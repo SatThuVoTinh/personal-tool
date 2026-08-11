@@ -4,7 +4,7 @@ Personal Tool is a local-first system for personal knowledge, AI, automation, an
 
 ## Current status
 
-The repository has the M1/T2 local quality baseline: pinned Node/npm tooling, reproducible format/lint/test/repository checks, and a committed dependency lockfile. M1/T3 CI and Security workflow implementation is in progress; runtime services, schemas, pipelines, and application code are intentionally not implemented yet. They will be added only in their approved milestone and task.
+M1 is complete: the repository has the M1/T2 local quality baseline plus validated CI and Security workflows from M1/T3. The current focus is planning M2 only; runtime services, schemas, pipelines, and application code remain intentionally unimplemented until their approved milestone and task.
 
 ## Development
 

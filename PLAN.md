@@ -372,11 +372,23 @@ The final response must clearly state:
 
 ## Current Focus
 
-**M1/T3 implementation update (2026-08-11):** CI and Security workflows, YAML 1.2 semantic workflow validation, and the `yaml@2.9.0` development dependency are implemented locally. M1/T3 and M1 remain `IN PROGRESS`: the pending completion path is local validation, implementation PR checks, merge to `main`, push checks, and manual `workflow_dispatch` evidence. No M2 work is authorized or included.
+**M1/T3 status (2026-08-11):** `COMPLETE`. CI and Security workflows are `IMPLEMENTED`; no runtime, data, RAG, AI, or M2 implementation was added.
 
-**Remote PR blocker (2026-08-11):** the first `Security / secret-scan` PR run failed with GitHub 403 while Gitleaks listed PR commits; the response explicitly required `pull_requests=read`. The scoped remediation is `permissions.pull-requests: read` in `security.yml`, plus semantic validation and a new PR run. M1/T3 remains `IN PROGRESS` until all remote evidence passes.
+**M1 status (2026-08-11):** `COMPLETE`.
 
-**Superseding next action:** Run the complete local validation set, open the M1/T3 implementation PR, and wait for all required CI/Security evidence before recording completion. Do not add a T3 changelog completion entry until then.
+**Current Focus:** Plan M2 infrastructure only. Do not implement M2 until its plan is approved.
+
+**Completion evidence:** M1/T3 implementation PR [#2](https://github.com/SatThuVoTinh/personal-tool/pull/2) merged into `main` at `9e80d9dff57c94265f8ddc2533552c6d6de3e06d`. PR checks passed: `CI / quality-gate`, `Security / dependency-audit`, and `Security / secret-scan`. The same three push checks passed on `main` (CI run `31497065617`; Security run `31497065623`). Manual dispatch also passed on `main`: CI run `31497197513` and Security run `31497245204` (dependency audit and secret scan; no leaks detected). Local gate passed: format check, lint, 14 unit tests, repository check, verify, high-level audit, and Git whitespace checks.
+
+**Resolved PR blocker:** the initial Gitleaks PR scan required `pull-requests: read` to list PR commits. Security now grants only `contents: read` and `pull-requests: read`; the corrected PR, push, and manual Security runs passed.
+
+**Status note:** This completion record supersedes the legacy M1/T3 `IN PROGRESS` focus text below.
+
+**M1/T3 implementation history (2026-08-11):** CI and Security workflows, YAML 1.2 semantic workflow validation, and the `yaml@2.9.0` development dependency were implemented locally. No runtime, data, RAG, AI, or M2 implementation was included.
+
+**Initial PR blocker (resolved):** the first `Security / secret-scan` PR run failed with GitHub 403 while Gitleaks listed PR commits; the response explicitly required `pull_requests=read`. The scoped remediation, semantic validation, corrected PR run, push run, and manual Security run all passed.
+
+**Superseded next action:** The PR/checks completion path above is complete; the next approved action is M2 planning only.
 
 **Local evidence (2026-08-11):** `npm run format:check`, `npm run lint`, `npm test` (14/14), `npm run repo:check`, `npm run verify`, `npm audit --audit-level=high`, `git diff --check`, and `git diff --cached --check` all passed. This is local implementation evidence only; remote PR, post-merge push, and manual-dispatch evidence are still required for completion.
 

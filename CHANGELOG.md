@@ -11,6 +11,8 @@ All notable, validated changes to Personal Tool are documented here.
 - Established the local Git repository, private GitHub remote, and documented development conventions for M1/T1.
 - Added a pinned Node/npm quality baseline with reproducible formatting, linting, testing, and repository-policy verification for M1/T2.
 - Added isolated Git-fixture tests for sensitive-file allowlists, working-tree whitespace, Git whitespace, required files, and command placeholders.
+- Added CI and Security workflows with exact Node 24.15.0/npm 12.0.2 provisioning, high/critical dependency audit, full-history Gitleaks scanning, and immutable Action pins for M1/T3.
+- Added YAML 1.2 semantic workflow-contract validation with focused unit coverage for executable commands, ordering, permissions, Action pins, and Gitleaks safeguards.
 
 ### Changed
 
@@ -19,6 +21,7 @@ All notable, validated changes to Personal Tool are documented here.
 - Centralized observability under `infrastructure/observability/`.
 - Separated document-oriented Knowledge RAG from L&SC Data Product RAG.
 - Added cross-platform tests, experimental workspaces, and CI workflow placeholders.
+- Replaced the CI, Security, and redundant test-workflow placeholders with the validated `CI / quality-gate`, `Security / dependency-audit`, and `Security / secret-scan` checks.
 
 ---
 
