@@ -318,6 +318,14 @@ function checkWorkflowRoot(workflowPath, workflow, securityWorkflow, failures) {
       ),
     );
   }
+  if (securityWorkflow && workflow.permissions?.["pull-requests"] !== "read") {
+    failures.push(
+      formatWorkflowFailure(
+        workflowPath,
+        "root permissions.pull-requests must be read for Gitleaks PR scans.",
+      ),
+    );
+  }
   checkWorkflowTriggers(workflowPath, workflow, securityWorkflow, failures);
   checkActionPins(workflowPath, workflow, failures);
 }

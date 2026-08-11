@@ -31,7 +31,7 @@ Use `npm ci` for clean verification and CI. Use `npm install --save-dev --save-e
 
 The `CI` workflow provides the stable `CI / quality-gate` check on pull requests to `main`, pushes to `main`, and manual dispatch. The `Security` workflow provides `Security / dependency-audit` and `Security / secret-scan` on the same triggers plus the Monday `0 2 * * 1` schedule.
 
-Every Node/npm job sets up Node `24.15.0` with `package-manager-cache: false`, installs npm `12.0.2` from `${{ runner.temp }}`, then asserts both exact versions before running `npm ci`/`npm run verify` or `npm audit --audit-level=high`. The repository policy test parses the workflow YAML and verifies executable job steps, their order, full-SHA Action pins, and the Gitleaks full-history and no-comment/no-artifact contract. It does not accept comments, metadata, or a text substring as evidence.
+Every Node/npm job sets up Node `24.15.0` with `package-manager-cache: false`, installs npm `12.0.2` from `${{ runner.temp }}`, then asserts both exact versions before running `npm ci`/`npm run verify` or `npm audit --audit-level=high`. Security keeps `contents: read` and adds only `pull-requests: read`, which Gitleaks needs to inspect PR commits. The repository policy test parses the workflow YAML and verifies executable job steps, their order, full-SHA Action pins, and the Gitleaks full-history and no-comment/no-artifact contract. It does not accept comments, metadata, or a text substring as evidence.
 
 ## Architecture
 

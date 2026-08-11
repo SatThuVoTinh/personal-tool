@@ -96,6 +96,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   dependency-audit:
@@ -349,15 +350,17 @@ test("rejects Gitleaks without full-history checkout or required flags", () => {
     writeWorkflow(
       repositoryRoot,
       "security.yml",
-      VALID_SECURITY_WORKFLOW.replace(
-        "fetch-depth: 0",
-        "fetch-depth: 1",
-      ).replace('          GITLEAKS_ENABLE_COMMENTS: "false"\n', ""),
+      VALID_SECURITY_WORKFLOW.replace("  pull-requests: read\n", "")
+        .replace("fetch-depth: 0", "fetch-depth: 1")
+        .replace('          GITLEAKS_ENABLE_COMMENTS: "false"\n', ""),
     );
     const failures = checkWorkflowDefinitions(repositoryRoot);
     assert.ok(failures.some((failure) => failure.includes("fetch-depth to 0")));
     assert.ok(
       failures.some((failure) => failure.includes("GITLEAKS_ENABLE_COMMENTS")),
+    );
+    assert.ok(
+      failures.some((failure) => failure.includes("permissions.pull-requests")),
     );
   });
 });
