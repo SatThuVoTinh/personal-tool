@@ -9,9 +9,12 @@ All notable, validated changes to Personal Tool are documented here.
 ### Added
 
 - Established the local Git repository, private GitHub remote, and documented development conventions for M1/T1.
+- Added a pinned Node/npm quality baseline with reproducible formatting, linting, testing, and repository-policy verification for M1/T2.
+- Added isolated Git-fixture tests for sensitive-file allowlists, working-tree whitespace, Git whitespace, required files, and command placeholders.
 
 ### Changed
 
+- Replaced the Makefile placeholder with functional quality-gate targets backed by npm scripts and a committed lockfile.
 - Replaced the initial partial scaffold with the approved Personal Tool architecture.
 - Centralized observability under `infrastructure/observability/`.
 - Separated document-oriented Knowledge RAG from L&SC Data Product RAG.
@@ -27,34 +30,34 @@ An entry may be added only after the corresponding task reaches its Definition o
 
 Do not record:
 
-* planned work;
-* work in progress;
-* blocked work;
-* placeholders;
-* empty directories;
-* unverified code;
-* speculative architecture;
-* future milestones.
+- planned work;
+- work in progress;
+- blocked work;
+- placeholders;
+- empty directories;
+- unverified code;
+- speculative architecture;
+- future milestones.
 
 ### Categories
 
 Use the following categories:
 
-* `Added` — new validated functionality.
-* `Changed` — validated changes to existing functionality.
-* `Fixed` — validated bug fixes.
-* `Security` — validated security improvements or fixes.
+- `Added` — new validated functionality.
+- `Changed` — validated changes to existing functionality.
+- `Fixed` — validated bug fixes.
+- `Security` — validated security improvements or fixes.
 
 ### Source of Truth
 
 `PLAN.md` is the authoritative source for:
 
-* current progress;
-* Active Task;
-* milestone status;
-* component status;
-* dependencies;
-* completion evidence.
+- current progress;
+- Active Task;
+- milestone status;
+- component status;
+- dependencies;
+- completion evidence.
 
 `CHANGELOG.md` is only the historical record of changes that have already been completed and validated.
 

@@ -1,0 +1,34 @@
+{
+  "private": true,
+  "engines": {
+    "node": ">=24.15.0 <25",
+    "npm": "12.x"
+  },
+  "packageManager": "npm@12.0.2",
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": ">=24.15.0 <25",
+      "onFail": "error"
+    },
+    "packageManager": {
+      "name": "npm",
+      "version": "12.0.2",
+      "onFail": "error"
+    }
+  },
+  "scripts": {
+    "format": "prettier --write README.md CHANGELOG.md docs/**/*.md experiments/**/*.md .github/workflows/*.{yml,yaml} .vscode/**/*.json package.json scripts/**/*.mjs tests/**/*.mjs",
+    "format:check": "prettier --check README.md CHANGELOG.md docs/**/*.md experiments/**/*.md .github/workflows/*.{yml,yaml} .vscode/**/*.json package.json scripts/**/*.mjs tests/**/*.mjs",
+    "lint": "eslint scripts tests && markdownlint-cli2",
+    "test": "node --test tests/repository-policy.test.mjs",
+    "repo:check": "node scripts/repository-check.mjs",
+    "verify": "npm run format:check && npm run lint && npm test && npm run repo:check"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "eslint": "10.8.1",
+    "markdownlint-cli2": "0.23.2",
+    "prettier": "3.9.6"
+  }
+}

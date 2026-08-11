@@ -1,6 +1,6 @@
 # Quy ước phát triển
 
-Tài liệu này quy định cách làm việc với repository Personal Tool. Phạm vi hiện tại là M1/T1: Git, tài liệu và quy ước repository. Không suy diễn rằng runtime, CI, database, RAG, AI agent hoặc ứng dụng đã tồn tại.
+Tài liệu này quy định cách làm việc với repository Personal Tool. M1/T2 đã thiết lập baseline format, lint, test và repository verification; runtime, CI, database, RAG, AI agent hoặc ứng dụng vẫn chưa được suy diễn là đã tồn tại.
 
 ## Git và branch
 
@@ -24,7 +24,7 @@ Dùng Conventional Commits theo mẫu `type(scope): summary`.
 - `.editorconfig` là nguồn chuẩn về UTF-8, LF, whitespace và indentation.
 - Mặc định dùng 2 spaces; Python dùng 4 spaces; Makefile dùng tab; Markdown giữ trailing whitespace để cho phép hard line break có chủ đích.
 - `.gitattributes` chuẩn hóa text file về LF và đánh dấu binary assets. Không tự thêm Git LFS hoặc Jupyter diff driver khi chưa có nhu cầu và cấu hình hỗ trợ.
-- Formatter và linter thực thi sẽ được thêm trong task M1 kế tiếp. Không ghi hoặc chạy command chất lượng chưa tồn tại như thể đã được triển khai.
+- Formatter, linter, test và repository verification được cung cấp qua npm scripts. Không thêm hoặc chạy command chất lượng chưa tồn tại như thể đã được triển khai.
 
 ## Lệnh kiểm chứng T1
 
@@ -44,6 +44,26 @@ if ($LASTEXITCODE -eq 0) { throw '.env.example must remain trackable.' }
 ```
 
 Trước commit, xem toàn bộ staged files bằng `git diff --cached --name-status` và chỉ commit file thuộc task đang active. Sau khi remote được cấu hình, xác nhận `main` theo dõi `origin/main` và `git ls-remote --heads origin main` trả về đúng branch.
+
+## Toolchain và verification T2
+
+- `engines` cho phép Node `>=24.15.0 <25` và npm `12.x`; `devEngines` bắt buộc Node trong range này và npm `12.0.2` cho development, verification và CI.
+- `package-lock.json` được commit. Dùng `npm ci` cho clean verification và CI; chỉ dùng `npm install --save-dev --save-exact <package>` khi chủ động thêm/cập nhật dependency và tạo lại lockfile.
+- Các npm script là `format`, `format:check`, `lint`, `test`, `repo:check` và `verify`. `verify` chạy theo thứ tự fail-fast: format check, lint, test, rồi repository check.
+- Repository check dùng Git cho tracked/staged files và Git whitespace, đồng thời đọc byte của working tree để kiểm tra line ending, trailing whitespace và policy. Secret/credential guard chỉ xét tracked files, với allowlist cho example/template và fixture kiểm thử được khai báo.
+
+Node 24.15.0 đi kèm npm bundled 11.12.1. Trong Codex sandbox, shim npm có thể fallback về bundled npm khi không đọc được user-global npm 12.0.2. Trên Windows, kiểm tra và gọi npm đúng như sau:
+
+```powershell
+node --version
+& "$env:APPDATA\npm\npm.cmd" --version
+
+$npm = "$env:APPDATA\npm\npm.cmd"
+& $npm ci
+& $npm run verify
+```
+
+Không sửa `PATH`, không cài lại Node/npm và không thay đổi global toolchain chỉ để xử lý fallback này. CI M1/T3 sẽ provision npm 12.0.2 rõ ràng.
 
 ## Secret và dữ liệu cục bộ
 
