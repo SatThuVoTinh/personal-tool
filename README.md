@@ -4,7 +4,7 @@ Personal Tool is a local-first system for personal knowledge, AI, automation, an
 
 ## Current status
 
-The repository has the M1/T2 local quality baseline: pinned Node/npm tooling, reproducible format/lint/test/repository checks, and a committed dependency lockfile. Runtime services, schemas, pipelines, CI workflows, and application code are intentionally not implemented yet. They will be added only in their approved milestone and task.
+The repository has the M1/T2 local quality baseline: pinned Node/npm tooling, reproducible format/lint/test/repository checks, and a committed dependency lockfile. M1/T3 CI and Security workflow implementation is in progress; runtime services, schemas, pipelines, and application code are intentionally not implemented yet. They will be added only in their approved milestone and task.
 
 ## Development
 
@@ -26,6 +26,12 @@ $npm = "$env:APPDATA\npm\npm.cmd"
 ```
 
 Use `npm ci` for clean verification and CI. Use `npm install --save-dev --save-exact <package>` only when intentionally adding or updating a dependency and regenerating `package-lock.json`.
+
+### GitHub validation (M1/T3)
+
+The `CI` workflow provides the stable `CI / quality-gate` check on pull requests to `main`, pushes to `main`, and manual dispatch. The `Security` workflow provides `Security / dependency-audit` and `Security / secret-scan` on the same triggers plus the Monday `0 2 * * 1` schedule.
+
+Every Node/npm job sets up Node `24.15.0` with `package-manager-cache: false`, installs npm `12.0.2` from `${{ runner.temp }}`, then asserts both exact versions before running `npm ci`/`npm run verify` or `npm audit --audit-level=high`. The repository policy test parses the workflow YAML and verifies executable job steps, their order, full-SHA Action pins, and the Gitleaks full-history and no-comment/no-artifact contract. It does not accept comments, metadata, or a text substring as evidence.
 
 ## Architecture
 
