@@ -27,7 +27,7 @@ personal-tool/
 ├── .gitattributes
 ├── .gitignore
 ├── .env.example
-├── .github/workflows/{ci.yml,tests.yml,security.yml}
+├── .github/workflows/{ci.yml,security.yml}
 ├── applications/
 │   ├── ai-chat/
 │   ├── admin-dashboard/

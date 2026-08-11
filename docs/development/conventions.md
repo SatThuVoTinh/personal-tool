@@ -63,6 +63,13 @@ $npm = "$env:APPDATA\npm\npm.cmd"
 & $npm run verify
 ```
 
+## CI and Security workflows (M1/T3)
+
+- `ci.yml` publishes `CI / quality-gate`; `security.yml` publishes `Security / dependency-audit` and `Security / secret-scan`. Both run for pull requests and pushes to `main` and through `workflow_dispatch`; Security also runs on `0 2 * * 1`.
+- Every Node/npm job runs `actions/setup-node` with Node `24.15.0` and `package-manager-cache: false`, bootstraps npm `12.0.2` from `${{ runner.temp }}`, asserts exact Node/npm versions, and only then runs `npm ci`/`npm run verify` or `npm audit --audit-level=high`.
+- Every external Action is pinned by full 40-character SHA with a release-version comment. Gitleaks uses full history, does not persist checkout credentials, does not create PR comments or upload artifacts, and has no license or custom configuration for this personal repository. Security grants only `contents: read` and `pull-requests: read`, the latter being needed to read PR commits.
+- `repo:check` parses YAML 1.2 and validates executable `jobs.*.steps`. Comments, metadata, step names, and substrings are never evidence of a workflow contract. Branch protection remains out of scope until checks are stable.
+
 Không sửa `PATH`, không cài lại Node/npm và không thay đổi global toolchain chỉ để xử lý fallback này. CI M1/T3 sẽ provision npm 12.0.2 rõ ràng.
 
 ## Secret và dữ liệu cục bộ

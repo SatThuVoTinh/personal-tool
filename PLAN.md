@@ -372,6 +372,14 @@ The final response must clearly state:
 
 ## Current Focus
 
+**M1/T3 implementation update (2026-08-11):** CI and Security workflows, YAML 1.2 semantic workflow validation, and the `yaml@2.9.0` development dependency are implemented locally. M1/T3 and M1 remain `IN PROGRESS`: the pending completion path is local validation, implementation PR checks, merge to `main`, push checks, and manual `workflow_dispatch` evidence. No M2 work is authorized or included.
+
+**Remote PR blocker (2026-08-11):** the first `Security / secret-scan` PR run failed with GitHub 403 while Gitleaks listed PR commits; the response explicitly required `pull_requests=read`. The scoped remediation is `permissions.pull-requests: read` in `security.yml`, plus semantic validation and a new PR run. M1/T3 remains `IN PROGRESS` until all remote evidence passes.
+
+**Superseding next action:** Run the complete local validation set, open the M1/T3 implementation PR, and wait for all required CI/Security evidence before recording completion. Do not add a T3 changelog completion entry until then.
+
+**Local evidence (2026-08-11):** `npm run format:check`, `npm run lint`, `npm test` (14/14), `npm run repo:check`, `npm run verify`, `npm audit --audit-level=high`, `git diff --check`, and `git diff --cached --check` all passed. This is local implementation evidence only; remote PR, post-merge push, and manual-dispatch evidence are still required for completion.
+
 **Milestone:** M1 — Development Foundation
 **Trạng thái:** `IN PROGRESS`
 
