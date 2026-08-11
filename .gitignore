@@ -1,0 +1,53 @@
+# Secrets and machine-specific environment files
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example
+**/credentials*.json
+**/*.key
+**/*.pem
+**/*.p12
+**/*.pfx
+
+# Runtime data and generated artifacts
+/backups/*
+!/backups/.gitkeep
+/logs/*
+!/logs/.gitkeep
+/temp/*
+!/temp/.gitkeep
+/infrastructure/docker/volumes/**
+/infrastructure/databases/**/backups/**
+/experiments/**/artifacts/**
+/experiments/**/results/**
+*.log
+
+# Python development and test output
+__pycache__/
+*.py[cod]
+*.pyd
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# JavaScript and frontend build output
+node_modules/
+dist/
+build/
+.next/
+.turbo/
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
+*.code-workspace
+.vscode/*
+!.vscode/settings.json
