@@ -375,16 +375,18 @@ The final response must clearly state:
 **Milestone:** M1 — Development Foundation
 **Trạng thái:** `IN PROGRESS`
 
-**Active Task:** M1/T2 — baseline lint, format, test và verify có thể thực thi.
+**Active Task:** M1/T3 — CI và security workflow thực thi quality gate.
 
 **Phạm vi:**
 
-- Lập kế hoạch và đưa vào framework lint, format, test và verify tái lập được cho M1.
-- Không triển khai runtime, database schema, business logic, RAG, AI Agent hoặc dashboard trong M1/T2.
+- Thay các GitHub workflow placeholder bằng CI thực thi `npm ci` và `npm run verify` với Node `>=24.15.0 <25` và npm `12.0.2`.
+- Thêm dependency/secret scanning phù hợp với development foundation, không triển khai runtime, database schema, business logic, RAG, AI Agent hoặc dashboard.
 
-**Hành động kế tiếp:** Kiểm tra toolchain hiện có và lập kế hoạch M1/T2 trước khi thêm lệnh kiểm chứng hoặc CI thực thi.
+**Hành động kế tiếp:** Lập kế hoạch M1/T3 trước khi thay workflow placeholder bằng CI/security workflow thực thi.
 
-**Blocker:** Không có blocker đã biết cho M1/T2.
+**Blocker:** Không có blocker đã biết cho M1/T3.
+
+**Bằng chứng M1/T2 hoàn thành:** Đã thêm `package.json`/`package-lock.json` với Node `>=24.15.0 <25`, npm 12.0.2, version pin đầy đủ cho `@eslint/js` 10.0.1, ESLint 10.8.1, Markdownlint CLI2 0.23.2 và Prettier 3.9.6. Makefile thay placeholder bằng target thực; npm scripts cung cấp format, format check, lint, test, repository check và quality gate fail-fast. Repository checker kiểm tra tracked/staged Git state, Git whitespace, byte working tree, file policy và secret allowlist; sáu test dùng Git repository tạm, không thay đổi Git index của workspace. Đã xác thực `npm ci`, từng lệnh quality và `npm run verify` bằng Node 24.15.0/npm 12.0.2; formatter đạt idempotency, audit không có vulnerability và repository policy check pass. Trong Codex sandbox, npm bundled 11.12.1 có thể được dùng khi không đọc được user-global npm 12.0.2; lệnh T2 gọi trực tiếp `%APPDATA%\npm\npm.cmd`, không sửa PATH hoặc global toolchain. Các workflow CI/security vẫn là placeholder và thuộc M1/T3.
 
 **Bằng chứng M1/T1 hoàn thành:** Git repository đã khởi tạo với nhánh `main`; private remote `https://github.com/SatThuVoTinh/personal-tool.git` là `origin` duy nhất; `main` theo dõi `origin/main` tại `87b78cf97a3a9fdeca0fbec862d5185caa957142`. Bootstrap commit dùng author cục bộ `Hoang Vinh <therealvinh738107@gmail.com>`. `.editorconfig`, `.gitattributes`, `.gitignore`, `README.md` và `docs/development/conventions.md` đã được chuẩn hóa. Đã xác thực staged diff không có whitespace error, attribute `README.md` là `text`/`eol=lf`, `.env` bị ignore còn `.env.example` trackable, và không có secret-like file ngoài các `.env.example` được phép trong bootstrap commit.
 
@@ -543,7 +545,7 @@ Container `Up` không phải bằng chứng M2 hoàn thành. M2 chỉ `COMPLETE`
 | Khu vực | Trạng thái thành phần hiện tại | Milestone sở hữu | Bằng chứng hoàn thành |
 | --- | --- | --- | --- |
 | Tài liệu kiến trúc | `IMPLEMENTED` | Duy trì xuyên suốt | Tài liệu mô tả boundary hiện có; không phải bằng chứng runtime. |
-| CI, Makefile, script và test framework | `PLANNED` | M1 | Lệnh kiểm chứng và CI chạy được. |
+| CI, Makefile, script và test framework | `PARTIALLY IMPLEMENTED` | M1 | Local format/lint/test/repository quality gate đã pass; CI và security workflows còn thuộc M1/T3. |
 | Docker, database, networking, reverse proxy | `PLANNED` | M2 | Service readiness theo Definition of Done M2. |
 | Knowledge Platform | `PLANNED` | M3 | Index, retrieval và citation được kiểm thử. |
 | AI Platform và ai-chat | `PLANNED` | M4–M5 | Luồng chat local có bằng chứng end-to-end. |

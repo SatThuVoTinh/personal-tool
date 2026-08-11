@@ -1,5 +1,22 @@
-.PHONY: help
+.PHONY: install format format-check lint test repo-check verify
 
-help:
-	@echo "Personal Tool architecture scaffold."
-	@echo "Runtime commands will be added with the implementation of each platform."
+install:
+	npm ci
+
+format:
+	npm run format
+
+format-check:
+	npm run format:check
+
+lint:
+	npm run lint
+
+test:
+	npm test
+
+repo-check:
+	npm run repo:check
+
+verify:
+	npm run verify

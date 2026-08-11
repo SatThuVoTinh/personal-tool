@@ -4,7 +4,7 @@ Personal Tool is a local-first system for personal knowledge, AI, automation, an
 
 ## Current status
 
-The repository is an architecture scaffold with the M1/T1 repository foundation. Runtime services, schemas, pipelines, CI workflows, and application code are intentionally not implemented yet. They will be added only in their approved milestone and task.
+The repository has the M1/T2 local quality baseline: pinned Node/npm tooling, reproducible format/lint/test/repository checks, and a committed dependency lockfile. Runtime services, schemas, pipelines, CI workflows, and application code are intentionally not implemented yet. They will be added only in their approved milestone and task.
 
 ## Development
 
@@ -14,6 +14,18 @@ Before making a change, read:
 - [PLAN.md](PLAN.md) for the active task, dependencies, and completion evidence.
 - [Development conventions](docs/development/conventions.md) for Git, formatting, verification, secrets, and progress-update rules.
 - [CHANGELOG.md](CHANGELOG.md) for validated historical changes only.
+
+### Local verification
+
+Use Node `>=24.15.0 <25` and npm `12.0.2`. On this Windows environment, invoke the user-global npm explicitly so the bundled npm 11.12.1 fallback is not used:
+
+```powershell
+$npm = "$env:APPDATA\npm\npm.cmd"
+& $npm ci
+& $npm run verify
+```
+
+Use `npm ci` for clean verification and CI. Use `npm install --save-dev --save-exact <package>` only when intentionally adding or updating a dependency and regenerating `package-lock.json`.
 
 ## Architecture
 
