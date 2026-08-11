@@ -1,5 +1,4 @@
 # Changelog
-# CHANGELOG
 
 All notable, validated changes to Personal Tool are documented here.
 
@@ -7,7 +6,16 @@ All notable, validated changes to Personal Tool are documented here.
 
 ## [Unreleased]
 
-No completed changes recorded yet.
+### Added
+
+- Established the local Git repository, private GitHub remote, and documented development conventions for M1/T1.
+
+### Changed
+
+- Replaced the initial partial scaffold with the approved Personal Tool architecture.
+- Centralized observability under `infrastructure/observability/`.
+- Separated document-oriented Knowledge RAG from L&SC Data Product RAG.
+- Added cross-platform tests, experimental workspaces, and CI workflow placeholders.
 
 ---
 
@@ -71,14 +79,4 @@ When a task reaches Definition of Done:
 
 Do not add a changelog entry before validation is complete.
 
-
 This file records material architectural changes rather than individual commits.
-
-## Unreleased
-
-### Changed
-
-- Replaced the initial partial scaffold with the approved Personal Tool architecture.
-- Centralized observability under `infrastructure/observability/`.
-- Separated document-oriented Knowledge RAG from L&SC Data Product RAG.
-- Added cross-platform tests, experimental workspaces, and CI workflow placeholders.

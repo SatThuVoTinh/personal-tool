@@ -375,17 +375,18 @@ The final response must clearly state:
 **Milestone:** M1 — Development Foundation
 **Trạng thái:** `IN PROGRESS`
 
-**Active Task:** M1/T1 — Git/GitHub và quy ước repository.
+**Active Task:** M1/T2 — baseline lint, format, test và verify có thể thực thi.
 
 **Phạm vi:**
 
-- Xác nhận Git repository và GitHub remote; ghi rõ quy ước phát triển/repository.
-- Chuẩn bị phạm vi chỉnh sửa cho `.editorconfig`, `.gitattributes`, `.gitignore`, `README.md` và tài liệu development.
-- Không triển khai CI, runtime, database schema, business logic, RAG, AI Agent hoặc dashboard trong T1.
+- Lập kế hoạch và đưa vào framework lint, format, test và verify tái lập được cho M1.
+- Không triển khai runtime, database schema, business logic, RAG, AI Agent hoặc dashboard trong M1/T2.
 
-**Hành động kế tiếp:** Chờ quyền truy cập rõ ràng vào các file thuộc M1/T1, rồi kiểm tra trạng thái thực tế trước khi thay đổi nhỏ nhất cần thiết.
+**Hành động kế tiếp:** Kiểm tra toolchain hiện có và lập kế hoạch M1/T2 trước khi thêm lệnh kiểm chứng hoặc CI thực thi.
 
-**Blocker:** Quyền hiện tại chỉ cho phép chỉnh sửa `PLAN.md` và `CHANGELOG.md`; chưa có quyền truy cập các file M1/T1 khác.
+**Blocker:** Không có blocker đã biết cho M1/T2.
+
+**Bằng chứng M1/T1 hoàn thành:** Git repository đã khởi tạo với nhánh `main`; private remote `https://github.com/SatThuVoTinh/personal-tool.git` là `origin` duy nhất; `main` theo dõi `origin/main` tại `87b78cf97a3a9fdeca0fbec862d5185caa957142`. Bootstrap commit dùng author cục bộ `Hoang Vinh <therealvinh738107@gmail.com>`. `.editorconfig`, `.gitattributes`, `.gitignore`, `README.md` và `docs/development/conventions.md` đã được chuẩn hóa. Đã xác thực staged diff không có whitespace error, attribute `README.md` là `text`/`eol=lf`, `.env` bị ignore còn `.env.example` trackable, và không có secret-like file ngoài các `.env.example` được phép trong bootstrap commit.
 
 **Bằng chứng M0 hoàn thành:** Chủ sở hữu đã phê duyệt kế hoạch V1 vào 2026-08-11. M0 không bao gồm thay đổi chức năng hệ thống.
 
