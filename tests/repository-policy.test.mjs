@@ -142,6 +142,20 @@ test("rejects a tracked .env file", () => {
   });
 });
 
+test("rejects a tracked runtime license artifact", () => {
+  withTemporaryRepository((repositoryRoot) => {
+    writeTrackedFile(
+      repositoryRoot,
+      "runtime/minio.license",
+      "not-a-license\n",
+    );
+    const failures = checkTrackedFilePolicies(listTrackedFiles(repositoryRoot));
+    assert.deepEqual(failures, [
+      "Tracked sensitive file is not allowlisted: runtime/minio.license",
+    ]);
+  });
+});
+
 test("accepts allowlisted example and test fixture paths", () => {
   const failures = checkTrackedFilePolicies([
     ".env.example",

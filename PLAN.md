@@ -21,16 +21,16 @@ Do not begin implementation before the Active Task is known.
 
 `PLAN.md` is the single source of truth for:
 
-* development sequence;
-* milestone status;
-* task status;
-* Current Focus;
-* Active Task;
-* dependencies;
-* Definition of Done;
-* completion evidence;
-* blockers;
-* component completion status.
+- development sequence;
+- milestone status;
+- task status;
+- Current Focus;
+- Active Task;
+- dependencies;
+- Definition of Done;
+- completion evidence;
+- blockers;
+- component completion status.
 
 `AGENTS.md` defines how an agent must work.
 
@@ -46,14 +46,14 @@ Only the task explicitly identified as the current Active Task in `PLAN.md` is i
 
 The agent MUST NOT:
 
-* implement future milestones proactively;
-* start another milestone because it appears easy;
-* create infrastructure for future milestones;
-* refactor unrelated components;
-* add speculative abstractions;
-* modify deferred applications;
-* mark future work as complete;
-* silently expand the scope of the Active Task.
+- implement future milestones proactively;
+- start another milestone because it appears easy;
+- create infrastructure for future milestones;
+- refactor unrelated components;
+- add speculative abstractions;
+- modify deferred applications;
+- mark future work as complete;
+- silently expand the scope of the Active Task.
 
 If the current task reveals a prerequisite outside its scope, stop and report the dependency. Do not silently expand the task.
 
@@ -96,30 +96,30 @@ After a milestone becomes `COMPLETE`, the next milestone becomes eligible for ex
 
 Never infer implementation status from:
 
-* file names;
-* directory names;
-* architecture diagrams;
-* documentation;
-* comments;
-* TODO items;
-* placeholders;
-* empty directories;
-* configuration templates;
-* planned schemas;
-* declared Docker services.
+- file names;
+- directory names;
+- architecture diagrams;
+- documentation;
+- comments;
+- TODO items;
+- placeholders;
+- empty directories;
+- configuration templates;
+- planned schemas;
+- declared Docker services.
 
 A component may be classified as `IMPLEMENTED` only when observable repository evidence supports that status.
 
 Acceptable evidence may include:
 
-* executable implementation;
-* passing automated tests;
-* successful reproducible commands;
-* successful database migration;
-* successful service health check;
-* validated API behavior;
-* validated data-pipeline output;
-* validated end-to-end behavior.
+- executable implementation;
+- passing automated tests;
+- successful reproducible commands;
+- successful database migration;
+- successful service health check;
+- validated API behavior;
+- validated data-pipeline output;
+- validated end-to-end behavior.
 
 If evidence is unavailable, report the component as not verified.
 
@@ -170,12 +170,12 @@ Before claiming that something is implemented, inspect the actual repository.
 
 The agent MUST NOT assume that an architectural component exists merely because it is described in:
 
-* `AGENTS.md`;
-* `PLAN.md`;
-* architecture documentation;
-* README files;
-* diagrams;
-* previous conversations.
+- `AGENTS.md`;
+- `PLAN.md`;
+- architecture documentation;
+- README files;
+- diagrams;
+- previous conversations.
 
 If implementation and documentation disagree, treat the repository evidence as the current implementation reality and report the inconsistency.
 
@@ -187,13 +187,13 @@ Do not silently change approved architecture.
 
 A new:
 
-* database;
-* infrastructure service;
-* framework;
-* model provider;
-* external dependency;
-* architectural boundary;
-* major runtime dependency
+- database;
+- infrastructure service;
+- framework;
+- model provider;
+- external dependency;
+- architectural boundary;
+- major runtime dependency
 
 requires an explicit architectural decision before implementation when it changes the approved V1 design.
 
@@ -253,9 +253,9 @@ end-to-end validation
 
 If validation cannot be performed:
 
-* do not claim completion;
-* record the missing validation or blocker in `PLAN.md`;
-* report exactly what remains unverified.
+- do not claim completion;
+- record the missing validation or blocker in `PLAN.md`;
+- report exactly what remains unverified.
 
 ---
 
@@ -263,15 +263,15 @@ If validation cannot be performed:
 
 Update `PLAN.md` when:
 
-* a task is completed;
-* a task becomes blocked;
-* a task is deferred or cancelled;
-* the Active Task changes;
-* a dependency changes;
-* the Definition of Done changes;
-* the implementation materially changes the approved approach;
-* a new architectural decision is required;
-* completion evidence changes.
+- a task is completed;
+- a task becomes blocked;
+- a task is deferred or cancelled;
+- the Active Task changes;
+- a dependency changes;
+- the Definition of Done changes;
+- the implementation materially changes the approved approach;
+- a new architectural decision is required;
+- completion evidence changes.
 
 All updates must describe actual repository state, not intentions.
 
@@ -285,14 +285,14 @@ Add an entry only after the relevant task reaches its Definition of Done.
 
 Do not add entries for:
 
-* planned work;
-* work in progress;
-* blocked work;
-* placeholders;
-* empty directories;
-* unverified code;
-* architecture proposals;
-* speculative changes.
+- planned work;
+- work in progress;
+- blocked work;
+- placeholders;
+- empty directories;
+- unverified code;
+- architecture proposals;
+- speculative changes.
 
 When a task reaches Definition of Done, update `PLAN.md` and `CHANGELOG.md` in the same change set whenever practical.
 
@@ -304,13 +304,13 @@ When a task reaches Definition of Done, update `PLAN.md` and `CHANGELOG.md` in t
 
 Never:
 
-* commit `.env` files containing secrets;
-* expose API keys;
-* expose passwords;
-* expose access tokens;
-* print credentials;
-* commit private certificates;
-* expose sensitive local configuration.
+- commit `.env` files containing secrets;
+- expose API keys;
+- expose passwords;
+- expose access tokens;
+- print credentials;
+- commit private certificates;
+- expose sensitive local configuration.
 
 Environment files may be inspected for variable names and structure, but secret values must remain redacted.
 
@@ -322,11 +322,11 @@ Use `.env.example` to document configuration shape.
 
 Do not:
 
-* silently delete databases;
-* reset persistent volumes without explicit approval;
-* destroy existing data merely to simplify testing;
-* introduce schema changes without appropriate validation;
-* treat a migration file as proof that a migration has been executed successfully.
+- silently delete databases;
+- reset persistent volumes without explicit approval;
+- destroy existing data merely to simplify testing;
+- introduce schema changes without appropriate validation;
+- treat a migration file as proof that a migration has been executed successfully.
 
 Database changes must be reproducible and validated.
 
@@ -356,13 +356,13 @@ Before reporting a task as complete:
 
 The final response must clearly state:
 
-* what was changed;
-* what was validated;
-* what evidence was obtained;
-* what remains blocked or unverified;
-* whether the next milestone is unlocked.
-## End rule
+- what was changed;
+- what was validated;
+- what evidence was obtained;
+- what remains blocked or unverified;
+- whether the next milestone is unlocked.
 
+## End rule
 
 ## Kế hoạch phát triển V1
 
@@ -376,7 +376,35 @@ The final response must clearly state:
 
 **M1 status (2026-08-11):** `COMPLETE`.
 
-**Current Focus:** Plan M2 infrastructure only. Do not implement M2 until its plan is approved.
+**M2 status (2026-08-12):** `COMPLETE`.
+
+**M2/T1 status (2026-08-12):** `COMPLETE`. Runtime preflight passed with the owner-provided ignored AIStor Free license artifact; T2 is now eligible to begin.
+
+**M2/T2 status (2026-08-12):** `COMPLETE`. PostgreSQL + pgvector, transient Redis, and named-volume AIStor passed their core-storage and recreation validation; T3 is now eligible to begin.
+
+**M2/T3 status (2026-08-12):** `COMPLETE`. Cumulative T1–T3 validation proved n8n PostgreSQL state, the persistent `.n8n` volume, the stable encryption-key contract, Nginx health/default-deny behavior, and container-to-host Ollama connectivity; T4 is now eligible to begin.
+
+**M2/T4 status (2026-08-12):** `COMPLETE`. Cumulative T1–T4 validation proved the required Prometheus scrape targets, repository-provisioned Grafana datasource/dashboard, loopback Dozzle filtering/log reading, and the idle resource gate; T5 is now eligible to begin.
+
+**M2/T5 status (2026-08-12):** `COMPLETE`. The full isolated backup/destroy/recreate/restore acceptance passed; M3 is unlocked for planning only.
+
+**Current Focus:** M3 planning — define the read-only Obsidian Knowledge Platform scope, contracts, and validation plan. Do not implement M3 until that planning is approved.
+
+**M2 execution rule:** Work strictly in the sequence `T1 → T2 → T3 → T4 → T5`. No task may start until its predecessor is `COMPLETE`, all predecessor regression checks pass, no blocking dependency remains, and `PLAN.md`, `README.md`, and `CHANGELOG.md` have been updated in the same completion change set. A failed check keeps the current task `IN PROGRESS` or marks it `BLOCKED`; it never unlocks the next task.
+
+**M2/T1 scope:** Pin AIStor Free server/client images, configure an ephemeral in-network `mc` helper, validate non-default root credentials and an ignored license file outside the repository, validate Docker/Compose/Ollama, and run AIStor license plus S3 put/get smoke tests. No PostgreSQL, Redis, n8n, Nginx, observability, persistence volume, schema, pipeline, or application implementation belongs to T1.
+
+**M2/T1 Definition of Done:** Docker Engine, Compose, and Ollama with a smoke model no larger than 4 GiB are available; Compose config is valid; AIStor server/client are release-and-digest pinned; preflight rejects missing/default/tracked runtime artifacts; the `mc` helper validates the AIStor license and completes S3 put/get without publishing port 9000. The temporary T1 project must be removed after runtime validation.
+
+**M2/T1 completion evidence (2026-08-12):** Docker Desktop 4.78.0 / Engine 29.5.3 and Docker Compose 5.1.4 are available. Ollama 0.31.2 at the standard per-user location has `bge-m3:latest` (1.2 GB). Static Compose contract rendering, both pinned AIStor image manifests, PowerShell syntax, 18 unit tests, lint, format check, repository policy, and Git whitespace checks passed. `preflight.ps1 -Runtime` passed with the ignored runtime environment: it pulled the release-and-digest pinned AIStor server/client images, created the temporary `personal-tool-t1` project, validated the AIStor license through the ephemeral in-network `mc` helper, and completed S3 bucket/create/write/read marker round-trip without publishing S3 port 9000. The temporary project was torn down. The runtime environment and license contents were not logged or tracked.
+
+**M2/T2 completion evidence (2026-08-12):** Static Compose contract rendering, PowerShell syntax, format check, lint, 22 unit tests, repository policy, and Git whitespace checks passed. `core-storage.ps1` reran the full T1 runtime preflight, pulled the release-and-digest pinned pgvector PostgreSQL 17 and Redis 8 images, then started PostgreSQL, Redis, and AIStor healthy on the normal user-defined bridge with no PostgreSQL, Redis, or S3 host port. The idempotent bootstrap created the `n8n` role/database, enabled `vector` in `postgres`, and on its second run safely reported the existing extension; `vector` remained absent from `n8n` and `template1`. The recreation gate wrote synthetic PostgreSQL, AIStor, and Redis markers, executed `docker compose down` without `-v`, recreated the containers, and verified that PostgreSQL and AIStor markers remained while the Redis key disappeared. Synthetic markers were removed and the temporary `personal-tool-t2` project was torn down. No Docker restart command was used as persistence evidence.
+
+**M2/T3 completion evidence (2026-08-12):** Static Compose rendering, PowerShell syntax, format check, lint, 26 unit tests, repository policy, and Git whitespace checks passed. `local-integration.ps1` reran the T1 runtime preflight and complete T2 storage/recreation validation, then started n8n and Nginx with healthy dependencies on the normal user-defined bridge. Nginx passed `nginx -t`, returned `200` from `/healthz`, and default-denied `/` with `404`. An n8n container called the Windows-host Ollama `/api/embed` endpoint through `host.docker.internal` and received a non-empty embedding response from the configured smoke model. The validator wrote a `.n8n` marker and created a synthetic, non-real credential without persisting plaintext in logs or artifacts; the database held encrypted ciphertext. After `docker compose down` without `-v` followed by clean container recreation, the `.n8n` marker remained and n8n decrypted that credential using the unchanged `N8N_ENCRYPTION_KEY`. The temporary `personal-tool-t3` project and synthetic credential were removed. Limitations remain: no business workflow was created, and backup/restore plus the separate encryption-key recovery procedure remain T5 scope.
+
+**M2/T4 completion evidence (2026-08-12):** Static Compose rendering, PowerShell syntax, format check, lint, 31 unit tests, repository policy, and Git whitespace checks passed. `observability.ps1` reran the complete T1–T3 runtime/recreation validation, then started digest-pinned Prometheus, Grafana, Dozzle, PostgreSQL exporter, and Redis exporter healthy. Prometheus reported `UP` for its mandatory `prometheus`, `postgres-exporter`, and `redis-exporter` targets. Grafana served `200` from `/api/health` and loaded both the repository-provisioned Prometheus datasource and `m2-infrastructure` dashboard. Dozzle was healthy on loopback; direct UI validation showed only the ten labeled `personal-tool-t4` containers while excluding an unlabeled probe container, and it displayed Nginx log entries. `docker stats` measured every T4 container at idle below the 6 GiB M2 target; container inspection found no OOM termination or unexpected restart. The temporary `personal-tool-t4` project was torn down without removing named volumes. Residual limitation: Dozzle mounts the direct Docker socket read-only and disables actions, shell, and MCP, but that socket remains a strong privileged boundary—not least privilege. A Docker socket proxy is deferred to a future hardening milestone.
+
+**M2/T5 completion evidence (2026-08-12):** `acceptance.ps1` reran the complete T1–T4 runtime/recreation suite, then used only `COMPOSE_PROJECT_NAME=personal-tool-acceptance`, acceptance-specific named volumes, and temporary ignored environment/license/backup artifacts outside the repository. It seeded non-secret synthetic PostgreSQL, AIStor, n8n and Redis state; proved the PostgreSQL, AIStor, `.n8n`, and encrypted n8n credential markers durable through `docker compose down`/`up` while the Redis marker disappeared; created logical PostgreSQL custom archives, an S3-layer object export/index with object checksums and tags, a `.n8n` archive excluding `config`, and a checksum-validated manifest with `secrets_included: false`. The test destroyed only acceptance volumes, recreated a clean acceptance stack with idempotent bootstrap, restored the archive, and verified the PostgreSQL marker, object bytes/tags, `.n8n` marker, synthetic credential decryption using the unchanged `N8N_ENCRYPTION_KEY`, and the absence of the Redis marker. The accepted run completed in 432 seconds, reported `M2/T5 full acceptance passed`, and removed the acceptance project, volumes, and temporary artifacts. No M2 backup contains plaintext credentials, encryption key, license, root credentials, Redis data, Prometheus runtime metrics, or Grafana runtime state.
 
 **Completion evidence:** M1/T3 implementation PR [#2](https://github.com/SatThuVoTinh/personal-tool/pull/2) merged into `main` at `9e80d9dff57c94265f8ddc2533552c6d6de3e06d`. PR checks passed: `CI / quality-gate`, `Security / dependency-audit`, and `Security / secret-scan`. The same three push checks passed on `main` (CI run `31497065617`; Security run `31497065623`). Manual dispatch also passed on `main`: CI run `31497197513` and Security run `31497245204` (dependency audit and secret scan; no leaks detected). Local gate passed: format check, lint, 14 unit tests, repository check, verify, high-level audit, and Git whitespace checks.
 
@@ -392,20 +420,6 @@ The final response must clearly state:
 
 **Local evidence (2026-08-11):** `npm run format:check`, `npm run lint`, `npm test` (14/14), `npm run repo:check`, `npm run verify`, `npm audit --audit-level=high`, `git diff --check`, and `git diff --cached --check` all passed. This is local implementation evidence only; remote PR, post-merge push, and manual-dispatch evidence are still required for completion.
 
-**Milestone:** M1 — Development Foundation
-**Trạng thái:** `IN PROGRESS`
-
-**Active Task:** M1/T3 — CI và security workflow thực thi quality gate.
-
-**Phạm vi:**
-
-- Thay các GitHub workflow placeholder bằng CI thực thi `npm ci` và `npm run verify` với Node `>=24.15.0 <25` và npm `12.0.2`.
-- Thêm dependency/secret scanning phù hợp với development foundation, không triển khai runtime, database schema, business logic, RAG, AI Agent hoặc dashboard.
-
-**Hành động kế tiếp:** Lập kế hoạch M1/T3 trước khi thay workflow placeholder bằng CI/security workflow thực thi.
-
-**Blocker:** Không có blocker đã biết cho M1/T3.
-
 **Bằng chứng M1/T2 hoàn thành:** Đã thêm `package.json`/`package-lock.json` với Node `>=24.15.0 <25`, npm 12.0.2, version pin đầy đủ cho `@eslint/js` 10.0.1, ESLint 10.8.1, Markdownlint CLI2 0.23.2 và Prettier 3.9.6. Makefile thay placeholder bằng target thực; npm scripts cung cấp format, format check, lint, test, repository check và quality gate fail-fast. Repository checker kiểm tra tracked/staged Git state, Git whitespace, byte working tree, file policy và secret allowlist; sáu test dùng Git repository tạm, không thay đổi Git index của workspace. Đã xác thực `npm ci`, từng lệnh quality và `npm run verify` bằng Node 24.15.0/npm 12.0.2; formatter đạt idempotency, audit không có vulnerability và repository policy check pass. Trong Codex sandbox, npm bundled 11.12.1 có thể được dùng khi không đọc được user-global npm 12.0.2; lệnh T2 gọi trực tiếp `%APPDATA%\npm\npm.cmd`, không sửa PATH hoặc global toolchain. Các workflow CI/security vẫn là placeholder và thuộc M1/T3.
 
 **Bằng chứng M1/T1 hoàn thành:** Git repository đã khởi tạo với nhánh `main`; private remote `https://github.com/SatThuVoTinh/personal-tool.git` là `origin` duy nhất; `main` theo dõi `origin/main` tại `87b78cf97a3a9fdeca0fbec862d5185caa957142`. Bootstrap commit dùng author cục bộ `Hoang Vinh <therealvinh738107@gmail.com>`. `.editorconfig`, `.gitattributes`, `.gitignore`, `README.md` và `docs/development/conventions.md` đã được chuẩn hóa. Đã xác thực staged diff không có whitespace error, attribute `README.md` là `text`/`eol=lf`, `.env` bị ignore còn `.env.example` trackable, và không có secret-like file ngoài các `.env.example` được phép trong bootstrap commit.
@@ -414,13 +428,14 @@ The final response must clearly state:
 
 ## Nhật ký quyết định
 
-| ID | Ngày | Trạng thái | Quyết định | Lý do | Tác động |
-| --- | --- | --- | --- | --- | --- |
-| D-001 | 2026-08-10 | `ACCEPTED` | V1 đi theo vertical slice: Knowledge Assistant, rồi L&SC Intelligence, rồi hardening. | Hoàn thành một luồng dùng được trước khi mở rộng phạm vi. | M3–M6 hoàn tất trước M7. |
-| D-002 | 2026-08-10 | `ACCEPTED` | AI và embedding là local-first; Ollama chạy trên Windows host. | Phù hợp RAM 24 GB, VRAM 6 GB và yêu cầu không dùng cloud. | Container truy cập Ollama qua host gateway; M2 xác thực kết nối này. |
-| D-003 | 2026-08-10 | `ACCEPTED` | M1 chỉ là Development Foundation. | Không đưa domain hoặc runtime vào trước khi repository có cơ chế kiểm chứng. | Không có database schema, business logic, RAG, agent hoặc dashboard ở M1. |
-| D-004 | 2026-08-10 | `ACCEPTED` | M2 gồm Docker, PostgreSQL + pgvector, Redis, Nginx, Ollama, Prometheus, Grafana, Dozzle, MinIO và n8n. | Cung cấp nền local cho các vertical slice sau. | M2 chỉ xác thực hạ tầng; chưa có workflow nghiệp vụ hoặc data pipeline. |
-| D-005 | 2026-08-10 | `ACCEPTED` | `PLAN.md` là nguồn trạng thái; `CHANGELOG.md` chỉ ghi việc đã hoàn thành và được xác thực. | Tách kế hoạch khỏi lịch sử thay đổi. | Hai file cập nhật cùng change set khi task đạt Definition of Done. |
+| ID    | Ngày       | Trạng thái | Quyết định                                                                                             | Lý do                                                                                                 | Tác động                                                                                              |
+| ----- | ---------- | ---------- | ------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| D-001 | 2026-08-10 | `ACCEPTED` | V1 đi theo vertical slice: Knowledge Assistant, rồi L&SC Intelligence, rồi hardening.                  | Hoàn thành một luồng dùng được trước khi mở rộng phạm vi.                                             | M3–M6 hoàn tất trước M7.                                                                              |
+| D-002 | 2026-08-10 | `ACCEPTED` | AI và embedding là local-first; Ollama chạy trên Windows host.                                         | Phù hợp RAM 24 GB, VRAM 6 GB và yêu cầu không dùng cloud.                                             | Container truy cập Ollama qua host gateway; M2 xác thực kết nối này.                                  |
+| D-003 | 2026-08-10 | `ACCEPTED` | M1 chỉ là Development Foundation.                                                                      | Không đưa domain hoặc runtime vào trước khi repository có cơ chế kiểm chứng.                          | Không có database schema, business logic, RAG, agent hoặc dashboard ở M1.                             |
+| D-004 | 2026-08-10 | `ACCEPTED` | M2 gồm Docker, PostgreSQL + pgvector, Redis, Nginx, Ollama, Prometheus, Grafana, Dozzle, MinIO và n8n. | Cung cấp nền local cho các vertical slice sau.                                                        | M2 chỉ xác thực hạ tầng; chưa có workflow nghiệp vụ hoặc data pipeline.                               |
+| D-005 | 2026-08-10 | `ACCEPTED` | `PLAN.md` là nguồn trạng thái; `CHANGELOG.md` chỉ ghi việc đã hoàn thành và được xác thực.             | Tách kế hoạch khỏi lịch sử thay đổi.                                                                  | Hai file cập nhật cùng change set khi task đạt Definition of Done.                                    |
+| D-006 | 2026-08-11 | `ACCEPTED` | M2 logical object-storage dùng MinIO AIStor Free thay cho legacy MinIO Community prebuilt image.       | Community repository đã archive; AIStor Free là single-node S3-compatible maintained path có license. | AIStor license file là runtime dependency ngoài Git; server và `mc` helper phải pin release + digest. |
 
 ## Lộ trình Personal Tool V1
 
@@ -448,19 +463,19 @@ M2  Local Infrastructure
     └── M10 Hardening → V1 DONE
 ```
 
-| Milestone | Trạng thái | Phụ thuộc | Mục tiêu |
-| --- | --- | --- | --- |
-| M0 — Phê duyệt kế hoạch | `COMPLETE` | — | Chốt phạm vi, thứ tự và Definition of Done. |
-| M1 — Development Foundation | `IN PROGRESS` | M0 `COMPLETE` | Tạo nền tảng phát triển và kiểm chứng repository. |
-| M2 — Local Infrastructure | `NOT STARTED` | M1 `COMPLETE` | Đưa và xác thực các service nền local. |
-| M3 — Knowledge Platform | `NOT STARTED` | M2 `COMPLETE` | Index và retrieval Obsidian có citation. |
-| M4 — AI Platform | `NOT STARTED` | M3 `COMPLETE` | Điều phối AI local và RAG route. |
-| M5 — Web Chat | `NOT STARTED` | M4 `COMPLETE` | Cung cấp ai-chat dùng Knowledge Assistant. |
+| Milestone                       | Trạng thái    | Phụ thuộc     | Mục tiêu                                                   |
+| ------------------------------- | ------------- | ------------- | ---------------------------------------------------------- |
+| M0 — Phê duyệt kế hoạch         | `COMPLETE`    | —             | Chốt phạm vi, thứ tự và Definition of Done.                |
+| M1 — Development Foundation     | `COMPLETE`    | M0 `COMPLETE` | Tạo nền tảng phát triển và kiểm chứng repository.          |
+| M2 — Local Infrastructure       | `COMPLETE`    | M1 `COMPLETE` | Đưa và xác thực các service nền local theo T1 → T5.        |
+| M3 — Knowledge Platform         | `NOT STARTED` | M2 `COMPLETE` | Index và retrieval Obsidian có citation.                   |
+| M4 — AI Platform                | `NOT STARTED` | M3 `COMPLETE` | Điều phối AI local và RAG route.                           |
+| M5 — Web Chat                   | `NOT STARTED` | M4 `COMPLETE` | Cung cấp ai-chat dùng Knowledge Assistant.                 |
 | M6 — Automation + Observability | `NOT STARTED` | M5 `COMPLETE` | Tự động hóa, telemetry và runbook cho Knowledge Assistant. |
-| M7 — Data Intake & Data Plant | `NOT STARTED` | M6 `COMPLETE` | Tạo dữ liệu L&SC được govern. |
-| M8 — Forecasting | `NOT STARTED` | M7 `COMPLETE` | Huấn luyện, đánh giá và suy luận dự báo local. |
-| M9 — Dashboard | `NOT STARTED` | M8 `COMPLETE` | Hiển thị data product và forecast có lineage. |
-| M10 — Hardening | `NOT STARTED` | M9 `COMPLETE` | Sẵn sàng phát hành V1. |
+| M7 — Data Intake & Data Plant   | `NOT STARTED` | M6 `COMPLETE` | Tạo dữ liệu L&SC được govern.                              |
+| M8 — Forecasting                | `NOT STARTED` | M7 `COMPLETE` | Huấn luyện, đánh giá và suy luận dự báo local.             |
+| M9 — Dashboard                  | `NOT STARTED` | M8 `COMPLETE` | Hiển thị data product và forecast có lineage.              |
+| M10 — Hardening                 | `NOT STARTED` | M9 `COMPLETE` | Sẵn sàng phát hành V1.                                     |
 
 ## M1 — Development Foundation
 
@@ -490,7 +505,7 @@ M2  Local Infrastructure
 
 - Docker Compose; PostgreSQL + pgvector; Redis; Nginx.
 - Ollama chạy trên Windows host.
-- Prometheus; Grafana; Dozzle; MinIO; n8n.
+- Prometheus; Grafana; Dozzle; AIStor Free object storage; n8n.
 - Cấu hình, persistence, health check, network local, script vận hành và tài liệu kiểm chứng hạ tầng.
 
 **Ngoài phạm vi:**
@@ -500,18 +515,30 @@ M2  Local Infrastructure
 
 **Definition of Done:**
 
-| Năng lực | Bằng chứng bắt buộc |
-| --- | --- |
-| Docker Compose | Cấu hình hợp lệ, khởi động/dừng có kiểm soát và service network hoạt động. |
-| PostgreSQL + pgvector | Client kết nối được, pgvector khả dụng và dữ liệu hạ tầng vẫn tồn tại sau restart. |
-| Redis | Client `PING` thành công; đặc tính transient/persistence được cấu hình hoặc ghi rõ. |
-| Nginx | Cấu hình được kiểm tra hợp lệ và chỉ mở theo local boundary đã định. |
-| Ollama host | Host cung cấp Ollama; container truy cập được qua host gateway; có smoke test model cục bộ. |
-| MinIO | Xác thực được, đọc/ghi object kiểm thử thành công và object persistence được xác nhận. |
-| n8n | Service khởi động, state persistence được xác nhận; chưa có workflow nghiệp vụ. |
-| Prometheus + Grafana + Dozzle | Target/service health quan sát được, Grafana có datasource/hiển thị cơ bản và Dozzle xem được log container. |
+| Năng lực                      | Bằng chứng bắt buộc                                                                                                                               |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Docker Compose                | Cấu hình hợp lệ, khởi động/dừng có kiểm soát và service network hoạt động.                                                                        |
+| PostgreSQL + pgvector         | Client kết nối được, pgvector khả dụng và dữ liệu hạ tầng vẫn tồn tại sau container recreation bằng named volume.                                 |
+| Redis                         | Client `PING` thành công; đặc tính transient/persistence được cấu hình hoặc ghi rõ.                                                               |
+| Nginx                         | Cấu hình được kiểm tra hợp lệ và chỉ mở theo local boundary đã định.                                                                              |
+| Ollama host                   | Host cung cấp Ollama; container truy cập được qua host gateway; có smoke test model cục bộ.                                                       |
+| Object storage (AIStor Free)  | License hợp lệ, xác thực được, đọc/ghi object kiểm thử thành công và object persistence được xác nhận qua container recreation bằng named volume. |
+| n8n                           | Service khởi động, state persistence được xác nhận; chưa có workflow nghiệp vụ.                                                                   |
+| Prometheus + Grafana + Dozzle | Target/service health quan sát được, Grafana có datasource/hiển thị cơ bản và Dozzle xem được log container.                                      |
 
 Container `Up` không phải bằng chứng M2 hoàn thành. M2 chỉ `COMPLETE` khi toàn bộ năng lực trên được xác thực, resource usage được kiểm tra phù hợp phần cứng và các lệnh vận hành được tài liệu hóa.
+
+### Chuỗi task M2 được phê duyệt
+
+| Task                              | Trạng thái hiện tại | Chỉ mở khi    | Phạm vi và completion gate                                                                                                                                  |
+| --------------------------------- | ------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M2/T1 — Host preflight            | `COMPLETE`          | M1 `COMPLETE` | AIStor server/client pin theo release+digest, license/credential/Ollama preflight, helper `mc` ephemeral và AIStor license + S3 put/get smoke.              |
+| M2/T2 — Core storage              | `COMPLETE`          | T1 `COMPLETE` | PostgreSQL + pgvector, Redis transient, AIStor named volume và idempotent bootstrap; persistence chỉ chứng minh qua `down`/`up` hoặc force-recreate.        |
+| M2/T3 — Local integration         | `COMPLETE`          | T2 `COMPLETE` | n8n PostgreSQL state + `.n8n` volume + stable `N8N_ENCRYPTION_KEY`, Nginx health/default deny và Ollama host-gateway smoke đã được xác thực qua recreation. |
+| M2/T4 — Observability             | `COMPLETE`          | T3 `COMPLETE` | Prometheus, Grafana, Dozzle/filter và exporter cần thiết; targets, dashboard và container logs đã được xác thực.                                            |
+| M2/T5 — Operations and acceptance | `COMPLETE`          | T4 `COMPLETE` | Start/stop/backup/restore/verify và acceptance project riêng; full destroy volumes → clean recreate → restore → marker verification đã pass.                |
+
+Mọi task lặp lại regression của mọi task trước đó. Sau khi task đạt Definition of Done, cập nhật `PLAN.md`, `README.md` và `CHANGELOG.md` trong cùng completion change set trước khi chuyển Active Task. Nếu runtime/static/recreation validation thất bại, task không mở task tiếp theo và phải được giữ `IN PROGRESS` hoặc đánh dấu `BLOCKED` cùng bằng chứng.
 
 ## Phase 1 — Knowledge Assistant
 
@@ -562,17 +589,17 @@ Container `Up` không phải bằng chứng M2 hoàn thành. M2 chỉ `COMPLETE`
 
 ## Bản đồ hoàn thành theo cây thư mục
 
-| Khu vực | Trạng thái thành phần hiện tại | Milestone sở hữu | Bằng chứng hoàn thành |
-| --- | --- | --- | --- |
-| Tài liệu kiến trúc | `IMPLEMENTED` | Duy trì xuyên suốt | Tài liệu mô tả boundary hiện có; không phải bằng chứng runtime. |
-| CI, Makefile, script và test framework | `PARTIALLY IMPLEMENTED` | M1 | Local format/lint/test/repository quality gate đã pass; CI và security workflows còn thuộc M1/T3. |
-| Docker, database, networking, reverse proxy | `PLANNED` | M2 | Service readiness theo Definition of Done M2. |
-| Knowledge Platform | `PLANNED` | M3 | Index, retrieval và citation được kiểm thử. |
-| AI Platform và ai-chat | `PLANNED` | M4–M5 | Luồng chat local có bằng chứng end-to-end. |
-| Automation và observability theo nghiệp vụ | `PLANNED` | M6 | Workflow, telemetry và runbook đã xác thực. |
-| L&SC Data Plant, forecasting và dashboard | `PLANNED` | M7–M9 | Data quality, lineage, model và dashboard được kiểm chứng. |
-| Experiments | `PLANNED` | M8 trở đi | Đánh giá cô lập và quyết định promotion được ghi lại. |
-| Admin dashboard và document manager | `DEFERRED` | Sau V1 | Có nhu cầu cụ thể được chủ sở hữu phê duyệt. |
+| Khu vực                                     | Trạng thái thành phần hiện tại | Milestone sở hữu   | Bằng chứng hoàn thành                                                                             |
+| ------------------------------------------- | ------------------------------ | ------------------ | ------------------------------------------------------------------------------------------------- |
+| Tài liệu kiến trúc                          | `IMPLEMENTED`                  | Duy trì xuyên suốt | Tài liệu mô tả boundary hiện có; không phải bằng chứng runtime.                                   |
+| CI, Makefile, script và test framework      | `PARTIALLY IMPLEMENTED`        | M1                 | Local format/lint/test/repository quality gate đã pass; CI và security workflows còn thuộc M1/T3. |
+| Docker, database, networking, reverse proxy | `PLANNED`                      | M2                 | Service readiness theo Definition of Done M2.                                                     |
+| Knowledge Platform                          | `PLANNED`                      | M3                 | Index, retrieval và citation được kiểm thử.                                                       |
+| AI Platform và ai-chat                      | `PLANNED`                      | M4–M5              | Luồng chat local có bằng chứng end-to-end.                                                        |
+| Automation và observability theo nghiệp vụ  | `PLANNED`                      | M6                 | Workflow, telemetry và runbook đã xác thực.                                                       |
+| L&SC Data Plant, forecasting và dashboard   | `PLANNED`                      | M7–M9              | Data quality, lineage, model và dashboard được kiểm chứng.                                        |
+| Experiments                                 | `PLANNED`                      | M8 trở đi          | Đánh giá cô lập và quyết định promotion được ghi lại.                                             |
+| Admin dashboard và document manager         | `DEFERRED`                     | Sau V1             | Có nhu cầu cụ thể được chủ sở hữu phê duyệt.                                                      |
 
 ## Đồng bộ tiến độ và Changelog
 
@@ -590,9 +617,6 @@ Không cập nhật `CHANGELOG.md` cho kế hoạch, placeholder, directory rỗ
 - Obsidian là nguồn tri thức do người dùng viết; hệ thống không ghi tùy ý vào Vault.
 - Knowledge Assistant hoàn thành trước L&SC Intelligence.
 - Routing/optimization nâng cao, multimodal indexing, ontology, context pack và ứng dụng bổ sung chỉ được xem xét sau V1 khi có quyết định mới.
-
-
-
 
 <!-- Bản nháp kế hoạch trước đã được thay thế; không dùng để điều phối công việc.
 

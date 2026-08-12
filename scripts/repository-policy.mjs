@@ -507,6 +507,7 @@ function isSensitivePath(filePath) {
   return (
     name === ".env" ||
     /^credentials[^/]*\.json$/.test(name) ||
+    /\.license$/.test(name) ||
     /\.(key|pem|p12|pfx)$/.test(name)
   );
 }
