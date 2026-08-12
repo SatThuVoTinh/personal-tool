@@ -1,17 +1,368 @@
 # Personal Tool — Development Plan
 
-`PLAN.md` is the authoritative record of development order, active scope, architectural decisions, completion evidence, and blockers. `CHANGELOG.md` records only work that has completed its Definition of Done.
+## Development Rules
 
-## Operating rules
+### 1. Read Before Acting
 
-- Read `AGENTS.md`, this file, and the relevant implementation before changing a module.
-- Work only on the declared active task. Do not create speculative infrastructure or start a later milestone early.
-- A task is complete only with executable evidence: tests, reproducible commands, runtime checks, or observed API/database behavior as appropriate.
-- Do not infer completion from a file, directory, diagram, configuration declaration, or placeholder.
-- Do not commit secrets, runtime `.env` files, licenses, credentials, generated backup data, or user Vault content.
-- Treat Obsidian as read-only source material. PostgreSQL/vector data is derived and rebuildable.
-- When a module completes, update this file, `CHANGELOG.md`, and `README.md` in the same change set where applicable. Planned or blocked work is recorded here, never as a completed changelog entry.
+Before modifying the repository, the agent MUST:
 
+1. Read `AGENTS.md`.
+2. Read `PLAN.md`.
+3. Identify the current Active Task in `PLAN.md`.
+4. Inspect the relevant repository files and existing implementation.
+5. Determine the actual implementation state from repository evidence.
+6. Make the smallest change required by the Active Task.
+
+Do not begin implementation before the Active Task is known.
+
+---
+
+### 2. `PLAN.md` Is the Development Source of Truth
+
+`PLAN.md` is the single source of truth for:
+
+- development sequence;
+- milestone status;
+- task status;
+- Current Focus;
+- Active Task;
+- dependencies;
+- Definition of Done;
+- completion evidence;
+- blockers;
+- component completion status.
+
+`AGENTS.md` defines how an agent must work.
+
+`CHANGELOG.md` records historical completed changes.
+
+The agent MUST NOT create a separate development roadmap or progress state in another document.
+
+---
+
+### 3. Active Task Rule
+
+Only the task explicitly identified as the current Active Task in `PLAN.md` is in scope.
+
+The agent MUST NOT:
+
+- implement future milestones proactively;
+- start another milestone because it appears easy;
+- create infrastructure for future milestones;
+- refactor unrelated components;
+- add speculative abstractions;
+- modify deferred applications;
+- mark future work as complete;
+- silently expand the scope of the Active Task.
+
+If the current task reveals a prerequisite outside its scope, stop and report the dependency. Do not silently expand the task.
+
+---
+
+### 4. Sequential Milestone Rule
+
+Personal Tool V1 follows the approved milestone sequence:
+
+```text
+M0 → M1 → M2 → M3 → M4 → M5 → M6 → M7 → M8 → M9 → M10
+```
+
+A milestone may move to `IN PROGRESS` only after the previous required milestone has reached `COMPLETE`.
+
+No milestone may run in parallel unless the owner explicitly approves the exception.
+
+The agent MUST NOT unlock or begin the next milestone merely because its implementation appears possible.
+
+---
+
+### 5. Milestone Completion Gate
+
+A milestone may be marked `COMPLETE` only when:
+
+1. its Definition of Done is satisfied;
+2. the required implementation exists;
+3. relevant validation has passed;
+4. required service health checks have passed;
+5. completion evidence has been recorded in `PLAN.md`;
+6. known blockers affecting the milestone are resolved or explicitly documented.
+
+Code existence alone does not establish completion.
+
+After a milestone becomes `COMPLETE`, the next milestone becomes eligible for execution according to `PLAN.md`.
+
+---
+
+### 6. Evidence Rule
+
+Never infer implementation status from:
+
+- file names;
+- directory names;
+- architecture diagrams;
+- documentation;
+- comments;
+- TODO items;
+- placeholders;
+- empty directories;
+- configuration templates;
+- planned schemas;
+- declared Docker services.
+
+A component may be classified as `IMPLEMENTED` only when observable repository evidence supports that status.
+
+Acceptable evidence may include:
+
+- executable implementation;
+- passing automated tests;
+- successful reproducible commands;
+- successful database migration;
+- successful service health check;
+- validated API behavior;
+- validated data-pipeline output;
+- validated end-to-end behavior.
+
+If evidence is unavailable, report the component as not verified.
+
+---
+
+### 7. Status Vocabulary
+
+Milestone and task status:
+
+```text
+NOT STARTED
+IN PROGRESS
+BLOCKED
+COMPLETE
+DEFERRED
+CANCELLED
+```
+
+Component status:
+
+```text
+IMPLEMENTED
+PARTIALLY IMPLEMENTED
+PLANNED
+MISSING
+INCONSISTENT
+DEPRECATED
+```
+
+These two status systems MUST NOT be mixed.
+
+For example:
+
+```text
+M5 → IN PROGRESS
+ai-chat → PARTIALLY IMPLEMENTED
+```
+
+is valid.
+
+Do not use `IMPLEMENTED` as a milestone status or `COMPLETE` as a component status.
+
+---
+
+### 8. Repository-State Verification
+
+Before claiming that something is implemented, inspect the actual repository.
+
+The agent MUST NOT assume that an architectural component exists merely because it is described in:
+
+- `AGENTS.md`;
+- `PLAN.md`;
+- architecture documentation;
+- README files;
+- diagrams;
+- previous conversations.
+
+If implementation and documentation disagree, treat the repository evidence as the current implementation reality and report the inconsistency.
+
+---
+
+### 9. Architecture and Dependency Changes
+
+Do not silently change approved architecture.
+
+A new:
+
+- database;
+- infrastructure service;
+- framework;
+- model provider;
+- external dependency;
+- architectural boundary;
+- major runtime dependency
+
+requires an explicit architectural decision before implementation when it changes the approved V1 design.
+
+Record the decision in `PLAN.md` under `Decision Log`.
+
+A proposal must be marked `PROPOSED` until explicitly approved by the owner.
+
+Do not implement a `PROPOSED` architectural change as though it were `ACCEPTED`.
+
+---
+
+### 10. Scope Protection
+
+V1 prioritizes the complete Knowledge Assistant before L&SC Intelligence.
+
+The approved execution order is:
+
+```text
+Knowledge Assistant
+    M3 → M4 → M5 → M6
+        ↓
+L&SC Intelligence
+    M7 → M8 → M9
+        ↓
+V1 Hardening
+    M10
+```
+
+Deferred applications, including:
+
+```text
+applications/admin-dashboard/
+applications/document-manager/
+```
+
+must not be developed during V1 unless explicitly re-approved.
+
+---
+
+### 11. Validation Rule
+
+After implementation, run the narrowest meaningful validation first and broader validation when required.
+
+Examples:
+
+```text
+implementation
+    ↓
+unit test
+    ↓
+integration validation
+    ↓
+service health
+    ↓
+end-to-end validation
+```
+
+If validation cannot be performed:
+
+- do not claim completion;
+- record the missing validation or blocker in `PLAN.md`;
+- report exactly what remains unverified.
+
+---
+
+### 12. `PLAN.md` Update Rule
+
+Update `PLAN.md` when:
+
+- a task is completed;
+- a task becomes blocked;
+- a task is deferred or cancelled;
+- the Active Task changes;
+- a dependency changes;
+- the Definition of Done changes;
+- the implementation materially changes the approved approach;
+- a new architectural decision is required;
+- completion evidence changes.
+
+All updates must describe actual repository state, not intentions.
+
+---
+
+### 13. `CHANGELOG.md` Update Rule
+
+`CHANGELOG.md` is a historical record of completed and validated changes.
+
+Add an entry only after the relevant task reaches its Definition of Done.
+
+Do not add entries for:
+
+- planned work;
+- work in progress;
+- blocked work;
+- placeholders;
+- empty directories;
+- unverified code;
+- architecture proposals;
+- speculative changes.
+
+When a task reaches Definition of Done, update `PLAN.md` and `CHANGELOG.md` in the same change set whenever practical.
+
+`CHANGELOG.md` MUST NOT be used as the source of truth for the current Active Task.
+
+---
+
+### 14. Security and Secrets
+
+Never:
+
+- commit `.env` files containing secrets;
+- expose API keys;
+- expose passwords;
+- expose access tokens;
+- print credentials;
+- commit private certificates;
+- expose sensitive local configuration.
+
+Environment files may be inspected for variable names and structure, but secret values must remain redacted.
+
+Use `.env.example` to document configuration shape.
+
+---
+
+### 15. Database and Persistent Data Safety
+
+Do not:
+
+- silently delete databases;
+- reset persistent volumes without explicit approval;
+- destroy existing data merely to simplify testing;
+- introduce schema changes without appropriate validation;
+- treat a migration file as proof that a migration has been executed successfully.
+
+Database changes must be reproducible and validated.
+
+---
+
+### 16. Minimal Change Principle
+
+Prefer the smallest coherent change that satisfies the Active Task.
+
+Do not perform unrelated cleanup, broad refactoring, dependency replacement, or architecture modernization during an implementation task.
+
+If a larger refactor is genuinely required, explain why and obtain the necessary architectural decision before expanding scope.
+
+---
+
+### 17. Final Verification
+
+Before reporting a task as complete:
+
+1. Verify the changed files.
+2. Run the relevant tests/checks.
+3. Verify affected services where applicable.
+4. Confirm no secrets were exposed.
+5. Record completion evidence in `PLAN.md`.
+6. Update `CHANGELOG.md` if the Definition of Done was reached.
+7. Confirm the next milestone is actually unlocked.
+
+The final response must clearly state:
+
+- what was changed;
+- what was validated;
+- what evidence was obtained;
+- what remains blocked or unverified;
+- whether the next milestone is unlocked.
+
+## End rule
 ## Current status and release gate
 
 | Item                             | Status                     | Verified evidence                                                                                                                                                          |
