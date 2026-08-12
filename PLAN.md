@@ -19,9 +19,9 @@
 | M0 — plan approval               | `COMPLETE`                 | V1 sequence and ownership boundaries approved.                                                                                                                             |
 | M1 — development foundation      | `COMPLETE`                 | Local verification suite and GitHub CI/Security workflows exist and pass.                                                                                                  |
 | M2 — local infrastructure        | `COMPLETE + REMOTE-BACKED` | Commit `5ffe4cb9be81c30d5c24bd7eb6a9d41abc2a5f19`; full isolated M2/T5 acceptance passed on 2026-08-12; GitHub CI run `31597875617` and Security run `31597875566` passed. |
-| M3 — Markdown Knowledge Platform | `IN PROGRESS`              | M3/T1 passed isolated runtime acceptance and the full M2/T1–T5 regression on 2026-08-12; T2 remains locked until this change set passes GitHub CI/Security on `main`.       |
+| M3 — Markdown Knowledge Platform | `IN PROGRESS`              | M3/T1 is `COMPLETE + REMOTE-BACKED` at merge `4097862ab383e8698f2d5b1ff5adce0acd1c6579`; isolated M3/T1 and M2/T1–T5 acceptance passed on 2026-08-12, then GitHub CI `31615503607` and Security `31615503591` passed on `main`. |
 
-**Next eligible task:** M3/T2 — Markdown discovery and segmentation. It may start only after the M3/T1 change set containing this plan, `README.md`, and `CHANGELOG.md` is committed, merged to `main`, and its GitHub CI/Security checks pass.
+**Next eligible task:** M3/T2 — Markdown discovery and segmentation. M3/T1 is merged to `main` and its GitHub CI/Security checks passed; T2 is eligible but has not started.
 
 **M2 completion evidence:** the isolated `personal-tool-acceptance` project passed T1 runtime preflight, T2 durable PostgreSQL/AIStor plus transient Redis checks, T3 persistent/encrypted n8n state and Ollama connectivity, T4 observability target/resource checks, and T5 logical backup → destroy acceptance volumes → clean recreate → restore. The acceptance project and its temporary artifacts were removed. GitHub confirmed `CI / quality-gate`, `Security / dependency-audit`, and `Security / secret-scan` as successful for the remote M2 commit.
 
@@ -31,7 +31,7 @@
 M0  Plan approval                         COMPLETE
 M1  Development foundation                COMPLETE
 M2  Local infrastructure                  COMPLETE + REMOTE-BACKED
-M3  Markdown Knowledge Platform           IN PROGRESS (T1 complete)
+M3  Markdown Knowledge Platform           IN PROGRESS (T1 remote-backed; T2 eligible)
 M4  PDF document ingestion                 deferred until M3 is complete
 M5  Image and video multimodal ingestion  deferred until M4 is complete
 M6  AI Platform                            deferred
@@ -61,7 +61,7 @@ M3 provides local hybrid retrieval over human-authored Markdown in `01. Knowledg
 
 | Task                                        | Status        | Scope and completion gate                                                                                                                                                                                                     |
 | ------------------------------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| M3/T1 — service and index identity          | `COMPLETE`    | Internal-only Knowledge service, idempotent migrations, health/readiness, active-index invariant, digest/dimension preflight, orphan-run recovery, and an advisory-lock in-process scheduler passed isolated runtime acceptance plus M2/T1–T5 regression on 2026-08-12. No retrieval or source adapter was implemented. |
+| M3/T1 — service and index identity          | `COMPLETE + REMOTE-BACKED` | Internal-only Knowledge service, idempotent migrations, health/readiness, active-index invariant, digest/dimension preflight, orphan-run recovery, and an advisory-lock in-process scheduler passed isolated runtime acceptance plus M2/T1–T5 regression on 2026-08-12; merge `4097862` and its GitHub CI/Security checks passed. No retrieval or source adapter was implemented. |
 | M3/T2 — Markdown discovery and segmentation | `NOT STARTED` | Read-only Vault scan, canonical topic validation, native-tag extraction, title/heading extraction, original-line source spans, and deterministic token-aware chunks.                                                          |
 | M3/T3 — index lifecycle                     | `NOT STARTED` | Incremental replacement, side-by-side full rebuild, digest checks, document-level atomicity, deletion safety, recovery, and run status APIs.                                                                                  |
 | M3/T4 — hybrid retrieval and reranking      | `NOT STARTED` | Filtered HNSW/FTS retrieval, RRF, batched ONNX reranking, citations, capacity limits, and search APIs.                                                                                                                        |
@@ -69,7 +69,7 @@ M3 provides local hybrid retrieval over human-authored Markdown in `01. Knowledg
 
 Each task reruns all relevant predecessor regression checks. A failed task remains `IN PROGRESS` or becomes `BLOCKED`; it never unlocks the next task.
 
-**M3/T1 completion evidence:** the isolated `personal-tool-m3-t1` project built the Knowledge image and proved that Nginx reaches its internal-only liveness route, readiness refuses a missing ACTIVE index, active-index uniqueness is enforced, readiness becomes healthy only with the exact resolved BGE-M3 digest and 1024 dimensions, a digest change returns `EMBEDDING_MODEL_DRIFT`, and a restarted service converts a `RUNNING` run to `INTERRUPTED` with `PROCESS_RESTART`. Its project, network, and volume were removed. The cumulative isolated M2/T1–T5 acceptance was then rerun and passed, including backup, destroy/recreate, restore, and cleanup.
+**M3/T1 completion evidence:** the isolated `personal-tool-m3-t1` project built the Knowledge image and proved that Nginx reaches its internal-only liveness route, readiness refuses a missing ACTIVE index, active-index uniqueness is enforced, readiness becomes healthy only with the exact resolved BGE-M3 digest and 1024 dimensions, a digest change returns `EMBEDDING_MODEL_DRIFT`, and a restarted service converts a `RUNNING` run to `INTERRUPTED` with `PROCESS_RESTART`. Its project, network, and volume were removed. The cumulative isolated M2/T1–T5 acceptance was then rerun and passed, including backup, destroy/recreate, restore, and cleanup. M3/T1 was merged at `4097862ab383e8698f2d5b1ff5adce0acd1c6579`; GitHub CI run `31615503607` and Security run `31615503591` passed on that `main` commit.
 
 ### Read-only Vault and canonical topics
 
