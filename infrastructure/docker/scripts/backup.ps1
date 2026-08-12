@@ -103,6 +103,26 @@ function Get-ObjectTags {
   return $tags
 }
 
+function Get-ImageDigest {
+  param([string]$Image)
+
+  $imageParts = $Image -split "@", 2
+
+  if ($imageParts.Count -eq 2 -and $imageParts[1]) {
+    return $imageParts[1]
+  }
+
+  # Locally built services do not have a registry manifest digest. Record the
+  # immutable local image ID instead, so the manifest is still attributable.
+  $imageId = & docker image inspect --format "{{.Id}}" $Image 2>$null
+
+  if ($LASTEXITCODE -ne 0 -or -not $imageId) {
+    throw "Cannot resolve an image identity for service image '$Image'."
+  }
+
+  return ([string]$imageId).Trim()
+}
+
 function Assert-Name {
   param(
     [string]$Name,
@@ -236,7 +256,7 @@ $imageDigests = [ordered]@{}
 foreach ($property in $composeConfiguration.services.PSObject.Properties) {
   $image = [string]$property.Value.image
   $serviceVersions[$property.Name] = $image
-  $imageDigests[$property.Name] = ($image -split "@", 2)[1]
+  $imageDigests[$property.Name] = Get-ImageDigest $image
 }
 
 $manifestFiles = @()

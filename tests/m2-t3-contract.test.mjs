@@ -77,14 +77,16 @@ test("M2/T3 makes stable n8n encryption and Postgres persistence explicit", () =
   assert.ok(n8n.networks.includes("platform"));
 });
 
-test("M2/T3 Nginx permits only health and default-denies other paths", () => {
+test("M2/T3 Nginx keeps health/default-deny while allowing the approved Knowledge route", () => {
   const configuration = readFileSync(nginxConfigurationPath, "utf8");
 
   assert.match(configuration, /listen 8080;/);
   assert.match(configuration, /location = \/healthz/);
   assert.match(configuration, /return 200 "ok\\n";/);
   assert.match(configuration, /location \/ \{[\s\S]*return 404;/);
-  assert.doesNotMatch(configuration, /proxy_pass/);
+  assert.match(configuration, /location \/knowledge\//);
+  assert.match(configuration, /rewrite \^\/knowledge\/\(\.\*\)\$ \/\$1 break;/);
+  assert.match(configuration, /proxy_pass http:\/\/\$knowledge_upstream;/);
 });
 
 test("M2/T3 verifier reruns T2 and uses recreation without persisting plaintext", () => {
