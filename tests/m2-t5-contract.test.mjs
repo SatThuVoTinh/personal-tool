@@ -44,6 +44,8 @@ test("M2/T5 backup uses portable logical exports and excludes n8n config", () =>
   assert.match(contents, /object-storage-index\.json/);
   assert.match(contents, /tagResult\.tagset/);
   assert.match(contents, /function Get-BackupRelativePath/);
+  assert.match(contents, /function Get-ImageDigest/);
+  assert.match(contents, /docker image inspect --format/);
   assert.doesNotMatch(contents, /GetRelativePath/);
   assert.match(contents, /--exclude=config/);
   assert.match(contents, /Stop n8n before backup/);

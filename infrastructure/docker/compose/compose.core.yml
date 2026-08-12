@@ -29,7 +29,11 @@ services:
         target: /minio.license
         read_only: true
     healthcheck:
-      test: ["CMD-SHELL", "curl --fail --silent http://localhost:9000/minio/health/live >/dev/null"]
+      test:
+        [
+          "CMD-SHELL",
+          "curl --fail --silent http://localhost:9000/minio/health/live >/dev/null",
+        ]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -180,7 +184,11 @@ services:
     volumes:
       - n8n-data:/home/node/.n8n
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:5678/healthz').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))\""]
+      test:
+        [
+          "CMD-SHELL",
+          'node -e "fetch(''http://127.0.0.1:5678/healthz'').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"',
+        ]
       interval: 5s
       timeout: 5s
       retries: 30
@@ -214,6 +222,47 @@ services:
     labels:
       personal-tool.component: reverse-proxy
       personal-tool.milestone: m2-t3
+      personal-tool.project: personal-tool
+    networks:
+      - platform
+
+  knowledge:
+    <<: *runtime-defaults
+    build:
+      context: ../../../apps/knowledge
+      dockerfile: Dockerfile
+    image: personal-tool/knowledge:m3-t1
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      KNOWLEDGE_DATABASE_HOST: postgres
+      KNOWLEDGE_DATABASE_NAME: postgres
+      KNOWLEDGE_DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-m2-t2-unconfigured}
+      KNOWLEDGE_DATABASE_PORT: "5432"
+      KNOWLEDGE_DATABASE_USER: postgres
+      KNOWLEDGE_EMBEDDING_DIMENSIONS: "1024"
+      KNOWLEDGE_EMBEDDING_MODEL: ${KNOWLEDGE_EMBEDDING_MODEL:-bge-m3:latest}
+      KNOWLEDGE_INDEX_ADVISORY_LOCK_KEY: "741212391041002"
+      KNOWLEDGE_OLLAMA_URL: http://host.docker.internal:11434
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/healthz').read()",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 15s
+    mem_limit: 768m
+    labels:
+      personal-tool.component: knowledge-platform
+      personal-tool.milestone: m3-t1
       personal-tool.project: personal-tool
     networks:
       - platform
@@ -284,7 +333,8 @@ services:
         target: /etc/prometheus/prometheus.yml
         read_only: true
     healthcheck:
-      test: ["CMD-SHELL", "wget --spider --quiet http://127.0.0.1:9090/-/healthy"]
+      test:
+        ["CMD-SHELL", "wget --spider --quiet http://127.0.0.1:9090/-/healthy"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -327,7 +377,8 @@ services:
         target: /etc/grafana/provisioning/dashboards-json
         read_only: true
     healthcheck:
-      test: ["CMD-SHELL", "wget --spider --quiet http://127.0.0.1:3000/api/health"]
+      test:
+        ["CMD-SHELL", "wget --spider --quiet http://127.0.0.1:3000/api/health"]
       interval: 5s
       timeout: 3s
       retries: 20

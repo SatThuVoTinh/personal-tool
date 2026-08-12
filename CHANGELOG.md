@@ -8,6 +8,7 @@ All notable, validated changes to Personal Tool are documented here.
 
 ### Added
 
+- Added validated M3/T1 Knowledge-service foundation: an internal-only FastAPI/Uvicorn container; idempotent `knowledge` schema for indexes, runs, sources, sidecars, and segments; one ACTIVE-index constraint; BGE-M3 digest/dimension readiness guard; orphan-run interruption recovery; advisory-lock background-run coordination; and isolated container acceptance without Vault access.
 - Established the local Git repository, private GitHub remote, and documented development conventions for M1/T1.
 - Added a pinned Node/npm quality baseline with reproducible formatting, linting, testing, and repository-policy verification for M1/T2.
 - Added isolated Git-fixture tests for sensitive-file allowlists, working-tree whitespace, Git whitespace, required files, and command placeholders.
@@ -21,6 +22,7 @@ All notable, validated changes to Personal Tool are documented here.
 
 ### Changed
 
+- Updated backup manifests to record a locally built service image's immutable local image ID when it has no registry digest, preserving M2 backup/restore compatibility after adding the Knowledge container.
 - Consolidated the approved V1 roadmap into one authoritative M3 architecture contract, recorded the verified remote M2 backup/CI evidence, and aligned the README with the Markdown-only M3 boundary and deferred multimodal roadmap.
 - Replaced the Makefile placeholder with functional quality-gate targets backed by npm scripts and a committed lockfile.
 - Replaced the initial partial scaffold with the approved Personal Tool architecture.
