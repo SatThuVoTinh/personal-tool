@@ -21,6 +21,7 @@ All notable, validated changes to Personal Tool are documented here.
 
 ### Changed
 
+- Consolidated the approved V1 roadmap into one authoritative M3 architecture contract, recorded the verified remote M2 backup/CI evidence, and aligned the README with the Markdown-only M3 boundary and deferred multimodal roadmap.
 - Replaced the Makefile placeholder with functional quality-gate targets backed by npm scripts and a committed lockfile.
 - Replaced the initial partial scaffold with the approved Personal Tool architecture.
 - Centralized observability under `infrastructure/observability/`.
