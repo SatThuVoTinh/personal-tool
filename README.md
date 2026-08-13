@@ -8,7 +8,7 @@ M1 and M2 are complete. M2 is backed up on GitHub at commit [`5ffe4cb`](https://
 
 The validated M2 stack uses PostgreSQL 17 + pgvector, AIStor Free, Redis, n8n, Nginx, Prometheus, Grafana, and Dozzle. PostgreSQL, AIStor, n8n state, and `.n8n` use named volumes; Redis is intentionally transient. PostgreSQL, Redis, exporters, the S3 API, and the future Knowledge service have no host port mapping. Nginx, n8n, Prometheus, Grafana, and Dozzle bind only to host loopback.
 
-M3 is in progress. M3/T1 provides the merged internal-only Knowledge-service foundation at [`4097862`](https://github.com/SatThuVoTinh/personal-tool/commit/4097862ab383e8698f2d5b1ff5adce0acd1c6579). M3/T2 provides remote-backed, read-only Markdown discovery, all-or-nothing source validation, native Obsidian tag parsing, original-line coordinates, and retrieval-safe segmentation under the pinned reranker tokenizer budget. M3/T2 is merged at [`b446ff1`](https://github.com/SatThuVoTinh/personal-tool/commit/b446ff17146763ea762b8669207c09642d42098f), with [CI](https://github.com/SatThuVoTinh/personal-tool/actions/runs/31682828157) and [Security](https://github.com/SatThuVoTinh/personal-tool/actions/runs/31682828014) passed on `main`; M3/T3 is now eligible. T2 does not write to the database, embed content, expose an API, or manage index lifecycle. PDF, image, and video ingestion remain deferred to M4/M5.
+M3 is in progress. M3/T1 provides the merged internal-only Knowledge-service foundation at [`4097862`](https://github.com/SatThuVoTinh/personal-tool/commit/4097862ab383e8698f2d5b1ff5adce0acd1c6579). M3/T2 provides remote-backed, read-only Markdown discovery, all-or-nothing source validation, native Obsidian tag parsing, original-line coordinates, and retrieval-safe segmentation under the pinned reranker tokenizer budget. M3/T2 is merged at [`b446ff1`](https://github.com/SatThuVoTinh/personal-tool/commit/b446ff17146763ea762b8669207c09642d42098f), with [CI](https://github.com/SatThuVoTinh/personal-tool/actions/runs/31682828157) and [Security](https://github.com/SatThuVoTinh/personal-tool/actions/runs/31682828014) passed on `main`. M3/T3 is now in progress: it adds persistent index-run APIs, incremental replacement and side-by-side full rebuilds; M3/T4 is not yet eligible. PDF, image, and video ingestion remain deferred to M4/M5.
 
 ## Development
 
@@ -78,6 +78,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/docker/scri
 ```
 
 The first script builds with the committed `uv.lock`, verifies the immutable tokenizer artifact, runs the Python suite, mounts only the repository fixture Vault read-only, and confirms its hashes are unchanged. The second script is Windows-native acceptance for junction/reparse rejection; Linux-container tests do not claim Windows filesystem semantics.
+
+## M3/T3 index lifecycle verification
+
+With the same runtime environment and local `bge-m3:latest` model, run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/docker/scripts/knowledge-t3.ps1 -EnvironmentFile ./infrastructure/docker/env/.env
+```
+
+This uses a disposable copy of the Markdown fixture mounted read-only, then verifies `POST` persistence before `202`, full rebuild publication, unchanged incremental convergence, and empty-snapshot deletion protection through Nginx.
 
 ## GitHub validation
 

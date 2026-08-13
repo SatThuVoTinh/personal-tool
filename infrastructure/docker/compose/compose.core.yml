@@ -245,6 +245,7 @@ services:
       KNOWLEDGE_EMBEDDING_MODEL: ${KNOWLEDGE_EMBEDDING_MODEL:-bge-m3:latest}
       KNOWLEDGE_INDEX_ADVISORY_LOCK_KEY: "741212391041002"
       KNOWLEDGE_OLLAMA_URL: http://host.docker.internal:11434
+      KNOWLEDGE_VAULT_ROOT: /vault
     extra_hosts:
       - host.docker.internal:host-gateway
     healthcheck:

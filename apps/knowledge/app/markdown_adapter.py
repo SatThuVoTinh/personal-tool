@@ -170,7 +170,9 @@ class MarkdownVaultScanner:
     def __init__(self, token_budget: TokenBudget) -> None:
         self._token_budget = token_budget
 
-    def scan_vault(self, vault_root: Path) -> MarkdownScanResult:
+    def scan_vault(
+        self, vault_root: Path, *, include_valid_sources_on_error: bool = False
+    ) -> MarkdownScanResult:
         try:
             vault_root_resolved = vault_root.resolve(strict=True)
             knowledge_root = vault_root_resolved / "01. Knowledge"
@@ -200,7 +202,11 @@ class MarkdownVaultScanner:
         errors = self._sort_and_deduplicate_errors(errors)
         if errors:
             return MarkdownScanResult(
-                False, len(candidates), len(valid_sources), (), tuple(errors)
+                False,
+                len(candidates),
+                len(valid_sources),
+                tuple(valid_sources) if include_valid_sources_on_error else (),
+                tuple(errors),
             )
         return MarkdownScanResult(
             True,

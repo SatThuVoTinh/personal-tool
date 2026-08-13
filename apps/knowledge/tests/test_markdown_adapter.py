@@ -92,6 +92,24 @@ class MarkdownAdapterTests(unittest.TestCase):
             ],
         )
 
+    def test_lifecycle_mode_returns_valid_sources_without_marking_scan_successful(self) -> None:
+        temporary, vault = self.make_vault()
+        self.addCleanup(temporary.cleanup)
+        self.write_note(vault, "AI", "valid.md", "# Valid\n\nContent.\n\n#ai\n")
+        self.write_note(vault, "AI", "invalid.md", "# Invalid\n\nContent.\n")
+
+        result = self.scanner.scan_vault(
+            vault, include_valid_sources_on_error=True
+        )
+
+        self.assertFalse(result.succeeded)
+        self.assertEqual(result.discovered_count, 2)
+        self.assertEqual(result.valid_source_count, 1)
+        self.assertEqual(
+            [source.source_path for source in result.sources],
+            ["01. Knowledge/AI/valid.md"],
+        )
+
     def test_structural_short_circuit_preserves_error_precedence(self) -> None:
         temporary, vault = self.make_vault()
         self.addCleanup(temporary.cleanup)

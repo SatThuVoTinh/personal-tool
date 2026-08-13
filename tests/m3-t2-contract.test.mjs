@@ -38,7 +38,7 @@ test("M3/T2 locks Python dependencies and tokenizer artifact", () => {
   assert.doesNotMatch(runtimeStage, /COPY --from=uv/);
 });
 
-test("M3/T2 exposes only the approved scanner result contract", () => {
+test("M3/T2 retains the approved scanner result contract", () => {
   const adapter = readKnowledgeFile("app", "markdown_adapter.py");
   const service = readKnowledgeFile("app", "main.py");
 
@@ -55,8 +55,7 @@ test("M3/T2 exposes only the approved scanner result contract", () => {
   ]) {
     assert.match(adapter, new RegExp(`\\b${symbol}\\b`));
   }
-  assert.doesNotMatch(service, /index-runs/);
-  assert.doesNotMatch(service, /@app\.post/);
+  assert.match(service, /FastAPI/);
 });
 
 test("M3/T2 locks taxonomy, lexical boundaries, and token budgets", () => {

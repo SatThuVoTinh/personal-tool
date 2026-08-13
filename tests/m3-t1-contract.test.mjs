@@ -169,9 +169,12 @@ test("M3/T1 recovers orphan runs and holds an advisory lock for background work"
   assert.match(database, /WHERE status = 'RUNNING'/);
   assert.match(database, /SELECT pg_try_advisory_lock\(\$1\)/);
   assert.match(database, /SELECT pg_advisory_unlock\(\$1\)/);
-  assert.match(coordinator, /asyncio\.create_task\(self\._run\(work\)\)/);
+  assert.match(
+    coordinator,
+    /asyncio\.create_task\(self\._run\(work, cleanup, connection\)\)/,
+  );
   assert.match(coordinator, /INDEX_RUN_ALREADY_ACTIVE/);
-  assert.match(coordinator, /await self\._release_lock\(\)/);
+  assert.match(coordinator, /await self\._database\.release_advisory_lock\(/);
 });
 
 test("M3/T1 acceptance validates readiness and cleans only its isolated project", () => {
