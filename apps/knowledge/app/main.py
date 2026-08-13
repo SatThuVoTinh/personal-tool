@@ -3,13 +3,14 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from typing import AsyncIterator, Literal
 
+import asyncpg
 import httpx
 from fastapi import FastAPI, HTTPException, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from .config import Settings
-from .database import AcceptedIndexRun, KnowledgeDatabase
+from .database import AcceptedIndexRun, KnowledgeDatabase, StateTransitionError
 from .index_lifecycle import IndexLifecycle, LifecycleError
 from .index_runner import IndexRunAlreadyActiveError, IndexRunCoordinator
 from .model_probe import ModelProbeError, OllamaModelProbe
@@ -24,6 +25,14 @@ class IndexRunAcceptedResponse(BaseModel):
     index_run_id: str
     index_id: str
     status: Literal["RUNNING"]
+
+
+DATABASE_ERRORS = (
+    asyncpg.PostgresError,
+    asyncpg.InterfaceError,
+    ConnectionError,
+    TimeoutError,
+)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -47,6 +56,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             yield
         finally:
             await coordinator.stop()
+            await model_probe.close()
             await database.stop()
 
     app = FastAPI(
@@ -56,6 +66,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         redoc_url=None,
         lifespan=lifespan,
     )
+    app.state.database = database
+    app.state.coordinator = coordinator
+    app.state.model_probe = model_probe
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
@@ -65,7 +78,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def readyz() -> JSONResponse | dict[str, object]:
         if not database.available:
             return JSONResponse(status_code=503, content={"status": "not_ready", "code": database.startup_error_code or "DATABASE_UNAVAILABLE"})
-        active_index = await database.get_active_index()
+        try:
+            active_index = await database.get_active_index()
+        except DATABASE_ERRORS:
+            return JSONResponse(
+                status_code=503,
+                content={"status": "not_ready", "code": "DATABASE_UNAVAILABLE"},
+            )
         if active_index is None:
             return JSONResponse(status_code=503, content={"status": "not_ready", "code": "NO_ACTIVE_INDEX"})
         try:
@@ -107,23 +126,41 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 identity = await lifecycle.resolve_configured_model()
                 accepted = await database.accept_full_rebuild(identity.name, identity.digest, identity.dimensions)
             try:
-                await coordinator.schedule(lambda: lifecycle.execute(accepted))
+                await coordinator.schedule(
+                    lambda: lifecycle.execute(accepted), lifecycle.cleanup
+                )
             except Exception as error:
                 await database.fail_run(accepted, "SCHEDULING_FAILED", [SafeRunError("SCHEDULING_FAILED")], 0, 0, 0, request.kind == "FULL_REBUILD")
                 raise HTTPException(status_code=503, detail={"code": "SCHEDULING_FAILED"}) from error
             return IndexRunAcceptedResponse(index_run_id=accepted.id, index_id=accepted.index_id, status="RUNNING")
         except LifecycleError as error:
             raise HTTPException(status_code=503, detail={"code": error.code}) from None
+        except StateTransitionError:
+            raise HTTPException(
+                status_code=409, detail={"code": "INDEX_STATE_TRANSITION_FAILED"}
+            ) from None
+        except DATABASE_ERRORS:
+            raise HTTPException(
+                status_code=503, detail={"code": "DATABASE_UNAVAILABLE"}
+            ) from None
         finally:
-            if accepted is None or not coordinator.active:
-                await coordinator.release_reservation()
+            await coordinator.release_reservation()
 
     @app.get("/v1/index-runs/{run_id}")
     async def get_index_run(run_id: str) -> dict[str, object]:
+        if not database.available:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": database.startup_error_code or "DATABASE_UNAVAILABLE"},
+            )
         try:
             run = await database.get_run(run_id)
         except ValueError:
             run = None
+        except DATABASE_ERRORS:
+            raise HTTPException(
+                status_code=503, detail={"code": "DATABASE_UNAVAILABLE"}
+            ) from None
         if run is None:
             raise HTTPException(status_code=404, detail={"code": "INDEX_RUN_NOT_FOUND"})
         return {

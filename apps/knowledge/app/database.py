@@ -10,6 +10,10 @@ from .markdown_adapter import MarkdownSource
 from .run_errors import SafeRunError, serialize_errors
 
 
+class StateTransitionError(RuntimeError):
+    """Raised when a lifecycle transaction no longer owns its expected state."""
+
+
 @dataclass(frozen=True)
 class ActiveIndex:
     id: str
@@ -180,15 +184,24 @@ class KnowledgeDatabase:
         if self._pool is None:
             raise RuntimeError("Database pool is unavailable.")
         run_id = uuid4()
-        await self._pool.execute(
-            """
-            INSERT INTO knowledge.index_runs (id, index_id, kind, status)
-            VALUES ($1, $2, $3::knowledge.index_run_kind, 'RUNNING')
-            """,
-            run_id,
-            UUID(index_id),
-            kind,
-        )
+        index_uuid = UUID(index_id)
+        async with self._pool.acquire() as connection:
+            async with connection.transaction():
+                index_status = await connection.fetchval(
+                    "SELECT status::text FROM knowledge.indexes WHERE id = $1 FOR UPDATE",
+                    index_uuid,
+                )
+                if index_status != "ACTIVE":
+                    raise StateTransitionError("Incremental target is no longer ACTIVE.")
+                await connection.execute(
+                    """
+                    INSERT INTO knowledge.index_runs (id, index_id, kind, status)
+                    VALUES ($1, $2, $3::knowledge.index_run_kind, 'RUNNING')
+                    """,
+                    run_id,
+                    index_uuid,
+                    kind,
+                )
         return AcceptedIndexRun(str(run_id), index_id, kind, "RUNNING")
 
     async def source_hashes(self, index_id: str) -> dict[str, str]:
@@ -210,11 +223,18 @@ class KnowledgeDatabase:
         )
 
     async def set_discovered(self, run_id: str, discovered: int) -> None:
-        await self._execute(
-            "UPDATE knowledge.index_runs SET sources_discovered = $2 WHERE id = $1",
+        if self._pool is None:
+            raise RuntimeError("Database pool is unavailable.")
+        updated = await self._pool.fetchval(
+            """
+            UPDATE knowledge.index_runs SET sources_discovered = $2
+            WHERE id = $1 AND status = 'RUNNING' RETURNING id
+            """,
             UUID(run_id),
             discovered,
         )
+        if updated is None:
+            raise StateTransitionError("Index run is no longer RUNNING.")
 
     async def replace_source(
         self,
@@ -229,6 +249,7 @@ class KnowledgeDatabase:
         source_id = uuid4()
         async with self._pool.acquire() as connection:
             async with connection.transaction():
+                await self._require_run_and_index_state(connection, run)
                 await connection.execute(
                     "DELETE FROM knowledge.sources WHERE index_id = $1 AND source_path = $2",
                     UUID(run.index_id),
@@ -296,23 +317,27 @@ class KnowledgeDatabase:
             raise RuntimeError("Database pool is unavailable.")
         async with self._pool.acquire() as connection:
             async with connection.transaction():
+                await self._require_run_and_index_state(connection, run)
                 if stale_paths:
                     await connection.execute(
                         "DELETE FROM knowledge.sources WHERE index_id = $1 AND source_path = ANY($2::text[])",
                         UUID(run.index_id),
                         sorted(stale_paths),
                     )
-                await connection.execute(
+                updated_run = await connection.fetchval(
                     """
                     UPDATE knowledge.index_runs
                     SET status = 'SUCCEEDED', finished_at = now(), sources_discovered = $2,
                         sources_indexed = $3, sources_failed = 0
                     WHERE id = $1 AND status = 'RUNNING'
+                    RETURNING id
                     """,
                     UUID(run.id),
                     discovered,
                     indexed,
                 )
+                if updated_run is None:
+                    raise StateTransitionError("Incremental run did not reach SUCCEEDED.")
 
     async def publish_full_rebuild(
         self, run: AcceptedIndexRun, discovered: int, indexed: int
@@ -321,35 +346,45 @@ class KnowledgeDatabase:
             raise RuntimeError("Database pool is unavailable.")
         async with self._pool.acquire() as connection:
             async with connection.transaction():
-                superseded_rows = await connection.fetch(
+                await self._require_run_and_index_state(connection, run)
+                await connection.fetch(
                     "SELECT id FROM knowledge.indexes WHERE status = 'ACTIVE' FOR UPDATE"
                 )
-                superseded = [str(row["id"]) for row in superseded_rows]
                 await connection.execute(
                     """
                     UPDATE knowledge.indexes SET status = 'SUPERSEDED', superseded_at = now()
                     WHERE status = 'ACTIVE'
                     """
                 )
-                await connection.execute(
+                activated = await connection.fetchval(
                     """
                     UPDATE knowledge.indexes SET status = 'ACTIVE', activated_at = now()
                     WHERE id = $1 AND status = 'BUILDING'
+                    RETURNING id
                     """,
                     UUID(run.index_id),
                 )
-                await connection.execute(
+                if activated is None:
+                    raise StateTransitionError("BUILDING index did not reach ACTIVE.")
+                completed_run = await connection.fetchval(
                     """
                     UPDATE knowledge.index_runs
                     SET status = 'SUCCEEDED', finished_at = now(), sources_discovered = $2,
                         sources_indexed = $3, sources_failed = 0
                     WHERE id = $1 AND status = 'RUNNING'
+                    RETURNING id
                     """,
                     UUID(run.id),
                     discovered,
                     indexed,
                 )
-        return superseded
+                if completed_run is None:
+                    raise StateTransitionError("Full-rebuild run did not reach SUCCEEDED.")
+                cleanup_rows = await connection.fetch(
+                    "SELECT id FROM knowledge.indexes WHERE status = 'SUPERSEDED'"
+                )
+                cleanup_ids = [str(row["id"]) for row in cleanup_rows]
+        return cleanup_ids
 
     async def fail_run(
         self,
@@ -366,25 +401,48 @@ class KnowledgeDatabase:
         detail = serialize_errors(errors or [SafeRunError(code)])
         async with self._pool.acquire() as connection:
             async with connection.transaction():
+                run_row = await connection.fetchrow(
+                    """
+                    SELECT index_id, kind::text, status::text
+                    FROM knowledge.index_runs WHERE id = $1 FOR UPDATE
+                    """,
+                    UUID(run.id),
+                )
+                if run_row is None:
+                    raise StateTransitionError("Index run does not exist.")
+                if run_row["status"] != "RUNNING":
+                    return
+                if str(run_row["index_id"]) != run.index_id or run_row["kind"] != run.kind:
+                    raise StateTransitionError("Index run identity changed unexpectedly.")
                 if fail_index:
-                    await connection.execute(
+                    index_status = await connection.fetchval(
+                        "SELECT status::text FROM knowledge.indexes WHERE id = $1 FOR UPDATE",
+                        UUID(run.index_id),
+                    )
+                    if index_status != "BUILDING":
+                        raise StateTransitionError("Full-rebuild target is no longer BUILDING.")
+                    failed_index = await connection.fetchval(
                         """
                         UPDATE knowledge.indexes
                         SET status = 'FAILED', failed_at = now(), failure_code = $2,
                             failure_detail = $3
                         WHERE id = $1 AND status = 'BUILDING'
+                        RETURNING id
                         """,
                         UUID(run.index_id),
                         code,
                         detail,
                     )
-                await connection.execute(
+                    if failed_index is None:
+                        raise StateTransitionError("BUILDING index did not reach FAILED.")
+                failed_run = await connection.fetchval(
                     """
                     UPDATE knowledge.index_runs
                     SET status = 'FAILED', finished_at = now(), sources_discovered = $2,
                         sources_indexed = $3, sources_failed = $4, failure_code = $5,
                         failure_detail = $6
                     WHERE id = $1 AND status = 'RUNNING'
+                    RETURNING id
                     """,
                     UUID(run.id),
                     discovered,
@@ -393,6 +451,8 @@ class KnowledgeDatabase:
                     code,
                     detail,
                 )
+                if failed_run is None:
+                    raise StateTransitionError("Index run did not reach FAILED.")
 
     async def cleanup_superseded(self, index_ids: list[str]) -> None:
         if not index_ids or self._pool is None:
@@ -467,10 +527,30 @@ class KnowledgeDatabase:
         finally:
             await self._pool.release(connection)
 
-    async def _execute(self, query: str, *args: object) -> None:
-        if self._pool is None:
-            raise RuntimeError("Database pool is unavailable.")
-        await self._pool.execute(query, *args)
+    @staticmethod
+    async def _require_run_and_index_state(
+        connection: asyncpg.Connection, run: AcceptedIndexRun
+    ) -> None:
+        run_row = await connection.fetchrow(
+            """
+            SELECT index_id, kind::text, status::text
+            FROM knowledge.index_runs WHERE id = $1 FOR UPDATE
+            """,
+            UUID(run.id),
+        )
+        if run_row is None or run_row["status"] != "RUNNING":
+            raise StateTransitionError("Index run is no longer RUNNING.")
+        if str(run_row["index_id"]) != run.index_id or run_row["kind"] != run.kind:
+            raise StateTransitionError("Index run identity changed unexpectedly.")
+        expected_index_status = "ACTIVE" if run.kind == "INCREMENTAL" else "BUILDING"
+        index_status = await connection.fetchval(
+            "SELECT status::text FROM knowledge.indexes WHERE id = $1 FOR UPDATE",
+            UUID(run.index_id),
+        )
+        if index_status != expected_index_status:
+            raise StateTransitionError(
+                f"Target index is no longer {expected_index_status}."
+            )
 
     async def _apply_migrations(self) -> None:
         if self._pool is None:

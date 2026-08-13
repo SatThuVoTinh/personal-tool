@@ -6,7 +6,12 @@ from pathlib import Path
 
 import httpx
 
-from .database import AcceptedIndexRun, ActiveIndex, KnowledgeDatabase
+from .database import (
+    AcceptedIndexRun,
+    ActiveIndex,
+    KnowledgeDatabase,
+    StateTransitionError,
+)
 from .markdown_adapter import MarkdownSource, MarkdownVaultScanner, TokenBudget
 from .model_probe import ModelProbeError, OllamaModelProbe, ResolvedEmbeddingModel
 from .run_errors import SafeRunError
@@ -85,30 +90,50 @@ class IndexLifecycle:
         if not self.matches(expected, actual):
             raise LifecycleError("EMBEDDING_MODEL_DRIFT")
 
-    async def execute(self, run: AcceptedIndexRun) -> None:
+    async def execute(self, run: AcceptedIndexRun) -> list[str]:
         """Run the non-transactional work; database methods own state transitions."""
         expected = await self._database.get_index(run.index_id)
         if expected is None:
             await self._fail(run, "INDEX_NOT_FOUND", [], 0, 0, 0)
-            return
+            return []
         discovered = indexed = failed = 0
         errors: list[SafeRunError] = []
+        scan_failed = False
         try:
-            scan = await asyncio.to_thread(self._scanner.scan_vault, self._vault_root)
+            scan = await asyncio.to_thread(
+                self._scanner.scan_vault,
+                self._vault_root,
+                include_valid_sources_on_error=True,
+            )
             discovered = scan.discovered_count
             await self._database.set_discovered(run.id, discovered)
             if not scan.succeeded:
-                scan_errors = [SafeRunError(error.code, error.source_path or None) for error in scan.errors]
-                failed = len({error.source_path for error in scan.errors if error.source_path})
-                await self._fail(run, "SCAN_FAILED", scan_errors, discovered, indexed, failed)
-                return
+                scan_failed = True
+                source_error_paths = {
+                    error.source_path
+                    for error in scan.errors
+                    if error.source_path.endswith(".md")
+                }
+                errors.extend(
+                    SafeRunError(
+                        error.code,
+                        error.source_path if error.source_path in source_error_paths else None,
+                    )
+                    for error in scan.errors
+                )
+                failed = len(source_error_paths)
+                if run.kind == "FULL_REBUILD" or not scan.sources:
+                    await self._fail(
+                        run, "SCAN_FAILED", errors, discovered, indexed, failed
+                    )
+                    return []
 
             existing = await self._database.source_hashes(run.index_id)
             active_before = await self._database.get_active_index()
             active_source_count = (
                 await self._database.source_count(active_before.id) if active_before else 0
             )
-            if not scan.sources and active_source_count > 0:
+            if scan.succeeded and not scan.sources and active_source_count > 0:
                 await self._fail(
                     run,
                     "EMPTY_SNAPSHOT_DELETION_BLOCKED",
@@ -117,7 +142,7 @@ class IndexLifecycle:
                     indexed,
                     failed,
                 )
-                return
+                return []
 
             manifest = {source.source_path: source for source in scan.sources}
             for source in scan.sources:
@@ -139,15 +164,34 @@ class IndexLifecycle:
                     )
                     if not is_run_level:
                         failed += 1
-                    if run.kind == "FULL_REBUILD":
+                    if is_run_level or run.kind == "FULL_REBUILD":
                         await self._fail(run, error.code, errors, discovered, indexed, failed)
-                        return
-                except (httpx.HTTPError, ModelProbeError, ValueError):
-                    errors.append(SafeRunError("EMBEDDING_FAILED", source.source_path))
+                        return []
+                except StateTransitionError:
+                    await self._fail(
+                        run,
+                        "INDEX_STATE_TRANSITION_FAILED",
+                        [SafeRunError("INDEX_STATE_TRANSITION_FAILED")],
+                        discovered,
+                        indexed,
+                        failed,
+                    )
+                    return []
+                except Exception:
+                    errors.append(
+                        SafeRunError("DOCUMENT_INDEXING_FAILED", source.source_path)
+                    )
                     failed += 1
                     if run.kind == "FULL_REBUILD":
-                        await self._fail(run, "EMBEDDING_FAILED", errors, discovered, indexed, failed)
-                        return
+                        await self._fail(
+                            run,
+                            "DOCUMENT_INDEXING_FAILED",
+                            errors,
+                            discovered,
+                            indexed,
+                            failed,
+                        )
+                        return []
 
             # A final gate covers unchanged and empty snapshots as well as the
             # window immediately before deletion/publication.
@@ -155,25 +199,35 @@ class IndexLifecycle:
                 await self.require_identity(expected)
             except LifecycleError as error:
                 await self._fail(
-                    run, error.code, [SafeRunError(error.code)], discovered, indexed, failed
+                    run,
+                    error.code,
+                    [*errors, SafeRunError(error.code)],
+                    discovered,
+                    indexed,
+                    failed,
                 )
-                return
+                return []
 
             if run.kind == "INCREMENTAL":
-                if failed:
-                    await self._fail(run, "SOURCE_INDEXING_FAILED", errors, discovered, indexed, failed)
-                    return
+                if errors:
+                    await self._fail(
+                        run,
+                        "SCAN_FAILED" if scan_failed else "SOURCE_INDEXING_FAILED",
+                        errors,
+                        discovered,
+                        indexed,
+                        failed,
+                    )
+                    return []
                 await self._database.complete_incremental(
                     run, discovered, indexed, set(existing).difference(manifest)
                 )
-                return
+                return []
 
-            superseded = await self._database.publish_full_rebuild(run, discovered, indexed)
-            if superseded:
-                # Deliberately detached: lock is released as execute returns.
-                asyncio.create_task(self._cleanup(superseded))
+            return await self._database.publish_full_rebuild(run, discovered, indexed)
         except LifecycleError as error:
             await self._fail(run, error.code, [SafeRunError(error.code, error.source_path)], discovered, indexed, failed)
+            return []
         except Exception:
             await self._fail(
                 run,
@@ -183,6 +237,7 @@ class IndexLifecycle:
                 indexed,
                 failed,
             )
+            return []
 
     async def _embed_source(self, expected: ActiveIndex, source: MarkdownSource) -> list[list[float]]:
         try:
@@ -215,7 +270,7 @@ class IndexLifecycle:
             fail_index=run.kind == "FULL_REBUILD",
         )
 
-    async def _cleanup(self, index_ids: list[str]) -> None:
+    async def cleanup(self, index_ids: list[str]) -> None:
         try:
             await self._database.cleanup_superseded(index_ids)
         except Exception:

@@ -39,11 +39,18 @@ test("M3/T3 locks final model gates and atomic terminal transitions", () => {
 
 test("M3/T3 protects deletion and rebuild recovery", () => {
   assert.match(lifecycle, /EMPTY_SNAPSHOT_DELETION_BLOCKED/);
-  assert.match(lifecycle, /if failed:/);
+  assert.match(lifecycle, /if errors:/);
   assert.match(database, /WHERE status = 'RUNNING'/);
   assert.match(database, /ORPHANED_BUILDING_INDEX/);
   assert.match(database, /PROCESS_RESTART/);
-  assert.match(lifecycle, /asyncio\.create_task\(self\._cleanup/);
+  const releasePosition = coordinator.indexOf(
+    "await self._database.release_advisory_lock(",
+    coordinator.indexOf("async def _run("),
+  );
+  const cleanupPosition = coordinator.indexOf(
+    "asyncio.create_task(cleanup(cleanup_ids))",
+  );
+  assert.ok(releasePosition >= 0 && cleanupPosition > releasePosition);
 });
 
 test("M3/T3 serializes only bounded safe errors", () => {
