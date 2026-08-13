@@ -33,6 +33,7 @@ DATABASE_ERRORS = (
     ConnectionError,
     TimeoutError,
 )
+DATABASE_RESERVATION_ERRORS = DATABASE_ERRORS + (RuntimeError,)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -109,6 +110,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await coordinator.reserve()
         except IndexRunAlreadyActiveError:
             raise HTTPException(status_code=409, detail={"code": "INDEX_RUN_ALREADY_ACTIVE"}) from None
+        except DATABASE_RESERVATION_ERRORS:
+            raise HTTPException(
+                status_code=503, detail={"code": "DATABASE_UNAVAILABLE"}
+            ) from None
 
         accepted: AcceptedIndexRun | None = None
         try:

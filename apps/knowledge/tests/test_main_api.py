@@ -52,3 +52,37 @@ class IndexRunApiBoundaryTests(unittest.IsolatedAsyncioTestCase):
         reserve.assert_not_awaited()
         self.assertEqual(unavailable.status_code, 503)
         self.assertEqual(unavailable.json()["detail"]["code"], "DATABASE_UNAVAILABLE")
+
+    async def test_database_failure_during_lock_acquisition_returns_503(self) -> None:
+        settings = Settings(
+            database_host="unused",
+            database_port=5432,
+            database_name="unused",
+            database_user="unused",
+            database_password="unused",
+            ollama_url="http://unused",
+            embedding_model="bge-m3:latest",
+            embedding_dimensions=1024,
+            advisory_lock_key=1,
+            migration_directory=Path("/app/migrations"),
+            vault_root=Path("/vault"),
+            tokenizer_path=Path(os.environ["KNOWLEDGE_TOKENIZER_PATH"]),
+        )
+        app = create_app(settings)
+        app.state.database._pool = object()
+        app.state.coordinator.reserve = AsyncMock(
+            side_effect=ConnectionError("must not escape")
+        )
+        transport = httpx.ASGITransport(app=app)
+        try:
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://test"
+            ) as client:
+                response = await client.post(
+                    "/v1/index-runs", json={"kind": "INCREMENTAL"}
+                )
+        finally:
+            await app.state.model_probe.close()
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["detail"]["code"], "DATABASE_UNAVAILABLE")

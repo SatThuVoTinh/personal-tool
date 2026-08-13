@@ -28,8 +28,10 @@ class IndexRunCoordinator:
 
     async def reserve(self) -> None:
         """Acquire the cross-process lock before persistent run acceptance."""
-        if self._reservation is not None or not self._database.available:
+        if self._reservation is not None:
             raise IndexRunAlreadyActiveError("INDEX_RUN_ALREADY_ACTIVE")
+        if not self._database.available:
+            raise RuntimeError("Database pool is unavailable.")
         connection = await self._database.acquire_advisory_lock(self._advisory_lock_key)
         if connection is None:
             raise IndexRunAlreadyActiveError("INDEX_RUN_ALREADY_ACTIVE")
