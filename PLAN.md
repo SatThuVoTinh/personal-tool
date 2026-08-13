@@ -370,9 +370,9 @@ The final response must clearly state:
 | M0 — plan approval               | `COMPLETE`                 | V1 sequence and ownership boundaries approved.                                                                                                                             |
 | M1 — development foundation      | `COMPLETE`                 | Local verification suite and GitHub CI/Security workflows exist and pass.                                                                                                  |
 | M2 — local infrastructure        | `COMPLETE + REMOTE-BACKED` | Commit `5ffe4cb9be81c30d5c24bd7eb6a9d41abc2a5f19`; full isolated M2/T5 acceptance passed on 2026-08-12; GitHub CI run `31597875617` and Security run `31597875566` passed. |
-| M3 — Markdown Knowledge Platform | `IN PROGRESS`              | M3/T1 is `COMPLETE + REMOTE-BACKED` at merge `4097862ab383e8698f2d5b1ff5adce0acd1c6579`; isolated M3/T1 and M2/T1–T5 acceptance passed on 2026-08-12, then GitHub CI `31615503607` and Security `31615503591` passed on `main`. |
+| M3 — Markdown Knowledge Platform | `IN PROGRESS`              | M3/T1 is `COMPLETE + REMOTE-BACKED`; M3/T2 is `COMPLETE + LOCAL-VALIDATED` on 2026-08-13 and awaits draft-PR CI/Security plus merge before M3/T3 is unlocked. |
 
-**Next eligible task:** M3/T2 — Markdown discovery and segmentation. M3/T1 is merged to `main` and its GitHub CI/Security checks passed; T2 is eligible but has not started.
+**Next task in sequence:** M3/T3 — index lifecycle. It is not yet eligible: M3/T2 must first be backed by passing GitHub CI/Security checks, reviewed, and merged to `main`.
 
 **M2 completion evidence:** the isolated `personal-tool-acceptance` project passed T1 runtime preflight, T2 durable PostgreSQL/AIStor plus transient Redis checks, T3 persistent/encrypted n8n state and Ollama connectivity, T4 observability target/resource checks, and T5 logical backup → destroy acceptance volumes → clean recreate → restore. The acceptance project and its temporary artifacts were removed. GitHub confirmed `CI / quality-gate`, `Security / dependency-audit`, and `Security / secret-scan` as successful for the remote M2 commit.
 
@@ -382,7 +382,7 @@ The final response must clearly state:
 M0  Plan approval                         COMPLETE
 M1  Development foundation                COMPLETE
 M2  Local infrastructure                  COMPLETE + REMOTE-BACKED
-M3  Markdown Knowledge Platform           IN PROGRESS (T1 remote-backed; T2 eligible)
+M3  Markdown Knowledge Platform           IN PROGRESS (T1 remote-backed; T2 local-validated)
 M4  PDF document ingestion                 deferred until M3 is complete
 M5  Image and video multimodal ingestion  deferred until M4 is complete
 M6  AI Platform                            deferred
@@ -413,7 +413,7 @@ M3 provides local hybrid retrieval over human-authored Markdown in `01. Knowledg
 | Task                                        | Status        | Scope and completion gate                                                                                                                                                                                                     |
 | ------------------------------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | M3/T1 — service and index identity          | `COMPLETE + REMOTE-BACKED` | Internal-only Knowledge service, idempotent migrations, health/readiness, active-index invariant, digest/dimension preflight, orphan-run recovery, and an advisory-lock in-process scheduler passed isolated runtime acceptance plus M2/T1–T5 regression on 2026-08-12; merge `4097862` and its GitHub CI/Security checks passed. No retrieval or source adapter was implemented. |
-| M3/T2 — Markdown discovery and segmentation | `NOT STARTED` | Read-only Vault scan, canonical topic validation, native-tag extraction, title/heading extraction, original-line source spans, and deterministic token-aware chunks.                                                          |
+| M3/T2 — Markdown discovery and segmentation | `COMPLETE + LOCAL-VALIDATED` | Read-only Vault scan, deterministic all-or-nothing scan result, canonical topic/tag validation, Markdown lexical parsing, original-line spans, and retrieval-safe segmentation passed all local gates on 2026-08-13. GitHub validation and merge remain pending. |
 | M3/T3 — index lifecycle                     | `NOT STARTED` | Incremental replacement, side-by-side full rebuild, digest checks, document-level atomicity, deletion safety, recovery, and run status APIs.                                                                                  |
 | M3/T4 — hybrid retrieval and reranking      | `NOT STARTED` | Filtered HNSW/FTS retrieval, RRF, batched ONNX reranking, citations, capacity limits, and search APIs.                                                                                                                        |
 | M3/T5 — acceptance and handoff              | `NOT STARTED` | Fixture and opt-in Vault acceptance, migration/rebuild recovery, operations runbook, final evidence, and synchronized documentation.                                                                                          |
@@ -422,30 +422,34 @@ Each task reruns all relevant predecessor regression checks. A failed task remai
 
 **M3/T1 completion evidence:** the isolated `personal-tool-m3-t1` project built the Knowledge image and proved that Nginx reaches its internal-only liveness route, readiness refuses a missing ACTIVE index, active-index uniqueness is enforced, readiness becomes healthy only with the exact resolved BGE-M3 digest and 1024 dimensions, a digest change returns `EMBEDDING_MODEL_DRIFT`, and a restarted service converts a `RUNNING` run to `INTERRUPTED` with `PROCESS_RESTART`. Its project, network, and volume were removed. The cumulative isolated M2/T1–T5 acceptance was then rerun and passed, including backup, destroy/recreate, restore, and cleanup. M3/T1 was merged at `4097862ab383e8698f2d5b1ff5adce0acd1c6579`; GitHub CI run `31615503607` and Security run `31615503591` passed on that `main` commit.
 
+**M3/T2 local completion evidence:** on 2026-08-13, all 22 Python unit/golden tests passed in the pinned `uv` environment; the isolated read-only fixture acceptance passed with identical Vault hashes before and after; Windows-native junction/reparse acceptance passed; all 46 repository and contract tests passed through `npm run verify`; the isolated M3/T1 runtime regression passed; and the cumulative M2/T1–T5 acceptance passed, including backup, destroy/recreate, restore, and cleanup. GitHub CI/Security and merge evidence are intentionally not claimed yet, so M3/T3 remains locked.
+
 ### Read-only Vault and canonical topics
 
 M3 discovers only `01. Knowledge/**/*.md` from the configured Vault root. It must not write to the Vault and must reject paths escaping the configured root. `02. Books`, `03. Papers`, `04. Images`, and `05. Videos` are excluded from M3.
 
-The five media branches share the same thirteen logical topics for later milestones. In M3, the topic folder determines `primary_topic`; native Obsidian tags are mandatory validation and secondary classification. Numeric folder prefixes are ignored when matching the canonical folder label.
+The five media branches share the same thirteen logical topics for later milestones. In M3, the topic folder determines `primary_topic`; native Obsidian tags are mandatory validation and secondary classification. A topic folder may use its exact canonical label or the strict numeric prefix `^\d{2}\.\s+` followed by that label; no other prefix is stripped.
 
-| Folder topic        | Required primary native tag |
-| ------------------- | --------------------------- |
-| AI                  | `#ai`                       |
-| Data                | `#data`                     |
-| Cloud               | `#cloud`                    |
-| Machine Learning    | `#machinelearning`          |
-| Logistics           | `#logistics`                |
-| Supply Chain        | `#supplychain`              |
-| Material Science    | `#materialscience`          |
-| Agriculture Science | `#agriculturalscience`      |
-| Economic            | `#economic`                 |
-| Natural Science     | `#naturalscience`           |
-| Social Science      | `#socialscience`            |
-| English             | `#english`                  |
-| Chinese             | `#chinese`                  |
+| Folder | Required native tag |
+| --- | --- |
+| AI | `#ai` |
+| Data | `#data` |
+| Cloud | `#cloud` |
+| Machine Learning | `#machinelearning` |
+| Logistics | `#logistics` |
+| Supply Chain | `#supplychain` |
+| Material Science | `#materialscience` |
+| Agricultural Science | `#agriculturalscience` |
+| Economic | `#economic` |
+| Natural Science | `#naturalscience` |
+| Social Science | `#socialscience` |
+| English | `#english` |
+| Chinese | `#chinese` |
 
-- Canonical native `#tags` are lowercase and parsed from Markdown outside fenced code blocks. YAML frontmatter, including a YAML `tags:` field, is ignored as classification input.
+- Canonical native `#tags` are lowercase and parsed from Markdown outside YAML frontmatter, fenced code, inline code, headings, and HTML comments. Escaped hashes and URL fragments are not tags.
+- Required-topic validation uses the raw native-tag lexeme before NFC/case-fold normalization; for example, `#MachineLearning` does not satisfy `#machinelearning`.
 - A note must contain the canonical tag required by its topic folder. It may contain other canonical topics and ordinary Obsidian tags; all appear in `canonical_topics` and `tags` metadata.
+- `canonical_topics` follow the fixed taxonomy order. After validation, metadata tags are NFC-normalized, case-folded, deduplicated, and deterministically sorted; passage text, titles, and headings are not Unicode-normalized.
 - Tag order is not semantic and cannot change `primary_topic`. Moving a note to another topic folder changes `primary_topic` and is an atomic reindex replacement.
 - A missing or mismatched required tag makes that source invalid. An incremental run retains the previous source version and marks the source/run error. A full rebuild fails and never activates its BUILDING index.
 - Tag-only lines may be omitted from passage text, but tags remain structured metadata and receive full-text weight A. YAML removal and every embedding transformation preserve original Markdown source coordinates.
@@ -502,11 +506,14 @@ All M3 retrieval rows are scoped by an `index_id`; an ACTIVE and a BUILDING inde
 
 Markdown segmentation is deterministic and heading/paragraph-aware:
 
-- Target approximately 1,500 characters; hard maximum 2,000 characters.
-- A segment may contain at most 768 passage tokens according to the reranker tokenizer.
-- `RERANK_MAX_LENGTH=1024`; the query budget is 256 tokens including pair special-token allowance. The final tokenizer pair encoding must be asserted to be no longer than 1,024 tokens; passage text is shortened before that assertion if necessary.
-- Use heading and paragraph boundaries first, then sentence boundaries. Never split a fenced code block; an oversized fenced block remains a single segment only if it meets both hard caps, otherwise the source is rejected with a clear error.
-- The parser keeps a source-span map to original Markdown line numbers. Stripping YAML frontmatter or normalizing embedding text never renumbers citations.
+- `TARGET_CHARS=1500` is a soft target; `MAX_CHARS=2000` is the hard character cap. Chunks may exceed the target but never the hard cap, and semantic boundaries are not broken merely to hit the target.
+- `retrieval_text` prepends the current `heading_path` joined by `" > "` and two newlines. `content_token_count` counts raw passage text; `retrieval_token_count` counts this final retrieval representation, both with `add_special_tokens=False`.
+- The application-level reranker budget is `QUERY_MAX_TOKENS=256`, `PAIR_MAX_TOKENS=1024`, `PAIR_SPECIAL_TOKENS_EXPECTED=4`, and `MAX_RETRIEVAL_TOKENS=764`. Initialization disables tokenizer truncation and padding, verifies the tokenizer's actual pair-special-token count is four, and verifies the budget equation.
+- Every segment is checked through the actual tokenizer pair API with a fixed query fixture that encodes to exactly 256 raw tokens. Segmentation, never silent truncation, must make `len(pair_encoding.ids) <= 1024`.
+- Use heading and paragraph boundaries first, then sentence, whitespace, and tokenizer-offset boundaries. Never split a CommonMark-style backtick or tilde fenced block; an oversized block is rejected if it exceeds `MAX_CHARS`, `MAX_RETRIEVAL_TOKENS`, or the actual pair budget.
+- `line_start` and `line_end` are 1-based and inclusive over logical source lines before newline normalization. SHA-256 is computed separately over the original raw bytes.
+
+M3/T2 returns one deterministic `MarkdownScanResult`. `discovered_count` counts `.md` candidates before validation and `valid_source_count` counts sources that pass all validation. Any validation error makes `succeeded=false` and public `sources=[]`, while preserving the valid count and deterministically sorted safe errors; T3 cannot consume a partial snapshot.
 
 ### Index execution and atomicity
 
