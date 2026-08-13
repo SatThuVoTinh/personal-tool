@@ -17,6 +17,8 @@ class Settings:
     embedding_dimensions: int
     advisory_lock_key: int
     migration_directory: Path
+    vault_root: Path
+    tokenizer_path: Path
 
     @classmethod
     def from_environment(cls) -> "Settings":
@@ -47,5 +49,9 @@ class Settings:
                     "KNOWLEDGE_MIGRATION_DIRECTORY",
                     str(Path(__file__).resolve().parents[1] / "migrations"),
                 )
+            ),
+            vault_root=Path(os.environ.get("KNOWLEDGE_VAULT_ROOT", "/vault")),
+            tokenizer_path=Path(
+                os.environ.get("KNOWLEDGE_TOKENIZER_PATH", "/app/artifacts/tokenizer.json")
             ),
         )

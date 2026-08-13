@@ -28,21 +28,27 @@ class IndexRunCoordinator:
     def active(self) -> bool:
         return self._task is not None and not self._task.done()
 
-    async def start(
+    async def reserve(self) -> None:
+        """Reserve the cross-process lock before persistent run acceptance."""
+        if self.active or self._lock_connection is not None or not self._database.available:
+            raise IndexRunAlreadyActiveError("INDEX_RUN_ALREADY_ACTIVE")
+
+        connection = await self._database.acquire_advisory_lock(self._advisory_lock_key)
+        if connection is None:
+            raise IndexRunAlreadyActiveError("INDEX_RUN_ALREADY_ACTIVE")
+        self._lock_connection = connection
+
+    async def schedule(
         self,
         work: Callable[[], Awaitable[None]],
     ) -> None:
-        if self.active or not self._database.available:
+        if self.active or self._lock_connection is None:
             raise IndexRunAlreadyActiveError("INDEX_RUN_ALREADY_ACTIVE")
-
-        connection = await self._database.acquire_advisory_lock(
-            self._advisory_lock_key
-        )
-        if connection is None:
-            raise IndexRunAlreadyActiveError("INDEX_RUN_ALREADY_ACTIVE")
-
-        self._lock_connection = connection
         self._task = asyncio.create_task(self._run(work))
+
+    async def release_reservation(self) -> None:
+        if self._task is None:
+            await self._release_lock()
 
     async def stop(self) -> None:
         if self._task is not None and not self._task.done():

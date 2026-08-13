@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import httpx
+import math
 
 
 class ModelProbeError(RuntimeError):
@@ -50,3 +51,30 @@ class OllamaModelProbe:
                 digest=model["digest"],
                 dimensions=len(embeddings[0]),
             )
+
+    async def embed(self, model_name: str, texts: list[str]) -> list[list[float]]:
+        """Return one finite embedding per supplied retrieval text."""
+        if not texts:
+            return []
+        timeout = httpx.Timeout(90.0, connect=3.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                f"{self._base_url}/api/embed",
+                json={"model": model_name, "input": texts},
+            )
+            response.raise_for_status()
+            embeddings = response.json().get("embeddings")
+        if not isinstance(embeddings, list) or len(embeddings) != len(texts):
+            raise ModelProbeError("EMBEDDING_INVALID_RESPONSE")
+        normalized: list[list[float]] = []
+        for embedding in embeddings:
+            if not isinstance(embedding, list) or not embedding:
+                raise ModelProbeError("EMBEDDING_INVALID_RESPONSE")
+            try:
+                vector = [float(value) for value in embedding]
+            except (TypeError, ValueError) as error:
+                raise ModelProbeError("EMBEDDING_INVALID_RESPONSE") from error
+            if not all(math.isfinite(value) for value in vector):
+                raise ModelProbeError("EMBEDDING_INVALID_RESPONSE")
+            normalized.append(vector)
+        return normalized
