@@ -370,9 +370,9 @@ The final response must clearly state:
 | M0 — plan approval               | `COMPLETE`                 | V1 sequence and ownership boundaries approved.                                                                                                                             |
 | M1 — development foundation      | `COMPLETE`                 | Local verification suite and GitHub CI/Security workflows exist and pass.                                                                                                  |
 | M2 — local infrastructure        | `COMPLETE + REMOTE-BACKED` | Commit `5ffe4cb9be81c30d5c24bd7eb6a9d41abc2a5f19`; full isolated M2/T5 acceptance passed on 2026-08-12; GitHub CI run `31597875617` and Security run `31597875566` passed. |
-| M3 — Markdown Knowledge Platform | `IN PROGRESS`              | M3/T1 and M3/T2 are `COMPLETE + REMOTE-BACKED`; M3/T2 merge `b446ff17146763ea762b8669207c09642d42098f` passed GitHub CI and Security on `main` on 2026-08-13. |
+| M3 — Markdown Knowledge Platform | `IN PROGRESS`              | M3/T1–T3 are `COMPLETE + REMOTE-BACKED`; M3/T3 merge `242bca819b72ded9f6178221eb9cdda09b3dea38` passed GitHub CI and Security on `main` on 2026-08-13. |
 
-**Next eligible task:** M3/T3 — index lifecycle. M3/T2 is merged to `main` and its GitHub CI/Security checks passed.
+**Next eligible task:** M3/T4 — hybrid retrieval and reranking. M3/T3 is merged to `main` and its GitHub CI/Security checks passed.
 
 **M2 completion evidence:** the isolated `personal-tool-acceptance` project passed T1 runtime preflight, T2 durable PostgreSQL/AIStor plus transient Redis checks, T3 persistent/encrypted n8n state and Ollama connectivity, T4 observability target/resource checks, and T5 logical backup → destroy acceptance volumes → clean recreate → restore. The acceptance project and its temporary artifacts were removed. GitHub confirmed `CI / quality-gate`, `Security / dependency-audit`, and `Security / secret-scan` as successful for the remote M2 commit.
 
@@ -382,7 +382,7 @@ The final response must clearly state:
 M0  Plan approval                         COMPLETE
 M1  Development foundation                COMPLETE
 M2  Local infrastructure                  COMPLETE + REMOTE-BACKED
-M3  Markdown Knowledge Platform           IN PROGRESS (T1-T2 remote-backed; T3 eligible)
+M3  Markdown Knowledge Platform           IN PROGRESS (T1-T3 remote-backed; T4 eligible)
 M4  PDF document ingestion                 deferred until M3 is complete
 M5  Image and video multimodal ingestion  deferred until M4 is complete
 M6  AI Platform                            deferred
@@ -414,7 +414,7 @@ M3 provides local hybrid retrieval over human-authored Markdown in `01. Knowledg
 | ------------------------------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | M3/T1 — service and index identity          | `COMPLETE + REMOTE-BACKED` | Internal-only Knowledge service, idempotent migrations, health/readiness, active-index invariant, digest/dimension preflight, orphan-run recovery, and an advisory-lock in-process scheduler passed isolated runtime acceptance plus M2/T1–T5 regression on 2026-08-12; merge `4097862` and its GitHub CI/Security checks passed. No retrieval or source adapter was implemented. |
 | M3/T2 — Markdown discovery and segmentation | `COMPLETE + REMOTE-BACKED` | Read-only Vault scan, deterministic all-or-nothing scan result, canonical topic/tag validation, Markdown lexical parsing, original-line spans, and retrieval-safe segmentation passed all local gates; merge `b446ff1` and its GitHub CI/Security checks passed on `main` on 2026-08-13. |
-| M3/T3 — index lifecycle                     | `IN PROGRESS` | Incremental replacement, side-by-side full rebuild, digest checks, document-level atomicity, deletion safety, recovery, and run status APIs.                                                                                  |
+| M3/T3 — index lifecycle                     | `COMPLETE + REMOTE-BACKED` | Incremental replacement, side-by-side full rebuild, immutable model checks, document-level atomicity, deletion safety, recovery, and run status APIs passed all local gates; merge `242bca8` and its GitHub CI/Security checks passed on `main` on 2026-08-13. |
 | M3/T4 — hybrid retrieval and reranking      | `NOT STARTED` | Filtered HNSW/FTS retrieval, RRF, batched ONNX reranking, citations, capacity limits, and search APIs.                                                                                                                        |
 | M3/T5 — acceptance and handoff              | `NOT STARTED` | Fixture and opt-in Vault acceptance, migration/rebuild recovery, operations runbook, final evidence, and synchronized documentation.                                                                                          |
 
@@ -424,7 +424,7 @@ Each task reruns all relevant predecessor regression checks. A failed task remai
 
 **M3/T2 completion evidence:** on 2026-08-13, all 22 Python unit/golden tests passed in the pinned `uv` environment; the isolated read-only fixture acceptance passed with identical Vault hashes before and after; Windows-native junction/reparse acceptance passed; all 46 repository and contract tests passed through `npm run verify`; the isolated M3/T1 runtime regression passed; and the cumulative M2/T1–T5 acceptance passed, including backup, destroy/recreate, restore, and cleanup. PR `#8` merged at `b446ff17146763ea762b8669207c09642d42098f`; GitHub CI run `31682828157` and Security run `31682828014` passed on that `main` commit. M3/T3 is unlocked.
 
-**M3/T3 local validation evidence:** on 2026-08-13, the audited implementation passed all 42 Python lifecycle/scanner/model/error/API tests in the pinned `uv` container and all 51 repository/contract tests. The isolated M3/T3 acceptance passed through Nginx with PostgreSQL assertions, immediate GET after `202`, full publication, unchanged incremental convergence, empty-snapshot protection, restart recovery, read-only Vault mounting, and cleanup. M3/T1, M3/T2 read-only fixture, Windows-native junction/reparse, and cumulative M2/T1–T5 backup/destroy/recreate/restore regressions also passed. M3/T3 remains `IN PROGRESS` until draft PR `#10` is merged and remote CI/Security pass; M3/T4 remains locked.
+**M3/T3 completion evidence:** on 2026-08-13, the audited implementation passed all 42 Python lifecycle/scanner/model/error/API tests in the pinned `uv` container and all 51 repository/contract tests. The isolated M3/T3 acceptance passed through Nginx with PostgreSQL assertions, immediate GET after `202`, full publication, unchanged incremental convergence, empty-snapshot protection, restart recovery, read-only Vault mounting, and cleanup. M3/T1, M3/T2 read-only fixture, Windows-native junction/reparse, and cumulative M2/T1–T5 backup/destroy/recreate/restore regressions also passed. PR `#10` merged at `242bca819b72ded9f6178221eb9cdda09b3dea38`; GitHub CI run `31694753997` and Security run `31694754021` passed on that `main` commit. M3/T4 is unlocked.
 
 ### Read-only Vault and canonical topics
 
