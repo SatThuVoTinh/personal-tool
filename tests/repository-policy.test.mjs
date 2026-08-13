@@ -189,6 +189,20 @@ test("detects CR line endings and trailing whitespace in working-tree bytes", ()
   });
 });
 
+test("allows Git to represent an intentional tracked file deletion", () => {
+  withTemporaryRepository((repositoryRoot) => {
+    writeTrackedFile(repositoryRoot, "obsolete.txt", "obsolete\n");
+    rmSync(path.join(repositoryRoot, "obsolete.txt"));
+    assert.deepEqual(
+      checkWorkingTreeTextPolicy(
+        repositoryRoot,
+        listTrackedFiles(repositoryRoot),
+      ),
+      [],
+    );
+  });
+});
+
 test("detects Git whitespace violations independently from tracked index state", () => {
   withTemporaryRepository((repositoryRoot) => {
     writeTrackedFile(repositoryRoot, "note.md", "clean line\n");

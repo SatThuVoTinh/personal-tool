@@ -540,9 +540,8 @@ export function checkWorkingTreeTextPolicy(repositoryRoot, trackedFiles) {
   for (const repositoryPath of trackedFiles) {
     const filePath = resolveTrackedPath(repositoryRoot, repositoryPath);
     if (!existsSync(filePath)) {
-      failures.push(
-        `Tracked file is missing from working tree: ${repositoryPath}`,
-      );
+      // Git owns deletion state. This check validates bytes that still exist in
+      // the working tree and must not prevent an intentional tracked deletion.
       continue;
     }
 

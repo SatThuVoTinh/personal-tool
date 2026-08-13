@@ -1,4 +1,32 @@
-FROM python:3.13.14-slim-bookworm@sha256:de572b33eae61a53675a87bbd02b5e365df7b6b2b06c9276124e965cec08c452
+FROM ghcr.io/astral-sh/uv:0.12.0@sha256:606e70c71c852d03f611b1e56a195d08648507018a7057fab82c4974c4eae105 AS uv
+
+FROM python:3.13.14-slim-bookworm@sha256:de572b33eae61a53675a87bbd02b5e365df7b6b2b06c9276124e965cec08c452 AS builder
+
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_NO_CACHE=1 \
+    UV_PYTHON_DOWNLOADS=0
+
+WORKDIR /app
+
+COPY --from=uv /uv /usr/local/bin/uv
+COPY pyproject.toml uv.lock ./
+RUN uv sync --locked --no-dev --no-install-project
+
+ADD --checksum=sha256:69564b696052886ed0ac63fa393e928384e0f8caada38c1f4864a9bfbf379c15 \
+    https://huggingface.co/BAAI/bge-reranker-v2-m3/resolve/953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e/tokenizer.json \
+    /app/artifacts/tokenizer.json
+
+RUN echo "69564b696052886ed0ac63fa393e928384e0f8caada38c1f4864a9bfbf379c15  /app/artifacts/tokenizer.json" | sha256sum --check --strict
+
+FROM builder AS test
+
+COPY app ./app
+COPY tests ./tests
+ENV KNOWLEDGE_TOKENIZER_PATH=/app/artifacts/tokenizer.json
+RUN uv run --locked --no-sync python -m unittest discover -s tests -v
+
+FROM python:3.13.14-slim-bookworm@sha256:de572b33eae61a53675a87bbd02b5e365df7b6b2b06c9276124e965cec08c452 AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -6,13 +34,17 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN addgroup --system knowledge && adduser --system --ingroup knowledge knowledge
+RUN addgroup --system knowledge && \
+    adduser --system --ingroup knowledge knowledge && \
+    install -d -o knowledge -g knowledge -m 0555 /app/artifacts
 
-COPY requirements.txt ./
-RUN python -m pip install --no-cache-dir --requirement requirements.txt
-
+COPY --from=builder /app/.venv /app/.venv
+COPY --from=builder --chown=knowledge:knowledge --chmod=0444 /app/artifacts/tokenizer.json /app/artifacts/tokenizer.json
 COPY app ./app
 COPY migrations ./migrations
+
+ENV PATH="/app/.venv/bin:$PATH" \
+    KNOWLEDGE_TOKENIZER_PATH=/app/artifacts/tokenizer.json
 
 USER knowledge
 

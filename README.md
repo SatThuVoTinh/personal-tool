@@ -8,7 +8,7 @@ M1 and M2 are complete. M2 is backed up on GitHub at commit [`5ffe4cb`](https://
 
 The validated M2 stack uses PostgreSQL 17 + pgvector, AIStor Free, Redis, n8n, Nginx, Prometheus, Grafana, and Dozzle. PostgreSQL, AIStor, n8n state, and `.n8n` use named volumes; Redis is intentionally transient. PostgreSQL, Redis, exporters, the S3 API, and the future Knowledge service have no host port mapping. Nginx, n8n, Prometheus, Grafana, and Dozzle bind only to host loopback.
 
-M3 is in progress. M3/T1 now provides the internal-only Knowledge-service foundation: idempotent PostgreSQL/pgvector schema, index and run identities, one ACTIVE-index database invariant, digest- and dimension-checked readiness, startup recovery for interrupted runs, and an in-process advisory-lock scheduler. It does not yet scan a Vault, create index runs through an API, embed Markdown, or serve retrieval. M3/T1 is merged at [`4097862`](https://github.com/SatThuVoTinh/personal-tool/commit/4097862ab383e8698f2d5b1ff5adce0acd1c6579), with [CI](https://github.com/SatThuVoTinh/personal-tool/actions/runs/31615503607) and [Security](https://github.com/SatThuVoTinh/personal-tool/actions/runs/31615503591) passed; M3/T2 is eligible but unstarted. M3 will index only read-only Markdown from `01. Knowledge`, use native Obsidian `#tags`, lock BGE-M3 by resolved digest, and provide hybrid retrieval with original-line citations. PDF, image, and video ingestion remain deferred to M4/M5.
+M3 is in progress. M3/T1 provides the merged internal-only Knowledge-service foundation at [`4097862`](https://github.com/SatThuVoTinh/personal-tool/commit/4097862ab383e8698f2d5b1ff5adce0acd1c6579), with [CI](https://github.com/SatThuVoTinh/personal-tool/actions/runs/31615503607) and [Security](https://github.com/SatThuVoTinh/personal-tool/actions/runs/31615503591) passed. M3/T2 now provides locally validated, read-only Markdown discovery, all-or-nothing source validation, native Obsidian tag parsing, original-line coordinates, and retrieval-safe segmentation under the pinned reranker tokenizer budget. It does not write to the database, embed content, expose an API, or manage index lifecycle. M3/T3 remains locked until the M3/T2 draft PR passes GitHub checks, is reviewed, and is merged. PDF, image, and video ingestion remain deferred to M4/M5.
 
 ## Development
 
@@ -67,6 +67,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/docker/scri
 ```
 
 This creates only the isolated `personal-tool-m3-t1` Compose project, builds the Knowledge image, verifies the internal Nginx route, active-index uniqueness, digest-drift refusal, and interrupted-run recovery, then removes its project, network, and volume. It does not read or write an Obsidian Vault.
+
+## M3/T2 Markdown verification
+
+Run the pinned unit/golden tests and isolated read-only fixture acceptance:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/docker/scripts/knowledge-t2.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/docker/scripts/knowledge-t2-windows.ps1
+```
+
+The first script builds with the committed `uv.lock`, verifies the immutable tokenizer artifact, runs the Python suite, mounts only the repository fixture Vault read-only, and confirms its hashes are unchanged. The second script is Windows-native acceptance for junction/reparse rejection; Linux-container tests do not claim Windows filesystem semantics.
 
 ## GitHub validation
 
