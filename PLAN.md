@@ -370,9 +370,9 @@ The final response must clearly state:
 | M0 — plan approval               | `COMPLETE`                 | V1 sequence and ownership boundaries approved.                                                                                                                             |
 | M1 — development foundation      | `COMPLETE`                 | Local verification suite and GitHub CI/Security workflows exist and pass.                                                                                                  |
 | M2 — local infrastructure        | `COMPLETE + REMOTE-BACKED` | Commit `5ffe4cb9be81c30d5c24bd7eb6a9d41abc2a5f19`; full isolated M2/T5 acceptance passed on 2026-08-12; GitHub CI run `31597875617` and Security run `31597875566` passed. |
-| M3 — Markdown Knowledge Platform | `IN PROGRESS`              | M3/T1–T3 are `COMPLETE + REMOTE-BACKED`; M3/T3 merge `242bca819b72ded9f6178221eb9cdda09b3dea38` passed GitHub CI and Security on `main` on 2026-08-13. |
+| M3 — Markdown Knowledge Platform | `IN PROGRESS`              | M3/T1–T3 are `COMPLETE + REMOTE-BACKED`; M3/T4 hybrid retrieval and reranking is `IN PROGRESS`. |
 
-**Next eligible task:** M3/T4 — hybrid retrieval and reranking. M3/T3 is merged to `main` and its GitHub CI/Security checks passed.
+**Active Task:** M3/T4 — hybrid retrieval and reranking. M3/T3 is merged to `main` and its GitHub CI/Security checks passed.
 
 **M2 completion evidence:** the isolated `personal-tool-acceptance` project passed T1 runtime preflight, T2 durable PostgreSQL/AIStor plus transient Redis checks, T3 persistent/encrypted n8n state and Ollama connectivity, T4 observability target/resource checks, and T5 logical backup → destroy acceptance volumes → clean recreate → restore. The acceptance project and its temporary artifacts were removed. GitHub confirmed `CI / quality-gate`, `Security / dependency-audit`, and `Security / secret-scan` as successful for the remote M2 commit.
 
@@ -415,7 +415,7 @@ M3 provides local hybrid retrieval over human-authored Markdown in `01. Knowledg
 | M3/T1 — service and index identity          | `COMPLETE + REMOTE-BACKED` | Internal-only Knowledge service, idempotent migrations, health/readiness, active-index invariant, digest/dimension preflight, orphan-run recovery, and an advisory-lock in-process scheduler passed isolated runtime acceptance plus M2/T1–T5 regression on 2026-08-12; merge `4097862` and its GitHub CI/Security checks passed. No retrieval or source adapter was implemented. |
 | M3/T2 — Markdown discovery and segmentation | `COMPLETE + REMOTE-BACKED` | Read-only Vault scan, deterministic all-or-nothing scan result, canonical topic/tag validation, Markdown lexical parsing, original-line spans, and retrieval-safe segmentation passed all local gates; merge `b446ff1` and its GitHub CI/Security checks passed on `main` on 2026-08-13. |
 | M3/T3 — index lifecycle                     | `COMPLETE + REMOTE-BACKED` | Incremental replacement, side-by-side full rebuild, immutable model checks, document-level atomicity, deletion safety, recovery, and run status APIs passed all local gates; merge `242bca8` and its GitHub CI/Security checks passed on `main` on 2026-08-13. |
-| M3/T4 — hybrid retrieval and reranking      | `NOT STARTED` | Filtered HNSW/FTS retrieval, RRF, batched ONNX reranking, citations, capacity limits, and search APIs.                                                                                                                        |
+| M3/T4 — hybrid retrieval and reranking      | `IN PROGRESS` | Filtered HNSW/FTS retrieval, deterministic RRF, batched dynamic-INT8 ONNX reranking, citations, capacity limits, and search APIs. Runtime/build acceptance and remote evidence remain required. |
 | M3/T5 — acceptance and handoff              | `NOT STARTED` | Fixture and opt-in Vault acceptance, migration/rebuild recovery, operations runbook, final evidence, and synchronized documentation.                                                                                          |
 
 Each task reruns all relevant predecessor regression checks. A failed task remains `IN PROGRESS` or becomes `BLOCKED`; it never unlocks the next task.
@@ -544,7 +544,7 @@ M3/T2 returns one deterministic `MarkdownScanResult`. `discovered_count` counts 
 ```
 
 - Only the unique ACTIVE `index_id` is searchable. All supplied metadata filters are SQL predicates before candidate generation.
-- The vector path uses a pgvector 0.8.1 HNSW cosine index (`vector_cosine_ops`). Every dense retrieval transaction sets `hnsw.iterative_scan = strict_order`, `hnsw.ef_search = 100`, `hnsw.max_scan_tuples = 20000`, and `hnsw.scan_mem_multiplier = 1` locally so approximate filtering continues until sufficient ordered candidates are found.
+- The vector path uses a pgvector 0.8.1 HNSW cosine index (`vector_cosine_ops`). Every dense retrieval transaction sets `hnsw.iterative_scan = strict_order`, `hnsw.ef_search = 100`, `hnsw.max_scan_tuples = 20000`, and `hnsw.scan_mem_multiplier = 1` locally on the same connection as the ANN SELECT. HNSW filtering is logically constrained by SQL predicates but physically applied after approximate scan; iterative scan compensates for filter underfill.
 - Global dense retrieval returns top 40; global FTS returns top 40. M3 does not fan out into thirteen physical tables.
 - `segments.search_vector` is constructed as:
 
@@ -557,11 +557,10 @@ setweight(to_tsvector('simple', text), 'D')
 
 FTS parses with `websearch_to_tsquery('simple', query)` and ranks with `ts_rank_cd('{0.1,0.2,0.4,1.0}', search_vector, query, 0)`. Chinese lexical segmentation is intentionally deferred; multilingual dense retrieval remains available through BGE-M3.
 
-- Candidate identity is `segment_id`. The dense/FTS union deduplicates by that ID before fusion. If a segment is rank 2 dense and rank 5 FTS, its score is `1/(60+2) + 1/(60+5)` and it appears once.
-- RRF uses `k=60`, fuses at most 80 unique segments, and passes the top 20 to reranking. Stable ties resolve by the best branch rank, then `segment_id`.
-- Reranking uses a singleton `BAAI/bge-reranker-v2-m3` ONNX Runtime CPU session with a dynamic-INT8 artifact, `CPUExecutionProvider` only, `intra_op_num_threads=4`, `inter_op_num_threads=1`, and configurable batch size (default 20).
-- One global search semaphore permits two retrieval pipelines; one global rerank semaphore permits only one batched `CrossEncoder.predict` call at a time. A saturated search slot returns `429 SEARCH_CAPACITY_EXCEEDED` rather than unboundedly queueing requests.
-- The reranker receives one batch of `(query, segment)` pairs, not twenty separate inference calls. `rerank_score = sigmoid(raw_logit)`; never min-max normalize scores within a query.
+- Candidate identity is `segment_id`. Dense sorts by cosine distance then `segment_id`; FTS sorts by rank then `segment_id`. The union deduplicates by ID before 1-based RRF with `k=60`; `best_branch_rank` is the minimum non-null branch rank. RRF ties resolve by best branch rank then `segment_id`.
+- Search resolves an ACTIVE index, verifies/embeds against that immutable identity, then re-reads ACTIVE inside one read-only `REPEATABLE READ` transaction. A change retries the full pipeline once; a second change returns `503 ACTIVE_INDEX_CHANGED`. Dense and FTS never mix index generations.
+- Reranking uses a singleton `BAAI/bge-reranker-v2-m3` dynamic-INT8 ONNX Runtime session with `CPUExecutionProvider`, `ORT_SEQUENTIAL`, `intra_op_num_threads=4`, and a dedicated one-worker executor. A 2-slot atomic no-queue search limiter returns `429 SEARCH_CAPACITY_EXCEEDED` when saturated; the executor enforces at most one physical inference despite cancellation.
+- T4 inherits the T2 pair budget unchanged: `QUERY_MAX_TOKENS=256`, `MAX_RETRIEVAL_TOKENS=764`, `PAIR_SPECIAL_TOKENS_EXPECTED=4`, and `PAIR_MAX_TOKENS=1024`. Each actual pair is validated without tokenizer truncation/padding, then manually right-padded only to the longest sequence in the one 1–20-pair ONNX batch. `render_retrieval_text()` remains the single canonical representation renderer. `rerank_score = sigmoid(raw_logit)`; never min-max normalize scores within a query.
 
 Search results contain the source title/path, text, heading path, `indexed_by_run_id`, retrieval/rerank scores, and a source-specific citation locator. M3 emits Markdown citations using original `line_start` and `line_end` only.
 

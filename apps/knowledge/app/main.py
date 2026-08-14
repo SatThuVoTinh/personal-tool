@@ -5,15 +5,36 @@ from typing import AsyncIterator, Literal
 
 import asyncpg
 import httpx
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, Request, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from .config import Settings
-from .database import AcceptedIndexRun, KnowledgeDatabase, StateTransitionError
+from .database import (
+    AcceptedIndexRun,
+    ActiveIndexChangedError,
+    KnowledgeDatabase,
+    StateTransitionError,
+)
 from .index_lifecycle import IndexLifecycle, LifecycleError
 from .index_runner import IndexRunAlreadyActiveError, IndexRunCoordinator
+from .markdown_adapter import QUERY_MAX_TOKENS, TokenBudget, render_retrieval_text
 from .model_probe import ModelProbeError, OllamaModelProbe
+from .reranker import (
+    OnnxReranker,
+    PairTokenBudgetError,
+    RerankerUnavailableError,
+    stable_sigmoid,
+)
+from .retrieval import (
+    MAX_RERANK_CANDIDATES,
+    SearchCapacityLimiter,
+    SearchValidationError,
+    fuse_candidates,
+    normalize_filters,
+    render_citation,
+)
 from .run_errors import SafeRunError, deserialize_errors
 
 
@@ -25,6 +46,16 @@ class IndexRunAcceptedResponse(BaseModel):
     index_run_id: str
     index_id: str
     status: Literal["RUNNING"]
+
+
+class SearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str
+    limit: int = Field(default=10, ge=1, le=20)
+    primary_topic: str | None = None
+    tags_all: list[str] | None = None
+    path_prefix: str | None = None
 
 
 DATABASE_ERRORS = (
@@ -49,13 +80,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     coordinator = IndexRunCoordinator(database, configured_settings.advisory_lock_key)
     model_probe = OllamaModelProbe(configured_settings.ollama_url)
     lifecycle = IndexLifecycle.from_settings(database, configured_settings, model_probe)
+    token_budget = TokenBudget(configured_settings.tokenizer_path)
+    search_limiter = SearchCapacityLimiter(capacity=2)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         await database.start()
+        reranker: OnnxReranker | None = None
+        reranker_error: str | None = None
+        try:
+            reranker = OnnxReranker(
+                configured_settings.reranker_model_path,
+                configured_settings.reranker_manifest_path,
+                token_budget,
+            )
+        except RerankerUnavailableError:
+            reranker_error = "RERANKER_UNAVAILABLE"
+        app.state.reranker = reranker
+        app.state.reranker_error = reranker_error
         try:
             yield
         finally:
+            if reranker is not None:
+                await reranker.close()
             await coordinator.stop()
             await model_probe.close()
             await database.stop()
@@ -70,6 +117,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.database = database
     app.state.coordinator = coordinator
     app.state.model_probe = model_probe
+    app.state.token_budget = token_budget
+    app.state.search_limiter = search_limiter
+    app.state.reranker = None
+    app.state.reranker_error = "RERANKER_UNAVAILABLE"
+
+    @app.exception_handler(RequestValidationError)
+    async def invalid_request(_: Request, __: RequestValidationError) -> JSONResponse:
+        return JSONResponse(status_code=422, content={"detail": {"code": "INVALID_SEARCH_REQUEST"}})
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
@@ -88,6 +143,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         if active_index is None:
             return JSONResponse(status_code=503, content={"status": "not_ready", "code": "NO_ACTIVE_INDEX"})
+        if app.state.reranker is None:
+            return JSONResponse(status_code=503, content={"status": "not_ready", "code": "RERANKER_UNAVAILABLE"})
         try:
             actual_model = await model_probe.resolve(configured_settings.embedding_model)
         except (httpx.HTTPError, ModelProbeError):
@@ -99,8 +156,109 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             or actual_model.dimensions != active_index.embedding_dimensions
             or actual_model.dimensions != configured_settings.embedding_dimensions
         ):
-            return JSONResponse(status_code=503, content={"status": "not_ready", "code": "EMBEDDING_MODEL_DRIFT", "expected": {"name": active_index.embedding_model_name, "digest": active_index.embedding_model_digest, "dimensions": active_index.embedding_dimensions}, "actual": {"name": actual_model.name, "digest": actual_model.digest, "dimensions": actual_model.dimensions}})
+            return JSONResponse(
+                status_code=503,
+                content={"status": "not_ready", "code": "EMBEDDING_MODEL_DRIFT"},
+            )
         return {"status": "ready", "active_index_id": active_index.id, "embedding_model": {"name": actual_model.name, "digest": actual_model.digest, "dimensions": actual_model.dimensions}}
+
+    @app.post("/v1/search")
+    async def search(request: SearchRequest) -> dict[str, object]:
+        lease = await search_limiter.try_acquire()
+        if lease is None:
+            raise HTTPException(status_code=429, detail={"code": "SEARCH_CAPACITY_EXCEEDED"})
+        try:
+            if not database.available:
+                raise HTTPException(
+                    status_code=503,
+                    detail={"code": database.startup_error_code or "DATABASE_UNAVAILABLE"},
+                )
+            if app.state.reranker is None:
+                raise HTTPException(status_code=503, detail={"code": "RERANKER_UNAVAILABLE"})
+            query = request.query.strip()
+            if not query:
+                raise HTTPException(status_code=422, detail={"code": "INVALID_SEARCH_REQUEST"})
+            if token_budget.count(query) > QUERY_MAX_TOKENS:
+                raise HTTPException(status_code=422, detail={"code": "QUERY_TOKEN_LIMIT_EXCEEDED"})
+            filters = normalize_filters(request.primary_topic, request.tags_all, request.path_prefix)
+            for attempt in range(2):
+                active_index = await database.get_active_index()
+                if active_index is None:
+                    raise HTTPException(status_code=503, detail={"code": "ACTIVE_INDEX_UNAVAILABLE"})
+                try:
+                    await lifecycle.require_identity(active_index)
+                    query_embedding = await model_probe.embed(active_index.embedding_model_name, [query])
+                    # The model can be swapped while the embedding request is
+                    # in flight.  Check the immutable index identity again
+                    # before entering the repeatable-read retrieval snapshot.
+                    await lifecycle.require_identity(active_index)
+                except LifecycleError as error:
+                    code = error.code if error.code == "EMBEDDING_MODEL_DRIFT" else "EMBEDDING_MODEL_UNAVAILABLE"
+                    raise HTTPException(status_code=503, detail={"code": code}) from None
+                except (httpx.HTTPError, ModelProbeError):
+                    raise HTTPException(status_code=503, detail={"code": "EMBEDDING_MODEL_UNAVAILABLE"}) from None
+                if len(query_embedding) != 1 or len(query_embedding[0]) != active_index.embedding_dimensions:
+                    raise HTTPException(status_code=503, detail={"code": "EMBEDDING_MODEL_UNAVAILABLE"})
+                try:
+                    dense, fts = await database.search_candidates(
+                        active_index.id,
+                        query_embedding[0],
+                        query,
+                        filters.primary_topic,
+                        filters.tags_all,
+                        filters.path_prefix,
+                    )
+                except ActiveIndexChangedError:
+                    if attempt == 0:
+                        continue
+                    raise HTTPException(status_code=503, detail={"code": "ACTIVE_INDEX_CHANGED"}) from None
+                fused = fuse_candidates(dense, fts)[:MAX_RERANK_CANDIDATES]
+                pairs = [
+                    (query, render_retrieval_text(item.candidate.heading_path, item.candidate.text))
+                    for item in fused
+                ]
+                try:
+                    logits = await app.state.reranker.predict(pairs)
+                except PairTokenBudgetError:
+                    raise HTTPException(status_code=422, detail={"code": "PAIR_TOKEN_BUDGET_EXCEEDED"}) from None
+                except RerankerUnavailableError:
+                    raise HTTPException(status_code=503, detail={"code": "RERANKER_UNAVAILABLE"}) from None
+                results = []
+                for item, raw_logit in zip(fused, logits, strict=True):
+                    candidate = item.candidate
+                    results.append(
+                        {
+                            "segment_id": candidate.id,
+                            "source_path": candidate.source_path,
+                            "title": candidate.title,
+                            "text": candidate.text,
+                            "heading_path": list(candidate.heading_path),
+                            "indexed_by_run_id": candidate.indexed_by_run_id,
+                            "dense_score": None if candidate.dense_distance is None else 1.0 - candidate.dense_distance,
+                            "fts_score": candidate.fts_score,
+                            "rrf_score": item.rrf_score,
+                            "rerank_score": stable_sigmoid(raw_logit),
+                            "citation": {
+                                "source_path": candidate.source_path,
+                                "line_start": candidate.line_start,
+                                "line_end": candidate.line_end,
+                                "markdown": render_citation(candidate.title, candidate.source_path, candidate.line_start, candidate.line_end),
+                            },
+                        }
+                    )
+                results.sort(key=lambda item: (-item["rerank_score"], -item["rrf_score"], item["segment_id"]))
+                return {"index_id": active_index.id, "query": query, "results": results[:request.limit]}
+            raise HTTPException(status_code=503, detail={"code": "ACTIVE_INDEX_CHANGED"})
+        except SearchValidationError as error:
+            raise HTTPException(status_code=422, detail={"code": error.code}) from None
+        except HTTPException:
+            raise
+        except DATABASE_ERRORS:
+            raise HTTPException(status_code=503, detail={"code": "DATABASE_UNAVAILABLE"}) from None
+        except Exception:
+            raise HTTPException(status_code=500, detail={"code": "INTERNAL_ERROR"}) from None
+        finally:
+            await lease.release()
 
     @app.post("/v1/index-runs", status_code=status.HTTP_202_ACCEPTED, response_model=IndexRunAcceptedResponse)
     async def create_index_run(request: IndexRunRequest) -> IndexRunAcceptedResponse:

@@ -231,7 +231,7 @@ services:
     build:
       context: ../../../apps/knowledge
       dockerfile: Dockerfile
-    image: personal-tool/knowledge:m3-t2
+    image: personal-tool/knowledge:m3-t4
     depends_on:
       postgres:
         condition: service_healthy
@@ -245,6 +245,8 @@ services:
       KNOWLEDGE_EMBEDDING_MODEL: ${KNOWLEDGE_EMBEDDING_MODEL:-bge-m3:latest}
       KNOWLEDGE_INDEX_ADVISORY_LOCK_KEY: "741212391041002"
       KNOWLEDGE_OLLAMA_URL: http://host.docker.internal:11434
+      KNOWLEDGE_RERANKER_MANIFEST_PATH: /app/artifacts/reranker-manifest.json
+      KNOWLEDGE_RERANKER_MODEL_PATH: /app/artifacts/model.int8.onnx
       KNOWLEDGE_VAULT_ROOT: /vault
     extra_hosts:
       - host.docker.internal:host-gateway
@@ -259,11 +261,11 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
-      start_period: 15s
-    mem_limit: 768m
+      start_period: 120s
+    mem_limit: 4g
     labels:
       personal-tool.component: knowledge-platform
-      personal-tool.milestone: m3-t2
+      personal-tool.milestone: m3-t4
       personal-tool.project: personal-tool
     networks:
       - platform

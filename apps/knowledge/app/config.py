@@ -19,6 +19,8 @@ class Settings:
     migration_directory: Path
     vault_root: Path
     tokenizer_path: Path
+    reranker_model_path: Path = Path("/app/artifacts/model.int8.onnx")
+    reranker_manifest_path: Path = Path("/app/artifacts/reranker-manifest.json")
 
     @classmethod
     def from_environment(cls) -> "Settings":
@@ -53,5 +55,11 @@ class Settings:
             vault_root=Path(os.environ.get("KNOWLEDGE_VAULT_ROOT", "/vault")),
             tokenizer_path=Path(
                 os.environ.get("KNOWLEDGE_TOKENIZER_PATH", "/app/artifacts/tokenizer.json")
+            ),
+            reranker_model_path=Path(
+                os.environ.get("KNOWLEDGE_RERANKER_MODEL_PATH", "/app/artifacts/model.int8.onnx")
+            ),
+            reranker_manifest_path=Path(
+                os.environ.get("KNOWLEDGE_RERANKER_MANIFEST_PATH", "/app/artifacts/reranker-manifest.json")
             ),
         )

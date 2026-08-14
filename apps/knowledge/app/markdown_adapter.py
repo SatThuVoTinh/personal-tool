@@ -143,6 +143,32 @@ class TokenBudget:
     def count(self, text: str) -> int:
         return len(self.__tokenizer.encode(text, add_special_tokens=False).ids)
 
+    def encode_pair(self, query: str, retrieval_text: str):
+        """Encode one reranker pair without truncation or padding.
+
+        Indexing uses ``pair_count`` with a fixed 256-token query fixture.  The
+        search path must additionally validate the *actual* query before a
+        batch is manually padded for ONNX Runtime.
+        """
+        return self.__tokenizer.encode(
+            query,
+            pair=retrieval_text,
+            add_special_tokens=True,
+        )
+
+    def pair_count_for_query(self, query: str, retrieval_text: str) -> int:
+        return len(self.encode_pair(query, retrieval_text).ids)
+
+    @property
+    def pad_token_id(self) -> int:
+        padding = self.__tokenizer.padding
+        # ``no_padding`` above deliberately leaves no active padding policy.
+        # The serialized tokenizer still exposes the canonical pad token.
+        pad_id = self.__tokenizer.token_to_id("<pad>")
+        if pad_id is None:
+            raise RuntimeError("TOKENIZER_PAD_TOKEN_MISSING")
+        return pad_id
+
     def pair_count(self, retrieval_text: str) -> int:
         encoding = self.__tokenizer.encode(
             QUERY_BUDGET_FIXTURE,
