@@ -82,12 +82,29 @@ COMMIT;
 function Assert-KnowledgeMemory {
   $containerId = (Invoke-Compose @("ps", "-q", "knowledge")).Trim()
   if (-not $containerId) { throw "Knowledge container id is unavailable." }
-  $raw = @(& docker exec $containerId sh -c 'if [ -f /sys/fs/cgroup/memory.peak ]; then cat /sys/fs/cgroup/memory.peak; cat /sys/fs/cgroup/memory.events; else cat /sys/fs/cgroup/memory/memory.max_usage_in_bytes; printf "oom 0\noom_kill 0\n"; fi')
-  $peak = [int64]$raw[0]
-  if ($peak -ge 3435973837) { throw "Knowledge cgroup peak memory exceeded 80% of its 4 GiB ceiling: $peak bytes." }
-  if (($raw -match '^oom [1-9][0-9]*$').Count -gt 0 -or ($raw -match '^oom_kill [1-9][0-9]*$').Count -gt 0) {
-    throw "Knowledge cgroup reported an OOM event."
+  & docker exec $containerId test -f /sys/fs/cgroup/memory.peak | Out-Null
+  if ($LASTEXITCODE -eq 0) {
+    $peakOutput = @(& docker exec $containerId cat /sys/fs/cgroup/memory.peak)
+    if ($LASTEXITCODE -ne 0 -or $peakOutput.Count -eq 0) { throw "Knowledge cgroup v2 peak is unavailable." }
+    $events = @(& docker exec $containerId cat /sys/fs/cgroup/memory.events)
+    if ($LASTEXITCODE -ne 0) { throw "Knowledge cgroup v2 OOM counters are unavailable." }
+    if (($events -match '^oom [1-9][0-9]*$').Count -gt 0 -or ($events -match '^oom_kill [1-9][0-9]*$').Count -gt 0) {
+      throw "Knowledge cgroup reported an OOM event."
+    }
   }
+  else {
+    $peakOutput = @(& docker exec $containerId cat /sys/fs/cgroup/memory/memory.max_usage_in_bytes)
+    if ($LASTEXITCODE -ne 0 -or $peakOutput.Count -eq 0) { throw "Knowledge cgroup v1 peak is unavailable." }
+    $failCountOutput = @(& docker exec $containerId cat /sys/fs/cgroup/memory/memory.failcnt)
+    if ($LASTEXITCODE -ne 0 -or $failCountOutput.Count -eq 0) { throw "Knowledge cgroup v1 failure counter is unavailable." }
+    $oomControl = @(& docker exec $containerId cat /sys/fs/cgroup/memory/memory.oom_control)
+    if ($LASTEXITCODE -ne 0) { throw "Knowledge cgroup v1 OOM counters are unavailable." }
+    if ([int64](($failCountOutput -join "").Trim()) -gt 0 -or ($oomControl -match '^oom_kill [1-9][0-9]*$').Count -gt 0) {
+      throw "Knowledge cgroup reported an OOM event."
+    }
+  }
+  $peak = [int64](($peakOutput -join "").Trim())
+  if ($peak -ge 3435973837) { throw "Knowledge cgroup peak memory exceeded 80% of its 4 GiB ceiling: $peak bytes." }
 }
 
 function Wait-Run {
@@ -114,8 +131,9 @@ try {
   Invoke-Compose @("build", "knowledge")
   $started = $true
   Invoke-Compose @("up", "--detach", "--wait", "--wait-timeout", "300", "knowledge", "nginx")
-  $mount = @(& docker inspect --format "{{json .Mounts}}" "${projectName}-knowledge-1" | ConvertFrom-Json | Where-Object Destination -eq "/vault")
-  if ($mount.Count -ne 1 -or $mount.RW) { throw "M3/T4 Vault mount is not read-only." }
+  $mounts = @(& docker inspect --format "{{json .Mounts}}" "${projectName}-knowledge-1" | ConvertFrom-Json)
+  $mount = @($mounts | Where-Object { $_.Destination -eq "/vault" })
+  if ($mount.Count -ne 1 -or $mount[0].RW) { throw "M3/T4 Vault mount is not read-only." }
 
   $accepted = Invoke-Api "POST" "/v1/index-runs" '{"kind":"FULL_REBUILD"}'
   if ($accepted.StatusCode -ne 202) { throw "Full rebuild was not accepted: $($accepted.Body)" }

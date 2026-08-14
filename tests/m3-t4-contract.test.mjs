@@ -9,6 +9,7 @@ const app = read("apps", "knowledge", "app", "main.py");
 const database = read("apps", "knowledge", "app", "database.py");
 const retrieval = read("apps", "knowledge", "app", "retrieval.py");
 const reranker = read("apps", "knowledge", "app", "reranker.py");
+const exporter = read("apps", "knowledge", "scripts", "export_reranker.py");
 const adapter = read("apps", "knowledge", "app", "markdown_adapter.py");
 const dockerfile = read("apps", "knowledge", "Dockerfile");
 const config = read("apps", "knowledge", "app", "config.py");
@@ -65,9 +66,19 @@ test("M3/T4 pins and isolates the reranker artifact", () => {
   );
   assert.match(config, /model\.int8\.onnx/);
   assert.match(dockerfile, /runtime-artifacts/);
+  assert.match(dockerfile, /ml-dtypes==0\.5\.3/);
+  assert.match(dockerfile, /download\.pytorch\.org\/whl\/cpu/);
+  assert.match(exporter, /torch\.onnx\.export\([\s\S]*str\(fp32\)/);
   assert.match(compose, /personal-tool\/knowledge:m3-t4/);
   assert.match(compose, /mem_limit: 4g/);
   assert.match(acceptance, /personal-tool-m3-t4/);
   assert.match(acceptance, /\/v1\/search/);
   assert.match(acceptance, /Search ordering is not deterministic/);
+  assert.match(
+    acceptance,
+    /\$mounts \| Where-Object \{ \$_\.Destination -eq "\/vault" \}/,
+  );
+  assert.match(acceptance, /\$mount\[0\]\.RW/);
+  assert.match(acceptance, /cat \/sys\/fs\/cgroup\/memory\.peak/);
+  assert.doesNotMatch(acceptance, /docker exec \$containerId sh -c/);
 });

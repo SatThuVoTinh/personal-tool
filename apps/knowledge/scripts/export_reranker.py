@@ -170,7 +170,9 @@ def main() -> None:
     torch.onnx.export(
         model,
         (input_ids, attention_mask),
-        fp32,
+        # The legacy exporter only enables ONNX external-data output for
+        # models above protobuf's 2 GiB limit when given a file-name string.
+        str(fp32),
         input_names=["input_ids", "attention_mask"],
         output_names=["logits"],
         dynamic_axes={"input_ids": {0: "batch", 1: "sequence"}, "attention_mask": {0: "batch", 1: "sequence"}, "logits": {0: "batch"}},
