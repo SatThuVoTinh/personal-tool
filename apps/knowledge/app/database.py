@@ -45,6 +45,26 @@ class IndexRunState:
     failure_detail: str | None
 
 
+@dataclass(frozen=True)
+class SearchCandidate:
+    id: str
+    source_path: str
+    title: str
+    primary_topic: str
+    tags: tuple[str, ...]
+    heading_path: tuple[str, ...]
+    text: str
+    line_start: int
+    line_end: int
+    indexed_by_run_id: str
+    dense_distance: float | None = None
+    fts_score: float | None = None
+
+
+class ActiveIndexChangedError(RuntimeError):
+    """The immutable ACTIVE index selected by search was replaced."""
+
+
 class KnowledgeDatabase:
     def __init__(
         self,
@@ -220,6 +240,95 @@ class KnowledgeDatabase:
             await self._pool.fetchval(
                 "SELECT count(*) FROM knowledge.sources WHERE index_id = $1", UUID(index_id)
             )
+        )
+
+    async def search_candidates(
+        self,
+        index_id: str,
+        query_embedding: list[float],
+        query: str,
+        primary_topic: str | None,
+        tags_all: tuple[str, ...],
+        path_prefix: str | None,
+    ) -> tuple[list[SearchCandidate], list[SearchCandidate]]:
+        """Read both branches from one repeatable-read ACTIVE-index snapshot."""
+        if self._pool is None:
+            raise RuntimeError("Database pool is unavailable.")
+        vector = "[" + ",".join(format(value, ".17g") for value in query_embedding) + "]"
+        tags = list(tags_all) if tags_all else None
+        async with self._pool.acquire() as connection:
+            async with connection.transaction(isolation="repeatable_read", readonly=True):
+                active = await connection.fetchval(
+                    "SELECT id::text FROM knowledge.indexes WHERE status = 'ACTIVE'"
+                )
+                if active != index_id:
+                    raise ActiveIndexChangedError("ACTIVE index changed.")
+                # These query-scoped settings must be issued on exactly the
+                # connection used by the ANN SELECT.
+                await connection.execute("SET LOCAL hnsw.iterative_scan = strict_order")
+                await connection.execute("SET LOCAL hnsw.ef_search = 100")
+                await connection.execute("SET LOCAL hnsw.max_scan_tuples = 20000")
+                await connection.execute("SET LOCAL hnsw.scan_mem_multiplier = 1")
+                common = """
+                    index_id = $1::uuid
+                    AND ($3::text IS NULL OR primary_topic = $3)
+                    AND ($4::text[] IS NULL OR tags @> $4::text[])
+                    AND ($5::text IS NULL OR source_path = $5
+                         OR left(source_path, char_length($5) + 1) = $5 || '/')
+                """
+                # The inner query intentionally has only the pgvector distance
+                # operator in ascending order plus LIMIT, which permits HNSW.
+                dense_rows = await connection.fetch(
+                    f"""
+                    WITH ann AS MATERIALIZED (
+                      SELECT id, source_path, title, primary_topic, tags, heading_path,
+                             text, line_start, line_end, indexed_by_run_id,
+                             embedding <=> $2::vector AS dense_distance
+                      FROM knowledge.segments
+                      WHERE {common}
+                      ORDER BY embedding <=> $2::vector ASC
+                      LIMIT 40
+                    )
+                    SELECT * FROM ann ORDER BY dense_distance ASC, id ASC
+                    """,
+                    UUID(index_id), vector, primary_topic, tags, path_prefix,
+                )
+                fts_rows = await connection.fetch(
+                    f"""
+                    WITH parsed AS (
+                      SELECT websearch_to_tsquery('simple', $2) AS value
+                    )
+                    SELECT segments.id, source_path, title, primary_topic, tags,
+                           heading_path, text, line_start, line_end, indexed_by_run_id,
+                           ts_rank_cd('{{0.1,0.2,0.4,1.0}}', search_vector,
+                                      parsed.value, 0) AS fts_score
+                    FROM knowledge.segments, parsed
+                    WHERE {common} AND search_vector @@ parsed.value
+                    ORDER BY fts_score DESC, segments.id ASC
+                    LIMIT 40
+                    """,
+                    UUID(index_id), query, primary_topic, tags, path_prefix,
+                )
+        return (
+            [self._candidate_from_row(row, "dense_distance") for row in dense_rows],
+            [self._candidate_from_row(row, "fts_score") for row in fts_rows],
+        )
+
+    @staticmethod
+    def _candidate_from_row(row: asyncpg.Record, score_name: str) -> SearchCandidate:
+        return SearchCandidate(
+            id=str(row["id"]),
+            source_path=row["source_path"],
+            title=row["title"],
+            primary_topic=row["primary_topic"],
+            tags=tuple(row["tags"]),
+            heading_path=tuple(row["heading_path"]),
+            text=row["text"],
+            line_start=int(row["line_start"]),
+            line_end=int(row["line_end"]),
+            indexed_by_run_id=str(row["indexed_by_run_id"]),
+            dense_distance=float(row[score_name]) if score_name == "dense_distance" else None,
+            fts_score=float(row[score_name]) if score_name == "fts_score" else None,
         )
 
     async def set_discovered(self, run_id: str, discovered: int) -> None:

@@ -44,12 +44,18 @@ class IndexLifecycle:
         self._embedding_dimensions = dependencies.embedding_dimensions
 
     @classmethod
-    def from_settings(cls, database: KnowledgeDatabase, settings, model_probe: OllamaModelProbe) -> "IndexLifecycle":
+    def from_settings(
+        cls,
+        database: KnowledgeDatabase,
+        settings,
+        model_probe: OllamaModelProbe,
+        token_budget: TokenBudget,
+    ) -> "IndexLifecycle":
         return cls(
             LifecycleDependencies(
                 database=database,
                 model_probe=model_probe,
-                scanner=MarkdownVaultScanner(TokenBudget(settings.tokenizer_path)),
+                scanner=MarkdownVaultScanner(token_budget),
                 vault_root=settings.vault_root,
                 embedding_model=settings.embedding_model,
                 embedding_dimensions=settings.embedding_dimensions,

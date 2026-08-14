@@ -67,10 +67,10 @@ function readCompose() {
 test("M3/T1 declares an internal-only Knowledge service", () => {
   const knowledge = readCompose().services.knowledge;
 
-  assert.equal(knowledge.image, "personal-tool/knowledge:m3-t2");
+  assert.equal(knowledge.image, "personal-tool/knowledge:m3-t4");
   assert.equal(knowledge.ports, undefined);
-  assert.equal(knowledge.mem_limit, "768m");
-  assert.equal(knowledge.labels["personal-tool.milestone"], "m3-t2");
+  assert.equal(knowledge.mem_limit, "4g");
+  assert.equal(knowledge.labels["personal-tool.milestone"], "m3-t4");
   assert.equal(knowledge.labels["personal-tool.project"], "personal-tool");
   assert.deepEqual(knowledge.networks, ["platform"]);
   assert.equal(knowledge.depends_on.postgres.condition, "service_healthy");

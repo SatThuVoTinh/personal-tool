@@ -8,7 +8,7 @@ M1 and M2 are complete. M2 is backed up on GitHub at commit [`5ffe4cb`](https://
 
 The validated M2 stack uses PostgreSQL 17 + pgvector, AIStor Free, Redis, n8n, Nginx, Prometheus, Grafana, and Dozzle. PostgreSQL, AIStor, n8n state, and `.n8n` use named volumes; Redis is intentionally transient. PostgreSQL, Redis, exporters, the S3 API, and the future Knowledge service have no host port mapping. Nginx, n8n, Prometheus, Grafana, and Dozzle bind only to host loopback.
 
-M3 is in progress. M3/T1 provides the merged internal-only Knowledge-service foundation at [`4097862`](https://github.com/SatThuVoTinh/personal-tool/commit/4097862ab383e8698f2d5b1ff5adce0acd1c6579). M3/T2 provides remote-backed, read-only Markdown discovery, strict source validation, native Obsidian tag parsing, original-line coordinates, and retrieval-safe segmentation under the pinned reranker tokenizer budget. M3/T3 adds remote-backed persistent index-run APIs, incremental replacement, side-by-side full rebuilds, atomic publication/failure transitions, immutable model-identity gates, protected deletion, recovery, and safe error reporting. M3/T3 is merged at [`242bca8`](https://github.com/SatThuVoTinh/personal-tool/commit/242bca819b72ded9f6178221eb9cdda09b3dea38), with [CI](https://github.com/SatThuVoTinh/personal-tool/actions/runs/31694753997) and [Security](https://github.com/SatThuVoTinh/personal-tool/actions/runs/31694754021) passed on `main`; M3/T4 is now eligible. PDF, image, and video ingestion remain deferred to M4/M5.
+M3 is in progress. M3/T1 provides the merged internal-only Knowledge-service foundation at [`4097862`](https://github.com/SatThuVoTinh/personal-tool/commit/4097862ab383e8698f2d5b1ff5adce0acd1c6579). M3/T2 provides remote-backed, read-only Markdown discovery, strict source validation, native Obsidian tag parsing, original-line coordinates, and retrieval-safe segmentation under the pinned reranker tokenizer budget. M3/T3 adds remote-backed persistent index-run APIs, incremental replacement, side-by-side full rebuilds, atomic publication/failure transitions, immutable model-identity gates, protected deletion, recovery, and safe error reporting. M3/T3 is merged at [`242bca8`](https://github.com/SatThuVoTinh/personal-tool/commit/242bca819b72ded9f6178221eb9cdda09b3dea38), with [CI](https://github.com/SatThuVoTinh/personal-tool/actions/runs/31694753997) and [Security](https://github.com/SatThuVoTinh/personal-tool/actions/runs/31694754021) passed on `main`; M3/T4 hybrid retrieval and ONNX reranking is in progress. PDF, image, and video ingestion remain deferred to M4/M5.
 
 ## Development
 
@@ -88,6 +88,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/docker/scri
 ```
 
 This uses a disposable copy of the Markdown fixture mounted read-only, then verifies `POST` persistence before `202`, full rebuild publication, unchanged incremental convergence, and empty-snapshot deletion protection through Nginx.
+
+## M3/T4 hybrid retrieval verification
+
+With the same runtime environment and local `bge-m3:latest` model, run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/docker/scripts/knowledge-t4.ps1 -EnvironmentFile ./infrastructure/docker/env/.env
+```
+
+This builds the checksum-pinned dynamic-INT8 reranker artifact in a non-runtime Docker stage, mounts the fixture Vault read-only, indexes it, and verifies deterministic filtered search plus Markdown line citations through Nginx.
 
 ## GitHub validation
 

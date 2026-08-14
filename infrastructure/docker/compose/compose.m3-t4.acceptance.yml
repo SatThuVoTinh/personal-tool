@@ -1,0 +1,7 @@
+services:
+  knowledge:
+    volumes:
+      - type: bind
+        source: ${KNOWLEDGE_ACCEPTANCE_VAULT_ROOT}
+        target: /vault
+        read_only: true

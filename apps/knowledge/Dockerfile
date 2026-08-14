@@ -19,7 +19,27 @@ ADD --checksum=sha256:69564b696052886ed0ac63fa393e928384e0f8caada38c1f4864a9bfbf
 
 RUN echo "69564b696052886ed0ac63fa393e928384e0f8caada38c1f4864a9bfbf379c15  /app/artifacts/tokenizer.json" | sha256sum --check --strict
 
-FROM builder AS test
+FROM builder AS reranker-export
+
+RUN uv venv /opt/reranker-venv && \
+    uv pip install --python /opt/reranker-venv/bin/python \
+      --index https://download.pytorch.org/whl/cpu \
+      "torch==2.8.0" \
+      "transformers==5.14.1" \
+      "onnx==1.18.0" \
+      "onnxruntime==1.27.0" \
+      "ml-dtypes==0.5.3"
+
+COPY app /app/app
+COPY scripts/export_reranker.py /app/export_reranker.py
+RUN install -d /opt/reranker-source
+ADD https://huggingface.co/BAAI/bge-reranker-v2-m3/resolve/953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e/config.json /opt/reranker-source/config.json
+ADD --checksum=sha256:d9e3e081faff1eefb84019509b2f5558fd74c1a05a2c7db22f74174fcedb5286 \
+    https://huggingface.co/BAAI/bge-reranker-v2-m3/resolve/953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e/model.safetensors \
+    /opt/reranker-source/model.safetensors
+RUN /opt/reranker-venv/bin/python /app/export_reranker.py
+
+FROM reranker-export AS test
 
 COPY app ./app
 COPY tests ./tests
@@ -40,6 +60,7 @@ RUN addgroup --system knowledge && \
 
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder --chown=knowledge:knowledge --chmod=0444 /app/artifacts/tokenizer.json /app/artifacts/tokenizer.json
+COPY --from=reranker-export --chown=knowledge:knowledge --chmod=0444 /app/runtime-artifacts/ /app/artifacts/
 COPY app ./app
 COPY migrations ./migrations
 
