@@ -16,10 +16,11 @@ from onnxruntime.quantization import QuantType, quantize_dynamic
 from transformers import AutoModelForSequenceClassification
 
 from app.markdown_adapter import ARTIFACT_SHA256_EXPECTED
-
-MODEL_NAME = "BAAI/bge-reranker-v2-m3"
-REVISION = "953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e"
-SOURCE_SHA256 = "d9e3e081faff1eefb84019509b2f5558fd74c1a05a2c7db22f74174fcedb5286"
+from app.reranker_contract import (
+    RERANKER_MODEL_NAME,
+    RERANKER_REVISION,
+    SOURCE_MODEL_SHA256,
+)
 
 # Clear relevance ordering avoids a guessed numeric quantization tolerance.
 GOLDEN: tuple[tuple[str, tuple[str, str, str]], ...] = (
@@ -30,7 +31,11 @@ GOLDEN: tuple[tuple[str, tuple[str, str, str]], ...] = (
 
 
 def digest(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    value = hashlib.sha256()
+    with path.open("rb") as artifact:
+        for block in iter(lambda: artifact.read(1024 * 1024), b""):
+            value.update(block)
+    return value.hexdigest()
 
 
 def sigmoid(value: float) -> float:
@@ -91,17 +96,48 @@ def external_data_files(graph_path: Path) -> set[Path]:
     return files
 
 
-def assert_fidelity(model, tokenizer, fp32_path: Path, int8_path: Path, evidence_path: Path) -> None:
-    sessions = [
-        ort.InferenceSession(str(fp32_path), providers=["CPUExecutionProvider"]),
-        ort.InferenceSession(str(int8_path), providers=["CPUExecutionProvider"]),
-    ]
-    evidence = []
+def assert_dynamic_graph_contract(
+    sessions: tuple[ort.InferenceSession, ...],
+) -> list[dict[str, int | str]]:
+    evidence: list[dict[str, int | str]] = []
+    for session_name, session in zip(("fp32", "int8"), sessions, strict=True):
+        input_names = {item.name for item in session.get_inputs()}
+        for batch_size, sequence_length in ((1, 8), (20, 17), (1, 1024)):
+            batch = {
+                "input_ids": np.full(
+                    (batch_size, sequence_length), 5, dtype=np.int64
+                ),
+                "attention_mask": np.ones(
+                    (batch_size, sequence_length), dtype=np.int64
+                ),
+                "token_type_ids": np.zeros(
+                    (batch_size, sequence_length), dtype=np.int64
+                ),
+            }
+            inputs = {name: batch[name] for name in input_names}
+            logits = np.asarray(session.run(None, inputs)[0]).reshape(-1)
+            if len(logits) != batch_size or not np.isfinite(logits).all():
+                raise RuntimeError("ONNX_DYNAMIC_GRAPH_CONTRACT_FAILED")
+            evidence.append(
+                {
+                    "graph": session_name,
+                    "batch_size": batch_size,
+                    "sequence_length": sequence_length,
+                }
+            )
+    return evidence
+
+
+def assert_fidelity(
+    model, tokenizer, sessions: tuple[ort.InferenceSession, ...]
+) -> list[dict[str, object]]:
+    evidence: list[dict[str, object]] = []
     model.eval()
     for query, documents in GOLDEN:
         batch = encode_batch(tokenizer, query, documents)
         with torch.inference_mode():
             reference = model(**{key: torch.from_numpy(value) for key, value in batch.items()}).logits.reshape(-1).tolist()
+            reference_repeat = model(**{key: torch.from_numpy(value) for key, value in batch.items()}).logits.reshape(-1).tolist()
         fp32, int8 = [ort_logits(session, batch) for session in sessions]
         repeat_fp32, repeat_int8 = [ort_logits(session, batch) for session in sessions]
         expected = [0, 1, 2]
@@ -110,19 +146,19 @@ def assert_fidelity(model, tokenizer, fp32_path: Path, int8_path: Path, evidence
                 raise RuntimeError(f"{name.upper()}_NONFINITE_LOGIT")
             if _ranking(values) != expected:
                 raise RuntimeError(f"{name.upper()}_RELEVANCE_ORDERING_FAILED")
-        if fp32 != repeat_fp32 or int8 != repeat_int8:
+        if reference != reference_repeat or fp32 != repeat_fp32 or int8 != repeat_int8:
             raise RuntimeError("ONNX_NONDETERMINISTIC_OUTPUT")
         fp32_deviation, int8_deviation = _deviation(reference, fp32), _deviation(reference, int8)
         if not fp32_deviation["ordering_preserved"] or not int8_deviation["ordering_preserved"]:
             raise RuntimeError("QUANTIZATION_RELEVANCE_ORDERING_FAILED")
         evidence.append({"query": query, "reference_logits": reference, "fp32_logits": fp32, "int8_logits": int8, "sigmoid_scores": {"reference": [sigmoid(value) for value in reference], "fp32": [sigmoid(value) for value in fp32], "int8": [sigmoid(value) for value in int8]}, "fp32_deviation": fp32_deviation, "int8_deviation": int8_deviation})
-    evidence_path.write_text(json.dumps(evidence, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+    return evidence
 
 
 def main() -> None:
     source = Path("/opt/reranker-source")
     artifacts = Path("/app/artifacts")
-    if digest(source / "model.safetensors") != SOURCE_SHA256:
+    if digest(source / "model.safetensors") != SOURCE_MODEL_SHA256:
         raise RuntimeError("SOURCE_MODEL_SHA256_MISMATCH")
     if digest(artifacts / "tokenizer.json") != ARTIFACT_SHA256_EXPECTED:
         raise RuntimeError("TOKENIZER_SHA256_MISMATCH")
@@ -149,8 +185,21 @@ def main() -> None:
 
     tokenizer = Tokenizer.from_file(str(artifacts / "tokenizer.json"))
     fidelity_path = artifacts / "reranker-fidelity.json"
-    assert_fidelity(model, tokenizer, fp32, int8, fidelity_path)
-    session = ort.InferenceSession(str(int8), providers=["CPUExecutionProvider"])
+    sessions = (
+        ort.InferenceSession(str(fp32), providers=["CPUExecutionProvider"]),
+        ort.InferenceSession(str(int8), providers=["CPUExecutionProvider"]),
+    )
+    graph_evidence = assert_dynamic_graph_contract(sessions)
+    fidelity_evidence = assert_fidelity(model, tokenizer, sessions)
+    fidelity_path.write_text(
+        json.dumps(
+            {"graph_contract": graph_evidence, "fidelity": fidelity_evidence},
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    session = sessions[1]
     inputs = [{"name": item.name, "dtype": item.type, "rank": len(item.shape), "shape": item.shape} for item in session.get_inputs()]
     outputs = [{"name": item.name, "dtype": item.type, "rank": len(item.shape), "shape": item.shape} for item in session.get_outputs()]
     graph_files = {fp32, int8}
@@ -165,7 +214,7 @@ def main() -> None:
     for source_path in runtime_paths:
         shutil.copy2(source_path, runtime_artifacts / source_path.name)
     (runtime_artifacts / "reranker-manifest.json").write_text(
-        json.dumps({"model_name": MODEL_NAME, "revision": REVISION, "source_model_sha256": SOURCE_SHA256, "tokenizer_sha256": ARTIFACT_SHA256_EXPECTED, "files": files, "runtime_files": runtime_files, "inputs": inputs, "outputs": outputs, "graph_contract": {"batch_axis": 0, "sequence_axis": 1, "max_batch_size": 20, "max_sequence_length": 1024, "one_logit_per_pair": True}, "exporter": {"torch": torch.__version__, "transformers": __import__("transformers").__version__, "opset": 17, "dynamo": False}, "quantizer": {"onnxruntime": ort.__version__, "kind": "dynamic-int8", "weight_type": "QInt8", "per_channel": False, "reduce_range": True}, "fidelity_evidence_sha256": digest(fidelity_path)}, sort_keys=True),
+        json.dumps({"model_name": RERANKER_MODEL_NAME, "revision": RERANKER_REVISION, "source_model_sha256": SOURCE_MODEL_SHA256, "tokenizer_sha256": ARTIFACT_SHA256_EXPECTED, "files": files, "runtime_files": runtime_files, "inputs": inputs, "outputs": outputs, "graph_contract": {"batch_axis": 0, "sequence_axis": 1, "max_batch_size": 20, "max_sequence_length": 1024, "one_logit_per_pair": True}, "exporter": {"torch": torch.__version__, "transformers": __import__("transformers").__version__, "opset": 17, "dynamo": False}, "quantizer": {"onnxruntime": ort.__version__, "kind": "dynamic-int8", "weight_type": "QInt8", "per_channel": False, "reduce_range": True}, "fidelity_evidence_sha256": digest(fidelity_path)}, sort_keys=True),
         encoding="utf-8",
     )
 

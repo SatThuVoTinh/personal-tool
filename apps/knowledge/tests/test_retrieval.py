@@ -64,6 +64,16 @@ class RetrievalTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fused[0].best_branch_rank, 1)
         self.assertEqual(fused[0].candidate.fts_score, 0.5)
 
+    def test_rrf_uses_first_rank_and_caps_each_branch_at_40(self) -> None:
+        dense = [candidate(f"dense-{index}", dense=float(index)) for index in range(41)]
+        dense.insert(1, dense[0])
+        fused = fuse_candidates(dense, [])
+        identifiers = [item.candidate.id for item in fused]
+        self.assertEqual(identifiers.count("dense-0"), 1)
+        self.assertNotIn("dense-39", identifiers)
+        self.assertNotIn("dense-40", identifiers)
+        self.assertEqual(fused[0].dense_rank, 1)
+
     def test_filters_are_literal_and_citation_is_safe(self) -> None:
         filters = normalize_filters("Data", ["#Tag", "tag"], "foo\\bar%_ Unicode")
         self.assertEqual(filters.tags_all, ("tag",))

@@ -122,6 +122,16 @@ try {
   $run = Wait-Run (($accepted.Body | ConvertFrom-Json).index_run_id)
   if ($run.status -ne "SUCCEEDED") { throw "Fixture rebuild failed." }
 
+  $first = Invoke-Api "POST" "/v1/search" '{"query":"What is safety stock?","limit":10,"primary_topic":"Supply Chain","tags_all":["inventory"],"path_prefix":"01. Knowledge/Supply Chain"}'
+  if ($first.StatusCode -ne 200) { throw "Search failed: $($first.Body)" }
+  $second = Invoke-Api "POST" "/v1/search" '{"query":"What is safety stock?","limit":10,"primary_topic":"Supply Chain","tags_all":["inventory"],"path_prefix":"01. Knowledge/Supply Chain"}'
+  $firstIds = @(($first.Body | ConvertFrom-Json).results | ForEach-Object segment_id)
+  $secondIds = @(($second.Body | ConvertFrom-Json).results | ForEach-Object segment_id)
+  if ($firstIds.Count -eq 0 -or (($firstIds -join "`n") -cne ($secondIds -join "`n"))) { throw "Search ordering is not deterministic." }
+  $citation = (($first.Body | ConvertFrom-Json).results[0].citation)
+  if ($citation.line_start -lt 1 -or $citation.line_end -lt $citation.line_start -or $citation.markdown -notmatch "\(lines ") { throw "Citation does not preserve Markdown source lines." }
+  Assert-KnowledgeMemory
+
   $activeIndexId = $run.index_id
   $syntheticSql = @"
 WITH source AS (
@@ -145,16 +155,6 @@ ANALYZE knowledge.segments;
 "@
   Invoke-Postgres $syntheticSql | Out-Null
   Assert-HnswPlan $activeIndexId
-
-  $first = Invoke-Api "POST" "/v1/search" '{"query":"What is safety stock?","limit":10,"primary_topic":"Supply Chain","tags_all":["inventory"],"path_prefix":"01. Knowledge/Supply Chain"}'
-  if ($first.StatusCode -ne 200) { throw "Search failed: $($first.Body)" }
-  $second = Invoke-Api "POST" "/v1/search" '{"query":"What is safety stock?","limit":10,"primary_topic":"Supply Chain","tags_all":["inventory"],"path_prefix":"01. Knowledge/Supply Chain"}'
-  $firstIds = @(($first.Body | ConvertFrom-Json).results | ForEach-Object segment_id)
-  $secondIds = @(($second.Body | ConvertFrom-Json).results | ForEach-Object segment_id)
-  if ($firstIds.Count -eq 0 -or (@(Compare-Object $firstIds $secondIds).Count -ne 0)) { throw "Search ordering is not deterministic." }
-  $citation = (($first.Body | ConvertFrom-Json).results[0].citation)
-  if ($citation.line_start -lt 1 -or $citation.line_end -lt $citation.line_start -or $citation.markdown -notmatch "\(lines ") { throw "Citation does not preserve Markdown source lines." }
-  Assert-KnowledgeMemory
 
   $afterHash = (Get-FileHash -LiteralPath (Join-Path $vaultRoot "01. Knowledge\Supply Chain\safety-stock.md") -Algorithm SHA256).Hash
   if ($beforeHash -ne $afterHash) { throw "M3/T4 wrote to the Vault." }

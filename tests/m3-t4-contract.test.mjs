@@ -54,7 +54,7 @@ test("M3/T4 keeps public errors and capacity boundaries safe", () => {
   assert.match(app, /RERANKER_UNAVAILABLE/);
   assert.match(app, /await lease\.release\(\)/);
   assert.match(retrieval, /async def try_acquire/);
-  assert.match(reranker, /ThreadPoolExecutor\(max_workers=1/);
+  assert.match(reranker, /ThreadPoolExecutor\(\s*max_workers=1/);
 });
 
 test("M3/T4 pins and isolates the reranker artifact", () => {

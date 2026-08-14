@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import unicodedata
 from dataclasses import dataclass, replace
 from urllib.parse import quote
@@ -44,30 +43,31 @@ class SearchLease:
     async def release(self) -> None:
         if self._released:
             return
+        self._limiter._release()
         self._released = True
-        await self._limiter._release()
 
 
 class SearchCapacityLimiter:
     """A two-slot, no-queue limiter with cancellation-safe leases."""
 
     def __init__(self, capacity: int = 2) -> None:
+        if capacity < 1:
+            raise ValueError("SEARCH_CAPACITY_INVALID")
         self._capacity = capacity
         self._held = 0
-        self._lock = asyncio.Lock()
 
     async def try_acquire(self) -> SearchLease | None:
-        async with self._lock:
-            if self._held >= self._capacity:
-                return None
-            self._held += 1
-            return SearchLease(self)
+        # This method has no suspension point: check-and-increment is atomic
+        # with respect to all request tasks on the service event loop.
+        if self._held >= self._capacity:
+            return None
+        self._held += 1
+        return SearchLease(self)
 
-    async def _release(self) -> None:
-        async with self._lock:
-            if self._held <= 0:
-                raise RuntimeError("SEARCH_LEASE_UNDERFLOW")
-            self._held -= 1
+    def _release(self) -> None:
+        if self._held <= 0:
+            raise RuntimeError("SEARCH_LEASE_UNDERFLOW")
+        self._held -= 1
 
 
 def normalize_filters(
@@ -104,29 +104,34 @@ def _normalize_path_prefix(value: str | None) -> str | None:
 def fuse_candidates(
     dense: list[SearchCandidate], fts: list[SearchCandidate]
 ) -> list[FusedCandidate]:
-    merged: dict[str, dict[str, object]] = {}
-    for rank, candidate in enumerate(dense, start=1):
-        item = merged.setdefault("%s" % candidate.id, {"candidate": candidate})
-        item["dense_rank"] = rank
-        item["candidate"] = candidate
-    for rank, candidate in enumerate(fts, start=1):
-        item = merged.setdefault("%s" % candidate.id, {"candidate": candidate})
-        item["fts_rank"] = rank
-        previous = item["candidate"]
-        if isinstance(previous, SearchCandidate):
-            item["candidate"] = replace(previous, fts_score=candidate.fts_score)
+    candidates: dict[str, SearchCandidate] = {}
+    dense_ranks: dict[str, int] = {}
+    fts_ranks: dict[str, int] = {}
+    for rank, candidate in enumerate(dense[:MAX_BRANCH_CANDIDATES], start=1):
+        if candidate.id not in dense_ranks:
+            dense_ranks[candidate.id] = rank
+            candidates[candidate.id] = candidate
+    for rank, candidate in enumerate(fts[:MAX_BRANCH_CANDIDATES], start=1):
+        if candidate.id in fts_ranks:
+            continue
+        fts_ranks[candidate.id] = rank
+        previous = candidates.get(candidate.id)
+        candidates[candidate.id] = (
+            candidate
+            if previous is None
+            else replace(previous, fts_score=candidate.fts_score)
+        )
     fused: list[FusedCandidate] = []
-    for item in merged.values():
-        dense_rank = item.get("dense_rank")
-        fts_rank = item.get("fts_rank")
-        ranks = [rank for rank in (dense_rank, fts_rank) if isinstance(rank, int)]
-        assert ranks
+    for identifier, candidate in candidates.items():
+        dense_rank = dense_ranks.get(identifier)
+        fts_rank = fts_ranks.get(identifier)
+        ranks = [rank for rank in (dense_rank, fts_rank) if rank is not None]
         rrf_score = sum(1.0 / (RRF_K + rank) for rank in ranks)
         fused.append(
             FusedCandidate(
-                candidate=item["candidate"],  # type: ignore[arg-type]
-                dense_rank=dense_rank if isinstance(dense_rank, int) else None,
-                fts_rank=fts_rank if isinstance(fts_rank, int) else None,
+                candidate=candidate,
+                dense_rank=dense_rank,
+                fts_rank=fts_rank,
                 rrf_score=rrf_score,
                 best_branch_rank=min(ranks),
             )

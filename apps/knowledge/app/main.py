@@ -6,6 +6,7 @@ from typing import AsyncIterator, Literal
 import asyncpg
 import httpx
 from fastapi import FastAPI, HTTPException, Request, status
+from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
@@ -79,8 +80,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     coordinator = IndexRunCoordinator(database, configured_settings.advisory_lock_key)
     model_probe = OllamaModelProbe(configured_settings.ollama_url)
-    lifecycle = IndexLifecycle.from_settings(database, configured_settings, model_probe)
     token_budget = TokenBudget(configured_settings.tokenizer_path)
+    lifecycle = IndexLifecycle.from_settings(
+        database, configured_settings, model_probe, token_budget
+    )
     search_limiter = SearchCapacityLimiter(capacity=2)
 
     @asynccontextmanager
@@ -123,8 +126,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.reranker_error = "RERANKER_UNAVAILABLE"
 
     @app.exception_handler(RequestValidationError)
-    async def invalid_request(_: Request, __: RequestValidationError) -> JSONResponse:
-        return JSONResponse(status_code=422, content={"detail": {"code": "INVALID_SEARCH_REQUEST"}})
+    async def invalid_request(
+        request: Request, error: RequestValidationError
+    ) -> JSONResponse:
+        if request.url.path == "/v1/search":
+            return JSONResponse(
+                status_code=422,
+                content={"detail": {"code": "INVALID_SEARCH_REQUEST"}},
+            )
+        return await request_validation_exception_handler(request, error)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:

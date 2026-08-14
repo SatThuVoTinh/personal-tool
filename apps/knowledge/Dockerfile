@@ -22,7 +22,7 @@ RUN echo "69564b696052886ed0ac63fa393e928384e0f8caada38c1f4864a9bfbf379c15  /app
 FROM builder AS reranker-export
 
 COPY app /app/app
-COPY scripts/export_reranker.py /opt/export_reranker.py
+COPY scripts/export_reranker.py /app/export_reranker.py
 RUN uv venv /opt/reranker-venv && \
     uv pip install --python /opt/reranker-venv/bin/python \
       "torch==2.8.0" "transformers==5.14.1" "onnx==1.18.0" "onnxruntime==1.27.0"
@@ -32,7 +32,7 @@ ADD https://huggingface.co/BAAI/bge-reranker-v2-m3/resolve/953dc6f6f85a1b2dbfca4
 ADD --checksum=sha256:d9e3e081faff1eefb84019509b2f5558fd74c1a05a2c7db22f74174fcedb5286 \
     https://huggingface.co/BAAI/bge-reranker-v2-m3/resolve/953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e/model.safetensors \
     /opt/reranker-source/model.safetensors
-RUN /opt/reranker-venv/bin/python /opt/export_reranker.py
+RUN /opt/reranker-venv/bin/python /app/export_reranker.py
 
 FROM reranker-export AS test
 

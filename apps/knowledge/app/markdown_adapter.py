@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Iterable
 
 import yaml
-from tokenizers import Tokenizer
+from tokenizers import Encoding, Tokenizer
 
 TARGET_CHARS = 1500
 MAX_CHARS = 2000
@@ -143,7 +143,7 @@ class TokenBudget:
     def count(self, text: str) -> int:
         return len(self.__tokenizer.encode(text, add_special_tokens=False).ids)
 
-    def encode_pair(self, query: str, retrieval_text: str):
+    def encode_pair(self, query: str, retrieval_text: str) -> Encoding:
         """Encode one reranker pair without truncation or padding.
 
         Indexing uses ``pair_count`` with a fixed 256-token query fixture.  The
@@ -161,7 +161,6 @@ class TokenBudget:
 
     @property
     def pad_token_id(self) -> int:
-        padding = self.__tokenizer.padding
         # ``no_padding`` above deliberately leaves no active padding policy.
         # The serialized tokenizer still exposes the canonical pad token.
         pad_id = self.__tokenizer.token_to_id("<pad>")
