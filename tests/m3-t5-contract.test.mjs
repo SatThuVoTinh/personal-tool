@@ -111,13 +111,25 @@ test("M3/T5 declares a read-only operational Vault mount", () => {
 test("M3/T5 isolates cleanup by labels and proves kernel read-only behavior", () => {
   assert.match(acceptanceCompose, /com\.personal-tool\.acceptance-run/);
   assert.match(acceptanceCompose, /com\.personal-tool\.persistence: temporary/);
+  assert.match(acceptanceCompose, /ports: !override\s+- "127\.0\.0\.1::8080"/);
   assert.match(common, /function Remove-T5TemporaryResources/);
   assert.match(common, /label=com\.personal-tool\.acceptance-run=\$RunId/);
   assert.match(common, /label=com\.personal-tool\.persistence=temporary/);
   assert.match(common, /function Assert-T5ReadOnlyMount/);
   assert.match(common, /errno\.EROFS/);
   assert.match(common, /HostConfig\.PortBindings/);
+  assert.match(common, /NetworkSettings\.Ports/);
+  assert.match(common, /ExpectedNginxHostPort = "8080"/);
   assert.match(isolated, /InjectFailureAfterStart/);
+  assert.match(isolated, /port", "nginx", "8080"/);
+  assert.match(
+    isolated,
+    /Assert-T5NetworkBoundary \$knowledgeId \$nginxId \$publishedPort/,
+  );
+  assert.match(
+    isolated,
+    /Isolated Nginx did not publish an ephemeral loopback endpoint/,
+  );
   assert.match(isolated, /Remove-T5TemporaryResources \$runId/);
   assert.doesNotMatch(isolated, /\("build", "knowledge"\)/);
 });
@@ -143,6 +155,9 @@ test("M3/T5 persists local evidence and guards a live rebuild", () => {
   assert.match(live, /pg_namespace/);
   assert.match(live, /schema migration ledger is missing, corrupt, or unknown/);
   assert.match(live, /backups\\knowledge-t5/);
+  assert.match(live, /docker exec \$postgresId pg_dump/);
+  assert.match(live, /docker cp "\$\{postgresId\}:\$containerDumpPath"/);
+  assert.doesNotMatch(live, /compose .*run --rm.*pg_dump/);
   assert.match(common, /function Get-T5CgroupSnapshot/);
   assert.match(common, /function Get-T5ResourceWindow/);
   assert.match(common, /oom_count_before/);
@@ -155,5 +170,8 @@ test("M3/T5 persists local evidence and guards a live rebuild", () => {
   assert.match(remote, /Candidate-affecting source digest changed/);
   assert.match(remote, /Get-SuccessfulWorkflowRun "CI"/);
   assert.match(remote, /Get-SuccessfulWorkflowRun "Security"/);
+  assert.match(remote, /--json databaseId,headSha,status,url/);
+  assert.match(remote, /gh run view \$runs\[0\]\.databaseId/);
+  assert.doesNotMatch(remote, /workflowDatabaseId/);
   assert.doesNotMatch(live, /down --volumes/);
 });

@@ -33,11 +33,11 @@ if ($LASTEXITCODE -ne 0 -or $remoteSha -notmatch '^[0-9a-f]{40}$') { throw "Unab
 
 function Get-SuccessfulWorkflowRun {
   param([string]$WorkflowName)
-  $runs = @(& gh run list --workflow $WorkflowName --branch $MainBranch --commit $remoteSha --limit 1 --json workflowDatabaseId,headSha,status,url | ConvertFrom-Json)
+  $runs = @(& gh run list --workflow $WorkflowName --branch $MainBranch --commit $remoteSha --limit 1 --json databaseId,headSha,status,url | ConvertFrom-Json)
   if ($LASTEXITCODE -ne 0 -or $runs.Count -ne 1 -or $runs[0].headSha -ne $remoteSha -or $runs[0].status -ne "completed") {
     throw "$WorkflowName has no completed run for remote main SHA $remoteSha."
   }
-  $run = & gh run view $runs[0].workflowDatabaseId --json conclusion,headSha,status,url | ConvertFrom-Json
+  $run = & gh run view $runs[0].databaseId --json conclusion,headSha,status,url | ConvertFrom-Json
   if ($LASTEXITCODE -ne 0 -or $run.headSha -ne $remoteSha -or $run.status -ne "completed" -or $run.conclusion -ne "success") {
     throw "$WorkflowName did not pass for remote main SHA $remoteSha."
   }

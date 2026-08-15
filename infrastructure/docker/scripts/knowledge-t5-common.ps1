@@ -395,14 +395,22 @@ function Get-T5ResourceWindow {
 }
 
 function Assert-T5NetworkBoundary {
-  param([string]$KnowledgeContainerId, [string]$NginxContainerId)
+  param(
+    [string]$KnowledgeContainerId,
+    [string]$NginxContainerId,
+    [string]$ExpectedNginxHostPort = "8080"
+  )
 
   $knowledgePorts = (& docker inspect --format "{{json .HostConfig.PortBindings}}" $KnowledgeContainerId).Trim()
   if ($knowledgePorts -notin @('null', '{}', '')) { throw "Knowledge must not publish host ports." }
   $nginx = @(& docker inspect $NginxContainerId | ConvertFrom-Json)[0]
-  $bindings = @($nginx.HostConfig.PortBindings.'8080/tcp')
-  if ($bindings.Count -ne 1 -or $bindings[0].HostIp -ne '127.0.0.1' -or $bindings[0].HostPort -ne '8080') {
-    throw "Nginx must bind exactly 127.0.0.1:8080."
+  $configuredBindings = @($nginx.HostConfig.PortBindings.'8080/tcp')
+  $runtimeBindings = @($nginx.NetworkSettings.Ports.'8080/tcp')
+  if ($ExpectedNginxHostPort -notmatch '^\d+$' -or $configuredBindings.Count -ne 1 -or
+    $runtimeBindings.Count -ne 1 -or $configuredBindings[0].HostIp -ne '127.0.0.1' -or
+    $configuredBindings[0].HostPort -notin @('', $ExpectedNginxHostPort) -or
+    $runtimeBindings[0].HostIp -ne '127.0.0.1' -or $runtimeBindings[0].HostPort -ne $ExpectedNginxHostPort) {
+    throw "Nginx must bind exactly 127.0.0.1:$ExpectedNginxHostPort."
   }
 }
 
