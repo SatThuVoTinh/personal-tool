@@ -11,6 +11,58 @@ $script:T5CandidatePathspecs = @(
   "docs/runbooks"
 )
 
+if (-not ("PersonalTool.T5ReparsePoint" -as [type])) {
+  Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+
+namespace PersonalTool {
+  public static class T5ReparsePoint {
+    private const uint FSCTL_GET_REPARSE_POINT = 0x000900A8;
+    private const uint FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000;
+    private const uint FILE_FLAG_BACKUP_SEMANTICS = 0x02000000;
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeFileHandle CreateFile(
+      string fileName, uint desiredAccess, uint shareMode, IntPtr securityAttributes,
+      uint creationDisposition, uint flagsAndAttributes, IntPtr templateFile);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool DeviceIoControl(
+      SafeFileHandle device, uint controlCode, IntPtr inputBuffer, int inputSize,
+      byte[] outputBuffer, int outputSize, out int bytesReturned, IntPtr overlapped);
+
+    public static uint GetTag(string path) {
+      using (SafeFileHandle handle = CreateFile(
+        path, 0, 7, IntPtr.Zero, 3,
+        FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, IntPtr.Zero)) {
+        if (handle.IsInvalid) {
+          throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+        byte[] buffer = new byte[16384];
+        int returned;
+        if (!DeviceIoControl(
+          handle, FSCTL_GET_REPARSE_POINT, IntPtr.Zero, 0,
+          buffer, buffer.Length, out returned, IntPtr.Zero)) {
+          throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+        if (returned < 8) {
+          throw new InvalidOperationException("The reparse buffer is incomplete.");
+        }
+        return BitConverter.ToUInt32(buffer, 0);
+      }
+    }
+
+    public static bool IsCloudPlaceholder(uint tag) {
+      return (tag & 0xFFFF0FFFu) == 0x9000001Au;
+    }
+  }
+}
+'@
+}
+
 function Assert-T5CleanRepository {
   $changes = @(git status --porcelain)
   if ($LASTEXITCODE -ne 0 -or $changes.Count -ne 0) {
@@ -70,13 +122,21 @@ function Get-T5CanonicalVaultRoot {
   return $resolved.TrimEnd('\', '/')
 }
 
-function Assert-T5NoNestedReparsePoint {
+function Assert-T5NoUnsafeNestedReparsePoint {
   param([string]$VaultRoot)
 
   $items = Get-ChildItem -LiteralPath $VaultRoot -Force -Recurse -ErrorAction Stop
+  $rootPrefix = $VaultRoot.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
   foreach ($item in $items) {
     if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-      throw "Nested reparse point is not allowed: $($item.FullName)"
+      $tag = [PersonalTool.T5ReparsePoint]::GetTag($item.FullName)
+      if (-not [PersonalTool.T5ReparsePoint]::IsCloudPlaceholder($tag)) {
+        throw "Nested link-like or unknown reparse point is not allowed: $($item.FullName)"
+      }
+      $resolved = (Resolve-Path -LiteralPath $item.FullName -ErrorAction Stop).Path
+      if ($resolved -cne $VaultRoot -and -not $resolved.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Cloud placeholder resolves outside the configured Vault: $($item.FullName)"
+      }
     }
   }
 }
@@ -84,7 +144,7 @@ function Assert-T5NoNestedReparsePoint {
 function Get-T5VaultTreeHash {
   param([string]$CanonicalVaultRoot)
 
-  Assert-T5NoNestedReparsePoint $CanonicalVaultRoot
+  Assert-T5NoUnsafeNestedReparsePoint $CanonicalVaultRoot
   $entries = foreach ($item in Get-ChildItem -LiteralPath $CanonicalVaultRoot -File -Force -Recurse -ErrorAction Stop) {
     $relative = $item.FullName.Substring($CanonicalVaultRoot.Length).TrimStart('\', '/').Replace('\', '/')
     [ordered]@{

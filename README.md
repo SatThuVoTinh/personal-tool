@@ -99,7 +99,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/docker/scri
 powershell -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/docker/scripts/knowledge-t2-windows.ps1
 ```
 
-The first script builds with the committed `uv.lock`, verifies the immutable tokenizer artifact, runs the Python suite, mounts only the repository fixture Vault read-only, and confirms its hashes are unchanged. The second script is Windows-native acceptance for junction/reparse rejection; Linux-container tests do not claim Windows filesystem semantics.
+The first script builds with the committed `uv.lock`, verifies the immutable tokenizer artifact, runs the Python suite, mounts only the repository fixture Vault read-only, and confirms its hashes are unchanged. The second script is Windows-native acceptance for junction and link-like reparse rejection; recognized Cloud Files placeholders that remain inside the Vault are allowed. Linux-container tests do not claim Windows filesystem semantics.
 
 ## M3/T3 index lifecycle verification
 

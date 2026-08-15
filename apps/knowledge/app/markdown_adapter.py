@@ -62,6 +62,8 @@ ERROR_PRECEDENCE = {
 _ATX_HEADING = re.compile(r"^ {0,3}(#{1,6})(?:[ \t]+|$)(.*)$")
 _SETEXT = re.compile(r"^ {0,3}(=+|-+)[ \t]*$")
 _FENCE_OPEN = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+_CLOUD_REPARSE_TAG_MASK = 0xFFFF0FFF
+_CLOUD_REPARSE_TAG = 0x9000001A
 _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?。！？])\s+")
 
 
@@ -286,7 +288,16 @@ class MarkdownVaultScanner:
             return False
         attributes = getattr(metadata, "st_file_attributes", 0)
         reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
-        return bool(reparse_flag and attributes & reparse_flag)
+        if not (reparse_flag and attributes & reparse_flag):
+            return False
+        return not MarkdownVaultScanner._is_cloud_placeholder(metadata)
+
+    @staticmethod
+    def _is_cloud_placeholder(metadata: os.stat_result) -> bool:
+        reparse_tag = getattr(metadata, "st_reparse_tag", 0)
+        return (
+            reparse_tag & _CLOUD_REPARSE_TAG_MASK
+        ) == _CLOUD_REPARSE_TAG
 
     def _validate_source(
         self, vault_root: Path, knowledge_root: Path, candidate: Path
@@ -376,7 +387,11 @@ class MarkdownVaultScanner:
                 return True
             attributes = getattr(metadata, "st_file_attributes", 0)
             reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
-            if reparse_flag and attributes & reparse_flag:
+            if (
+                reparse_flag
+                and attributes & reparse_flag
+                and not MarkdownVaultScanner._is_cloud_placeholder(metadata)
+            ):
                 return True
             is_junction = getattr(current, "is_junction", None)
             if is_junction is not None and is_junction():

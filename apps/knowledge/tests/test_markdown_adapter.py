@@ -5,6 +5,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from app.markdown_adapter import (
     MAX_CHARS,
@@ -77,6 +78,20 @@ class MarkdownAdapterTests(unittest.TestCase):
         self.assertEqual(
             result.sources[0].source_path,
             "01. Knowledge/2. Data/SQL/window-functions.md",
+        )
+
+    def test_cloud_placeholder_tags_are_not_treated_as_link_targets(self) -> None:
+        for reparse_tag in (0x9000001A, 0x9000601A, 0x9000F01A):
+            with self.subTest(reparse_tag=hex(reparse_tag)):
+                self.assertTrue(
+                    self.scanner._is_cloud_placeholder(
+                        SimpleNamespace(st_reparse_tag=reparse_tag)
+                    )
+                )
+        self.assertFalse(
+            self.scanner._is_cloud_placeholder(
+                SimpleNamespace(st_reparse_tag=0xA000000C)
+            )
         )
 
     def test_scan_does_not_publish_partial_sources(self) -> None:

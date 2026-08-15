@@ -432,6 +432,8 @@ Each task reruns all relevant predecessor regression checks. A failed task remai
 
 M3 discovers only `01. Knowledge/**/*.md` from the configured Vault root. It must not write to the Vault and must reject paths escaping the configured root. `02. Books`, `03. Papers`, `04. Images`, and `05. Videos` are excluded from M3.
 
+Windows Cloud Files placeholders are allowed only when their Microsoft cloud reparse tag is recognized and the resolved path remains inside the canonical Vault root. Symlinks, junctions, name-surrogate reparse points, unknown reparse tags, cycles, and path escapes fail closed.
+
 The five media branches share the same thirteen logical topics for later milestones. In M3, native Obsidian tags are the taxonomy source of truth. Folder names below `01. Knowledge` are organizational only and may use personal names or numbering such as `2. Data`; they do not determine or validate topic metadata. The first canonical native tag in document order determines `primary_topic`, and every canonical native tag contributes to `canonical_topics`.
 
 | Canonical topic | Native tag |

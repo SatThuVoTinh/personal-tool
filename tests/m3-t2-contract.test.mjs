@@ -65,6 +65,8 @@ test("M3/T2 locks tag-derived taxonomy, lexical boundaries, and token budgets", 
   assert.match(adapter, /TAG_TO_TOPIC\[raw_tag\]/);
   assert.match(adapter, /primary_topic = canonical_topics\[0\]/);
   assert.doesNotMatch(adapter, /_topic_from_path/);
+  assert.match(adapter, /_CLOUD_REPARSE_TAG = 0x9000001A/);
+  assert.match(adapter, /_is_cloud_placeholder/);
   assert.match(adapter, /TARGET_CHARS = 1500/);
   assert.match(adapter, /MAX_CHARS = 2000/);
   assert.match(adapter, /QUERY_MAX_TOKENS = 256/);

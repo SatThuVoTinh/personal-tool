@@ -16,7 +16,9 @@ automatic rollback of a published index.
 - Ollama has `bge-m3:latest` available with 1024 embedding dimensions.
 - `KNOWLEDGE_VAULT_ROOT` in the ignored environment file is an absolute Vault
   path containing `01. Knowledge`.
-- The Vault has no nested symlink, junction, or reparse point.
+- The Vault has no nested symlink, junction, name-surrogate, or unknown reparse
+  point. Recognized Microsoft Cloud Files placeholders are allowed only when
+  they resolve inside the canonical Vault root.
 - Before any RealVault acceptance, pause Obsidian writes, sync clients, and
   every other writer until the final tree-hash check completes.
 

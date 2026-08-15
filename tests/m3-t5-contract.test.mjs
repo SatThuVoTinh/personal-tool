@@ -125,7 +125,12 @@ test("M3/T5 isolates cleanup by labels and proves kernel read-only behavior", ()
 test("M3/T5 persists local evidence and guards a live rebuild", () => {
   assert.match(common, /temp\\knowledge-t5\\evidence/);
   assert.match(common, /function Get-T5VaultTreeHash/);
-  assert.match(common, /Nested reparse point is not allowed/);
+  assert.match(common, /function Assert-T5NoUnsafeNestedReparsePoint/);
+  assert.match(common, /IsCloudPlaceholder/);
+  assert.match(
+    common,
+    /Nested link-like or unknown reparse point is not allowed/,
+  );
   assert.match(common, /function Assert-T5ExpectedSourcePath/);
   assert.match(common, /firstCanonical\.topic/);
   assert.match(common, /firstCanonical\.tag/);
