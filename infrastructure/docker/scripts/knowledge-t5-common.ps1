@@ -164,7 +164,7 @@ function Assert-T5ExpectedSourcePath {
 
   if ([IO.Path]::IsPathRooted($ExpectedSourcePath) -or $ExpectedSourcePath.Contains('\') -or
     $ExpectedSourcePath.StartsWith('/') -or -not $ExpectedSourcePath.EndsWith('.md', [StringComparison]::Ordinal) -or
-    $ExpectedSourcePath -notmatch '^01\. Knowledge/[A-Za-z0-9._ -]+(?:/[A-Za-z0-9._ -]+)*\.md$') {
+    $ExpectedSourcePath -notmatch '^01\. Knowledge/.+\.md$' -or $ExpectedSourcePath -match '[\x00-\x1f\x7f]') {
     throw "ExpectedSourcePath must be a canonical Vault-relative POSIX Markdown path."
   }
   $segments = $ExpectedSourcePath.Split('/')

@@ -132,6 +132,8 @@ test("M3/T5 persists local evidence and guards a live rebuild", () => {
     /Nested link-like or unknown reparse point is not allowed/,
   );
   assert.match(common, /function Assert-T5ExpectedSourcePath/);
+  assert.match(common, /\[\\x00-\\x1f\\x7f\]/);
+  assert.doesNotMatch(common, /A-Za-z0-9\._ -/);
   assert.match(common, /firstCanonical\.topic/);
   assert.match(common, /firstCanonical\.tag/);
   assert.doesNotMatch(common, /unsupported primary topic/);
