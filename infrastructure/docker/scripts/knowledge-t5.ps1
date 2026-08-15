@@ -22,6 +22,7 @@ $acceptanceComposeFile = Join-Path $script:T5DockerDirectory "compose\compose.m3
 $fixtureVault = Join-Path $script:T5RepositoryRoot "apps\knowledge\tests\fixtures\vault"
 $fixtureCopyRoot = ""
 $started = $false
+$apiBaseUrl = ""
 $evidence = [ordered]@{ schema_version = 1; mode = $Mode; result = "FAIL"; acceptance_run_id = $runId; started_at = [DateTime]::UtcNow.ToString("o") }
 
 function Invoke-T5Compose {
@@ -32,6 +33,7 @@ function Invoke-T5Compose {
 
 function Invoke-T5Api {
   param([string]$Method, [string]$Path, [string]$Body = "")
+  if (-not $script:apiBaseUrl) { throw "The isolated Nginx endpoint has not been resolved." }
   $responsePath = Join-Path ([IO.Path]::GetTempPath()) "knowledge-t5-$runId-$([guid]::NewGuid().ToString('N')).json"
   $requestPath = $null
   try {
@@ -41,7 +43,7 @@ function Invoke-T5Api {
       [IO.File]::WriteAllText($requestPath, $Body, [Text.UTF8Encoding]::new($false))
       $arguments += @("--header", "Content-Type: application/json", "--data-binary", "@$requestPath")
     }
-    $arguments += "http://127.0.0.1:8080/knowledge$Path"
+    $arguments += "$script:apiBaseUrl$Path"
     $statusCode = & curl.exe @arguments
     if ($LASTEXITCODE -ne 0) { throw "HTTP request failed for $Path." }
     return [ordered]@{ status = [int]$statusCode; body = Get-Content -LiteralPath $responsePath -Raw -Encoding utf8 }
@@ -126,6 +128,11 @@ try {
   $evidence.deployment = Get-T5DeploymentFingerprint $projectName "temporary"
   $started = $true
   Invoke-T5Compose @("up", "--detach", "--wait", "--wait-timeout", "300", "postgres", "nginx", "knowledge")
+  $publishedEndpoint = (Invoke-T5Compose @("port", "nginx", "8080")).Trim()
+  if ($publishedEndpoint -notmatch '^127\.0\.0\.1:\d+$') {
+    throw "Isolated Nginx did not publish an ephemeral loopback endpoint."
+  }
+  $script:apiBaseUrl = "http://$publishedEndpoint/knowledge"
   if ($InjectFailureAfterStart) { throw "Intentional M3/T5 cleanup failure injection." }
 
   $knowledgeId = (Invoke-T5Compose @("ps", "-q", "knowledge")).Trim()

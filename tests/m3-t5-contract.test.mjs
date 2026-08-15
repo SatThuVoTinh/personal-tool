@@ -111,6 +111,7 @@ test("M3/T5 declares a read-only operational Vault mount", () => {
 test("M3/T5 isolates cleanup by labels and proves kernel read-only behavior", () => {
   assert.match(acceptanceCompose, /com\.personal-tool\.acceptance-run/);
   assert.match(acceptanceCompose, /com\.personal-tool\.persistence: temporary/);
+  assert.match(acceptanceCompose, /ports: !override\s+- "127\.0\.0\.1::8080"/);
   assert.match(common, /function Remove-T5TemporaryResources/);
   assert.match(common, /label=com\.personal-tool\.acceptance-run=\$RunId/);
   assert.match(common, /label=com\.personal-tool\.persistence=temporary/);
@@ -118,6 +119,11 @@ test("M3/T5 isolates cleanup by labels and proves kernel read-only behavior", ()
   assert.match(common, /errno\.EROFS/);
   assert.match(common, /HostConfig\.PortBindings/);
   assert.match(isolated, /InjectFailureAfterStart/);
+  assert.match(isolated, /port", "nginx", "8080"/);
+  assert.match(
+    isolated,
+    /Isolated Nginx did not publish an ephemeral loopback endpoint/,
+  );
   assert.match(isolated, /Remove-T5TemporaryResources \$runId/);
   assert.doesNotMatch(isolated, /\("build", "knowledge"\)/);
 });

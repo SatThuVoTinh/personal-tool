@@ -18,6 +18,8 @@ services:
       com.personal-tool.persistence: temporary
 
   nginx:
+    ports: !override
+      - "127.0.0.1::8080"
     labels:
       com.personal-tool.acceptance: t5
       com.personal-tool.acceptance-run: ${KNOWLEDGE_T5_RUN_ID}
