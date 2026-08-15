@@ -1,0 +1,54 @@
+services:
+  object-storage:
+    labels:
+      com.personal-tool.acceptance: t5
+      com.personal-tool.acceptance-run: ${KNOWLEDGE_T5_RUN_ID}
+      com.personal-tool.persistence: temporary
+
+  postgres:
+    labels:
+      com.personal-tool.acceptance: t5
+      com.personal-tool.acceptance-run: ${KNOWLEDGE_T5_RUN_ID}
+      com.personal-tool.persistence: temporary
+
+  redis:
+    labels:
+      com.personal-tool.acceptance: t5
+      com.personal-tool.acceptance-run: ${KNOWLEDGE_T5_RUN_ID}
+      com.personal-tool.persistence: temporary
+
+  nginx:
+    labels:
+      com.personal-tool.acceptance: t5
+      com.personal-tool.acceptance-run: ${KNOWLEDGE_T5_RUN_ID}
+      com.personal-tool.persistence: temporary
+
+  knowledge:
+    volumes:
+      - type: bind
+        source: ${KNOWLEDGE_ACCEPTANCE_VAULT_ROOT}
+        target: /vault
+        read_only: true
+    labels:
+      com.personal-tool.acceptance: t5
+      com.personal-tool.acceptance-run: ${KNOWLEDGE_T5_RUN_ID}
+      com.personal-tool.persistence: temporary
+
+networks:
+  platform:
+    labels:
+      com.personal-tool.acceptance: t5
+      com.personal-tool.acceptance-run: ${KNOWLEDGE_T5_RUN_ID}
+      com.personal-tool.persistence: temporary
+
+volumes:
+  object-storage-data:
+    labels:
+      com.personal-tool.acceptance: t5
+      com.personal-tool.acceptance-run: ${KNOWLEDGE_T5_RUN_ID}
+      com.personal-tool.persistence: temporary
+  postgres-data:
+    labels:
+      com.personal-tool.acceptance: t5
+      com.personal-tool.acceptance-run: ${KNOWLEDGE_T5_RUN_ID}
+      com.personal-tool.persistence: temporary

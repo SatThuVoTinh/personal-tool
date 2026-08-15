@@ -231,7 +231,9 @@ services:
     build:
       context: ../../../apps/knowledge
       dockerfile: Dockerfile
-    image: personal-tool/knowledge:m3-t4
+      args:
+        KNOWLEDGE_IMAGE_REVISION: ${KNOWLEDGE_IMAGE_REVISION:-unverified}
+    image: personal-tool/knowledge:m3
     depends_on:
       postgres:
         condition: service_healthy
@@ -265,7 +267,7 @@ services:
     mem_limit: 4g
     labels:
       personal-tool.component: knowledge-platform
-      personal-tool.milestone: m3-t4
+      personal-tool.milestone: m3-t5
       personal-tool.project: personal-tool
     networks:
       - platform

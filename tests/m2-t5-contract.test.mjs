@@ -20,7 +20,7 @@ test("M2/T5 declares cumulative logical profile semantics", () => {
 
   assert.match(
     contents,
-    /\[ValidateSet\("core", "platform", "observability", "all"\)\]/,
+    /\[ValidateSet\("core", "platform", "observability", "all", "knowledge"\)\]/,
   );
   assert.match(contents, /core = @\("object-storage", "postgres", "redis"\)/);
   assert.match(
@@ -28,7 +28,14 @@ test("M2/T5 declares cumulative logical profile semantics", () => {
     /platform = @\("object-storage", "postgres", "redis", "nginx", "n8n"\)/,
   );
   assert.match(contents, /observability = @\([\s\S]*"dozzle"/);
-  assert.match(contents, /run --rm --no-deps -T postgres-bootstrap/);
+  assert.match(
+    contents,
+    /Invoke-PlatformCompose @\("run", "--rm", "--no-deps", "-T", "postgres-bootstrap"\)/,
+  );
+  assert.match(
+    contents,
+    /knowledge = @\("object-storage", "postgres", "redis", "nginx", "knowledge"\)/,
+  );
   assert.doesNotMatch(contents, /\bpull @services\b/);
   assert.doesNotMatch(contents, /profiles:/);
 });

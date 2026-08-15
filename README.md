@@ -8,7 +8,7 @@ M1 and M2 are complete. M2 is backed up on GitHub at commit [`5ffe4cb`](https://
 
 The validated M2 stack uses PostgreSQL 17 + pgvector, AIStor Free, Redis, n8n, Nginx, Prometheus, Grafana, and Dozzle. PostgreSQL, AIStor, n8n state, and `.n8n` use named volumes; Redis is intentionally transient. PostgreSQL, Redis, exporters, the S3 API, and the future Knowledge service have no host port mapping. Nginx, n8n, Prometheus, Grafana, and Dozzle bind only to host loopback.
 
-M3 is in progress. M3/T1 provides the merged internal-only Knowledge-service foundation at [`4097862`](https://github.com/SatThuVoTinh/personal-tool/commit/4097862ab383e8698f2d5b1ff5adce0acd1c6579). M3/T2 provides remote-backed, read-only Markdown discovery, strict source validation, native Obsidian tag parsing, original-line coordinates, and retrieval-safe segmentation under the pinned reranker tokenizer budget. M3/T3 adds remote-backed persistent index-run APIs, incremental replacement, side-by-side full rebuilds, atomic publication/failure transitions, immutable model-identity gates, protected deletion, recovery, and safe error reporting. M3/T3 is merged at [`242bca8`](https://github.com/SatThuVoTinh/personal-tool/commit/242bca819b72ded9f6178221eb9cdda09b3dea38), with [CI](https://github.com/SatThuVoTinh/personal-tool/actions/runs/31694753997) and [Security](https://github.com/SatThuVoTinh/personal-tool/actions/runs/31694754021) passed on `main`; M3/T4 hybrid retrieval and ONNX reranking is in progress. PDF, image, and video ingestion remain deferred to M4/M5.
+M3 is in progress. M3/T1 through T4 are remote-backed; T4 hybrid retrieval and ONNX reranking merged at [`aa73b06`](https://github.com/SatThuVoTinh/personal-tool/commit/aa73b06375321460800b9f78e8195b6837ea5125) with [CI](https://github.com/SatThuVoTinh/personal-tool/actions/runs/31805436907) and [Security](https://github.com/SatThuVoTinh/personal-tool/actions/runs/31805436900) passing on `main`. M3/T5 acceptance and operational handoff is being implemented. PDF, image, and video ingestion remain deferred to M4/M5.
 
 ## Development
 
@@ -57,6 +57,23 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/docker/scri
 ```
 
 `build.ps1` is the explicit image refresh/validation gate. `start.ps1` uses cached immutable images when available. M2 backup excludes runtime credentials, AIStor root credentials and license, PostgreSQL roles/passwords, the n8n encryption key, plaintext n8n credentials, Redis, Prometheus runtime metrics, and Grafana runtime state.
+
+## M3 Knowledge operation
+
+The dedicated `knowledge` profile starts AIStor, PostgreSQL, Redis, Nginx, and
+Knowledge without n8n or observability. `build.ps1 -Profile knowledge` requires
+a clean working tree and labels the local Knowledge image with the exact HEAD
+SHA; it does not require a Vault path. `start.ps1 -Profile knowledge` requires
+an absolute `KNOWLEDGE_VAULT_ROOT` in the ignored environment file and mounts
+it read-only. The existing `all` profile is unchanged.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/docker/scripts/build.ps1 -Profile knowledge -EnvironmentFile ./infrastructure/docker/env/.env
+powershell -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/docker/scripts/start.ps1 -Profile knowledge -EnvironmentFile ./infrastructure/docker/env/.env
+```
+
+See the [Knowledge Platform runbook](docs/runbooks/knowledge-platform.md) for
+indexing, acceptance, recovery, and local-evidence handling.
 
 ## M3/T1 runtime verification
 
