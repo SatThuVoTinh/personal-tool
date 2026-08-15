@@ -4,6 +4,9 @@
 
 This runbook operates the M3 Markdown Knowledge Platform. It indexes only
 `01. Knowledge/**/*.md` from an external Obsidian Vault mounted read-only.
+Folder names below `01. Knowledge` are organizational and may use personal
+numbering. Each indexed note instead requires at least one lowercase canonical
+native tag; the first canonical tag determines `primary_topic`.
 It does not authorize PDF ingestion, Vault writes, direct database edits, or
 automatic rollback of a published index.
 

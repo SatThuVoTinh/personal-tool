@@ -67,6 +67,11 @@ SHA; it does not require a Vault path. `start.ps1 -Profile knowledge` requires
 an absolute `KNOWLEDGE_VAULT_ROOT` in the ignored environment file and mounts
 it read-only. The existing `all` profile is unchanged.
 
+Within `01. Knowledge`, folder names and numeric prefixes are organizational
+only. Native canonical tags provide topic metadata: the first canonical tag in
+document order is `primary_topic`, and additional canonical tags represent
+cross-topic classification.
+
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/docker/scripts/build.ps1 -Profile knowledge -EnvironmentFile ./infrastructure/docker/env/.env
 powershell -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/docker/scripts/start.ps1 -Profile knowledge -EnvironmentFile ./infrastructure/docker/env/.env

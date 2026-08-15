@@ -127,6 +127,9 @@ test("M3/T5 persists local evidence and guards a live rebuild", () => {
   assert.match(common, /function Get-T5VaultTreeHash/);
   assert.match(common, /Nested reparse point is not allowed/);
   assert.match(common, /function Assert-T5ExpectedSourcePath/);
+  assert.match(common, /firstCanonical\.topic/);
+  assert.match(common, /firstCanonical\.tag/);
+  assert.doesNotMatch(common, /unsupported primary topic/);
   assert.match(common, /function Write-T5Evidence/);
   assert.match(live, /ConfirmPersistentIndex/);
   assert.match(live, /No matching isolated RealVault PASS evidence exists/);

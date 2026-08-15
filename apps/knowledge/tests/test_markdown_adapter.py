@@ -42,11 +42,11 @@ class MarkdownAdapterTests(unittest.TestCase):
         path.write_text(content, encoding="utf-8", newline="")
         return path
 
-    def test_all_canonical_topics_and_raw_required_tags(self) -> None:
+    def test_all_canonical_topics_are_derived_from_native_tags(self) -> None:
         temporary, vault = self.make_vault()
         self.addCleanup(temporary.cleanup)
         for index, (topic, tag) in enumerate(TOPIC_TAGS, start=1):
-            folder = f"{index:02d}. {topic}" if index % 2 else topic
+            folder = f"{index}. Personal Collection"
             self.write_note(vault, folder, f"note-{index}.md", f"# {topic}\n\nBody.\n\n{tag}\n")
 
         result = self.scanner.scan_vault(vault)
@@ -57,6 +57,26 @@ class MarkdownAdapterTests(unittest.TestCase):
         self.assertEqual(
             {source.primary_topic for source in result.sources},
             {topic for topic, _ in TOPIC_TAGS},
+        )
+
+    def test_first_canonical_tag_is_primary_and_folder_is_organizational(self) -> None:
+        temporary, vault = self.make_vault()
+        self.addCleanup(temporary.cleanup)
+        self.write_note(
+            vault,
+            "2. Data/SQL",
+            "window-functions.md",
+            "# Window functions\n\nBody.\n\n#supplychain #data #sql\n",
+        )
+
+        result = self.scanner.scan_vault(vault)
+
+        self.assertTrue(result.succeeded)
+        self.assertEqual(result.sources[0].primary_topic, "Supply Chain")
+        self.assertEqual(result.sources[0].canonical_topics, ("Supply Chain", "Data"))
+        self.assertEqual(
+            result.sources[0].source_path,
+            "01. Knowledge/2. Data/SQL/window-functions.md",
         )
 
     def test_scan_does_not_publish_partial_sources(self) -> None:
@@ -70,21 +90,17 @@ class MarkdownAdapterTests(unittest.TestCase):
                 f"# Valid {index}\n\nContent {index}.\n\n#ai\n",
             )
         self.write_note(vault, "AI", "missing-tag.md", "# Missing\n\nContent.\n")
-        self.write_note(vault, "3PL", "unsupported.md", "# Unsupported\n\nContent.\n")
+        self.write_note(vault, "3PL", "tagged.md", "# Tagged\n\nContent.\n\n#data\n")
 
         result = self.scanner.scan_vault(vault)
 
         self.assertFalse(result.succeeded)
         self.assertEqual(result.discovered_count, 100)
-        self.assertEqual(result.valid_source_count, 98)
+        self.assertEqual(result.valid_source_count, 99)
         self.assertEqual(result.sources, ())
         self.assertEqual(
             [(error.source_path, error.code) for error in result.errors],
             [
-                (
-                    "01. Knowledge/3PL/unsupported.md",
-                    "UNSUPPORTED_TOPIC",
-                ),
                 (
                     "01. Knowledge/AI/missing-tag.md",
                     "REQUIRED_TOPIC_TAG_MISSING",
@@ -121,10 +137,7 @@ class MarkdownAdapterTests(unittest.TestCase):
 
         self.assertEqual(
             [(error.source_path, error.code) for error in result.errors],
-            [
-                ("01. Knowledge/4PL/invalid.md", "UNSUPPORTED_TOPIC"),
-                ("01. Knowledge/4PL/invalid.md", "INVALID_UTF8"),
-            ],
+            [("01. Knowledge/4PL/invalid.md", "INVALID_UTF8")],
         )
 
     def test_required_tag_uses_raw_lowercase_lexeme(self) -> None:

@@ -132,23 +132,36 @@ function Get-T5SearchFilters {
   param([string]$CanonicalVaultRoot, [string]$ExpectedSourcePath)
 
   $segments = $ExpectedSourcePath.Split('/')
-  if ($segments.Count -lt 3) { throw "ExpectedSourcePath must include a topic directory." }
-  $topic = $segments[1] -replace '^\d{2}\.\s+', ''
-  $requiredTags = @{
-    "AI" = "ai"; "Data" = "data"; "Cloud" = "cloud"; "Machine Learning" = "machinelearning"
-    "Logistics" = "logistics"; "Supply Chain" = "supplychain"; "Material Science" = "materialscience"
-    "Agricultural Science" = "agriculturalscience"; "Economic" = "economic"; "Natural Science" = "naturalscience"
-    "Social Science" = "socialscience"; "English" = "english"; "Chinese" = "chinese"
-  }
-  if (-not $requiredTags.ContainsKey($topic)) { throw "ExpectedSourcePath has an unsupported primary topic." }
   $source = Assert-T5ExpectedSourcePath $CanonicalVaultRoot $ExpectedSourcePath
   $contents = Get-Content -LiteralPath $source -Raw -Encoding utf8
-  $tag = "#$($requiredTags[$topic])"
-  if ($contents -notmatch "(?<![\w/])$([regex]::Escape($tag))(?![\w/-])") {
-    throw "Expected source does not contain the required native tag $tag."
+
+  $canonicalTags = @(
+    [pscustomobject]@{ topic = "AI"; tag = "ai" },
+    [pscustomobject]@{ topic = "Data"; tag = "data" },
+    [pscustomobject]@{ topic = "Cloud"; tag = "cloud" },
+    [pscustomobject]@{ topic = "Machine Learning"; tag = "machinelearning" },
+    [pscustomobject]@{ topic = "Logistics"; tag = "logistics" },
+    [pscustomobject]@{ topic = "Supply Chain"; tag = "supplychain" },
+    [pscustomobject]@{ topic = "Material Science"; tag = "materialscience" },
+    [pscustomobject]@{ topic = "Agricultural Science"; tag = "agriculturalscience" },
+    [pscustomobject]@{ topic = "Economic"; tag = "economic" },
+    [pscustomobject]@{ topic = "Natural Science"; tag = "naturalscience" },
+    [pscustomobject]@{ topic = "Social Science"; tag = "socialscience" },
+    [pscustomobject]@{ topic = "English"; tag = "english" },
+    [pscustomobject]@{ topic = "Chinese"; tag = "chinese" }
+  )
+  $firstCanonical = $null
+  foreach ($candidate in $canonicalTags) {
+    $pattern = "(?<![\w/\\])#$([regex]::Escape($candidate.tag))(?![\w/-])"
+    $match = [regex]::Match($contents, $pattern, [Text.RegularExpressions.RegexOptions]::CultureInvariant)
+    if ($match.Success -and (-not $firstCanonical -or $match.Index -lt $firstCanonical.index)) {
+      $firstCanonical = [pscustomobject]@{ index = $match.Index; topic = $candidate.topic; tag = $candidate.tag }
+    }
   }
+  if (-not $firstCanonical) { throw "Expected source does not contain a lowercase canonical native topic tag." }
+
   $parent = ($segments[0..($segments.Count - 2)] -join '/')
-  return [ordered]@{ primary_topic = $topic; tags_all = @($requiredTags[$topic]); path_prefix = $parent }
+  return [ordered]@{ primary_topic = $firstCanonical.topic; tags_all = @($firstCanonical.tag); path_prefix = $parent }
 }
 
 function Get-T5ImageIdentity {

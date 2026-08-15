@@ -432,9 +432,9 @@ Each task reruns all relevant predecessor regression checks. A failed task remai
 
 M3 discovers only `01. Knowledge/**/*.md` from the configured Vault root. It must not write to the Vault and must reject paths escaping the configured root. `02. Books`, `03. Papers`, `04. Images`, and `05. Videos` are excluded from M3.
 
-The five media branches share the same thirteen logical topics for later milestones. In M3, the topic folder determines `primary_topic`; native Obsidian tags are mandatory validation and secondary classification. A topic folder may use its exact canonical label or the strict numeric prefix `^\d{2}\.\s+` followed by that label; no other prefix is stripped.
+The five media branches share the same thirteen logical topics for later milestones. In M3, native Obsidian tags are the taxonomy source of truth. Folder names below `01. Knowledge` are organizational only and may use personal names or numbering such as `2. Data`; they do not determine or validate topic metadata. The first canonical native tag in document order determines `primary_topic`, and every canonical native tag contributes to `canonical_topics`.
 
-| Folder | Required native tag |
+| Canonical topic | Native tag |
 | --- | --- |
 | AI | `#ai` |
 | Data | `#data` |
@@ -451,11 +451,11 @@ The five media branches share the same thirteen logical topics for later milesto
 | Chinese | `#chinese` |
 
 - Canonical native `#tags` are lowercase and parsed from Markdown outside YAML frontmatter, fenced code, inline code, headings, and HTML comments. Escaped hashes and URL fragments are not tags.
-- Required-topic validation uses the raw native-tag lexeme before NFC/case-fold normalization; for example, `#MachineLearning` does not satisfy `#machinelearning`.
-- A note must contain the canonical tag required by its topic folder. It may contain other canonical topics and ordinary Obsidian tags; all appear in `canonical_topics` and `tags` metadata.
-- `canonical_topics` follow the fixed taxonomy order. After validation, metadata tags are NFC-normalized, case-folded, deduplicated, and deterministically sorted; passage text, titles, and headings are not Unicode-normalized.
-- Tag order is not semantic and cannot change `primary_topic`. Moving a note to another topic folder changes `primary_topic` and is an atomic reindex replacement.
-- A missing or mismatched required tag makes that source invalid. An incremental run retains the previous source version and marks the source/run error. A full rebuild fails and never activates its BUILDING index.
+- Canonical-topic validation uses the raw native-tag lexeme before NFC/case-fold normalization; for example, `#MachineLearning` does not satisfy `#machinelearning`.
+- A note must contain at least one canonical native topic tag. It may contain additional canonical topics and ordinary Obsidian tags; all appear in `canonical_topics` and `tags` metadata.
+- `primary_topic` is derived from the first canonical tag in document order, while `canonical_topics` preserve first occurrence order and remove duplicates. After validation, metadata tags are NFC-normalized, case-folded, deduplicated, and deterministically sorted; passage text, titles, and headings are not Unicode-normalized.
+- Moving a note between folders changes `source_path` but not its topic metadata. Reordering canonical tags may intentionally change `primary_topic` and is handled as an atomic reindex replacement.
+- A missing canonical native topic tag makes that source invalid. An incremental run retains the previous source version and marks the source/run error. A full rebuild fails and never activates its BUILDING index.
 - Tag-only lines may be omitted from passage text, but tags remain structured metadata and receive full-text weight A. YAML removal and every embedding transformation preserve original Markdown source coordinates.
 
 The initial read-only inventory found the five top-level subject trees and all thirteen topics. At the time of inspection, `01. Knowledge`, Papers, Images, and Videos had no eligible content; Books had Markdown sidecars for PDFs physically archived under `99. Archives`. M3 acceptance therefore uses a repository fixture Vault. A separate opt-in real-Vault acceptance remains skipped until the owner provides at least one valid `01. Knowledge` note; it never writes to that Vault.
@@ -571,7 +571,7 @@ Search results contain the source title/path, text, heading path, `indexed_by_ru
 ### M3 acceptance criteria
 
 - Migration tests prove all required foreign keys, `index_id` uniqueness, and the one-ACTIVE partial unique index.
-- Tests prove native tag parsing, YAML tag exclusion, required folder/tag matching, tag-order invariance, path traversal rejection, H1 fallback, source-line citation mapping, fenced-code behavior, Chinese token caps, and reranker pair-length enforcement.
+- Tests prove tag-derived topics independent of folder names, first-canonical-tag primary selection, native tag parsing, YAML tag exclusion, path traversal rejection, H1 fallback, source-line citation mapping, fenced-code behavior, Chinese token caps, and reranker pair-length enforcement.
 - Runtime tests prove digest capture, drift refusal, no incremental mutation on drift, full rebuild side-by-side isolation, atomic activation, failed-run partial-success semantics, protected deletion behavior, startup interruption recovery, and active-run `409` behavior.
 - Retrieval tests prove filters are present in both candidate SQL branches, iterative HNSW settings are local, FTS weights/parser are exact, RRF deduplicates by `segment_id`, and reranking is singleton/batched/semaphore-limited with sigmoid scores.
 - Container acceptance proves the Knowledge service has no host port, Nginx reaches it only over the internal network, read-only fixture mounting prevents Vault writes, and citations resolve to the original fixture lines.
