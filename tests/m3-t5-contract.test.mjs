@@ -155,6 +155,9 @@ test("M3/T5 persists local evidence and guards a live rebuild", () => {
   assert.match(live, /pg_namespace/);
   assert.match(live, /schema migration ledger is missing, corrupt, or unknown/);
   assert.match(live, /backups\\knowledge-t5/);
+  assert.match(live, /docker exec \$postgresId pg_dump/);
+  assert.match(live, /docker cp "\$\{postgresId\}:\$containerDumpPath"/);
+  assert.doesNotMatch(live, /compose .*run --rm.*pg_dump/);
   assert.match(common, /function Get-T5CgroupSnapshot/);
   assert.match(common, /function Get-T5ResourceWindow/);
   assert.match(common, /oom_count_before/);

@@ -143,10 +143,25 @@ try {
 
   New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
   if ($schemaExists) {
-    & docker compose --project-name $ProjectName --env-file $EnvironmentFile -f $composeFile run --rm --no-deps --entrypoint pg_dump --volume "${backupRoot}:/backup" postgres --username=postgres --dbname=postgres --format=custom --schema=knowledge --file=/backup/knowledge.dump
-    if ($LASTEXITCODE -ne 0) { throw "Knowledge recovery-point backup failed." }
+    $postgresId = (Invoke-LiveCompose -KnowledgeOverlay -Arguments @("ps", "-q", "postgres")).Trim()
+    if ($postgresId -notmatch '^[0-9a-f]{12,64}$') { throw "Operational PostgreSQL container is unavailable." }
     $dumpPath = Join-Path $backupRoot "knowledge.dump"
-    if (-not (Test-Path -LiteralPath $dumpPath -PathType Leaf)) { throw "Knowledge recovery-point dump is missing." }
+    $temporaryDumpPath = Join-Path $backupRoot "knowledge.dump.tmp-$runId"
+    $containerDumpPath = "/tmp/knowledge-t5-$runId.dump"
+    try {
+      & docker exec $postgresId pg_dump --username=postgres --dbname=postgres --format=custom --schema=knowledge --file=$containerDumpPath
+      if ($LASTEXITCODE -ne 0) { throw "Knowledge recovery-point backup failed." }
+      & docker cp "${postgresId}:$containerDumpPath" $temporaryDumpPath
+      if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $temporaryDumpPath -PathType Leaf) -or
+        (Get-Item -LiteralPath $temporaryDumpPath).Length -eq 0) {
+        throw "Knowledge recovery-point dump is missing."
+      }
+      Move-Item -LiteralPath $temporaryDumpPath -Destination $dumpPath -Force
+    }
+    finally {
+      & docker exec $postgresId rm -f $containerDumpPath 2>$null | Out-Null
+      Remove-Item -LiteralPath $temporaryDumpPath -Force -ErrorAction SilentlyContinue
+    }
     $evidence.recovery_point = [ordered]@{ schema_present = $true; path = $dumpPath; sha256 = (Get-FileHash -LiteralPath $dumpPath -Algorithm SHA256).Hash.ToLowerInvariant() }
   }
   else {
