@@ -129,16 +129,17 @@ try {
   $started = $true
   Invoke-T5Compose @("up", "--detach", "--wait", "--wait-timeout", "300", "postgres", "nginx", "knowledge")
   $publishedEndpoint = (Invoke-T5Compose @("port", "nginx", "8080")).Trim()
-  if ($publishedEndpoint -notmatch '^127\.0\.0\.1:\d+$') {
+  if ($publishedEndpoint -notmatch '^127\.0\.0\.1:(?<port>\d+)$') {
     throw "Isolated Nginx did not publish an ephemeral loopback endpoint."
   }
+  $publishedPort = $Matches.port
   $script:apiBaseUrl = "http://$publishedEndpoint/knowledge"
   if ($InjectFailureAfterStart) { throw "Intentional M3/T5 cleanup failure injection." }
 
   $knowledgeId = (Invoke-T5Compose @("ps", "-q", "knowledge")).Trim()
   $nginxId = (Invoke-T5Compose @("ps", "-q", "nginx")).Trim()
   Assert-T5ReadOnlyMount $knowledgeId $runId
-  Assert-T5NetworkBoundary $knowledgeId $nginxId
+  Assert-T5NetworkBoundary $knowledgeId $nginxId $publishedPort
   $ledgerBefore = @(Invoke-T5Sql "SELECT version FROM knowledge.schema_migrations ORDER BY version;") | Where-Object { $_ }
   if (($ledgerBefore -join "") -ne "001_initial.sql") { throw "Knowledge migration ledger is invalid." }
   $schemaFingerprintBefore = Get-T5SchemaCatalogFingerprint

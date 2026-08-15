@@ -118,8 +118,14 @@ test("M3/T5 isolates cleanup by labels and proves kernel read-only behavior", ()
   assert.match(common, /function Assert-T5ReadOnlyMount/);
   assert.match(common, /errno\.EROFS/);
   assert.match(common, /HostConfig\.PortBindings/);
+  assert.match(common, /NetworkSettings\.Ports/);
+  assert.match(common, /ExpectedNginxHostPort = "8080"/);
   assert.match(isolated, /InjectFailureAfterStart/);
   assert.match(isolated, /port", "nginx", "8080"/);
+  assert.match(
+    isolated,
+    /Assert-T5NetworkBoundary \$knowledgeId \$nginxId \$publishedPort/,
+  );
   assert.match(
     isolated,
     /Isolated Nginx did not publish an ephemeral loopback endpoint/,
