@@ -155,5 +155,8 @@ test("M3/T5 persists local evidence and guards a live rebuild", () => {
   assert.match(remote, /Candidate-affecting source digest changed/);
   assert.match(remote, /Get-SuccessfulWorkflowRun "CI"/);
   assert.match(remote, /Get-SuccessfulWorkflowRun "Security"/);
+  assert.match(remote, /--json databaseId,headSha,status,url/);
+  assert.match(remote, /gh run view \$runs\[0\]\.databaseId/);
+  assert.doesNotMatch(remote, /workflowDatabaseId/);
   assert.doesNotMatch(live, /down --volumes/);
 });
