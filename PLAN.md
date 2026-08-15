@@ -370,9 +370,9 @@ The final response must clearly state:
 | M0 — plan approval               | `COMPLETE`                 | V1 sequence and ownership boundaries approved.                                                                                                                             |
 | M1 — development foundation      | `COMPLETE`                 | Local verification suite and GitHub CI/Security workflows exist and pass.                                                                                                  |
 | M2 — local infrastructure        | `COMPLETE + REMOTE-BACKED` | Commit `5ffe4cb9be81c30d5c24bd7eb6a9d41abc2a5f19`; full isolated M2/T5 acceptance passed on 2026-08-12; GitHub CI run `31597875617` and Security run `31597875566` passed. |
-| M3 — Markdown Knowledge Platform | `IN PROGRESS`              | M3/T1–T4 are `COMPLETE + REMOTE-BACKED`; M3/T5 acceptance, provenance, and operational-handoff implementation is in progress. |
+| M3 — Markdown Knowledge Platform | `IN PROGRESS`              | M3/T1–T4 are `COMPLETE + REMOTE-BACKED`; M3/T5 local Fixture, RealVault isolated, and live acceptance passed on 2026-08-15 for accepted candidate `be4c8687b5d7fa2c12f19c330639968ac9d7edfb`. Remote gates remain. |
 
-**Active Task:** M3/T5 — acceptance and handoff. Implementation is in progress: local candidate provenance, fixture/RealVault evidence gates, isolated cleanup ownership, and Knowledge operations are being added. M3/T4 is merged to `main` and remote-backed.
+**Active Task:** M3/T5 — local acceptance passed, awaiting remote gates. The exact clean candidate `be4c8687b5d7fa2c12f19c330639968ac9d7edfb` passed Fixture, RealVault isolated, and live acceptance on 2026-08-15. Completion still requires the implementation PR and sanitized remote-evidence PR to pass GitHub CI/Security and merge without rewriting the accepted commit identity.
 
 **M2 completion evidence:** the isolated `personal-tool-acceptance` project passed T1 runtime preflight, T2 durable PostgreSQL/AIStor plus transient Redis checks, T3 persistent/encrypted n8n state and Ollama connectivity, T4 observability target/resource checks, and T5 logical backup → destroy acceptance volumes → clean recreate → restore. The acceptance project and its temporary artifacts were removed. GitHub confirmed `CI / quality-gate`, `Security / dependency-audit`, and `Security / secret-scan` as successful for the remote M2 commit.
 
@@ -382,7 +382,7 @@ The final response must clearly state:
 M0  Plan approval                         COMPLETE
 M1  Development foundation                COMPLETE
 M2  Local infrastructure                  COMPLETE + REMOTE-BACKED
-M3  Markdown Knowledge Platform           IN PROGRESS (T1-T4 remote-backed; T5 plan open)
+M3  Markdown Knowledge Platform           IN PROGRESS (T1-T4 remote-backed; T5 local acceptance passed, awaiting remote gates)
 M4  PDF document ingestion                 deferred until M3 is complete
 M5  Image and video multimodal ingestion  deferred until M4 is complete
 M6  AI Platform                            deferred
@@ -416,7 +416,7 @@ M3 provides local hybrid retrieval over human-authored Markdown in `01. Knowledg
 | M3/T2 — Markdown discovery and segmentation | `COMPLETE + REMOTE-BACKED` | Read-only Vault scan, deterministic all-or-nothing scan result, canonical topic/tag validation, Markdown lexical parsing, original-line spans, and retrieval-safe segmentation passed all local gates; merge `b446ff1` and its GitHub CI/Security checks passed on `main` on 2026-08-13. |
 | M3/T3 — index lifecycle                     | `COMPLETE + REMOTE-BACKED` | Incremental replacement, side-by-side full rebuild, immutable model checks, document-level atomicity, deletion safety, recovery, and run status APIs passed all local gates; merge `242bca8` and its GitHub CI/Security checks passed on `main` on 2026-08-13. |
 | M3/T4 — hybrid retrieval and reranking      | `COMPLETE + REMOTE-BACKED` | Filtered HNSW/FTS retrieval, deterministic RRF, batched dynamic-INT8 ONNX reranking, citations, capacity limits, and search APIs passed builder/runtime acceptance and all predecessor regressions; merge `aa73b06` and its GitHub CI/Security checks passed on `main`. |
-| M3/T5 — acceptance and handoff              | `IN PROGRESS` | Candidate-image provenance, fixture/RealVault acceptance, isolated resource ownership, migration/rebuild recovery, operations runbook, final evidence, and synchronized documentation are in implementation. Completion remains blocked on local RealVault/live acceptance and remote CI/Security evidence. |
+| M3/T5 — acceptance and handoff              | `IN PROGRESS — LOCAL ACCEPTANCE PASSED` | Exact-HEAD image provenance, owned isolated cleanup, Fixture, RealVault isolated, and persistent live acceptance passed on 2026-08-15 for candidate `be4c8687b5d7fa2c12f19c330639968ac9d7edfb`. The live run indexed 28 sources, preserved one queryable ACTIVE index across restart, verified retrieval/citation and read-only Vault integrity, stayed below the Knowledge-container memory threshold, and recorded zero OOM-kill deltas. Completion awaits remote CI/Security and the final sanitized evidence merge. |
 
 Each task reruns all relevant predecessor regression checks. A failed task remains `IN PROGRESS` or becomes `BLOCKED`; it never unlocks the next task.
 
