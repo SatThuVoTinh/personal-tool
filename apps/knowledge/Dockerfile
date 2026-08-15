@@ -48,6 +48,9 @@ RUN uv run --locked --no-sync python -m unittest discover -s tests -v
 
 FROM python:3.13.14-slim-bookworm@sha256:de572b33eae61a53675a87bbd02b5e365df7b6b2b06c9276124e965cec08c452 AS runtime
 
+ARG KNOWLEDGE_IMAGE_REVISION=unverified
+LABEL org.opencontainers.image.revision=$KNOWLEDGE_IMAGE_REVISION
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1

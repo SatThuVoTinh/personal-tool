@@ -59,10 +59,11 @@ ERROR_PRECEDENCE = {
     )
 }
 
-_NUMBERED_TOPIC = re.compile(r"^\d{2}\.\s+")
 _ATX_HEADING = re.compile(r"^ {0,3}(#{1,6})(?:[ \t]+|$)(.*)$")
 _SETEXT = re.compile(r"^ {0,3}(=+|-+)[ \t]*$")
 _FENCE_OPEN = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+_CLOUD_REPARSE_TAG_MASK = 0xFFFF0FFF
+_CLOUD_REPARSE_TAG = 0x9000001A
 _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?。！？])\s+")
 
 
@@ -287,7 +288,16 @@ class MarkdownVaultScanner:
             return False
         attributes = getattr(metadata, "st_file_attributes", 0)
         reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
-        return bool(reparse_flag and attributes & reparse_flag)
+        if not (reparse_flag and attributes & reparse_flag):
+            return False
+        return not MarkdownVaultScanner._is_cloud_placeholder(metadata)
+
+    @staticmethod
+    def _is_cloud_placeholder(metadata: os.stat_result) -> bool:
+        reparse_tag = getattr(metadata, "st_reparse_tag", 0)
+        return (
+            reparse_tag & _CLOUD_REPARSE_TAG_MASK
+        ) == _CLOUD_REPARSE_TAG
 
     def _validate_source(
         self, vault_root: Path, knowledge_root: Path, candidate: Path
@@ -313,11 +323,6 @@ class MarkdownVaultScanner:
             return None, [self._error(source_path, "SOURCE_READ_FAILED")]
 
         errors: list[MarkdownValidationError] = []
-        relative_to_knowledge = candidate.relative_to(knowledge_root)
-        topic = self._topic_from_path(relative_to_knowledge)
-        if topic is None:
-            errors.append(self._error(source_path, "UNSUPPORTED_TOPIC"))
-
         try:
             content = raw_bytes.decode("utf-8-sig")
         except UnicodeDecodeError:
@@ -331,7 +336,10 @@ class MarkdownVaultScanner:
             return None, errors
 
         title, raw_tags, blocks = self._parse_blocks(lines, content_start)
-        if topic is not None and TOPIC_TO_TAG[topic] not in raw_tags:
+        canonical_topics = tuple(
+            TAG_TO_TOPIC[raw_tag] for raw_tag in raw_tags if raw_tag in TAG_TO_TOPIC
+        )
+        if not canonical_topics:
             errors.append(self._error(source_path, "REQUIRED_TOPIC_TAG_MISSING"))
 
         segments, segmentation_errors = self._segment_blocks(source_path, blocks)
@@ -342,12 +350,7 @@ class MarkdownVaultScanner:
         if errors:
             return None, errors
 
-        assert topic is not None
-        canonical_topics = tuple(
-            canonical_topic
-            for canonical_topic, canonical_tag in TOPIC_TAGS
-            if canonical_topic == topic or canonical_tag in raw_tags
-        )
+        primary_topic = canonical_topics[0]
         normalized_tags = tuple(
             sorted(
                 {
@@ -362,7 +365,7 @@ class MarkdownVaultScanner:
                 sha256=hashlib.sha256(raw_bytes).hexdigest(),
                 mime_type="text/markdown",
                 title=title or candidate.stem,
-                primary_topic=topic,
+                primary_topic=primary_topic,
                 canonical_topics=canonical_topics,
                 tags=normalized_tags,
                 segments=segments,
@@ -384,19 +387,16 @@ class MarkdownVaultScanner:
                 return True
             attributes = getattr(metadata, "st_file_attributes", 0)
             reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
-            if reparse_flag and attributes & reparse_flag:
+            if (
+                reparse_flag
+                and attributes & reparse_flag
+                and not MarkdownVaultScanner._is_cloud_placeholder(metadata)
+            ):
                 return True
             is_junction = getattr(current, "is_junction", None)
             if is_junction is not None and is_junction():
                 return True
         return False
-
-    @staticmethod
-    def _topic_from_path(relative_path: Path) -> str | None:
-        if len(relative_path.parts) < 2:
-            return None
-        folder = _NUMBERED_TOPIC.sub("", relative_path.parts[0], count=1)
-        return folder if folder in TOPIC_TO_TAG else None
 
     @staticmethod
     def _frontmatter_end(lines: list[str]) -> tuple[int, bool]:
@@ -416,9 +416,10 @@ class MarkdownVaultScanner:
 
     def _parse_blocks(
         self, lines: list[str], start_index: int
-    ) -> tuple[str, set[str], list[_Block]]:
+    ) -> tuple[str, tuple[str, ...], list[_Block]]:
         title = ""
-        raw_tags: set[str] = set()
+        raw_tags: list[str] = []
+        seen_raw_tags: set[str] = set()
         blocks: list[_Block] = []
         heading_levels: list[str] = []
         paragraph: list[tuple[int, str]] = []
@@ -507,8 +508,11 @@ class MarkdownVaultScanner:
 
             without_code = self._strip_inline_code(visible)
             tag_matches = self._extract_tags(without_code)
-            line_tags = {raw_tag for raw_tag, _, _ in tag_matches}
-            raw_tags.update(line_tags)
+            line_tags = [raw_tag for raw_tag, _, _ in tag_matches]
+            for raw_tag in line_tags:
+                if raw_tag not in seen_raw_tags:
+                    raw_tags.append(raw_tag)
+                    seen_raw_tags.add(raw_tag)
             tagless_parts: list[str] = []
             tag_cursor = 0
             for _, tag_start, tag_end in tag_matches:
@@ -525,7 +529,7 @@ class MarkdownVaultScanner:
             index += 1
 
         flush_paragraph()
-        return title, raw_tags, blocks
+        return title, tuple(raw_tags), blocks
 
     @staticmethod
     def _strip_html_comments(line: str, in_comment: bool) -> tuple[str, bool]:
@@ -835,7 +839,7 @@ class MarkdownVaultScanner:
             "UNSUPPORTED_TOPIC": "The source is not under a canonical topic folder.",
             "INVALID_UTF8": "The source is not valid UTF-8.",
             "MALFORMED_FRONTMATTER": "The source frontmatter is malformed.",
-            "REQUIRED_TOPIC_TAG_MISSING": "The required lowercase native topic tag is missing.",
+            "REQUIRED_TOPIC_TAG_MISSING": "A lowercase canonical native topic tag is missing.",
             "EMPTY_INDEXABLE_CONTENT": "The source has no indexable passage content.",
             "HEADING_CONTEXT_TOO_LARGE": "The heading context leaves no retrieval passage budget.",
             "OVERSIZED_FENCED_BLOCK": "A fenced code block exceeds a hard segment budget.",

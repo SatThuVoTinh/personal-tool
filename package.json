@@ -21,7 +21,7 @@
     "format": "prettier --write README.md CHANGELOG.md docs/**/*.md experiments/**/*.md .github/workflows/*.{yml,yaml} .vscode/**/*.json package.json scripts/**/*.mjs tests/**/*.mjs",
     "format:check": "prettier --check README.md CHANGELOG.md docs/**/*.md experiments/**/*.md .github/workflows/*.{yml,yaml} .vscode/**/*.json package.json scripts/**/*.mjs tests/**/*.mjs",
     "lint": "eslint scripts tests && markdownlint-cli2",
-    "test": "node --test tests/repository-policy.test.mjs tests/m2-t1-contract.test.mjs tests/m2-t2-contract.test.mjs tests/m2-t3-contract.test.mjs tests/m2-t4-contract.test.mjs tests/m2-t5-contract.test.mjs tests/m3-t1-contract.test.mjs tests/m3-t2-contract.test.mjs tests/m3-t3-contract.test.mjs tests/m3-t4-contract.test.mjs",
+    "test": "node --test tests/repository-policy.test.mjs tests/m2-t1-contract.test.mjs tests/m2-t2-contract.test.mjs tests/m2-t3-contract.test.mjs tests/m2-t4-contract.test.mjs tests/m2-t5-contract.test.mjs tests/m3-t1-contract.test.mjs tests/m3-t2-contract.test.mjs tests/m3-t3-contract.test.mjs tests/m3-t4-contract.test.mjs tests/m3-t5-contract.test.mjs",
     "repo:check": "node scripts/repository-check.mjs",
     "verify": "npm run format:check && npm run lint && npm test && npm run repo:check"
   },

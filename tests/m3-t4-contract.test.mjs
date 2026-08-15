@@ -69,7 +69,7 @@ test("M3/T4 pins and isolates the reranker artifact", () => {
   assert.match(dockerfile, /ml-dtypes==0\.5\.3/);
   assert.match(dockerfile, /download\.pytorch\.org\/whl\/cpu/);
   assert.match(exporter, /torch\.onnx\.export\([\s\S]*str\(fp32\)/);
-  assert.match(compose, /personal-tool\/knowledge:m3-t4/);
+  assert.match(compose, /personal-tool\/knowledge:m3/);
   assert.match(compose, /mem_limit: 4g/);
   assert.match(acceptance, /personal-tool-m3-t4/);
   assert.match(acceptance, /\/v1\/search/);

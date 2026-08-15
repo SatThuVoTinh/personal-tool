@@ -370,9 +370,9 @@ The final response must clearly state:
 | M0 — plan approval               | `COMPLETE`                 | V1 sequence and ownership boundaries approved.                                                                                                                             |
 | M1 — development foundation      | `COMPLETE`                 | Local verification suite and GitHub CI/Security workflows exist and pass.                                                                                                  |
 | M2 — local infrastructure        | `COMPLETE + REMOTE-BACKED` | Commit `5ffe4cb9be81c30d5c24bd7eb6a9d41abc2a5f19`; full isolated M2/T5 acceptance passed on 2026-08-12; GitHub CI run `31597875617` and Security run `31597875566` passed. |
-| M3 — Markdown Knowledge Platform | `IN PROGRESS`              | M3/T1–T3 are `COMPLETE + REMOTE-BACKED`; M3/T4 hybrid retrieval and reranking is `IN PROGRESS`. |
+| M3 — Markdown Knowledge Platform | `IN PROGRESS`              | M3/T1–T4 are `COMPLETE + REMOTE-BACKED`; M3/T5 local Fixture, RealVault isolated, and live acceptance passed on 2026-08-15 for accepted candidate `be4c8687b5d7fa2c12f19c330639968ac9d7edfb`. Remote gates remain. |
 
-**Active Task:** M3/T4 — hybrid retrieval and reranking. M3/T3 is merged to `main` and its GitHub CI/Security checks passed.
+**Active Task:** M3/T5 — local acceptance passed, awaiting remote gates. The exact clean candidate `be4c8687b5d7fa2c12f19c330639968ac9d7edfb` passed Fixture, RealVault isolated, and live acceptance on 2026-08-15. Completion still requires the implementation PR and sanitized remote-evidence PR to pass GitHub CI/Security and merge without rewriting the accepted commit identity.
 
 **M2 completion evidence:** the isolated `personal-tool-acceptance` project passed T1 runtime preflight, T2 durable PostgreSQL/AIStor plus transient Redis checks, T3 persistent/encrypted n8n state and Ollama connectivity, T4 observability target/resource checks, and T5 logical backup → destroy acceptance volumes → clean recreate → restore. The acceptance project and its temporary artifacts were removed. GitHub confirmed `CI / quality-gate`, `Security / dependency-audit`, and `Security / secret-scan` as successful for the remote M2 commit.
 
@@ -382,7 +382,7 @@ The final response must clearly state:
 M0  Plan approval                         COMPLETE
 M1  Development foundation                COMPLETE
 M2  Local infrastructure                  COMPLETE + REMOTE-BACKED
-M3  Markdown Knowledge Platform           IN PROGRESS (T1-T3 remote-backed; T4 eligible)
+M3  Markdown Knowledge Platform           IN PROGRESS (T1-T4 remote-backed; T5 local acceptance passed, awaiting remote gates)
 M4  PDF document ingestion                 deferred until M3 is complete
 M5  Image and video multimodal ingestion  deferred until M4 is complete
 M6  AI Platform                            deferred
@@ -415,8 +415,8 @@ M3 provides local hybrid retrieval over human-authored Markdown in `01. Knowledg
 | M3/T1 — service and index identity          | `COMPLETE + REMOTE-BACKED` | Internal-only Knowledge service, idempotent migrations, health/readiness, active-index invariant, digest/dimension preflight, orphan-run recovery, and an advisory-lock in-process scheduler passed isolated runtime acceptance plus M2/T1–T5 regression on 2026-08-12; merge `4097862` and its GitHub CI/Security checks passed. No retrieval or source adapter was implemented. |
 | M3/T2 — Markdown discovery and segmentation | `COMPLETE + REMOTE-BACKED` | Read-only Vault scan, deterministic all-or-nothing scan result, canonical topic/tag validation, Markdown lexical parsing, original-line spans, and retrieval-safe segmentation passed all local gates; merge `b446ff1` and its GitHub CI/Security checks passed on `main` on 2026-08-13. |
 | M3/T3 — index lifecycle                     | `COMPLETE + REMOTE-BACKED` | Incremental replacement, side-by-side full rebuild, immutable model checks, document-level atomicity, deletion safety, recovery, and run status APIs passed all local gates; merge `242bca8` and its GitHub CI/Security checks passed on `main` on 2026-08-13. |
-| M3/T4 — hybrid retrieval and reranking      | `IN PROGRESS` | Filtered HNSW/FTS retrieval, deterministic RRF, batched dynamic-INT8 ONNX reranking, citations, capacity limits, and search APIs. Runtime/build acceptance and remote evidence remain required. |
-| M3/T5 — acceptance and handoff              | `NOT STARTED` | Fixture and opt-in Vault acceptance, migration/rebuild recovery, operations runbook, final evidence, and synchronized documentation.                                                                                          |
+| M3/T4 — hybrid retrieval and reranking      | `COMPLETE + REMOTE-BACKED` | Filtered HNSW/FTS retrieval, deterministic RRF, batched dynamic-INT8 ONNX reranking, citations, capacity limits, and search APIs passed builder/runtime acceptance and all predecessor regressions; merge `aa73b06` and its GitHub CI/Security checks passed on `main`. |
+| M3/T5 — acceptance and handoff              | `IN PROGRESS — LOCAL ACCEPTANCE PASSED` | Exact-HEAD image provenance, owned isolated cleanup, Fixture, RealVault isolated, and persistent live acceptance passed on 2026-08-15 for candidate `be4c8687b5d7fa2c12f19c330639968ac9d7edfb`. The live run indexed 28 sources, preserved one queryable ACTIVE index across restart, verified retrieval/citation and read-only Vault integrity, stayed below the Knowledge-container memory threshold, and recorded zero OOM-kill deltas. Completion awaits remote CI/Security and the final sanitized evidence merge. |
 
 Each task reruns all relevant predecessor regression checks. A failed task remains `IN PROGRESS` or becomes `BLOCKED`; it never unlocks the next task.
 
@@ -426,13 +426,17 @@ Each task reruns all relevant predecessor regression checks. A failed task remai
 
 **M3/T3 completion evidence:** on 2026-08-13, the audited implementation passed all 42 Python lifecycle/scanner/model/error/API tests in the pinned `uv` container and all 51 repository/contract tests. The isolated M3/T3 acceptance passed through Nginx with PostgreSQL assertions, immediate GET after `202`, full publication, unchanged incremental convergence, empty-snapshot protection, restart recovery, read-only Vault mounting, and cleanup. M3/T1, M3/T2 read-only fixture, Windows-native junction/reparse, and cumulative M2/T1–T5 backup/destroy/recreate/restore regressions also passed. PR `#10` merged at `242bca819b72ded9f6178221eb9cdda09b3dea38`; GitHub CI run `31694753997` and Security run `31694754021` passed on that `main` commit. M3/T4 is unlocked.
 
+**M3/T4 completion evidence:** on 2026-08-14, 53 Python tests and all 55 repository/contract tests passed. Builder fidelity validated the pinned multilingual FP32 reference → FP32 ONNX → dynamic-INT8 ONNX chain; runtime acceptance validated batched reranking, deterministic filtered search, citations, the 10,000-segment HNSW plan, the 4 GiB cgroup memory/OOM gate, and read-only Vault hashes. M3/T1–T3, Windows-native junction/reparse, and cumulative M2/T1–T5 backup/destroy/recreate/restore regressions also passed. PR `#12` merged at `aa73b06375321460800b9f78e8195b6837ea5125`; GitHub CI run `31805436907` and Security run `31805436900` passed on that `main` commit. The M3/T5 plan is unlocked; no T5 implementation is claimed.
+
 ### Read-only Vault and canonical topics
 
 M3 discovers only `01. Knowledge/**/*.md` from the configured Vault root. It must not write to the Vault and must reject paths escaping the configured root. `02. Books`, `03. Papers`, `04. Images`, and `05. Videos` are excluded from M3.
 
-The five media branches share the same thirteen logical topics for later milestones. In M3, the topic folder determines `primary_topic`; native Obsidian tags are mandatory validation and secondary classification. A topic folder may use its exact canonical label or the strict numeric prefix `^\d{2}\.\s+` followed by that label; no other prefix is stripped.
+Windows Cloud Files placeholders are allowed only when their Microsoft cloud reparse tag is recognized and the resolved path remains inside the canonical Vault root. Symlinks, junctions, name-surrogate reparse points, unknown reparse tags, cycles, and path escapes fail closed.
 
-| Folder | Required native tag |
+The five media branches share the same thirteen logical topics for later milestones. In M3, native Obsidian tags are the taxonomy source of truth. Folder names below `01. Knowledge` are organizational only and may use personal names or numbering such as `2. Data`; they do not determine or validate topic metadata. The first canonical native tag in document order determines `primary_topic`, and every canonical native tag contributes to `canonical_topics`.
+
+| Canonical topic | Native tag |
 | --- | --- |
 | AI | `#ai` |
 | Data | `#data` |
@@ -449,11 +453,11 @@ The five media branches share the same thirteen logical topics for later milesto
 | Chinese | `#chinese` |
 
 - Canonical native `#tags` are lowercase and parsed from Markdown outside YAML frontmatter, fenced code, inline code, headings, and HTML comments. Escaped hashes and URL fragments are not tags.
-- Required-topic validation uses the raw native-tag lexeme before NFC/case-fold normalization; for example, `#MachineLearning` does not satisfy `#machinelearning`.
-- A note must contain the canonical tag required by its topic folder. It may contain other canonical topics and ordinary Obsidian tags; all appear in `canonical_topics` and `tags` metadata.
-- `canonical_topics` follow the fixed taxonomy order. After validation, metadata tags are NFC-normalized, case-folded, deduplicated, and deterministically sorted; passage text, titles, and headings are not Unicode-normalized.
-- Tag order is not semantic and cannot change `primary_topic`. Moving a note to another topic folder changes `primary_topic` and is an atomic reindex replacement.
-- A missing or mismatched required tag makes that source invalid. An incremental run retains the previous source version and marks the source/run error. A full rebuild fails and never activates its BUILDING index.
+- Canonical-topic validation uses the raw native-tag lexeme before NFC/case-fold normalization; for example, `#MachineLearning` does not satisfy `#machinelearning`.
+- A note must contain at least one canonical native topic tag. It may contain additional canonical topics and ordinary Obsidian tags; all appear in `canonical_topics` and `tags` metadata.
+- `primary_topic` is derived from the first canonical tag in document order, while `canonical_topics` preserve first occurrence order and remove duplicates. After validation, metadata tags are NFC-normalized, case-folded, deduplicated, and deterministically sorted; passage text, titles, and headings are not Unicode-normalized.
+- Moving a note between folders changes `source_path` but not its topic metadata. Reordering canonical tags may intentionally change `primary_topic` and is handled as an atomic reindex replacement.
+- A missing canonical native topic tag makes that source invalid. An incremental run retains the previous source version and marks the source/run error. A full rebuild fails and never activates its BUILDING index.
 - Tag-only lines may be omitted from passage text, but tags remain structured metadata and receive full-text weight A. YAML removal and every embedding transformation preserve original Markdown source coordinates.
 
 The initial read-only inventory found the five top-level subject trees and all thirteen topics. At the time of inspection, `01. Knowledge`, Papers, Images, and Videos had no eligible content; Books had Markdown sidecars for PDFs physically archived under `99. Archives`. M3 acceptance therefore uses a repository fixture Vault. A separate opt-in real-Vault acceptance remains skipped until the owner provides at least one valid `01. Knowledge` note; it never writes to that Vault.
@@ -569,7 +573,7 @@ Search results contain the source title/path, text, heading path, `indexed_by_ru
 ### M3 acceptance criteria
 
 - Migration tests prove all required foreign keys, `index_id` uniqueness, and the one-ACTIVE partial unique index.
-- Tests prove native tag parsing, YAML tag exclusion, required folder/tag matching, tag-order invariance, path traversal rejection, H1 fallback, source-line citation mapping, fenced-code behavior, Chinese token caps, and reranker pair-length enforcement.
+- Tests prove tag-derived topics independent of folder names, first-canonical-tag primary selection, native tag parsing, YAML tag exclusion, path traversal rejection, H1 fallback, source-line citation mapping, fenced-code behavior, Chinese token caps, and reranker pair-length enforcement.
 - Runtime tests prove digest capture, drift refusal, no incremental mutation on drift, full rebuild side-by-side isolation, atomic activation, failed-run partial-success semantics, protected deletion behavior, startup interruption recovery, and active-run `409` behavior.
 - Retrieval tests prove filters are present in both candidate SQL branches, iterative HNSW settings are local, FTS weights/parser are exact, RRF deduplicates by `segment_id`, and reranking is singleton/batched/semaphore-limited with sigmoid scores.
 - Container acceptance proves the Knowledge service has no host port, Nginx reaches it only over the internal network, read-only fixture mounting prevents Vault writes, and citations resolve to the original fixture lines.
