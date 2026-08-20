@@ -1,25 +1,128 @@
-# Personal Tool
+# Zink Knowledgebase (`personal-tool`)
 
-Personal Tool is a local-first, single-user system for personal knowledge, AI, automation, and Logistics & Supply Chain data.
+Local-first, single-user knowledge and Logistics & Supply Chain data system.
+The repository still uses the historical `personal-tool` runtime/repository
+identity where changing it would affect accepted infrastructure or persistent
+state. A naming migration is separate from architecture cleanup.
 
 ## Current status
 
-M1 and M2 are complete. M2 is backed up on GitHub at commit [`5ffe4cb`](https://github.com/SatThuVoTinh/personal-tool/commit/5ffe4cb9be81c30d5c24bd7eb6a9d41abc2a5f19): its isolated full acceptance passed locally, and GitHub [CI](https://github.com/SatThuVoTinh/personal-tool/actions/runs/31597875617) plus [Security](https://github.com/SatThuVoTinh/personal-tool/actions/runs/31597875566) passed.
+| Milestone                        | Status                              |
+| -------------------------------- | ----------------------------------- |
+| M1 — Development Foundation      | `COMPLETE / REMOTE-BACKED`          |
+| M2 — Local Infrastructure        | `COMPLETE / REMOTE-BACKED`          |
+| M3 — Markdown Knowledge Platform | `COMPLETE / REMOTE-BACKED`          |
+| M4 — PDF Document Ingestion      | approved; implementation authorized |
+| M5+                              | deferred                            |
 
-The validated M2 stack uses PostgreSQL 17 + pgvector, AIStor Free, Redis, n8n, Nginx, Prometheus, Grafana, and Dozzle. PostgreSQL, AIStor, n8n state, and `.n8n` use named volumes; Redis is intentionally transient. PostgreSQL, Redis, exporters, the S3 API, and the future Knowledge service have no host port mapping. Nginx, n8n, Prometheus, Grafana, and Dozzle bind only to host loopback.
+M2 accepted commit:
+`5ffe4cb9be81c30d5c24bd7eb6a9d41abc2a5f19`.
 
-M3 is complete and remote-backed. The exact accepted candidate [`ff4a5fb`](https://github.com/SatThuVoTinh/personal-tool/commit/ff4a5fb7d779f260ffb9b5aa2393ad6ab75eb549) passed failure cleanup, Fixture, isolated RealVault, persistent live rebuild, 28-source retrieval/citation, restart persistence, Vault-integrity, memory, and OOM gates. PR [#15](https://github.com/SatThuVoTinh/personal-tool/pull/15) preserved that candidate in merge [`9cd34ce`](https://github.com/SatThuVoTinh/personal-tool/commit/9cd34cebb196631e9524b095c21f1fd5aff78749); [CI](https://github.com/SatThuVoTinh/personal-tool/actions/runs/31894926039) and [Security](https://github.com/SatThuVoTinh/personal-tool/actions/runs/31894925985) passed on the exact remote-main SHA. The active task is planning M4 PDF ingestion; no PDF, image, or video ingestion implementation is claimed yet.
+M3 accepted candidate:
+`ff4a5fb7d779f260ffb9b5aa2393ad6ab75eb549`; accepted merge:
+`9cd34cebb196631e9524b095c21f1fd5aff78749`.
+
+See [PLAN.md](PLAN.md) for exact milestone state, evidence, and the current
+execution gate. Do not infer implementation authorization from this README.
+
+## Architecture
+
+Zink Knowledgebase owns two domain platforms:
+
+```text
+Zink Knowledgebase
+├── Knowledge Platform
+│   ├── Research Knowledge Store (Obsidian/reference → research agents/Q&A)
+│   ├── Agent Skill Store (ZAS learned skills → functional subagents)
+│   ├── source ingestion and processing
+│   ├── knowledge-ai
+│   ├── indexing/publication
+│   └── retrieval/citations/provenance
+└── L&SC Data Plant
+    ├── deterministic control plane
+    ├── governed data lifecycle
+    ├── data-ai advisory capabilities
+    ├── semantic/data products
+    └── forecasting / machine learning / operations research
+```
+
+General agents, subagents, cross-project orchestration, permissions/tools,
+learning/evaluation logic, and general automation belong to the separate **Zink
+Agents System**. ZAS reads Research Knowledge and submits/retrieves learned
+functional skills through the Agent Skill Store contract. This repository owns
+the persistent stores but not the ZAS runtime.
+
+Important L&SC distinction:
+
+- `control-plane/` manages pipeline definitions, run state, retries, promotion
+  gates, recovery, and governed ETL actions;
+- `data-ai/` assists with profiling, quality/anomaly analysis, remediation, and
+  recommendations; it does not become a second control plane and its output does
+  not authorize governed mutations by itself.
+
+`feature-store` remains a data product. Feature engineering belongs to the model
+lifecycle that produces versioned features.
+
+Read architecture in this order:
+
+1. [Architecture index](docs/architecture/README.md)
+2. [System overview](docs/architecture/system-overview.md)
+3. [Platform boundaries](docs/architecture/platform-boundaries.md)
+4. [Knowledge flow](docs/architecture/knowledge-flow.md)
+5. [L&SC data flow](docs/architecture/data-flow.md)
+6. [Agents System boundary](docs/architecture/agents-system-boundaries.md)
+
+## Repository agent harness
+
+Coding-agent control is separate from the Zink Agents System runtime:
+
+```text
+AGENTS.md
+PLAN.md
+docs/contracts/execution/
+├── README.md              # tracked lifecycle protocol
+└── ACTIVE.md              # generated only while an approved task is executable; ignored
+.agents/
+├── skills/
+│   ├── planning/SKILL.md
+│   ├── architecture-review/SKILL.md
+│   ├── execution/SKILL.md
+│   ├── code-review/SKILL.md
+│   ├── debugging/SKILL.md
+│   └── validating/SKILL.md
+└── states/
+    ├── README.md
+    ├── context.md         # local/ignored when active
+    ├── findings.md        # local/ignored when active
+    └── handoff.md         # local/ignored when active
+.cline/skills/                  # Cline executor adapters
+.clinerules/                    # always-on Cline role rules
+```
+
+`AGENTS.md` defines authority and routing. `PLAN.md` owns durable task/lifecycle
+state. While execution is authorized, a matching `docs/contracts/execution/ACTIVE.md`
+is the sole source of truth for approved implementation details. Skills define
+procedures; `.agents/states/` is bounded local/ignored working memory only.
 
 ## Development
 
-Before changing a module, read:
+Before changing repository state, read:
 
-- [AGENTS.md](AGENTS.md) for repository operating rules.
-- [PLAN.md](PLAN.md) for the active task, architectural contracts, and completion evidence.
-- [CHANGELOG.md](CHANGELOG.md) for completed, validated history only.
-- [Development conventions](docs/development/conventions.md) for Git, formatting, verification, and secret handling.
+- [AGENTS.md](AGENTS.md) — agent authority, roles, safety, and skill routing;
+- [PLAN.md](PLAN.md) — Active Task, lifecycle state, authorization, and execution-contract pointer;
+- [Execution contract protocol](docs/contracts/execution/README.md) — `ACTIVE.md` lifecycle and implementation source-of-truth rule;
+- [Development conventions](docs/development/conventions.md) — Git, formatting,
+  verification, and secret handling;
+- only the architecture/contracts/runbooks relevant to the task.
 
-Use Node `>=24.15.0 <25` and npm `12.0.2`:
+Toolchain baseline:
+
+```text
+Node >=24.15.0 <25
+npm 12.0.2
+```
+
+Repository verification:
 
 ```powershell
 $npm = "$env:APPDATA\npm\npm.cmd"
@@ -27,110 +130,81 @@ $npm = "$env:APPDATA\npm\npm.cmd"
 & $npm run verify
 ```
 
-## M2 runtime verification
+## Local infrastructure
 
-Copy `infrastructure/docker/env/.env.example` to the ignored sibling `.env`. Supply unique credentials and passwords, a stable `N8N_ENCRYPTION_KEY` of at least 32 characters, an installed Ollama smoke model no larger than 4 GiB, and an AIStor Free license file outside the repository. Never commit or print those values.
+The accepted local runtime foundation includes PostgreSQL + pgvector, AIStor
+Free object storage, Redis, Nginx, Ollama, Prometheus, Grafana, Dozzle, and
+inherited n8n runtime support from M2. Existing n8n runtime compatibility does
+not make an Automation Platform part of the canonical Knowledgebase domain
+architecture.
 
-Run the cumulative checks with an execution-policy override for the current process only:
+Copy `infrastructure/docker/env/.env.example` to the ignored sibling `.env` and
+supply required local credentials/license values. Never commit or print those
+values.
+
+Primary runtime scripts:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/docker/scripts/preflight.ps1 -EnvironmentFile ./infrastructure/docker/env/.env
-powershell -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/docker/scripts/core-storage.ps1 -EnvironmentFile ./infrastructure/docker/env/.env
-powershell -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/docker/scripts/local-integration.ps1 -EnvironmentFile ./infrastructure/docker/env/.env
-powershell -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/docker/scripts/observability.ps1 -EnvironmentFile ./infrastructure/docker/env/.env
-powershell -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/docker/scripts/acceptance.ps1 -EnvironmentFile ./infrastructure/docker/env/.env
-```
-
-The final acceptance creates only the temporary `personal-tool-acceptance` Compose project. It validates recreation, logical backup, destroy of acceptance volumes, clean recreation, and restore; it removes its project, volumes, and temporary artifacts afterward. Automated restore rejects all project names other than `personal-tool-acceptance`.
-
-Normal profiles are cumulative:
-
-- `core`: AIStor, PostgreSQL, and Redis.
-- `platform`: `core` plus Nginx and n8n.
-- `observability`: `platform` plus Prometheus, Grafana, Dozzle, and exporters.
-- `all`: every M2 long-running service.
-
-```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/docker/scripts/build.ps1 -EnvironmentFile ./infrastructure/docker/env/.env
 powershell -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/docker/scripts/start.ps1 -Profile all -EnvironmentFile ./infrastructure/docker/env/.env
 powershell -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/docker/scripts/stop.ps1 -EnvironmentFile ./infrastructure/docker/env/.env
 ```
 
-`build.ps1` is the explicit image refresh/validation gate. `start.ps1` uses cached immutable images when available. M2 backup excludes runtime credentials, AIStor root credentials and license, PostgreSQL roles/passwords, the n8n encryption key, plaintext n8n credentials, Redis, Prometheus runtime metrics, and Grafana runtime state.
+Use the applicable runbook rather than improvising destructive recovery steps.
 
-## M3 Knowledge operation
+## Knowledge Platform operation
 
-The dedicated `knowledge` profile starts AIStor, PostgreSQL, Redis, Nginx, and
-Knowledge without n8n or observability. `build.ps1 -Profile knowledge` requires
-a clean working tree and labels the local Knowledge image with the exact HEAD
-SHA; it does not require a Vault path. `start.ps1 -Profile knowledge` requires
-an absolute `KNOWLEDGE_VAULT_ROOT` in the ignored environment file and mounts
-it read-only. The existing `all` profile is unchanged.
+The current accepted implementation remains under `apps/knowledge/`. It is not
+moved during M4/M5 because those milestones must preserve accepted M3 behavior.
+A dedicated post-M5 architecture-consolidation milestone owns that structural
+migration.
 
-Within `01. Knowledge`, folder names and numeric prefixes are organizational
-only. Native canonical tags provide topic metadata: the first canonical tag in
-document order is `primary_topic`, and additional canonical tags represent
-cross-topic classification.
+The `knowledge` profile starts the runtime required for Knowledge retrieval and
+mounts the configured Obsidian Vault read-only. The source Vault remains
+human-owned; ingestion must not write back to it.
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/docker/scripts/build.ps1 -Profile knowledge -EnvironmentFile ./infrastructure/docker/env/.env
 powershell -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/docker/scripts/start.ps1 -Profile knowledge -EnvironmentFile ./infrastructure/docker/env/.env
 ```
 
-See the [Knowledge Platform runbook](docs/runbooks/knowledge-platform.md) for
-indexing, acceptance, recovery, and local-evidence handling.
+Operational and acceptance procedures are in the
+[Knowledge Platform runbook](docs/runbooks/knowledge-platform.md).
 
-## M3/T1 runtime verification
+## M4 execution
 
-With the same ignored runtime environment file and a locally available `bge-m3:latest` Ollama model, run:
+M4 adds sidecar-driven PDF ingestion while preserving the accepted Markdown
+path. The owner-approved implementation contract is transiently materialized at
+`docs/contracts/execution/ACTIVE.md`; `PLAN.md` is the durable source for its
+task identity, revision, and authorization state.
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/docker/scripts/knowledge-t1.ps1 -EnvironmentFile ./infrastructure/docker/env/.env
+At the current repository gate:
+
+```text
+Task: M4 — PDF Document Ingestion
+Planning Readiness: APPROVED
+Plan Revision: M4-R1
+Execution Authorization: YES
 ```
 
-This creates only the isolated `personal-tool-m3-t1` Compose project, builds the Knowledge image, verifies the internal Nginx route, active-index uniqueness, digest-drift refusal, and interrupted-run recovery, then removes its project, network, and volume. It does not read or write an Obsidian Vault.
+Authorization does not claim that PDF implementation or any M4 gate has passed.
 
-## M3/T2 Markdown verification
+## Security and persistent-state rules
 
-Run the pinned unit/golden tests and isolated read-only fixture acceptance:
+- Never commit `.env`, credentials, licenses, private Vault content, backups, or
+  runtime secrets.
+- Real user/operational data is read-only by default unless a bounded approved
+  task explicitly authorizes mutation.
+- Do not delete volumes, drop databases, rewrite accepted migrations, or write
+  to the source Vault as a shortcut for tests or recovery.
+- Use fixtures and isolated acceptance projects for destructive tests.
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/docker/scripts/knowledge-t2.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/docker/scripts/knowledge-t2-windows.ps1
-```
+## Validation and history
 
-The first script builds with the committed `uv.lock`, verifies the immutable tokenizer artifact, runs the Python suite, mounts only the repository fixture Vault read-only, and confirms its hashes are unchanged. The second script is Windows-native acceptance for junction and link-like reparse rejection; recognized Cloud Files placeholders that remain inside the Vault are allowed. Linux-container tests do not claim Windows filesystem semantics.
+`npm run verify` is the repository quality baseline. Milestone-specific runtime
+and exact-candidate gates are defined in `PLAN.md`, contracts, and runbooks.
+Local PASS does not imply remote CI/Security PASS.
 
-## M3/T3 index lifecycle verification
-
-With the same runtime environment and local `bge-m3:latest` model, run:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/docker/scripts/knowledge-t3.ps1 -EnvironmentFile ./infrastructure/docker/env/.env
-```
-
-This uses a disposable copy of the Markdown fixture mounted read-only, then verifies `POST` persistence before `202`, full rebuild publication, unchanged incremental convergence, and empty-snapshot deletion protection through Nginx.
-
-## M3/T4 hybrid retrieval verification
-
-With the same runtime environment and local `bge-m3:latest` model, run:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/docker/scripts/knowledge-t4.ps1 -EnvironmentFile ./infrastructure/docker/env/.env
-```
-
-This builds the checksum-pinned dynamic-INT8 reranker artifact in a non-runtime Docker stage, mounts the fixture Vault read-only, indexes it, and verifies deterministic filtered search plus Markdown line citations through Nginx.
-
-## GitHub validation
-
-The `CI` workflow supplies `CI / quality-gate`; the `Security` workflow supplies `Security / dependency-audit` and `Security / secret-scan`. They run on pushes and pull requests to `main`; Security also runs on its weekly schedule. All Node/npm jobs pin Node `24.15.0` and npm `12.0.2`, and the repository policy tests validate workflow commands, order, immutable Action pins, and Gitleaks safeguards.
-
-## Architecture
-
-The current architecture and execution contracts are maintained in [PLAN.md](PLAN.md). The repository's ownership boundaries are documented in:
-
-- [System overview](docs/architecture/system-overview.md)
-- [Platform boundaries](docs/architecture/platform-boundaries.md)
-- [Knowledge flow](docs/architecture/knowledge-flow.md)
-- [Data flow](docs/architecture/data-flow.md)
-- [AI boundaries](docs/architecture/ai-boundaries.md)
+Validated completed history belongs in [CHANGELOG.md](CHANGELOG.md). Planned or
+unvalidated architecture changes must not be recorded there as completed work.
