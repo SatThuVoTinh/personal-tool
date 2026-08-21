@@ -1,0 +1,13 @@
+.env
+node_modules/
+dist/
+coverage/
+backups/
+datasets/raw/
+large-model-files/
+build/
+logs/
+cache/
+.venv
+generated artifacts/
+runtime volumes/

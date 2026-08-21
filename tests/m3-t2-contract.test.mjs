@@ -16,8 +16,12 @@ test("M3/T2 locks Python dependencies and tokenizer artifact", () => {
   const dockerfile = readKnowledgeFile("Dockerfile");
 
   assert.match(project, /requires-python = ">=3\.13,<3\.14"/);
+  assert.match(project, /"fastapi==0\.133\.0"/);
   assert.match(project, /"tokenizers==0\.23\.1"/);
   assert.match(project, /"pyyaml==6\.0\.3"/);
+  assert.match(lock, /name = "annotated-doc"[\s\S]*version = "0\.0\.5"/);
+  assert.match(lock, /name = "fastapi"[\s\S]*version = "0\.133\.0"/);
+  assert.match(lock, /name = "starlette"[\s\S]*version = "1\.3\.1"/);
   assert.match(lock, /name = "tokenizers"[\s\S]*version = "0\.23\.1"/);
   assert.match(lock, /name = "pyyaml"[\s\S]*version = "6\.0\.3"/);
   assert.match(

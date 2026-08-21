@@ -52,3 +52,10 @@ Thumbs.db
 *.code-workspace
 .vscode/*
 !.vscode/settings.json
+
+# Local coding-agent hot state; keep the protocol tracked
+.agents/states/*.md
+!.agents/states/README.md
+
+# Transient owner-approved execution contract; protocol README remains tracked
+/docs/contracts/execution/ACTIVE.md

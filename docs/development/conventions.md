@@ -19,6 +19,20 @@ Dùng Conventional Commits theo mẫu `type(scope): summary`.
 - `summary` dùng động từ mệnh lệnh, ngắn gọn, không có dấu chấm cuối. Ưu tiên dưới 72 ký tự.
 - Ví dụ: `chore(repo): establish git conventions`.
 
+### Agent execution commits và remote publication
+
+- `PLAN.md` giữ durable lifecycle/authorization; khi task đã được owner approve,
+  `docs/contracts/execution/ACTIVE.md` là source of truth cho implementation details.
+- Cursor execute và handoff; Cursor không sở hữu final task commit/push theo mặc định.
+- Codex chỉ tạo local implementation commit sau khi review/fix hội tụ và Final
+  Quality Gate `PASS`.
+- Sau implementation commit, Codex cập nhật `PLAN.md`, xóa `ACTIVE.md`, dọn state
+  tạm, chạy lại gate bị ảnh hưởng và tạo local closeout commit.
+- Khi closeout sạch, Codex push current non-`main` task branch lên configured
+  remote; push branch không đồng nghĩa remote CI/Security đã `PASS`.
+- Tạo/merge PR, push trực tiếp `main`, force-push/history rewrite, release và
+  deployment vẫn cần owner authorization riêng.
+
 ## Định dạng và line ending
 
 - `.editorconfig` là nguồn chuẩn về UTF-8, LF, whitespace và indentation.
@@ -80,6 +94,6 @@ Không sửa `PATH`, không cài lại Node/npm và không thay đổi global to
 
 ## Cập nhật PLAN và CHANGELOG
 
-- `PLAN.md` là nguồn trạng thái duy nhất. Khi bắt đầu hoặc hoàn thành task, cập nhật Current Focus, trạng thái, bằng chứng kiểm chứng, blocker/limitation và next action trong cùng change set khi phù hợp.
+- `PLAN.md` là nguồn durable task/lifecycle state. `ACTIVE.md` chỉ giữ transient approved implementation details và phải bị xóa khi closeout. Khi bắt đầu hoặc hoàn thành task, cập nhật Current Focus, trạng thái, contract pointer, bằng chứng kiểm chứng, blocker/limitation và next action theo protocol.
 - Chỉ đánh dấu task hoặc milestone `COMPLETE` khi mọi Definition of Done và kiểm chứng liên quan đã đạt.
 - `CHANGELOG.md` chỉ nhận entry `Added`, `Changed`, `Fixed` hoặc `Security` sau khi task đạt Definition of Done. Không ghi plan, placeholder, empty directory hoặc thay đổi chưa kiểm chứng.
