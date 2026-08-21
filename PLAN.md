@@ -48,6 +48,12 @@ Evidence Level: NONE | LOCAL-VERIFIED | REMOTE-BACKED
 Legacy `COMPLETE + REMOTE-BACKED` means `Status: COMPLETE` plus
 `Evidence Level: REMOTE-BACKED`.
 
+M3/S1 security remediation has its own evidence progression:
+
+```text
+ACTIVE → LOCAL-COMPLETE → REMOTE-PENDING → REMOTE-BACKED
+```
+
 ## 3. Current release gate
 
 | Milestone | Status | Evidence level | Gate summary |
@@ -55,8 +61,8 @@ Legacy `COMPLETE + REMOTE-BACKED` means `Status: COMPLETE` plus
 | M0 — Plan and architecture baseline | `COMPLETE` | `LOCAL-VERIFIED` | Repository operating model and initial V1 baseline established; future milestone wording may be refined without rewriting accepted implementation evidence. |
 | M1 — Development foundation | `COMPLETE` | `REMOTE-BACKED` | Local verification suite and GitHub CI/Security workflows exist and passed. |
 | M2 — Local infrastructure | `COMPLETE` | `REMOTE-BACKED` | Accepted commit `5ffe4cb9be81c30d5c24bd7eb6a9d41abc2a5f19`; isolated M2 acceptance plus remote CI/Security passed. |
-| M3 — Markdown Knowledge Platform | `COMPLETE` | `REMOTE-BACKED` | Accepted candidate `ff4a5fb7d779f260ffb9b5aa2393ad6ab75eb549`, merge `9cd34cebb196631e9524b095c21f1fd5aff78749`, remote CI/Security passed. |
-| M4 — PDF document ingestion | `IN PROGRESS` | `NONE` | Owner-approved `M4-R1` execution contract is active; implementation evidence is not yet claimed. |
+| M3 — Markdown Knowledge Platform | `COMPLETE` | `REMOTE-BACKED` | Accepted candidate `ff4a5fb7d779f260ffb9b5aa2393ad6ab75eb549`, merge `9cd34cebb196631e9524b095c21f1fd5aff78749`, remote CI/Security passed; M3/S1 is local-complete and awaiting separately authorized remote evidence. |
+| M4 — PDF document ingestion | `NOT STARTED` | `NONE` | M4-R3 is owner-approved but cannot begin until M3/S1 is remote-backed. |
 | M5 — Image and video ingestion | `DEFERRED` | `NONE` | Locked until M4 is complete and M5 source contracts are approved. |
 | M6 — Architecture consolidation | `DEFERRED` | `NONE` | Post-Knowledge structural migration only; no M4/M5 accepted code is moved early. |
 | M7 — L&SC Data Plant core | `DEFERRED` | `NONE` | Governed data lifecycle and deterministic control plane. |
@@ -67,21 +73,17 @@ Legacy `COMPLETE + REMOTE-BACKED` means `Status: COMPLETE` plus
 ## 4. Current focus
 
 ```text
-Milestone: M4 — PDF Document Ingestion
-Task: M4 — PDF Document Ingestion
-Task Status: IN PROGRESS
+Milestone: M3 — Markdown Knowledge Platform
+Task: M3/S1 — Python dependency security prerequisite
+Task Status: LOCAL-COMPLETE
 Planning Readiness: APPROVED
-Plan Revision: M4-R1
-Execution Authorization: YES
-Execution Contract: docs/contracts/execution/ACTIVE.md
-Evidence Level: NONE
+Plan Revision: M3/S1
+Execution Authorization: NO
+Execution Contract: NONE
+Evidence Level: LOCAL-VERIFIED
 ```
 
-The owner explicitly approved the M4 plan on 2026-08-20. Its full frozen
-implementation body now exists only in `docs/contracts/execution/ACTIVE.md`.
-Execution starts at checkpoint M4/T1 and remains subject to every ordered gate in
-that contract. Authorization is not completion evidence; accepted M1–M3 behavior
-and evidence remain unchanged.
+M3/S1 implementation commit `5c035fb2d3749d9fabe0a9ff69d9d82509465934` resolved the approved FastAPI/Starlette candidate with exact lock, Python 3.13 regression, dependency audit, full-history secret scan, and repository gates passing. Push/PR/merge remains separately owner-controlled. M4/T1 is conditionally pre-authorized only after exact remote M3/S1 evidence is present.
 
 ## 5. Current delivery sequence
 
@@ -175,6 +177,7 @@ citations to original source lines.
 | M3/T3 — Index lifecycle | `COMPLETE` | Incremental replacement, side-by-side full rebuild, deletion safety, recovery, and run APIs passed; merge `242bca819b72ded9f6178221eb9cdda09b3dea38`. |
 | M3/T4 — Retrieval and reranking | `COMPLETE` | Filtered vector/FTS retrieval, deterministic fusion/reranking, citations, concurrency, and resource gates passed; merge `aa73b06375321460800b9f78e8195b6837ea5125`. |
 | M3/T5 — Acceptance and handoff | `COMPLETE` | Fixture, RealVault, persistent-live, exact-candidate, and remote gates passed; accepted candidate `ff4a5fb7d779f260ffb9b5aa2393ad6ab75eb549`, merge `9cd34cebb196631e9524b095c21f1fd5aff78749`. |
+| M3/S1 — Python dependency security prerequisite | `LOCAL-COMPLETE` | Exact candidate FastAPI `0.133.0`, Starlette `1.3.1`, and `annotated-doc` `0.0.5` passed resolver, audit, Python 3.13 regression, repository gates, and secret scan; implementation commit `5c035fb2d3749d9fabe0a9ff69d9d82509465934`. |
 
 Inherited M3 invariants include:
 
@@ -190,20 +193,17 @@ Inherited M3 invariants include:
 
 ### M4 — PDF Document Ingestion
 
-Status: `IN PROGRESS`
+Status: `NOT STARTED`
 Planning Readiness: `APPROVED`
-Plan Revision: `M4-R1`
-Execution Authorization: `YES`
-Execution Contract: `docs/contracts/execution/ACTIVE.md`
+Plan Revision: `M4-R3`
+Execution Authorization: `NO`
+Execution Contract: `NONE`
 Evidence Level: `NONE`
 
 Purpose: add sidecar-driven PDF ingestion for native text, scanned pages,
 tables, and OCR-visible figure text while preserving all accepted M3 behavior.
 
-Approved execution contract:
-`docs/contracts/execution/ACTIVE.md`.
-Numerical limits and implementation choices in that contract are requirements,
-not execution evidence.
+The owner-approved M4-R3 plan is the direct execution contract exception for Codex through M4/T1; no `ACTIVE.md` is created for M3/S1 or M4/T1. M4/T1 may begin only after M3/S1 has exact remote-backed evidence. M4/T2 and later return to the normal owner-approved `ACTIVE.md` protocol.
 
 Hard boundaries:
 
@@ -223,16 +223,14 @@ Planned task sequence:
 
 | Task | Status | Scope and gate |
 | --- | --- | --- |
-| M4/P0 — Finalize contract | `COMPLETE` | Canonical contract, inherited matrix, task gates, and owner approval recorded in `M4-R1`. |
-| M4/T1 — Runtime, source, schema, and identity | `IN PROGRESS` | Pins/offline artifacts, sidecars, paths, digests, additive migrations, ownership, and recovery. |
+| M4/P0 — Finalize contract | `COMPLETE` | M4-R1 is superseded, M4-R2 invalidated, and owner-approved M4-R3 is frozen as the direct Codex contract through T1. |
+| M4/T1 — Runtime, source, schema, and identity | `NOT STARTED` | Conditionally pre-authorized after M3/S1 becomes remote-backed; pins/offline artifacts, sidecars, paths, digests, additive migrations, ownership, and recovery. |
 | M4/T2 — Preflight, extraction, and segmentation | `NOT STARTED` | Parser/encryption checks, resource profiles, bounded batching/OCR, deterministic extraction, and atomic batch behavior. |
 | M4/T3 — Resume, drift, retention, and publication | `NOT STARTED` | Checkpoint reuse, source/metadata drift, last-known-good retention, idempotent publication, and resource gates. |
 | M4/T4 — Adapters, retrieval, and API | `NOT STARTED` | Preserve Markdown adapter; add PDF filters/counters/citations without changing accepted M3 semantics. |
 | M4/T5 — Acceptance and handoff | `NOT STARTED` | Offline, multilingual, security, crash/recovery, concurrency, RealVault, M2/M3 regression, exact-candidate CI/Security, and remote gate. |
 
-M4 execution is authorized only while `PLAN.md` and the matching `M4-R1`
-`ACTIVE.md` satisfy the validity rules in `AGENTS.md`. T1 through T5 remain
-strictly gated; no later checkpoint starts before the preceding gate passes.
+M4/T1 remains unauthorized until M3/S1 remote-backed evidence exists. T2 through T5 remain strictly gated; no later checkpoint starts before the preceding gate passes.
 
 ### M5 — Image and Video Ingestion
 
@@ -566,8 +564,7 @@ Unless a future approved requirement justifies them, V1 does not require:
 
 ## 15. End rule
 
-The repository is currently executing the owner-approved **M4-R1** contract.
-M4 implementation is authorized; later milestones remain unauthorized.
+M3/S1 is local-complete and awaits separately authorized remote publication and exact remote CI/Security evidence. Only then may the owner-approved M4-R3/T1 direct Codex contract begin. Later M4 tasks and later milestones remain unauthorized.
 
 If plan, architecture, contracts, state files, and verified implementation
 disagree, apply the authority order in `AGENTS.md`, preserve accepted evidence,
