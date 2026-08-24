@@ -13,6 +13,30 @@ COPY --from=uv /uv /usr/local/bin/uv
 COPY pyproject.toml uv.lock ./
 RUN uv sync --locked --no-dev --no-install-project
 
+# The PDF model stack is deliberately a separate project and virtual
+# environment.  Do not merge this lock into the parent M3 runtime: it has a
+# different, security-audited tokenizers/Transformers closure.
+COPY pdf-runtime/pyproject.toml pdf-runtime/uv.lock pdf-runtime/requirements.txt /opt/pdf-runtime/
+WORKDIR /opt/pdf-runtime
+RUN uv export --frozen --no-dev --no-emit-project --no-header \
+      --format requirements.txt --output-file /tmp/pdf-requirements.lock.txt && \
+    cmp /tmp/pdf-requirements.lock.txt requirements.txt && \
+    uv sync --locked --no-dev --no-install-project && \
+    chmod -R g+rX,o-rwx,a-w /opt/pdf-runtime
+COPY pdf-runtime/src/zink_pdf_runtime/download_models.py /tmp/download_pdf_models.py
+RUN /opt/pdf-runtime/.venv/bin/python /tmp/download_pdf_models.py \
+      --output-dir /opt/pdf-artifacts && \
+    find /opt/pdf-artifacts -type d -exec chmod 0550 {} + && \
+    find /opt/pdf-artifacts -type f -exec chmod 0440 {} +
+COPY pdf-runtime/src /opt/pdf-runtime/src
+RUN uv sync --locked --no-dev && \
+    chmod -R g+rX,o-rwx,a-w \
+      /opt/pdf-runtime/src \
+      /opt/pdf-runtime/.venv/lib/python3.13/site-packages/_editable_impl_zink_knowledge_pdf_runtime.pth \
+      /opt/pdf-runtime/.venv/lib/python3.13/site-packages/zink_knowledge_pdf_runtime-*.dist-info
+
+WORKDIR /app
+
 ADD --checksum=sha256:69564b696052886ed0ac63fa393e928384e0f8caada38c1f4864a9bfbf379c15 \
     https://huggingface.co/BAAI/bge-reranker-v2-m3/resolve/953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e/tokenizer.json \
     /app/artifacts/tokenizer.json
@@ -30,7 +54,10 @@ RUN uv venv /opt/reranker-venv && \
       "onnxruntime==1.27.0" \
       "ml-dtypes==0.5.3"
 
-COPY app /app/app
+RUN install -d /app/app
+COPY app/__init__.py /app/app/__init__.py
+COPY app/markdown_adapter.py /app/app/markdown_adapter.py
+COPY app/reranker_contract.py /app/app/reranker_contract.py
 COPY scripts/export_reranker.py /app/export_reranker.py
 RUN install -d /opt/reranker-source
 ADD https://huggingface.co/BAAI/bge-reranker-v2-m3/resolve/953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e/config.json /opt/reranker-source/config.json
@@ -59,16 +86,41 @@ WORKDIR /app
 
 RUN addgroup --system knowledge && \
     adduser --system --ingroup knowledge knowledge && \
-    install -d -o knowledge -g knowledge -m 0555 /app/artifacts
+    install -d -o knowledge -g knowledge -m 0555 /app/artifacts && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+      libgl1=1.6.0-1 \
+      tesseract-ocr=5.3.0-2 \
+      tesseract-ocr-eng=1:4.1.0-2 \
+      tesseract-ocr-vie=1:4.1.0-2 \
+      tesseract-ocr-chi-sim=1:4.1.0-2 && \
+    rm -rf /var/lib/apt/lists/* && \
+    install -d -o knowledge -g knowledge -m 0700 /tmp/pdf-runtime
 
 COPY --from=builder /app/.venv /app/.venv
+COPY --from=builder --chown=root:knowledge /opt/pdf-runtime /opt/pdf-runtime
+COPY --from=builder --chown=root:knowledge /opt/pdf-artifacts /opt/pdf-artifacts
+COPY --chown=root:knowledge --chmod=0440 uv.lock /app/uv.lock
 COPY --from=builder --chown=knowledge:knowledge --chmod=0444 /app/artifacts/tokenizer.json /app/artifacts/tokenizer.json
 COPY --from=reranker-export --chown=knowledge:knowledge --chmod=0444 /app/runtime-artifacts/ /app/artifacts/
 COPY app ./app
 COPY migrations ./migrations
 
+RUN /opt/pdf-runtime/.venv/bin/python -m zink_pdf_runtime.manifest \
+      --artifacts /opt/pdf-artifacts \
+      --lock /opt/pdf-runtime/uv.lock \
+      --tesseract /usr/bin/tesseract \
+      --tessdata /usr/share/tesseract-ocr/5/tessdata \
+      --output /opt/pdf-artifacts/manifest.json && \
+    test -s /opt/pdf-artifacts/manifest.json && \
+    chown root:knowledge /opt/pdf-artifacts/manifest.json && \
+    chmod 0440 /opt/pdf-artifacts/manifest.json
+
 ENV PATH="/app/.venv/bin:$PATH" \
-    KNOWLEDGE_TOKENIZER_PATH=/app/artifacts/tokenizer.json
+    KNOWLEDGE_TOKENIZER_PATH=/app/artifacts/tokenizer.json \
+    KNOWLEDGE_PDF_RUNTIME_ENABLED=1 \
+    HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1
 
 USER knowledge
 

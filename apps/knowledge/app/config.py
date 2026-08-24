@@ -21,6 +21,14 @@ class Settings:
     tokenizer_path: Path
     reranker_model_path: Path = Path("/app/artifacts/model.int8.onnx")
     reranker_manifest_path: Path = Path("/app/artifacts/reranker-manifest.json")
+    pdf_runtime_enabled: bool = False
+    pdf_runtime_python: Path = Path("/opt/pdf-runtime/.venv/bin/python")
+    pdf_runtime_lock_path: Path = Path("/opt/pdf-runtime/uv.lock")
+    pdf_runtime_manifest_path: Path = Path("/opt/pdf-artifacts/manifest.json")
+    pdf_runtime_artifacts_path: Path = Path("/opt/pdf-artifacts")
+    pdf_runtime_temp_root: Path = Path("/tmp/pdf-runtime")
+    pdf_tesseract_binary: Path = Path("/usr/bin/tesseract")
+    pdf_tessdata_path: Path = Path("/usr/share/tesseract-ocr/5/tessdata")
 
     @classmethod
     def from_environment(cls) -> "Settings":
@@ -61,5 +69,27 @@ class Settings:
             ),
             reranker_manifest_path=Path(
                 os.environ.get("KNOWLEDGE_RERANKER_MANIFEST_PATH", "/app/artifacts/reranker-manifest.json")
+            ),
+            pdf_runtime_enabled=os.environ.get("KNOWLEDGE_PDF_RUNTIME_ENABLED", "0") == "1",
+            pdf_runtime_python=Path(
+                os.environ.get("KNOWLEDGE_PDF_RUNTIME_PYTHON", "/opt/pdf-runtime/.venv/bin/python")
+            ),
+            pdf_runtime_lock_path=Path(
+                os.environ.get("KNOWLEDGE_PDF_RUNTIME_LOCK", "/opt/pdf-runtime/uv.lock")
+            ),
+            pdf_runtime_manifest_path=Path(
+                os.environ.get("KNOWLEDGE_PDF_RUNTIME_MANIFEST", "/opt/pdf-artifacts/manifest.json")
+            ),
+            pdf_runtime_artifacts_path=Path(
+                os.environ.get("KNOWLEDGE_PDF_RUNTIME_ARTIFACTS", "/opt/pdf-artifacts")
+            ),
+            pdf_runtime_temp_root=Path(
+                os.environ.get("KNOWLEDGE_PDF_RUNTIME_TEMP_ROOT", "/tmp/pdf-runtime")
+            ),
+            pdf_tesseract_binary=Path(
+                os.environ.get("KNOWLEDGE_PDF_TESSERACT_BINARY", "/usr/bin/tesseract")
+            ),
+            pdf_tessdata_path=Path(
+                os.environ.get("KNOWLEDGE_PDF_TESSDATA_PATH", "/usr/share/tesseract-ocr/5/tessdata")
             ),
         )

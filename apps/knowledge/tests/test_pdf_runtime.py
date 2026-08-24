@@ -1,0 +1,247 @@
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import importlib.util
+import json
+import re
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from app.pdf_runtime import (
+    MAX_RESPONSE_BYTES,
+    MAX_STDERR_BYTES,
+    PROTOCOL_VERSION,
+    PdfRuntimeClient,
+    PdfRuntimeError,
+    PdfRuntimeSettings,
+    _OutputCapExceeded,
+    _read_capped,
+    _validate_response,
+    processing_identity_for_runtime,
+    verify_runtime_probe,
+)
+
+
+class ParentIsolationTests(unittest.TestCase):
+    EXPECTED_PARENT_LOCK_SHA256 = "f78c96e3c1ae954103641a498e18cc65dc80aa2e2926a3591ff39197eb73823c"
+    EXPECTED_PARENT_PROJECT_SHA256 = "81111e305c23c62c97ac49ed7dc9f84bd56af6f7c3505a0d1b49edbddd8462bb"
+
+    def test_parent_lock_and_import_closure_excludes_pdf_runtime_dependencies(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        lock_bytes = (root / "uv.lock").read_bytes()
+        project_bytes = (root / "pyproject.toml").read_bytes()
+        self.assertEqual(hashlib.sha256(lock_bytes).hexdigest(), self.EXPECTED_PARENT_LOCK_SHA256)
+        self.assertEqual(hashlib.sha256(project_bytes).hexdigest(), self.EXPECTED_PARENT_PROJECT_SHA256)
+        parent_lock = lock_bytes.decode("utf-8")
+        parent_project = project_bytes.decode("utf-8")
+        self.assertIn('"tokenizers==0.23.1"', parent_project)
+        self.assertIn('name = "tokenizers"', parent_lock)
+        for dependency in ("docling", "transformers", "torch", "docling-ibm-models"):
+            self.assertNotIn(f'name = "{dependency}"', parent_lock)
+            self.assertNotIn(f'"{dependency}', parent_project)
+        self.assertIsNone(importlib.util.find_spec("docling"))
+        self.assertIsNone(importlib.util.find_spec("transformers"))
+        self.assertIsNone(importlib.util.find_spec("torch"))
+
+    def test_isolated_runtime_is_not_on_parent_sys_path(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        isolated = (root / "pdf-runtime").resolve()
+        import sys
+        self.assertFalse(any(isolated == Path(entry).resolve() or isolated in Path(entry).resolve().parents for entry in sys.path if entry))
+
+
+class IsolatedLockContractTests(unittest.TestCase):
+    def test_candidate_is_exact_cpu_only_and_models_use_immutable_revisions(self) -> None:
+        root = Path(__file__).resolve().parents[1] / "pdf-runtime"
+        project = (root / "pyproject.toml").read_text(encoding="utf-8")
+        lock = (root / "uv.lock").read_text(encoding="utf-8")
+        requirements = (root / "requirements.txt").read_text(encoding="utf-8")
+        downloader = (root / "src" / "zink_pdf_runtime" / "download_models.py").read_text(
+            encoding="utf-8"
+        )
+        for requirement in (
+            '"docling==2.121.0"',
+            '"docling-core==2.92.0"',
+            '"docling-ibm-models==3.14.0"',
+            '"docling-parse==7.15.0"',
+            '"pypdfium2==5.13.0"',
+            '"torch==2.13.0+cpu"',
+            '"torchvision==0.28.0+cpu"',
+            '"transformers==5.15.1"',
+        ):
+            self.assertIn(requirement, project)
+        self.assertIn('name = "tokenizers"', lock)
+        self.assertIn('version = "0.22.2"', lock)
+        self.assertNotRegex(lock.casefold(), r'name = "(?:nvidia|cuda|rocm|xpu)')
+        for package in ("docling", "docling-core", "torch", "torchvision", "transformers"):
+            self.assertRegex(requirements, rf"(?m)^{re.escape(package)}==[^\s]+.*\\$")
+        revisions = re.findall(r'"[^"]+/[^"]+": "([0-9a-f]{40})"', downloader)
+        self.assertEqual(len(revisions), 3)
+
+
+class ProtocolValidationTests(unittest.TestCase):
+    def response(self, value: dict[str, object]) -> bytes:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+    def test_canonical_success_response_is_accepted(self) -> None:
+        request = {
+            "protocol_version": PROTOCOL_VERSION,
+            "operation": "extract_range",
+            "page_start": 5,
+            "page_end": 8,
+        }
+        response = self.response({
+            "protocol_version": PROTOCOL_VERSION,
+            "status": "ok",
+            "page_start": 5,
+            "page_end": 8,
+            "items": [{
+                "kind": "text",
+                "ordinal": 0,
+                "content": "bounded text",
+                "page_start": 5,
+                "page_end": 5,
+                "bbox": [0.1, 0.2, 0.3, 0.4],
+            }],
+        })
+        self.assertEqual(_validate_response(response, request)["status"], "ok")
+
+    def test_out_of_range_or_unexpected_item_data_is_rejected(self) -> None:
+        request = {
+            "protocol_version": PROTOCOL_VERSION,
+            "operation": "extract_range",
+            "page_start": 5,
+            "page_end": 8,
+        }
+        base = {
+            "protocol_version": PROTOCOL_VERSION,
+            "status": "ok",
+            "page_start": 5,
+            "page_end": 8,
+            "items": [{
+                "kind": "text",
+                "ordinal": 0,
+                "content": "outside",
+                "page_start": 4,
+                "page_end": 4,
+                "bbox": None,
+            }],
+        }
+        with self.assertRaisesRegex(PdfRuntimeError, "PDF_RUNTIME_OUTPUT_INVALID"):
+            _validate_response(self.response(base), request)
+        base["items"][0]["page_start"] = 5
+        base["items"][0]["page_end"] = 5
+        base["items"][0]["absolute_path"] = "/vault/private.pdf"
+        with self.assertRaisesRegex(PdfRuntimeError, "PDF_RUNTIME_OUTPUT_INVALID"):
+            _validate_response(self.response(base), request)
+
+    def test_noncanonical_or_unexpected_response_is_rejected(self) -> None:
+        request = {"protocol_version": PROTOCOL_VERSION, "operation": "probe"}
+        with self.assertRaisesRegex(PdfRuntimeError, "PDF_RUNTIME_OUTPUT_INVALID"):
+            _validate_response(b'{"status":"ok", "protocol_version":"zink:pdf-runtime-protocol:v1"}', request)
+        with self.assertRaisesRegex(PdfRuntimeError, "PDF_RUNTIME_PROTOCOL_MISMATCH"):
+            _validate_response(self.response({"protocol_version": "wrong", "status": "ok"}), request)
+
+    def test_safe_child_error_is_preserved_without_stderr(self) -> None:
+        request = {"protocol_version": PROTOCOL_VERSION, "operation": "probe"}
+        raw = self.response({
+            "protocol_version": PROTOCOL_VERSION,
+            "status": "error",
+            "code": "PDF_RUNTIME_MISMATCH",
+        })
+        with self.assertRaisesRegex(PdfRuntimeError, "PDF_RUNTIME_MISMATCH"):
+            _validate_response(raw, request)
+        unsafe = self.response({
+            "protocol_version": PROTOCOL_VERSION,
+            "status": "error",
+            "code": "PDF_RUNTIME_/vault/private.pdf",
+        })
+        with self.assertRaisesRegex(PdfRuntimeError, "PDF_RUNTIME_OUTPUT_INVALID"):
+            _validate_response(unsafe, request)
+
+
+class ClientRequestTests(unittest.IsolatedAsyncioTestCase):
+    async def test_invalid_range_never_spawns_child(self) -> None:
+        client = PdfRuntimeClient(
+            PdfRuntimeSettings(
+                python=Path("/opt/pdf-runtime/.venv/bin/python"),
+                module="zink_pdf_runtime",
+                vault_root=Path("/vault"),
+                artifacts_root=Path("/opt/pdf-artifacts"),
+                manifest_path=Path("/opt/pdf-artifacts/manifest.json"),
+                lock_path=Path("/opt/pdf-runtime/uv.lock"),
+                tesseract_binary=Path("/usr/bin/tesseract"),
+                tessdata_path=Path("/usr/share/tesseract-ocr/5/tessdata"),
+                temp_root=Path("/tmp/pdf-runtime"),
+            )
+        )
+        with self.assertRaisesRegex(PdfRuntimeError, "PDF_RUNTIME_OUTPUT_INVALID"):
+            await client.extract_range("02. Books/a.pdf", 0, 1, "a" * 64, asyncio.get_running_loop().time() + 1)
+        with self.assertRaisesRegex(PdfRuntimeError, "PDF_RUNTIME_OUTPUT_INVALID"):
+            await client.extract_range(
+                "02. Books/a.pdf",
+                True,
+                1,
+                "a" * 64,
+                asyncio.get_running_loop().time() + 1,
+            )
+
+    async def test_stdout_and_stderr_caps_are_enforced_while_streaming(self) -> None:
+        for configured_cap in (MAX_RESPONSE_BYTES, MAX_STDERR_BYTES):
+            reader = asyncio.StreamReader()
+            reader.feed_data(b"x" * 2)
+            reader.feed_eof()
+            with self.assertRaises(_OutputCapExceeded):
+                await _read_capped(reader, min(configured_cap, 1))
+
+
+class RuntimeIdentityTests(unittest.TestCase):
+    def test_parent_recomputes_and_compares_manifest_probe(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            parent_lock = root / "parent.lock"
+            runtime_lock = root / "runtime.lock"
+            parent_lock.write_text("parent", encoding="utf-8")
+            runtime_lock.write_text("runtime", encoding="utf-8")
+            manifest = {
+                "artifact_digests": {"layout/model.bin": "a" * 64},
+                "distribution_versions": {"docling": "2.121.0", "transformers": "5.15.1"},
+                "locked_distribution_hashes": {
+                    "docling==2.121.0": ["sha256:" + "e" * 64],
+                },
+                "hashed_requirements_digest": "f" * 64,
+                "model_artifact_revisions": {
+                    "docling-project/docling-layout-heron": "d" * 40,
+                },
+                "pdf_runtime_lock_digest": hashlib.sha256(b"runtime").hexdigest(),
+                "protocol_version": PROTOCOL_VERSION,
+                "runner_code_digest": "b" * 64,
+                "tesseract_version": "tesseract 5.3.0",
+                "tessdata_source_revision": {"tesseract-ocr": "5.3.0-2"},
+            }
+            manifest_path = root / "manifest.json"
+            manifest_path.write_bytes(json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+            expected = processing_identity_for_runtime(
+                parent_lock,
+                runtime_lock,
+                manifest_path,
+                {"tokenizer_identity": "c" * 64, "embedding_identity": "m3"},
+            )
+            probe = {
+                "processing_identity_digest": expected,
+                "pdf_runtime_lock_digest": manifest["pdf_runtime_lock_digest"],
+                "distributions": manifest["distribution_versions"],
+                "artifact_digests": manifest["artifact_digests"],
+                "runner_code_digest": manifest["runner_code_digest"],
+            }
+            verify_runtime_probe(manifest_path, runtime_lock, probe, expected)
+            probe["artifact_digests"] = {}
+            with self.assertRaisesRegex(PdfRuntimeError, "PDF_RUNTIME_MISMATCH"):
+                verify_runtime_probe(manifest_path, runtime_lock, probe, expected)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncIterator, Literal
 
 import asyncpg
@@ -22,6 +24,13 @@ from .index_lifecycle import IndexLifecycle, LifecycleError
 from .index_runner import IndexRunAlreadyActiveError, IndexRunCoordinator
 from .markdown_adapter import QUERY_MAX_TOKENS, TokenBudget, render_retrieval_text
 from .model_probe import ModelProbeError, OllamaModelProbe
+from .pdf_foundation import sha256_file
+from .pdf_runtime import (
+    PdfRuntimeClient,
+    PdfRuntimeError,
+    PdfRuntimeSettings,
+    processing_identity_for_runtime,
+)
 from .reranker import (
     OnnxReranker,
     PairTokenBudgetError,
@@ -84,6 +93,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     lifecycle = IndexLifecycle.from_settings(
         database, configured_settings, model_probe, token_budget
     )
+    pdf_runtime = PdfRuntimeClient(
+        PdfRuntimeSettings(
+            python=configured_settings.pdf_runtime_python,
+            module="zink_pdf_runtime",
+            vault_root=configured_settings.vault_root,
+            artifacts_root=configured_settings.pdf_runtime_artifacts_path,
+            manifest_path=configured_settings.pdf_runtime_manifest_path,
+            lock_path=configured_settings.pdf_runtime_lock_path,
+            tesseract_binary=configured_settings.pdf_tesseract_binary,
+            tessdata_path=configured_settings.pdf_tessdata_path,
+            temp_root=configured_settings.pdf_runtime_temp_root,
+        )
+    )
     search_limiter = SearchCapacityLimiter(capacity=2)
 
     @asynccontextmanager
@@ -124,6 +146,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.search_limiter = search_limiter
     app.state.reranker = None
     app.state.reranker_error = "RERANKER_UNAVAILABLE"
+    app.state.pdf_runtime = pdf_runtime
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(
@@ -170,6 +193,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 status_code=503,
                 content={"status": "not_ready", "code": "EMBEDDING_MODEL_DRIFT"},
             )
+        if configured_settings.pdf_runtime_enabled:
+            try:
+                processing_identity = processing_identity_for_runtime(
+                    Path(__file__).resolve().parents[1] / "uv.lock",
+                    configured_settings.pdf_runtime_lock_path,
+                    configured_settings.pdf_runtime_manifest_path,
+                    {
+                        "tokenizer_identity": sha256_file(configured_settings.tokenizer_path),
+                        "retrieval_token_budget_version": 1,
+                        "embedding_identity": {
+                            "name": actual_model.name,
+                            "digest": actual_model.digest,
+                            "dimensions": actual_model.dimensions,
+                        },
+                    },
+                )
+                await pdf_runtime.probe(
+                    processing_identity,
+                    asyncio.get_running_loop().time() + 15,
+                )
+            except PdfRuntimeError as error:
+                return JSONResponse(
+                    status_code=503,
+                    content={"status": "not_ready", "code": error.code},
+                )
         return {"status": "ready", "active_index_id": active_index.id, "embedding_model": {"name": actual_model.name, "digest": actual_model.digest, "dimensions": actual_model.dimensions}}
 
     @app.post("/v1/search")
