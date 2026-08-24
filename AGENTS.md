@@ -95,17 +95,17 @@ Owner approval is the authorization source; Codex may only materialize that
 approval into `PLAN.md`/`ACTIVE.md` and perform the bounded lifecycle authorized
 by this contract.
 
-### Cline — executor
+### dsh — executor
 
-Cursor implements an approved Active Task only when `PLAN.md` authorizes
+dsh implements an approved Active Task only when `PLAN.md` authorizes
 execution and a matching valid `docs/contracts/execution/ACTIVE.md` exists.
 
-Cursor preserves approved scope, architecture, persistent contracts, resource
+dsh preserves approved scope, architecture, persistent contracts, resource
 ceilings, ordering, and validation gates. For implementation details it follows
 `ACTIVE.md` exactly. If execution reveals a material plan/architecture problem,
 stop the affected work and escalate instead of silently re-planning.
 
-Cursor must not create, modify, replace, rename, or delete `ACTIVE.md`; change
+dsh must not create, modify, replace, rename, or delete `ACTIVE.md`; change
 PLAN approval/authorization/completion state; perform future work; broaden scope;
 weaken acceptance criteria; replace contracts; create final task commits/pushes;
 or fabricate completion evidence unless the owner explicitly overrides this role

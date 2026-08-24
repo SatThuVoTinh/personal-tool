@@ -56,19 +56,19 @@ ACTIVE → LOCAL-COMPLETE → REMOTE-PENDING → REMOTE-BACKED
 
 ## 3. Current release gate
 
-| Milestone | Status | Evidence level | Gate summary |
-| --- | --- | --- | --- |
-| M0 — Plan and architecture baseline | `COMPLETE` | `LOCAL-VERIFIED` | Repository operating model and initial V1 baseline established; future milestone wording may be refined without rewriting accepted implementation evidence. |
-| M1 — Development foundation | `COMPLETE` | `REMOTE-BACKED` | Local verification suite and GitHub CI/Security workflows exist and passed. |
-| M2 — Local infrastructure | `COMPLETE` | `REMOTE-BACKED` | Accepted commit `5ffe4cb9be81c30d5c24bd7eb6a9d41abc2a5f19`; isolated M2 acceptance plus remote CI/Security passed. |
-| M3 — Markdown Knowledge Platform | `COMPLETE` | `REMOTE-BACKED` | Accepted candidate `ff4a5fb7d779f260ffb9b5aa2393ad6ab75eb549`, prior merge `9cd34cebb196631e9524b095c21f1fd5aff78749`, and M3/S1 merge `3f9e018a82854f27de08f3e1ba62a7931d879626` all have remote CI/Security evidence. |
-| M4 — PDF document ingestion | `ACTIVE` | `LOCAL-VERIFIED` | M4-R4/T1 completed locally with an isolated PDF runtime while preserving the M3 dependency identity; M4/T2 remains unauthorized. |
-| M5 — Image and video ingestion | `DEFERRED` | `NONE` | Locked until M4 is complete and M5 source contracts are approved. |
-| M6 — Architecture consolidation | `DEFERRED` | `NONE` | Post-Knowledge structural migration only; no M4/M5 accepted code is moved early. |
-| M7 — L&SC Data Plant core | `DEFERRED` | `NONE` | Governed data lifecycle and deterministic control plane. |
-| M8 — L&SC modeling and products | `DEFERRED` | `NONE` | Forecasting, machine learning, operations research, feature store, training data, registry and inference. |
-| M9 — Agent Skill Store, Agents System integration and hardening | `DEFERRED` | `NONE` | Dual-store Knowledge boundary, function-scoped learned-skill persistence, ZAS integration, and cross-platform hardening. |
-| M10 — V1 release | `DEFERRED` | `NONE` | Exact-candidate local and remote acceptance for the complete Knowledgebase V1. |
+| Milestone                                                       | Status        | Evidence level   | Gate summary                                                                                                                                                    |
+| --------------------------------------------------------------- | ------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M0 — Plan and architecture baseline                             | `COMPLETE`    | `LOCAL-VERIFIED` | Repository operating model and initial V1 baseline established; future milestone wording may be refined without rewriting accepted implementation evidence.     |
+| M1 — Development foundation                                     | `COMPLETE`    | `REMOTE-BACKED`  | Local verification suite and GitHub CI/Security workflows exist and passed.                                                                                     |
+| M2 — Local infrastructure                                       | `COMPLETE`    | `REMOTE-BACKED`  | Accepted commit `5ffe4cb9be81c30d5c24bd7eb6a9d41abc2a5f19`; isolated M2 acceptance plus remote CI/Security passed.                                              |
+| M3 — Markdown Knowledge Platform                                | `COMPLETE`    | `REMOTE-BACKED`  | Accepted candidate `ff4a5fb7d779f260ffb9b5aa2393ad6ab75eb549`, prior merge `9cd34cebb196631e9524b095c21f1fd5aff78749`, and M3/S1 merge `3f9e018a82854f27de08f3e1ba62a7931d879626` all have remote CI/Security evidence. |
+| M4 — PDF document ingestion                                     | `ACTIVE`      | `LOCAL-VERIFIED` | M4-R4/T1 completed locally with an isolated PDF runtime while preserving the M3 dependency identity; M4/T2 remains unauthorized. |
+| M5 — Image and video ingestion                                  | `DEFERRED`    | `NONE`           | Locked until M4 is complete and M5 source contracts are approved.                                                                                               |
+| M6 — Architecture consolidation                                 | `DEFERRED`    | `NONE`           | Post-Knowledge structural migration only; no M4/M5 accepted code is moved early.                                                                                |
+| M7 — L&SC Data Plant core                                       | `DEFERRED`    | `NONE`           | Governed data lifecycle and deterministic control plane.                                                                                                        |
+| M8 — L&SC modeling and products                                 | `DEFERRED`    | `NONE`           | Forecasting, machine learning, operations research, feature store, training data, registry and inference.                                                       |
+| M9 — Agent Skill Store, Agents System integration and hardening | `DEFERRED`    | `NONE`           | Dual-store Knowledge boundary, function-scoped learned-skill persistence, ZAS integration, and cross-platform hardening.                                        |
+| M10 — V1 release                                                | `DEFERRED`    | `NONE`           | Exact-candidate local and remote acceptance for the complete Knowledgebase V1.                                                                                  |
 
 ## 4. Current focus
 
@@ -84,7 +84,12 @@ Execution Contract: NONE
 Evidence Level: LOCAL-VERIFIED
 ```
 
-M3/S1 implementation commit `5c035fb2d3749d9fabe0a9ff69d9d82509465934` was merged as `3f9e018a82854f27de08f3e1ba62a7931d879626`; exact merge-SHA CI and Security passed. M4-R3 is invalidated by `PDF_DEPENDENCY_INCOMPATIBLE`: Docling cannot share the exact M3 environment with immutable `tokenizers==0.23.1`. Owner-approved M4-R4 completed M4/T1 locally with feature commit `c4ef66d`. M4/T2 and later remain unauthorized.
+M3/S1 implementation commit `5c035fb2d3749d9fabe0a9ff69d9d82509465934` was
+merged as `3f9e018a82854f27de08f3e1ba62a7931d879626`; exact merge-SHA CI and
+Security passed. M4-R3 is invalidated by `PDF_DEPENDENCY_INCOMPATIBLE`: Docling
+cannot share the exact M3 environment with immutable `tokenizers==0.23.1`.
+Owner-approved M4-R4 completed M4/T1 locally with feature commit `c4ef66d`.
+M4/T2 and later remain unauthorized.
 
 ## 5. Current delivery sequence
 
@@ -171,13 +176,13 @@ Evidence Level: `REMOTE-BACKED`
 Purpose: local hybrid retrieval over permitted human-authored Markdown with
 citations to original source lines.
 
-| Task | Status | Accepted evidence summary |
-| --- | --- | --- |
-| M3/T1 — Service and index identity | `COMPLETE` | Internal Knowledge service, readiness, immutable model identity, active-index invariant, advisory lock, and recovery passed; merge `4097862ab383e8698f2d5b1ff5adce0acd1c6579`. |
-| M3/T2 — Markdown discovery and segmentation | `COMPLETE` | Read-only Vault discovery, path/reparse safety, canonical tags, deterministic segmentation, and original-line citations passed; merge `b446ff17146763ea762b8669207c09642d42098f`. |
-| M3/T3 — Index lifecycle | `COMPLETE` | Incremental replacement, side-by-side full rebuild, deletion safety, recovery, and run APIs passed; merge `242bca819b72ded9f6178221eb9cdda09b3dea38`. |
-| M3/T4 — Retrieval and reranking | `COMPLETE` | Filtered vector/FTS retrieval, deterministic fusion/reranking, citations, concurrency, and resource gates passed; merge `aa73b06375321460800b9f78e8195b6837ea5125`. |
-| M3/T5 — Acceptance and handoff | `COMPLETE` | Fixture, RealVault, persistent-live, exact-candidate, and remote gates passed; accepted candidate `ff4a5fb7d779f260ffb9b5aa2393ad6ab75eb549`, merge `9cd34cebb196631e9524b095c21f1fd5aff78749`. |
+| Task                                        | Status     | Accepted evidence summary                                                                                                                                                                       |
+| ------------------------------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M3/T1 — Service and index identity          | `COMPLETE` | Internal Knowledge service, readiness, immutable model identity, active-index invariant, advisory lock, and recovery passed; merge `4097862ab383e8698f2d5b1ff5adce0acd1c6579`.                  |
+| M3/T2 — Markdown discovery and segmentation | `COMPLETE` | Read-only Vault discovery, path/reparse safety, canonical tags, deterministic segmentation, and original-line citations passed; merge `b446ff17146763ea762b8669207c09642d42098f`.               |
+| M3/T3 — Index lifecycle                     | `COMPLETE` | Incremental replacement, side-by-side full rebuild, deletion safety, recovery, and run APIs passed; merge `242bca819b72ded9f6178221eb9cdda09b3dea38`.                                           |
+| M3/T4 — Retrieval and reranking             | `COMPLETE` | Filtered vector/FTS retrieval, deterministic fusion/reranking, citations, concurrency, and resource gates passed; merge `aa73b06375321460800b9f78e8195b6837ea5125`.                             |
+| M3/T5 — Acceptance and handoff              | `COMPLETE` | Fixture, RealVault, persistent-live, exact-candidate, and remote gates passed; accepted candidate `ff4a5fb7d779f260ffb9b5aa2393ad6ab75eb549`, merge `9cd34cebb196631e9524b095c21f1fd5aff78749`. |
 | M3/S1 — Python dependency security prerequisite | `REMOTE-BACKED` | Exact candidate FastAPI `0.133.0`, Starlette `1.3.1`, and `annotated-doc` `0.0.5` passed resolver, audit, Python 3.13 regression, repository gates, and secret scan; implementation commit `5c035fb2d3749d9fabe0a9ff69d9d82509465934`, merged as `3f9e018a82854f27de08f3e1ba62a7931d879626` with exact merge-SHA CI/Security PASS. |
 
 Inherited M3 invariants include:
@@ -205,7 +210,11 @@ Evidence Level: `LOCAL-VERIFIED`
 Purpose: add sidecar-driven PDF ingestion for native text, scanned pages,
 tables, and OCR-visible figure text while preserving all accepted M3 behavior.
 
-M4-R3 is invalidated. The owner-approved M4-R4 plan was the direct execution contract exception for Codex through M4/T1: the PDF dependency stack runs in an isolated in-image runtime while M3 stays byte-for-byte unchanged. No `ACTIVE.md` was created for M4/T1. M4/T2 and later return to the normal owner-approved `ACTIVE.md` protocol.
+M4-R3 is invalidated. The owner-approved M4-R4 plan is the direct execution
+contract exception for Codex through M4/T1: the PDF dependency stack runs in an
+isolated in-image runtime while M3 stays byte-for-byte unchanged. No `ACTIVE.md`
+is created for M4/T1. M4/T2 and later return to the normal owner-approved
+`ACTIVE.md` protocol.
 
 Hard boundaries:
 
@@ -223,16 +232,17 @@ Hard boundaries:
 
 Planned task sequence:
 
-| Task | Status | Scope and gate |
-| --- | --- | --- |
-| M4/P0 — Finalize contract | `COMPLETE` | M4-R1 is superseded, M4-R2 invalidated, M4-R3 invalidated by the shared-runtime dependency conflict, and owner-approved M4-R4 is the direct Codex contract through T1. |
-| M4/T1 — Runtime, source, schema, and identity | `COMPLETE` | Feature commit `c4ef66d`; isolated runtime, parent-child protocol, offline artifacts, dependency/security audit, sidecars, paths, identities, migration/recovery, M3 regression, and repository gates passed. |
-| M4/T2 — Preflight, extraction, and segmentation | `NOT STARTED` | Parser/encryption checks, resource profiles, bounded batching/OCR, deterministic extraction, and atomic batch behavior. |
-| M4/T3 — Resume, drift, retention, and publication | `NOT STARTED` | Checkpoint reuse, source/metadata drift, last-known-good retention, idempotent publication, and resource gates. |
-| M4/T4 — Adapters, retrieval, and API | `NOT STARTED` | Preserve Markdown adapter; add PDF filters/counters/citations without changing accepted M3 semantics. |
-| M4/T5 — Acceptance and handoff | `NOT STARTED` | Offline, multilingual, security, crash/recovery, concurrency, RealVault, M2/M3 regression, exact-candidate CI/Security, and remote gate. |
+| Task                                              | Status        | Scope and gate                                                                                                                                                                    |
+| ------------------------------------------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M4/P0 — Finalize contract                         | `COMPLETE` | M4-R1 is superseded, M4-R2 invalidated, M4-R3 invalidated by the shared-runtime dependency conflict, and owner-approved M4-R4 is the direct Codex contract through T1. |
+| M4/T1 — Runtime, source, schema, and identity     | `COMPLETE` | Feature commit `c4ef66d`; isolated runtime, parent-child protocol, offline artifacts, dependency/security audit, sidecars, paths, identities, migration/recovery, M3 regression, and repository gates passed. |
+| M4/T2 — Preflight, extraction, and segmentation   | `NOT STARTED` | Parser/encryption checks, resource profiles, bounded batching/OCR, deterministic extraction, and atomic batch behavior.                                                           |
+| M4/T3 — Resume, drift, retention, and publication | `NOT STARTED` | Checkpoint reuse, source/metadata drift, last-known-good retention, idempotent publication, and resource gates.                                                                   |
+| M4/T4 — Adapters, retrieval, and API              | `NOT STARTED` | Preserve Markdown adapter; add PDF filters/counters/citations without changing accepted M3 semantics.                                                                             |
+| M4/T5 — Acceptance and handoff                    | `NOT STARTED` | Offline, multilingual, security, crash/recovery, concurrency, RealVault, M2/M3 regression, exact-candidate CI/Security, and remote gate.                                          |
 
-M4/T1 is complete and execution authorization is revoked. T2 through T5 remain strictly gated; no later checkpoint starts before an owner-approved `ACTIVE.md`.
+M4/T1 is complete and execution authorization is revoked. T2 through T5 remain
+strictly gated; no later checkpoint starts before an owner-approved `ACTIVE.md`.
 
 ### M5 — Image and Video Ingestion
 
@@ -436,13 +446,13 @@ accepted.
 
 ### Planned task sequence
 
-| Task | Status | Scope and gate |
-| --- | --- | --- |
-| M9/T1 — Dual-store persistence contract | `DEFERRED` | Freeze store identity, logical persistence isolation, lifecycle, provenance, backup/restore, and authorization rules. Reuse existing PostgreSQL/pgvector/object storage unless evidence requires physical separation. |
+| Task                                                         | Status     | Scope and gate                                                                                                                                                                                                             |
+| ------------------------------------------------------------ | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M9/T1 — Dual-store persistence contract                      | `DEFERRED` | Freeze store identity, logical persistence isolation, lifecycle, provenance, backup/restore, and authorization rules. Reuse existing PostgreSQL/pgvector/object storage unless evidence requires physical separation.      |
 | M9/T2 — Function registry and Skill Store intake/publication | `DEFERRED` | Mirror the current 32 ZAS leaf functions; enforce one `function_id` ↔ one `subagent_id` ↔ one `namespace_id`; versioned `CANDIDATE/ACTIVE/DEPRECATED/REJECTED` lifecycle; idempotent intake; no direct ZAS storage writes. |
-| M9/T3 — Scoped retrieval and ZAS compatibility | `DEFERRED` | Return ACTIVE skills only from the authorized functional namespace; preserve Research Knowledge citation semantics; prove the two stores cannot be accidentally blended. |
-| M9/T4 — L&SC and cross-project integration | `DEFERRED` | Integrate permitted L&SC status/run/model contracts and validate ZAS orchestration without transferring L&SC ownership. |
-| M9/T5 — System hardening and acceptance | `DEFERRED` | Cross-platform security, authorization, recovery, failure isolation, contract compatibility, full regression, and exact-candidate acceptance. |
+| M9/T3 — Scoped retrieval and ZAS compatibility               | `DEFERRED` | Return ACTIVE skills only from the authorized functional namespace; preserve Research Knowledge citation semantics; prove the two stores cannot be accidentally blended.                                                   |
+| M9/T4 — L&SC and cross-project integration                   | `DEFERRED` | Integrate permitted L&SC status/run/model contracts and validate ZAS orchestration without transferring L&SC ownership.                                                                                                    |
+| M9/T5 — System hardening and acceptance                      | `DEFERRED` | Cross-platform security, authorization, recovery, failure isolation, contract compatibility, full regression, and exact-candidate acceptance.                                                                              |
 
 ### Research Knowledge Store rules
 
@@ -546,27 +556,29 @@ Unless a future approved requirement justifies them, V1 does not require:
 
 ## 14. Decision log
 
-| Decision | Current rule |
-| --- | --- |
-| Domain ownership | Knowledgebase owns Knowledge Platform and L&SC Data Plant only. |
-| Knowledge stores | Knowledge Platform owns two logically isolated stores: Research Knowledge Store and Agent Skill Store. |
-| Research Knowledge | Derived from approved human/reference sources; read-only to ZAS; future Zink Q&A consumer. |
-| Agent Skill Store | Knowledgebase owns persistence/index/retrieval; ZAS owns learning/evaluation; one function = one subagent = one skill namespace. |
-| Physical storage | Reuse existing PostgreSQL/pgvector/object storage by default; logical store isolation is mandatory, separate servers are not. |
-| General AI/automation | External Zink Agents System owns general agents, orchestration, permissions/tools, learning logic, and general automation. |
-| Knowledge AI | Internal capability of Knowledge Platform; not a separate general AI platform. |
-| Data AI | Internal advisory capability of L&SC Data Plant; not a control plane. |
-| Pipeline authority | L&SC `control-plane/` owns governed ETL/pipeline execution and transitions. |
-| Feature store | Remains an L&SC data product; feature engineering stays in modeling. |
-| L&SC model families | Forecasting, machine learning, and operations research are first-class modeling scopes when their milestone is approved. |
+| Decision               | Current rule                                                                                                                         |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Domain ownership       | Knowledgebase owns Knowledge Platform and L&SC Data Plant only.                                                                      |
+| Knowledge stores       | Knowledge Platform owns two logically isolated stores: Research Knowledge Store and Agent Skill Store.                               |
+| Research Knowledge     | Derived from approved human/reference sources; read-only to ZAS; future Zink Q&A consumer.                                           |
+| Agent Skill Store      | Knowledgebase owns persistence/index/retrieval; ZAS owns learning/evaluation; one function = one subagent = one skill namespace.     |
+| Physical storage       | Reuse existing PostgreSQL/pgvector/object storage by default; logical store isolation is mandatory, separate servers are not.        |
+| General AI/automation  | External Zink Agents System owns general agents, orchestration, permissions/tools, learning logic, and general automation.           |
+| Knowledge AI           | Internal capability of Knowledge Platform; not a separate general AI platform.                                                       |
+| Data AI                | Internal advisory capability of L&SC Data Plant; not a control plane.                                                                |
+| Pipeline authority     | L&SC `control-plane/` owns governed ETL/pipeline execution and transitions.                                                          |
+| Feature store          | Remains an L&SC data product; feature engineering stays in modeling.                                                                 |
+| L&SC model families    | Forecasting, machine learning, and operations research are first-class modeling scopes when their milestone is approved.             |
 | Cross-project mutation | API/contract boundary only; ZAS may submit skill candidates/lifecycle requests but never receives direct persistent-state ownership. |
-| `apps/knowledge/` | Preserve during M4/M5; migrate only in M6 with dedicated regression evidence. |
-| Source Vault | Human-owned and read-only to ingestion. |
-| Runtime complexity | Add services/dependencies/control planes only for concrete current requirements. |
+| `apps/knowledge/`      | Preserve during M4/M5; migrate only in M6 with dedicated regression evidence.                                                        |
+| Source Vault           | Human-owned and read-only to ingestion.                                                                                              |
+| Runtime complexity     | Add services/dependencies/control planes only for concrete current requirements.                                                     |
 
 ## 15. End rule
 
-M3/S1 is remote-backed by merge `3f9e018a82854f27de08f3e1ba62a7931d879626` with exact CI/Security PASS. M4-R4/T1 is locally complete; later M4 tasks and later milestones remain unauthorized.
+M3/S1 is remote-backed by merge `3f9e018a82854f27de08f3e1ba62a7931d879626`
+with exact CI/Security PASS. M4-R4/T1 is locally complete; later M4 tasks and
+later milestones remain unauthorized.
 
 If plan, architecture, contracts, state files, and verified implementation
 disagree, apply the authority order in `AGENTS.md`, preserve accepted evidence,
