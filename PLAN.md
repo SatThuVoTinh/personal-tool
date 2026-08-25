@@ -74,14 +74,14 @@ ACTIVE → LOCAL-COMPLETE → REMOTE-PENDING → REMOTE-BACKED
 
 ```text
 Milestone: M4 — PDF Document Ingestion
-Task: M4/T2 — Preflight, extraction, and segmentation
-Task Status: COMPLETE
+Task: M4/T3 — Resume, drift, retention, and publication
+Task Status: IN PROGRESS
 Planning Readiness: APPROVED
-Plan Revision: M4/T2-R1
-Execution Authorization: NO
-Authorized Task: NONE
-Execution Contract: NONE
-Evidence Level: LOCAL-VERIFIED
+Plan Revision: M4/T3-R1
+Execution Authorization: YES
+Authorized Task: M4/T3
+Execution Contract: docs/contracts/execution/ACTIVE.md
+Evidence Level: NONE
 ```
 
 M3/S1 implementation commit `5c035fb2d3749d9fabe0a9ff69d9d82509465934` was
@@ -90,8 +90,15 @@ Security passed. M4-R3 is invalidated by `PDF_DEPENDENCY_INCOMPATIBLE`: Docling
 cannot share the exact M3 environment with immutable `tokenizers==0.23.1`.
 Owner-approved M4-R4 completed M4/T1 locally with feature commit `c4ef66d`.
 Owner-approved M4/T2-R1 completed locally in implementation commit
-`82126e4354b3e0985056c4352fa3b6efb2574863`; authorization is revoked and
-M4/T3 and later remain unauthorized.
+`82126e4354b3e0985056c4352fa3b6efb2574863`. Owner approval on 2026-08-25
+grants chain authorization for `M4/T3-R1 → M4/T4-R1 → M4/T5-R1`: only T3 is
+materialized initially, and at most one task may be ACTIVE at a time. After a
+task reaches COMPLETE, passes every mandatory gate, has its implementation
+commit created, and its transition commit has pushed successfully, Codex may
+materialize and execute the next task under this same authorization. Any RED,
+BLOCKED, mandatory-gate failure, unresolved review finding, unexpected
+schema/dependency/API/resource change, lock-loss safety failure, or inability
+to create a required commit revokes the chain immediately.
 
 ## 5. Current delivery sequence
 
@@ -203,11 +210,11 @@ Inherited M3 invariants include:
 
 Status: `ACTIVE`
 Planning Readiness: `APPROVED`
-Plan Revision: `M4/T2-R1`
-Execution Authorization: `NO`
-Authorized Task: `NONE`
-Execution Contract: `NONE`
-Evidence Level: `LOCAL-VERIFIED`
+Plan Revision: `M4/T3-R1`
+Execution Authorization: `YES`
+Authorized Task: `M4/T3`
+Execution Contract: `docs/contracts/execution/ACTIVE.md`
+Evidence Level: `NONE`
 
 Purpose: add sidecar-driven PDF ingestion for native text, scanned pages,
 tables, and OCR-visible figure text while preserving all accepted M3 behavior.
@@ -239,12 +246,14 @@ Planned task sequence:
 | M4/P0 — Finalize contract                         | `COMPLETE` | M4-R1 is superseded, M4-R2 invalidated, M4-R3 invalidated by the shared-runtime dependency conflict, and owner-approved M4-R4 is the direct Codex contract through T1. |
 | M4/T1 — Runtime, source, schema, and identity     | `COMPLETE` | Feature commit `c4ef66d`; isolated runtime, parent-child protocol, offline artifacts, dependency/security audit, sidecars, paths, identities, migration/recovery, M3 regression, and repository gates passed. |
 | M4/T2 — Preflight, extraction, and segmentation   | `COMPLETE` | Implementation commit `82126e4`; exact pypdfium2 security preflight, 4-page offline extraction/OCR, page-local deterministic segmentation, drift brackets, deadlines, process cleanup, and atomic non-searchable content builds passed 99 parent tests, 8 isolated-runtime tests, real PDF fixture acceptance, isolated database integration, repository verification, dependency audit, and staged secret scan. |
-| M4/T3 — Resume, drift, retention, and publication | `NOT STARTED` | Checkpoint reuse, source/metadata drift, last-known-good retention, idempotent publication, and resource gates.                                                                   |
+| M4/T3 — Resume, drift, retention, and publication | `IN PROGRESS` | Owner-approved `M4/T3-R1`; checkpoint reuse, source/metadata drift, last-known-good retention, idempotent publication, pinned-lock recovery, and mandatory local gates.            |
 | M4/T4 — Adapters, retrieval, and API              | `NOT STARTED` | Preserve Markdown adapter; add PDF filters/counters/citations without changing accepted M3 semantics.                                                                             |
 | M4/T5 — Acceptance and handoff                    | `NOT STARTED` | Offline, multilingual, security, crash/recovery, concurrency, RealVault, M2/M3 regression, exact-candidate CI/Security, and remote gate.                                          |
 
-M4/T1 and M4/T2 are complete locally. Execution authorization is revoked and
-the transient T2 contract has been removed; T3 through T5 remain strictly gated.
+M4/T1 and M4/T2 are complete locally. `M4/T3-R1` is the only materialized
+active task. T4/T5 remain unmaterialized and may not begin until T3 completes,
+its transition commit has pushed successfully, and the chain authorization
+remains valid.
 
 ### M5 — Image and Video Ingestion
 

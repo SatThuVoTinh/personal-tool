@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 import json
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, AsyncIterator, Mapping, Sequence
 from uuid import UUID, uuid4
 
 import asyncpg
@@ -28,6 +30,18 @@ _PDF_CONTENT_IDENTITY_INDEXES = {
     "knowledge_pdf_content_builds_one_building_idx",
     "knowledge_pdf_content_builds_one_ready_idx",
 }
+_SEARCHABLE_SEGMENT_TYPES = {
+    "MARKDOWN_PASSAGE",
+    "PDF_PASSAGE",
+    "PDF_TABLE",
+    "PDF_FIGURE_TEXT",
+}
+_SEARCHABLE_SEGMENT_TYPES = {
+    "MARKDOWN_PASSAGE",
+    "PDF_PASSAGE",
+    "PDF_TABLE",
+    "PDF_FIGURE_TEXT",
+}
 
 
 @dataclass(frozen=True)
@@ -45,6 +59,23 @@ class PdfContentBatch:
 
 
 @dataclass(frozen=True)
+class PdfContentBatchState:
+    batch: PdfContentBatch
+    status: str
+
+
+@dataclass(frozen=True)
+class PdfContentBuildState:
+    build: PdfContentBuild
+    pdf_digest: str
+    sidecar_digest: str
+    processing_identity_digest: str
+    status: str
+    batches: tuple[PdfContentBatchState, ...]
+    segment_count: int
+
+
+@dataclass(frozen=True)
 class PdfContentSegment:
     ordinal: int
     segment_type: str
@@ -53,6 +84,16 @@ class PdfContentSegment:
     page_end: int
     bbox: tuple[float, float, float, float] | None
     provenance: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class PdfPublicationSegment:
+    chunk_ordinal: int
+    segment_type: str
+    content: str
+    page_start: int
+    page_end: int
+    bbox: tuple[float, float, float, float] | None
 
 
 @dataclass(frozen=True)
@@ -123,6 +164,7 @@ class KnowledgeDatabase:
         self._database_password = database_password
         self._migration_directory = migration_directory
         self._pool: asyncpg.Pool | None = None
+        self._owner_connection: asyncpg.Connection | None = None
         self.startup_error_code: str | None = None
 
     @property
@@ -143,7 +185,8 @@ class KnowledgeDatabase:
                 command_timeout=30,
             )
             await self._apply_migrations()
-            await self.recover_interrupted_runs()
+            await self.assert_searchable_segment_type_domain()
+            await self.assert_searchable_segment_type_domain()
         except Exception:
             self.startup_error_code = "DATABASE_UNAVAILABLE"
             if self._pool is not None:
@@ -154,6 +197,34 @@ class KnowledgeDatabase:
         if self._pool is not None:
             await self._pool.close()
             self._pool = None
+
+    def bind_owner_connection(self, connection: asyncpg.Connection) -> None:
+        """Route run-state mutations through the session that owns the lock."""
+
+        if self._owner_connection is not None:
+            raise StateTransitionError("An index owner session is already bound.")
+        self._owner_connection = connection
+
+    def unbind_owner_connection(self, connection: asyncpg.Connection) -> None:
+        if self._owner_connection is connection:
+            self._owner_connection = None
+
+    @asynccontextmanager
+    async def _mutation_transaction(self) -> AsyncIterator[asyncpg.Connection]:
+        """Use the pinned lock owner for lifecycle mutation when one exists."""
+
+        if self._pool is None:
+            raise RuntimeError("Database pool is unavailable.")
+        connection = self._owner_connection
+        if connection is not None:
+            if connection.is_closed():
+                raise StateTransitionError("Index ownership connection was lost.")
+            async with connection.transaction():
+                yield connection
+            return
+        async with self._pool.acquire() as pooled_connection:
+            async with pooled_connection.transaction():
+                yield pooled_connection
 
     async def assert_pdf_content_identity_schema(self) -> None:
         """Reject schema drift; T2 must never repair migration 002 at runtime."""
@@ -190,6 +261,44 @@ class KnowledgeDatabase:
         if not required or unconditional:
             raise PdfSchemaContractError("PDF_CONTENT_IDENTITY_SCHEMA_INVALID")
 
+    async def assert_searchable_segment_type_domain(self) -> None:
+        """Fail closed if a currently searchable segment cannot be typed."""
+
+        if self._pool is None:
+            raise RuntimeError("Database pool is unavailable.")
+        rows = await self._pool.fetch(
+            """
+            SELECT DISTINCT segments.segment_type
+            FROM knowledge.segments
+            JOIN knowledge.indexes ON knowledge.indexes.id = knowledge.segments.index_id
+            WHERE knowledge.indexes.status IN ('ACTIVE', 'BUILDING')
+            """
+        )
+        unknown = {row["segment_type"] for row in rows}.difference(
+            _SEARCHABLE_SEGMENT_TYPES
+        )
+        if unknown:
+            raise StateTransitionError("Searchable segment-type domain is incompatible.")
+
+    async def assert_searchable_segment_type_domain(self) -> None:
+        """Fail closed if a currently searchable segment cannot be typed."""
+
+        if self._pool is None:
+            raise RuntimeError("Database pool is unavailable.")
+        rows = await self._pool.fetch(
+            """
+            SELECT DISTINCT segments.segment_type
+            FROM knowledge.segments
+            JOIN knowledge.indexes ON knowledge.indexes.id = knowledge.segments.index_id
+            WHERE knowledge.indexes.status IN ('ACTIVE', 'BUILDING')
+            """
+        )
+        unknown = {row["segment_type"] for row in rows}.difference(
+            _SEARCHABLE_SEGMENT_TYPES
+        )
+        if unknown:
+            raise StateTransitionError("Searchable segment-type domain is incompatible.")
+
     async def create_pdf_content_build(
         self,
         *,
@@ -212,8 +321,7 @@ class KnowledgeDatabase:
             for start in range(1, page_count + 1, batch_size)
         )
         try:
-            async with self._pool.acquire() as connection:
-                async with connection.transaction():
+            async with self._mutation_transaction() as connection:
                     await connection.execute(
                         """
                         INSERT INTO knowledge.pdf_content_builds
@@ -244,11 +352,146 @@ class KnowledgeDatabase:
             raise
         return PdfContentBuild(str(build_id), content_identity_digest), batches
 
+    async def get_pdf_content_build_state(
+        self, content_identity_digest: str
+    ) -> PdfContentBuildState | None:
+        """Read the one resumable BUILDING/READY identity, if it exists."""
+
+        if self._pool is None:
+            raise RuntimeError("Database pool is unavailable.")
+        row = await self._pool.fetchrow(
+            """
+            SELECT id::text, pdf_digest, sidecar_digest, processing_identity_digest,
+                   status, content_identity_digest
+            FROM knowledge.pdf_content_builds
+            WHERE content_identity_digest = $1 AND status IN ('BUILDING', 'READY')
+            """,
+            content_identity_digest,
+        )
+        if row is None:
+            return None
+        batches = await self._pool.fetch(
+            """
+            SELECT id::text, build_id::text, page_start, page_end, status
+            FROM knowledge.pdf_content_batches
+            WHERE build_id = $1
+            ORDER BY page_start, page_end, id
+            """,
+            UUID(row["id"]),
+        )
+        segment_count = await self._pool.fetchval(
+            "SELECT count(*) FROM knowledge.pdf_content_segments WHERE build_id = $1",
+            UUID(row["id"]),
+        )
+        return PdfContentBuildState(
+            build=PdfContentBuild(str(row["id"]), row["content_identity_digest"]),
+            pdf_digest=row["pdf_digest"],
+            sidecar_digest=row["sidecar_digest"],
+            processing_identity_digest=row["processing_identity_digest"],
+            status=row["status"],
+            batches=tuple(
+                PdfContentBatchState(
+                    PdfContentBatch(
+                        str(batch["id"]),
+                        str(batch["build_id"]),
+                        int(batch["page_start"]),
+                        int(batch["page_end"]),
+                    ),
+                    batch["status"],
+                )
+                for batch in batches
+            ),
+            segment_count=int(segment_count),
+        )
+
+    async def recover_pdf_content_build(
+        self, state: PdfContentBuildState
+    ) -> PdfContentBuildState:
+        """Reconcile a matching build after ownership is established.
+
+        The global session lock proves no prior execution owner remains live.
+        Only under that proof can a RUNNING child be returned to PENDING.
+        """
+
+        if state.status == "READY":
+            return state
+        recovery_failure = False
+        async with self._mutation_transaction() as connection:
+            build = await connection.fetchrow(
+                """
+                SELECT id::text, pdf_digest, sidecar_digest, processing_identity_digest,
+                       status, content_identity_digest
+                FROM knowledge.pdf_content_builds
+                WHERE id = $1 FOR UPDATE
+                """,
+                UUID(state.build.id),
+            )
+            if build is None or build["status"] != "BUILDING":
+                raise StateTransitionError("PDF content build changed during recovery.")
+            batches = await connection.fetch(
+                """
+                SELECT id::text, build_id::text, page_start, page_end, status
+                FROM knowledge.pdf_content_batches
+                WHERE build_id = $1
+                ORDER BY page_start, page_end, id FOR UPDATE
+                """,
+                UUID(state.build.id),
+            )
+            batch_states = tuple(
+                PdfContentBatchState(
+                    PdfContentBatch(
+                        str(batch["id"]), str(batch["build_id"]),
+                        int(batch["page_start"]), int(batch["page_end"]),
+                    ),
+                    batch["status"],
+                )
+                for batch in batches
+            )
+            self._validate_pdf_batch_topology(batch_states)
+            if any(batch.status == "FAILED" for batch in batch_states):
+                await self._fail_pdf_build_locked(connection, state.build.id, "PDF_RUNTIME_FAILED")
+                recovery_failure = True
+            elif all(batch.status == "SUCCEEDED" for batch in batch_states):
+                segment_count = await connection.fetchval(
+                    "SELECT count(*) FROM knowledge.pdf_content_segments WHERE build_id = $1",
+                    UUID(state.build.id),
+                )
+                if int(segment_count) < 1:
+                    await self._fail_pdf_build_locked(connection, state.build.id, "PDF_RUNTIME_FAILED")
+                    recovery_failure = True
+                else:
+                    updated = await connection.fetchval(
+                        """
+                        UPDATE knowledge.pdf_content_builds
+                        SET status = 'READY', ready_at = now(), finished_at = now()
+                        WHERE id = $1 AND status = 'BUILDING'
+                        RETURNING id
+                        """,
+                        UUID(state.build.id),
+                    )
+                    if updated is None:
+                        raise StateTransitionError("PDF completed build changed during recovery.")
+            elif any(batch.status == "RUNNING" for batch in batch_states):
+                await connection.execute(
+                    """
+                    UPDATE knowledge.pdf_content_batches
+                    SET status = 'PENDING', started_at = NULL
+                    WHERE build_id = $1 AND status = 'RUNNING'
+                    """,
+                    UUID(state.build.id),
+                )
+
+        if recovery_failure:
+            raise StateTransitionError("PDF build was finalized FAILED during recovery.")
+        recovered = await self.get_pdf_content_build_state(state.build.content_identity_digest)
+        if recovered is None:
+            raise StateTransitionError("PDF content build disappeared during recovery.")
+        return recovered
+
     async def start_pdf_content_batch(self, batch: PdfContentBatch) -> None:
         if self._pool is None:
             raise RuntimeError("Database pool is unavailable.")
-        async with self._pool.acquire() as connection:
-            async with connection.transaction():
+        async with self._mutation_transaction() as connection:
                 await self._require_pdf_building(connection, batch.build_id)
                 updated = await connection.fetchval(
                     """
@@ -270,8 +513,7 @@ class KnowledgeDatabase:
 
         if self._pool is None:
             raise RuntimeError("Database pool is unavailable.")
-        async with self._pool.acquire() as connection:
-            async with connection.transaction():
+        async with self._mutation_transaction() as connection:
                 await self._require_pdf_building(connection, batch.build_id)
                 state = await connection.fetchval(
                     """
@@ -325,8 +567,7 @@ class KnowledgeDatabase:
     async def fail_pdf_content_batch_and_build(self, batch: PdfContentBatch, code: str) -> None:
         if self._pool is None:
             raise RuntimeError("Database pool is unavailable.")
-        async with self._pool.acquire() as connection:
-            async with connection.transaction():
+        async with self._mutation_transaction() as connection:
                 await self._require_pdf_building(connection, batch.build_id)
                 failed_batch = await connection.fetchval(
                     """
@@ -344,8 +585,7 @@ class KnowledgeDatabase:
     async def fail_pdf_content_build(self, build: PdfContentBuild, code: str) -> None:
         if self._pool is None:
             raise RuntimeError("Database pool is unavailable.")
-        async with self._pool.acquire() as connection:
-            async with connection.transaction():
+        async with self._mutation_transaction() as connection:
                 await self._require_pdf_building(connection, build.id)
                 await self._fail_pdf_build_locked(connection, build.id, code)
 
@@ -354,8 +594,7 @@ class KnowledgeDatabase:
 
         if self._pool is None:
             raise RuntimeError("Database pool is unavailable.")
-        async with self._pool.acquire() as connection:
-            async with connection.transaction():
+        async with self._mutation_transaction() as connection:
                 await self._require_pdf_building(connection, build.id)
                 batch_states = await connection.fetch(
                     "SELECT status FROM knowledge.pdf_content_batches WHERE build_id = $1 FOR UPDATE",
@@ -380,6 +619,46 @@ class KnowledgeDatabase:
                 )
                 if updated is None:
                     raise StateTransitionError("PDF build did not reach READY.")
+
+    async def pdf_publication_segments(
+        self, build_id: str
+    ) -> tuple[PdfPublicationSegment, ...]:
+        """Read READY build output in deterministic global publication order."""
+
+        if self._pool is None:
+            raise RuntimeError("Database pool is unavailable.")
+        rows = await self._pool.fetch(
+            """
+            SELECT segment_type, content, pdf_content_segments.page_start,
+                   pdf_content_segments.page_end, bbox
+            FROM knowledge.pdf_content_segments
+            JOIN knowledge.pdf_content_batches
+              ON pdf_content_batches.id = pdf_content_segments.batch_id
+             AND pdf_content_batches.build_id = pdf_content_segments.build_id
+            JOIN knowledge.pdf_content_builds
+              ON pdf_content_builds.id = pdf_content_segments.build_id
+            WHERE pdf_content_segments.build_id = $1
+              AND pdf_content_builds.status = 'READY'
+              AND pdf_content_batches.status = 'SUCCEEDED'
+            ORDER BY pdf_content_batches.page_start, pdf_content_batches.page_end,
+                     pdf_content_segments.ordinal
+            """,
+            UUID(build_id),
+        )
+        segments = tuple(
+            PdfPublicationSegment(
+                chunk_ordinal=ordinal,
+                segment_type=row["segment_type"],
+                content=row["content"],
+                page_start=int(row["page_start"]),
+                page_end=int(row["page_end"]),
+                bbox=(tuple(float(value) for value in row["bbox"]) if row["bbox"] is not None else None),
+            )
+            for ordinal, row in enumerate(rows)
+        )
+        if not segments:
+            raise StateTransitionError("READY PDF content build has no segments.")
+        return segments
 
     async def get_active_index(self) -> ActiveIndex | None:
         return await self.get_index_by_status("ACTIVE")
@@ -444,8 +723,7 @@ class KnowledgeDatabase:
         if self._pool is None:
             raise RuntimeError("Database pool is unavailable.")
         index_id, run_id = uuid4(), uuid4()
-        async with self._pool.acquire() as connection:
-            async with connection.transaction():
+        async with self._mutation_transaction() as connection:
                 await connection.execute(
                     """
                     INSERT INTO knowledge.indexes
@@ -472,8 +750,7 @@ class KnowledgeDatabase:
             raise RuntimeError("Database pool is unavailable.")
         run_id = uuid4()
         index_uuid = UUID(index_id)
-        async with self._pool.acquire() as connection:
-            async with connection.transaction():
+        async with self._mutation_transaction() as connection:
                 index_status = await connection.fetchval(
                     "SELECT status::text FROM knowledge.indexes WHERE id = $1 FOR UPDATE",
                     index_uuid,
@@ -538,6 +815,7 @@ class KnowledgeDatabase:
                 await connection.execute("SET LOCAL hnsw.scan_mem_multiplier = 1")
                 common = """
                     index_id = $1::uuid
+                    AND segment_type = 'MARKDOWN_PASSAGE'
                     AND ($3::text IS NULL OR primary_topic = $3)
                     AND ($4::text[] IS NULL OR tags @> $4::text[])
                     AND ($5::text IS NULL OR source_path = $5
@@ -601,14 +879,15 @@ class KnowledgeDatabase:
     async def set_discovered(self, run_id: str, discovered: int) -> None:
         if self._pool is None:
             raise RuntimeError("Database pool is unavailable.")
-        updated = await self._pool.fetchval(
-            """
-            UPDATE knowledge.index_runs SET sources_discovered = $2
-            WHERE id = $1 AND status = 'RUNNING' RETURNING id
-            """,
-            UUID(run_id),
-            discovered,
-        )
+        async with self._mutation_transaction() as connection:
+            updated = await connection.fetchval(
+                """
+                UPDATE knowledge.index_runs SET sources_discovered = $2
+                WHERE id = $1 AND status = 'RUNNING' RETURNING id
+                """,
+                UUID(run_id),
+                discovered,
+            )
         if updated is None:
             raise StateTransitionError("Index run is no longer RUNNING.")
 
@@ -623,8 +902,7 @@ class KnowledgeDatabase:
         if len(embeddings) != len(source.segments):
             raise ValueError("Embedding count does not match source segments.")
         source_id = uuid4()
-        async with self._pool.acquire() as connection:
-            async with connection.transaction():
+        async with self._mutation_transaction() as connection:
                 await self._require_run_and_index_state(connection, run)
                 await connection.execute(
                     "DELETE FROM knowledge.sources WHERE index_id = $1 AND source_path = $2",
@@ -686,13 +964,101 @@ class KnowledgeDatabase:
                         UUID(run.id),
                     )
 
+    async def replace_pdf_source(
+        self,
+        run: AcceptedIndexRun,
+        *,
+        source_path: str,
+        content_identity_digest: str,
+        title: str,
+        canonical_topics: tuple[str, ...],
+        tags: tuple[str, ...],
+        build_id: str,
+        segments: Sequence[PdfPublicationSegment],
+        embeddings: Sequence[Sequence[float]],
+        validate_before_publish: Callable[[], Awaitable[None]] | None = None,
+    ) -> None:
+        """Atomically replace one PDF source with deterministic READY content."""
+
+        if self._pool is None:
+            raise RuntimeError("Database pool is unavailable.")
+        if not segments or len(segments) != len(embeddings) or not canonical_topics:
+            raise ValueError("PDF publication payload is invalid.")
+        if any(segment.segment_type not in _SEARCHABLE_SEGMENT_TYPES for segment in segments):
+            raise ValueError("PDF publication contains an unknown segment type.")
+        source_id = uuid4()
+        async with self._mutation_transaction() as connection:
+                await self._require_run_and_index_state(connection, run)
+                ready = await connection.fetchval(
+                    """
+                    SELECT id FROM knowledge.pdf_content_builds
+                    WHERE id = $1 AND status = 'READY'
+                    """,
+                    UUID(build_id),
+                )
+                if ready is None:
+                    raise StateTransitionError("PDF content build is no longer READY.")
+                if validate_before_publish is not None:
+                    await validate_before_publish()
+                await connection.execute(
+                    "DELETE FROM knowledge.sources WHERE index_id = $1 AND source_path = $2",
+                    UUID(run.index_id), source_path,
+                )
+                await connection.execute(
+                    """
+                    INSERT INTO knowledge.sources (
+                      id, index_id, source_type, source_path, sha256, mime_type, title,
+                      primary_topic, canonical_topics, tags, indexed_by_run_id
+                    ) VALUES ($1, $2, 'PDF', $3, $4, 'application/pdf', $5, $6, $7, $8, $9)
+                    """,
+                    source_id, UUID(run.index_id), source_path, content_identity_digest,
+                    title, canonical_topics[0], list(canonical_topics), list(tags), UUID(run.id),
+                )
+                await connection.execute(
+                    """
+                    INSERT INTO knowledge.pdf_source_details (index_id, source_id, build_id)
+                    VALUES ($1, $2, $3)
+                    """,
+                    UUID(run.index_id), source_id, UUID(build_id),
+                )
+                for segment, embedding in zip(segments, embeddings, strict=True):
+                    vector = "[" + ",".join(format(value, ".17g") for value in embedding) + "]"
+                    await connection.execute(
+                        """
+                        INSERT INTO knowledge.segments (
+                          id, index_id, source_id, segment_type, chunk_ordinal, source_path,
+                          title, primary_topic, canonical_topics, tags, heading_path,
+                          heading_text, text, page_start, page_end, bbox, embedding,
+                          search_vector, indexed_by_run_id
+                        ) VALUES (
+                          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+                          $14, $15, $16, $17::vector,
+                          setweight(to_tsvector('simple', $7), 'A') ||
+                          setweight(to_tsvector('simple', array_to_string($9::text[], ' ')), 'A') ||
+                          setweight(to_tsvector('simple', $12), 'B') ||
+                          setweight(to_tsvector('simple', $13), 'D'),
+                          $18
+                        )
+                        """,
+                        uuid4(), UUID(run.index_id), source_id, segment.segment_type,
+                        segment.chunk_ordinal, source_path, title, canonical_topics[0],
+                        list(canonical_topics), list(tags), [title], title, segment.content,
+                        segment.page_start, segment.page_end,
+                        list(segment.bbox) if segment.bbox is not None else None,
+                        vector, UUID(run.id),
+                    )
+
     async def complete_incremental(
-        self, run: AcceptedIndexRun, discovered: int, indexed: int, stale_paths: set[str]
+        self,
+        run: AcceptedIndexRun,
+        discovered: int,
+        indexed: int,
+        stale_paths: set[str],
+        source_counts: Mapping[str, tuple[int, int, int]] | None = None,
     ) -> None:
         if self._pool is None:
             raise RuntimeError("Database pool is unavailable.")
-        async with self._pool.acquire() as connection:
-            async with connection.transaction():
+        async with self._mutation_transaction() as connection:
                 await self._require_run_and_index_state(connection, run)
                 if stale_paths:
                     await connection.execute(
@@ -700,6 +1066,7 @@ class KnowledgeDatabase:
                         UUID(run.index_id),
                         sorted(stale_paths),
                     )
+                await self._upsert_source_counts_locked(connection, run.id, source_counts)
                 updated_run = await connection.fetchval(
                     """
                     UPDATE knowledge.index_runs
@@ -716,12 +1083,15 @@ class KnowledgeDatabase:
                     raise StateTransitionError("Incremental run did not reach SUCCEEDED.")
 
     async def publish_full_rebuild(
-        self, run: AcceptedIndexRun, discovered: int, indexed: int
+        self,
+        run: AcceptedIndexRun,
+        discovered: int,
+        indexed: int,
+        source_counts: Mapping[str, tuple[int, int, int]] | None = None,
     ) -> list[str]:
         if self._pool is None:
             raise RuntimeError("Database pool is unavailable.")
-        async with self._pool.acquire() as connection:
-            async with connection.transaction():
+        async with self._mutation_transaction() as connection:
                 await self._require_run_and_index_state(connection, run)
                 await connection.fetch(
                     "SELECT id FROM knowledge.indexes WHERE status = 'ACTIVE' FOR UPDATE"
@@ -742,6 +1112,7 @@ class KnowledgeDatabase:
                 )
                 if activated is None:
                     raise StateTransitionError("BUILDING index did not reach ACTIVE.")
+                await self._upsert_source_counts_locked(connection, run.id, source_counts)
                 completed_run = await connection.fetchval(
                     """
                     UPDATE knowledge.index_runs
@@ -771,12 +1142,12 @@ class KnowledgeDatabase:
         indexed: int,
         failed: int,
         fail_index: bool,
+        source_counts: Mapping[str, tuple[int, int, int]] | None = None,
     ) -> None:
         if self._pool is None:
             return
         detail = serialize_errors(errors or [SafeRunError(code)])
-        async with self._pool.acquire() as connection:
-            async with connection.transaction():
+        async with self._mutation_transaction() as connection:
                 run_row = await connection.fetchrow(
                     """
                     SELECT index_id, kind::text, status::text
@@ -790,6 +1161,7 @@ class KnowledgeDatabase:
                     return
                 if str(run_row["index_id"]) != run.index_id or run_row["kind"] != run.kind:
                     raise StateTransitionError("Index run identity changed unexpectedly.")
+                await self._upsert_source_counts_locked(connection, run.id, source_counts)
                 if fail_index:
                     index_status = await connection.fetchval(
                         "SELECT status::text FROM knowledge.indexes WHERE id = $1 FOR UPDATE",
@@ -849,8 +1221,7 @@ class KnowledgeDatabase:
     async def recover_interrupted_runs(self) -> int:
         if self._pool is None:
             raise RuntimeError("Database pool is unavailable.")
-        async with self._pool.acquire() as connection:
-            async with connection.transaction():
+        async with self._mutation_transaction() as connection:
                 rows = await connection.fetch(
                     "SELECT id, index_id, kind::text FROM knowledge.index_runs WHERE status = 'RUNNING' FOR UPDATE"
                 )
@@ -899,7 +1270,11 @@ class KnowledgeDatabase:
         if self._pool is None:
             return
         try:
-            await connection.execute("SELECT pg_advisory_unlock($1)", lock_key)
+            if not connection.is_closed():
+                await connection.execute("SELECT pg_advisory_unlock($1)", lock_key)
+        except (asyncpg.PostgresError, asyncpg.InterfaceError, ConnectionError):
+            # PostgreSQL releases a session advisory lock with a lost connection.
+            pass
         finally:
             await self._pool.release(connection)
 
@@ -911,6 +1286,52 @@ class KnowledgeDatabase:
         )
         if status != "BUILDING":
             raise StateTransitionError("PDF content build is no longer BUILDING.")
+
+    @staticmethod
+    async def _upsert_source_counts_locked(
+        connection: asyncpg.Connection,
+        run_id: str,
+        source_counts: Mapping[str, tuple[int, int, int]] | None,
+    ) -> None:
+        if source_counts is None:
+            return
+        if set(source_counts) != {"MARKDOWN", "PDF"}:
+            raise ValueError("Source counts must contain MARKDOWN and PDF only.")
+        values: list[tuple[UUID, str, int, int, int]] = []
+        for source_type in ("MARKDOWN", "PDF"):
+            discovered, indexed, failed = source_counts[source_type]
+            if min(discovered, indexed, failed) < 0:
+                raise ValueError("Source counts cannot be negative.")
+            values.append((UUID(run_id), source_type, discovered, indexed, failed))
+        await connection.executemany(
+            """
+            INSERT INTO knowledge.index_run_source_counts
+              (index_run_id, source_type, discovered_count, indexed_count, failed_count)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (index_run_id, source_type) DO UPDATE
+              SET discovered_count = EXCLUDED.discovered_count,
+                  indexed_count = EXCLUDED.indexed_count,
+                  failed_count = EXCLUDED.failed_count
+            """,
+            values,
+        )
+
+    @staticmethod
+    def _validate_pdf_batch_topology(batches: Sequence[PdfContentBatchState]) -> None:
+        """Reject a corrupted or incomplete expected-batch manifest."""
+
+        if not batches:
+            raise StateTransitionError("PDF content build has no batch manifest.")
+        expected_start = 1
+        for state in batches:
+            batch = state.batch
+            if (
+                batch.page_start != expected_start
+                or batch.page_end < batch.page_start
+                or state.status not in {"PENDING", "RUNNING", "SUCCEEDED", "FAILED"}
+            ):
+                raise StateTransitionError("PDF content batch topology is invalid.")
+            expected_start = batch.page_end + 1
 
     @staticmethod
     async def _fail_pdf_build_locked(

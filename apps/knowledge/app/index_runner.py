@@ -35,7 +35,24 @@ class IndexRunCoordinator:
         connection = await self._database.acquire_advisory_lock(self._advisory_lock_key)
         if connection is None:
             raise IndexRunAlreadyActiveError("INDEX_RUN_ALREADY_ACTIVE")
+        try:
+            self._database.bind_owner_connection(connection)
+        except Exception:
+            await self._database.release_advisory_lock(connection, self._advisory_lock_key)
+            raise
         self._reservation = connection
+
+    async def recover_startup(self) -> int:
+        """Recover only when this process has proven there is no live owner."""
+
+        try:
+            await self.reserve()
+        except IndexRunAlreadyActiveError:
+            return 0
+        try:
+            return await self._database.recover_interrupted_runs()
+        finally:
+            await self.release_reservation()
 
     async def schedule(
         self,
@@ -54,6 +71,7 @@ class IndexRunCoordinator:
         connection = self._reservation
         self._reservation = None
         if connection is not None:
+            self._database.unbind_owner_connection(connection)
             await self._database.release_advisory_lock(
                 connection, self._advisory_lock_key
             )
@@ -73,9 +91,22 @@ class IndexRunCoordinator:
         connection: asyncpg.Connection,
     ) -> None:
         cleanup_ids: list[str] = []
+        current_task = asyncio.current_task()
+
+        def on_termination(_: asyncpg.Connection) -> None:
+            if current_task is not None and not current_task.done():
+                current_task.cancel()
+
+        add_listener = getattr(connection, "add_termination_listener", None)
+        remove_listener = getattr(connection, "remove_termination_listener", None)
+        if callable(add_listener):
+            add_listener(on_termination)
         try:
             cleanup_ids = await work()
         finally:
+            if callable(remove_listener):
+                remove_listener(on_termination)
+            self._database.unbind_owner_connection(connection)
             await self._database.release_advisory_lock(
                 connection, self._advisory_lock_key
             )

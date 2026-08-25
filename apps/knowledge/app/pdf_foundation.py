@@ -13,6 +13,7 @@ import json
 import os
 import re
 import stat
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Mapping
@@ -191,8 +192,8 @@ def parse_pdf_sidecar(vault_root: Path, sidecar_path: Path) -> PdfSidecar:
     source_path = canonical_vault_path(vault_root, target, require_pdf=True)
     if not source_path.startswith(("02. Books/", "03. Papers/", "Archives/")):
         raise PdfFoundationError("PDF_SIDECAR_EMBED_INVALID")
-    tags = tuple(f"#{tag}" for tag in _TAG.findall(visible_body))
-    canonical_topics = tuple(dict.fromkeys(TAG_TO_TOPIC[tag] for tag in tags if tag in TAG_TO_TOPIC))
+    raw_tags = tuple(f"#{tag}" for tag in _TAG.findall(visible_body))
+    canonical_topics = tuple(dict.fromkeys(TAG_TO_TOPIC[tag] for tag in raw_tags if tag in TAG_TO_TOPIC))
     if not canonical_topics:
         raise PdfFoundationError("REQUIRED_TOPIC_TAG_MISSING")
     return PdfSidecar(
@@ -200,7 +201,7 @@ def parse_pdf_sidecar(vault_root: Path, sidecar_path: Path) -> PdfSidecar:
         source_path=source_path,
         title=headings[0].strip(),
         canonical_topics=canonical_topics,
-        tags=tuple(dict.fromkeys(tags)),
+        tags=tuple(sorted({unicodedata.normalize("NFC", tag[1:]).casefold() for tag in raw_tags})),
         pdf_digest=sha256_file(vault_root / source_path),
         sidecar_digest=hashlib.sha256(raw).hexdigest(),
     )

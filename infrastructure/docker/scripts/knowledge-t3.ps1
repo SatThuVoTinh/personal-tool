@@ -1,13 +1,14 @@
 [CmdletBinding()]
 param(
-  [string]$EnvironmentFile = (Join-Path $PSScriptRoot "..\env\.env")
+  [string]$EnvironmentFile = ""
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-$projectName = "personal-tool-m3-t3"
 $scriptDirectory = Split-Path -Parent $PSCommandPath
+if (-not $EnvironmentFile) { $EnvironmentFile = Join-Path $scriptDirectory "..\env\.env" }
+$projectName = "personal-tool-m3-t3"
 $dockerDirectory = Split-Path -Parent $scriptDirectory
 $repositoryRoot = (Resolve-Path (Join-Path $scriptDirectory "..\..\..")).Path
 $composeFile = Join-Path $dockerDirectory "compose\compose.core.yml"
@@ -15,6 +16,8 @@ $acceptanceComposeFile = Join-Path $dockerDirectory "compose\compose.m3-t3.accep
 $fixtureRoot = Join-Path $repositoryRoot "apps\knowledge\tests\fixtures\vault"
 $temporaryRoot = Join-Path ([IO.Path]::GetTempPath()) "personal-tool-m3-t3-$([guid]::NewGuid().ToString('N'))"
 $vaultRoot = Join-Path $temporaryRoot "vault"
+$script:nginxPort = 0
+$priorEmbeddingModel = $env:KNOWLEDGE_EMBEDDING_MODEL
 
 function Invoke-Compose {
   param([string[]]$Arguments)
@@ -32,7 +35,7 @@ function Invoke-Api {
       [IO.File]::WriteAllText($requestBodyPath, $Body, [Text.UTF8Encoding]::new($false))
       $arguments += @("--header", "Content-Type: application/json", "--data-binary", "@$requestBodyPath")
     }
-    $arguments += "http://127.0.0.1:8080/knowledge$Path"
+    $arguments += "http://127.0.0.1:$script:nginxPort/knowledge$Path"
     $statusCode = & curl.exe @arguments
     if ($LASTEXITCODE -ne 0) { throw "HTTP request failed for $Path." }
     return [pscustomobject]@{ StatusCode = [int]$statusCode; Body = Get-Content -LiteralPath $bodyPath -Raw -Encoding utf8 }
@@ -55,16 +58,55 @@ function Wait-Run {
   throw "Index run $RunId did not reach a terminal state."
 }
 
+function New-SyntheticPdf {
+  param([string]$Path, [string]$Text)
+
+  $encoding = [Text.Encoding]::ASCII
+  $stream = "BT /F1 24 Tf 72 720 Td ($Text) Tj ET"
+  $objects = @(
+    "1 0 obj`n<< /Type /Catalog /Pages 2 0 R >>`nendobj`n",
+    "2 0 obj`n<< /Type /Pages /Kids [3 0 R] /Count 1 >>`nendobj`n",
+    "3 0 obj`n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>`nendobj`n",
+    "4 0 obj`n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>`nendobj`n",
+    "5 0 obj`n<< /Length $($encoding.GetByteCount($stream)) >>`nstream`n$stream`nendstream`nendobj`n"
+  )
+  $bytes = [Collections.Generic.List[byte]]::new()
+  $header = $encoding.GetBytes("%PDF-1.4`n% synthetic fixture`n")
+  $bytes.AddRange($header)
+  $offsets = [Collections.Generic.List[int]]::new()
+  foreach ($object in $objects) {
+    $offsets.Add($bytes.Count)
+    $bytes.AddRange($encoding.GetBytes($object))
+  }
+  $xrefOffset = $bytes.Count
+  $xref = "xref`n0 6`n0000000000 65535 f `n" + (($offsets | ForEach-Object { "{0:D10} 00000 n `n" -f $_ }) -join "") + "trailer`n<< /Size 6 /Root 1 0 R >>`nstartxref`n$xrefOffset`n%%EOF`n"
+  $bytes.AddRange($encoding.GetBytes($xref))
+  [IO.File]::WriteAllBytes($Path, $bytes.ToArray())
+}
+
 if (-not (Test-Path -LiteralPath $EnvironmentFile -PathType Leaf)) { throw "Runtime environment file is missing: $EnvironmentFile" }
 New-Item -ItemType Directory -Path $temporaryRoot | Out-Null
 Copy-Item -LiteralPath $fixtureRoot -Destination $vaultRoot -Recurse
+$pdfDirectory = Join-Path $vaultRoot "02. Books\T3"
+New-Item -ItemType Directory -Path $pdfDirectory -Force | Out-Null
+$pdfPath = Join-Path $pdfDirectory "acceptance.pdf"
+New-SyntheticPdf -Path $pdfPath -Text "PDF acceptance text"
+[IO.File]::WriteAllText(
+  (Join-Path $pdfDirectory "acceptance.md"),
+  "---`nzink_source: pdf`n---`n`n# PDF acceptance`n`n![[02. Books/T3/acceptance.pdf]]`n`n#supplychain #english`n",
+  [Text.UTF8Encoding]::new($false)
+)
 $env:KNOWLEDGE_ACCEPTANCE_VAULT_ROOT = $vaultRoot
+$env:KNOWLEDGE_EMBEDDING_MODEL = "bge-m3:latest"
 $started = $false
 
 try {
   Invoke-Compose @("build", "knowledge")
   $started = $true
   Invoke-Compose @("up", "--detach", "--wait", "--wait-timeout", "240", "knowledge", "nginx")
+  $nginxAddress = (Invoke-Compose @("port", "nginx", "8080") | Select-Object -Last 1).Trim()
+  if ($nginxAddress -notmatch '^127\.0\.0\.1:(\d+)$') { throw "Acceptance Nginx did not receive a loopback port." }
+  $script:nginxPort = [int]$Matches[1]
 
   $mounts = & docker inspect --format "{{json .Mounts}}" "${projectName}-knowledge-1" | ConvertFrom-Json
   $vaultMount = @($mounts | Where-Object { $_.Destination -eq "/vault" })
@@ -76,7 +118,12 @@ try {
   $immediate = Invoke-Api "GET" "/v1/index-runs/$($acceptedBody.index_run_id)"
   if ($immediate.StatusCode -ne 200) { throw "Accepted run was not immediately visible." }
   $fullRun = Wait-Run $acceptedBody.index_run_id
-  if ($fullRun.status -ne "SUCCEEDED" -or $fullRun.sources_indexed -ne 1) { throw "Full rebuild did not publish the fixture index." }
+  if ($fullRun.status -ne "SUCCEEDED" -or $fullRun.sources_indexed -ne 2) { throw "Full rebuild did not publish the combined fixture index." }
+
+  $pdfPublication = Invoke-Compose @("exec", "-T", "postgres", "psql", "--username=postgres", "--dbname=postgres", "--tuples-only", "--no-align", "--command", "SELECT (SELECT count(*) FROM knowledge.sources WHERE index_id = '$($fullRun.index_id)' AND source_type = 'PDF') || ':' || (SELECT count(*) FROM knowledge.pdf_source_details WHERE index_id = '$($fullRun.index_id)') || ':' || (SELECT count(*) FROM knowledge.segments WHERE index_id = '$($fullRun.index_id)' AND segment_type LIKE 'PDF_%');")
+  if (($pdfPublication -join "").Trim() -notmatch '^1:1:[1-9][0-9]*$') { throw "PDF publication did not atomically create source, detail and segments." }
+  $sourceCounts = Invoke-Compose @("exec", "-T", "postgres", "psql", "--username=postgres", "--dbname=postgres", "--tuples-only", "--no-align", "--command", "SELECT string_agg(source_type || ':' || discovered_count || ':' || indexed_count || ':' || failed_count, ',' ORDER BY CASE source_type WHEN 'MARKDOWN' THEN 1 WHEN 'PDF' THEN 2 END) FROM knowledge.index_run_source_counts WHERE index_run_id = '$($fullRun.index_run_id)';")
+  if (($sourceCounts -join "").Trim() -ne "MARKDOWN:1:1:0,PDF:1:1:0") { throw "Full rebuild source counters were not exact and canonical." }
 
   $incrementalAccepted = Invoke-Api "POST" "/v1/index-runs" '{"kind":"INCREMENTAL"}'
   if ($incrementalAccepted.StatusCode -ne 202) { throw "Unchanged incremental run was not accepted." }
@@ -84,13 +131,15 @@ try {
   if ($incrementalRun.status -ne "SUCCEEDED" -or $incrementalRun.sources_indexed -ne 0) { throw "Unchanged source was re-indexed." }
 
   Remove-Item -LiteralPath (Join-Path $vaultRoot "01. Knowledge\Supply Chain\safety-stock.md") -Force
+  Remove-Item -LiteralPath $pdfPath -Force
+  Remove-Item -LiteralPath (Join-Path $pdfDirectory "acceptance.md") -Force
   $emptyAccepted = Invoke-Api "POST" "/v1/index-runs" '{"kind":"INCREMENTAL"}'
   if ($emptyAccepted.StatusCode -ne 202) { throw "Empty incremental run was not accepted asynchronously." }
   $emptyRun = Wait-Run (($emptyAccepted.Body | ConvertFrom-Json).index_run_id)
   if ($emptyRun.status -ne "FAILED" -or $emptyRun.failure_code -ne "EMPTY_SNAPSHOT_DELETION_BLOCKED") { throw "Empty snapshot guard did not protect the active index." }
 
   $sourceCount = Invoke-Compose @("exec", "-T", "postgres", "psql", "--username=postgres", "--dbname=postgres", "--tuples-only", "--no-align", "--command", "SELECT count(*) FROM knowledge.sources WHERE index_id = '$($fullRun.index_id)';")
-  if (($sourceCount -join "").Trim() -ne "1") { throw "Empty snapshot guard deleted indexed sources." }
+  if (($sourceCount -join "").Trim() -ne "2") { throw "Empty snapshot guard deleted indexed sources." }
 
   $orphanIndexId = [guid]::NewGuid().ToString()
   $orphanRunId = [guid]::NewGuid().ToString()
@@ -106,7 +155,7 @@ VALUES ('$orphanRunId', '$orphanIndexId', 'FULL_REBUILD', 'RUNNING');
   Invoke-Compose @("up", "--detach", "--wait", "--wait-timeout", "120", "knowledge")
   $recoveryState = Invoke-Compose @("exec", "-T", "postgres", "psql", "--username=postgres", "--dbname=postgres", "--tuples-only", "--no-align", "--command", "SELECT (SELECT status FROM knowledge.index_runs WHERE id = '$orphanRunId') || ':' || (SELECT status FROM knowledge.indexes WHERE id = '$orphanIndexId') || ':' || (SELECT status FROM knowledge.indexes WHERE id = '$($fullRun.index_id)');")
   if (($recoveryState -join "").Trim() -ne "INTERRUPTED:FAILED:ACTIVE") { throw "Full rebuild restart recovery did not preserve the active index." }
-  Write-Output "M3/T3 index lifecycle acceptance passed."
+  Write-Output "M4/T3 index lifecycle acceptance passed."
 }
 finally {
   if ($started) {
@@ -115,4 +164,6 @@ finally {
   }
   if (Test-Path -LiteralPath $temporaryRoot) { Remove-Item -LiteralPath $temporaryRoot -Recurse -Force }
   Remove-Item Env:KNOWLEDGE_ACCEPTANCE_VAULT_ROOT -ErrorAction SilentlyContinue
+  if ($null -eq $priorEmbeddingModel) { Remove-Item Env:KNOWLEDGE_EMBEDDING_MODEL -ErrorAction SilentlyContinue }
+  else { $env:KNOWLEDGE_EMBEDDING_MODEL = $priorEmbeddingModel }
 }

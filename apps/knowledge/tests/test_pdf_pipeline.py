@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 import os
 import tempfile
 import time
@@ -8,8 +9,14 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from app.database import PdfContentBatch, PdfContentBuild
-from app.pdf_foundation import PdfSidecar, sha256_file
+from app.database import (
+    PdfContentBatch,
+    PdfContentBatchState,
+    PdfContentBuild,
+    PdfContentBuildState,
+    StateTransitionError,
+)
+from app.pdf_foundation import PdfSidecar, content_identity_digest, sha256_file
 from app.pdf_pipeline import PdfBuildError, PdfContentBuilder, _sentence_pieces
 from app.pdf_runtime import PdfRuntimeError
 
@@ -137,9 +144,21 @@ class _Database:
         self.failures: list[tuple[str, str]] = []
         self.ready = False
         self.after_complete = None
+        self.state: PdfContentBuildState | None = None
+        self.recovered = False
+        self.recovery_error = False
 
     async def assert_pdf_content_identity_schema(self) -> None:
         return None
+
+    async def get_pdf_content_build_state(self, _identity):
+        return self.state
+
+    async def recover_pdf_content_build(self, state):
+        self.recovered = True
+        if self.recovery_error:
+            raise StateTransitionError("failed recovery")
+        return replace(state, status="READY")
 
     async def create_pdf_content_build(self, **values):
         self.created = True
@@ -255,6 +274,104 @@ class PdfBuildLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.segment_count, 3)
         self.assertTrue(database.ready)
         self.assertFalse(database.failures)
+
+    async def test_matching_ready_build_is_reused_after_source_revalidation(self) -> None:
+        database, runtime = _Database(), _Runtime(9)
+        identity = "a" * 64
+        database.state = PdfContentBuildState(
+            build=PdfContentBuild("00000000-0000-0000-0000-000000000099", "b" * 64),
+            pdf_digest=sha256_file(self.pdf),
+            sidecar_digest=sha256_file(self.markdown),
+            processing_identity_digest=identity,
+            status="READY",
+            batches=(
+                PdfContentBatchState(
+                    PdfContentBatch(
+                        "00000000-0000-0000-0000-000000000098",
+                        "00000000-0000-0000-0000-000000000099",
+                        1,
+                        1,
+                    ),
+                    "SUCCEEDED",
+                ),
+            ),
+            segment_count=4,
+        )
+
+        result = await self.builder(database, runtime).build(self.sidecar, identity)
+
+        self.assertEqual(result.build_id, database.state.build.id)
+        self.assertEqual(result.segment_count, 4)
+        self.assertEqual(runtime.ranges, [])
+        self.assertTrue(database.recovered)
+
+    async def test_all_succeeded_build_recovers_to_ready_without_a_child(self) -> None:
+        database, runtime = _Database(), _Runtime(1)
+        identity = "a" * 64
+        database.state = PdfContentBuildState(
+            build=PdfContentBuild("00000000-0000-0000-0000-000000000099", "b" * 64),
+            pdf_digest=sha256_file(self.pdf),
+            sidecar_digest=sha256_file(self.markdown),
+            processing_identity_digest=identity,
+            status="BUILDING",
+            batches=(
+                PdfContentBatchState(
+                    PdfContentBatch(
+                        "00000000-0000-0000-0000-000000000098",
+                        "00000000-0000-0000-0000-000000000099",
+                        1,
+                        1,
+                    ),
+                    "SUCCEEDED",
+                ),
+            ),
+            segment_count=1,
+        )
+
+        result = await self.builder(database, runtime).build(self.sidecar, identity)
+
+        self.assertEqual(result.segment_count, 1)
+        self.assertTrue(database.recovered)
+        self.assertEqual(runtime.ranges, [])
+
+    async def test_failed_build_recovery_is_fail_closed(self) -> None:
+        database, runtime = _Database(), _Runtime(1)
+        identity = "a" * 64
+        database.state = PdfContentBuildState(
+            build=PdfContentBuild("00000000-0000-0000-0000-000000000099", "b" * 64),
+            pdf_digest=sha256_file(self.pdf),
+            sidecar_digest=sha256_file(self.markdown),
+            processing_identity_digest=identity,
+            status="BUILDING",
+            batches=(
+                PdfContentBatchState(
+                    PdfContentBatch(
+                        "00000000-0000-0000-0000-000000000098",
+                        "00000000-0000-0000-0000-000000000099",
+                        1,
+                        1,
+                    ),
+                    "FAILED",
+                ),
+            ),
+            segment_count=0,
+        )
+        database.recovery_error = True
+
+        with self.assertRaisesRegex(PdfBuildError, "PDF_RUNTIME_FAILED"):
+            await self.builder(database, runtime).build(self.sidecar, identity)
+        self.assertTrue(database.recovered)
+        self.assertEqual(runtime.ranges, [])
+
+    async def test_publication_bracket_revalidates_full_content_identity(self) -> None:
+        database, runtime = _Database(), _Runtime(1)
+        builder = self.builder(database, runtime)
+        baseline = await asyncio.to_thread(builder._initial_snapshot, self.sidecar)
+        identity = content_identity_digest(baseline.pdf_digest, baseline.sidecar_digest, "a" * 64)
+        self.pdf.write_bytes(b"changed fixture")
+
+        with self.assertRaisesRegex(PdfBuildError, "PDF_SOURCE_DRIFT"):
+            await builder.revalidate_identity(self.sidecar, "a" * 64, identity)
 
     async def test_prebuild_cumulative_timeout_creates_no_rows(self) -> None:
         database, runtime = _Database(), _Runtime(1)

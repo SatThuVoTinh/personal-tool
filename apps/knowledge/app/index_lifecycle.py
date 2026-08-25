@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,6 +15,8 @@ from .database import (
 )
 from .markdown_adapter import MarkdownSource, MarkdownVaultScanner, TokenBudget
 from .model_probe import ModelProbeError, OllamaModelProbe, ResolvedEmbeddingModel
+from .pdf_foundation import PdfFoundationError, PdfSidecar, discover_pdf_sidecars
+from .pdf_pipeline import PdfBuildError, PdfContentBuilder
 from .run_errors import SafeRunError
 
 
@@ -32,6 +35,8 @@ class LifecycleDependencies:
     vault_root: Path
     embedding_model: str
     embedding_dimensions: int
+    pdf_builder: PdfContentBuilder | None = None
+    pdf_processing_identity: Callable[[ActiveIndex], str] | None = None
 
 
 class IndexLifecycle:
@@ -42,6 +47,9 @@ class IndexLifecycle:
         self._vault_root = dependencies.vault_root
         self._embedding_model = dependencies.embedding_model
         self._embedding_dimensions = dependencies.embedding_dimensions
+        self._pdf_builder = dependencies.pdf_builder
+        self._pdf_processing_identity = dependencies.pdf_processing_identity
+        self._run_source_counts: dict[str, list[int]] | None = None
 
     @classmethod
     def from_settings(
@@ -50,6 +58,8 @@ class IndexLifecycle:
         settings,
         model_probe: OllamaModelProbe,
         token_budget: TokenBudget,
+        pdf_builder: PdfContentBuilder | None = None,
+        pdf_processing_identity: Callable[[ActiveIndex], str] | None = None,
     ) -> "IndexLifecycle":
         return cls(
             LifecycleDependencies(
@@ -59,6 +69,8 @@ class IndexLifecycle:
                 vault_root=settings.vault_root,
                 embedding_model=settings.embedding_model,
                 embedding_dimensions=settings.embedding_dimensions,
+                pdf_builder=pdf_builder,
+                pdf_processing_identity=pdf_processing_identity,
             )
         )
 
@@ -111,8 +123,25 @@ class IndexLifecycle:
                 self._vault_root,
                 include_valid_sources_on_error=True,
             )
-            discovered = scan.discovered_count
+            pdf_sidecars: tuple[PdfSidecar, ...] = ()
+            pdf_discovery_error: PdfFoundationError | None = None
+            if self._pdf_builder is not None:
+                try:
+                    pdf_sidecars = await asyncio.to_thread(discover_pdf_sidecars, self._vault_root)
+                except PdfFoundationError as error:
+                    pdf_discovery_error = error
+            discovered = scan.discovered_count + len(pdf_sidecars)
+            self._run_source_counts = {
+                "MARKDOWN": [scan.discovered_count, 0, 0],
+                "PDF": [len(pdf_sidecars), 0, 0],
+            }
             await self._database.set_discovered(run.id, discovered)
+            if pdf_discovery_error is not None:
+                scan_failed = True
+                errors.append(SafeRunError(pdf_discovery_error.code))
+                if run.kind == "FULL_REBUILD":
+                    await self._fail(run, "SCAN_FAILED", errors, discovered, indexed, failed)
+                    return []
             if not scan.succeeded:
                 scan_failed = True
                 source_error_paths = {
@@ -128,6 +157,7 @@ class IndexLifecycle:
                     for error in scan.errors
                 )
                 failed = len(source_error_paths)
+                self._run_source_counts["MARKDOWN"][2] = failed
                 if run.kind == "FULL_REBUILD" or not scan.sources:
                     await self._fail(
                         run, "SCAN_FAILED", errors, discovered, indexed, failed
@@ -139,7 +169,7 @@ class IndexLifecycle:
             active_source_count = (
                 await self._database.source_count(active_before.id) if active_before else 0
             )
-            if scan.succeeded and not scan.sources and active_source_count > 0:
+            if scan.succeeded and not scan.sources and not pdf_sidecars and active_source_count > 0:
                 await self._fail(
                     run,
                     "EMPTY_SNAPSHOT_DELETION_BLOCKED",
@@ -151,6 +181,7 @@ class IndexLifecycle:
                 return []
 
             manifest = {source.source_path: source for source in scan.sources}
+            manifest.update({sidecar.source_path: sidecar for sidecar in pdf_sidecars})
             for source in scan.sources:
                 if run.kind == "INCREMENTAL" and existing.get(source.source_path) == source.sha256:
                     continue
@@ -160,6 +191,7 @@ class IndexLifecycle:
                     await self.require_identity(expected)
                     await self._database.replace_source(run, source, embeddings)
                     indexed += 1
+                    self._run_source_counts["MARKDOWN"][1] += 1
                 except LifecycleError as error:
                     is_run_level = error.code in {
                         "EMBEDDING_MODEL_DRIFT",
@@ -170,6 +202,7 @@ class IndexLifecycle:
                     )
                     if not is_run_level:
                         failed += 1
+                        self._run_source_counts["MARKDOWN"][2] += 1
                     if is_run_level or run.kind == "FULL_REBUILD":
                         await self._fail(run, error.code, errors, discovered, indexed, failed)
                         return []
@@ -188,6 +221,7 @@ class IndexLifecycle:
                         SafeRunError("DOCUMENT_INDEXING_FAILED", source.source_path)
                     )
                     failed += 1
+                    self._run_source_counts["MARKDOWN"][2] += 1
                     if run.kind == "FULL_REBUILD":
                         await self._fail(
                             run,
@@ -198,6 +232,85 @@ class IndexLifecycle:
                             failed,
                         )
                         return []
+
+            if pdf_sidecars:
+                if self._pdf_processing_identity is None:
+                    await self._fail(
+                        run,
+                        "PDF_RUNTIME_UNAVAILABLE",
+                        [*errors, SafeRunError("PDF_RUNTIME_UNAVAILABLE")],
+                        discovered,
+                        indexed,
+                        failed,
+                    )
+                    return []
+                try:
+                    pdf_processing_identity = self._pdf_processing_identity(expected)
+                except Exception:
+                    await self._fail(
+                        run,
+                        "PDF_RUNTIME_UNAVAILABLE",
+                        [*errors, SafeRunError("PDF_RUNTIME_UNAVAILABLE")],
+                        discovered,
+                        indexed,
+                        failed,
+                    )
+                    return []
+                for sidecar in pdf_sidecars:
+                    try:
+                        result = await self._pdf_builder.build(sidecar, pdf_processing_identity)
+                        if existing.get(sidecar.source_path) == result.content_identity_digest:
+                            continue
+                        await self.require_identity(expected)
+                        await self._pdf_builder.revalidate_identity(
+                            sidecar, pdf_processing_identity, result.content_identity_digest
+                        )
+                        segments = await self._database.pdf_publication_segments(result.build_id)
+                        embeddings = await self._embed_pdf_segments(expected, sidecar, segments)
+                        await self.require_identity(expected)
+                        await self._pdf_builder.revalidate_identity(
+                            sidecar, pdf_processing_identity, result.content_identity_digest
+                        )
+                        await self._database.replace_pdf_source(
+                            run,
+                            source_path=sidecar.source_path,
+                            content_identity_digest=result.content_identity_digest,
+                            title=sidecar.title,
+                            canonical_topics=sidecar.canonical_topics,
+                            tags=sidecar.tags,
+                            build_id=result.build_id,
+                            segments=segments,
+                            embeddings=embeddings,
+                            validate_before_publish=lambda: self._pdf_builder.revalidate_identity(
+                                sidecar, pdf_processing_identity, result.content_identity_digest
+                            ),
+                        )
+                        indexed += 1
+                        self._run_source_counts["PDF"][1] += 1
+                    except (PdfBuildError, StateTransitionError) as error:
+                        code = error.code if isinstance(error, PdfBuildError) else "PDF_RUNTIME_FAILED"
+                        errors.append(SafeRunError(code, sidecar.source_path))
+                        failed += 1
+                        self._run_source_counts["PDF"][2] += 1
+                        if run.kind == "FULL_REBUILD":
+                            await self._fail(run, code, errors, discovered, indexed, failed)
+                            return []
+                    except LifecycleError as error:
+                        errors.append(SafeRunError(error.code, sidecar.source_path))
+                        failed += 1
+                        self._run_source_counts["PDF"][2] += 1
+                        if run.kind == "FULL_REBUILD":
+                            await self._fail(run, error.code, errors, discovered, indexed, failed)
+                            return []
+                    except Exception:
+                        errors.append(SafeRunError("DOCUMENT_INDEXING_FAILED", sidecar.source_path))
+                        failed += 1
+                        self._run_source_counts["PDF"][2] += 1
+                        if run.kind == "FULL_REBUILD":
+                            await self._fail(
+                                run, "DOCUMENT_INDEXING_FAILED", errors, discovered, indexed, failed
+                            )
+                            return []
 
             # A final gate covers unchanged and empty snapshots as well as the
             # window immediately before deletion/publication.
@@ -226,11 +339,17 @@ class IndexLifecycle:
                     )
                     return []
                 await self._database.complete_incremental(
-                    run, discovered, indexed, set(existing).difference(manifest)
+                    run,
+                    discovered,
+                    indexed,
+                    set(existing).difference(manifest),
+                    self._source_counts(),
                 )
                 return []
 
-            return await self._database.publish_full_rebuild(run, discovered, indexed)
+            return await self._database.publish_full_rebuild(
+                run, discovered, indexed, self._source_counts()
+            )
         except LifecycleError as error:
             await self._fail(run, error.code, [SafeRunError(error.code, error.source_path)], discovered, indexed, failed)
             return []
@@ -244,6 +363,8 @@ class IndexLifecycle:
                 failed,
             )
             return []
+        finally:
+            self._run_source_counts = None
 
     async def _embed_source(self, expected: ActiveIndex, source: MarkdownSource) -> list[list[float]]:
         try:
@@ -255,6 +376,22 @@ class IndexLifecycle:
             raise LifecycleError("EMBEDDING_FAILED", source.source_path) from error
         if any(len(vector) != expected.embedding_dimensions for vector in embeddings):
             raise LifecycleError("EMBEDDING_INVALID_DIMENSIONS", source.source_path)
+        return embeddings
+
+    async def _embed_pdf_segments(
+        self, expected: ActiveIndex, sidecar: PdfSidecar, segments
+    ) -> list[list[float]]:
+        try:
+            embeddings = await self._model_probe.embed(
+                expected.embedding_model_name,
+                [f"{sidecar.title}\n\n{segment.content}" for segment in segments],
+            )
+        except (httpx.HTTPError, ModelProbeError) as error:
+            raise LifecycleError("EMBEDDING_FAILED", sidecar.source_path) from error
+        if len(embeddings) != len(segments) or any(
+            len(vector) != expected.embedding_dimensions for vector in embeddings
+        ):
+            raise LifecycleError("EMBEDDING_INVALID_DIMENSIONS", sidecar.source_path)
         return embeddings
 
     async def _fail(
@@ -274,7 +411,16 @@ class IndexLifecycle:
             indexed,
             failed,
             fail_index=run.kind == "FULL_REBUILD",
+            source_counts=self._source_counts(),
         )
+
+    def _source_counts(self) -> dict[str, tuple[int, int, int]] | None:
+        if self._run_source_counts is None:
+            return None
+        return {
+            source_type: (values[0], values[1], values[2])
+            for source_type, values in self._run_source_counts.items()
+        }
 
     async def cleanup(self, index_ids: list[str]) -> None:
         try:

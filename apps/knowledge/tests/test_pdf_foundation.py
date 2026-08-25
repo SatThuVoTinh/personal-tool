@@ -63,6 +63,7 @@ class PdfFoundationTests(unittest.TestCase):
         item = discover_pdf_sidecars(vault)[0]
         self.assertEqual(item.source_path, "02. Books/supply/book.pdf")
         self.assertEqual(item.canonical_topics, ("Supply Chain", "English"))
+        self.assertEqual(item.tags, ("english", "supplychain"))
         self.write_sidecar(vault, "two.md", "02. Books/supply/book.pdf")
         with self.assertRaisesRegex(PdfFoundationError, "PDF_DUPLICATE_TARGET"):
             discover_pdf_sidecars(vault)

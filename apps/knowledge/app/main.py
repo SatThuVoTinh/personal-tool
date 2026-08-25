@@ -25,6 +25,7 @@ from .index_runner import IndexRunAlreadyActiveError, IndexRunCoordinator
 from .markdown_adapter import QUERY_MAX_TOKENS, TokenBudget, render_retrieval_text
 from .model_probe import ModelProbeError, OllamaModelProbe
 from .pdf_foundation import sha256_file
+from .pdf_pipeline import PdfContentBuilder
 from .pdf_runtime import (
     PdfRuntimeClient,
     PdfRuntimeError,
@@ -90,9 +91,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     coordinator = IndexRunCoordinator(database, configured_settings.advisory_lock_key)
     model_probe = OllamaModelProbe(configured_settings.ollama_url)
     token_budget = TokenBudget(configured_settings.tokenizer_path)
-    lifecycle = IndexLifecycle.from_settings(
-        database, configured_settings, model_probe, token_budget
-    )
     pdf_runtime = PdfRuntimeClient(
         PdfRuntimeSettings(
             python=configured_settings.pdf_runtime_python,
@@ -106,11 +104,48 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             temp_root=configured_settings.pdf_runtime_temp_root,
         )
     )
+    pdf_builder = (
+        PdfContentBuilder(
+            database=database,
+            runtime=pdf_runtime,
+            vault_root=configured_settings.vault_root,
+            token_budget=token_budget,
+        )
+        if configured_settings.pdf_runtime_enabled
+        else None
+    )
+
+    def pdf_processing_identity(expected: ActiveIndex) -> str:
+        return processing_identity_for_runtime(
+            Path(__file__).resolve().parents[1] / "uv.lock",
+            configured_settings.pdf_runtime_lock_path,
+            configured_settings.pdf_runtime_manifest_path,
+            {
+                "tokenizer_identity": sha256_file(configured_settings.tokenizer_path),
+                "retrieval_token_budget_version": 1,
+                "embedding_identity": {
+                    "name": expected.embedding_model_name,
+                    "digest": expected.embedding_model_digest,
+                    "dimensions": expected.embedding_dimensions,
+                },
+            },
+        )
+
+    lifecycle = IndexLifecycle.from_settings(
+        database,
+        configured_settings,
+        model_probe,
+        token_budget,
+        pdf_builder,
+        pdf_processing_identity if pdf_builder is not None else None,
+    )
     search_limiter = SearchCapacityLimiter(capacity=2)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         await database.start()
+        if database.available:
+            await coordinator.recover_startup()
         reranker: OnnxReranker | None = None
         reranker_error: str | None = None
         try:

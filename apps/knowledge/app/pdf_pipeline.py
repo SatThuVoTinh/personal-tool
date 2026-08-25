@@ -16,6 +16,7 @@ from .database import (
     PdfContentBuild,
     PdfContentIdentityExistsError,
     PdfContentSegment,
+    StateTransitionError,
 )
 from .markdown_adapter import (
     MAX_CHARS,
@@ -119,21 +120,54 @@ class PdfContentBuilder:
         identity = content_identity_digest(
             baseline.pdf_digest, baseline.sidecar_digest, expected_processing_identity_digest
         )
-        try:
-            build, batches = await self._database.create_pdf_content_build(
-                content_identity_digest=identity,
-                pdf_digest=baseline.pdf_digest,
-                sidecar_digest=baseline.sidecar_digest,
-                processing_identity_digest=expected_processing_identity_digest,
-                page_count=page_count,
-                batch_size=PAGES_PER_BATCH,
-            )
-        except PdfContentIdentityExistsError as error:
-            raise PdfBuildError("PDF_CONTENT_IDENTITY_EXISTS") from error
+        state = await self._database.get_pdf_content_build_state(identity)
+        if state is None:
+            try:
+                build, batches = await self._database.create_pdf_content_build(
+                    content_identity_digest=identity,
+                    pdf_digest=baseline.pdf_digest,
+                    sidecar_digest=baseline.sidecar_digest,
+                    processing_identity_digest=expected_processing_identity_digest,
+                    page_count=page_count,
+                    batch_size=PAGES_PER_BATCH,
+                )
+            except PdfContentIdentityExistsError as error:
+                raise PdfBuildError("PDF_RUNTIME_FAILED") from error
+            batch_states = tuple((batch, "PENDING") for batch in batches)
+            segment_count = 0
+        else:
+            if (
+                state.pdf_digest != baseline.pdf_digest
+                or state.sidecar_digest != baseline.sidecar_digest
+                or state.processing_identity_digest != expected_processing_identity_digest
+            ):
+                raise PdfBuildError("PDF_SOURCE_DRIFT")
+            try:
+                if state.status == "BUILDING" and all(
+                    entry.status == "SUCCEEDED" for entry in state.batches
+                ):
+                    await self.revalidate_identity(
+                        sidecar, expected_processing_identity_digest, identity
+                    )
+                state = await self._database.recover_pdf_content_build(state)
+            except StateTransitionError as error:
+                raise PdfBuildError("PDF_RUNTIME_FAILED") from error
+            build = state.build
+            batch_states = tuple((entry.batch, entry.status) for entry in state.batches)
+            segment_count = state.segment_count
+            if state.status == "READY":
+                try:
+                    await asyncio.to_thread(self._final_snapshot, sidecar, baseline)
+                except PdfBuildError:
+                    raise
+                return PdfBuildResult(build.id, identity, page_count, segment_count)
 
-        segment_count = 0
         try:
-            for batch in batches:
+            for batch, batch_status in batch_states:
+                if batch_status == "SUCCEEDED":
+                    continue
+                if batch_status != "PENDING":
+                    raise PdfBuildError("PDF_RUNTIME_FAILED")
                 await self._require_after_commit_deadline(cumulative_deadline, build)
                 await self._assert_baseline_or_fail(sidecar, baseline, build)
                 await self._database.start_pdf_content_batch(batch)
@@ -184,6 +218,23 @@ class PdfContentBuilder:
         except PdfBuildError:
             raise
         return PdfBuildResult(build.id, identity, page_count, segment_count)
+
+    async def revalidate_identity(
+        self,
+        sidecar: PdfSidecar,
+        expected_processing_identity_digest: str,
+        expected_content_identity_digest: str,
+    ) -> None:
+        """Re-hash both source files at every T3 publication bracket."""
+
+        snapshot = await asyncio.to_thread(self._initial_snapshot, sidecar)
+        actual = content_identity_digest(
+            snapshot.pdf_digest,
+            snapshot.sidecar_digest,
+            expected_processing_identity_digest,
+        )
+        if actual != expected_content_identity_digest:
+            raise PdfBuildError("PDF_SOURCE_DRIFT")
 
     def _initial_snapshot(self, sidecar: PdfSidecar) -> _SourceSnapshot:
         pdf_path, sidecar_path = self._safe_paths(sidecar)

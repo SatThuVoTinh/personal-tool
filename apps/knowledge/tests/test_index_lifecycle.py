@@ -68,6 +68,7 @@ class FakeDatabase:
         self.fail_replace_for: set[str] = set()
         self.failures: list[tuple[tuple[object, ...], dict[str, object]]] = []
         self.completed = False
+        self.completed_args: tuple[object, ...] = ()
         self.published = False
 
     async def get_index(self, _: str) -> ActiveIndex:
@@ -92,8 +93,9 @@ class FakeDatabase:
             raise RuntimeError("database detail must not escape")
         self.replaced.append(item.source_path)
 
-    async def complete_incremental(self, *_: object) -> None:
+    async def complete_incremental(self, *args: object) -> None:
         self.completed = True
+        self.completed_args = args
 
     async def publish_full_rebuild(self, *_: object) -> list[str]:
         self.published = True
@@ -164,6 +166,20 @@ class IndexLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(probe.embed_calls, 0)
         self.assertFalse(database.completed)
         self.assertEqual(database.failures[0][0][1], "EMBEDDING_MODEL_DRIFT")
+
+    async def test_incremental_terminal_counts_include_an_explicit_zero_pdf_row(self) -> None:
+        item = source("counted", "new")
+        database = FakeDatabase()
+
+        await lifecycle(database, FakeProbe([MATCHING]), FakeScanner(item)).execute(
+            AcceptedIndexRun("run-1", EXPECTED.id, "INCREMENTAL", "RUNNING")
+        )
+
+        self.assertTrue(database.completed)
+        self.assertEqual(
+            database.completed_args[-1],
+            {"MARKDOWN": (1, 1, 0), "PDF": (0, 0, 0)},
+        )
 
     async def test_incremental_commits_valid_sources_but_defers_deletion_on_parse_error(self) -> None:
         healthy = source("healthy", "new")
@@ -238,6 +254,14 @@ class FakeCoordinatorDatabase:
 
     def __init__(self) -> None:
         self.events: list[str] = []
+        self.owner: object | None = None
+
+    def bind_owner_connection(self, connection: object) -> None:
+        self.owner = connection
+
+    def unbind_owner_connection(self, connection: object) -> None:
+        if self.owner is connection:
+            self.owner = None
 
     async def acquire_advisory_lock(self, _: int) -> object:
         return object()
