@@ -74,12 +74,12 @@ ACTIVE → LOCAL-COMPLETE → REMOTE-PENDING → REMOTE-BACKED
 
 ```text
 Milestone: M4 — PDF Document Ingestion
-Task: M4/T3 — Resume, drift, retention, and publication
+Task: M4/T4 — Adapters, retrieval, and API
 Task Status: IN PROGRESS
 Planning Readiness: APPROVED
-Plan Revision: M4/T3-R1
+Plan Revision: M4/T4-R1
 Execution Authorization: YES
-Authorized Task: M4/T3
+Authorized Task: M4/T4
 Execution Contract: docs/contracts/execution/ACTIVE.md
 Evidence Level: NONE
 ```
@@ -246,14 +246,14 @@ Planned task sequence:
 | M4/P0 — Finalize contract                         | `COMPLETE` | M4-R1 is superseded, M4-R2 invalidated, M4-R3 invalidated by the shared-runtime dependency conflict, and owner-approved M4-R4 is the direct Codex contract through T1. |
 | M4/T1 — Runtime, source, schema, and identity     | `COMPLETE` | Feature commit `c4ef66d`; isolated runtime, parent-child protocol, offline artifacts, dependency/security audit, sidecars, paths, identities, migration/recovery, M3 regression, and repository gates passed. |
 | M4/T2 — Preflight, extraction, and segmentation   | `COMPLETE` | Implementation commit `82126e4`; exact pypdfium2 security preflight, 4-page offline extraction/OCR, page-local deterministic segmentation, drift brackets, deadlines, process cleanup, and atomic non-searchable content builds passed 99 parent tests, 8 isolated-runtime tests, real PDF fixture acceptance, isolated database integration, repository verification, dependency audit, and staged secret scan. |
-| M4/T3 — Resume, drift, retention, and publication | `IN PROGRESS` | Owner-approved `M4/T3-R1`; checkpoint reuse, source/metadata drift, last-known-good retention, idempotent publication, pinned-lock recovery, and mandatory local gates.            |
-| M4/T4 — Adapters, retrieval, and API              | `NOT STARTED` | Preserve Markdown adapter; add PDF filters/counters/citations without changing accepted M3 semantics.                                                                             |
+| M4/T3 — Resume, drift, retention, and publication | `COMPLETE` | Local implementation commit `c1df143`; pinned session ownership, resumable PDF builds, drift brackets, atomic source publication, counters, retention, fixture persistence/restart acceptance, and focused regressions passed. |
+| M4/T4 — Adapters, retrieval, and API              | `IN PROGRESS` | Owner-approved `M4/T4-R1`; preserve Markdown adapter and M3 fields while adding fail-closed PDF filters, counters, retrieval, and citations.                                                                             |
 | M4/T5 — Acceptance and handoff                    | `NOT STARTED` | Offline, multilingual, security, crash/recovery, concurrency, RealVault, M2/M3 regression, exact-candidate CI/Security, and remote gate.                                          |
 
-M4/T1 and M4/T2 are complete locally. `M4/T3-R1` is the only materialized
-active task. T4/T5 remain unmaterialized and may not begin until T3 completes,
-its transition commit has pushed successfully, and the chain authorization
-remains valid.
+M4/T1, M4/T2, and M4/T3 are complete locally. `M4/T4-R1` is the only
+materialized active task under the owner-approved chain. T4 may begin only after
+this transition commit pushes successfully; T5 remains unmaterialized until T4
+completes and its transition commit pushes successfully.
 
 ### M5 — Image and Video Ingestion
 
