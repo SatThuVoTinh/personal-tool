@@ -20,6 +20,10 @@ MAX_REQUEST_BYTES = 64 * 1024
 MAX_RESPONSE_BYTES = 64 * 1024 * 1024
 MAX_STDERR_BYTES = 1024 * 1024
 SAFE_CHILD_ERROR_CODES = {
+    "PDF_DOCUMENT_INVALID",
+    "PDF_DOCUMENT_ENCRYPTED",
+    "PDF_DOCUMENT_EMPTY",
+    "PDF_MULTI_PAGE_ITEM_UNSUPPORTED",
     "PDF_RUNTIME_UNAVAILABLE",
     "PDF_RUNTIME_PROTOCOL_MISMATCH",
     "PDF_RUNTIME_MISMATCH",
@@ -170,6 +174,25 @@ class PdfRuntimeClient:
                 "source_path": canonical,
                 "page_start": page_start,
                 "page_end": page_end,
+                "expected_processing_identity_digest": expected_processing_identity_digest,
+            },
+            deadline,
+        )
+
+    async def preflight(
+        self,
+        source_path: str,
+        expected_processing_identity_digest: str,
+        deadline: float,
+    ) -> Mapping[str, Any]:
+        """Validate one source in the isolated pinned PDF runtime."""
+
+        canonical = canonical_vault_path(self._settings.vault_root, source_path, require_pdf=True)
+        return await self._invoke(
+            {
+                "protocol_version": PROTOCOL_VERSION,
+                "operation": "preflight",
+                "source_path": canonical,
                 "expected_processing_identity_digest": expected_processing_identity_digest,
             },
             deadline,
@@ -339,6 +362,12 @@ def _validate_response(raw: bytes, request: Mapping[str, Any]) -> Mapping[str, A
             if not isinstance(value, str) or len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
                 raise PdfRuntimeError("PDF_RUNTIME_OUTPUT_INVALID")
         if not isinstance(response.get("distributions"), dict) or not isinstance(response.get("artifact_digests"), dict):
+            raise PdfRuntimeError("PDF_RUNTIME_OUTPUT_INVALID")
+    if request["operation"] == "preflight":
+        if set(response) != {"protocol_version", "status", "page_count"}:
+            raise PdfRuntimeError("PDF_RUNTIME_OUTPUT_INVALID")
+        page_count = response.get("page_count")
+        if isinstance(page_count, bool) or not isinstance(page_count, int) or page_count < 1:
             raise PdfRuntimeError("PDF_RUNTIME_OUTPUT_INVALID")
     if request["operation"] == "extract_range":
         if set(response) != {"protocol_version", "status", "page_start", "page_end", "items"}:

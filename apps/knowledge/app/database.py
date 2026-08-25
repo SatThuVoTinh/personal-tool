@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
+from typing import Any, Mapping, Sequence
 from uuid import UUID, uuid4
 
 import asyncpg
@@ -12,6 +14,45 @@ from .run_errors import SafeRunError, serialize_errors
 
 class StateTransitionError(RuntimeError):
     """Raised when a lifecycle transaction no longer owns its expected state."""
+
+
+class PdfContentIdentityExistsError(RuntimeError):
+    """An in-progress or READY build already owns this content identity."""
+
+
+class PdfSchemaContractError(RuntimeError):
+    """The installed schema cannot support the frozen M4/T2 lifecycle."""
+
+
+_PDF_CONTENT_IDENTITY_INDEXES = {
+    "knowledge_pdf_content_builds_one_building_idx",
+    "knowledge_pdf_content_builds_one_ready_idx",
+}
+
+
+@dataclass(frozen=True)
+class PdfContentBuild:
+    id: str
+    content_identity_digest: str
+
+
+@dataclass(frozen=True)
+class PdfContentBatch:
+    id: str
+    build_id: str
+    page_start: int
+    page_end: int
+
+
+@dataclass(frozen=True)
+class PdfContentSegment:
+    ordinal: int
+    segment_type: str
+    content: str
+    page_start: int
+    page_end: int
+    bbox: tuple[float, float, float, float] | None
+    provenance: Mapping[str, Any]
 
 
 @dataclass(frozen=True)
@@ -113,6 +154,232 @@ class KnowledgeDatabase:
         if self._pool is not None:
             await self._pool.close()
             self._pool = None
+
+    async def assert_pdf_content_identity_schema(self) -> None:
+        """Reject schema drift; T2 must never repair migration 002 at runtime."""
+
+        if self._pool is None:
+            raise RuntimeError("Database pool is unavailable.")
+        rows = await self._pool.fetch(
+            """
+            SELECT indexdef
+            FROM pg_indexes
+            WHERE schemaname = 'knowledge' AND tablename = 'pdf_content_builds'
+            """
+        )
+        definitions = [str(row["indexdef"]).upper() for row in rows]
+        required = any(
+            "UNIQUE INDEX" in definition
+            and "CONTENT_IDENTITY_DIGEST" in definition
+            and "WHERE" in definition
+            and "BUILDING" in definition
+            and "READY" in definition
+            for definition in definitions
+        )
+        constraints = await self._pool.fetch(
+            """
+            SELECT pg_get_constraintdef(oid) AS definition
+            FROM pg_constraint
+            WHERE conrelid = 'knowledge.pdf_content_builds'::regclass AND contype = 'u'
+            """
+        )
+        unconditional = any(
+            "CONTENT_IDENTITY_DIGEST" in str(row["definition"]).upper()
+            for row in constraints
+        )
+        if not required or unconditional:
+            raise PdfSchemaContractError("PDF_CONTENT_IDENTITY_SCHEMA_INVALID")
+
+    async def create_pdf_content_build(
+        self,
+        *,
+        content_identity_digest: str,
+        pdf_digest: str,
+        sidecar_digest: str,
+        processing_identity_digest: str,
+        page_count: int,
+        batch_size: int,
+    ) -> tuple[PdfContentBuild, tuple[PdfContentBatch, ...]]:
+        """Atomically create a BUILDING row and its immutable PENDING ranges."""
+
+        if self._pool is None:
+            raise RuntimeError("Database pool is unavailable.")
+        if page_count < 1 or batch_size < 1:
+            raise ValueError("PDF build page range is invalid.")
+        build_id = uuid4()
+        batches = tuple(
+            PdfContentBatch(str(uuid4()), str(build_id), start, min(start + batch_size - 1, page_count))
+            for start in range(1, page_count + 1, batch_size)
+        )
+        try:
+            async with self._pool.acquire() as connection:
+                async with connection.transaction():
+                    await connection.execute(
+                        """
+                        INSERT INTO knowledge.pdf_content_builds
+                            (id, content_identity_digest, pdf_digest, sidecar_digest,
+                             processing_identity_digest, status)
+                        VALUES ($1, $2, $3, $4, $5, 'BUILDING')
+                        """,
+                        build_id,
+                        content_identity_digest,
+                        pdf_digest,
+                        sidecar_digest,
+                        processing_identity_digest,
+                    )
+                    await connection.executemany(
+                        """
+                        INSERT INTO knowledge.pdf_content_batches
+                            (id, build_id, page_start, page_end, status)
+                        VALUES ($1, $2, $3, $4, 'PENDING')
+                        """,
+                        [
+                            (UUID(batch.id), build_id, batch.page_start, batch.page_end)
+                            for batch in batches
+                        ],
+                    )
+        except asyncpg.UniqueViolationError as error:
+            if getattr(error, "constraint_name", None) in _PDF_CONTENT_IDENTITY_INDEXES:
+                raise PdfContentIdentityExistsError("PDF_CONTENT_IDENTITY_EXISTS") from error
+            raise
+        return PdfContentBuild(str(build_id), content_identity_digest), batches
+
+    async def start_pdf_content_batch(self, batch: PdfContentBatch) -> None:
+        if self._pool is None:
+            raise RuntimeError("Database pool is unavailable.")
+        async with self._pool.acquire() as connection:
+            async with connection.transaction():
+                await self._require_pdf_building(connection, batch.build_id)
+                updated = await connection.fetchval(
+                    """
+                    UPDATE knowledge.pdf_content_batches
+                    SET status = 'RUNNING', started_at = now()
+                    WHERE id = $1 AND build_id = $2 AND status = 'PENDING'
+                    RETURNING id
+                    """,
+                    UUID(batch.id),
+                    UUID(batch.build_id),
+                )
+                if updated is None:
+                    raise StateTransitionError("PDF batch is no longer PENDING.")
+
+    async def complete_pdf_content_batch(
+        self, batch: PdfContentBatch, segments: Sequence[PdfContentSegment]
+    ) -> None:
+        """Insert all batch output and mark success in one short transaction."""
+
+        if self._pool is None:
+            raise RuntimeError("Database pool is unavailable.")
+        async with self._pool.acquire() as connection:
+            async with connection.transaction():
+                await self._require_pdf_building(connection, batch.build_id)
+                state = await connection.fetchval(
+                    """
+                    SELECT status FROM knowledge.pdf_content_batches
+                    WHERE id = $1 AND build_id = $2 FOR UPDATE
+                    """,
+                    UUID(batch.id), UUID(batch.build_id),
+                )
+                if state != "RUNNING":
+                    raise StateTransitionError("PDF batch is no longer RUNNING.")
+                if segments:
+                    await connection.executemany(
+                        """
+                        INSERT INTO knowledge.pdf_content_segments
+                            (id, build_id, batch_id, ordinal, segment_type, content,
+                             page_start, page_end, bbox, provenance)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
+                        """,
+                        [
+                            (
+                                uuid4(),
+                                UUID(batch.build_id),
+                                UUID(batch.id),
+                                segment.ordinal,
+                                segment.segment_type,
+                                segment.content,
+                                segment.page_start,
+                                segment.page_end,
+                                list(segment.bbox) if segment.bbox is not None else None,
+                                json.dumps(
+                                    segment.provenance,
+                                    sort_keys=True,
+                                    separators=(",", ":"),
+                                ),
+                            )
+                            for segment in segments
+                        ],
+                    )
+                updated = await connection.fetchval(
+                    """
+                    UPDATE knowledge.pdf_content_batches
+                    SET status = 'SUCCEEDED', finished_at = now()
+                    WHERE id = $1 AND build_id = $2 AND status = 'RUNNING'
+                    RETURNING id
+                    """,
+                    UUID(batch.id), UUID(batch.build_id),
+                )
+                if updated is None:
+                    raise StateTransitionError("PDF batch did not reach SUCCEEDED.")
+
+    async def fail_pdf_content_batch_and_build(self, batch: PdfContentBatch, code: str) -> None:
+        if self._pool is None:
+            raise RuntimeError("Database pool is unavailable.")
+        async with self._pool.acquire() as connection:
+            async with connection.transaction():
+                await self._require_pdf_building(connection, batch.build_id)
+                failed_batch = await connection.fetchval(
+                    """
+                    UPDATE knowledge.pdf_content_batches
+                    SET status = 'FAILED', failure_code = $3, finished_at = now()
+                    WHERE id = $1 AND build_id = $2 AND status = 'RUNNING'
+                    RETURNING id
+                    """,
+                    UUID(batch.id), UUID(batch.build_id), code,
+                )
+                if failed_batch is None:
+                    raise StateTransitionError("PDF batch did not reach FAILED.")
+                await self._fail_pdf_build_locked(connection, batch.build_id, code)
+
+    async def fail_pdf_content_build(self, build: PdfContentBuild, code: str) -> None:
+        if self._pool is None:
+            raise RuntimeError("Database pool is unavailable.")
+        async with self._pool.acquire() as connection:
+            async with connection.transaction():
+                await self._require_pdf_building(connection, build.id)
+                await self._fail_pdf_build_locked(connection, build.id, code)
+
+    async def complete_pdf_content_build(self, build: PdfContentBuild) -> None:
+        """Make a build READY only after every range and all output are present."""
+
+        if self._pool is None:
+            raise RuntimeError("Database pool is unavailable.")
+        async with self._pool.acquire() as connection:
+            async with connection.transaction():
+                await self._require_pdf_building(connection, build.id)
+                batch_states = await connection.fetch(
+                    "SELECT status FROM knowledge.pdf_content_batches WHERE build_id = $1 FOR UPDATE",
+                    UUID(build.id),
+                )
+                if not batch_states or any(row["status"] != "SUCCEEDED" for row in batch_states):
+                    raise StateTransitionError("PDF build has incomplete batches.")
+                segment_count = await connection.fetchval(
+                    "SELECT count(*) FROM knowledge.pdf_content_segments WHERE build_id = $1",
+                    UUID(build.id),
+                )
+                if segment_count < 1:
+                    raise StateTransitionError("PDF build has no extractable content.")
+                updated = await connection.fetchval(
+                    """
+                    UPDATE knowledge.pdf_content_builds
+                    SET status = 'READY', ready_at = now(), finished_at = now()
+                    WHERE id = $1 AND status = 'BUILDING'
+                    RETURNING id
+                    """,
+                    UUID(build.id),
+                )
+                if updated is None:
+                    raise StateTransitionError("PDF build did not reach READY.")
 
     async def get_active_index(self) -> ActiveIndex | None:
         return await self.get_index_by_status("ACTIVE")
@@ -635,6 +902,31 @@ class KnowledgeDatabase:
             await connection.execute("SELECT pg_advisory_unlock($1)", lock_key)
         finally:
             await self._pool.release(connection)
+
+    @staticmethod
+    async def _require_pdf_building(connection: asyncpg.Connection, build_id: str) -> None:
+        status = await connection.fetchval(
+            "SELECT status FROM knowledge.pdf_content_builds WHERE id = $1 FOR UPDATE",
+            UUID(build_id),
+        )
+        if status != "BUILDING":
+            raise StateTransitionError("PDF content build is no longer BUILDING.")
+
+    @staticmethod
+    async def _fail_pdf_build_locked(
+        connection: asyncpg.Connection, build_id: str, code: str
+    ) -> None:
+        updated = await connection.fetchval(
+            """
+            UPDATE knowledge.pdf_content_builds
+            SET status = 'FAILED', failure_code = $2, finished_at = now()
+            WHERE id = $1 AND status = 'BUILDING'
+            RETURNING id
+            """,
+            UUID(build_id), code,
+        )
+        if updated is None:
+            raise StateTransitionError("PDF build did not reach FAILED.")
 
     @staticmethod
     async def _require_run_and_index_state(

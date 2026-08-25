@@ -7,13 +7,13 @@ state. A naming migration is separate from architecture cleanup.
 
 ## Current status
 
-| Milestone                        | Status                              |
-| -------------------------------- | ----------------------------------- |
-| M1 — Development Foundation      | `COMPLETE / REMOTE-BACKED`          |
-| M2 — Local Infrastructure        | `COMPLETE / REMOTE-BACKED`          |
-| M3 — Markdown Knowledge Platform | `COMPLETE / REMOTE-BACKED`          |
-| M4 — PDF Document Ingestion      | approved; implementation authorized |
-| M5+                              | deferred                            |
+| Milestone                        | Status                                 |
+| -------------------------------- | -------------------------------------- |
+| M1 — Development Foundation      | `COMPLETE / REMOTE-BACKED`             |
+| M2 — Local Infrastructure        | `COMPLETE / REMOTE-BACKED`             |
+| M3 — Markdown Knowledge Platform | `COMPLETE / REMOTE-BACKED`             |
+| M4 — PDF Document Ingestion      | `M4/T2 IN PROGRESS / LOCAL-UNVERIFIED` |
+| M5+                              | deferred                               |
 
 M2 accepted commit:
 `5ffe4cb9be81c30d5c24bd7eb6a9d41abc2a5f19`.
@@ -182,9 +182,9 @@ task identity, revision, and authorization state.
 At the current repository gate:
 
 ```text
-Task: M4 — PDF Document Ingestion
+Task: M4/T2 — Preflight, extraction, and segmentation
 Planning Readiness: APPROVED
-Plan Revision: M4-R1
+Plan Revision: M4/T2-R1
 Execution Authorization: YES
 ```
 

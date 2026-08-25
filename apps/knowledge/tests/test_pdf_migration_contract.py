@@ -33,6 +33,13 @@ class PdfMigrationContractTests(unittest.TestCase):
         self.assertIn("FOREIGN KEY (build_id, build_status)", self.sql)
         self.assertIn("REFERENCES knowledge.pdf_content_builds(id, status)", self.sql)
 
+    def test_failed_identity_can_retry_without_an_unconditional_unique_constraint(self) -> None:
+        self.assertIn(
+            "ON knowledge.pdf_content_builds (content_identity_digest)\n  WHERE status IN ('BUILDING', 'READY')",
+            self.sql,
+        )
+        self.assertNotIn("UNIQUE (content_identity_digest)", self.sql)
+
     def test_index_run_source_counts_is_relational_not_json(self) -> None:
         self.assertIn("PRIMARY KEY (index_run_id, source_type)", self.sql)
         self.assertIn("source_type IN ('MARKDOWN', 'PDF')", self.sql)

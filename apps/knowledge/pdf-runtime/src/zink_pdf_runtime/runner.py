@@ -15,6 +15,10 @@ from typing import Any, Mapping
 PROTOCOL_VERSION = "zink:pdf-runtime-protocol:v1"
 MAX_REQUEST_BYTES = 64 * 1024
 _SAFE_ERRORS = {
+    "PDF_DOCUMENT_INVALID",
+    "PDF_DOCUMENT_ENCRYPTED",
+    "PDF_DOCUMENT_EMPTY",
+    "PDF_MULTI_PAGE_ITEM_UNSUPPORTED",
     "PDF_RUNTIME_UNAVAILABLE",
     "PDF_RUNTIME_PROTOCOL_MISMATCH",
     "PDF_RUNTIME_MISMATCH",
@@ -49,6 +53,8 @@ def _dispatch(request: Mapping[str, Any]) -> Mapping[str, Any]:
     operation = request.get("operation")
     if operation == "probe":
         return _probe(request)
+    if operation == "preflight":
+        return _preflight(request)
     if operation == "extract_range":
         return _extract_range(request)
     return _error("PDF_RUNTIME_OUTPUT_INVALID")
@@ -113,6 +119,8 @@ def _extract_range(request: Mapping[str, Any]) -> Mapping[str, Any]:
     try:
         source = _safe_source_path(request.get("source_path"))
         items = _docling_extract(source, start, end)
+    except _MultiPageItem:
+        return _error("PDF_MULTI_PAGE_ITEM_UNSUPPORTED")
     except _RangeUnsupported:
         return _error("PDF_PAGE_RANGE_UNSUPPORTED")
     except Exception:
@@ -126,7 +134,59 @@ def _extract_range(request: Mapping[str, Any]) -> Mapping[str, Any]:
     }
 
 
+def _preflight(request: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Reject invalid or protected PDFs through pypdfium2's public API."""
+
+    if set(request) != {
+        "protocol_version",
+        "operation",
+        "source_path",
+        "expected_processing_identity_digest",
+    }:
+        return _error("PDF_RUNTIME_OUTPUT_INVALID")
+    probe = _probe(
+        {
+            "protocol_version": PROTOCOL_VERSION,
+            "operation": "probe",
+            "expected_processing_identity_digest": request.get(
+                "expected_processing_identity_digest"
+            ),
+        }
+    )
+    if probe.get("status") != "ok":
+        return probe
+    try:
+        import pypdfium2
+        from pypdfium2 import raw
+    except Exception:
+        return _error("PDF_RUNTIME_UNAVAILABLE")
+    try:
+        source = _safe_source_path(request.get("source_path"))
+        with pypdfium2.PdfDocument(source, password=None) as document:
+            revision = raw.FPDF_GetSecurityHandlerRevision(document.raw)
+            if revision != -1:
+                return _error("PDF_DOCUMENT_ENCRYPTED")
+            page_count = len(document)
+    except pypdfium2.PdfiumError as error:
+        if error.err_code in {raw.FPDF_ERR_PASSWORD, raw.FPDF_ERR_SECURITY}:
+            return _error("PDF_DOCUMENT_ENCRYPTED")
+        return _error("PDF_DOCUMENT_INVALID")
+    except Exception:
+        return _error("PDF_DOCUMENT_INVALID")
+    if page_count == 0:
+        return _error("PDF_DOCUMENT_EMPTY")
+    return {
+        "protocol_version": PROTOCOL_VERSION,
+        "status": "ok",
+        "page_count": page_count,
+    }
+
+
 class _RangeUnsupported(RuntimeError):
+    pass
+
+
+class _MultiPageItem(RuntimeError):
     pass
 
 
@@ -176,40 +236,180 @@ def _docling_extract(source: Path, start: int, end: int) -> list[dict[str, Any]]
         raise _RangeUnsupported from error
     document = result.document
     items: list[dict[str, Any]] = []
-    for element in document.texts:
-        text = getattr(element, "text", "")
-        provenance = getattr(element, "prov", ())
-        if not text or not provenance:
+    # ``iterate_items`` is Docling's public reading-order traversal.  OCR text
+    # nested below a PictureItem is a TextItem, so identify its public parent
+    # reference before emitting the ordered stream.
+    ordered_items = tuple(document.iterate_items())
+    picture_refs = {
+        getattr(element, "self_ref", "")
+        for element, _level in ordered_items
+        if _is_picture_item(element)
+    }
+    table_refs = {
+        getattr(element, "self_ref", "")
+        for element, _level in ordered_items
+        if _is_table_item(element)
+    }
+    picture_child_refs = {
+        str(getattr(child, "cref", child))
+        for element, _level in ordered_items
+        if _is_picture_item(element)
+        for child in (getattr(element, "children", ()) or ())
+    }
+    for element, _level in ordered_items:
+        if _is_picture_item(element):
+            for child in _resolved_picture_text_items(document, element):
+                _append_materialized_item(
+                    items,
+                    document,
+                    child,
+                    "figure_text",
+                    getattr(child, "text", ""),
+                    start,
+                    end,
+                )
             continue
-        for source in provenance:
-            page = int(getattr(source, "page_no", 0))
-            charspan = getattr(source, "charspan", None)
-            if (
-                page < start
-                or page > end
-                or not isinstance(charspan, (list, tuple))
-                or len(charspan) != 2
-                or isinstance(charspan[0], bool)
-                or isinstance(charspan[1], bool)
-                or not isinstance(charspan[0], int)
-                or not isinstance(charspan[1], int)
-                or not (0 <= charspan[0] < charspan[1] <= len(text))
-            ):
-                raise _RangeUnsupported
-            page_text = text[charspan[0] : charspan[1]].strip()
-            if not page_text:
-                continue
-            items.append(
-                {
-                    "kind": "text",
-                    "ordinal": len(items),
-                    "content": page_text,
-                    "page_start": page,
-                    "page_end": page,
-                    "bbox": _normalized_bbox(getattr(source, "bbox", None)),
-                }
-            )
+        if str(getattr(element, "self_ref", "")) in picture_child_refs:
+            # Picture children are emitted at the picture's reading-order slot.
+            continue
+        kind, content = _public_item_content(
+            document, element, picture_refs, table_refs
+        )
+        if kind is None or not content:
+            continue
+        _append_materialized_item(items, document, element, kind, content, start, end)
     return items
+
+
+def _append_materialized_item(
+    output: list[dict[str, Any]],
+    document: Any,
+    element: Any,
+    kind: str,
+    content: str,
+    start: int,
+    end: int,
+) -> None:
+    provenance = tuple(getattr(element, "prov", ()) or ())
+    if not provenance or not content:
+        return
+    for page, page_content, bbox in _page_local_content(
+        kind, content, provenance, document, start, end
+    ):
+        output.append(
+            {
+                "kind": kind,
+                "ordinal": len(output),
+                "content": page_content,
+                "page_start": page,
+                "page_end": page,
+                "bbox": bbox,
+            }
+        )
+
+
+def _resolved_picture_text_items(document: Any, picture: Any) -> tuple[Any, ...]:
+    """Resolve public PictureItem child refs without using Docling internals."""
+
+    from docling_core.types.doc import TextItem
+
+    output: list[Any] = []
+    for reference in (getattr(picture, "children", ()) or ()):
+        child = reference.resolve(document)
+        if isinstance(child, TextItem):
+            output.append(child)
+    return tuple(output)
+
+
+def _public_item_content(
+    document: Any,
+    element: Any,
+    picture_refs: set[str],
+    table_refs: set[str],
+) -> tuple[str | None, str]:
+    """Use documented Docling item APIs without depending on internals."""
+
+    from docling_core.types.doc import PictureItem, TableItem, TextItem
+
+    if isinstance(element, TableItem):
+        return "table", element.export_to_markdown(doc=document).strip()
+    if isinstance(element, PictureItem):
+        return None, ""
+    if isinstance(element, TextItem):
+        parent_ref = _parent_ref(element)
+        if parent_ref in table_refs:
+            return None, ""
+        kind = "figure_text" if parent_ref in picture_refs else "text"
+        return kind, getattr(element, "text", "")
+    return None, ""
+
+
+def _page_local_content(
+    kind: str,
+    content: str,
+    provenance: tuple[Any, ...],
+    document: Any,
+    requested_start: int,
+    requested_end: int,
+) -> list[tuple[int, str, list[float] | None]]:
+    pages = {int(getattr(source, "page_no", 0)) for source in provenance}
+    if any(page < requested_start or page > requested_end for page in pages):
+        raise _RangeUnsupported
+    if kind == "table":
+        if len(pages) != 1:
+            raise _MultiPageItem
+        page = next(iter(pages))
+        bbox = (
+            _normalized_bbox(getattr(provenance[0], "bbox", None), document, page)
+            if len(provenance) == 1
+            else None
+        )
+        return [(page, content, bbox)]
+
+    parts: list[tuple[int, str, list[float] | None]] = []
+    for source in provenance:
+        page = int(getattr(source, "page_no", 0))
+        charspan = getattr(source, "charspan", None)
+        if (
+            not isinstance(charspan, (list, tuple))
+            or len(charspan) != 2
+            or isinstance(charspan[0], bool)
+            or isinstance(charspan[1], bool)
+            or not isinstance(charspan[0], int)
+            or not isinstance(charspan[1], int)
+            or not (0 <= charspan[0] < charspan[1] <= len(content))
+        ):
+            if len(pages) != 1:
+                raise _MultiPageItem
+            fallback = content.strip()
+            return [(next(iter(pages)), fallback, None)] if fallback else []
+        page_content = content[charspan[0] : charspan[1]].strip()
+        if page_content:
+            parts.append(
+                (
+                    page,
+                    page_content,
+                    _normalized_bbox(getattr(source, "bbox", None), document, page),
+                )
+            )
+    return parts
+
+
+def _parent_ref(element: Any) -> str:
+    parent = getattr(element, "parent", None)
+    return str(getattr(parent, "cref", parent))
+
+
+def _is_picture_item(element: Any) -> bool:
+    from docling_core.types.doc import PictureItem
+
+    return isinstance(element, PictureItem)
+
+
+def _is_table_item(element: Any) -> bool:
+    from docling_core.types.doc import TableItem
+
+    return isinstance(element, TableItem)
 
 
 def _configure_determinism() -> None:
@@ -251,12 +451,24 @@ def _safe_source_path(value: Any) -> Path:
     return resolved
 
 
-def _normalized_bbox(value: Any) -> list[float] | None:
-    # Docling coordinate systems are not guaranteed to be top-left normalized;
-    # T2 owns geometry conversion.  T1 only emits a bbox when already exact.
-    if not isinstance(value, (list, tuple)) or len(value) != 4:
-        return None
-    values = [float(item) for item in value]
+def _normalized_bbox(value: Any, document: Any, page: int) -> list[float] | None:
+    """Emit geometry only when one source box maps exactly to one item."""
+
+    if isinstance(value, (list, tuple)) and len(value) == 4:
+        values = [float(item) for item in value]
+    else:
+        try:
+            page_size = document.pages[page].size
+            width, height = float(page_size.width), float(page_size.height)
+            top_left = value.to_top_left_origin(height)
+            values = [
+                float(top_left.l) / width,
+                float(top_left.t) / height,
+                float(top_left.r) / width,
+                float(top_left.b) / height,
+            ]
+        except (AttributeError, KeyError, TypeError, ValueError, ZeroDivisionError):
+            return None
     if not (0 <= values[0] < values[2] <= 1 and 0 <= values[1] < values[3] <= 1):
         return None
     return values

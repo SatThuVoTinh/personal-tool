@@ -118,6 +118,34 @@ def canonical_vault_path(vault_root: Path, raw_path: str, *, require_pdf: bool =
     return relative.as_posix()
 
 
+def validated_vault_regular_file(
+    vault_root: Path, raw_path: str, *, require_pdf: bool = False
+) -> Path:
+    """Return a canonical Vault file only when every path component is safe.
+
+    This deliberately repeats the link/reparse validation on every call.  The
+    PDF builder uses it at each drift checkpoint rather than trusting a
+    pathname that was safe only during initial discovery.
+    """
+
+    relative = canonical_vault_path(vault_root, raw_path, require_pdf=require_pdf)
+    root = vault_root.resolve(strict=True)
+    candidate = root.joinpath(*PurePosixPath(relative).parts)
+    _assert_no_link_or_reparse(root, candidate)
+    try:
+        info = candidate.lstat()
+    except OSError as error:
+        raise PdfFoundationError("PDF_SOURCE_PATH_INVALID") from error
+    attributes = getattr(info, "st_file_attributes", 0)
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or stat.S_ISLNK(info.st_mode)
+        or attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    ):
+        raise PdfFoundationError("PDF_SOURCE_PATH_INVALID")
+    return candidate
+
+
 def parse_pdf_sidecar(vault_root: Path, sidecar_path: Path) -> PdfSidecar:
     """Validate the strict M4 sidecar contract before any database mutation."""
 

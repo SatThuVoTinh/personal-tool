@@ -4,7 +4,9 @@ import asyncio
 import hashlib
 import importlib.util
 import json
+import os
 import re
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -109,6 +111,22 @@ class ProtocolValidationTests(unittest.TestCase):
         })
         self.assertEqual(_validate_response(response, request)["status"], "ok")
 
+    def test_preflight_accepts_only_a_canonical_page_count(self) -> None:
+        request = {"protocol_version": PROTOCOL_VERSION, "operation": "preflight"}
+        accepted = self.response({
+            "protocol_version": PROTOCOL_VERSION,
+            "status": "ok",
+            "page_count": 12,
+        })
+        self.assertEqual(_validate_response(accepted, request)["page_count"], 12)
+        invalid = self.response({
+            "protocol_version": PROTOCOL_VERSION,
+            "status": "ok",
+            "page_count": True,
+        })
+        with self.assertRaisesRegex(PdfRuntimeError, "PDF_RUNTIME_OUTPUT_INVALID"):
+            _validate_response(invalid, request)
+
     def test_out_of_range_or_unexpected_item_data_is_rejected(self) -> None:
         request = {
             "protocol_version": PROTOCOL_VERSION,
@@ -154,6 +172,13 @@ class ProtocolValidationTests(unittest.TestCase):
         })
         with self.assertRaisesRegex(PdfRuntimeError, "PDF_RUNTIME_MISMATCH"):
             _validate_response(raw, request)
+        encrypted = self.response({
+            "protocol_version": PROTOCOL_VERSION,
+            "status": "error",
+            "code": "PDF_DOCUMENT_ENCRYPTED",
+        })
+        with self.assertRaisesRegex(PdfRuntimeError, "PDF_DOCUMENT_ENCRYPTED"):
+            _validate_response(encrypted, request)
         unsafe = self.response({
             "protocol_version": PROTOCOL_VERSION,
             "status": "error",
@@ -164,8 +189,9 @@ class ProtocolValidationTests(unittest.TestCase):
 
 
 class ClientRequestTests(unittest.IsolatedAsyncioTestCase):
-    async def test_invalid_range_never_spawns_child(self) -> None:
-        client = PdfRuntimeClient(
+    @staticmethod
+    def client() -> PdfRuntimeClient:
+        return PdfRuntimeClient(
             PdfRuntimeSettings(
                 python=Path("/opt/pdf-runtime/.venv/bin/python"),
                 module="zink_pdf_runtime",
@@ -178,6 +204,9 @@ class ClientRequestTests(unittest.IsolatedAsyncioTestCase):
                 temp_root=Path("/tmp/pdf-runtime"),
             )
         )
+
+    async def test_invalid_range_never_spawns_child(self) -> None:
+        client = self.client()
         with self.assertRaisesRegex(PdfRuntimeError, "PDF_RUNTIME_OUTPUT_INVALID"):
             await client.extract_range("02. Books/a.pdf", 0, 1, "a" * 64, asyncio.get_running_loop().time() + 1)
         with self.assertRaisesRegex(PdfRuntimeError, "PDF_RUNTIME_OUTPUT_INVALID"):
@@ -196,6 +225,69 @@ class ClientRequestTests(unittest.IsolatedAsyncioTestCase):
             reader.feed_eof()
             with self.assertRaises(_OutputCapExceeded):
                 await _read_capped(reader, min(configured_cap, 1))
+
+    async def test_invocations_are_strictly_sequential(self) -> None:
+        client = self.client()
+        active = 0
+        maximum_active = 0
+
+        async def controlled_invocation(_request, _deadline):
+            nonlocal active, maximum_active
+            active += 1
+            maximum_active = max(maximum_active, active)
+            await asyncio.sleep(0.02)
+            active -= 1
+            return {"status": "ok"}
+
+        with patch.object(client, "_invoke_locked", new=controlled_invocation):
+            await asyncio.gather(
+                client._invoke({"operation": "first"}, 1),
+                client._invoke({"operation": "second"}, 1),
+            )
+        self.assertEqual(maximum_active, 1)
+
+    @unittest.skipUnless(os.name == "posix", "process-group contract is Linux-only")
+    async def test_timeout_kills_the_child_process_group(self) -> None:
+        client = self.client()
+        original_spawn = asyncio.create_subprocess_exec
+        with tempfile.TemporaryDirectory() as directory:
+            pid_path = Path(directory) / "descendant.pid"
+            program = (
+                "import pathlib, subprocess, sys, time; "
+                "child = subprocess.Popen([sys.executable, '-c', "
+                "'import time; time.sleep(60)']); "
+                f"pathlib.Path({str(pid_path)!r}).write_text(str(child.pid)); "
+                "time.sleep(60)"
+            )
+
+            async def spawn_test_group(*_args, **kwargs):
+                return await original_spawn(sys.executable, "-c", program, **kwargs)
+
+            deadline = asyncio.get_running_loop().time() + 0.5
+            with patch("app.pdf_runtime.asyncio.create_subprocess_exec", spawn_test_group):
+                with self.assertRaisesRegex(PdfRuntimeError, "PDF_RUNTIME_TIMEOUT"):
+                    await client._invoke(
+                        {
+                            "protocol_version": PROTOCOL_VERSION,
+                            "operation": "probe",
+                            "expected_processing_identity_digest": "a" * 64,
+                        },
+                        deadline,
+                    )
+
+            descendant_pid = int(pid_path.read_text(encoding="utf-8"))
+            for _ in range(100):
+                try:
+                    state = Path(f"/proc/{descendant_pid}/stat").read_text(
+                        encoding="utf-8"
+                    ).split()[2]
+                except FileNotFoundError:
+                    break
+                if state == "Z":
+                    break
+                await asyncio.sleep(0.01)
+            else:
+                self.fail("timed-out runtime descendant remained alive")
 
 
 class RuntimeIdentityTests(unittest.TestCase):

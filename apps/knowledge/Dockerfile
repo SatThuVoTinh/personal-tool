@@ -69,6 +69,9 @@ RUN /opt/reranker-venv/bin/python /app/export_reranker.py
 FROM reranker-export AS test
 
 COPY app ./app
+COPY migrations ./migrations
+COPY pdf-runtime/pyproject.toml pdf-runtime/uv.lock pdf-runtime/requirements.txt ./pdf-runtime/
+COPY pdf-runtime/src ./pdf-runtime/src
 COPY tests ./tests
 ENV KNOWLEDGE_TOKENIZER_PATH=/app/artifacts/tokenizer.json
 RUN uv run --locked --no-sync python -m unittest discover -s tests -v
