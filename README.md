@@ -7,13 +7,13 @@ state. A naming migration is separate from architecture cleanup.
 
 ## Current status
 
-| Milestone                        | Status                                 |
-| -------------------------------- | -------------------------------------- |
-| M1 — Development Foundation      | `COMPLETE / REMOTE-BACKED`             |
-| M2 — Local Infrastructure        | `COMPLETE / REMOTE-BACKED`             |
-| M3 — Markdown Knowledge Platform | `COMPLETE / REMOTE-BACKED`             |
-| M4 — PDF Document Ingestion      | `M4/T2 IN PROGRESS / LOCAL-UNVERIFIED` |
-| M5+                              | deferred                               |
+| Milestone                        | Status                            |
+| -------------------------------- | --------------------------------- |
+| M1 — Development Foundation      | `COMPLETE / REMOTE-BACKED`        |
+| M2 — Local Infrastructure        | `COMPLETE / REMOTE-BACKED`        |
+| M3 — Markdown Knowledge Platform | `COMPLETE / REMOTE-BACKED`        |
+| M4 — PDF Document Ingestion      | `M4/T2 COMPLETE / LOCAL-VERIFIED` |
+| M5+                              | deferred                          |
 
 M2 accepted commit:
 `5ffe4cb9be81c30d5c24bd7eb6a9d41abc2a5f19`.
@@ -175,9 +175,9 @@ Operational and acceptance procedures are in the
 ## M4 execution
 
 M4 adds sidecar-driven PDF ingestion while preserving the accepted Markdown
-path. The owner-approved implementation contract is transiently materialized at
-`docs/contracts/execution/ACTIVE.md`; `PLAN.md` is the durable source for its
-task identity, revision, and authorization state.
+path. M4/T2 now provides bounded security preflight, four-page extraction/OCR,
+deterministic page-local segmentation, source-drift containment, and atomic
+content builds. These T2 builds stop before publication and are not searchable.
 
 At the current repository gate:
 
@@ -185,10 +185,13 @@ At the current repository gate:
 Task: M4/T2 — Preflight, extraction, and segmentation
 Planning Readiness: APPROVED
 Plan Revision: M4/T2-R1
-Execution Authorization: YES
+Task Status: COMPLETE
+Evidence Level: LOCAL-VERIFIED
+Execution Authorization: NO
 ```
 
-Authorization does not claim that PDF implementation or any M4 gate has passed.
+The transient T2 execution contract has been removed. M4/T3 and later remain
+unauthorized; local verification does not imply remote CI/Security backing.
 
 ## Security and persistent-state rules
 

@@ -62,7 +62,7 @@ ACTIVE → LOCAL-COMPLETE → REMOTE-PENDING → REMOTE-BACKED
 | M1 — Development foundation                                     | `COMPLETE`    | `REMOTE-BACKED`  | Local verification suite and GitHub CI/Security workflows exist and passed.                                                                                     |
 | M2 — Local infrastructure                                       | `COMPLETE`    | `REMOTE-BACKED`  | Accepted commit `5ffe4cb9be81c30d5c24bd7eb6a9d41abc2a5f19`; isolated M2 acceptance plus remote CI/Security passed.                                              |
 | M3 — Markdown Knowledge Platform                                | `COMPLETE`    | `REMOTE-BACKED`  | Accepted candidate `ff4a5fb7d779f260ffb9b5aa2393ad6ab75eb549`, prior merge `9cd34cebb196631e9524b095c21f1fd5aff78749`, and M3/S1 merge `3f9e018a82854f27de08f3e1ba62a7931d879626` all have remote CI/Security evidence. |
-| M4 — PDF document ingestion                                     | `ACTIVE`      | `LOCAL-VERIFIED` | M4-R4/T1 completed locally with an isolated PDF runtime while preserving the M3 dependency identity; M4/T2 is authorized and in progress under M4/T2-R1. |
+| M4 — PDF document ingestion                                     | `ACTIVE`      | `LOCAL-VERIFIED` | M4/T1 and M4/T2 are complete locally; T2 validated bounded preflight/extraction/segmentation and atomic non-searchable content builds without changing M3 dependency identity. |
 | M5 — Image and video ingestion                                  | `DEFERRED`    | `NONE`           | Locked until M4 is complete and M5 source contracts are approved.                                                                                               |
 | M6 — Architecture consolidation                                 | `DEFERRED`    | `NONE`           | Post-Knowledge structural migration only; no M4/M5 accepted code is moved early.                                                                                |
 | M7 — L&SC Data Plant core                                       | `DEFERRED`    | `NONE`           | Governed data lifecycle and deterministic control plane.                                                                                                        |
@@ -75,13 +75,13 @@ ACTIVE → LOCAL-COMPLETE → REMOTE-PENDING → REMOTE-BACKED
 ```text
 Milestone: M4 — PDF Document Ingestion
 Task: M4/T2 — Preflight, extraction, and segmentation
-Task Status: IN PROGRESS
+Task Status: COMPLETE
 Planning Readiness: APPROVED
 Plan Revision: M4/T2-R1
-Execution Authorization: YES
-Authorized Task: M4/T2
-Execution Contract: docs/contracts/execution/ACTIVE.md
-Evidence Level: NONE
+Execution Authorization: NO
+Authorized Task: NONE
+Execution Contract: NONE
+Evidence Level: LOCAL-VERIFIED
 ```
 
 M3/S1 implementation commit `5c035fb2d3749d9fabe0a9ff69d9d82509465934` was
@@ -89,7 +89,8 @@ merged as `3f9e018a82854f27de08f3e1ba62a7931d879626`; exact merge-SHA CI and
 Security passed. M4-R3 is invalidated by `PDF_DEPENDENCY_INCOMPATIBLE`: Docling
 cannot share the exact M3 environment with immutable `tokenizers==0.23.1`.
 Owner-approved M4-R4 completed M4/T1 locally with feature commit `c4ef66d`.
-Owner-approved M4/T2-R1 is authorized through its matching `ACTIVE.md`.
+Owner-approved M4/T2-R1 completed locally in implementation commit
+`82126e4354b3e0985056c4352fa3b6efb2574863`; authorization is revoked and
 M4/T3 and later remain unauthorized.
 
 ## 5. Current delivery sequence
@@ -203,10 +204,10 @@ Inherited M3 invariants include:
 Status: `ACTIVE`
 Planning Readiness: `APPROVED`
 Plan Revision: `M4/T2-R1`
-Execution Authorization: `YES`
-Authorized Task: `M4/T2`
-Execution Contract: `docs/contracts/execution/ACTIVE.md`
-Evidence Level: `NONE`
+Execution Authorization: `NO`
+Authorized Task: `NONE`
+Execution Contract: `NONE`
+Evidence Level: `LOCAL-VERIFIED`
 
 Purpose: add sidecar-driven PDF ingestion for native text, scanned pages,
 tables, and OCR-visible figure text while preserving all accepted M3 behavior.
@@ -237,13 +238,13 @@ Planned task sequence:
 | ------------------------------------------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | M4/P0 — Finalize contract                         | `COMPLETE` | M4-R1 is superseded, M4-R2 invalidated, M4-R3 invalidated by the shared-runtime dependency conflict, and owner-approved M4-R4 is the direct Codex contract through T1. |
 | M4/T1 — Runtime, source, schema, and identity     | `COMPLETE` | Feature commit `c4ef66d`; isolated runtime, parent-child protocol, offline artifacts, dependency/security audit, sidecars, paths, identities, migration/recovery, M3 regression, and repository gates passed. |
-| M4/T2 — Preflight, extraction, and segmentation   | `IN PROGRESS` | Owner-approved M4/T2-R1: parser/security checks, bounded batching/OCR, deterministic extraction/segmentation, source-drift containment, and atomic content-build batches. |
+| M4/T2 — Preflight, extraction, and segmentation   | `COMPLETE` | Implementation commit `82126e4`; exact pypdfium2 security preflight, 4-page offline extraction/OCR, page-local deterministic segmentation, drift brackets, deadlines, process cleanup, and atomic non-searchable content builds passed 99 parent tests, 8 isolated-runtime tests, real PDF fixture acceptance, isolated database integration, repository verification, dependency audit, and staged secret scan. |
 | M4/T3 — Resume, drift, retention, and publication | `NOT STARTED` | Checkpoint reuse, source/metadata drift, last-known-good retention, idempotent publication, and resource gates.                                                                   |
 | M4/T4 — Adapters, retrieval, and API              | `NOT STARTED` | Preserve Markdown adapter; add PDF filters/counters/citations without changing accepted M3 semantics.                                                                             |
 | M4/T5 — Acceptance and handoff                    | `NOT STARTED` | Offline, multilingual, security, crash/recovery, concurrency, RealVault, M2/M3 regression, exact-candidate CI/Security, and remote gate.                                          |
 
-M4/T1 is complete. M4/T2 is authorized only through its matching
-owner-approved `ACTIVE.md`; T3 through T5 remain strictly gated.
+M4/T1 and M4/T2 are complete locally. Execution authorization is revoked and
+the transient T2 contract has been removed; T3 through T5 remain strictly gated.
 
 ### M5 — Image and Video Ingestion
 
