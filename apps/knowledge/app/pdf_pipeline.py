@@ -149,7 +149,9 @@ class PdfContentBuilder:
                     await self.revalidate_identity(
                         sidecar, expected_processing_identity_digest, identity
                     )
-                state = await self._database.recover_pdf_content_build(state)
+                state = await self._database.recover_pdf_content_build(
+                    state, page_count
+                )
             except StateTransitionError as error:
                 raise PdfBuildError("PDF_RUNTIME_FAILED") from error
             build = state.build

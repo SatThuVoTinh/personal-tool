@@ -44,7 +44,9 @@ from .retrieval import (
     SearchValidationError,
     fuse_candidates,
     normalize_filters,
+    normalize_source_types,
     render_citation,
+    render_pdf_citation,
 )
 from .run_errors import SafeRunError, deserialize_errors
 
@@ -67,6 +69,7 @@ class SearchRequest(BaseModel):
     primary_topic: str | None = None
     tags_all: list[str] | None = None
     path_prefix: str | None = None
+    source_types: list[Literal["MARKDOWN", "PDF"]] | None = None
 
 
 DATABASE_ERRORS = (
@@ -274,6 +277,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if token_budget.count(query) > QUERY_MAX_TOKENS:
                 raise HTTPException(status_code=422, detail={"code": "QUERY_TOKEN_LIMIT_EXCEEDED"})
             filters = normalize_filters(request.primary_topic, request.tags_all, request.path_prefix)
+            source_types = normalize_source_types(request.source_types)
+            segment_types = tuple(
+                segment_type
+                for source_type in source_types
+                for segment_type in (
+                    ("MARKDOWN_PASSAGE",) if source_type == "MARKDOWN"
+                    else ("PDF_PASSAGE", "PDF_TABLE", "PDF_FIGURE_TEXT")
+                )
+            )
             for attempt in range(2):
                 active_index = await database.get_active_index()
                 if active_index is None:
@@ -300,6 +312,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         filters.primary_topic,
                         filters.tags_all,
                         filters.path_prefix,
+                        segment_types,
                     )
                 except ActiveIndexChangedError:
                     if attempt == 0:
@@ -331,11 +344,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             "fts_score": candidate.fts_score,
                             "rrf_score": item.rrf_score,
                             "rerank_score": stable_sigmoid(raw_logit),
+                            "source_type": candidate.source_type,
                             "citation": {
                                 "source_path": candidate.source_path,
                                 "line_start": candidate.line_start,
                                 "line_end": candidate.line_end,
-                                "markdown": render_citation(candidate.title, candidate.source_path, candidate.line_start, candidate.line_end),
+                                "page_start": candidate.page_start,
+                                "page_end": candidate.page_end,
+                                "bbox": (
+                                    list(candidate.bbox)
+                                    if candidate.bbox is not None
+                                    else None
+                                ),
+                                "markdown": (
+                                    render_pdf_citation(candidate.title, candidate.source_path, candidate.page_start, candidate.page_end)
+                                    if candidate.source_type == "PDF" and candidate.page_start is not None and candidate.page_end is not None
+                                    else render_citation(candidate.title, candidate.source_path, candidate.line_start, candidate.line_end)
+                                ),
                             },
                         }
                     )
@@ -411,6 +436,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         try:
             run = await database.get_run(run_id)
+            source_counts = [] if run is None else await database.get_run_source_counts(run.id)
         except ValueError:
             run = None
         except DATABASE_ERRORS:
@@ -431,6 +457,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "sources_failed": run.sources_failed,
             "failure_code": run.failure_code,
             "failure": deserialize_errors(run.failure_detail),
+            "source_counts": source_counts,
         }
 
     return app

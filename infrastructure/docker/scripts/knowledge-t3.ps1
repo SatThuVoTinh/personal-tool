@@ -48,7 +48,7 @@ function Invoke-Api {
 
 function Wait-Run {
   param([string]$RunId)
-  for ($attempt = 0; $attempt -lt 120; $attempt++) {
+  for ($attempt = 0; $attempt -lt 240; $attempt++) {
     $response = Invoke-Api "GET" "/v1/index-runs/$RunId"
     if ($response.StatusCode -ne 200) { throw "Index run $RunId cannot be read." }
     $run = $response.Body | ConvertFrom-Json
@@ -116,7 +116,7 @@ try {
   if ($accepted.StatusCode -ne 202) { throw "Full rebuild was not accepted: HTTP $($accepted.StatusCode) $($accepted.Body)" }
   $acceptedBody = $accepted.Body | ConvertFrom-Json
   $immediate = Invoke-Api "GET" "/v1/index-runs/$($acceptedBody.index_run_id)"
-  if ($immediate.StatusCode -ne 200) { throw "Accepted run was not immediately visible." }
+  if ($immediate.StatusCode -ne 200) { throw "Accepted run was not immediately visible: HTTP $($immediate.StatusCode) $($immediate.Body)" }
   $fullRun = Wait-Run $acceptedBody.index_run_id
   if ($fullRun.status -ne "SUCCEEDED" -or $fullRun.sources_indexed -ne 2) { throw "Full rebuild did not publish the combined fixture index." }
 
@@ -124,6 +124,14 @@ try {
   if (($pdfPublication -join "").Trim() -notmatch '^1:1:[1-9][0-9]*$') { throw "PDF publication did not atomically create source, detail and segments." }
   $sourceCounts = Invoke-Compose @("exec", "-T", "postgres", "psql", "--username=postgres", "--dbname=postgres", "--tuples-only", "--no-align", "--command", "SELECT string_agg(source_type || ':' || discovered_count || ':' || indexed_count || ':' || failed_count, ',' ORDER BY CASE source_type WHEN 'MARKDOWN' THEN 1 WHEN 'PDF' THEN 2 END) FROM knowledge.index_run_source_counts WHERE index_run_id = '$($fullRun.index_run_id)';")
   if (($sourceCounts -join "").Trim() -ne "MARKDOWN:1:1:0,PDF:1:1:0") { throw "Full rebuild source counters were not exact and canonical." }
+  if (($fullRun.source_counts | ForEach-Object { "$($_.source_type):$($_.discovered_count):$($_.indexed_count):$($_.failed_count)" }) -join "," -cne "MARKDOWN:1:1:0,PDF:1:1:0") { throw "API source counters were not exact and canonical." }
+
+  $pdfSearch = Invoke-Api "POST" "/v1/search" '{"query":"PDF acceptance text","source_types":["PDF"]}'
+  if ($pdfSearch.StatusCode -ne 200) { throw "PDF-only retrieval did not succeed." }
+  $pdfResult = $pdfSearch.Body | ConvertFrom-Json
+  if ($pdfResult.results.Count -lt 1 -or $pdfResult.results[0].source_type -ne "PDF" -or $null -eq $pdfResult.results[0].citation.page_start -or $null -ne $pdfResult.results[0].citation.line_start) { throw "PDF retrieval fields did not satisfy the additive API contract." }
+  $markdownSearch = Invoke-Api "POST" "/v1/search" '{"query":"safety stock","source_types":["MARKDOWN"]}'
+  if ($markdownSearch.StatusCode -ne 200) { throw "Markdown-only retrieval regressed." }
 
   $incrementalAccepted = Invoke-Api "POST" "/v1/index-runs" '{"kind":"INCREMENTAL"}'
   if ($incrementalAccepted.StatusCode -ne 202) { throw "Unchanged incremental run was not accepted." }

@@ -13,14 +13,13 @@ class IndexRunAlreadyActiveError(RuntimeError):
 
 
 class IndexRunCoordinator:
-    """Reserve the lifecycle lock, run correctness work, then detach cleanup."""
+    """Hold one lifecycle lock through correctness work and owned cleanup."""
 
     def __init__(self, database: KnowledgeDatabase, advisory_lock_key: int) -> None:
         self._database = database
         self._advisory_lock_key = advisory_lock_key
         self._reservation: asyncpg.Connection | None = None
         self._run_tasks: set[asyncio.Task[None]] = set()
-        self._cleanup_tasks: set[asyncio.Task[None]] = set()
 
     @property
     def active(self) -> bool:
@@ -78,7 +77,7 @@ class IndexRunCoordinator:
 
     async def stop(self) -> None:
         await self.release_reservation()
-        tasks = [*self._run_tasks, *self._cleanup_tasks]
+        tasks = [*self._run_tasks]
         for task in tasks:
             task.cancel()
         if tasks:
@@ -103,6 +102,8 @@ class IndexRunCoordinator:
             add_listener(on_termination)
         try:
             cleanup_ids = await work()
+            if cleanup_ids:
+                await cleanup(cleanup_ids)
         finally:
             if callable(remove_listener):
                 remove_listener(on_termination)
@@ -110,7 +111,3 @@ class IndexRunCoordinator:
             await self._database.release_advisory_lock(
                 connection, self._advisory_lock_key
             )
-        if cleanup_ids:
-            task = asyncio.create_task(cleanup(cleanup_ids))
-            self._cleanup_tasks.add(task)
-            task.add_done_callback(self._cleanup_tasks.discard)

@@ -1,4 +1,10 @@
 services:
+  nginx:
+    ports: !override
+      - target: 8080
+        host_ip: 127.0.0.1
+        protocol: tcp
+
   knowledge:
     volumes:
       - type: bind

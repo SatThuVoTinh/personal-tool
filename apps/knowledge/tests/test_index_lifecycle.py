@@ -271,7 +271,7 @@ class FakeCoordinatorDatabase:
 
 
 class IndexRunCoordinatorTests(unittest.IsolatedAsyncioTestCase):
-    async def test_cleanup_starts_only_after_advisory_lock_release(self) -> None:
+    async def test_cleanup_finishes_before_advisory_lock_release(self) -> None:
         database = FakeCoordinatorDatabase()
         coordinator = IndexRunCoordinator(database, 7)  # type: ignore[arg-type]
         cleanup_done = asyncio.Event()
@@ -289,4 +289,4 @@ class IndexRunCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(cleanup_done.wait(), timeout=1)
         await coordinator.stop()
 
-        self.assertEqual(database.events, ["terminal-commit", "release", "cleanup"])
+        self.assertEqual(database.events, ["terminal-commit", "cleanup", "release"])

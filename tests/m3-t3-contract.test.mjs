@@ -37,7 +37,7 @@ test("M3/T3 locks final model gates and atomic terminal transitions", () => {
   assert.match(database, /SET status = 'FAILED', failed_at = now\(\)/);
 });
 
-test("M3/T3 protects deletion and rebuild recovery", () => {
+test("M3/T3 protects deletion, ownership, and rebuild recovery", () => {
   assert.match(lifecycle, /EMPTY_SNAPSHOT_DELETION_BLOCKED/);
   assert.match(lifecycle, /if errors:/);
   assert.match(database, /WHERE status = 'RUNNING'/);
@@ -47,10 +47,12 @@ test("M3/T3 protects deletion and rebuild recovery", () => {
     "await self._database.release_advisory_lock(",
     coordinator.indexOf("async def _run("),
   );
-  const cleanupPosition = coordinator.indexOf(
-    "asyncio.create_task(cleanup(cleanup_ids))",
+  const cleanupPosition = coordinator.indexOf("await cleanup(cleanup_ids)");
+  assert.ok(cleanupPosition >= 0 && releasePosition > cleanupPosition);
+  assert.match(
+    database,
+    /async def cleanup_superseded[\s\S]*?async with self\._mutation_transaction\(\) as connection:/,
   );
-  assert.ok(releasePosition >= 0 && cleanupPosition > releasePosition);
 });
 
 test("M3/T3 serializes only bounded safe errors", () => {

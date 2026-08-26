@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.database import (
+    KnowledgeDatabase,
     PdfContentBatch,
     PdfContentBatchState,
     PdfContentBuild,
@@ -154,10 +155,13 @@ class _Database:
     async def get_pdf_content_build_state(self, _identity):
         return self.state
 
-    async def recover_pdf_content_build(self, state):
+    async def recover_pdf_content_build(self, state, expected_page_count):
         self.recovered = True
         if self.recovery_error:
             raise StateTransitionError("failed recovery")
+        KnowledgeDatabase._validate_pdf_batch_topology(
+            state.batches, expected_page_count
+        )
         return replace(state, status="READY")
 
     async def create_pdf_content_build(self, **values):
@@ -290,7 +294,25 @@ class PdfBuildLifecycleTests(unittest.IsolatedAsyncioTestCase):
                         "00000000-0000-0000-0000-000000000098",
                         "00000000-0000-0000-0000-000000000099",
                         1,
-                        1,
+                        4,
+                    ),
+                    "SUCCEEDED",
+                ),
+                PdfContentBatchState(
+                    PdfContentBatch(
+                        "00000000-0000-0000-0000-000000000097",
+                        "00000000-0000-0000-0000-000000000099",
+                        5,
+                        8,
+                    ),
+                    "SUCCEEDED",
+                ),
+                PdfContentBatchState(
+                    PdfContentBatch(
+                        "00000000-0000-0000-0000-000000000096",
+                        "00000000-0000-0000-0000-000000000099",
+                        9,
+                        9,
                     ),
                     "SUCCEEDED",
                 ),
@@ -304,6 +326,35 @@ class PdfBuildLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.segment_count, 4)
         self.assertEqual(runtime.ranges, [])
         self.assertTrue(database.recovered)
+
+    async def test_incomplete_ready_manifest_is_rejected(self) -> None:
+        database, runtime = _Database(), _Runtime(9)
+        identity = "a" * 64
+        database.state = PdfContentBuildState(
+            build=PdfContentBuild(
+                "00000000-0000-0000-0000-000000000099", "b" * 64
+            ),
+            pdf_digest=sha256_file(self.pdf),
+            sidecar_digest=sha256_file(self.markdown),
+            processing_identity_digest=identity,
+            status="READY",
+            batches=(
+                PdfContentBatchState(
+                    PdfContentBatch(
+                        "00000000-0000-0000-0000-000000000098",
+                        "00000000-0000-0000-0000-000000000099",
+                        1,
+                        4,
+                    ),
+                    "SUCCEEDED",
+                ),
+            ),
+            segment_count=1,
+        )
+
+        with self.assertRaisesRegex(PdfBuildError, "PDF_RUNTIME_FAILED"):
+            await self.builder(database, runtime).build(self.sidecar, identity)
+        self.assertEqual(runtime.ranges, [])
 
     async def test_all_succeeded_build_recovers_to_ready_without_a_child(self) -> None:
         database, runtime = _Database(), _Runtime(1)

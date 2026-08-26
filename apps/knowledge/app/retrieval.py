@@ -89,6 +89,15 @@ def normalize_filters(
     return SearchFilters(topic, tuple(sorted(normalized_tags)), _normalize_path_prefix(path_prefix))
 
 
+def normalize_source_types(source_types: list[str] | None) -> tuple[str, ...]:
+    if source_types is None:
+        return ("MARKDOWN", "PDF")
+    values = set(source_types)
+    if not values or not values.issubset({"MARKDOWN", "PDF"}):
+        raise SearchValidationError("INVALID_SEARCH_REQUEST")
+    return tuple(value for value in ("MARKDOWN", "PDF") if value in values)
+
+
 def _normalize_path_prefix(value: str | None) -> str | None:
     if value is None:
         return None
@@ -144,3 +153,10 @@ def render_citation(title: str, source_path: str, line_start: int, line_end: int
     escaped_title = title.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
     encoded_path = quote(source_path, safe="/")
     return f"[{escaped_title}](<{encoded_path}>) (lines {line_start}-{line_end})"
+
+
+def render_pdf_citation(title: str, source_path: str, page_start: int, page_end: int) -> str:
+    escaped_title = title.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
+    encoded_path = quote(source_path, safe="/")
+    pages = str(page_start) if page_start == page_end else f"{page_start}-{page_end}"
+    return f"[{escaped_title}](<{encoded_path}#page={page_start}>) (pages {pages})"

@@ -10,7 +10,9 @@ from app.retrieval import (
     SearchValidationError,
     fuse_candidates,
     normalize_filters,
+    normalize_source_types,
     render_citation,
+    render_pdf_citation,
 )
 
 
@@ -84,6 +86,19 @@ class RetrievalTests(unittest.IsolatedAsyncioTestCase):
         )
         with self.assertRaises(SearchValidationError):
             normalize_filters("Data", [], "foo/../bar")
+
+    def test_source_types_and_pdf_citation_are_canonical(self) -> None:
+        self.assertEqual(normalize_source_types(None), ("MARKDOWN", "PDF"))
+        self.assertEqual(normalize_source_types(["PDF", "PDF"]), ("PDF",))
+        self.assertEqual(normalize_source_types(["PDF", "MARKDOWN"]), ("MARKDOWN", "PDF"))
+        with self.assertRaises(SearchValidationError):
+            normalize_source_types([])
+        with self.assertRaises(SearchValidationError):
+            normalize_source_types(["UNKNOWN"])
+        self.assertEqual(
+            render_pdf_citation("A [title]", "02. Books/My #1 (đ).pdf", 3, 4),
+            "[A \\[title\\]](<02.%20Books/My%20%231%20%28%C4%91%29.pdf#page=3>) (pages 3-4)",
+        )
 
     def test_sigmoid_is_finite_at_extremes(self) -> None:
         self.assertGreater(stable_sigmoid(1000), 0.999)
