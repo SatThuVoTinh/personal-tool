@@ -133,6 +133,11 @@ test("M3/T5 isolates cleanup by labels and proves kernel read-only behavior", ()
   assert.match(common, /label=com\.personal-tool\.persistence=temporary/);
   assert.match(common, /function Assert-T5ReadOnlyMount/);
   assert.match(common, /function Assert-T5RuntimeIsolation/);
+  assert.doesNotMatch(common, /Networks\.PSObject\.Properties\.Count/);
+  assert.match(
+    common,
+    /@\(\$knowledge\.NetworkSettings\.Networks\.PSObject\.Properties\)\.Count/,
+  );
   assert.match(common, /ReadonlyRootfs/);
   assert.match(common, /CapDrop/);
   assert.match(common, /NoNewPrivs/);

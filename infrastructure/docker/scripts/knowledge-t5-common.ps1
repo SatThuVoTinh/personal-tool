@@ -527,7 +527,7 @@ function Assert-T5RuntimeIsolation {
   Assert-T5PrivilegeBoundary $KnowledgeContainerId
   $knowledge = @(& docker inspect $KnowledgeContainerId | ConvertFrom-Json)[0]
   if (@($knowledge.HostConfig.ExtraHosts).Count -ne 0 -or
-    $knowledge.NetworkSettings.Networks.PSObject.Properties.Count -ne 1) {
+    @($knowledge.NetworkSettings.Networks.PSObject.Properties).Count -ne 1) {
     throw "Knowledge acceptance has an unexpected host or network route."
   }
   $networkId = @($knowledge.NetworkSettings.Networks.PSObject.Properties.Value.NetworkID)[0]
@@ -547,7 +547,7 @@ function Assert-T5RuntimeIsolation {
   if ($LASTEXITCODE -ne 0) { throw "Acceptance gateway exposed a non-allowlisted Ollama API." }
 
   $nginx = @(& docker inspect $NginxContainerId | ConvertFrom-Json)[0]
-  if ($nginx.NetworkSettings.Networks.PSObject.Properties.Count -ne 2) {
+  if (@($nginx.NetworkSettings.Networks.PSObject.Properties).Count -ne 2) {
     throw "Acceptance Nginx must be the only dual-homed allowlisted gateway."
   }
 }
