@@ -272,5 +272,9 @@ test("M4/T5 log leak inspection accepts normal container stderr safely", () => {
   assert.match(isolated, /\$runtimeLogRecords = @\(& docker logs/);
   assert.match(isolated, /\$runtimeLogExitCode = \$LASTEXITCODE/);
   assert.match(isolated, /Unable to read Knowledge runtime logs/);
-  assert.match(isolated, /TOP_SECRET_VAULT_SENTINEL_M4_T5/);
+  assert.match(
+    isolated,
+    /IndexOf\("TOP_SECRET_VAULT_SENTINEL_M4_T5", \[StringComparison\]::Ordinal\) -ge 0/,
+  );
+  assert.doesNotMatch(isolated, /\.Contains\([^\r\n]+\[StringComparison\]/);
 });

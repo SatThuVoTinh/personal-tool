@@ -246,7 +246,7 @@ VALUES ('$orphanRunId', '$orphanIndexId', 'FULL_REBUILD', 'RUNNING');
   }
   if ($runtimeLogExitCode -ne 0) { throw "Unable to read Knowledge runtime logs." }
   $runtimeLogs = (($runtimeLogRecords | ForEach-Object { $_.ToString() }) -join "`n")
-  if ($runtimeLogs.Contains("TOP_SECRET_VAULT_SENTINEL_M4_T5", [StringComparison]::Ordinal)) { throw "Private-content sentinel leaked into runtime logs." }
+  if ($runtimeLogs.IndexOf("TOP_SECRET_VAULT_SENTINEL_M4_T5", [StringComparison]::Ordinal) -ge 0) { throw "Private-content sentinel leaked into runtime logs." }
   $hashAfter = Get-T5VaultTreeHash $canonicalVault
   if ($hashBefore -ne $hashAfter) { throw "Vault tree hash changed during acceptance." }
 
