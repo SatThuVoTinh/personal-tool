@@ -198,6 +198,8 @@ test("M4/T5 binds backup, recovery, and live mutation to one ownership interval"
   assert.match(live, /Live-database restore guard/);
   assert.match(live, /metadata digest differs/);
   assert.match(live, /sequence\/identity state differs/);
+  assert.match(isolated, /t\.typtype::text/);
+  assert.match(live, /t\.typtype::text/);
   assert.match(
     live,
     /arbitrary_knowledge_content_may_contain_secrets = \$true/,
