@@ -26,6 +26,12 @@ const acceptanceCompose = read(
   "compose",
   "compose.m3-t5.acceptance.yml",
 );
+const acceptanceNginx = read(
+  "infrastructure",
+  "nginx",
+  "conf.d",
+  "t5-acceptance.conf",
+);
 const build = read("infrastructure", "docker", "scripts", "build.ps1");
 const start = read("infrastructure", "docker", "scripts", "start.ps1");
 const stop = read("infrastructure", "docker", "scripts", "stop.ps1");
@@ -69,12 +75,22 @@ test("M3/T5 pins a clean HEAD-provenanced Knowledge image", () => {
   );
 });
 
-test("M3/T5 keeps deployment identity out of candidate parity", () => {
+test("M4/T5 freezes portable Git path and blob candidate identities", () => {
   assert.match(common, /function Get-T5Candidate/);
   assert.match(common, /candidate_fingerprint/);
   assert.match(common, /function Get-T5DeploymentFingerprint/);
   assert.match(common, /persistence = \$Persistence/);
-  assert.match(common, /candidate_source_digest/);
+  assert.match(common, /function Get-T5CandidatePathManifest/);
+  assert.match(common, /git ls-tree -r --name-only/);
+  assert.match(common, /candidate_path_set_sha256/);
+  assert.match(common, /candidate_manifest_sha256/);
+  assert.match(common, /git_blob_oid/);
+  assert.match(common, /ForEach-Object \{ \$_\.Replace/);
+  assert.match(common, /T5Utf8ByteComparer/);
+  assert.match(common, /function Test-T5CandidateAffectingPath/);
+  assert.match(common, /\\\.npmrc/);
+  assert.match(common, /\$pathBytes\.Add\(0\)/);
+  assert.match(common, /\$manifestBytes\.Add\(0\)/);
   assert.match(live, /Get-T5MatchingRealVaultEvidence/);
   assert.match(live, /before database mutation/);
   assert.doesNotMatch(common, /ConvertFrom-Json -AsHashtable/);
@@ -116,6 +132,19 @@ test("M3/T5 isolates cleanup by labels and proves kernel read-only behavior", ()
   assert.match(common, /label=com\.personal-tool\.acceptance-run=\$RunId/);
   assert.match(common, /label=com\.personal-tool\.persistence=temporary/);
   assert.match(common, /function Assert-T5ReadOnlyMount/);
+  assert.match(common, /function Assert-T5RuntimeIsolation/);
+  assert.match(common, /ReadonlyRootfs/);
+  assert.match(common, /CapDrop/);
+  assert.match(common, /NoNewPrivs/);
+  assert.match(acceptanceCompose, /internal: true/);
+  assert.match(
+    acceptanceCompose,
+    /KNOWLEDGE_OLLAMA_URL: http:\/\/nginx:8080\/ollama/,
+  );
+  assert.match(acceptanceNginx, /location = \/ollama\/api\/tags/);
+  assert.match(acceptanceNginx, /location = \/ollama\/api\/embed/);
+  assert.doesNotMatch(acceptanceNginx, /location \/ollama\//);
+  assert.match(common, /non-allowlisted Ollama API/);
   assert.match(common, /errno\.EROFS/);
   assert.match(common, /HostConfig\.PortBindings/);
   assert.match(common, /NetworkSettings\.Ports/);
@@ -134,8 +163,9 @@ test("M3/T5 isolates cleanup by labels and proves kernel read-only behavior", ()
   assert.doesNotMatch(isolated, /\("build", "knowledge"\)/);
 });
 
-test("M3/T5 persists local evidence and guards a live rebuild", () => {
-  assert.match(common, /temp\\knowledge-t5\\evidence/);
+test("M4/T5 binds backup, recovery, and live mutation to one ownership interval", () => {
+  assert.match(common, /ZinkKnowledge\\evidence\\m4-t5/);
+  assert.match(common, /Initialize-T5PrivateEvidenceDirectory/);
   assert.match(common, /function Get-T5VaultTreeHash/);
   assert.match(common, /function Assert-T5NoUnsafeNestedReparsePoint/);
   assert.match(common, /IsCloudPlaceholder/);
@@ -153,25 +183,79 @@ test("M3/T5 persists local evidence and guards a live rebuild", () => {
   assert.match(live, /ConfirmPersistentIndex/);
   assert.match(live, /No matching isolated RealVault PASS evidence exists/);
   assert.match(live, /pg_namespace/);
-  assert.match(live, /schema migration ledger is missing, corrupt, or unknown/);
-  assert.match(live, /backups\\knowledge-t5/);
-  assert.match(live, /docker exec \$postgresId pg_dump/);
-  assert.match(live, /docker cp "\$\{postgresId\}:\$containerDumpPath"/);
+  assert.match(live, /migration ledger is missing, corrupt, or unknown/);
+  assert.match(live, /LOCALAPPDATA/);
+  assert.match(live, /ZinkKnowledge\\recovery\\m4/);
+  assert.match(live, /--snapshot=\$\(\$Snapshot\.snapshot_id\)/);
+  assert.match(live, /pg_restore --list/);
+  assert.match(live, /--no-owner --no-acl/);
+  assert.match(live, /Disposable recovery restore failed/);
+  assert.match(live, /Live-database restore guard/);
+  assert.match(live, /metadata digest differs/);
+  assert.match(live, /sequence\/identity state differs/);
+  assert.match(
+    live,
+    /arbitrary_knowledge_content_may_contain_secrets = \$true/,
+  );
+  assert.match(live, /known_credential_store_in_scope = \$false/);
+  assert.match(live, /Assert-BackupGuardSelfTests/);
+  assert.match(live, /Truncated recovery archive was accepted/);
+  assert.match(live, /Final recovery archive collision/);
+  assert.match(live, /Backup destination reparse guard/);
   assert.doesNotMatch(live, /compose .*run --rm.*pg_dump/);
   assert.match(common, /function Get-T5CgroupSnapshot/);
   assert.match(common, /function Get-T5ResourceWindow/);
   assert.match(common, /oom_count_before/);
   assert.match(common, /oom_kill_delta/);
   assert.match(isolated, /INTERRUPTED:FAILED:ACTIVE/);
-  assert.match(live, /Assert-LiveSearch \$request -RequireExpectedSource/);
+  assert.match(live, /Assert-LiveSearch \$request/);
   assert.match(live, /restart", "knowledge/);
-  assert.match(live, /accepted-candidate\.json/);
+  assert.match(
+    live,
+    /accepted-candidate-\$\(\$candidate\.repository_sha\)\.json/,
+  );
+  assert.match(live, /Accepted candidate evidence is immutable/);
+  assert.match(live, /status = "REMOTE-PENDING"/);
   assert.match(remote, /git merge-base --is-ancestor/);
-  assert.match(remote, /Candidate-affecting source digest changed/);
+  assert.match(
+    remote,
+    /Remote candidate path completeness or Git-blob manifest changed/,
+  );
   assert.match(remote, /Get-SuccessfulWorkflowRun "CI"/);
   assert.match(remote, /Get-SuccessfulWorkflowRun "Security"/);
   assert.match(remote, /--json databaseId,headSha,status,url/);
   assert.match(remote, /gh run view \$runs\[0\]\.databaseId/);
   assert.doesNotMatch(remote, /workflowDatabaseId/);
   assert.doesNotMatch(live, /down --volumes/);
+});
+
+test("M4/T5 application exports backup before migration on the pinned lock", () => {
+  const database = read("apps", "knowledge", "app", "database.py");
+  const runner = read("apps", "knowledge", "app", "index_runner.py");
+  const main = read("apps", "knowledge", "app", "main.py");
+  assert.match(database, /pg_export_snapshot/);
+  assert.match(
+    database,
+    /await self\._acceptance_backup_barrier\(connection\)/,
+  );
+  assert.match(database, /await self\._apply_migrations\(connection\)/);
+  assert.match(database, /self\._startup_owner_connection = connection/);
+  assert.match(runner, /adopt_startup_reservation/);
+  assert.match(runner, /self\._acceptance_preclaimed/);
+  assert.match(main, /database\.take_startup_owner_connection/);
+  assert.match(main, /coordinator\.adopt_startup_reservation/);
+});
+
+test("M4/T5 cleanup cannot be skipped and acceptance marker is last", () => {
+  assert.match(isolated, /finalizationError/);
+  assert.match(isolated, /Remove-T5TemporaryResources/);
+  assert.match(live, /finalizationError/);
+  assert.ok(
+    live.lastIndexOf('Write-T5Evidence "live"') <
+      live.lastIndexOf("Write-T5AtomicJson $acceptedCandidatePath"),
+  );
+  assert.ok(
+    live.lastIndexOf("docker rm -f $restoreContainer") <
+      live.lastIndexOf("Write-T5AtomicJson $acceptedCandidatePath"),
+  );
 });

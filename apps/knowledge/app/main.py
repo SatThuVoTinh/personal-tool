@@ -90,6 +90,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         configured_settings.database_user,
         configured_settings.database_password,
         configured_settings.migration_directory,
+        configured_settings.advisory_lock_key,
+        configured_settings.acceptance_backup_barrier_dir,
     )
     coordinator = IndexRunCoordinator(database, configured_settings.advisory_lock_key)
     model_probe = OllamaModelProbe(configured_settings.ollama_url)
@@ -148,7 +150,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         await database.start()
         if database.available:
-            await coordinator.recover_startup()
+            startup_owner = database.take_startup_owner_connection()
+            if startup_owner is None:
+                await coordinator.recover_startup()
+            else:
+                coordinator.adopt_startup_reservation(startup_owner)
+                await database.recover_interrupted_runs()
         reranker: OnnxReranker | None = None
         reranker_error: str | None = None
         try:

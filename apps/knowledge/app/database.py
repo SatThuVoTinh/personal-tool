@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 import json
+import os
 from pathlib import Path
+import re
 from typing import Any, AsyncIterator, Mapping, Sequence
 from uuid import UUID, uuid4
 
@@ -154,6 +157,8 @@ class KnowledgeDatabase:
         database_user: str,
         database_password: str,
         migration_directory: Path,
+        advisory_lock_key: int = 741212391041002,
+        acceptance_backup_barrier_dir: Path | None = None,
     ) -> None:
         self._database_host = database_host
         self._database_port = database_port
@@ -161,8 +166,11 @@ class KnowledgeDatabase:
         self._database_user = database_user
         self._database_password = database_password
         self._migration_directory = migration_directory
+        self._advisory_lock_key = advisory_lock_key
+        self._acceptance_backup_barrier_dir = acceptance_backup_barrier_dir
         self._pool: asyncpg.Pool | None = None
         self._owner_connection: asyncpg.Connection | None = None
+        self._startup_owner_connection: asyncpg.Connection | None = None
         self.startup_error_code: str | None = None
 
     @property
@@ -182,10 +190,30 @@ class KnowledgeDatabase:
                 timeout=10,
                 command_timeout=30,
             )
-            await self._apply_migrations()
+            barrier_completed = self._acceptance_barrier_is_completed()
+            if self._acceptance_backup_barrier_dir is None or barrier_completed:
+                await self._apply_migrations()
+            else:
+                connection = await self.acquire_advisory_lock(self._advisory_lock_key)
+                if connection is None:
+                    raise RuntimeError("INDEX_RUN_ALREADY_ACTIVE")
+                self.bind_owner_connection(connection)
+                try:
+                    await self._acceptance_backup_barrier(connection)
+                    await self._apply_migrations(connection)
+                    self._startup_owner_connection = connection
+                except Exception:
+                    self.unbind_owner_connection(connection)
+                    await self.release_advisory_lock(connection, self._advisory_lock_key)
+                    raise
             await self.assert_searchable_segment_type_domain()
         except Exception:
             self.startup_error_code = "DATABASE_UNAVAILABLE"
+            if self._startup_owner_connection is not None:
+                connection = self._startup_owner_connection
+                self._startup_owner_connection = None
+                self.unbind_owner_connection(connection)
+                await self.release_advisory_lock(connection, self._advisory_lock_key)
             if self._pool is not None:
                 await self._pool.close()
                 self._pool = None
@@ -194,6 +222,138 @@ class KnowledgeDatabase:
         if self._pool is not None:
             await self._pool.close()
             self._pool = None
+
+    def take_startup_owner_connection(self) -> asyncpg.Connection | None:
+        connection = self._startup_owner_connection
+        self._startup_owner_connection = None
+        return connection
+
+    def _acceptance_barrier_is_completed(self) -> bool:
+        directory = self._acceptance_backup_barrier_dir
+        if directory is None:
+            return False
+        if str(directory) != "/acceptance-backup-barrier" or directory.is_symlink():
+            raise RuntimeError("Invalid acceptance backup barrier directory.")
+        resolved = directory.resolve(strict=True)
+        if not resolved.is_dir() or str(resolved) != "/acceptance-backup-barrier":
+            raise RuntimeError("Invalid acceptance backup barrier directory.")
+        request_path = resolved / "request"
+        completed_path = resolved / "completed"
+        if not completed_path.exists():
+            return False
+        if request_path.is_symlink() or completed_path.is_symlink():
+            raise RuntimeError("Invalid acceptance backup barrier completion state.")
+        token = request_path.read_text(encoding="ascii").strip()
+        completed = completed_path.read_text(encoding="ascii").strip()
+        if not re.fullmatch(r"[a-f0-9]{64}", token) or completed != token:
+            raise RuntimeError("Invalid acceptance backup barrier completion state.")
+        return True
+
+    async def _acceptance_backup_barrier(
+        self, connection: asyncpg.Connection
+    ) -> None:
+        """Export a pre-migration snapshot without releasing index ownership."""
+
+        directory = self._acceptance_backup_barrier_dir
+        if directory is None:
+            return
+        if str(directory) != "/acceptance-backup-barrier" or directory.is_symlink():
+            raise RuntimeError("Invalid acceptance backup barrier directory.")
+        resolved = directory.resolve(strict=True)
+        if not resolved.is_dir() or str(resolved) != "/acceptance-backup-barrier":
+            raise RuntimeError("Invalid acceptance backup barrier directory.")
+        request_path = resolved / "request"
+        if request_path.is_symlink() or not request_path.is_file():
+            raise RuntimeError("Invalid acceptance backup barrier request.")
+        token = request_path.read_text(encoding="ascii").strip()
+        if not re.fullmatch(r"[a-f0-9]{64}", token):
+            raise RuntimeError("Invalid acceptance backup barrier request.")
+        snapshot_path = resolved / "snapshot.json"
+        continue_path = resolved / "continue"
+        if snapshot_path.exists() or continue_path.exists():
+            raise RuntimeError("Acceptance backup barrier state is not clean.")
+
+        async with connection.transaction(isolation="repeatable_read", readonly=True):
+            schema_ready = await connection.fetchval(
+                """
+                SELECT to_regclass('knowledge.schema_migrations') IS NOT NULL
+                   AND to_regclass('knowledge.indexes') IS NOT NULL
+                """
+            )
+            if not schema_ready:
+                raise RuntimeError("M4 live acceptance requires the recoverable M3 schema.")
+            snapshot_id = await connection.fetchval("SELECT pg_export_snapshot()")
+            active_ids = [
+                str(row["id"])
+                for row in await connection.fetch(
+                    "SELECT id FROM knowledge.indexes WHERE status = 'ACTIVE' ORDER BY id"
+                )
+            ]
+            migration_versions = [
+                row["version"]
+                for row in await connection.fetch(
+                    "SELECT version FROM knowledge.schema_migrations ORDER BY version"
+                )
+            ]
+            database_identity = await connection.fetchrow(
+                """
+                SELECT current_database() AS database_name,
+                       current_setting('server_version_num') AS server_version_num,
+                       current_setting('server_encoding') AS server_encoding,
+                       current_setting('lc_collate') AS lc_collate,
+                       current_setting('lc_ctype') AS lc_ctype
+                """
+            )
+            extensions = [
+                {"name": row["extname"], "version": row["extversion"]}
+                for row in await connection.fetch(
+                    "SELECT extname, extversion FROM pg_extension ORDER BY extname"
+                )
+            ]
+            payload = {
+                "schema_version": 1,
+                "token": token,
+                "snapshot_id": snapshot_id,
+                "prior_active_ids": active_ids,
+                "migration_versions": migration_versions,
+                "database": dict(database_identity),
+                "extensions": extensions,
+            }
+            descriptor = os.open(
+                snapshot_path,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+            )
+            try:
+                with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                    json.dump(payload, stream, sort_keys=True, separators=(",", ":"))
+                    stream.flush()
+                    os.fsync(stream.fileno())
+            finally:
+                if not snapshot_path.exists():
+                    raise RuntimeError("Acceptance backup snapshot was not persisted.")
+
+            deadline = asyncio.get_running_loop().time() + 600
+            while True:
+                if continue_path.exists():
+                    if continue_path.is_symlink() or not continue_path.is_file():
+                        raise RuntimeError("Invalid acceptance backup continuation state.")
+                    if continue_path.read_text(encoding="ascii").strip() != token:
+                        raise RuntimeError("Invalid acceptance backup continuation token.")
+                    completed_path = resolved / "completed"
+                    descriptor = os.open(
+                        completed_path,
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                        0o600,
+                    )
+                    with os.fdopen(descriptor, "w", encoding="ascii") as stream:
+                        stream.write(token)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    break
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise TimeoutError("Acceptance backup barrier timed out.")
+                await asyncio.sleep(0.1)
 
     def bind_owner_connection(self, connection: asyncpg.Connection) -> None:
         """Route run-state mutations through the session that owns the lock."""
@@ -1393,13 +1553,15 @@ class KnowledgeDatabase:
                 f"Target index is no longer {expected_index_status}."
             )
 
-    async def _apply_migrations(self) -> None:
+    async def _apply_migrations(
+        self, owner_connection: asyncpg.Connection | None = None
+    ) -> None:
         if self._pool is None:
             raise RuntimeError("Database pool is unavailable.")
         migrations = sorted(self._migration_directory.glob("*.sql"))
         if not migrations:
             raise RuntimeError("No Knowledge Platform migrations were found.")
-        async with self._pool.acquire() as connection:
+        async def apply(connection: asyncpg.Connection) -> None:
             await connection.execute("CREATE SCHEMA IF NOT EXISTS knowledge")
             await connection.execute(
                 "CREATE TABLE IF NOT EXISTS knowledge.schema_migrations (version text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())"
@@ -1415,3 +1577,8 @@ class KnowledgeDatabase:
                     await connection.execute(
                         "INSERT INTO knowledge.schema_migrations (version) VALUES ($1)", version
                     )
+        if owner_connection is not None:
+            await apply(owner_connection)
+        else:
+            async with self._pool.acquire() as connection:
+                await apply(connection)

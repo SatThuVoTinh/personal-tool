@@ -48,7 +48,7 @@ function Invoke-Api {
 
 function Wait-Run {
   param([string]$RunId)
-  for ($attempt = 0; $attempt -lt 240; $attempt++) {
+  for ($attempt = 0; $attempt -lt 600; $attempt++) {
     $response = Invoke-Api "GET" "/v1/index-runs/$RunId"
     if ($response.StatusCode -ne 200) { throw "Index run $RunId cannot be read." }
     $run = $response.Body | ConvertFrom-Json

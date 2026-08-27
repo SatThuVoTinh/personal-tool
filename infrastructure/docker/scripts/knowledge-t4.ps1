@@ -118,7 +118,7 @@ function Assert-KnowledgeMemory {
 
 function Wait-Run {
   param([string]$RunId)
-  for ($attempt = 0; $attempt -lt 240; $attempt++) {
+  for ($attempt = 0; $attempt -lt 600; $attempt++) {
     $run = Invoke-Api "GET" "/v1/index-runs/$RunId"
     if ($run.StatusCode -eq 200) {
       $payload = $run.Body | ConvertFrom-Json

@@ -2,14 +2,9 @@ Set-StrictMode -Version Latest
 
 $script:T5RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..\..")).Path
 $script:T5DockerDirectory = Split-Path -Parent $PSScriptRoot
-$script:T5EvidenceDirectory = Join-Path $script:T5RepositoryRoot "temp\knowledge-t5\evidence"
-$script:T5CandidatePathspecs = @(
-  "apps/knowledge",
-  "infrastructure/docker/compose",
-  "infrastructure/docker/scripts",
-  "tests",
-  "docs/runbooks"
-)
+if (-not $env:LOCALAPPDATA) { throw "LOCALAPPDATA is required for private M4/T5 evidence." }
+$script:T5EvidenceDirectory = Join-Path $env:LOCALAPPDATA "ZinkKnowledge\evidence\m4-t5"
+$script:T5AdvisoryLockKey = 741212391041002
 
 if (-not ("PersonalTool.T5ReparsePoint" -as [type])) {
   Add-Type -TypeDefinition @'
@@ -19,6 +14,19 @@ using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
 
 namespace PersonalTool {
+  public sealed class T5Utf8ByteComparer : System.Collections.Generic.IComparer<string> {
+    public int Compare(string left, string right) {
+      byte[] a = System.Text.Encoding.UTF8.GetBytes(left);
+      byte[] b = System.Text.Encoding.UTF8.GetBytes(right);
+      int count = Math.Min(a.Length, b.Length);
+      for (int index = 0; index < count; index++) {
+        int comparison = a[index].CompareTo(b[index]);
+        if (comparison != 0) return comparison;
+      }
+      return a.Length.CompareTo(b.Length);
+    }
+  }
+
   public static class T5ReparsePoint {
     private const uint FSCTL_GET_REPARSE_POINT = 0x000900A8;
     private const uint FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000;
@@ -78,34 +86,65 @@ function Get-T5RepositorySha {
   return $sha
 }
 
-function Get-T5CandidateSourceDigest {
-  $paths = @(git ls-files -- @script:T5CandidatePathspecs | Sort-Object)
+function Get-T5CandidatePathManifest {
+  param([string]$Treeish = "HEAD")
+
+  if ($Treeish -notmatch '^(HEAD|[0-9a-f]{40,64}|[A-Za-z0-9_.]+/[A-Za-z0-9_.-]+)$') { throw "Candidate Git tree identity is invalid." }
+  [string[]]$paths = @(git ls-tree -r --name-only $Treeish |
+    ForEach-Object { $_.Replace("\", "/") } |
+    Where-Object { Test-T5CandidateAffectingPath $_ })
+  [Array]::Sort($paths, [PersonalTool.T5Utf8ByteComparer]::new())
   if ($LASTEXITCODE -ne 0 -or $paths.Count -eq 0) {
-    throw "Unable to enumerate M3/T5 candidate files."
+    throw "Unable to enumerate M4/T5 candidate files."
   }
-  $lines = foreach ($relativePath in $paths) {
-    $absolutePath = Join-Path $script:T5RepositoryRoot $relativePath
-    if (-not (Test-Path -LiteralPath $absolutePath -PathType Leaf)) {
-      throw "Candidate file is missing: $relativePath"
+
+  $pathBytes = [Collections.Generic.List[byte]]::new()
+  $manifestBytes = [Collections.Generic.List[byte]]::new()
+  $entries = foreach ($relativePath in $paths) {
+    if ($relativePath.Contains("\")) { throw "Candidate path is not POSIX-normalized: $relativePath" }
+    $oid = (& git rev-parse "${Treeish}:$relativePath").Trim()
+    if ($LASTEXITCODE -ne 0 -or $oid -notmatch '^[0-9a-f]{40,64}$') {
+      throw "Unable to resolve candidate Git blob OID: $relativePath"
     }
-    $hash = (Get-FileHash -LiteralPath $absolutePath -Algorithm SHA256).Hash.ToLowerInvariant()
-    $length = (Get-Item -LiteralPath $absolutePath).Length
-    "{0}|{1}|{2}" -f ($relativePath.Replace("\", "/")), $length, $hash
+    $encodedPath = [Text.UTF8Encoding]::new($false).GetBytes($relativePath)
+    $encodedOid = [Text.Encoding]::ASCII.GetBytes($oid)
+    $pathBytes.AddRange($encodedPath); $pathBytes.Add(0)
+    $manifestBytes.AddRange($encodedPath); $manifestBytes.Add(0)
+    $manifestBytes.AddRange($encodedOid); $manifestBytes.Add(0)
+    [ordered]@{ path = $relativePath; git_blob_oid = $oid }
   }
-  return (Get-T5Sha256Text (($lines -join "`n") + "`n"))
+  return [ordered]@{
+    entries = @($entries)
+    candidate_path_count = $paths.Count
+    candidate_path_set_sha256 = Get-T5Sha256Bytes $pathBytes.ToArray()
+    candidate_manifest_sha256 = Get-T5Sha256Bytes $manifestBytes.ToArray()
+  }
+}
+
+function Test-T5CandidateAffectingPath {
+  param([string]$Path)
+
+  if ($Path -match '^(apps/knowledge|docs|infrastructure/docker|infrastructure/nginx|infrastructure/databases/redis|scripts|tests|\.github/workflows)/') {
+    return $true
+  }
+  return $Path -match '^(README\.md|Makefile|package(?:-lock)?\.json|eslint\.config\.[^/]+|\.editorconfig|\.env\.example|\.gitattributes|\.gitignore|\.markdownlint[^/]*|\.npmrc|\.nvmrc|Dockerfile|tsconfig[^/]*|.*workspace[^/]*)$'
+}
+
+function Get-T5Sha256Bytes {
+  param([byte[]]$Bytes)
+
+  $sha256 = [Security.Cryptography.SHA256]::Create()
+  try {
+    return ([BitConverter]::ToString($sha256.ComputeHash($Bytes))).Replace("-", "").ToLowerInvariant()
+  }
+  finally { $sha256.Dispose() }
 }
 
 function Get-T5Sha256Text {
   param([string]$Text)
 
   $bytes = [Text.UTF8Encoding]::new($false).GetBytes($Text)
-  $sha256 = [Security.Cryptography.SHA256]::Create()
-  try {
-    return ([BitConverter]::ToString($sha256.ComputeHash($bytes))).Replace("-", "").ToLowerInvariant()
-  }
-  finally {
-    $sha256.Dispose()
-  }
+  return Get-T5Sha256Bytes $bytes
 }
 
 function Get-T5CanonicalVaultRoot {
@@ -157,6 +196,28 @@ function Get-T5VaultTreeHash {
     $entry | ConvertTo-Json -Compress
   }
   return Get-T5Sha256Text (($serialized -join "`n") + "`n")
+}
+
+function New-T5SyntheticPdf {
+  param([string]$Path, [string]$Text)
+
+  $encoding = [Text.Encoding]::ASCII
+  $stream = "BT /F1 24 Tf 72 720 Td ($Text) Tj ET"
+  $objects = @(
+    "1 0 obj`n<< /Type /Catalog /Pages 2 0 R >>`nendobj`n",
+    "2 0 obj`n<< /Type /Pages /Kids [3 0 R] /Count 1 >>`nendobj`n",
+    "3 0 obj`n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>`nendobj`n",
+    "4 0 obj`n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>`nendobj`n",
+    "5 0 obj`n<< /Length $($encoding.GetByteCount($stream)) >>`nstream`n$stream`nendstream`nendobj`n"
+  )
+  $bytes = [Collections.Generic.List[byte]]::new()
+  $bytes.AddRange($encoding.GetBytes("%PDF-1.4`n% M4 acceptance fixture`n"))
+  $offsets = [Collections.Generic.List[int]]::new()
+  foreach ($object in $objects) { $offsets.Add($bytes.Count); $bytes.AddRange($encoding.GetBytes($object)) }
+  $xrefOffset = $bytes.Count
+  $xref = "xref`n0 6`n0000000000 65535 f `n" + (($offsets | ForEach-Object { "{0:D10} 00000 n `n" -f $_ }) -join "") + "trailer`n<< /Size 6 /Root 1 0 R >>`nstartxref`n$xrefOffset`n%%EOF`n"
+  $bytes.AddRange($encoding.GetBytes($xref))
+  [IO.File]::WriteAllBytes($Path, $bytes.ToArray())
 }
 
 function Assert-T5ExpectedSourcePath {
@@ -250,8 +311,9 @@ function Get-T5MigrationIdentity {
   $migrations = @(foreach ($file in Get-ChildItem -LiteralPath $migrationDirectory -Filter *.sql | Sort-Object Name) {
     [ordered]@{ name = $file.Name; sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
   })
-  if ($migrations.Count -ne 1 -or $migrations[0]["name"] -ne "001_initial.sql") {
-    throw "M3/T5 expects exactly migration 001_initial.sql."
+  $expected = @("001_initial.sql", "002_pdf_ingestion_foundation.sql")
+  if (($migrations.name -join "`n") -cne ($expected -join "`n")) {
+    throw "M4/T5 expects the exact approved migration 001/002 ledger."
   }
   return @($migrations)
 }
@@ -266,6 +328,22 @@ function Get-T5ModelIdentity {
   return [ordered]@{ name = $ModelName; digest = $model.digest; dimension = 1024 }
 }
 
+function Assert-T5LocalEmbeddingReady {
+  param([string]$ModelName, [int]$ExpectedDimensions)
+
+  $body = @{ model = $ModelName; input = "knowledge-m4-t5-offline-preflight" } | ConvertTo-Json -Compress
+  try {
+    $response = Invoke-RestMethod -Uri "http://127.0.0.1:11434/api/embed" -Method Post -ContentType "application/json" -Body $body -TimeoutSec 90
+  }
+  catch {
+    throw "Approved local Ollama embedding endpoint is not ready before the offline phase."
+  }
+  $embeddings = @($response.embeddings)
+  if ($embeddings.Count -ne 1 -or @($embeddings[0]).Count -ne $ExpectedDimensions) {
+    throw "Approved local Ollama embedding dimensions do not match the frozen contract."
+  }
+}
+
 function Get-T5Candidate {
   param([string]$ModelName = "bge-m3:latest")
 
@@ -275,11 +353,13 @@ function Get-T5Candidate {
   if ($image.revision -ne $repositorySha) {
     throw "Knowledge image provenance does not match the clean repository HEAD."
   }
+  $embedding = Get-T5ModelIdentity $ModelName
+  Assert-T5LocalEmbeddingReady $ModelName 1024
   $candidate = [ordered]@{
     repository_sha = $repositorySha
-    candidate_source_digest = Get-T5CandidateSourceDigest
+    candidate_manifest = Get-T5CandidatePathManifest
     image = $image
-    embedding = Get-T5ModelIdentity $ModelName
+    embedding = $embedding
     migrations = Get-T5MigrationIdentity
     knowledge_memory_limit_bytes = 4294967296
     vault_target = "/vault"
@@ -287,6 +367,18 @@ function Get-T5Candidate {
   }
   $candidate.candidate_fingerprint = Get-T5Sha256Text ($candidate | ConvertTo-Json -Depth 10 -Compress)
   return $candidate
+}
+
+function Assert-T5CandidateManifest {
+  param([object]$Expected)
+
+  $actual = Get-T5CandidatePathManifest
+  if ($actual.candidate_path_count -ne $Expected.candidate_path_count -or
+    $actual.candidate_path_set_sha256 -cne $Expected.candidate_path_set_sha256 -or
+    $actual.candidate_manifest_sha256 -cne $Expected.candidate_manifest_sha256) {
+    throw "Frozen candidate path set or Git-blob manifest changed."
+  }
+  return $actual
 }
 
 function Get-T5DeploymentFingerprint {
@@ -300,10 +392,25 @@ function Get-T5DeploymentFingerprint {
 function Write-T5Evidence {
   param([string]$Prefix, [string]$RunId, [System.Collections.IDictionary]$Evidence)
 
-  New-Item -ItemType Directory -Path $script:T5EvidenceDirectory -Force | Out-Null
+  Initialize-T5PrivateEvidenceDirectory
   $path = Join-Path $script:T5EvidenceDirectory "$Prefix-$RunId.json"
   Write-T5AtomicJson $path $Evidence
   return $path
+}
+
+function Initialize-T5PrivateEvidenceDirectory {
+  New-Item -ItemType Directory -Path $script:T5EvidenceDirectory -Force | Out-Null
+  $current = Get-Item -LiteralPath $script:T5EvidenceDirectory -Force
+  while ($current) {
+    if (($current.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+      throw "Private evidence path traverses a reparse point."
+    }
+    $current = $current.Parent
+  }
+  & icacls.exe $script:T5EvidenceDirectory /inheritance:r /grant:r "${env:USERNAME}:(OI)(CI)F" | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "Unable to apply private evidence ACL." }
+  $acl = Get-Acl -LiteralPath $script:T5EvidenceDirectory
+  if (-not $acl.AreAccessRulesProtected) { throw "Private evidence ACL inheritance remains enabled." }
 }
 
 function Write-T5AtomicJson {
@@ -412,6 +519,59 @@ function Assert-T5NetworkBoundary {
     $runtimeBindings[0].HostIp -ne '127.0.0.1' -or $runtimeBindings[0].HostPort -ne $ExpectedNginxHostPort) {
     throw "Nginx must bind exactly 127.0.0.1:$ExpectedNginxHostPort."
   }
+}
+
+function Assert-T5RuntimeIsolation {
+  param([string]$KnowledgeContainerId, [string]$NginxContainerId)
+
+  Assert-T5PrivilegeBoundary $KnowledgeContainerId
+  $knowledge = @(& docker inspect $KnowledgeContainerId | ConvertFrom-Json)[0]
+  if (@($knowledge.HostConfig.ExtraHosts).Count -ne 0 -or
+    $knowledge.NetworkSettings.Networks.PSObject.Properties.Count -ne 1) {
+    throw "Knowledge acceptance has an unexpected host or network route."
+  }
+  $networkId = @($knowledge.NetworkSettings.Networks.PSObject.Properties.Value.NetworkID)[0]
+  $network = @(& docker network inspect $networkId | ConvertFrom-Json)[0]
+  if (-not $network.Internal) { throw "Knowledge acceptance network must be internal." }
+  & docker exec $KnowledgeContainerId python -c "import socket; s=socket.socket(); s.settimeout(2);`ntry: s.connect(('1.1.1.1',443))`nexcept OSError: raise SystemExit(0)`nraise SystemExit(1)"
+  if ($LASTEXITCODE -ne 0) { throw "Knowledge direct external TCP egress was not denied." }
+  & docker exec $KnowledgeContainerId python -c "import socket; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.settimeout(2);`ntry: s.sendto(b'\\x00'*12,('8.8.8.8',53)); s.recvfrom(512)`nexcept OSError: raise SystemExit(0)`nraise SystemExit(1)"
+  if ($LASTEXITCODE -ne 0) { throw "Knowledge external DNS transport was not denied." }
+  & docker exec $KnowledgeContainerId python -c "import socket; s=socket.create_connection(('postgres',5432),3); s.close()"
+  if ($LASTEXITCODE -ne 0) { throw "Knowledge could not reach approved local PostgreSQL." }
+  & docker exec $KnowledgeContainerId python -c "from urllib.request import urlopen; r=urlopen('http://nginx:8080/ollama/api/tags',timeout=5); raise SystemExit(0 if r.status==200 else 1)"
+  if ($LASTEXITCODE -ne 0) { throw "Knowledge could not reach approved local Ollama through the allowlisted gateway." }
+  & docker exec $KnowledgeContainerId python -c "from urllib.request import urlopen;`ntry: urlopen('http://nginx:8080/https://example.com/', timeout=3)`nexcept Exception: raise SystemExit(0)`nraise SystemExit(1)"
+  if ($LASTEXITCODE -ne 0) { throw "Acceptance gateway behaved like a generic forward proxy." }
+  & docker exec $KnowledgeContainerId python -c "from urllib.request import Request,urlopen;`ntry: urlopen(Request('http://nginx:8080/ollama/api/pull',data=b'{}',method='POST'),timeout=3)`nexcept Exception: raise SystemExit(0)`nraise SystemExit(1)"
+  if ($LASTEXITCODE -ne 0) { throw "Acceptance gateway exposed a non-allowlisted Ollama API." }
+
+  $nginx = @(& docker inspect $NginxContainerId | ConvertFrom-Json)[0]
+  if ($nginx.NetworkSettings.Networks.PSObject.Properties.Count -ne 2) {
+    throw "Acceptance Nginx must be the only dual-homed allowlisted gateway."
+  }
+}
+
+function Assert-T5PrivilegeBoundary {
+  param([string]$KnowledgeContainerId)
+
+  $knowledge = @(& docker inspect $KnowledgeContainerId | ConvertFrom-Json)[0]
+  if (-not $knowledge.HostConfig.ReadonlyRootfs -or
+    @($knowledge.HostConfig.CapDrop) -notcontains "ALL" -or
+    @($knowledge.HostConfig.SecurityOpt) -notcontains "no-new-privileges:true" -or
+    [int]$knowledge.HostConfig.PidsLimit -ne 256) {
+    throw "Knowledge acceptance privilege isolation is incomplete."
+  }
+  if (@($knowledge.Mounts | Where-Object { $_.Destination -eq "/var/run/docker.sock" }).Count -ne 0) {
+    throw "Knowledge acceptance must not receive the Docker socket."
+  }
+
+  $status = @(& docker exec $KnowledgeContainerId sh -c "grep -E '^(CapEff|NoNewPrivs):' /proc/1/status")
+  if (($status -join "`n") -notmatch 'CapEff:\s+0{16}' -or ($status -join "`n") -notmatch 'NoNewPrivs:\s+1') {
+    throw "Knowledge runtime capability/no-new-privileges proof failed."
+  }
+  & docker exec $KnowledgeContainerId python -c "from pathlib import Path; p=Path('/app/.t5-rootfs-probe');`ntry: p.write_text('x')`nexcept OSError: raise SystemExit(0)`nraise SystemExit(1)"
+  if ($LASTEXITCODE -ne 0) { throw "Knowledge root filesystem is writable." }
 }
 
 function Assert-T5ReadOnlyMount {

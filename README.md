@@ -12,7 +12,7 @@ state. A naming migration is separate from architecture cleanup.
 | M1 — Development Foundation      | `COMPLETE / REMOTE-BACKED`        |
 | M2 — Local Infrastructure        | `COMPLETE / REMOTE-BACKED`        |
 | M3 — Markdown Knowledge Platform | `COMPLETE / REMOTE-BACKED`        |
-| M4 — PDF Document Ingestion      | `M4/T2 COMPLETE / LOCAL-VERIFIED` |
+| M4 — PDF Document Ingestion      | `M4/T4 COMPLETE / LOCAL-VERIFIED` |
 | M5+                              | deferred                          |
 
 M2 accepted commit:
@@ -175,23 +175,25 @@ Operational and acceptance procedures are in the
 ## M4 execution
 
 M4 adds sidecar-driven PDF ingestion while preserving the accepted Markdown
-path. M4/T2 now provides bounded security preflight, four-page extraction/OCR,
-deterministic page-local segmentation, source-drift containment, and atomic
-content builds. These T2 builds stop before publication and are not searchable.
+path. M4/T1–T4 now provide bounded security preflight, four-page extraction/OCR,
+deterministic page-local segmentation, resumable content builds, drift-safe
+atomic publication, combined Markdown/PDF retrieval, source filters, reranking,
+and page/bounding-box citations.
 
 At the current repository gate:
 
 ```text
-Task: M4/T2 — Preflight, extraction, and segmentation
+Task: M4/T5 — Acceptance and handoff
 Planning Readiness: APPROVED
-Plan Revision: M4/T2-R1
-Task Status: COMPLETE
-Evidence Level: LOCAL-VERIFIED
-Execution Authorization: NO
+Plan Revision: M4/T5-R1
+Task Status: IN PROGRESS
+Evidence Level: NONE
+Execution Authorization: YES
 ```
 
-The transient T2 execution contract has been removed. M4/T3 and later remain
-unauthorized; local verification does not imply remote CI/Security backing.
+T5 is authorized only for the immutable local candidate and `REMOTE-PENDING`
+handoff defined by the active execution contract. Local verification does not
+imply remote CI/Security backing or authorize M4/T5-C1 closeout.
 
 ## Security and persistent-state rules
 

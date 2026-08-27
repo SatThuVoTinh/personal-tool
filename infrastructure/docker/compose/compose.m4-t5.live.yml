@@ -1,0 +1,17 @@
+services:
+  knowledge:
+    environment:
+      KNOWLEDGE_ACCEPTANCE_BACKUP_BARRIER_DIR: /acceptance-backup-barrier
+    volumes:
+      - type: bind
+        source: ${KNOWLEDGE_T5_BACKUP_BARRIER_ROOT:?KNOWLEDGE_T5_BACKUP_BARRIER_ROOT is required}
+        target: /acceptance-backup-barrier
+        read_only: false
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=768m,mode=1777

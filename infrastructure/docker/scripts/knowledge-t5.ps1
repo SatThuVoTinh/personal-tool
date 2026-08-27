@@ -21,7 +21,9 @@ $composeFile = Join-Path $script:T5DockerDirectory "compose\compose.core.yml"
 $acceptanceComposeFile = Join-Path $script:T5DockerDirectory "compose\compose.m3-t5.acceptance.yml"
 $fixtureVault = Join-Path $script:T5RepositoryRoot "apps\knowledge\tests\fixtures\vault"
 $fixtureCopyRoot = ""
+$fixturePdfPath = ""
 $started = $false
+$script:bodyFailed = $false
 $apiBaseUrl = ""
 $evidence = [ordered]@{ schema_version = 1; mode = $Mode; result = "FAIL"; acceptance_run_id = $runId; started_at = [DateTime]::UtcNow.ToString("o") }
 
@@ -56,7 +58,7 @@ function Invoke-T5Api {
 
 function Wait-T5Run {
   param([string]$RunId)
-  for ($attempt = 0; $attempt -lt 240; $attempt++) {
+  for ($attempt = 0; $attempt -lt 600; $attempt++) {
     $response = Invoke-T5Api "GET" "/v1/index-runs/$RunId"
     if ($response.status -eq 200) {
       $run = $response.body | ConvertFrom-Json
@@ -97,7 +99,13 @@ UNION ALL
 SELECT 'index|' || indexname || '|' || indexdef FROM pg_indexes WHERE schemaname = 'knowledge'
 UNION ALL
 SELECT 'constraint|' || c.conname || '|' || pg_get_constraintdef(c.oid)
-FROM pg_constraint c JOIN pg_namespace n ON n.oid = c.connamespace WHERE n.nspname = 'knowledge';
+FROM pg_constraint c JOIN pg_namespace n ON n.oid = c.connamespace WHERE n.nspname = 'knowledge'
+UNION ALL
+SELECT 'type|' || t.typname || '|' || t.typtype FROM pg_type t JOIN pg_namespace n ON n.oid=t.typnamespace WHERE n.nspname='knowledge'
+UNION ALL
+SELECT 'function|' || p.proname || '|' || pg_get_function_identity_arguments(p.oid) || '|' || pg_get_function_result(p.oid)
+FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='knowledge'
+ORDER BY 1;
 "@
   $rows = @(Invoke-T5Sql $catalogSql | Where-Object { $_ } | Sort-Object)
   if ($rows.Count -eq 0) { throw "Knowledge schema catalog is empty." }
@@ -110,8 +118,19 @@ try {
   $candidateSha = Get-T5RepositorySha
   $env:KNOWLEDGE_IMAGE_REVISION = $candidateSha
   if ($Mode -eq "Fixture") {
-    $fixtureCopyRoot = Join-Path ([IO.Path]::GetTempPath()) "personal-tool-m3-t5-fixture-$runId"
+    $fixtureCopyRoot = Join-Path ([IO.Path]::GetTempPath()) "personal-tool-m4-t5-fixture-$runId"
     Copy-Item -LiteralPath $fixtureVault -Destination $fixtureCopyRoot -Recurse
+    $pdfDirectory = Join-Path $fixtureCopyRoot "02. Books\T5"
+    New-Item -ItemType Directory -Path $pdfDirectory -Force | Out-Null
+    $unicodeD = [char]0x0111
+    $pdfName = "Offline 50% ($unicodeD).pdf"
+    $fixturePdfPath = Join-Path $pdfDirectory $pdfName
+    New-T5SyntheticPdf $fixturePdfPath "multilingual PDF safety stock acceptance TOP_SECRET_VAULT_SENTINEL_M4_T5"
+    [IO.File]::WriteAllText(
+      (Join-Path $pdfDirectory "acceptance.md"),
+      "---`nzink_source: pdf`n---`n`n# SQL title ''; DROP TABLE sources; --`n`n![[02. Books/T5/$pdfName]]`n`n#supplychain #english`n",
+      [Text.UTF8Encoding]::new($false)
+    )
     $canonicalVault = Get-T5CanonicalVaultRoot $fixtureCopyRoot
   }
   else {
@@ -140,8 +159,9 @@ try {
   $nginxId = (Invoke-T5Compose @("ps", "-q", "nginx")).Trim()
   Assert-T5ReadOnlyMount $knowledgeId $runId
   Assert-T5NetworkBoundary $knowledgeId $nginxId $publishedPort
+  Assert-T5RuntimeIsolation $knowledgeId $nginxId
   $ledgerBefore = @(Invoke-T5Sql "SELECT version FROM knowledge.schema_migrations ORDER BY version;") | Where-Object { $_ }
-  if (($ledgerBefore -join "") -ne "001_initial.sql") { throw "Knowledge migration ledger is invalid." }
+  if (($ledgerBefore -join "`n") -cne "001_initial.sql`n002_pdf_ingestion_foundation.sql") { throw "Knowledge migration ledger is invalid." }
   $schemaFingerprintBefore = Get-T5SchemaCatalogFingerprint
 
   $oldRun = Start-T5FullRebuild
@@ -164,6 +184,15 @@ VALUES ('$orphanRunId', '$orphanIndexId', 'FULL_REBUILD', 'RUNNING');
 
   $rebuildBefore = Get-T5CgroupSnapshot $knowledgeId
   $run = Start-T5FullRebuild
+  $sourceCounts = @($run.source_counts | ForEach-Object { "$($_.source_type):$($_.discovered_count):$($_.indexed_count):$($_.failed_count)" })
+  if ($Mode -eq "Fixture" -and ($sourceCounts -join ",") -cne "MARKDOWN:1:1:0,PDF:1:1:0") {
+    throw "M4 combined fixture source counters are not exact: $($sourceCounts -join ',')"
+  }
+  if ($Mode -eq "RealVault" -and (
+    @($run.source_counts | Where-Object { $_.source_type -eq "MARKDOWN" -and $_.indexed_count -gt 0 }).Count -ne 1 -or
+    @($run.source_counts | Where-Object { $_.source_type -eq "PDF" -and $_.indexed_count -gt 0 }).Count -ne 1)) {
+    throw "RealVault acceptance requires successful combined Markdown/PDF indexing."
+  }
   $request = [ordered]@{ query = $Query; limit = 20; primary_topic = $filters.primary_topic; tags_all = $filters.tags_all; path_prefix = $filters.path_prefix }
   $search = Invoke-T5Api "POST" "/v1/search" ($request | ConvertTo-Json -Compress)
   if ($search.status -ne 200) { throw "Filtered search failed." }
@@ -172,6 +201,19 @@ VALUES ('$orphanRunId', '$orphanIndexId', 'FULL_REBUILD', 'RUNNING');
   $rerankScore = if ($result) { [double]$result.rerank_score } else { [double]::NaN }
   if (-not $result -or [double]::IsNaN($rerankScore) -or [double]::IsInfinity($rerankScore) -or $rerankScore -lt 0 -or $rerankScore -gt 1) { throw "Expected source did not survive reranking." }
   if ($result.citation.source_path -ne $ExpectedSourcePath -or $result.citation.line_start -lt 1 -or $result.citation.line_end -lt $result.citation.line_start) { throw "Citation is invalid." }
+  $pdfQuery = if ($Mode -eq "Fixture") { "multilingual PDF safety stock acceptance" } else { $Query }
+  $pdfSearchRequest = [ordered]@{ query = $pdfQuery; source_types = @("PDF", "PDF"); limit = 10 }
+  $pdfSearch = Invoke-T5Api "POST" "/v1/search" ($pdfSearchRequest | ConvertTo-Json -Compress)
+  if ($Mode -eq "Fixture") {
+    $pdfResults = @(($pdfSearch.body | ConvertFrom-Json).results)
+    if ($pdfSearch.status -ne 200 -or $pdfResults.Count -lt 1 -or @($pdfResults | Where-Object source_type -ne "PDF").Count -ne 0) { throw "M4 PDF-only retrieval failed." }
+    $pdfCitation = $pdfResults[0].citation
+    if ($pdfCitation.page_start -ne 1 -or $pdfCitation.page_end -ne 1 -or
+      $pdfCitation.markdown -notmatch 'Offline%2050%25%20%28%C4%91%29\.pdf#page=1') { throw "M4 PDF citation encoding/page contract failed." }
+  }
+  elseif ($pdfSearch.status -ne 200 -or @(($pdfSearch.body | ConvertFrom-Json).results).Count -lt 1) {
+    throw "RealVault combined retrieval did not return a PDF result."
+  }
   $rebuildAfter = Get-T5CgroupSnapshot $knowledgeId
   $rebuildEvidence = Get-T5ResourceWindow $rebuildBefore $rebuildAfter "rebuild"
   $activeState = ((Invoke-T5Sql "SELECT count(*) || ':' || min(id::text) FROM knowledge.indexes WHERE status = 'ACTIVE';") -join "").Trim()
@@ -185,11 +227,13 @@ VALUES ('$orphanRunId', '$orphanIndexId', 'FULL_REBUILD', 'RUNNING');
   $restartAfter = Get-T5CgroupSnapshot $knowledgeId
   $restartEvidence = Get-T5ResourceWindow $restartBefore $restartAfter "restart"
   $ledgerAfter = @(Invoke-T5Sql "SELECT version FROM knowledge.schema_migrations ORDER BY version;") | Where-Object { $_ }
-  if (($ledgerAfter -join "") -ne "001_initial.sql") { throw "Migration was reapplied after restart." }
+  if (($ledgerAfter -join "`n") -cne "001_initial.sql`n002_pdf_ingestion_foundation.sql") { throw "Migration was reapplied after restart." }
   $schemaFingerprintAfter = Get-T5SchemaCatalogFingerprint
   if ($schemaFingerprintBefore -ne $schemaFingerprintAfter) { throw "Knowledge schema catalog changed after restart/rebuild." }
   $afterRestartSearch = Invoke-T5Api "POST" "/v1/search" ($request | ConvertTo-Json -Compress)
   if ($afterRestartSearch.status -ne 200) { throw "Knowledge search failed after restart." }
+  $runtimeLogs = (& docker logs $knowledgeId 2>&1 | Out-String)
+  if ($runtimeLogs.Contains("TOP_SECRET_VAULT_SENTINEL_M4_T5", [StringComparison]::Ordinal)) { throw "Private-content sentinel leaked into runtime logs." }
   $hashAfter = Get-T5VaultTreeHash $canonicalVault
   if ($hashBefore -ne $hashAfter) { throw "Vault tree hash changed during acceptance." }
 
@@ -201,22 +245,30 @@ VALUES ('$orphanRunId', '$orphanIndexId', 'FULL_REBUILD', 'RUNNING');
   $evidence.retrieval = [ordered]@{ source_found = $true; rerank_score = $rerankScore; citation_valid = $true; rerank_valid = $true }
   $evidence.runtime = [ordered]@{ rebuild = $rebuildEvidence; restart = $restartEvidence }
   $evidence.result = "PASS"
-  Write-Output "M3/T5 $Mode acceptance passed."
 }
 catch {
+  $script:bodyFailed = $true
   $evidence.error = $_.Exception.Message
   throw
 }
 finally {
   $evidence.finished_at = [DateTime]::UtcNow.ToString("o")
   $prefix = if ($Mode -eq "Fixture") { "fixture" } else { "realvault" }
-  Write-T5Evidence $prefix $runId $evidence | Out-Null
-  if ($started) {
-    $previous = $ErrorActionPreference; $ErrorActionPreference = "Continue"
-    try { Remove-T5TemporaryResources $runId } finally { $ErrorActionPreference = $previous }
+  $finalizationError = $null
+  try { Write-T5Evidence $prefix $runId $evidence | Out-Null } catch { $finalizationError = $_.Exception }
+  try {
+    if ($started) {
+      $previous = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+      try { Remove-T5TemporaryResources $runId } finally { $ErrorActionPreference = $previous }
+    }
+  }
+  catch {
+    if ($null -eq $finalizationError) { $finalizationError = $_.Exception }
   }
   Remove-Item Env:KNOWLEDGE_T5_RUN_ID -ErrorAction SilentlyContinue
   Remove-Item Env:KNOWLEDGE_ACCEPTANCE_VAULT_ROOT -ErrorAction SilentlyContinue
   Remove-Item Env:KNOWLEDGE_IMAGE_REVISION -ErrorAction SilentlyContinue
   if ($fixtureCopyRoot) { Remove-Item -LiteralPath $fixtureCopyRoot -Recurse -Force -ErrorAction SilentlyContinue }
+  if ($null -ne $finalizationError -and -not $script:bodyFailed) { throw "M4/T5 evidence finalization or temporary-resource cleanup failed." }
 }
+Write-Output "M4/T5 $Mode acceptance passed."

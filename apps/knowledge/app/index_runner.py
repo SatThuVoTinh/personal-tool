@@ -19,6 +19,7 @@ class IndexRunCoordinator:
         self._database = database
         self._advisory_lock_key = advisory_lock_key
         self._reservation: asyncpg.Connection | None = None
+        self._acceptance_preclaimed = False
         self._run_tasks: set[asyncio.Task[None]] = set()
 
     @property
@@ -28,6 +29,9 @@ class IndexRunCoordinator:
     async def reserve(self) -> None:
         """Acquire the cross-process lock before persistent run acceptance."""
         if self._reservation is not None:
+            if self._acceptance_preclaimed:
+                self._acceptance_preclaimed = False
+                return
             raise IndexRunAlreadyActiveError("INDEX_RUN_ALREADY_ACTIVE")
         if not self._database.available:
             raise RuntimeError("Database pool is unavailable.")
@@ -40,6 +44,14 @@ class IndexRunCoordinator:
             await self._database.release_advisory_lock(connection, self._advisory_lock_key)
             raise
         self._reservation = connection
+
+    def adopt_startup_reservation(self, connection: asyncpg.Connection) -> None:
+        """Adopt the acceptance-only lock retained across backup and migration."""
+
+        if self._reservation is not None:
+            raise IndexRunAlreadyActiveError("INDEX_RUN_ALREADY_ACTIVE")
+        self._reservation = connection
+        self._acceptance_preclaimed = True
 
     async def recover_startup(self) -> int:
         """Recover only when this process has proven there is no live owner."""

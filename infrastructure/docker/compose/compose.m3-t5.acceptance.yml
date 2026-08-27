@@ -20,12 +20,33 @@ services:
   nginx:
     ports: !override
       - "127.0.0.1::8080"
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    volumes: !override
+      - type: bind
+        source: ../../nginx/conf.d/t5-acceptance.conf
+        target: /etc/nginx/conf.d/default.conf
+        read_only: true
+    networks:
+      - platform
+      - t5-ollama-egress
     labels:
       com.personal-tool.acceptance: t5
       com.personal-tool.acceptance-run: ${KNOWLEDGE_T5_RUN_ID}
       com.personal-tool.persistence: temporary
 
   knowledge:
+    environment:
+      KNOWLEDGE_OLLAMA_URL: http://nginx:8080/ollama
+    extra_hosts: !reset []
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=768m,mode=1777
     volumes:
       - type: bind
         source: ${KNOWLEDGE_ACCEPTANCE_VAULT_ROOT}
@@ -38,6 +59,12 @@ services:
 
 networks:
   platform:
+    internal: true
+    labels:
+      com.personal-tool.acceptance: t5
+      com.personal-tool.acceptance-run: ${KNOWLEDGE_T5_RUN_ID}
+      com.personal-tool.persistence: temporary
+  t5-ollama-egress:
     labels:
       com.personal-tool.acceptance: t5
       com.personal-tool.acceptance-run: ${KNOWLEDGE_T5_RUN_ID}

@@ -270,6 +270,37 @@ class FakeCoordinatorDatabase:
         self.events.append("release")
 
 
+class FakeLockConnection:
+    def __init__(self) -> None:
+        self.listener: object | None = None
+
+    def add_termination_listener(self, listener: object) -> None:
+        self.listener = listener
+
+    def remove_termination_listener(self, listener: object) -> None:
+        if self.listener is listener:
+            self.listener = None
+
+    def terminate(self) -> None:
+        listener = self.listener
+        if callable(listener):
+            listener(self)
+
+
+class FakeLockLossDatabase(FakeCoordinatorDatabase):
+    def __init__(self) -> None:
+        super().__init__()
+        self.connection = FakeLockConnection()
+        self.released = asyncio.Event()
+
+    async def acquire_advisory_lock(self, _: int) -> object:
+        return self.connection
+
+    async def release_advisory_lock(self, _: object, __: int) -> None:
+        await super().release_advisory_lock(_, __)
+        self.released.set()
+
+
 class IndexRunCoordinatorTests(unittest.IsolatedAsyncioTestCase):
     async def test_cleanup_finishes_before_advisory_lock_release(self) -> None:
         database = FakeCoordinatorDatabase()
@@ -290,3 +321,25 @@ class IndexRunCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         await coordinator.stop()
 
         self.assertEqual(database.events, ["terminal-commit", "cleanup", "release"])
+
+    async def test_lock_connection_loss_cancels_work_before_cleanup_or_publication(self) -> None:
+        database = FakeLockLossDatabase()
+        coordinator = IndexRunCoordinator(database, 7)  # type: ignore[arg-type]
+        work_started = asyncio.Event()
+
+        async def work() -> list[str]:
+            work_started.set()
+            await asyncio.Event().wait()
+            database.events.append("published")
+            return ["old-index"]
+
+        async def cleanup(_: list[str]) -> None:
+            database.events.append("cleanup")
+
+        await coordinator.reserve()
+        await coordinator.schedule(work, cleanup)
+        await asyncio.wait_for(work_started.wait(), timeout=1)
+        database.connection.terminate()
+        await asyncio.wait_for(database.released.wait(), timeout=1)
+
+        self.assertEqual(database.events, ["release"])

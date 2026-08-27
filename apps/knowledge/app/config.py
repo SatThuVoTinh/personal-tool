@@ -29,6 +29,7 @@ class Settings:
     pdf_runtime_temp_root: Path = Path("/tmp/pdf-runtime")
     pdf_tesseract_binary: Path = Path("/usr/bin/tesseract")
     pdf_tessdata_path: Path = Path("/usr/share/tesseract-ocr/5/tessdata")
+    acceptance_backup_barrier_dir: Path | None = None
 
     @classmethod
     def from_environment(cls) -> "Settings":
@@ -91,5 +92,10 @@ class Settings:
             ),
             pdf_tessdata_path=Path(
                 os.environ.get("KNOWLEDGE_PDF_TESSDATA_PATH", "/usr/share/tesseract-ocr/5/tessdata")
+            ),
+            acceptance_backup_barrier_dir=(
+                Path(os.environ["KNOWLEDGE_ACCEPTANCE_BACKUP_BARRIER_DIR"])
+                if os.environ.get("KNOWLEDGE_ACCEPTANCE_BACKUP_BARRIER_DIR")
+                else None
             ),
         )
