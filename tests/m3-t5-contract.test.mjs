@@ -266,3 +266,11 @@ test("M4/T5 cleanup cannot be skipped and acceptance marker is last", () => {
       live.lastIndexOf("Write-T5AtomicJson $acceptedCandidatePath"),
   );
 });
+
+test("M4/T5 log leak inspection accepts normal container stderr safely", () => {
+  assert.match(isolated, /\$ErrorActionPreference = "Continue"/);
+  assert.match(isolated, /\$runtimeLogRecords = @\(& docker logs/);
+  assert.match(isolated, /\$runtimeLogExitCode = \$LASTEXITCODE/);
+  assert.match(isolated, /Unable to read Knowledge runtime logs/);
+  assert.match(isolated, /TOP_SECRET_VAULT_SENTINEL_M4_T5/);
+});

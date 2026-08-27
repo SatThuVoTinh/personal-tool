@@ -232,7 +232,20 @@ VALUES ('$orphanRunId', '$orphanIndexId', 'FULL_REBUILD', 'RUNNING');
   if ($schemaFingerprintBefore -ne $schemaFingerprintAfter) { throw "Knowledge schema catalog changed after restart/rebuild." }
   $afterRestartSearch = Invoke-T5Api "POST" "/v1/search" ($request | ConvertTo-Json -Compress)
   if ($afterRestartSearch.status -ne 200) { throw "Knowledge search failed after restart." }
-  $runtimeLogs = (& docker logs $knowledgeId 2>&1 | Out-String)
+  $previousErrorActionPreference = $ErrorActionPreference
+  try {
+    # Docker forwards normal container stderr (including Uvicorn INFO lines) on
+    # its own stderr. Capture both streams without promoting those records to a
+    # terminating PowerShell error, then validate the native exit code.
+    $ErrorActionPreference = "Continue"
+    $runtimeLogRecords = @(& docker logs $knowledgeId 2>&1)
+    $runtimeLogExitCode = $LASTEXITCODE
+  }
+  finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+  }
+  if ($runtimeLogExitCode -ne 0) { throw "Unable to read Knowledge runtime logs." }
+  $runtimeLogs = (($runtimeLogRecords | ForEach-Object { $_.ToString() }) -join "`n")
   if ($runtimeLogs.Contains("TOP_SECRET_VAULT_SENTINEL_M4_T5", [StringComparison]::Ordinal)) { throw "Private-content sentinel leaked into runtime logs." }
   $hashAfter = Get-T5VaultTreeHash $canonicalVault
   if ($hashBefore -ne $hashAfter) { throw "Vault tree hash changed during acceptance." }
