@@ -166,24 +166,18 @@ def parse_pdf_sidecar(vault_root: Path, sidecar_path: Path) -> PdfSidecar:
         raise PdfFoundationError("PDF_SIDECAR_INVALID_UTF8") from error
 
     frontmatter, body = _split_frontmatter(text)
-    if len(re.findall(r"(?m)^zink_source\s*:", frontmatter)) != 1:
-        raise PdfFoundationError("PDF_SIDECAR_INVALID_SOURCE")
-    try:
-        metadata = yaml.safe_load(frontmatter)
-    except yaml.YAMLError as error:
-        raise PdfFoundationError("PDF_SIDECAR_INVALID_SOURCE") from error
-    if not isinstance(metadata, dict) or metadata.get("zink_source") != "pdf":
-        raise PdfFoundationError("PDF_SIDECAR_INVALID_SOURCE")
+    if frontmatter.strip():
+        try:
+            metadata = yaml.safe_load(frontmatter)
+        except yaml.YAMLError as error:
+            raise PdfFoundationError("PDF_SIDECAR_INVALID_SOURCE") from error
+        if not isinstance(metadata, dict):
+            raise PdfFoundationError("PDF_SIDECAR_INVALID_SOURCE")
     visible_body = _visible_markdown(body)
     headings = _H1.findall(visible_body)
     if len(headings) != 1:
         raise PdfFoundationError("PDF_SIDECAR_H1_INVALID")
-    embeds = _EMBED.findall(visible_body)
-    pdf_embeds = [
-        value
-        for value in embeds
-        if value.split("|", 1)[0].split("#", 1)[0].strip().lower().endswith(".pdf")
-    ]
+    pdf_embeds = _visible_pdf_embeds(visible_body)
     if len(pdf_embeds) != 1:
         raise PdfFoundationError("PDF_SIDECAR_EMBED_INVALID")
     target = pdf_embeds[0].strip()
@@ -208,7 +202,7 @@ def parse_pdf_sidecar(vault_root: Path, sidecar_path: Path) -> PdfSidecar:
 
 
 def discover_pdf_sidecars(vault_root: Path) -> tuple[PdfSidecar, ...]:
-    """Discover only Markdown sidecars under the two approved roots."""
+    """Discover visible-PDF-embed sidecars under the two approved roots."""
 
     discovered: list[PdfSidecar] = []
     targets: dict[str, str] = {}
@@ -219,6 +213,14 @@ def discover_pdf_sidecars(vault_root: Path) -> tuple[PdfSidecar, ...]:
             continue
         _assert_no_link_or_reparse(resolved_vault, root)
         for sidecar in sorted(root.rglob("*.md")):
+            raw = sidecar.read_bytes()
+            recognition_text = raw.decode("utf-8", errors="ignore")
+            try:
+                _, recognition_body = _split_frontmatter(recognition_text)
+            except PdfFoundationError:
+                recognition_body = recognition_text
+            if not _visible_pdf_embeds(_visible_markdown(recognition_body)):
+                continue
             item = parse_pdf_sidecar(resolved_vault, sidecar)
             prior = targets.setdefault(item.source_path.casefold(), item.sidecar_path)
             if prior != item.sidecar_path:
@@ -257,12 +259,20 @@ def _assert_canonical_value(value: Any) -> None:
 
 def _split_frontmatter(text: str) -> tuple[str, str]:
     if not text.startswith("---\n") and not text.startswith("---\r\n"):
-        raise PdfFoundationError("PDF_SIDECAR_INVALID_SOURCE")
+        return "", text
     lines = text.splitlines(keepends=True)
     for index, line in enumerate(lines[1:], 1):
         if line.rstrip("\r\n") == "---":
             return "".join(lines[1:index]), "".join(lines[index + 1 :])
     raise PdfFoundationError("PDF_SIDECAR_INVALID_SOURCE")
+
+
+def _visible_pdf_embeds(visible_markdown: str) -> list[str]:
+    return [
+        value
+        for value in _EMBED.findall(visible_markdown)
+        if value.split("|", 1)[0].split("#", 1)[0].strip().lower().endswith(".pdf")
+    ]
 
 
 def _visible_markdown(text: str) -> str:

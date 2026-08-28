@@ -174,7 +174,9 @@ Operational and acceptance procedures are in the
 
 ## M4 execution
 
-M4 adds sidecar-driven PDF ingestion while preserving the accepted Markdown
+M4 adds visible-PDF-embed-driven sidecar ingestion. Ordinary Markdown under
+Books/Papers is ignored by PDF discovery; no `zink_source` marker is required.
+The accepted Markdown
 path. M4/T1–T4 now provide bounded security preflight, four-page extraction/OCR,
 deterministic page-local segmentation, resumable content builds, drift-safe
 atomic publication, combined Markdown/PDF retrieval, source filters, reranking,
@@ -185,7 +187,7 @@ At the current repository gate:
 ```text
 Task: M4/T5 — Acceptance and handoff
 Planning Readiness: APPROVED
-Plan Revision: M4/T5-R1
+Plan Revision: M4/T5-R2
 Task Status: IN PROGRESS
 Evidence Level: NONE
 Execution Authorization: YES

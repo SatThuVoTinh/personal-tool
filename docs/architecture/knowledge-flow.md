@@ -63,8 +63,8 @@ sources and pinned processing/model identities.
 | Source          | Default architecture policy                                                                                     |
 | --------------- | --------------------------------------------------------------------------------------------------------------- |
 | `01. Knowledge` | Active Markdown ingestion and retrieval                                                                         |
-| `02. Books`     | Sidecar/contract-controlled PDF ingestion and retrieval                                                         |
-| `03. Papers`    | Sidecar/contract-controlled PDF ingestion and retrieval                                                         |
+| `02. Books`     | Visible-PDF-embed sidecar/contract-controlled PDF ingestion and retrieval                                       |
+| `03. Papers`    | Visible-PDF-embed sidecar/contract-controlled PDF ingestion and retrieval                                       |
 | `04. Pictures`  | Permitted image ingestion after M5 contracts/gates are approved                                                 |
 | `05. Videos`    | Permitted video ingestion after M5 contracts/gates are approved                                                 |
 | Templates       | Process only under an explicit template/source policy                                                           |

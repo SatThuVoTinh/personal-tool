@@ -26,7 +26,7 @@ class PdfFoundationTests(unittest.TestCase):
     def write_sidecar(self, vault: Path, name: str, target: str, extra: str = "") -> Path:
         path = vault / "02. Books" / "supply" / name
         path.write_text(
-            "---\nzink_source: pdf\n---\n\n# PDF title\n\n"
+            "# PDF title\n\n"
             f"![[{target}]]\n\n#supplychain #english\n{extra}",
             encoding="utf-8",
         )
@@ -68,6 +68,35 @@ class PdfFoundationTests(unittest.TestCase):
         with self.assertRaisesRegex(PdfFoundationError, "PDF_DUPLICATE_TARGET"):
             discover_pdf_sidecars(vault)
 
+    def test_discovery_ignores_ordinary_markdown_without_visible_pdf_embed(self) -> None:
+        temporary, vault = self.make_vault()
+        self.addCleanup(temporary.cleanup)
+        ordinary = vault / "02. Books" / "supply" / "notes.md"
+        ordinary.write_text(
+            "---\nzink_source: pdf\n---\n\n# Reading notes\n\nNo PDF sidecar here.\n",
+            encoding="utf-8",
+        )
+        hidden = vault / "02. Books" / "supply" / "example.md"
+        hidden.write_text(
+            "# Example\n\n```md\n![[02. Books/supply/book.pdf]]\n```\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(discover_pdf_sidecars(vault), ())
+
+    def test_discovery_fails_closed_for_malformed_embed_driven_sidecar(self) -> None:
+        temporary, vault = self.make_vault()
+        self.addCleanup(temporary.cleanup)
+        (vault / "02. Books" / "supply" / "one.pdf").write_bytes(b"%PDF-one")
+        (vault / "02. Books" / "supply" / "two.pdf").write_bytes(b"%PDF-two")
+        path = vault / "02. Books" / "supply" / "bad.md"
+        path.write_text(
+            "# PDF title\n\n![[02. Books/supply/one.pdf]]\n"
+            "![[02. Books/supply/two.pdf]]\n#english\n",
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(PdfFoundationError, "PDF_SIDECAR_EMBED_INVALID"):
+            discover_pdf_sidecars(vault)
+
     def test_sidecar_rejects_alias_fragment_and_path_escape(self) -> None:
         temporary, vault = self.make_vault()
         self.addCleanup(temporary.cleanup)
@@ -84,7 +113,7 @@ class PdfFoundationTests(unittest.TestCase):
         (vault / "Archives" / "book.pdf").write_bytes(b"%PDF-test")
         self.write_sidecar(vault, "archived.md", "Archives/book.pdf")
         (vault / "Archives" / "undiscovered.md").write_text(
-            "---\nzink_source: pdf\n---\n# ignored\n![[Archives/book.pdf]]\n#english",
+            "# ignored\n![[Archives/book.pdf]]\n#english",
             encoding="utf-8",
         )
         result = discover_pdf_sidecars(vault)
@@ -112,7 +141,7 @@ class PdfFoundationTests(unittest.TestCase):
         (vault / "02. Books" / "supply" / "book.pdf").write_bytes(b"%PDF-test")
         path = vault / "02. Books" / "supply" / "code-only.md"
         path.write_text(
-            "---\nzink_source: pdf\n---\n\n# PDF title\n\n"
+            "# PDF title\n\n"
             "```md\n![[02. Books/supply/book.pdf]]\n#english\n```\n"
             "<!-- ![[02. Books/supply/book.pdf]] #supplychain -->\n",
             encoding="utf-8",

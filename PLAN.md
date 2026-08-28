@@ -56,19 +56,19 @@ ACTIVE → LOCAL-COMPLETE → REMOTE-PENDING → REMOTE-BACKED
 
 ## 3. Current release gate
 
-| Milestone                                                       | Status        | Evidence level   | Gate summary                                                                                                                                                    |
-| --------------------------------------------------------------- | ------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| M0 — Plan and architecture baseline                             | `COMPLETE`    | `LOCAL-VERIFIED` | Repository operating model and initial V1 baseline established; future milestone wording may be refined without rewriting accepted implementation evidence.     |
-| M1 — Development foundation                                     | `COMPLETE`    | `REMOTE-BACKED`  | Local verification suite and GitHub CI/Security workflows exist and passed.                                                                                     |
-| M2 — Local infrastructure                                       | `COMPLETE`    | `REMOTE-BACKED`  | Accepted commit `5ffe4cb9be81c30d5c24bd7eb6a9d41abc2a5f19`; isolated M2 acceptance plus remote CI/Security passed.                                              |
-| M3 — Markdown Knowledge Platform                                | `COMPLETE`    | `REMOTE-BACKED`  | Accepted candidate `ff4a5fb7d779f260ffb9b5aa2393ad6ab75eb549`, prior merge `9cd34cebb196631e9524b095c21f1fd5aff78749`, and M3/S1 merge `3f9e018a82854f27de08f3e1ba62a7931d879626` all have remote CI/Security evidence. |
-| M4 — PDF document ingestion                                     | `ACTIVE`      | `LOCAL-VERIFIED` | M4/T1 and M4/T2 are complete locally; T2 validated bounded preflight/extraction/segmentation and atomic non-searchable content builds without changing M3 dependency identity. |
-| M5 — Image and video ingestion                                  | `DEFERRED`    | `NONE`           | Locked until M4 is complete and M5 source contracts are approved.                                                                                               |
-| M6 — Architecture consolidation                                 | `DEFERRED`    | `NONE`           | Post-Knowledge structural migration only; no M4/M5 accepted code is moved early.                                                                                |
-| M7 — L&SC Data Plant core                                       | `DEFERRED`    | `NONE`           | Governed data lifecycle and deterministic control plane.                                                                                                        |
-| M8 — L&SC modeling and products                                 | `DEFERRED`    | `NONE`           | Forecasting, machine learning, operations research, feature store, training data, registry and inference.                                                       |
-| M9 — Agent Skill Store, Agents System integration and hardening | `DEFERRED`    | `NONE`           | Dual-store Knowledge boundary, function-scoped learned-skill persistence, ZAS integration, and cross-platform hardening.                                        |
-| M10 — V1 release                                                | `DEFERRED`    | `NONE`           | Exact-candidate local and remote acceptance for the complete Knowledgebase V1.                                                                                  |
+| Milestone                                                       | Status     | Evidence level   | Gate summary                                                                                                                                                                                                            |
+| --------------------------------------------------------------- | ---------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M0 — Plan and architecture baseline                             | `COMPLETE` | `LOCAL-VERIFIED` | Repository operating model and initial V1 baseline established; future milestone wording may be refined without rewriting accepted implementation evidence.                                                             |
+| M1 — Development foundation                                     | `COMPLETE` | `REMOTE-BACKED`  | Local verification suite and GitHub CI/Security workflows exist and passed.                                                                                                                                             |
+| M2 — Local infrastructure                                       | `COMPLETE` | `REMOTE-BACKED`  | Accepted commit `5ffe4cb9be81c30d5c24bd7eb6a9d41abc2a5f19`; isolated M2 acceptance plus remote CI/Security passed.                                                                                                      |
+| M3 — Markdown Knowledge Platform                                | `COMPLETE` | `REMOTE-BACKED`  | Accepted candidate `ff4a5fb7d779f260ffb9b5aa2393ad6ab75eb549`, prior merge `9cd34cebb196631e9524b095c21f1fd5aff78749`, and M3/S1 merge `3f9e018a82854f27de08f3e1ba62a7931d879626` all have remote CI/Security evidence. |
+| M4 — PDF document ingestion                                     | `ACTIVE`   | `LOCAL-VERIFIED` | M4/T1 and M4/T2 are complete locally; T2 validated bounded preflight/extraction/segmentation and atomic non-searchable content builds without changing M3 dependency identity.                                          |
+| M5 — Image and video ingestion                                  | `DEFERRED` | `NONE`           | Locked until M4 is complete and M5 source contracts are approved.                                                                                                                                                       |
+| M6 — Architecture consolidation                                 | `DEFERRED` | `NONE`           | Post-Knowledge structural migration only; no M4/M5 accepted code is moved early.                                                                                                                                        |
+| M7 — L&SC Data Plant core                                       | `DEFERRED` | `NONE`           | Governed data lifecycle and deterministic control plane.                                                                                                                                                                |
+| M8 — L&SC modeling and products                                 | `DEFERRED` | `NONE`           | Forecasting, machine learning, operations research, feature store, training data, registry and inference.                                                                                                               |
+| M9 — Agent Skill Store, Agents System integration and hardening | `DEFERRED` | `NONE`           | Dual-store Knowledge boundary, function-scoped learned-skill persistence, ZAS integration, and cross-platform hardening.                                                                                                |
+| M10 — V1 release                                                | `DEFERRED` | `NONE`           | Exact-candidate local and remote acceptance for the complete Knowledgebase V1.                                                                                                                                          |
 
 ## 4. Current focus
 
@@ -77,7 +77,7 @@ Milestone: M4 — PDF Document Ingestion
 Task: M4/T5 — Acceptance and handoff
 Task Status: IN PROGRESS
 Planning Readiness: APPROVED
-Plan Revision: M4/T5-R1
+Plan Revision: M4/T5-R2
 Execution Authorization: YES
 Authorized Task: M4/T5
 Execution Contract: docs/contracts/execution/ACTIVE.md
@@ -99,6 +99,12 @@ materialize and execute the next task under this same authorization. Any RED,
 BLOCKED, mandatory-gate failure, unresolved review finding, unexpected
 schema/dependency/API/resource change, lock-loss safety failure, or inability
 to create a required commit revokes the chain immediately.
+
+The owner's 2026-08-28 correction authorizes `M4/T5-R2` in place of T5-R1:
+PDF sidecar discovery is driven by visible internal PDF embeds, ordinary
+Books/Papers Markdown is ignored by PDF discovery, and `zink_source: pdf` is no
+longer required or used as a discriminator. All remaining T5 scope and gates
+stay unchanged.
 
 ## 5. Current delivery sequence
 
@@ -185,13 +191,13 @@ Evidence Level: `REMOTE-BACKED`
 Purpose: local hybrid retrieval over permitted human-authored Markdown with
 citations to original source lines.
 
-| Task                                        | Status     | Accepted evidence summary                                                                                                                                                                       |
-| ------------------------------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| M3/T1 — Service and index identity          | `COMPLETE` | Internal Knowledge service, readiness, immutable model identity, active-index invariant, advisory lock, and recovery passed; merge `4097862ab383e8698f2d5b1ff5adce0acd1c6579`.                  |
-| M3/T2 — Markdown discovery and segmentation | `COMPLETE` | Read-only Vault discovery, path/reparse safety, canonical tags, deterministic segmentation, and original-line citations passed; merge `b446ff17146763ea762b8669207c09642d42098f`.               |
-| M3/T3 — Index lifecycle                     | `COMPLETE` | Incremental replacement, side-by-side full rebuild, deletion safety, recovery, and run APIs passed; merge `242bca819b72ded9f6178221eb9cdda09b3dea38`.                                           |
-| M3/T4 — Retrieval and reranking             | `COMPLETE` | Filtered vector/FTS retrieval, deterministic fusion/reranking, citations, concurrency, and resource gates passed; merge `aa73b06375321460800b9f78e8195b6837ea5125`.                             |
-| M3/T5 — Acceptance and handoff              | `COMPLETE` | Fixture, RealVault, persistent-live, exact-candidate, and remote gates passed; accepted candidate `ff4a5fb7d779f260ffb9b5aa2393ad6ab75eb549`, merge `9cd34cebb196631e9524b095c21f1fd5aff78749`. |
+| Task                                            | Status          | Accepted evidence summary                                                                                                                                                                                                                                                                                                          |
+| ----------------------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M3/T1 — Service and index identity              | `COMPLETE`      | Internal Knowledge service, readiness, immutable model identity, active-index invariant, advisory lock, and recovery passed; merge `4097862ab383e8698f2d5b1ff5adce0acd1c6579`.                                                                                                                                                     |
+| M3/T2 — Markdown discovery and segmentation     | `COMPLETE`      | Read-only Vault discovery, path/reparse safety, canonical tags, deterministic segmentation, and original-line citations passed; merge `b446ff17146763ea762b8669207c09642d42098f`.                                                                                                                                                  |
+| M3/T3 — Index lifecycle                         | `COMPLETE`      | Incremental replacement, side-by-side full rebuild, deletion safety, recovery, and run APIs passed; merge `242bca819b72ded9f6178221eb9cdda09b3dea38`.                                                                                                                                                                              |
+| M3/T4 — Retrieval and reranking                 | `COMPLETE`      | Filtered vector/FTS retrieval, deterministic fusion/reranking, citations, concurrency, and resource gates passed; merge `aa73b06375321460800b9f78e8195b6837ea5125`.                                                                                                                                                                |
+| M3/T5 — Acceptance and handoff                  | `COMPLETE`      | Fixture, RealVault, persistent-live, exact-candidate, and remote gates passed; accepted candidate `ff4a5fb7d779f260ffb9b5aa2393ad6ab75eb549`, merge `9cd34cebb196631e9524b095c21f1fd5aff78749`.                                                                                                                                    |
 | M3/S1 — Python dependency security prerequisite | `REMOTE-BACKED` | Exact candidate FastAPI `0.133.0`, Starlette `1.3.1`, and `annotated-doc` `0.0.5` passed resolver, audit, Python 3.13 regression, repository gates, and secret scan; implementation commit `5c035fb2d3749d9fabe0a9ff69d9d82509465934`, merged as `3f9e018a82854f27de08f3e1ba62a7931d879626` with exact merge-SHA CI/Security PASS. |
 
 Inherited M3 invariants include:
@@ -210,7 +216,7 @@ Inherited M3 invariants include:
 
 Status: `ACTIVE`
 Planning Readiness: `APPROVED`
-Plan Revision: `M4/T5-R1`
+Plan Revision: `M4/T5-R2`
 Execution Authorization: `YES`
 Authorized Task: `M4/T5`
 Execution Contract: `docs/contracts/execution/ACTIVE.md`
@@ -241,16 +247,16 @@ Hard boundaries:
 
 Planned task sequence:
 
-| Task                                              | Status        | Scope and gate                                                                                                                                                                    |
-| ------------------------------------------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| M4/P0 — Finalize contract                         | `COMPLETE` | M4-R1 is superseded, M4-R2 invalidated, M4-R3 invalidated by the shared-runtime dependency conflict, and owner-approved M4-R4 is the direct Codex contract through T1. |
-| M4/T1 — Runtime, source, schema, and identity     | `COMPLETE` | Feature commit `c4ef66d`; isolated runtime, parent-child protocol, offline artifacts, dependency/security audit, sidecars, paths, identities, migration/recovery, M3 regression, and repository gates passed. |
-| M4/T2 — Preflight, extraction, and segmentation   | `COMPLETE` | Implementation commit `82126e4`; exact pypdfium2 security preflight, 4-page offline extraction/OCR, page-local deterministic segmentation, drift brackets, deadlines, process cleanup, and atomic non-searchable content builds passed 99 parent tests, 8 isolated-runtime tests, real PDF fixture acceptance, isolated database integration, repository verification, dependency audit, and staged secret scan. |
-| M4/T3 — Resume, drift, retention, and publication | `COMPLETE` | Local implementation commit `c1df143`; pinned session ownership, resumable PDF builds, drift brackets, atomic source publication, counters, retention, fixture persistence/restart acceptance, and focused regressions passed. |
-| M4/T4 — Adapters, retrieval, and API              | `COMPLETE` | Reviewed local implementation commit `1904853`; fail-closed PDF filters, source counters, coherent hybrid retrieval, citation metadata, HNSW capability, recovery/ownership fixes, and repository gates passed. |
-| M4/T5 — Acceptance and handoff                    | `IN PROGRESS` | Owner-approved `M4/T5-R1`; offline, multilingual, security, crash/recovery, concurrency, RealVault, M2/M3 regression, exact-candidate, and remote-pending handoff. |
+| Task                                              | Status        | Scope and gate                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------------------------------------------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M4/P0 — Finalize contract                         | `COMPLETE`    | M4-R1 is superseded, M4-R2 invalidated, M4-R3 invalidated by the shared-runtime dependency conflict, and owner-approved M4-R4 is the direct Codex contract through T1.                                                                                                                                                                                                                                           |
+| M4/T1 — Runtime, source, schema, and identity     | `COMPLETE`    | Feature commit `c4ef66d`; isolated runtime, parent-child protocol, offline artifacts, dependency/security audit, sidecars, paths, identities, migration/recovery, M3 regression, and repository gates passed.                                                                                                                                                                                                    |
+| M4/T2 — Preflight, extraction, and segmentation   | `COMPLETE`    | Implementation commit `82126e4`; exact pypdfium2 security preflight, 4-page offline extraction/OCR, page-local deterministic segmentation, drift brackets, deadlines, process cleanup, and atomic non-searchable content builds passed 99 parent tests, 8 isolated-runtime tests, real PDF fixture acceptance, isolated database integration, repository verification, dependency audit, and staged secret scan. |
+| M4/T3 — Resume, drift, retention, and publication | `COMPLETE`    | Local implementation commit `c1df143`; pinned session ownership, resumable PDF builds, drift brackets, atomic source publication, counters, retention, fixture persistence/restart acceptance, and focused regressions passed.                                                                                                                                                                                   |
+| M4/T4 — Adapters, retrieval, and API              | `COMPLETE`    | Reviewed local implementation commit `1904853`; fail-closed PDF filters, source counters, coherent hybrid retrieval, citation metadata, HNSW capability, recovery/ownership fixes, and repository gates passed.                                                                                                                                                                                                  |
+| M4/T5 — Acceptance and handoff                    | `IN PROGRESS` | Owner-approved `M4/T5-R2`; embed-driven PDF sidecar recognition ignores ordinary Books/Papers Markdown, removes the redundant `zink_source: pdf` discriminator, retains fail-closed validation, and reruns affected acceptance before remote-pending handoff.                                                                                                                                                    |
 
-M4/T1 through M4/T4 are complete locally. `M4/T5-R1` is the only materialized
+M4/T1 through M4/T4 are complete locally. `M4/T5-R2` is the only materialized
 active task under the owner-approved chain. T5 may begin only after this
 transition commit pushes successfully.
 

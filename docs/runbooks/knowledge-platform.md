@@ -9,6 +9,8 @@ Folder names below `01. Knowledge` are organizational and may use personal
 numbering. Each indexed note instead requires at least one lowercase canonical
 native tag; the first canonical tag determines `primary_topic`.
 Each PDF requires one valid Markdown sidecar and an exact internal embed target.
+PDF discovery is driven by a visible internal PDF embed; ordinary Markdown under
+Books/Papers without one is ignored, and no `zink_source` marker is required.
 It does not authorize image/video ingestion, Vault writes, ad-hoc database
 edits, or automatic rollback of a published index.
 
