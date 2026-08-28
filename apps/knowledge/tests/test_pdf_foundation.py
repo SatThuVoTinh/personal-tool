@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -83,7 +84,7 @@ class PdfFoundationTests(unittest.TestCase):
         )
         self.assertEqual(discover_pdf_sidecars(vault), ())
 
-    def test_discovery_fails_closed_for_malformed_embed_driven_sidecar(self) -> None:
+    def test_discovery_ignores_ambiguous_multi_pdf_markdown(self) -> None:
         temporary, vault = self.make_vault()
         self.addCleanup(temporary.cleanup)
         (vault / "02. Books" / "supply" / "one.pdf").write_bytes(b"%PDF-one")
@@ -94,7 +95,33 @@ class PdfFoundationTests(unittest.TestCase):
             "![[02. Books/supply/two.pdf]]\n#english\n",
             encoding="utf-8",
         )
+        self.assertEqual(discover_pdf_sidecars(vault), ())
         with self.assertRaisesRegex(PdfFoundationError, "PDF_SIDECAR_EMBED_INVALID"):
+            parse_pdf_sidecar(vault, path)
+
+    def test_missing_h1_uses_nfc_normalized_sidecar_filename(self) -> None:
+        temporary, vault = self.make_vault()
+        self.addCleanup(temporary.cleanup)
+        (vault / "02. Books" / "supply" / "book.pdf").write_bytes(b"%PDF-test")
+        path = vault / "02. Books" / "supply" / "Cafe\u0301.md"
+        path.write_text(
+            "![[02. Books/supply/book.pdf]]\n\n#supplychain #english\n",
+            encoding="utf-8",
+        )
+        item = discover_pdf_sidecars(vault)[0]
+        self.assertEqual(item.title, "Caf\u00e9")
+
+    def test_multiple_h1_headings_still_fail_closed(self) -> None:
+        temporary, vault = self.make_vault()
+        self.addCleanup(temporary.cleanup)
+        (vault / "02. Books" / "supply" / "book.pdf").write_bytes(b"%PDF-test")
+        path = self.write_sidecar(
+            vault,
+            "multiple-headings.md",
+            "02. Books/supply/book.pdf",
+            extra="# Another title\n",
+        )
+        with self.assertRaisesRegex(PdfFoundationError, "PDF_SIDECAR_H1_INVALID"):
             discover_pdf_sidecars(vault)
 
     def test_sidecar_rejects_alias_fragment_and_path_escape(self) -> None:
@@ -105,6 +132,59 @@ class PdfFoundationTests(unittest.TestCase):
             path = self.write_sidecar(vault, f"bad-{index}.md", target)
             with self.assertRaisesRegex(PdfFoundationError, "PDF_SIDECAR_EMBED_INVALID|PDF_SOURCE_PATH_INVALID"):
                 parse_pdf_sidecar(vault, path)
+
+    def test_unique_basename_embed_resolves_anywhere_inside_vault(self) -> None:
+        temporary, vault = self.make_vault()
+        self.addCleanup(temporary.cleanup)
+        (vault / "Attachments").mkdir()
+        (vault / "Attachments" / "book.pdf").write_bytes(b"%PDF-test")
+        path = self.write_sidecar(vault, "basename.md", "book.pdf")
+        self.assertEqual(
+            parse_pdf_sidecar(vault, path).source_path,
+            "Attachments/book.pdf",
+        )
+
+    def test_explicit_target_outside_existing_approved_roots_still_fails(self) -> None:
+        temporary, vault = self.make_vault()
+        self.addCleanup(temporary.cleanup)
+        (vault / "Attachments").mkdir()
+        (vault / "Attachments" / "book.pdf").write_bytes(b"%PDF-test")
+        path = self.write_sidecar(vault, "explicit.md", "Attachments/book.pdf")
+        with self.assertRaisesRegex(PdfFoundationError, "PDF_SIDECAR_EMBED_INVALID"):
+            parse_pdf_sidecar(vault, path)
+
+    def test_missing_or_ambiguous_basename_embed_fails_closed(self) -> None:
+        temporary, vault = self.make_vault()
+        self.addCleanup(temporary.cleanup)
+        (vault / "03. Papers").mkdir()
+        (vault / "Archives").mkdir()
+        missing = self.write_sidecar(vault, "missing.md", "missing.pdf")
+        with self.assertRaisesRegex(PdfFoundationError, "PDF_SOURCE_PATH_INVALID"):
+            parse_pdf_sidecar(vault, missing)
+        (vault / "03. Papers" / "duplicate.pdf").write_bytes(b"%PDF-one")
+        (vault / "Archives" / "duplicate.pdf").write_bytes(b"%PDF-two")
+        ambiguous = self.write_sidecar(vault, "ambiguous.md", "duplicate.pdf")
+        with self.assertRaisesRegex(PdfFoundationError, "PDF_SOURCE_PATH_INVALID"):
+            parse_pdf_sidecar(vault, ambiguous)
+
+    def test_pdf_named_directory_is_not_a_valid_basename_target(self) -> None:
+        temporary, vault = self.make_vault()
+        self.addCleanup(temporary.cleanup)
+        (vault / "Attachments" / "directory.pdf").mkdir(parents=True)
+        path = self.write_sidecar(vault, "directory.md", "directory.pdf")
+        with self.assertRaisesRegex(PdfFoundationError, "PDF_SOURCE_PATH_INVALID"):
+            parse_pdf_sidecar(vault, path)
+
+    def test_basename_scan_does_not_traverse_linked_directory(self) -> None:
+        temporary, vault = self.make_vault()
+        self.addCleanup(temporary.cleanup)
+        outside = Path(temporary.name) / "outside"
+        outside.mkdir()
+        (outside / "linked.pdf").write_bytes(b"%PDF-outside")
+        os.symlink(outside, vault / "linked", target_is_directory=True)
+        path = self.write_sidecar(vault, "linked.md", "linked.pdf")
+        with self.assertRaisesRegex(PdfFoundationError, "PDF_SOURCE_PATH_INVALID"):
+            parse_pdf_sidecar(vault, path)
 
     def test_archives_is_allowed_only_as_target_not_discovery_root(self) -> None:
         temporary, vault = self.make_vault()

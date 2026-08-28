@@ -147,7 +147,12 @@ def validated_vault_regular_file(
     return candidate
 
 
-def parse_pdf_sidecar(vault_root: Path, sidecar_path: Path) -> PdfSidecar:
+def parse_pdf_sidecar(
+    vault_root: Path,
+    sidecar_path: Path,
+    *,
+    pdf_basename_targets: Mapping[str, tuple[str, ...]] | None = None,
+) -> PdfSidecar:
     """Validate the strict M4 sidecar contract before any database mutation."""
 
     try:
@@ -175,17 +180,35 @@ def parse_pdf_sidecar(vault_root: Path, sidecar_path: Path) -> PdfSidecar:
             raise PdfFoundationError("PDF_SIDECAR_INVALID_SOURCE")
     visible_body = _visible_markdown(body)
     headings = _H1.findall(visible_body)
-    if len(headings) != 1:
+    if len(headings) > 1:
         raise PdfFoundationError("PDF_SIDECAR_H1_INVALID")
+    title = (
+        headings[0].strip()
+        if headings
+        else unicodedata.normalize("NFC", PurePosixPath(sidecar_relative).stem)
+    )
     pdf_embeds = _visible_pdf_embeds(visible_body)
     if len(pdf_embeds) != 1:
         raise PdfFoundationError("PDF_SIDECAR_EMBED_INVALID")
     target = pdf_embeds[0].strip()
     if not target or "|" in target or "#" in target or "://" in target:
         raise PdfFoundationError("PDF_SIDECAR_EMBED_INVALID")
+    normalized_target = target.replace("\\", "/")
+    basename_only = "/" not in normalized_target
+    if basename_only:
+        basename_targets = (
+            pdf_basename_targets
+            if pdf_basename_targets is not None
+            else _build_pdf_basename_targets(vault_root)
+        )
+        matches = basename_targets.get(normalized_target, ())
+        if len(matches) != 1:
+            raise PdfFoundationError("PDF_SOURCE_PATH_INVALID")
+        target = matches[0]
     source_path = canonical_vault_path(vault_root, target, require_pdf=True)
-    if not source_path.startswith(("02. Books/", "03. Papers/", "Archives/")):
+    if not basename_only and not source_path.startswith(("02. Books/", "03. Papers/", "Archives/")):
         raise PdfFoundationError("PDF_SIDECAR_EMBED_INVALID")
+    source_file = validated_vault_regular_file(vault_root, source_path, require_pdf=True)
     raw_tags = tuple(f"#{tag}" for tag in _TAG.findall(visible_body))
     canonical_topics = tuple(dict.fromkeys(TAG_TO_TOPIC[tag] for tag in raw_tags if tag in TAG_TO_TOPIC))
     if not canonical_topics:
@@ -193,10 +216,10 @@ def parse_pdf_sidecar(vault_root: Path, sidecar_path: Path) -> PdfSidecar:
     return PdfSidecar(
         sidecar_path=sidecar_relative,
         source_path=source_path,
-        title=headings[0].strip(),
+        title=title,
         canonical_topics=canonical_topics,
         tags=tuple(sorted({unicodedata.normalize("NFC", tag[1:]).casefold() for tag in raw_tags})),
-        pdf_digest=sha256_file(vault_root / source_path),
+        pdf_digest=sha256_file(source_file),
         sidecar_digest=hashlib.sha256(raw).hexdigest(),
     )
 
@@ -206,6 +229,7 @@ def discover_pdf_sidecars(vault_root: Path) -> tuple[PdfSidecar, ...]:
 
     discovered: list[PdfSidecar] = []
     targets: dict[str, str] = {}
+    basename_targets: dict[str, tuple[str, ...]] | None = None
     resolved_vault = vault_root.resolve(strict=True)
     for root_name in ("02. Books", "03. Papers"):
         root = resolved_vault / root_name
@@ -219,9 +243,17 @@ def discover_pdf_sidecars(vault_root: Path) -> tuple[PdfSidecar, ...]:
                 _, recognition_body = _split_frontmatter(recognition_text)
             except PdfFoundationError:
                 recognition_body = recognition_text
-            if not _visible_pdf_embeds(_visible_markdown(recognition_body)):
+            pdf_embeds = _visible_pdf_embeds(_visible_markdown(recognition_body))
+            if len(pdf_embeds) != 1:
                 continue
-            item = parse_pdf_sidecar(resolved_vault, sidecar)
+            normalized_target = pdf_embeds[0].strip().replace("\\", "/")
+            if "/" not in normalized_target and basename_targets is None:
+                basename_targets = _build_pdf_basename_targets(resolved_vault)
+            item = parse_pdf_sidecar(
+                resolved_vault,
+                sidecar,
+                pdf_basename_targets=basename_targets,
+            )
             prior = targets.setdefault(item.source_path.casefold(), item.sidecar_path)
             if prior != item.sidecar_path:
                 raise PdfFoundationError("PDF_DUPLICATE_TARGET")
@@ -273,6 +305,40 @@ def _visible_pdf_embeds(visible_markdown: str) -> list[str]:
         for value in _EMBED.findall(visible_markdown)
         if value.split("|", 1)[0].split("#", 1)[0].strip().lower().endswith(".pdf")
     ]
+
+
+def _build_pdf_basename_targets(vault_root: Path) -> dict[str, tuple[str, ...]]:
+    root = vault_root.resolve(strict=True)
+    targets: dict[str, list[str]] = {}
+    pending = [root]
+    while pending:
+        directory = pending.pop()
+        try:
+            entries = sorted(os.scandir(directory), key=lambda entry: entry.name)
+        except OSError as error:
+            raise PdfFoundationError("PDF_SOURCE_PATH_INVALID") from error
+        child_directories: list[Path] = []
+        for entry in entries:
+            candidate = Path(entry.path)
+            try:
+                info = entry.stat(follow_symlinks=False)
+            except OSError as error:
+                raise PdfFoundationError("PDF_SOURCE_PATH_INVALID") from error
+            attributes = getattr(info, "st_file_attributes", 0)
+            if (
+                entry.is_symlink()
+                or stat.S_ISLNK(info.st_mode)
+                or attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+            ):
+                continue
+            if stat.S_ISDIR(info.st_mode):
+                child_directories.append(candidate)
+                continue
+            if stat.S_ISREG(info.st_mode) and candidate.suffix.lower() == ".pdf":
+                relative = candidate.relative_to(root).as_posix()
+                targets.setdefault(candidate.name, []).append(relative)
+        pending.extend(reversed(child_directories))
+    return {name: tuple(sorted(paths)) for name, paths in targets.items()}
 
 
 def _visible_markdown(text: str) -> str:

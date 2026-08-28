@@ -174,10 +174,13 @@ Operational and acceptance procedures are in the
 
 ## M4 execution
 
-M4 adds visible-PDF-embed-driven sidecar ingestion. Ordinary Markdown under
-Books/Papers is ignored by PDF discovery; no `zink_source` marker is required.
-The accepted Markdown
-path. M4/T1–T4 now provide bounded security preflight, four-page extraction/OCR,
+M4 adds sidecar ingestion identified by exactly one visible PDF embed. Markdown
+with zero or multiple visible PDF embeds is ignored by PDF discovery; no
+`zink_source` marker or H1 is required. Basename-only Obsidian PDF embeds resolve
+only when one exact filename match exists anywhere inside the read-only Vault;
+Markdown discovery remains limited to Books and Papers.
+The accepted Markdown path remains unchanged. M4/T1–T4 now provide bounded
+security preflight, four-page extraction/OCR,
 deterministic page-local segmentation, resumable content builds, drift-safe
 atomic publication, combined Markdown/PDF retrieval, source filters, reranking,
 and page/bounding-box citations.
@@ -187,7 +190,7 @@ At the current repository gate:
 ```text
 Task: M4/T5 — Acceptance and handoff
 Planning Readiness: APPROVED
-Plan Revision: M4/T5-R2
+Plan Revision: M4/T5-R6
 Task Status: IN PROGRESS
 Evidence Level: NONE
 Execution Authorization: YES

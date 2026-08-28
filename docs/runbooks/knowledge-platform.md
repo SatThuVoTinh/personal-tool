@@ -9,8 +9,13 @@ Folder names below `01. Knowledge` are organizational and may use personal
 numbering. Each indexed note instead requires at least one lowercase canonical
 native tag; the first canonical tag determines `primary_topic`.
 Each PDF requires one valid Markdown sidecar and an exact internal embed target.
-PDF discovery is driven by a visible internal PDF embed; ordinary Markdown under
-Books/Papers without one is ignored, and no `zink_source` marker is required.
+Exactly one visible internal PDF embed identifies a sidecar; Markdown with zero
+or multiple visible PDF embeds is ignored by PDF discovery. A sidecar H1 is used
+as its title when present, otherwise the Markdown filename stem is used. No
+`zink_source` marker is required. A basename-only Obsidian PDF embed is accepted
+only when that exact filename resolves to one safe PDF anywhere inside the
+read-only Vault; missing or ambiguous basename targets fail closed. Markdown
+discovery remains limited to Books and Papers.
 It does not authorize image/video ingestion, Vault writes, ad-hoc database
 edits, or automatic rollback of a published index.
 

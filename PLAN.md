@@ -77,7 +77,7 @@ Milestone: M4 — PDF Document Ingestion
 Task: M4/T5 — Acceptance and handoff
 Task Status: IN PROGRESS
 Planning Readiness: APPROVED
-Plan Revision: M4/T5-R2
+Plan Revision: M4/T5-R6
 Execution Authorization: YES
 Authorized Task: M4/T5
 Execution Contract: docs/contracts/execution/ACTIVE.md
@@ -105,6 +105,44 @@ PDF sidecar discovery is driven by visible internal PDF embeds, ordinary
 Books/Papers Markdown is ignored by PDF discovery, and `zink_source: pdf` is no
 longer required or used as a discriminator. All remaining T5 scope and gates
 stay unchanged.
+
+RealVault pre-candidate evidence then invalidated T5-R3: every unambiguous
+sidecar used a basename-only Obsidian PDF embed, while the parser accepted only
+Vault-relative paths. The owner's instruction to continue fixing discovered
+errors authorizes `M4/T5-R4`: a basename-only PDF embed resolves only when one
+exact filename match exists across the approved Books, Papers, and Archives PDF
+target roots. Missing or ambiguous matches fail closed; Vault-relative targets
+retain their existing semantics and all other R3/T5 gates remain unchanged.
+
+RealVault aggregate validation invalidated T5-R4 because no PDFs were present
+under its three approved target roots. T5-R5 tested a casefold hypothesis, but
+aggregate evidence showed all 28 embed filenames already match exactly and all
+31 Vault PDFs lie outside those roots. R5 is invalidated without acceptance.
+Expanding target resolution to the whole read-only Vault changes the frozen path
+boundary and requires an explicit owner decision before a new revision may be
+materialized.
+
+The owner's 2026-08-28 approval materializes `M4/T5-R6`: basename-only embeds
+resolve only when one exact filename match exists anywhere inside the read-only
+Vault. Missing or ambiguous matches fail closed; traversal, link/reparse,
+regular-file, PDF-suffix, duplicate-target, and read-only protections remain.
+Markdown discovery remains limited to Books and Papers. Explicit Vault-relative
+target semantics are unchanged; no fuzzy/casefold resolver or Vault write is
+authorized.
+
+R6 pre-candidate validation passes 116 Knowledge tests and the repository/static
+gates. After the owner corrected source metadata, read-only aggregate RealVault
+validation finds all 28 unambiguous sidecar candidates valid with no errors. The
+owner's instruction to continue resumes R6 execution; no new implementation
+candidate commit exists yet.
+
+Exact-candidate RealVault evidence invalidated T5-R2: 29 embed-bearing notes had
+no H1, while one multi-PDF note was not an unambiguous sidecar. The owner's
+2026-08-28 follow-up authorizes `M4/T5-R3`: exactly one visible PDF embed
+identifies a sidecar; zero or multiple visible PDF embeds are ordinary Markdown
+for PDF discovery; a missing H1 uses the Markdown filename stem as the
+deterministic title, while multiple H1 headings still fail closed. Existing
+topic, path, duplicate-target, read-only, security, and acceptance gates remain.
 
 ## 5. Current delivery sequence
 
@@ -216,7 +254,7 @@ Inherited M3 invariants include:
 
 Status: `ACTIVE`
 Planning Readiness: `APPROVED`
-Plan Revision: `M4/T5-R2`
+Plan Revision: `M4/T5-R6`
 Execution Authorization: `YES`
 Authorized Task: `M4/T5`
 Execution Contract: `docs/contracts/execution/ACTIVE.md`
@@ -234,8 +272,9 @@ is created for M4/T1. M4/T2 and later return to the normal owner-approved
 Hard boundaries:
 
 - discovery is sidecar-driven only under permitted Books and Papers roots;
-- Archives may hold referenced physical PDFs but are never scanned as an
-  independent source root;
+- physical PDFs referenced by unique basename may reside anywhere inside the
+  read-only Vault, while Markdown sidecar discovery remains limited to Books
+  and Papers and Archives is never an independent discovery root;
 - no new service, queue, permanent worker, cloud dependency, GPU, or VLM unless
   a later owner-approved contract revision explicitly changes this;
 - CPU extraction and OCR remain bounded by the approved resource profile;
@@ -254,11 +293,10 @@ Planned task sequence:
 | M4/T2 — Preflight, extraction, and segmentation   | `COMPLETE`    | Implementation commit `82126e4`; exact pypdfium2 security preflight, 4-page offline extraction/OCR, page-local deterministic segmentation, drift brackets, deadlines, process cleanup, and atomic non-searchable content builds passed 99 parent tests, 8 isolated-runtime tests, real PDF fixture acceptance, isolated database integration, repository verification, dependency audit, and staged secret scan. |
 | M4/T3 — Resume, drift, retention, and publication | `COMPLETE`    | Local implementation commit `c1df143`; pinned session ownership, resumable PDF builds, drift brackets, atomic source publication, counters, retention, fixture persistence/restart acceptance, and focused regressions passed.                                                                                                                                                                                   |
 | M4/T4 — Adapters, retrieval, and API              | `COMPLETE`    | Reviewed local implementation commit `1904853`; fail-closed PDF filters, source counters, coherent hybrid retrieval, citation metadata, HNSW capability, recovery/ownership fixes, and repository gates passed.                                                                                                                                                                                                  |
-| M4/T5 — Acceptance and handoff                    | `IN PROGRESS` | Owner-approved `M4/T5-R2`; embed-driven PDF sidecar recognition ignores ordinary Books/Papers Markdown, removes the redundant `zink_source: pdf` discriminator, retains fail-closed validation, and reruns affected acceptance before remote-pending handoff.                                                                                                                                                    |
+| M4/T5 — Acceptance and handoff                    | `IN PROGRESS` | R6 implementation/static gates and read-only RealVault discovery pass: 28/28 unambiguous sidecars validate with no errors. Final review, candidate freeze, and exact-candidate acceptance remain before handoff.                                                                                                                                                                          |
 
-M4/T1 through M4/T4 are complete locally. `M4/T5-R2` is the only materialized
-active task under the owner-approved chain. T5 may begin only after this
-transition commit pushes successfully.
+M4/T1 through M4/T4 are complete locally. `M4/T5-R6` is active under the owner's
+instruction to continue after resolving the RealVault source-metadata blocker.
 
 ### M5 — Image and Video Ingestion
 
