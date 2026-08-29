@@ -77,7 +77,7 @@ Milestone: M4 — PDF Document Ingestion
 Task: M4/T5 — Acceptance and handoff
 Task Status: IN PROGRESS
 Planning Readiness: APPROVED
-Plan Revision: M4/T5-R6
+Plan Revision: M4/T5-R7
 Execution Authorization: YES
 Authorized Task: M4/T5
 Execution Contract: docs/contracts/execution/ACTIVE.md
@@ -130,11 +130,15 @@ Markdown discovery remains limited to Books and Papers. Explicit Vault-relative
 target semantics are unchanged; no fuzzy/casefold resolver or Vault write is
 authorized.
 
-R6 pre-candidate validation passes 116 Knowledge tests and the repository/static
-gates. After the owner corrected source metadata, read-only aggregate RealVault
-validation finds all 28 unambiguous sidecar candidates valid with no errors. The
-owner's instruction to continue resumes R6 execution; no new implementation
-candidate commit exists yet.
+R6 pre-candidate validation passed 116 Knowledge tests and the repository/static
+gates. Candidate `7a20d1a` then passed Fixture, T3, and T4 exact-candidate gates,
+but RealVault failed closed with `PDF_TABLE_ROW_TOO_LARGE`. R6 and that candidate
+are invalidated. On 2026-08-29 the owner approved M4/T5-R7 option A:
+deterministically split an oversized table row with the existing token-offset
+splitter while preserving all source text, `PDF_TABLE` kind, ordering, and
+citation metadata. No Vault write, token-ceiling increase, source-data drop, or
+generalized table framework is authorized. Structurally impossible minimum
+context remains fail-closed.
 
 Exact-candidate RealVault evidence invalidated T5-R2: 29 embed-bearing notes had
 no H1, while one multi-PDF note was not an unambiguous sidecar. The owner's
@@ -254,7 +258,7 @@ Inherited M3 invariants include:
 
 Status: `ACTIVE`
 Planning Readiness: `APPROVED`
-Plan Revision: `M4/T5-R6`
+Plan Revision: `M4/T5-R7`
 Execution Authorization: `YES`
 Authorized Task: `M4/T5`
 Execution Contract: `docs/contracts/execution/ACTIVE.md`
@@ -293,10 +297,10 @@ Planned task sequence:
 | M4/T2 — Preflight, extraction, and segmentation   | `COMPLETE`    | Implementation commit `82126e4`; exact pypdfium2 security preflight, 4-page offline extraction/OCR, page-local deterministic segmentation, drift brackets, deadlines, process cleanup, and atomic non-searchable content builds passed 99 parent tests, 8 isolated-runtime tests, real PDF fixture acceptance, isolated database integration, repository verification, dependency audit, and staged secret scan. |
 | M4/T3 — Resume, drift, retention, and publication | `COMPLETE`    | Local implementation commit `c1df143`; pinned session ownership, resumable PDF builds, drift brackets, atomic source publication, counters, retention, fixture persistence/restart acceptance, and focused regressions passed.                                                                                                                                                                                   |
 | M4/T4 — Adapters, retrieval, and API              | `COMPLETE`    | Reviewed local implementation commit `1904853`; fail-closed PDF filters, source counters, coherent hybrid retrieval, citation metadata, HNSW capability, recovery/ownership fixes, and repository gates passed.                                                                                                                                                                                                  |
-| M4/T5 — Acceptance and handoff                    | `IN PROGRESS` | R6 implementation/static gates and read-only RealVault discovery pass: 28/28 unambiguous sidecars validate with no errors. Final review, candidate freeze, and exact-candidate acceptance remain before handoff.                                                                                                                                                                          |
+| M4/T5 — Acceptance and handoff                    | `IN PROGRESS` | R7 option A is owner-approved: split oversized table rows deterministically without data loss or ceiling changes, then create and validate a new immutable candidate from the beginning.                                                                                                                                                                                               |
 
-M4/T1 through M4/T4 are complete locally. `M4/T5-R6` is active under the owner's
-instruction to continue after resolving the RealVault source-metadata blocker.
+M4/T1 through M4/T4 are complete locally. `M4/T5-R7` is active under the owner's
+2026-08-29 explicit approval of option A.
 
 ### M5 — Image and Video Ingestion
 

@@ -16,6 +16,7 @@ from typing import Any, Mapping
 from .pdf_foundation import canonical_json_bytes, canonical_vault_path
 
 PROTOCOL_VERSION = "zink:pdf-runtime-protocol:v1"
+SEGMENTATION_ALGORITHM_VERSION = 2
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_RESPONSE_BYTES = 64 * 1024 * 1024
 MAX_STDERR_BYTES = 1024 * 1024
@@ -95,7 +96,7 @@ def processing_identity_for_runtime(
         "ocr_languages": ["eng", "vie", "chi_sim"],
         "ocr_policy_version": 1,
         "render_policy_version": 1,
-        "segmentation_algorithm_version": 1,
+        "segmentation_algorithm_version": SEGMENTATION_ALGORITHM_VERSION,
         "runner_code_digest": manifest["runner_code_digest"],
         "parent_client_code_digest": _sha256_file(Path(__file__)),
         "tesseract_version": manifest["tesseract_version"],

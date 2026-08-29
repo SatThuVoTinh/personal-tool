@@ -16,6 +16,7 @@ from app.pdf_runtime import (
     MAX_RESPONSE_BYTES,
     MAX_STDERR_BYTES,
     PROTOCOL_VERSION,
+    SEGMENTATION_ALGORITHM_VERSION,
     PdfRuntimeClient,
     PdfRuntimeError,
     PdfRuntimeSettings,
@@ -291,6 +292,9 @@ class ClientRequestTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RuntimeIdentityTests(unittest.TestCase):
+    def test_processing_identity_tracks_table_segmentation_revision(self) -> None:
+        self.assertEqual(SEGMENTATION_ALGORITHM_VERSION, 2)
+
     def test_parent_recomputes_and_compares_manifest_probe(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

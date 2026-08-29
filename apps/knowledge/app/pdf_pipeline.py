@@ -438,12 +438,19 @@ class PdfContentBuilder:
                 raise PdfBuildError("PDF_TABLE_ROW_TOO_LARGE")
             return (text,)
         header, separator, *rows = lines
+        context = "\n".join((header, separator))
+        if not self._fits(title, context):
+            raise PdfBuildError("PDF_TABLE_ROW_TOO_LARGE")
         output: list[str] = []
         current: list[str] = []
         for row in rows:
-            one_row = "\n".join((header, separator, row))
+            one_row = f"{context}\n{row}"
             if not self._fits(title, one_row):
-                raise PdfBuildError("PDF_TABLE_ROW_TOO_LARGE")
+                if current:
+                    output.append("\n".join((context, *current)))
+                    current = []
+                output.extend(self._split_table_row(title, context, row))
+                continue
             candidate = "\n".join((header, separator, *current, row))
             if current and not self._fits(title, candidate):
                 output.append("\n".join((header, separator, *current)))
@@ -452,6 +459,42 @@ class PdfContentBuilder:
                 current.append(row)
         if current:
             output.append("\n".join((header, separator, *current)))
+        return tuple(output)
+
+    def _split_table_row(self, title: str, context: str, row: str) -> tuple[str, ...]:
+        offsets = self._token_budget.offsets(row)
+        if not offsets:
+            raise PdfBuildError("PDF_TABLE_ROW_TOO_LARGE")
+        output: list[str] = []
+        token_start = 0
+        character_start = 0
+        while token_start < len(offsets):
+            best: str | None = None
+            best_end = token_start
+            best_character_end = character_start
+            low = token_start + 1
+            high = min(token_start + MAX_RETRIEVAL_TOKENS, len(offsets))
+            while low <= high:
+                end = (low + high) // 2
+                character_end = len(row) if end == len(offsets) else offsets[end - 1][1]
+                row_fragment = row[character_start:character_end]
+                candidate = f"{context}\n{row_fragment}"
+                if self._fits(title, candidate):
+                    best, best_end, best_character_end = candidate, end, character_end
+                    low = end + 1
+                else:
+                    high = end - 1
+            if best is None:
+                raise PdfBuildError("PDF_TABLE_ROW_TOO_LARGE")
+            output.append(best)
+            character_start = best_character_end
+            token_start = best_end
+        if character_start < len(row):
+            trailing = row[character_start:]
+            candidate = output[-1] + trailing
+            if not self._fits(title, candidate):
+                raise PdfBuildError("PDF_TABLE_ROW_TOO_LARGE")
+            output[-1] = candidate
         return tuple(output)
 
     def _fits(self, title: str, text: str) -> bool:

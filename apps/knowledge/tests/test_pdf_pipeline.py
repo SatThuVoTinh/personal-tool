@@ -107,7 +107,35 @@ class PdfSegmentationTests(unittest.TestCase):
         self.assertEqual(segments[0].content, "First sentence. Second sentence.")
         self.assertEqual(segments[0].bbox, (0.1, 0.1, 0.2, 0.2))
 
-    def test_table_row_budget_includes_title_header_and_separator(self) -> None:
+    def test_oversized_table_row_splits_without_payload_loss(self) -> None:
+        builder = self.builder(52)
+        context = "| A | B |\n| --- | --- |"
+        row = "| a very long value with exact spacing | another long value |"
+        item = {
+            "kind": "table", "ordinal": 0,
+            "content": f"{context}\n{row}",
+            "page_start": 1, "page_end": 1,
+            "bbox": [0.1, 0.1, 0.2, 0.2],
+        }
+
+        segments = builder._segment_batch("Title", [item], self.batch())
+
+        self.assertGreater(len(segments), 1)
+        self.assertEqual(segments, builder._segment_batch("Title", [item], self.batch()))
+        self.assertTrue(all(segment.segment_type == "PDF_TABLE" for segment in segments))
+        self.assertTrue(all(segment.page_start == segment.page_end == 1 for segment in segments))
+        self.assertTrue(all(segment.bbox is None for segment in segments))
+        self.assertTrue(all(builder._fits("Title", segment.content) for segment in segments))
+        self.assertEqual(
+            "".join(segment.content.removeprefix(f"{context}\n") for segment in segments),
+            row,
+        )
+
+    def test_fitting_table_output_is_unchanged(self) -> None:
+        table = "| A | B |\n| --- | --- |\n| a | b |\n| c | d |"
+        self.assertEqual(self.builder(100)._split_table("Title", table), (table,))
+
+    def test_table_minimum_context_must_fit(self) -> None:
         with self.assertRaisesRegex(PdfBuildError, "PDF_TABLE_ROW_TOO_LARGE"):
             self.builder(24)._segment_batch(
                 "Title",
