@@ -100,6 +100,10 @@ Then run isolated RealVault acceptance with a valid canonical source path:
 powershell -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/docker/scripts/knowledge-t5.ps1 -Mode RealVault -EnvironmentFile ./infrastructure/docker/env/.env -VaultRoot "C:/Vault" -Query "What is safety stock?" -ExpectedSourcePath "01. Knowledge/Supply Chain/safety-stock.md"
 ```
 
+Fixture acceptance allows five minutes for its index run. RealVault acceptance
+allows up to 24 hours so a bounded large-PDF build can complete without the
+harness timing out before the runtime's own mandatory deadline.
+
 The script writes private local evidence under
 `%LOCALAPPDATA%/ZinkKnowledge/evidence/m4-t5/`, outside the repository and its
 OneDrive tree. Do not copy or upload it. It includes private Vault paths, query

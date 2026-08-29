@@ -25,6 +25,7 @@ $fixturePdfPath = ""
 $started = $false
 $script:bodyFailed = $false
 $apiBaseUrl = ""
+$script:runTimeoutSeconds = if ($Mode -eq "RealVault") { 24 * 60 * 60 } else { 5 * 60 }
 $evidence = [ordered]@{ schema_version = 1; mode = $Mode; result = "FAIL"; acceptance_run_id = $runId; started_at = [DateTime]::UtcNow.ToString("o") }
 
 function Invoke-T5Compose {
@@ -58,7 +59,8 @@ function Invoke-T5Api {
 
 function Wait-T5Run {
   param([string]$RunId)
-  for ($attempt = 0; $attempt -lt 600; $attempt++) {
+  $deadline = [DateTime]::UtcNow.AddSeconds($script:runTimeoutSeconds)
+  while ([DateTime]::UtcNow -lt $deadline) {
     $response = Invoke-T5Api "GET" "/v1/index-runs/$RunId"
     if ($response.status -eq 200) {
       $run = $response.body | ConvertFrom-Json
@@ -66,7 +68,7 @@ function Wait-T5Run {
     }
     Start-Sleep -Milliseconds 500
   }
-  throw "Index run $RunId did not reach a terminal state."
+  throw "Index run $RunId did not reach a terminal state within the acceptance timeout."
 }
 
 function Invoke-T5Sql {
