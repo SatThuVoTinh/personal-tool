@@ -435,7 +435,7 @@ class PdfContentBuilder:
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         if len(lines) < 3:
             if not self._fits(title, text):
-                raise PdfBuildError("PDF_TABLE_ROW_TOO_LARGE")
+                return self._split_table_payload(title, "", text)
             return (text,)
         header, separator, *rows = lines
         context = "\n".join((header, separator))

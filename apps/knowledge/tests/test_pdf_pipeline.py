@@ -154,6 +154,17 @@ class PdfSegmentationTests(unittest.TestCase):
         self.assertTrue(all(builder._fits("Title", piece) for piece in pieces))
         self.assertEqual("".join(pieces), table)
 
+    def test_oversized_short_table_splits_complete_payload_without_loss(self) -> None:
+        builder = self.builder(24)
+        table = "| a very long unstructured table value |\n| another long value |"
+
+        pieces = builder._split_table("Title", table)
+
+        self.assertGreater(len(pieces), 1)
+        self.assertEqual(pieces, builder._split_table("Title", table))
+        self.assertTrue(all(builder._fits("Title", piece) for piece in pieces))
+        self.assertEqual("".join(pieces), table)
+
     def test_table_fails_when_one_source_token_cannot_fit_with_title(self) -> None:
         with self.assertRaisesRegex(PdfBuildError, "PDF_TABLE_ROW_TOO_LARGE"):
             self.builder(7)._split_table(
