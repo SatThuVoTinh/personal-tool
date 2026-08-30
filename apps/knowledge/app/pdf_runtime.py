@@ -16,7 +16,7 @@ from typing import Any, Mapping
 from .pdf_foundation import canonical_json_bytes, canonical_vault_path
 
 PROTOCOL_VERSION = "zink:pdf-runtime-protocol:v1"
-SEGMENTATION_ALGORITHM_VERSION = 2
+SEGMENTATION_ALGORITHM_VERSION = 3
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_RESPONSE_BYTES = 64 * 1024 * 1024
 MAX_STDERR_BYTES = 1024 * 1024

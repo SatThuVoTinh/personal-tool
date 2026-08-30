@@ -77,7 +77,7 @@ Milestone: M4 — PDF Document Ingestion
 Task: M4/T5 — Acceptance and handoff
 Task Status: IN PROGRESS
 Planning Readiness: APPROVED
-Plan Revision: M4/T5-R7
+Plan Revision: M4/T5-R8
 Execution Authorization: YES
 Authorized Task: M4/T5
 Execution Contract: docs/contracts/execution/ACTIVE.md
@@ -139,6 +139,16 @@ splitter while preserving all source text, `PDF_TABLE` kind, ordering, and
 citation metadata. No Vault write, token-ceiling increase, source-data drop, or
 generalized table framework is authorized. Structurally impossible minimum
 context remains fail-closed.
+
+R7 candidate `5e6c196` passed focused, repository, Fixture, T3, and T4 gates,
+but RealVault failed closed again. A read-only, offline diagnostic classified the
+failure as `MINIMUM_CONTEXT`: the table header plus separator alone exceeded the
+accepted retrieval budget. R7 and that candidate are invalidated. On 2026-08-30
+the owner approved `M4/T5-R8`: retain R7 row splitting, and when the minimum
+header/separator context itself cannot fit, deterministically split the complete
+normalized table Markdown with the existing token-offset mechanism. Preserve
+all source text and ordering as bounded `PDF_TABLE` fragments; do not raise a
+ceiling, drop data, write the Vault, or broaden architecture.
 
 Exact-candidate RealVault evidence invalidated T5-R2: 29 embed-bearing notes had
 no H1, while one multi-PDF note was not an unambiguous sidecar. The owner's
@@ -258,7 +268,7 @@ Inherited M3 invariants include:
 
 Status: `ACTIVE`
 Planning Readiness: `APPROVED`
-Plan Revision: `M4/T5-R7`
+Plan Revision: `M4/T5-R8`
 Execution Authorization: `YES`
 Authorized Task: `M4/T5`
 Execution Contract: `docs/contracts/execution/ACTIVE.md`
@@ -297,10 +307,10 @@ Planned task sequence:
 | M4/T2 — Preflight, extraction, and segmentation   | `COMPLETE`    | Implementation commit `82126e4`; exact pypdfium2 security preflight, 4-page offline extraction/OCR, page-local deterministic segmentation, drift brackets, deadlines, process cleanup, and atomic non-searchable content builds passed 99 parent tests, 8 isolated-runtime tests, real PDF fixture acceptance, isolated database integration, repository verification, dependency audit, and staged secret scan. |
 | M4/T3 — Resume, drift, retention, and publication | `COMPLETE`    | Local implementation commit `c1df143`; pinned session ownership, resumable PDF builds, drift brackets, atomic source publication, counters, retention, fixture persistence/restart acceptance, and focused regressions passed.                                                                                                                                                                                   |
 | M4/T4 — Adapters, retrieval, and API              | `COMPLETE`    | Reviewed local implementation commit `1904853`; fail-closed PDF filters, source counters, coherent hybrid retrieval, citation metadata, HNSW capability, recovery/ownership fixes, and repository gates passed.                                                                                                                                                                                                  |
-| M4/T5 — Acceptance and handoff                    | `IN PROGRESS` | R7 option A is owner-approved: split oversized table rows deterministically without data loss or ceiling changes, then create and validate a new immutable candidate from the beginning.                                                                                                                                                                                               |
+| M4/T5 — Acceptance and handoff                    | `IN PROGRESS` | R8 is owner-approved: retain deterministic oversized-row splitting and split complete normalized table Markdown when minimum header/separator context cannot fit, without data loss or ceiling changes; then validate a new immutable candidate from the beginning.                                                                                                                   |
 
-M4/T1 through M4/T4 are complete locally. `M4/T5-R7` is active under the owner's
-2026-08-29 explicit approval of option A.
+M4/T1 through M4/T4 are complete locally. `M4/T5-R8` is active under the owner's
+2026-08-30 explicit approval of the bounded minimum-context fallback.
 
 ### M5 — Image and Video Ingestion
 

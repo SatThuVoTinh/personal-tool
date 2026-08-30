@@ -135,16 +135,29 @@ class PdfSegmentationTests(unittest.TestCase):
         table = "| A | B |\n| --- | --- |\n| a | b |\n| c | d |"
         self.assertEqual(self.builder(100)._split_table("Title", table), (table,))
 
-    def test_table_minimum_context_must_fit(self) -> None:
+    def test_oversized_table_context_splits_complete_table_without_loss(self) -> None:
+        builder = self.builder(24)
+        table = "| A | B |\n| --- | --- |\n| a very long value | b |"
+        item = {
+            "kind": "table", "ordinal": 0, "content": table,
+            "page_start": 1, "page_end": 1, "bbox": [0.1, 0.1, 0.2, 0.2],
+        }
+
+        segments = builder._segment_batch("Title", [item], self.batch())
+        pieces = tuple(segment.content for segment in segments)
+
+        self.assertGreater(len(pieces), 1)
+        self.assertEqual(segments, builder._segment_batch("Title", [item], self.batch()))
+        self.assertTrue(all(segment.segment_type == "PDF_TABLE" for segment in segments))
+        self.assertTrue(all(segment.page_start == segment.page_end == 1 for segment in segments))
+        self.assertTrue(all(segment.bbox is None for segment in segments))
+        self.assertTrue(all(builder._fits("Title", piece) for piece in pieces))
+        self.assertEqual("".join(pieces), table)
+
+    def test_table_fails_when_one_source_token_cannot_fit_with_title(self) -> None:
         with self.assertRaisesRegex(PdfBuildError, "PDF_TABLE_ROW_TOO_LARGE"):
-            self.builder(24)._segment_batch(
-                "Title",
-                [{
-                    "kind": "table", "ordinal": 0,
-                    "content": "| A | B |\n| --- | --- |\n| a very long value | b |",
-                    "page_start": 1, "page_end": 1, "bbox": None,
-                }],
-                self.batch(),
+            self.builder(7)._split_table(
+                "Title", "| A | B |\n| --- | --- |\n| value | b |"
             )
 
     def test_multi_page_item_fails_explicitly(self) -> None:

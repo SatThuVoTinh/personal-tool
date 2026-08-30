@@ -293,7 +293,7 @@ class ClientRequestTests(unittest.IsolatedAsyncioTestCase):
 
 class RuntimeIdentityTests(unittest.TestCase):
     def test_processing_identity_tracks_table_segmentation_revision(self) -> None:
-        self.assertEqual(SEGMENTATION_ALGORITHM_VERSION, 2)
+        self.assertEqual(SEGMENTATION_ALGORITHM_VERSION, 3)
 
     def test_parent_recomputes_and_compares_manifest_probe(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

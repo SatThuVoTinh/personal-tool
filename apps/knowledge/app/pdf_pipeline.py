@@ -440,7 +440,7 @@ class PdfContentBuilder:
         header, separator, *rows = lines
         context = "\n".join((header, separator))
         if not self._fits(title, context):
-            raise PdfBuildError("PDF_TABLE_ROW_TOO_LARGE")
+            return self._split_table_payload(title, "", text)
         output: list[str] = []
         current: list[str] = []
         for row in rows:
@@ -462,7 +462,10 @@ class PdfContentBuilder:
         return tuple(output)
 
     def _split_table_row(self, title: str, context: str, row: str) -> tuple[str, ...]:
-        offsets = self._token_budget.offsets(row)
+        return self._split_table_payload(title, f"{context}\n", row)
+
+    def _split_table_payload(self, title: str, prefix: str, text: str) -> tuple[str, ...]:
+        offsets = self._token_budget.offsets(text)
         if not offsets:
             raise PdfBuildError("PDF_TABLE_ROW_TOO_LARGE")
         output: list[str] = []
@@ -476,9 +479,9 @@ class PdfContentBuilder:
             high = min(token_start + MAX_RETRIEVAL_TOKENS, len(offsets))
             while low <= high:
                 end = (low + high) // 2
-                character_end = len(row) if end == len(offsets) else offsets[end - 1][1]
-                row_fragment = row[character_start:character_end]
-                candidate = f"{context}\n{row_fragment}"
+                character_end = len(text) if end == len(offsets) else offsets[end - 1][1]
+                fragment = text[character_start:character_end]
+                candidate = f"{prefix}{fragment}"
                 if self._fits(title, candidate):
                     best, best_end, best_character_end = candidate, end, character_end
                     low = end + 1
@@ -489,8 +492,8 @@ class PdfContentBuilder:
             output.append(best)
             character_start = best_character_end
             token_start = best_end
-        if character_start < len(row):
-            trailing = row[character_start:]
+        if character_start < len(text):
+            trailing = text[character_start:]
             candidate = output[-1] + trailing
             if not self._fits(title, candidate):
                 raise PdfBuildError("PDF_TABLE_ROW_TOO_LARGE")
