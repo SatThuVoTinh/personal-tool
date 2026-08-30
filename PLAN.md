@@ -62,7 +62,7 @@ ACTIVE → LOCAL-COMPLETE → REMOTE-PENDING → REMOTE-BACKED
 | M1 — Development foundation                                     | `COMPLETE` | `REMOTE-BACKED`  | Local verification suite and GitHub CI/Security workflows exist and passed.                                                                                                                                             |
 | M2 — Local infrastructure                                       | `COMPLETE` | `REMOTE-BACKED`  | Accepted commit `5ffe4cb9be81c30d5c24bd7eb6a9d41abc2a5f19`; isolated M2 acceptance plus remote CI/Security passed.                                                                                                      |
 | M3 — Markdown Knowledge Platform                                | `COMPLETE` | `REMOTE-BACKED`  | Accepted candidate `ff4a5fb7d779f260ffb9b5aa2393ad6ab75eb549`, prior merge `9cd34cebb196631e9524b095c21f1fd5aff78749`, and M3/S1 merge `3f9e018a82854f27de08f3e1ba62a7931d879626` all have remote CI/Security evidence. |
-| M4 — PDF document ingestion                                     | `ACTIVE`   | `LOCAL-VERIFIED` | M4/T1 and M4/T2 are complete locally; T2 validated bounded preflight/extraction/segmentation and atomic non-searchable content builds without changing M3 dependency identity.                                          |
+| M4 — PDF document ingestion                                     | `ACTIVE`   | `LOCAL-VERIFIED` | M4/T1 through M4/T4 are complete locally; owner-authorized T5-R9 is correcting the verified pair-budget and child-reap failures before immutable-candidate acceptance restarts.                                         |
 | M5 — Image and video ingestion                                  | `DEFERRED` | `NONE`           | Locked until M4 is complete and M5 source contracts are approved.                                                                                                                                                       |
 | M6 — Architecture consolidation                                 | `DEFERRED` | `NONE`           | Post-Knowledge structural migration only; no M4/M5 accepted code is moved early.                                                                                                                                        |
 | M7 — L&SC Data Plant core                                       | `DEFERRED` | `NONE`           | Governed data lifecycle and deterministic control plane.                                                                                                                                                                |
@@ -77,7 +77,7 @@ Milestone: M4 — PDF Document Ingestion
 Task: M4/T5 — Acceptance and handoff
 Task Status: IN PROGRESS
 Planning Readiness: APPROVED
-Plan Revision: M4/T5-R8
+Plan Revision: M4/T5-R9
 Execution Authorization: YES
 Authorized Task: M4/T5
 Execution Contract: docs/contracts/execution/ACTIVE.md
@@ -149,6 +149,29 @@ header/separator context itself cannot fit, deterministically split the complete
 normalized table Markdown with the existing token-offset mechanism. Preserve
 all source text and ordering as bounded `PDF_TABLE` fragments; do not raise a
 ceiling, drop data, write the Vault, or broaden architecture.
+
+R8 candidates `f334e95` and `acbf11c` passed pre-candidate review/repository
+gates plus exact-candidate Fixture, T3, and T4 gates, but RealVault failed
+closed with `PDF_TABLE_ROW_TOO_LARGE`. A temporary read-only diagnostic clone
+classified the reproducible splitter failure as `PDF_DIAG_WHOLE_TOKEN`: one
+text-only tokenizer-offset span does not fit when encoded with the full PDF
+title/retrieval representation. This is the exact R8 fail-closed condition, so
+R8 and both candidates are invalidated rather than weakened silently. One
+diagnostic attempt also proved an unbounded native-child reap window after the
+900-second operation deadline; its isolated resources were removed and a clean
+retry progressed normally. Execution is BLOCKED and authorization is revoked
+pending owner approval of a new contract revision.
+
+On 2026-08-30 the owner approved `M4/T5-R9`: retain the R8 token-offset
+splitter, but when one exact tokenizer-offset source slice cannot fit with the
+accepted full title/retrieval representation, subdivide only that exact slice at
+Unicode code-point boundaries using bounded deterministic search. Preserve
+exact text, title, ceilings, metadata, and order; fail closed only when one code
+point cannot fit. R9 also bounds the post-`SIGKILL` reap window: if a native PDF
+child still cannot be reaped, the Knowledge process must fail-stop so the pinned
+database ownership session closes and no further mutation or publication can
+occur. No API, schema, dependency, topology, resource-ceiling, Vault, or public
+error-contract change is authorized.
 
 Exact-candidate RealVault evidence invalidated T5-R2: 29 embed-bearing notes had
 no H1, while one multi-PDF note was not an unambiguous sidecar. The owner's
@@ -268,7 +291,7 @@ Inherited M3 invariants include:
 
 Status: `ACTIVE`
 Planning Readiness: `APPROVED`
-Plan Revision: `M4/T5-R8`
+Plan Revision: `M4/T5-R9`
 Execution Authorization: `YES`
 Authorized Task: `M4/T5`
 Execution Contract: `docs/contracts/execution/ACTIVE.md`
@@ -307,10 +330,11 @@ Planned task sequence:
 | M4/T2 — Preflight, extraction, and segmentation   | `COMPLETE`    | Implementation commit `82126e4`; exact pypdfium2 security preflight, 4-page offline extraction/OCR, page-local deterministic segmentation, drift brackets, deadlines, process cleanup, and atomic non-searchable content builds passed 99 parent tests, 8 isolated-runtime tests, real PDF fixture acceptance, isolated database integration, repository verification, dependency audit, and staged secret scan. |
 | M4/T3 — Resume, drift, retention, and publication | `COMPLETE`    | Local implementation commit `c1df143`; pinned session ownership, resumable PDF builds, drift brackets, atomic source publication, counters, retention, fixture persistence/restart acceptance, and focused regressions passed.                                                                                                                                                                                   |
 | M4/T4 — Adapters, retrieval, and API              | `COMPLETE`    | Reviewed local implementation commit `1904853`; fail-closed PDF filters, source counters, coherent hybrid retrieval, citation metadata, HNSW capability, recovery/ownership fixes, and repository gates passed.                                                                                                                                                                                                  |
-| M4/T5 — Acceptance and handoff                    | `IN PROGRESS` | R8 is owner-approved: retain deterministic oversized-row splitting and split complete normalized table Markdown when minimum header/separator context cannot fit, without data loss or ceiling changes; then validate a new immutable candidate from the beginning.                                                                                                                   |
+| M4/T5 — Acceptance and handoff                    | `IN PROGRESS` | R9 is owner-authorized to add the bounded code-point fallback for one tokenizer-offset slice and bounded fail-stop handling for an unreaped native child, then produce and validate a new immutable candidate. R8 candidates remain invalid.                                                                                                          |
 
-M4/T1 through M4/T4 are complete locally. `M4/T5-R8` is active under the owner's
-2026-08-30 explicit approval of the bounded minimum-context fallback.
+M4/T1 through M4/T4 are complete locally. `M4/T5-R9` is the sole active
+owner-approved execution contract; T5 remains incomplete until the new
+immutable candidate passes every mandatory local acceptance gate.
 
 ### M5 — Image and Video Ingestion
 

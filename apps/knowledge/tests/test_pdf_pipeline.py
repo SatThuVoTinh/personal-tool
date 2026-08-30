@@ -40,10 +40,20 @@ class _Budget:
         return tuple((index, index + 1) for index in range(len(text)))
 
 
+class _WholeTokenBudget(_Budget):
+    def offsets(self, text: str) -> tuple[tuple[int, int], ...]:
+        return ((0, len(text)),) if text else ()
+
+
 class PdfSegmentationTests(unittest.TestCase):
     def builder(self, maximum: int = 40) -> PdfContentBuilder:
         instance = object.__new__(PdfContentBuilder)
         instance._token_budget = _Budget(maximum)
+        return instance
+
+    def whole_token_builder(self, maximum: int = 40) -> PdfContentBuilder:
+        instance = object.__new__(PdfContentBuilder)
+        instance._token_budget = _WholeTokenBudget(maximum)
         return instance
 
     @staticmethod
@@ -165,7 +175,18 @@ class PdfSegmentationTests(unittest.TestCase):
         self.assertTrue(all(builder._fits("Title", piece) for piece in pieces))
         self.assertEqual("".join(pieces), table)
 
-    def test_table_fails_when_one_source_token_cannot_fit_with_title(self) -> None:
+    def test_table_pair_budget_fallback_splits_one_token_by_codepoint(self) -> None:
+        builder = self.whole_token_builder(18)
+        table = "| A | B |\n| --- | --- |\n| giá trị dài | b |"
+
+        pieces = builder._split_table("Title", table)
+
+        self.assertGreater(len(pieces), 1)
+        self.assertEqual(pieces, builder._split_table("Title", table))
+        self.assertTrue(all(builder._fits("Title", piece) for piece in pieces))
+        self.assertEqual("".join(pieces), table)
+
+    def test_table_fails_when_one_source_codepoint_cannot_fit_with_title(self) -> None:
         with self.assertRaisesRegex(PdfBuildError, "PDF_TABLE_ROW_TOO_LARGE"):
             self.builder(7)._split_table(
                 "Title", "| A | B |\n| --- | --- |\n| value | b |"

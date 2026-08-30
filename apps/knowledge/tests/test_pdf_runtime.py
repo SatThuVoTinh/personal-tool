@@ -21,6 +21,7 @@ from app.pdf_runtime import (
     PdfRuntimeError,
     PdfRuntimeSettings,
     _OutputCapExceeded,
+    _terminate_child_group,
     _read_capped,
     _validate_response,
     processing_identity_for_runtime,
@@ -247,6 +248,45 @@ class ClientRequestTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(maximum_active, 1)
 
+    async def test_unreaped_child_after_sigkill_fail_stops_within_bound(self) -> None:
+        class FailStopTriggered(BaseException):
+            pass
+
+        class UnreapedProcess:
+            returncode = None
+            pid = 123
+
+            def __init__(self) -> None:
+                self.terminated = False
+                self.killed = False
+
+            def terminate(self) -> None:
+                self.terminated = True
+
+            def kill(self) -> None:
+                self.killed = True
+
+            async def wait(self) -> int:
+                await asyncio.Event().wait()
+                return 0
+
+        process = UnreapedProcess()
+        with (
+            patch("app.pdf_runtime.os.name", "nt"),
+            patch("app.pdf_runtime.CHILD_TERMINATION_GRACE_SECONDS", 0.001),
+            patch("app.pdf_runtime.CHILD_KILL_REAP_SECONDS", 0.001),
+            patch(
+                "app.pdf_runtime._fail_stop_unreaped_child",
+                side_effect=FailStopTriggered,
+            ) as fail_stop,
+        ):
+            with self.assertRaises(FailStopTriggered):
+                await _terminate_child_group(process)  # type: ignore[arg-type]
+
+        self.assertTrue(process.terminated)
+        self.assertTrue(process.killed)
+        fail_stop.assert_called_once_with()
+
     @unittest.skipUnless(os.name == "posix", "process-group contract is Linux-only")
     async def test_timeout_kills_the_child_process_group(self) -> None:
         client = self.client()
@@ -293,7 +333,7 @@ class ClientRequestTests(unittest.IsolatedAsyncioTestCase):
 
 class RuntimeIdentityTests(unittest.TestCase):
     def test_processing_identity_tracks_table_segmentation_revision(self) -> None:
-        self.assertEqual(SEGMENTATION_ALGORITHM_VERSION, 3)
+        self.assertEqual(SEGMENTATION_ALGORITHM_VERSION, 4)
 
     def test_parent_recomputes_and_compares_manifest_probe(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

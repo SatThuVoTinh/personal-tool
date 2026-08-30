@@ -11,12 +11,14 @@ import signal
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, NoReturn
 
 from .pdf_foundation import canonical_json_bytes, canonical_vault_path
 
 PROTOCOL_VERSION = "zink:pdf-runtime-protocol:v1"
-SEGMENTATION_ALGORITHM_VERSION = 3
+SEGMENTATION_ALGORITHM_VERSION = 4
+CHILD_TERMINATION_GRACE_SECONDS = 5
+CHILD_KILL_REAP_SECONDS = 5
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_RESPONSE_BYTES = 64 * 1024 * 1024
 MAX_STDERR_BYTES = 1024 * 1024
@@ -304,7 +306,9 @@ async def _terminate_child_group(process: asyncio.subprocess.Process) -> None:
             except ProcessLookupError:
                 pass
         try:
-            await asyncio.wait_for(process.wait(), timeout=5)
+            await asyncio.wait_for(
+                process.wait(), timeout=CHILD_TERMINATION_GRACE_SECONDS
+            )
         except TimeoutError:
             if os.name != "posix":
                 process.kill()
@@ -313,7 +317,10 @@ async def _terminate_child_group(process: asyncio.subprocess.Process) -> None:
                     os.killpg(process.pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
-            await process.wait()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=CHILD_KILL_REAP_SECONDS)
+            except TimeoutError:
+                _fail_stop_unreaped_child()
     # The direct child can exit before an OCR descendant.  Its dedicated
     # session lets us assert and clean only that invocation's process group.
     if os.name == "posix":
@@ -325,6 +332,10 @@ async def _terminate_child_group(process: asyncio.subprocess.Process) -> None:
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             return
+
+
+def _fail_stop_unreaped_child() -> NoReturn:
+    os._exit(70)
 
 
 def _validate_response(raw: bytes, request: Mapping[str, Any]) -> Mapping[str, Any]:

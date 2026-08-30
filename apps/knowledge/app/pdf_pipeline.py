@@ -488,7 +488,21 @@ class PdfContentBuilder:
                 else:
                     high = end - 1
             if best is None:
-                raise PdfBuildError("PDF_TABLE_ROW_TOO_LARGE")
+                character_end = (
+                    len(text) if token_start + 1 == len(offsets) else offsets[token_start][1]
+                )
+                if character_end <= character_start:
+                    raise PdfBuildError("PDF_TABLE_ROW_TOO_LARGE")
+                output.extend(
+                    self._split_table_codepoints(
+                        title,
+                        prefix,
+                        text[character_start:character_end],
+                    )
+                )
+                character_start = character_end
+                token_start += 1
+                continue
             output.append(best)
             character_start = best_character_end
             token_start = best_end
@@ -498,6 +512,30 @@ class PdfContentBuilder:
             if not self._fits(title, candidate):
                 raise PdfBuildError("PDF_TABLE_ROW_TOO_LARGE")
             output[-1] = candidate
+        return tuple(output)
+
+    def _split_table_codepoints(
+        self, title: str, prefix: str, text: str
+    ) -> tuple[str, ...]:
+        output: list[str] = []
+        start = 0
+        while start < len(text):
+            best: str | None = None
+            best_end = start
+            low = start + 1
+            high = min(start + MAX_CHARS, len(text))
+            while low <= high:
+                end = (low + high) // 2
+                candidate = f"{prefix}{text[start:end]}"
+                if self._fits(title, candidate):
+                    best, best_end = candidate, end
+                    low = end + 1
+                else:
+                    high = end - 1
+            if best is None:
+                raise PdfBuildError("PDF_TABLE_ROW_TOO_LARGE")
+            output.append(best)
+            start = best_end
         return tuple(output)
 
     def _fits(self, title: str, text: str) -> bool:
