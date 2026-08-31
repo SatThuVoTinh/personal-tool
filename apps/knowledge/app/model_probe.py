@@ -34,10 +34,29 @@ class OllamaModelProbe:
 
     async def resolve(self, model_name: str) -> ResolvedEmbeddingModel:
         timeout = httpx.Timeout(10.0, connect=3.0)
-        tags_response = await self._client.get(
-            f"{self._base_url}/api/tags", timeout=timeout
-        )
-        tags_response.raise_for_status()
+        for attempt in range(2):
+            failure_code: str | None = None
+            try:
+                tags_response = await self._client.get(
+                    f"{self._base_url}/api/tags", timeout=timeout
+                )
+                tags_response.raise_for_status()
+            except httpx.TimeoutException:
+                failure_code = "EMBEDDING_TIMEOUT"
+            except httpx.HTTPStatusError as error:
+                if error.response.status_code not in _TRANSIENT_EMBED_HTTP_STATUSES:
+                    raise ModelProbeError("EMBEDDING_PERMANENT_HTTP") from None
+                failure_code = "EMBEDDING_TRANSIENT_HTTP"
+            except httpx.TransportError:
+                failure_code = "EMBEDDING_TRANSPORT"
+
+            if failure_code is None:
+                break
+            if attempt == 0:
+                await asyncio.sleep(_EMBED_RETRY_DELAY_SECONDS)
+                continue
+            raise ModelProbeError(failure_code) from None
+
         try:
             tags_payload = tags_response.json()
         except ValueError as error:
@@ -58,13 +77,10 @@ class OllamaModelProbe:
         if not isinstance(digest, str) or not _MODEL_DIGEST.fullmatch(digest):
             raise ModelProbeError("EMBEDDING_MODEL_UNAVAILABLE")
 
-        embedding_response = await self._client.post(
-            f"{self._base_url}/api/embed",
-            json={"model": model_name, "input": "knowledge-model-preflight"},
-            timeout=timeout,
+        embeddings = await self._embed_batch(
+            model_name,
+            ["knowledge-model-preflight"],
         )
-        embedding_response.raise_for_status()
-        embeddings = self._response_embeddings(embedding_response, 1)
 
         return ResolvedEmbeddingModel(
             name=model_name,

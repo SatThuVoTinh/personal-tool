@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 
@@ -11,17 +11,27 @@ from app.model_probe import ModelProbeError, OllamaModelProbe
 
 class OllamaModelProbeTests(unittest.IsolatedAsyncioTestCase):
     async def test_resolve_validates_digest_and_finite_probe_vector(self) -> None:
+        observed_preflight_inputs: list[list[str]] = []
+        observed_read_timeouts: dict[str, float] = {}
+
         async def handler(request: httpx.Request) -> httpx.Response:
+            observed_read_timeouts[request.url.path] = request.extensions["timeout"][
+                "read"
+            ]
             if request.url.path == "/api/tags":
                 return httpx.Response(
                     200,
                     json={"models": [{"name": "bge-m3:latest", "digest": "a" * 64}]},
                 )
+            observed_preflight_inputs.append(json.loads(request.content)["input"])
             return httpx.Response(200, json={"embeddings": [[0.0, 1.0]]})
 
         probe = OllamaModelProbe("http://ollama")
         await probe._client.aclose()
-        probe._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        probe._client = httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+            timeout=httpx.Timeout(90.0, connect=3.0),
+        )
         try:
             resolved = await probe.resolve("bge-m3:latest")
         finally:
@@ -29,6 +39,182 @@ class OllamaModelProbeTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(resolved.digest, "a" * 64)
         self.assertEqual(resolved.dimensions, 2)
+        self.assertEqual(observed_preflight_inputs, [["knowledge-model-preflight"]])
+        self.assertEqual(
+            observed_read_timeouts,
+            {"/api/tags": 10.0, "/api/embed": 90.0},
+        )
+
+    async def test_resolve_retries_each_transient_model_list_http_status(self) -> None:
+        for status in (429, 502, 503, 504):
+            with self.subTest(status=status):
+                calls = 0
+
+                async def handler(request: httpx.Request) -> httpx.Response:
+                    nonlocal calls
+                    if request.url.path == "/api/tags":
+                        calls += 1
+                        if calls == 1:
+                            return httpx.Response(status)
+                        return httpx.Response(
+                            200,
+                            json={
+                                "models": [
+                                    {"name": "bge-m3:latest", "digest": "a" * 64}
+                                ]
+                            },
+                        )
+                    return httpx.Response(200, json={"embeddings": [[0.0]]})
+
+                probe = OllamaModelProbe("http://ollama")
+                await probe._client.aclose()
+                probe._client = httpx.AsyncClient(
+                    transport=httpx.MockTransport(handler)
+                )
+                try:
+                    with patch("app.model_probe._EMBED_RETRY_DELAY_SECONDS", 0):
+                        resolved = await probe.resolve("bge-m3:latest")
+                finally:
+                    await probe.close()
+
+                self.assertEqual(calls, 2)
+                self.assertEqual(resolved.dimensions, 1)
+
+    async def test_resolve_retries_one_model_list_transport_failure(self) -> None:
+        calls = 0
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal calls
+            if request.url.path == "/api/tags":
+                calls += 1
+                if calls == 1:
+                    raise httpx.ConnectError("synthetic transport", request=request)
+                return httpx.Response(
+                    200,
+                    json={"models": [{"name": "bge-m3:latest", "digest": "a" * 64}]},
+                )
+            return httpx.Response(200, json={"embeddings": [[0.0]]})
+
+        probe = OllamaModelProbe("http://ollama")
+        await probe._client.aclose()
+        probe._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        delay = AsyncMock()
+        try:
+            with patch("app.model_probe.asyncio.sleep", delay):
+                resolved = await probe.resolve("bge-m3:latest")
+        finally:
+            await probe.close()
+
+        self.assertEqual(calls, 2)
+        self.assertEqual(resolved.dimensions, 1)
+        delay.assert_awaited_once_with(1.0)
+
+    async def test_resolve_fails_after_one_model_list_timeout_retry(self) -> None:
+        calls = 0
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+            raise httpx.ReadTimeout("synthetic timeout", request=request)
+
+        probe = OllamaModelProbe("http://ollama")
+        await probe._client.aclose()
+        probe._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        try:
+            with patch("app.model_probe._EMBED_RETRY_DELAY_SECONDS", 0):
+                with self.assertRaisesRegex(ModelProbeError, "^EMBEDDING_TIMEOUT$"):
+                    await probe.resolve("bge-m3:latest")
+        finally:
+            await probe.close()
+
+        self.assertEqual(calls, 2)
+
+    async def test_resolve_does_not_retry_permanent_or_invalid_model_list(self) -> None:
+        for response in (
+            httpx.Response(400),
+            httpx.Response(
+                200,
+                content=b"not-json",
+                headers={"content-type": "application/json"},
+            ),
+        ):
+            with self.subTest(status=response.status_code):
+                calls = 0
+
+                async def handler(_: httpx.Request) -> httpx.Response:
+                    nonlocal calls
+                    calls += 1
+                    return response
+
+                probe = OllamaModelProbe("http://ollama")
+                await probe._client.aclose()
+                probe._client = httpx.AsyncClient(
+                    transport=httpx.MockTransport(handler)
+                )
+                try:
+                    with self.assertRaises(ModelProbeError):
+                        await probe.resolve("bge-m3:latest")
+                finally:
+                    await probe.close()
+
+                self.assertEqual(calls, 1)
+
+    async def test_resolve_retries_preflight_embedding_once(self) -> None:
+        embed_calls = 0
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal embed_calls
+            if request.url.path == "/api/tags":
+                return httpx.Response(
+                    200,
+                    json={"models": [{"name": "bge-m3:latest", "digest": "a" * 64}]},
+                )
+            embed_calls += 1
+            if embed_calls == 1:
+                return httpx.Response(503)
+            return httpx.Response(200, json={"embeddings": [[0.0, 1.0]]})
+
+        probe = OllamaModelProbe("http://ollama")
+        await probe._client.aclose()
+        probe._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        try:
+            with patch("app.model_probe._EMBED_RETRY_DELAY_SECONDS", 0):
+                resolved = await probe.resolve("bge-m3:latest")
+        finally:
+            await probe.close()
+
+        self.assertEqual(embed_calls, 2)
+        self.assertEqual(resolved.dimensions, 2)
+
+    async def test_resolve_does_not_retry_nonfinite_preflight_embedding(self) -> None:
+        embed_calls = 0
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal embed_calls
+            if request.url.path == "/api/tags":
+                return httpx.Response(
+                    200,
+                    json={"models": [{"name": "bge-m3:latest", "digest": "a" * 64}]},
+                )
+            embed_calls += 1
+            return httpx.Response(
+                200,
+                content=b'{"embeddings":[[Infinity]]}',
+                headers={"content-type": "application/json"},
+            )
+
+        probe = OllamaModelProbe("http://ollama")
+        await probe._client.aclose()
+        probe._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        try:
+            with self.assertRaisesRegex(
+                ModelProbeError, "^EMBEDDING_INVALID_RESPONSE$"
+            ):
+                await probe.resolve("bge-m3:latest")
+        finally:
+            await probe.close()
+
+        self.assertEqual(embed_calls, 1)
 
     async def test_resolve_rejects_malformed_digest_without_embedding(self) -> None:
         embed_called = False
