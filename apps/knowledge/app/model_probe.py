@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import math
 import re
 from dataclasses import dataclass
@@ -7,6 +8,9 @@ from dataclasses import dataclass
 import httpx
 
 _MODEL_DIGEST = re.compile(r"^[a-f0-9]{64}$")
+_EMBED_BATCH_SIZE = 8
+_EMBED_RETRY_DELAY_SECONDS = 1.0
+_TRANSIENT_EMBED_HTTP_STATUSES = frozenset({429, 502, 503, 504})
 
 
 class ModelProbeError(RuntimeError):
@@ -72,12 +76,40 @@ class OllamaModelProbe:
         """Return one finite embedding per supplied retrieval text."""
         if not texts:
             return []
-        response = await self._client.post(
-            f"{self._base_url}/api/embed",
-            json={"model": model_name, "input": texts},
-        )
-        response.raise_for_status()
-        return self._response_embeddings(response, len(texts))
+        embeddings: list[list[float]] = []
+        for offset in range(0, len(texts), _EMBED_BATCH_SIZE):
+            batch = texts[offset : offset + _EMBED_BATCH_SIZE]
+            embeddings.extend(await self._embed_batch(model_name, batch))
+        return embeddings
+
+    async def _embed_batch(
+        self, model_name: str, texts: list[str]
+    ) -> list[list[float]]:
+        for attempt in range(2):
+            failure_code: str | None = None
+            try:
+                response = await self._client.post(
+                    f"{self._base_url}/api/embed",
+                    json={"model": model_name, "input": texts},
+                )
+                response.raise_for_status()
+            except httpx.TimeoutException:
+                failure_code = "EMBEDDING_TIMEOUT"
+            except httpx.HTTPStatusError as error:
+                if error.response.status_code not in _TRANSIENT_EMBED_HTTP_STATUSES:
+                    raise ModelProbeError("EMBEDDING_PERMANENT_HTTP") from None
+                failure_code = "EMBEDDING_TRANSIENT_HTTP"
+            except httpx.TransportError:
+                failure_code = "EMBEDDING_TRANSPORT"
+
+            if failure_code is None:
+                return self._response_embeddings(response, len(texts))
+            if attempt == 0:
+                await asyncio.sleep(_EMBED_RETRY_DELAY_SECONDS)
+                continue
+            raise ModelProbeError(failure_code) from None
+
+        raise AssertionError("Embedding retry loop exhausted without a result.")
 
     @staticmethod
     def _response_embeddings(

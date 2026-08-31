@@ -62,7 +62,7 @@ ACTIVE → LOCAL-COMPLETE → REMOTE-PENDING → REMOTE-BACKED
 | M1 — Development foundation                                     | `COMPLETE` | `REMOTE-BACKED`  | Local verification suite and GitHub CI/Security workflows exist and passed.                                                                                                                                             |
 | M2 — Local infrastructure                                       | `COMPLETE` | `REMOTE-BACKED`  | Accepted commit `5ffe4cb9be81c30d5c24bd7eb6a9d41abc2a5f19`; isolated M2 acceptance plus remote CI/Security passed.                                                                                                      |
 | M3 — Markdown Knowledge Platform                                | `COMPLETE` | `REMOTE-BACKED`  | Accepted candidate `ff4a5fb7d779f260ffb9b5aa2393ad6ab75eb549`, prior merge `9cd34cebb196631e9524b095c21f1fd5aff78749`, and M3/S1 merge `3f9e018a82854f27de08f3e1ba62a7931d879626` all have remote CI/Security evidence. |
-| M4 — PDF document ingestion                                     | `ACTIVE`   | `LOCAL-VERIFIED` | M4/T1 through M4/T4 are complete locally; owner-authorized T5-R9 is correcting the verified pair-budget and child-reap failures before immutable-candidate acceptance restarts.                                         |
+| M4 — PDF document ingestion                                     | `ACTIVE`   | `LOCAL-VERIFIED` | M4/T1 through M4/T4 are complete locally; owner-approved T5-R10 is bounding embedding requests and one transient retry before a new immutable candidate.                                                                 |
 | M5 — Image and video ingestion                                  | `DEFERRED` | `NONE`           | Locked until M4 is complete and M5 source contracts are approved.                                                                                                                                                       |
 | M6 — Architecture consolidation                                 | `DEFERRED` | `NONE`           | Post-Knowledge structural migration only; no M4/M5 accepted code is moved early.                                                                                                                                        |
 | M7 — L&SC Data Plant core                                       | `DEFERRED` | `NONE`           | Governed data lifecycle and deterministic control plane.                                                                                                                                                                |
@@ -77,7 +77,7 @@ Milestone: M4 — PDF Document Ingestion
 Task: M4/T5 — Acceptance and handoff
 Task Status: IN PROGRESS
 Planning Readiness: APPROVED
-Plan Revision: M4/T5-R9
+Plan Revision: M4/T5-R10
 Execution Authorization: YES
 Authorized Task: M4/T5
 Execution Contract: docs/contracts/execution/ACTIVE.md
@@ -172,6 +172,30 @@ child still cannot be reaped, the Knowledge process must fail-stop so the pinned
 database ownership session closes and no further mutation or publication can
 occur. No API, schema, dependency, topology, resource-ceiling, Vault, or public
 error-contract change is authorized.
+
+R9 candidate `a0b00f106d30e3e96c4a89e700b38eacff1dae05` passed pre-candidate
+review/repository/security gates plus exact-candidate Fixture, T3, and T4.
+RealVault then ran fail-closed and returned `EMBEDDING_FAILED`; all isolated
+containers, networks, and volumes were removed. A post-failure local Ollama
+probe returned HTTP 200 for both model discovery and a synthetic embedding,
+while the implementation sends every segment of one source in one request under
+a 90-second timeout. The candidate and its exact-candidate evidence are
+invalidated. This mandatory-gate failure revokes authorization; no embedding
+batching/retry change or further acceptance may run until the owner approves a
+new bounded revision.
+
+On 2026-08-31 the owner approved `M4/T5-R10`. Preserve every embedding input
+byte-for-byte and in order, but split each source's inputs into deterministic
+fixed batches of at most eight texts. Retry one batch exactly once only for a
+transport timeout/error or HTTP 429/502/503/504; use a fixed bounded delay and
+never retry malformed responses, invalid dimensions, or other HTTP failures.
+Concatenate successful vectors in original input order and retain the existing
+public `EMBEDDING_FAILED` contract. Internal diagnostics may classify only the
+safe failure category (`timeout`, `transport`, `transient HTTP`, `permanent
+HTTP`, or `invalid response`) and must never contain source paths, queries, text,
+credentials, or response bodies. Add synthetic batch/order/transient/permanent
+stress tests before creating a new candidate. No API, schema, dependency,
+topology, resource-ceiling, Vault, or public error-contract change is authorized.
 
 Exact-candidate RealVault evidence invalidated T5-R2: 29 embed-bearing notes had
 no H1, while one multi-PDF note was not an unambiguous sidecar. The owner's
@@ -291,7 +315,7 @@ Inherited M3 invariants include:
 
 Status: `ACTIVE`
 Planning Readiness: `APPROVED`
-Plan Revision: `M4/T5-R9`
+Plan Revision: `M4/T5-R10`
 Execution Authorization: `YES`
 Authorized Task: `M4/T5`
 Execution Contract: `docs/contracts/execution/ACTIVE.md`
