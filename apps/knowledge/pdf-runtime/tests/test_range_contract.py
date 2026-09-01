@@ -9,11 +9,15 @@ from pathlib import Path
 from unittest.mock import patch
 
 from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
+from docling_core.types.doc import PictureItem, TableItem, TextItem
 
 from zink_pdf_runtime.runner import (
     PROTOCOL_VERSION,
+    _MultiPageItem,
+    _RangeUnsupported,
     _dispatch,
     _docling_extract,
+    _materialize_document_items,
     _page_local_content,
 )
 
@@ -202,6 +206,163 @@ class PageRangeContractTests(unittest.TestCase):
                 (2, "again", [0.2, 0.2, 0.3, 0.3]),
             ],
         )
+
+    def test_multi_page_table_materializes_public_children_once_in_order(
+        self,
+    ) -> None:
+        first = self.text_item("#/texts/0", "first", 1, [0.1, 0.1, 0.2, 0.2])
+        second = self.text_item("#/texts/1", "again", 2, [0.2, 0.2, 0.3, 0.3])
+        table = TableItem.model_construct(
+            self_ref="#/tables/0",
+            prov=(self.provenance(1), self.provenance(2)),
+            children=(Reference(first), Reference(second)),
+        )
+        document = Document(((table, 0), (first, 1), (second, 1)))
+
+        items = _materialize_document_items(document, 1, 2)
+
+        self.assertEqual(
+            items,
+            [
+                {
+                    "kind": "table",
+                    "ordinal": 0,
+                    "content": "first",
+                    "page_start": 1,
+                    "page_end": 1,
+                    "bbox": [0.1, 0.1, 0.2, 0.2],
+                },
+                {
+                    "kind": "table",
+                    "ordinal": 1,
+                    "content": "again",
+                    "page_start": 2,
+                    "page_end": 2,
+                    "bbox": [0.2, 0.2, 0.3, 0.3],
+                },
+            ],
+        )
+        self.assertEqual(items, _materialize_document_items(document, 1, 2))
+
+    def test_single_page_table_keeps_markdown_export(self) -> None:
+        table = TableItem.model_construct(
+            self_ref="#/tables/0",
+            prov=(self.provenance(1, [0.1, 0.1, 0.4, 0.4]),),
+            children=(),
+        )
+        document = Document(((table, 0),))
+        with patch.object(
+            TableItem, "export_to_markdown", return_value="| A |\n| - |"
+        ):
+            items = _materialize_document_items(document, 1, 1)
+        self.assertEqual(items[0]["content"], "| A |\n| - |")
+        self.assertEqual(items[0]["page_start"], items[0]["page_end"])
+
+    def test_multi_page_table_rejects_unprovable_children_before_output(self) -> None:
+        valid = self.text_item("#/texts/0", "first", 1)
+        cases = (
+            (),
+            (Reference(valid), BrokenReference()),
+            (Reference(valid), Reference(valid)),
+            (
+                Reference(valid),
+                Reference(types.SimpleNamespace(self_ref="#/groups/0")),
+            ),
+            (Reference(valid), Reference(self.text_item("#/texts/1", "", 2))),
+            (
+                Reference(valid),
+                Reference(
+                    TextItem.model_construct(
+                        self_ref="#/texts/1", text="again", prov=()
+                    )
+                ),
+            ),
+        )
+        for children in cases:
+            with self.subTest(children=len(children)):
+                table = TableItem.model_construct(
+                    self_ref="#/tables/0",
+                    prov=(self.provenance(1), self.provenance(2)),
+                    children=children,
+                )
+                with self.assertRaises(_MultiPageItem):
+                    _materialize_document_items(Document(((table, 0),)), 1, 2)
+
+    def test_multi_page_table_rejects_picture_child_collision(self) -> None:
+        child = self.text_item("#/texts/0", "first", 1)
+        reference = Reference(child)
+        picture = PictureItem.model_construct(
+            self_ref="#/pictures/0", children=(reference,)
+        )
+        table = TableItem.model_construct(
+            self_ref="#/tables/0",
+            prov=(self.provenance(1), self.provenance(2)),
+            children=(reference,),
+        )
+        with self.assertRaises(_MultiPageItem):
+            _materialize_document_items(
+                Document(((picture, 0), (table, 0), (child, 1))), 1, 2
+            )
+
+    def test_multi_page_table_rejects_out_of_range_child_provenance(self) -> None:
+        child = self.text_item("#/texts/0", "outside", 3)
+        table = TableItem.model_construct(
+            self_ref="#/tables/0",
+            prov=(self.provenance(1), self.provenance(2)),
+            children=(Reference(child),),
+        )
+        with self.assertRaises(_RangeUnsupported):
+            _materialize_document_items(Document(((table, 0),)), 1, 2)
+
+    def test_multi_page_table_rejects_out_of_range_table_provenance(self) -> None:
+        first = self.text_item("#/texts/0", "first", 1)
+        second = self.text_item("#/texts/1", "again", 2)
+        table = TableItem.model_construct(
+            self_ref="#/tables/0",
+            prov=(self.provenance(1), self.provenance(3)),
+            children=(Reference(first), Reference(second)),
+        )
+        with self.assertRaises(_RangeUnsupported):
+            _materialize_document_items(Document(((table, 0),)), 1, 2)
+
+    @staticmethod
+    def provenance(page: int, bbox=None):
+        return types.SimpleNamespace(page_no=page, charspan=(0, 64), bbox=bbox)
+
+    @classmethod
+    def text_item(cls, self_ref: str, text: str, page: int, bbox=None):
+        return TextItem.model_construct(
+            self_ref=self_ref,
+            text=text,
+            prov=(types.SimpleNamespace(
+                page_no=page, charspan=(0, len(text)), bbox=bbox
+            ),),
+        )
+
+
+class Reference:
+    def __init__(self, child):
+        self.child = child
+        self.cref = child.self_ref
+
+    def resolve(self, _document):
+        return self.child
+
+
+class BrokenReference:
+    cref = "#/texts/broken"
+
+    def resolve(self, _document):
+        raise KeyError
+
+
+class Document:
+    def __init__(self, ordered_items):
+        self.ordered_items = ordered_items
+
+    def iterate_items(self):
+        return iter(self.ordered_items)
+
 
 def _write_native_fixture(path: Path) -> None:
     streams = (b"BT /F1 16 Tf 72 700 Td (first page) Tj ET", b"BT /F1 16 Tf 72 700 Td (second page) Tj ET")

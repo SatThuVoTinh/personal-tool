@@ -234,7 +234,12 @@ def _docling_extract(source: Path, start: int, end: int) -> list[dict[str, Any]]
         result = converter.convert(source, page_range=(start, end))
     except TypeError as error:
         raise _RangeUnsupported from error
-    document = result.document
+    return _materialize_document_items(result.document, start, end)
+
+
+def _materialize_document_items(
+    document: Any, start: int, end: int
+) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     # ``iterate_items`` is Docling's public reading-order traversal.  OCR text
     # nested below a PictureItem is a TextItem, so identify its public parent
@@ -250,12 +255,35 @@ def _docling_extract(source: Path, start: int, end: int) -> list[dict[str, Any]]
         for element, _level in ordered_items
         if _is_table_item(element)
     }
+    multi_page_tables: dict[str, tuple[tuple[str, Any], ...]] = {}
+    for element, _level in ordered_items:
+        if not _is_table_item(element) or not _spans_multiple_pages(
+            element, start, end
+        ):
+            continue
+        table_ref = str(getattr(element, "self_ref", ""))
+        if not table_ref or table_ref in multi_page_tables:
+            raise _MultiPageItem
+        multi_page_tables[table_ref] = _resolved_table_text_items(
+            document, element
+        )
     picture_child_refs = {
         str(getattr(child, "cref", child))
         for element, _level in ordered_items
         if _is_picture_item(element)
         for child in (getattr(element, "children", ()) or ())
     }
+    ordered_table_child_refs = [
+        child_ref
+        for children in multi_page_tables.values()
+        for child_ref, _child in children
+    ]
+    multi_page_table_child_refs = set(ordered_table_child_refs)
+    if (
+        len(multi_page_table_child_refs) != len(ordered_table_child_refs)
+        or multi_page_table_child_refs.intersection(picture_child_refs)
+    ):
+        raise _MultiPageItem
     for element, _level in ordered_items:
         if _is_picture_item(element):
             for child in _resolved_picture_text_items(document, element):
@@ -269,8 +297,28 @@ def _docling_extract(source: Path, start: int, end: int) -> list[dict[str, Any]]
                     end,
                 )
             continue
-        if str(getattr(element, "self_ref", "")) in picture_child_refs:
-            # Picture children are emitted at the picture's reading-order slot.
+        element_ref = str(getattr(element, "self_ref", ""))
+        if element_ref in multi_page_tables:
+            before = len(items)
+            for _child_ref, child in multi_page_tables[element_ref]:
+                _append_materialized_item(
+                    items,
+                    document,
+                    child,
+                    "table",
+                    getattr(child, "text", ""),
+                    start,
+                    end,
+                    provenance_kind="text",
+                )
+            if len(items) == before:
+                raise _MultiPageItem
+            continue
+        if (
+            element_ref in picture_child_refs
+            or element_ref in multi_page_table_child_refs
+        ):
+            # Nested children are emitted at their structural reading-order slot.
             continue
         kind, content = _public_item_content(
             document, element, picture_refs, table_refs
@@ -289,12 +337,14 @@ def _append_materialized_item(
     content: str,
     start: int,
     end: int,
+    *,
+    provenance_kind: str | None = None,
 ) -> None:
     provenance = tuple(getattr(element, "prov", ()) or ())
     if not provenance or not content:
         return
     for page, page_content, bbox in _page_local_content(
-        kind, content, provenance, document, start, end
+        provenance_kind or kind, content, provenance, document, start, end
     ):
         output.append(
             {
@@ -319,6 +369,49 @@ def _resolved_picture_text_items(document: Any, picture: Any) -> tuple[Any, ...]
         if isinstance(child, TextItem):
             output.append(child)
     return tuple(output)
+
+
+def _resolved_table_text_items(
+    document: Any, table: Any
+) -> tuple[tuple[str, Any], ...]:
+    """Resolve every public multi-page table child without guessing page identity."""
+
+    from docling_core.types.doc import TextItem
+
+    references = tuple(getattr(table, "children", ()) or ())
+    if not references:
+        raise _MultiPageItem
+    output: list[tuple[str, Any]] = []
+    seen: set[str] = set()
+    for reference in references:
+        child_ref = str(getattr(reference, "cref", ""))
+        try:
+            child = reference.resolve(document)
+        except Exception as error:
+            raise _MultiPageItem from error
+        if (
+            not child_ref
+            or child_ref in seen
+            or not isinstance(child, TextItem)
+            or str(getattr(child, "self_ref", "")) != child_ref
+            or not isinstance(getattr(child, "text", None), str)
+            or not getattr(child, "text").strip()
+            or not tuple(getattr(child, "prov", ()) or ())
+        ):
+            raise _MultiPageItem
+        seen.add(child_ref)
+        output.append((child_ref, child))
+    return tuple(output)
+
+
+def _spans_multiple_pages(element: Any, start: int, end: int) -> bool:
+    pages = {
+        int(getattr(source, "page_no", 0))
+        for source in (getattr(element, "prov", ()) or ())
+    }
+    if any(page < start or page > end for page in pages):
+        raise _RangeUnsupported
+    return len(pages) > 1
 
 
 def _public_item_content(

@@ -62,7 +62,7 @@ ACTIVE → LOCAL-COMPLETE → REMOTE-PENDING → REMOTE-BACKED
 | M1 — Development foundation                                     | `COMPLETE` | `REMOTE-BACKED`  | Local verification suite and GitHub CI/Security workflows exist and passed.                                                                                                                                             |
 | M2 — Local infrastructure                                       | `COMPLETE` | `REMOTE-BACKED`  | Accepted commit `5ffe4cb9be81c30d5c24bd7eb6a9d41abc2a5f19`; isolated M2 acceptance plus remote CI/Security passed.                                                                                                      |
 | M3 — Markdown Knowledge Platform                                | `COMPLETE` | `REMOTE-BACKED`  | Accepted candidate `ff4a5fb7d779f260ffb9b5aa2393ad6ab75eb549`, prior merge `9cd34cebb196631e9524b095c21f1fd5aff78749`, and M3/S1 merge `3f9e018a82854f27de08f3e1ba62a7931d879626` all have remote CI/Security evidence. |
-| M4 — PDF document ingestion                                     | `ACTIVE`   | `LOCAL-VERIFIED` | M4/T1 through M4/T4 are complete locally; owner-approved T5-R11 applies one bounded transient retry to the existing model-identity preflight before producing a new immutable candidate.                               |
+| M4 — PDF document ingestion                                     | `ACTIVE`   | `LOCAL-VERIFIED` | M4/T1 through M4/T4 are complete locally; owner-approved T5-R12 adds bounded page-local materialization for provably lossless multi-page extraction items.                                                         |
 | M5 — Image and video ingestion                                  | `DEFERRED` | `NONE`           | Locked until M4 is complete and M5 source contracts are approved.                                                                                                                                                       |
 | M6 — Architecture consolidation                                 | `DEFERRED` | `NONE`           | Post-Knowledge structural migration only; no M4/M5 accepted code is moved early.                                                                                                                                        |
 | M7 — L&SC Data Plant core                                       | `DEFERRED` | `NONE`           | Governed data lifecycle and deterministic control plane.                                                                                                                                                                |
@@ -77,7 +77,7 @@ Milestone: M4 — PDF Document Ingestion
 Task: M4/T5 — Acceptance and handoff
 Task Status: IN PROGRESS
 Planning Readiness: APPROVED
-Plan Revision: M4/T5-R11
+Plan Revision: M4/T5-R12
 Execution Authorization: YES
 Authorized Task: M4/T5
 Execution Contract: docs/contracts/execution/ACTIVE.md
@@ -218,6 +218,28 @@ non-finite embeddings, dimension mismatch, model drift, and other HTTP statuses
 remain immediate fail-closed outcomes. No new setting, dependency, API, schema,
 service, topology, or resource-ceiling change is authorized.
 
+R11 candidate `9eb107743828547cdfe717ed949c0ff97454d01a` passed focused,
+repository, final-quality, security-diff, Fixture, T3, and T4 gates. Exact
+RealVault then completed all 68 manifested PDF batches without a failed batch,
+but the combined 64-source rebuild failed closed before publication with
+`PDF_MULTI_PAGE_ITEM_UNSUPPORTED`. The isolated project left zero containers,
+volumes, and networks, and the repository remained clean. This mandatory-gate
+failure invalidates the candidate for acceptance, revokes execution
+authorization, and blocks T5 before persistent-live, acceptance-record, or push.
+No multi-page item behavior change or further acceptance run is authorized
+without an owner-approved revised contract.
+
+On 2026-09-01 the owner approved `M4/T5-R12`. Preserve the page-local citation
+invariant and existing single-page extraction behavior. For a multi-page table,
+materialize its publicly resolved child text items deterministically at the
+table's reading-order position, preserve child order and source text, emit only
+page-local `PDF_TABLE` items, and suppress their later traversal duplicates.
+Preserve an exact page bbox only when public provenance proves it; otherwise use
+`null`. Any missing, ambiguous, non-text, out-of-range, or non-lossless public
+provenance remains fail-closed. Existing non-table exact-charspan behavior and
+all API, schema, dependency, topology, resource, Vault, and error-code contracts
+remain unchanged.
+
 Exact-candidate RealVault evidence invalidated T5-R2: 29 embed-bearing notes had
 no H1, while one multi-PDF note was not an unambiguous sidecar. The owner's
 2026-08-28 follow-up authorizes `M4/T5-R3`: exactly one visible PDF embed
@@ -336,7 +358,7 @@ Inherited M3 invariants include:
 
 Status: `ACTIVE`
 Planning Readiness: `APPROVED`
-Plan Revision: `M4/T5-R11`
+Plan Revision: `M4/T5-R12`
 Execution Authorization: `YES`
 Authorized Task: `M4/T5`
 Execution Contract: `docs/contracts/execution/ACTIVE.md`
@@ -375,9 +397,9 @@ Planned task sequence:
 | M4/T2 — Preflight, extraction, and segmentation   | `COMPLETE`    | Implementation commit `82126e4`; exact pypdfium2 security preflight, 4-page offline extraction/OCR, page-local deterministic segmentation, drift brackets, deadlines, process cleanup, and atomic non-searchable content builds passed 99 parent tests, 8 isolated-runtime tests, real PDF fixture acceptance, isolated database integration, repository verification, dependency audit, and staged secret scan. |
 | M4/T3 — Resume, drift, retention, and publication | `COMPLETE`    | Local implementation commit `c1df143`; pinned session ownership, resumable PDF builds, drift brackets, atomic source publication, counters, retention, fixture persistence/restart acceptance, and focused regressions passed.                                                                                                                                                                                   |
 | M4/T4 — Adapters, retrieval, and API              | `COMPLETE`    | Reviewed local implementation commit `1904853`; fail-closed PDF filters, source counters, coherent hybrid retrieval, citation metadata, HNSW capability, recovery/ownership fixes, and repository gates passed.                                                                                                                                                                                                  |
-| M4/T5 — Acceptance and handoff                    | `IN PROGRESS` | R11 is owner-authorized to add one bounded transient retry to the existing model-list/identity preflight, preserve all R10 behavior, and produce a new immutable candidate for complete exact-candidate acceptance.                                                                                                                                  |
+| M4/T5 — Acceptance and handoff                    | `IN PROGRESS` | R12 is owner-authorized to materialize provably lossless multi-page tables from public page-local child text provenance while preserving single-page behavior and every existing boundary.                                                                                                                                                |
 
-M4/T1 through M4/T4 are complete locally. `M4/T5-R11` is the sole active
+M4/T1 through M4/T4 are complete locally. `M4/T5-R12` is the sole active
 owner-approved execution contract. T5 remains incomplete until a new immutable
 candidate passes every mandatory local acceptance gate.
 
