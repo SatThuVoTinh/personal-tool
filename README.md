@@ -7,13 +7,13 @@ state. A naming migration is separate from architecture cleanup.
 
 ## Current status
 
-| Milestone                        | Status                            |
-| -------------------------------- | --------------------------------- |
-| M1 — Development Foundation      | `COMPLETE / REMOTE-BACKED`        |
-| M2 — Local Infrastructure        | `COMPLETE / REMOTE-BACKED`        |
-| M3 — Markdown Knowledge Platform | `COMPLETE / REMOTE-BACKED`        |
-| M4 — PDF Document Ingestion      | `M4/T4 COMPLETE / LOCAL-VERIFIED` |
-| M5+                              | deferred                          |
+| Milestone                        | Status                      |
+| -------------------------------- | --------------------------- |
+| M1 — Development Foundation      | `COMPLETE / REMOTE-BACKED`  |
+| M2 — Local Infrastructure        | `COMPLETE / REMOTE-BACKED`  |
+| M3 — Markdown Knowledge Platform | `COMPLETE / REMOTE-BACKED`  |
+| M4 — PDF Document Ingestion      | `COMPLETE / LOCAL-VERIFIED` |
+| M5+                              | deferred                    |
 
 M2 accepted commit:
 `5ffe4cb9be81c30d5c24bd7eb6a9d41abc2a5f19`.
@@ -164,9 +164,84 @@ The `knowledge` profile starts the runtime required for Knowledge retrieval and
 mounts the configured Obsidian Vault read-only. The source Vault remains
 human-owned; ingestion must not write back to it.
 
+### Configure sources
+
+Copy `infrastructure/docker/env/.env.example` to the ignored `.env` file and set
+`KNOWLEDGE_VAULT_ROOT` to the absolute path of the Obsidian Vault root. This is
+the directory containing `01. Knowledge`, `02. Books`, and `03. Papers`; it is
+not a PDF path. Keep credentials and machine-specific paths only in `.env`.
+
+Markdown under `01. Knowledge` is indexed directly. To index a PDF, create one
+Markdown sidecar under `02. Books` or `03. Papers` containing exactly one visible
+Obsidian PDF embed, for example:
+
+```markdown
+# Optional document title
+
+![[reference.pdf]]
+```
+
+An H1 is optional; without one, the sidecar filename becomes the title. A
+basename-only embed works only when that PDF filename is unique across the
+Vault. Use a Vault-relative embed when duplicate filenames exist. No
+`zink_source` field is needed.
+
+Ensure Ollama is running locally and already contains `bge-m3:latest`. Build and
+start the Knowledge profile:
+
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/docker/scripts/build.ps1 -Profile knowledge -EnvironmentFile ./infrastructure/docker/env/.env
 powershell -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/docker/scripts/start.ps1 -Profile knowledge -EnvironmentFile ./infrastructure/docker/env/.env
+```
+
+### Build the index
+
+Create the initial index with a full rebuild:
+
+```powershell
+$body = @{ kind = "FULL_REBUILD" } | ConvertTo-Json -Compress
+$run = Invoke-RestMethod -Method Post -ContentType "application/json" -Body $body -Uri "http://127.0.0.1:8080/knowledge/v1/index-runs"
+$run
+```
+
+Save the returned `index_run_id` and poll it until `status` is `SUCCEEDED` or
+`FAILED`:
+
+```powershell
+$runId = "<index_run_id>"
+Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:8080/knowledge/v1/index-runs/$runId"
+```
+
+PDF extraction/OCR can take substantially longer than Markdown indexing. Do not
+start another run while one is `RUNNING`. After an ACTIVE index exists, use
+`INCREMENTAL` instead of `FULL_REBUILD` for normal updates. A failed rebuild does
+not replace the last known good ACTIVE index.
+
+### Search
+
+`query` is simply the natural-language question to search for; it is not a file
+path or environment variable. Omitting `source_types` searches both Markdown and
+PDF. This example searches only PDFs:
+
+```powershell
+$search = @{
+  query = "What does this document say about inventory policy?"
+  limit = 10
+  source_types = @("PDF")
+} | ConvertTo-Json -Compress
+
+Invoke-RestMethod -Method Post -ContentType "application/json" -Body $search -Uri "http://127.0.0.1:8080/knowledge/v1/search"
+```
+
+Use `@("MARKDOWN")` for Markdown-only search, or
+`@("MARKDOWN", "PDF")` for both. Results include `source_type` and citation
+metadata; PDF citations use page ranges and an encoded `#page=N` link.
+
+Check readiness and stop the service without deleting its named volumes:
+
+```powershell
+Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:8080/knowledge/readyz"
+powershell -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/docker/scripts/stop.ps1 -Profile knowledge -EnvironmentFile ./infrastructure/docker/env/.env
 ```
 
 Operational and acceptance procedures are in the
@@ -185,20 +260,9 @@ deterministic page-local segmentation, resumable content builds, drift-safe
 atomic publication, combined Markdown/PDF retrieval, source filters, reranking,
 and page/bounding-box citations.
 
-At the current repository gate:
-
-```text
-Task: M4/T5 — Acceptance and handoff
-Planning Readiness: APPROVED
-Plan Revision: M4/T5-R6
-Task Status: IN PROGRESS
-Evidence Level: NONE
-Execution Authorization: YES
-```
-
-T5 is authorized only for the immutable local candidate and `REMOTE-PENDING`
-handoff defined by the active execution contract. Local verification does not
-imply remote CI/Security backing or authorize M4/T5-C1 closeout.
+M4 is locally verified at candidate
+`0a64b0bcedb31d9e8c84c62bfc321e500fae72e8`. Local verification and a branch
+push do not imply remote CI/Security backing.
 
 ## Security and persistent-state rules
 

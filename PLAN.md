@@ -62,8 +62,8 @@ ACTIVE → LOCAL-COMPLETE → REMOTE-PENDING → REMOTE-BACKED
 | M1 — Development foundation                                     | `COMPLETE` | `REMOTE-BACKED`  | Local verification suite and GitHub CI/Security workflows exist and passed.                                                                                                                                             |
 | M2 — Local infrastructure                                       | `COMPLETE` | `REMOTE-BACKED`  | Accepted commit `5ffe4cb9be81c30d5c24bd7eb6a9d41abc2a5f19`; isolated M2 acceptance plus remote CI/Security passed.                                                                                                      |
 | M3 — Markdown Knowledge Platform                                | `COMPLETE` | `REMOTE-BACKED`  | Accepted candidate `ff4a5fb7d779f260ffb9b5aa2393ad6ab75eb549`, prior merge `9cd34cebb196631e9524b095c21f1fd5aff78749`, and M3/S1 merge `3f9e018a82854f27de08f3e1ba62a7931d879626` all have remote CI/Security evidence. |
-| M4 — PDF document ingestion                                     | `ACTIVE`   | `LOCAL-VERIFIED` | M4/T1 through M4/T4 are complete locally; owner-approved T5-R13 adds bounded page-local materialization for the exact losslessly reversible pinned-Docling hyphen-merge defect.                                      |
-| M5 — Image and video ingestion                                  | `DEFERRED` | `NONE`           | Locked until M4 is complete and M5 source contracts are approved.                                                                                                                                                       |
+| M4 — PDF document ingestion                                     | `COMPLETE` | `LOCAL-VERIFIED` | Candidate `0a64b0bcedb31d9e8c84c62bfc321e500fae72e8` passed focused/full repository gates, Fixture/T3/T4, and representative extraction/embedding/atomic-publication proof across five real PDFs; operator documentation is current.                                           |
+| M5 — Image and video ingestion                                  | `DEFERRED` | `NONE`           | Eligible for separate owner planning after local M4 completion; no M5 execution is authorized.                                                                                                                          |
 | M6 — Architecture consolidation                                 | `DEFERRED` | `NONE`           | Post-Knowledge structural migration only; no M4/M5 accepted code is moved early.                                                                                                                                        |
 | M7 — L&SC Data Plant core                                       | `DEFERRED` | `NONE`           | Governed data lifecycle and deterministic control plane.                                                                                                                                                                |
 | M8 — L&SC modeling and products                                 | `DEFERRED` | `NONE`           | Forecasting, machine learning, operations research, feature store, training data, registry and inference.                                                                                                               |
@@ -75,13 +75,13 @@ ACTIVE → LOCAL-COMPLETE → REMOTE-PENDING → REMOTE-BACKED
 ```text
 Milestone: M4 — PDF Document Ingestion
 Task: M4/T5 — Acceptance and handoff
-Task Status: IN PROGRESS
+Task Status: COMPLETE
 Planning Readiness: APPROVED
-Plan Revision: M4/T5-R13
-Execution Authorization: YES
-Authorized Task: M4/T5
-Execution Contract: docs/contracts/execution/ACTIVE.md
-Evidence Level: NONE
+Plan Revision: M4/T5-R14
+Execution Authorization: NO
+Authorized Task: NONE
+Execution Contract: NONE
+Evidence Level: LOCAL-VERIFIED
 ```
 
 M3/S1 implementation commit `5c035fb2d3749d9fabe0a9ff69d9d82509465934` was
@@ -260,6 +260,25 @@ and the complete security diff scan passed with zero findings. The prior R12
 candidate remains invalid; exact-candidate acceptance begins only after R13 is
 committed as a new immutable SHA.
 
+Candidate `0a64b0bcedb31d9e8c84c62bfc321e500fae72e8` then passed the exact-
+candidate Fixture, T3, and T4 gates. Its isolated RealVault run proved five
+distinct real PDFs through complete extraction, embedding, READY transition,
+and atomic publication with no failed batch or duplicate source publication.
+On 2026-09-02 the owner approved `M4/T5-R14`: this representative proof replaces
+the full 27-PDF disposable rebuild and persistent-live acceptance, whose repeated
+full extraction cost is disproportionate and does not produce operational state.
+The unfinished sixth-PDF work is excluded and must be cancelled and cleaned up.
+R14 requires current operator instructions in `README.md`, affected repository
+verification, a local closeout commit, a clean worktree, and push of the current
+non-main branch. It does not claim remote CI/Security backing.
+
+R14 closeout cancelled and removed only the obsolete disposable RealVault
+project, synchronized the README and Knowledge runbook, and passed formatting,
+lint, all 63 repository/contract tests, repository policy, staged secret review,
+and final diff checks. M4/T5 and M4 are locally complete at candidate
+`0a64b0bcedb31d9e8c84c62bfc321e500fae72e8`; branch publication does not promote
+this evidence to `REMOTE-BACKED`.
+
 Exact-candidate RealVault evidence invalidated T5-R2: 29 embed-bearing notes had
 no H1, while one multi-PDF note was not an unambiguous sidecar. The owner's
 2026-08-28 follow-up authorizes `M4/T5-R3`: exactly one visible PDF embed
@@ -376,13 +395,13 @@ Inherited M3 invariants include:
 
 ### M4 — PDF Document Ingestion
 
-Status: `ACTIVE`
+Status: `COMPLETE`
 Planning Readiness: `APPROVED`
-Plan Revision: `M4/T5-R13`
-Execution Authorization: `YES`
-Authorized Task: `M4/T5`
-Execution Contract: `docs/contracts/execution/ACTIVE.md`
-Evidence Level: `NONE`
+Plan Revision: `M4/T5-R14`
+Execution Authorization: `NO`
+Authorized Task: `NONE`
+Execution Contract: `NONE`
+Evidence Level: `LOCAL-VERIFIED`
 
 Purpose: add sidecar-driven PDF ingestion for native text, scanned pages,
 tables, and OCR-visible figure text while preserving all accepted M3 behavior.
@@ -417,11 +436,10 @@ Planned task sequence:
 | M4/T2 — Preflight, extraction, and segmentation   | `COMPLETE`    | Implementation commit `82126e4`; exact pypdfium2 security preflight, 4-page offline extraction/OCR, page-local deterministic segmentation, drift brackets, deadlines, process cleanup, and atomic non-searchable content builds passed 99 parent tests, 8 isolated-runtime tests, real PDF fixture acceptance, isolated database integration, repository verification, dependency audit, and staged secret scan. |
 | M4/T3 — Resume, drift, retention, and publication | `COMPLETE`    | Local implementation commit `c1df143`; pinned session ownership, resumable PDF builds, drift brackets, atomic source publication, counters, retention, fixture persistence/restart acceptance, and focused regressions passed.                                                                                                                                                                                   |
 | M4/T4 — Adapters, retrieval, and API              | `COMPLETE`    | Reviewed local implementation commit `1904853`; fail-closed PDF filters, source counters, coherent hybrid retrieval, citation metadata, HNSW capability, recovery/ownership fixes, and repository gates passed.                                                                                                                                                                                                  |
-| M4/T5 — Acceptance and handoff                    | `IN PROGRESS` | R13 is owner-authorized to materialize the exact losslessly reversible pinned-Docling two-page hyphen-merge provenance defect while preserving R12 table behavior and every existing boundary.                                                                                                                                            |
+| M4/T5 — Acceptance and handoff                    | `COMPLETE`    | Candidate `0a64b0bcedb31d9e8c84c62bfc321e500fae72e8` passed exact-candidate Fixture/T3/T4 and five-PDF representative RealVault proof; R14 removed obsolete disposable resources, documented normal operation, and passed affected repository closeout gates.                     |
 
-M4/T1 through M4/T4 are complete locally. `M4/T5-R13` is the sole active
-owner-approved execution contract. T5 remains incomplete until a new immutable
-candidate passes every mandatory local acceptance gate.
+M4/T1 through M4/T5 are complete locally. No M4 execution contract remains
+active. M5 stays deferred and requires its own owner-approved plan before work.
 
 ### M5 — Image and Video Ingestion
 
@@ -756,8 +774,9 @@ Unless a future approved requirement justifies them, V1 does not require:
 ## 15. End rule
 
 M3/S1 is remote-backed by merge `3f9e018a82854f27de08f3e1ba62a7931d879626`
-with exact CI/Security PASS. M4-R4/T1 is locally complete; later M4 tasks and
-later milestones remain unauthorized.
+with exact CI/Security PASS. M4 is locally complete at candidate
+`0a64b0bcedb31d9e8c84c62bfc321e500fae72e8`; later milestones remain
+unauthorized until separately planned and owner-approved.
 
 If plan, architecture, contracts, state files, and verified implementation
 disagree, apply the authority order in `AGENTS.md`, preserve accepted evidence,

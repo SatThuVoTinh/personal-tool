@@ -74,85 +74,33 @@ Search through `POST /knowledge/v1/search`. Optional `source_types` accepts
 original line range, while PDF citations use page ranges and an encoded
 `#page=N` fragment.
 
-## M4/T5 exact-candidate acceptance
+## M4/T5 validation boundary
 
-Create the reviewed implementation candidate commit before these commands.
-Every command below must run on that unchanged clean SHA. A code, test,
-configuration, runtime, lock, or candidate-path change invalidates the candidate
-and restarts the complete acceptance sequence.
+M4 was locally accepted at immutable candidate
+`0a64b0bcedb31d9e8c84c62bfc321e500fae72e8` using focused/full repository
+checks, isolated Fixture/T3/T4 acceptance, and representative RealVault proof
+covering five distinct PDFs through extraction, embedding, READY transition,
+and atomic publication. The former all-PDF disposable rebuild and persistent-
+live acceptance are not operator prerequisites and must not be run merely to
+start or use Knowledge.
 
-Run the intentional failure-cleanup gate first. It must fail with the injected
-error and leave no resource carrying that run ID:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/docker/scripts/knowledge-t5.ps1 -Mode Fixture -EnvironmentFile ./infrastructure/docker/env/.env -InjectFailureAfterStart
-```
-
-Then run the fixture gate:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/docker/scripts/knowledge-t5.ps1 -Mode Fixture -EnvironmentFile ./infrastructure/docker/env/.env
-```
-
-Then run isolated RealVault acceptance with a valid canonical source path:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/docker/scripts/knowledge-t5.ps1 -Mode RealVault -EnvironmentFile ./infrastructure/docker/env/.env -VaultRoot "C:/Vault" -Query "What is safety stock?" -ExpectedSourcePath "01. Knowledge/Supply Chain/safety-stock.md"
-```
-
-Fixture acceptance allows five minutes for its index run. RealVault acceptance
-allows up to 24 hours so a bounded large-PDF build can complete without the
-harness timing out before the runtime's own mandatory deadline.
-
-The script writes private local evidence under
-`%LOCALAPPDATA%/ZinkKnowledge/evidence/m4-t5/`, outside the repository and its
-OneDrive tree. Do not copy or upload it. It includes private Vault paths, query
-input, checksums, and recovery identifiers.
-
-Only after isolated RealVault PASS, while the Vault remains quiescent, run the
-persistent live gate:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/docker/scripts/knowledge-t5-live.ps1 -EnvironmentFile ./infrastructure/docker/env/.env -VaultRoot "C:/Vault" -Query "What is safety stock?" -ExpectedSourcePath "01. Knowledge/Supply Chain/safety-stock.md" -ConfirmPersistentIndex
-```
-
-The live gate refuses to mutate Knowledge state unless it finds a matching
-isolated PASS artifact for the same canonical Vault root, tree hash, query,
-source path, image candidate, model identity, and migrations.
-
-Before any migration or index mutation, the Knowledge process acquires its
-pinned PostgreSQL advisory-lock session, exports a repeatable-read snapshot, and
-waits. The host gate creates and validates a private logical archive from that
-exact snapshot, restores it into an isolated disposable PostgreSQL container,
-and only then releases the barrier. Migration, recovery, admission, publication,
-counters, and ACTIVE lifecycle continue under the same lock-owning session.
-
-After live PASS, the private
-`accepted-candidate-<implementation-sha>.json` evidence freezes
-the implementation SHA, Git-blob manifest digest, POSIX path-set digest, path
-count, and `REMOTE-PENDING`. Private evidence and backup locations never enter
-Git. Any later candidate-affecting change requires a new candidate and a full
-acceptance rerun.
-
-Remote verification is the separately authorized M4/T5-C1 phase. After the
-implementation PR is merged without squash/rebase and CI/Security have passed
-on the exact `main` SHA, verify the frozen candidate:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/docker/scripts/knowledge-t5-remote.ps1 -ImplementationCandidateSha "<accepted-40-character-SHA>"
-```
-
-This writes ignored sanitized `remote-gate.json`. Only its non-private status,
-repository SHA, workflow URLs, image/model identities, and migration version may
-be copied into remote-backed documentation.
+Normal operation uses the build, start, index, status, search, and stop commands
+above. A full operational index is initiated by the owner when current Vault
+content should be published; it is not an automatic acceptance side effect.
+Private local evidence remains outside the repository and must never be copied,
+uploaded, logged, or committed. Remote CI/Security backing, if required later,
+is a separate owner-controlled closeout and is not implied by local validation
+or a branch push.
 
 ## Recovery
 
-The live gate creates exactly one private, run-scoped, Knowledge-schema logical
-recovery point under `%LOCALAPPDATA%/ZinkKnowledge/recovery/m4/<run-id>/` by
-default. `-BackupBase` may select another owner-approved, non-reparse private
-root outside the repository. It contains the migration ledger and all Knowledge
-data required to recover the prior ACTIVE state. The
+The optional `knowledge-t5-live.ps1` recovery-acceptance path, when separately
+owner-authorized, creates exactly one private, run-scoped, Knowledge-schema
+logical recovery point under
+`%LOCALAPPDATA%/ZinkKnowledge/recovery/m4/<run-id>/` by default. It is not
+required for normal indexing. `-BackupBase` may select another owner-approved,
+non-reparse private root outside the repository. The recovery point contains the
+migration ledger and all Knowledge data required to recover the prior ACTIVE state. The
 archive and manifest are always potentially secret-bearing private Knowledge
 data: do not print, upload, mount elsewhere, or commit them. M4 automation never
 deletes or overwrites an existing recovery point; retention is owner-controlled.
