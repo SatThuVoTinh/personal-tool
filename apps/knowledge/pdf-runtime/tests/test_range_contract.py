@@ -207,6 +207,43 @@ class PageRangeContractTests(unittest.TestCase):
             ],
         )
 
+    def test_docling_hyphen_merge_is_page_local_lossless_and_deterministic(
+        self,
+    ) -> None:
+        first = types.SimpleNamespace(
+            page_no=1, charspan=(0, 4), bbox=[0.1, 0.1, 0.2, 0.2]
+        )
+        second = types.SimpleNamespace(
+            page_no=2, charspan=(5, 8), bbox=[0.2, 0.2, 0.3, 0.3]
+        )
+
+        parts = _page_local_content(
+            "text", "foobar", (first, second), object(), 1, 2
+        )
+
+        self.assertEqual(parts, [(1, "foo", None), (2, "bar", None)])
+        self.assertEqual("".join(part[1] for part in parts), "foobar")
+        self.assertEqual(
+            parts,
+            _page_local_content(
+                "text", "foobar", (first, second), object(), 1, 2
+            ),
+        )
+
+    def test_non_exact_multi_page_text_still_fails_closed(self) -> None:
+        first = types.SimpleNamespace(page_no=1, charspan=(0, 4), bbox=None)
+        invalid_cases = (
+            types.SimpleNamespace(page_no=2, charspan=(5, 9), bbox=None),
+            types.SimpleNamespace(page_no=2, charspan=(4, 8), bbox=None),
+            types.SimpleNamespace(page_no=2, charspan=(5, 7), bbox=None),
+        )
+        for second in invalid_cases:
+            with self.subTest(charspan=second.charspan):
+                with self.assertRaises(_MultiPageItem):
+                    _page_local_content(
+                        "text", "foobar", (first, second), object(), 1, 2
+                    )
+
     def test_multi_page_table_materializes_public_children_once_in_order(
         self,
     ) -> None:

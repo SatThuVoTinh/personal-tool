@@ -473,6 +473,9 @@ def _page_local_content(
             or not (0 <= charspan[0] < charspan[1] <= len(content))
         ):
             if len(pages) != 1:
+                repaired = _docling_hyphen_merge_parts(content, provenance)
+                if repaired is not None:
+                    return repaired
                 raise _MultiPageItem
             fallback = content.strip()
             return [(next(iter(pages)), fallback, None)] if fallback else []
@@ -486,6 +489,60 @@ def _page_local_content(
                 )
             )
     return parts
+
+
+def _docling_hyphen_merge_parts(
+    content: str, provenance: tuple[Any, ...]
+) -> list[tuple[int, str, None]] | None:
+    """Repair Docling's pinned two-page hyphen-merge provenance exactly.
+
+    The pinned reading-order model records the continuation span before it
+    removes the trailing hyphen and joins without a separator.  That leaves the
+    second public span shifted two characters beyond the sanitized payload.
+    Accept only that exact, losslessly reversible topology; everything else
+    remains fail-closed.
+    """
+
+    if len(provenance) != 2:
+        return None
+    first_span = getattr(provenance[0], "charspan", None)
+    second_span = getattr(provenance[1], "charspan", None)
+    if not all(
+        isinstance(span, (list, tuple))
+        and len(span) == 2
+        and all(
+            isinstance(value, int) and not isinstance(value, bool) for value in span
+        )
+        for span in (first_span, second_span)
+    ):
+        return None
+    first_start, first_end = first_span
+    second_start, second_end = second_span
+    boundary = second_start - 2
+    if (
+        first_start != 0
+        or first_end <= 1
+        or second_start != first_end + 1
+        or second_end - len(content) != 2
+        or boundary != first_end - 1
+        or second_end - second_start != len(content) - boundary
+        or not (0 < boundary < len(content))
+    ):
+        return None
+    first_content = content[:boundary]
+    second_content = content[boundary:]
+    if not first_content.strip() or not second_content.strip():
+        return None
+    if first_content + second_content != content:
+        return None
+    first_page = int(getattr(provenance[0], "page_no", 0))
+    second_page = int(getattr(provenance[1], "page_no", 0))
+    if first_page == second_page:
+        return None
+    return [
+        (first_page, first_content, None),
+        (second_page, second_content, None),
+    ]
 
 
 def _parent_ref(element: Any) -> str:
