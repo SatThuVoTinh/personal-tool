@@ -1,13 +1,5 @@
 services:
-  object-storage:
-    labels:
-      com.personal-tool.persistence: operational
-
   postgres:
-    labels:
-      com.personal-tool.persistence: operational
-
-  redis:
     labels:
       com.personal-tool.persistence: operational
 
@@ -30,9 +22,6 @@ networks:
       com.personal-tool.persistence: operational
 
 volumes:
-  object-storage-data:
-    labels:
-      com.personal-tool.persistence: operational
   postgres-data:
     labels:
       com.personal-tool.persistence: operational

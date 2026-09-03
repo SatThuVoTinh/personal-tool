@@ -124,7 +124,7 @@ function Get-T5CandidatePathManifest {
 function Test-T5CandidateAffectingPath {
   param([string]$Path)
 
-  if ($Path -match '^(apps/knowledge|docs|infrastructure/docker|infrastructure/nginx|infrastructure/databases/redis|scripts|tests|\.github/workflows)/') {
+  if ($Path -match '^(apps/knowledge|docs|infrastructure/docker|infrastructure/nginx|scripts|tests|\.github/workflows)/') {
     return $true
   }
   return $Path -match '^(README\.md|Makefile|package(?:-lock)?\.json|eslint\.config\.[^/]+|\.editorconfig|\.env\.example|\.gitattributes|\.gitignore|\.markdownlint[^/]*|\.npmrc|\.nvmrc|Dockerfile|tsconfig[^/]*|.*workspace[^/]*)$'

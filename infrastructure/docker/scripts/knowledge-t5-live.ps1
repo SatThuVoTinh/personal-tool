@@ -433,7 +433,7 @@ try {
   $env:KNOWLEDGE_T5_BACKUP_BARRIER_ROOT = $barrierRoot
   $env:KNOWLEDGE_VAULT_ROOT = $canonicalVault
 
-  Invoke-LiveCompose @("up", "--detach", "--wait", "--wait-timeout", "180", "object-storage", "postgres", "redis", "nginx")
+  Invoke-LiveCompose @("up", "--detach", "--wait", "--wait-timeout", "180", "postgres", "nginx")
   $schemaExists = ((Invoke-LiveSql "SELECT to_regclass('knowledge.schema_migrations') IS NOT NULL AND to_regclass('knowledge.indexes') IS NOT NULL;") -join "").Trim() -eq "t"
   if (-not $schemaExists) { throw "M4 live acceptance requires the recoverable M3 Knowledge schema." }
   $ledgerBefore = @(Invoke-LiveSql "SELECT version FROM knowledge.schema_migrations ORDER BY version" | Where-Object { $_ })

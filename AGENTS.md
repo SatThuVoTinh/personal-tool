@@ -233,24 +233,31 @@ Detailed architecture lives in `docs/architecture/`.
 
 Repository-wide rules:
 
-- Zink Knowledgebase owns two domain platforms only: Knowledge Platform and
-  L&SC Data Plant.
-- General agents, cross-project orchestration, automation, permissions, and
-  tool execution belong to external Zink Agents System.
+- The target repository has three logical modules only: **Zink Knowledgebase**,
+  **Zink Skill Store**, and **Zink Tools**.
+- Zink Knowledgebase owns approved human/reference ingestion, indexing,
+  retrieval, provenance, and citations.
+- Zink Skill Store owns governed learned-skill persistence and scoped retrieval;
+  it remains logically isolated from research Knowledgebase indexes.
+- Zink Tools is a thin OpenClaw/n8n adapter-contract boundary. It does not own
+  orchestration, workflow state, or persistent Knowledge/Skill internals.
+- The historical L&SC Data Plant name refers only to the logical external
+  data/compute flow documented in `docs/architecture/lsc-data-flow.md`; it is
+  not a repository module, runtime, platform, integration subsystem, self-built
+  lakehouse, generic ETL control plane, feature store, or generic MLOps platform.
+- Forecasting, optimization, operations research, and simulation remain
+  first-class Zink Tool capabilities; provider-specific training/heavy compute
+  remains external.
+- OpenClaw owns agent orchestration/model-tool execution behavior; n8n owns
+  deterministic workflow execution. Both use approved APIs/contracts.
 - `knowledge-ai` is an internal Knowledge capability, not a general AI platform.
-- `data-ai` is an internal advisory L&SC capability, not a control plane.
-- L&SC `control-plane/` owns ETL orchestration, run state, retries, promotion
-  gates, recovery, and governed mutations.
-- Data AI recommendations never create execution authority by themselves.
-- `feature-store` remains an L&SC data product; feature engineering belongs to
-  the modeling lifecycle.
 - Cross-project effects use approved APIs/contracts; no direct mutation of
   another owner's database/vector/object-store state.
 - Source Obsidian Vault is human-owned and read-only.
 - Infrastructure owns runtime capability, not domain policy.
 - Target directory trees are architecture, not implementation evidence.
-- The accepted `apps/knowledge/` implementation must not be moved during M4;
-  structural migration requires its own approved task and regression gate.
+- The accepted `apps/knowledge/` implementation remains the current Knowledgebase runtime until a separately approved migration; structural migration requires its own task and regression gate.
+- `zink-skill-store/` and `zink-tools/` are canonical peer-module paths; do not nest them under the Knowledgebase or legacy agent-system integration paths.
 
 ## 10. Safety invariants
 

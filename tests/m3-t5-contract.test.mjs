@@ -112,15 +112,15 @@ test("M3/T5 declares a read-only operational Vault mount", () => {
       knowledgeCompose.match(/com\.personal-tool\.persistence: operational/g) ??
       []
     ).length,
-    8,
+    5,
   );
   assert.match(
     start,
     /KNOWLEDGE_VAULT_ROOT is required for the knowledge profile/,
   );
   assert.match(start, /KNOWLEDGE_VAULT_ROOT must contain 01\. Knowledge/);
-  assert.match(stop, /ValidateSet\("all", "knowledge"\)/);
-  assert.match(stop, /stop knowledge nginx redis postgres object-storage/);
+  assert.match(stop, /ValidateSet\("knowledge", "automation", "all"\)/);
+  assert.match(stop, /stop @services/);
   assert.doesNotMatch(stop, /down --volumes/);
 });
 

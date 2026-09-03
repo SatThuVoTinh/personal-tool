@@ -70,7 +70,6 @@ test("M3/T1 declares an internal-only Knowledge service", () => {
   assert.equal(knowledge.image, "personal-tool/knowledge:m3");
   assert.equal(knowledge.ports, undefined);
   assert.equal(knowledge.mem_limit, "4g");
-  assert.equal(knowledge.labels["personal-tool.milestone"], "m3-t5");
   assert.equal(knowledge.labels["personal-tool.project"], "personal-tool");
   assert.deepEqual(knowledge.networks, ["platform"]);
   assert.equal(knowledge.depends_on.postgres.condition, "service_healthy");
@@ -86,7 +85,7 @@ test("M3/T1 declares an internal-only Knowledge service", () => {
   assert.equal(knowledge.environment.KNOWLEDGE_DATABASE_NAME, "postgres");
   assert.equal(
     knowledge.environment.KNOWLEDGE_DATABASE_PASSWORD,
-    "${POSTGRES_PASSWORD:-m2-t2-unconfigured}",
+    "${POSTGRES_PASSWORD:-unconfigured}",
   );
   assert.equal(knowledge.environment.KNOWLEDGE_DATABASE_PORT, "5432");
   assert.equal(knowledge.environment.KNOWLEDGE_DATABASE_USER, "postgres");

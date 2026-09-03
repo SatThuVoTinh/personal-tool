@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-  [ValidateSet("core", "platform", "observability", "all", "knowledge")]
+  [ValidateSet("knowledge", "automation", "all")]
   [string]$Profile = "all",
   [string]$EnvironmentFile = "",
   [string]$ProjectName = "personal-tool"
@@ -14,6 +14,7 @@ if (-not $EnvironmentFile) { $EnvironmentFile = Join-Path $PSScriptRoot "..\env\
 $dockerDirectory = Split-Path -Parent $PSScriptRoot
 $composeFile = Join-Path $dockerDirectory "compose\compose.core.yml"
 $knowledgeComposeFile = Join-Path $dockerDirectory "compose\compose.knowledge.yml"
+$usesKnowledge = $Profile -in @("knowledge", "all")
 
 function Get-EnvironmentFileValue {
   param([string]$Name, [string]$Path)
@@ -23,20 +24,28 @@ function Get-EnvironmentFileValue {
       return $Matches[1].Trim().Trim('"')
     }
   }
+
   return ""
 }
 
 function Invoke-PlatformCompose {
-  param([string[]]$Arguments)
+  param(
+    [string[]]$Arguments,
+    [string[]]$Profiles = @($Profile)
+  )
 
   $composeArguments = @(
     "--project-name", $ProjectName,
     "--env-file", $EnvironmentFile,
     "-f", $composeFile
   )
-  if ($Profile -eq "knowledge") {
+  if ($usesKnowledge) {
     $composeArguments += @("-f", $knowledgeComposeFile)
   }
+  foreach ($composeProfile in $Profiles) {
+    $composeArguments += @("--profile", $composeProfile)
+  }
+
   & docker compose @composeArguments @Arguments
   if ($LASTEXITCODE -ne 0) {
     throw "Docker Compose command failed with exit code $LASTEXITCODE."
@@ -47,7 +56,7 @@ if (-not (Test-Path -LiteralPath $EnvironmentFile -PathType Leaf)) {
   throw "Runtime environment file is missing: $EnvironmentFile"
 }
 
-if ($Profile -eq "knowledge") {
+if ($usesKnowledge) {
   $configuredVaultRoot = Get-EnvironmentFileValue "KNOWLEDGE_VAULT_ROOT" $EnvironmentFile
   if (-not $configuredVaultRoot) {
     throw "KNOWLEDGE_VAULT_ROOT is required for the knowledge profile."
@@ -62,32 +71,14 @@ if ($Profile -eq "knowledge") {
   $env:KNOWLEDGE_VAULT_ROOT = $resolvedVaultRoot
 }
 
-$servicesByProfile = @{
-  core = @("object-storage", "postgres", "redis")
-  platform = @("object-storage", "postgres", "redis", "nginx", "n8n")
-  observability = @(
-    "object-storage", "postgres", "redis", "nginx", "n8n",
-    "postgres-exporter", "redis-exporter", "prometheus", "grafana", "dozzle"
+Invoke-PlatformCompose -Arguments @("up", "--detach", "--wait", "--wait-timeout", "180", "postgres")
+
+if ($Profile -in @("automation", "all")) {
+  Invoke-PlatformCompose -Profiles @("bootstrap") -Arguments @(
+    "run", "--rm", "--no-deps", "-T", "postgres-bootstrap"
   )
-  all = @(
-    "object-storage", "postgres", "redis", "nginx", "n8n",
-    "postgres-exporter", "redis-exporter", "prometheus", "grafana", "dozzle"
-  )
-  knowledge = @("object-storage", "postgres", "redis", "nginx", "knowledge")
 }
 
-$services = $servicesByProfile[$Profile]
-$coreServices = $servicesByProfile.core
-$nonCoreServices = @($services | Where-Object { $_ -notin $coreServices })
+Invoke-PlatformCompose -Arguments @("up", "--detach", "--wait", "--wait-timeout", "180")
 
-Invoke-PlatformCompose -Arguments (@("up", "--detach", "--wait", "--wait-timeout", "180") + $coreServices)
-
-if ($Profile -in @("platform", "observability", "all")) {
-  Invoke-PlatformCompose @("run", "--rm", "--no-deps", "-T", "postgres-bootstrap")
-}
-
-if ($Profile -ne "core") {
-  Invoke-PlatformCompose -Arguments (@("up", "--detach", "--wait", "--wait-timeout", "180") + $nonCoreServices)
-}
-
-Write-Output "Started logical profile '$Profile' for project '$ProjectName'."
+Write-Output "Started Docker profile '$Profile' for project '$ProjectName'."

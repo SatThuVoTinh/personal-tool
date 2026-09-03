@@ -1,17 +1,5 @@
 services:
-  object-storage:
-    labels:
-      com.personal-tool.acceptance: t5
-      com.personal-tool.acceptance-run: ${KNOWLEDGE_T5_RUN_ID}
-      com.personal-tool.persistence: temporary
-
   postgres:
-    labels:
-      com.personal-tool.acceptance: t5
-      com.personal-tool.acceptance-run: ${KNOWLEDGE_T5_RUN_ID}
-      com.personal-tool.persistence: temporary
-
-  redis:
     labels:
       com.personal-tool.acceptance: t5
       com.personal-tool.acceptance-run: ${KNOWLEDGE_T5_RUN_ID}
@@ -71,11 +59,6 @@ networks:
       com.personal-tool.persistence: temporary
 
 volumes:
-  object-storage-data:
-    labels:
-      com.personal-tool.acceptance: t5
-      com.personal-tool.acceptance-run: ${KNOWLEDGE_T5_RUN_ID}
-      com.personal-tool.persistence: temporary
   postgres-data:
     labels:
       com.personal-tool.acceptance: t5
