@@ -32,7 +32,7 @@ Evidence Level: NONE | LOCAL-VERIFIED | REMOTE-BACKED
 | M2 — Local infrastructure | `COMPLETE` | `REMOTE-BACKED` | Accepted commit `5ffe4cb9be81c30d5c24bd7eb6a9d41abc2a5f19`. |
 | M3 — Markdown Knowledgebase | `COMPLETE` | `REMOTE-BACKED` | Accepted candidate `ff4a5fb7d779f260ffb9b5aa2393ad6ab75eb549`; accepted merge `9cd34cebb196631e9524b095c21f1fd5aff78749`. |
 | M4 — PDF ingestion | `COMPLETE` | `REMOTE-BACKED` | T1–T5 pushed; owner has temporarily accepted M4 as complete. Exact accepted commit hash should be reconciled from git history without reopening M4 scope. |
-| M5 — Architecture contraction | `IN PROGRESS` | `NONE` | Synchronize canonical module paths and remove obsolete architecture/integration scaffolding without refactoring accepted Knowledgebase runtime. |
+| M5 — Architecture contraction | `COMPLETE` | `REMOTE-BACKED` | M5/T1-R2 synchronized canonical paths, documentation and the contracted Docker runtime without refactoring the accepted Knowledgebase application. |
 | M6 — Zink Skill Store | `DEFERRED` | `NONE` | Governed skills plus Excel/Power BI template ownership. |
 | M7 — Zink Tools + OpenClaw integration + V1 hardening | `DEFERRED` | `NONE` | Execution tools, external infrastructure flow, failure isolation, acceptance, release. |
 
@@ -45,17 +45,19 @@ operations research and simulation remain first-class capabilities.
 ```text
 Milestone: M5 — Architecture Contraction
 Task: M5/T1 — Canonical architecture/path synchronization
-Task Status: IN PROGRESS
+Task Status: COMPLETE
 Planning Readiness: APPROVED
 Plan Revision: M5/T1-R2
 Execution Authorization: NO
 Authorized Task: NONE
 Execution Contract: NONE
-Evidence Level: LOCAL-VERIFIED
-Closeout State: PENDING_REMOTE
+Evidence Level: REMOTE-BACKED
+Closeout State: REMOTE-BACKED
 Implementation Commit: 4a331d7eba8b84e85d34dac361d2a2c719876d77
-Implementation Remote Ref: origin/codex/architecture-sync-m4
+Closeout Commit: 2ad4247759cb49f6035ccde6a7c7bf8b3d10dce8
+Remote Ref: origin/codex/architecture-sync-m4
 Implementation Evidence: REMOTE-BACKED
+Task Evidence: REMOTE-BACKED
 ```
 
 Validation: `PASS` — npm 12.0.2 repository verification (47 tests), Knowledge
