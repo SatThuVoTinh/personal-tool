@@ -6,12 +6,35 @@ Zink Skill Store owns governed reusable skills and owner-built template assets.
 It is logically isolated from Zink Knowledgebase indexes and is not a runtime
 implemented by M5/T1-R2.
 
-## Identity and lifecycle
+## Git-native governed skills
 
-A skill has the stable identity: capability + namespace + version.
+A governed skill version is tracked at:
 
-There is no one-to-one legacy agent mapping. A candidate or research artifact
-remains non-active until the owner explicitly promotes it to ACTIVE.
+```text
+zink-skill-store/skills/<namespace...>/<capability>/<version>/
+├── manifest.json
+└── SKILL.md
+```
+
+Its stable identity is namespace + capability + version. The manifest is strict
+JSON and binds that identity to the directory and to the SHA-256 of the exact
+raw Markdown bytes. The catalog is fail-closed: a malformed record prevents all
+normal retrieval, including retrieval of otherwise valid records.
+
+The public read-only interface is:
+
+```text
+skill-store validate
+skill-store get --namespace <slash-separated namespace> --capability <slug>
+```
+
+`get` returns only the exact `ACTIVE` version after validation of the complete
+catalog. The lifecycle histories are `[CANDIDATE]`, `[CANDIDATE, ACTIVE]`,
+`[CANDIDATE, ACTIVE, DEPRECATED]`, and `[CANDIDATE, REJECTED]`; current state is
+the final event. At most one version per namespace/capability is ACTIVE.
+
+This contract intentionally has no `work` or `research` manifest field.
+Operational routing policy remains the responsibility of M7/OpenClaw.
 
 ## Templates
 

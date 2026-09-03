@@ -1,0 +1,719 @@
+import { createHash } from "node:crypto";
+import { lstat, readdir, readFile, realpath } from "node:fs/promises";
+import path from "node:path";
+import { URL } from "node:url";
+import { TextDecoder } from "node:util";
+
+const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const VERSION = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
+const DIGEST = /^[0-9a-f]{64}$/;
+const DECISION = /^PLAN:M(?:0|[1-9][0-9]*)\/(?:T|S)[1-9][0-9]*-R[1-9][0-9]*$/;
+const GIT_SHA = /^[0-9a-f]{40}$/;
+const PLAN_REF = /^M(?:0|[1-9][0-9]*)\/(?:T|S)[1-9][0-9]*-R[1-9][0-9]*$/;
+const SOURCE_TYPES = new Set([
+  "owner-authored",
+  "demonstration",
+  "execution",
+  "correction",
+  "research",
+]);
+const REFERENCE_TYPES = new Set(["repository", "url", "plan", "git"]);
+const STATUSES = new Set(["CANDIDATE", "ACTIVE", "DEPRECATED", "REJECTED"]);
+const textDecoder = new TextDecoder("utf-8", { fatal: true });
+
+class StrictJsonError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.code = code;
+  }
+}
+
+class JsonParser {
+  constructor(text) {
+    this.text = text;
+    this.index = 0;
+  }
+
+  parse() {
+    this.#space();
+    const value = this.#value();
+    this.#space();
+    if (this.index !== this.text.length)
+      this.#invalid("Unexpected trailing data.");
+    return value;
+  }
+
+  #invalid(message) {
+    throw new StrictJsonError("MANIFEST_JSON_INVALID", message);
+  }
+
+  #space() {
+    while (/[\t\n\r ]/.test(this.text[this.index])) this.index += 1;
+  }
+
+  #value() {
+    this.#space();
+    const character = this.text[this.index];
+    if (character === "{") return this.#object();
+    if (character === "[") return this.#array();
+    if (character === '"') return this.#string();
+    if (
+      character === "t" &&
+      this.text.slice(this.index, this.index + 4) === "true"
+    ) {
+      this.index += 4;
+      return true;
+    }
+    if (
+      character === "f" &&
+      this.text.slice(this.index, this.index + 5) === "false"
+    ) {
+      this.index += 5;
+      return false;
+    }
+    if (
+      character === "n" &&
+      this.text.slice(this.index, this.index + 4) === "null"
+    ) {
+      this.index += 4;
+      return null;
+    }
+    if (character === "-" || /[0-9]/.test(character)) return this.#number();
+    this.#invalid("Expected a JSON value.");
+  }
+
+  #object() {
+    const result = Object.create(null);
+    const names = new Set();
+    this.index += 1;
+    this.#space();
+    if (this.text[this.index] === "}") {
+      this.index += 1;
+      return result;
+    }
+    while (true) {
+      if (this.text[this.index] !== '"')
+        this.#invalid("Expected an object member name.");
+      const name = this.#string();
+      if (names.has(name)) {
+        throw new StrictJsonError(
+          "MANIFEST_JSON_DUPLICATE_KEY",
+          `Duplicate member name: ${name}.`,
+        );
+      }
+      names.add(name);
+      this.#space();
+      if (this.text[this.index] !== ":") this.#invalid("Expected a colon.");
+      this.index += 1;
+      result[name] = this.#value();
+      this.#space();
+      if (this.text[this.index] === "}") {
+        this.index += 1;
+        return result;
+      }
+      if (this.text[this.index] !== ",") this.#invalid("Expected a comma.");
+      this.index += 1;
+      this.#space();
+    }
+  }
+
+  #array() {
+    const result = [];
+    this.index += 1;
+    this.#space();
+    if (this.text[this.index] === "]") {
+      this.index += 1;
+      return result;
+    }
+    while (true) {
+      result.push(this.#value());
+      this.#space();
+      if (this.text[this.index] === "]") {
+        this.index += 1;
+        return result;
+      }
+      if (this.text[this.index] !== ",") this.#invalid("Expected a comma.");
+      this.index += 1;
+      this.#space();
+    }
+  }
+
+  #string() {
+    const start = this.index;
+    this.index += 1;
+    while (this.index < this.text.length) {
+      const character = this.text[this.index];
+      if (character === '"') {
+        this.index += 1;
+        try {
+          return JSON.parse(this.text.slice(start, this.index));
+        } catch {
+          this.#invalid("Invalid JSON string.");
+        }
+      }
+      if (character === "\\") {
+        this.index += 1;
+        const escape = this.text[this.index];
+        if (!'"\\/bfnrtu'.includes(escape ?? ""))
+          this.#invalid("Invalid string escape.");
+        if (escape === "u") {
+          for (let offset = 1; offset <= 4; offset += 1) {
+            if (!/[0-9a-fA-F]/.test(this.text[this.index + offset] ?? "")) {
+              this.#invalid("Invalid Unicode escape.");
+            }
+          }
+          this.index += 4;
+        }
+      } else if (character < " ") {
+        this.#invalid("Unescaped control character in string.");
+      }
+      this.index += 1;
+    }
+    this.#invalid("Unterminated string.");
+  }
+
+  #number() {
+    const match = /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/.exec(
+      this.text.slice(this.index),
+    );
+    if (!match) this.#invalid("Invalid number.");
+    const value = match[0];
+    this.index += value.length;
+    return Number(value);
+  }
+}
+
+function diagnostic(code, message, relativePath) {
+  return { code, message, path: relativePath };
+}
+
+function skillPath(parts = []) {
+  return ["skills", ...parts].join("/");
+}
+
+function isObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function exactKeys(value, required, allowed = required) {
+  if (!isObject(value)) return false;
+  const keys = Object.keys(value);
+  return (
+    required.every((key) => Object.hasOwn(value, key)) &&
+    keys.every((key) => allowed.includes(key))
+  );
+}
+
+function nonEmpty(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function validRepositoryReference(value) {
+  if (
+    !nonEmpty(value) ||
+    value.includes("\\") ||
+    value.includes("://") ||
+    /^[A-Za-z]:/.test(value)
+  )
+    return false;
+  if (value.startsWith("/") || value.endsWith("/")) return false;
+  return value
+    .split("/")
+    .every((segment) => segment !== "" && segment !== "." && segment !== "..");
+}
+
+function validUrl(value) {
+  if (!nonEmpty(value)) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && Boolean(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function validTimestamp(value) {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(value)) return false;
+  const date = new Date(value);
+  return (
+    !Number.isNaN(date.valueOf()) &&
+    date.toISOString() === value.replace("Z", ".000Z")
+  );
+}
+
+function schemaError(errors, relativePath, message) {
+  errors.push(diagnostic("MANIFEST_SCHEMA_INVALID", message, relativePath));
+}
+
+function validateManifest(manifest, expected, relativePath, errors) {
+  if (
+    !exactKeys(manifest, [
+      "schema_version",
+      "identity",
+      "content",
+      "provenance",
+      "lifecycle",
+    ])
+  ) {
+    schemaError(errors, relativePath, "Manifest fields or types are invalid.");
+    return;
+  }
+  if (
+    !Number.isInteger(manifest.schema_version) ||
+    manifest.schema_version !== 1
+  ) {
+    schemaError(errors, relativePath, "schema_version must be integer 1.");
+  }
+  const identity = manifest.identity;
+  if (
+    !exactKeys(identity, ["namespace", "capability", "version"]) ||
+    !Array.isArray(identity.namespace) ||
+    identity.namespace.length < 1 ||
+    identity.namespace.length > 8 ||
+    !identity.namespace.every(
+      (segment) => typeof segment === "string" && SLUG.test(segment),
+    ) ||
+    typeof identity.capability !== "string" ||
+    !SLUG.test(identity.capability) ||
+    typeof identity.version !== "string" ||
+    !VERSION.test(identity.version)
+  ) {
+    schemaError(errors, relativePath, "identity is invalid.");
+  } else if (
+    identity.namespace.join("/") !== expected.namespace.join("/") ||
+    identity.capability !== expected.capability ||
+    identity.version !== expected.version
+  ) {
+    errors.push(
+      diagnostic(
+        "IDENTITY_PATH_MISMATCH",
+        "Manifest identity does not match directory identity.",
+        relativePath,
+      ),
+    );
+  }
+  const content = manifest.content;
+  if (
+    !exactKeys(content, ["path", "sha256"]) ||
+    content.path !== "SKILL.md" ||
+    typeof content.sha256 !== "string" ||
+    !DIGEST.test(content.sha256)
+  ) {
+    schemaError(errors, relativePath, "content is invalid.");
+  }
+  const provenance = manifest.provenance;
+  if (
+    !exactKeys(provenance, ["source_type", "references"]) ||
+    !SOURCE_TYPES.has(provenance.source_type) ||
+    !Array.isArray(provenance.references) ||
+    provenance.references.length > 32
+  ) {
+    schemaError(errors, relativePath, "provenance is invalid.");
+  } else {
+    for (const reference of provenance.references) {
+      if (
+        !exactKeys(reference, ["type", "ref"]) ||
+        !REFERENCE_TYPES.has(reference.type) ||
+        !nonEmpty(reference.ref)
+      ) {
+        schemaError(errors, relativePath, "A provenance reference is invalid.");
+      } else if (
+        (reference.type === "repository" &&
+          !validRepositoryReference(reference.ref)) ||
+        (reference.type === "url" && !validUrl(reference.ref)) ||
+        (reference.type === "plan" && !PLAN_REF.test(reference.ref)) ||
+        (reference.type === "git" && !GIT_SHA.test(reference.ref))
+      ) {
+        errors.push(
+          diagnostic(
+            "UNSAFE_PROVENANCE_REFERENCE",
+            "Provenance reference is invalid for its type.",
+            relativePath,
+          ),
+        );
+      }
+    }
+  }
+  const lifecycle = manifest.lifecycle;
+  if (
+    !Array.isArray(lifecycle) ||
+    lifecycle.length < 1 ||
+    lifecycle.length > 64
+  ) {
+    schemaError(errors, relativePath, "lifecycle is invalid.");
+    return;
+  }
+  let previousTime = -Infinity;
+  const statuses = [];
+  for (const event of lifecycle) {
+    const requiresDecision = isObject(event) && event.status !== "CANDIDATE";
+    const expectedKeys = requiresDecision
+      ? ["status", "at", "actor", "decision_ref"]
+      : ["status", "at", "actor"];
+    if (
+      !exactKeys(event, expectedKeys) ||
+      !STATUSES.has(event.status) ||
+      !nonEmpty(event.actor) ||
+      typeof event.at !== "string" ||
+      !validTimestamp(event.at) ||
+      (requiresDecision &&
+        (!nonEmpty(event.decision_ref) || !DECISION.test(event.decision_ref)))
+    ) {
+      schemaError(errors, relativePath, "A lifecycle event is invalid.");
+      continue;
+    }
+    const timestamp = Date.parse(event.at);
+    if (timestamp < previousTime)
+      errors.push(
+        diagnostic(
+          "LIFECYCLE_TIMESTAMP_INVALID",
+          "Lifecycle timestamps must be non-decreasing.",
+          relativePath,
+        ),
+      );
+    previousTime = timestamp;
+    statuses.push(event.status);
+  }
+  const legal = [
+    "CANDIDATE",
+    "CANDIDATE,ACTIVE",
+    "CANDIDATE,ACTIVE,DEPRECATED",
+    "CANDIDATE,REJECTED",
+  ];
+  if (!legal.includes(statuses.join(",")))
+    errors.push(
+      diagnostic(
+        "LIFECYCLE_SEQUENCE_INVALID",
+        "Lifecycle sequence is invalid.",
+        relativePath,
+      ),
+    );
+}
+
+async function readRegularFile(filePath, relativePath, errors) {
+  try {
+    const info = await lstat(filePath);
+    if (!info.isFile() || info.isSymbolicLink()) {
+      errors.push(
+        diagnostic(
+          "UNSAFE_PATH",
+          "Expected a regular non-link file.",
+          relativePath,
+        ),
+      );
+      return null;
+    }
+    return await readFile(filePath);
+  } catch {
+    errors.push(
+      diagnostic(
+        "MISSING_REQUIRED_FILE",
+        "Required file is missing.",
+        relativePath,
+      ),
+    );
+    return null;
+  }
+}
+
+async function validateVersion(directory, parts, errors, records) {
+  const relativeDirectory = skillPath(parts);
+  const entries = await readdir(directory, { withFileTypes: true });
+  const names = entries.map((entry) => entry.name).sort();
+  if (
+    names.length !== 2 ||
+    names[0] !== "SKILL.md" ||
+    names[1] !== "manifest.json"
+  ) {
+    errors.push(
+      diagnostic(
+        "VERSION_DIRECTORY_CONTENT_INVALID",
+        "Version directory must contain only manifest.json and SKILL.md.",
+        relativeDirectory,
+      ),
+    );
+    return;
+  }
+  const manifestPath = path.join(directory, "manifest.json");
+  const markdownPath = path.join(directory, "SKILL.md");
+  const manifestRelative = skillPath([...parts, "manifest.json"]);
+  const markdownRelative = skillPath([...parts, "SKILL.md"]);
+  const manifestBytes = await readRegularFile(
+    manifestPath,
+    manifestRelative,
+    errors,
+  );
+  const markdownBytes = await readRegularFile(
+    markdownPath,
+    markdownRelative,
+    errors,
+  );
+  if (!manifestBytes || !markdownBytes) return;
+  if (manifestBytes.length > 65_536)
+    errors.push(
+      diagnostic(
+        "MANIFEST_SIZE_LIMIT_EXCEEDED",
+        "manifest.json exceeds 65,536 bytes.",
+        manifestRelative,
+      ),
+    );
+  if (markdownBytes.length > 262_144)
+    errors.push(
+      diagnostic(
+        "MARKDOWN_SIZE_LIMIT_EXCEEDED",
+        "SKILL.md exceeds 262,144 bytes.",
+        markdownRelative,
+      ),
+    );
+  let manifest;
+  try {
+    manifest = new JsonParser(textDecoder.decode(manifestBytes)).parse();
+  } catch (error) {
+    const code =
+      error instanceof TypeError
+        ? "INVALID_UTF8"
+        : (error.code ?? "MANIFEST_JSON_INVALID");
+    errors.push(
+      diagnostic(
+        code,
+        code === "INVALID_UTF8"
+          ? "manifest.json is not valid UTF-8."
+          : error.message,
+        manifestRelative,
+      ),
+    );
+    return;
+  }
+  let markdown;
+  try {
+    markdown = textDecoder.decode(markdownBytes);
+  } catch {
+    errors.push(
+      diagnostic(
+        "INVALID_UTF8",
+        "SKILL.md is not valid UTF-8.",
+        markdownRelative,
+      ),
+    );
+    return;
+  }
+  const expected = {
+    namespace: parts.slice(0, -2),
+    capability: parts.at(-2),
+    version: parts.at(-1),
+  };
+  validateManifest(manifest, expected, manifestRelative, errors);
+  if (
+    manifest.content?.sha256 &&
+    createHash("sha256").update(markdownBytes).digest("hex") !==
+      manifest.content.sha256
+  ) {
+    errors.push(
+      diagnostic(
+        "CONTENT_DIGEST_MISMATCH",
+        "SKILL.md digest does not match manifest content.sha256.",
+        markdownRelative,
+      ),
+    );
+  }
+  records.push({
+    manifest,
+    markdown,
+    relativePath: manifestRelative,
+    expected,
+  });
+}
+
+async function walk(directory, parts, errors, records, count) {
+  let info;
+  try {
+    info = await lstat(directory);
+  } catch {
+    errors.push(
+      diagnostic(
+        "SKILLS_ROOT_MISSING",
+        "Skills root is missing.",
+        skillPath(parts),
+      ),
+    );
+    return;
+  }
+  if (!info.isDirectory() || info.isSymbolicLink()) {
+    errors.push(
+      diagnostic(
+        "UNSAFE_PATH",
+        "Expected a non-link directory.",
+        skillPath(parts),
+      ),
+    );
+    return;
+  }
+  const entries = (await readdir(directory, { withFileTypes: true })).sort(
+    (left, right) => left.name.localeCompare(right.name),
+  );
+  if (parts.length === 0 && entries.length === 0) return;
+  if (parts.length === 0) {
+    for (const entry of entries) {
+      if (entry.name === "README.md") {
+        if (!entry.isFile() || entry.isSymbolicLink())
+          errors.push(
+            diagnostic(
+              "UNSAFE_PATH",
+              "Root README.md must be a regular non-link file.",
+              skillPath([entry.name]),
+            ),
+          );
+      } else if (
+        !entry.isDirectory() ||
+        entry.isSymbolicLink() ||
+        !SLUG.test(entry.name)
+      ) {
+        errors.push(
+          diagnostic(
+            "DIRECTORY_GRAMMAR_INVALID",
+            "Skills root contains an invalid entry.",
+            skillPath([entry.name]),
+          ),
+        );
+      } else {
+        await walk(
+          path.join(directory, entry.name),
+          [entry.name],
+          errors,
+          records,
+          count,
+        );
+      }
+    }
+    return;
+  }
+  const currentName = parts.at(-1);
+  const isVersion =
+    VERSION.test(currentName) && parts.length >= 3 && parts.length <= 10;
+  if (isVersion) {
+    count.value += 1;
+    if (count.value > 1000)
+      errors.push(
+        diagnostic(
+          "MANIFEST_LIMIT_EXCEEDED",
+          "Catalog exceeds 1,000 manifests.",
+          skillPath(parts),
+        ),
+      );
+    await validateVersion(directory, parts, errors, records);
+    return;
+  }
+  if (!SLUG.test(currentName) || parts.length > 9 || entries.length === 0) {
+    errors.push(
+      diagnostic(
+        "DIRECTORY_GRAMMAR_INVALID",
+        "Intermediate namespace or capability directory is invalid.",
+        skillPath(parts),
+      ),
+    );
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.isSymbolicLink()) {
+      errors.push(
+        diagnostic(
+          "DIRECTORY_GRAMMAR_INVALID",
+          "Intermediate directories may contain only non-link directories.",
+          skillPath([...parts, entry.name]),
+        ),
+      );
+      continue;
+    }
+    await walk(
+      path.join(directory, entry.name),
+      [...parts, entry.name],
+      errors,
+      records,
+      count,
+    );
+  }
+}
+
+function sortDiagnostics(errors) {
+  return errors.sort(
+    (left, right) =>
+      left.path.localeCompare(right.path) ||
+      left.code.localeCompare(right.code),
+  );
+}
+
+export async function scanCatalog(skillsRoot) {
+  const errors = [];
+  const records = [];
+  try {
+    const rootInfo = await lstat(skillsRoot);
+    if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) {
+      errors.push(
+        diagnostic(
+          "UNSAFE_PATH",
+          "Skills root must be a non-link directory.",
+          "skills",
+        ),
+      );
+    } else {
+      const resolvedRoot = await realpath(skillsRoot);
+      await walk(resolvedRoot, [], errors, records, { value: 0 });
+    }
+  } catch {
+    errors.push(
+      diagnostic("SKILLS_ROOT_MISSING", "Skills root is missing.", "skills"),
+    );
+  }
+  const active = new Map();
+  for (const record of records) {
+    const identity = record.manifest?.identity;
+    const lifecycle = record.manifest?.lifecycle;
+    if (
+      !isObject(identity) ||
+      !Array.isArray(identity.namespace) ||
+      typeof identity.capability !== "string" ||
+      !Array.isArray(lifecycle) ||
+      lifecycle.at(-1)?.status !== "ACTIVE"
+    )
+      continue;
+    const key = `${identity.namespace.join("/")}\u0000${identity.capability}`;
+    if (active.has(key)) {
+      errors.push(
+        diagnostic(
+          "MULTIPLE_ACTIVE_VERSIONS",
+          "Namespace and capability have multiple ACTIVE versions.",
+          record.relativePath,
+        ),
+      );
+    } else active.set(key, record);
+  }
+  return {
+    errors: sortDiagnostics(errors),
+    records: records.sort((left, right) =>
+      left.relativePath.localeCompare(right.relativePath),
+    ),
+  };
+}
+
+export async function getActiveSkill(skillsRoot, namespace, capability) {
+  const catalog = await scanCatalog(skillsRoot);
+  if (catalog.errors.length > 0) return { ...catalog, skill: null };
+  const skill =
+    catalog.records.find(
+      (record) =>
+        record.manifest.identity.namespace.join("/") === namespace &&
+        record.manifest.identity.capability === capability &&
+        record.manifest.lifecycle.at(-1).status === "ACTIVE",
+    ) ?? null;
+  return { ...catalog, skill };
+}
+
+export function catalogError(details) {
+  return {
+    error: {
+      code: "CATALOG_INVALID",
+      message: "Skill Store catalog is invalid.",
+      details,
+    },
+  };
+}
