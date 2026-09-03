@@ -8,6 +8,10 @@ All notable, validated changes to Personal Tool are documented here.
 
 ### Added
 
+- Completed M6/T1-R4 Git-native governed Skill Store core: strict duplicate-key
+  rejecting JSON manifests, raw-byte SHA-256-bound UTF-8 Markdown, complete
+  fail-closed catalog validation, exact ACTIVE retrieval, deterministic offline
+  diagnostics, and the read-only `skill-store` CLI.
 - Completed locally verified M4 PDF ingestion at candidate `0a64b0b`: sidecar-driven native/scanned PDF extraction and OCR, deterministic page-local prose/table/figure segments, resumable and drift-safe atomic publication, combined Markdown/PDF retrieval with page citations, and current README operator instructions; exact-candidate Fixture/T3/T4 and five representative real PDFs passed without failed batches or duplicate source publication.
 - Added locally validated M4/T2 PDF content builds: exact encrypted/protected/corrupt preflight, bounded four-page offline extraction and multilingual OCR, reading-order text/table/figure materialization, deterministic retrieval-budget segmentation with exact bbox provenance, source-drift and cumulative-deadline containment, process-group cleanup, and atomic non-searchable database batches.
 - Added validated M3/T5 acceptance and operational handoff: an exact-clean-HEAD OCI-provenanced Knowledge image, isolated ownership/cleanup, machine-readable Fixture/RealVault/live evidence, candidate/deployment fingerprint separation, read-only Vault proof, migration/recovery checks, persistent rebuild safeguards, resource windows, and the Knowledge operations runbook.

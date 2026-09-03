@@ -33,7 +33,7 @@ Evidence Level: NONE | LOCAL-VERIFIED | REMOTE-BACKED
 | M3 — Markdown Knowledgebase | `COMPLETE` | `REMOTE-BACKED` | Accepted candidate `ff4a5fb7d779f260ffb9b5aa2393ad6ab75eb549`; accepted merge `9cd34cebb196631e9524b095c21f1fd5aff78749`. |
 | M4 — PDF ingestion | `COMPLETE` | `REMOTE-BACKED` | T1–T5 pushed; owner has temporarily accepted M4 as complete. Exact accepted commit hash should be reconciled from git history without reopening M4 scope. |
 | M5 — Architecture contraction | `COMPLETE` | `REMOTE-BACKED` | M5/T1-R2 synchronized canonical paths, documentation and the contracted Docker runtime without refactoring the accepted Knowledgebase application. |
-| M6 — Zink Skill Store | `IN PROGRESS` | `LOCAL-VERIFIED` | M6/T1-R4 passed local validation and awaits publication. |
+| M6 — Zink Skill Store | `COMPLETE` | `REMOTE-BACKED` | M6/T1-R4 task commit is remotely verified; governance closeout is recorded separately. |
 | M7 — Zink Tools + OpenClaw integration + V1 hardening | `DEFERRED` | `NONE` | Execution tools, external infrastructure flow, failure isolation, acceptance, release. |
 
 The former self-built L&SC Data Plant is replaced by a **logical external
@@ -45,21 +45,26 @@ operations research and simulation remain first-class capabilities.
 ```text
 Milestone: M6 — Zink Skill Store
 Task: M6/T1 — Git-native governed skill core
-Task Status: IN PROGRESS
+Task Status: COMPLETE
 Planning Readiness: APPROVED
 Plan Revision: M6/T1-R4
 Execution Authorization: NO
-Authorized Task: M6/T1
+Authorized Task: NONE
 Execution Contract: NONE
-Evidence Level: LOCAL-VERIFIED
-Closeout State: AWAITING REMOTE
+Evidence Level: REMOTE-BACKED
+Closeout State: REMOTE-BACKED
+Task Commit: fb746021b8b1a51080d1ba4fed4b35011bb78ce6
+Task Branch: codex/m6-t1-git-native-skill-store
+Upstream: origin/codex/m6-t1-git-native-skill-store
+Remote Task Verification: PASS
 ```
 
-M6/T1-R4 local evidence: focused M6 tests, `npm run verify` (61 tests), and
-`git diff --check` passed. Source execution authority is closed:
-`Execution Authorization: NO` at `LOCAL-VERIFIED / AWAITING REMOTE`
-permits only the already-authorized publication and governance-closeout work.
-No further source implementation is authorized.
+M6/T1-R4 evidence: focused M6 tests, `npm run verify` (61 tests),
+`git diff --check`, staged diff check, and scope review passed. Task commit
+`fb746021b8b1a51080d1ba4fed4b35011bb78ce6` is remotely verified on
+`origin/codex/m6-t1-git-native-skill-store`. This closeout commit records
+M6/T1 and M6 completion; its remote verification is required before the
+completion declaration.
 
 Host operation: `.wslconfig` was backed up without overwrite, changed only from
 `memory=9728MB` to `memory=8192MB`, and read back successfully. No
@@ -214,7 +219,7 @@ M0 Plan/Architecture
 → M3 Markdown Knowledgebase
 → M4 PDF Ingestion                 [COMPLETE]
 → M5 Architecture Contraction      [COMPLETE]
-→ M6 Zink Skill Store              [LOCAL-VERIFIED]
+→ M6 Zink Skill Store              [COMPLETE / REMOTE-BACKED]
 → M7 Zink Tools + OpenClaw Integration + V1 Hardening/Release
 ```
 
@@ -240,18 +245,22 @@ Current scope:
 
 ### M6 — Zink Skill Store
 
-Status: `IN PROGRESS`
+Status: `COMPLETE`
 Task: `M6/T1 — Git-native governed skill core`
 Plan Revision: `M6/T1-R4`
 Execution Authorization: `NO`
-Evidence: `LOCAL-VERIFIED`
-Closeout State: `AWAITING REMOTE`
+Execution Contract: `NONE`
+Evidence: `REMOTE-BACKED`
+Task Commit: `fb746021b8b1a51080d1ba4fed4b35011bb78ce6`
+Task Branch: `codex/m6-t1-git-native-skill-store`
+Upstream: `origin/codex/m6-t1-git-native-skill-store`
+Remote Task Verification: `PASS`
 
-M6/T1 implements Git-managed strict JSON manifests and Markdown content,
+M6/T1 delivered Git-managed strict JSON manifests and Markdown content,
 complete-catalog fail-closed validation, and exact retrieval of one ACTIVE
 version. Routing context remains M7/OpenClaw policy and is not manifest
-metadata. M6/T1 completion closes M6 after the task and governance closeout
-commits are remotely verified.
+metadata. M6/T1 completion closes M6 after this governance closeout commit is
+remotely verified.
 
 ### M7 — Zink Tools + OpenClaw Integration + V1 Hardening
 
