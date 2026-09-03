@@ -34,7 +34,7 @@ Evidence Level: NONE | LOCAL-VERIFIED | REMOTE-BACKED
 | M4 — PDF ingestion | `COMPLETE` | `REMOTE-BACKED` | T1–T5 pushed; owner has temporarily accepted M4 as complete. Exact accepted commit hash should be reconciled from git history without reopening M4 scope. |
 | M5 — Architecture contraction | `COMPLETE` | `REMOTE-BACKED` | M5/T1-R2 synchronized canonical paths, documentation and the contracted Docker runtime without refactoring the accepted Knowledgebase application. |
 | M6 — Zink Skill Store | `COMPLETE` | `REMOTE-BACKED` | M6/T1-R4 task commit is remotely verified; governance closeout is recorded separately. |
-| M7 — Zink Tools + OpenClaw integration + V1 hardening | `DEFERRED` | `NONE` | Execution tools, external infrastructure flow, failure isolation, acceptance, release. |
+| M7 — Zink Tools + OpenClaw integration + V1 hardening | `IN PROGRESS` | `NONE` | M7/T1-R9 OpenClaw foundation is owner-approved and authorized. |
 
 The former self-built L&SC Data Plant is replaced by a **logical external
 infrastructure flow**, not another repository module. Forecasting, optimization,
@@ -43,22 +43,17 @@ operations research and simulation remain first-class capabilities.
 ## 4. Current focus
 
 ```text
-Milestone: M6 — Zink Skill Store
-Task: M6/T1 — Git-native governed skill core
-Task Status: COMPLETE
+Milestone: M7 — Zink Tools + OpenClaw Integration + V1 Hardening
+Task: M7/T1 — OpenClaw foundation
+Task Status: IN PROGRESS
 Planning Readiness: APPROVED
-Plan Revision: M6/T1-R4
-Execution Authorization: NO
-Authorized Task: NONE
-Execution Contract: NONE
-Evidence Level: REMOTE-BACKED
-Closeout State: REMOTE-BACKED
-Task Commit: fb746021b8b1a51080d1ba4fed4b35011bb78ce6
-Task Branch: codex/m6-t1-git-native-skill-store
-Upstream: origin/codex/m6-t1-git-native-skill-store
-Remote Task Verification: PASS
-Post-completion Fix Commit: 652ed9bd248dcc047a2be09300aaaba1d9c2dbbf
-Remote Fix Verification: PASS
+Plan Revision: M7/T1-R9
+Execution Authorization: YES
+Authorized Task: M7/T1 — OpenClaw foundation
+Execution Contract: docs/contracts/execution/ACTIVE.md
+Evidence Level: NONE
+Task Branch: codex/m7-t1-openclaw-foundation
+Owner Approval: 2026-09-03 explicit implementation request
 ```
 
 M6/T1-R4 evidence: focused M6 tests, `npm run verify` (64 tests),
@@ -267,8 +262,17 @@ remotely verified.
 
 ### M7 — Zink Tools + OpenClaw Integration + V1 Hardening
 
-Status: `DEFERRED`
-Execution Authorization: `NO`
+Status: `IN PROGRESS`
+Task: `M7/T1 — OpenClaw foundation`
+Plan Revision: `M7/T1-R9`
+Planning Readiness: `APPROVED`
+Execution Authorization: `YES`
+Execution Contract: `docs/contracts/execution/ACTIVE.md`
+Evidence: `NONE`
+
+M7/T1-R9 is the owner-approved, deterministic OpenClaw foundation only. Its
+frozen scope, host gates, configuration posture and validation requirements are
+in `docs/contracts/execution/ACTIVE.md`. T2–T4 remain unimplemented.
 
 Minimum scope:
 
