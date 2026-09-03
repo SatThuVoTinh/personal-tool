@@ -53,6 +53,10 @@ All notable, validated changes to Personal Tool are documented here.
 
 ### Fixed
 
+- Hardened the M6 Skill Store validator to stop before decoding oversized
+  content, reject URI-shaped repository references, suppress partial catalogs,
+  preserve operational error classification, and order diagnostics without
+  locale dependence.
 - Isolated T5 Nginx now uses a validated ephemeral loopback port, remote evidence resolves exact workflow-run IDs, and schema-present live recovery dumps run inside operational PostgreSQL without Compose helper reconciliation.
 - Made partial validation startups eligible for cleanup, added a bounded retry for transient AIStor marker writes immediately after bucket readiness, and made acceptance fail if its isolated project or volumes cannot be destroyed, preventing leaked test stacks, flaky recreation checks, and false backup/restore passes.
 

@@ -57,14 +57,15 @@ Task Commit: fb746021b8b1a51080d1ba4fed4b35011bb78ce6
 Task Branch: codex/m6-t1-git-native-skill-store
 Upstream: origin/codex/m6-t1-git-native-skill-store
 Remote Task Verification: PASS
+Post-completion Fix Commit: 652ed9bd248dcc047a2be09300aaaba1d9c2dbbf
+Remote Fix Verification: PASS
 ```
 
-M6/T1-R4 evidence: focused M6 tests, `npm run verify` (61 tests),
+M6/T1-R4 evidence: focused M6 tests, `npm run verify` (64 tests),
 `git diff --check`, staged diff check, and scope review passed. Task commit
 `fb746021b8b1a51080d1ba4fed4b35011bb78ce6` is remotely verified on
-`origin/codex/m6-t1-git-native-skill-store`. This closeout commit records
-M6/T1 and M6 completion; its remote verification is required before the
-completion declaration.
+`origin/codex/m6-t1-git-native-skill-store`. Post-completion fix commit
+`652ed9bd248dcc047a2be09300aaaba1d9c2dbbf` is also remotely verified there.
 
 Host operation: `.wslconfig` was backed up without overwrite, changed only from
 `memory=9728MB` to `memory=8192MB`, and read back successfully. No
@@ -255,6 +256,8 @@ Task Commit: `fb746021b8b1a51080d1ba4fed4b35011bb78ce6`
 Task Branch: `codex/m6-t1-git-native-skill-store`
 Upstream: `origin/codex/m6-t1-git-native-skill-store`
 Remote Task Verification: `PASS`
+Post-completion Fix Commit: `652ed9bd248dcc047a2be09300aaaba1d9c2dbbf`
+Remote Fix Verification: `PASS`
 
 M6/T1 delivered Git-managed strict JSON manifests and Markdown content,
 complete-catalog fail-closed validation, and exact retrieval of one ACTIVE
