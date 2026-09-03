@@ -27,6 +27,12 @@ function digest(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+function compareStrings(left, right) {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
 function manifest(overrides = {}) {
   const { markdown = Buffer.from("# Skill\n", "utf8"), ...fields } = overrides;
   return {
@@ -62,6 +68,11 @@ function writeSkill(root, options = {}) {
   mkdirSync(directory, { recursive: true });
   const data = manifest({ markdown: options.markdown });
   const value = options.value ?? data.value;
+  if (!options.value) {
+    value.identity.namespace = namespace;
+    value.identity.capability = capability;
+    value.identity.version = version;
+  }
   writeFileSync(
     path.join(directory, "manifest.json"),
     options.manifestBytes ?? JSON.stringify(value),
@@ -183,6 +194,14 @@ test("detects duplicate JSON keys at top-level and nested levels", async () => {
       );
     });
   }
+  await temporaryStore(async (root) => {
+    writeSkill(root, {
+      manifestBytes: '{"private-value":1,"private-value":2}',
+    });
+    const result = await executeCli(["validate"], root);
+    assert.equal(result.exitCode, 2);
+    assert.equal(result.stderr.includes("private-value"), false);
+  });
 });
 
 test("rejects malformed JSON, schema errors, unsafe provenance, and bad UTF-8", async () => {
@@ -219,6 +238,18 @@ test("rejects malformed JSON, schema errors, unsafe provenance, and bad UTF-8", 
     );
   });
   await temporaryStore(async (root) => {
+    const value = manifest().value;
+    value.provenance.references = [
+      { type: "repository", ref: "mailto:owner@example.test" },
+    ];
+    writeSkill(root, { value });
+    assert.ok(
+      (await catalog(root)).errors.some(
+        (error) => error.code === "UNSAFE_PROVENANCE_REFERENCE",
+      ),
+    );
+  });
+  await temporaryStore(async (root) => {
     writeSkill(root, { manifestBytes: Buffer.from([0xff]) });
     assert.equal((await catalog(root)).errors[0].code, "INVALID_UTF8");
   });
@@ -228,6 +259,20 @@ test("rejects malformed JSON, schema errors, unsafe provenance, and bad UTF-8", 
       (await catalog(root)).errors.some(
         (error) => error.code === "INVALID_UTF8",
       ),
+    );
+  });
+});
+
+test("keeps malformed top-level JSON values catalog-invalid", async () => {
+  await temporaryStore(async (root) => {
+    writeSkill(root, { manifestBytes: "null" });
+    const result = await catalog(root);
+    assert.ok(
+      result.errors.some((error) => error.code === "MANIFEST_SCHEMA_INVALID"),
+    );
+    assert.equal(
+      result.errors.some((error) => error.code === "SKILLS_ROOT_MISSING"),
+      false,
     );
   });
 });
@@ -313,22 +358,29 @@ test("enforces exact byte and collection limits without truncation", async () =>
     assert.deepEqual((await catalog(root)).errors, []);
   });
   await temporaryStore(async (root) => {
-    const bytes = Buffer.alloc(65_537, 0x20);
+    const bytes = Buffer.alloc(65_537, 0xff);
     writeSkill(root, { manifestBytes: bytes });
-    assert.ok(
-      (await catalog(root)).errors.some(
-        (error) => error.code === "MANIFEST_SIZE_LIMIT_EXCEEDED",
-      ),
+    assert.deepEqual(
+      (await catalog(root)).errors.map((error) => error.code),
+      ["MANIFEST_SIZE_LIMIT_EXCEEDED"],
     );
   });
   await temporaryStore(async (root) => {
-    const markdown = Buffer.alloc(262_145, 0x61);
+    const markdown = Buffer.alloc(262_145, 0xff);
     writeSkill(root, { markdown });
-    assert.ok(
-      (await catalog(root)).errors.some(
-        (error) => error.code === "MARKDOWN_SIZE_LIMIT_EXCEEDED",
-      ),
+    assert.deepEqual(
+      (await catalog(root)).errors.map((error) => error.code),
+      ["MARKDOWN_SIZE_LIMIT_EXCEEDED"],
     );
+  });
+  await temporaryStore(async (root) => {
+    const value = manifest().value;
+    value.provenance.references = Array.from({ length: 32 }, () => ({
+      type: "plan",
+      ref: "M6/T1-R4",
+    }));
+    writeSkill(root, { value });
+    assert.deepEqual((await catalog(root)).errors, []);
   });
   await temporaryStore(async (root) => {
     const value = manifest().value;
@@ -339,8 +391,23 @@ test("enforces exact byte and collection limits without truncation", async () =>
     writeSkill(root, { value });
     assert.ok(
       (await catalog(root)).errors.some(
-        (error) => error.code === "MANIFEST_SCHEMA_INVALID",
+        (error) => error.code === "PROVENANCE_REFERENCE_LIMIT_EXCEEDED",
       ),
+    );
+  });
+  await temporaryStore(async (root) => {
+    const value = manifest().value;
+    value.lifecycle = Array.from({ length: 64 }, (_, index) => ({
+      status: "CANDIDATE",
+      at: `2026-09-03T01:00:${String(index % 60).padStart(2, "0")}Z`,
+      actor: "owner",
+    }));
+    writeSkill(root, { value });
+    assert.equal(
+      (await catalog(root)).errors.some(
+        (error) => error.code === "LIFECYCLE_EVENT_LIMIT_EXCEEDED",
+      ),
+      false,
     );
   });
   await temporaryStore(async (root) => {
@@ -353,7 +420,41 @@ test("enforces exact byte and collection limits without truncation", async () =>
     writeSkill(root, { value });
     assert.ok(
       (await catalog(root)).errors.some(
-        (error) => error.code === "MANIFEST_SCHEMA_INVALID",
+        (error) => error.code === "LIFECYCLE_EVENT_LIMIT_EXCEEDED",
+      ),
+    );
+  });
+});
+
+test("accepts 1,000 manifests and rejects manifest 1,001", async () => {
+  await temporaryStore(async (root) => {
+    for (let index = 0; index < 1000; index += 1) {
+      const version = `1.0.${index}`;
+      const value = manifest().value;
+      value.identity.version = version;
+      value.lifecycle = [
+        {
+          status: "CANDIDATE",
+          at: "2026-09-03T01:00:00Z",
+          actor: "owner",
+        },
+      ];
+      writeSkill(root, { version, value });
+    }
+    assert.deepEqual((await catalog(root)).errors, []);
+    const value = manifest().value;
+    value.identity.version = "1.0.1000";
+    value.lifecycle = [
+      {
+        status: "CANDIDATE",
+        at: "2026-09-03T01:00:00Z",
+        actor: "owner",
+      },
+    ];
+    writeSkill(root, { version: "1.0.1000", value });
+    assert.ok(
+      (await catalog(root)).errors.some(
+        (error) => error.code === "MANIFEST_LIMIT_EXCEEDED",
       ),
     );
   });
@@ -373,13 +474,24 @@ test("orders diagnostics deterministically and validates reference variants", as
     assert.deepEqual(
       [...errors].sort(
         (left, right) =>
-          left.path.localeCompare(right.path) ||
-          left.code.localeCompare(right.code),
+          compareStrings(left.path, right.path) ||
+          compareStrings(left.code, right.code),
       ),
       errors,
     );
     assert.ok(
       errors.some((error) => error.code === "UNSAFE_PROVENANCE_REFERENCE"),
+    );
+  });
+});
+
+test("uses locale-independent lexical diagnostic ordering", async () => {
+  await temporaryStore(async (root) => {
+    writeFileSync(path.join(root, "ä"), "invalid\n");
+    writeFileSync(path.join(root, "z"), "invalid\n");
+    assert.deepEqual(
+      (await catalog(root)).errors.map((error) => error.path),
+      ["skills/z", "skills/ä"],
     );
   });
 });
@@ -451,6 +563,7 @@ test("fails closed when another catalog record is invalid", async () => {
     assert.equal(result.exitCode, 2);
     assert.equal(result.stdout, "");
     assert.equal(JSON.parse(result.stderr).error.code, "CATALOG_INVALID");
+    assert.deepEqual((await catalog(root)).records, []);
   });
 });
 
@@ -475,6 +588,13 @@ test("enforces CLI exit codes and output channels", async () => {
     assert.equal(
       JSON.parse(absent.stderr).error.code,
       "ACTIVE_SKILL_NOT_FOUND",
+    );
+    const operational = await executeCli(["validate"], null);
+    assert.equal(operational.exitCode, 1);
+    assert.equal(operational.stdout, "");
+    assert.equal(
+      JSON.parse(operational.stderr).error.code,
+      "OPERATIONAL_FAILURE",
     );
   });
 });

@@ -98,7 +98,7 @@ class JsonParser {
       if (names.has(name)) {
         throw new StrictJsonError(
           "MANIFEST_JSON_DUPLICATE_KEY",
-          `Duplicate member name: ${name}.`,
+          "Duplicate object member name.",
         );
       }
       names.add(name);
@@ -187,6 +187,12 @@ function diagnostic(code, message, relativePath) {
   return { code, message, path: relativePath };
 }
 
+function compareStrings(left, right) {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
 function skillPath(parts = []) {
   return ["skills", ...parts].join("/");
 }
@@ -212,8 +218,7 @@ function validRepositoryReference(value) {
   if (
     !nonEmpty(value) ||
     value.includes("\\") ||
-    value.includes("://") ||
-    /^[A-Za-z]:/.test(value)
+    /^[A-Za-z][A-Za-z0-9+.-]*:/.test(value)
   )
     return false;
   if (value.startsWith("/") || value.endsWith("/")) return false;
@@ -305,10 +310,17 @@ function validateManifest(manifest, expected, relativePath, errors) {
   if (
     !exactKeys(provenance, ["source_type", "references"]) ||
     !SOURCE_TYPES.has(provenance.source_type) ||
-    !Array.isArray(provenance.references) ||
-    provenance.references.length > 32
+    !Array.isArray(provenance.references)
   ) {
     schemaError(errors, relativePath, "provenance is invalid.");
+  } else if (provenance.references.length > 32) {
+    errors.push(
+      diagnostic(
+        "PROVENANCE_REFERENCE_LIMIT_EXCEEDED",
+        "Provenance exceeds 32 references.",
+        relativePath,
+      ),
+    );
   } else {
     for (const reference of provenance.references) {
       if (
@@ -335,12 +347,18 @@ function validateManifest(manifest, expected, relativePath, errors) {
     }
   }
   const lifecycle = manifest.lifecycle;
-  if (
-    !Array.isArray(lifecycle) ||
-    lifecycle.length < 1 ||
-    lifecycle.length > 64
-  ) {
+  if (!Array.isArray(lifecycle) || lifecycle.length < 1) {
     schemaError(errors, relativePath, "lifecycle is invalid.");
+    return;
+  }
+  if (lifecycle.length > 64) {
+    errors.push(
+      diagnostic(
+        "LIFECYCLE_EVENT_LIMIT_EXCEEDED",
+        "Lifecycle exceeds 64 events.",
+        relativePath,
+      ),
+    );
     return;
   }
   let previousTime = -Infinity;
@@ -416,10 +434,21 @@ async function readRegularFile(filePath, relativePath, errors) {
   }
 }
 
-async function validateVersion(directory, parts, errors, records) {
+async function validateVersion(directory, parts, errors, records, count) {
   const relativeDirectory = skillPath(parts);
   const entries = await readdir(directory, { withFileTypes: true });
-  const names = entries.map((entry) => entry.name).sort();
+  const names = entries.map((entry) => entry.name).sort(compareStrings);
+  if (names.includes("manifest.json")) {
+    count.value += 1;
+    if (count.value > 1000)
+      errors.push(
+        diagnostic(
+          "MANIFEST_LIMIT_EXCEEDED",
+          "Catalog exceeds 1,000 manifests.",
+          skillPath([...parts, "manifest.json"]),
+        ),
+      );
+  }
   if (
     names.length !== 2 ||
     names[0] !== "SKILL.md" ||
@@ -449,7 +478,9 @@ async function validateVersion(directory, parts, errors, records) {
     errors,
   );
   if (!manifestBytes || !markdownBytes) return;
-  if (manifestBytes.length > 65_536)
+  const manifestTooLarge = manifestBytes.length > 65_536;
+  const markdownTooLarge = markdownBytes.length > 262_144;
+  if (manifestTooLarge)
     errors.push(
       diagnostic(
         "MANIFEST_SIZE_LIMIT_EXCEEDED",
@@ -457,7 +488,7 @@ async function validateVersion(directory, parts, errors, records) {
         manifestRelative,
       ),
     );
-  if (markdownBytes.length > 262_144)
+  if (markdownTooLarge)
     errors.push(
       diagnostic(
         "MARKDOWN_SIZE_LIMIT_EXCEEDED",
@@ -465,6 +496,7 @@ async function validateVersion(directory, parts, errors, records) {
         markdownRelative,
       ),
     );
+  if (manifestTooLarge || markdownTooLarge) return;
   let manifest;
   try {
     manifest = new JsonParser(textDecoder.decode(manifestBytes)).parse();
@@ -504,7 +536,7 @@ async function validateVersion(directory, parts, errors, records) {
   };
   validateManifest(manifest, expected, manifestRelative, errors);
   if (
-    manifest.content?.sha256 &&
+    manifest?.content?.sha256 &&
     createHash("sha256").update(markdownBytes).digest("hex") !==
       manifest.content.sha256
   ) {
@@ -549,7 +581,7 @@ async function walk(directory, parts, errors, records, count) {
     return;
   }
   const entries = (await readdir(directory, { withFileTypes: true })).sort(
-    (left, right) => left.name.localeCompare(right.name),
+    (left, right) => compareStrings(left.name, right.name),
   );
   if (parts.length === 0 && entries.length === 0) return;
   if (parts.length === 0) {
@@ -591,16 +623,7 @@ async function walk(directory, parts, errors, records, count) {
   const isVersion =
     VERSION.test(currentName) && parts.length >= 3 && parts.length <= 10;
   if (isVersion) {
-    count.value += 1;
-    if (count.value > 1000)
-      errors.push(
-        diagnostic(
-          "MANIFEST_LIMIT_EXCEEDED",
-          "Catalog exceeds 1,000 manifests.",
-          skillPath(parts),
-        ),
-      );
-    await validateVersion(directory, parts, errors, records);
+    await validateVersion(directory, parts, errors, records, count);
     return;
   }
   if (!SLUG.test(currentName) || parts.length > 9 || entries.length === 0) {
@@ -637,32 +660,35 @@ async function walk(directory, parts, errors, records, count) {
 function sortDiagnostics(errors) {
   return errors.sort(
     (left, right) =>
-      left.path.localeCompare(right.path) ||
-      left.code.localeCompare(right.code),
+      compareStrings(left.path, right.path) ||
+      compareStrings(left.code, right.code),
   );
 }
 
 export async function scanCatalog(skillsRoot) {
   const errors = [];
   const records = [];
+  let rootInfo;
   try {
-    const rootInfo = await lstat(skillsRoot);
-    if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) {
-      errors.push(
-        diagnostic(
-          "UNSAFE_PATH",
-          "Skills root must be a non-link directory.",
-          "skills",
-        ),
-      );
-    } else {
-      const resolvedRoot = await realpath(skillsRoot);
-      await walk(resolvedRoot, [], errors, records, { value: 0 });
-    }
-  } catch {
+    rootInfo = await lstat(skillsRoot);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
     errors.push(
       diagnostic("SKILLS_ROOT_MISSING", "Skills root is missing.", "skills"),
     );
+    return { errors, records };
+  }
+  if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) {
+    errors.push(
+      diagnostic(
+        "UNSAFE_PATH",
+        "Skills root must be a non-link directory.",
+        "skills",
+      ),
+    );
+  } else {
+    const resolvedRoot = await realpath(skillsRoot);
+    await walk(resolvedRoot, [], errors, records, { value: 0 });
   }
   const active = new Map();
   for (const record of records) {
@@ -687,11 +713,13 @@ export async function scanCatalog(skillsRoot) {
       );
     } else active.set(key, record);
   }
+  const sortedErrors = sortDiagnostics(errors);
+  const sortedRecords = records.sort((left, right) =>
+    compareStrings(left.relativePath, right.relativePath),
+  );
   return {
-    errors: sortDiagnostics(errors),
-    records: records.sort((left, right) =>
-      left.relativePath.localeCompare(right.relativePath),
-    ),
+    errors: sortedErrors,
+    records: sortedErrors.length === 0 ? sortedRecords : [],
   };
 }
 
