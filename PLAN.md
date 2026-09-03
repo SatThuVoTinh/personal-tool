@@ -48,11 +48,25 @@ Task: M5/T1 — Canonical architecture/path synchronization
 Task Status: IN PROGRESS
 Planning Readiness: APPROVED
 Plan Revision: M5/T1-R2
-Execution Authorization: YES
-Authorized Task: M5/T1 — Canonical architecture/path synchronization
-Execution Contract: docs/contracts/execution/ACTIVE.md
-Evidence Level: NONE
+Execution Authorization: NO
+Authorized Task: NONE
+Execution Contract: NONE
+Evidence Level: LOCAL-VERIFIED
+Closeout State: PENDING_REMOTE
+Implementation Commit: 4a331d7eba8b84e85d34dac361d2a2c719876d77
+Implementation Remote Ref: origin/codex/architecture-sync-m4
+Implementation Evidence: REMOTE-BACKED
 ```
+
+Validation: `PASS` — npm 12.0.2 repository verification (47 tests), Knowledge
+Docker-isolated tests (135 tests), YAML/three-profile Compose configuration,
+PowerShell parsing, M5 Docker contracts, isolated Knowledge smoke, isolated
+automation smoke, canonical-reference scan and `git diff --check` all passed.
+
+Host operation: `.wslconfig` was backed up without overwrite, changed only from
+`memory=9728MB` to `memory=8192MB`, and read back successfully. No
+`wsl --shutdown` was run; effective application remains owner-controlled through
+a later WSL restart.
 
 M4/T5 is treated as **temporarily accepted and complete by the owner** after the
 Codex push. The exact accepted commit hash is intentionally not invented here; it
