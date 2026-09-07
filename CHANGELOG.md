@@ -8,6 +8,12 @@ All notable, validated changes to Personal Tool are documented here.
 
 ### Added
 
+- Completed locally verified M7/T1-R16 OpenClaw foundation: seven isolated
+  minimal-tool agents and Discord bot accounts across one owner-only text channel
+  and three forums, 21 partitioned Google profiles, restricted Docker sandboxes,
+  fail-closed plugin/command/model policy, encrypted password-store resolution,
+  systemd service controls, and semantic live verification of all 28
+  account/surface permission pairs.
 - Completed M6/T1-R4 Git-native governed Skill Store core: strict duplicate-key
   rejecting JSON manifests, raw-byte SHA-256-bound UTF-8 Markdown, complete
   fail-closed catalog validation, exact ACTIVE retrieval, deterministic offline
