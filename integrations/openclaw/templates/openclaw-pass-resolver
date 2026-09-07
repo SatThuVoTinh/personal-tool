@@ -1,0 +1,85 @@
+#!/usr/bin/env node
+const { execFile } = require("node:child_process");
+
+const PROVIDER = "pass_store";
+const ALLOWED_IDS = new Set(__ZINK_ALLOWED_IDS__);
+const MAX_REQUEST_BYTES = 16 * 1024;
+const PASS_COMMAND = "/usr/bin/pass";
+const PASS_ARGUMENTS = [];
+const PASS_TIMEOUT_MS = 3500;
+
+function readSecret(id) {
+  return new Promise((resolve) => {
+    execFile(
+      PASS_COMMAND,
+      [...PASS_ARGUMENTS, "show", id],
+      {
+        encoding: "utf8",
+        shell: false,
+        timeout: PASS_TIMEOUT_MS,
+        maxBuffer: 16 * 1024,
+        windowsHide: true,
+      },
+      (error, stdout) => {
+        const value =
+          !error && typeof stdout === "string"
+            ? stdout.split(/\r?\n/u, 1)[0]
+            : "";
+        resolve({ id, value });
+      },
+    );
+  });
+}
+
+let stdin = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  stdin += chunk;
+  if (Buffer.byteLength(stdin, "utf8") > MAX_REQUEST_BYTES) {
+    process.exitCode = 1;
+    process.stdin.destroy();
+  }
+});
+process.stdin.on("error", () => {
+  process.exitCode = 1;
+});
+process.stdin.on("end", async () => {
+  if (process.exitCode) {
+    return;
+  }
+
+  let request;
+  try {
+    request = JSON.parse(stdin || "{}");
+  } catch {
+    process.exitCode = 1;
+    return;
+  }
+
+  const ids = request.ids;
+  if (
+    request.protocolVersion !== 1 ||
+    request.provider !== PROVIDER ||
+    !Array.isArray(ids) ||
+    ids.length < 1 ||
+    ids.length > ALLOWED_IDS.size ||
+    new Set(ids).size !== ids.length ||
+    ids.some((id) => typeof id !== "string" || !ALLOWED_IDS.has(id))
+  ) {
+    process.exitCode = 1;
+    return;
+  }
+
+  const results = await Promise.all(ids.map((id) => readSecret(id)));
+  const values = {};
+  const errors = {};
+  for (const { id, value } of results) {
+    if (value) {
+      values[id] = value;
+    } else {
+      errors[id] = { code: "NOT_FOUND" };
+    }
+  }
+
+  process.stdout.write(JSON.stringify({ protocolVersion: 1, values, errors }));
+});

@@ -1,17 +1,45 @@
 # OpenClaw T1 Foundation
 
-This directory provisions the owner-approved M7/T1-R9 OpenClaw profile. It is
-intentionally a private Discord conversation foundation, not the Zink Tools
-bridge: there are no specialists, skills, native Zink plugins or data/tool
-access surfaces in T1.
+This directory provisions the owner-approved M7/T1-R16 OpenClaw profile. It is
+intentionally a private seven-bot Discord conversation foundation, not the Zink
+Tools bridge. The frozen agent identities exist, but they have no skills,
+delegation or data/tool access surfaces in T1.
 
 ## Safety boundary
 
-The generated `main` agent has an empty effective tool set and no command
-surface. It uses a separate, non-repository workspace and a Docker sandbox with
-no network, read-only root, all capabilities dropped and no binds. This does not
-put the Gateway or channel plugin inside the sandbox; gateway loopback/auth,
-plugin inventory and Discord access gates remain separate controls.
+The generated `main`, `o1`, `o2`, `excel`, `power-bi`, `sql`, and `python`
+agents expose only the native `session_status` tool and have no command surface.
+The tool remains available because exact-version live evidence showed that
+OpenClaw `2026.6.34` rejects an empty-tool model turn. Model policy still limits
+session overrides to the two approved Google aliases. Every agent
+uses a separate non-repository workspace and agent state directory plus a Docker
+sandbox with no network, read-only root, all capabilities dropped and no binds.
+This does not put the Gateway, channel plugin or internal routing inside the
+sandbox; gateway loopback/auth, plugin inventory and Discord access gates remain
+separate controls.
+
+Plugin discovery is fail-closed with `plugins.bundledDiscovery="allowlist"` and
+an exact `plugins.allow=["google","discord"]`. Google remains the only model
+provider plugin and Discord is the only channel plugin; browser, OpenAI, ACP and
+all other bundled or external plugins are ineligible to load. The implicit
+memory slot is explicitly disabled with `plugins.slots.memory="none"`.
+
+Each agent has one Discord account with the same account ID as the agent ID.
+All seven accounts are available in the owner-only text channel `#office` and
+the forum parents `#results`, `#approvals`, and `#incidents`. An account accepts
+only an owner message that explicitly mentions its bot or directly replies to a
+message authored by that same bot. Bot-authored messages are ignored. T2 may
+later enable the exact native delegation graph, but Discord is never the
+internal bot message bus.
+
+OpenClaw `2026.6.34` always requests Message Content Intent and treats a direct
+reply to the bot as an implicit mention. Keep Message Content Intent enabled for
+all seven applications. The builder does not persist the unsupported
+`channels.discord.intents.messageContent` key. This release also has no Discord
+join-introduction feature or `joinIntro` schema key, so the builder persists no
+invented key and the runtime has no join/onboarding post behavior to enable.
+Supplemental history, quote, and thread context is filtered to the owner
+allowlist.
 
 Only these moving Google aliases are permitted:
 
@@ -21,21 +49,41 @@ google/gemini-flash-lite-latest
 ```
 
 Fallback stays within Google. A failure of both aliases is closed; no OpenAI,
-Codex or another provider is configured. The single `google:zink-primary`
-profile is an API-key profile whose key is a structured SecretRef in the
-OpenClaw auth store, never an inline value.
+Codex or another provider is configured. The exact profiles
+`google:zink-01` through `google:zink-21` each use one structured `exec`
+SecretRef, never an inline value. The keys are partitioned without sharing:
+three consecutive profiles per agent in roster order. The resolver can read
+only those 21 Gemini entries, seven account-specific Discord entries and the
+Gateway entry from the encrypted `pass` password store.
+
+The builder persists `agents.defaults.thinkingDefault="low"`. For the approved
+Flash aliases this avoids the unsupported Gemini `MINIMAL` request level and
+keeps the provider payload deterministic at `LOW` unless a later approved task
+changes the policy.
+
+OpenClaw may add `meta.lastTouchedVersion` and `meta.lastTouchedAt` when its own
+config CLI writes the file. Verification accepts only those two runtime-managed
+fields, requires the pinned release version and rejects any broader metadata.
+
+Each agent's three-profile pool permits at most two additional profile rotations
+before advancing to the fallback model. Native cooldown and session pinning are
+per agent; a key is never provisioned into a second agent's auth store.
 
 ## Prepare non-secret identifiers
 
-In a systemd-capable WSL shell, set only local shell variables for the three
-Discord identifiers. Do not add tokens or API keys to shell history, the repo or
-the builder command line.
+In a systemd-capable WSL shell, set only local shell variables for the guild,
+owner, one text channel, and three forum-parent identifiers. All four surface
+IDs must be distinct numeric Discord IDs. Do not add tokens or API keys to shell
+history, the repo, or the builder command line.
 
 ```bash
 export ZINK_STATE_DIR="$HOME/.openclaw-zink"
 export ZINK_DISCORD_GUILD_ID='replace-with-guild-id'
-export ZINK_DISCORD_CHANNEL_ID='replace-with-channel-id'
 export ZINK_DISCORD_OWNER_ID='replace-with-owner-user-id'
+export ZINK_DISCORD_OFFICE_CHANNEL_ID='replace-with-office-channel-id'
+export ZINK_DISCORD_RESULTS_FORUM_ID='replace-with-results-forum-id'
+export ZINK_DISCORD_APPROVALS_FORUM_ID='replace-with-approvals-forum-id'
+export ZINK_DISCORD_INCIDENTS_FORUM_ID='replace-with-incidents-forum-id'
 ```
 
 Run the repository builder from the repository root. `--dry-run` writes nothing.
@@ -44,20 +92,39 @@ Run the repository builder from the repository root. `--dry-run` writes nothing.
 node integrations/openclaw/configure.mjs --dry-run \
   --state-dir "$ZINK_STATE_DIR" \
   --discord-guild-id "$ZINK_DISCORD_GUILD_ID" \
-  --discord-channel-id "$ZINK_DISCORD_CHANNEL_ID" \
-  --discord-owner-id "$ZINK_DISCORD_OWNER_ID"
+  --discord-owner-id "$ZINK_DISCORD_OWNER_ID" \
+  --discord-office-channel-id "$ZINK_DISCORD_OFFICE_CHANNEL_ID" \
+  --discord-results-forum-id "$ZINK_DISCORD_RESULTS_FORUM_ID" \
+  --discord-approvals-forum-id "$ZINK_DISCORD_APPROVALS_FORUM_ID" \
+  --discord-incidents-forum-id "$ZINK_DISCORD_INCIDENTS_FORUM_ID"
 
 node integrations/openclaw/configure.mjs --apply \
   --state-dir "$ZINK_STATE_DIR" \
   --discord-guild-id "$ZINK_DISCORD_GUILD_ID" \
-  --discord-channel-id "$ZINK_DISCORD_CHANNEL_ID" \
-  --discord-owner-id "$ZINK_DISCORD_OWNER_ID"
+  --discord-owner-id "$ZINK_DISCORD_OWNER_ID" \
+  --discord-office-channel-id "$ZINK_DISCORD_OFFICE_CHANNEL_ID" \
+  --discord-results-forum-id "$ZINK_DISCORD_RESULTS_FORUM_ID" \
+  --discord-approvals-forum-id "$ZINK_DISCORD_APPROVALS_FORUM_ID" \
+  --discord-incidents-forum-id "$ZINK_DISCORD_INCIDENTS_FORUM_ID"
 ```
 
-The builder creates only regular, owner-private state/config files, the exact
-empty workspace template, a systemd drop-in, and
-`zink-auth-secret-plan.json`. It refuses pre-existing workspace/config drift
-instead of deleting it.
+The builder creates only regular owner-private state/config files, seven exact
+empty workspace templates and agent directories, the allowlisted password-store
+resolver, its empty private store directory, a systemd drop-in, and
+`zink-auth-secret-plan.json` plus `zink-auth-order-plan.json`. It refuses
+pre-existing workspace, config, resolver, account, binding or plan drift instead
+of deleting it.
+
+If an earlier one-channel config was generated with a wrong ID, stop the named
+service and move only `openclaw.json` to a private recovery directory before
+applying R16. This preserves all encrypted entries and generated auth stores:
+
+```bash
+systemctl --user stop openclaw-gateway-zink.service 2>/dev/null || true
+install -d -m 700 "$HOME/openclaw-zink-recovery"
+mv --no-clobber "$ZINK_STATE_DIR/openclaw.json" \
+  "$HOME/openclaw-zink-recovery/openclaw.json.pre-r16"
+```
 
 ## Install and provision locally
 
@@ -66,16 +133,91 @@ update channel with the generated config. Do not substitute `latest` if
 `extended-stable` cannot be selected. Build the official
 `openclaw-sandbox:bookworm-slim` image if the Docker preflight says it is absent.
 
-Populate the masked OpenClaw store with the three values named
-`GEMINI_API_KEY`, `DISCORD_BOT_TOKEN` and `ZINK_OPENCLAW_GATEWAY_TOKEN` through
-an approved local secret-entry flow. Then let OpenClaw, not this repository,
-write the `main` auth SQLite record from the generated ref-only plan:
+Install the exact matching official Discord plugin and pin the resolved install
+record. Never install its moving tag or run broad `doctor --fix` remediation:
+
+```bash
+openclaw plugins install --pin @openclaw/discord@2026.6.34
+```
+
+Install `pass`, create the dedicated two-year unattended service identity, then
+initialize its private store. The empty passphrase is deliberate for unattended
+systemd startup; filesystem ownership, the isolated GPG home, the 29-entry
+resolver allowlist, and the minimal-tool agents remain the access boundary. Rotate
+the identity before expiry. A process that compromises the Linux account can use
+this key, so do not treat encryption at rest as account-level isolation.
+
+```bash
+install -d -m 700 \
+  "$ZINK_STATE_DIR/secrets/gnupg" \
+  "$ZINK_STATE_DIR/secrets/password-store"
+export PASSWORD_STORE_DIR="$ZINK_STATE_DIR/secrets/password-store"
+export GNUPGHOME="$ZINK_STATE_DIR/secrets/gnupg"
+gpg --batch --pinentry-mode loopback --passphrase '' \
+  --quick-generate-key 'Zink OpenClaw Service' default default 2y
+pass init 'Zink OpenClaw Service'
+```
+
+Insert all 21 Gemini values, seven Discord bot tokens and the Gateway token
+interactively. Secret values must be entered only at the `pass` prompts; never
+put them in these commands or shell history.
+
+```bash
+for index in $(seq -w 1 21); do
+  pass insert "zink/openclaw/GEMINI_API_KEY_${index}"
+done
+for agent in main o1 o2 excel power-bi sql python; do
+  entry="${agent^^}"
+  entry="${entry//-/_}"
+  pass insert "zink/openclaw/DISCORD_BOT_TOKEN_${entry}"
+done
+pass insert zink/openclaw/ZINK_OPENCLAW_GATEWAY_TOKEN
+```
+
+The setup must pass a non-interactive resolver probe under the same
+`GNUPGHOME`/`PASSWORD_STORE_DIR` used by the named systemd user service. Missing,
+unreadable, or expired credentials fail closed; do not weaken GPG or store
+permissions as a workaround.
+
+Then let OpenClaw, not this repository, write exactly three agent-local auth
+records per agent from the generated 21-target ref-only plan:
 
 ```bash
 export OPENCLAW_PROFILE=zink
 export OPENCLAW_STATE_DIR="$ZINK_STATE_DIR"
-openclaw secrets apply --from "$ZINK_STATE_DIR/zink-auth-secret-plan.json"
+openclaw secrets apply \
+  --from "$ZINK_STATE_DIR/zink-auth-secret-plan.json" \
+  --dry-run \
+  --allow-exec
+openclaw secrets apply \
+  --from "$ZINK_STATE_DIR/zink-auth-secret-plan.json" \
+  --allow-exec
 ```
+
+OpenClaw natively reads the default agent's auth store through secondary-agent
+runtime views. Lock each stored per-agent order to its own three profiles so
+that inherited main profiles remain ineligible:
+
+```bash
+openclaw models auth order set --agent main --provider google \
+  google:zink-01 google:zink-02 google:zink-03
+openclaw models auth order set --agent o1 --provider google \
+  google:zink-04 google:zink-05 google:zink-06
+openclaw models auth order set --agent o2 --provider google \
+  google:zink-07 google:zink-08 google:zink-09
+openclaw models auth order set --agent excel --provider google \
+  google:zink-10 google:zink-11 google:zink-12
+openclaw models auth order set --agent power-bi --provider google \
+  google:zink-13 google:zink-14 google:zink-15
+openclaw models auth order set --agent sql --provider google \
+  google:zink-16 google:zink-17 google:zink-18
+openclaw models auth order set --agent python --provider google \
+  google:zink-19 google:zink-20 google:zink-21
+```
+
+The generated order plan is the comparison source for verification. A missing,
+extra or reordered profile is a failure; never clear these overrides while the
+R16 partition is active.
 
 Install the named service using the same profile/state environment and reload
 the drop-in:
@@ -106,19 +248,32 @@ the official sandbox image are present.
 node integrations/openclaw/verify.mjs \
   --state-dir "$ZINK_STATE_DIR" \
   --discord-guild-id "$ZINK_DISCORD_GUILD_ID" \
-  --discord-channel-id "$ZINK_DISCORD_CHANNEL_ID" \
-  --discord-owner-id "$ZINK_DISCORD_OWNER_ID"
+  --discord-owner-id "$ZINK_DISCORD_OWNER_ID" \
+  --discord-office-channel-id "$ZINK_DISCORD_OFFICE_CHANNEL_ID" \
+  --discord-results-forum-id "$ZINK_DISCORD_RESULTS_FORUM_ID" \
+  --discord-approvals-forum-id "$ZINK_DISCORD_APPROVALS_FORUM_ID" \
+  --discord-incidents-forum-id "$ZINK_DISCORD_INCIDENTS_FORUM_ID"
 
 node integrations/openclaw/verify.mjs --live \
   --state-dir "$ZINK_STATE_DIR" \
   --discord-guild-id "$ZINK_DISCORD_GUILD_ID" \
-  --discord-channel-id "$ZINK_DISCORD_CHANNEL_ID" \
-  --discord-owner-id "$ZINK_DISCORD_OWNER_ID"
+  --discord-owner-id "$ZINK_DISCORD_OWNER_ID" \
+  --discord-office-channel-id "$ZINK_DISCORD_OFFICE_CHANNEL_ID" \
+  --discord-results-forum-id "$ZINK_DISCORD_RESULTS_FORUM_ID" \
+  --discord-approvals-forum-id "$ZINK_DISCORD_APPROVALS_FORUM_ID" \
+  --discord-incidents-forum-id "$ZINK_DISCORD_INCIDENTS_FORUM_ID"
 ```
 
-The live operator checklist also requires: no default gateway active for the
-same port/state; `openclaw-gateway-zink.service` enabled and active; no native
-Discord command registrations; `channels status --channel discord --probe` live
-success; targeted channel capabilities when the installed CLI supports them; and
-owner mention/non-owner/no-mention/command-like message tests. Redact IDs and
-all runtime output before recording evidence.
+The live operator checklist also requires: all seven Discord applications have
+Message Content Intent enabled; `#office` grants View Channel, Send Messages,
+and Read Message History; each forum grants View Channel, Send Messages in
+Threads, and Read Message History; no default
+gateway active for the same port/state; `openclaw-gateway-zink.service` enabled
+and active; no native Discord command registrations; all seven account probes
+succeed; targeted capability checks cover all 28 account/surface pairs, require
+the operational permissions, and reject administrator, channel/role/webhook
+management, or application-command permission; and owner mention,
+direct-reply, multi-mention, non-owner, no-mention, bot-authored, and command-like
+message tests behave exactly as contracted. Additional non-admin channel
+capabilities remain owner-managed Discord state. Redact IDs and all runtime
+output before recording evidence.

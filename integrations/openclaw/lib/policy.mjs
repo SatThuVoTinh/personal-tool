@@ -10,22 +10,92 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 export const PROFILE = "zink";
 export const STATE_DIRECTORY_NAME = ".openclaw-zink";
-export const GOOGLE_PROFILE_ID = "google:zink-primary";
+export const OPENCLAW_RELEASE = "2026.6.34";
+export const AGENT_DEFINITIONS = Object.freeze([
+  Object.freeze({ id: "main", name: "Main" }),
+  Object.freeze({ id: "o1", name: "Knowledge" }),
+  Object.freeze({ id: "o2", name: "Orchestrator" }),
+  Object.freeze({ id: "excel", name: "Excel" }),
+  Object.freeze({ id: "power-bi", name: "Power BI" }),
+  Object.freeze({ id: "sql", name: "SQL" }),
+  Object.freeze({ id: "python", name: "Python" }),
+]);
+export const AGENT_IDS = Object.freeze(
+  AGENT_DEFINITIONS.map((agent) => agent.id),
+);
+export const DISCORD_SURFACE_IDENTIFIERS = Object.freeze([
+  "discordOfficeChannelId",
+  "discordResultsForumId",
+  "discordApprovalsForumId",
+  "discordIncidentsForumId",
+]);
+export const GOOGLE_PROFILE_IDS = Object.freeze(
+  Array.from(
+    { length: 21 },
+    (_, index) => `google:zink-${String(index + 1).padStart(2, "0")}`,
+  ),
+);
+export const PASS_PROVIDER_ID = "pass_store";
+export const PLUGIN_ALLOWLIST = Object.freeze(["google", "discord"]);
+export const PASS_ENTRY_IDS = Object.freeze({
+  gemini: Object.freeze(
+    Array.from(
+      { length: 21 },
+      (_, index) =>
+        `zink/openclaw/GEMINI_API_KEY_${String(index + 1).padStart(2, "0")}`,
+    ),
+  ),
+  discord: Object.freeze(
+    Object.fromEntries(
+      AGENT_IDS.map((agentId) => [
+        agentId,
+        `zink/openclaw/DISCORD_BOT_TOKEN_${agentId
+          .toUpperCase()
+          .replaceAll("-", "_")}`,
+      ]),
+    ),
+  ),
+  gateway: "zink/openclaw/ZINK_OPENCLAW_GATEWAY_TOKEN",
+});
+export const AGENT_GOOGLE_PROFILES = Object.freeze(
+  Object.fromEntries(
+    AGENT_IDS.map((agentId, index) => [
+      agentId,
+      Object.freeze(GOOGLE_PROFILE_IDS.slice(index * 3, index * 3 + 3)),
+    ]),
+  ),
+);
 export const MODEL_ALLOWLIST = [
   "google/gemini-flash-latest",
   "google/gemini-flash-lite-latest",
 ];
 
 export const SECRET_REFS = Object.freeze({
-  gemini: { source: "store", provider: "default", id: "GEMINI_API_KEY" },
-  discord: { source: "store", provider: "default", id: "DISCORD_BOT_TOKEN" },
+  gemini: Object.freeze(
+    PASS_ENTRY_IDS.gemini.map((id) =>
+      Object.freeze({ source: "exec", provider: PASS_PROVIDER_ID, id }),
+    ),
+  ),
+  discord: Object.freeze(
+    Object.fromEntries(
+      AGENT_IDS.map((agentId) => [
+        agentId,
+        Object.freeze({
+          source: "exec",
+          provider: PASS_PROVIDER_ID,
+          id: PASS_ENTRY_IDS.discord[agentId],
+        }),
+      ]),
+    ),
+  ),
   gateway: {
-    source: "store",
-    provider: "default",
-    id: "ZINK_OPENCLAW_GATEWAY_TOKEN",
+    source: "exec",
+    provider: PASS_PROVIDER_ID,
+    id: PASS_ENTRY_IDS.gateway,
   },
 });
 
@@ -43,6 +113,12 @@ const COMMAND_POSTURE = Object.freeze({
 
 const SNOWFLAKE = /^[1-9]\d{16,19}$/u;
 const TEMPLATE_FILES = Object.freeze([".gitkeep"]);
+const PASS_RESOLVER_TEMPLATE = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "templates",
+  "openclaw-pass-resolver",
+);
 
 export function defaultStateDirectory() {
   return path.join(homedir(), STATE_DIRECTORY_NAME);
@@ -53,22 +129,44 @@ export function defaultSystemdUserDirectory() {
 }
 
 export function parseIdentifiers(values) {
-  const names = ["discordGuildId", "discordChannelId", "discordOwnerId"];
+  const names = [
+    "discordGuildId",
+    "discordOwnerId",
+    ...DISCORD_SURFACE_IDENTIFIERS,
+  ];
   for (const name of names) {
     if (!SNOWFLAKE.test(values[name] ?? "")) {
       throw new Error(`${name} must be a numeric Discord snowflake`);
     }
   }
-  return Object.freeze({
-    discordGuildId: values.discordGuildId,
-    discordChannelId: values.discordChannelId,
-    discordOwnerId: values.discordOwnerId,
-  });
+  const surfaceIds = DISCORD_SURFACE_IDENTIFIERS.map((name) => values[name]);
+  if (new Set(surfaceIds).size !== surfaceIds.length) {
+    throw new Error("Discord surface IDs must be distinct");
+  }
+  return Object.freeze(
+    Object.fromEntries(names.map((name) => [name, values[name]])),
+  );
 }
 
 export function buildConfig({ stateDir, identifiers }) {
   const ids = parseIdentifiers(identifiers);
-  const workspace = path.join(stateDir, "workspaces", "main");
+  const resolverDirectory = path.join(stateDir, "bin");
+  const channelAccess = {
+    requireMention: true,
+    ignoreOtherMentions: true,
+    users: [ids.discordOwnerId],
+    channels: Object.fromEntries(
+      DISCORD_SURFACE_IDENTIFIERS.map((name) => [
+        ids[name],
+        {
+          enabled: true,
+          requireMention: true,
+          ignoreOtherMentions: true,
+          users: [ids.discordOwnerId],
+        },
+      ]),
+    ),
+  };
   return {
     update: {
       channel: "extended-stable",
@@ -81,8 +179,6 @@ export function buildConfig({ stateDir, identifiers }) {
       auth: { mode: "token", token: SECRET_REFS.gateway },
       tailscale: { mode: "off" },
       controlUi: { enabled: true },
-      cliAgents: { enabled: false },
-      terminal: { enabled: false },
     },
     agents: {
       defaults: {
@@ -91,69 +187,112 @@ export function buildConfig({ stateDir, identifiers }) {
           primary: MODEL_ALLOWLIST[0],
           fallbacks: [MODEL_ALLOWLIST[1]],
         },
-        modelPolicy: { allow: MODEL_ALLOWLIST },
-        utilityModel: "",
+        models: Object.fromEntries(MODEL_ALLOWLIST.map((model) => [model, {}])),
+        thinkingDefault: "low",
       },
-      entries: {
-        main: {
-          workspace,
-          skills: [],
-          tools: { profile: "minimal", deny: ["session_status"] },
-          sandbox: {
-            mode: "all",
-            backend: "docker",
-            scope: "agent",
-            workspaceAccess: "none",
-            docker: {
-              image: "openclaw-sandbox:bookworm-slim",
-              network: "none",
-              readOnlyRoot: true,
-              capDrop: ["ALL"],
-              tmpfs: ["/tmp", "/var/tmp", "/run"],
-            },
+      list: AGENT_DEFINITIONS.map((agent) => ({
+        id: agent.id,
+        default: agent.id === "main",
+        name: agent.name,
+        workspace: path.join(stateDir, "workspaces", agent.id),
+        agentDir: path.join(stateDir, "agents", agent.id, "agent"),
+        skills: [],
+        tools: { profile: "minimal" },
+        sandbox: {
+          mode: "all",
+          backend: "docker",
+          scope: "agent",
+          workspaceAccess: "none",
+          docker: {
+            image: "openclaw-sandbox:bookworm-slim",
+            network: "none",
+            readOnlyRoot: true,
+            capDrop: ["ALL"],
+            tmpfs: ["/tmp", "/var/tmp", "/run"],
           },
+        },
+      })),
+    },
+    auth: {
+      profiles: Object.fromEntries(
+        GOOGLE_PROFILE_IDS.map((profileId) => [
+          profileId,
+          { provider: "google", mode: "api_key" },
+        ]),
+      ),
+      order: { google: [...GOOGLE_PROFILE_IDS] },
+      cooldowns: {
+        overloadedProfileRotations: 2,
+        rateLimitedProfileRotations: 2,
+      },
+    },
+    tools: {
+      agentToAgent: { enabled: false, allow: [] },
+    },
+    commands: { ...COMMAND_POSTURE },
+    secrets: {
+      providers: {
+        [PASS_PROVIDER_ID]: {
+          source: "exec",
+          command: path.join(resolverDirectory, "openclaw-pass-resolver"),
+          passEnv: [
+            "PATH",
+            "HOME",
+            "GNUPGHOME",
+            "GPG_TTY",
+            "PASSWORD_STORE_DIR",
+          ],
+          jsonOnly: true,
+          trustedDirs: [resolverDirectory],
         },
       },
     },
-    auth: {
-      profiles: {
-        [GOOGLE_PROFILE_ID]: { provider: "google", mode: "api_key" },
-      },
-      order: { google: [GOOGLE_PROFILE_ID] },
+    plugins: {
+      enabled: true,
+      allow: [...PLUGIN_ALLOWLIST],
+      deny: [],
+      load: { paths: [] },
+      entries: Object.fromEntries(
+        PLUGIN_ALLOWLIST.map((pluginId) => [pluginId, { enabled: true }]),
+      ),
+      bundledDiscovery: "allowlist",
+      slots: { memory: "none" },
     },
-    commands: { ...COMMAND_POSTURE },
+    bindings: AGENT_IDS.map((agentId) => ({
+      agentId,
+      match: {
+        channel: "discord",
+        accountId: agentId,
+        guildId: ids.discordGuildId,
+      },
+    })),
     channels: {
       discord: {
         enabled: true,
-        token: SECRET_REFS.discord,
-        joinIntro: false,
+        defaultAccount: "main",
         dmPolicy: "disabled",
         dm: { enabled: false, groupEnabled: false },
         groupPolicy: "allowlist",
         allowBots: false,
-        intents: { messageContent: false },
+        contextVisibility: "allowlist",
+        thread: { inheritParent: false },
         commands: { native: false, nativeSkills: false },
         guilds: {
-          [ids.discordGuildId]: {
-            requireMention: true,
-            ignoreOtherMentions: true,
-            users: [ids.discordOwnerId],
-            channels: {
-              [ids.discordChannelId]: {
-                enabled: true,
-                requireMention: true,
-                users: [ids.discordOwnerId],
-              },
-            },
-          },
+          [ids.discordGuildId]: channelAccess,
         },
+        accounts: Object.fromEntries(
+          AGENT_IDS.map((agentId) => [
+            agentId,
+            { enabled: true, token: SECRET_REFS.discord[agentId] },
+          ]),
+        ),
       },
     },
     session: {
+      threadBindings: { enabled: false },
       maintenance: {
         mode: "enforce",
         pruneAfter: "30d",
-        archiveDashboardAfter: "7d",
         maxEntries: 500,
         resetArchiveRetention: "30d",
         maxDiskBytes: "512mb",
@@ -166,21 +305,58 @@ export function buildSecretsPlan() {
   return {
     version: 1,
     protocolVersion: 1,
-    targets: [
-      {
+    targets: GOOGLE_PROFILE_IDS.map((profileId, index) => {
+      const agentId = AGENT_IDS[Math.floor(index / 3)];
+      return {
         type: "auth-profiles.api_key.key",
-        path: `profiles.${GOOGLE_PROFILE_ID}.key`,
-        pathSegments: ["profiles", GOOGLE_PROFILE_ID, "key"],
-        agentId: "main",
+        path: `profiles.${profileId}.key`,
+        pathSegments: ["profiles", profileId, "key"],
+        agentId,
         authProfileProvider: "google",
-        ref: SECRET_REFS.gemini,
-      },
-    ],
+        ref: SECRET_REFS.gemini[index],
+      };
+    }),
+  };
+}
+
+export function buildAuthOrderPlan() {
+  return {
+    version: 1,
+    provider: "google",
+    agents: Object.fromEntries(
+      AGENT_IDS.map((agentId) => [
+        agentId,
+        [...AGENT_GOOGLE_PROFILES[agentId]],
+      ]),
+    ),
   };
 }
 
 export function renderSystemdDropIn(stateDir) {
-  return `[Service]\nEnvironment=OPENCLAW_PROFILE=${PROFILE}\nEnvironment=OPENCLAW_STATE_DIR=${stateDir}\nMemoryMax=768M\n`;
+  const passStore = path.join(stateDir, "secrets", "password-store");
+  const gpgHome = path.join(stateDir, "secrets", "gnupg");
+  const userBin = path.join(homedir(), ".local", "bin");
+  return `[Service]\nEnvironment=OPENCLAW_PROFILE=${PROFILE}\nEnvironment=OPENCLAW_STATE_DIR=${stateDir}\nEnvironment=PASSWORD_STORE_DIR=${passStore}\nEnvironment=GNUPGHOME=${gpgHome}\nEnvironment=PATH=${userBin}:/usr/local/bin:/usr/bin:/bin\nMemoryMax=768M\n`;
+}
+
+export function passResolverContents() {
+  const template = readFileSync(PASS_RESOLVER_TEMPLATE, "utf8");
+  const marker = "__ZINK_ALLOWED_IDS__";
+  if (template.split(marker).length !== 2) {
+    throw new Error("Password-store resolver template marker drift detected");
+  }
+  return template.replace(
+    marker,
+    JSON.stringify(
+      [
+        ...PASS_ENTRY_IDS.gemini,
+        ...Object.values(PASS_ENTRY_IDS.discord),
+        PASS_ENTRY_IDS.gateway,
+      ],
+      null,
+      2,
+    ),
+  );
 }
 
 export function stableJson(value) {
@@ -197,17 +373,37 @@ function assertEqual(actual, expected, label) {
   }
 }
 
+function validateRuntimeMetadata(meta) {
+  if (meta === undefined) return;
+  if (
+    meta === null ||
+    typeof meta !== "object" ||
+    Array.isArray(meta) ||
+    !equal(Object.keys(meta), ["lastTouchedVersion", "lastTouchedAt"]) ||
+    meta.lastTouchedVersion !== OPENCLAW_RELEASE ||
+    typeof meta.lastTouchedAt !== "string" ||
+    !Number.isFinite(Date.parse(meta.lastTouchedAt))
+  ) {
+    throw new Error("OpenClaw runtime metadata drift detected");
+  }
+}
+
 export function validateConfig(config, { stateDir, identifiers }) {
   const expected = buildConfig({ stateDir, identifiers });
+  validateRuntimeMetadata(config.meta);
   assertEqual(config.update, expected.update, "update");
   assertEqual(config.gateway, expected.gateway, "gateway");
   assertEqual(config.agents, expected.agents, "agents");
   assertEqual(config.auth, expected.auth, "auth");
+  assertEqual(config.tools, expected.tools, "tools");
   assertEqual(config.commands, expected.commands, "commands");
+  assertEqual(config.secrets, expected.secrets, "secrets");
+  assertEqual(config.plugins, expected.plugins, "plugins");
+  assertEqual(config.bindings, expected.bindings, "bindings");
   assertEqual(config.channels, expected.channels, "channels");
   assertEqual(config.session, expected.session, "session");
   const unexpected = Object.keys(config).filter(
-    (key) => !Object.hasOwn(expected, key),
+    (key) => key !== "meta" && !Object.hasOwn(expected, key),
   );
   if (unexpected.length > 0) {
     throw new Error(
@@ -244,10 +440,10 @@ export function ensurePrivateDirectory(directoryPath) {
   return realpathSync(directoryPath);
 }
 
-export function writePrivateRegularFile(filePath, contents) {
+export function writePrivateRegularFile(filePath, contents, fileMode = 0o600) {
   assertRegularOrMissing(filePath);
-  writeFileSync(filePath, contents, { encoding: "utf8", mode: 0o600 });
-  chmodSync(filePath, 0o600);
+  writeFileSync(filePath, contents, { encoding: "utf8", mode: fileMode });
+  chmodSync(filePath, fileMode);
 }
 
 export function assertWorkspaceMatchesTemplate(workspacePath) {
@@ -256,11 +452,11 @@ export function assertWorkspaceMatchesTemplate(workspacePath) {
     return false;
   }
   const entries = readdirSync(workspacePath).sort();
-  assertEqual(entries, TEMPLATE_FILES, "main workspace template");
+  assertEqual(entries, TEMPLATE_FILES, "agent workspace template");
   const marker = path.join(workspacePath, ".gitkeep");
   assertRegularOrMissing(marker);
   if (readFileSync(marker, "utf8") !== "") {
-    throw new Error("Main workspace template marker must remain empty");
+    throw new Error("Agent workspace template marker must remain empty");
   }
   return true;
 }
