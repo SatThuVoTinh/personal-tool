@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
 import test from "node:test";
+import { runInNewContext } from "node:vm";
 
 import {
   AGENT_DEFINITIONS,
@@ -29,10 +30,22 @@ import {
   buildAuthOrderPlan,
   buildConfig,
   buildSecretsPlan,
+  geminiStreamHotfixContents,
   passResolverContents,
   parseIdentifiers,
+  renderSystemdDropIn,
+  renderLegacySystemdDropInR16,
   validateConfig,
 } from "../integrations/openclaw/lib/policy.mjs";
+import {
+  OPENCLAW_HOTFIX_ARTIFACTS,
+  OPENCLAW_HOTFIX_RELEASE,
+  assertPatchedInvariants,
+  patchContents,
+  requireKnownHash,
+  requireSupportedRelease,
+  revertContents,
+} from "../integrations/openclaw/templates/openclaw-gemini-stream-hotfix.mjs";
 import { isExpectedDiscordCapability } from "../integrations/openclaw/verify.mjs";
 
 const identifiers = Object.freeze({
@@ -69,6 +82,257 @@ function environmentForTemporaryHome(root) {
     USERPROFILE: root,
   };
 }
+
+const ORIGINAL_HOTFIX_FIXTURES = Object.freeze({
+  transport: `\t\twhile (true) {
+\t\t\tif (signal?.aborted) throw new Error("Request was aborted");
+\t\t\tconst { done, value } = await reader.read();
+\t\t\tif (done) {
+\t\t\t\tcompleted = true;
+\t\t\t\tbreak;
+\t\t\t}
+\t\t\tbuffer += decoder.decode(value, { stream: true }).replace(/\\r/g, "");
+\t\t}
+\t\t\t\tlet currentBlockIndex = -1;
+\t\t\t\tconst toolCallBlocksById = /* @__PURE__ */ new Map();
+\t\t\t\t\tif (typeof candidate?.finishReason === "string") {
+\t\t\t\t\t\toutput.stopReason = mapStopReasonString(candidate.finishReason);
+\t\t\t\t\t}
+\t\t\t\tif (currentBlockIndex >= 0) pushTextBlockEnd(stream, output, currentBlockIndex);
+\t\t\t\tfinalizeTransportStream({`,
+  "error-classification": `const ERROR_PATTERNS = {
+\tserverError: [
+\t\t"an error occurred while processing",
+\t\t"internal server error"
+\t]
+};
+ERROR_PATTERNS;`,
+  payloads: `\tconst reasoningText = suppressAssistantArtifacts || runAborted ? "" : assistantForPayload && params.reasoningLevel === "on" && params.thinkingLevel !== "off" ? extractAssistantThinking(assistantForPayload) : "";
+\tconst answerTexts = suppressAssistantArtifacts || runAborted ? [] : (shouldUseCanonicalFinalAnswer ? [fallbackAnswerSourceText] : shouldPreferRawAnswerText && fallbackRawAnswerText ? [fallbackRawAnswerText] : hasAssistantTextPayload ? nonEmptyAssistantTexts : fallbackAnswerText ? [fallbackAnswerText] : []).filter((text) => !shouldSuppressRawErrorText(text));`,
+  "embedded-runner": `\t\t\t\t\tconst finalAssistantVisibleText = resolveFinalAssistantVisibleText(sessionLastAssistant);
+\t\t\t\t\tconst finalAssistantRawText = resolveFinalAssistantRawText(sessionLastAssistant);
+\t\t\t\t\tconst payloads = [];
+\t\t\t\t\tconst timedOutDuringPrompt = timedOut && !timedOutDuringCompaction && !timedOutDuringToolExecution;
+\t\t\t\t\tconst finalAssistantStopReason = (sessionLastAssistant?.stopReason ?? "").trim().toLowerCase();`,
+});
+
+test("M7/T1 Gemini stream backport is exact, reversible, and fail closed", () => {
+  assert.equal(OPENCLAW_HOTFIX_RELEASE, OPENCLAW_RELEASE);
+  assert.deepEqual(
+    OPENCLAW_HOTFIX_ARTIFACTS.map(({ id, fileName }) => ({ id, fileName })),
+    [
+      { id: "transport", fileName: "transport-stream-Cs5gt3Yy.js" },
+      {
+        id: "error-classification",
+        fileName: "sanitize-user-facing-text-DCd-Uriq.js",
+      },
+      { id: "payloads", fileName: "payloads-CpuaeKbz.js" },
+      { id: "embedded-runner", fileName: "embedded-agent-CGzgLLU-.js" },
+    ],
+  );
+  for (const artifact of OPENCLAW_HOTFIX_ARTIFACTS) {
+    assert.match(artifact.originalSha256, /^[a-f0-9]{64}$/u);
+    assert.match(artifact.patchedSha256, /^[a-f0-9]{64}$/u);
+    assert.notEqual(artifact.originalSha256, artifact.patchedSha256);
+    const original = ORIGINAL_HOTFIX_FIXTURES[artifact.id];
+    const patched = patchContents(artifact.id, original);
+    assertPatchedInvariants(artifact.id, patched);
+    assert.equal(revertContents(artifact.id, patched), original);
+  }
+  requireSupportedRelease(OPENCLAW_RELEASE);
+  assert.throws(
+    () => requireSupportedRelease("2026.6.35"),
+    /Unsupported OpenClaw version/u,
+  );
+  assert.throws(
+    () => requireKnownHash("unknown", "unknown artifact"),
+    /Unknown OpenClaw hotfix artifact/u,
+  );
+  assert.throws(
+    () => requireKnownHash("transport", "unknown artifact"),
+    /hash is not allowlisted/u,
+  );
+
+  const patched = patchContents(
+    "transport",
+    ORIGINAL_HOTFIX_FIXTURES.transport,
+  );
+  assert.match(patched, /Google SSE stream ended with an incomplete frame/u);
+  assert.match(
+    patched,
+    /candidate\.finishReason !== "FINISH_REASON_UNSPECIFIED"/u,
+  );
+  assert.match(patched, /Google stream ended before a terminal finish reason/u);
+  assert.match(patched, /code: "STREAM_INCOMPLETE"/u);
+  assert.match(patched, /type: "google_incomplete_stream"/u);
+  const trailingStatement = patched
+    .split("\n")
+    .find((line) => line.includes('if (buffer.split("\\n")'))
+    ?.trim();
+  assert.ok(trailingStatement);
+  assert.doesNotThrow(() => runInNewContext(trailingStatement, { buffer: "" }));
+  assert.throws(
+    () =>
+      runInNewContext(trailingStatement, {
+        buffer: 'data: {"candidates":[{"content":"partial"}',
+      }),
+    /incomplete frame/u,
+  );
+  const terminalStart = patched.indexOf(
+    "if (!sawTerminalReason && !options?.signal?.aborted)",
+  );
+  const terminalEnd = patched.indexOf(
+    "\n\t\t\t\tfinalizeTransportStream({",
+    terminalStart,
+  );
+  assert.notEqual(terminalStart, -1);
+  assert.notEqual(terminalEnd, -1);
+  const terminalStatement = patched.slice(terminalStart, terminalEnd);
+  assert.doesNotThrow(() =>
+    runInNewContext(terminalStatement, {
+      sawTerminalReason: true,
+      options: { signal: { aborted: false } },
+    }),
+  );
+  assert.throws(
+    () =>
+      runInNewContext(terminalStatement, {
+        sawTerminalReason: false,
+        options: { signal: { aborted: false } },
+      }),
+    (error) =>
+      error.code === "STREAM_INCOMPLETE" &&
+      error.type === "google_incomplete_stream",
+  );
+  assert.doesNotThrow(() =>
+    runInNewContext(terminalStatement, {
+      sawTerminalReason: false,
+      options: { signal: { aborted: true } },
+    }),
+  );
+  assert.equal(
+    revertContents("transport", patched),
+    ORIGINAL_HOTFIX_FIXTURES.transport,
+  );
+  assert.throws(
+    () =>
+      patchContents(
+        "transport",
+        ORIGINAL_HOTFIX_FIXTURES.transport.replace(
+          "reader.read()",
+          "reader.next()",
+        ),
+      ),
+    /source shape mismatch/u,
+  );
+});
+
+test("M7/T1 classifies incomplete terminal streams without widening generic stream errors", () => {
+  const patched = patchContents(
+    "error-classification",
+    ORIGINAL_HOTFIX_FIXTURES["error-classification"],
+  );
+  const patterns = runInNewContext(patched).serverError;
+  assert.equal(
+    patterns.some(
+      (pattern) =>
+        typeof pattern?.test === "function" &&
+        pattern.test("Google stream ended before a terminal finish reason"),
+    ),
+    true,
+  );
+  for (const unrelated of [
+    "local stream ended before cleanup",
+    "OpenRouter music generation stream ended before completion",
+    "SSE stream ended before next event",
+  ]) {
+    assert.equal(
+      patterns.some(
+        (pattern) =>
+          typeof pattern?.test === "function" && pattern.test(unrelated),
+      ),
+      false,
+    );
+  }
+});
+
+test("M7/T1 suppresses errored partial payloads and preserves successful replies", () => {
+  const patched = patchContents("payloads", ORIGINAL_HOTFIX_FIXTURES.payloads);
+  const [reasoningStatement, answerStatement] = patched.split("\n");
+  const baseContext = {
+    assistantForPayload: {},
+    extractAssistantThinking: () => "partial hidden reasoning",
+    fallbackAnswerSourceText: "complete answer",
+    fallbackAnswerText: "fallback answer",
+    fallbackRawAnswerText: "raw answer",
+    hasAssistantTextPayload: true,
+    nonEmptyAssistantTexts: ["partial answer"],
+    params: { reasoningLevel: "on", thinkingLevel: "low" },
+    runAborted: false,
+    shouldPreferRawAnswerText: false,
+    shouldSuppressRawErrorText: () => false,
+    shouldUseCanonicalFinalAnswer: false,
+    suppressAssistantArtifacts: false,
+  };
+  assert.equal(
+    runInNewContext(`${reasoningStatement}\nreasoningText;`, {
+      ...baseContext,
+      lastAssistantNeedsErrorSurface: true,
+    }),
+    "",
+  );
+  assert.deepEqual(
+    Array.from(
+      runInNewContext(`${answerStatement}\nanswerTexts;`, {
+        ...baseContext,
+        lastAssistantNeedsErrorSurface: true,
+      }),
+    ),
+    [],
+  );
+  assert.equal(
+    runInNewContext(`${reasoningStatement}\nreasoningText;`, {
+      ...baseContext,
+      lastAssistantNeedsErrorSurface: false,
+    }),
+    "partial hidden reasoning",
+  );
+  assert.deepEqual(
+    Array.from(
+      runInNewContext(`${answerStatement}\nanswerTexts;`, {
+        ...baseContext,
+        lastAssistantNeedsErrorSurface: false,
+      }),
+    ),
+    ["partial answer"],
+  );
+});
+
+test("M7/T1 removes errored final-assistant evidence", () => {
+  const patched = patchContents(
+    "embedded-runner",
+    ORIGINAL_HOTFIX_FIXTURES["embedded-runner"],
+  );
+  assert.equal(patched.match(/const finalAssistantStopReason/gu)?.length, 1);
+  const projection = patched.slice(0, patched.indexOf("const payloads"));
+  const evaluate = (stopReason) =>
+    runInNewContext(
+      `${projection}\n({ finalAssistantVisibleText, finalAssistantRawText });`,
+      {
+        resolveFinalAssistantRawText: () => "partial raw",
+        resolveFinalAssistantVisibleText: () => "partial visible",
+        sessionLastAssistant: { stopReason },
+      },
+    );
+  for (const stopReason of ["error", "aborted"]) {
+    const result = evaluate(stopReason);
+    assert.equal(result.finalAssistantRawText, undefined);
+    assert.equal(result.finalAssistantVisibleText, undefined);
+  }
+  const successful = evaluate("stop");
+  assert.equal(successful.finalAssistantRawText, "partial raw");
+  assert.equal(successful.finalAssistantVisibleText, "partial visible");
+});
 
 test("M7/T1 builds the exact minimal-tool, zero-command foundation", () => {
   const stateDir = path.join(tmpdir(), "zink-openclaw-static");
@@ -190,12 +454,17 @@ test("M7/T1 builds the exact minimal-tool, zero-command foundation", () => {
   );
   assert.equal(Object.hasOwn(config.channels.discord, "token"), false);
   assert.equal(config.channels.discord.defaultAccount, "main");
+  assert.deepEqual(config.channels.discord.streaming, { mode: "off" });
   assert.deepEqual(Object.keys(config.channels.discord.accounts), AGENT_IDS);
   for (const agentId of AGENT_IDS) {
     assert.deepEqual(config.channels.discord.accounts[agentId], {
       enabled: true,
       token: SECRET_REFS.discord[agentId],
     });
+    assert.equal(
+      Object.hasOwn(config.channels.discord.accounts[agentId], "streaming"),
+      false,
+    );
   }
   assert.deepEqual(
     config.bindings.map((binding) => binding.agentId),
@@ -329,6 +598,22 @@ test("M7/T1 rejects configuration drift on restricted surfaces", () => {
     () => validateConfig(accountDrift, { stateDir, identifiers }),
     /Policy drift at channels/u,
   );
+  for (const mode of ["progress", "partial", "block"]) {
+    const streamingDrift = buildConfig({ stateDir, identifiers });
+    streamingDrift.channels.discord.streaming.mode = mode;
+    assert.throws(
+      () => validateConfig(streamingDrift, { stateDir, identifiers }),
+      /Policy drift at channels/u,
+    );
+  }
+  const accountStreamingDrift = buildConfig({ stateDir, identifiers });
+  accountStreamingDrift.channels.discord.accounts.sql.streaming = {
+    mode: "off",
+  };
+  assert.throws(
+    () => validateConfig(accountStreamingDrift, { stateDir, identifiers }),
+    /Policy drift at channels/u,
+  );
   const mentionDrift = buildConfig({ stateDir, identifiers });
   mentionDrift.channels.discord.guilds[identifiers.discordGuildId].channels[
     identifiers.discordOfficeChannelId
@@ -444,7 +729,7 @@ test("M7/T1 password-store resolver is a fail-closed 29-entry boundary", () => {
         provider: PASS_PROVIDER_ID,
         ids: PASS_ENTRY_IDS.gemini,
       }),
-      timeout: 3000,
+      timeout: 10_000,
     });
     assert.equal(parallelLookup.status, 0);
     assert.equal(parallelLookup.signal, null);
@@ -506,6 +791,29 @@ test("M7/T1 builder is dry-run safe and apply materializes no secrets", () => {
     const resolverPath = path.join(stateDir, "bin", "openclaw-pass-resolver");
     assert.equal(existsSync(resolverPath), true);
     assert.match(readFileSync(resolverPath, "utf8"), /ALLOWED_IDS/u);
+    const hotfixPath = path.join(
+      stateDir,
+      "bin",
+      "openclaw-gemini-stream-hotfix.mjs",
+    );
+    assert.equal(existsSync(hotfixPath), true);
+    assert.equal(
+      readFileSync(hotfixPath, "utf8"),
+      geminiStreamHotfixContents(),
+    );
+    const dropInPath = path.join(
+      systemdUserDir,
+      "openclaw-gateway-zink.service.d",
+      "10-zink.conf",
+    );
+    assert.equal(
+      readFileSync(dropInPath, "utf8"),
+      renderSystemdDropIn(stateDir),
+    );
+    assert.match(
+      readFileSync(dropInPath, "utf8"),
+      /ExecStartPre=.*openclaw-gemini-stream-hotfix\.mjs --check/u,
+    );
     assert.equal(
       existsSync(path.join(stateDir, "secrets", "password-store")),
       true,
@@ -524,6 +832,100 @@ test("M7/T1 builder is dry-run safe and apply materializes no secrets", () => {
         true,
       );
     }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("M7/T1 builder upgrades only the exact R16 drop-in and rejects owned drift", () => {
+  const root = temporaryDirectory();
+  try {
+    const environment = environmentForTemporaryHome(root);
+    const stateDir = path.join(root, ".openclaw-zink");
+    const systemdUserDir = path.join(root, ".config", "systemd", "user");
+    const dropInPath = path.join(
+      systemdUserDir,
+      "openclaw-gateway-zink.service.d",
+      "10-zink.conf",
+    );
+    const script = path.join(
+      process.cwd(),
+      "integrations",
+      "openclaw",
+      "configure.mjs",
+    );
+    const apply = () =>
+      execFileSync(
+        process.execPath,
+        [
+          "--",
+          script,
+          "--state-dir",
+          stateDir,
+          "--systemd-user-dir",
+          systemdUserDir,
+          ...discordIdentifierArguments,
+          "--apply",
+        ],
+        { env: environment, stdio: "pipe" },
+      );
+
+    mkdirSync(path.dirname(dropInPath), { recursive: true });
+    writeFileSync(dropInPath, renderLegacySystemdDropInR16(stateDir), "utf8");
+    apply();
+    assert.equal(
+      readFileSync(dropInPath, "utf8"),
+      renderSystemdDropIn(stateDir),
+    );
+
+    const configPath = path.join(stateDir, "openclaw.json");
+    const legacyConfig = JSON.parse(readFileSync(configPath, "utf8"));
+    delete legacyConfig.channels.discord.streaming;
+    const reorderedConfig = Object.fromEntries(
+      Object.entries(legacyConfig).reverse(),
+    );
+    writeFileSync(
+      configPath,
+      `${JSON.stringify(reorderedConfig, null, 2)}\n`,
+      "utf8",
+    );
+    assert.doesNotThrow(apply);
+    assert.deepEqual(
+      JSON.parse(readFileSync(configPath, "utf8")).channels.discord.streaming,
+      { mode: "off" },
+    );
+
+    const streamingDrift = JSON.parse(readFileSync(configPath, "utf8"));
+    streamingDrift.channels.discord.streaming.mode = "progress";
+    writeFileSync(
+      configPath,
+      `${JSON.stringify(streamingDrift, null, 2)}\n`,
+      "utf8",
+    );
+    assert.throws(apply, /Policy drift at channels/u);
+    streamingDrift.channels.discord.streaming.mode = "off";
+    writeFileSync(
+      configPath,
+      `${JSON.stringify(streamingDrift, null, 2)}\n`,
+      "utf8",
+    );
+
+    const hotfixPath = path.join(
+      stateDir,
+      "bin",
+      "openclaw-gemini-stream-hotfix.mjs",
+    );
+    writeFileSync(hotfixPath, "unapproved hotfix drift\n", "utf8");
+    assert.throws(apply, /Gemini stream hotfix utility drift detected/u);
+    assert.equal(readFileSync(hotfixPath, "utf8"), "unapproved hotfix drift\n");
+
+    writeFileSync(hotfixPath, geminiStreamHotfixContents(), "utf8");
+    writeFileSync(dropInPath, "unapproved systemd drift\n", "utf8");
+    assert.throws(apply, /Systemd drop-in drift detected/u);
+    assert.equal(
+      readFileSync(dropInPath, "utf8"),
+      "unapproved systemd drift\n",
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -1,6 +1,6 @@
 # OpenClaw T1 Foundation
 
-This directory provisions the owner-approved M7/T1-R16 OpenClaw profile. It is
+This directory provisions the owner-approved M7/T1-R19 OpenClaw profile. It is
 intentionally a private seven-bot Discord conversation foundation, not the Zink
 Tools bridge. The frozen agent identities exist, but they have no skills,
 delegation or data/tool access surfaces in T1.
@@ -31,6 +31,14 @@ only an owner message that explicitly mentions its bot or directly replies to a
 message authored by that same bot. Bot-authored messages are ignored. T2 may
 later enable the exact native delegation graph, but Discord is never the
 internal bot message bus.
+
+Global Discord streaming is pinned to `mode="off"` for all seven accounts, with
+no account override. OpenClaw therefore keeps typing/model progress internal and
+posts only the final terminally validated reply. Do not enable `progress`,
+`partial`, or `block`: a provider stream can fail after partial tokens arrive.
+R19 additionally classifies an incomplete terminal stream as a timeout-class
+native recovery event and suppresses any retained errored assistant text,
+reasoning, or final-answer evidence.
 
 OpenClaw `2026.6.34` always requests Message Content Intent and treats a direct
 reply to the bot as an implicit mention. Keep Message Content Intent enabled for
@@ -113,7 +121,22 @@ empty workspace templates and agent directories, the allowlisted password-store
 resolver, its empty private store directory, a systemd drop-in, and
 `zink-auth-secret-plan.json` plus `zink-auth-order-plan.json`. It refuses
 pre-existing workspace, config, resolver, account, binding or plan drift instead
-of deleting it.
+of deleting it. R19 upgrades only the exact known R18 hotfix utility, preserves
+the R16-to-current systemd drop-in migration and the exact R17 config migration
+that added final-only Discord delivery. Any other pre-existing utility, drop-in,
+channel, or streaming drift fails closed.
+
+When applying a revision to an already-running profile, stop only the named
+service before `configure.mjs --apply`, then start it after the apply. A dry run
+is safe while the service is active. Do not hand-write `openclaw.json` while the
+Gateway is running: its in-memory config writer can restore an older snapshot
+over the new file.
+
+```bash
+systemctl --user stop openclaw-gateway-zink.service
+# Run the exact configure.mjs --apply command above.
+systemctl --user start openclaw-gateway-zink.service
+```
 
 If an earlier one-channel config was generated with a wrong ID, stop the named
 service and move only `openclaw.json` to a private recovery directory before
@@ -217,7 +240,37 @@ openclaw models auth order set --agent python --provider google \
 
 The generated order plan is the comparison source for verification. A missing,
 extra or reordered profile is a failure; never clear these overrides while the
-R16 partition is active.
+R19 partition is active.
+
+## Apply the Gemini stream hotfix
+
+OpenClaw `2026.6.34` can accept an incomplete Gemini SSE response as a normal
+`stop`, and its older payload layer can surface retained partial text beside an
+error. R17 introduced the official fail-closed transport checks; R18 disabled
+Discord previews. R19 backports upstream timeout classification plus errored
+payload/final-evidence suppression. Apply and verify the patch before restarting
+the service:
+
+```bash
+"$HOME/.local/bin/node" \
+  "$ZINK_STATE_DIR/bin/openclaw-gemini-stream-hotfix.mjs" --apply
+"$HOME/.local/bin/node" \
+  "$ZINK_STATE_DIR/bin/openclaw-gemini-stream-hotfix.mjs" --check
+```
+
+The utility accepts only OpenClaw `2026.6.34` and exact known original, R18
+predecessor, or fully patched SHA-256 state across four frozen bundle artifacts.
+It validates every artifact before writing, rolls back completed writes if a
+later write fails, rejects any other partial state, and makes repeated
+apply/check calls safe. The generated service drop-in runs `--check` in
+`ExecStartPre`, so a package update or restored vendor file cannot silently
+start without review.
+
+For an owner-approved rollback, stop the named service first, run `--revert`,
+and restore the exact pre-hotfix drop-in from the matching repository revision before
+starting the service. The R17 drop-in intentionally refuses to start against an
+unpatched artifact. Do not remove the preflight alone or resume on another
+OpenClaw release.
 
 Install the named service using the same profile/state environment and reload
 the drop-in:

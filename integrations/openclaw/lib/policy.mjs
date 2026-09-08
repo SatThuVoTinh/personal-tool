@@ -119,6 +119,12 @@ const PASS_RESOLVER_TEMPLATE = path.resolve(
   "templates",
   "openclaw-pass-resolver",
 );
+const GEMINI_STREAM_HOTFIX_TEMPLATE = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "templates",
+  "openclaw-gemini-stream-hotfix.mjs",
+);
 
 export function defaultStateDirectory() {
   return path.join(homedir(), STATE_DIRECTORY_NAME);
@@ -286,6 +292,7 @@ export function buildConfig({ stateDir, identifiers }) {
             { enabled: true, token: SECRET_REFS.discord[agentId] },
           ]),
         ),
+        streaming: { mode: "off" },
       },
     },
     session: {
@@ -335,8 +342,29 @@ export function buildAuthOrderPlan() {
 export function renderSystemdDropIn(stateDir) {
   const passStore = path.join(stateDir, "secrets", "password-store");
   const gpgHome = path.join(stateDir, "secrets", "gnupg");
-  const userBin = path.join(homedir(), ".local", "bin");
+  const userBin = path.join(path.dirname(stateDir), ".local", "bin");
+  const nodeBinary = path.join(userBin, "node");
+  const hotfix = path.join(
+    stateDir,
+    "bin",
+    "openclaw-gemini-stream-hotfix.mjs",
+  );
+  return `[Service]\nEnvironment=OPENCLAW_PROFILE=${PROFILE}\nEnvironment=OPENCLAW_STATE_DIR=${stateDir}\nEnvironment=PASSWORD_STORE_DIR=${passStore}\nEnvironment=GNUPGHOME=${gpgHome}\nEnvironment=PATH=${userBin}:/usr/local/bin:/usr/bin:/bin\nExecStartPre=${nodeBinary} ${hotfix} --check\nMemoryMax=768M\n`;
+}
+
+export function renderLegacySystemdDropInR16(stateDir) {
+  const passStore = path.join(stateDir, "secrets", "password-store");
+  const gpgHome = path.join(stateDir, "secrets", "gnupg");
+  const userBin = path.join(path.dirname(stateDir), ".local", "bin");
   return `[Service]\nEnvironment=OPENCLAW_PROFILE=${PROFILE}\nEnvironment=OPENCLAW_STATE_DIR=${stateDir}\nEnvironment=PASSWORD_STORE_DIR=${passStore}\nEnvironment=GNUPGHOME=${gpgHome}\nEnvironment=PATH=${userBin}:/usr/local/bin:/usr/bin:/bin\nMemoryMax=768M\n`;
+}
+
+export function geminiStreamHotfixContents() {
+  const template = readFileSync(GEMINI_STREAM_HOTFIX_TEMPLATE, "utf8");
+  if (/__ZINK_[A-Z0-9_]+__/u.test(template)) {
+    throw new Error("Gemini stream hotfix template hash is not materialized");
+  }
+  return template;
 }
 
 export function passResolverContents() {

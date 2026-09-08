@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -17,9 +18,11 @@ import {
   defaultStateDirectory,
   defaultSystemdUserDirectory,
   ensurePrivateDirectory,
+  geminiStreamHotfixContents,
   materializeWorkspace,
   parseIdentifiers,
   passResolverContents,
+  renderLegacySystemdDropInR16,
   renderSystemdDropIn,
   stableJson,
   validateConfig,
@@ -31,6 +34,12 @@ const REPOSITORY_ROOT = path.resolve(
   "..",
   "..",
 );
+const LEGACY_GEMINI_STREAM_HOTFIX_R18_SHA256 =
+  "41bfeedf2835db4a50573a0f61325bc438ac805a90fef03ce3bc29b8c303f133";
+
+function sha256(contents) {
+  return createHash("sha256").update(contents).digest("hex");
+}
 
 function usage() {
   return [
@@ -86,7 +95,7 @@ function parseArguments(argv) {
   return options;
 }
 
-function existingConfigMatches(configPath, expected, context) {
+function existingConfigMatches(configPath, context) {
   assertRegularOrMissing(configPath);
   if (!existsSync(configPath)) {
     return false;
@@ -97,15 +106,22 @@ function existingConfigMatches(configPath, expected, context) {
   } catch {
     throw new Error(`Existing config must be canonical JSON: ${configPath}`);
   }
-  validateConfig(actual, context);
-  const policyConfig = { ...actual };
-  delete policyConfig.meta;
-  if (stableJson(policyConfig) !== stableJson(expected)) {
-    throw new Error(
-      "Existing config does not match the deterministic T1 policy",
-    );
+  try {
+    validateConfig(actual, context);
+    return true;
+  } catch (validationError) {
+    if (actual.channels?.discord?.streaming !== undefined) {
+      throw validationError;
+    }
+    const migrated = JSON.parse(JSON.stringify(actual));
+    try {
+      migrated.channels.discord.streaming = { mode: "off" };
+      validateConfig(migrated, context);
+    } catch {
+      throw validationError;
+    }
+    return false;
   }
-  return true;
 }
 
 function requireFileMode(filePath, expectedMode, label) {
@@ -120,14 +136,26 @@ function requireFileMode(filePath, expectedMode, label) {
   }
 }
 
-function materializeOwnedFile(filePath, contents, label, fileMode = 0o600) {
+function materializeOwnedFile(
+  filePath,
+  contents,
+  label,
+  fileMode = 0o600,
+  allowedPreviousContents = [],
+  allowedPreviousSha256 = [],
+) {
   assertRegularOrMissing(filePath);
   if (existsSync(filePath)) {
-    if (readFileSync(filePath, "utf8") !== contents) {
+    const existingContents = readFileSync(filePath, "utf8");
+    if (
+      existingContents !== contents &&
+      !allowedPreviousContents.includes(existingContents) &&
+      !allowedPreviousSha256.includes(sha256(existingContents))
+    ) {
       throw new Error(`${label} drift detected: ${filePath}`);
     }
     requireFileMode(filePath, fileMode, label);
-    return;
+    if (existingContents === contents) return;
   }
   writePrivateRegularFile(filePath, contents, fileMode);
 }
@@ -137,10 +165,17 @@ function assertOwnedFileMatchesOrMissing(
   contents,
   label,
   fileMode = 0o600,
+  allowedPreviousContents = [],
+  allowedPreviousSha256 = [],
 ) {
   assertRegularOrMissing(filePath);
   if (existsSync(filePath)) {
-    if (readFileSync(filePath, "utf8") !== contents) {
+    const existingContents = readFileSync(filePath, "utf8");
+    if (
+      existingContents !== contents &&
+      !allowedPreviousContents.includes(existingContents) &&
+      !allowedPreviousSha256.includes(sha256(existingContents))
+    ) {
       throw new Error(`${label} drift detected: ${filePath}`);
     }
     requireFileMode(filePath, fileMode, label);
@@ -186,6 +221,11 @@ function main() {
     authPlanPath: path.join(stateDir, "zink-auth-secret-plan.json"),
     authOrderPlanPath: path.join(stateDir, "zink-auth-order-plan.json"),
     passResolverPath: path.join(stateDir, "bin", "openclaw-pass-resolver"),
+    geminiStreamHotfixPath: path.join(
+      stateDir,
+      "bin",
+      "openclaw-gemini-stream-hotfix.mjs",
+    ),
     passStoreDirectory: path.join(stateDir, "secrets", "password-store"),
     gpgHomeDirectory: path.join(stateDir, "secrets", "gnupg"),
     systemdDropInPath: path.join(
@@ -207,6 +247,7 @@ function main() {
     output.authPlanPath,
     output.authOrderPlanPath,
     output.passResolverPath,
+    output.geminiStreamHotfixPath,
     output.passStoreDirectory,
     output.gpgHomeDirectory,
     systemdUserDir,
@@ -217,7 +258,7 @@ function main() {
 
   const context = { stateDir, identifiers };
   const configPath = output.configPath;
-  const configExists = existingConfigMatches(configPath, config, context);
+  const configExists = existingConfigMatches(configPath, context);
   for (const workspace of Object.values(output.workspaces)) {
     assertWorkspaceMatchesTemplate(workspace);
   }
@@ -243,9 +284,19 @@ function main() {
     0o700,
   );
   assertOwnedFileMatchesOrMissing(
+    output.geminiStreamHotfixPath,
+    geminiStreamHotfixContents(),
+    "Gemini stream hotfix utility",
+    0o700,
+    [],
+    [LEGACY_GEMINI_STREAM_HOTFIX_R18_SHA256],
+  );
+  assertOwnedFileMatchesOrMissing(
     output.systemdDropInPath,
     renderSystemdDropIn(stateDir),
     "Systemd drop-in",
+    0o600,
+    [renderLegacySystemdDropInR16(stateDir)],
   );
 
   ensurePrivateDirectory(stateDir);
@@ -275,6 +326,14 @@ function main() {
     "Password-store resolver",
     0o700,
   );
+  materializeOwnedFile(
+    output.geminiStreamHotfixPath,
+    geminiStreamHotfixContents(),
+    "Gemini stream hotfix utility",
+    0o700,
+    [],
+    [LEGACY_GEMINI_STREAM_HOTFIX_R18_SHA256],
+  );
   ensurePrivateDirectory(path.dirname(output.passStoreDirectory));
   ensurePrivateDirectory(output.passStoreDirectory);
   ensurePrivateDirectory(output.gpgHomeDirectory);
@@ -283,6 +342,8 @@ function main() {
     output.systemdDropInPath,
     renderSystemdDropIn(stateDir),
     "Systemd drop-in",
+    0o600,
+    [renderLegacySystemdDropInR16(stateDir)],
   );
   process.stdout.write(`${stableJson(output)}`);
 }

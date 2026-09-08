@@ -22,6 +22,7 @@ import {
   buildSecretsPlan,
   defaultStateDirectory,
   defaultSystemdUserDirectory,
+  geminiStreamHotfixContents,
   parseIdentifiers,
   passResolverContents,
   renderSystemdDropIn,
@@ -251,6 +252,11 @@ async function main() {
   const authPlanPath = path.join(stateDir, "zink-auth-secret-plan.json");
   const authOrderPlanPath = path.join(stateDir, "zink-auth-order-plan.json");
   const passResolverPath = path.join(stateDir, "bin", "openclaw-pass-resolver");
+  const geminiStreamHotfixPath = path.join(
+    stateDir,
+    "bin",
+    "openclaw-gemini-stream-hotfix.mjs",
+  );
   const passStoreDirectory = path.join(stateDir, "secrets", "password-store");
   const gpgHomeDirectory = path.join(stateDir, "secrets", "gnupg");
   const workspaces = AGENT_IDS.map((agentId) =>
@@ -270,6 +276,7 @@ async function main() {
     authPlanPath,
     authOrderPlanPath,
     passResolverPath,
+    geminiStreamHotfixPath,
     passStoreDirectory,
     gpgHomeDirectory,
     ...workspaces,
@@ -282,12 +289,15 @@ async function main() {
   assertRegularOrMissing(configPath);
   assertRegularOrMissing(authPlanPath);
   assertRegularOrMissing(authOrderPlanPath);
+  assertRegularOrMissing(passResolverPath);
+  assertRegularOrMissing(geminiStreamHotfixPath);
   assertRegularOrMissing(dropInPath);
   if (
     !existsSync(configPath) ||
     !existsSync(authPlanPath) ||
     !existsSync(authOrderPlanPath) ||
     !existsSync(passResolverPath) ||
+    !existsSync(geminiStreamHotfixPath) ||
     !existsSync(passStoreDirectory) ||
     !existsSync(gpgHomeDirectory) ||
     !existsSync(dropInPath) ||
@@ -301,6 +311,7 @@ async function main() {
   requireMode(authPlanPath, 0o600);
   requireMode(authOrderPlanPath, 0o600);
   requireMode(passResolverPath, 0o700);
+  requireMode(geminiStreamHotfixPath, 0o700);
   requireMode(passStoreDirectory, 0o700);
   requireMode(gpgHomeDirectory, 0o700);
   requireMode(dropInPath, 0o600);
@@ -322,6 +333,12 @@ async function main() {
   }
   if (readFileSync(passResolverPath, "utf8") !== passResolverContents()) {
     throw new Error("Password-store resolver drift detected");
+  }
+  if (
+    readFileSync(geminiStreamHotfixPath, "utf8") !==
+    geminiStreamHotfixContents()
+  ) {
+    throw new Error("Gemini stream hotfix utility drift detected");
   }
   if (readFileSync(dropInPath, "utf8") !== renderSystemdDropIn(stateDir)) {
     throw new Error("Systemd drop-in drift detected");
@@ -377,6 +394,13 @@ async function main() {
       ["security", "audit", "--deep", "--json"],
     ];
     result.live = commands.map((args) => runLive(command, args, environment));
+    result.live.unshift(
+      runLive(
+        process.execPath,
+        [geminiStreamHotfixPath, "--check"],
+        environment,
+      ),
+    );
     const permissionChecks = AGENT_IDS.flatMap((accountId) =>
       DISCORD_SURFACE_IDENTIFIERS.map((surfaceIdentifier) => ({
         accountId,
