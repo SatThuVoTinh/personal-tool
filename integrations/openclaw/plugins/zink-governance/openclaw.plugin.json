@@ -1,0 +1,15 @@
+{
+  "id": "zink-governance",
+  "name": "Zink Governance",
+  "description": "Model-invisible trusted governance guard for Zink T2 workflows.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "ledgerRoot": { "type": "string" },
+      "ownerDiscordId": { "type": "string", "pattern": "^[1-9][0-9]{16,19}$" },
+      "ownerPrincipalRef": { "type": "string" },
+      "enabled": { "type": "boolean" }
+    }
+  }
+}

@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "zink://contracts/execution-brief-v1",
+  "title": "ExecutionBriefV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "governance_version",
+    "task_id",
+    "brief_revision",
+    "brief_state",
+    "workflow_status",
+    "origin",
+    "origin_principal_ref",
+    "origin_message_id",
+    "inputs",
+    "input_refs",
+    "nodes",
+    "semantic_contract_status",
+    "dataset_validation_status",
+    "mandatory_decision_evidence"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "governance_version": { "const": "m7-t2-r11" },
+    "task_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "brief_revision": { "type": "integer", "minimum": 1, "maximum": 16 },
+    "brief_state": { "enum": ["ACTIVE", "SUPERSEDED", "CLOSED"] },
+    "workflow_status": {
+      "enum": [
+        "ACTIVE",
+        "BLOCKED",
+        "COMPLETE",
+        "PARTIAL",
+        "FAILED",
+        "CANCELLED"
+      ]
+    },
+    "origin": { "type": "string", "maxLength": 128 },
+    "origin_principal_ref": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "origin_message_id": { "type": "string", "pattern": "^[1-9][0-9]{16,19}$" },
+    "source_task_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "inputs": { "type": "string", "maxLength": 16384 },
+    "input_refs": {
+      "type": "array",
+      "maxItems": 16,
+      "items": { "$ref": "governed-reference.schema.json" }
+    },
+    "semantic_contract_status": { "enum": ["VALID", "MISSING", "AMBIGUOUS"] },
+    "dataset_validation_status": { "enum": ["VALID", "MISSING", "INVALID"] },
+    "mandatory_decision_evidence": {
+      "type": "array",
+      "maxItems": 16,
+      "items": { "type": "string", "maxLength": 4096 }
+    },
+    "nodes": {
+      "type": "array",
+      "maxItems": 72,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["node_id", "stack_id", "dependencies", "required"],
+        "properties": {
+          "node_id": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$" },
+          "stack_id": {
+            "enum": [
+              "infrastructure",
+              "data_plant",
+              "semantic",
+              "intelligence",
+              "decision"
+            ]
+          },
+          "dependencies": {
+            "type": "array",
+            "maxItems": 72,
+            "items": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$" }
+          },
+          "required": { "type": "boolean" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "prerequisite": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stack_id", "requirement", "blocking_node_id"],
+      "properties": {
+        "stack_id": {
+          "enum": [
+            "infrastructure",
+            "data_plant",
+            "semantic",
+            "intelligence",
+            "decision"
+          ]
+        },
+        "requirement": { "type": "string", "maxLength": 4096 },
+        "blocking_node_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+        }
+      }
+    }
+  }
+}

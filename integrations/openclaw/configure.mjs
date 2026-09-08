@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { createHash } from "node:crypto";
-import { existsSync, lstatSync, readFileSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -17,6 +17,9 @@ import {
   buildSecretsPlan,
   defaultStateDirectory,
   defaultSystemdUserDirectory,
+  agentInstructions,
+  governancePluginFiles,
+  GOVERNANCE_PLUGIN_ID,
   ensurePrivateDirectory,
   geminiStreamHotfixContents,
   materializeWorkspace,
@@ -28,6 +31,8 @@ import {
   validateConfig,
   writePrivateRegularFile,
 } from "./lib/policy.mjs";
+import { ledgerPaths, ensureLedger } from "./topology/lib/ledger.mjs";
+import { canonicalJson } from "./topology/lib/canonical.mjs";
 
 const REPOSITORY_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -36,9 +41,42 @@ const REPOSITORY_ROOT = path.resolve(
 );
 const LEGACY_GEMINI_STREAM_HOTFIX_R18_SHA256 =
   "41bfeedf2835db4a50573a0f61325bc438ac805a90fef03ce3bc29b8c303f133";
+const LEGACY_GOVERNANCE_ENTRYPOINT_R11_SHA256 =
+  "c71cf9d6fe9965eaa0ff789d611a55ee0ea2fc98d8023b3c7526495aaa60f559";
+const LEGACY_GOVERNANCE_MANIFEST_R11_SHA256 =
+  "02c805e7909b9ca35711cc5888bc889fe9c9a566f09f580ba614682682ce41ca";
 
 function sha256(contents) {
   return createHash("sha256").update(contents).digest("hex");
+}
+
+function buildBackupManifest(output, config) {
+  const targets = [
+    output.configPath,
+    ...Object.values(output.workspaces),
+    output.governancePluginDirectory,
+  ];
+  return {
+    schema_version: "1.0.0",
+    governance_version: "m7-t2-r11",
+    target_policy_digest: sha256(stableJson(config)),
+    restore_order: [
+      output.configPath,
+      ...Object.values(output.workspaces),
+      output.governancePluginDirectory,
+    ],
+    files: targets
+      .filter((target) => existsSync(target))
+      .map((target) => ({
+        path: target,
+        kind: statSync(target).isDirectory() ? "directory" : "file",
+        digest: statSync(target).isDirectory()
+          ? null
+          : sha256(readFileSync(target)),
+        mode: statSync(target).mode & 0o777,
+      })),
+    excludes: ["secrets", "auth material", "identity.key"],
+  };
 }
 
 function usage() {
@@ -110,6 +148,36 @@ function existingConfigMatches(configPath, context) {
     validateConfig(actual, context);
     return true;
   } catch (validationError) {
+    const legacy = JSON.parse(JSON.stringify(buildConfig(context)));
+    delete legacy.agents.defaults.subagents;
+    for (const agent of legacy.agents.list) {
+      delete agent.subagents;
+      delete agent.tools.alsoAllow;
+    }
+    delete legacy.tools.subagents;
+    delete legacy.tools.sessions;
+    delete legacy.tools.sessions_spawn;
+    legacy.plugins.allow = legacy.plugins.allow.filter(
+      (pluginId) => pluginId !== GOVERNANCE_PLUGIN_ID,
+    );
+    legacy.plugins.load = { paths: [] };
+    delete legacy.plugins.entries[GOVERNANCE_PLUGIN_ID];
+    try {
+      const actualFoundation = JSON.parse(JSON.stringify(actual));
+      delete actualFoundation.meta;
+      if (actualFoundation.channels?.discord?.streaming === undefined) {
+        actualFoundation.channels.discord.streaming = { mode: "off" };
+      }
+      const previousR11 = JSON.parse(JSON.stringify(buildConfig(context)));
+      delete previousR11.plugins.entries[GOVERNANCE_PLUGIN_ID].config
+        .ownerDiscordId;
+      if (canonicalJson(actualFoundation) === canonicalJson(previousR11))
+        return false;
+      if (canonicalJson(actualFoundation) === canonicalJson(legacy))
+        return false;
+    } catch {
+      // fall through to the fail-closed drift error below
+    }
     if (actual.channels?.discord?.streaming !== undefined) {
       throw validationError;
     }
@@ -182,6 +250,28 @@ function assertOwnedFileMatchesOrMissing(
   }
 }
 
+function assertGovernanceManifestMatchesOrMissing(filePath, contents) {
+  assertRegularOrMissing(filePath);
+  if (!existsSync(filePath)) return;
+  let actual;
+  let expected;
+  try {
+    actual = JSON.parse(readFileSync(filePath, "utf8"));
+    expected = JSON.parse(contents);
+  } catch {
+    throw new Error(`Governance plugin manifest drift detected: ${filePath}`);
+  }
+  const previous = JSON.parse(JSON.stringify(expected));
+  delete previous.configSchema.properties.ownerDiscordId;
+  if (
+    canonicalJson(actual) !== canonicalJson(expected) &&
+    canonicalJson(actual) !== canonicalJson(previous)
+  ) {
+    throw new Error(`Governance plugin manifest drift detected: ${filePath}`);
+  }
+  requireFileMode(filePath, 0o600, "Governance plugin manifest");
+}
+
 function main() {
   const options = parseArguments(process.argv.slice(2));
   const stateDir = path.resolve(
@@ -233,6 +323,39 @@ function main() {
       "openclaw-gateway-zink.service.d",
       "10-zink.conf",
     ),
+    governancePluginDirectory: path.join(
+      stateDir,
+      "extensions",
+      GOVERNANCE_PLUGIN_ID,
+    ),
+    governancePluginManifestPath: path.join(
+      stateDir,
+      "extensions",
+      GOVERNANCE_PLUGIN_ID,
+      "openclaw.plugin.json",
+    ),
+    governancePluginPackagePath: path.join(
+      stateDir,
+      "extensions",
+      GOVERNANCE_PLUGIN_ID,
+      "package.json",
+    ),
+    governancePluginEntrypointPath: path.join(
+      stateDir,
+      "extensions",
+      GOVERNANCE_PLUGIN_ID,
+      "index.mjs",
+    ),
+    ledgerDirectory: ledgerPaths(stateDir).root,
+    ledgerEventsPath: ledgerPaths(stateDir).events,
+    ledgerSnapshotPath: ledgerPaths(stateDir).snapshot,
+    identityKeyPath: ledgerPaths(stateDir).identityKey,
+    backupManifestPath: path.join(
+      stateDir,
+      "operator",
+      "m7-t2",
+      "backup-manifest.json",
+    ),
   };
   if (options.mode === "dry-run") {
     process.stdout.write(`${stableJson(output)}`);
@@ -252,6 +375,15 @@ function main() {
     output.gpgHomeDirectory,
     systemdUserDir,
     output.systemdDropInPath,
+    output.governancePluginDirectory,
+    output.governancePluginManifestPath,
+    output.governancePluginPackagePath,
+    output.governancePluginEntrypointPath,
+    output.ledgerDirectory,
+    output.ledgerEventsPath,
+    output.ledgerSnapshotPath,
+    output.identityKeyPath,
+    output.backupManifestPath,
   ]) {
     assertNoSymlinkComponents(target);
   }
@@ -259,8 +391,8 @@ function main() {
   const context = { stateDir, identifiers };
   const configPath = output.configPath;
   const configExists = existingConfigMatches(configPath, context);
-  for (const workspace of Object.values(output.workspaces)) {
-    assertWorkspaceMatchesTemplate(workspace);
+  for (const [agentId, workspace] of Object.entries(output.workspaces)) {
+    assertWorkspaceMatchesTemplate(workspace, agentInstructions(agentId));
   }
   for (const agentDir of Object.values(output.agentDirs)) {
     assertDirectoryOrMissing(agentDir);
@@ -272,6 +404,30 @@ function main() {
     stableJson(buildSecretsPlan()),
     "Auth SecretRef plan",
   );
+  const pluginFiles = governancePluginFiles();
+  assertGovernanceManifestMatchesOrMissing(
+    output.governancePluginManifestPath,
+    pluginFiles.manifest,
+  );
+  assertOwnedFileMatchesOrMissing(
+    output.governancePluginPackagePath,
+    pluginFiles.package,
+    "Governance plugin package",
+  );
+  assertOwnedFileMatchesOrMissing(
+    output.governancePluginEntrypointPath,
+    pluginFiles.entrypoint,
+    "Governance plugin entrypoint",
+    0o700,
+    [],
+    [LEGACY_GOVERNANCE_ENTRYPOINT_R11_SHA256],
+  );
+  assertRegularOrMissing(output.identityKeyPath);
+  if (existsSync(output.identityKeyPath))
+    requireFileMode(output.identityKeyPath, 0o600, "Governance identity key");
+  assertRegularOrMissing(output.backupManifestPath);
+  if (existsSync(output.backupManifestPath))
+    requireFileMode(output.backupManifestPath, 0o600, "T2 backup manifest");
   assertOwnedFileMatchesOrMissing(
     output.authOrderPlanPath,
     stableJson(buildAuthOrderPlan()),
@@ -300,11 +456,19 @@ function main() {
   );
 
   ensurePrivateDirectory(stateDir);
+  ensurePrivateDirectory(output.ledgerDirectory);
+  if (!existsSync(output.backupManifestPath)) {
+    materializeOwnedFile(
+      output.backupManifestPath,
+      stableJson(buildBackupManifest(output, config)),
+      "T2 backup manifest",
+    );
+  }
   if (!configExists) {
     writePrivateRegularFile(configPath, stableJson(config));
   }
-  for (const workspace of Object.values(output.workspaces)) {
-    materializeWorkspace(workspace);
+  for (const [agentId, workspace] of Object.entries(output.workspaces)) {
+    materializeWorkspace(workspace, agentInstructions(agentId));
   }
   for (const agentDir of Object.values(output.agentDirs)) {
     ensurePrivateDirectory(agentDir);
@@ -314,6 +478,35 @@ function main() {
     stableJson(buildSecretsPlan()),
     "Auth SecretRef plan",
   );
+  ensurePrivateDirectory(output.governancePluginDirectory);
+  materializeOwnedFile(
+    output.governancePluginManifestPath,
+    pluginFiles.manifest,
+    "Governance plugin manifest",
+    0o600,
+    [],
+    [LEGACY_GOVERNANCE_MANIFEST_R11_SHA256],
+  );
+  materializeOwnedFile(
+    output.governancePluginPackagePath,
+    pluginFiles.package,
+    "Governance plugin package",
+  );
+  materializeOwnedFile(
+    output.governancePluginEntrypointPath,
+    pluginFiles.entrypoint,
+    "Governance plugin entrypoint",
+    0o700,
+    [],
+    [LEGACY_GOVERNANCE_ENTRYPOINT_R11_SHA256],
+  );
+  if (!existsSync(output.identityKeyPath))
+    writePrivateRegularFile(
+      output.identityKeyPath,
+      `${randomBytes(32).toString("hex")}\n`,
+      0o600,
+    );
+  ensureLedger(ledgerPaths(stateDir));
   materializeOwnedFile(
     output.authOrderPlanPath,
     stableJson(buildAuthOrderPlan()),

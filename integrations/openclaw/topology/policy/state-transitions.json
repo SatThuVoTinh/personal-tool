@@ -1,0 +1,35 @@
+{
+  "schema_version": "1.0.0",
+  "governance_version": "m7-t2-r11",
+  "workflow_status": {
+    "ACTIVE": ["BLOCKED", "COMPLETE", "PARTIAL", "FAILED", "CANCELLED"],
+    "BLOCKED": ["ACTIVE", "FAILED", "CANCELLED"],
+    "COMPLETE": [],
+    "PARTIAL": [],
+    "FAILED": [],
+    "CANCELLED": []
+  },
+  "brief_state": {
+    "ACTIVE": ["SUPERSEDED", "CLOSED"],
+    "SUPERSEDED": [],
+    "CLOSED": []
+  },
+  "run_state": {
+    "PENDING": ["SPAWN_UNKNOWN", "RUNNING", "BLOCKED", "CANCELLED", "UNKNOWN"],
+    "SPAWN_UNKNOWN": ["RUNNING", "BLOCKED", "CANCELLED", "UNKNOWN"],
+    "RUNNING": ["COMPLETE", "FAILED", "BLOCKED", "CANCELLED", "UNKNOWN"],
+    "BLOCKED": ["RUNNING", "FAILED", "CANCELLED"],
+    "COMPLETE": [],
+    "FAILED": [],
+    "CANCELLED": [],
+    "UNKNOWN": ["BLOCKED", "CANCELLED"]
+  },
+  "result_acceptance": [
+    "PENDING",
+    "ACCEPTED",
+    "IDEMPOTENT_DUPLICATE",
+    "STALE_REJECTED",
+    "CONFLICT_REJECTED",
+    "INVALID_REJECTED"
+  ]
+}

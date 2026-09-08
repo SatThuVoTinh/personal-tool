@@ -1,0 +1,48 @@
+{
+  "schema_version": "1.0.0",
+  "governance_version": "m7-t2-r11",
+  "runtime_version": "2026.6.34",
+  "roles": {
+    "main": {
+      "allowAgents": ["o1", "o2"],
+      "tools": [
+        "agents_list",
+        "session_status",
+        "sessions_spawn",
+        "sessions_yield"
+      ]
+    },
+    "o1": {
+      "allowAgents": ["excel", "power-bi", "sql", "python"],
+      "tools": ["session_status", "sessions_spawn", "sessions_yield"]
+    },
+    "o2": {
+      "allowAgents": ["excel", "sql", "python"],
+      "tools": ["session_status", "sessions_spawn", "sessions_yield"]
+    },
+    "excel": { "allowAgents": [], "tools": ["session_status"] },
+    "power-bi": { "allowAgents": [], "tools": ["session_status"] },
+    "sql": { "allowAgents": [], "tools": ["session_status"] },
+    "python": { "allowAgents": [], "tools": ["session_status"] }
+  },
+  "effective_tool_matrix": {
+    "main:d0": [
+      "agents_list",
+      "session_status",
+      "sessions_spawn",
+      "sessions_yield"
+    ],
+    "o1:d0": ["session_status", "sessions_spawn", "sessions_yield"],
+    "o1:d1": ["session_status", "sessions_spawn", "sessions_yield"],
+    "o2:d0": ["session_status", "sessions_spawn", "sessions_yield"],
+    "o2:d1": ["session_status", "sessions_spawn", "sessions_yield"],
+    "excel:d0": ["session_status"],
+    "excel:d2": ["session_status"],
+    "power-bi:d0": ["session_status"],
+    "power-bi:d2": ["session_status"],
+    "sql:d0": ["session_status"],
+    "sql:d2": ["session_status"],
+    "python:d0": ["session_status"],
+    "python:d2": ["session_status"]
+  }
+}

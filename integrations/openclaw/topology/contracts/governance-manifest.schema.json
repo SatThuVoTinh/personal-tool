@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "zink://contracts/governance-manifest-v1",
+  "title": "GovernanceManifestV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "governance_version",
+    "agent_id",
+    "role",
+    "allowed_stacks",
+    "workspace_instruction_digest",
+    "effective_tool_policy",
+    "spawn_target_allowlist",
+    "require_agent_id",
+    "max_spawn_depth",
+    "sandbox_requirement",
+    "context_mode",
+    "runtime_version",
+    "model_policy_id",
+    "auth_policy_id"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "governance_version": { "const": "m7-t2-r11" },
+    "agent_id": {
+      "enum": ["main", "o1", "o2", "excel", "power-bi", "sql", "python"]
+    },
+    "role": { "type": "string", "maxLength": 64 },
+    "allowed_stacks": {
+      "type": "array",
+      "maxItems": 5,
+      "items": { "type": "string" }
+    },
+    "workspace_instruction_digest": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "effective_tool_policy": {
+      "type": "array",
+      "maxItems": 16,
+      "items": { "type": "string" }
+    },
+    "spawn_target_allowlist": {
+      "type": "array",
+      "maxItems": 4,
+      "items": { "type": "string" }
+    },
+    "require_agent_id": { "const": true },
+    "max_spawn_depth": { "const": 2 },
+    "sandbox_requirement": { "const": "require" },
+    "context_mode": { "const": "isolated" },
+    "runtime_version": { "const": "2026.6.34" },
+    "model_policy_id": { "type": "string", "maxLength": 128 },
+    "auth_policy_id": { "type": "string", "maxLength": 128 }
+  }
+}

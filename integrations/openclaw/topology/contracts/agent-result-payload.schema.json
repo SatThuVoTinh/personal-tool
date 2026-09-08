@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "zink://contracts/agent-result-payload-v1",
+  "title": "AgentResultPayloadV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "governance_version",
+    "outcome_claim",
+    "reason_claim",
+    "output",
+    "assumptions",
+    "limitations",
+    "requested_prerequisites",
+    "agent_self_validation"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "governance_version": { "const": "m7-t2-r11" },
+    "outcome_claim": { "enum": ["COMPLETE", "PARTIAL", "BLOCKED", "FAILED"] },
+    "reason_claim": {
+      "type": "string",
+      "enum": [
+        "NONE",
+        "OPTIONAL_BRANCH_FAILED",
+        "MISSING_INPUT",
+        "MISSING_PREREQUISITE",
+        "APPROVAL_REQUIRED",
+        "OWNER_DECISION_REQUIRED",
+        "POLICY_DENIED",
+        "SELF_VALIDATION_FAILED",
+        "PROMPT_INJECTION_SUSPECTED"
+      ]
+    },
+    "output": { "type": "string", "maxLength": 16384 },
+    "claimed_artifact_refs": {
+      "type": "array",
+      "maxItems": 16,
+      "items": { "type": "object", "additionalProperties": false }
+    },
+    "assumptions": {
+      "type": "array",
+      "maxItems": 16,
+      "items": { "type": "string", "maxLength": 4096 }
+    },
+    "limitations": {
+      "type": "array",
+      "maxItems": 16,
+      "items": { "type": "string", "maxLength": 4096 }
+    },
+    "requested_prerequisites": {
+      "type": "array",
+      "maxItems": 8,
+      "items": { "$ref": "execution-brief.schema.json#/$defs/prerequisite" }
+    },
+    "agent_self_validation": { "type": "string", "maxLength": 4096 }
+  }
+}

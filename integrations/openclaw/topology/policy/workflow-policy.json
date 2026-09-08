@@ -1,0 +1,31 @@
+{
+  "schema_version": "1.0.0",
+  "governance_version": "m7-t2-r11",
+  "budgets": {
+    "maxBriefRevisionsPerTask": 16,
+    "maxStackTransitionsPerTask": 10,
+    "maxTotalDelegatedRunsPerTask": 72
+  },
+  "runtime": {
+    "maxSpawnDepth": 2,
+    "maxChildrenPerAgent": 4,
+    "maxConcurrent": 4,
+    "run_timeout": 300,
+    "announce_timeout": 120000,
+    "session_visibility": "tree",
+    "agentToAgent": false,
+    "attachments": false
+  },
+  "payload_limits": {
+    "delegation_inline_text": 16384,
+    "delegation_envelope": 32768,
+    "trusted_result_envelope": 65536,
+    "refs_per_packet": 16,
+    "single_ref_metadata": 2048,
+    "requested_prerequisites": 8,
+    "assumptions": 16,
+    "limitations": 16,
+    "ordinary_field": 4096,
+    "output": 16384
+  }
+}

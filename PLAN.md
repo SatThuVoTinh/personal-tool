@@ -25,16 +25,16 @@ Evidence Level: NONE | LOCAL-VERIFIED | REMOTE-BACKED
 
 ## 3. Current release gate
 
-| Milestone | Status | Evidence | Gate summary |
-| --- | --- | --- | --- |
-| M0 — Plan/architecture baseline | `COMPLETE` | `LOCAL-VERIFIED` | Repository governance established. |
-| M1 — Development foundation | `COMPLETE` | `REMOTE-BACKED` | Verification and CI/Security baseline passed. |
-| M2 — Local infrastructure | `COMPLETE` | `REMOTE-BACKED` | Accepted commit `5ffe4cb9be81c30d5c24bd7eb6a9d41abc2a5f19`. |
-| M3 — Markdown Knowledgebase | `COMPLETE` | `REMOTE-BACKED` | Accepted candidate `ff4a5fb7d779f260ffb9b5aa2393ad6ab75eb549`; accepted merge `9cd34cebb196631e9524b095c21f1fd5aff78749`. |
-| M4 — PDF ingestion | `COMPLETE` | `REMOTE-BACKED` | T1–T5 pushed; owner has temporarily accepted M4 as complete. Exact accepted commit hash should be reconciled from git history without reopening M4 scope. |
-| M5 — Architecture contraction | `COMPLETE` | `REMOTE-BACKED` | M5/T1-R2 synchronized canonical paths, documentation and the contracted Docker runtime without refactoring the accepted Knowledgebase application. |
-| M6 — Zink Skill Store | `COMPLETE` | `REMOTE-BACKED` | M6/T1-R4 task commit is remotely verified; governance closeout is recorded separately. |
-| M7 — Zink Tools + OpenClaw integration + V1 hardening | `IN PROGRESS` | `LOCAL-VERIFIED` | M7/T1-R19 completed at `7b5edc510d463eec197f000191d907e5b17aa87c`; T2 is next and unauthorized. |
+| Milestone                                             | Status        | Evidence         | Gate summary                                                                                                                                              |
+| ----------------------------------------------------- | ------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M0 — Plan/architecture baseline                       | `COMPLETE`    | `LOCAL-VERIFIED` | Repository governance established.                                                                                                                        |
+| M1 — Development foundation                           | `COMPLETE`    | `REMOTE-BACKED`  | Verification and CI/Security baseline passed.                                                                                                             |
+| M2 — Local infrastructure                             | `COMPLETE`    | `REMOTE-BACKED`  | Accepted commit `5ffe4cb9be81c30d5c24bd7eb6a9d41abc2a5f19`.                                                                                               |
+| M3 — Markdown Knowledgebase                           | `COMPLETE`    | `REMOTE-BACKED`  | Accepted candidate `ff4a5fb7d779f260ffb9b5aa2393ad6ab75eb549`; accepted merge `9cd34cebb196631e9524b095c21f1fd5aff78749`.                                 |
+| M4 — PDF ingestion                                    | `COMPLETE`    | `REMOTE-BACKED`  | T1–T5 pushed; owner has temporarily accepted M4 as complete. Exact accepted commit hash should be reconciled from git history without reopening M4 scope. |
+| M5 — Architecture contraction                         | `COMPLETE`    | `REMOTE-BACKED`  | M5/T1-R2 synchronized canonical paths, documentation and the contracted Docker runtime without refactoring the accepted Knowledgebase application.        |
+| M6 — Zink Skill Store                                 | `COMPLETE`    | `REMOTE-BACKED`  | M6/T1-R4 task commit is remotely verified; governance closeout is recorded separately.                                                                    |
+| M7 — Zink Tools + OpenClaw integration + V1 hardening | `IN PROGRESS` | `LOCAL-VERIFIED` | M7/T1-R19 completed at `7b5edc510d463eec197f000191d907e5b17aa87c`; T2 is next and unauthorized.                                                           |
 
 The former self-built L&SC Data Plant is replaced by a **logical external
 infrastructure flow**, not another repository module. Forecasting, optimization,
@@ -45,15 +45,15 @@ operations research and simulation remain first-class capabilities.
 ```text
 Milestone: M7 — Zink Tools + OpenClaw Integration + V1 Hardening
 Task: M7/T2 — Agent topology
-Task Status: NOT STARTED
-Planning Readiness: DRAFT
-Plan Revision: NONE
-Execution Authorization: NO
-Authorized Task: NONE
-Execution Contract: NONE
+Task Status: IN PROGRESS
+Planning Readiness: APPROVED
+Plan Revision: M7/T2-R11
+Execution Authorization: YES
+Authorized Task: M7/T2 — Agent topology
+Execution Contract: docs/contracts/execution/ACTIVE.md
 Evidence Level: NONE
-Task Branch: NONE
-Owner Approval: NONE
+Task Branch: codex/m7-t2-agent-topology
+Owner Approval: EXPLICIT — M7/T2-R11 implementation plan
 ```
 
 M6/T1-R4 evidence: focused M6 tests, `npm run verify` (64 tests),
@@ -74,13 +74,13 @@ convenient. Do not reopen M4 implementation scope merely to fill that metadata.
 
 M4/T1 through M4/T4 are complete locally:
 
-| Task | Status | Evidence summary |
-| --- | --- | --- |
-| M4/T1 — Runtime, source, schema, identity | `COMPLETE` | Feature commit `c4ef66d`; isolated PDF runtime and M3 regression gates passed. |
-| M4/T2 — Preflight, extraction, segmentation | `COMPLETE` | Implementation commit `82126e4`; bounded extraction/OCR and atomic non-searchable builds passed. |
-| M4/T3 — Resume, drift, retention, publication | `COMPLETE` | Local implementation commit `c1df143`; resumability and atomic publication passed. |
-| M4/T4 — Adapters, retrieval, API | `COMPLETE` | Reviewed local implementation commit `1904853`; Markdown/PDF retrieval, filters, citations, and repository gates passed. |
-| M4/T5 — Acceptance and handoff | `COMPLETE` | Owner reports the accepted M4/T5 state was pushed and is temporarily closed; exact remote commit evidence remains to be reconciled from git history. |
+| Task                                          | Status     | Evidence summary                                                                                                                                     |
+| --------------------------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M4/T1 — Runtime, source, schema, identity     | `COMPLETE` | Feature commit `c4ef66d`; isolated PDF runtime and M3 regression gates passed.                                                                       |
+| M4/T2 — Preflight, extraction, segmentation   | `COMPLETE` | Implementation commit `82126e4`; bounded extraction/OCR and atomic non-searchable builds passed.                                                     |
+| M4/T3 — Resume, drift, retention, publication | `COMPLETE` | Local implementation commit `c1df143`; resumability and atomic publication passed.                                                                   |
+| M4/T4 — Adapters, retrieval, API              | `COMPLETE` | Reviewed local implementation commit `1904853`; Markdown/PDF retrieval, filters, citations, and repository gates passed.                             |
+| M4/T5 — Acceptance and handoff                | `COMPLETE` | Owner reports the accepted M4/T5 state was pushed and is temporarily closed; exact remote commit evidence remains to be reconciled from git history. |
 
 The owner's 2026-08-28 correction remains authoritative for `M4/T5-R2`:
 visible internal PDF embeds drive sidecar recognition; ordinary Books/Papers
@@ -281,7 +281,7 @@ terminal evidence. The investigation and post-fix gates covered all seven bots.
 The exact hotfix utility and runtime artifacts passed integrity checks; the full
 repository gate passed 81 tests, all 60 live OpenClaw gates passed, and the owner
 observed three repeated all-seven Discord tests with complete replies and no
-truncation. M7/T2 remains unauthorized.
+truncation. M7/T2-R11 is now the authorized current task recorded in section 4.
 
 M7/T1-R16 retained the R15 minimal-tool compatibility decision and recorded the
 owner's 2026-09-07 correction that Discord capability evidence is an operational
@@ -294,7 +294,8 @@ details were implemented and validated without enabling internal delegation.
 Focused OpenClaw tests, the full 76-test repository gate, `git diff --check`,
 host/runtime/security checks, seven model and auth-order probes, all 28 Discord
 account/surface permission probes, and owner-observed live behavior passed.
-M7/T2 Agent topology is the next eligible task and remains unauthorized.
+M7/T2-R11 owns the current five-stack topology implementation under the active
+execution contract referenced in section 4.
 
 Minimum scope:
 
@@ -319,15 +320,15 @@ Unless separately approved:
 
 ## 10. Decision log
 
-| Decision | Current rule |
-| --- | --- |
-| Repository scope | Three logical modules: Knowledgebase, Skill Store, Tools. |
-| Knowledgebase taxonomy | Preserve existing owner-approved taxonomy and Supply Chain coverage. |
-| Templates | Excel/Power BI templates are owner-built assets stored in Zink Skill Store. |
-| Work/Research | Main infers mode from intent; mode is metadata, not a second store. |
-| Execution specialists | Excel, Power BI, SQL and Python are the baseline four. |
-| Five Stack | Functional processing layers; agents may serve more than one stack. |
-| L&SC Data Plant | Logical external-infrastructure/data-compute flow only; no platform runtime. |
-| Model artifacts | Heavy artifacts stay external; repository keeps only lightweight metadata/config/evaluation references when needed. |
-| OpenClaw | External runtime/orchestrator and task-mode classifier. |
-| n8n | Deterministic workflow/trigger/schedule plumbing. |
+| Decision               | Current rule                                                                                                        |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Repository scope       | Three logical modules: Knowledgebase, Skill Store, Tools.                                                           |
+| Knowledgebase taxonomy | Preserve existing owner-approved taxonomy and Supply Chain coverage.                                                |
+| Templates              | Excel/Power BI templates are owner-built assets stored in Zink Skill Store.                                         |
+| Work/Research          | Main infers mode from intent; mode is metadata, not a second store.                                                 |
+| Execution specialists  | Excel, Power BI, SQL and Python are the baseline four.                                                              |
+| Five Stack             | Functional processing layers; agents may serve more than one stack.                                                 |
+| L&SC Data Plant        | Logical external-infrastructure/data-compute flow only; no platform runtime.                                        |
+| Model artifacts        | Heavy artifacts stay external; repository keeps only lightweight metadata/config/evaluation references when needed. |
+| OpenClaw               | External runtime/orchestrator and task-mode classifier.                                                             |
+| n8n                    | Deterministic workflow/trigger/schedule plumbing.                                                                   |

@@ -357,7 +357,18 @@ test("M7/T1 builds the exact minimal-tool, zero-command foundation", () => {
       path.join(stateDir, "agents", agent.id, "agent"),
     );
     assert.deepEqual(agent.skills, []);
-    assert.deepEqual(agent.tools, { profile: "minimal" });
+    const expectedTools = { profile: "minimal" };
+    if (agent.id === "main") {
+      expectedTools.alsoAllow = [
+        "agents_list",
+        "sessions_spawn",
+        "sessions_yield",
+      ];
+    } else if (["o1", "o2"].includes(agent.id)) {
+      expectedTools.alsoAllow = ["sessions_spawn", "sessions_yield"];
+    }
+    assert.deepEqual(agent.tools, expectedTools);
+    assert.deepEqual(agent.subagents.requireAgentId, true);
     assert.deepEqual(agent.sandbox, {
       mode: "all",
       backend: "docker",
@@ -385,16 +396,26 @@ test("M7/T1 builds the exact minimal-tool, zero-command foundation", () => {
   });
   assert.deepEqual(config.tools, {
     agentToAgent: { enabled: false, allow: [] },
+    subagents: { tools: { alsoAllow: ["session_status"] } },
+    sessions: { visibility: "tree" },
+    sessions_spawn: { attachments: { enabled: false } },
   });
   assert.deepEqual(config.plugins, {
     enabled: true,
-    allow: [...PLUGIN_ALLOWLIST],
+    allow: [...PLUGIN_ALLOWLIST, "zink-governance"],
     deny: [],
-    load: { paths: [] },
+    load: { paths: [path.join(stateDir, "extensions", "zink-governance")] },
     slots: { memory: "none" },
     entries: {
       google: { enabled: true },
       discord: { enabled: true },
+      "zink-governance": {
+        enabled: true,
+        config: {
+          ledgerRoot: path.join(stateDir, "operator", "m7-t2", "ledger"),
+          ownerDiscordId: identifiers.discordOwnerId,
+        },
+      },
     },
     bundledDiscovery: "allowlist",
   });

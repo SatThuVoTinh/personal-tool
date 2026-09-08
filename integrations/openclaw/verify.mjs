@@ -18,10 +18,13 @@ import {
   assertNoSymlinkComponents,
   assertRegularOrMissing,
   assertWorkspaceMatchesTemplate,
+  agentInstructions,
   buildAuthOrderPlan,
   buildSecretsPlan,
   defaultStateDirectory,
   defaultSystemdUserDirectory,
+  GOVERNANCE_PLUGIN_ID,
+  governancePluginFiles,
   geminiStreamHotfixContents,
   parseIdentifiers,
   passResolverContents,
@@ -29,6 +32,7 @@ import {
   stableJson,
   validateConfig,
 } from "./lib/policy.mjs";
+import { ledgerPaths } from "./topology/lib/ledger.mjs";
 
 const REPOSITORY_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -270,6 +274,21 @@ async function main() {
     "openclaw-gateway-zink.service.d",
     "10-zink.conf",
   );
+  const pluginDirectory = path.join(
+    stateDir,
+    "extensions",
+    GOVERNANCE_PLUGIN_ID,
+  );
+  const pluginManifestPath = path.join(pluginDirectory, "openclaw.plugin.json");
+  const pluginPackagePath = path.join(pluginDirectory, "package.json");
+  const pluginEntrypointPath = path.join(pluginDirectory, "index.mjs");
+  const governancePaths = ledgerPaths(stateDir);
+  const backupManifestPath = path.join(
+    stateDir,
+    "operator",
+    "m7-t2",
+    "backup-manifest.json",
+  );
   for (const target of [
     stateDir,
     configPath,
@@ -283,6 +302,15 @@ async function main() {
     ...agentDirs,
     systemdUserDir,
     dropInPath,
+    pluginDirectory,
+    pluginManifestPath,
+    pluginPackagePath,
+    pluginEntrypointPath,
+    governancePaths.root,
+    governancePaths.events,
+    governancePaths.snapshot,
+    governancePaths.identityKey,
+    backupManifestPath,
   ]) {
     assertNoSymlinkComponents(target);
   }
@@ -292,6 +320,10 @@ async function main() {
   assertRegularOrMissing(passResolverPath);
   assertRegularOrMissing(geminiStreamHotfixPath);
   assertRegularOrMissing(dropInPath);
+  assertRegularOrMissing(pluginManifestPath);
+  assertRegularOrMissing(pluginPackagePath);
+  assertRegularOrMissing(pluginEntrypointPath);
+  assertRegularOrMissing(backupManifestPath);
   if (
     !existsSync(configPath) ||
     !existsSync(authPlanPath) ||
@@ -301,6 +333,13 @@ async function main() {
     !existsSync(passStoreDirectory) ||
     !existsSync(gpgHomeDirectory) ||
     !existsSync(dropInPath) ||
+    !existsSync(pluginManifestPath) ||
+    !existsSync(pluginPackagePath) ||
+    !existsSync(pluginEntrypointPath) ||
+    !existsSync(governancePaths.events) ||
+    !existsSync(governancePaths.snapshot) ||
+    !existsSync(governancePaths.identityKey) ||
+    !existsSync(backupManifestPath) ||
     workspaces.some((workspace) => !existsSync(workspace)) ||
     agentDirs.some((agentDir) => !existsSync(agentDir))
   ) {
@@ -315,6 +354,15 @@ async function main() {
   requireMode(passStoreDirectory, 0o700);
   requireMode(gpgHomeDirectory, 0o700);
   requireMode(dropInPath, 0o600);
+  requireMode(pluginDirectory, 0o700);
+  requireMode(pluginManifestPath, 0o600);
+  requireMode(pluginPackagePath, 0o600);
+  requireMode(pluginEntrypointPath, 0o700);
+  requireMode(governancePaths.root, 0o700);
+  requireMode(governancePaths.events, 0o600);
+  requireMode(governancePaths.snapshot, 0o600);
+  requireMode(governancePaths.identityKey, 0o600);
+  requireMode(backupManifestPath, 0o600);
   for (const workspace of workspaces) {
     requireMode(workspace, 0o700);
   }
@@ -343,6 +391,23 @@ async function main() {
   if (readFileSync(dropInPath, "utf8") !== renderSystemdDropIn(stateDir)) {
     throw new Error("Systemd drop-in drift detected");
   }
+  const pluginFiles = governancePluginFiles();
+  if (
+    readFileSync(pluginManifestPath, "utf8") !== pluginFiles.manifest ||
+    readFileSync(pluginPackagePath, "utf8") !== pluginFiles.package ||
+    readFileSync(pluginEntrypointPath, "utf8") !== pluginFiles.entrypoint
+  ) {
+    throw new Error("Governance plugin drift detected");
+  }
+  const backupManifest = JSON.parse(readFileSync(backupManifestPath, "utf8"));
+  if (
+    backupManifest.schema_version !== "1.0.0" ||
+    backupManifest.governance_version !== "m7-t2-r11" ||
+    !Array.isArray(backupManifest.restore_order) ||
+    !Array.isArray(backupManifest.files)
+  ) {
+    throw new Error("T2 backup manifest is invalid");
+  }
   if (
     config.agents.list.length !== AGENT_IDS.length ||
     config.agents.list.some((agent, index) => agent.id !== AGENT_IDS[index])
@@ -350,7 +415,11 @@ async function main() {
     throw new Error("Expected the exact seven-agent roster");
   }
   for (const agent of config.agents.list) {
-    assertWorkspaceMatchesTemplate(agent.workspace);
+    assertWorkspaceMatchesTemplate(
+      agent.workspace,
+      agentInstructions(agent.id),
+      true,
+    );
   }
   const result = { static: "PASS", live: [] };
   if (options.live) {

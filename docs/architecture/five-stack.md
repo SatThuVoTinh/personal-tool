@@ -1,65 +1,23 @@
 # Five-Stack Operating Model
 
-The five stacks are **functional processing layers**, not five permanent agent
-processes and not five repository modules.
+The five stacks are functional processing layers, not repository modules or
+permanent agent processes. Stable protocol IDs are `infrastructure`,
+`data_plant`, `semantic`, `intelligence`, and `decision`.
 
-## Stack 1 — Infrastructure
+| Stack          | Coordinator | Executor / support                                         | Responsibility                                                                                                |
+| -------------- | ----------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Infrastructure | Main        | O2 designated support/future executor                      | External runtime, storage, compute, network and monitoring; T2 grants no infrastructure execution capability. |
+| Data Plant     | O2          | Excel, SQL, Python                                         | Extract, clean, validate, transform and publish governed datasets.                                            |
+| Semantic       | O1          | Power BI, SQL, Excel, Python                               | KPI, metric, schema meaning, business rules and constraints.                                                  |
+| Intelligence   | O1          | Python primary; Excel/Power BI when needed                 | Statistics, forecast, ML, risk, OR, optimization and simulation.                                              |
+| Decision       | Main        | O1/O2 support; specialist evidence through its coordinator | Final evidence synthesis, assumptions, constraints, trade-offs and owner-facing decision response.            |
 
-Existing infrastructure used directly when practical:
+Main is the only authority that changes execution between coordinators or
+functional stacks. O1 and O2 return a transition request to Main instead of
+invoking one another. The execution graph is a DAG and downstream work starts
+only after declared dependencies are accepted.
 
-```text
-R2 | DuckDB | MotherDuck | Kaggle | Databricks | local compute
-```
-
-Purpose: storage, query, CPU/GPU/notebook compute and external execution capacity.
-
-## Stack 2 — Execution
-
-Baseline execution specialists:
-
-```text
-Excel Specialist
-Power BI Specialist
-SQL Specialist
-Python Specialist
-```
-
-n8n provides deterministic trigger/schedule/workflow plumbing. Stack 2 turns a
-bounded business/analytical requirement into reproducible execution and
-artifacts.
-
-## Stack 3 — Semantic
-
-O1 resolves domain meaning, KPI definitions, business rules, constraints,
-policies and ambiguity before execution where required.
-
-An execution specialist must not invent business semantics merely because it can
-write the code or file.
-
-## Stack 4 — Intelligence
-
-```text
-Forecast
-Optimization
-Operations Research
-Simulation
-```
-
-These capabilities may use external compute and may be invoked lazily. The same
-Stack 4 supports operational work and after-hours R&D.
-
-## Stack 5 — Decision
-
-Main + O1 + O2 compare evidence, scenarios, operational risk and trade-offs to
-produce the recommendation or decision support.
-
-Model accuracy alone is not final decision quality. Operational constraints,
-risk and downstream outcome remain part of Stack 5 evaluation.
-
-## Agent-to-stack rule
-
-`agent != stack`.
-
-One specialist may serve multiple stacks. For example, Python may perform Stack 2
-transformation and execute a Stack 4 forecast/simulation. Stack identity describes
-the role of the processing stage, not who permanently owns a process.
+`agent != stack`: a specialist may support multiple stacks, but it cannot
+delegate, expand scope or claim workflow-level Decision completion. Direct
+depth-0 sessions are independent single-stack workflows; missing prerequisites
+remain BLOCKED and require a new Main workflow rather than a hidden A2A edge.

@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "zink://contracts/trusted-result-envelope-v1",
+  "title": "TrustedResultEnvelopeV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "governance_version",
+    "task_id",
+    "brief_revision",
+    "node_id",
+    "agent_id",
+    "stack_id",
+    "delegation_id",
+    "native_run_id",
+    "attempt",
+    "expected_governance_hash",
+    "observed_governance_hash",
+    "run_state",
+    "received_at",
+    "payload_digest",
+    "verifier_validation",
+    "accepted_outcome_status",
+    "accepted_reason_code",
+    "result_acceptance"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "governance_version": { "const": "m7-t2-r11" },
+    "task_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "brief_revision": { "type": "integer", "minimum": 1, "maximum": 16 },
+    "node_id": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$" },
+    "agent_id": {
+      "enum": ["main", "o1", "o2", "excel", "power-bi", "sql", "python"]
+    },
+    "stack_id": {
+      "enum": [
+        "infrastructure",
+        "data_plant",
+        "semantic",
+        "intelligence",
+        "decision"
+      ]
+    },
+    "delegation_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "native_run_id": { "type": "string", "maxLength": 256 },
+    "parent_run_id": { "type": "string", "maxLength": 256 },
+    "attempt": { "type": "integer", "minimum": 1, "maximum": 3 },
+    "expected_governance_hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "observed_governance_hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "run_state": {
+      "enum": [
+        "PENDING",
+        "SPAWN_UNKNOWN",
+        "RUNNING",
+        "BLOCKED",
+        "COMPLETE",
+        "FAILED",
+        "CANCELLED",
+        "UNKNOWN"
+      ]
+    },
+    "received_at": { "type": "string", "format": "date-time" },
+    "payload_digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "verifier_validation": { "enum": ["VALID", "INVALID", "PENDING"] },
+    "accepted_outcome_status": {
+      "enum": ["COMPLETE", "PARTIAL", "BLOCKED", "FAILED"]
+    },
+    "accepted_reason_code": { "type": "string", "maxLength": 128 },
+    "owner_action_required": { "type": "boolean" },
+    "result_acceptance": {
+      "enum": [
+        "PENDING",
+        "ACCEPTED",
+        "IDEMPOTENT_DUPLICATE",
+        "STALE_REJECTED",
+        "CONFLICT_REJECTED",
+        "INVALID_REJECTED"
+      ]
+    }
+  }
+}

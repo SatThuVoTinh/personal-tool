@@ -20,6 +20,11 @@ n8n owns deterministic workflow execution and run state. OpenClaw-to-Skill-Store
 is a reserved thin adapter boundary through Zink Tools. It is documentation only
 in M5/T1-R2 and has no implementation, API or service.
 
+For M7/T2, the model-invisible `zink-governance` OpenClaw integration enforces
+the approved five-stack topology. Its trusted operator ledger owns task dedupe,
+budget reservation, lineage, result acceptance, cancellation and restart
+reconciliation; it is not a fourth repository module and exposes no model tool.
+
 ## Skill Store governance
 
 Skill identity is capability + namespace + version. Research/candidate output

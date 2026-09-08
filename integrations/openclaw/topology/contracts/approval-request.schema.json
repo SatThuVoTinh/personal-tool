@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "zink://contracts/approval-request-v1",
+  "title": "ApprovalRequestPacketV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "governance_version",
+    "task_id",
+    "brief_revision",
+    "exact_target",
+    "exact_operation",
+    "material_parameters",
+    "impact",
+    "recovery_proposal",
+    "issued_at",
+    "expires_at",
+    "approval_scope_digest",
+    "publication_status"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "governance_version": { "const": "m7-t2-r11" },
+    "task_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "brief_revision": { "type": "integer", "minimum": 1, "maximum": 16 },
+    "exact_target": { "type": "string", "maxLength": 1024 },
+    "exact_operation": { "type": "string", "maxLength": 1024 },
+    "material_parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 32
+    },
+    "impact": { "type": "string", "maxLength": 4096 },
+    "recovery_proposal": { "type": "string", "maxLength": 4096 },
+    "issued_at": { "type": "string", "format": "date-time" },
+    "expires_at": { "type": "string", "format": "date-time" },
+    "approval_scope_digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "publication_status": { "const": "pending_owner_post" }
+  }
+}

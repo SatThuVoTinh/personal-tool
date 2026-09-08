@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "zink://contracts/delegation-envelope-v1",
+  "title": "DelegationEnvelopeV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "governance_version",
+    "task_id",
+    "brief_revision",
+    "node_id",
+    "delegation_id",
+    "attempt",
+    "parent_agent_id",
+    "target_agent_id",
+    "target_stack",
+    "expected_governance_hash",
+    "inputs",
+    "input_refs",
+    "constraints",
+    "validation_criteria",
+    "remaining_task_budget",
+    "requested_output_schema"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "governance_version": { "const": "m7-t2-r11" },
+    "task_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "brief_revision": { "type": "integer", "minimum": 1, "maximum": 16 },
+    "node_id": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$" },
+    "delegation_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "attempt": { "type": "integer", "minimum": 1, "maximum": 3 },
+    "parent_agent_id": { "enum": ["main", "o1", "o2"] },
+    "target_agent_id": {
+      "enum": ["o1", "o2", "excel", "power-bi", "sql", "python"]
+    },
+    "target_stack": {
+      "enum": [
+        "infrastructure",
+        "data_plant",
+        "semantic",
+        "intelligence",
+        "decision"
+      ]
+    },
+    "expected_governance_hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "inputs": { "type": "string", "maxLength": 16384 },
+    "input_refs": {
+      "type": "array",
+      "maxItems": 16,
+      "items": { "$ref": "governed-reference.schema.json" }
+    },
+    "constraints": { "type": "string", "maxLength": 4096 },
+    "validation_criteria": { "type": "string", "maxLength": 4096 },
+    "remaining_task_budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revisions", "transitions", "delegated_runs"],
+      "properties": {
+        "revisions": { "type": "integer", "minimum": 0, "maximum": 16 },
+        "transitions": { "type": "integer", "minimum": 0, "maximum": 10 },
+        "delegated_runs": { "type": "integer", "minimum": 0, "maximum": 72 }
+      }
+    },
+    "requested_output_schema": { "type": "string", "maxLength": 4096 }
+  }
+}

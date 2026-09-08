@@ -1,16 +1,18 @@
-# OpenClaw T1 Foundation
+# OpenClaw T2 Trusted Governance Runtime
 
-This directory provisions the owner-approved M7/T1-R19 OpenClaw profile. It is
-intentionally a private seven-bot Discord conversation foundation, not the Zink
-Tools bridge. The frozen agent identities exist, but they have no skills,
-delegation or data/tool access surfaces in T1.
+This directory provisions the owner-approved M7/T2-R11 OpenClaw profile. It is
+intentionally a private seven-bot Discord conversation foundation with the
+frozen five-stack topology, not the Zink Tools bridge. The model agents remain
+bounded; trusted builder/operator and the model-invisible `zink-governance`
+plugin enforce topology, ledger, lineage, budgets and result acceptance.
 
 ## Safety boundary
 
 The generated `main`, `o1`, `o2`, `excel`, `power-bi`, `sql`, and `python`
-agents expose only the native `session_status` tool and have no command surface.
-The tool remains available because exact-version live evidence showed that
-OpenClaw `2026.6.34` rejects an empty-tool model turn. Model policy still limits
+agents use the exact pinned effective-tool matrix: coordinators receive only
+their required status/spawn/yield surface and specialists receive native
+`session_status`. The harmless specialist re-allow avoids the exact-version
+empty-tool model failure observed on OpenClaw `2026.6.34`. Model policy still limits
 session overrides to the two approved Google aliases. Every agent
 uses a separate non-repository workspace and agent state directory plus a Docker
 sandbox with no network, read-only root, all capabilities dropped and no binds.
@@ -19,18 +21,24 @@ sandbox; gateway loopback/auth, plugin inventory and Discord access gates remain
 separate controls.
 
 Plugin discovery is fail-closed with `plugins.bundledDiscovery="allowlist"` and
-an exact `plugins.allow=["google","discord"]`. Google remains the only model
-provider plugin and Discord is the only channel plugin; browser, OpenAI, ACP and
-all other bundled or external plugins are ineligible to load. The implicit
-memory slot is explicitly disabled with `plugins.slots.memory="none"`.
+`plugins.allow=["google","discord","zink-governance"]`. Google remains the
+only model provider plugin and Discord is the only channel plugin; the local
+governance plugin is model-invisible, has no network capability and is not a
+Zink Tools adapter. Browser, OpenAI, ACP and all other bundled or external
+plugins are ineligible to load. The implicit memory slot is explicitly disabled.
+
+The operator ledger lives outside every model workspace at
+`~/.openclaw-zink/operator/m7-t2/ledger/` and uses append-only JSONL plus an
+atomic snapshot. Corruption fails closed as `EXECUTION_STATE_UNKNOWN`; native
+OpenClaw sessions are reconciliation evidence, not governance authority.
 
 Each agent has one Discord account with the same account ID as the agent ID.
 All seven accounts are available in the owner-only text channel `#office` and
 the forum parents `#results`, `#approvals`, and `#incidents`. An account accepts
 only an owner message that explicitly mentions its bot or directly replies to a
-message authored by that same bot. Bot-authored messages are ignored. T2 may
-later enable the exact native delegation graph, but Discord is never the
-internal bot message bus.
+message authored by that same bot. Bot-authored messages are ignored. The exact
+native delegation graph is enabled only through explicit target allowlists;
+Discord is never the internal bot message bus.
 
 Global Discord streaming is pinned to `mode="off"` for all seven accounts, with
 no account override. OpenClaw therefore keeps typing/model progress internal and
