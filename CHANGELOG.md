@@ -8,6 +8,13 @@ All notable, validated changes to Personal Tool are documented here.
 
 ### Added
 
+- Completed remotely backed M7/T2-R11 OpenClaw governance runtime: five-stack
+  topology and hard spawn allowlists, exact pinned `2026.6.34` capability policy,
+  model-invisible `zink-governance` hooks, append-only trusted ledger with atomic
+  budgets, strict execution/result/reference schemas, canonical identity hashes,
+  state/retry/cancellation/supersession rules, secret-redacted bounded handoffs,
+  layered generated AGENTS contracts, rollback backup manifest, and focused/full
+  repository gates on `codex/m7-t2-agent-topology`.
 - Completed locally verified M7/T1-R16 OpenClaw foundation: seven isolated
   minimal-tool agents and Discord bot accounts across one owner-only text channel
   and three forums, 21 partitioned Google profiles, restricted Docker sandboxes,

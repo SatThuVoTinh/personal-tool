@@ -34,7 +34,7 @@ Evidence Level: NONE | LOCAL-VERIFIED | REMOTE-BACKED
 | M4 — PDF ingestion                                    | `COMPLETE`    | `REMOTE-BACKED`  | T1–T5 pushed; owner has temporarily accepted M4 as complete. Exact accepted commit hash should be reconciled from git history without reopening M4 scope. |
 | M5 — Architecture contraction                         | `COMPLETE`    | `REMOTE-BACKED`  | M5/T1-R2 synchronized canonical paths, documentation and the contracted Docker runtime without refactoring the accepted Knowledgebase application.        |
 | M6 — Zink Skill Store                                 | `COMPLETE`    | `REMOTE-BACKED`  | M6/T1-R4 task commit is remotely verified; governance closeout is recorded separately.                                                                    |
-| M7 — Zink Tools + OpenClaw integration + V1 hardening | `IN PROGRESS` | `LOCAL-VERIFIED` | M7/T1-R19 completed at `7b5edc510d463eec197f000191d907e5b17aa87c`; T2 is next and unauthorized.                                                           |
+| M7 — Zink Tools + OpenClaw integration + V1 hardening | `IN PROGRESS` | `REMOTE-BACKED` | M7/T1-R19 remains complete; M7/T2-R11 is remotely backed on the task branch with the five-stack governance runtime implemented. |
 
 The former self-built L&SC Data Plant is replaced by a **logical external
 infrastructure flow**, not another repository module. Forecasting, optimization,
@@ -45,16 +45,27 @@ operations research and simulation remain first-class capabilities.
 ```text
 Milestone: M7 — Zink Tools + OpenClaw Integration + V1 Hardening
 Task: M7/T2 — Agent topology
-Task Status: IN PROGRESS
+Task Status: COMPLETE
 Planning Readiness: APPROVED
 Plan Revision: M7/T2-R11
 Execution Authorization: YES
 Authorized Task: M7/T2 — Agent topology
 Execution Contract: docs/contracts/execution/ACTIVE.md
-Evidence Level: NONE
+Evidence Level: REMOTE-BACKED
 Task Branch: codex/m7-t2-agent-topology
 Owner Approval: EXPLICIT — M7/T2-R11 implementation plan
 ```
+
+M7/T2-R11 completion evidence:
+
+- implementation commit `2c376d19df858ae642930fe60f4ecc24fbd9cbdd` is verified on
+  `origin/codex/m7-t2-agent-topology`;
+- `corepack npm test` passed all 87 tests;
+- `corepack npm run format:check`, `corepack npm run lint`, and
+  `corepack npm run repo:check` passed;
+- focused M7/T1–T2 tests passed 23/23, with `git diff --check` clean;
+- exact pinned OpenClaw `2026.6.34 (5c38f99)` config validation and static
+  verifier passed after scoped gateway restart; R11 topology remained effective.
 
 M6/T1-R4 evidence: focused M6 tests, `npm run verify` (64 tests),
 `git diff --check`, staged diff check, and scope review passed. Task commit
