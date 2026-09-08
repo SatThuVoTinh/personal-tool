@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-import { execFile, execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { clearTimeout, setTimeout } from "node:timers";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 
 import {
   AGENT_GOOGLE_PROFILES,
@@ -39,7 +39,7 @@ const REPOSITORY_ROOT = path.resolve(
   "..",
   "..",
 );
-const execFileAsync = promisify(execFile);
+const LIVE_COMMAND_TIMEOUT_MS = 10_000;
 const DISCORD_FORBIDDEN_PERMISSIONS = Object.freeze([
   "Administrator",
   "ManageChannels",
@@ -167,30 +167,89 @@ function resolveGatewayToken(resolverPath, environment) {
   return value;
 }
 
-function runLive(command, args, environment) {
-  try {
-    execFileSync(command, args, {
-      env: environment,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    return { command: displayCommand(command, args), status: "PASS" };
-  } catch {
-    return { command: displayCommand(command, args), status: "FAIL" };
+function terminateBoundedChild(child) {
+  if (process.platform !== "win32" && child.pid) {
+    try {
+      process.kill(-child.pid, "SIGKILL");
+      return;
+    } catch {
+      // Fall through to the direct child kill when a process group is gone.
+    }
   }
+  child.kill("SIGKILL");
 }
 
-function runLiveJsonCheck(command, args, environment, isExpected) {
-  try {
-    const output = execFileSync(command, args, {
-      env: environment,
-      encoding: "utf8",
+function execFileBounded(command, args, options = {}) {
+  const {
+    timeout = LIVE_COMMAND_TIMEOUT_MS,
+    maxBuffer = 16 * 1024 * 1024,
+    ...spawnOptions
+  } = options;
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      ...spawnOptions,
+      detached: process.platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
     });
-    const parsed = JSON.parse(output);
-    if (!isExpected(parsed)) {
-      throw new Error("Unexpected live JSON result");
-    }
+    let stdout = "";
+    let stderr = "";
+    let outputBytes = 0;
+    let settled = false;
+    let timer;
+    const abort = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      terminateBoundedChild(child);
+      child.stdout.destroy();
+      child.stderr.destroy();
+      reject(error);
+    };
+    timer = setTimeout(() => {
+      const error = new Error(`${command} timed out`);
+      error.code = "ETIMEDOUT";
+      abort(error);
+    }, timeout);
+
+    const append = (name, chunk) => {
+      if (settled) return;
+      outputBytes += chunk.byteLength;
+      if (outputBytes > maxBuffer) {
+        abort(new Error(`${command} exceeded output limit`));
+        return;
+      }
+      if (name === "stdout") stdout += chunk.toString("utf8");
+      else stderr += chunk.toString("utf8");
+    };
+    child.stdout.on("data", (chunk) => append("stdout", chunk));
+    child.stderr.on("data", (chunk) => append("stderr", chunk));
+    child.once("error", (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once("close", (code, signal) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (code !== 0) {
+        const error = new Error(`${command} exited with code ${code}`);
+        error.code = code;
+        error.signal = signal;
+        error.stderr = stderr;
+        reject(error);
+      } else {
+        resolve({ stdout, stderr });
+      }
+    });
+  });
+}
+
+async function runLiveAsync(command, args, environment) {
+  try {
+    await execFileBounded(command, args, { env: environment });
     return { command: displayCommand(command, args), status: "PASS" };
   } catch {
     return { command: displayCommand(command, args), status: "FAIL" };
@@ -199,10 +258,8 @@ function runLiveJsonCheck(command, args, environment, isExpected) {
 
 async function runLiveJsonCheckAsync(command, args, environment, isExpected) {
   try {
-    const { stdout } = await execFileAsync(command, args, {
+    const { stdout } = await execFileBounded(command, args, {
       env: environment,
-      encoding: "utf8",
-      maxBuffer: 16 * 1024 * 1024,
     });
     const parsed = JSON.parse(stdout);
     if (!isExpected(parsed)) {
@@ -462,9 +519,11 @@ async function main() {
       ["secrets", "audit", "--check", "--allow-exec"],
       ["security", "audit", "--deep", "--json"],
     ];
-    result.live = commands.map((args) => runLive(command, args, environment));
+    result.live = await runInBatches(commands, 8, (args) =>
+      runLiveAsync(command, args, environment),
+    );
     result.live.unshift(
-      runLive(
+      await runLiveAsync(
         process.execPath,
         [geminiStreamHotfixPath, "--check"],
         environment,
@@ -477,7 +536,7 @@ async function main() {
       })),
     );
     result.live.push(
-      ...(await runInBatches(permissionChecks, 4, (check) =>
+      ...(await runInBatches(permissionChecks, 8, (check) =>
         runLiveJsonCheckAsync(
           command,
           [
@@ -497,9 +556,9 @@ async function main() {
       )),
     );
     result.live.push(
-      ...AGENT_IDS.map((agentId) => {
+      ...(await runInBatches(AGENT_IDS, 8, (agentId) => {
         const expectedOrder = AGENT_GOOGLE_PROFILES[agentId];
-        return runLiveJsonCheck(
+        return runLiveJsonCheckAsync(
           command,
           [
             "models",
@@ -518,7 +577,7 @@ async function main() {
             value.provider === "google" &&
             JSON.stringify(value.order) === JSON.stringify(expectedOrder),
         );
-      }),
+      })),
     );
     if (result.live.some((entry) => entry.status === "FAIL")) {
       process.exitCode = 1;
