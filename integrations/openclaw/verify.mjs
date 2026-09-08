@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -39,7 +39,8 @@ const REPOSITORY_ROOT = path.resolve(
   "..",
   "..",
 );
-const LIVE_COMMAND_TIMEOUT_MS = 10_000;
+const LIVE_COMMAND_TIMEOUT_MS = 45_000;
+const LIVE_PROBE_CONCURRENCY = 1;
 const DISCORD_FORBIDDEN_PERMISSIONS = Object.freeze([
   "Administrator",
   "ManageChannels",
@@ -139,21 +140,19 @@ function displayCommand(command, args) {
   return [command, ...redacted].join(" ");
 }
 
-function resolveGatewayToken(resolverPath, environment) {
+async function resolveGatewayToken(resolverPath, environment) {
   const request = {
     protocolVersion: 1,
     provider: PASS_PROVIDER_ID,
     ids: [SECRET_REFS.gateway.id],
   };
-  const output = execFileSync(resolverPath, [], {
+  const { stdout } = await execFileBounded(resolverPath, [], {
     env: environment,
-    encoding: "utf8",
-    input: JSON.stringify(request),
-    stdio: ["pipe", "pipe", "pipe"],
     timeout: 5_000,
     maxBuffer: 16 * 1024,
+    input: JSON.stringify(request),
   });
-  const response = JSON.parse(output);
+  const response = JSON.parse(stdout);
   const value = response?.values?.[SECRET_REFS.gateway.id];
   if (
     response?.protocolVersion !== 1 ||
@@ -183,13 +182,14 @@ function execFileBounded(command, args, options = {}) {
   const {
     timeout = LIVE_COMMAND_TIMEOUT_MS,
     maxBuffer = 16 * 1024 * 1024,
+    input,
     ...spawnOptions
   } = options;
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       ...spawnOptions,
       detached: process.platform !== "win32",
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
       windowsHide: true,
     });
     let stdout = "";
@@ -224,6 +224,7 @@ function execFileBounded(command, args, options = {}) {
     };
     child.stdout.on("data", (chunk) => append("stdout", chunk));
     child.stderr.on("data", (chunk) => append("stderr", chunk));
+    if (input !== undefined) child.stdin.end(input);
     child.once("error", (error) => {
       if (settled) return;
       settled = true;
@@ -488,7 +489,7 @@ async function main() {
       PASSWORD_STORE_DIR: passStoreDirectory,
       GNUPGHOME: gpgHomeDirectory,
     };
-    environment.OPENCLAW_GATEWAY_TOKEN = resolveGatewayToken(
+    environment.OPENCLAW_GATEWAY_TOKEN = await resolveGatewayToken(
       passResolverPath,
       environment,
     );
@@ -519,7 +520,7 @@ async function main() {
       ["secrets", "audit", "--check", "--allow-exec"],
       ["security", "audit", "--deep", "--json"],
     ];
-    result.live = await runInBatches(commands, 8, (args) =>
+    result.live = await runInBatches(commands, LIVE_PROBE_CONCURRENCY, (args) =>
       runLiveAsync(command, args, environment),
     );
     result.live.unshift(
@@ -536,27 +537,30 @@ async function main() {
       })),
     );
     result.live.push(
-      ...(await runInBatches(permissionChecks, 8, (check) =>
-        runLiveJsonCheckAsync(
-          command,
-          [
-            "channels",
-            "capabilities",
-            "--channel",
-            "discord",
-            "--account",
-            check.accountId,
-            "--target",
-            `channel:${identifiers[check.surfaceIdentifier]}`,
-            "--json",
-          ],
-          environment,
-          (value) => isExpectedDiscordCapability(value, check),
-        ),
+      ...(await runInBatches(
+        permissionChecks,
+        LIVE_PROBE_CONCURRENCY,
+        (check) =>
+          runLiveJsonCheckAsync(
+            command,
+            [
+              "channels",
+              "capabilities",
+              "--channel",
+              "discord",
+              "--account",
+              check.accountId,
+              "--target",
+              `channel:${identifiers[check.surfaceIdentifier]}`,
+              "--json",
+            ],
+            environment,
+            (value) => isExpectedDiscordCapability(value, check),
+          ),
       )),
     );
     result.live.push(
-      ...(await runInBatches(AGENT_IDS, 8, (agentId) => {
+      ...(await runInBatches(AGENT_IDS, LIVE_PROBE_CONCURRENCY, (agentId) => {
         const expectedOrder = AGENT_GOOGLE_PROFILES[agentId];
         return runLiveJsonCheckAsync(
           command,
