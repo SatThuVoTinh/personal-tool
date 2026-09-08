@@ -63,6 +63,9 @@ M7/T2-R11 completion evidence:
 - corrective verifier commit `8d93aae1c47ff13bb74e03a119e061ba30dbb948` is
   verified on `origin/codex/m7-t2-agent-topology`; live probes are now bounded,
   process-group terminated on timeout, and evaluated asynchronously in batches;
+- final live-gate fix commit `02e30b1c229894a1d896374ce8857bfdbba3eba5` is
+  verified on `origin/codex/m7-t2-agent-topology`; the exact pinned
+  `2026.6.34` static and full sequential live verifier both passed;
 - `corepack npm test` passed all 87 tests;
 - `corepack npm run format:check`, `corepack npm run lint`, and
   `corepack npm run repo:check` passed;

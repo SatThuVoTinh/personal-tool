@@ -18,6 +18,9 @@ All notable, validated changes to Personal Tool are documented here.
 - Added the remotely backed M7/T2-R11 verifier correction: live OpenClaw probes
   use bounded process groups, forced timeout cleanup, batched execution, and
   asynchronous JSON checks so a hung child cannot stall the verifier indefinitely.
+- Completed the M7/T2-R11 live-gate hardening: gateway-secret resolution uses the
+  same bounded process-group runner, OpenClaw probes run sequentially to avoid
+  shared-runtime contention, and the full exact-`2026.6.34` live matrix passed.
 - Completed locally verified M7/T1-R16 OpenClaw foundation: seven isolated
   minimal-tool agents and Discord bot accounts across one owner-only text channel
   and three forums, 21 partitioned Google profiles, restricted Docker sandboxes,
