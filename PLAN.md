@@ -34,7 +34,7 @@ Evidence Level: NONE | LOCAL-VERIFIED | REMOTE-BACKED
 | M4 — PDF ingestion | `COMPLETE` | `REMOTE-BACKED` | T1–T5 pushed; owner has temporarily accepted M4 as complete. Exact accepted commit hash should be reconciled from git history without reopening M4 scope. |
 | M5 — Architecture contraction | `COMPLETE` | `REMOTE-BACKED` | M5/T1-R2 synchronized canonical paths, documentation and the contracted Docker runtime without refactoring the accepted Knowledgebase application. |
 | M6 — Zink Skill Store | `COMPLETE` | `REMOTE-BACKED` | M6/T1-R4 task commit is remotely verified; governance closeout is recorded separately. |
-| M7 — Zink Tools + OpenClaw integration + V1 hardening | `IN PROGRESS` | `LOCAL-VERIFIED` | M7/T1-R19 backports upstream terminal-stream recovery and suppresses errored partial output for all seven Discord bots; T2 remains unauthorized. |
+| M7 — Zink Tools + OpenClaw integration + V1 hardening | `IN PROGRESS` | `LOCAL-VERIFIED` | M7/T1-R19 completed at `7b5edc510d463eec197f000191d907e5b17aa87c`; T2 is next and unauthorized. |
 
 The former self-built L&SC Data Plant is replaced by a **logical external
 infrastructure flow**, not another repository module. Forecasting, optimization,
@@ -44,16 +44,16 @@ operations research and simulation remain first-class capabilities.
 
 ```text
 Milestone: M7 — Zink Tools + OpenClaw Integration + V1 Hardening
-Task: M7/T1 — OpenClaw Gemini stream and Discord delivery hotfix
-Task Status: IN PROGRESS
-Planning Readiness: APPROVED
-Plan Revision: M7/T1-R19
-Execution Authorization: YES
-Authorized Task: M7/T1-R19
-Execution Contract: docs/contracts/execution/ACTIVE.md
-Evidence Level: LOCAL-VERIFIED
-Task Branch: codex/m7-t1-openclaw-foundation
-Owner Approval: 2026-09-08 explicit "duyệt" for the proposed R19 upstream backport
+Task: M7/T2 — Agent topology
+Task Status: NOT STARTED
+Planning Readiness: DRAFT
+Plan Revision: NONE
+Execution Authorization: NO
+Authorized Task: NONE
+Execution Contract: NONE
+Evidence Level: NONE
+Task Branch: NONE
+Owner Approval: NONE
 ```
 
 M6/T1-R4 evidence: focused M6 tests, `npm run verify` (64 tests),
@@ -264,21 +264,24 @@ remotely verified.
 
 Status: `IN PROGRESS`
 Task: `M7/T1 — OpenClaw foundation`
-Task Status: `IN PROGRESS`
+Task Status: `COMPLETE`
 Plan Revision: `M7/T1-R19`
 Planning Readiness: `APPROVED`
-Execution Authorization: `YES`
-Execution Contract: `docs/contracts/execution/ACTIVE.md`
+Execution Authorization: `NO`
+Execution Contract: `NONE`
 Evidence: `LOCAL-VERIFIED`
-Implementation Commit: `e15a1adf9ed50ec34e1db57f825771616d9dd2c9`
+Foundation Commit: `e15a1adf9ed50ec34e1db57f825771616d9dd2c9`
+R19 Implementation Commit: `7b5edc510d463eec197f000191d907e5b17aa87c`
 
 M7/T1-R19 is an owner-approved bounded upstream backport for pinned OpenClaw
 2026.6.34. It preserves the R17 Google SSE terminal checks and R18 Discord
 final-only delivery, classifies incomplete terminal streams as timeout-class
 failover events, and suppresses errored partial assistant text/reasoning and
-terminal evidence. The investigation and post-fix gates cover all seven bots.
-Frozen implementation details and gates are in the active execution contract.
-It does not authorize T2 topology or capability work.
+terminal evidence. The investigation and post-fix gates covered all seven bots.
+The exact hotfix utility and runtime artifacts passed integrity checks; the full
+repository gate passed 81 tests, all 60 live OpenClaw gates passed, and the owner
+observed three repeated all-seven Discord tests with complete replies and no
+truncation. M7/T2 remains unauthorized.
 
 M7/T1-R16 retained the R15 minimal-tool compatibility decision and recorded the
 owner's 2026-09-07 correction that Discord capability evidence is an operational

@@ -59,6 +59,11 @@ All notable, validated changes to Personal Tool are documented here.
 
 ### Fixed
 
+- Fixed truncated OpenClaw Discord replies across all seven bots by backporting
+  exact-version Gemini terminal-stream recovery and suppressing errored partial
+  answer, reasoning, and final-evidence payloads. The patch is hash-guarded,
+  reversible, enforced before service start, and validated by 81 repository
+  tests, 60 live gates, and three owner-observed all-seven Discord runs.
 - Hardened the M6 Skill Store validator to stop before decoding oversized
   content, reject URI-shaped repository references, suppress partial catalogs,
   preserve operational error classification, and order diagnostics without
