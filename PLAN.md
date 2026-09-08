@@ -50,7 +50,7 @@ Planning Readiness: APPROVED
 Plan Revision: M7/T2-R11
 Execution Authorization: YES
 Authorized Task: M7/T2 — Agent topology
-Execution Contract: docs/contracts/execution/ACTIVE.md
+Execution Contract: NONE
 Evidence Level: REMOTE-BACKED
 Task Branch: codex/m7-t2-agent-topology
 Owner Approval: EXPLICIT — M7/T2-R11 implementation plan
@@ -60,6 +60,9 @@ M7/T2-R11 completion evidence:
 
 - implementation commit `2c376d19df858ae642930fe60f4ecc24fbd9cbdd` is verified on
   `origin/codex/m7-t2-agent-topology`;
+- corrective verifier commit `8d93aae1c47ff13bb74e03a119e061ba30dbb948` is
+  verified on `origin/codex/m7-t2-agent-topology`; live probes are now bounded,
+  process-group terminated on timeout, and evaluated asynchronously in batches;
 - `corepack npm test` passed all 87 tests;
 - `corepack npm run format:check`, `corepack npm run lint`, and
   `corepack npm run repo:check` passed;
