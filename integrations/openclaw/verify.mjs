@@ -1,10 +1,15 @@
 #!/usr/bin/env node
+import { Buffer } from "node:buffer";
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { clearTimeout, setTimeout } from "node:timers";
 import { fileURLToPath } from "node:url";
+import {
+  runtimeBackupPath,
+  verifyRuntimeBackup,
+} from "./topology/lib/runtime-backup.mjs";
 
 import {
   AGENT_GOOGLE_PROFILES,
@@ -140,7 +145,7 @@ function displayCommand(command, args) {
   return [command, ...redacted].join(" ");
 }
 
-async function resolveGatewayToken(resolverPath, environment) {
+export async function resolveGatewayToken(resolverPath, environment) {
   const request = {
     protocolVersion: 1,
     provider: PASS_PROVIDER_ID,
@@ -178,7 +183,7 @@ function terminateBoundedChild(child) {
   child.kill("SIGKILL");
 }
 
-function execFileBounded(command, args, options = {}) {
+export function execFileBounded(command, args, options = {}) {
   const {
     timeout = LIVE_COMMAND_TIMEOUT_MS,
     maxBuffer = 16 * 1024 * 1024,
@@ -192,8 +197,8 @@ function execFileBounded(command, args, options = {}) {
       stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
       windowsHide: true,
     });
-    let stdout = "";
-    let stderr = "";
+    const stdout = [];
+    const stderr = [];
     let outputBytes = 0;
     let settled = false;
     let timer;
@@ -202,6 +207,7 @@ function execFileBounded(command, args, options = {}) {
       settled = true;
       clearTimeout(timer);
       terminateBoundedChild(child);
+      child.stdin?.destroy();
       child.stdout.destroy();
       child.stderr.destroy();
       reject(error);
@@ -219,12 +225,14 @@ function execFileBounded(command, args, options = {}) {
         abort(new Error(`${command} exceeded output limit`));
         return;
       }
-      if (name === "stdout") stdout += chunk.toString("utf8");
-      else stderr += chunk.toString("utf8");
+      (name === "stdout" ? stdout : stderr).push(chunk);
     };
     child.stdout.on("data", (chunk) => append("stdout", chunk));
     child.stderr.on("data", (chunk) => append("stderr", chunk));
-    if (input !== undefined) child.stdin.end(input);
+    if (input !== undefined) {
+      child.stdin.on("error", abort);
+      child.stdin.end(input);
+    }
     child.once("error", (error) => {
       if (settled) return;
       settled = true;
@@ -239,10 +247,12 @@ function execFileBounded(command, args, options = {}) {
         const error = new Error(`${command} exited with code ${code}`);
         error.code = code;
         error.signal = signal;
-        error.stderr = stderr;
         reject(error);
       } else {
-        resolve({ stdout, stderr });
+        resolve({
+          stdout: Buffer.concat(stdout).toString("utf8"),
+          stderr: Buffer.concat(stderr).toString("utf8"),
+        });
       }
     });
   });
@@ -342,10 +352,8 @@ async function main() {
   const pluginEntrypointPath = path.join(pluginDirectory, "index.mjs");
   const governancePaths = ledgerPaths(stateDir);
   const backupManifestPath = path.join(
-    stateDir,
-    "operator",
-    "m7-t2",
-    "backup-manifest.json",
+    runtimeBackupPath(stateDir),
+    "manifest.json",
   );
   for (const target of [
     stateDir,
@@ -450,6 +458,14 @@ async function main() {
     throw new Error("Systemd drop-in drift detected");
   }
   const pluginFiles = governancePluginFiles();
+  for (const [relative, contents] of Object.entries(pluginFiles.assets)) {
+    const target = path.join(pluginDirectory, relative);
+    assertNoSymlinkComponents(target);
+    assertRegularOrMissing(target);
+    requireMode(target, 0o600);
+    if (readFileSync(target, "utf8") !== contents)
+      throw new Error("Governance plugin asset drift detected");
+  }
   if (
     readFileSync(pluginManifestPath, "utf8") !== pluginFiles.manifest ||
     readFileSync(pluginPackagePath, "utf8") !== pluginFiles.package ||
@@ -457,15 +473,7 @@ async function main() {
   ) {
     throw new Error("Governance plugin drift detected");
   }
-  const backupManifest = JSON.parse(readFileSync(backupManifestPath, "utf8"));
-  if (
-    backupManifest.schema_version !== "1.0.0" ||
-    backupManifest.governance_version !== "m7-t2-r11" ||
-    !Array.isArray(backupManifest.restore_order) ||
-    !Array.isArray(backupManifest.files)
-  ) {
-    throw new Error("T2 backup manifest is invalid");
-  }
+  await verifyRuntimeBackup({ stateDir, identifiers });
   if (
     config.agents.list.length !== AGENT_IDS.length ||
     config.agents.list.some((agent, index) => agent.id !== AGENT_IDS[index])

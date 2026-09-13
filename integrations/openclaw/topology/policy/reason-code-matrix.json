@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "governance_version": "m7-t2-r11",
+  "governance_version": "m7-t2-r12",
   "agent_claims": [
     "NONE",
     "OPTIONAL_BRANCH_FAILED",
@@ -45,6 +45,8 @@
       "APPROVAL_REQUIRED",
       "OWNER_DECISION_REQUIRED",
       "POLICY_DENIED",
+      "PROMPT_INJECTION_SUSPECTED",
+      "VALIDATION_FAILED",
       "SPAWN_UNKNOWN",
       "EXECUTION_STATE_UNKNOWN",
       "DEPENDENCY_CYCLE",

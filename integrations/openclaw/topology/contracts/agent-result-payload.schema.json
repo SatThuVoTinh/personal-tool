@@ -17,7 +17,7 @@
   ],
   "properties": {
     "schema_version": { "const": "1.0.0" },
-    "governance_version": { "const": "m7-t2-r11" },
+    "governance_version": { "const": "m7-t2-r12" },
     "outcome_claim": { "enum": ["COMPLETE", "PARTIAL", "BLOCKED", "FAILED"] },
     "reason_claim": {
       "type": "string",
@@ -37,7 +37,7 @@
     "claimed_artifact_refs": {
       "type": "array",
       "maxItems": 16,
-      "items": { "type": "object", "additionalProperties": false }
+      "items": { "$ref": "governed-reference.schema.json" }
     },
     "assumptions": {
       "type": "array",
@@ -55,5 +55,23 @@
       "items": { "$ref": "execution-brief.schema.json#/$defs/prerequisite" }
     },
     "agent_self_validation": { "type": "string", "maxLength": 4096 }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "reason_claim": { "const": "MISSING_PREREQUISITE" } }
+      },
+      "then": {
+        "properties": {
+          "requested_prerequisites": {
+            "minItems": 1,
+            "items": {
+              "$ref": "execution-brief.schema.json#/$defs/prerequisite"
+            }
+          }
+        }
+      },
+      "else": { "properties": { "requested_prerequisites": { "maxItems": 0 } } }
+    }
+  ]
 }

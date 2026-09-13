@@ -1,6 +1,6 @@
 import { createHash, createHmac } from "node:crypto";
 
-export const GOVERNANCE_VERSION = "m7-t2-r11";
+export const GOVERNANCE_VERSION = "m7-t2-r12";
 export const SCHEMA_VERSION = "1.0.0";
 
 const SET_KEYS = new Set(["allowed_tools", "allowAgents", "allowed_stacks"]);
@@ -8,7 +8,7 @@ const SET_KEYS = new Set(["allowed_tools", "allowAgents", "allowed_stacks"]);
 function normalize(value, key = "") {
   if (typeof value === "string") return value.normalize("NFC");
   if (typeof value === "number") {
-    if (!Number.isInteger(value) || !Number.isFinite(value)) {
+    if (!Number.isSafeInteger(value)) {
       throw new TypeError("Canonical contracts allow integers only");
     }
     return value;
@@ -17,20 +17,42 @@ function normalize(value, key = "") {
     const items = value.map((item) => normalize(item));
     return SET_KEYS.has(key)
       ? [...items].sort((left, right) =>
-          JSON.stringify(left).localeCompare(JSON.stringify(right)),
+          compareCodeUnits(JSON.stringify(left), JSON.stringify(right)),
         )
       : items;
   }
   if (value && typeof value === "object") {
+    if (
+      Object.getPrototypeOf(value) !== Object.prototype &&
+      Object.getPrototypeOf(value) !== null
+    )
+      throw new TypeError("Canonical contracts require plain objects");
+    const fields = Object.keys(value)
+      .filter((field) => value[field] !== undefined)
+      .map((field) => [field.normalize("NFC"), field]);
+    if (new Set(fields.map(([field]) => field)).size !== fields.length)
+      throw new TypeError("Canonical object has duplicate normalized keys");
     return Object.fromEntries(
-      Object.keys(value)
-        .filter((field) => value[field] !== undefined)
-        .sort()
-        .map((field) => [field, normalize(value[field], field)]),
+      fields
+        .sort(([left], [right]) => compareCodeUnits(left, right))
+        .map(([normalized, field]) => [
+          normalized,
+          normalize(value[field], normalized),
+        ]),
     );
   }
   if (value === null || typeof value === "boolean") return value;
   throw new TypeError("Unsupported canonical value");
+}
+
+function compareCodeUnits(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function requireSnowflake(value) {
+  if (typeof value !== "string" || !/^[1-9][0-9]{16,19}$/u.test(value))
+    throw new TypeError("Discord identity must be a snowflake string");
+  return value;
 }
 
 export function canonicalJson(value) {
@@ -51,7 +73,7 @@ export function deriveTaskId({
   return canonicalHash("zink-task-id-v1", {
     origin,
     origin_principal_ref,
-    origin_message_id: String(origin_message_id),
+    origin_message_id: requireSnowflake(origin_message_id),
   });
 }
 
@@ -81,7 +103,7 @@ export function deriveApprovalScopeDigest(value) {
 
 export function derivePrincipalRef(identityKey, rawDiscordId) {
   return createHmac("sha256", identityKey)
-    .update(`discord-principal-v1\0${String(rawDiscordId)}`, "utf8")
+    .update(`discord-principal-v1\0${requireSnowflake(rawDiscordId)}`, "utf8")
     .digest("hex");
 }
 

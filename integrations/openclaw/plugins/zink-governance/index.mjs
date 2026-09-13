@@ -1,150 +1,44 @@
-import {
-  appendFileSync,
-  chmodSync,
-  closeSync,
-  existsSync,
-  fsyncSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  renameSync,
-  writeFileSync,
-} from "node:fs";
 import { createHash } from "node:crypto";
+import { lstatSync, readFileSync } from "node:fs";
 import path from "node:path";
-import process from "node:process";
+import { URL } from "node:url";
+import { setTimeout, clearTimeout } from "node:timers";
+import { createGovernanceGuard } from "../../topology/lib/guard.mjs";
+import { sanitizeDelegationText } from "../../topology/lib/runtime.mjs";
+import { registerNativeGuard } from "../../topology/lib/native-boundary.mjs";
+import {
+  readSnapshot,
+  recordWorkflowEvent,
+} from "../../topology/lib/ledger.mjs";
+import { findSession } from "../../topology/lib/workflow.mjs";
+import {
+  canonicalHash,
+  derivePrincipalRef,
+  deriveTaskId,
+  GOVERNANCE_VERSION,
+  SCHEMA_VERSION,
+} from "../../topology/lib/canonical.mjs";
 
-const VERSION = "m7-t2-r11";
-const AGENTS = Object.freeze({
-  main: ["o1", "o2"],
-  o1: ["excel", "power-bi", "sql", "python"],
-  o2: ["excel", "sql", "python"],
-  excel: [],
-  "power-bi": [],
-  sql: [],
-  python: [],
-});
-
-function canonical(value) {
-  if (typeof value === "string") return value.normalize("NFC");
-  if (Array.isArray(value)) return value.map(canonical);
-  if (value && typeof value === "object")
-    return Object.fromEntries(
-      Object.keys(value)
-        .filter((key) => value[key] !== undefined)
-        .sort()
-        .map((key) => [key, canonical(value[key])]),
-    );
-  return value;
-}
-function hash(value) {
-  return createHash("sha256")
-    .update(`zink-ledger-event-v1\0${JSON.stringify(canonical(value))}`)
-    .digest("hex");
-}
-function paths(api) {
-  const root =
-    api.pluginConfig?.ledgerRoot ??
-    path.join(
-      api.runtime?.state?.resolveStateDir?.() ??
-        process.env.OPENCLAW_STATE_DIR ??
-        ".",
-      "operator",
-      "m7-t2",
-      "ledger",
-    );
-  return {
-    root,
-    events: path.join(root, "events.jsonl"),
-    snapshot: path.join(root, "snapshot.json"),
-  };
-}
-function ensure(p) {
-  const parent = path.dirname(p.root);
-  mkdirSync(p.root, { recursive: true, mode: 0o700 });
-  chmodSync(parent, 0o700);
-  chmodSync(p.root, 0o700);
-  if (!existsSync(p.events)) writeFileSync(p.events, "", { mode: 0o600 });
-  if (!existsSync(p.snapshot))
-    writeFileSync(
-      p.snapshot,
-      `${JSON.stringify({ schema_version: "1.0.0", governance_version: VERSION, sequence: 0, last_event_digest: null, ingress_ids: [], tasks: {} })}\n`,
-      { mode: 0o600 },
-    );
-  chmodSync(p.events, 0o600);
-  chmodSync(p.snapshot, 0o600);
-}
-function snapshot(p) {
-  ensure(p);
-  const value = JSON.parse(readFileSync(p.snapshot, "utf8"));
-  if (
-    value.schema_version !== "1.0.0" ||
-    value.governance_version !== VERSION ||
-    !Number.isInteger(value.sequence)
+const ids = new Set(["main", "o1", "o2", "excel", "power-bi", "sql", "python"]);
+function noLinks(target) {
+  for (
+    let cursor = path.resolve(target);
+    cursor !== path.dirname(cursor);
+    cursor = path.dirname(cursor)
   )
-    throw new Error("EXECUTION_STATE_UNKNOWN");
-  return value;
+    if (lstatSync(cursor).isSymbolicLink()) throw new Error("POLICY_DENIED");
 }
-function ingressDuplicate(api, messageId) {
-  if (!messageId) return false;
-  const current = snapshot(paths(api));
-  return (
-    Array.isArray(current.ingress_ids) &&
-    current.ingress_ids.includes(String(messageId))
-  );
-}
-function record(api, type, payload) {
-  const p = paths(api);
-  const current = snapshot(p);
-  const event = {
-    schema_version: "1.0.0",
-    governance_version: VERSION,
-    sequence: current.sequence + 1,
-    type,
-    payload,
-    created_at: new Date().toISOString(),
-    previous_event_digest: current.last_event_digest,
-  };
-  const eventDigest = hash(event);
-  const fd = openSync(p.events, "a", 0o600);
-  try {
-    appendFileSync(
-      fd,
-      `${JSON.stringify({ ...event, event_digest: eventDigest })}\n`,
-    );
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-  const next = {
-    ...current,
-    sequence: event.sequence,
-    last_event_digest: eventDigest,
-    updated_at: event.created_at,
-    ingress_ids:
-      type === "INGRESS_RECEIVED" && payload.messageId
-        ? [
-            ...new Set([
-              ...(current.ingress_ids ?? []),
-              String(payload.messageId),
-            ]),
-          ].slice(-2048)
-        : (current.ingress_ids ?? []),
-  };
-  const temp = `${p.snapshot}.tmp-${process.pid}`;
-  writeFileSync(temp, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
-  chmodSync(temp, 0o600);
-  renameSync(temp, p.snapshot);
-  const directoryFd = openSync(p.root, "r");
-  try {
-    fsyncSync(directoryFd);
-  } finally {
-    closeSync(directoryFd);
-  }
-  return next;
-}
-function blockReason(error) {
-  return error?.code ?? "POLICY_DENIED";
+function leaseKey(context, event = {}) {
+  const sessionKey = context.sessionKey ?? event.sessionKey;
+  const runId = context.runId ?? event.runId;
+  const toolCallId = context.toolCallId ?? event.toolCallId;
+  if (!sessionKey || !runId || !toolCallId)
+    throw new Error(`LINEAGE_MISMATCH: sessionKey=${sessionKey}, runId=${runId}, toolCallId=${toolCallId}`);
+  return canonicalHash("zink-native-call-v1", {
+    sessionKey,
+    runId,
+    toolCallId,
+  });
 }
 
 export default {
@@ -155,191 +49,310 @@ export default {
   register(api) {
     const config = api.pluginConfig ?? {};
     if (config.enabled === false) return;
-    const pendingChildren = new Map();
-    const lastToolBySession = new Map();
-    const childParentBySession = new Map();
-    const hook = (events, name, handler) =>
-      api.registerHook(events, handler, {
-        name,
-        description: `Zink governance ${name}`,
-      });
-    hook(["message_received"], "zink-governance-ingress", async (event) => {
+    if (
+      !path.isAbsolute(config.ledgerRoot ?? "") ||
+      !/^[1-9][0-9]{16,19}$/u.test(config.ownerDiscordId ?? "")
+    )
+      throw new Error("GOVERNANCE_CONFIGURATION_INVALID");
+    const paths = {
+      root: config.ledgerRoot,
+      events: path.join(config.ledgerRoot, "events.jsonl"),
+      snapshot: path.join(config.ledgerRoot, "snapshot.json"),
+    };
+    const stateDir = path.resolve(config.ledgerRoot, "../../..");
+    // Invocation leases prove the native gate ran. They are not workflow state.
+    const leasesKey = Symbol.for("zink.governance.native.leases");
+    if (!globalThis[leasesKey]) {
+      Object.defineProperty(globalThis, leasesKey, { value: new Map() });
+    }
+    const leases = globalThis[leasesKey];
+    // Notification waiters are transient, not authority. After notification the
+    // guard still requires the exact receipt persisted in the trusted ledger.
+    const startingRunsKey = Symbol.for("zink.governance.native.starting_runs");
+    if (!globalThis[startingRunsKey]) {
+      Object.defineProperty(globalThis, startingRunsKey, { value: new Set() });
+    }
+    const startingRuns = globalThis[startingRunsKey];
+    async function awaitSpawnReceipt(context, signal) {
+      const snapshot = readSnapshot(paths);
       try {
-        const authenticatedOwner =
-          typeof config.ownerDiscordId === "string" &&
-          event.senderId === config.ownerDiscordId;
-        if (
-          !authenticatedOwner ||
-          (config.ownerPrincipalRef &&
-            event.ownerPrincipalRef !== config.ownerPrincipalRef)
-        ) {
-          record(api, "INGRESS_DENIED", {
-            sessionKey: event.sessionKey,
-            reason: "POLICY_DENIED",
-          });
-          return;
-        }
-        if (ingressDuplicate(api, event.messageId)) return;
-        record(api, "INGRESS_RECEIVED", {
-          sessionKey: event.sessionKey,
-          messageId: event.messageId ?? undefined,
-        });
-      } catch (error) {
-        api.logger.error?.(
-          `zink governance ingress blocked: ${blockReason(error)}`,
-        );
+        findSession(snapshot, context.sessionKey, context.runId);
+        return;
+      } catch {
+        /* Check trusted pending work below. */
       }
-    });
-    hook(["before_prompt_build"], "zink-governance-receipt", async (event) => {
-      try {
-        record(api, "PROMPT_BOUNDARY", { sessionKey: event.sessionKey });
-        return {};
-      } catch (error) {
-        api.logger.error?.(
-          `zink governance prompt blocked: ${blockReason(error)}`,
-        );
+      if (
+        Object.values(snapshot.tasks).some(
+          (task) => task.continuations?.[context.runId],
+        )
+      )
+        return;
+      const hasPending = Object.values(snapshot.tasks).some(
+        (task) =>
+          task.workflow_status === "ACTIVE" &&
+          Object.values(task.delegations ?? {}).some(
+            (run) =>
+              run.agent_id === context.agentId &&
+              run.run_state === "SPAWN_UNKNOWN",
+          ),
+      );
+      if (!hasPending) return; // beforeRun rejects the unresolved identity.
+      await new Promise((resolve, reject) => {
+        const finish = (error) => {
+          clearTimeout(timer);
+          startingRuns.delete(check);
+          signal?.removeEventListener("abort", abort);
+          if (error) reject(error);
+          else resolve();
+        };
+        const abort = () => finish(new Error("EXECUTION_STATE_UNKNOWN"));
+        const check = (stopping = false) => {
+          if (stopping) return abort();
+          try {
+            findSession(readSnapshot(paths), context.sessionKey, context.runId);
+          } catch {
+            return;
+          }
+          finish();
+        };
+        // Never outlive the frozen delegated-run ceiling while waiting for ACK.
+        const timer = setTimeout(abort, 300000);
+        startingRuns.add(check);
+        signal?.addEventListener("abort", abort, { once: true });
+        if (signal?.aborted) abort();
+        else check();
+      });
+    }
+    const manifestFor = (agentId) => {
+      if (!ids.has(agentId)) throw new Error("UNAUTHORIZED_TARGET");
+      const mapping = JSON.parse(
+        readFileSync(
+          new URL("./governance-manifests.json", import.meta.url),
+          "utf8",
+        ),
+      );
+      const expected = mapping[agentId];
+      if (!expected || expected.governance_version !== GOVERNANCE_VERSION)
+        throw new Error("GOVERNANCE_HASH_MISMATCH");
+      const workspaceFile = path.join(
+        stateDir,
+        "workspaces",
+        agentId,
+        "AGENTS.md",
+      );
+      noLinks(workspaceFile);
+      const observed = createHash("sha256")
+        .update(readFileSync(workspaceFile))
+        .digest("hex");
+      if (observed !== expected.workspace_sha256)
+        throw new Error("GOVERNANCE_HASH_MISMATCH");
+      return {
+        expected_governance_hash: expected.governance_hash,
+        observed_governance_hash: expected.governance_hash,
+        allowed_tools: expected.allowed_tools,
+      };
+    };
+    const guard = createGovernanceGuard({ paths, manifestFor });
+    const unregister = registerNativeGuard(paths.root, {
+      beforeIngress(event) {
         return {
-          prependContext:
-            "[Governance] EXECUTION_STATE_UNKNOWN; remain BLOCKED.",
+          prompt: sanitizeDelegationText(event.prompt)
+            .split(config.ownerDiscordId)
+            .join("[OWNER_PRINCIPAL]"),
+        };
+      },
+      async beforeRun(event, context, signal) {
+        // message_received is fire-and-forget and its inbound mapper has no
+        // runId in 2026.6.34. Bind authenticated ingress at the awaited native
+        // run boundary, where message identity and run identity coexist.
+        if (!context.inputProvenance && context.channelId === "discord")
+          authenticateIngress(context);
+        await awaitSpawnReceipt(context, signal);
+        return guard.beforeRun(event, context, signal);
+      },
+      beforeToolCall(event, context, signal) {
+        const decision = guard.beforeToolCall(event, context, signal);
+        if (decision.allow) {
+          const params = decision.spawnLabel
+            ? {
+                ...event.params,
+                label: decision.spawnLabel,
+                task: decision.spawnTask,
+              }
+            : { ...event.params };
+          if (event.toolName === "sessions_spawn") {
+            params.runtime = "subagent";
+            params.mode = "run";
+            params.thread = false;
+            params.cleanup = "keep";
+            delete params.taskName;
+          }
+          const lKey = leaseKey({ ...context, toolCallId: event.toolCallId }, event);
+          const pHash = canonicalHash("zink-native-call-v1", params);
+          leases.set(lKey, pHash);
+          api.logger?.warn?.(`[zink-lease:set] key=${lKey} agent=${context.agentId} sessionKey=${context.sessionKey} runId=${context.runId} toolCallId=${event.toolCallId} hash=${pHash}`);
+        }
+        return decision;
+      },
+      beforeAnnounce: guard.beforeAnnounce,
+      beforeRunEnd: guard.beforeRunEnd,
+    });
+    api.on("gateway_stop", () => {
+      for (const check of [...startingRuns]) check(true);
+      leases.clear();
+      unregister();
+    });
+    api.on("before_tool_call", (event, context = {}) => {
+      try {
+        const key = leaseKey(context, event);
+        const expected = leases.get(key);
+        const params = { ...event.params };
+        if (
+          event.toolName === "sessions_spawn" &&
+          params.cleanup === undefined
+        ) {
+          params.cleanup = "keep";
+        }
+        const actualHash = canonicalHash("zink-native-call-v1", params);
+        api.logger?.warn?.(`[zink-lease:get] key=${key} expected=${expected} actual=${actualHash} match=${expected === actualHash} available=[${[...leases.keys()].join(",")}] context=${JSON.stringify({ agentId: context.agentId, sessionKey: context.sessionKey, runId: context.runId, toolCallId: context.toolCallId })} event=${JSON.stringify({ toolName: event.toolName, runId: event.runId, toolCallId: event.toolCallId })}`);
+        leases.delete(key);
+        if (
+          !expected ||
+          expected !== actualHash
+        )
+          throw new Error("POLICY_DENIED");
+      } catch (err) {
+        api.logger?.warn?.(`[zink-lease:blocked] ${err?.message ?? err}`);
+        return {
+          block: true,
+          blockReason: "Trusted native governance authorization is missing",
         };
       }
     });
-    hook(["llm_output"], "zink-governance-yield-audit", async (event) => {
-      const assistant = event.lastAssistant ?? event.assistant ?? {};
-      const serialized = JSON.stringify(assistant);
+    function authenticateIngress(context) {
       if (
-        serialized.includes("sessions_yield") &&
-        serialized.includes("sessions_spawn")
-      ) {
-        try {
-          record(api, "YIELD_SIBLING_DETECTED", {
-            sessionKey: event.sessionKey,
-          });
-        } catch {
-          /* before_tool_call remains the enforcement point */
-        }
-      }
-    });
-    hook(["before_tool_call"], "zink-governance-tool-guard", async (event) => {
-      const toolName = event.toolName ?? event.name ?? "";
-      if (toolName === "sessions_yield") {
-        const caller = event.agentId ?? event.requesterAgentId ?? "";
-        const key = event.sessionKey ?? caller;
-        const pending = pendingChildren.get(key) ?? 0;
-        if (
-          !["main", "o1", "o2"].includes(caller) ||
-          pending === 0 ||
-          event.pending_child_count === 0 ||
-          event.sibling_tool_calls > 0 ||
-          lastToolBySession.get(key) === "sessions_spawn"
-        )
-          return {
-            block: true,
-            blockReason:
-              "sessions_yield requires a later turn with pending children and no sibling calls",
-          };
-      }
-      if (toolName === "subagents")
-        return { block: true, blockReason: "subagents model tool is disabled" };
-      if (toolName === "sessions_spawn") {
-        const agentId = event.params?.agentId;
-        const caller = event.agentId ?? event.requesterAgentId ?? "";
-        const params = event.params ?? {};
-        if (
-          !agentId ||
-          !Object.hasOwn(AGENTS, caller) ||
-          !AGENTS[caller].includes(agentId) ||
-          params.runtime !== "subagent" ||
-          params.mode !== "run" ||
-          params.thread !== false ||
-          params.context !== "isolated" ||
-          params.sandbox !== "require" ||
-          params.cleanup !== "keep" ||
-          ["model", "thinking", "cwd", "profile", "auth", "attachments"].some(
-            (key) => Object.hasOwn(params, key),
-          )
-        )
-          return { block: true, blockReason: "UNAUTHORIZED_TARGET" };
-        const key = event.sessionKey ?? caller;
-        pendingChildren.set(key, (pendingChildren.get(key) ?? 0) + 1);
-        try {
-          record(api, "DELEGATION_RESERVED", {
-            caller,
-            agentId,
-            params: {
-              runtime: event.params?.runtime,
-              mode: event.params?.mode,
-              thread: event.params?.thread,
-              context: event.params?.context,
-              sandbox: event.params?.sandbox,
-            },
-          });
-        } catch (error) {
-          return { block: true, blockReason: blockReason(error) };
-        }
-      }
-      if (event.sessionKey || event.agentId)
-        lastToolBySession.set(event.sessionKey ?? event.agentId, toolName);
-      return undefined;
-    });
-    hook(["after_tool_call"], "zink-governance-tool-receipt", async (event) => {
+        context.channelId !== "discord" ||
+        context.senderId !== config.ownerDiscordId ||
+        !ids.has(context.agentId)
+      )
+        throw new Error("POLICY_DENIED");
+      if (
+        typeof context.currentMessageId !== "string" ||
+        !/^[1-9][0-9]{16,19}$/u.test(context.currentMessageId)
+      )
+        throw new Error("LINEAGE_MISMATCH");
+      const identityPath = path.resolve(paths.root, "../identity.key");
+      noLinks(identityPath);
+      // Trusted HMAC use only; the key never enters prompts or logs.
+      const key = readFileSync(identityPath, "utf8").trim();
+      if (!/^[a-f0-9]{64}$/u.test(key))
+        throw new Error("EXECUTION_STATE_UNKNOWN");
+      const origin = {
+        origin: "discord",
+        origin_principal_ref: derivePrincipalRef(key, context.senderId),
+        origin_message_id: context.currentMessageId,
+      };
+      recordWorkflowEvent(paths, "WORKFLOW_OPENED", {
+        ...origin,
+        task_id: deriveTaskId(origin),
+        root_agent_id: context.agentId,
+        root_session_key: context.sessionKey,
+        root_run_id: context.runId,
+      });
+    }
+    api.on("before_prompt_build", (_event, context = {}) => {
       try {
-        record(api, "TOOL_RECEIPT", {
-          toolName: event.toolName ?? event.name,
-          sessionKey: event.sessionKey,
-        });
-      } catch {
-        /* fail closed on next state operation */
-      }
-    });
-    hook(["subagent_spawned"], "zink-governance-spawned", async (event) => {
-      try {
-        record(api, "SPAWN_RECEIPT", {
-          childSessionKey: event.childSessionKey,
-          runId: event.runId,
-          agentId: event.agentId,
-        });
-        if (event.childSessionKey && event.requesterSessionKey)
-          childParentBySession.set(
-            event.childSessionKey,
-            event.requesterSessionKey,
-          );
-      } catch (error) {
-        api.logger.error?.(
-          `zink governance spawn receipt failed: ${blockReason(error)}`,
+        const owner = findSession(
+          readSnapshot(paths),
+          context.sessionKey,
+          context.runId,
         );
+        const receipt = {
+          schema_version: SCHEMA_VERSION,
+          governance_version: GOVERNANCE_VERSION,
+          task_id: owner.task_id,
+          brief_revision: owner.task.brief_revision,
+          remaining_task_budget: {
+            revisions: 16 - owner.task.revisions_used,
+            transitions: 10 - owner.task.transitions_used,
+            delegated_runs: 72 - owner.task.delegated_runs_used,
+          },
+        };
+        if (!owner.delegation)
+          Object.assign(receipt, {
+            origin: owner.task.origin,
+            origin_principal_ref: owner.task.origin_principal_ref,
+            origin_message_id: owner.task.origin_message_id,
+          });
+        return {
+          prependContext: `[Trusted governance receipt]\n${JSON.stringify(receipt)}`,
+        };
+      } catch (error) {
+        api.logger?.error?.(
+          `zink governance before_prompt_build: EXECUTION_STATE_UNKNOWN (${error?.message ?? error})`,
+        );
+        return {
+          prependContext:
+            "[Trusted governance] EXECUTION_STATE_UNKNOWN. Do not delegate; report BLOCKED.",
+        };
       }
     });
-    hook(["subagent_ended"], "zink-governance-ended", async (event) => {
+    api.on("subagent_ended", (event, context = {}) => {
       try {
-        record(api, "CHILD_ENDED", {
-          targetSessionKey: event.targetSessionKey,
-          runId: event.runId,
+        if (
+          event.targetKind !== "subagent" ||
+          event.runId !== context.runId ||
+          event.targetSessionKey !== context.childSessionKey
+        )
+          throw new Error("LINEAGE_MISMATCH");
+        const owner = findSession(
+          readSnapshot(paths),
+          context.childSessionKey,
+          context.runId,
+        );
+        if (
+          !owner.delegation ||
+          owner.delegation.parent_session_key !== context.requesterSessionKey
+        )
+          throw new Error("LINEAGE_MISMATCH");
+        recordWorkflowEvent(paths, "WORKFLOW_NATIVE_ENDED", {
+          task_id: owner.task_id,
+          native_run_id: context.runId,
+          child_session_key: context.childSessionKey,
+          parent_session_key: context.requesterSessionKey,
           outcome: event.outcome,
         });
-        const parentSession = childParentBySession.get(event.targetSessionKey);
-        pendingChildren.set(
-          parentSession ?? event.targetSessionKey,
-          Math.max(
-            0,
-            (pendingChildren.get(parentSession ?? event.targetSessionKey) ??
-              1) - 1,
-          ),
-        );
       } catch {
-        /* ledger failure is surfaced by verifier */
+        api.logger?.error?.(
+          "zink governance completion: EXECUTION_STATE_UNKNOWN",
+        );
       }
     });
-    hook(["agent_end"], "zink-governance-result", async (event) => {
+    api.on("subagent_spawned", (event, context = {}) => {
       try {
-        record(api, "AGENT_PAYLOAD_RECEIVED", {
-          sessionKey: event.sessionKey,
-          stopReason: event.stopReason,
-        });
-      } catch (error) {
-        api.logger.error?.(
-          `zink governance result rejected: ${blockReason(error)}`,
+        const matches = Object.entries(readSnapshot(paths).tasks).flatMap(
+          ([task_id, task]) =>
+            Object.values(task.delegations ?? {})
+              .filter(
+                (run) =>
+                  run.delegation_id === event.label &&
+                  run.parent_session_key === context.requesterSessionKey &&
+                  run.agent_id === event.agentId,
+              )
+              .map((run) => ({ task_id, run })),
         );
+        if (matches.length !== 1) throw new Error("LINEAGE_MISMATCH");
+        recordWorkflowEvent(paths, "WORKFLOW_SPAWN_RECEIVED", {
+          task_id: matches[0].task_id,
+          delegation_id: matches[0].run.delegation_id,
+          native_run_id: event.runId,
+          child_session_key: event.childSessionKey,
+          agent_id: event.agentId,
+          parent_session_key: context.requesterSessionKey,
+        });
+        for (const check of [...startingRuns]) check();
+      } catch {
+        api.logger?.error?.("zink governance spawn: EXECUTION_STATE_UNKNOWN");
       }
     });
   },

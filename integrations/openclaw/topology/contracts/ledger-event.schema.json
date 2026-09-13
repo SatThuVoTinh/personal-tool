@@ -15,20 +15,738 @@
     "event_digest"
   ],
   "properties": {
-    "schema_version": { "const": "1.0.0" },
-    "governance_version": { "const": "m7-t2-r11" },
-    "sequence": { "type": "integer", "minimum": 1 },
-    "type": { "type": "string", "maxLength": 128 },
-    "payload": {
-      "type": "object",
-      "additionalProperties": false,
-      "maxProperties": 64
+    "schema_version": {
+      "const": "1.0.0"
     },
-    "created_at": { "type": "string", "format": "date-time" },
+    "governance_version": {
+      "const": "m7-t2-r12"
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "type": {
+      "enum": [
+        "WORKFLOW_OPENED",
+        "WORKFLOW_NATIVE_ENDED",
+        "WORKFLOW_BRIEF_ACTIVATED",
+        "WORKFLOW_SPAWN_RESERVED",
+        "WORKFLOW_SPAWN_RECEIVED",
+        "WORKFLOW_RESULT_RECORDED",
+        "WORKFLOW_ROOT_RESULT_RECORDED",
+        "WORKFLOW_CANCELLED",
+        "WORKFLOW_CONTINUATION_AUTHORIZED",
+        "WORKFLOW_CONTINUATION_STARTED",
+        "BUDGET_RESERVED",
+        "TASK_CREATED",
+        "DELEGATION_RESERVED"
+      ]
+    },
+    "payload": {
+      "type": "object"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
     "previous_event_digest": {
       "type": ["string", "null"],
       "pattern": "^[a-f0-9]{64}$"
     },
-    "event_digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+    "event_digest": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "type": { "const": "WORKFLOW_NATIVE_ENDED" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "task_id",
+              "native_run_id",
+              "child_session_key",
+              "parent_session_key",
+              "outcome"
+            ],
+            "properties": {
+              "task_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+              "native_run_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "child_session_key": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "parent_session_key": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "outcome": {
+                "enum": ["ok", "error", "timeout", "killed", "reset", "deleted"]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "WORKFLOW_OPENED"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "#/$defs/opened"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "WORKFLOW_BRIEF_ACTIVATED"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["task_id", "brief_revision", "nodes"],
+            "properties": {
+              "task_id": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "brief_revision": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 16
+              },
+              "nodes": {
+                "type": "array",
+                "maxItems": 72,
+                "items": {
+                  "$ref": "#/$defs/node"
+                },
+                "minItems": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "WORKFLOW_SPAWN_RESERVED"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "#/$defs/reserved"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "WORKFLOW_SPAWN_RECEIVED"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "task_id",
+              "delegation_id",
+              "native_run_id",
+              "child_session_key",
+              "agent_id",
+              "parent_session_key"
+            ],
+            "properties": {
+              "task_id": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "delegation_id": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "native_run_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "child_session_key": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "agent_id": {
+                "enum": [
+                  "main",
+                  "o1",
+                  "o2",
+                  "excel",
+                  "power-bi",
+                  "sql",
+                  "python"
+                ]
+              },
+              "parent_session_key": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "WORKFLOW_RESULT_RECORDED"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["task_id", "envelope"],
+            "properties": {
+              "task_id": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "envelope": {
+                "$ref": "trusted-result-envelope.schema.json"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "WORKFLOW_ROOT_RESULT_RECORDED"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "#/$defs/root_result"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "WORKFLOW_CANCELLED"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["task_id", "reason_code"],
+            "properties": {
+              "task_id": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "reason_code": {
+                "enum": ["OWNER_CANCELLED", "PARENT_CANCELLED"]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "WORKFLOW_CONTINUATION_AUTHORIZED"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "#/$defs/continuation"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "WORKFLOW_CONTINUATION_STARTED"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "task_id",
+              "next_run_id",
+              "session_key",
+              "source_session_key",
+              "agent_id"
+            ],
+            "properties": {
+              "task_id": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "next_run_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "session_key": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "source_session_key": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "agent_id": {
+                "enum": [
+                  "main",
+                  "o1",
+                  "o2",
+                  "excel",
+                  "power-bi",
+                  "sql",
+                  "python"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "BUDGET_RESERVED"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["task_id", "kind", "amount", "counters"],
+            "properties": {
+              "task_id": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "kind": {
+                "enum": ["revisions", "transitions", "delegated_runs"]
+              },
+              "amount": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "counters": {
+                "$ref": "#/$defs/counters"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "TASK_CREATED"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["task_id"],
+            "properties": {
+              "task_id": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "DELEGATION_RESERVED"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["task_id"],
+            "properties": {
+              "task_id": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "counters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revisions_used", "transitions_used", "delegated_runs_used"],
+      "properties": {
+        "revisions_used": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16
+        },
+        "transitions_used": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10
+        },
+        "delegated_runs_used": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 72
+        }
+      }
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "node_id",
+        "agent_id",
+        "stack_id",
+        "dependencies",
+        "required",
+        "input_digest",
+        "constraints_digest",
+        "validation_digest"
+      ],
+      "properties": {
+        "node_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+        },
+        "agent_id": {
+          "enum": ["main", "o1", "o2", "excel", "power-bi", "sql", "python"]
+        },
+        "stack_id": {
+          "enum": [
+            "infrastructure",
+            "data_plant",
+            "semantic",
+            "intelligence",
+            "decision"
+          ]
+        },
+        "dependencies": {
+          "type": "array",
+          "maxItems": 72,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+          },
+          "uniqueItems": true
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "input_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "constraints_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "validation_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "opened": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id",
+        "origin",
+        "origin_principal_ref",
+        "origin_message_id",
+        "root_agent_id",
+        "root_session_key",
+        "root_run_id"
+      ],
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "origin": {
+          "const": "discord"
+        },
+        "origin_principal_ref": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "origin_message_id": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{16,19}$"
+        },
+        "root_agent_id": {
+          "enum": ["main", "o1", "o2", "excel", "power-bi", "sql", "python"]
+        },
+        "root_session_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "root_run_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      }
+    },
+    "reserved": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id",
+        "brief_revision",
+        "node_id",
+        "agent_id",
+        "parent_agent_id",
+        "parent_session_key",
+        "parent_run_id",
+        "tool_call_id",
+        "turn",
+        "attempt",
+        "delegation_id",
+        "expected_governance_hash",
+        "request_digest"
+      ],
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "brief_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16
+        },
+        "node_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+        },
+        "agent_id": {
+          "enum": ["main", "o1", "o2", "excel", "power-bi", "sql", "python"]
+        },
+        "parent_agent_id": {
+          "enum": ["main", "o1", "o2", "excel", "power-bi", "sql", "python"]
+        },
+        "parent_session_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "parent_run_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "tool_call_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "turn": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3
+        },
+        "delegation_id": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "expected_governance_hash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "request_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "continuation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id",
+        "brief_revision",
+        "session_key",
+        "previous_run_id",
+        "next_run_id",
+        "source_session_key",
+        "trigger_run_id"
+      ],
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "brief_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16
+        },
+        "session_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "previous_run_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "next_run_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "source_session_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "trigger_run_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      }
+    },
+    "root_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id",
+        "brief_revision",
+        "native_run_id",
+        "agent_id",
+        "payload_digest",
+        "outcome_status",
+        "reason_code",
+        "governance_hash"
+      ],
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "brief_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16
+        },
+        "native_run_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "agent_id": {
+          "enum": ["main", "o1", "o2", "excel", "power-bi", "sql", "python"]
+        },
+        "payload_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "outcome_status": {
+          "enum": ["COMPLETE", "PARTIAL", "BLOCKED", "FAILED"]
+        },
+        "reason_code": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "governance_hash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    }
   }
 }

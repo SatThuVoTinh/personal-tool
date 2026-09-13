@@ -14,23 +14,388 @@
     "updated_at"
   ],
   "properties": {
-    "schema_version": { "const": "1.0.0" },
-    "governance_version": { "const": "m7-t2-r11" },
-    "sequence": { "type": "integer", "minimum": 0 },
-    "last_event_digest": { "type": ["string", "null"] },
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "governance_version": {
+      "const": "m7-t2-r12"
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "last_event_digest": {
+      "type": ["string", "null"],
+      "pattern": "^[a-f0-9]{64}$"
+    },
     "ingress_ids": {
       "type": "array",
       "maxItems": 2048,
-      "items": { "type": "string", "maxLength": 128 }
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256
+      }
     },
     "tasks": {
       "type": "object",
-      "additionalProperties": {
-        "type": "object",
-        "additionalProperties": false,
-        "maxProperties": 64
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[a-f0-9]{64}$": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "task_id",
+                "origin",
+                "origin_principal_ref",
+                "origin_message_id",
+                "root_agent_id",
+                "root_session_key",
+                "root_run_id",
+                "revisions_used",
+                "transitions_used",
+                "delegated_runs_used",
+                "brief_revision",
+                "brief_state",
+                "workflow_status",
+                "nodes",
+                "delegations"
+              ],
+              "properties": {
+                "task_id": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "origin": {
+                  "const": "discord"
+                },
+                "origin_principal_ref": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "origin_message_id": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]{16,19}$"
+                },
+                "root_agent_id": {
+                  "enum": [
+                    "main",
+                    "o1",
+                    "o2",
+                    "excel",
+                    "power-bi",
+                    "sql",
+                    "python"
+                  ]
+                },
+                "root_session_key": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "root_run_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "revisions_used": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 16
+                },
+                "transitions_used": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10
+                },
+                "delegated_runs_used": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 72
+                },
+                "brief_revision": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 16
+                },
+                "brief_state": {
+                  "enum": ["ACTIVE", "SUPERSEDED", "CLOSED"]
+                },
+                "workflow_status": {
+                  "enum": [
+                    "ACTIVE",
+                    "BLOCKED",
+                    "COMPLETE",
+                    "PARTIAL",
+                    "FAILED",
+                    "CANCELLED"
+                  ]
+                },
+                "nodes": {
+                  "type": "array",
+                  "maxItems": 72,
+                  "items": {
+                    "$ref": "ledger-event.schema.json#/$defs/node"
+                  }
+                },
+                "delegations": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "patternProperties": {
+                    "^[a-f0-9]{64}$": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "task_id",
+                        "brief_revision",
+                        "node_id",
+                        "agent_id",
+                        "parent_agent_id",
+                        "parent_session_key",
+                        "parent_run_id",
+                        "tool_call_id",
+                        "turn",
+                        "attempt",
+                        "delegation_id",
+                        "expected_governance_hash",
+                        "request_digest",
+                        "stack_id",
+                        "run_state"
+                      ],
+                      "properties": {
+                        "task_id": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        },
+                        "brief_revision": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 16
+                        },
+                        "node_id": {
+                          "type": "string",
+                          "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                        },
+                        "agent_id": {
+                          "enum": [
+                            "main",
+                            "o1",
+                            "o2",
+                            "excel",
+                            "power-bi",
+                            "sql",
+                            "python"
+                          ]
+                        },
+                        "parent_agent_id": {
+                          "enum": [
+                            "main",
+                            "o1",
+                            "o2",
+                            "excel",
+                            "power-bi",
+                            "sql",
+                            "python"
+                          ]
+                        },
+                        "parent_session_key": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 256
+                        },
+                        "parent_run_id": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 256
+                        },
+                        "tool_call_id": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 256
+                        },
+                        "turn": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "attempt": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 3
+                        },
+                        "delegation_id": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        },
+                        "expected_governance_hash": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        },
+                        "request_digest": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        },
+                        "stack_id": {
+                          "enum": [
+                            "infrastructure",
+                            "data_plant",
+                            "semantic",
+                            "intelligence",
+                            "decision"
+                          ]
+                        },
+                        "run_state": {
+                          "enum": [
+                            "PENDING",
+                            "SPAWN_UNKNOWN",
+                            "RUNNING",
+                            "BLOCKED",
+                            "COMPLETE",
+                            "FAILED",
+                            "CANCELLED",
+                            "UNKNOWN"
+                          ]
+                        },
+                        "native_run_id": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 256
+                        },
+                        "child_session_key": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 256
+                        },
+                        "previous_native_run_ids": {
+                          "type": "array",
+                          "maxItems": 72,
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 256
+                          }
+                        },
+                        "accepted_payload_digest": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        },
+                        "accepted_received_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "accepted_outcome_status": {
+                          "enum": ["COMPLETE", "PARTIAL", "BLOCKED", "FAILED"]
+                        },
+                        "accepted_reason_code": {
+                          "type": "string",
+                          "maxLength": 128
+                        },
+                        "runtime_reason_code": {
+                          "enum": ["RUN_TIMEOUT", "EXECUTION_STATE_UNKNOWN"]
+                        }
+                      }
+                    }
+                  },
+                  "maxProperties": 72
+                },
+                "continuations": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "patternProperties": {
+                    "^.{1,256}$": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "task_id",
+                        "brief_revision",
+                        "session_key",
+                        "previous_run_id",
+                        "next_run_id",
+                        "source_session_key",
+                        "trigger_run_id",
+                        "started"
+                      ],
+                      "properties": {
+                        "task_id": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        },
+                        "brief_revision": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 16
+                        },
+                        "session_key": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 256
+                        },
+                        "previous_run_id": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 256
+                        },
+                        "next_run_id": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 256
+                        },
+                        "source_session_key": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 256
+                        },
+                        "trigger_run_id": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 256
+                        },
+                        "started": {
+                          "type": "boolean"
+                        }
+                      }
+                    }
+                  },
+                  "maxProperties": 144
+                },
+                "previous_root_run_ids": {
+                  "type": "array",
+                  "maxItems": 144,
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  }
+                },
+                "current_stack": {
+                  "enum": [
+                    "infrastructure",
+                    "data_plant",
+                    "semantic",
+                    "intelligence",
+                    "decision"
+                  ]
+                },
+                "root_result": {
+                  "$ref": "ledger-event.schema.json#/$defs/root_result"
+                },
+                "reason_code": {
+                  "type": "string",
+                  "maxLength": 128
+                }
+              }
+            },
+            {
+              "$ref": "ledger-event.schema.json#/$defs/counters"
+            }
+          ]
+        }
       }
     },
-    "updated_at": { "type": "string", "format": "date-time" }
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
   }
 }

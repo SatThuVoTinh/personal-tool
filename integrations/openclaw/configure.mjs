@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
+import {
+  createRuntimeBackup,
+  runtimeBackupPath,
+} from "./topology/lib/runtime-backup.mjs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -31,7 +35,11 @@ import {
   validateConfig,
   writePrivateRegularFile,
 } from "./lib/policy.mjs";
-import { ledgerPaths, ensureLedger } from "./topology/lib/ledger.mjs";
+import {
+  ledgerPaths,
+  inspectLedgerUpgrade,
+  upgradeEmptyLegacyLedger,
+} from "./topology/lib/ledger.mjs";
 import { canonicalJson } from "./topology/lib/canonical.mjs";
 
 const REPOSITORY_ROOT = path.resolve(
@@ -43,45 +51,48 @@ const LEGACY_GEMINI_STREAM_HOTFIX_R18_SHA256 =
   "41bfeedf2835db4a50573a0f61325bc438ac805a90fef03ce3bc29b8c303f133";
 const LEGACY_GOVERNANCE_ENTRYPOINT_R11_SHA256 =
   "c71cf9d6fe9965eaa0ff789d611a55ee0ea2fc98d8023b3c7526495aaa60f559";
+const STARTING_GOVERNANCE_ENTRYPOINT_SHA256 =
+  "26bb3b447bdc039925fa568ae89beb1969319ce8b6c86236eb715c2c6224ebf0";
+const INTERMEDIATE_GOVERNANCE_ENTRYPOINT_SHA256 =
+  "a384e509ebac2c47f4a50e758b2bb697e87cc50721367ae20948d11d4f24b06b";
 const LEGACY_GOVERNANCE_MANIFEST_R11_SHA256 =
   "02c805e7909b9ca35711cc5888bc889fe9c9a566f09f580ba614682682ce41ca";
+const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
+  "lib/guard.mjs": Object.freeze([
+    "3d017828de32ed2d9ecdfc7c78e1828f3b4f8a13f88a51aabdd8ddff81443029",
+    "00cce929877bfab0864b16519dfa0276bb2955053d348b3e298c4121c3784100",
+    "55b38c41d44dc5386f696af671ca8b4de3655e2e2f5b0a6c586560509336c0bc",
+    "1c580dc09518ceffeb48ea44d760f280af03b9e3f2b11d0f7a9231638d04e9b3",
+    "a6b6f452255d22bee7d3b8b860da4fddef85bafa299fcbaf519dd76cfca075e9",
+    "b230651ec4fa9b5a123c10e319438918c0763f99287f5223da1a71d1aebe213a",
+    "efdcea2457db29f20603fa0cf948fd8e0261f78d3ec3f863637a56befdf8f784",
+  ]),
+  "lib/native-boundary.mjs": Object.freeze([
+    "4b77356f2a843f26040a7cd3312c896469aff33cc472bc6c02fdd5c472bd1234",
+    "4c3f908b84ae64155e6a32741596fc6e2b28601127b72dc33fcea20bcbcc7347",
+    "25759e86e53d962bcb00a13eedd63ea028abb31c212ae2874a84bfd041509809",
+    "164b17293cf4ac63089ad2ea1afe96bc24b39450bc3332820bc9f5fff654e253",
+    "8dbd524a49a8b65959e74f0aaf37516a7a211759bd0a3d047dfd1e73863bd741",
+  ]),
+  "lib/runtime.mjs": Object.freeze([
+    "6a522c73efacf8b593d63ee55e18b5d02c3675340e0593142a5c2fea8dc6e24a",
+  ]),
+  "lib/ledger.mjs": Object.freeze([
+    "d7f406e9dfa8f45d117f555bed18d2bf4c63ed966c3dd0588d221a54b9e87255",
+  ]),
+  "lib/workflow.mjs": Object.freeze([
+    "14bb6a5575b3f25e7d04aafb28eb1e95b0b5b2a21b15b6b5dec787aaaf94f907",
+    "19dc0eb40b216fbc898afd8dfc66f5c6aae4da15d1d2a6e5923753e13fcb09f0",
+  ]),
+});
 
 function sha256(contents) {
   return createHash("sha256").update(contents).digest("hex");
 }
 
-function buildBackupManifest(output, config) {
-  const targets = [
-    output.configPath,
-    ...Object.values(output.workspaces),
-    output.governancePluginDirectory,
-  ];
-  return {
-    schema_version: "1.0.0",
-    governance_version: "m7-t2-r11",
-    target_policy_digest: sha256(stableJson(config)),
-    restore_order: [
-      output.configPath,
-      ...Object.values(output.workspaces),
-      output.governancePluginDirectory,
-    ],
-    files: targets
-      .filter((target) => existsSync(target))
-      .map((target) => ({
-        path: target,
-        kind: statSync(target).isDirectory() ? "directory" : "file",
-        digest: statSync(target).isDirectory()
-          ? null
-          : sha256(readFileSync(target)),
-        mode: statSync(target).mode & 0o777,
-      })),
-    excludes: ["secrets", "auth material", "identity.key"],
-  };
-}
-
 function usage() {
   return [
-    "Usage: configure.mjs --dry-run|--apply --discord-guild-id <id>",
+    "Usage: configure.mjs --dry-run|--preflight|--apply --discord-guild-id <id>",
     "  --discord-owner-id <id> --discord-office-channel-id <id>",
     "  --discord-results-forum-id <id> --discord-approvals-forum-id <id>",
     "  --discord-incidents-forum-id <id>",
@@ -103,9 +114,11 @@ function parseArguments(argv) {
   ]);
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
-    if (argument === "--dry-run" || argument === "--apply") {
+    if (["--dry-run", "--preflight", "--apply"].includes(argument)) {
       if (options.mode) {
-        throw new Error("Select exactly one of --dry-run or --apply");
+        throw new Error(
+          "Select exactly one of --dry-run, --preflight or --apply",
+        );
       }
       options.mode = argument.slice(2);
       continue;
@@ -128,7 +141,7 @@ function parseArguments(argv) {
     index += 1;
   }
   if (!options.mode) {
-    throw new Error("Select exactly one of --dry-run or --apply");
+    throw new Error("Select exactly one of --dry-run, --preflight or --apply");
   }
   return options;
 }
@@ -272,7 +285,7 @@ function assertGovernanceManifestMatchesOrMissing(filePath, contents) {
   requireFileMode(filePath, 0o600, "Governance plugin manifest");
 }
 
-function main() {
+async function main() {
   const options = parseArguments(process.argv.slice(2));
   const stateDir = path.resolve(
     options["state-dir"] ?? defaultStateDirectory(),
@@ -350,12 +363,7 @@ function main() {
     ledgerEventsPath: ledgerPaths(stateDir).events,
     ledgerSnapshotPath: ledgerPaths(stateDir).snapshot,
     identityKeyPath: ledgerPaths(stateDir).identityKey,
-    backupManifestPath: path.join(
-      stateDir,
-      "operator",
-      "m7-t2",
-      "backup-manifest.json",
-    ),
+    backupManifestPath: path.join(runtimeBackupPath(stateDir), "manifest.json"),
   };
   if (options.mode === "dry-run") {
     process.stdout.write(`${stableJson(output)}`);
@@ -389,10 +397,16 @@ function main() {
   }
 
   const context = { stateDir, identifiers };
+  inspectLedgerUpgrade(ledgerPaths(stateDir));
   const configPath = output.configPath;
   const configExists = existingConfigMatches(configPath, context);
   for (const [agentId, workspace] of Object.entries(output.workspaces)) {
-    assertWorkspaceMatchesTemplate(workspace, agentInstructions(agentId));
+    assertWorkspaceMatchesTemplate(
+      workspace,
+      agentInstructions(agentId),
+      false,
+      agentId,
+    );
   }
   for (const agentDir of Object.values(output.agentDirs)) {
     assertDirectoryOrMissing(agentDir);
@@ -405,6 +419,18 @@ function main() {
     "Auth SecretRef plan",
   );
   const pluginFiles = governancePluginFiles();
+  for (const [relative, contents] of Object.entries(pluginFiles.assets)) {
+    const target = path.join(output.governancePluginDirectory, relative);
+    assertNoSymlinkComponents(target);
+    assertOwnedFileMatchesOrMissing(
+      target,
+      contents,
+      "Governance plugin asset",
+      0o600,
+      [],
+      ALLOWED_GOVERNANCE_ASSET_SHA256[relative] ?? [],
+    );
+  }
   assertGovernanceManifestMatchesOrMissing(
     output.governancePluginManifestPath,
     pluginFiles.manifest,
@@ -420,7 +446,21 @@ function main() {
     "Governance plugin entrypoint",
     0o700,
     [],
-    [LEGACY_GOVERNANCE_ENTRYPOINT_R11_SHA256],
+    [
+      LEGACY_GOVERNANCE_ENTRYPOINT_R11_SHA256,
+      STARTING_GOVERNANCE_ENTRYPOINT_SHA256,
+      INTERMEDIATE_GOVERNANCE_ENTRYPOINT_SHA256,
+      "d5f1394e18eb2e1910c2ec7f1c92cab4e6c16b1e7ced7c7899b7d1076df85b2e",
+      "f116d778cb5a8fa875ff33cb2fe6de8a42f209b984a84899cf2ab795592b13d7",
+      "73bea1f506a72181528c11bd210ee6ccaf4ad69518c2ff38fdafc5da4a91be6e",
+      "6ccf56a256a321597c7405f2daff3412371a3c37e5d27a410c0cf2a3db802724",
+      "3c6545cc8925710ca76068ed64070a71353a794b81de74561bd168e034ec2135",
+      "9402dc774e7db90616bf5cafe9afc2bf899892fb2c926abf2526f69eb29d7d7e",
+      "e2a265dca6a0ea2b20b8a41004cf08b6157bfbaf503d1a5d2257dfc2504243f3",
+      "694a89ae93d6685ff37562828873e7120bb07353b8d3e6e213fd5b080106bf8f",
+      "af0ce312e23a0d3be9a10c3bb350b3d6b7d345b1ca7fc49ae13efd41219e5c93",
+      "fdb72c9f058cb29e3ba4e3ae3a394d1f84e805a274e8614e592018d073e88015",
+    ],
   );
   assertRegularOrMissing(output.identityKeyPath);
   if (existsSync(output.identityKeyPath))
@@ -455,20 +495,20 @@ function main() {
     [renderLegacySystemdDropInR16(stateDir)],
   );
 
+  if (options.mode === "preflight") {
+    process.stdout.write(
+      `${stableJson({ ...output, preflight: "PASS", installedMutation: false })}`,
+    );
+    return;
+  }
   ensurePrivateDirectory(stateDir);
   ensurePrivateDirectory(output.ledgerDirectory);
-  if (!existsSync(output.backupManifestPath)) {
-    materializeOwnedFile(
-      output.backupManifestPath,
-      stableJson(buildBackupManifest(output, config)),
-      "T2 backup manifest",
-    );
-  }
+  await createRuntimeBackup({ stateDir, identifiers });
   if (!configExists) {
     writePrivateRegularFile(configPath, stableJson(config));
   }
   for (const [agentId, workspace] of Object.entries(output.workspaces)) {
-    materializeWorkspace(workspace, agentInstructions(agentId));
+    materializeWorkspace(workspace, agentInstructions(agentId), agentId);
   }
   for (const agentDir of Object.values(output.agentDirs)) {
     ensurePrivateDirectory(agentDir);
@@ -479,6 +519,18 @@ function main() {
     "Auth SecretRef plan",
   );
   ensurePrivateDirectory(output.governancePluginDirectory);
+  for (const [relative, contents] of Object.entries(pluginFiles.assets)) {
+    const target = path.join(output.governancePluginDirectory, relative);
+    ensurePrivateDirectory(path.dirname(target));
+    materializeOwnedFile(
+      target,
+      contents,
+      "Governance plugin asset",
+      0o600,
+      [],
+      ALLOWED_GOVERNANCE_ASSET_SHA256[relative] ?? [],
+    );
+  }
   materializeOwnedFile(
     output.governancePluginManifestPath,
     pluginFiles.manifest,
@@ -498,7 +550,21 @@ function main() {
     "Governance plugin entrypoint",
     0o700,
     [],
-    [LEGACY_GOVERNANCE_ENTRYPOINT_R11_SHA256],
+    [
+      LEGACY_GOVERNANCE_ENTRYPOINT_R11_SHA256,
+      STARTING_GOVERNANCE_ENTRYPOINT_SHA256,
+      INTERMEDIATE_GOVERNANCE_ENTRYPOINT_SHA256,
+      "d5f1394e18eb2e1910c2ec7f1c92cab4e6c16b1e7ced7c7899b7d1076df85b2e",
+      "f116d778cb5a8fa875ff33cb2fe6de8a42f209b984a84899cf2ab795592b13d7",
+      "73bea1f506a72181528c11bd210ee6ccaf4ad69518c2ff38fdafc5da4a91be6e",
+      "6ccf56a256a321597c7405f2daff3412371a3c37e5d27a410c0cf2a3db802724",
+      "3c6545cc8925710ca76068ed64070a71353a794b81de74561bd168e034ec2135",
+      "9402dc774e7db90616bf5cafe9afc2bf899892fb2c926abf2526f69eb29d7d7e",
+      "e2a265dca6a0ea2b20b8a41004cf08b6157bfbaf503d1a5d2257dfc2504243f3",
+      "694a89ae93d6685ff37562828873e7120bb07353b8d3e6e213fd5b080106bf8f",
+      "af0ce312e23a0d3be9a10c3bb350b3d6b7d345b1ca7fc49ae13efd41219e5c93",
+      "fdb72c9f058cb29e3ba4e3ae3a394d1f84e805a274e8614e592018d073e88015",
+    ],
   );
   if (!existsSync(output.identityKeyPath))
     writePrivateRegularFile(
@@ -506,7 +572,7 @@ function main() {
       `${randomBytes(32).toString("hex")}\n`,
       0o600,
     );
-  ensureLedger(ledgerPaths(stateDir));
+  upgradeEmptyLegacyLedger(ledgerPaths(stateDir));
   materializeOwnedFile(
     output.authOrderPlanPath,
     stableJson(buildAuthOrderPlan()),
@@ -542,7 +608,7 @@ function main() {
 }
 
 try {
-  main();
+  await main();
 } catch (error) {
   process.stderr.write(`${error.message}\n${usage()}\n`);
   process.exitCode = 1;

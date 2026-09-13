@@ -23,7 +23,7 @@
   ],
   "properties": {
     "schema_version": { "const": "1.0.0" },
-    "governance_version": { "const": "m7-t2-r11" },
+    "governance_version": { "const": "m7-t2-r12" },
     "task_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "brief_revision": { "type": "integer", "minimum": 1, "maximum": 16 },
     "brief_state": { "enum": ["ACTIVE", "SUPERSEDED", "CLOSED"] },
@@ -60,8 +60,23 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["node_id", "stack_id", "dependencies", "required"],
+        "required": [
+          "node_id",
+          "stack_id",
+          "agent_id",
+          "dependencies",
+          "required",
+          "inputs",
+          "constraints",
+          "validation_criteria"
+        ],
         "properties": {
+          "agent_id": {
+            "enum": ["main", "o1", "o2", "excel", "power-bi", "sql", "python"]
+          },
+          "inputs": { "type": "string", "maxLength": 16384 },
+          "constraints": { "type": "string", "maxLength": 4096 },
+          "validation_criteria": { "type": "string", "maxLength": 4096 },
           "node_id": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$" },
           "stack_id": {
             "enum": [

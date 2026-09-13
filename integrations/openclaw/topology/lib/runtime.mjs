@@ -1,52 +1,33 @@
 import { canonicalHash, deriveDelegationId, utcNow } from "./canonical.mjs";
+import { validateContract } from "./schema.mjs";
+import { readFileSync } from "node:fs";
+import { URL } from "node:url";
 
-export const AGENT_REASON_CODES = Object.freeze([
-  "NONE",
-  "OPTIONAL_BRANCH_FAILED",
-  "MISSING_INPUT",
-  "MISSING_PREREQUISITE",
-  "APPROVAL_REQUIRED",
-  "OWNER_DECISION_REQUIRED",
-  "POLICY_DENIED",
-  "SELF_VALIDATION_FAILED",
-  "PROMPT_INJECTION_SUSPECTED",
-]);
-
-export const RUNTIME_REASON_CODES = Object.freeze([
-  "SCHEMA_INVALID",
-  "LINEAGE_MISMATCH",
-  "GOVERNANCE_HASH_MISMATCH",
-  "UNAUTHORIZED_TARGET",
-  "DUPLICATE_RESULT_CONFLICT",
-  "INVALID_STATE_TRANSITION",
-  "RESULT_DIGEST_MISMATCH",
-  "REFERENCE_INVALID",
-  "TRANSIENT_RUNTIME_FAILURE",
-  "VALIDATION_FAILED",
-  "SPAWN_UNKNOWN",
-  "EXECUTION_STATE_UNKNOWN",
-  "RUN_TIMEOUT",
-  "ANNOUNCE_DELIVERY_FAILED",
-  "DEPENDENCY_CYCLE",
-  "WORKFLOW_BUDGET_EXHAUSTED",
-  "RUNTIME_CAPABILITY_MISMATCH",
-  "RETRY_EXHAUSTED",
-  "OWNER_CANCELLED",
-  "PARENT_CANCELLED",
-  "SUPERSEDED_REVISION",
-  "STALE_RESULT",
-]);
+const reasonPolicy = JSON.parse(
+  readFileSync(
+    new URL("../policy/reason-code-matrix.json", import.meta.url),
+    "utf8",
+  ),
+);
+export const AGENT_REASON_CODES = Object.freeze(reasonPolicy.agent_claims);
+export const RUNTIME_REASON_CODES = Object.freeze(reasonPolicy.runtime_reasons);
 
 const SECRET_PATTERN =
-  /(?:api[_-]?key|token|password|secret|private[_-]?key|authorization)\s*[:=]\s*[^\s,;]+/giu;
-const PATH_PATTERN = /(?:[A-Z]:\\|\/home\/|~\/|\\\\)[^\s"']+/gu;
+  /(?:api[_-]?key|token|password|secret|private[_-]?key|authorization)["']?\s*[:=]\s*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\r\n,;}]+)/giu;
+const PATH_PATTERN =
+  /(?:[A-Z]:\\|\/home\/|~\/|\\\\[a-zA-Z0-9_.-]+\\)[^\s"']+/gu;
+const PEM_PATTERN =
+  /-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----[\s\S]*?(?:-----END (?:[A-Z]+ )?PRIVATE KEY-----|$)/gu;
+const TOKEN_PATTERN =
+  /\b(?:sk-[A-Za-z0-9_-]{16,}|AIza[A-Za-z0-9_-]{30,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|mfa\.[A-Za-z0-9_-]{20,}|[A-Za-z0-9_-]{24,}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{25,})\b/gu;
 
 export function sanitizeDelegationText(value) {
   if (typeof value !== "string") return "";
   return value
+    .replace(PEM_PATTERN, "[REDACTED_SECRET]")
+    .replace(TOKEN_PATTERN, "[REDACTED_SECRET]")
     .replace(SECRET_PATTERN, "[REDACTED_SECRET]")
-    .replace(PATH_PATTERN, "[REDACTED_PATH]")
-    .slice(0, 16 * 1024);
+    .replace(PATH_PATTERN, "[REDACTED_PATH]");
 }
 
 export function payloadDigest(payload) {
@@ -54,6 +35,15 @@ export function payloadDigest(payload) {
 }
 
 export function validateAgentClaim(payload) {
+  validateContract("agent-result-payload", payload);
+  const inspectText = (value) => {
+    if (typeof value === "string" && sanitizeDelegationText(value) !== value)
+      throw new Error("POLICY_DENIED");
+    if (Array.isArray(value)) value.forEach(inspectText);
+    else if (value && typeof value === "object")
+      Object.values(value).forEach(inspectText);
+  };
+  inspectText(payload);
   if (!payload || typeof payload !== "object" || Array.isArray(payload))
     throw new Error("SCHEMA_INVALID");
   if (!/^(COMPLETE|PARTIAL|BLOCKED|FAILED)$/u.test(payload.outcome_claim ?? ""))
@@ -97,14 +87,30 @@ export function createTrustedResultEnvelope({
   lineage,
   governance,
   runState,
-  verifierValidation = "VALID",
-  resultAcceptance = "ACCEPTED",
+  verifierValidation,
+  resultAcceptance,
+  receivedAt = utcNow(),
 }) {
   validateAgentClaim(payload);
-  const acceptedReason = payload.reason_claim;
-  return {
+  if (verifierValidation !== "VALID" || resultAcceptance !== "ACCEPTED")
+    throw new Error("VALIDATION_FAILED");
+  if (
+    !/^[a-f0-9]{64}$/u.test(governance?.expected_governance_hash ?? "") ||
+    governance.expected_governance_hash !== governance.observed_governance_hash
+  )
+    throw new Error("GOVERNANCE_HASH_MISMATCH");
+  if (runState !== "COMPLETE") throw new Error("INVALID_STATE_TRANSITION");
+  if (
+    !lineage?.native_run_id ||
+    (lineage.delegation_id &&
+      lineage.delegation_id !== deriveDelegationId(lineage))
+  )
+    throw new Error("LINEAGE_MISMATCH");
+  const { outcome: acceptedOutcome, reason: acceptedReason } =
+    normalizeAgentOutcome(payload, lineage.attempt);
+  const envelope = {
     schema_version: "1.0.0",
-    governance_version: "m7-t2-r11",
+    governance_version: "m7-t2-r12",
     task_id: lineage.task_id,
     brief_revision: lineage.brief_revision,
     node_id: lineage.node_id,
@@ -117,16 +123,42 @@ export function createTrustedResultEnvelope({
     expected_governance_hash: governance.expected_governance_hash,
     observed_governance_hash: governance.observed_governance_hash,
     run_state: runState,
-    received_at: utcNow(),
+    received_at: receivedAt,
     payload_digest: payloadDigest(payload),
     verifier_validation: verifierValidation,
-    accepted_outcome_status: payload.outcome_claim,
+    accepted_outcome_status: acceptedOutcome,
     accepted_reason_code: acceptedReason,
-    owner_action_required: ["BLOCKED", "FAILED"].includes(
-      payload.outcome_claim,
-    ),
+    owner_action_required: ["BLOCKED", "FAILED"].includes(acceptedOutcome),
     result_acceptance: resultAcceptance,
   };
+  validateContract("trusted-result-envelope", envelope);
+  return envelope;
+}
+
+export function normalizeAgentOutcome(payload, attempt = 1) {
+  validateAgentClaim(payload);
+  // Self-reported failure cannot spend retry budget or declare exhaustion.
+  // Likewise a PARTIAL claim cannot authorize degraded delivery by itself.
+  let acceptedOutcome = payload.outcome_claim;
+  let acceptedReason = payload.reason_claim;
+  if (acceptedReason === "SELF_VALIDATION_FAILED") {
+    acceptedOutcome = attempt >= 3 ? "FAILED" : "BLOCKED";
+    acceptedReason = attempt >= 3 ? "RETRY_EXHAUSTED" : "VALIDATION_FAILED";
+  } else if (acceptedOutcome === "PARTIAL") {
+    acceptedOutcome = "BLOCKED";
+    acceptedReason = "OWNER_DECISION_REQUIRED";
+  }
+  if (
+    !reasonPolicy.outcome_compatibility[acceptedOutcome]?.includes(
+      acceptedReason,
+    )
+  )
+    throw new Error("VALIDATION_FAILED");
+  return { outcome: acceptedOutcome, reason: acceptedReason };
+}
+
+export function outcomeReasonAllowed(outcome, reason) {
+  return reasonPolicy.outcome_compatibility[outcome]?.includes(reason) === true;
 }
 
 export function classifyDuplicate(existing, incoming) {
@@ -144,8 +176,19 @@ export function classifyDuplicate(existing, incoming) {
 export function workflowAggregate(nodes) {
   const mandatory = nodes.filter((node) => node.required);
   const outcome = (node) => node.outcome_status ?? node.accepted_outcome_status;
-  if (mandatory.some((node) => outcome(node) === "BLOCKED")) return "BLOCKED";
+  if (mandatory.length === 0) return "BLOCKED";
+  // An accepted terminal mandatory failure cannot be repaired by waiting for
+  // downstream nodes which will never become ready. Optional failures still
+  // do not decide the workflow outcome.
   if (mandatory.some((node) => outcome(node) === "FAILED")) return "FAILED";
+  if (
+    mandatory.some(
+      (node) =>
+        !["COMPLETE", "PARTIAL", "FAILED", "BLOCKED"].includes(outcome(node)),
+    )
+  )
+    return "BLOCKED";
+  if (mandatory.some((node) => outcome(node) === "BLOCKED")) return "BLOCKED";
   if (mandatory.some((node) => outcome(node) === "PARTIAL")) return "PARTIAL";
   return "COMPLETE";
 }

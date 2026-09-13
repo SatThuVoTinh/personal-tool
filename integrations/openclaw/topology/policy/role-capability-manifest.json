@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "governance_version": "m7-t2-r11",
+  "governance_version": "m7-t2-r12",
   "runtime_version": "2026.6.34",
   "roles": {
     "main": {
