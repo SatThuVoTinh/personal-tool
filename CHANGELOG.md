@@ -8,6 +8,15 @@ All notable, validated changes to Personal Tool are documented here.
 
 ### Added
 
+- Completed remotely backed M7/T2-R12 OpenClaw native governance runtime: attached
+  trusted governance guard to native pre-tool callback and child delivery paths,
+  enforced atomic ledger reservations, parent-turn yield contracts, bounded
+  subagent delegations, and pre-announce acceptance vetoes; verified reversible
+  native patching and full rollback (`T1_RESTORED`) via `operator-rollback.mjs` and
+  `operator-apply.mjs`; passed 112 unit tests and all 8 live governance probe stages
+  (7 direct role checks and nested 7-role workflow with 6 accepted children) on branch
+  `codex/m7-t2-agent-topology` at implementation commit `4872314c686bcc92797acc68483b8b68fe4ee8ca`.
+
 - Completed remotely backed M7/T2-R11 OpenClaw governance runtime: five-stack
   topology and hard spawn allowlists, exact pinned `2026.6.34` capability policy,
   model-invisible `zink-governance` hooks, append-only trusted ledger with atomic

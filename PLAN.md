@@ -34,7 +34,7 @@ Evidence Level: NONE | LOCAL-VERIFIED | REMOTE-BACKED
 | M4 — PDF ingestion                                    | `COMPLETE`    | `REMOTE-BACKED`  | T1–T5 pushed; owner has temporarily accepted M4 as complete. Exact accepted commit hash should be reconciled from git history without reopening M4 scope. |
 | M5 — Architecture contraction                         | `COMPLETE`    | `REMOTE-BACKED`  | M5/T1-R2 synchronized canonical paths, documentation and the contracted Docker runtime without refactoring the accepted Knowledgebase application.        |
 | M6 — Zink Skill Store                                 | `COMPLETE`    | `REMOTE-BACKED`  | M6/T1-R4 task commit is remotely verified; governance closeout is recorded separately.                                                                    |
-| M7 — Zink Tools + OpenClaw integration + V1 hardening | `IN PROGRESS` | `REMOTE-BACKED` | M7/T1-R19 remains complete; M7/T2-R11 is remotely backed on the task branch with the five-stack governance runtime implemented. |
+| M7 — Zink Tools + OpenClaw integration + V1 hardening | `IN PROGRESS` | `REMOTE-BACKED` | M7/T1-R19 remains complete; M7/T2-R12 is complete and remotely backed on the task branch with native governance enforcement and rollback gates verified. |
 
 The former self-built L&SC Data Plant is replaced by a **logical external
 infrastructure flow**, not another repository module. Forecasting, optimization,
@@ -47,31 +47,32 @@ Milestone: M7 — Zink Tools + OpenClaw Integration + V1 Hardening
 Task: M7/T2 — Agent topology
 Task Status: COMPLETE
 Planning Readiness: APPROVED
-Plan Revision: M7/T2-R11
-Execution Authorization: YES
-Authorized Task: M7/T2 — Agent topology
+Plan Revision: M7/T2-R12
+Execution Authorization: NO
+Authorized Task: NONE
 Execution Contract: NONE
 Evidence Level: REMOTE-BACKED
 Task Branch: codex/m7-t2-agent-topology
-Owner Approval: EXPLICIT — M7/T2-R11 implementation plan
+Owner Approval: EXPLICIT — R12 native governance gate scope expansion, preserving R11 boundaries and requiring rollback/native tests
 ```
 
-M7/T2-R11 completion evidence:
+M7/T2-R12 validated completion evidence:
 
-- implementation commit `2c376d19df858ae642930fe60f4ecc24fbd9cbdd` is verified on
+- implementation commit `4872314c686bcc92797acc68483b8b68fe4ee8ca` is verified on
   `origin/codex/m7-t2-agent-topology`;
-- corrective verifier commit `8d93aae1c47ff13bb74e03a119e061ba30dbb948` is
-  verified on `origin/codex/m7-t2-agent-topology`; live probes are now bounded,
-  process-group terminated on timeout, and evaluated asynchronously in batches;
-- final live-gate fix commit `02e30b1c229894a1d896374ce8857bfdbba3eba5` is
-  verified on `origin/codex/m7-t2-agent-topology`; the exact pinned
-  `2026.6.34` static and full sequential live verifier both passed;
-- `corepack npm test` passed all 87 tests;
-- `corepack npm run format:check`, `corepack npm run lint`, and
-  `corepack npm run repo:check` passed;
-- focused M7/T1–T2 tests passed 23/23, with `git diff --check` clean;
-- exact pinned OpenClaw `2026.6.34 (5c38f99)` config validation and static
-  verifier passed after scoped gateway restart; R11 topology remained effective.
+- unit and static test suite passed 112/112 tests (`npm test`);
+- native patch probe passed with all sub-checks verified (`native-patch-probe.mjs`):
+  exact roundtrips, drift rejection, native prepare execution vetoes, synthetic apply/restore;
+- operator preflight passed (`operator-preflight.mjs`):
+  `{"identifiers":"VALID","builder_preflight":"PASS","installed_mutation":false}`;
+- operator apply passed and verified rollback readiness (`operator-apply.mjs`):
+  `{"status":"PASS","stage":"applied","rollback_ready":true}`;
+- operator rollback verified to clean T1 baseline (`operator-rollback.mjs`):
+  `{"status":"PASS","runtime":"T1_RESTORED"}`;
+- live governance probe passed all 8 stages (`live-governance-probe.mjs`):
+  direct checks on all seven identities (`main`, `o1`, `o2`, `excel`, `power-bi`, `sql`, `python`)
+  and full nested seven-role matrix (`{"stage":"nested-seven-role-matrix","status":"PASS","accepted_children":6}`);
+- scoped gateway service `openclaw-gateway-zink.service` verified active on port 18789.
 
 M6/T1-R4 evidence: focused M6 tests, `npm run verify` (64 tests),
 `git diff --check`, staged diff check, and scope review passed. Task commit
