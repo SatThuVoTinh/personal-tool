@@ -8,6 +8,16 @@ All notable, validated changes to Personal Tool are documented here.
 
 ### Added
 
+- Completed remotely backed M7/T3-R16 Zink Tools Governed Callable Interfaces & Adapter Contracts:
+  implemented Model A (Virtual / Contract Tool Interface) for 5 callable tools (`zink_excel`, `zink_power_bi`,
+  `zink_sql`, `zink_python`, `zink_n8n`) and 4 deferred schema-only capabilities (`zink_forecast`, `zink_optimization`,
+  `zink_operations_research`, `zink_simulation`); established closed invocation and result envelopes,
+  Option A self-contained tool branches, pure logical path safety (`validateArtifactLogicalPath`), Lean single-statement
+  SQL validation with injective parameter binding (`validateSqlQuery`), loopback-only governed n8n webhook adapter
+  (`invokeN8n`), dual authorization paths (read-only for SQL vs delegated for specialists), authenticated approval
+  ledger resolution with atomic anti-replay protection, deterministic `ENGINE_NOT_IMPLEMENTED` 4-tuple contract seam,
+  and host tool registration on branch `codex/m7-t3-tools-contracts` at implementation commit `ac68bce0653ad3c4bfcc8d230960bcdcf7e8f71d`.
+
 - Completed remotely backed M7/T2-R12 OpenClaw native governance runtime: attached
   trusted governance guard to native pre-tool callback and child delivery paths,
   enforced atomic ledger reservations, parent-turn yield contracts, bounded

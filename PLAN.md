@@ -34,7 +34,7 @@ Evidence Level: NONE | LOCAL-VERIFIED | REMOTE-BACKED
 | M4 — PDF ingestion                                    | `COMPLETE`    | `REMOTE-BACKED`  | T1–T5 pushed; owner has temporarily accepted M4 as complete. Exact accepted commit hash should be reconciled from git history without reopening M4 scope. |
 | M5 — Architecture contraction                         | `COMPLETE`    | `REMOTE-BACKED`  | M5/T1-R2 synchronized canonical paths, documentation and the contracted Docker runtime without refactoring the accepted Knowledgebase application.        |
 | M6 — Zink Skill Store                                 | `COMPLETE`    | `REMOTE-BACKED`  | M6/T1-R4 task commit is remotely verified; governance closeout is recorded separately.                                                                    |
-| M7 — Zink Tools + OpenClaw integration + V1 hardening | `IN PROGRESS` | `REMOTE-BACKED` | M7/T1-R19 remains complete; M7/T2-R12 is complete and remotely backed on the task branch with native governance enforcement and rollback gates verified. |
+| M7 — Zink Tools + OpenClaw integration + V1 hardening | `IN PROGRESS` | `REMOTE-BACKED` | M7/T1-R19 and M7/T2-R12 remain complete; M7/T3-R16 is complete and remotely backed on the task branch with Zink Tools callable contracts and governed adapters implemented. |
 
 The former self-built L&SC Data Plant is replaced by a **logical external
 infrastructure flow**, not another repository module. Forecasting, optimization,
@@ -44,17 +44,30 @@ operations research and simulation remain first-class capabilities.
 
 ```text
 Milestone: M7 — Zink Tools + OpenClaw Integration + V1 Hardening
-Task: M7/T2 — Agent topology
+Task: M7/T3 — Zink Tools callable interfaces & adapter contracts
 Task Status: COMPLETE
 Planning Readiness: APPROVED
-Plan Revision: M7/T2-R12
+Plan Revision: M7/T3-R16
 Execution Authorization: NO
 Authorized Task: NONE
 Execution Contract: NONE
 Evidence Level: REMOTE-BACKED
-Task Branch: codex/m7-t2-agent-topology
-Owner Approval: EXPLICIT — R12 native governance gate scope expansion, preserving R11 boundaries and requiring rollback/native tests
+Task Branch: codex/m7-t3-tools-contracts
+Owner Approval: EXPLICIT — Approved implementation plan M7/T3-R16
 ```
+
+M7/T3-R16 validated completion evidence:
+
+- implementation commit `ac68bce0653ad3c4bfcc8d230960bcdcf7e8f71d` is verified on `origin/codex/m7-t3-tools-contracts`;
+- 25 frozen scope files implemented within Case C boundaries with zero non-goal violations;
+- unit and static test suite passed 112/112 tests (`npm test`) with zero regressions;
+- focused M7/T3 test suite passed 31/31 tests across all domains A-H (`node --test tests/m7-t3-tools-contract.test.mjs`);
+- host registration assertion gate passed (`G0.6`): exact 5 Zink tools captured on mock host registration;
+- anti-replay concurrent race gate passed (`G0.9`): atomic single claim admitted, concurrent replay rejected with `AUTH_APPROVAL_REPLAYED`;
+- projection isolation and manifest drift gate passed (`G5`): `agent.tools.alsoAllow` matches `effectiveOpenClawToolAllowlist`, role manifest matches `effectiveZinkCallableTools`;
+- code quality gates passed (`G4`): ESLint 0 errors / 0 warnings;
+- patch integrity gate passed (`G7`): `git diff --cached --check` clean, zero whitespace violations;
+- dependencies untouched: `package.json` and `package-lock.json` completely unmodified.
 
 M7/T2-R12 validated completion evidence:
 
