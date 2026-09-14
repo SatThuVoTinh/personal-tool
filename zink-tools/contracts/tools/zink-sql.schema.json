@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zink.local/contracts/tools/zink-sql.schema.json",
+  "title": "Zink SQL Tool Schema",
+  "x-zink-contract-version": "1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "$defs": {
+    "parameter": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        }
+      },
+      "required": ["name"],
+      "oneOf": [
+        {
+          "properties": {
+            "type": { "const": "string" },
+            "value": { "type": "string" }
+          },
+          "required": ["type", "value"]
+        },
+        {
+          "properties": {
+            "type": { "const": "integer" },
+            "value": { "type": "integer" }
+          },
+          "required": ["type", "value"]
+        },
+        {
+          "properties": {
+            "type": { "const": "float" },
+            "value": { "type": "number" }
+          },
+          "required": ["type", "value"]
+        },
+        {
+          "properties": {
+            "type": { "const": "boolean" },
+            "value": { "type": "boolean" }
+          },
+          "required": ["type", "value"]
+        },
+        {
+          "properties": {
+            "type": { "const": "null" },
+            "value": { "type": "null" }
+          },
+          "required": ["type", "value"]
+        }
+      ],
+      "additionalProperties": false
+    },
+    "input": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "target_database": {
+          "type": "string",
+          "enum": ["knowledge", "analytics_read"]
+        },
+        "max_rows": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 100
+        },
+        "parameters": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/parameter"
+          },
+          "maxItems": 100
+        }
+      },
+      "required": ["query", "target_database"],
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "row_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "columns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": {
+              "type": ["string", "number", "boolean", "null"]
+            }
+          }
+        }
+      },
+      "required": ["row_count", "columns", "rows"],
+      "additionalProperties": false
+    }
+  }
+}

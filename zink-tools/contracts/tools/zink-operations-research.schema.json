@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zink.local/contracts/tools/zink-operations-research.schema.json",
+  "title": "Zink Operations Research Schema-Only Specification",
+  "x-zink-contract-version": "1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "model_type": {
+      "type": "string",
+      "enum": ["network_flow", "vehicle_routing", "facility_location", "job_shop_scheduling", "queueing_model"]
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "supply_demand": { "type": "number" },
+          "capacity": { "type": "number" }
+        },
+        "required": ["id"],
+        "additionalProperties": false
+      }
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "source": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "target": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "cost": { "type": "number" },
+          "capacity": { "type": "number" },
+          "lower_bound": { "type": "number" }
+        },
+        "required": ["source", "target"],
+        "additionalProperties": false
+      }
+    },
+    "parameters": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "required": ["model_type"]
+}

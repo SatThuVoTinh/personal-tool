@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zink.local/contracts/tools/zink-n8n.schema.json",
+  "title": "Zink n8n Tool Schema",
+  "x-zink-contract-version": "1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "$defs": {
+    "data_plant_ingest_payload": {
+      "type": "object",
+      "properties": {
+        "source": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "dataset": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "options": { "type": "object", "additionalProperties": true }
+      },
+      "required": ["source", "dataset"],
+      "additionalProperties": false
+    },
+    "data_plant_ingest_output_data": {
+      "type": "object",
+      "properties": {
+        "ingest_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "records_ingested": { "type": "integer", "minimum": 0 },
+        "status": { "type": "string", "minLength": 1, "maxLength": 64 }
+      },
+      "required": ["ingest_id", "status"],
+      "additionalProperties": false
+    },
+    "data_plant_sync_payload": {
+      "type": "object",
+      "properties": {
+        "target": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "full_sync": { "type": "boolean" }
+      },
+      "required": ["target"],
+      "additionalProperties": false
+    },
+    "data_plant_sync_output_data": {
+      "type": "object",
+      "properties": {
+        "sync_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "synced_tables": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 128 }
+        },
+        "status": { "type": "string", "minLength": 1, "maxLength": 64 }
+      },
+      "required": ["sync_id", "status"],
+      "additionalProperties": false
+    },
+    "pipeline_notify_payload": {
+      "type": "object",
+      "properties": {
+        "event": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "severity": { "type": "string", "enum": ["info", "warning", "critical"] },
+        "message": { "type": "string", "minLength": 1, "maxLength": 1024 }
+      },
+      "required": ["event", "severity", "message"],
+      "additionalProperties": false
+    },
+    "pipeline_notify_output_data": {
+      "type": "object",
+      "properties": {
+        "delivered": { "type": "boolean" },
+        "notification_id": { "type": "string", "minLength": 1, "maxLength": 128 }
+      },
+      "required": ["delivered"],
+      "additionalProperties": false
+    },
+    "input": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "workflow_id": { "const": "data_plant_ingest" },
+            "payload": { "$ref": "#/$defs/data_plant_ingest_payload" }
+          },
+          "required": ["workflow_id", "payload"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "workflow_id": { "const": "data_plant_sync" },
+            "payload": { "$ref": "#/$defs/data_plant_sync_payload" }
+          },
+          "required": ["workflow_id", "payload"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "workflow_id": { "const": "pipeline_notify" },
+            "payload": { "$ref": "#/$defs/pipeline_notify_payload" }
+          },
+          "required": ["workflow_id", "payload"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "output": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "workflow_id": { "const": "data_plant_ingest" },
+            "data": { "$ref": "#/$defs/data_plant_ingest_output_data" }
+          },
+          "required": ["workflow_id", "data"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "workflow_id": { "const": "data_plant_sync" },
+            "data": { "$ref": "#/$defs/data_plant_sync_output_data" }
+          },
+          "required": ["workflow_id", "data"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "workflow_id": { "const": "pipeline_notify" },
+            "data": { "$ref": "#/$defs/pipeline_notify_output_data" }
+          },
+          "required": ["workflow_id", "data"],
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}

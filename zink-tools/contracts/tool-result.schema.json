@@ -1,0 +1,361 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zink.local/contracts/tool-result.schema.json",
+  "title": "Zink Tool Result Envelope Schema",
+  "x-zink-contract-version": "1.0.0",
+  "$defs": {
+    "uuid_v4": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "artifact_ref": {
+      "type": "object",
+      "properties": {
+        "logical_path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1073741824
+        }
+      },
+      "required": ["logical_path", "type", "size_bytes"],
+      "additionalProperties": false
+    },
+    "generic_error": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": [
+            "ENGINE_NOT_IMPLEMENTED",
+            "TOOL_TIMEOUT",
+            "TOOL_CANCELLED",
+            "SCHEMA_VALIDATION_FAILED",
+            "N8N_UPSTREAM_ERROR",
+            "N8N_RESPONSE_TOO_LARGE",
+            "N8N_REDIRECT_BLOCKED",
+            "N8N_TRANSPORT_ERROR",
+            "N8N_UNAVAILABLE",
+            "N8N_CONFIGURATION_INVALID"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "details": {
+          "type": "string",
+          "maxLength": 8192
+        }
+      },
+      "required": ["code", "message"],
+      "additionalProperties": false
+    },
+    "timeout_error": {
+      "type": "object",
+      "properties": {
+        "code": { "const": "TOOL_TIMEOUT" },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "details": {
+          "type": "string",
+          "maxLength": 8192
+        }
+      },
+      "required": ["code", "message"],
+      "additionalProperties": false
+    },
+    "cancelled_error": {
+      "type": "object",
+      "properties": {
+        "code": { "const": "TOOL_CANCELLED" },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "details": {
+          "type": "string",
+          "maxLength": 8192
+        }
+      },
+      "required": ["code", "message"],
+      "additionalProperties": false
+    }
+  },
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "call_id": { "$ref": "#/$defs/uuid_v4" },
+        "tool_id": { "const": "zink_excel" },
+        "specialist": { "const": "excel" },
+        "status": { "const": "success" },
+        "output": { "$ref": "tools/zink-excel.schema.json#/$defs/output" },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact_ref" } }
+      },
+      "required": ["call_id", "tool_id", "specialist", "status", "output", "artifacts"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "call_id": { "$ref": "#/$defs/uuid_v4" },
+        "tool_id": { "const": "zink_excel" },
+        "specialist": { "const": "excel" },
+        "status": { "const": "error" },
+        "error": { "$ref": "#/$defs/generic_error" },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact_ref" } }
+      },
+      "required": ["call_id", "tool_id", "specialist", "status", "error", "artifacts"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "call_id": { "$ref": "#/$defs/uuid_v4" },
+        "tool_id": { "const": "zink_excel" },
+        "specialist": { "const": "excel" },
+        "status": { "const": "timeout" },
+        "error": { "$ref": "#/$defs/timeout_error" },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact_ref" } }
+      },
+      "required": ["call_id", "tool_id", "specialist", "status", "error", "artifacts"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "call_id": { "$ref": "#/$defs/uuid_v4" },
+        "tool_id": { "const": "zink_excel" },
+        "specialist": { "const": "excel" },
+        "status": { "const": "cancelled" },
+        "error": { "$ref": "#/$defs/cancelled_error" },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact_ref" } }
+      },
+      "required": ["call_id", "tool_id", "specialist", "status", "error", "artifacts"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "call_id": { "$ref": "#/$defs/uuid_v4" },
+        "tool_id": { "const": "zink_power_bi" },
+        "specialist": { "const": "power-bi" },
+        "status": { "const": "success" },
+        "output": { "$ref": "tools/zink-power-bi.schema.json#/$defs/output" },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact_ref" } }
+      },
+      "required": ["call_id", "tool_id", "specialist", "status", "output", "artifacts"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "call_id": { "$ref": "#/$defs/uuid_v4" },
+        "tool_id": { "const": "zink_power_bi" },
+        "specialist": { "const": "power-bi" },
+        "status": { "const": "error" },
+        "error": { "$ref": "#/$defs/generic_error" },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact_ref" } }
+      },
+      "required": ["call_id", "tool_id", "specialist", "status", "error", "artifacts"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "call_id": { "$ref": "#/$defs/uuid_v4" },
+        "tool_id": { "const": "zink_power_bi" },
+        "specialist": { "const": "power-bi" },
+        "status": { "const": "timeout" },
+        "error": { "$ref": "#/$defs/timeout_error" },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact_ref" } }
+      },
+      "required": ["call_id", "tool_id", "specialist", "status", "error", "artifacts"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "call_id": { "$ref": "#/$defs/uuid_v4" },
+        "tool_id": { "const": "zink_power_bi" },
+        "specialist": { "const": "power-bi" },
+        "status": { "const": "cancelled" },
+        "error": { "$ref": "#/$defs/cancelled_error" },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact_ref" } }
+      },
+      "required": ["call_id", "tool_id", "specialist", "status", "error", "artifacts"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "call_id": { "$ref": "#/$defs/uuid_v4" },
+        "tool_id": { "const": "zink_sql" },
+        "specialist": { "const": "sql" },
+        "status": { "const": "success" },
+        "output": { "$ref": "tools/zink-sql.schema.json#/$defs/output" },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact_ref" } }
+      },
+      "required": ["call_id", "tool_id", "specialist", "status", "output", "artifacts"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "call_id": { "$ref": "#/$defs/uuid_v4" },
+        "tool_id": { "const": "zink_sql" },
+        "specialist": { "const": "sql" },
+        "status": { "const": "error" },
+        "error": { "$ref": "#/$defs/generic_error" },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact_ref" } }
+      },
+      "required": ["call_id", "tool_id", "specialist", "status", "error", "artifacts"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "call_id": { "$ref": "#/$defs/uuid_v4" },
+        "tool_id": { "const": "zink_sql" },
+        "specialist": { "const": "sql" },
+        "status": { "const": "timeout" },
+        "error": { "$ref": "#/$defs/timeout_error" },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact_ref" } }
+      },
+      "required": ["call_id", "tool_id", "specialist", "status", "error", "artifacts"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "call_id": { "$ref": "#/$defs/uuid_v4" },
+        "tool_id": { "const": "zink_sql" },
+        "specialist": { "const": "sql" },
+        "status": { "const": "cancelled" },
+        "error": { "$ref": "#/$defs/cancelled_error" },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact_ref" } }
+      },
+      "required": ["call_id", "tool_id", "specialist", "status", "error", "artifacts"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "call_id": { "$ref": "#/$defs/uuid_v4" },
+        "tool_id": { "const": "zink_python" },
+        "specialist": { "const": "python" },
+        "status": { "const": "success" },
+        "output": { "$ref": "tools/zink-python.schema.json#/$defs/output" },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact_ref" } }
+      },
+      "required": ["call_id", "tool_id", "specialist", "status", "output", "artifacts"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "call_id": { "$ref": "#/$defs/uuid_v4" },
+        "tool_id": { "const": "zink_python" },
+        "specialist": { "const": "python" },
+        "status": { "const": "error" },
+        "error": { "$ref": "#/$defs/generic_error" },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact_ref" } }
+      },
+      "required": ["call_id", "tool_id", "specialist", "status", "error", "artifacts"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "call_id": { "$ref": "#/$defs/uuid_v4" },
+        "tool_id": { "const": "zink_python" },
+        "specialist": { "const": "python" },
+        "status": { "const": "timeout" },
+        "error": { "$ref": "#/$defs/timeout_error" },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact_ref" } }
+      },
+      "required": ["call_id", "tool_id", "specialist", "status", "error", "artifacts"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "call_id": { "$ref": "#/$defs/uuid_v4" },
+        "tool_id": { "const": "zink_python" },
+        "specialist": { "const": "python" },
+        "status": { "const": "cancelled" },
+        "error": { "$ref": "#/$defs/cancelled_error" },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact_ref" } }
+      },
+      "required": ["call_id", "tool_id", "specialist", "status", "error", "artifacts"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "call_id": { "$ref": "#/$defs/uuid_v4" },
+        "tool_id": { "const": "zink_n8n" },
+        "specialist": { "enum": ["o2", "python"] },
+        "status": { "const": "success" },
+        "output": { "$ref": "tools/zink-n8n.schema.json#/$defs/output" },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact_ref" } }
+      },
+      "required": ["call_id", "tool_id", "specialist", "status", "output", "artifacts"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "call_id": { "$ref": "#/$defs/uuid_v4" },
+        "tool_id": { "const": "zink_n8n" },
+        "specialist": { "enum": ["o2", "python"] },
+        "status": { "const": "error" },
+        "error": { "$ref": "#/$defs/generic_error" },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact_ref" } }
+      },
+      "required": ["call_id", "tool_id", "specialist", "status", "error", "artifacts"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "call_id": { "$ref": "#/$defs/uuid_v4" },
+        "tool_id": { "const": "zink_n8n" },
+        "specialist": { "enum": ["o2", "python"] },
+        "status": { "const": "timeout" },
+        "error": { "$ref": "#/$defs/timeout_error" },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact_ref" } }
+      },
+      "required": ["call_id", "tool_id", "specialist", "status", "error", "artifacts"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "call_id": { "$ref": "#/$defs/uuid_v4" },
+        "tool_id": { "const": "zink_n8n" },
+        "specialist": { "enum": ["o2", "python"] },
+        "status": { "const": "cancelled" },
+        "error": { "$ref": "#/$defs/cancelled_error" },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact_ref" } }
+      },
+      "required": ["call_id", "tool_id", "specialist", "status", "error", "artifacts"],
+      "additionalProperties": false
+    }
+  ]
+}

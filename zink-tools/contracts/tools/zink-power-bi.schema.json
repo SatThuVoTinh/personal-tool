@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zink.local/contracts/tools/zink-power-bi.schema.json",
+  "title": "Zink Power BI Tool Schema",
+  "x-zink-contract-version": "1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "$defs": {
+    "input": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "operation": { "const": "load" },
+            "model": { "type": "string", "minLength": 1, "maxLength": 256 }
+          },
+          "required": ["operation", "model"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "operation": { "const": "bind" },
+            "model": { "type": "string", "minLength": 1, "maxLength": 256 },
+            "datasource": { "type": "string", "minLength": 1, "maxLength": 256 },
+            "tables": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1, "maxLength": 128 }
+            }
+          },
+          "required": ["operation", "model", "datasource"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "operation": { "const": "update" },
+            "model": { "type": "string", "minLength": 1, "maxLength": 256 },
+            "changes": { "type": "object", "additionalProperties": true }
+          },
+          "required": ["operation", "model", "changes"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "operation": { "const": "validate" },
+            "model": { "type": "string", "minLength": 1, "maxLength": 256 }
+          },
+          "required": ["operation", "model"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "operation": { "type": "string", "enum": ["load", "bind", "update", "validate"] },
+        "model": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "success": { "type": "boolean" },
+        "details": { "type": "object", "additionalProperties": true }
+      },
+      "required": ["operation", "model", "success"],
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { URL } from "node:url";
+import process from "node:process";
+import { URL, pathToFileURL } from "node:url";
 import { setTimeout, clearTimeout } from "node:timers";
 import { createGovernanceGuard } from "../../topology/lib/guard.mjs";
 import { sanitizeDelegationText } from "../../topology/lib/runtime.mjs";
@@ -19,6 +20,35 @@ import {
   SCHEMA_VERSION,
 } from "../../topology/lib/canonical.mjs";
 
+let policyModule;
+try {
+  policyModule = await import("../../lib/policy.mjs");
+} catch {
+  const repoPolicyPath = path.resolve(
+    process.cwd(),
+    "integrations/openclaw/lib/policy.mjs",
+  );
+  policyModule = await import(pathToFileURL(repoPolicyPath).href);
+}
+const { CALLABLE_TOOL_REGISTRY } = policyModule;
+
+export function registerTools(api) {
+  const registerFn =
+    typeof api?.registerTool === "function"
+      ? api.registerTool.bind(api)
+      : typeof api?.tools?.register === "function"
+        ? api.tools.register.bind(api.tools)
+        : null;
+  if (!registerFn) return;
+  for (const [toolId, def] of Object.entries(CALLABLE_TOOL_REGISTRY)) {
+    registerFn({
+      name: toolId,
+      id: toolId,
+      description: def.description,
+    });
+  }
+}
+
 const ids = new Set(["main", "o1", "o2", "excel", "power-bi", "sql", "python"]);
 function noLinks(target) {
   for (
@@ -33,7 +63,9 @@ function leaseKey(context, event = {}) {
   const runId = context.runId ?? event.runId;
   const toolCallId = context.toolCallId ?? event.toolCallId;
   if (!sessionKey || !runId || !toolCallId)
-    throw new Error(`LINEAGE_MISMATCH: sessionKey=${sessionKey}, runId=${runId}, toolCallId=${toolCallId}`);
+    throw new Error(
+      `LINEAGE_MISMATCH: sessionKey=${sessionKey}, runId=${runId}, toolCallId=${toolCallId}`,
+    );
   return canonicalHash("zink-native-call-v1", {
     sessionKey,
     runId,
@@ -47,6 +79,7 @@ export default {
   description:
     "Model-invisible trusted governance guard for Zink T2 workflows.",
   register(api) {
+    registerTools(api);
     const config = api.pluginConfig ?? {};
     if (config.enabled === false) return;
     if (
@@ -170,9 +203,9 @@ export default {
         await awaitSpawnReceipt(context, signal);
         return guard.beforeRun(event, context, signal);
       },
-      beforeToolCall(event, context, signal) {
-        const decision = guard.beforeToolCall(event, context, signal);
-        if (decision.allow) {
+      async beforeToolCall(event, context, signal) {
+        const decision = await guard.beforeToolCall(event, context, signal);
+        if (decision?.allow) {
           const params = decision.spawnLabel
             ? {
                 ...event.params,
@@ -187,10 +220,15 @@ export default {
             params.cleanup = "keep";
             delete params.taskName;
           }
-          const lKey = leaseKey({ ...context, toolCallId: event.toolCallId }, event);
+          const lKey = leaseKey(
+            { ...context, toolCallId: event.toolCallId },
+            event,
+          );
           const pHash = canonicalHash("zink-native-call-v1", params);
           leases.set(lKey, pHash);
-          api.logger?.warn?.(`[zink-lease:set] key=${lKey} agent=${context.agentId} sessionKey=${context.sessionKey} runId=${context.runId} toolCallId=${event.toolCallId} hash=${pHash}`);
+          api.logger?.warn?.(
+            `[zink-lease:set] key=${lKey} agent=${context.agentId} sessionKey=${context.sessionKey} runId=${context.runId} toolCallId=${event.toolCallId} hash=${pHash}`,
+          );
         }
         return decision;
       },
@@ -214,12 +252,11 @@ export default {
           params.cleanup = "keep";
         }
         const actualHash = canonicalHash("zink-native-call-v1", params);
-        api.logger?.warn?.(`[zink-lease:get] key=${key} expected=${expected} actual=${actualHash} match=${expected === actualHash} available=[${[...leases.keys()].join(",")}] context=${JSON.stringify({ agentId: context.agentId, sessionKey: context.sessionKey, runId: context.runId, toolCallId: context.toolCallId })} event=${JSON.stringify({ toolName: event.toolName, runId: event.runId, toolCallId: event.toolCallId })}`);
+        api.logger?.warn?.(
+          `[zink-lease:get] key=${key} expected=${expected} actual=${actualHash} match=${expected === actualHash} available=[${[...leases.keys()].join(",")}] context=${JSON.stringify({ agentId: context.agentId, sessionKey: context.sessionKey, runId: context.runId, toolCallId: context.toolCallId })} event=${JSON.stringify({ toolName: event.toolName, runId: event.runId, toolCallId: event.toolCallId })}`,
+        );
         leases.delete(key);
-        if (
-          !expected ||
-          expected !== actualHash
-        )
+        if (!expected || expected !== actualHash)
           throw new Error("POLICY_DENIED");
       } catch (err) {
         api.logger?.warn?.(`[zink-lease:blocked] ${err?.message ?? err}`);

@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zink.local/contracts/tools/zink-simulation.schema.json",
+  "title": "Zink Simulation Schema-Only Specification",
+  "x-zink-contract-version": "1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "simulation_type": {
+      "type": "string",
+      "enum": ["monte_carlo", "discrete_event", "agent_based", "system_dynamics"]
+    },
+    "iterations": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10000000
+    },
+    "random_seed": {
+      "type": "integer"
+    },
+    "distributions": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "type": { "type": "string", "enum": ["normal", "uniform", "triangular", "exponential", "poisson", "lognormal"] },
+          "parameters": { "type": "object", "additionalProperties": { "type": "number" } }
+        },
+        "required": ["type", "parameters"],
+        "additionalProperties": false
+      }
+    },
+    "metrics": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1, "maxLength": 128 }
+    }
+  },
+  "required": ["simulation_type", "iterations"]
+}

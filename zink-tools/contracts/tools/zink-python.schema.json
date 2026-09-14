@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zink.local/contracts/tools/zink-python.schema.json",
+  "title": "Zink Python Tool Schema",
+  "x-zink-contract-version": "1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "$defs": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "entrypoint": {
+          "type": "string",
+          "pattern": "^scripts/[a-zA-Z0-9_-]+\\.py$",
+          "maxLength": 512
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 1024
+          },
+          "maxItems": 64
+        },
+        "stack": {
+          "type": "string",
+          "enum": ["data_plant", "semantic", "intelligence", "decision"]
+        }
+      },
+      "required": ["entrypoint", "stack"],
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "exit_code": {
+          "type": "integer"
+        },
+        "stdout": {
+          "type": "string",
+          "maxLength": 1048576
+        },
+        "stderr": {
+          "type": "string",
+          "maxLength": 1048576
+        }
+      },
+      "required": ["exit_code", "stdout", "stderr"],
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zink.local/contracts/tools/zink-optimization.schema.json",
+  "title": "Zink Optimization Schema-Only Specification",
+  "x-zink-contract-version": "1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "problem_class": {
+      "type": "string",
+      "enum": ["linear_programming", "mixed_integer_programming", "quadratic_programming", "nonlinear_programming"]
+    },
+    "objective": {
+      "type": "object",
+      "properties": {
+        "sense": { "type": "string", "enum": ["minimize", "maximize"] },
+        "expression": { "type": "string", "minLength": 1, "maxLength": 4096 }
+      },
+      "required": ["sense", "expression"],
+      "additionalProperties": false
+    },
+    "variables": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "type": { "type": "string", "enum": ["continuous", "integer", "binary"] },
+          "lower_bound": { "type": "number" },
+          "upper_bound": { "type": "number" }
+        },
+        "required": ["name", "type"],
+        "additionalProperties": false
+      }
+    },
+    "constraints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "expression": { "type": "string", "minLength": 1, "maxLength": 4096 }
+        },
+        "required": ["name", "expression"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["problem_class", "objective", "variables", "constraints"]
+}

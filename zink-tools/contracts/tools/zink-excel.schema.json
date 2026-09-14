@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zink.local/contracts/tools/zink-excel.schema.json",
+  "title": "Zink Excel Tool Schema",
+  "x-zink-contract-version": "1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "$defs": {
+    "input": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "operation": { "const": "load" },
+            "file_path": { "type": "string", "minLength": 1, "maxLength": 512 }
+          },
+          "required": ["operation", "file_path"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "operation": { "const": "populate" },
+            "file_path": { "type": "string", "minLength": 1, "maxLength": 512 },
+            "template_path": { "type": "string", "minLength": 1, "maxLength": 512 },
+            "data": { "type": "object", "additionalProperties": true }
+          },
+          "required": ["operation", "file_path", "data"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "operation": { "const": "validate" },
+            "file_path": { "type": "string", "minLength": 1, "maxLength": 512 },
+            "rules": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1, "maxLength": 256 }
+            }
+          },
+          "required": ["operation", "file_path"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "operation": { "const": "generate" },
+            "file_path": { "type": "string", "minLength": 1, "maxLength": 512 },
+            "specification": { "type": "object", "additionalProperties": true }
+          },
+          "required": ["operation", "file_path", "specification"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "operation": { "type": "string", "enum": ["load", "populate", "validate", "generate"] },
+        "success": { "type": "boolean" },
+        "file_path": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "summary": { "type": "object", "additionalProperties": true }
+      },
+      "required": ["operation", "success"],
+      "additionalProperties": false
+    }
+  }
+}

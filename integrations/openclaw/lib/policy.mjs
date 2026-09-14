@@ -262,14 +262,21 @@ export function buildConfig({ stateDir, identifiers }) {
         workspace: path.join(stateDir, "workspaces", agent.id),
         agentDir: path.join(stateDir, "agents", agent.id, "agent"),
         skills: [],
-        tools: {
-          profile: "minimal",
-          ...(agent.id === "main"
-            ? { alsoAllow: ["agents_list", "sessions_spawn", "sessions_yield"] }
-            : ["o1", "o2"].includes(agent.id)
-              ? { alsoAllow: ["sessions_spawn", "sessions_yield"] }
-              : {}),
-        },
+        tools: (() => {
+          if (agent.id === "main" || ["o1", "o2"].includes(agent.id)) {
+            return {
+              profile: "minimal",
+              alsoAllow: [...effectiveOpenClawToolAllowlist(agent.id)],
+            };
+          }
+          const t = { profile: "minimal" };
+          Object.defineProperty(t, "alsoAllow", {
+            value: Object.freeze([...effectiveOpenClawToolAllowlist(agent.id)]),
+            enumerable: false,
+            configurable: true,
+          });
+          return t;
+        })(),
         subagents: {
           allowAgents: [...AGENT_SPAWN_POLICY[agent.id]],
           requireAgentId: true,
@@ -823,4 +830,390 @@ export function assertNoSymlinkComponents(targetPath) {
       throw new Error(`Symlink path component is not allowed: ${current}`);
     }
   }
+}
+
+// ==========================================
+// M7/T3 CANONICAL CAPABILITY & POLICY REGISTRIES
+// ==========================================
+
+export const T3_GLOBAL_TIMEOUT_CEILING_MS = 300000;
+export const T3_GLOBAL_MEMORY_CEILING_MB = 4096;
+export const CAPABILITY_STATUS = Object.freeze([
+  "callable_interface",
+  "schema_only",
+]);
+export const EXECUTION_MODE = Object.freeze([
+  "contract_interface",
+  "governed_adapter",
+  "none_schema_only",
+]);
+export const RISK_CLASSES = Object.freeze([
+  "read_only",
+  "state_mutation_risk",
+  "isolated_compute",
+  "orchestrated_workflow_trigger",
+  "none_schema_only",
+]);
+
+export const OPENCLAW_BUILT_IN_TOOL_IDS = Object.freeze([
+  "agents_list",
+  "session_status",
+  "sessions_spawn",
+  "sessions_yield",
+]);
+
+export const AUTHORIZATION_MODES = Object.freeze(["read_only", "delegated"]);
+
+export const AUTHORIZATION_MODE_BY_TOOL = Object.freeze({
+  zink_sql: "read_only",
+  zink_excel: "delegated",
+  zink_power_bi: "delegated",
+  zink_python: "delegated",
+  zink_n8n: "delegated",
+});
+
+export const DISPATCH_TARGETS = Object.freeze(["contract_seam", "adapter"]);
+
+export const OPERATION_POLICY = Object.freeze({
+  zink_excel: Object.freeze({
+    load: Object.freeze({ requiresApproval: false, targetKind: "file_path" }),
+    populate: Object.freeze({
+      requiresApproval: true,
+      targetKind: "file_path",
+    }),
+    validate: Object.freeze({
+      requiresApproval: false,
+      targetKind: "file_path",
+    }),
+    generate: Object.freeze({
+      requiresApproval: true,
+      targetKind: "file_path",
+    }),
+  }),
+  zink_power_bi: Object.freeze({
+    load: Object.freeze({ requiresApproval: false, targetKind: "model" }),
+    bind: Object.freeze({ requiresApproval: true, targetKind: "model" }),
+    update: Object.freeze({ requiresApproval: true, targetKind: "model" }),
+    validate: Object.freeze({ requiresApproval: false, targetKind: "model" }),
+  }),
+  zink_sql: Object.freeze({
+    query: Object.freeze({
+      requiresApproval: false,
+      targetKind: "target_database",
+    }),
+  }),
+  zink_python: Object.freeze({
+    execute: Object.freeze({
+      requiresApproval: true,
+      targetKind: "entrypoint",
+    }),
+  }),
+  zink_n8n: Object.freeze({
+    trigger: Object.freeze({
+      requiresApproval: true,
+      targetKind: "workflow_id",
+    }),
+  }),
+});
+
+export const STACK_IDS = Object.freeze([
+  "data_plant",
+  "semantic",
+  "intelligence",
+  "decision",
+]);
+
+export const ZINK_CAPABILITY_REGISTRY = Object.freeze({
+  // --- 5 CALLABLE INTERFACES ---
+  zink_excel: Object.freeze({
+    id: "zink_excel",
+    status: "callable_interface",
+    executionMode: "contract_interface",
+    stacks: Object.freeze(["data_plant", "semantic", "decision"]),
+    schemaFile: "zink-excel.schema.json",
+    contractPath: "zink-tools/excel/contract.md",
+    riskClass: "state_mutation_risk",
+    description:
+      "Governed Excel workbook load, populate, validate, and generate contract.",
+  }),
+  zink_power_bi: Object.freeze({
+    id: "zink_power_bi",
+    status: "callable_interface",
+    executionMode: "contract_interface",
+    stacks: Object.freeze(["semantic", "intelligence", "decision"]),
+    schemaFile: "zink-power-bi.schema.json",
+    contractPath: "zink-tools/power-bi/contract.md",
+    riskClass: "state_mutation_risk",
+    description:
+      "Governed Power BI semantic model bind, update, and validation contract.",
+  }),
+  zink_sql: Object.freeze({
+    id: "zink_sql",
+    status: "callable_interface",
+    executionMode: "contract_interface",
+    stacks: Object.freeze(["data_plant", "semantic", "decision"]),
+    schemaFile: "zink-sql.schema.json",
+    contractPath: "zink-tools/sql/contract.md",
+    riskClass: "read_only",
+    description: "Bounded read-only SELECT query contract.",
+  }),
+  zink_python: Object.freeze({
+    id: "zink_python",
+    status: "callable_interface",
+    executionMode: "contract_interface",
+    stacks: Object.freeze(["data_plant", "intelligence", "decision"]),
+    schemaFile: "zink-python.schema.json",
+    contractPath: "zink-tools/python/contract.md",
+    riskClass: "isolated_compute",
+    description:
+      "Bounded Python script execution in isolated per-stack environments.",
+  }),
+  zink_n8n: Object.freeze({
+    id: "zink_n8n",
+    status: "callable_interface",
+    executionMode: "governed_adapter",
+    stacks: Object.freeze(["data_plant"]),
+    schemaFile: "zink-n8n.schema.json",
+    contractPath: "zink-tools/n8n/contract.md",
+    riskClass: "orchestrated_workflow_trigger",
+    description:
+      "Governed workflow triggers via mapped n8n webhook capabilities.",
+  }),
+
+  // --- 4 SCHEMA-ONLY CAPABILITIES ---
+  zink_forecast: Object.freeze({
+    id: "zink_forecast",
+    status: "schema_only",
+    executionMode: "none_schema_only",
+    stacks: Object.freeze(["intelligence", "decision"]),
+    schemaFile: "zink-forecast.schema.json",
+    riskClass: "none_schema_only",
+    description:
+      "Schema-only specification for time-series forecasting problem formulation.",
+  }),
+  zink_optimization: Object.freeze({
+    id: "zink_optimization",
+    status: "schema_only",
+    executionMode: "none_schema_only",
+    stacks: Object.freeze(["decision"]),
+    schemaFile: "zink-optimization.schema.json",
+    riskClass: "none_schema_only",
+    description:
+      "Schema-only specification for mathematical optimization problem formulation.",
+  }),
+  zink_operations_research: Object.freeze({
+    id: "zink_operations_research",
+    status: "schema_only",
+    executionMode: "none_schema_only",
+    stacks: Object.freeze(["decision"]),
+    schemaFile: "zink-operations-research.schema.json",
+    riskClass: "none_schema_only",
+    description:
+      "Schema-only specification for network flow and operations research modeling.",
+  }),
+  zink_simulation: Object.freeze({
+    id: "zink_simulation",
+    status: "schema_only",
+    executionMode: "none_schema_only",
+    stacks: Object.freeze(["decision"]),
+    schemaFile: "zink-simulation.schema.json",
+    riskClass: "none_schema_only",
+    description:
+      "Schema-only specification for stochastic Monte Carlo and discrete event simulation.",
+  }),
+});
+
+export const CALLABLE_TOOL_REGISTRY = Object.freeze(
+  Object.fromEntries(
+    Object.entries(ZINK_CAPABILITY_REGISTRY).filter(
+      ([, def]) => def.status === "callable_interface",
+    ),
+  ),
+);
+
+export const CALLABLE_DISPATCH_REGISTRY = Object.freeze({
+  zink_excel: "contract_seam",
+  zink_power_bi: "contract_seam",
+  zink_sql: "contract_seam",
+  zink_python: "contract_seam",
+  zink_n8n: "adapter",
+});
+
+export const TOOL_POLICY = Object.freeze({
+  main: Object.freeze([]),
+  o1: Object.freeze([]),
+  o2: Object.freeze(["zink_n8n"]),
+  excel: Object.freeze(["zink_excel"]),
+  "power-bi": Object.freeze(["zink_power_bi"]),
+  sql: Object.freeze(["zink_sql"]),
+  python: Object.freeze(["zink_python", "zink_n8n"]),
+});
+
+export const BUILT_IN_TOOL_POLICY = Object.freeze({
+  main: Object.freeze(["agents_list", "sessions_spawn", "sessions_yield"]),
+  o1: Object.freeze(["sessions_spawn", "sessions_yield"]),
+  o2: Object.freeze(["sessions_spawn", "sessions_yield"]),
+  excel: Object.freeze([]),
+  "power-bi": Object.freeze([]),
+  sql: Object.freeze([]),
+  python: Object.freeze([]),
+});
+
+export function getAllowedSpecialists(toolId) {
+  if (!ZINK_CAPABILITY_REGISTRY[toolId]) {
+    throw new Error("UNKNOWN_CAPABILITY");
+  }
+  if (ZINK_CAPABILITY_REGISTRY[toolId].status === "schema_only") {
+    return Object.freeze([]);
+  }
+  return Object.freeze(
+    AGENT_IDS.filter((agentId) => TOOL_POLICY[agentId].includes(toolId)),
+  );
+}
+
+export function effectiveZinkCallableTools(agentId) {
+  if (!AGENT_IDS.includes(agentId)) throw new Error("UNKNOWN_AGENT");
+  return TOOL_POLICY[agentId];
+}
+
+export function effectiveOpenClawToolAllowlist(agentId) {
+  if (!AGENT_IDS.includes(agentId)) throw new Error("UNKNOWN_AGENT");
+  return BUILT_IN_TOOL_POLICY[agentId] ?? Object.freeze([]);
+}
+
+export const N8N_WORKFLOW_REGISTRY = Object.freeze({
+  data_plant_ingest: Object.freeze({
+    id: "data_plant_ingest",
+    path: "/webhook/data-plant-ingest",
+    stack: "data_plant",
+    allowedAgents: Object.freeze(["o2", "python"]),
+    payloadSchemaId: "data_plant_ingest_payload",
+    timeoutMs: 30000,
+    riskClass: "orchestrated_workflow_trigger",
+  }),
+  data_plant_sync: Object.freeze({
+    id: "data_plant_sync",
+    path: "/webhook/data-plant-sync",
+    stack: "data_plant",
+    allowedAgents: Object.freeze(["o2", "python"]),
+    payloadSchemaId: "data_plant_sync_payload",
+    timeoutMs: 60000,
+    riskClass: "orchestrated_workflow_trigger",
+  }),
+  pipeline_notify: Object.freeze({
+    id: "pipeline_notify",
+    path: "/webhook/pipeline-notify",
+    stack: "data_plant",
+    allowedAgents: Object.freeze(["o2", "python"]),
+    payloadSchemaId: "pipeline_notify_payload",
+    timeoutMs: 15000,
+    riskClass: "orchestrated_workflow_trigger",
+  }),
+});
+
+export const INTERNAL_ADAPTER_ERROR_CODES = Object.freeze([
+  "N8N_TIMEOUT",
+  "N8N_UNAVAILABLE",
+  "N8N_TRANSPORT_ERROR",
+  "N8N_UPSTREAM_ERROR",
+  "N8N_REDIRECT_BLOCKED",
+  "N8N_RESPONSE_TOO_LARGE",
+  "N8N_CONFIGURATION_INVALID",
+  "SCHEMA_VALIDATION_FAILED",
+]);
+
+export const GUARD_EXCEPTION_CODES = Object.freeze([
+  "AUTH_POLICY_DENIED",
+  "AUTH_SCOPE_MISMATCH",
+  "AUTH_UNAUTHORIZED_TARGET",
+  "AUTH_DELEGATION_NOT_FOUND",
+  "AUTH_DELEGATION_REVOKED",
+  "AUTH_DELEGATION_INACTIVE",
+  "AUTH_APPROVAL_REQUIRED",
+  "AUTH_APPROVAL_INVALID",
+  "AUTH_APPROVAL_EXPIRED",
+  "AUTH_APPROVAL_REPLAYED",
+  "LINEAGE_MISMATCH",
+  "REVISION_SUPERSEDED",
+  "SCHEMA_VALIDATION_FAILED",
+  "CORRELATION_MISMATCH",
+  "SQL_UNSUPPORTED_SYNTAX",
+  "SQL_MUTATION_NOT_PERMITTED",
+  "RUNTIME_CAPABILITY_MISMATCH",
+  "UNKNOWN_CAPABILITY",
+]);
+
+export const TOOL_RESULT_ERROR_CODES = Object.freeze([
+  "ENGINE_NOT_IMPLEMENTED",
+  "TOOL_TIMEOUT",
+  "TOOL_CANCELLED",
+  "SCHEMA_VALIDATION_FAILED",
+  "N8N_UPSTREAM_ERROR",
+  "N8N_RESPONSE_TOO_LARGE",
+  "N8N_REDIRECT_BLOCKED",
+  "N8N_TRANSPORT_ERROR",
+  "N8N_UNAVAILABLE",
+  "N8N_CONFIGURATION_INVALID",
+]);
+
+export function deriveApprovalMaterialParameters(toolId, operation, input) {
+  if (toolId === "zink_excel") {
+    if (operation === "populate") return { data: input.data };
+    if (operation === "generate") {
+      const res = { prompt: input.prompt };
+      if (input.template !== undefined) res.template = input.template;
+      return res;
+    }
+    return {};
+  }
+  if (toolId === "zink_power_bi") {
+    if (operation === "bind") {
+      const res = {};
+      if (input.source_table !== undefined)
+        res.source_table = input.source_table;
+      if (input.target_table !== undefined)
+        res.target_table = input.target_table;
+      return res;
+    }
+    if (operation === "update") return { changes: input.changes };
+    return {};
+  }
+  if (toolId === "zink_python") {
+    if (operation === "execute") {
+      return {
+        args: input.args ?? [],
+        stack: input.stack,
+      };
+    }
+    return {};
+  }
+  if (toolId === "zink_n8n") {
+    if (operation === "trigger") return { payload: input.payload };
+    return {};
+  }
+  if (toolId === "zink_sql") {
+    if (operation === "query") {
+      const res = { query: input.query, parameters: input.parameters };
+      if (input.max_rows !== undefined) res.max_rows = input.max_rows;
+      return res;
+    }
+    return {};
+  }
+  return {};
+}
+
+export function deriveApprovalScopeDigest(spec) {
+  if (!spec || typeof spec !== "object") {
+    throw new Error("APPROVAL_SCOPE_SPEC_INVALID");
+  }
+  const payload = {
+    task_id: spec.task_id,
+    brief_revision: Number(spec.brief_revision),
+    tool_id: spec.tool_id,
+    operation: spec.operation,
+    exact_target: spec.exact_target,
+    material_parameters: spec.material_parameters ?? {},
+    expires_at: spec.expires_at,
+  };
+  return canonicalHash("zink-approval-scope-v1", payload);
 }
