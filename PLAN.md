@@ -44,16 +44,16 @@ operations research and simulation remain first-class capabilities.
 
 ```text
 Milestone: M7 — Zink Tools + OpenClaw Integration + V1 Hardening
-Task: M7/T3 — Zink Tools callable interfaces & adapter contracts
-Task Status: COMPLETE
+Task: M7/T4 — External Infrastructure Integration & Governed Orchestration
+Task Status: IN PROGRESS
 Planning Readiness: APPROVED
-Plan Revision: M7/T3-R16
-Execution Authorization: NO
-Authorized Task: NONE
-Execution Contract: NONE
-Evidence Level: REMOTE-BACKED
-Task Branch: codex/m7-t3-tools-contracts
-Owner Approval: EXPLICIT — Approved implementation plan M7/T3-R16
+Plan Revision: M7/T4-R10
+Execution Authorization: YES
+Authorized Task: M7/T4
+Execution Contract: docs/contracts/execution/ACTIVE.md
+Evidence Level: NONE
+Task Branch: codex/m7-t4-external-infrastructure
+Owner Approval: EXPLICIT — Approved implementation plan M7/T4-R10 and authorized execution
 ```
 
 M7/T3-R16 validated completion evidence:

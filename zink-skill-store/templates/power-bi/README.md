@@ -1,8 +1,5 @@
-# Power BI Templates
+# Mẫu Báo cáo Power BI Chuẩn (Power BI Templates)
 
-Place owner-built Power BI templates/projects here when they are onboarded to
-Zink Skill Store. The Power BI Specialist accesses them through the approved
-Power BI tool.
+Thư mục này lưu trữ các mẫu báo cáo/dự án Power BI (`.pbix` hoặc `.pbit`) do chủ sở hữu xây dựng sẵn để phục vụ cho các tác vụ trực quan hóa dữ liệu trong **Zink Skill Store**.
 
-Keep template identity/version metadata minimal until a real template requires
-it.
+Chuyên gia Power BI (`zink_power_bi`) truy cập các template này theo hợp đồng công cụ được phê duyệt. Giữ cấu trúc định danh và phiên bản của template tối giản cho đến khi có mẫu template thực tế đầu tiên được tích hợp.

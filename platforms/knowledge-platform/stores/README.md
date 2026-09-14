@@ -1,11 +1,10 @@
-# Knowledgebase Stores
+# Kho Dữ liệu Bền vững của Knowledgebase (Knowledgebase Stores)
 
-This path belongs to the current accepted **Zink Knowledgebase** runtime.
+Thư mục này thuộc quyền quản lý của **Zink Knowledgebase**:
 
-`research-knowledge-store/` contains Knowledgebase persistence derived from approved human/reference sources and retrieved with provenance/citations.
+- **`research-knowledge-store/`**: Chứa dữ liệu bền vững của Knowledgebase được trích xuất từ các nguồn tri thức tham chiếu của con người đã qua phê duyệt, phục vụ truy xuất có nguồn gốc và trích dẫn.
 
-**Zink Skill Store is not owned by this directory.** Its canonical peer-module path is `zink-skill-store/`. The former nested `agent-skill-store/` path is obsolete and must not receive new content.
+### Ranh giới kiến trúc bất biến:
 
-Knowledgebase and Skill Store may reuse PostgreSQL/pgvector, object storage, embedding or API infrastructure, but they remain isolated by ownership, persistence namespace, publication state, provenance, access policy and retrieval path.
-
-`.agents/skills/` is unrelated: it is the repository coding-agent harness, not runtime learned-skill memory.
+- **Zink Skill Store không thuộc quyền sở hữu của thư mục này:** Đường dẫn chuẩn của Skill Store là `zink-skill-store/` (ngang hàng độc lập).
+- Knowledgebase và Skill Store có thể dùng chung hạ tầng PostgreSQL/pgvector hoặc lưu trữ đối tượng, nhưng luôn được cách ly hoàn toàn theo định danh, namespace lưu trữ, trạng thái xuất bản, nguồn gốc và chính sách truy cập.

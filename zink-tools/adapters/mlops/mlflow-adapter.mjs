@@ -1,0 +1,120 @@
+import crypto from "node:crypto";
+
+export class MLflowAdapterError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.name = "MLflowAdapterError";
+    this.code = code;
+  }
+}
+
+/**
+ * Governed MLflow Local Adapter
+ * Logs and tracks local experiments, parameters, metrics, and artifact references.
+ */
+export class MLflowLocalAdapter {
+  constructor(options = {}) {
+    this.trackingUri = options.trackingUri || "sqlite:///mlflow.db";
+    this.runs = new Map();
+  }
+
+  /**
+   * Starts a new run within an experiment.
+   * @param {object} params
+   * @param {string} params.experiment_name
+   * @param {string} [params.run_name]
+   * @param {object} [params.tags={}]
+   * @returns {Promise<object>}
+   */
+  async createRun({ experiment_name, run_name, tags = {} }) {
+    if (!experiment_name) {
+      throw new MLflowAdapterError(
+        "MLFLOW_INVALID_PARAMS",
+        "experiment_name is required.",
+      );
+    }
+    const runId = `mlf-${crypto.randomBytes(8).toString("hex")}`;
+    const runRecord = {
+      run_id: runId,
+      experiment_name,
+      run_name: run_name || `run-${runId.slice(0, 8)}`,
+      status: "RUNNING",
+      start_time: new Date().toISOString(),
+      tags: { ...tags },
+      params: {},
+      metrics: {},
+      artifacts: [],
+    };
+    this.runs.set(runId, runRecord);
+    return Object.freeze({ ...runRecord });
+  }
+
+  /**
+   * Logs parameters to an active run.
+   */
+  async logParameters(runId, params) {
+    const run = this.runs.get(runId);
+    if (!run) {
+      throw new MLflowAdapterError("MLFLOW_RUN_NOT_FOUND", `Run '${runId}' not found.`);
+    }
+    Object.assign(run.params, params);
+    return Object.freeze({ run_id: runId, params: { ...run.params } });
+  }
+
+  /**
+   * Logs metrics to an active run.
+   */
+  async logMetrics(runId, metrics, step = 0) {
+    const run = this.runs.get(runId);
+    if (!run) {
+      throw new MLflowAdapterError("MLFLOW_RUN_NOT_FOUND", `Run '${runId}' not found.`);
+    }
+    for (const [k, v] of Object.entries(metrics)) {
+      if (!run.metrics[k]) run.metrics[k] = [];
+      run.metrics[k].push({ value: v, step, timestamp: Date.now() });
+    }
+    return Object.freeze({ run_id: runId, metrics: { ...run.metrics } });
+  }
+
+  /**
+   * Logs an artifact reference to an active run.
+   */
+  async logArtifact(runId, { artifact_name, artifact_path, checksum }) {
+    const run = this.runs.get(runId);
+    if (!run) {
+      throw new MLflowAdapterError("MLFLOW_RUN_NOT_FOUND", `Run '${runId}' not found.`);
+    }
+    const artifactRecord = {
+      artifact_name,
+      artifact_path,
+      checksum,
+      logged_at: new Date().toISOString(),
+    };
+    run.artifacts.push(artifactRecord);
+    return Object.freeze(artifactRecord);
+  }
+
+  /**
+   * Terminates a run with a given status.
+   */
+  async endRun(runId, status = "FINISHED") {
+    const run = this.runs.get(runId);
+    if (!run) {
+      throw new MLflowAdapterError("MLFLOW_RUN_NOT_FOUND", `Run '${runId}' not found.`);
+    }
+    run.status = status;
+    run.end_time = new Date().toISOString();
+    return Object.freeze({ ...run });
+  }
+
+  /**
+   * Fetches an immutable snapshot of a run.
+   */
+  async getRun(runId) {
+    const run = this.runs.get(runId);
+    if (!run) {
+      throw new MLflowAdapterError("MLFLOW_RUN_NOT_FOUND", `Run '${runId}' not found.`);
+    }
+    return Object.freeze(JSON.parse(JSON.stringify(run)));
+  }
+}

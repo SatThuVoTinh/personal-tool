@@ -1,7 +1,5 @@
-# Excel Templates
+# Mẫu Báo cáo Excel Chuẩn (Excel Templates)
 
-Place owner-built Excel templates here when they are onboarded to Zink Skill
-Store. The Excel Specialist accesses them through the approved Excel tool.
+Thư mục này lưu trữ các mẫu bảng tính Excel (`.xlsx`) do chủ sở hữu xây dựng sẵn để phục vụ cho các tác vụ xuất báo cáo tự động trong **Zink Skill Store**.
 
-Keep template identity/version metadata minimal until a real template requires
-it.
+Chuyên gia Excel (`zink_excel`) truy cập các template này theo hợp đồng công cụ được phê duyệt. Giữ cấu trúc định danh và phiên bản của template tối giản cho đến khi có mẫu template thực tế đầu tiên được tích hợp.

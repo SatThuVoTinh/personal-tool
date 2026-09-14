@@ -1,14 +1,12 @@
-# Research Knowledge Store
+# Kho Lưu trữ Tri thức Nghiên cứu (Research Knowledge Store)
 
-This directory belongs to **Zink Knowledgebase** and stores/publishes knowledge derived from approved reference and research sources.
+Thư mục này thuộc về **Zink Knowledgebase**, chịu trách nhiệm lưu trữ và quản lý trạng thái xuất bản của các tri thức trích xuất từ các nguồn tài liệu nghiên cứu đã được phê duyệt.
 
-It is a peer of the separately owned `zink-skill-store/`; it does **not** contain agent skills.
+Thư mục này là đối tác ngang hàng với `zink-skill-store/` độc lập; thư mục này **không** chứa kỹ năng của agent.
 
-The subdirectories preserve the existing Knowledgebase governance scaffold:
+### Cấu trúc phân cấp quản trị:
 
-- `namespaces/` — logical knowledge partitions.
-- `policies/` — publication/access/source policies.
-- `provenance/` — source and derivation provenance.
-- `publication/` — publication lifecycle state.
-
-Runtime implementation may reuse shared PostgreSQL/pgvector, object storage, embedding, or API infrastructure, but Knowledgebase persistence and retrieval remain logically isolated from Zink Skill Store.
+- **`namespaces/`**: Phân vùng tri thức theo logic nghiệp vụ.
+- **`policies/`**: Chính sách xuất bản, kiểm soát truy cập và độ tin cậy của nguồn.
+- **`provenance/`**: Dữ liệu nguồn gốc xuất xứ và quy trình dẫn xuất.
+- **`publication/`**: Trạng thái vòng đời xuất bản của tài liệu.
