@@ -39,6 +39,289 @@ export const DISCORD_SURFACE_IDENTIFIERS = Object.freeze([
   "discordApprovalsForumId",
   "discordIncidentsForumId",
 ]);
+
+export function resolveMentionedAgents(textOrMentions, { requireMention = true } = {}) {
+  if (!textOrMentions) {
+    return requireMention ? Object.freeze([]) : Object.freeze(["main"]);
+  }
+
+  // Support Discord event object: { content, mentions }
+  if (typeof textOrMentions === "object" && !Array.isArray(textOrMentions)) {
+    const content = textOrMentions.content ?? textOrMentions.prompt ?? textOrMentions.text ?? "";
+    const mentions = Array.isArray(textOrMentions.mentions) ? textOrMentions.mentions : [];
+
+    if (/@everyone\b|@here\b/u.test(content)) {
+      return Object.freeze([...AGENT_IDS]);
+    }
+
+    const matched = new Set();
+    for (const mention of mentions) {
+      const name = typeof mention === "string" ? mention : (mention?.username ?? mention?.name ?? "");
+      const normalized = String(name).toLowerCase().trim();
+      if (AGENT_IDS.includes(normalized)) {
+        matched.add(normalized);
+      }
+    }
+
+    for (const agentId of AGENT_IDS) {
+      const regex = new RegExp(`(?:<@!?|@)\\b${agentId}\\b`, "ui");
+      if (regex.test(content)) {
+        matched.add(agentId);
+      }
+    }
+
+    if (matched.size === 0) {
+      return requireMention ? Object.freeze([]) : Object.freeze(["main"]);
+    }
+    return Object.freeze([...matched]);
+  }
+
+  if (Array.isArray(textOrMentions)) {
+    const matched = textOrMentions
+      .map((item) => String(item).toLowerCase().trim())
+      .filter((item) => AGENT_IDS.includes(item));
+    const unique = [...new Set(matched)];
+    return Object.freeze(unique);
+  }
+
+  const text = String(textOrMentions).trim();
+
+  if (/@everyone\b|@here\b/u.test(text)) {
+    return Object.freeze([...AGENT_IDS]);
+  }
+
+  const matched = new Set();
+  for (const agentId of AGENT_IDS) {
+    const regex = new RegExp(`(?:<@!?|@)\\b${agentId}\\b`, "ui");
+    if (regex.test(text)) {
+      matched.add(agentId);
+    }
+  }
+
+  if (matched.size === 0) {
+    return requireMention ? Object.freeze([]) : Object.freeze(["main"]);
+  }
+
+  return Object.freeze([...matched]);
+}
+
+export const ACCESS_LEVELS = Object.freeze({
+  L0: "DENY",
+  L1: "DISCOVER",
+  L2: "READ",
+  L3: "EXECUTE",
+  L4: "ADMIN",
+});
+
+export const KB_ACCESS_MATRIX = Object.freeze({
+  main: Object.freeze({
+    core: "L2", governance: "L2", "supply-chain": "L2", logistics: "L2",
+    finance: "L1", "data-engineering": "L2", analytics: "L2", sql: "L2",
+    "bi-semantic": "L1", excel: "L1", statistics: "L1", "machine-learning": "L1",
+    optimization: "L1", "operations-research": "L1", simulation: "L1",
+    research: "L2", architecture: "L2",
+  }),
+  o1: Object.freeze({
+    core: "L2", governance: "L2", "supply-chain": "L2", logistics: "L2",
+    finance: "L2", "data-engineering": "L2", analytics: "L2", sql: "L2",
+    "bi-semantic": "L2", excel: "L2", statistics: "L2", "machine-learning": "L2",
+    optimization: "L2", "operations-research": "L2", simulation: "L2",
+    research: "L2", architecture: "L2",
+  }),
+  o2: Object.freeze({
+    core: "L2", governance: "L2", "supply-chain": "L2", logistics: "L2",
+    finance: "L1", "data-engineering": "L2", analytics: "L2", sql: "L2",
+    "bi-semantic": "L2", excel: "L1", statistics: "L2", "machine-learning": "L2",
+    optimization: "L2", "operations-research": "L2", simulation: "L2",
+    research: "L1", architecture: "L2",
+  }),
+  excel: Object.freeze({
+    core: "L2", governance: "L1", "supply-chain": "L2", logistics: "L2",
+    finance: "L2", "data-engineering": "L2", analytics: "L2", sql: "L2",
+    "bi-semantic": "L1", excel: "L2", statistics: "L1", "machine-learning": "L1",
+    optimization: "L1", "operations-research": "L1", simulation: "L1",
+    research: "L1", architecture: "L1",
+  }),
+  "power-bi": Object.freeze({
+    core: "L2", governance: "L1", "supply-chain": "L2", logistics: "L2",
+    finance: "L2", "data-engineering": "L2", analytics: "L2", sql: "L2",
+    "bi-semantic": "L2", excel: "L1", statistics: "L1", "machine-learning": "L1",
+    optimization: "L1", "operations-research": "L1", simulation: "L1",
+    research: "L1", architecture: "L2",
+  }),
+  sql: Object.freeze({
+    core: "L2", governance: "L2", "supply-chain": "L2", logistics: "L2",
+    finance: "L1", "data-engineering": "L2", analytics: "L2", sql: "L2",
+    "bi-semantic": "L2", excel: "L1", statistics: "L2", "machine-learning": "L2",
+    optimization: "L1", "operations-research": "L1", simulation: "L1",
+    research: "L1", architecture: "L2",
+  }),
+  python: Object.freeze({
+    core: "L2", governance: "L1", "supply-chain": "L2", logistics: "L2",
+    finance: "L2", "data-engineering": "L2", analytics: "L2", sql: "L2",
+    "bi-semantic": "L2", excel: "L1", statistics: "L2", "machine-learning": "L2",
+    optimization: "L2", "operations-research": "L2", simulation: "L2",
+    research: "L2", architecture: "L2",
+  }),
+});
+
+export const SKILL_STORE_ACCESS_MATRIX = Object.freeze({
+  main: Object.freeze({
+    discover: true, read: true, validate: true, apply: "selective",
+    publish: false, deprecate: false, admin: false,
+  }),
+  o1: Object.freeze({
+    discover: true, read: true, validate: true, apply: "approved_research_domain",
+    publish: false, deprecate: false, admin: false,
+  }),
+  o2: Object.freeze({
+    discover: true, read: true, validate: true, apply: "approved_data_infra",
+    publish: false, deprecate: false, admin: false,
+  }),
+  excel: Object.freeze({
+    discover: true, read: true, validate: true, apply: "approved_excel_templates",
+    publish: false, deprecate: false, admin: false,
+  }),
+  "power-bi": Object.freeze({
+    discover: true, read: true, validate: true, apply: "approved_power_bi_templates",
+    publish: false, deprecate: false, admin: false,
+  }),
+  sql: Object.freeze({
+    discover: true, read: true, validate: true, apply: "approved_sql_data_skills",
+    publish: false, deprecate: false, admin: false,
+  }),
+  python: Object.freeze({
+    discover: true, read: true, validate: true, apply: "approved_python_ml_or_skills",
+    publish: false, deprecate: false, admin: false,
+  }),
+});
+
+export const ZINK_TOOLS_ACCESS_MATRIX = Object.freeze({
+  main: Object.freeze({
+    zink_excel: "delegate", zink_power_bi: "delegate", zink_sql: "L2",
+    zink_python: "delegate", zink_n8n: "L3",
+  }),
+  o1: Object.freeze({
+    zink_excel: "delegate", zink_power_bi: "delegate", zink_sql: "L2",
+    zink_python: "delegate", zink_n8n: "delegate",
+  }),
+  o2: Object.freeze({
+    zink_excel: "delegate", zink_power_bi: "delegate", zink_sql: "L3",
+    zink_python: "delegate", zink_n8n: "L3",
+  }),
+  excel: Object.freeze({
+    zink_excel: "L3", zink_power_bi: "L0", zink_sql: "L2",
+    zink_python: "L0", zink_n8n: "L0",
+  }),
+  "power-bi": Object.freeze({
+    zink_excel: "L0", zink_power_bi: "L3", zink_sql: "L2",
+    zink_python: "L0", zink_n8n: "L0",
+  }),
+  sql: Object.freeze({
+    zink_excel: "L0", zink_power_bi: "L0", zink_sql: "L3",
+    zink_python: "L0", zink_n8n: "L0",
+  }),
+  python: Object.freeze({
+    zink_excel: "L0", zink_power_bi: "L0", zink_sql: "L3",
+    zink_python: "L3", zink_n8n: "L0",
+  }),
+});
+
+export const DELEGATION_TABLE = Object.freeze({
+  main: Object.freeze({
+    zink_excel: Object.freeze(["o1", "o2"]),
+    zink_power_bi: Object.freeze(["o1"]),
+    zink_sql: Object.freeze(["o1", "o2"]),
+    zink_python: Object.freeze(["o1", "o2"]),
+    zink_n8n: Object.freeze(["direct"]),
+  }),
+  o1: Object.freeze({
+    zink_excel: Object.freeze(["excel"]),
+    zink_power_bi: Object.freeze(["power-bi"]),
+    zink_sql: Object.freeze(["sql"]),
+    zink_python: Object.freeze(["python"]),
+  }),
+  o2: Object.freeze({
+    zink_excel: Object.freeze(["excel"]),
+    zink_sql: Object.freeze(["sql"]),
+    zink_python: Object.freeze(["python"]),
+    zink_n8n: Object.freeze(["direct"]),
+  }),
+  excel: Object.freeze({}),
+  "power-bi": Object.freeze({}),
+  sql: Object.freeze({}),
+  python: Object.freeze({}),
+});
+
+export function evaluateCapabilityAccess(agentId, capability, resource, action = "read") {
+  if (!AGENT_IDS.includes(agentId)) {
+    return { allowed: false, level: "L0", reason: "UNKNOWN_AGENT" };
+  }
+
+  if (ZINK_TOOLS_ACCESS_MATRIX[agentId]?.[capability]) {
+    const level = ZINK_TOOLS_ACCESS_MATRIX[agentId][capability];
+    if (level === "L0") {
+      return { allowed: false, level: "L0", reason: "CAPABILITY_ACCESS_DENIED" };
+    }
+    if (level === "delegate") {
+      return { allowed: true, level: "delegate", reason: "DELEGATION_REQUIRED" };
+    }
+    if (level === "L2" && action === "execute") {
+      return { allowed: false, level: "L2", reason: "READ_ONLY_ACCESS" };
+    }
+    return { allowed: true, level, reason: "AUTHORIZED" };
+  }
+
+  if (capability === "zink_knowledge") {
+    let namespace = resource ?? "core";
+    const mapping = {
+      "SC/Logistics": "supply-chain",
+      "Data Eng": "data-engineering",
+      "Analytics/SQL": "analytics",
+      "BI": "bi-semantic",
+      "Stats/ML": "statistics",
+      "OR/Opt/Sim": "optimization",
+      "Research": "research",
+      "Architecture": "architecture",
+      "Core": "core",
+      "Governance": "governance",
+    };
+    if (mapping[namespace]) namespace = mapping[namespace];
+
+    const level = KB_ACCESS_MATRIX[agentId]?.[namespace] ?? "L0";
+    if (level === "L0") {
+      return { allowed: false, level: "L0", reason: "NAMESPACE_ACCESS_DENIED" };
+    }
+    if (action === "admin" || action === "ingestion" || action === "update" || action === "delete") {
+      return { allowed: false, level, reason: "KB_ACTION_DENIED" };
+    }
+    if (level === "L1" && action === "read") {
+      return { allowed: false, level: "L1", reason: "DISCOVER_ONLY_ACCESS" };
+    }
+    return { allowed: true, level, reason: "AUTHORIZED" };
+  }
+
+  if (capability === "zink_skill") {
+    const policy = SKILL_STORE_ACCESS_MATRIX[agentId];
+    if (!policy) return { allowed: false, level: "L0", reason: "SKILL_POLICY_MISSING" };
+    if (action === "publish" || action === "deprecate" || action === "admin") {
+      return { allowed: false, level: "L0", reason: "SKILL_ACTION_DENIED" };
+    }
+    if (action === "apply") {
+      if (policy.apply === false) {
+        return { allowed: false, level: "L0", reason: "SKILL_APPLY_DENIED" };
+      }
+      return { allowed: true, level: "L3", reason: "AUTHORIZED_SCOPED_APPLY" };
+    }
+    if (policy[action] === true) {
+      return { allowed: true, level: "L2", reason: "AUTHORIZED" };
+    }
+    return { allowed: false, level: "L0", reason: "SKILL_ACTION_DENIED" };
+  }
+
+  return { allowed: false, level: "L0", reason: "UNKNOWN_CAPABILITY" };
+}
+
 export const GOOGLE_PROFILE_IDS = Object.freeze(
   Array.from(
     { length: 21 },
@@ -448,7 +731,7 @@ export function governanceHash(agentId) {
 }
 
 export function agentInstructions(agentId) {
-  return `# Zink T2 Governance Contract\n\n<!-- generated: governance_version=${GOVERNANCE_VERSION}; governance_hash=${governanceHash(agentId)} -->\n\n${instructionBody(agentId)}`;
+  return `# Zink T5 Governance Contract\n\n<!-- generated: governance_version=${GOVERNANCE_VERSION}; governance_hash=${governanceHash(agentId)} -->\n\n${instructionBody(agentId)}`;
 }
 
 function instructionBody(agentId) {

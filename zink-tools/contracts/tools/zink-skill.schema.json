@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zink.local/contracts/tools/zink-skill.schema.json",
+  "title": "Zink Skill Tool Schema",
+  "x-zink-contract-version": "1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "$defs": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": ["discover", "read", "validate", "apply"]
+        },
+        "namespace": {
+          "type": "string",
+          "enum": ["automation", "business", "data", "lscm", "research", "system"]
+        },
+        "skill_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9_-]{1,128}$"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": ["action"],
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "namespace": {
+          "type": "string"
+        },
+        "skills": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "skill_id": { "type": "string" },
+              "name": { "type": "string" },
+              "namespace": { "type": "string" },
+              "lifecycle_state": { "type": "string" },
+              "description": { "type": "string" }
+            },
+            "required": ["skill_id", "namespace", "lifecycle_state"],
+            "additionalProperties": false
+          }
+        },
+        "skill_content": {
+          "type": "object",
+          "properties": {
+            "skill_id": { "type": "string" },
+            "lifecycle_state": { "type": "string" },
+            "content": { "type": "string" },
+            "signature": { "type": "string" }
+          },
+          "additionalProperties": true
+        },
+        "governed_status": {
+          "type": "string",
+          "enum": ["SUCCESS", "CONTROLLED_FAILURE"]
+        }
+      },
+      "required": ["action", "governed_status"],
+      "additionalProperties": false
+    }
+  }
+}

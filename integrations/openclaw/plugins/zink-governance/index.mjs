@@ -174,14 +174,19 @@ export default {
         "AGENTS.md",
       );
       noLinks(workspaceFile);
+      const workspaceContent = readFileSync(workspaceFile, "utf8");
       const observed = createHash("sha256")
-        .update(readFileSync(workspaceFile))
+        .update(workspaceContent)
         .digest("hex");
       if (observed !== expected.workspace_sha256)
         throw new Error("GOVERNANCE_HASH_MISMATCH");
+      const match = workspaceContent.match(/governance_hash=([a-f0-9]{64})/);
+      const observedGovHash = match ? match[1] : null;
+      if (!observedGovHash || observedGovHash !== expected.governance_hash)
+        throw new Error("GOVERNANCE_HASH_MISMATCH");
       return {
         expected_governance_hash: expected.governance_hash,
-        observed_governance_hash: expected.governance_hash,
+        observed_governance_hash: observedGovHash,
         allowed_tools: expected.allowed_tools,
       };
     };
@@ -291,7 +296,10 @@ export default {
       };
       recordWorkflowEvent(paths, "WORKFLOW_OPENED", {
         ...origin,
-        task_id: deriveTaskId(origin),
+        task_id: deriveTaskId({
+          ...origin,
+          agent_id: context.agentId,
+        }),
         root_agent_id: context.agentId,
         root_session_key: context.sessionKey,
         root_run_id: context.runId,

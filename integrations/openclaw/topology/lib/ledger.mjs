@@ -150,7 +150,8 @@ export function inspectLedgerUpgrade(paths) {
   } catch {
     throw new Error("EXECUTION_STATE_UNKNOWN");
   }
-  if (snapshot?.governance_version === GOVERNANCE_VERSION) {
+  const supportedVersions = new Set([GOVERNANCE_VERSION, "m7-t2-r12"]);
+  if (supportedVersions.has(snapshot?.governance_version)) {
     readSnapshotLocked(paths, false);
     return "CURRENT";
   }
@@ -177,7 +178,7 @@ export function inspectLedgerUpgrade(paths) {
 export function upgradeEmptyLegacyLedger(paths) {
   return withWriterLock(paths, () => {
     const state = inspectLedgerUpgrade(paths);
-    if (state === "EMPTY_R11") writeSnapshotAtomic(paths, emptySnapshot());
+    if (state === "EMPTY_R11") writeSnapshotAtomic(paths, { ...emptySnapshot(), governance_version: "m7-t2-r12" });
     return readSnapshotLocked(paths);
   });
 }
@@ -188,10 +189,11 @@ function readSnapshotLocked(paths, repairSnapshot = true) {
   try {
     let snapshot = JSON.parse(readFileSync(paths.snapshot, "utf8"));
     validateContract("ledger-snapshot", snapshot, Number.MAX_SAFE_INTEGER);
+    const supportedVersions = new Set([GOVERNANCE_VERSION, "m7-t2-r12"]);
     if (
       !snapshot ||
       snapshot.schema_version !== SCHEMA_VERSION ||
-      snapshot.governance_version !== GOVERNANCE_VERSION ||
+      !supportedVersions.has(snapshot.governance_version) ||
       !snapshot.tasks ||
       typeof snapshot.tasks !== "object" ||
       Array.isArray(snapshot.tasks) ||
@@ -214,7 +216,7 @@ function readSnapshotLocked(paths, repairSnapshot = true) {
       const { event_digest, ...unsigned } = event;
       if (
         event.schema_version !== SCHEMA_VERSION ||
-        event.governance_version !== GOVERNANCE_VERSION ||
+        !supportedVersions.has(event.governance_version) ||
         event.sequence !== lastSequence + 1 ||
         event.previous_event_digest !== previous ||
         canonicalHash("zink-ledger-event-v1", unsigned) !== event_digest

@@ -24,7 +24,9 @@
   ],
   "properties": {
     "schema_version": { "const": "1.0.0" },
-    "governance_version": { "const": "m7-t2-r12" },
+    "governance_version": {
+      "enum": ["m7-t2-r12", "m7-t5-r13"]
+    },
     "ref_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "ref_type": { "type": "string", "maxLength": 128 },
     "producer_task_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },

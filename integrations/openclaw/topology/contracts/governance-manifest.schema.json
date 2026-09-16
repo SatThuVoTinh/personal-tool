@@ -23,7 +23,9 @@
   ],
   "properties": {
     "schema_version": { "const": "1.0.0" },
-    "governance_version": { "const": "m7-t2-r12" },
+    "governance_version": {
+      "enum": ["m7-t2-r12", "m7-t5-r13"]
+    },
     "agent_id": {
       "enum": ["main", "o1", "o2", "excel", "power-bi", "sql", "python"]
     },

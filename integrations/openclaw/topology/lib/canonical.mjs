@@ -1,6 +1,6 @@
 import { createHash, createHmac } from "node:crypto";
 
-export const GOVERNANCE_VERSION = "m7-t2-r12";
+export const GOVERNANCE_VERSION = "m7-t5-r13";
 export const SCHEMA_VERSION = "1.0.0";
 
 const SET_KEYS = new Set(["allowed_tools", "allowAgents", "allowed_stacks"]);
@@ -66,10 +66,40 @@ export function canonicalHash(domain, value) {
 }
 
 export function deriveTaskId({
+  task_schema_version,
   origin,
   origin_principal_ref,
   origin_message_id,
+  agent_id,
+  root_agent_id,
+  task_id,
 }) {
+  const explicitAgent =
+    agent_id ?? (task_schema_version === "v2" ? root_agent_id : undefined);
+  if (task_schema_version === "v2" || explicitAgent !== undefined) {
+    if (explicitAgent !== undefined && typeof explicitAgent !== "string") {
+      throw new TypeError("agent_id must be a string");
+    }
+    return canonicalHash("zink-task-id-v2", {
+      task_schema_version: "v2",
+      origin,
+      origin_principal_ref,
+      origin_message_id: requireSnowflake(origin_message_id),
+      agent_id: explicitAgent,
+    });
+  }
+  if (root_agent_id !== undefined) {
+    const v2Candidate = canonicalHash("zink-task-id-v2", {
+      task_schema_version: "v2",
+      origin,
+      origin_principal_ref,
+      origin_message_id: requireSnowflake(origin_message_id),
+      agent_id: root_agent_id,
+    });
+    if (task_id !== undefined && task_id === v2Candidate) {
+      return v2Candidate;
+    }
+  }
   return canonicalHash("zink-task-id-v1", {
     origin,
     origin_principal_ref,

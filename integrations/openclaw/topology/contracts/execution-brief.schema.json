@@ -23,7 +23,9 @@
   ],
   "properties": {
     "schema_version": { "const": "1.0.0" },
-    "governance_version": { "const": "m7-t2-r12" },
+    "governance_version": {
+      "enum": ["m7-t2-r12", "m7-t5-r13"]
+    },
     "task_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "brief_revision": { "type": "integer", "minimum": 1, "maximum": 16 },
     "brief_state": { "enum": ["ACTIVE", "SUPERSEDED", "CLOSED"] },

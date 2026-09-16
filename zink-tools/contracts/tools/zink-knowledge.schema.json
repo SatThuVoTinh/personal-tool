@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zink.local/contracts/tools/zink-knowledge.schema.json",
+  "title": "Zink Knowledge Tool Schema",
+  "x-zink-contract-version": "1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "$defs": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": ["search", "retrieve", "citation", "metadata"]
+        },
+        "namespace": {
+          "type": "string",
+          "enum": [
+            "core",
+            "governance",
+            "supply-chain",
+            "logistics",
+            "finance",
+            "data-engineering",
+            "analytics",
+            "sql",
+            "bi-semantic",
+            "excel",
+            "statistics",
+            "machine-learning",
+            "optimization",
+            "operations-research",
+            "simulation",
+            "research",
+            "architecture"
+          ]
+        },
+        "query": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "chunk_id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+        },
+        "top_k": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50,
+          "default": 10
+        }
+      },
+      "required": ["action", "namespace"],
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "namespace": {
+          "type": "string"
+        },
+        "results": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "chunk_id": { "type": "string" },
+              "title": { "type": "string" },
+              "text": { "type": "string" },
+              "score": { "type": "number" },
+              "citation": { "type": "string" },
+              "metadata": { "type": "object" }
+            },
+            "required": ["chunk_id", "text"],
+            "additionalProperties": true
+          }
+        },
+        "total_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "governed_status": {
+          "type": "string",
+          "enum": ["SUCCESS", "CONTROLLED_FAILURE"]
+        }
+      },
+      "required": ["action", "namespace", "results", "total_count", "governed_status"],
+      "additionalProperties": false
+    }
+  }
+}

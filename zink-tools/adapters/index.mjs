@@ -31,3 +31,13 @@ export {
   StreamlitAdapter,
   StreamlitAdapterError,
 } from "./app/streamlit-adapter.mjs";
+export {
+  KnowledgeAdapter,
+  KnowledgeAdapterError,
+  executeGovernedKnowledgeQuery,
+} from "./knowledge/knowledge-adapter.mjs";
+export {
+  SkillAdapter,
+  SkillAdapterError,
+  executeGovernedSkillQuery,
+} from "./skill-store/skill-adapter.mjs";
