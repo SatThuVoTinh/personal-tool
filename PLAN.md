@@ -34,7 +34,7 @@ Evidence Level: NONE | LOCAL-VERIFIED | REMOTE-BACKED
 | M4 — PDF ingestion                                    | `COMPLETE`    | `REMOTE-BACKED`  | T1–T5 pushed; owner has temporarily accepted M4 as complete. Exact accepted commit hash should be reconciled from git history without reopening M4 scope. |
 | M5 — Architecture contraction                         | `COMPLETE`    | `REMOTE-BACKED`  | M5/T1-R2 synchronized canonical paths, documentation and the contracted Docker runtime without refactoring the accepted Knowledgebase application.        |
 | M6 — Zink Skill Store                                 | `COMPLETE`    | `REMOTE-BACKED`  | M6/T1-R4 task commit is remotely verified; governance closeout is recorded separately.                                                                    |
-| M7 — Zink Tools + OpenClaw integration + V1 hardening | `IN PROGRESS` | `REMOTE-BACKED` | M7/T1-R19 and M7/T2-R12 remain complete; M7/T3-R16 is complete and remotely backed on the task branch with Zink Tools callable contracts and governed adapters implemented. |
+| M7 — Zink Tools + OpenClaw integration + V1 hardening | `IN PROGRESS` | `REMOTE-BACKED` | M7/T1-R19 and M7/T2-R12 remain complete; M7/T3-R16 and M7/T4-R10 are complete; M7/T5-R13 is in progress for Zink runtime governance remediation. |
 
 The former self-built L&SC Data Plant is replaced by a **logical external
 infrastructure flow**, not another repository module. Forecasting, optimization,
@@ -44,17 +44,24 @@ operations research and simulation remain first-class capabilities.
 
 ```text
 Milestone: M7 — Zink Tools + OpenClaw Integration + V1 Hardening
-Task: M7/T4 — External Infrastructure Integration & Governed Orchestration
+Task: M7/T5 — Zink Runtime Governance Remediation & Capability Enforcement
 Task Status: IN PROGRESS
 Planning Readiness: APPROVED
-Plan Revision: M7/T4-R10
+Plan Revision: M7/T5-R13
 Execution Authorization: YES
-Authorized Task: M7/T4
+Authorized Task: M7/T5
 Execution Contract: docs/contracts/execution/ACTIVE.md
 Evidence Level: NONE
-Task Branch: codex/m7-t4-external-infrastructure
-Owner Approval: EXPLICIT — Approved implementation plan M7/T4-R10 and authorized execution
+Task Branch: codex/m7-t5-governance-remediation
+Owner Approval: EXPLICIT — Approved implementation plan M7/T5-R13 and authorized execution
 ```
+
+M7/T4-R10 validated completion evidence:
+
+- implementation commit `d73f20cc5fd5fd14533b34e2840517c49b9989b1` on `main`;
+- external infrastructure adapters, duckdb bridge, and vietnamese docs implemented;
+- pre-existing test suite passed with zero regressions.
+
 
 M7/T3-R16 validated completion evidence:
 
