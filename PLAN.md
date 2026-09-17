@@ -34,7 +34,7 @@ Evidence Level: NONE | LOCAL-VERIFIED | REMOTE-BACKED
 | M4 — PDF ingestion                                    | `COMPLETE`    | `REMOTE-BACKED`  | T1–T5 pushed; owner has temporarily accepted M4 as complete. Exact accepted commit hash should be reconciled from git history without reopening M4 scope. |
 | M5 — Architecture contraction                         | `COMPLETE`    | `REMOTE-BACKED`  | M5/T1-R2 synchronized canonical paths, documentation and the contracted Docker runtime without refactoring the accepted Knowledgebase application.        |
 | M6 — Zink Skill Store                                 | `COMPLETE`    | `REMOTE-BACKED`  | M6/T1-R4 task commit is remotely verified; governance closeout is recorded separately.                                                                    |
-| M7 — Zink Tools + OpenClaw integration + V1 hardening | `IN PROGRESS` | `REMOTE-BACKED` | M7/T1-R19 and M7/T2-R12 remain complete; M7/T3-R16 and M7/T4-R10 are complete; M7/T5-R13 is in progress for Zink runtime governance remediation. |
+| M7 — Zink Tools + OpenClaw integration + V1 hardening | `COMPLETE`    | `REMOTE-BACKED`  | M7/T1-R19, M7/T2-R12, M7/T3-R16, M7/T4-R10, and M7/T5-R13 complete; runtime governance remediation, Discord 7-bot integration, and Zink tools specialist policies verified. |
 
 The former self-built L&SC Data Plant is replaced by a **logical external
 infrastructure flow**, not another repository module. Forecasting, optimization,
@@ -45,16 +45,27 @@ operations research and simulation remain first-class capabilities.
 ```text
 Milestone: M7 — Zink Tools + OpenClaw Integration + V1 Hardening
 Task: M7/T5 — Zink Runtime Governance Remediation & Capability Enforcement
-Task Status: IN PROGRESS
+Task Status: COMPLETE
 Planning Readiness: APPROVED
 Plan Revision: M7/T5-R13
-Execution Authorization: YES
-Authorized Task: M7/T5
-Execution Contract: docs/contracts/execution/ACTIVE.md
-Evidence Level: NONE
+Execution Authorization: NO
+Authorized Task: NONE
+Execution Contract: NONE
+Evidence Level: REMOTE-BACKED
 Task Branch: codex/m7-t5-governance-remediation
-Owner Approval: EXPLICIT — Approved implementation plan M7/T5-R13 and authorized execution
+Owner Approval: EXPLICIT — Approved implementation plan M7/T5-R13, authorized execution, and authorized merge
 ```
+
+M7/T5-R13 validated completion evidence:
+
+- implementation commits `4037187` and `8e71759` verified on `codex/m7-t5-governance-remediation`;
+- multi-agent Discord ingress task collision remediated via deterministic per-agent `deriveTaskId`; 7 concurrent bots reply without collision or dropped messages;
+- Zink tools registered with complete JSON Schema parameter definitions for `zink_excel`, `zink_power_bi`, `zink_sql`, `zink_python`, and `zink_n8n`;
+- specialist tool allowlists (`alsoAllow`) enforced in `openclaw.json` for Excel (`zink_excel`), Power BI (`zink_power_bi`), SQL (`zink_sql`), Python (`zink_python`, `zink_n8n`), and O2 (`zink_n8n`);
+- Discord output formatting hook unwraps JSON and formats natural Vietnamese conversation;
+- CI shallow clone depth (`fetch-depth: 0`) and `smol-toml` high vulnerability advisory remediated;
+- full test suite passed (173 passed, 0 failed, 1 skipped);
+- GitHub Actions CI (run 35168425589) and Security (run 35168435913) remotely passed (green).
 
 M7/T4-R10 validated completion evidence:
 
