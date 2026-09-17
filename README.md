@@ -41,15 +41,15 @@ Hệ thống OpenClaw quản trị cụm 7 agent vai trò cố định. Các age
 
 ### Bảng Tổng hợp Danh mục 7 Bot
 
-| Agent ID   | Tên hiển thị Discord | Snowflake ID          | Handle / Tag        | Nhiệm vụ chính                                         | Công cụ Zink được gọi                                | Môi trường Sandbox      |
-| :--------- | :------------------- | :-------------------- | :------------------ | :----------------------------------------------------- | :--------------------------------------------------- | :---------------------- |
-| `main`     | **Quản Lý**          | `1545436878835163156` | `@Quản Lý`          | Tiếp nhận, phân rã DAG, lập Execution Brief, tổng hợp  | `sessions_spawn`, `sessions_yield`, `session_status` | Cô lập, điều phối       |
-| `o1`       | **Điều Phối 1 (O1)** | `1545437953197744248` | `@Điều Phối 1 (O1)` | Chuyên viên Tri thức (Knowledge Specialist)            | `session_status`, Knowledgebase API                  | Sandbox read-only Vault |
-| `o2`       | **Điều Phối 2 (O2)** | `1545438251966402661` | `@Điều Phối 2 (O2)` | Chuyên viên Quy trình (Orchestrator)                   | `session_status`, `zink_n8n`                         | Sandbox Docker          |
-| `excel`    | **Excel**            | `1545438637750227104` | `@Excel`            | Chuyên viên Bảng tính (Spreadsheet Specialist)         | `session_status`, `zink_excel`                       | Sandbox Docker          |
-| `power-bi` | **PowerBI**          | `1545439082019164271` | `@PowerBI`          | Chuyên viên Báo cáo BI (BI & Dashboard Specialist)     | `session_status`, `zink_power_bi`                    | Sandbox Docker          |
-| `sql`      | **SQL**              | `1545438861356966010` | `@SQL`              | Chuyên viên Dữ liệu & Truy vấn (Data & SQL Specialist) | `session_status`, `zink_sql`                         | Governed DuckDB Bridge  |
-| `python`   | **Python**           | `1545439279843508235` | `@Python`           | Chuyên viên Khoa học Dữ liệu (Decision & Data Science) | `session_status`, `zink_python`, `zink_n8n`          | Sandbox Docker          |
+| Agent ID   | Tên hiển thị Discord | Snowflake ID          | Handle / Tag        | Nhiệm vụ chính                                         | Công cụ Zink được gọi                                                                                           | Môi trường Sandbox      |
+| :--------- | :------------------- | :-------------------- | :------------------ | :----------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------- | :---------------------- |
+| `main`     | **Quản Lý**          | `1545436878835163156` | `@Quản Lý`          | Tiếp nhận, phân rã DAG, lập Execution Brief, tổng hợp  | `sessions_spawn`, `sessions_yield`, `session_status`, `zink_knowledge_search`, `zink_skill_search`              | Cô lập, điều phối       |
+| `o1`       | **Điều Phối 1 (O1)** | `1545437953197744248` | `@Điều Phối 1 (O1)` | Chuyên viên Tri thức (Knowledge Specialist)            | `session_status`, `zink_knowledge_search`, `zink_skill_search`, `zink_skill_propose`                            | Sandbox read-only Vault |
+| `o2`       | **Điều Phối 2 (O2)** | `1545438251966402661` | `@Điều Phối 2 (O2)` | Chuyên viên Quy trình (Orchestrator)                   | `session_status`, `zink_n8n`, `zink_knowledge_search`, `zink_skill_search`                                      | Sandbox Docker          |
+| `excel`    | **Excel**            | `1545438637750227104` | `@Excel`            | Chuyên viên Bảng tính (Spreadsheet Specialist)         | `session_status`, `zink_excel`, `zink_skill_search`, `zink_skill_propose`, `zink_knowledge_search`              | Sandbox Docker          |
+| `power-bi` | **PowerBI**          | `1545439082019164271` | `@PowerBI`          | Chuyên viên Báo cáo BI (BI & Dashboard Specialist)     | `session_status`, `zink_power_bi`, `zink_skill_search`, `zink_skill_propose`, `zink_knowledge_search`           | Sandbox Docker          |
+| `sql`      | **SQL**              | `1545438861356966010` | `@SQL`              | Chuyên viên Dữ liệu & Truy vấn (Data & SQL Specialist) | `session_status`, `zink_sql`, `zink_skill_search`, `zink_skill_propose`, `zink_knowledge_search`                | Governed DuckDB Bridge  |
+| `python`   | **Python**           | `1545439279843508235` | `@Python`           | Chuyên viên Khoa học Dữ liệu (Decision & Data Science) | `session_status`, `zink_python`, `zink_n8n`, `zink_skill_search`, `zink_skill_propose`, `zink_knowledge_search` | Sandbox Docker          |
 
 ---
 
@@ -235,17 +235,32 @@ Hệ thống hỗ trợ 3 hình thức tag bot:
 - Trên Discord Mobile, bạn có thể bấm vào avatar của bất kỳ bot nào và chọn **Nhắn tin** (Send Message).
 - Cấu hình `dmPolicy: "allowlist"` kết hợp `allowFrom: ["854005217715814432"]` đảm bảo chỉ duy nhất chủ sở hữu được phép trò chuyện riêng tư với các bot qua tin nhắn DM; các tài khoản lạ sẽ bị từ chối tự động.
 
+#### 4. Quy trình Phê duyệt Kỹ năng Mới trên Diễn đàn `#approvals`
+
+- Khi một agent (`excel`, `power-bi`, `sql`, `python`, `o1`) học được kỹ năng mới hoặc giải pháp phân tích tái sử dụng, agent gọi `zink_skill_propose` để khởi tạo bản ghi `CANDIDATE`.
+- Đề xuất được định danh bằng mã băm nội dung bất biến (immutable SHA-256 hash) và gửi thông báo vào diễn đàn `#approvals`.
+- **Phê duyệt:** Chủ sở hữu (`854005217715814432`) đọc nội dung đề xuất và trả lời trực tiếp trong thread với nội dung chứa từ khóa `APPROVED` (ví dụ: `APPROVED` hoặc `Đồng ý APPROVED`).
+- **Xác thực tự động:** Hệ thống `handleOwnerSkillApproval` sẽ xác thực danh tính chủ sở hữu và tính toàn vẹn của mã băm nội dung, sau đó tiến hành kích hoạt kỹ năng lên trạng thái `ACTIVE` trong Git canonical store và đồng bộ sang PostgreSQL vector index. Mọi nỗ lực giả mạo danh tính hoặc sai lệch mã băm đều bị từ chối fail-closed.
+
 ---
 
-## 6. 5 Công cụ Zink có thể gọi (Callable Tools)
+## 6. Danh mục Công cụ Zink có thể gọi (Callable Tools)
 
-Đúng 5 công cụ Zink được phép thực thi trong toàn bộ hệ thống:
+Hệ thống cung cấp đúng 8 công cụ Zink được phép thực thi có quản trị:
+
+### Nhóm 1: Công cụ Thực thi Chuyên môn (Execution Specialist Tools)
 
 1. **`zink_excel`:** Hợp đồng gọi xử lý bảng tính Excel cho agent `excel`.
 2. **`zink_power_bi`:** Hợp đồng trực quan hóa báo cáo Power BI cho agent `power-bi`.
 3. **`zink_sql`:** Giao diện truy vấn SQL phân tích chỉ đọc (Lean Option B) cho agent `sql`.
 4. **`zink_python`:** Giao diện xử lý tính toán số và khoa học quyết định cho agent `python`.
 5. **`zink_n8n`:** Bộ điều hợp kích hoạt luồng công việc tất định cho agent `o2` và `python`.
+
+### Nhóm 2: Công cụ Bộ nhớ & Truy xuất Tri thức (Governed Memory & Semantic RAG Tools)
+
+1. **`zink_skill_search`:** Tra cứu vector ngữ nghĩa trong Zink Skill Store (1024-dim BGE-M3, HNSW cosine distance, chỉ lọc skill trạng thái `ACTIVE`). Cho phép cả 7 agent truy xuất các kỹ năng phân tích và template chuẩn.
+2. **`zink_skill_propose`:** Cơ chế ghi nhớ 2 chiều (Human-in-the-Loop Memory) dành cho các agent chuyên môn (`excel`, `power-bi`, `sql`, `python`) và `o1`. Agent đề xuất kỹ năng mới dưới dạng `CANDIDATE` kèm hash định danh bất biến, đẩy vào kênh `#approvals`. Tuyệt đối không cho phép agent tự kích hoạt `ACTIVE`; bắt buộc có sự phê duyệt xác thực từ chủ sở hữu.
+3. **`zink_knowledge_search`:** Tra cứu ngữ nghĩa Knowledgebase một chiều (Vector HNSW + FTS + RRF reranker kèm trích dẫn source và bbox). Cho phép cả 7 agent tra cứu tài liệu và quy trình chuẩn từ Obsidian Vault mà không thể can thiệp sửa đổi nội dung nguồn.
 
 _4 Năng lực đặc tả (Schema-only capabilities):_ `zink_forecast`, `zink_optimization`, `zink_operations_research`, `zink_simulation` là các lược đồ định dạng bài toán toán học, không phải công cụ thực thi trực tiếp.
 

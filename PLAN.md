@@ -25,16 +25,17 @@ Evidence Level: NONE | LOCAL-VERIFIED | REMOTE-BACKED
 
 ## 3. Current release gate
 
-| Milestone                                             | Status        | Evidence         | Gate summary                                                                                                                                              |
-| ----------------------------------------------------- | ------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| M0 — Plan/architecture baseline                       | `COMPLETE`    | `LOCAL-VERIFIED` | Repository governance established.                                                                                                                        |
-| M1 — Development foundation                           | `COMPLETE`    | `REMOTE-BACKED`  | Verification and CI/Security baseline passed.                                                                                                             |
-| M2 — Local infrastructure                             | `COMPLETE`    | `REMOTE-BACKED`  | Accepted commit `5ffe4cb9be81c30d5c24bd7eb6a9d41abc2a5f19`.                                                                                               |
-| M3 — Markdown Knowledgebase                           | `COMPLETE`    | `REMOTE-BACKED`  | Accepted candidate `ff4a5fb7d779f260ffb9b5aa2393ad6ab75eb549`; accepted merge `9cd34cebb196631e9524b095c21f1fd5aff78749`.                                 |
-| M4 — PDF ingestion                                    | `COMPLETE`    | `REMOTE-BACKED`  | T1–T5 pushed; owner has temporarily accepted M4 as complete. Exact accepted commit hash should be reconciled from git history without reopening M4 scope. |
-| M5 — Architecture contraction                         | `COMPLETE`    | `REMOTE-BACKED`  | M5/T1-R2 synchronized canonical paths, documentation and the contracted Docker runtime without refactoring the accepted Knowledgebase application.        |
-| M6 — Zink Skill Store                                 | `COMPLETE`    | `REMOTE-BACKED`  | M6/T1-R4 task commit is remotely verified; governance closeout is recorded separately.                                                                    |
-| M7 — Zink Tools + OpenClaw integration + V1 hardening | `COMPLETE`    | `REMOTE-BACKED`  | M7/T1-R19, M7/T2-R12, M7/T3-R16, M7/T4-R10, and M7/T5-R13 complete; runtime governance remediation, Discord 7-bot integration, and Zink tools specialist policies verified. |
+| Milestone                                                                  | Status        | Evidence         | Gate summary                                                                                                                                                                |
+| -------------------------------------------------------------------------- | ------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M0 — Plan/architecture baseline                                            | `COMPLETE`    | `LOCAL-VERIFIED` | Repository governance established.                                                                                                                                          |
+| M1 — Development foundation                                                | `COMPLETE`    | `REMOTE-BACKED`  | Verification and CI/Security baseline passed.                                                                                                                               |
+| M2 — Local infrastructure                                                  | `COMPLETE`    | `REMOTE-BACKED`  | Accepted commit `5ffe4cb9be81c30d5c24bd7eb6a9d41abc2a5f19`.                                                                                                                 |
+| M3 — Markdown Knowledgebase                                                | `COMPLETE`    | `REMOTE-BACKED`  | Accepted candidate `ff4a5fb7d779f260ffb9b5aa2393ad6ab75eb549`; accepted merge `9cd34cebb196631e9524b095c21f1fd5aff78749`.                                                   |
+| M4 — PDF ingestion                                                         | `COMPLETE`    | `REMOTE-BACKED`  | T1–T5 pushed; owner has temporarily accepted M4 as complete. Exact accepted commit hash should be reconciled from git history without reopening M4 scope.                   |
+| M5 — Architecture contraction                                              | `COMPLETE`    | `REMOTE-BACKED`  | M5/T1-R2 synchronized canonical paths, documentation and the contracted Docker runtime without refactoring the accepted Knowledgebase application.                          |
+| M6 — Zink Skill Store                                                      | `COMPLETE`    | `REMOTE-BACKED`  | M6/T1-R4 task commit is remotely verified; governance closeout is recorded separately.                                                                                      |
+| M7 — Zink Tools + OpenClaw integration + V1 hardening                      | `COMPLETE`    | `REMOTE-BACKED`  | M7/T1-R19, M7/T2-R12, M7/T3-R16, M7/T4-R10, and M7/T5-R13 complete; runtime governance remediation, Discord 7-bot integration, and Zink tools specialist policies verified. |
+| M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Integration | `COMPLETE`    | `LOCAL-VERIFIED` | Task M8/T1 complete: Governed Skill Vector DB, semantic search, 2-way proposal pipeline, and Discord Mobile Gateway verified.                                               |
 
 The former self-built L&SC Data Plant is replaced by a **logical external
 infrastructure flow**, not another repository module. Forecasting, optimization,
@@ -43,18 +44,31 @@ operations research and simulation remain first-class capabilities.
 ## 4. Current focus
 
 ```text
-Milestone: M7 — Zink Tools + OpenClaw Integration + V1 Hardening
-Task: M7/T5 — Zink Runtime Governance Remediation & Capability Enforcement
+Milestone: M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Integration
+Task: M8/T1 — Governed Skill Vector Store, Semantic Search & Agent Proposal Pipeline
 Task Status: COMPLETE
 Planning Readiness: APPROVED
-Plan Revision: M7/T5-R13
+Plan Revision: M8/T1-R1
 Execution Authorization: NO
 Authorized Task: NONE
 Execution Contract: NONE
-Evidence Level: REMOTE-BACKED
-Task Branch: codex/m7-t5-governance-remediation
-Owner Approval: EXPLICIT — Approved implementation plan M7/T5-R13, authorized execution, and authorized merge
+Evidence Level: LOCAL-VERIFIED
+Task Branch: codex/m8-t1-skill-vector-memory
+Owner Approval: EXPLICIT — Owner instructed to record plan into ACTIVE.md and implement 2-way long-term memory for Zink Skill Store
 ```
+
+M8/T1-R1 validated completion evidence:
+
+- PostgreSQL schema `skills` initialized with `catalog_index`, `segments`, and 1024-dimension HNSW cosine vector index `skills_segments_embedding_hnsw_idx` via migration `apps/knowledge/migrations/003_skills_vector_schema.sql`;
+- shared canonical semantic contract implemented in `zink-tools/common/semantic-contract.mjs` with deterministic uppercase envelope formatting (`renderEmbeddingEnvelope`), SHA-256 envelope hashing (`computeEmbeddingInputHash`), safe query preparation, and non-hallucinating taxonomy derivation;
+- Git-to-PostgreSQL vector synchronization implemented in `zink-skill-store/src/vector-sync.mjs` with fail-closed validation, ACTIVE-only indexing, source-drift abort safeguards, and 1024-dimension vector enforcement;
+- callable tool contracts and adapters implemented for `zink_skill_search` (vector cosine similarity, ACTIVE-only), `zink_skill_propose` (candidate-only, human-in-the-loop approval, strictly prevents direct promotion to ACTIVE), and `zink_knowledge_search` (hybrid search proxy with citation provenance);
+- Discord `#approvals` owner approval callback (`handleOwnerSkillApproval`) implemented in OpenClaw governance plugin with immutable content-hash binding and fail-closed owner verification;
+- RBAC policy updated in `integrations/openclaw/lib/policy.mjs`: all 7 agents authorized for `zink_skill_search` and `zink_knowledge_search`; specialists and O1 authorized for `zink_skill_propose`;
+- Discord Mobile mention parsing remediated: corrected punctuation lookahead regex `(?=$|[>\\s,.:;!?])` and mapped all 7 snowflake IDs in `AGENT_ALIASES` and `groupChat.mentionPatterns`, allowing raw `<@ID>`, `<@!ID>`, snowflake, and natural text mentions from Mobile and Desktop clients;
+- Discord Gateway stability remediated: set `replyToMode: "off"` to eliminate Discord API 50035/50001 permission errors; verified all 7 bot WebSockets active and connected to Discord Gateway;
+- automated test suite `tests/m8-t1-skill-vector-memory.test.mjs` passed 11/11 tests covering all bug prevention rules (BUG-01 through BUG-13);
+- full verification suite `npm run verify` passed all 123 tests cleanly (`format:check`, `lint`, `test`, `repo:check`).
 
 M7/T5-R13 validated completion evidence:
 
@@ -72,7 +86,6 @@ M7/T4-R10 validated completion evidence:
 - implementation commit `d73f20cc5fd5fd14533b34e2840517c49b9989b1` on `main`;
 - external infrastructure adapters, duckdb bridge, and vietnamese docs implemented;
 - pre-existing test suite passed with zero regressions.
-
 
 M7/T3-R16 validated completion evidence:
 
@@ -265,7 +278,8 @@ M0 Plan/Architecture
 → M4 PDF Ingestion                 [COMPLETE]
 → M5 Architecture Contraction      [COMPLETE]
 → M6 Zink Skill Store              [COMPLETE / REMOTE-BACKED]
-→ M7 Zink Tools + OpenClaw Integration + V1 Hardening/Release
+→ M7 Zink Tools + OpenClaw Integration + V1 Hardening/Release [COMPLETE]
+→ M8 Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Integration [COMPLETE]
 ```
 
 ### M5 — Architecture Contraction
@@ -356,6 +370,42 @@ Minimum scope:
 - training/heavy compute stays on approved external infrastructure when needed;
 - compatibility tests, bounded errors/timeouts and failure isolation;
 - no secret values committed to integration configs.
+
+### M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Integration
+
+Status: `COMPLETE`
+Task: `M8/T1 — Governed Skill Vector Store, Semantic Search & Agent Proposal Pipeline`
+Task Status: `COMPLETE`
+Plan Revision: `M8/T1-R1`
+Planning Readiness: `APPROVED`
+Execution Authorization: `NO`
+Execution Contract: `NONE`
+Evidence: `LOCAL-VERIFIED`
+Task Branch: `codex/m8-t1-skill-vector-memory`
+
+M8/T1 implemented a 2-way long-term memory system for Zink Skill Store and a 1-way
+read-only semantic RAG pipeline for Zink Knowledgebase:
+
+- PostgreSQL schema `skills` initialized with `catalog_index`, `segments`, and
+  `skills_segments_embedding_hnsw_idx` (1024-dim BGE-M3 HNSW cosine index);
+- shared canonical semantic contract (`zink-tools/common/semantic-contract.mjs`)
+  enforces deterministic uppercase envelope formatting, SHA-256 content hashing,
+  safe query truncation, and non-hallucinating taxonomy derivation;
+- Git-to-PostgreSQL vector synchronization (`zink-skill-store/src/vector-sync.mjs`)
+  enforces fail-closed active catalog filtering, source-drift abort safeguards,
+  and 1024-dimension vector constraints; Git remains the canonical authority;
+- callable tool interfaces added for `zink_skill_search` (ACTIVE-only cosine similarity),
+  `zink_skill_propose` (human-in-the-loop candidate proposal via `#approvals`,
+  preventing direct activation), and `zink_knowledge_search` (hybrid search proxy);
+- Discord `#approvals` owner approval callback (`handleOwnerSkillApproval`)
+  authenticates owner identity and binds immutable proposal content hashes before
+  promoting candidate skills to Git;
+- OpenClaw RBAC policy updated granting retrieval to all 7 bots and proposal rights
+  to execution specialists and O1;
+- Discord Mobile mention resolution remediated (supporting `<@ID>`, `<@!ID>`, raw
+  snowflakes, and Vietnamese text patterns with corrected punctuation lookahead) and
+  Gateway stability ensured with `replyToMode: "off"`;
+- full verification suite passed with all 123 tests clean.
 
 ## 9. Deferred beyond V1
 

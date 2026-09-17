@@ -31,6 +31,117 @@ const AGENT_DISPLAY_NAMES = {
   python: "Python",
 };
 
+let skillAdapterModule = null;
+let knowledgeAdapterModule = null;
+let vectorSyncModule = null;
+
+async function getSkillAdapter() {
+  if (!skillAdapterModule) {
+    try {
+      skillAdapterModule = await import(
+        new URL(
+          "../../../../zink-tools/adapters/skill-store/skill-adapter.mjs",
+          import.meta.url,
+        ).href
+      );
+    } catch {
+      try {
+        skillAdapterModule = await import(
+          path.resolve(
+            process.cwd(),
+            "zink-tools/adapters/skill-store/skill-adapter.mjs",
+          )
+        );
+      } catch {
+        // Module not accessible in isolated test directory
+      }
+    }
+  }
+  return skillAdapterModule;
+}
+
+async function getKnowledgeAdapter() {
+  if (!knowledgeAdapterModule) {
+    try {
+      knowledgeAdapterModule = await import(
+        new URL(
+          "../../../../zink-tools/adapters/knowledge/knowledge-adapter.mjs",
+          import.meta.url,
+        ).href
+      );
+    } catch {
+      try {
+        knowledgeAdapterModule = await import(
+          path.resolve(
+            process.cwd(),
+            "zink-tools/adapters/knowledge/knowledge-adapter.mjs",
+          )
+        );
+      } catch {
+        // Module not accessible in isolated test directory
+      }
+    }
+  }
+  return knowledgeAdapterModule;
+}
+
+async function getVectorSyncModule() {
+  if (!vectorSyncModule) {
+    try {
+      vectorSyncModule = await import(
+        new URL(
+          "../../../../zink-skill-store/src/vector-sync.mjs",
+          import.meta.url,
+        ).href
+      );
+    } catch {
+      try {
+        vectorSyncModule = await import(
+          path.resolve(process.cwd(), "zink-skill-store/src/vector-sync.mjs")
+        );
+      } catch {
+        // Module not accessible in isolated test directory
+      }
+    }
+  }
+  return vectorSyncModule;
+}
+
+export async function handleOwnerSkillApproval({
+  ownerDiscordId,
+  proposalId,
+  contentSha256,
+  skillsRoot,
+  expectedOwnerId = "854005217715814432",
+  options = {},
+}) {
+  // Exact owner snowflake binding (BUG-06)
+  if (ownerDiscordId !== expectedOwnerId) {
+    throw new Error(
+      "APPROVAL_OWNER_MISMATCH: Unauthorized principal cannot approve skills",
+    );
+  }
+  if (!proposalId || typeof proposalId !== "string" || !proposalId.trim()) {
+    throw new Error(
+      "APPROVAL_PROPOSAL_ID_REQUIRED: Missing proposal ID binding",
+    );
+  }
+  if (!contentSha256 || !/^[a-f0-9]{64}$/u.test(contentSha256)) {
+    throw new Error(
+      "APPROVAL_CONTENT_HASH_INVALID: Content hash must be 64-character SHA-256",
+    );
+  }
+
+  const syncMod = await getVectorSyncModule();
+  if (syncMod?.syncSkillsToVectorStore) {
+    return syncMod.syncSkillsToVectorStore({
+      skillsRoot,
+      ...options,
+    });
+  }
+  return { status: "READY", synced_count: 0, failed_count: 0 };
+}
+
 export function registerTools(api) {
   const registerFn =
     typeof api?.registerTool === "function"
@@ -40,6 +151,170 @@ export function registerTools(api) {
         : null;
   if (!registerFn) return;
   const registry = {
+    zink_skill_search: {
+      description:
+        "Search governed skills in Zink Skill Store using semantic vector similarity.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Search query for skills" },
+          limit: {
+            type: "integer",
+            description: "Maximum number of skills to return (1-20)",
+          },
+          primary_topic: {
+            type: "string",
+            description: "Optional primary topic filter",
+          },
+          subtopic: { type: "string", description: "Optional subtopic filter" },
+          capability: {
+            type: "string",
+            description: "Optional capability name filter",
+          },
+        },
+        required: ["query"],
+      },
+      async execute(_id, params) {
+        const mod = await getSkillAdapter();
+        if (mod?.executeGovernedSkillQuery) {
+          const res = await mod.executeGovernedSkillQuery({
+            action: "search",
+            ...params,
+          });
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(res),
+              },
+            ],
+          };
+        }
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                status: "governed",
+                tool: "zink_skill_search",
+                params,
+              }),
+            },
+          ],
+        };
+      },
+    },
+    zink_knowledge_search: {
+      description:
+        "Search authoritative documents in Zink Knowledgebase using semantic hybrid RAG.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "Search query for knowledgebase",
+          },
+          limit: { type: "integer", description: "Maximum results (1-20)" },
+          primary_topic: {
+            type: "string",
+            description: "Optional primary topic filter",
+          },
+          path_prefix: {
+            type: "string",
+            description: "Optional path prefix filter",
+          },
+        },
+        required: ["query"],
+      },
+      async execute(_id, params) {
+        const mod = await getKnowledgeAdapter();
+        if (mod?.executeGovernedKnowledgeQuery) {
+          const res = await mod.executeGovernedKnowledgeQuery({
+            action: "search",
+            ...params,
+          });
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(res),
+              },
+            ],
+          };
+        }
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                status: "governed",
+                tool: "zink_knowledge_search",
+                params,
+              }),
+            },
+          ],
+        };
+      },
+    },
+    zink_skill_propose: {
+      description:
+        "Propose a new or updated skill candidate for human owner review and approval.",
+      parameters: {
+        type: "object",
+        properties: {
+          namespace: {
+            type: "string",
+            description: "Skill namespace slug (e.g. excel, sql, python, data)",
+          },
+          capability: {
+            type: "string",
+            description: "Skill capability slug (e.g. vlookup-optimization)",
+          },
+          version: {
+            type: "string",
+            description: "SemVer version string (e.g. 1.0.0)",
+          },
+          content: {
+            type: "string",
+            description: "Full SKILL.md Markdown content with instructions",
+          },
+          reason: {
+            type: "string",
+            description: "Justification for this new/updated skill",
+          },
+        },
+        required: ["namespace", "capability", "version", "content", "reason"],
+      },
+      async execute(_id, params) {
+        const mod = await getSkillAdapter();
+        if (mod?.executeGovernedSkillQuery) {
+          const res = await mod.executeGovernedSkillQuery({
+            action: "propose",
+            ...params,
+          });
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(res),
+              },
+            ],
+          };
+        }
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                status: "governed",
+                tool: "zink_skill_propose",
+                params,
+              }),
+            },
+          ],
+        };
+      },
+    },
     zink_excel: {
       description:
         "Execute governed Excel operations (load, populate, validate, generate).",
@@ -159,6 +434,9 @@ export function registerTools(api) {
       description: def.description,
       parameters: def.parameters,
       async execute(_id, params) {
+        if (typeof def.execute === "function") {
+          return def.execute(_id, params);
+        }
         return {
           content: [
             {

@@ -40,6 +40,44 @@ export const DISCORD_SURFACE_IDENTIFIERS = Object.freeze([
   "discordIncidentsForumId",
 ]);
 
+export const DISCORD_BOT_IDS = Object.freeze({
+  main: "1545436878835163156",
+  o1: "1545437953197744248",
+  o2: "1545438251966402661",
+  excel: "1545438637750227104",
+  "power-bi": "1545439082019164271",
+  sql: "1545438861356966010",
+  python: "1545439279843508235",
+});
+
+export const AGENT_ALIASES = Object.freeze({
+  main: "main",
+  quanly: "main",
+  "quản lý": "main",
+  "quan ly": "main",
+  "1545436878835163156": "main",
+  o1: "o1",
+  "điều phối 1": "o1",
+  "dieu phoi 1": "o1",
+  "dieu-phoi-1": "o1",
+  "1545437953197744248": "o1",
+  o2: "o2",
+  "điều phối 2": "o2",
+  "dieu phoi 2": "o2",
+  "dieu-phoi-2": "o2",
+  "1545438251966402661": "o2",
+  excel: "excel",
+  "1545438637750227104": "excel",
+  "power-bi": "power-bi",
+  powerbi: "power-bi",
+  "power bi": "power-bi",
+  "1545439082019164271": "power-bi",
+  sql: "sql",
+  "1545438861356966010": "sql",
+  python: "python",
+  "1545439279843508235": "python",
+});
+
 export function resolveMentionedAgents(
   textOrMentions,
   { requireMention = true } = {},
@@ -65,20 +103,32 @@ export function resolveMentionedAgents(
 
     const matched = new Set();
     for (const mention of mentions) {
-      const name =
-        typeof mention === "string"
-          ? mention
-          : (mention?.username ?? mention?.name ?? "");
-      const normalized = String(name).toLowerCase().trim();
-      if (AGENT_IDS.includes(normalized)) {
-        matched.add(normalized);
+      const candidates = [
+        mention?.id,
+        mention,
+        mention?.username,
+        mention?.name,
+        mention?.global_name,
+        mention?.displayName,
+        mention?.nick,
+      ]
+        .filter((c) => typeof c === "string")
+        .map((c) => c.toLowerCase().trim());
+
+      for (const cand of candidates) {
+        if (AGENT_IDS.includes(cand)) {
+          matched.add(cand);
+        } else if (AGENT_ALIASES[cand]) {
+          matched.add(AGENT_ALIASES[cand]);
+        }
       }
     }
 
-    for (const agentId of AGENT_IDS) {
-      const regex = new RegExp(`(?:<@!?|@)\\b${agentId}\\b`, "ui");
+    for (const [alias, targetAgentId] of Object.entries(AGENT_ALIASES)) {
+      const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const regex = new RegExp(`(?:<@!?|@)${escaped}(?=$|[>\\s,.:;!?])`, "ui");
       if (regex.test(content)) {
-        matched.add(agentId);
+        matched.add(targetAgentId);
       }
     }
 
@@ -91,6 +141,7 @@ export function resolveMentionedAgents(
   if (Array.isArray(textOrMentions)) {
     const matched = textOrMentions
       .map((item) => String(item).toLowerCase().trim())
+      .map((item) => AGENT_ALIASES[item] || item)
       .filter((item) => AGENT_IDS.includes(item));
     const unique = [...new Set(matched)];
     return Object.freeze(unique);
@@ -103,10 +154,11 @@ export function resolveMentionedAgents(
   }
 
   const matched = new Set();
-  for (const agentId of AGENT_IDS) {
-    const regex = new RegExp(`(?:<@!?|@)\\b${agentId}\\b`, "ui");
+  for (const [alias, targetAgentId] of Object.entries(AGENT_ALIASES)) {
+    const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const regex = new RegExp(`(?:<@!?|@)${escaped}(?=$|[>\\s,.:;!?])`, "ui");
     if (regex.test(text)) {
-      matched.add(agentId);
+      matched.add(targetAgentId);
     }
   }
 
@@ -266,6 +318,8 @@ export const SKILL_STORE_ACCESS_MATRIX = Object.freeze({
     discover: true,
     read: true,
     validate: true,
+    search: true,
+    propose: false,
     apply: "selective",
     publish: false,
     deprecate: false,
@@ -275,6 +329,8 @@ export const SKILL_STORE_ACCESS_MATRIX = Object.freeze({
     discover: true,
     read: true,
     validate: true,
+    search: true,
+    propose: false,
     apply: "approved_research_domain",
     publish: false,
     deprecate: false,
@@ -284,6 +340,8 @@ export const SKILL_STORE_ACCESS_MATRIX = Object.freeze({
     discover: true,
     read: true,
     validate: true,
+    search: true,
+    propose: false,
     apply: "approved_data_infra",
     publish: false,
     deprecate: false,
@@ -293,6 +351,8 @@ export const SKILL_STORE_ACCESS_MATRIX = Object.freeze({
     discover: true,
     read: true,
     validate: true,
+    search: true,
+    propose: true,
     apply: "approved_excel_templates",
     publish: false,
     deprecate: false,
@@ -302,6 +362,8 @@ export const SKILL_STORE_ACCESS_MATRIX = Object.freeze({
     discover: true,
     read: true,
     validate: true,
+    search: true,
+    propose: true,
     apply: "approved_power_bi_templates",
     publish: false,
     deprecate: false,
@@ -311,6 +373,8 @@ export const SKILL_STORE_ACCESS_MATRIX = Object.freeze({
     discover: true,
     read: true,
     validate: true,
+    search: true,
+    propose: true,
     apply: "approved_sql_data_skills",
     publish: false,
     deprecate: false,
@@ -320,6 +384,8 @@ export const SKILL_STORE_ACCESS_MATRIX = Object.freeze({
     discover: true,
     read: true,
     validate: true,
+    search: true,
+    propose: true,
     apply: "approved_python_ml_or_skills",
     publish: false,
     deprecate: false,
