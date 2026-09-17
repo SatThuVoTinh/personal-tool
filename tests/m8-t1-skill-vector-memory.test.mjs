@@ -204,58 +204,65 @@ describe("M8/T1 Governed Skill Vector Store & Semantic Vector RAG", () => {
   // Test 5: BUG-06 — handleOwnerSkillApproval requires exact owner snowflake and content hash
   // =========================================================================
   test("BUG-06: handleOwnerSkillApproval validates exact owner identity and content binding", async () => {
-    const validProposalId = "prop-123456789";
-    const validHash = "a".repeat(64);
-
-    // 1. Rejects wrong owner snowflake
-    await assert.rejects(
-      () =>
-        handleOwnerSkillApproval({
-          ownerDiscordId: "999999999999999999", // not owner
-          proposalId: validProposalId,
-          contentSha256: validHash,
-          skillsRoot: "/tmp",
-        }),
-      /APPROVAL_OWNER_MISMATCH/,
+    const tempDir = await mkdtemp(
+      path.join(os.tmpdir(), "zink-approval-test-"),
     );
+    try {
+      const validProposalId = "prop-123456789";
+      const validHash = "a".repeat(64);
 
-    // 2. Rejects invalid content hash
-    await assert.rejects(
-      () =>
-        handleOwnerSkillApproval({
-          ownerDiscordId: "854005217715814432",
-          proposalId: validProposalId,
-          contentSha256: "invalid-hash",
-          skillsRoot: "/tmp",
-        }),
-      /APPROVAL_CONTENT_HASH_INVALID/,
-    );
+      // 1. Rejects wrong owner snowflake
+      await assert.rejects(
+        () =>
+          handleOwnerSkillApproval({
+            ownerDiscordId: "999999999999999999", // not owner
+            proposalId: validProposalId,
+            contentSha256: validHash,
+            skillsRoot: tempDir,
+          }),
+        /APPROVAL_OWNER_MISMATCH/,
+      );
 
-    // 3. Rejects missing proposal ID
-    await assert.rejects(
-      () =>
-        handleOwnerSkillApproval({
-          ownerDiscordId: "854005217715814432",
-          proposalId: "",
-          contentSha256: validHash,
-          skillsRoot: "/tmp",
-        }),
-      /APPROVAL_PROPOSAL_ID_REQUIRED/,
-    );
+      // 2. Rejects invalid content hash
+      await assert.rejects(
+        () =>
+          handleOwnerSkillApproval({
+            ownerDiscordId: "854005217715814432",
+            proposalId: validProposalId,
+            contentSha256: "invalid-hash",
+            skillsRoot: tempDir,
+          }),
+        /APPROVAL_CONTENT_HASH_INVALID/,
+      );
 
-    // 4. Accepts valid owner + proposal + hash
-    const approvalResult = await handleOwnerSkillApproval({
-      ownerDiscordId: "854005217715814432",
-      proposalId: validProposalId,
-      contentSha256: validHash,
-      skillsRoot: "/tmp",
-      options: {
-        embedFn: async () => [new Array(1024).fill(0.01)],
-        dbExecutor: async () => "",
-      },
-    });
+      // 3. Rejects missing proposal ID
+      await assert.rejects(
+        () =>
+          handleOwnerSkillApproval({
+            ownerDiscordId: "854005217715814432",
+            proposalId: "",
+            contentSha256: validHash,
+            skillsRoot: tempDir,
+          }),
+        /APPROVAL_PROPOSAL_ID_REQUIRED/,
+      );
 
-    assert.ok(approvalResult);
+      // 4. Accepts valid owner + proposal + hash
+      const approvalResult = await handleOwnerSkillApproval({
+        ownerDiscordId: "854005217715814432",
+        proposalId: validProposalId,
+        contentSha256: validHash,
+        skillsRoot: tempDir,
+        options: {
+          embedFn: async () => [new Array(1024).fill(0.01)],
+          dbExecutor: async () => "",
+        },
+      });
+
+      assert.ok(approvalResult);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   // =========================================================================
