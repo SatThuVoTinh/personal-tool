@@ -79,6 +79,7 @@ function temporaryDirectory() {
 function environmentForTemporaryHome(root) {
   return {
     ...process.env,
+    HOME: root,
     USERPROFILE: root,
   };
 }
@@ -892,7 +893,10 @@ test("M7/T1 builder upgrades only the exact R16 drop-in and rejects owned drift"
       );
 
     mkdirSync(path.dirname(dropInPath), { recursive: true });
-    writeFileSync(dropInPath, renderLegacySystemdDropInR16(stateDir), "utf8");
+    writeFileSync(dropInPath, renderLegacySystemdDropInR16(stateDir), {
+      encoding: "utf8",
+      mode: 0o600,
+    });
     apply();
     assert.equal(
       readFileSync(dropInPath, "utf8"),
@@ -941,7 +945,10 @@ test("M7/T1 builder upgrades only the exact R16 drop-in and rejects owned drift"
     assert.equal(readFileSync(hotfixPath, "utf8"), "unapproved hotfix drift\n");
 
     writeFileSync(hotfixPath, geminiStreamHotfixContents(), "utf8");
-    writeFileSync(dropInPath, "unapproved systemd drift\n", "utf8");
+    writeFileSync(dropInPath, "unapproved systemd drift\n", {
+      encoding: "utf8",
+      mode: 0o600,
+    });
     assert.throws(apply, /Systemd drop-in drift detected/u);
     assert.equal(
       readFileSync(dropInPath, "utf8"),

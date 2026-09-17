@@ -1,0 +1,9 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Allow synthetic Discord IDs and test fixtures"
+paths = [
+  '''tests/.*''',
+  '''integrations/openclaw/orchestration/README\.md'''
+]
