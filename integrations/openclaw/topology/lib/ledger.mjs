@@ -178,7 +178,11 @@ export function inspectLedgerUpgrade(paths) {
 export function upgradeEmptyLegacyLedger(paths) {
   return withWriterLock(paths, () => {
     const state = inspectLedgerUpgrade(paths);
-    if (state === "EMPTY_R11") writeSnapshotAtomic(paths, { ...emptySnapshot(), governance_version: "m7-t2-r12" });
+    if (state === "EMPTY_R11")
+      writeSnapshotAtomic(paths, {
+        ...emptySnapshot(),
+        governance_version: "m7-t2-r12",
+      });
     return readSnapshotLocked(paths);
   });
 }

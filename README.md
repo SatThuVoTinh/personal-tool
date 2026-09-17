@@ -35,23 +35,209 @@ _Lưu ý kiến trúc:_ Thuật ngữ lịch sử "L&SC Data Plant" chỉ đại
 
 ---
 
-## 3. Thành phần và 7 Vai trò Agent
+## 3. Thành phần và Hồ sơ Chi tiết 7 Vai trò Agent
 
-Hệ thống OpenClaw quản trị 7 agent vai trò cố định, không tạo thêm agent mới:
+Hệ thống OpenClaw quản trị cụm 7 agent vai trò cố định. Các agent hoạt động trong môi trường Docker sandbox cô lập (`/workspace`), tuân thủ ranh giới quyền hạn nghiêm ngặt và không tự ý gọi chéo nhau trực tiếp trên Discord:
 
-| Định danh Agent | Tên hiển thị         | Vai trò chính                                                     | Công cụ Zink được phép gọi |
-| --------------- | -------------------- | ----------------------------------------------------------------- | -------------------------- |
-| `main`          | Main Coordinator     | Tiếp nhận yêu cầu, phân loại Work/Research, điều phối cấp cao     | Không gọi trực tiếp        |
-| `o1`            | Knowledge Specialist | Truy xuất tri thức, phân tích tài liệu tham khảo từ Knowledgebase | Không gọi trực tiếp        |
-| `o2`            | Orchestrator         | Điều phối luồng công việc tất định (deterministic workflows)      | `zink_n8n`                 |
-| `excel`         | Excel Specialist     | Xử lý bảng tính, mô hình hóa dữ liệu Excel                        | `zink_excel`               |
-| `power-bi`      | Power BI Specialist  | Trực quan hóa dữ liệu, báo cáo BI và dashboard                    | `zink_power_bi`            |
-| `sql`           | SQL Specialist       | Truy vấn phân tích cơ sở dữ liệu (DuckDB, MotherDuck, BigQuery)   | `zink_sql`                 |
-| `python`        | Python Specialist    | Xử lý dữ liệu số, phân tích định lượng, kích hoạt n8n/ML          | `zink_python`, `zink_n8n`  |
+### Bảng Tổng hợp Danh mục 7 Bot
+
+| Agent ID   | Tên hiển thị Discord | Snowflake ID          | Handle / Tag        | Nhiệm vụ chính                                         | Công cụ Zink được gọi                                | Môi trường Sandbox      |
+| :--------- | :------------------- | :-------------------- | :------------------ | :----------------------------------------------------- | :--------------------------------------------------- | :---------------------- |
+| `main`     | **Quản Lý**          | `1545436878835163156` | `@Quản Lý`          | Tiếp nhận, phân rã DAG, lập Execution Brief, tổng hợp  | `sessions_spawn`, `sessions_yield`, `session_status` | Cô lập, điều phối       |
+| `o1`       | **Điều Phối 1 (O1)** | `1545437953197744248` | `@Điều Phối 1 (O1)` | Chuyên viên Tri thức (Knowledge Specialist)            | `session_status`, Knowledgebase API                  | Sandbox read-only Vault |
+| `o2`       | **Điều Phối 2 (O2)** | `1545438251966402661` | `@Điều Phối 2 (O2)` | Chuyên viên Quy trình (Orchestrator)                   | `session_status`, `zink_n8n`                         | Sandbox Docker          |
+| `excel`    | **Excel**            | `1545438637750227104` | `@Excel`            | Chuyên viên Bảng tính (Spreadsheet Specialist)         | `session_status`, `zink_excel`                       | Sandbox Docker          |
+| `power-bi` | **PowerBI**          | `1545439082019164271` | `@PowerBI`          | Chuyên viên Báo cáo BI (BI & Dashboard Specialist)     | `session_status`, `zink_power_bi`                    | Sandbox Docker          |
+| `sql`      | **SQL**              | `1545438861356966010` | `@SQL`              | Chuyên viên Dữ liệu & Truy vấn (Data & SQL Specialist) | `session_status`, `zink_sql`                         | Governed DuckDB Bridge  |
+| `python`   | **Python**           | `1545439279843508235` | `@Python`           | Chuyên viên Khoa học Dữ liệu (Decision & Data Science) | `session_status`, `zink_python`, `zink_n8n`          | Sandbox Docker          |
 
 ---
 
-## 4. 5 Công cụ Zink có thể gọi (Callable Tools)
+### Hồ sơ Chi tiết Từng Agent
+
+#### 1. Agent `main` — Quản Lý (Coordinator Agent)
+
+- **Discord Handle:** `@Quản Lý` (ID: `1545436878835163156`)
+- **Chức năng chính:** Điểm tiếp nhận yêu cầu đầu tiên từ người vận hành trên kênh `#office` hoặc DM. Phân tích yêu cầu, phân loại bài toán (Work/Research), phân rã DAG (Directed Acyclic Graph) và lập Execution Brief.
+- **Quyền hạn & Công cụ:**
+  - Được phép sử dụng `sessions_spawn` để giao nhiệm vụ con cho các sub-agent chuyên trách (`o1`, `o2`, `excel`, `power-bi`, `sql`, `python`) ở chế độ cô lập hoàn toàn (`context=isolated`, `mode=run`, `sandbox=require`).
+  - Được phép sử dụng `sessions_yield` để nhận kết quả dạng push-based bất đồng bộ từ các sub-agent.
+  - Sử dụng `session_status` để kiểm tra trạng thái luồng làm việc.
+- **Ranh giới an toàn & Giới hạn:**
+  - **Không** gọi trực tiếp các công cụ thực thi dữ liệu (`zink_excel`, `zink_power_bi`, `zink_sql`, `zink_python`, `zink_n8n`).
+  - Kiểm định toàn bộ kết quả đầu ra của sub-agent theo lược đồ hợp đồng `agent-result-payload-v1` (xác thực `outcome_claim`, `assumptions`, `limitations`, `self_validation`) trước khi phản hồi người dùng.
+
+#### 2. Agent `o1` — Điều Phối 1 (Knowledge Specialist)
+
+- **Discord Handle:** `@Điều Phối 1 (O1)` (ID: `1545437953197744248`)
+- **Chức năng chính:** Chuyên viên quản trị và khai thác tri thức. Chịu trách nhiệm tra cứu tài liệu tham khảo, tiêu chuẩn quy trình, tài liệu chuyên môn và lịch sử quyết định trong Zink Knowledgebase.
+- **Quyền hạn & Công cụ:**
+  - Truy xuất Knowledgebase thông qua giao diện API nội bộ `http://127.0.0.1:8080/knowledge` (tìm kiếm vector HNSW, Full-Text Search FTS, trích xuất đoạn văn bản kèm metadata và nguồn gốc provenance).
+  - Sử dụng `session_status`.
+- **Ranh giới an toàn & Giới hạn:**
+  - Thư mục nguồn Obsidian Vault của con người được mount ở chế độ **chỉ đọc (`read-only`)**; tuyệt đối không ghi đè, sửa đổi hay xóa tài liệu trong Vault.
+  - Không có quyền thao tác trực tiếp trên cơ sở dữ liệu phân tích hay các adapter ngoại vi.
+
+#### 3. Agent `o2` — Điều Phối 2 (Orchestrator)
+
+- **Discord Handle:** `@Điều Phối 2 (O2)` (ID: `1545438251966402661`)
+- **Chức năng chính:** Chuyên viên điều phối các chuỗi quy trình tất định (deterministic workflows) và tự động hóa tác vụ định kỳ giữa các hệ thống.
+- **Quyền hạn & Công cụ:**
+  - Sử dụng `zink_n8n` để kích hoạt các workflow đã được kiểm định và cấp phép trong n8n instance cục bộ (`http://127.0.0.1:5678`).
+  - Sử dụng `session_status`.
+- **Ranh giới an toàn & Giới hạn:**
+  - Chỉ kích hoạt các mẫu workflow chuẩn (P1 - P10); không tự ý tạo mới hoặc sửa đổi cấu trúc node n8n trên production mà chưa có phê duyệt của operator.
+
+#### 4. Agent `excel` — Chuyên viên Bảng tính (Excel Specialist)
+
+- **Discord Handle:** `@Excel` (ID: `1545438637750227104`)
+- **Chức năng chính:** Xử lý, tính toán, định dạng và xuất bản các mô hình bảng tính `.xlsx`, bảng dữ liệu kiểm kê, báo cáo tài chính và supply chain planning.
+- **Quyền hạn & Công cụ:**
+  - Sử dụng `zink_excel` để thực thi các thao tác đọc/ghi bảng tính, áp dụng công thức, macro chuẩn hóa và tạo sheet báo cáo.
+  - Sử dụng template quản trị lưu trữ trong `zink-skill-store/templates/`.
+  - Sử dụng `session_status`.
+- **Ranh giới an toàn & Giới hạn:**
+  - Chỉ thao tác với các tệp tin trong môi trường sandbox cô lập của task hoặc thư mục artifact đã được chỉ định rõ ràng; không truy cập hệ thống tệp bên ngoài.
+
+#### 5. Agent `power-bi` — Chuyên viên Báo cáo BI (Power BI Specialist)
+
+- **Discord Handle:** `@PowerBI` (ID: `1545439082019164271`)
+- **Chức năng chính:** Thiết kế, cập nhật và trực quan hóa dữ liệu kinh doanh dưới dạng dashboard và báo cáo Power BI (`.pbix`).
+- **Quyền hạn & Công cụ:**
+  - Sử dụng `zink_power_bi` để sinh cấu trúc mô hình dữ liệu (semantic model), công thức DAX chuẩn, bố cục dashboard và định dạng báo cáo.
+  - Sử dụng `session_status`.
+- **Ranh giới an toàn & Giới hạn:**
+  - Tiêu thụ dữ liệu phân tích đã được tổng hợp ở tầng Gold; không can thiệp trực tiếp vào dữ liệu thô tầng Landing hoặc Silver.
+
+#### 6. Agent `sql` — Chuyên viên Truy vấn Dữ liệu (SQL Specialist)
+
+- **Discord Handle:** `@SQL` (ID: `1545438861356966010`)
+- **Chức năng chính:** Khảo sát, trích xuất và biến đổi dữ liệu phân tích thông qua các câu truy vấn SQL hiệu năng cao trên DuckDB, MotherDuck và BigQuery.
+- **Quyền hạn & Công cụ:**
+  - Sử dụng `zink_sql` để gửi câu lệnh truy vấn tới DuckDB Governed Bridge trên Windows hoặc các cloud data warehouse.
+  - Sử dụng `session_status`.
+- **Ranh giới an toàn & Giới hạn:**
+  - **Chỉ đọc (`read-only`):** DuckDB Bridge kiểm soát chặt chẽ cú pháp (AST validation); cấm tuyệt đối các thao tác thay đổi schema tùy tiện, cấm `ATTACH`, `COPY`, cấm thoát khỏi thư mục cơ sở dữ liệu (`DUCKDB_FILESYSTEM_ACCESS_DENIED`) và cấm gọi lệnh shell máy chủ.
+
+#### 7. Agent `python` — Chuyên viên Khoa học Dữ liệu (Decision & Data Science)
+
+- **Discord Handle:** `@Python` (ID: `1545439279843508235`)
+- **Chức năng chính:** Thực thi các bài toán khoa học quyết định phức tạp: phân tích thống kê, tối ưu hóa tuyến tính/phi tuyến, dự báo chuỗi thời gian, mô phỏng Monte Carlo và xử lý dữ liệu định lượng.
+- **Quyền hạn & Công cụ:**
+  - Sử dụng `zink_python` để chạy các script Python phân tích trong môi trường container runtime bảo mật.
+  - Sử dụng `zink_n8n` để kích hoạt pipeline tính toán khi cần thiết.
+  - Sử dụng `session_status`.
+- **Ranh giới an toàn & Giới hạn:**
+  - Chạy trong Docker container sandbox; tài nguyên compute nặng được điều hướng ra adapter ngoại vi (Kaggle/Databricks) có kiểm soát; mô hình học máy ngoại vi chỉ dừng ở mức đánh giá (`EVALUATED_NOT_PROMOTED`), cấm tự động đưa vào production.
+
+---
+
+## 4. Hướng dẫn Thiết lập và Vận hành Cụm Discord Gateway
+
+Hệ thống giao tiếp Discord của Personal Tool vận hành theo mô hình Multi-Bot Gateway tập trung, quản lý đồng thời 7 bot client dưới một tiến trình duy nhất trên nền tảng OpenClaw trong môi trường WSL2 Ubuntu.
+
+### 1. Quản lý Khóa Bí mật (Discord Tokens) qua Pass-Store
+
+Mọi token của 7 bot được mã hóa bằng GPG thông qua công cụ `pass` (password-store), tuyệt đối không lưu dưới dạng plain text trong mã nguồn:
+
+```bash
+# Kiểm tra các khóa token bot đã được lưu trữ trong pass-store
+pass show zink/openclaw/DISCORD_BOT_TOKEN_MAIN
+pass show zink/openclaw/DISCORD_BOT_TOKEN_O1
+pass show zink/openclaw/DISCORD_BOT_TOKEN_O2
+pass show zink/openclaw/DISCORD_BOT_TOKEN_EXCEL
+pass show zink/openclaw/DISCORD_BOT_TOKEN_POWER_BI
+pass show zink/openclaw/DISCORD_BOT_TOKEN_SQL
+pass show zink/openclaw/DISCORD_BOT_TOKEN_PYTHON
+```
+
+Nếu cần cập nhật token mới cho bot bất kỳ:
+
+```bash
+pass insert zink/openclaw/DISCORD_BOT_TOKEN_<AGENT_ID>
+```
+
+### 2. Cấu hình Giữ Kết nối Mạng (TCP Keepalive Prevention)
+
+Mặc định trên Linux và WSL2, `net.ipv4.tcp_keepalive_time` là 7200 giây (2 giờ). Khi hệ thống ở trạng thái nhàn rỗi không có tin nhắn, bảng định tuyến NAT / vSwitch của Windows sẽ đóng kết nối WebSocket ngầm định sau khoảng 2 giờ, dẫn tới lỗi ngắt kết nối WebSocket `1006` và làm trễ các bot trong hàng đợi identify rate-limit của Discord.
+
+Hệ thống đã được cấu hình tối ưu vĩnh viễn tại `/etc/sysctl.d/99-openclaw-keepalive.conf`:
+
+```ini
+net.ipv4.tcp_keepalive_time = 60
+net.ipv4.tcp_keepalive_intvl = 10
+net.ipv4.tcp_keepalive_probes = 3
+```
+
+Cấu hình này gửi tín hiệu thăm dò socket định kỳ mỗi 60 giây, đảm bảo cả 7 kết nối WebSocket tới Discord Gateway luôn được duy trì liên tục 24/7 mà không bao giờ bị ngắt quãng.
+
+### 3. Vận hành Dịch vụ Gateway qua Systemd
+
+Tiến trình Gateway được quản lý như một dịch vụ người dùng systemd (`openclaw-gateway-zink.service`):
+
+```bash
+# Kiểm tra trạng thái hoạt động của cụm bot
+systemctl --user status openclaw-gateway-zink.service
+
+# Khởi động lại dịch vụ gateway khi thay đổi cấu hình
+systemctl --user restart openclaw-gateway-zink.service
+
+# Xem nhật ký hoạt động thời gian thực của gateway
+journalctl --user -u openclaw-gateway-zink.service -f
+
+# Kiểm tra số lượng kết nối WebSocket đang hoạt động tới Discord (phải đủ 7 kết nối)
+ss -tnp | grep 443
+```
+
+---
+
+## 5. Quy chuẩn Kênh Giao tiếp và Hướng dẫn Tương tác Discord
+
+### Danh mục Kênh Discord của Hệ thống
+
+| Kênh Discord            | Loại kênh                    | Snowflake ID          | Chức năng & Quy chuẩn                                                                                                                  |
+| :---------------------- | :--------------------------- | :-------------------- | :------------------------------------------------------------------------------------------------------------------------------------- |
+| **`#office`**           | Văn phòng chung (Text)       | `1545425766161063937` | Nơi tiếp nhận yêu cầu, giao việc và điều phối hoạt động chung. Hỗ trợ tag trực tiếp bot hoặc trao đổi với `@Quản Lý`.                  |
+| **`#results`**          | Kết quả phân tích (Forum)    | `1545696269010477056` | Diễn đàn đăng tải báo cáo, artifact và kết quả nghiệm thu của các task. Mọi bài viết là một Thread riêng biệt (`inheritParent: true`). |
+| **`#approvals`**        | Phê duyệt quyết định (Forum) | `1545696207316455527` | Nơi các agent gửi đề xuất giải quyết mâu thuẫn ngữ nghĩa (`BLOCKED_SEMANTIC_REVIEW`) chờ chủ sở hữu phê duyệt.                         |
+| **`#incidents`**        | Báo cáo sự cố (Forum)        | `1545696360018481182` | Kênh thông báo cảnh báo lỗi, vi phạm hợp đồng dữ liệu hoặc sự cố ranh giới an toàn.                                                    |
+| **Tin nhắn riêng (DM)** | Direct Message               | N/A                   | Dành riêng cho chủ sở hữu (`854005217715814432`) nhắn tin trực tiếp riêng cho từng bot.                                                |
+
+---
+
+### Hướng dẫn Tương tác trên Discord Desktop & Discord Mobile
+
+Để đảm bảo các bot luôn phản hồi 100% chính xác trên cả ứng dụng máy tính (Desktop) và ứng dụng điện thoại (Discord Mobile), người vận hành lưu ý các cơ chế giao tiếp sau:
+
+#### 1. Cơ chế Nhận diện Mention Đa hình (Polymorphic Mention Resolution)
+
+Hệ thống hỗ trợ 3 hình thức tag bot:
+
+- **Native Mention (`<@ID>`):** Khi bạn gõ `@` và chọn tên bot từ danh sách gợi ý của Discord.
+- **Nickname Mention (`<@!ID>`):** Khi Discord Mobile hoặc Desktop gắn tag bot có biệt danh máy chủ.
+- **Plain-text Mention (Nhận diện văn bản tiếng Việt & tiếng Anh):** Khi bàn phím trên điện thoại tự động thêm khoảng trắng hoặc không hiện pop-up gợi ý, bạn hoàn toàn có thể gõ trực tiếp tên bot dạng text thuần. Hệ thống đã được tích hợp `groupChat.mentionPatterns` đa ngữ:
+  - Gọi Quản Lý: `@Quản Lý`, `@quản lý`, `@Quản lý`, `@main`
+  - Gọi Điều Phối 1: `@Điều Phối 1`, `@điều phối 1`, `@o1`, `@knowledge`
+  - Gọi Điều Phối 2: `@Điều Phối 2`, `@điều phối 2`, `@o2`, `@orchestrator`
+  - Gọi Excel: `@Excel`, `@excel`
+  - Gọi Power BI: `@PowerBI`, `@power-bi`, `@powerbi`
+  - Gọi SQL: `@SQL`, `@sql`
+  - Gọi Python: `@Python`, `@python`
+
+#### 2. Thảo luận trong Diễn đàn Forum (`#results`, `#approvals`, `#incidents`)
+
+- Trên cả Desktop và Mobile, mỗi bài đăng trong Forum là một **Thread**.
+- Nhờ cấu hình `thread.inheritParent: true`, mọi bài đăng và phản hồi trong thread đều tự động kế thừa quyền hạn allowlist và phân quyền của kênh diễn đàn cha.
+- Bạn chỉ cần mở thread và tag bot cần làm việc (ví dụ: `@Excel kiểm tra số liệu bảng này giúp anh`), bot sẽ phản hồi trực tiếp ngay trong thread đó.
+
+#### 3. Nhắn tin Trực tiếp Riêng (Direct Message — DM)
+
+- Trên Discord Mobile, bạn có thể bấm vào avatar của bất kỳ bot nào và chọn **Nhắn tin** (Send Message).
+- Cấu hình `dmPolicy: "allowlist"` kết hợp `allowFrom: ["854005217715814432"]` đảm bảo chỉ duy nhất chủ sở hữu được phép trò chuyện riêng tư với các bot qua tin nhắn DM; các tài khoản lạ sẽ bị từ chối tự động.
+
+---
+
+## 6. 5 Công cụ Zink có thể gọi (Callable Tools)
 
 Đúng 5 công cụ Zink được phép thực thi trong toàn bộ hệ thống:
 
@@ -65,7 +251,7 @@ _4 Năng lực đặc tả (Schema-only capabilities):_ `zink_forecast`, `zink_o
 
 ---
 
-## 5. Yêu cầu Hệ thống
+## 7. Yêu cầu Hệ thống
 
 Trước khi vận hành, máy trạm cần đáp ứng các điều kiện sau:
 
@@ -78,7 +264,7 @@ Trước khi vận hành, máy trạm cần đáp ứng các điều kiện sau:
 
 ---
 
-## 6. Hướng dẫn Thiết lập Từng bước (Setup Walkthrough)
+## 8. Hướng dẫn Thiết lập Từng bước (Docker & Nền tảng Cục bộ)
 
 ### Bước 1: Kiểm tra môi trường dòng lệnh
 
@@ -120,7 +306,7 @@ Lệnh trên sẽ tự động chạy:
 
 ---
 
-## 7. Khởi động và Kiểm tra Sức khỏe Hệ thống (Preflight & Start)
+## 9. Khởi động và Kiểm tra Sức khỏe Hệ thống (Preflight & Start)
 
 ### Bước 1: Kiểm tra Preflight Docker
 
@@ -152,7 +338,7 @@ Kết quả trả về `{ "status": "ok" }` báo hiệu hệ thống đã sẵn 
 
 ---
 
-## 8. Sử dụng Governed DuckDB Windows Bridge
+## 10. Sử dụng Governed DuckDB Windows Bridge
 
 Cầu nối DuckDB trên Windows (`zink-tools/sql/duckdb-bridge.mjs`) cho phép thực thi truy vấn phân tích cục bộ với độ bảo mật cao:
 
@@ -179,7 +365,7 @@ console.log(result.rows);
 
 ---
 
-## 9. Cấu hình và Sử dụng Nhà cung cấp Ngoại vi (External Providers)
+## 11. Cấu hình và Sử dụng Nhà cung cấp Ngoại vi (External Providers)
 
 Hệ thống hỗ trợ 11 nhà cung cấp hạ tầng. Các adapter backend nằm tại `zink-tools/adapters/`:
 
@@ -219,7 +405,7 @@ Hệ thống hỗ trợ 11 nhà cung cấp hạ tầng. Các adapter backend n�
 
 ---
 
-## 10. 10 Mẫu Điều phối Chuẩn (Orchestration Patterns P1 - P10)
+## 12. 10 Mẫu Điều phối Chuẩn (Orchestration Patterns P1 - P10)
 
 Các mẫu điều phối được triển khai tại `integrations/openclaw/orchestration/patterns/index.mjs`:
 
@@ -236,7 +422,7 @@ Các mẫu điều phối được triển khai tại `integrations/openclaw/orc
 
 ---
 
-## 11. Xử lý Trạng thái Bị Chặn (Blocked Handling)
+## 13. Xử lý Trạng thái Bị Chặn (Blocked Handling)
 
 Khi hệ thống gặp điều kiện cần chủ sở hữu quyết định hoặc thiếu tài nguyên:
 
@@ -247,7 +433,7 @@ Khi hệ thống gặp điều kiện cần chủ sở hữu quyết định ho�
 
 ---
 
-## 12. Ranh giới An toàn và Hành vi Bị Cấm Tuyệt đối
+## 14. Ranh giới An toàn và Hành vi Bị Cấm Tuyệt đối
 
 Người vận hành và các agent tuyệt đối tuân thủ các điều cấm sau:
 
@@ -261,7 +447,7 @@ Người vận hành và các agent tuyệt đối tuân thủ các điều cấ
 
 ---
 
-## 13. Bảng Tra cứu Sự cố (Troubleshooting)
+## 15. Bảng Tra cứu Sự cố (Troubleshooting)
 
 | Hiện tượng                            | Nguyên nhân có thể                                  | Cách khắc phục                                                              |
 | ------------------------------------- | --------------------------------------------------- | --------------------------------------------------------------------------- |
@@ -274,7 +460,7 @@ Người vận hành và các agent tuyệt đối tuân thủ các điều cấ
 
 ---
 
-## 14. Ma trận Trạng thái Nhà cung cấp (Provider Status Matrix)
+## 16. Ma trận Trạng thái Nhà cung cấp (Provider Status Matrix)
 
 Bảng phân định trạng thái thực tế của 11 nhà cung cấp trong phiên bản V1:
 
@@ -294,7 +480,7 @@ Bảng phân định trạng thái thực tế của 11 nhà cung cấp trong ph
 
 ---
 
-## 15. Quy trình Dừng Hệ thống
+## 17. Quy trình Dừng Hệ thống
 
 Khi kết thúc phiên làm việc:
 

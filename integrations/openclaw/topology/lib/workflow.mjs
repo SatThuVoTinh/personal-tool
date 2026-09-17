@@ -64,8 +64,7 @@ export function findSession(
     if (
       task.root_session_key === sessionKey &&
       (task.root_run_id === runId ||
-        (includePrevious &&
-          (task.previous_root_run_ids ?? []).includes(runId)))
+        (includePrevious && (task.previous_root_run_ids ?? []).includes(runId)))
     )
       matches.push({ task_id, task });
     for (const delegation of Object.values(task.delegations ?? {}))

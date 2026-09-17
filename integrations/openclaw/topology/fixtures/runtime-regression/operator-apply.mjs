@@ -119,7 +119,9 @@ try {
     rmSync(oldQuarantine, { recursive: true, force: true });
   if (existsSync(nativeBackup)) {
     const inspection = inspectNativePatch(runtimeRoot);
-    if (Object.values(inspection).every((entry) => entry.state === "BASELINE")) {
+    if (
+      Object.values(inspection).every((entry) => entry.state === "BASELINE")
+    ) {
       rmSync(nativeBackup, { recursive: true, force: true });
     }
   }

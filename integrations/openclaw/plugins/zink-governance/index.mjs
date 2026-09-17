@@ -163,7 +163,11 @@ export function registerTools(api) {
           content: [
             {
               type: "text",
-              text: JSON.stringify({ status: "governed", tool: toolId, params }),
+              text: JSON.stringify({
+                status: "governed",
+                tool: toolId,
+                params,
+              }),
             },
           ],
         };
@@ -252,7 +256,8 @@ export default {
             (run) =>
               run.agent_id === context.agentId &&
               run.run_state === "SPAWN_UNKNOWN" &&
-              (!parentSessionKey || run.parent_session_key === parentSessionKey),
+              (!parentSessionKey ||
+                run.parent_session_key === parentSessionKey),
           ),
       );
       if (!hasPending) return; // beforeRun rejects the unresolved identity.
@@ -535,8 +540,7 @@ export default {
         ctx.agentId ||
         ctx.accountId ||
         (agentIdMatch ? agentIdMatch[1] : undefined);
-      const agentName =
-        AGENT_DISPLAY_NAMES[agentId] ?? agentId ?? "Zink Bot";
+      const agentName = AGENT_DISPLAY_NAMES[agentId] ?? agentId ?? "Zink Bot";
       return {
         content: formatForDiscord(event.content, { agentName }),
       };

@@ -90,15 +90,19 @@ async function ensureDependencies() {
         CALLABLE_DISPATCH_REGISTRY = policy.CALLABLE_DISPATCH_REGISTRY ?? {};
         N8N_WORKFLOW_REGISTRY = policy.N8N_WORKFLOW_REGISTRY ?? {};
         ZINK_CAPABILITY_REGISTRY = policy.ZINK_CAPABILITY_REGISTRY ?? {};
-        T3_GLOBAL_TIMEOUT_CEILING_MS = policy.T3_GLOBAL_TIMEOUT_CEILING_MS ?? 30000;
+        T3_GLOBAL_TIMEOUT_CEILING_MS =
+          policy.T3_GLOBAL_TIMEOUT_CEILING_MS ?? 30000;
         T3_GLOBAL_MEMORY_CEILING_MB = policy.T3_GLOBAL_MEMORY_CEILING_MB ?? 512;
-        deriveApprovalMaterialParameters = policy.deriveApprovalMaterialParameters ?? (() => ({}));
-        deriveApprovalScopeDigest = policy.deriveApprovalScopeDigest ?? (() => "");
+        deriveApprovalMaterialParameters =
+          policy.deriveApprovalMaterialParameters ?? (() => ({}));
+        deriveApprovalScopeDigest =
+          policy.deriveApprovalScopeDigest ?? (() => "");
       }
 
       let pathSafety;
       try {
-        pathSafety = await import("../../../../zink-tools/common/path-safety.mjs");
+        pathSafety =
+          await import("../../../../zink-tools/common/path-safety.mjs");
       } catch {
         const candidates = [
           path.resolve(process.cwd(), "zink-tools/common/path-safety.mjs"),
@@ -114,7 +118,8 @@ async function ensureDependencies() {
           }
         }
       }
-      validateArtifactLogicalPath = pathSafety?.validateArtifactLogicalPath ?? (() => {});
+      validateArtifactLogicalPath =
+        pathSafety?.validateArtifactLogicalPath ?? (() => {});
 
       let sqlValidator;
       try {
