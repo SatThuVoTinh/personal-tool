@@ -1,9 +1,5 @@
 import test, { describe } from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import path from "node:path";
-import os from "node:os";
-import { createHash } from "node:crypto";
 
 import {
   GOVERNANCE_VERSION,
@@ -18,12 +14,7 @@ import {
   ZINK_CAPABILITY_REGISTRY,
   CALLABLE_TOOL_REGISTRY,
   CALLABLE_DISPATCH_REGISTRY,
-  TOOL_POLICY,
-  BUILT_IN_TOOL_POLICY,
   DELEGATION_TABLE,
-  KB_ACCESS_MATRIX,
-  SKILL_STORE_ACCESS_MATRIX,
-  ZINK_TOOLS_ACCESS_MATRIX,
   resolveMentionedAgents,
   evaluateCapabilityAccess,
   effectiveOpenClawToolAllowlist,
@@ -33,7 +24,6 @@ import {
 import {
   formatForDiscord,
   formatError,
-  sanitizeDiscordText,
 } from "../integrations/openclaw/lib/discord-formatter.mjs";
 
 import {
@@ -64,20 +54,45 @@ describe("M7/T5 Runtime Governance Remediation Comprehensive Test Suite", () => 
       const taskO1 = deriveTaskId({ ...sampleMessage, agent_id: "o1" });
       const taskExcel = deriveTaskId({ ...sampleMessage, agent_id: "excel" });
 
-      assert.notEqual(taskMain, taskO1, "main and o1 must have distinct task_ids");
-      assert.notEqual(taskMain, taskExcel, "main and excel must have distinct task_ids");
-      assert.notEqual(taskO1, taskExcel, "o1 and excel must have distinct task_ids");
+      assert.notEqual(
+        taskMain,
+        taskO1,
+        "main and o1 must have distinct task_ids",
+      );
+      assert.notEqual(
+        taskMain,
+        taskExcel,
+        "main and excel must have distinct task_ids",
+      );
+      assert.notEqual(
+        taskO1,
+        taskExcel,
+        "o1 and excel must have distinct task_ids",
+      );
 
       // Idempotency: same message + same agent => same task_id
-      const taskMainReplay = deriveTaskId({ ...sampleMessage, agent_id: "main" });
-      assert.equal(taskMain, taskMainReplay, "same agent + same message must be idempotent");
+      const taskMainReplay = deriveTaskId({
+        ...sampleMessage,
+        agent_id: "main",
+      });
+      assert.equal(
+        taskMain,
+        taskMainReplay,
+        "same agent + same message must be idempotent",
+      );
     });
 
     test("BUG-11: 7 concurrent agents produce 7 distinct task_ids for 1 message", () => {
       const taskIds = new Set(
-        AGENT_IDS.map((agent_id) => deriveTaskId({ ...sampleMessage, agent_id })),
+        AGENT_IDS.map((agent_id) =>
+          deriveTaskId({ ...sampleMessage, agent_id }),
+        ),
       );
-      assert.equal(taskIds.size, 7, "7 agents must produce 7 distinct task IDs");
+      assert.equal(
+        taskIds.size,
+        7,
+        "7 agents must produce 7 distinct task IDs",
+      );
     });
 
     test("BUG-15: deriveTaskId rejects forged or missing parameters", () => {
@@ -94,7 +109,10 @@ describe("M7/T5 Runtime Governance Remediation Comprehensive Test Suite", () => 
   describe("T5.3 — Discord Ingress Resolution & Output Sanitization (BUG-12, BUG-13, BUG-14)", () => {
     test("BUG-12: Discord mention resolution handles single, duplicate, multiple and @everyone", () => {
       // Single direct mention
-      const single = resolveMentionedAgents({ content: "help <@123>", mentions: [{ id: "123", username: "excel" }] });
+      const single = resolveMentionedAgents({
+        content: "help <@123>",
+        mentions: [{ id: "123", username: "excel" }],
+      });
       assert.deepEqual(single, ["excel"]);
 
       // Duplicate mention is deduplicated
@@ -118,11 +136,25 @@ describe("M7/T5 Runtime Governance Remediation Comprehensive Test Suite", () => 
       assert.deepEqual(multiple, ["sql", "python"]);
 
       // @everyone resolves all 7 governed agents
-      const everyone = resolveMentionedAgents({ content: "@everyone hello all", mentions: [] });
-      assert.deepEqual(everyone, ["main", "o1", "o2", "excel", "power-bi", "sql", "python"]);
+      const everyone = resolveMentionedAgents({
+        content: "@everyone hello all",
+        mentions: [],
+      });
+      assert.deepEqual(everyone, [
+        "main",
+        "o1",
+        "o2",
+        "excel",
+        "power-bi",
+        "sql",
+        "python",
+      ]);
 
       // No mention with requireMention: true resolves to []
-      const none = resolveMentionedAgents({ content: "hello nobody", mentions: [] }, { requireMention: true });
+      const none = resolveMentionedAgents(
+        { content: "hello nobody", mentions: [] },
+        { requireMention: true },
+      );
       assert.deepEqual(none, []);
     });
 
@@ -141,14 +173,31 @@ describe("M7/T5 Runtime Governance Remediation Comprehensive Test Suite", () => 
         },
       });
 
-      const formatted = formatForDiscord(internalLeak, { agentName: "SQL Specialist" });
+      const formatted = formatForDiscord(internalLeak, {
+        agentName: "SQL Specialist",
+      });
 
       // Must NOT contain internal task IDs, session keys, run IDs, bearer tokens, or local paths
-      assert.ok(!formatted.includes("a".repeat(64)), "64-hex task ID must be redacted");
-      assert.ok(!formatted.includes("sess-1234567890"), "Session key must be redacted");
-      assert.ok(!formatted.includes("run-9876543210"), "Run ID must be redacted");
-      assert.ok(!formatted.includes("secret_api_token"), "Bearer tokens must be redacted");
-      assert.ok(!formatted.includes("C:\\Users"), "Local paths must be redacted");
+      assert.ok(
+        !formatted.includes("a".repeat(64)),
+        "64-hex task ID must be redacted",
+      );
+      assert.ok(
+        !formatted.includes("sess-1234567890"),
+        "Session key must be redacted",
+      );
+      assert.ok(
+        !formatted.includes("run-9876543210"),
+        "Run ID must be redacted",
+      );
+      assert.ok(
+        !formatted.includes("secret_api_token"),
+        "Bearer tokens must be redacted",
+      );
+      assert.ok(
+        !formatted.includes("C:\\Users"),
+        "Local paths must be redacted",
+      );
 
       // Must contain clean user text
       assert.ok(formatted.includes("Clean user result with findings."));
@@ -156,14 +205,54 @@ describe("M7/T5 Runtime Governance Remediation Comprehensive Test Suite", () => 
       assert.ok(formatted.includes("Read only query"));
     });
 
-    test("BUG-14: formatError produces human-safe controlled failure messages", () => {
-      const err = new Error("Database timeout at line 42\n    at query (C:\\Users\\app\\db.mjs:42:10)");
+    test("BUG-13: formatError produces human-safe controlled failure messages", () => {
+      const err = new Error(
+        "Database timeout at line 42\n    at query (C:\\Users\\app\\db.mjs:42:10)",
+      );
       const formatted = formatError(err, { agentName: "SQL Bot" });
 
-      assert.ok(!formatted.includes("at query"), "Stack trace must be stripped");
+      assert.ok(
+        !formatted.includes("at query"),
+        "Stack trace must be stripped",
+      );
       assert.ok(!formatted.includes("C:\\Users"), "Path must be stripped");
       assert.ok(formatted.includes("SQL Bot"), "Agent name must be identified");
-      assert.ok(formatted.includes("Database timeout"), "Error summary preserved");
+      assert.ok(
+        formatted.includes("Database timeout"),
+        "Error summary preserved",
+      );
+    });
+
+    test("formatForDiscord: unwraps markdown code fences and agent-result-payload correctly", () => {
+      const fencedPayload =
+        "```json\n" +
+        JSON.stringify({
+          schema_version: "1.0.0",
+          governance_version: "m7-t5-r13",
+          outcome_claim: "COMPLETE",
+          reason_claim: "NONE",
+          output: "Xin chào sếp, em đã sẵn sàng hỗ trợ.",
+          assumptions: ["Hệ thống ổn định"],
+          limitations: ["Không ghi đè dữ liệu"],
+        }) +
+        "\n```";
+
+      const formatted = formatForDiscord(fencedPayload, { agentName: "Excel" });
+      assert.ok(
+        !formatted.startsWith("```"),
+        "Must not start with code fences",
+      );
+      assert.ok(formatted.includes("Xin chào sếp, em đã sẵn sàng hỗ trợ."));
+      assert.ok(formatted.includes("**Giả định:**\n• Hệ thống ổn định"));
+      assert.ok(formatted.includes("**Hạn chế:**\n• Không ghi đè dữ liệu"));
+    });
+
+    test("formatForDiscord: formats natural Vietnamese conversation correctly", () => {
+      const naturalText =
+        "Dạ chào anh, theo hợp đồng quản trị và cấu hình hiện tại của em (Agent Python, stack data_plant), em đã sẵn sàng hỗ trợ.";
+      const formatted = formatForDiscord(naturalText, { agentName: "Python" });
+      assert.ok(formatted.includes("Dạ chào anh, theo hợp đồng quản trị"));
+      assert.ok(!formatted.includes("```"));
     });
   });
 
@@ -206,42 +295,120 @@ describe("M7/T5 Runtime Governance Remediation Comprehensive Test Suite", () => 
   describe("T5.6 — Authoritative Access Matrices & Fine-Grained RBAC (BUG-03, BUG-09, BUG-16)", () => {
     test("BUG-03 & BUG-09: Knowledgebase Matrix evaluates agent and namespace access accurately", () => {
       // main has L2 on core and governance
-      assert.equal(evaluateCapabilityAccess("main", "zink_knowledge", "core", "read").allowed, true);
-      assert.equal(evaluateCapabilityAccess("main", "zink_knowledge", "governance", "read").allowed, true);
+      assert.equal(
+        evaluateCapabilityAccess("main", "zink_knowledge", "core", "read")
+          .allowed,
+        true,
+      );
+      assert.equal(
+        evaluateCapabilityAccess("main", "zink_knowledge", "governance", "read")
+          .allowed,
+        true,
+      );
 
       // excel has L2 on excel and SC/Logistics, but L0 on bi-semantic
-      assert.equal(evaluateCapabilityAccess("excel", "zink_knowledge", "excel", "read").allowed, true);
-      assert.equal(evaluateCapabilityAccess("excel", "zink_knowledge", "SC/Logistics", "read").allowed, true);
-      assert.equal(evaluateCapabilityAccess("excel", "zink_knowledge", "bi-semantic", "read").allowed, false);
+      assert.equal(
+        evaluateCapabilityAccess("excel", "zink_knowledge", "excel", "read")
+          .allowed,
+        true,
+      );
+      assert.equal(
+        evaluateCapabilityAccess(
+          "excel",
+          "zink_knowledge",
+          "SC/Logistics",
+          "read",
+        ).allowed,
+        true,
+      );
+      assert.equal(
+        evaluateCapabilityAccess(
+          "excel",
+          "zink_knowledge",
+          "bi-semantic",
+          "read",
+        ).allowed,
+        false,
+      );
 
       // Mutating actions are universally denied per KB action policy
-      assert.equal(evaluateCapabilityAccess("main", "zink_knowledge", "core", "ingestion").allowed, false);
-      assert.equal(evaluateCapabilityAccess("o1", "zink_knowledge", "core", "update").allowed, false);
-      assert.equal(evaluateCapabilityAccess("o2", "zink_knowledge", "core", "delete").allowed, false);
-      assert.equal(evaluateCapabilityAccess("python", "zink_knowledge", "core", "admin").allowed, false);
+      assert.equal(
+        evaluateCapabilityAccess("main", "zink_knowledge", "core", "ingestion")
+          .allowed,
+        false,
+      );
+      assert.equal(
+        evaluateCapabilityAccess("o1", "zink_knowledge", "core", "update")
+          .allowed,
+        false,
+      );
+      assert.equal(
+        evaluateCapabilityAccess("o2", "zink_knowledge", "core", "delete")
+          .allowed,
+        false,
+      );
+      assert.equal(
+        evaluateCapabilityAccess("python", "zink_knowledge", "core", "admin")
+          .allowed,
+        false,
+      );
     });
 
     test("BUG-08: Skill Store Matrix evaluates discover/read/apply and forbids admin/publish", () => {
       // Specialists can discover, read and apply their approved skills
-      assert.equal(evaluateCapabilityAccess("excel", "zink_skill", "excel", "discover").allowed, true);
-      assert.equal(evaluateCapabilityAccess("excel", "zink_skill", "excel", "read").allowed, true);
-      assert.equal(evaluateCapabilityAccess("excel", "zink_skill", "excel", "apply").allowed, true);
+      assert.equal(
+        evaluateCapabilityAccess("excel", "zink_skill", "excel", "discover")
+          .allowed,
+        true,
+      );
+      assert.equal(
+        evaluateCapabilityAccess("excel", "zink_skill", "excel", "read")
+          .allowed,
+        true,
+      );
+      assert.equal(
+        evaluateCapabilityAccess("excel", "zink_skill", "excel", "apply")
+          .allowed,
+        true,
+      );
 
       // Publishing and admin are universally DENIED to all agents per ACTIVE.md §9
       for (const agentId of AGENT_IDS) {
-        assert.equal(evaluateCapabilityAccess(agentId, "zink_skill", "all", "publish").allowed, false);
-        assert.equal(evaluateCapabilityAccess(agentId, "zink_skill", "all", "deprecate").allowed, false);
-        assert.equal(evaluateCapabilityAccess(agentId, "zink_skill", "all", "admin").allowed, false);
+        assert.equal(
+          evaluateCapabilityAccess(agentId, "zink_skill", "all", "publish")
+            .allowed,
+          false,
+        );
+        assert.equal(
+          evaluateCapabilityAccess(agentId, "zink_skill", "all", "deprecate")
+            .allowed,
+          false,
+        );
+        assert.equal(
+          evaluateCapabilityAccess(agentId, "zink_skill", "all", "admin")
+            .allowed,
+          false,
+        );
       }
     });
 
     test("BUG-09 & BUG-16: Zink Tools Matrix enforces specialist execution vs coordinator delegation", () => {
       // excel has L3 on zink_excel
-      assert.equal(evaluateCapabilityAccess("excel", "zink_excel", null, "execute").level, "L3");
+      assert.equal(
+        evaluateCapabilityAccess("excel", "zink_excel", null, "execute").level,
+        "L3",
+      );
       // main requires delegation for zink_excel
-      assert.equal(evaluateCapabilityAccess("main", "zink_excel", null, "execute").level, "delegate");
+      assert.equal(
+        evaluateCapabilityAccess("main", "zink_excel", null, "execute").level,
+        "delegate",
+      );
       // power-bi is L0 (denied) for zink_excel
-      assert.equal(evaluateCapabilityAccess("power-bi", "zink_excel", null, "execute").allowed, false);
+      assert.equal(
+        evaluateCapabilityAccess("power-bi", "zink_excel", null, "execute")
+          .allowed,
+        false,
+      );
     });
 
     test("BUG-10: OpenClaw projection does not expand capabilities beyond policy", () => {
@@ -253,7 +420,9 @@ describe("M7/T5 Runtime Governance Remediation Comprehensive Test Suite", () => 
       // Effective callable tools for specialists match TOOL_POLICY exactly
       assert.deepEqual(effectiveZinkCallableTools("excel"), ["zink_excel"]);
       assert.deepEqual(effectiveZinkCallableTools("sql"), ["zink_sql"]);
-      assert.deepEqual(effectiveZinkCallableTools("power-bi"), ["zink_power_bi"]);
+      assert.deepEqual(effectiveZinkCallableTools("power-bi"), [
+        "zink_power_bi",
+      ]);
     });
   });
 
@@ -276,30 +445,52 @@ describe("M7/T5 Runtime Governance Remediation Comprehensive Test Suite", () => 
 
     test("BUG-07: executeGovernedKnowledgeQuery forbids ingestion and mutation actions", async () => {
       await assert.rejects(
-        () => executeGovernedKnowledgeQuery({ action: "ingestion", namespace: "core" }),
+        () =>
+          executeGovernedKnowledgeQuery({
+            action: "ingestion",
+            namespace: "core",
+          }),
         /strictly forbidden/u,
       );
       await assert.rejects(
-        () => executeGovernedKnowledgeQuery({ action: "delete", namespace: "core" }),
+        () =>
+          executeGovernedKnowledgeQuery({
+            action: "delete",
+            namespace: "core",
+          }),
         /strictly forbidden/u,
       );
     });
 
     test("BUG-08: executeGovernedSkillQuery allows discover and read, but forbids publish and admin", async () => {
-      const discoverRes = await executeGovernedSkillQuery({ action: "discover", namespace: "all" });
+      const discoverRes = await executeGovernedSkillQuery({
+        action: "discover",
+        namespace: "all",
+      });
       assert.equal(discoverRes.governed_status, "SUCCESS");
       assert.ok(Array.isArray(discoverRes.skills));
 
-      const readRes = await executeGovernedSkillQuery({ action: "read", skill_id: "skill-excel" });
+      const readRes = await executeGovernedSkillQuery({
+        action: "read",
+        skill_id: "skill-excel",
+      });
       assert.equal(readRes.governed_status, "SUCCESS");
       assert.ok(readRes.skill_content);
 
       await assert.rejects(
-        () => executeGovernedSkillQuery({ action: "publish", skill_id: "skill-test" }),
+        () =>
+          executeGovernedSkillQuery({
+            action: "publish",
+            skill_id: "skill-test",
+          }),
         /strictly forbidden/u,
       );
       await assert.rejects(
-        () => executeGovernedSkillQuery({ action: "admin", skill_id: "skill-test" }),
+        () =>
+          executeGovernedSkillQuery({
+            action: "admin",
+            skill_id: "skill-test",
+          }),
         /strictly forbidden/u,
       );
     });
@@ -310,26 +501,53 @@ describe("M7/T5 Runtime Governance Remediation Comprehensive Test Suite", () => 
   // =========================================================================
   describe("ACTIVE.md §17 — 14 Mandatory Negative Security Tests", () => {
     test("1. Specialist unauthorized tool is denied", () => {
-      const res = evaluateCapabilityAccess("excel", "zink_sql", null, "execute");
+      const res = evaluateCapabilityAccess(
+        "excel",
+        "zink_sql",
+        null,
+        "execute",
+      );
       assert.equal(res.allowed, false);
       assert.equal(res.level, "L2");
       assert.equal(res.reason, "READ_ONLY_ACCESS");
-      assert.equal(evaluateCapabilityAccess("excel", "zink_python", null, "execute").allowed, false);
-      assert.equal(evaluateCapabilityAccess("sql", "zink_excel", null, "execute").allowed, false);
+      assert.equal(
+        evaluateCapabilityAccess("excel", "zink_python", null, "execute")
+          .allowed,
+        false,
+      );
+      assert.equal(
+        evaluateCapabilityAccess("sql", "zink_excel", null, "execute").allowed,
+        false,
+      );
     });
 
     test("2. Unauthorized KB namespace is denied", () => {
-      const res = evaluateCapabilityAccess("excel", "zink_knowledge", "bi-semantic", "read");
+      const res = evaluateCapabilityAccess(
+        "excel",
+        "zink_knowledge",
+        "bi-semantic",
+        "read",
+      );
       assert.equal(res.allowed, false);
       assert.equal(res.reason, "DISCOVER_ONLY_ACCESS");
 
-      const unknownRes = evaluateCapabilityAccess("excel", "zink_knowledge", "non_existent_ns", "read");
+      const unknownRes = evaluateCapabilityAccess(
+        "excel",
+        "zink_knowledge",
+        "non_existent_ns",
+        "read",
+      );
       assert.equal(unknownRes.allowed, false);
       assert.equal(unknownRes.reason, "NAMESPACE_ACCESS_DENIED");
     });
 
     test("3. Unauthorized Skill namespace / action is denied", () => {
-      const res = evaluateCapabilityAccess("excel", "zink_skill", "governance", "admin");
+      const res = evaluateCapabilityAccess(
+        "excel",
+        "zink_skill",
+        "governance",
+        "admin",
+      );
       assert.equal(res.allowed, false);
     });
 
@@ -360,7 +578,12 @@ describe("M7/T5 Runtime Governance Remediation Comprehensive Test Suite", () => 
     });
 
     test("7. Forged agent identity is denied", () => {
-      const res = evaluateCapabilityAccess("malicious_agent", "zink_sql", null, "read");
+      const res = evaluateCapabilityAccess(
+        "malicious_agent",
+        "zink_sql",
+        null,
+        "read",
+      );
       assert.equal(res.allowed, false);
       assert.equal(res.reason, "UNKNOWN_AGENT");
     });
@@ -408,7 +631,10 @@ describe("M7/T5 Runtime Governance Remediation Comprehensive Test Suite", () => 
       // main can only delegate zink_excel to o1 or o2, not directly to excel
       const mainTargets = DELEGATION_TABLE.main.zink_excel;
       assert.deepEqual(mainTargets, ["o1", "o2"]);
-      assert.ok(!mainTargets.includes("excel"), "main must not escalate directly to specialist excel");
+      assert.ok(
+        !mainTargets.includes("excel"),
+        "main must not escalate directly to specialist excel",
+      );
 
       // o1 can delegate zink_excel to excel, but not to o2 or python
       const o1Targets = DELEGATION_TABLE.o1.zink_excel;

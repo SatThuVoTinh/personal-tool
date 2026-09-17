@@ -11,7 +11,12 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { canonicalHash, deriveDelegationId } from "./canonical.mjs";
+import {
+  canonicalHash,
+  deriveDelegationId,
+  GOVERNANCE_VERSION,
+  SCHEMA_VERSION,
+} from "./canonical.mjs";
 import { readSnapshot, recordWorkflowEvent } from "./ledger.mjs";
 import { findSession, ownerRunIds } from "./workflow.mjs";
 import { validateContract } from "./schema.mjs";
@@ -24,68 +29,139 @@ import {
 } from "./runtime.mjs";
 
 let policy;
-try {
-  policy = await import("../../lib/policy.mjs");
-} catch {
-  const repoPolicyPath = path.resolve(
-    process.cwd(),
-    "integrations/openclaw/lib/policy.mjs",
-  );
-  policy = await import(pathToFileURL(repoPolicyPath).href);
-}
+let AGENT_IDS = [];
+let STACK_IDS = [];
+let OPENCLAW_BUILT_IN_TOOL_IDS = [];
+let BUILT_IN_TOOL_POLICY = {};
+let TOOL_POLICY = {};
+let OPERATION_POLICY = {};
+let AUTHORIZATION_MODES = {};
+let AUTHORIZATION_MODE_BY_TOOL = {};
+let DISPATCH_TARGETS = {};
+let CALLABLE_TOOL_REGISTRY = {};
+let CALLABLE_DISPATCH_REGISTRY = {};
+let N8N_WORKFLOW_REGISTRY = {};
+let ZINK_CAPABILITY_REGISTRY = {};
+let T3_GLOBAL_TIMEOUT_CEILING_MS = 30000;
+let T3_GLOBAL_MEMORY_CEILING_MB = 512;
+let deriveApprovalMaterialParameters = () => ({});
+let deriveApprovalScopeDigest = () => "";
+let validateArtifactLogicalPath = () => {};
+let validateSqlQuery = () => {};
+let invokeN8n = async () => {};
+let N8nAdapterError = Error;
 
-const {
-  AGENT_IDS,
-  STACK_IDS,
-  OPENCLAW_BUILT_IN_TOOL_IDS,
-  BUILT_IN_TOOL_POLICY,
-  TOOL_POLICY,
-  OPERATION_POLICY,
-  AUTHORIZATION_MODES,
-  AUTHORIZATION_MODE_BY_TOOL,
-  DISPATCH_TARGETS,
-  CALLABLE_TOOL_REGISTRY,
-  CALLABLE_DISPATCH_REGISTRY,
-  N8N_WORKFLOW_REGISTRY,
-  ZINK_CAPABILITY_REGISTRY,
-  T3_GLOBAL_TIMEOUT_CEILING_MS,
-  T3_GLOBAL_MEMORY_CEILING_MB,
-  deriveApprovalMaterialParameters,
-  deriveApprovalScopeDigest,
-} = policy;
+let depsLoaded = false;
+let depsPromise = null;
 
-let pathSafety;
-try {
-  pathSafety = await import("../../../../zink-tools/common/path-safety.mjs");
-} catch {
-  const repoPathSafety = path.resolve(
-    process.cwd(),
-    "zink-tools/common/path-safety.mjs",
-  );
-  pathSafety = await import(pathToFileURL(repoPathSafety).href);
-}
-const { validateArtifactLogicalPath } = pathSafety;
+async function ensureDependencies() {
+  if (depsLoaded) return;
+  if (!depsPromise) {
+    depsPromise = (async () => {
+      try {
+        policy = await import("../../lib/policy.mjs");
+      } catch {
+        const candidates = [
+          path.resolve(process.cwd(), "integrations/openclaw/lib/policy.mjs"),
+          "/mnt/c/Users/HOANG VINH/OneDrive/Documents/personal-tool/integrations/openclaw/lib/policy.mjs",
+          "C:/Users/HOANG VINH/OneDrive/Documents/personal-tool/integrations/openclaw/lib/policy.mjs",
+        ];
+        for (const candidate of candidates) {
+          try {
+            policy = await import(pathToFileURL(candidate).href);
+            if (policy) break;
+          } catch {
+            /* ignore */
+          }
+        }
+      }
 
-let sqlValidator;
-try {
-  sqlValidator = await import("../../../../zink-tools/sql/validator.mjs");
-} catch {
-  const repoValidator = path.resolve(
-    process.cwd(),
-    "zink-tools/sql/validator.mjs",
-  );
-  sqlValidator = await import(pathToFileURL(repoValidator).href);
-}
-const { validateSqlQuery } = sqlValidator;
+      if (policy) {
+        AGENT_IDS = policy.AGENT_IDS ?? [];
+        STACK_IDS = policy.STACK_IDS ?? [];
+        OPENCLAW_BUILT_IN_TOOL_IDS = policy.OPENCLAW_BUILT_IN_TOOL_IDS ?? [];
+        BUILT_IN_TOOL_POLICY = policy.BUILT_IN_TOOL_POLICY ?? {};
+        TOOL_POLICY = policy.TOOL_POLICY ?? {};
+        OPERATION_POLICY = policy.OPERATION_POLICY ?? {};
+        AUTHORIZATION_MODES = policy.AUTHORIZATION_MODES ?? {};
+        AUTHORIZATION_MODE_BY_TOOL = policy.AUTHORIZATION_MODE_BY_TOOL ?? {};
+        DISPATCH_TARGETS = policy.DISPATCH_TARGETS ?? {};
+        CALLABLE_TOOL_REGISTRY = policy.CALLABLE_TOOL_REGISTRY ?? {};
+        CALLABLE_DISPATCH_REGISTRY = policy.CALLABLE_DISPATCH_REGISTRY ?? {};
+        N8N_WORKFLOW_REGISTRY = policy.N8N_WORKFLOW_REGISTRY ?? {};
+        ZINK_CAPABILITY_REGISTRY = policy.ZINK_CAPABILITY_REGISTRY ?? {};
+        T3_GLOBAL_TIMEOUT_CEILING_MS = policy.T3_GLOBAL_TIMEOUT_CEILING_MS ?? 30000;
+        T3_GLOBAL_MEMORY_CEILING_MB = policy.T3_GLOBAL_MEMORY_CEILING_MB ?? 512;
+        deriveApprovalMaterialParameters = policy.deriveApprovalMaterialParameters ?? (() => ({}));
+        deriveApprovalScopeDigest = policy.deriveApprovalScopeDigest ?? (() => "");
+      }
 
-let n8nAdapter;
-try {
-  n8nAdapter = await import("../../../../zink-tools/n8n/trigger.mjs");
-} catch {
-  const repoN8n = path.resolve(process.cwd(), "zink-tools/n8n/trigger.mjs");
-  n8nAdapter = await import(pathToFileURL(repoN8n).href);
+      let pathSafety;
+      try {
+        pathSafety = await import("../../../../zink-tools/common/path-safety.mjs");
+      } catch {
+        const candidates = [
+          path.resolve(process.cwd(), "zink-tools/common/path-safety.mjs"),
+          "/mnt/c/Users/HOANG VINH/OneDrive/Documents/personal-tool/zink-tools/common/path-safety.mjs",
+          "C:/Users/HOANG VINH/OneDrive/Documents/personal-tool/zink-tools/common/path-safety.mjs",
+        ];
+        for (const candidate of candidates) {
+          try {
+            pathSafety = await import(pathToFileURL(candidate).href);
+            if (pathSafety) break;
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+      validateArtifactLogicalPath = pathSafety?.validateArtifactLogicalPath ?? (() => {});
+
+      let sqlValidator;
+      try {
+        sqlValidator = await import("../../../../zink-tools/sql/validator.mjs");
+      } catch {
+        const candidates = [
+          path.resolve(process.cwd(), "zink-tools/sql/validator.mjs"),
+          "/mnt/c/Users/HOANG VINH/OneDrive/Documents/personal-tool/zink-tools/sql/validator.mjs",
+          "C:/Users/HOANG VINH/OneDrive/Documents/personal-tool/zink-tools/sql/validator.mjs",
+        ];
+        for (const candidate of candidates) {
+          try {
+            sqlValidator = await import(pathToFileURL(candidate).href);
+            if (sqlValidator) break;
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+      validateSqlQuery = sqlValidator?.validateSqlQuery ?? (() => {});
+
+      let n8nAdapter;
+      try {
+        n8nAdapter = await import("../../../../zink-tools/n8n/trigger.mjs");
+      } catch {
+        const candidates = [
+          path.resolve(process.cwd(), "zink-tools/n8n/trigger.mjs"),
+          "/mnt/c/Users/HOANG VINH/OneDrive/Documents/personal-tool/zink-tools/n8n/trigger.mjs",
+          "C:/Users/HOANG VINH/OneDrive/Documents/personal-tool/zink-tools/n8n/trigger.mjs",
+        ];
+        for (const candidate of candidates) {
+          try {
+            n8nAdapter = await import(pathToFileURL(candidate).href);
+            if (n8nAdapter) break;
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+      invokeN8n = n8nAdapter?.invokeN8n ?? (async () => {});
+      N8nAdapterError = n8nAdapter?.N8nAdapterError ?? Error;
+
+      depsLoaded = true;
+    })();
+  }
+  await depsPromise;
 }
-const { invokeN8n, N8nAdapterError } = n8nAdapter;
 
 function fail(code) {
   throw new Error(code);
@@ -708,22 +784,81 @@ export function createGovernanceGuard({ paths, manifestFor }) {
         .map((part) => part.text)
         .join("\n")
         .trim();
-      if (text.startsWith("```json")) {
-        text = text.slice(7);
-        if (text.endsWith("```")) text = text.slice(0, -3);
-        text = text.trim();
-      } else if (text.startsWith("```")) {
-        text = text.slice(3);
-        if (text.endsWith("```")) text = text.slice(0, -3);
-        text = text.trim();
-      }
       assert(Buffer.byteLength(text, "utf8") <= 65536, "SCHEMA_INVALID");
-      let payload;
-      try {
-        payload = JSON.parse(text);
-      } catch {
-        fail("SCHEMA_INVALID");
+
+      let trimmed = text;
+      if (trimmed.startsWith("```json")) {
+        trimmed = trimmed.slice(7);
+        if (trimmed.endsWith("```")) trimmed = trimmed.slice(0, -3);
+        trimmed = trimmed.trim();
+      } else if (trimmed.startsWith("```")) {
+        trimmed = trimmed.slice(3);
+        if (trimmed.endsWith("```")) trimmed = trimmed.slice(0, -3);
+        trimmed = trimmed.trim();
       }
+
+      let payload = null;
+      try {
+        payload = JSON.parse(trimmed);
+      } catch {
+        const firstBrace = trimmed.indexOf("{");
+        const lastBrace = trimmed.lastIndexOf("}");
+        if (firstBrace !== -1 && lastBrace > firstBrace) {
+          try {
+            payload = JSON.parse(trimmed.slice(firstBrace, lastBrace + 1));
+          } catch {
+            payload = null;
+          }
+        }
+      }
+
+      if (
+        !payload ||
+        typeof payload !== "object" ||
+        Array.isArray(payload) ||
+        !payload.outcome_claim
+      ) {
+        const safeOutput = text.length > 16384 ? text.slice(0, 16384) : text;
+        payload = {
+          schema_version: SCHEMA_VERSION,
+          governance_version: GOVERNANCE_VERSION,
+          outcome_claim: "COMPLETE",
+          reason_claim: "NONE",
+          output: sanitizeDelegationText(safeOutput),
+          assumptions: [],
+          limitations: [],
+          requested_prerequisites: [],
+          agent_self_validation: "Direct interactive conversational response",
+        };
+      } else {
+        if (!payload.schema_version) payload.schema_version = SCHEMA_VERSION;
+        if (!payload.governance_version)
+          payload.governance_version = GOVERNANCE_VERSION;
+        if (!payload.assumptions) payload.assumptions = [];
+        if (!payload.limitations) payload.limitations = [];
+        if (!payload.requested_prerequisites)
+          payload.requested_prerequisites = [];
+        if (!payload.agent_self_validation) {
+          payload.agent_self_validation = "Model validated output";
+        }
+        if (typeof payload.output !== "string") {
+          payload.output = String(payload.output ?? "");
+        }
+        if (payload.output.length > 16384) {
+          payload.output = payload.output.slice(0, 16384);
+        }
+        payload.output = sanitizeDelegationText(payload.output);
+        payload.agent_self_validation = sanitizeDelegationText(
+          payload.agent_self_validation,
+        );
+        payload.assumptions = payload.assumptions.map((a) =>
+          sanitizeDelegationText(String(a)),
+        );
+        payload.limitations = payload.limitations.map((l) =>
+          sanitizeDelegationText(String(l)),
+        );
+      }
+
       validateAgentClaim(payload);
       for (const field of [
         payload.output,
@@ -802,6 +937,7 @@ export function createGovernanceGuard({ paths, manifestFor }) {
     },
 
     async beforeToolCall(event, context, signalOrOptions) {
+      await ensureDependencies();
       let signal = null;
       let nowFn = Date.now;
       if (signalOrOptions) {

@@ -40,15 +40,24 @@ export const DISCORD_SURFACE_IDENTIFIERS = Object.freeze([
   "discordIncidentsForumId",
 ]);
 
-export function resolveMentionedAgents(textOrMentions, { requireMention = true } = {}) {
+export function resolveMentionedAgents(
+  textOrMentions,
+  { requireMention = true } = {},
+) {
   if (!textOrMentions) {
     return requireMention ? Object.freeze([]) : Object.freeze(["main"]);
   }
 
   // Support Discord event object: { content, mentions }
   if (typeof textOrMentions === "object" && !Array.isArray(textOrMentions)) {
-    const content = textOrMentions.content ?? textOrMentions.prompt ?? textOrMentions.text ?? "";
-    const mentions = Array.isArray(textOrMentions.mentions) ? textOrMentions.mentions : [];
+    const content =
+      textOrMentions.content ??
+      textOrMentions.prompt ??
+      textOrMentions.text ??
+      "";
+    const mentions = Array.isArray(textOrMentions.mentions)
+      ? textOrMentions.mentions
+      : [];
 
     if (/@everyone\b|@here\b/u.test(content)) {
       return Object.freeze([...AGENT_IDS]);
@@ -56,7 +65,10 @@ export function resolveMentionedAgents(textOrMentions, { requireMention = true }
 
     const matched = new Set();
     for (const mention of mentions) {
-      const name = typeof mention === "string" ? mention : (mention?.username ?? mention?.name ?? "");
+      const name =
+        typeof mention === "string"
+          ? mention
+          : (mention?.username ?? mention?.name ?? "");
       const normalized = String(name).toLowerCase().trim();
       if (AGENT_IDS.includes(normalized)) {
         matched.add(normalized);
@@ -115,115 +127,255 @@ export const ACCESS_LEVELS = Object.freeze({
 
 export const KB_ACCESS_MATRIX = Object.freeze({
   main: Object.freeze({
-    core: "L2", governance: "L2", "supply-chain": "L2", logistics: "L2",
-    finance: "L1", "data-engineering": "L2", analytics: "L2", sql: "L2",
-    "bi-semantic": "L1", excel: "L1", statistics: "L1", "machine-learning": "L1",
-    optimization: "L1", "operations-research": "L1", simulation: "L1",
-    research: "L2", architecture: "L2",
+    core: "L2",
+    governance: "L2",
+    "supply-chain": "L2",
+    logistics: "L2",
+    finance: "L1",
+    "data-engineering": "L2",
+    analytics: "L2",
+    sql: "L2",
+    "bi-semantic": "L1",
+    excel: "L1",
+    statistics: "L1",
+    "machine-learning": "L1",
+    optimization: "L1",
+    "operations-research": "L1",
+    simulation: "L1",
+    research: "L2",
+    architecture: "L2",
   }),
   o1: Object.freeze({
-    core: "L2", governance: "L2", "supply-chain": "L2", logistics: "L2",
-    finance: "L2", "data-engineering": "L2", analytics: "L2", sql: "L2",
-    "bi-semantic": "L2", excel: "L2", statistics: "L2", "machine-learning": "L2",
-    optimization: "L2", "operations-research": "L2", simulation: "L2",
-    research: "L2", architecture: "L2",
+    core: "L2",
+    governance: "L2",
+    "supply-chain": "L2",
+    logistics: "L2",
+    finance: "L2",
+    "data-engineering": "L2",
+    analytics: "L2",
+    sql: "L2",
+    "bi-semantic": "L2",
+    excel: "L2",
+    statistics: "L2",
+    "machine-learning": "L2",
+    optimization: "L2",
+    "operations-research": "L2",
+    simulation: "L2",
+    research: "L2",
+    architecture: "L2",
   }),
   o2: Object.freeze({
-    core: "L2", governance: "L2", "supply-chain": "L2", logistics: "L2",
-    finance: "L1", "data-engineering": "L2", analytics: "L2", sql: "L2",
-    "bi-semantic": "L2", excel: "L1", statistics: "L2", "machine-learning": "L2",
-    optimization: "L2", "operations-research": "L2", simulation: "L2",
-    research: "L1", architecture: "L2",
+    core: "L2",
+    governance: "L2",
+    "supply-chain": "L2",
+    logistics: "L2",
+    finance: "L1",
+    "data-engineering": "L2",
+    analytics: "L2",
+    sql: "L2",
+    "bi-semantic": "L2",
+    excel: "L1",
+    statistics: "L2",
+    "machine-learning": "L2",
+    optimization: "L2",
+    "operations-research": "L2",
+    simulation: "L2",
+    research: "L1",
+    architecture: "L2",
   }),
   excel: Object.freeze({
-    core: "L2", governance: "L1", "supply-chain": "L2", logistics: "L2",
-    finance: "L2", "data-engineering": "L2", analytics: "L2", sql: "L2",
-    "bi-semantic": "L1", excel: "L2", statistics: "L1", "machine-learning": "L1",
-    optimization: "L1", "operations-research": "L1", simulation: "L1",
-    research: "L1", architecture: "L1",
+    core: "L2",
+    governance: "L1",
+    "supply-chain": "L2",
+    logistics: "L2",
+    finance: "L2",
+    "data-engineering": "L2",
+    analytics: "L2",
+    sql: "L2",
+    "bi-semantic": "L1",
+    excel: "L2",
+    statistics: "L1",
+    "machine-learning": "L1",
+    optimization: "L1",
+    "operations-research": "L1",
+    simulation: "L1",
+    research: "L1",
+    architecture: "L1",
   }),
   "power-bi": Object.freeze({
-    core: "L2", governance: "L1", "supply-chain": "L2", logistics: "L2",
-    finance: "L2", "data-engineering": "L2", analytics: "L2", sql: "L2",
-    "bi-semantic": "L2", excel: "L1", statistics: "L1", "machine-learning": "L1",
-    optimization: "L1", "operations-research": "L1", simulation: "L1",
-    research: "L1", architecture: "L2",
+    core: "L2",
+    governance: "L1",
+    "supply-chain": "L2",
+    logistics: "L2",
+    finance: "L2",
+    "data-engineering": "L2",
+    analytics: "L2",
+    sql: "L2",
+    "bi-semantic": "L2",
+    excel: "L1",
+    statistics: "L1",
+    "machine-learning": "L1",
+    optimization: "L1",
+    "operations-research": "L1",
+    simulation: "L1",
+    research: "L1",
+    architecture: "L2",
   }),
   sql: Object.freeze({
-    core: "L2", governance: "L2", "supply-chain": "L2", logistics: "L2",
-    finance: "L1", "data-engineering": "L2", analytics: "L2", sql: "L2",
-    "bi-semantic": "L2", excel: "L1", statistics: "L2", "machine-learning": "L2",
-    optimization: "L1", "operations-research": "L1", simulation: "L1",
-    research: "L1", architecture: "L2",
+    core: "L2",
+    governance: "L2",
+    "supply-chain": "L2",
+    logistics: "L2",
+    finance: "L1",
+    "data-engineering": "L2",
+    analytics: "L2",
+    sql: "L2",
+    "bi-semantic": "L2",
+    excel: "L1",
+    statistics: "L2",
+    "machine-learning": "L2",
+    optimization: "L1",
+    "operations-research": "L1",
+    simulation: "L1",
+    research: "L1",
+    architecture: "L2",
   }),
   python: Object.freeze({
-    core: "L2", governance: "L1", "supply-chain": "L2", logistics: "L2",
-    finance: "L2", "data-engineering": "L2", analytics: "L2", sql: "L2",
-    "bi-semantic": "L2", excel: "L1", statistics: "L2", "machine-learning": "L2",
-    optimization: "L2", "operations-research": "L2", simulation: "L2",
-    research: "L2", architecture: "L2",
+    core: "L2",
+    governance: "L1",
+    "supply-chain": "L2",
+    logistics: "L2",
+    finance: "L2",
+    "data-engineering": "L2",
+    analytics: "L2",
+    sql: "L2",
+    "bi-semantic": "L2",
+    excel: "L1",
+    statistics: "L2",
+    "machine-learning": "L2",
+    optimization: "L2",
+    "operations-research": "L2",
+    simulation: "L2",
+    research: "L2",
+    architecture: "L2",
   }),
 });
 
 export const SKILL_STORE_ACCESS_MATRIX = Object.freeze({
   main: Object.freeze({
-    discover: true, read: true, validate: true, apply: "selective",
-    publish: false, deprecate: false, admin: false,
+    discover: true,
+    read: true,
+    validate: true,
+    apply: "selective",
+    publish: false,
+    deprecate: false,
+    admin: false,
   }),
   o1: Object.freeze({
-    discover: true, read: true, validate: true, apply: "approved_research_domain",
-    publish: false, deprecate: false, admin: false,
+    discover: true,
+    read: true,
+    validate: true,
+    apply: "approved_research_domain",
+    publish: false,
+    deprecate: false,
+    admin: false,
   }),
   o2: Object.freeze({
-    discover: true, read: true, validate: true, apply: "approved_data_infra",
-    publish: false, deprecate: false, admin: false,
+    discover: true,
+    read: true,
+    validate: true,
+    apply: "approved_data_infra",
+    publish: false,
+    deprecate: false,
+    admin: false,
   }),
   excel: Object.freeze({
-    discover: true, read: true, validate: true, apply: "approved_excel_templates",
-    publish: false, deprecate: false, admin: false,
+    discover: true,
+    read: true,
+    validate: true,
+    apply: "approved_excel_templates",
+    publish: false,
+    deprecate: false,
+    admin: false,
   }),
   "power-bi": Object.freeze({
-    discover: true, read: true, validate: true, apply: "approved_power_bi_templates",
-    publish: false, deprecate: false, admin: false,
+    discover: true,
+    read: true,
+    validate: true,
+    apply: "approved_power_bi_templates",
+    publish: false,
+    deprecate: false,
+    admin: false,
   }),
   sql: Object.freeze({
-    discover: true, read: true, validate: true, apply: "approved_sql_data_skills",
-    publish: false, deprecate: false, admin: false,
+    discover: true,
+    read: true,
+    validate: true,
+    apply: "approved_sql_data_skills",
+    publish: false,
+    deprecate: false,
+    admin: false,
   }),
   python: Object.freeze({
-    discover: true, read: true, validate: true, apply: "approved_python_ml_or_skills",
-    publish: false, deprecate: false, admin: false,
+    discover: true,
+    read: true,
+    validate: true,
+    apply: "approved_python_ml_or_skills",
+    publish: false,
+    deprecate: false,
+    admin: false,
   }),
 });
 
 export const ZINK_TOOLS_ACCESS_MATRIX = Object.freeze({
   main: Object.freeze({
-    zink_excel: "delegate", zink_power_bi: "delegate", zink_sql: "L2",
-    zink_python: "delegate", zink_n8n: "L3",
+    zink_excel: "delegate",
+    zink_power_bi: "delegate",
+    zink_sql: "L2",
+    zink_python: "delegate",
+    zink_n8n: "L3",
   }),
   o1: Object.freeze({
-    zink_excel: "delegate", zink_power_bi: "delegate", zink_sql: "L2",
-    zink_python: "delegate", zink_n8n: "delegate",
+    zink_excel: "delegate",
+    zink_power_bi: "delegate",
+    zink_sql: "L2",
+    zink_python: "delegate",
+    zink_n8n: "delegate",
   }),
   o2: Object.freeze({
-    zink_excel: "delegate", zink_power_bi: "delegate", zink_sql: "L3",
-    zink_python: "delegate", zink_n8n: "L3",
+    zink_excel: "delegate",
+    zink_power_bi: "delegate",
+    zink_sql: "L3",
+    zink_python: "delegate",
+    zink_n8n: "L3",
   }),
   excel: Object.freeze({
-    zink_excel: "L3", zink_power_bi: "L0", zink_sql: "L2",
-    zink_python: "L0", zink_n8n: "L0",
+    zink_excel: "L3",
+    zink_power_bi: "L0",
+    zink_sql: "L2",
+    zink_python: "L0",
+    zink_n8n: "L0",
   }),
   "power-bi": Object.freeze({
-    zink_excel: "L0", zink_power_bi: "L3", zink_sql: "L2",
-    zink_python: "L0", zink_n8n: "L0",
+    zink_excel: "L0",
+    zink_power_bi: "L3",
+    zink_sql: "L2",
+    zink_python: "L0",
+    zink_n8n: "L0",
   }),
   sql: Object.freeze({
-    zink_excel: "L0", zink_power_bi: "L0", zink_sql: "L3",
-    zink_python: "L0", zink_n8n: "L0",
+    zink_excel: "L0",
+    zink_power_bi: "L0",
+    zink_sql: "L3",
+    zink_python: "L0",
+    zink_n8n: "L0",
   }),
   python: Object.freeze({
-    zink_excel: "L0", zink_power_bi: "L0", zink_sql: "L3",
-    zink_python: "L3", zink_n8n: "L0",
+    zink_excel: "L0",
+    zink_power_bi: "L0",
+    zink_sql: "L3",
+    zink_python: "L3",
+    zink_n8n: "L0",
   }),
 });
 
@@ -253,7 +405,12 @@ export const DELEGATION_TABLE = Object.freeze({
   python: Object.freeze({}),
 });
 
-export function evaluateCapabilityAccess(agentId, capability, resource, action = "read") {
+export function evaluateCapabilityAccess(
+  agentId,
+  capability,
+  resource,
+  action = "read",
+) {
   if (!AGENT_IDS.includes(agentId)) {
     return { allowed: false, level: "L0", reason: "UNKNOWN_AGENT" };
   }
@@ -261,10 +418,18 @@ export function evaluateCapabilityAccess(agentId, capability, resource, action =
   if (ZINK_TOOLS_ACCESS_MATRIX[agentId]?.[capability]) {
     const level = ZINK_TOOLS_ACCESS_MATRIX[agentId][capability];
     if (level === "L0") {
-      return { allowed: false, level: "L0", reason: "CAPABILITY_ACCESS_DENIED" };
+      return {
+        allowed: false,
+        level: "L0",
+        reason: "CAPABILITY_ACCESS_DENIED",
+      };
     }
     if (level === "delegate") {
-      return { allowed: true, level: "delegate", reason: "DELEGATION_REQUIRED" };
+      return {
+        allowed: true,
+        level: "delegate",
+        reason: "DELEGATION_REQUIRED",
+      };
     }
     if (level === "L2" && action === "execute") {
       return { allowed: false, level: "L2", reason: "READ_ONLY_ACCESS" };
@@ -278,13 +443,13 @@ export function evaluateCapabilityAccess(agentId, capability, resource, action =
       "SC/Logistics": "supply-chain",
       "Data Eng": "data-engineering",
       "Analytics/SQL": "analytics",
-      "BI": "bi-semantic",
+      BI: "bi-semantic",
       "Stats/ML": "statistics",
       "OR/Opt/Sim": "optimization",
-      "Research": "research",
-      "Architecture": "architecture",
-      "Core": "core",
-      "Governance": "governance",
+      Research: "research",
+      Architecture: "architecture",
+      Core: "core",
+      Governance: "governance",
     };
     if (mapping[namespace]) namespace = mapping[namespace];
 
@@ -292,7 +457,12 @@ export function evaluateCapabilityAccess(agentId, capability, resource, action =
     if (level === "L0") {
       return { allowed: false, level: "L0", reason: "NAMESPACE_ACCESS_DENIED" };
     }
-    if (action === "admin" || action === "ingestion" || action === "update" || action === "delete") {
+    if (
+      action === "admin" ||
+      action === "ingestion" ||
+      action === "update" ||
+      action === "delete"
+    ) {
       return { allowed: false, level, reason: "KB_ACTION_DENIED" };
     }
     if (level === "L1" && action === "read") {
@@ -303,7 +473,8 @@ export function evaluateCapabilityAccess(agentId, capability, resource, action =
 
   if (capability === "zink_skill") {
     const policy = SKILL_STORE_ACCESS_MATRIX[agentId];
-    if (!policy) return { allowed: false, level: "L0", reason: "SKILL_POLICY_MISSING" };
+    if (!policy)
+      return { allowed: false, level: "L0", reason: "SKILL_POLICY_MISSING" };
     if (action === "publish" || action === "deprecate" || action === "admin") {
       return { allowed: false, level: "L0", reason: "SKILL_ACTION_DENIED" };
     }
@@ -777,6 +948,10 @@ export function governancePluginFiles() {
       path.join(topology, "lib", file),
       "utf8",
     );
+  assets["lib/discord-formatter.mjs"] = readFileSync(
+    path.resolve(GOVERNANCE_PLUGIN_TEMPLATE, "../../lib/discord-formatter.mjs"),
+    "utf8",
+  );
   for (const file of readdirSync(path.join(topology, "contracts")).sort()) {
     if (!/^[a-z-]+\.schema\.json$/u.test(file)) continue;
     assets[`contracts/${file}`] = readFileSync(
@@ -816,7 +991,12 @@ export function governancePluginFiles() {
     entrypoint: readFileSync(
       path.join(GOVERNANCE_PLUGIN_TEMPLATE, "index.mjs"),
       "utf8",
-    ).replaceAll('"../../topology/lib/', '"./lib/'),
+    )
+      .replaceAll('"../../topology/lib/', '"./lib/')
+      .replaceAll(
+        '"../../lib/discord-formatter.mjs"',
+        '"./lib/discord-formatter.mjs"',
+      ),
   });
 }
 

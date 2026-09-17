@@ -2,6 +2,15 @@
   "id": "zink-governance",
   "name": "Zink Governance",
   "description": "Model-invisible trusted governance guard for Zink T2 workflows.",
+  "contracts": {
+    "tools": [
+      "zink_excel",
+      "zink_n8n",
+      "zink_power_bi",
+      "zink_python",
+      "zink_sql"
+    ]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

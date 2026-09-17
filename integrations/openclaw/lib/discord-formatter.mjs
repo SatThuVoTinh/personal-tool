@@ -56,7 +56,13 @@ export function formatForDiscord(rawInput, { agentName = "Zink Bot" } = {}) {
   if (typeof rawInput === "object") {
     parsed = rawInput;
   } else if (typeof rawInput === "string") {
-    const trimmed = rawInput.trim();
+    let trimmed = rawInput.trim();
+    if (trimmed.startsWith("```")) {
+      trimmed = trimmed
+        .replace(/^```(?:json)?\s*/iu, "")
+        .replace(/\s*```$/u, "")
+        .trim();
+    }
     if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
       try {
         parsed = JSON.parse(trimmed);
@@ -65,14 +71,25 @@ export function formatForDiscord(rawInput, { agentName = "Zink Bot" } = {}) {
         textContent = rawInput;
       }
     } else {
-      textContent = rawInput;
+      const firstBrace = trimmed.indexOf("{");
+      const lastBrace = trimmed.lastIndexOf("}");
+      if (firstBrace !== -1 && lastBrace > firstBrace) {
+        try {
+          parsed = JSON.parse(trimmed.slice(firstBrace, lastBrace + 1));
+        } catch {
+          textContent = rawInput;
+        }
+      } else {
+        textContent = rawInput;
+      }
     }
   }
 
   if (parsed) {
     // If it's a governed envelope/receipt
     const target = parsed.payload ?? parsed;
-    textContent = target.output ?? target.text ?? target.content ?? target.message ?? "";
+    textContent =
+      target.output ?? target.text ?? target.content ?? target.message ?? "";
     if (Array.isArray(target.assumptions) && target.assumptions.length > 0) {
       assumptions = target.assumptions;
     }
@@ -83,7 +100,51 @@ export function formatForDiscord(rawInput, { agentName = "Zink Bot" } = {}) {
     // Fallback if output was empty but status is present
     if (!textContent && (target.outcome_claim || parsed.outcome_claim)) {
       const status = target.outcome_claim || parsed.outcome_claim;
-      textContent = `Tác vụ hoàn thành với trạng thái: ${status}`;
+      const reason = target.reason_claim || parsed.reason_claim || "NONE";
+      textContent = `Tác vụ hoàn thành với trạng thái: ${status}${reason !== "NONE" ? ` (${reason})` : ""}`;
+    }
+  }
+
+  // If textContent itself is a stringified JSON (nested JSON payload), unwrap it
+  if (typeof textContent === "string") {
+    let innerTrimmed = textContent.trim();
+    if (innerTrimmed.startsWith("```")) {
+      innerTrimmed = innerTrimmed
+        .replace(/^```(?:json)?\s*/iu, "")
+        .replace(/\s*```$/u, "")
+        .trim();
+    }
+    if (innerTrimmed.startsWith("{") && innerTrimmed.endsWith("}")) {
+      try {
+        const innerParsed = JSON.parse(innerTrimmed);
+        const innerTarget = innerParsed.payload ?? innerParsed;
+        if (
+          innerTarget.output ||
+          innerTarget.text ||
+          innerTarget.content ||
+          innerTarget.message
+        ) {
+          textContent =
+            innerTarget.output ??
+            innerTarget.text ??
+            innerTarget.content ??
+            innerTarget.message;
+          if (
+            Array.isArray(innerTarget.assumptions) &&
+            innerTarget.assumptions.length > 0
+          ) {
+            assumptions = [...assumptions, ...innerTarget.assumptions];
+          }
+          if (
+            Array.isArray(innerTarget.limitations) &&
+            innerTarget.limitations.length > 0
+          ) {
+            limitations = [...limitations, ...innerTarget.limitations];
+          }
+        }
+      } catch {
+        // Keep textContent as is
+      }
     }
   }
 
@@ -103,7 +164,9 @@ export function formatForDiscord(rawInput, { agentName = "Zink Bot" } = {}) {
       .map((a) => sanitizeDiscordText(String(a)))
       .filter(Boolean);
     if (cleanAssumptions.length > 0) {
-      sections.push(`\n**Giả định:**\n${cleanAssumptions.map((a) => `• ${a}`).join("\n")}`);
+      sections.push(
+        `\n**Giả định:**\n${cleanAssumptions.map((a) => `• ${a}`).join("\n")}`,
+      );
     }
   }
 
@@ -112,7 +175,9 @@ export function formatForDiscord(rawInput, { agentName = "Zink Bot" } = {}) {
       .map((l) => sanitizeDiscordText(String(l)))
       .filter(Boolean);
     if (cleanLimitations.length > 0) {
-      sections.push(`\n**Hạn chế:**\n${cleanLimitations.map((l) => `• ${l}`).join("\n")}`);
+      sections.push(
+        `\n**Hạn chế:**\n${cleanLimitations.map((l) => `• ${l}`).join("\n")}`,
+      );
     }
   }
 
@@ -122,7 +187,7 @@ export function formatForDiscord(rawInput, { agentName = "Zink Bot" } = {}) {
 export function formatError(errorOrCode, optsOrName = "Zink Bot") {
   const agentName =
     typeof optsOrName === "object" && optsOrName !== null
-      ? optsOrName.agentName ?? "Zink Bot"
+      ? (optsOrName.agentName ?? "Zink Bot")
       : optsOrName;
 
   let rawMessage = "UNKNOWN_ERROR";

@@ -1,8 +1,7 @@
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync } from "node:fs";
 import path from "node:path";
-import process from "node:process";
-import { URL, pathToFileURL } from "node:url";
+import { URL } from "node:url";
 import { setTimeout, clearTimeout } from "node:timers";
 import { createGovernanceGuard } from "../../topology/lib/guard.mjs";
 import { sanitizeDelegationText } from "../../topology/lib/runtime.mjs";
@@ -20,17 +19,17 @@ import {
   SCHEMA_VERSION,
 } from "../../topology/lib/canonical.mjs";
 
-let policyModule;
-try {
-  policyModule = await import("../../lib/policy.mjs");
-} catch {
-  const repoPolicyPath = path.resolve(
-    process.cwd(),
-    "integrations/openclaw/lib/policy.mjs",
-  );
-  policyModule = await import(pathToFileURL(repoPolicyPath).href);
-}
-const { CALLABLE_TOOL_REGISTRY } = policyModule;
+import { formatForDiscord } from "../../lib/discord-formatter.mjs";
+
+const AGENT_DISPLAY_NAMES = {
+  main: "Quản Lý",
+  o1: "Điều Phối 1",
+  o2: "Điều Phối 2",
+  excel: "Excel",
+  "power-bi": "PowerBI",
+  sql: "SQL",
+  python: "Python",
+};
 
 export function registerTools(api) {
   const registerFn =
@@ -40,11 +39,135 @@ export function registerTools(api) {
         ? api.tools.register.bind(api.tools)
         : null;
   if (!registerFn) return;
-  for (const [toolId, def] of Object.entries(CALLABLE_TOOL_REGISTRY)) {
+  const registry = {
+    zink_excel: {
+      description:
+        "Execute governed Excel operations (load, populate, validate, generate).",
+      parameters: {
+        type: "object",
+        properties: {
+          operation: {
+            type: "string",
+            enum: ["load", "populate", "validate", "generate"],
+            description: "Excel operation to execute",
+          },
+          file_path: {
+            type: "string",
+            description: "Target Excel workbook file path",
+          },
+          template_path: {
+            type: "string",
+            description: "Template file path for population",
+          },
+          data: {
+            type: "object",
+            description: "Data object to populate into workbook",
+          },
+          rules: {
+            type: "array",
+            items: { type: "string" },
+            description: "Validation rules to check against workbook",
+          },
+          specification: {
+            type: "object",
+            description: "Generation specification for new workbook",
+          },
+        },
+        required: ["operation", "file_path"],
+      },
+    },
+    zink_n8n: {
+      description: "Execute governed n8n workflows via webhook triggers.",
+      parameters: {
+        type: "object",
+        properties: {
+          workflow_id: {
+            type: "string",
+            description: "n8n workflow identifier",
+          },
+          payload: {
+            type: "object",
+            description: "Workflow input payload",
+          },
+        },
+        required: ["workflow_id"],
+      },
+    },
+    zink_power_bi: {
+      description:
+        "Execute governed Power BI operations (bind, update, validate).",
+      parameters: {
+        type: "object",
+        properties: {
+          operation: {
+            type: "string",
+            enum: ["bind", "update", "validate"],
+            description: "Power BI operation to execute",
+          },
+          model_name: {
+            type: "string",
+            description: "Target Power BI semantic model name",
+          },
+          parameters: {
+            type: "object",
+            description: "Model update or bind parameters",
+          },
+        },
+        required: ["operation", "model_name"],
+      },
+    },
+    zink_python: {
+      description:
+        "Execute bounded Python scripts in isolated per-stack environments.",
+      parameters: {
+        type: "object",
+        properties: {
+          script: {
+            type: "string",
+            description: "Python script code to execute",
+          },
+          entrypoint: {
+            type: "string",
+            description: "Optional entrypoint function name",
+          },
+        },
+        required: ["script"],
+      },
+    },
+    zink_sql: {
+      description: "Execute bounded read-only SELECT SQL queries.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "Read-only SELECT SQL query to execute",
+          },
+          database: {
+            type: "string",
+            description: "Target database name",
+          },
+        },
+        required: ["query"],
+      },
+    },
+  };
+  for (const [toolId, def] of Object.entries(registry)) {
     registerFn({
       name: toolId,
       id: toolId,
       description: def.description,
+      parameters: def.parameters,
+      async execute(_id, params) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ status: "governed", tool: toolId, params }),
+            },
+          ],
+        };
+      },
     });
   }
 }
@@ -120,13 +243,16 @@ export default {
         )
       )
         return;
+      const parentSessionKey =
+        context.inputProvenance?.sessionKey ?? context.requesterSessionKey;
       const hasPending = Object.values(snapshot.tasks).some(
         (task) =>
           task.workflow_status === "ACTIVE" &&
           Object.values(task.delegations ?? {}).some(
             (run) =>
               run.agent_id === context.agentId &&
-              run.run_state === "SPAWN_UNKNOWN",
+              run.run_state === "SPAWN_UNKNOWN" &&
+              (!parentSessionKey || run.parent_session_key === parentSessionKey),
           ),
       );
       if (!hasPending) return; // beforeRun rejects the unresolved identity.
@@ -203,9 +329,11 @@ export default {
         // message_received is fire-and-forget and its inbound mapper has no
         // runId in 2026.6.34. Bind authenticated ingress at the awaited native
         // run boundary, where message identity and run identity coexist.
-        if (!context.inputProvenance && context.channelId === "discord")
+        if (!context.inputProvenance && context.channelId === "discord") {
           authenticateIngress(context);
-        await awaitSpawnReceipt(context, signal);
+        } else {
+          await awaitSpawnReceipt(context, signal);
+        }
         return guard.beforeRun(event, context, signal);
       },
       async beforeToolCall(event, context, signal) {
@@ -399,6 +527,19 @@ export default {
       } catch {
         api.logger?.error?.("zink governance spawn: EXECUTION_STATE_UNKNOWN");
       }
+    });
+    api.on("message_sending", async (event, ctx = {}) => {
+      if (ctx.channelId !== "discord") return;
+      const agentIdMatch = (ctx.sessionKey || "").match(/^agent:([^:]+)/);
+      const agentId =
+        ctx.agentId ||
+        ctx.accountId ||
+        (agentIdMatch ? agentIdMatch[1] : undefined);
+      const agentName =
+        AGENT_DISPLAY_NAMES[agentId] ?? agentId ?? "Zink Bot";
+      return {
+        content: formatForDiscord(event.content, { agentName }),
+      };
     });
   },
 };

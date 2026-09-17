@@ -139,7 +139,7 @@ import { executePattern6_GoldToExternalComputeFeatures } from "./patterns/index.
 const computeJob = await executePattern6_GoldToExternalComputeFeatures({
   context: { agent_id: "python", task_id: "task-p6-01" },
   compute_target: "kaggle",
-  idempotency_key: "idemp-key-train-20260914",
+  idempotency_key: "train-run-20260914",
   kaggleAdapter: kaggleInstance,
 });
 ```
