@@ -24,7 +24,19 @@ import {
 
 import { KnowledgeAdapter } from "../zink-tools/adapters/knowledge/knowledge-adapter.mjs";
 
-import { handleOwnerSkillApproval } from "../integrations/openclaw/plugins/zink-governance/index.mjs";
+import {
+  handleOwnerSkillApproval,
+  registerTools,
+  getPendingSkillProposal,
+} from "../integrations/openclaw/plugins/zink-governance/index.mjs";
+
+import {
+  formatForDiscord,
+  formatGovernedEnvelope,
+  formatApprovalNotification,
+  formatResultNotification,
+  formatIncidentNotification,
+} from "../integrations/openclaw/lib/discord-formatter.mjs";
 
 import {
   resolveMentionedAgents,
@@ -493,5 +505,207 @@ describe("M8/T1 Governed Skill Vector Store & Semantic Vector RAG", () => {
       query: "Search supply chain policy",
     });
     assert.equal(kbResult.governed_status, "CONTROLLED_FAILURE");
+  });
+
+  // =========================================================================
+  // Test 12: Unified message formatting for Approval, #results, and #incidents
+  // =========================================================================
+  test("Unified message formatting: Approval, Results, and Incidents share the same 5-part layout", () => {
+    // 1. Approval Notification
+    const approvalText = formatApprovalNotification(
+      {
+        proposal: {
+          proposal_id: "prop-test-12345",
+          namespace: ["data", "excel"],
+          capability: "xlookup-fallback",
+          version: "1.1.0",
+          content_sha256: "b".repeat(64),
+          requesting_agent: "excel",
+          reason: "Hỗ trợ tra cứu nhiều nguồn với fallback an toàn",
+          created_at: "2026-09-18T12:00:00Z",
+        },
+      },
+      { agentName: "Excel Specialist" },
+    );
+
+    assert.match(approvalText, /^### 🔖 \[PHÊ DUYỆT\]/u);
+    assert.match(approvalText, /> \*\*Mục đích:\*\* Phê duyệt/u);
+    assert.match(approvalText, /#### 📋 Thông tin Chi tiết \(Details\)/u);
+    assert.match(
+      approvalText,
+      /#### 📝 Nội dung Thực thi \/ Báo cáo \(Content & Deliverables\)/u,
+    );
+    assert.match(
+      approvalText,
+      /#### 📦 Tệp đính kèm & Tham chiếu \(Files & Artifacts\)/u,
+    );
+    assert.match(
+      approvalText,
+      /#### ⚖️ Đánh giá Tác động & Kiểm định \(Impact & Validation\)/u,
+    );
+    assert.match(
+      approvalText,
+      /#### 🔄 Hướng dẫn Xử lý & Phục hồi \(Action & Recovery\)/u,
+    );
+    assert.match(approvalText, /Duyệt đề xuất: prop-test-12345/u);
+
+    // 2. Result Notification (#results)
+    const resultText = formatResultNotification(
+      {
+        result_id: "res-test-67890",
+        workflow_status: "COMPLETE",
+        summary: "Hoàn tất phân tích tồn kho Q3",
+        deliverables: [
+          "Báo cáo tồn kho file:///Users/test/inventory.xlsx",
+          "Biểu đồ dashboard.pbix",
+        ],
+        validation: "VALID",
+      },
+      { agentName: "PowerBI Specialist" },
+    );
+
+    assert.match(resultText, /^### 📋 \[KẾT QUẢ\]/u);
+    assert.match(
+      resultText,
+      /> \*\*Mục đích:\*\* Báo cáo hoàn thành tác vụ phân tích & Bàn giao sản phẩm kết quả kèm file/u,
+    );
+    assert.match(resultText, /#### 📋 Thông tin Chi tiết \(Details\)/u);
+    assert.match(
+      resultText,
+      /#### 📝 Nội dung Thực thi \/ Báo cáo \(Content & Deliverables\)/u,
+    );
+    assert.match(
+      resultText,
+      /#### 📦 Tệp đính kèm & Tham chiếu \(Files & Artifacts\)/u,
+    );
+    assert.match(
+      resultText,
+      /#### ⚖️ Đánh giá Tác động & Kiểm định \(Impact & Validation\)/u,
+    );
+    assert.match(
+      resultText,
+      /#### 🔄 Hướng dẫn Xử lý & Phục hồi \(Action & Recovery\)/u,
+    );
+    // Path must be redacted by sanitizeDiscordText
+    assert.doesNotMatch(resultText, /file:\/\/\//u);
+
+    // 3. Incident Notification (#incidents)
+    const incidentText = formatIncidentNotification(
+      {
+        incident_id: "inc-test-99999",
+        severity: "HIGH",
+        category: "CONTRACT_VIOLATION",
+        observed_state: "Truy vấn trả về lỗi cú pháp SQL",
+        expected_state: "Kết quả truy vấn 100 dòng",
+        impact: "Báo cáo bị tạm dừng",
+        containment_status: "Đã ngắt kết nối",
+        recovery_status: "Chờ khôi phục",
+        owner_action_required: true,
+      },
+      { agentName: "SQL Specialist" },
+    );
+
+    assert.match(incidentText, /^### 🚨 \[SỰ CỐ\]/u);
+    assert.match(incidentText, /> \*\*Mục đích:\*\* Thông báo sự cố kỹ thuật/u);
+    assert.match(incidentText, /#### 📋 Thông tin Chi tiết \(Details\)/u);
+    assert.match(
+      incidentText,
+      /#### 📝 Nội dung Thực thi \/ Báo cáo \(Content & Deliverables\)/u,
+    );
+    assert.match(
+      incidentText,
+      /#### 📦 Tệp đính kèm & Tham chiếu \(Files & Artifacts\)/u,
+    );
+    assert.match(
+      incidentText,
+      /#### ⚖️ Đánh giá Tác động & Kiểm định \(Impact & Validation\)/u,
+    );
+    assert.match(
+      incidentText,
+      /#### 🔄 Hướng dẫn Xử lý & Phục hồi \(Action & Recovery\)/u,
+    );
+    assert.match(incidentText, /Yêu cầu Owner can thiệp để mở khóa tác vụ/u);
+
+    // 4. Direct formatGovernedEnvelope
+    const directText = formatGovernedEnvelope({
+      tag: "🔖 [PHÊ DUYỆT]",
+      title: "Tác vụ kiểm tra",
+      purpose: "Kiểm tra mẫu định dạng thống nhất",
+      content: "Nội dung kiểm tra",
+    });
+    assert.match(directText, /### 🔖 \[PHÊ DUYỆT\] Tác vụ kiểm tra/u);
+
+    // 5. Auto-detection in formatForDiscord
+    const detectedApproval = formatForDiscord({
+      action: "propose",
+      proposal: {
+        proposal_id: "prop-auto-detect",
+        capability: "auto-detect-skill",
+      },
+    });
+    assert.match(detectedApproval, /### 🔖 \[PHÊ DUYỆT\]/u);
+
+    const detectedIncident = formatForDiscord({
+      incident_id: "inc-auto-detect",
+      severity: "CRITICAL",
+      observed_state: "Kernel panic",
+    });
+    assert.match(detectedIncident, /### 🚨 \[SỰ CỐ\]/u);
+
+    const detectedResult = formatForDiscord({
+      result_id: "res-auto-detect",
+      workflow_status: "COMPLETE",
+      deliverables: ["Done deal"],
+    });
+    assert.match(detectedResult, /### 📋 \[KẾT QUẢ\]/u);
+  });
+
+  // =========================================================================
+  // Test 13: zink_skill_propose connects to Approval Request
+  // =========================================================================
+  test("zink_skill_propose connects to Approval flow: registers pending proposal and returns Approval Request packet", async () => {
+    let proposeTool = null;
+    const mockHostApi = {
+      registerTool: (t) => {
+        if (t.id === "zink_skill_propose") proposeTool = t;
+      },
+    };
+
+    registerTools(mockHostApi);
+    assert.ok(proposeTool, "zink_skill_propose tool must be registered");
+
+    const content = "# Dynamic Array Filter\n\nFilter multi criteria in Excel.";
+    const proposeResult = await proposeTool.execute("call-1", {
+      namespace: "excel",
+      capability: "filter-multi-criteria",
+      version: "1.0.0",
+      content,
+      reason: "Optimize filtering on large dataset",
+    });
+
+    assert.ok(proposeResult?.content?.[0]?.text);
+    const parsedPacket = JSON.parse(proposeResult.content[0].text);
+
+    assert.equal(parsedPacket.exact_operation, "SKILL_CANDIDATE_APPROVAL");
+    assert.equal(
+      parsedPacket.exact_target,
+      "skills/excel/filter-multi-criteria@1.0.0",
+    );
+    assert.equal(parsedPacket.publication_status, "pending_owner_post");
+    assert.equal(parsedPacket.proposal.status, "CANDIDATE");
+    assert.ok(parsedPacket.approval_id);
+
+    // Verify it is registered in pending proposals store
+    const retrieved = getPendingSkillProposal(parsedPacket.approval_id);
+    assert.ok(retrieved);
+    assert.equal(retrieved.approval_id, parsedPacket.approval_id);
+
+    // Verify formatForDiscord unwraps it into the unified 🔖 [PHÊ DUYỆT] format
+    const formattedMessage = formatForDiscord(proposeResult.content[0].text);
+    assert.match(
+      formattedMessage,
+      /### 🔖 \[PHÊ DUYỆT\] Đề xuất Skill: filter-multi-criteria/u,
+    );
+    assert.match(formattedMessage, /Duyệt đề xuất: /u);
   });
 });

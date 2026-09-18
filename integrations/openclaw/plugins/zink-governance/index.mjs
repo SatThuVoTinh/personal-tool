@@ -20,7 +20,40 @@ import {
   SCHEMA_VERSION,
 } from "../../topology/lib/canonical.mjs";
 
-import { formatForDiscord } from "../../lib/discord-formatter.mjs";
+import {
+  formatForDiscord,
+  formatGovernedEnvelope,
+  formatApprovalNotification,
+  formatResultNotification,
+  formatIncidentNotification,
+} from "../../lib/discord-formatter.mjs";
+
+export {
+  formatForDiscord,
+  formatGovernedEnvelope,
+  formatApprovalNotification,
+  formatResultNotification,
+  formatIncidentNotification,
+};
+
+const PENDING_PROPOSALS_KEY = Symbol.for(
+  "zink.governance.pending_skill_proposals",
+);
+if (!globalThis[PENDING_PROPOSALS_KEY]) {
+  globalThis[PENDING_PROPOSALS_KEY] = new Map();
+}
+
+export function registerPendingSkillProposal(approvalRecord) {
+  const proposalId =
+    approvalRecord.approval_id || approvalRecord.proposal?.proposal_id;
+  if (proposalId) {
+    globalThis[PENDING_PROPOSALS_KEY].set(proposalId, approvalRecord);
+  }
+}
+
+export function getPendingSkillProposal(proposalId) {
+  return globalThis[PENDING_PROPOSALS_KEY]?.get(proposalId) || null;
+}
 
 const AGENT_DISPLAY_NAMES = {
   main: "Quản Lý",
@@ -397,6 +430,49 @@ export function registerTools(api) {
             {},
             { ollamaUrl: resolveDefaultOllamaUrl() },
           );
+
+          if (res?.governed_status === "SUCCESS" && res.proposal) {
+            const proposal = res.proposal;
+            const nsStr = Array.isArray(proposal.namespace)
+              ? proposal.namespace.join("/")
+              : proposal.namespace || "specialist";
+            const targetStr = `skills/${nsStr}/${proposal.capability}@${proposal.version}`;
+            const approvalRecord = {
+              schema_version: "1.0.0",
+              governance_version: GOVERNANCE_VERSION,
+              approval_id: proposal.proposal_id,
+              task_id: `task-skill-${proposal.proposal_id}`,
+              exact_target: targetStr,
+              exact_operation: "SKILL_CANDIDATE_APPROVAL",
+              material_parameters: {
+                namespace: proposal.namespace,
+                capability: proposal.capability,
+                version: proposal.version,
+                content_sha256: proposal.content_sha256,
+                reason: proposal.reason,
+                requesting_agent: proposal.requesting_agent,
+              },
+              impact: `Duyệt đưa skill ${proposal.capability} v${proposal.version} vào Zink Skill Store (trạng thái ACTIVE) và lập chỉ mục vào cơ sở dữ liệu vector dài hạn (pgvector).`,
+              recovery_proposal:
+                "Owner có thể hạ cấp (deprecate) hoặc hủy bỏ skill bất kỳ lúc nào qua lệnh quản trị.",
+              issued_at: proposal.created_at,
+              expires_at: new Date(
+                Date.now() + 7 * 24 * 60 * 60 * 1000,
+              ).toISOString(),
+              publication_status: "pending_owner_post",
+              proposal,
+            };
+            registerPendingSkillProposal(approvalRecord);
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify(approvalRecord),
+                },
+              ],
+            };
+          }
+
           return {
             content: [
               {
