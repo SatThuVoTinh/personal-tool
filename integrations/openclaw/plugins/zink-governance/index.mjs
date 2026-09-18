@@ -310,6 +310,11 @@ export function registerTools(api) {
             type: "string",
             description: "Optional path prefix filter",
           },
+          rerank: {
+            type: "boolean",
+            description:
+              "Optional: enable deep CPU cross-encoder reranking (defaults to false for fast sub-second response)",
+          },
         },
         required: ["query"],
       },

@@ -55,13 +55,9 @@ const sharedSearchSemaphore = new AsyncSemaphore(2);
 export class KnowledgeAdapter {
   constructor(endpoint, options = {}) {
     this.endpoint =
-      endpoint ||
-      process.env.KNOWLEDGE_ENDPOINT ||
-      "http://127.0.0.1:8000";
+      endpoint || process.env.KNOWLEDGE_ENDPOINT || "http://127.0.0.1:8000";
     this.timeout =
-      options.timeout ||
-      Number(process.env.KNOWLEDGE_TIMEOUT_MS) ||
-      120000;
+      options.timeout || Number(process.env.KNOWLEDGE_TIMEOUT_MS) || 120000;
   }
 
   async queryKnowledge(input = {}, context = {}) {
@@ -75,6 +71,7 @@ export class KnowledgeAdapter {
       primary_topic,
       path_prefix,
       source_types,
+      rerank = false,
     } = input;
 
     if (!action || FORBIDDEN_ACTIONS.has(action)) {
@@ -117,6 +114,7 @@ export class KnowledgeAdapter {
       const requestPayloadObj = {
         query: query ? query.trim() : "",
         limit: boundedLimit,
+        rerank: Boolean(rerank),
       };
 
       if (primary_topic && typeof primary_topic === "string") {
@@ -141,10 +139,7 @@ export class KnowledgeAdapter {
         let response;
         const maxAttempts = 3;
         const reqTimeout =
-          input?.timeout ||
-          context?.timeout ||
-          this.timeout ||
-          120000;
+          input?.timeout || context?.timeout || this.timeout || 120000;
 
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
           response = await new Promise((resolve, reject) => {

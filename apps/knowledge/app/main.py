@@ -70,6 +70,7 @@ class SearchRequest(BaseModel):
     tags_all: list[str] | None = None
     path_prefix: str | None = None
     source_types: list[Literal["MARKDOWN", "PDF"]] | None = None
+    rerank: bool = True
 
 
 DATABASE_ERRORS = (
@@ -276,7 +277,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     status_code=503,
                     detail={"code": database.startup_error_code or "DATABASE_UNAVAILABLE"},
                 )
-            if app.state.reranker is None:
+            if request.rerank and app.state.reranker is None:
                 raise HTTPException(status_code=503, detail={"code": "RERANKER_UNAVAILABLE"})
             query = request.query.strip()
             if not query:
@@ -325,19 +326,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     if attempt == 0:
                         continue
                     raise HTTPException(status_code=503, detail={"code": "ACTIVE_INDEX_CHANGED"}) from None
-                fused = fuse_candidates(dense, fts)[:MAX_RERANK_CANDIDATES]
-                pairs = [
-                    (query, render_retrieval_text(item.candidate.heading_path, item.candidate.text))
-                    for item in fused
-                ]
-                try:
-                    logits = await app.state.reranker.predict(pairs)
-                except PairTokenBudgetError:
-                    raise HTTPException(status_code=422, detail={"code": "PAIR_TOKEN_BUDGET_EXCEEDED"}) from None
-                except RerankerUnavailableError:
-                    raise HTTPException(status_code=503, detail={"code": "RERANKER_UNAVAILABLE"}) from None
+                if request.rerank and app.state.reranker is not None:
+                    candidate_limit = min(MAX_RERANK_CANDIDATES, request.limit)
+                    fused_candidates = fuse_candidates(dense, fts)[:candidate_limit]
+                    pairs = [
+                        (query, render_retrieval_text(item.candidate.heading_path, item.candidate.text))
+                        for item in fused_candidates
+                    ]
+                    try:
+                        logits = await app.state.reranker.predict(pairs)
+                    except PairTokenBudgetError:
+                        raise HTTPException(status_code=422, detail={"code": "PAIR_TOKEN_BUDGET_EXCEEDED"}) from None
+                    except RerankerUnavailableError:
+                        raise HTTPException(status_code=503, detail={"code": "RERANKER_UNAVAILABLE"}) from None
+                    raw_scores = [stable_sigmoid(logit) for logit in logits]
+                else:
+                    candidate_limit = min(MAX_RERANK_CANDIDATES, request.limit)
+                    fused_candidates = fuse_candidates(dense, fts)[:candidate_limit]
+                    raw_scores = [item.rrf_score for item in fused_candidates]
+
                 results = []
-                for item, raw_logit in zip(fused, logits, strict=True):
+                for item, raw_score in zip(fused_candidates, raw_scores, strict=True):
                     candidate = item.candidate
                     results.append(
                         {
@@ -350,7 +359,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             "dense_score": None if candidate.dense_distance is None else 1.0 - candidate.dense_distance,
                             "fts_score": candidate.fts_score,
                             "rrf_score": item.rrf_score,
-                            "rerank_score": stable_sigmoid(raw_logit),
+                            "rerank_score": raw_score,
                             "source_type": candidate.source_type,
                             "citation": {
                                 "source_path": candidate.source_path,
