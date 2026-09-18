@@ -1,5 +1,7 @@
 import http from "node:http";
 import https from "node:https";
+import { setTimeout } from "node:timers/promises";
+import { URL } from "node:url";
 
 export class KnowledgeAdapterError extends Error {
   constructor(message, code = "KNOWLEDGE_ADAPTER_ERROR") {
@@ -18,6 +20,38 @@ const FORBIDDEN_ACTIONS = new Set([
   "governance mutation",
 ]);
 
+// Search capacity in personal-tool-knowledge-1 is strictly capped at 2.
+// We maintain an in-process AsyncSemaphore across adapter instances to queue
+// concurrent searches and prevent HTTP 429 SEARCH_CAPACITY_EXCEEDED.
+class AsyncSemaphore {
+  constructor(maxConcurrency = 2) {
+    this.maxConcurrency = maxConcurrency;
+    this.current = 0;
+    this.queue = [];
+  }
+
+  acquire() {
+    if (this.current < this.maxConcurrency) {
+      this.current++;
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      this.queue.push(resolve);
+    });
+  }
+
+  release() {
+    if (this.queue.length > 0) {
+      const next = this.queue.shift();
+      next();
+    } else {
+      this.current = Math.max(0, this.current - 1);
+    }
+  }
+}
+
+const sharedSearchSemaphore = new AsyncSemaphore(2);
+
 export class KnowledgeAdapter {
   constructor(endpoint, options = {}) {
     this.endpoint =
@@ -27,7 +61,7 @@ export class KnowledgeAdapter {
     this.timeout =
       options.timeout ||
       Number(process.env.KNOWLEDGE_TIMEOUT_MS) ||
-      90000;
+      120000;
   }
 
   async queryKnowledge(input = {}, context = {}) {
@@ -36,7 +70,7 @@ export class KnowledgeAdapter {
       namespace = "core",
       query,
       chunk_id,
-      top_k = 10,
+      top_k = 5,
       limit,
       primary_topic,
       path_prefix,
@@ -77,7 +111,7 @@ export class KnowledgeAdapter {
       const targetUrl = new URL(targetPath);
       const boundedLimit = Math.max(
         1,
-        Math.min(20, Number(limit || top_k || 10)),
+        Math.min(20, Number(limit ?? top_k ?? 5)),
       );
 
       const requestPayloadObj = {
@@ -96,81 +130,110 @@ export class KnowledgeAdapter {
       }
 
       const requestPayload = JSON.stringify(requestPayloadObj);
-
       const client = targetUrl.protocol === "https:" ? https : http;
 
-      const response = await new Promise((resolve, reject) => {
-        const req = client.request(
-          targetUrl,
-          {
-            method: action === "retrieve" ? "GET" : "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "Content-Length": Buffer.byteLength(requestPayload),
-            },
-            timeout:
-              input?.timeout ||
-              context?.timeout ||
-              this.timeout ||
-              90000,
-          },
-          (res) => {
-            let data = "";
-            res.on("data", (chunk) => (data += chunk));
-            res.on("end", () => resolve({ status: res.statusCode, data }));
-          },
-        );
-        req.on("error", (err) => reject(err));
-        req.on("timeout", () => {
-          req.destroy();
-          reject(new Error("KNOWLEDGE_SERVICE_TIMEOUT"));
-        });
-        if (action !== "retrieve") {
-          req.write(requestPayload);
-        }
-        req.end();
-      });
+      const shouldAcquireSemaphore = action === "search";
+      if (shouldAcquireSemaphore) {
+        await sharedSearchSemaphore.acquire();
+      }
 
-      if (response.status >= 200 && response.status < 300) {
-        const parsed = JSON.parse(response.data);
-        const rawResults = parsed.results || [];
-        const formattedResults = rawResults.map((r) => ({
-          chunk_id: r.segment_id || r.chunk_id || "unknown",
-          title: r.title || "Untitled",
-          text: r.text || "",
-          score: r.rerank_score ?? r.dense_score ?? 0,
-          citation:
-            r.citation ||
-            (r.source_path
-              ? `${r.source_path}${r.line_start ? `#L${r.line_start}` : ""}`
-              : ""),
-          metadata: {
-            source_path: r.source_path,
-            heading_path: r.heading_path || [],
-            source_type: r.source_type,
-            page_start: r.page_start,
-            page_end: r.page_end,
-          },
-        }));
+      try {
+        let response;
+        const maxAttempts = 3;
+        const reqTimeout =
+          input?.timeout ||
+          context?.timeout ||
+          this.timeout ||
+          120000;
+
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+          response = await new Promise((resolve, reject) => {
+            const req = client.request(
+              targetUrl,
+              {
+                method: action === "retrieve" ? "GET" : "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  "Content-Length": Buffer.byteLength(requestPayload),
+                },
+                timeout: reqTimeout,
+              },
+              (res) => {
+                let data = "";
+                res.on("data", (chunk) => (data += chunk));
+                res.on("end", () => resolve({ status: res.statusCode, data }));
+              },
+            );
+            req.on("error", (err) => reject(err));
+            req.on("timeout", () => {
+              req.destroy();
+              reject(new Error("KNOWLEDGE_SERVICE_TIMEOUT"));
+            });
+            if (action !== "retrieve") {
+              req.write(requestPayload);
+            }
+            req.end();
+          });
+
+          // Transient concurrency limit (429) or proxy timeout (503, 504) -> retry with jittered backoff
+          if (
+            (response.status === 429 ||
+              response.status === 503 ||
+              response.status === 504) &&
+            attempt < maxAttempts
+          ) {
+            const jitter = Math.floor(Math.random() * 1000);
+            await setTimeout(attempt * 1500 + jitter);
+            continue;
+          }
+          break;
+        }
+
+        if (response.status >= 200 && response.status < 300) {
+          const parsed = JSON.parse(response.data);
+          const rawResults = parsed.results || [];
+          const formattedResults = rawResults.map((r) => ({
+            chunk_id: r.segment_id || r.chunk_id || "unknown",
+            title: r.title || "Untitled",
+            text: r.text || "",
+            score: r.rerank_score ?? r.dense_score ?? 0,
+            citation:
+              r.citation ||
+              (r.source_path
+                ? `${r.source_path}${r.line_start ? `#L${r.line_start}` : ""}`
+                : ""),
+            metadata: {
+              source_path: r.source_path,
+              heading_path: r.heading_path || [],
+              source_type: r.source_type,
+              page_start: r.page_start,
+              page_end: r.page_end,
+            },
+          }));
+
+          return {
+            action,
+            namespace: namespace || "core",
+            results: formattedResults,
+            total_count: parsed.total_count ?? formattedResults.length,
+            governed_status: "SUCCESS",
+          };
+        }
 
         return {
           action,
           namespace: namespace || "core",
-          results: formattedResults,
-          total_count: parsed.total_count ?? formattedResults.length,
-          governed_status: "SUCCESS",
+          results: [],
+          total_count: 0,
+          governed_status: "CONTROLLED_FAILURE",
+          error: `HTTP_${response.status}`,
+          message: response.data,
         };
+      } finally {
+        if (shouldAcquireSemaphore) {
+          sharedSearchSemaphore.release();
+        }
       }
-
-      return {
-        action,
-        namespace: namespace || "core",
-        results: [],
-        total_count: 0,
-        governed_status: "CONTROLLED_FAILURE",
-        error: `HTTP_${response.status}`,
-        message: response.data,
-      };
     } catch (error) {
       // Fail closed with CONTROLLED_FAILURE — NEVER fabricate results per ACTIVE.md BUG-07
       return {
