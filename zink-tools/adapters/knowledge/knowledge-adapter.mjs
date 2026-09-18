@@ -19,11 +19,15 @@ const FORBIDDEN_ACTIONS = new Set([
 ]);
 
 export class KnowledgeAdapter {
-  constructor(endpoint) {
+  constructor(endpoint, options = {}) {
     this.endpoint =
       endpoint ||
       process.env.KNOWLEDGE_ENDPOINT ||
-      "http://127.0.0.1:8080/knowledge";
+      "http://127.0.0.1:8000";
+    this.timeout =
+      options.timeout ||
+      Number(process.env.KNOWLEDGE_TIMEOUT_MS) ||
+      90000;
   }
 
   async queryKnowledge(input = {}, context = {}) {
@@ -104,7 +108,11 @@ export class KnowledgeAdapter {
               "Content-Type": "application/json",
               "Content-Length": Buffer.byteLength(requestPayload),
             },
-            timeout: 5000,
+            timeout:
+              input?.timeout ||
+              context?.timeout ||
+              this.timeout ||
+              90000,
           },
           (res) => {
             let data = "";
@@ -181,8 +189,9 @@ export class KnowledgeAdapter {
 export const defaultKnowledgeAdapter = new KnowledgeAdapter();
 
 export async function executeGovernedKnowledgeQuery(input, context, options) {
-  const adapter = options?.endpoint
-    ? new KnowledgeAdapter(options.endpoint)
-    : defaultKnowledgeAdapter;
+  const adapter =
+    options?.endpoint || options?.timeout
+      ? new KnowledgeAdapter(options?.endpoint, options)
+      : defaultKnowledgeAdapter;
   return adapter.queryKnowledge(input, context);
 }

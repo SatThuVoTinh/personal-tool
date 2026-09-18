@@ -326,6 +326,7 @@ export function registerTools(api) {
               endpoint:
                 process.env.KNOWLEDGE_ENDPOINT ||
                 "http://127.0.0.1:8080/knowledge",
+              timeout: 90000,
             },
           );
           return {
