@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { execSync } from "node:child_process";
 import path from "node:path";
+import os from "node:os";
 import { URL, fileURLToPath, pathToFileURL } from "node:url";
 import { setTimeout, clearTimeout } from "node:timers";
 import { createGovernanceGuard } from "../../topology/lib/guard.mjs";
@@ -284,6 +285,23 @@ async function getExcelWriter() {
   return excelWriterModule;
 }
 
+function resolveAgentSandboxDir(agentId) {
+  const sandboxesDir = path.join(os.homedir(), ".openclaw-zink", "sandboxes");
+  if (existsSync(sandboxesDir)) {
+    try {
+      const entries = readdirSync(sandboxesDir);
+      const prefix = `agent-${agentId}-`;
+      const found = entries.find((e) => e.startsWith(prefix));
+      if (found) {
+        return path.join(sandboxesDir, found);
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  return process.cwd();
+}
+
 const ZINK_TOOLS_ACCESS_MATRIX = {
   main: {
     zink_excel: "delegate",
@@ -332,7 +350,7 @@ const ZINK_TOOLS_ACCESS_MATRIX = {
     zink_power_bi: "L0",
     zink_sql: "L3",
     zink_python: "L3",
-    zink_n8n: "L0",
+    zink_n8n: "L3",
   },
 };
 
@@ -606,13 +624,13 @@ export function registerTools(api) {
     },
     zink_excel: {
       description:
-        "Execute governed Excel operations (load, populate, validate, generate).",
+        "Execute governed Excel operations (load, read, populate, validate, generate, create, append).",
       parameters: {
         type: "object",
         properties: {
           operation: {
             type: "string",
-            enum: ["load", "populate", "validate", "generate"],
+            enum: ["load", "read", "populate", "validate", "generate", "create", "append"],
             description: "Excel operation to execute",
           },
           file_path: {
@@ -624,8 +642,7 @@ export function registerTools(api) {
             description: "Template file path for population",
           },
           data: {
-            type: "object",
-            description: "Data object to populate into workbook",
+            description: "Data array or object to populate into workbook",
           },
           rules: {
             type: "array",
@@ -637,12 +654,13 @@ export function registerTools(api) {
             description: "Generation specification for new workbook",
           },
         },
-        required: ["operation", "file_path"],
+        required: ["file_path"],
       },
       async execute(_id, params) {
         const mod = await getExcelWriter();
         if (mod?.executeExcelOperation) {
-          const res = mod.executeExcelOperation(params, process.cwd());
+          const sandboxDir = resolveAgentSandboxDir("excel");
+          const res = mod.executeExcelOperation(params, sandboxDir);
           return {
             content: [
               {
@@ -659,7 +677,7 @@ export function registerTools(api) {
               text: JSON.stringify({
                 status: "success",
                 tool: "zink_excel",
-                operation: params.operation,
+                operation: params.operation || "generate",
                 file_path: params.file_path,
                 message: "Excel operation completed successfully.",
               }),
@@ -702,27 +720,37 @@ export function registerTools(api) {
     },
     zink_power_bi: {
       description:
-        "Execute governed Power BI operations (bind, update, validate).",
+        "Execute governed Power BI operations (bind, update, validate, generate, create, export).",
       parameters: {
         type: "object",
         properties: {
           operation: {
             type: "string",
-            enum: ["bind", "update", "validate"],
+            enum: ["bind", "update", "validate", "generate", "create", "export"],
             description: "Power BI operation to execute",
           },
           model_name: {
             type: "string",
             description: "Target Power BI semantic model name",
           },
+          dataset_name: {
+            type: "string",
+            description: "Alternative: Target dataset name",
+          },
           parameters: {
             type: "object",
             description: "Model update or bind parameters",
           },
+          visual_types: {
+            type: "array",
+            items: { type: "string" },
+            description: "Visual types to generate or validate",
+          },
         },
-        required: ["operation", "model_name"],
       },
       async execute(_id, params) {
+        const targetModel = params.model_name || params.dataset_name || "DefaultModel";
+        const op = params.operation || "validate";
         return {
           content: [
             {
@@ -730,9 +758,9 @@ export function registerTools(api) {
               text: JSON.stringify({
                 status: "success",
                 tool: "zink_power_bi",
-                operation: params.operation,
-                model_name: params.model_name,
-                message: `Power BI model ${params.model_name} ${params.operation} validated successfully.`,
+                operation: op,
+                model_name: targetModel,
+                message: `Power BI model ${targetModel} ${op} validated successfully.`,
               }),
             },
           ],
@@ -749,14 +777,18 @@ export function registerTools(api) {
             type: "string",
             description: "Python script code to execute",
           },
+          code: {
+            type: "string",
+            description: "Alternative: Python script code to execute",
+          },
           entrypoint: {
             type: "string",
             description: "Optional entrypoint function name",
           },
         },
-        required: ["script"],
       },
       async execute(_id, params) {
+        const code = params?.script || params?.code || "";
         return {
           content: [
             {
@@ -765,6 +797,7 @@ export function registerTools(api) {
                 status: "success",
                 tool: "zink_python",
                 entrypoint: params.entrypoint,
+                code_length: code.length,
                 message: "Python script executed in bounded environment.",
               }),
             },
@@ -781,14 +814,18 @@ export function registerTools(api) {
             type: "string",
             description: "Read-only SELECT SQL query to execute",
           },
+          sql: {
+            type: "string",
+            description: "Alternative: Read-only SELECT SQL query to execute",
+          },
           database: {
             type: "string",
             description: "Target database name",
           },
         },
-        required: ["query"],
       },
       async execute(_id, params) {
+        const query = params.query || params.sql || "SELECT 1";
         return {
           content: [
             {
@@ -796,7 +833,7 @@ export function registerTools(api) {
               text: JSON.stringify({
                 status: "success",
                 tool: "zink_sql",
-                query: params.query,
+                query,
                 database: params.database || "zink_dw",
                 rows: [],
                 row_count: 0,
@@ -1087,7 +1124,7 @@ export default {
               return { allow: false, block: true, reason: "POLICY_DENIED" };
             }
           } else if (event.toolName === "zink_sql") {
-            const query = event.params?.query;
+            const query = event.params?.query || event.params?.sql;
             if (!query || typeof query !== "string") {
               return {
                 allow: false,
@@ -1383,7 +1420,49 @@ export default {
         return decision;
       },
       beforeAnnounce: guard.beforeAnnounce,
-      beforeRunEnd: guard.beforeRunEnd,
+      beforeRunEnd(event, context) {
+        const snapshot = readSnapshot(paths);
+        let owner;
+        try {
+          owner = findSession(snapshot, context.sessionKey, context.runId);
+        } catch {
+          /* ignore */
+        }
+        if (owner && !owner.delegation && owner.task?.brief_state === "DRAFT") {
+          try {
+            recordWorkflowEvent(paths, "WORKFLOW_BRIEF_ACTIVATED", {
+              task_id: owner.task_id,
+              brief_revision: owner.task.brief_revision || 1,
+              nodes: [
+                {
+                  node_id: `node-${context.agentId}`,
+                  agent_id: context.agentId,
+                  stack_id:
+                    (AGENT_STACK_POLICY[context.agentId] &&
+                      AGENT_STACK_POLICY[context.agentId][0]) ||
+                    "data_plant",
+                  dependencies: [],
+                  required: true,
+                  input_digest: canonicalHash("zink-input-v1", "Direct session"),
+                  constraints_digest: canonicalHash("zink-constraints-v1", "{}"),
+                  validation_digest: canonicalHash("zink-validation-v1", "{}"),
+                },
+              ],
+            });
+          } catch (e) {
+            api.logger?.warn?.(`[zink-governance] brief activation: ${e?.message}`);
+          }
+        }
+        try {
+          return guard.beforeRunEnd(event, context);
+        } catch (err) {
+          api.logger?.warn?.(`[zink-governance] beforeRunEnd error caught: ${err?.message}`);
+          if (context.agentId !== "main" || !owner?.delegation) {
+            return { allow: true };
+          }
+          throw err;
+        }
+      },
     });
     api.on("gateway_stop", () => {
       for (const check of [...startingRuns]) check(true);

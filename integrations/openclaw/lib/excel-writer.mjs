@@ -150,30 +150,40 @@ export function buildWorkbookBuffer(
 export function executeExcelOperation(params, baseDir = process.cwd()) {
   const op = params?.operation || "generate";
   const rawPath = params?.file_path || "workbook.xlsx";
-  const normalizedPath = rawPath.endsWith(".xlsx")
-    ? rawPath
-    : `${rawPath}.xlsx`;
+  let cleanPath = rawPath;
+  if (cleanPath.startsWith("/workspace/")) {
+    cleanPath = cleanPath.slice("/workspace/".length);
+  } else if (cleanPath.startsWith("/workspace")) {
+    cleanPath = cleanPath.slice("/workspace".length);
+  }
+  const normalizedPath = cleanPath.endsWith(".xlsx")
+    ? cleanPath
+    : `${cleanPath}.xlsx`;
   const targetPath = path.isAbsolute(normalizedPath)
     ? normalizedPath
     : path.resolve(baseDir, normalizedPath);
 
-  if (op === "load") {
-    if (!fs.existsSync(targetPath)) {
+  if (op === "load" || op === "read") {
+    let checkPath = targetPath;
+    if (!fs.existsSync(checkPath) && fs.existsSync(path.resolve(process.cwd(), normalizedPath))) {
+      checkPath = path.resolve(process.cwd(), normalizedPath);
+    }
+    if (!fs.existsSync(checkPath)) {
       return {
         status: "error",
         tool: "zink_excel",
-        operation: "load",
+        operation: op,
         file_path: rawPath,
         error: `File not found: ${rawPath}`,
       };
     }
-    const stat = fs.statSync(targetPath);
+    const stat = fs.statSync(checkPath);
     return {
       status: "success",
       tool: "zink_excel",
-      operation: "load",
+      operation: op,
       file_path: rawPath,
-      absolute_path: targetPath,
+      absolute_path: checkPath,
       summary: {
         exists: true,
         size_bytes: stat.size,
@@ -184,7 +194,10 @@ export function executeExcelOperation(params, baseDir = process.cwd()) {
   }
 
   if (op === "validate") {
-    const exists = fs.existsSync(targetPath);
+    let exists = fs.existsSync(targetPath);
+    if (!exists && fs.existsSync(path.resolve(process.cwd(), normalizedPath))) {
+      exists = true;
+    }
     return {
       status: exists ? "success" : "error",
       tool: "zink_excel",
@@ -197,7 +210,7 @@ export function executeExcelOperation(params, baseDir = process.cwd()) {
     };
   }
 
-  // generate or populate
+  // generate, create, populate, append, write
   let rows = [];
   if (Array.isArray(params?.specification?.sheets?.[0]?.rows)) {
     rows = params.specification.sheets[0].rows;
@@ -215,24 +228,35 @@ export function executeExcelOperation(params, baseDir = process.cwd()) {
     rows = [["đã ổn thưa anh"]];
   }
 
-  const sheetName = params?.specification?.sheets?.[0]?.name || "Sheet1";
+  const sheetName = params?.specification?.sheets?.[0]?.name || params?.sheet_name || "Sheet1";
   const buf = buildWorkbookBuffer(rows, sheetName);
 
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
   fs.writeFileSync(targetPath, buf);
+
+  // Also write a copy to current working directory if targetPath is in sandbox
+  try {
+    const cwdCopy = path.resolve(process.cwd(), path.basename(targetPath));
+    if (cwdCopy !== targetPath) {
+      fs.writeFileSync(cwdCopy, buf);
+    }
+  } catch {
+    /* ignore secondary write */
+  }
 
   return {
     status: "success",
     tool: "zink_excel",
     operation: op,
     file_path: rawPath,
+    container_path: `/workspace/${path.basename(targetPath)}`,
     absolute_path: targetPath,
     summary: {
       rows: rows.length,
       columns: rows[0]?.length || 1,
       sheets: [sheetName],
       size_bytes: buf.length,
-      message: `Workbook ${op} completed successfully at ${rawPath}`,
+      message: `Workbook ${op} completed successfully at ${rawPath} (/workspace/${path.basename(targetPath)})`,
     },
   };
 }
