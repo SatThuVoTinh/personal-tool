@@ -21,7 +21,23 @@
       "ledgerRoot": { "type": "string" },
       "ownerDiscordId": { "type": "string", "pattern": "^[1-9][0-9]{16,19}$" },
       "ownerPrincipalRef": { "type": "string" },
-      "enabled": { "type": "boolean" }
+      "enabled": { "type": "boolean" },
+      "discordOfficeChannelId": {
+        "type": "string",
+        "pattern": "^[1-9][0-9]{16,19}$"
+      },
+      "discordResultsForumId": {
+        "type": "string",
+        "pattern": "^[1-9][0-9]{16,19}$"
+      },
+      "discordApprovalsForumId": {
+        "type": "string",
+        "pattern": "^[1-9][0-9]{16,19}$"
+      },
+      "discordIncidentsForumId": {
+        "type": "string",
+        "pattern": "^[1-9][0-9]{16,19}$"
+      }
     }
   }
 }
