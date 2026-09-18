@@ -3,7 +3,7 @@ import { validateContract } from "./schema.mjs";
 import { outcomeReasonAllowed, workflowAggregate } from "./runtime.mjs";
 
 const roles = {
-  main: ["o1", "o2"],
+  main: ["o1", "o2", "excel", "power-bi", "sql", "python"],
   o1: ["excel", "power-bi", "sql", "python"],
   o2: ["excel", "sql", "python"],
   excel: [],

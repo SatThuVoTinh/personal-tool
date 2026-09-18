@@ -579,7 +579,7 @@ export const TOPOLOGY_POLICY = Object.freeze({
   attachments: false,
 });
 export const AGENT_SPAWN_POLICY = Object.freeze({
-  main: Object.freeze(["o1", "o2"]),
+  main: Object.freeze(["o1", "o2", "excel", "power-bi", "sql", "python"]),
   o1: Object.freeze(["excel", "power-bi", "sql", "python"]),
   o2: Object.freeze(["excel", "sql", "python"]),
   excel: Object.freeze([]),
@@ -1020,6 +1020,10 @@ export function governancePluginFiles() {
     path.resolve(GOVERNANCE_PLUGIN_TEMPLATE, "../../lib/discord-formatter.mjs"),
     "utf8",
   );
+  assets["lib/excel-writer.mjs"] = readFileSync(
+    path.resolve(GOVERNANCE_PLUGIN_TEMPLATE, "../../lib/excel-writer.mjs"),
+    "utf8",
+  );
   for (const file of readdirSync(path.join(topology, "contracts")).sort()) {
     if (!/^[a-z-]+\.schema\.json$/u.test(file)) continue;
     assets[`contracts/${file}`] = readFileSync(
@@ -1064,7 +1068,8 @@ export function governancePluginFiles() {
       .replaceAll(
         '"../../lib/discord-formatter.mjs"',
         '"./lib/discord-formatter.mjs"',
-      ),
+      )
+      .replaceAll('"../../lib/excel-writer.mjs"', '"./lib/excel-writer.mjs"'),
   });
 }
 

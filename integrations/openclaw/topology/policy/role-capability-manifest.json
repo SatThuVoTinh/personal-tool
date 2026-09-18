@@ -5,7 +5,7 @@
   "roles": [
     {
       "id": "main",
-      "allowAgents": ["o1", "o2"],
+      "allowAgents": ["o1", "o2", "excel", "power-bi", "sql", "python"],
       "tools": [
         "agents_list",
         "session_status",
@@ -17,21 +17,13 @@
     {
       "id": "o1",
       "allowAgents": ["excel", "power-bi", "sql", "python"],
-      "tools": [
-        "session_status",
-        "sessions_spawn",
-        "sessions_yield"
-      ],
+      "tools": ["session_status", "sessions_spawn", "sessions_yield"],
       "capabilities": []
     },
     {
       "id": "o2",
       "allowAgents": ["excel", "sql", "python"],
-      "tools": [
-        "session_status",
-        "sessions_spawn",
-        "sessions_yield"
-      ],
+      "tools": ["session_status", "sessions_spawn", "sessions_yield"],
       "capabilities": ["zink_n8n"]
     },
     {
