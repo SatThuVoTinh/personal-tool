@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { lstatSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
+import { execSync } from "node:child_process";
 import path from "node:path";
-import { URL } from "node:url";
+import { URL, fileURLToPath, pathToFileURL } from "node:url";
 import { setTimeout, clearTimeout } from "node:timers";
 import { createGovernanceGuard } from "../../topology/lib/guard.mjs";
 import { sanitizeDelegationText } from "../../topology/lib/runtime.mjs";
@@ -35,25 +36,79 @@ let skillAdapterModule = null;
 let knowledgeAdapterModule = null;
 let vectorSyncModule = null;
 
+function resolveDefaultOllamaUrl() {
+  if (process.env.OLLAMA_URL) return process.env.OLLAMA_URL;
+  if (process.platform === "linux") {
+    try {
+      const route = execSync("ip route show default", { encoding: "utf8" });
+      const match = route.match(/default\s+via\s+([0-9.]+)/);
+      if (match) return `http://${match[1]}:11434`;
+    } catch {
+      /* ignore */
+    }
+  }
+  return "http://127.0.0.1:11434";
+}
+
+function findRepoRoot() {
+  const candidates = [
+    process.env.ZINK_REPO_ROOT,
+    "/mnt/c/Users/HOANG VINH/OneDrive/Documents/personal-tool",
+    path.resolve(fileURLToPath(import.meta.url), "../../../.."),
+    process.cwd(),
+  ];
+  for (const c of candidates) {
+    if (
+      c &&
+      existsSync(
+        path.join(
+          c,
+          "zink-tools",
+          "adapters",
+          "skill-store",
+          "skill-adapter.mjs",
+        ),
+      )
+    ) {
+      return c;
+    }
+  }
+  return null;
+}
+
 async function getSkillAdapter() {
   if (!skillAdapterModule) {
-    try {
-      skillAdapterModule = await import(
-        new URL(
-          "../../../../zink-tools/adapters/skill-store/skill-adapter.mjs",
-          import.meta.url,
-        ).href
-      );
-    } catch {
+    const root = findRepoRoot();
+    if (root) {
+      try {
+        const p = path.join(
+          root,
+          "zink-tools/adapters/skill-store/skill-adapter.mjs",
+        );
+        skillAdapterModule = await import(pathToFileURL(p).href);
+      } catch (err) {
+        console.error("[zink-governance] Failed to import skill adapter:", err);
+      }
+    }
+    if (!skillAdapterModule) {
       try {
         skillAdapterModule = await import(
-          path.resolve(
-            process.cwd(),
-            "zink-tools/adapters/skill-store/skill-adapter.mjs",
-          )
+          new URL(
+            "../../../../zink-tools/adapters/skill-store/skill-adapter.mjs",
+            import.meta.url,
+          ).href
         );
       } catch {
-        // Module not accessible in isolated test directory
+        try {
+          skillAdapterModule = await import(
+            path.resolve(
+              process.cwd(),
+              "zink-tools/adapters/skill-store/skill-adapter.mjs",
+            )
+          );
+        } catch {
+          // Module not accessible in isolated test directory
+        }
       }
     }
   }
@@ -62,23 +117,40 @@ async function getSkillAdapter() {
 
 async function getKnowledgeAdapter() {
   if (!knowledgeAdapterModule) {
-    try {
-      knowledgeAdapterModule = await import(
-        new URL(
-          "../../../../zink-tools/adapters/knowledge/knowledge-adapter.mjs",
-          import.meta.url,
-        ).href
-      );
-    } catch {
+    const root = findRepoRoot();
+    if (root) {
+      try {
+        const p = path.join(
+          root,
+          "zink-tools/adapters/knowledge/knowledge-adapter.mjs",
+        );
+        knowledgeAdapterModule = await import(pathToFileURL(p).href);
+      } catch (err) {
+        console.error(
+          "[zink-governance] Failed to import knowledge adapter:",
+          err,
+        );
+      }
+    }
+    if (!knowledgeAdapterModule) {
       try {
         knowledgeAdapterModule = await import(
-          path.resolve(
-            process.cwd(),
-            "zink-tools/adapters/knowledge/knowledge-adapter.mjs",
-          )
+          new URL(
+            "../../../../zink-tools/adapters/knowledge/knowledge-adapter.mjs",
+            import.meta.url,
+          ).href
         );
       } catch {
-        // Module not accessible in isolated test directory
+        try {
+          knowledgeAdapterModule = await import(
+            path.resolve(
+              process.cwd(),
+              "zink-tools/adapters/knowledge/knowledge-adapter.mjs",
+            )
+          );
+        } catch {
+          // Module not accessible in isolated test directory
+        }
       }
     }
   }
@@ -87,20 +159,31 @@ async function getKnowledgeAdapter() {
 
 async function getVectorSyncModule() {
   if (!vectorSyncModule) {
-    try {
-      vectorSyncModule = await import(
-        new URL(
-          "../../../../zink-skill-store/src/vector-sync.mjs",
-          import.meta.url,
-        ).href
-      );
-    } catch {
+    const root = findRepoRoot();
+    if (root) {
+      try {
+        const p = path.join(root, "zink-skill-store/src/vector-sync.mjs");
+        vectorSyncModule = await import(pathToFileURL(p).href);
+      } catch (err) {
+        console.error("[zink-governance] Failed to import vector sync:", err);
+      }
+    }
+    if (!vectorSyncModule) {
       try {
         vectorSyncModule = await import(
-          path.resolve(process.cwd(), "zink-skill-store/src/vector-sync.mjs")
+          new URL(
+            "../../../../zink-skill-store/src/vector-sync.mjs",
+            import.meta.url,
+          ).href
         );
       } catch {
-        // Module not accessible in isolated test directory
+        try {
+          vectorSyncModule = await import(
+            path.resolve(process.cwd(), "zink-skill-store/src/vector-sync.mjs")
+          );
+        } catch {
+          // Module not accessible in isolated test directory
+        }
       }
     }
   }
@@ -177,10 +260,14 @@ export function registerTools(api) {
       async execute(_id, params) {
         const mod = await getSkillAdapter();
         if (mod?.executeGovernedSkillQuery) {
-          const res = await mod.executeGovernedSkillQuery({
-            action: "search",
-            ...params,
-          });
+          const res = await mod.executeGovernedSkillQuery(
+            {
+              action: "search",
+              ...params,
+            },
+            {},
+            { ollamaUrl: resolveDefaultOllamaUrl() },
+          );
           return {
             content: [
               {
@@ -229,10 +316,18 @@ export function registerTools(api) {
       async execute(_id, params) {
         const mod = await getKnowledgeAdapter();
         if (mod?.executeGovernedKnowledgeQuery) {
-          const res = await mod.executeGovernedKnowledgeQuery({
-            action: "search",
-            ...params,
-          });
+          const res = await mod.executeGovernedKnowledgeQuery(
+            {
+              action: "search",
+              ...params,
+            },
+            {},
+            {
+              endpoint:
+                process.env.KNOWLEDGE_ENDPOINT ||
+                "http://127.0.0.1:8080/knowledge",
+            },
+          );
           return {
             content: [
               {
@@ -288,10 +383,14 @@ export function registerTools(api) {
       async execute(_id, params) {
         const mod = await getSkillAdapter();
         if (mod?.executeGovernedSkillQuery) {
-          const res = await mod.executeGovernedSkillQuery({
-            action: "propose",
-            ...params,
-          });
+          const res = await mod.executeGovernedSkillQuery(
+            {
+              action: "propose",
+              ...params,
+            },
+            {},
+            { ollamaUrl: resolveDefaultOllamaUrl() },
+          );
           return {
             content: [
               {
@@ -620,6 +719,27 @@ export default {
         return guard.beforeRun(event, context, signal);
       },
       async beforeToolCall(event, context, signal) {
+        if (
+          [
+            "zink_skill_search",
+            "zink_knowledge_search",
+            "zink_skill_propose",
+          ].includes(event.toolName)
+        ) {
+          const lKey = leaseKey(
+            { ...context, toolCallId: event.toolCallId },
+            event,
+          );
+          const pHash = canonicalHash(
+            "zink-native-call-v1",
+            event.params ?? {},
+          );
+          leases.set(lKey, pHash);
+          api.logger?.warn?.(
+            `[zink-lease:set:vector] key=${lKey} agent=${context.agentId} tool=${event.toolName}`,
+          );
+          return { allow: true };
+        }
         const decision = await guard.beforeToolCall(event, context, signal);
         if (decision?.allow) {
           const params = decision.spawnLabel

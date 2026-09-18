@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
 import { scanCatalog } from "./catalog.mjs";
 import {
   deriveSemanticMetadata,
@@ -11,7 +11,22 @@ import {
 
 export const EXPECTED_MODEL_NAME = "bge-m3:latest";
 export const EXPECTED_DIMENSIONS = 1024;
-export const DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434";
+
+export function resolveDefaultOllamaUrl() {
+  if (process.env.OLLAMA_URL) return process.env.OLLAMA_URL;
+  if (process.platform === "linux") {
+    try {
+      const route = execSync("ip route show default", { encoding: "utf8" });
+      const match = route.match(/default\s+via\s+([0-9.]+)/);
+      if (match) return `http://${match[1]}:11434`;
+    } catch {
+      // Fall through to localhost
+    }
+  }
+  return "http://127.0.0.1:11434";
+}
+
+export const DEFAULT_OLLAMA_URL = resolveDefaultOllamaUrl();
 
 /**
  * Executes a PostgreSQL command via docker exec or custom query executor.

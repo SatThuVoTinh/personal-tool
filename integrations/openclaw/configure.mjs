@@ -460,6 +460,7 @@ async function main() {
       "694a89ae93d6685ff37562828873e7120bb07353b8d3e6e213fd5b080106bf8f",
       "af0ce312e23a0d3be9a10c3bb350b3d6b7d345b1ca7fc49ae13efd41219e5c93",
       "fdb72c9f058cb29e3ba4e3ae3a394d1f84e805a274e8614e592018d073e88015",
+      "17b4be782cebc34df7a363c095865653cc8351ba50e08c1206ce4981d6c7e6d1",
     ],
   );
   assertRegularOrMissing(output.identityKeyPath);
@@ -564,6 +565,7 @@ async function main() {
       "694a89ae93d6685ff37562828873e7120bb07353b8d3e6e213fd5b080106bf8f",
       "af0ce312e23a0d3be9a10c3bb350b3d6b7d345b1ca7fc49ae13efd41219e5c93",
       "fdb72c9f058cb29e3ba4e3ae3a394d1f84e805a274e8614e592018d073e88015",
+      "17b4be782cebc34df7a363c095865653cc8351ba50e08c1206ce4981d6c7e6d1",
     ],
   );
   if (!existsSync(output.identityKeyPath))

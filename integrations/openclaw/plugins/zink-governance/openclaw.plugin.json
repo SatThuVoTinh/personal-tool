@@ -5,9 +5,12 @@
   "contracts": {
     "tools": [
       "zink_excel",
+      "zink_knowledge_search",
       "zink_n8n",
       "zink_power_bi",
       "zink_python",
+      "zink_skill_propose",
+      "zink_skill_search",
       "zink_sql"
     ]
   },

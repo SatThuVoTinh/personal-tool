@@ -275,21 +275,31 @@ describe("T3 Domain A - Registry & Capability Policy", () => {
       registerTool: (t) => registered.push(t.id),
     };
     registerTools(mockHostApi);
-    const expected = [
+    const expectedRegistered = [
+      "zink_excel",
+      "zink_power_bi",
+      "zink_sql",
+      "zink_python",
+      "zink_n8n",
+      "zink_skill_search",
+      "zink_knowledge_search",
+      "zink_skill_propose",
+    ];
+    const expectedCallable = [
       "zink_excel",
       "zink_power_bi",
       "zink_sql",
       "zink_python",
       "zink_n8n",
     ];
-    assert.deepStrictEqual(registered.sort(), expected.sort());
+    assert.deepStrictEqual(registered.sort(), expectedRegistered.sort());
     assert.deepStrictEqual(
       Object.keys(CALLABLE_TOOL_REGISTRY).sort(),
-      expected.sort(),
+      expectedCallable.sort(),
     );
     assert.deepStrictEqual(
       Object.keys(CALLABLE_DISPATCH_REGISTRY).sort(),
-      expected.sort(),
+      expectedCallable.sort(),
     );
   });
 
