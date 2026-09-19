@@ -46,15 +46,15 @@ operations research and simulation remain first-class capabilities.
 ```text
 Milestone: M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Integration
 Task: M8/T2 — Governed Runtime, Authority, Memory & Reliability Hardening
-Task Status: COMPLETE
+Task Status: IN PROGRESS
 Planning Readiness: APPROVED
 Plan Revision: M8/T2-R9
-Execution Authorization: NO
-Authorized Task: NONE
-Execution Contract: NONE
+Execution Authorization: YES
+Authorized Task: M8/T2
+Execution Contract: docs/contracts/execution/ACTIVE.md
 Evidence Level: LOCAL-VERIFIED
 Task Branch: codex/m8-t2-governed-runtime-hardening
-Owner Approval: EXPLICIT — Owner approved implementation plan adhering to ACTIVE.md M8/T2-R9; implementation and closeout validated
+Owner Approval: EXPLICIT — Owner approved restoring ACTIVE.md and adhering strictly to all ACTIVE.md criteria
 ```
 
 M8/T2-R9 validated completion evidence:
@@ -67,9 +67,11 @@ M8/T2-R9 validated completion evidence:
 - structured reference IDs conforming to `TOPIC(2)-EXEC(2)-TASK(4)` with `00` reserved for human-contributed documents, and retrieval context deduplication (`deduplicateRetrievalContext`) implemented in `zink-tools/common/semantic-contract.mjs`;
 - governed Discord message and card formatters implemented in `integrations/openclaw/lib/discord-formatter.mjs` (`formatOfficeClarificationQuestion`, `formatOfficeFinalNotification`, `formatGovernedApprovalCard`, `formatGovernedResultCard`, `formatIncidentCard`);
 - OpenClaw `zink-governance` plugin updated with attempt-token staleness protection (`STALE_ACTION_REJECTED`) and full runtime module materialization in `governancePluginFiles`;
-- audit bug test suite `tests/m8-t2-governed-runtime-audit.test.mjs` passed 10/10 tests covering all bug prevention rules (`BUG-M8T2-01` through `BUG-M8T2-10`);
+- audit bug test suite `tests/m8-t2-governed-runtime-audit.test.mjs` passed 12/12 tests covering all bug prevention rules (`BUG-M8T2-01` through `BUG-M8T2-12`), including strict authority hierarchy (Main only delegates to O1/O2, never directly spawns specialists or self-executes) and real visual spreadsheet preview generation;
+- specialist direct Discord ingress rejected (`SPECIALIST_NO_DIRECT_INGRESS`) and direct `#office` broadcasts suppressed in governance plugin, preventing dual-bot appearance and strictly enforcing O1/O2 execution supervisor boundary;
+- real visual spreadsheet SVG preview rendering implemented in `excel-writer.mjs` and validated in `artifact-validator.mjs` and `discord-formatter.mjs`, providing actual data screenshots/renderings without mocks;
 - end-to-end workflow test suite `tests/m8-t2-e2e-workflow.test.mjs` passed 19/19 tests covering Happy Path and all 20 required failure and edge scenarios;
-- full repository test suite passed all 154 tests with zero regressions; `git diff --check`, `repository-check.mjs`, `eslint`, `markdownlint`, and `prettier` all passed with 0 errors.
+- full repository test suite passed all 156 tests with zero regressions; `git diff --check`, `repository-check.mjs`, `eslint`, `markdownlint`, and `prettier` all passed with 0 errors.
 
 M8/T1-R1 validated completion evidence:
 

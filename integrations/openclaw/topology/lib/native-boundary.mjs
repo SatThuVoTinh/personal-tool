@@ -45,15 +45,32 @@ function resolveGovernance(config) {
   const entry = config?.plugins?.entries?.["zink-governance"];
   if (entry?.enabled !== true) return { enabled: false };
   const scope = entry.config?.ledgerRoot;
+  let guard = typeof scope === "string" ? registry().get(scope) : undefined;
+  if (!guard && typeof scope === "string") {
+    // Normalization check in case of path separator / trailing slash differences
+    const normScope = scope.replace(/\\/g, "/").replace(/\/+$/, "");
+    for (const [registeredScope, registeredGuard] of registry().entries()) {
+      if (
+        registeredScope.replace(/\\/g, "/").replace(/\/+$/, "") === normScope
+      ) {
+        guard = registeredGuard;
+        break;
+      }
+    }
+  }
   return {
     enabled: true,
-    guard: typeof scope === "string" ? registry().get(scope) : undefined,
+    guard,
   };
 }
 
 async function callGuard(method, event, context, signal) {
-  if (signal?.aborted || typeof method !== "function")
+  if (signal?.aborted || typeof method !== "function") {
+    if (typeof method !== "function") {
+      console.error("[zink-native-gate] callGuard: guard method is not a function or guard unregistered");
+    }
     throw new Error("GOVERNANCE_UNAVAILABLE");
+  }
   let abort;
   const interrupted = new Promise((_, reject) => {
     abort = () => reject(new Error("GOVERNANCE_ABORTED"));
@@ -175,7 +192,8 @@ export function installNativeToolGate(agent, config, context) {
         delete event.args.taskName;
       }
       return nativeDecision;
-    } catch {
+    } catch (err) {
+      console.error("[zink-native-gate:error] beforeToolCall blocked:", err?.message || err);
       // Never return exception text: a provider/plugin error may contain input.
       return { block: true, reason: "GOVERNANCE_UNAVAILABLE" };
     }

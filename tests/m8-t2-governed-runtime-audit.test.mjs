@@ -38,6 +38,9 @@ import {
   formatIncidentCard,
 } from "../integrations/openclaw/lib/discord-formatter.mjs";
 
+import { AGENT_SPAWN_POLICY } from "../integrations/openclaw/lib/policy.mjs";
+import { executeExcelOperation } from "../integrations/openclaw/lib/excel-writer.mjs";
+
 describe("M8/T2 Governed Runtime, Authority, Memory & Reliability Hardening — Audit Bug Register", () => {
   // =========================================================================
   // BUG-M8T2-01: Decouple execution finish from task completion
@@ -417,5 +420,85 @@ describe("M8/T2 Governed Runtime, Authority, Memory & Reliability Hardening — 
     assert.match(incCard, /SỰ CỐ/);
     assert.match(incCard, /INC-001/);
     assert.match(incCard, /INVESTIGATING/);
+  });
+
+  // =========================================================================
+  // BUG-M8T2-11: Strict Authority Hierarchy & Spawn Policy Enforcement
+  // =========================================================================
+  test("BUG-M8T2-11: Main only delegates to O1 and O2; O1/O2 manage distinct specialist domains", () => {
+    // Main is Control Supervisor: strictly prohibited from spawning specialists directly
+    assert.deepEqual([...AGENT_SPAWN_POLICY.main], ["o1", "o2"]);
+    assert.equal(AGENT_SPAWN_POLICY.main.includes("excel"), false);
+    assert.equal(AGENT_SPAWN_POLICY.main.includes("power-bi"), false);
+    assert.equal(AGENT_SPAWN_POLICY.main.includes("sql"), false);
+    assert.equal(AGENT_SPAWN_POLICY.main.includes("python"), false);
+
+    // O1 manages ETL specialists
+    assert.deepEqual([...AGENT_SPAWN_POLICY.o1], ["excel", "sql", "python"]);
+
+    // O2 manages Analytics & Visualization specialists
+    assert.deepEqual([...AGENT_SPAWN_POLICY.o2], ["power-bi", "python"]);
+
+    // Specialists have empty spawn lists (pure execution workers)
+    for (const spec of ["excel", "power-bi", "sql", "python"]) {
+      assert.deepEqual([...AGENT_SPAWN_POLICY[spec]], []);
+    }
+  });
+
+  // =========================================================================
+  // BUG-M8T2-12: Real Visual Spreadsheet Preview Generation & Multi-Tier Linking
+  // =========================================================================
+  test("BUG-M8T2-12: Excel operation produces real visual SVG preview alongside xlsx file", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "zink-excel-prev-"));
+    const excelFile = path.join(tempDir, "revenue_report.xlsx");
+    try {
+      const res = executeExcelOperation(
+        {
+          operation: "generate",
+          file_path: excelFile,
+          sheet_name: "DoanhThu2026",
+          data: [
+            ["Tháng", "Doanh Thu (VNĐ)", "Chi Phí (VNĐ)", "Lợi Nhuận"],
+            ["T1", "150,000,000", "90,000,000", "60,000,000"],
+            ["T2", "180,000,000", "100,000,000", "80,000,000"],
+          ],
+        },
+        tempDir,
+      );
+
+      assert.equal(res.status, "success");
+      assert.ok(res.preview_image_path);
+      assert.match(res.preview_image_path, /revenue_report_preview\.svg$/);
+
+      // Verify artifact evaluation detects Excel and links real visual preview
+      const gate = evaluateResultGate({
+        artifactPath: excelFile,
+        technicalConfig: { expectedType: "excel" },
+      });
+
+      assert.equal(gate.technical.status, VALIDATION_STATUS.PASS);
+      assert.equal(gate.preview.available, true);
+      assert.equal(gate.preview.type, "excel");
+      assert.match(gate.preview.previewText, /Hình ảnh Preview thực tế/);
+      assert.match(gate.preview.previewText, /revenue_report_preview\.svg/);
+
+      // Result card includes visual preview image reference
+      const card = formatGovernedResultCard({
+        taskId: "TASK-042",
+        attempt: 1,
+        executionStatus: "EXECUTION_FINISHED",
+        technicalValidation: "PASS",
+        businessValidation: "PASS",
+        preview: gate.preview.previewText,
+        previewImage: gate.preview.previewImage,
+        artifact: excelFile,
+        keyFindings: "Doanh thu Q1 tăng trưởng tốt.",
+      });
+
+      assert.match(card, /revenue_report_preview\.svg/);
+      assert.match(card, /Hình ảnh Preview Trực quan/);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
   });
 });

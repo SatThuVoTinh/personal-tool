@@ -1783,6 +1783,10 @@ export default {
         !ids.has(context.agentId)
       )
         throw new Error("POLICY_DENIED");
+      // Direct intake in #office is only allowed for coordinators (main, o1, o2). Specialists are internal workers only.
+      if (["excel", "power-bi", "sql", "python"].includes(context.agentId)) {
+        throw new Error("SPECIALIST_NO_DIRECT_INGRESS");
+      }
       if (
         typeof context.currentMessageId !== "string" ||
         !/^[1-9][0-9]{16,19}$/u.test(context.currentMessageId)
@@ -1910,6 +1914,13 @@ export default {
         ctx.agentId ||
         ctx.accountId ||
         (agentIdMatch ? agentIdMatch[1] : undefined);
+      // Suppress specialist messages: specialists are background workers, never direct broadcasters to #office
+      if (["excel", "power-bi", "sql", "python"].includes(agentId)) {
+        api.logger?.warn?.(
+          `[zink-governance] Suppressed specialist '${agentId}' direct broadcast to Discord`,
+        );
+        return { block: true, cancel: true };
+      }
       const agentName = AGENT_DISPLAY_NAMES[agentId] ?? agentId ?? "Zink Bot";
       return {
         content: formatForDiscord(event.content, { agentName }),

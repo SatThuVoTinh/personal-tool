@@ -618,6 +618,7 @@ export function formatGovernedResultCard({
   technicalValidation = "PASS",
   businessValidation = "PASS",
   preview = "",
+  previewImage = null,
   artifact = "",
   keyFindings = "",
 }) {
@@ -628,6 +629,9 @@ export function formatGovernedResultCard({
   const cleanArtifact = sanitizeDiscordText(
     artifact || "*(Không có tệp đính kèm)*",
   );
+  const previewImgSection = previewImage
+    ? `\n🖼️ **Hình ảnh Preview Trực quan (Screenshot/Render):** \`${sanitizeDiscordText(previewImage)}\` *(đã đính kèm)*\n`
+    : "";
 
   return [
     `### 📋 [NGHIỆM THU KẾT QUẢ] — Tác vụ ${cleanTask}`,
@@ -640,9 +644,9 @@ export function formatGovernedResultCard({
     `**Kiểm định Kỹ thuật:** \`${technicalValidation}\``,
     `**Kiểm định Nghiệp vụ:** \`${businessValidation}\``,
     "",
-    "#### 🔍 Dữ liệu Mẫu Thực tế (Actual Preview):",
+    "#### 🔍 Dữ liệu Mẫu & Xem trước Thực tế (Actual Preview):",
     preview || "*(Không có dữ liệu trích xuất)*",
-    "",
+    previewImgSection,
     "#### 📦 Tệp Sản phẩm (Artifact):",
     `- ${cleanArtifact}`,
     "",
@@ -654,7 +658,7 @@ export function formatGovernedResultCard({
     "- Bấm **[ACCEPT / COMPLETE]** để nghiệm thu và hoàn thành tác vụ.",
     "- Bấm **[REJECT]** để bác bỏ kết quả.",
     "- Bấm **[REQUEST REVISION]** để yêu cầu chạy lại/tinh chỉnh.",
-  ].join("\n");
+  ].filter((line) => line !== null).join("\n");
 }
 
 /**

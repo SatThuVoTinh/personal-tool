@@ -308,6 +308,26 @@ export function generateArtifactPreview({ filePath, maxRows = 5 }) {
       };
     }
 
+    if (ext === ".xlsx" || ext === ".xls") {
+      const stat = statSync(filePath);
+      const svgPath = filePath.replace(/\.xlsx$/i, "_preview.svg");
+      const pngPath = filePath.replace(/\.xlsx$/i, "_preview.png");
+      const hasSvg = existsSync(svgPath);
+      const hasPng = existsSync(pngPath);
+      const previewImg = hasPng ? path.basename(pngPath) : hasSvg ? path.basename(svgPath) : null;
+      let text = `📊 **Bảng tính Excel:** \`${path.basename(filePath)}\` (${(stat.size / 1024).toFixed(1)} KB)`;
+      if (previewImg) {
+        text += `\n🖼️ **Hình ảnh Preview thực tế:** \`${previewImg}\` (đã đính kèm để xem trực tiếp)`;
+      }
+      return {
+        available: true,
+        type: "excel",
+        previewImage: previewImg,
+        previewImagePath: hasPng ? pngPath : hasSvg ? svgPath : null,
+        previewText: text,
+      };
+    }
+
     // Default file info
     const stat = statSync(filePath);
     return {

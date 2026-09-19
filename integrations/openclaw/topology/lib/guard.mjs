@@ -29,10 +29,38 @@ import {
 } from "./runtime.mjs";
 
 let policy;
-let AGENT_IDS = [];
-let STACK_IDS = [];
-let OPENCLAW_BUILT_IN_TOOL_IDS = [];
-let BUILT_IN_TOOL_POLICY = {};
+let AGENT_IDS = [
+  "main",
+  "o1",
+  "o2",
+  "excel",
+  "power-bi",
+  "sql",
+  "python",
+];
+let STACK_IDS = [
+  "semantic",
+  "intelligence",
+  "decision",
+  "infrastructure",
+  "data_plant",
+];
+let OPENCLAW_BUILT_IN_TOOL_IDS = [
+  "session_status",
+  "agents_list",
+  "sessions_spawn",
+  "sessions_yield",
+  "subagent_announce",
+];
+let BUILT_IN_TOOL_POLICY = {
+  main: ["session_status", "agents_list", "sessions_spawn", "sessions_yield"],
+  o1: ["session_status", "sessions_spawn", "sessions_yield"],
+  o2: ["session_status", "sessions_spawn", "sessions_yield"],
+  excel: ["session_status"],
+  "power-bi": ["session_status"],
+  sql: ["session_status"],
+  python: ["session_status"],
+};
 let TOOL_POLICY = {};
 let OPERATION_POLICY = {};
 let AUTHORIZATION_MODES = {};
