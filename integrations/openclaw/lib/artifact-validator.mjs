@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, openSync, readSync, closeSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
 /**
@@ -8,6 +8,19 @@ import path from "node:path";
  * - Business Validation (objectives, constraints, KPI boundaries, rule consistency).
  * - CRITICAL INVARIANT: Technical PASS + Business FAIL = RESULT BLOCKED (never send as success).
  * - Real Preview: Derived directly from real artifact data rows and KPIs; NO MOCKS.
+ *
+ * Supported types:
+ *   excel    — .xlsx / .xls
+ *   csv      — .csv
+ *   json     — .json
+ *   sql      — .sql   (SQL script; static content inspection)
+ *   python   — .py    (Python script; static content inspection)
+ *   powerbi  — .pbix / .pbit  (Power BI; ZIP magic byte check)
+ *   parquet  — .parquet       (Apache Parquet; PAR1 magic byte check)
+ *   pdf      — .pdf           (%PDF- magic byte check)
+ *   docx     — .docx / .doc   (DOCX; ZIP magic byte check)
+ *   markdown — .md / .markdown
+ *   generic  — all others
  */
 
 export const VALIDATION_STATUS = Object.freeze({
@@ -16,12 +29,105 @@ export const VALIDATION_STATUS = Object.freeze({
   BLOCKED: "BLOCKED",
 });
 
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Reads the first N bytes from a file as a Buffer without loading the whole file.
+ * Returns an empty Buffer on error.
+ * @param {string} filePath
+ * @param {number} n
+ * @returns {Buffer}
+ */
+function readFirstBytes(filePath, n) {
+  try {
+    const buf = Buffer.alloc(n);
+    const fd = openSync(filePath, "r");
+    const read = readSync(fd, buf, 0, n, 0);
+    closeSync(fd);
+    return buf.subarray(0, read);
+  } catch {
+    return Buffer.alloc(0);
+  }
+}
+
+/**
+ * Reads the last N bytes from a file.
+ * Returns an empty Buffer on error.
+ * @param {string} filePath
+ * @param {number} n
+ * @returns {Buffer}
+ */
+function readLastBytes(filePath, n) {
+  try {
+    const stat = statSync(filePath);
+    if (stat.size < n) return Buffer.alloc(0);
+    const buf = Buffer.alloc(n);
+    const fd = openSync(filePath, "r");
+    const read = readSync(fd, buf, 0, n, Math.max(0, stat.size - n));
+    closeSync(fd);
+    return buf.subarray(0, read);
+  } catch {
+    return Buffer.alloc(0);
+  }
+}
+
+/**
+ * Derives the canonical type string from a file extension or explicit override.
+ * @param {string|undefined} expectedType
+ * @param {string} ext  lowercase extension including dot
+ * @returns {string}
+ */
+function deriveType(expectedType, ext) {
+  if (expectedType) return expectedType;
+  switch (ext) {
+    case ".xlsx":
+    case ".xls":
+      return "excel";
+    case ".csv":
+      return "csv";
+    case ".json":
+      return "json";
+    case ".sql":
+      return "sql";
+    case ".py":
+      return "python";
+    case ".pbix":
+    case ".pbit":
+      return "powerbi";
+    case ".parquet":
+      return "parquet";
+    case ".pdf":
+      return "pdf";
+    case ".docx":
+    case ".doc":
+      return "docx";
+    case ".md":
+    case ".markdown":
+      return "markdown";
+    default:
+      return "generic";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Technical validation
+// ---------------------------------------------------------------------------
+
 /**
  * Validates technical integrity of an artifact file.
+ *
+ * @param {object} opts
+ * @param {string} opts.filePath
+ * @param {string} [opts.expectedType]  "excel"|"csv"|"json"|"sql"|"python"|"powerbi"|"parquet"|"pdf"|"docx"|"markdown"|"generic"
+ * @param {string[]} [opts.expectedFields]
+ * @param {number} [opts.minBytes]
+ * @returns {object}
  */
 export function validateTechnicalArtifact({
   filePath,
-  expectedType, // "excel" | "csv" | "json" | "markdown" | "generic"
+  expectedType,
   expectedFields = [],
   minBytes = 1,
 }) {
@@ -45,8 +151,10 @@ export function validateTechnicalArtifact({
   result.checks.existence = true;
 
   // 2. File size & readability check
+  let fileSizeBytes;
   try {
     const stat = statSync(filePath);
+    fileSizeBytes = stat.size;
     result.checks.sizeBytes = stat.size;
     if (stat.size < minBytes) {
       result.status = VALIDATION_STATUS.FAIL;
@@ -68,17 +176,8 @@ export function validateTechnicalArtifact({
 
   // 3. Content parsing & schema check by type
   const ext = path.extname(filePath).toLowerCase();
-  const inferredType =
-    expectedType ||
-    (ext === ".xlsx" || ext === ".xls"
-      ? "excel"
-      : ext === ".csv"
-        ? "csv"
-        : ext === ".json"
-          ? "json"
-          : ext === ".md"
-            ? "markdown"
-            : "generic");
+  const inferredType = deriveType(expectedType, ext);
+  result.checks.inferredType = inferredType;
 
   if (inferredType === "json") {
     try {
@@ -86,7 +185,6 @@ export function validateTechnicalArtifact({
       const parsed = JSON.parse(content);
       result.checks.jsonParse = true;
 
-      // Validate expected fields if specified
       if (
         expectedFields.length > 0 &&
         typeof parsed === "object" &&
@@ -138,16 +236,140 @@ export function validateTechnicalArtifact({
   } else if (inferredType === "excel") {
     // Basic structural presence check
     result.checks.format = "EXCEL";
-    if (statSync(filePath).size < 100) {
+    if (fileSizeBytes < 100) {
       result.status = VALIDATION_STATUS.FAIL;
       result.errors.push(
         "CORRUPT_EXCEL: File size too small to be valid workbook",
       );
     }
+  } else if (inferredType === "sql") {
+    try {
+      const content = readFileSync(filePath, "utf8");
+      if (content.trim().length === 0) {
+        result.status = VALIDATION_STATUS.FAIL;
+        result.errors.push("EMPTY_SQL: SQL file has no content");
+      } else {
+        // Check for at least one recognizable SQL keyword
+        const SQL_KEYWORDS = /\b(SELECT|INSERT|UPDATE|DELETE|CREATE|DROP|WITH|MERGE|CALL|EXEC)\b/i;
+        result.checks.hasSqlKeyword = SQL_KEYWORDS.test(content);
+        if (!result.checks.hasSqlKeyword) {
+          result.errors.push(
+            "WARN_SQL_NO_KEYWORD: File contains no recognizable SQL keyword",
+          );
+          // Treat as warning only — do not FAIL; file may be valid DDL fragments
+        }
+        const lines = content.split(/\r?\n/);
+        result.checks.lineCount = lines.length;
+        const stmtCount = (content.match(/;/g) || []).length;
+        result.checks.statementCount = stmtCount;
+      }
+    } catch (readErr) {
+      result.status = VALIDATION_STATUS.FAIL;
+      result.errors.push(`SQL_READ_ERROR: ${readErr?.message}`);
+    }
+  } else if (inferredType === "python") {
+    try {
+      const content = readFileSync(filePath, "utf8");
+      if (content.trim().length === 0) {
+        result.status = VALIDATION_STATUS.FAIL;
+        result.errors.push("EMPTY_PYTHON: Python file has no content");
+      } else {
+        const lines = content.split(/\r?\n/);
+        result.checks.lineCount = lines.length;
+        result.checks.functionCount = (content.match(/^\s*def\s+/gm) || []).length;
+        result.checks.classCount = (content.match(/^\s*class\s+/gm) || []).length;
+        result.checks.importCount = (content.match(/^\s*(import|from)\s+/gm) || []).length;
+      }
+    } catch (readErr) {
+      result.status = VALIDATION_STATUS.FAIL;
+      result.errors.push(`PYTHON_READ_ERROR: ${readErr?.message}`);
+    }
+  } else if (inferredType === "powerbi") {
+    // PBIX and PBIT are ZIP archives — check PK magic bytes
+    const header = readFirstBytes(filePath, 4);
+    const isPkZip =
+      header.length >= 4 &&
+      header[0] === 0x50 &&
+      header[1] === 0x4b &&
+      header[2] === 0x03 &&
+      header[3] === 0x04;
+    result.checks.format = "POWERBI";
+    result.checks.magicBytesValid = isPkZip;
+    if (!isPkZip) {
+      result.status = VALIDATION_STATUS.FAIL;
+      result.errors.push(
+        "CORRUPT_POWERBI: File does not have valid ZIP/PBIX magic bytes (PK\\x03\\x04)",
+      );
+    }
+  } else if (inferredType === "parquet") {
+    // Apache Parquet: first 4 bytes = "PAR1", last 4 bytes = "PAR1"
+    const header = readFirstBytes(filePath, 4);
+    const footer = readLastBytes(filePath, 4);
+    const headerOk =
+      header.length === 4 && header.toString("ascii") === "PAR1";
+    const footerOk =
+      footer.length === 4 && footer.toString("ascii") === "PAR1";
+    result.checks.format = "PARQUET";
+    result.checks.magicBytesHeader = headerOk;
+    result.checks.magicBytesFooter = footerOk;
+    if (!headerOk || !footerOk) {
+      result.status = VALIDATION_STATUS.FAIL;
+      result.errors.push(
+        `CORRUPT_PARQUET: Invalid PAR1 magic bytes (header=${headerOk}, footer=${footerOk})`,
+      );
+    }
+  } else if (inferredType === "pdf") {
+    // PDF: first 5 bytes must be "%PDF-"
+    const header = readFirstBytes(filePath, 5);
+    const isPdf = header.length === 5 && header.toString("ascii") === "%PDF-";
+    result.checks.format = "PDF";
+    result.checks.magicBytesValid = isPdf;
+    if (!isPdf) {
+      result.status = VALIDATION_STATUS.FAIL;
+      result.errors.push(
+        "CORRUPT_PDF: File does not start with %PDF- magic bytes",
+      );
+    }
+  } else if (inferredType === "docx") {
+    // DOCX is a ZIP archive — check PK magic bytes
+    const header = readFirstBytes(filePath, 4);
+    const isPkZip =
+      header.length >= 4 &&
+      header[0] === 0x50 &&
+      header[1] === 0x4b &&
+      header[2] === 0x03 &&
+      header[3] === 0x04;
+    result.checks.format = "DOCX";
+    result.checks.magicBytesValid = isPkZip;
+    if (!isPkZip) {
+      result.status = VALIDATION_STATUS.FAIL;
+      result.errors.push(
+        "CORRUPT_DOCX: File does not have valid ZIP/DOCX magic bytes (PK\\x03\\x04)",
+      );
+    }
+  } else if (inferredType === "markdown") {
+    try {
+      const content = readFileSync(filePath, "utf8");
+      if (content.trim().length === 0) {
+        result.status = VALIDATION_STATUS.FAIL;
+        result.errors.push("EMPTY_MARKDOWN: Markdown file has no content");
+      } else {
+        const lines = content.split(/\r?\n/);
+        result.checks.lineCount = lines.length;
+        result.checks.headingCount = (content.match(/^#+\s+/gm) || []).length;
+      }
+    } catch (readErr) {
+      result.status = VALIDATION_STATUS.FAIL;
+      result.errors.push(`MARKDOWN_READ_ERROR: ${readErr?.message}`);
+    }
   }
 
   return result;
 }
+
+// ---------------------------------------------------------------------------
+// Business validation
+// ---------------------------------------------------------------------------
 
 /**
  * Validates business logic, KPI boundaries, and constraints.
@@ -251,9 +473,18 @@ export function validateBusinessLogic({
   return result;
 }
 
+// ---------------------------------------------------------------------------
+// Real preview generation
+// ---------------------------------------------------------------------------
+
 /**
  * Extracts real preview data from an artifact file.
- * Prohibits mock data.
+ * Prohibits mock data — all content derived directly from the file.
+ *
+ * @param {object} opts
+ * @param {string} opts.filePath
+ * @param {number} [opts.maxRows]
+ * @returns {object}
  */
 export function generateArtifactPreview({ filePath, maxRows = 5 }) {
   if (!filePath || !existsSync(filePath)) {
@@ -267,6 +498,9 @@ export function generateArtifactPreview({ filePath, maxRows = 5 }) {
   const ext = path.extname(filePath).toLowerCase();
 
   try {
+    // -----------------------------------------------------------------------
+    // CSV
+    // -----------------------------------------------------------------------
     if (ext === ".csv") {
       const content = readFileSync(filePath, "utf8");
       const lines = content.split(/\r?\n/).filter((l) => l.trim().length > 0);
@@ -291,6 +525,9 @@ export function generateArtifactPreview({ filePath, maxRows = 5 }) {
       };
     }
 
+    // -----------------------------------------------------------------------
+    // JSON
+    // -----------------------------------------------------------------------
     if (ext === ".json") {
       const content = readFileSync(filePath, "utf8");
       const parsed = JSON.parse(content);
@@ -308,6 +545,9 @@ export function generateArtifactPreview({ filePath, maxRows = 5 }) {
       };
     }
 
+    // -----------------------------------------------------------------------
+    // Excel
+    // -----------------------------------------------------------------------
     if (ext === ".xlsx" || ext === ".xls") {
       const stat = statSync(filePath);
       const svgPath = filePath.replace(/\.xlsx$/i, "_preview.svg");
@@ -332,7 +572,192 @@ export function generateArtifactPreview({ filePath, maxRows = 5 }) {
       };
     }
 
+    // -----------------------------------------------------------------------
+    // SQL script
+    // -----------------------------------------------------------------------
+    if (ext === ".sql") {
+      const content = readFileSync(filePath, "utf8");
+      const allLines = content.split(/\r?\n/);
+      const nonEmpty = allLines.filter((l) => l.trim().length > 0);
+      const previewLines = nonEmpty.slice(0, 30);
+      const stmtCount = (content.match(/;/g) || []).length;
+      const MUTATION_RE = /\b(INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER)\b/i;
+      const hasMutations = MUTATION_RE.test(content);
+      const mutationNote = hasMutations
+        ? "\n⚠️ **Chứa câu lệnh ghi/xóa (DML/DDL)**"
+        : "\n✅ **Chỉ đọc (không có DML mutation)**";
+      const text =
+        `📄 **SQL Script:** \`${path.basename(filePath)}\` — ${allLines.length} dòng, ~${stmtCount} câu lệnh${mutationNote}\n` +
+        "```sql\n" +
+        previewLines.join("\n") +
+        (nonEmpty.length > 30 ? "\n-- ... (còn tiếp)" : "") +
+        "\n```";
+      return {
+        available: true,
+        type: "sql",
+        totalLines: allLines.length,
+        statementCount: stmtCount,
+        hasMutations,
+        previewText: text,
+      };
+    }
+
+    // -----------------------------------------------------------------------
+    // Python script
+    // -----------------------------------------------------------------------
+    if (ext === ".py") {
+      const content = readFileSync(filePath, "utf8");
+      const allLines = content.split(/\r?\n/);
+      const nonEmpty = allLines.filter((l) => l.trim().length > 0);
+      const previewLines = nonEmpty.slice(0, 30);
+      const fnCount = (content.match(/\bdef\s+/gm) || []).length;
+      const clsCount = (content.match(/^\s*class\s+/gm) || []).length;
+      const impCount = (content.match(/^\s*(import|from)\s+/gm) || []).length;
+      const text =
+        `🐍 **Python Script:** \`${path.basename(filePath)}\` — ${allLines.length} dòng, ${fnCount} hàm, ${clsCount} class, ${impCount} import\n` +
+        "```python\n" +
+        previewLines.join("\n") +
+        (nonEmpty.length > 30 ? "\n# ... (còn tiếp)" : "") +
+        "\n```";
+      return {
+        available: true,
+        type: "python",
+        totalLines: allLines.length,
+        functionCount: fnCount,
+        classCount: clsCount,
+        importCount: impCount,
+        previewText: text,
+      };
+    }
+
+    // -----------------------------------------------------------------------
+    // Power BI (.pbix / .pbit)
+    // -----------------------------------------------------------------------
+    if (ext === ".pbix" || ext === ".pbit") {
+      const stat = statSync(filePath);
+      const header = readFirstBytes(filePath, 4);
+      const isPkZip =
+        header.length >= 4 &&
+        header[0] === 0x50 &&
+        header[1] === 0x4b &&
+        header[2] === 0x03 &&
+        header[3] === 0x04;
+      const validity = isPkZip
+        ? "✅ Container ZIP hợp lệ"
+        : "❌ Không nhận dạng được định dạng PBIX/PBIT";
+      const label = ext === ".pbit" ? "Template (.pbit)" : "Report (.pbix)";
+      const text = `📊 **Power BI ${label}:** \`${path.basename(filePath)}\` (${(stat.size / 1024).toFixed(1)} KB)\n${validity}`;
+      return {
+        available: true,
+        type: "powerbi",
+        sizeBytes: stat.size,
+        magicBytesValid: isPkZip,
+        previewText: text,
+      };
+    }
+
+    // -----------------------------------------------------------------------
+    // Apache Parquet
+    // -----------------------------------------------------------------------
+    if (ext === ".parquet") {
+      const stat = statSync(filePath);
+      const header = readFirstBytes(filePath, 4);
+      const footer = readLastBytes(filePath, 4);
+      const headerOk =
+        header.length === 4 && header.toString("ascii") === "PAR1";
+      const footerOk =
+        footer.length === 4 && footer.toString("ascii") === "PAR1";
+      const validity =
+        headerOk && footerOk
+          ? "✅ Magic bytes PAR1 hợp lệ (header + footer)"
+          : `❌ Magic bytes không hợp lệ (header=${headerOk}, footer=${footerOk})`;
+      const text = `🗃️ **Apache Parquet:** \`${path.basename(filePath)}\` (${(stat.size / 1024).toFixed(1)} KB)\n${validity}`;
+      return {
+        available: true,
+        type: "parquet",
+        sizeBytes: stat.size,
+        magicBytesValid: headerOk && footerOk,
+        previewText: text,
+      };
+    }
+
+    // -----------------------------------------------------------------------
+    // PDF
+    // -----------------------------------------------------------------------
+    if (ext === ".pdf") {
+      const stat = statSync(filePath);
+      const header = readFirstBytes(filePath, 8);
+      const isPdf =
+        header.length >= 5 && header.subarray(0, 5).toString("ascii") === "%PDF-";
+      // Attempt to extract version from header e.g. "%PDF-1.7"
+      const versionMatch = header.toString("ascii").match(/%PDF-([\d.]+)/);
+      const version = versionMatch ? versionMatch[1] : "?";
+      const validity = isPdf
+        ? `✅ PDF hợp lệ (phiên bản ${version})`
+        : "❌ Không nhận dạng được định dạng PDF";
+      const text = `📕 **PDF:** \`${path.basename(filePath)}\` (${(stat.size / 1024).toFixed(1)} KB)\n${validity}`;
+      return {
+        available: true,
+        type: "pdf",
+        sizeBytes: stat.size,
+        magicBytesValid: isPdf,
+        pdfVersion: isPdf ? version : null,
+        previewText: text,
+      };
+    }
+
+    // -----------------------------------------------------------------------
+    // DOCX / DOC
+    // -----------------------------------------------------------------------
+    if (ext === ".docx" || ext === ".doc") {
+      const stat = statSync(filePath);
+      const header = readFirstBytes(filePath, 4);
+      const isPkZip =
+        header.length >= 4 &&
+        header[0] === 0x50 &&
+        header[1] === 0x4b &&
+        header[2] === 0x03 &&
+        header[3] === 0x04;
+      const validity = isPkZip
+        ? "✅ Container ZIP hợp lệ (DOCX/OOXML)"
+        : "❌ Không nhận dạng được định dạng DOCX";
+      const text = `📝 **Word Document:** \`${path.basename(filePath)}\` (${(stat.size / 1024).toFixed(1)} KB)\n${validity}`;
+      return {
+        available: true,
+        type: "docx",
+        sizeBytes: stat.size,
+        magicBytesValid: isPkZip,
+        previewText: text,
+      };
+    }
+
+    // -----------------------------------------------------------------------
+    // Markdown
+    // -----------------------------------------------------------------------
+    if (ext === ".md" || ext === ".markdown") {
+      const content = readFileSync(filePath, "utf8");
+      const allLines = content.split(/\r?\n/);
+      const nonEmpty = allLines.filter((l) => l.trim().length > 0);
+      const previewLines = nonEmpty.slice(0, 20);
+      const headingCount = (content.match(/^#+\s+/gm) || []).length;
+      const text =
+        `📄 **Markdown:** \`${path.basename(filePath)}\` — ${allLines.length} dòng, ${headingCount} heading\n` +
+        "```markdown\n" +
+        previewLines.join("\n") +
+        (nonEmpty.length > 20 ? "\n... (còn tiếp)" : "") +
+        "\n```";
+      return {
+        available: true,
+        type: "markdown",
+        totalLines: allLines.length,
+        headingCount,
+        previewText: text,
+      };
+    }
+
+    // -----------------------------------------------------------------------
     // Default file info
+    // -----------------------------------------------------------------------
     const stat = statSync(filePath);
     return {
       available: true,
@@ -347,6 +772,10 @@ export function generateArtifactPreview({ filePath, maxRows = 5 }) {
     };
   }
 }
+
+// ---------------------------------------------------------------------------
+// Combined result gate
+// ---------------------------------------------------------------------------
 
 /**
  * Comprehensive Validation Gate combining Technical + Business + Real Preview.
