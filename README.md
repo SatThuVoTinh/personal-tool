@@ -495,7 +495,127 @@ Bảng phân định trạng thái thực tế của 11 nhà cung cấp trong ph
 
 ---
 
-## 17. Quy trình Dừng Hệ thống
+## 17. Hướng dẫn Vận hành Runtime Quản trị, Thẩm quyền & Độ tin cậy (M8/T2)
+
+Mục này hướng dẫn chi tiết quy chế vận hành, phân định thẩm quyền nghiêm ngặt, cơ chế hàng đợi xử lý ngoại tuyến và kiểm định đa tầng được hoàn thiện trong cột mốc M8/T2.
+
+### 1. Mô hình Phân cấp Thẩm quyền (Authority Hierarchy)
+
+Hệ thống thiết lập ranh giới quyền hạn phân cấp 5 tầng nhằm bảo đảm không có agent nào tự cấp quyền hoặc tự nghiệm thu kết quả:
+
+```text
+[ User (Người Dùng / Operator) ]
+        │  ▲ (Duy nhất User có quyền: APPROVE, REJECT, ACCEPT, REQUEST_REVISION)
+        ▼  │
+[ Main Agent (@Quản Lý) ]
+        │  ▲ (Giám sát Quản trị & Điều phối, phát hành FINAL_NOTIFICATION trên #office)
+        ▼  │
+[ Primary Execution Coordinator (O1 hoặc O2) ]
+        │  ▲ (Chính xác 1 Coordinator chịu trách nhiệm giám sát thực thi task)
+        ▼  │
+[ Specialist Agents (Excel, PowerBI, SQL, Python) ]
+        │  ▲ (Năng lực thực thi chuyên biệt; TUYỆT ĐỐI KHÔNG can thiệp quản trị)
+        ▼  │
+[ Local Laptop Worker ]
+           (Kéo việc từ Queue, thực thi xử lý nặng, xuất bản artifact thật)
+```
+
+#### Ma trận Thẩm quyền 5 Bộ (Actor + Channel + Task + State + Action)
+
+| Hành động (`Action`)        | Kênh Discord  | Tác nhân được phép (`Actor`) | Trạng thái yêu cầu (`State`) | Trạng thái chuyển đổi (`Next State`) |
+| :-------------------------- | :------------ | :--------------------------- | :--------------------------- | :----------------------------------- |
+| `APPROVE`                   | `#approvals`  | Duy nhất `User`              | `APPROVAL_PENDING`           | `QUEUED`                             |
+| `REJECT_APPROVAL`           | `#approvals`  | Duy nhất `User`              | `APPROVAL_PENDING`           | `REJECTED`                           |
+| `REQUEST_REVISION_APPROVAL` | `#approvals`  | `User`, `Main`               | `APPROVAL_PENDING`, `EXECUT` | `REVISING`                           |
+| `ACCEPT_RESULT`             | `#results`    | Duy nhất `User`              | `RESULT_PENDING_REVIEW`      | `COMPLETE`                           |
+| `REJECT_RESULT`             | `#results`    | Duy nhất `User`              | `RESULT_PENDING_REVIEW`      | `REJECTED`                           |
+| `REQUEST_REVISION_RESULT`   | `#results`    | `User`, `Main`               | `RESULT_PENDING_REVIEW`      | `REVISING`                           |
+| `CLAIM`                     | N/A (Queue)   | `Worker`, `O1`, `O2`         | `QUEUED`, `WAIT_WORKER`      | `EXECUTING`                          |
+| `ASK_USER`                  | `#office`     | `O1`, `O2`, `Main`           | `EXECUTING`, `PREFLIGHT`     | `WAITING_FOR_USER`                   |
+| `ANSWER_USER`               | `#office`     | Duy nhất `User`              | `WAITING_FOR_USER`           | `EXECUTING`                          |
+| `EXECUTION_FINISHED`        | N/A (Runtime) | `O1`, `O2`, `Worker`         | `EXECUTING`                  | `RESULT_PENDING_REVIEW`              |
+| `FINAL_NOTIFICATION`        | `#office`     | Duy nhất `Main`              | `COMPLETE`, `REJECTED`       | Giữ nguyên trạng thái cuối           |
+
+_Nguyên tắc cốt lõi:_ Sự kiện `EXECUTION_FINISHED` chỉ đánh dấu kết thúc thực thi kỹ thuật. Nhiệm vụ chỉ được coi là hoàn tất (`COMPLETE`) khi người dùng trực tiếp nhấn nút **ACCEPT** trên thẻ nghiệm thu tại `#results`.
+
+---
+
+### 2. Quy chuẩn Vận hành 4 Kênh Discord Chuyên biệt
+
+Hệ thống phân tách luồng giao tiếp thành 4 kênh Discord độc lập:
+
+1. **Kênh `#office` — Bàn làm việc & Giao tiếp Trực tiếp:**
+   - Tiếp nhận lệnh từ người dùng; Main phân tích bài toán và phân rã nhiệm vụ.
+   - Khi điều phối viên (`O1`/`O2`) cần làm rõ câu hỏi nghiệp vụ, điều phối viên hỏi trực tiếp người dùng tại `#office`. Task tạm dừng ở `WAITING_FOR_USER`.
+   - Người dùng trả lời trực tiếp tại `#office` để đưa task trở lại `EXECUTING`.
+   - Sau khi task được nghiệm thu hoàn tất tại `#results`, `Main` phát thông báo tổng kết cuối cùng (`FINAL_NOTIFICATION`) trên `#office`.
+
+2. **Kênh `#approvals` — Phê duyệt Kế hoạch Thực thi:**
+   - Hiển thị thẻ kế hoạch (`formatGovernedApprovalCard`) gồm: mục tiêu, phạm vi ranh giới, dự toán tài nguyên, danh sách agent tham gia và token phiên làm việc.
+   - Người dùng nhấn nút:
+     - **[Duyệt Kế Hoạch]** (`APPROVE`): Đưa task vào hàng đợi `QUEUED`.
+     - **[Từ Chối]** (`REJECT`): Đóng task ở trạng thái `REJECTED`.
+     - **[Yêu Cầu Hiệu Chỉnh]** (`REQUEST_REVISION`): Chuyển về `REVISING` để cập nhật kế hoạch.
+
+3. **Kênh `#results` — Nghiệm thu Kết quả & Xem trước Dữ liệu Thực:**
+   - Chỉ xuất hiện khi task vượt qua quy trình Kiểm định Đa tầng (Multi-tier Validation).
+   - Hiển thị thẻ kết quả (`formatGovernedResultCard`) gồm tóm tắt kết quả, chứng thực kiểm tra kỹ thuật/kinh doanh và trích xuất dữ liệu thực tế (Real Artifact Preview: 5 dòng đầu CSV, bảng tổng hợp Excel hoặc trích đoạn JSON/Markdown). Tuyệt đối cấm sử dụng dữ liệu giả mạo (mock).
+   - Người dùng bấm nút:
+     - **[Nghiệm Thu Hoàn Tất]** (`ACCEPT_RESULT`): Chuyển task sang `COMPLETE`.
+     - **[Không Đạt / Từ Chối]** (`REJECT_RESULT`): Đóng task ở `REJECTED`.
+     - **[Yêu Cầu Chỉnh Sửa]** (`REQUEST_REVISION`): Chuyển task về `REVISING` kèm phản hồi.
+
+4. **Kênh `#incidents` — Báo cáo Sự cố & Cảnh báo An toàn:**
+   - Tự động phát cảnh báo dạng thẻ đỏ (`formatIncidentCard`) khi:
+     - Xảy ra vi phạm ranh giới thẩm quyền (ví dụ: agent chuyên biệt cố ý tự duyệt).
+     - Kiểm định kỹ thuật thất bại (tệp rỗng, sai schema, thiếu trường dữ liệu).
+     - Kiểm định nghiệp vụ không đạt khiến kết quả bị chặn (`RESULT BLOCKED`).
+     - Worker crash hoặc mất kết nối quá hạn thời gian cho phép (heartbeat timeout).
+
+---
+
+### 3. Cơ chế Hàng đợi & Phục hồi Worker Cục bộ (Local Laptop Worker)
+
+Hệ thống tách biệt hoàn toàn giữa **Control Plane** (chạy 24/7 trên máy chủ/VPS/môi trường luôn mở) và **Local Laptop Worker** (chạy trên laptop cá nhân của operator):
+
+- **Xử lý khi Laptop tắt/sleep:** Khi laptop của worker ngoại tuyến, task được lưu trữ an toàn trong hàng đợi bền vững (`QueueManager`) ở trạng thái `QUEUED` hoặc `WAITING_FOR_WORKER`. Không có task nào bị mất mát dữ liệu.
+- **Tự động nhận việc (Atomic Claim):** Khi laptop khởi động lại và worker kết nối, worker thực hiện `claimTask` nguyên tử để khóa độc quyền task và bắt đầu thực thi.
+- **Giám sát nhịp tim (Heartbeat & Stale Recovery):** Worker cập nhật heartbeat định kỳ. Nếu worker bị tắt đột ngột hoặc mất nguồn, Control Plane định kỳ quét qua `detectAndRecoverStaleTasks` để thu hồi task bị treo và chuyển lại về `WAITING_FOR_WORKER` cho lượt chạy kế tiếp.
+
+---
+
+### 4. Kiểm định Đa tầng (Multi-tier Validation)
+
+Quy trình nghiệm thu kết quả tuân thủ nghiêm ngặt 2 tầng kiểm tra độc lập:
+
+1. **Tầng Kỹ thuật (Technical Validation):**
+   - Kiểm tra tệp artifact tồn tại trên đĩa, kích thước hợp lệ (lớn hơn ngưỡng byte tối thiểu).
+   - Xác thực cấu trúc dữ liệu theo định dạng (`csv`, `json`, `markdown`, `excel`): phân tích cú pháp hợp lệ, kiểm tra sự hiện diện của các cột/trường dữ liệu bắt buộc.
+2. **Tầng Nghiệp vụ (Business Validation):**
+   - Kiểm tra ràng buộc chỉ số KPI (giá trị tối thiểu, tối đa).
+   - Kiểm định tính hợp lý của số liệu tính toán.
+
+**Nguyên tắc Bất biến Khóa Kết quả:**
+
+> **Technical PASS + Business FAIL = `RESULT BLOCKED`**
+>
+> Nếu kết quả thỏa mãn tính toàn vẹn kỹ thuật nhưng sai lệch chỉ số kinh doanh, hệ thống lập tức khóa kết quả ở trạng thái `BLOCKED`, ghi nhận sự cố lên `#incidents` và thông báo tới người dùng; không tự ý che giấu hay chuyển sang trạng thái hợp lệ.
+
+---
+
+### 5. Sổ cái Quyết định (Decision Ledger) & Mã Tham chiếu Có cấu trúc
+
+Nhằm tránh việc agent liên tục hỏi lại người dùng các câu hỏi đã được trả lời trong quá khứ:
+
+- **Sổ cái Quyết định (Decision Ledger):** Lưu trữ bền vững các câu trả lời và quyết định đã được con người xác nhận (`isHumanConfirmed: true`). Trước khi gửi câu hỏi làm rõ trên `#office`, agent phải tra cứu Decision Ledger. Nếu đã có tiền lệ được xác nhận, agent áp dụng ngay mà không làm phiền người dùng.
+- **Mã Tham chiếu Có Cấu trúc (Structured Reference ID):**
+  - Cú pháp chuẩn: `TOPIC(2)-EXEC(2)-TASK(4)` (ví dụ: `SC-01-0042`).
+  - Trong đó `TOPIC` gồm 2 chữ cái viết hoa đại diện cho lĩnh vực (ví dụ: `SC` cho Supply Chain, `KB` cho Knowledgebase), `EXEC` gồm 2 chữ số đại diện cho chu kỳ thực thi (`00` dành riêng cho tài liệu do con người đóng góp), và `TASK` gồm 4 chữ số thứ tự.
+- **Lọc Trùng Ngữ cảnh (Context Deduplication):** Thuật toán `deduplicateRetrievalContext` tự động loại bỏ các đoạn thông tin trùng lặp nội dung được lấy từ nhiều nguồn khác nhau, tối ưu dung lượng ngữ cảnh gửi tới mô hình.
+
+---
+
+## 18. Quy trình Dừng Hệ thống
 
 Khi kết thúc phiên làm việc:
 

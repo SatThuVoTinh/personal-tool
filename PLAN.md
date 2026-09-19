@@ -35,7 +35,7 @@ Evidence Level: NONE | LOCAL-VERIFIED | REMOTE-BACKED
 | M5 — Architecture contraction                                              | `COMPLETE`    | `REMOTE-BACKED`  | M5/T1-R2 synchronized canonical paths, documentation and the contracted Docker runtime without refactoring the accepted Knowledgebase application.                          |
 | M6 — Zink Skill Store                                                      | `COMPLETE`    | `REMOTE-BACKED`  | M6/T1-R4 task commit is remotely verified; governance closeout is recorded separately.                                                                                      |
 | M7 — Zink Tools + OpenClaw integration + V1 hardening                      | `COMPLETE`    | `REMOTE-BACKED`  | M7/T1-R19, M7/T2-R12, M7/T3-R16, M7/T4-R10, and M7/T5-R13 complete; runtime governance remediation, Discord 7-bot integration, and Zink tools specialist policies verified. |
-| M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Integration | `COMPLETE`    | `LOCAL-VERIFIED` | Task M8/T1 complete: Governed Skill Vector DB, semantic search, 2-way proposal pipeline, and Discord Mobile Gateway verified.                                               |
+| M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Integration | `COMPLETE`    | `LOCAL-VERIFIED` | Tasks M8/T1 and M8/T2-R9 complete; runtime authority, memory and reliability hardening verified.            |
 
 The former self-built L&SC Data Plant is replaced by a **logical external
 infrastructure flow**, not another repository module. Forecasting, optimization,
@@ -45,17 +45,31 @@ operations research and simulation remain first-class capabilities.
 
 ```text
 Milestone: M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Integration
-Task: M8/T1 — Governed Skill Vector Store, Semantic Search & Agent Proposal Pipeline
+Task: M8/T2 — Governed Runtime, Authority, Memory & Reliability Hardening
 Task Status: COMPLETE
 Planning Readiness: APPROVED
-Plan Revision: M8/T1-R1
+Plan Revision: M8/T2-R9
 Execution Authorization: NO
 Authorized Task: NONE
 Execution Contract: NONE
 Evidence Level: LOCAL-VERIFIED
-Task Branch: codex/m8-t1-skill-vector-memory
-Owner Approval: EXPLICIT — Owner instructed to record plan into ACTIVE.md and implement 2-way long-term memory for Zink Skill Store
+Task Branch: codex/m8-t2-governed-runtime-hardening
+Owner Approval: EXPLICIT — Owner approved implementation plan adhering to ACTIVE.md M8/T2-R9; implementation and closeout validated
 ```
+
+M8/T2-R9 validated completion evidence:
+
+- strict 5-tuple action authority engine (`validateActionAuthority` in `integrations/openclaw/lib/authority.mjs`) implemented, enforcing User as the sole authority for plan approvals and result acceptance, isolating actions across 4 dedicated Discord channels (`#office`, `#approvals`, `#results`, `#incidents`), and strictly blocking specialist agents from governance actions (`SPECIALIST_NO_GOVERNANCE`);
+- technical execution finish decoupled from human task completion: `EXECUTION_FINISHED` transitions tasks to `RESULT_PENDING_REVIEW` with preview and validation, requiring explicit User `ACCEPT_RESULT` to transition to `COMPLETE`;
+- persistent file-backed `QueueManager` implemented in `integrations/openclaw/lib/queue-manager.mjs` with atomic single-worker claims, lease heartbeat renewal, and automatic stale task recovery (`detectAndRecoverStaleTasks`), cleanly decoupling the 24/7 Control Plane from Local Laptop Worker offline/sleep cycles;
+- two-tier `evaluateResultGate` implemented in `integrations/openclaw/lib/artifact-validator.mjs` with technical integrity parsing and business KPI constraint verification, enforcing the critical invariant that Technical PASS + Business FAIL yields `RESULT BLOCKED` with real data previews and zero synthetic mocks;
+- human-confirmed `DecisionLedger` implemented in `integrations/openclaw/lib/decision-ledger.mjs` caching confirmed operator decisions and preventing redundant clarification questions;
+- structured reference IDs conforming to `TOPIC(2)-EXEC(2)-TASK(4)` with `00` reserved for human-contributed documents, and retrieval context deduplication (`deduplicateRetrievalContext`) implemented in `zink-tools/common/semantic-contract.mjs`;
+- governed Discord message and card formatters implemented in `integrations/openclaw/lib/discord-formatter.mjs` (`formatOfficeClarificationQuestion`, `formatOfficeFinalNotification`, `formatGovernedApprovalCard`, `formatGovernedResultCard`, `formatIncidentCard`);
+- OpenClaw `zink-governance` plugin updated with attempt-token staleness protection (`STALE_ACTION_REJECTED`) and full runtime module materialization in `governancePluginFiles`;
+- audit bug test suite `tests/m8-t2-governed-runtime-audit.test.mjs` passed 10/10 tests covering all bug prevention rules (`BUG-M8T2-01` through `BUG-M8T2-10`);
+- end-to-end workflow test suite `tests/m8-t2-e2e-workflow.test.mjs` passed 19/19 tests covering Happy Path and all 20 required failure and edge scenarios;
+- full repository test suite passed all 154 tests with zero regressions; `git diff --check`, `repository-check.mjs`, `eslint`, `markdownlint`, and `prettier` all passed with 0 errors.
 
 M8/T1-R1 validated completion evidence:
 
@@ -406,6 +420,28 @@ read-only semantic RAG pipeline for Zink Knowledgebase:
   snowflakes, and Vietnamese text patterns with corrected punctuation lookahead) and
   Gateway stability ensured with `replyToMode: "off"`;
 - full verification suite passed with all 123 tests clean.
+
+### M8/T2 — Governed Runtime, Authority, Memory & Reliability Hardening
+
+Status: `IN PROGRESS`
+Task: `M8/T2 — Governed Runtime, Authority, Memory & Reliability Hardening`
+Task Status: `IN PROGRESS`
+Plan Revision: `M8/T2-R9`
+Planning Readiness: `APPROVED`
+Execution Authorization: `YES`
+Execution Contract: `docs/contracts/execution/ACTIVE.md`
+Evidence: `LOCAL-VERIFIED`
+Task Branch: `codex/m8-t2-governed-runtime-hardening`
+
+Scope defined under `docs/contracts/execution/ACTIVE.md`:
+- Always-On Control Plane with offline local worker support;
+- Strict Action Authority tuple validation (Actor + Channel + Task + State + Action);
+- Main/O1/O2 separation: O1/O2 execution supervision, Main governance/routing only;
+- Discord channels contract (#office, #approvals, #results, #incidents) with 3-way actions;
+- Persistent observable queue with worker claim/ACK and heartbeat monitoring;
+- Multi-tier validation (Technical + Business) with real artifact previews;
+- Normalized incident lifecycle and Discord delivery integrity;
+- Memory store isolation, unified Reference IDs (TOPIC-EXECUTION-TASK), Decision Ledger, and human semantic authority.
 
 ## 9. Deferred beyond V1
 
