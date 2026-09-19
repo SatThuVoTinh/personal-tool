@@ -28,7 +28,34 @@ import {
   formatApprovalNotification,
   formatResultNotification,
   formatIncidentNotification,
+  formatOfficeClarificationQuestion,
+  formatOfficeFinalNotification,
+  formatGovernedApprovalCard,
+  formatGovernedResultCard,
+  formatIncidentCard,
 } from "../../lib/discord-formatter.mjs";
+
+import {
+  validateActionAuthority,
+  normalizeActor,
+  normalizeChannel,
+  ACTORS,
+  CHANNELS,
+  TASK_STATES,
+  ACTIONS,
+} from "../../lib/authority.mjs";
+
+import { QueueManager, defaultQueueManager } from "../../lib/queue-manager.mjs";
+
+import {
+  evaluateResultGate,
+  VALIDATION_STATUS,
+} from "../../lib/artifact-validator.mjs";
+
+import {
+  DecisionLedger,
+  defaultDecisionLedger,
+} from "../../lib/decision-ledger.mjs";
 
 export {
   formatForDiscord,
@@ -36,6 +63,22 @@ export {
   formatApprovalNotification,
   formatResultNotification,
   formatIncidentNotification,
+  formatOfficeClarificationQuestion,
+  formatOfficeFinalNotification,
+  formatGovernedApprovalCard,
+  formatGovernedResultCard,
+  formatIncidentCard,
+  validateActionAuthority,
+  ACTORS,
+  CHANNELS,
+  TASK_STATES,
+  ACTIONS,
+  QueueManager,
+  defaultQueueManager,
+  evaluateResultGate,
+  VALIDATION_STATUS,
+  DecisionLedger,
+  defaultDecisionLedger,
 };
 
 const PENDING_PROPOSALS_KEY = Symbol.for(
@@ -258,6 +301,203 @@ export async function handleOwnerSkillApproval({
     });
   }
   return { status: "READY", synced_count: 0, failed_count: 0 };
+}
+
+/**
+ * Handles Discord user/agent actions with strict 5-tuple validation:
+ * Actor + Channel + Task + Current State + Action.
+ * Implements ACTIVE.md Sections 4, 5, 8, 31, 32.
+ */
+export function handleDiscordAction({
+  actor,
+  channel,
+  taskId,
+  action,
+  currentState,
+  attemptToken = null,
+  activeAttemptToken = null,
+  primaryCoordinator = null,
+  data = {},
+  paths = null,
+}) {
+  // 1. Check for stale / expired attempt token (BUG-M8T2-07)
+  if (
+    attemptToken &&
+    activeAttemptToken &&
+    attemptToken !== activeAttemptToken
+  ) {
+    return {
+      allowed: false,
+      reason:
+        "STALE_ACTION_REJECTED: Interaction attempt token does not match active task attempt",
+      status: "STALE",
+    };
+  }
+
+  // 2. Validate 5-tuple authority
+  const auth = validateActionAuthority({
+    actor,
+    channel,
+    taskId,
+    currentState,
+    action,
+    primaryCoordinator,
+  });
+
+  if (!auth.allowed) {
+    return {
+      allowed: false,
+      reason: auth.reason,
+      status: "DENIED",
+    };
+  }
+
+  // 3. Record in ledger if ledger paths are provided
+  if (paths && auth.nextState) {
+    try {
+      if (
+        action === ACTIONS.APPROVE ||
+        action === ACTIONS.REJECT_APPROVAL ||
+        action === ACTIONS.REQUEST_REVISION_APPROVAL
+      ) {
+        recordWorkflowEvent(paths, "WORKFLOW_USER_APPROVAL_DECIDED", {
+          task_id: taskId,
+          actor: normalizeActor(actor),
+          channel: normalizeChannel(channel),
+          decision:
+            action === ACTIONS.APPROVE
+              ? "APPROVE"
+              : action === ACTIONS.REJECT_APPROVAL
+                ? "REJECT"
+                : "REQUEST_REVISION",
+        });
+      } else if (action === ACTIONS.ACCEPT_RESULT) {
+        recordWorkflowEvent(paths, "WORKFLOW_USER_RESULT_ACCEPTED", {
+          task_id: taskId,
+          actor: "user",
+          channel: "results",
+          decision: "ACCEPT",
+        });
+      } else if (action === ACTIONS.REJECT_RESULT) {
+        recordWorkflowEvent(paths, "WORKFLOW_USER_RESULT_REJECTED", {
+          task_id: taskId,
+          actor: "user",
+          channel: "results",
+          reason: data.reason || "USER_REJECTED",
+        });
+      } else if (action === ACTIONS.REQUEST_REVISION_RESULT) {
+        recordWorkflowEvent(paths, "WORKFLOW_RESULT_REVISION_REQUESTED", {
+          task_id: taskId,
+          actor: normalizeActor(actor),
+          channel: "results",
+          feedback: data.feedback || "Revision requested",
+        });
+      } else if (action === ACTIONS.ASK_USER) {
+        recordWorkflowEvent(paths, "WORKFLOW_USER_QUESTION_RECORDED", {
+          task_id: taskId,
+          agent_id: actor,
+          question: data.question || "Clarification needed",
+        });
+      } else if (action === ACTIONS.ANSWER_USER) {
+        recordWorkflowEvent(paths, "WORKFLOW_USER_ANSWER_RECORDED", {
+          task_id: taskId,
+          answer: data.answer || "User provided answer",
+        });
+      }
+    } catch (err) {
+      console.error(
+        "[zink-governance] Error recording workflow event:",
+        err?.message,
+      );
+    }
+  }
+
+  return {
+    allowed: true,
+    nextState: auth.nextState,
+    status: "SUCCESS",
+  };
+}
+
+/**
+ * Handles execution finished event with multi-tier validation.
+ * Implements ACTIVE.md Section 6, 16, 17:
+ * EXECUTION_FINISHED is an event, NOT task completion.
+ * Technical PASS + Business FAIL = RESULT BLOCKED.
+ */
+export function handleExecutionFinished({
+  taskId,
+  workerId,
+  artifactPath,
+  technicalConfig = {},
+  businessData = {},
+  businessConfig = {},
+  paths = null,
+  queueManager = defaultQueueManager,
+}) {
+  const gateResult = evaluateResultGate({
+    artifactPath,
+    technicalConfig,
+    businessData,
+    businessConfig,
+  });
+
+  if (gateResult.overallStatus === VALIDATION_STATUS.BLOCKED) {
+    // Technical passed, Business failed -> Blocked!
+    if (paths) {
+      try {
+        recordWorkflowEvent(paths, "WORKFLOW_CANCELLED", {
+          task_id: taskId,
+          reason_code: "OWNER_DECISION_REQUIRED",
+        });
+      } catch {
+        /* ignore */
+      }
+    }
+    return {
+      status: "BLOCKED",
+      gateResult,
+      message: gateResult.blockedReason,
+    };
+  }
+
+  if (gateResult.overallStatus === VALIDATION_STATUS.FAIL) {
+    return {
+      status: "FAILED",
+      gateResult,
+      message: gateResult.blockedReason,
+    };
+  }
+
+  // Update queue
+  try {
+    queueManager.finishExecution({
+      taskId,
+      workerId,
+      artifacts: artifactPath ? [artifactPath] : [],
+      resultSummary: "Technical and Business validation passed.",
+    });
+  } catch {
+    /* ignore */
+  }
+
+  // Format result card for #results
+  const resultCard = formatGovernedResultCard({
+    taskId,
+    executionStatus: "EXECUTION_FINISHED",
+    technicalValidation: "PASS",
+    businessValidation: "PASS",
+    preview: gateResult.preview?.previewText || "",
+    artifact: artifactPath || "",
+    keyFindings:
+      "Tất cả các kiểm định kỹ thuật và điều kiện ràng buộc nghiệp vụ đều đạt chuẩn.",
+  });
+
+  return {
+    status: "READY_FOR_REVIEW",
+    gateResult,
+    resultCard,
+  };
 }
 
 let excelWriterModule = null;
@@ -630,7 +870,15 @@ export function registerTools(api) {
         properties: {
           operation: {
             type: "string",
-            enum: ["load", "read", "populate", "validate", "generate", "create", "append"],
+            enum: [
+              "load",
+              "read",
+              "populate",
+              "validate",
+              "generate",
+              "create",
+              "append",
+            ],
             description: "Excel operation to execute",
           },
           file_path: {
@@ -726,7 +974,14 @@ export function registerTools(api) {
         properties: {
           operation: {
             type: "string",
-            enum: ["bind", "update", "validate", "generate", "create", "export"],
+            enum: [
+              "bind",
+              "update",
+              "validate",
+              "generate",
+              "create",
+              "export",
+            ],
             description: "Power BI operation to execute",
           },
           model_name: {
@@ -749,7 +1004,8 @@ export function registerTools(api) {
         },
       },
       async execute(_id, params) {
-        const targetModel = params.model_name || params.dataset_name || "DefaultModel";
+        const targetModel =
+          params.model_name || params.dataset_name || "DefaultModel";
         const op = params.operation || "validate";
         return {
           content: [
@@ -1071,9 +1327,9 @@ export default {
         ) {
           const isSynthetic = Boolean(
             event.params?.call_id &&
-              event.params?.specialist &&
-              event.params?.tool_id &&
-              event.params?.input,
+            event.params?.specialist &&
+            event.params?.tool_id &&
+            event.params?.input,
           );
 
           if (isSynthetic) {
@@ -1443,20 +1699,30 @@ export default {
                     "data_plant",
                   dependencies: [],
                   required: true,
-                  input_digest: canonicalHash("zink-input-v1", "Direct session"),
-                  constraints_digest: canonicalHash("zink-constraints-v1", "{}"),
+                  input_digest: canonicalHash(
+                    "zink-input-v1",
+                    "Direct session",
+                  ),
+                  constraints_digest: canonicalHash(
+                    "zink-constraints-v1",
+                    "{}",
+                  ),
                   validation_digest: canonicalHash("zink-validation-v1", "{}"),
                 },
               ],
             });
           } catch (e) {
-            api.logger?.warn?.(`[zink-governance] brief activation: ${e?.message}`);
+            api.logger?.warn?.(
+              `[zink-governance] brief activation: ${e?.message}`,
+            );
           }
         }
         try {
           return guard.beforeRunEnd(event, context);
         } catch (err) {
-          api.logger?.warn?.(`[zink-governance] beforeRunEnd error caught: ${err?.message}`);
+          api.logger?.warn?.(
+            `[zink-governance] beforeRunEnd error caught: ${err?.message}`,
+          );
           if (context.agentId !== "main" || !owner?.delegation) {
             return { allow: true };
           }
@@ -1492,8 +1758,7 @@ export default {
           };
           delete candidateParams.taskName;
           if (
-            expected ===
-            canonicalHash("zink-native-call-v1", candidateParams)
+            expected === canonicalHash("zink-native-call-v1", candidateParams)
           ) {
             matched = true;
           }
@@ -1502,8 +1767,7 @@ export default {
           `[zink-lease:get] key=${key} expected=${expected} actual=${actualHash} match=${matched} available=[${[...leases.keys()].join(",")}] context=${JSON.stringify({ agentId: context.agentId, sessionKey: context.sessionKey, runId: context.runId, toolCallId: context.toolCallId })} event=${JSON.stringify({ toolName: event.toolName, runId: event.runId, toolCallId: event.toolCallId })}`,
         );
         leases.delete(key);
-        if (!matched)
-          throw new Error("POLICY_DENIED");
+        if (!matched) throw new Error("POLICY_DENIED");
       } catch (err) {
         api.logger?.warn?.(`[zink-lease:blocked] ${err?.message ?? err}`);
         return {
@@ -1588,11 +1852,7 @@ export default {
         const runId = context.runId || event.runId;
         const childSessionKey =
           context.childSessionKey || event.targetSessionKey;
-        const owner = findSession(
-          readSnapshot(paths),
-          childSessionKey,
-          runId,
-        );
+        const owner = findSession(readSnapshot(paths), childSessionKey, runId);
         if (!owner.delegation) throw new Error("LINEAGE_MISMATCH");
         const parentSessionKey =
           context.requesterSessionKey || owner.delegation.parent_session_key;

@@ -497,3 +497,203 @@ export function formatError(errorOrCode, optsOrName = "Zink Bot") {
 
   return `⚠️ [${agentName}]: Yêu cầu chưa thể hoàn thành (${cleanCode}). Vui lòng kiểm tra lại quyền hạn hoặc cấu hình.`;
 }
+
+/**
+ * Formats a direct clarification question from O1/O2 in #office.
+ * Implements ACTIVE.md Section 8:
+ * Format:
+ * TASK-042 | O1
+ * Cần xác nhận: ...
+ * Lý do: ...
+ * Task: WAITING_FOR_USER
+ */
+export function formatOfficeClarificationQuestion({
+  taskId,
+  agentId = "O1",
+  question,
+  reason,
+}) {
+  const cleanTask = sanitizeDiscordText(taskId || "TASK-UNKNOWN");
+  const cleanAgent = sanitizeDiscordText(agentId.toUpperCase());
+  const cleanQuestion = sanitizeDiscordText(
+    question || "Cần xác nhận thêm thông tin.",
+  );
+  const cleanReason = sanitizeDiscordText(
+    reason || "Thiếu dữ kiện hoặc yêu cầu nghiệp vụ chưa rõ.",
+  );
+
+  return [
+    `**${cleanTask} | ${cleanAgent}**`,
+    "",
+    "**Cần xác nhận:**",
+    cleanQuestion,
+    "",
+    "**Lý do:**",
+    cleanReason,
+    "",
+    "**Trạng thái tác vụ:** `WAITING_FOR_USER`",
+    "*(Vui lòng trả lời trực tiếp tại #office để tác vụ tiếp tục thực thi)*",
+  ].join("\n");
+}
+
+/**
+ * Formats the final completion/rejection notification in #office by Main.
+ * Implements ACTIVE.md Section 8.
+ */
+export function formatOfficeFinalNotification({
+  taskId,
+  status = "COMPLETE",
+  summary,
+}) {
+  const cleanTask = sanitizeDiscordText(taskId || "TASK-UNKNOWN");
+  const cleanSummary = sanitizeDiscordText(summary || "Tác vụ đã kết thúc.");
+  const isComplete = status === "COMPLETE";
+
+  return [
+    `📢 **[Quản Lý | Thông báo Cuối]** Tác vụ **${cleanTask}**`,
+    "",
+    `**Kết quả:** ${isComplete ? "✅ ĐÃ HOÀN THÀNH (Đã được User nghiệm thu)" : "❌ ĐÃ TỪ CHỐI / HỦY BỎ"}`,
+    "",
+    "**Tóm tắt kết quả:**",
+    cleanSummary,
+  ].join("\n");
+}
+
+/**
+ * Formats an Approval Card for #approvals with exact fields and buttons.
+ * Implements ACTIVE.md Section 8.
+ */
+export function formatGovernedApprovalCard({
+  taskId,
+  planVersion = "1.0",
+  primary = "O1",
+  executionPlan = "",
+  risk = "Thấp",
+  validationCriteria = "",
+  queueStatus = "APPROVAL_PENDING",
+}) {
+  const cleanTask = sanitizeDiscordText(taskId || "TASK-UNKNOWN");
+  const cleanPlanVer = sanitizeDiscordText(planVersion);
+  const cleanPrimary = sanitizeDiscordText(primary);
+  const cleanPlan = sanitizeDiscordText(executionPlan);
+  const cleanRisk = sanitizeDiscordText(risk);
+  const cleanCriteria = sanitizeDiscordText(
+    validationCriteria || "Kiểm định kỹ thuật và nghiệp vụ",
+  );
+  const cleanQueue = sanitizeDiscordText(queueStatus);
+
+  return [
+    `### 🔖 [PHÊ DUYỆT THỰC THI] — Tác vụ ${cleanTask}`,
+    "> **Lưu ý:** Chỉ User/Owner mới có thẩm quyền APPROVE hoặc REJECT kế hoạch thực thi.",
+    "",
+    "---",
+    `**Mã tác vụ:** \`${cleanTask}\``,
+    `**Phiên bản kế hoạch:** \`${cleanPlanVer}\``,
+    `**Điều phối chính (Primary):** \`${cleanPrimary}\``,
+    `**Đánh giá rủi ro:** \`${cleanRisk}\``,
+    `**Trạng thái hàng đợi:** \`${cleanQueue}\``,
+    "",
+    "#### 📝 Kế hoạch Thực thi:",
+    cleanPlan || "*(Chi tiết kế hoạch chưa được đính kèm)*",
+    "",
+    "#### ⚖️ Tiêu chí Nghiệm thu (Validation Criteria):",
+    cleanCriteria,
+    "",
+    "---",
+    "**Thao tác dành cho User:**",
+    "- Bấm **[APPROVE]** để phê duyệt đưa vào hàng đợi thực thi.",
+    "- Bấm **[REJECT]** để từ chối kế hoạch.",
+    "- Bấm **[REQUEST REVISION]** để yêu cầu sửa đổi kế hoạch.",
+  ].join("\n");
+}
+
+/**
+ * Formats a Result Review Card for #results with exact fields, preview, and buttons.
+ * Implements ACTIVE.md Section 8.
+ */
+export function formatGovernedResultCard({
+  taskId,
+  attempt = 1,
+  executionStatus = "EXECUTION_FINISHED",
+  technicalValidation = "PASS",
+  businessValidation = "PASS",
+  preview = "",
+  artifact = "",
+  keyFindings = "",
+}) {
+  const cleanTask = sanitizeDiscordText(taskId || "TASK-UNKNOWN");
+  const cleanFindings = sanitizeDiscordText(
+    keyFindings || "Hoàn thành xử lý dữ liệu.",
+  );
+  const cleanArtifact = sanitizeDiscordText(
+    artifact || "*(Không có tệp đính kèm)*",
+  );
+
+  return [
+    `### 📋 [NGHIỆM THU KẾT QUẢ] — Tác vụ ${cleanTask}`,
+    "> **Lưu ý:** Chỉ User/Owner mới có quyền ACCEPT / COMPLETE hoặc REJECT kết quả.",
+    "",
+    "---",
+    `**Mã tác vụ:** \`${cleanTask}\``,
+    `**Lần thử nghiệm (Attempt):** \`#${attempt}\``,
+    `**Trạng thái thực thi:** \`${executionStatus}\``,
+    `**Kiểm định Kỹ thuật:** \`${technicalValidation}\``,
+    `**Kiểm định Nghiệp vụ:** \`${businessValidation}\``,
+    "",
+    "#### 🔍 Dữ liệu Mẫu Thực tế (Actual Preview):",
+    preview || "*(Không có dữ liệu trích xuất)*",
+    "",
+    "#### 📦 Tệp Sản phẩm (Artifact):",
+    `- ${cleanArtifact}`,
+    "",
+    "#### 💡 Phát hiện & Kết luận Chính (Key Findings):",
+    cleanFindings,
+    "",
+    "---",
+    "**Thao tác dành cho User:**",
+    "- Bấm **[ACCEPT / COMPLETE]** để nghiệm thu và hoàn thành tác vụ.",
+    "- Bấm **[REJECT]** để bác bỏ kết quả.",
+    "- Bấm **[REQUEST REVISION]** để yêu cầu chạy lại/tinh chỉnh.",
+  ].join("\n");
+}
+
+/**
+ * Formats an Incident Card for #incidents with normalized lifecycle.
+ * Implements ACTIVE.md Section 9:
+ * States: RECEIVED -> INVESTIGATING -> REPAIRING -> RESOLVED
+ */
+export function formatIncidentCard({
+  incidentId,
+  taskId = null,
+  state = "RECEIVED",
+  severity = "MEDIUM",
+  observed = "",
+  expected = "",
+  action = "",
+}) {
+  const cleanIncId = sanitizeDiscordText(incidentId || "INC-" + Date.now());
+  const cleanTask = taskId
+    ? ` (Liên kết: \`${sanitizeDiscordText(taskId)}\`)`
+    : "";
+
+  return [
+    `### 🚨 [SỰ CỐ] — ${cleanIncId}${cleanTask}`,
+    `> **Trạng thái:** \`${state}\` | **Mức độ:** \`${severity}\``,
+    "",
+    "---",
+    "**Hiện trạng quan sát (Observed):**",
+    sanitizeDiscordText(
+      observed || "Phát hiện bất thường trong quá trình thực thi.",
+    ),
+    "",
+    "**Trạng thái kỳ vọng (Expected):**",
+    sanitizeDiscordText(
+      expected || "Hoạt động bình thường theo hợp đồng quy định.",
+    ),
+    "",
+    "**Hành động xử lý & Khắc phục:**",
+    sanitizeDiscordText(
+      action || "Hệ thống đang tiến hành điều tra nguyên nhân.",
+    ),
+  ].join("\n");
+}

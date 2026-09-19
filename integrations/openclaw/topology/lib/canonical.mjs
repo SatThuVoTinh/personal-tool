@@ -1,6 +1,6 @@
 import { createHash, createHmac } from "node:crypto";
 
-export const GOVERNANCE_VERSION = "m7-t5-r13";
+export const GOVERNANCE_VERSION = "m8-t2-r9";
 export const SCHEMA_VERSION = "1.0.0";
 
 const SET_KEYS = new Set(["allowed_tools", "allowAgents", "allowed_stacks"]);

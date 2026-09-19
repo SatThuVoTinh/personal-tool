@@ -19,7 +19,7 @@
       "const": "1.0.0"
     },
     "governance_version": {
-      "enum": ["m7-t2-r12", "m7-t5-r13"]
+      "enum": ["m7-t2-r12", "m7-t5-r13", "m8-t2-r9"]
     },
     "sequence": {
       "type": "integer",
@@ -34,6 +34,13 @@
         "WORKFLOW_SPAWN_RECEIVED",
         "WORKFLOW_RESULT_RECORDED",
         "WORKFLOW_ROOT_RESULT_RECORDED",
+        "WORKFLOW_USER_RESULT_ACCEPTED",
+        "WORKFLOW_USER_RESULT_REJECTED",
+        "WORKFLOW_RESULT_REVISION_REQUESTED",
+        "WORKFLOW_USER_APPROVAL_DECIDED",
+        "WORKFLOW_TASK_CLAIMED",
+        "WORKFLOW_USER_QUESTION_RECORDED",
+        "WORKFLOW_USER_ANSWER_RECORDED",
         "WORKFLOW_CANCELLED",
         "WORKFLOW_CONTINUATION_AUTHORIZED",
         "WORKFLOW_CONTINUATION_STARTED",

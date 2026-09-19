@@ -192,3 +192,106 @@ export function prepareQueryEmbedding(params = {}) {
     metadataFilters,
   };
 }
+
+/**
+ * Structured Reference ID Contract
+ * Implements ACTIVE.md Sections 21 & 22:
+ * Schema: TOPIC (2 digits) - EXECUTION/TOOL (2 digits) - TASK (4 digits)
+ * E.g., "01-03-0042"
+ * "00" is strictly reserved for Personal Experience / Human-Contributed knowledge.
+ */
+export const STRUCTURED_REFERENCE_ID_REGEX = /^(\d{2})-(\d{2})-(\d{4})$/u;
+
+export function formatStructuredReferenceId({
+  topicCode, // 0-99
+  executionCode, // 0-99 (00 = human-contributed)
+  taskNumber, // 1-9999
+}) {
+  const t = String(topicCode).padStart(2, "0");
+  const e = String(executionCode).padStart(2, "0");
+  const k = String(taskNumber).padStart(4, "0");
+
+  if (!/^\d{2}$/.test(t) || !/^\d{2}$/.test(e) || !/^\d{4}$/.test(k)) {
+    throw new Error(
+      "INVALID_REFERENCE_ID_COMPONENTS: Expected 2-digit topic, 2-digit execution, 4-digit task",
+    );
+  }
+
+  return `${t}-${e}-${k}`;
+}
+
+export function parseStructuredReferenceId(id) {
+  if (typeof id !== "string") {
+    throw new TypeError("Reference ID must be a string");
+  }
+  const match = id.trim().match(STRUCTURED_REFERENCE_ID_REGEX);
+  if (!match) {
+    throw new Error(
+      `INVALID_REFERENCE_ID_FORMAT: "${id}" does not match TOPIC(2)-EXECUTION(2)-TASK(4)`,
+    );
+  }
+  return {
+    rawId: match[0],
+    topicCode: match[1],
+    executionCode: match[2],
+    taskNumber: match[3],
+    isHumanContributed: match[2] === "00",
+  };
+}
+
+export function isValidStructuredReferenceId(id) {
+  try {
+    parseStructuredReferenceId(id);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Retrieval Deduplication
+ * Implements ACTIVE.md Section 25:
+ * Collapses triple-redundant context (KB fact + Skill procedure referencing KB + Tool referencing Skill)
+ * into canonical fact + necessary procedure + necessary tool reference.
+ */
+export function deduplicateRetrievalContext(items = []) {
+  if (!Array.isArray(items)) return [];
+
+  const seenPassages = new Set();
+  const canonicalFacts = [];
+  const procedures = [];
+  const toolReferences = [];
+
+  for (const item of items) {
+    if (!item || typeof item !== "object") continue;
+
+    // Normalization key based on content hash or canonical passage ID
+    const contentKey =
+      item.content_hash || item.passage_id || item.text?.slice(0, 100);
+
+    if (contentKey && seenPassages.has(contentKey)) {
+      // Redundant duplicate fact, suppress
+      continue;
+    }
+    if (contentKey) {
+      seenPassages.add(contentKey);
+    }
+
+    const type = item.type || item.source_type || "fact";
+    if (type === "skill" || type === "procedure") {
+      procedures.push(item);
+    } else if (type === "tool") {
+      toolReferences.push(item);
+    } else {
+      canonicalFacts.push(item);
+    }
+  }
+
+  return {
+    canonicalFacts,
+    procedures,
+    toolReferences,
+    totalCount:
+      canonicalFacts.length + procedures.length + toolReferences.length,
+  };
+}

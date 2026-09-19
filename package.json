@@ -21,7 +21,7 @@
     "format": "prettier --write README.md CHANGELOG.md docs/**/*.md experiments/**/*.md .github/workflows/*.{yml,yaml} .vscode/**/*.json package.json scripts/**/*.mjs tests/**/*.mjs zink-skill-store/**/*.mjs zink-skill-store/**/*.md integrations/openclaw/**/*.mjs integrations/openclaw/**/*.md",
     "format:check": "prettier --check README.md CHANGELOG.md docs/**/*.md experiments/**/*.md .github/workflows/*.{yml,yaml} .vscode/**/*.json package.json scripts/**/*.mjs tests/**/*.mjs zink-skill-store/**/*.mjs zink-skill-store/**/*.md integrations/openclaw/**/*.mjs integrations/openclaw/**/*.md",
     "lint": "eslint scripts tests zink-skill-store/src zink-skill-store/bin integrations/openclaw && markdownlint-cli2",
-    "test": "node --test tests/repository-policy.test.mjs tests/m5-docker-contract.test.mjs tests/m3-t1-contract.test.mjs tests/m3-t2-contract.test.mjs tests/m3-t3-contract.test.mjs tests/m3-t4-contract.test.mjs tests/m3-t5-contract.test.mjs tests/m6-t1-skill-store.test.mjs tests/m7-t1-openclaw.test.mjs tests/m7-t2-openclaw.test.mjs tests/m8-t1-skill-vector-memory.test.mjs",
+    "test": "node --test tests/repository-policy.test.mjs tests/m5-docker-contract.test.mjs tests/m3-t1-contract.test.mjs tests/m3-t2-contract.test.mjs tests/m3-t3-contract.test.mjs tests/m3-t4-contract.test.mjs tests/m3-t5-contract.test.mjs tests/m6-t1-skill-store.test.mjs tests/m7-t1-openclaw.test.mjs tests/m7-t2-openclaw.test.mjs tests/m8-t1-skill-vector-memory.test.mjs tests/m8-t2-governed-runtime-audit.test.mjs tests/m8-t2-e2e-workflow.test.mjs",
     "repo:check": "node scripts/repository-check.mjs",
     "verify": "npm run format:check && npm run lint && npm test && npm run repo:check"
   },

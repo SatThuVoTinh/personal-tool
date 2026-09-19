@@ -1016,14 +1016,19 @@ export function governancePluginFiles() {
       path.join(topology, "lib", file),
       "utf8",
     );
-  assets["lib/discord-formatter.mjs"] = readFileSync(
-    path.resolve(GOVERNANCE_PLUGIN_TEMPLATE, "../../lib/discord-formatter.mjs"),
-    "utf8",
-  );
-  assets["lib/excel-writer.mjs"] = readFileSync(
-    path.resolve(GOVERNANCE_PLUGIN_TEMPLATE, "../../lib/excel-writer.mjs"),
-    "utf8",
-  );
+  for (const libFile of [
+    "discord-formatter.mjs",
+    "excel-writer.mjs",
+    "authority.mjs",
+    "queue-manager.mjs",
+    "artifact-validator.mjs",
+    "decision-ledger.mjs",
+  ]) {
+    assets[`lib/${libFile}`] = readFileSync(
+      path.resolve(GOVERNANCE_PLUGIN_TEMPLATE, `../../lib/${libFile}`),
+      "utf8",
+    );
+  }
   for (const file of readdirSync(path.join(topology, "contracts")).sort()) {
     if (!/^[a-z-]+\.schema\.json$/u.test(file)) continue;
     assets[`contracts/${file}`] = readFileSync(
@@ -1065,11 +1070,7 @@ export function governancePluginFiles() {
       "utf8",
     )
       .replaceAll('"../../topology/lib/', '"./lib/')
-      .replaceAll(
-        '"../../lib/discord-formatter.mjs"',
-        '"./lib/discord-formatter.mjs"',
-      )
-      .replaceAll('"../../lib/excel-writer.mjs"', '"./lib/excel-writer.mjs"'),
+      .replaceAll('"../../lib/', '"./lib/'),
   });
 }
 

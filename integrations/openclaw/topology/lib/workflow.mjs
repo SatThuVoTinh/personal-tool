@@ -11,7 +11,13 @@ const roles = {
   sql: [],
   python: [],
 };
-const terminal = new Set(["COMPLETE", "PARTIAL", "FAILED", "CANCELLED"]);
+const terminal = new Set([
+  "COMPLETE",
+  "PARTIAL",
+  "FAILED",
+  "CANCELLED",
+  "REJECTED",
+]);
 const activeRun = new Set([
   "PENDING",
   "SPAWN_UNKNOWN",
@@ -258,8 +264,114 @@ export function applyWorkflowEvent(snapshot, type, payload) {
     );
     task.root_result = { ...payload };
     task.workflow_status = payload.outcome_status;
-    task.reason_code = payload.reason_code;
     if (terminal.has(task.workflow_status)) task.brief_state = "CLOSED";
+    return next;
+  }
+  if (type === "WORKFLOW_USER_RESULT_ACCEPTED") {
+    exactKeys(payload, ["task_id", "actor", "channel", "decision"]);
+    requireCondition(payload.actor === "user", "POLICY_DENIED");
+    requireCondition(payload.channel === "results", "CHANNEL_MISMATCH");
+    requireCondition(payload.decision === "ACCEPT", "SCHEMA_INVALID");
+    requireCondition(
+      task.workflow_status === "RESULT_PENDING_REVIEW",
+      "INVALID_STATE_TRANSITION",
+    );
+    task.workflow_status = "COMPLETE";
+    task.brief_state = "CLOSED";
+    task.user_accepted_at = new Date().toISOString();
+    return next;
+  }
+  if (type === "WORKFLOW_USER_RESULT_REJECTED") {
+    exactKeys(payload, ["task_id", "actor", "channel", "reason"]);
+    requireCondition(payload.actor === "user", "POLICY_DENIED");
+    requireCondition(payload.channel === "results", "CHANNEL_MISMATCH");
+    requireCondition(
+      task.workflow_status === "RESULT_PENDING_REVIEW",
+      "INVALID_STATE_TRANSITION",
+    );
+    task.workflow_status = "REJECTED";
+    task.brief_state = "CLOSED";
+    task.user_rejected_at = new Date().toISOString();
+    task.rejection_reason = payload.reason;
+    return next;
+  }
+  if (type === "WORKFLOW_RESULT_REVISION_REQUESTED") {
+    exactKeys(payload, ["task_id", "actor", "channel", "feedback"]);
+    requireCondition(
+      ["user", "main"].includes(payload.actor),
+      "POLICY_DENIED",
+    );
+    requireCondition(payload.channel === "results", "CHANNEL_MISMATCH");
+    requireCondition(
+      task.workflow_status === "RESULT_PENDING_REVIEW",
+      "INVALID_STATE_TRANSITION",
+    );
+    task.workflow_status = "REVISING";
+    task.revision_requested_at = new Date().toISOString();
+    task.revision_feedback = payload.feedback;
+    return next;
+  }
+  if (type === "WORKFLOW_USER_APPROVAL_DECIDED") {
+    exactKeys(payload, ["task_id", "actor", "channel", "decision"]);
+    requireCondition(
+      payload.decision === "APPROVE" ||
+        payload.decision === "REJECT" ||
+        payload.decision === "REQUEST_REVISION",
+      "SCHEMA_INVALID",
+    );
+    if (payload.decision === "APPROVE" || payload.decision === "REJECT") {
+      requireCondition(payload.actor === "user", "POLICY_DENIED");
+    } else {
+      requireCondition(
+        ["user", "main"].includes(payload.actor),
+        "POLICY_DENIED",
+      );
+    }
+    requireCondition(payload.channel === "approvals", "CHANNEL_MISMATCH");
+    if (payload.decision === "APPROVE") {
+      task.workflow_status = "QUEUED";
+      task.approved_at = new Date().toISOString();
+    } else if (payload.decision === "REJECT") {
+      task.workflow_status = "REJECTED";
+      task.brief_state = "CLOSED";
+      task.rejected_at = new Date().toISOString();
+    } else {
+      task.workflow_status = "REVISING";
+      task.revision_requested_at = new Date().toISOString();
+    }
+    return next;
+  }
+  if (type === "WORKFLOW_TASK_CLAIMED") {
+    exactKeys(payload, ["task_id", "worker_id"]);
+    requireCondition(
+      task.workflow_status === "QUEUED" ||
+        task.workflow_status === "WAITING_FOR_WORKER" ||
+        task.workflow_status === "ACTIVE",
+      "INVALID_STATE_TRANSITION",
+    );
+    task.workflow_status = "EXECUTING";
+    task.claimed_by = payload.worker_id;
+    task.claimed_at = new Date().toISOString();
+    return next;
+  }
+  if (type === "WORKFLOW_USER_QUESTION_RECORDED") {
+    exactKeys(payload, ["task_id", "agent_id", "question"]);
+    requireCondition(
+      task.workflow_status === "EXECUTING",
+      "INVALID_STATE_TRANSITION",
+    );
+    task.workflow_status = "WAITING_FOR_USER";
+    task.waiting_question = payload.question;
+    return next;
+  }
+  if (type === "WORKFLOW_USER_ANSWER_RECORDED") {
+    exactKeys(payload, ["task_id", "answer"]);
+    requireCondition(
+      task.workflow_status === "WAITING_FOR_USER",
+      "INVALID_STATE_TRANSITION",
+    );
+    task.workflow_status = "EXECUTING";
+    task.user_answer = payload.answer;
     return next;
   }
   if (type === "WORKFLOW_SPAWN_RECEIVED") {

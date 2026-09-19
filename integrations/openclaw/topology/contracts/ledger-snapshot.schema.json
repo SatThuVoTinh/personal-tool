@@ -18,7 +18,7 @@
       "const": "1.0.0"
     },
     "governance_version": {
-      "enum": ["m7-t2-r12", "m7-t5-r13"]
+      "enum": ["m7-t2-r12", "m7-t5-r13", "m8-t2-r9"]
     },
     "sequence": {
       "type": "integer",
