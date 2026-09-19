@@ -41,73 +41,69 @@ Hệ thống OpenClaw quản trị cụm 7 agent vai trò cố định. Các age
 
 ### Bảng Tổng hợp Danh mục 7 Bot
 
-| Agent ID   | Tên hiển thị Discord | Snowflake ID          | Handle / Tag        | Nhiệm vụ chính                                         | Công cụ Zink được gọi                                                                                           | Môi trường Sandbox      |
-| :--------- | :------------------- | :-------------------- | :------------------ | :----------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------- | :---------------------- |
-| `main`     | **Quản Lý**          | `1545436878835163156` | `@Quản Lý`          | Tiếp nhận, phân rã DAG, lập Execution Brief, tổng hợp  | `sessions_spawn`, `sessions_yield`, `session_status`, `zink_knowledge_search`, `zink_skill_search`              | Cô lập, điều phối       |
-| `o1`       | **Điều Phối 1 (O1)** | `1545437953197744248` | `@Điều Phối 1 (O1)` | Chuyên viên Tri thức (Knowledge Specialist)            | `session_status`, `zink_knowledge_search`, `zink_skill_search`, `zink_skill_propose`                            | Sandbox read-only Vault |
-| `o2`       | **Điều Phối 2 (O2)** | `1545438251966402661` | `@Điều Phối 2 (O2)` | Chuyên viên Quy trình (Orchestrator)                   | `session_status`, `zink_n8n`, `zink_knowledge_search`, `zink_skill_search`                                      | Sandbox Docker          |
-| `excel`    | **Excel**            | `1545438637750227104` | `@Excel`            | Chuyên viên Bảng tính (Spreadsheet Specialist)         | `session_status`, `zink_excel`, `zink_skill_search`, `zink_skill_propose`, `zink_knowledge_search`              | Sandbox Docker          |
-| `power-bi` | **PowerBI**          | `1545439082019164271` | `@PowerBI`          | Chuyên viên Báo cáo BI (BI & Dashboard Specialist)     | `session_status`, `zink_power_bi`, `zink_skill_search`, `zink_skill_propose`, `zink_knowledge_search`           | Sandbox Docker          |
-| `sql`      | **SQL**              | `1545438861356966010` | `@SQL`              | Chuyên viên Dữ liệu & Truy vấn (Data & SQL Specialist) | `session_status`, `zink_sql`, `zink_skill_search`, `zink_skill_propose`, `zink_knowledge_search`                | Governed DuckDB Bridge  |
-| `python`   | **Python**           | `1545439279843508235` | `@Python`           | Chuyên viên Khoa học Dữ liệu (Decision & Data Science) | `session_status`, `zink_python`, `zink_n8n`, `zink_skill_search`, `zink_skill_propose`, `zink_knowledge_search` | Sandbox Docker          |
+| Agent ID   | Tên hiển thị Discord | Snowflake ID          | Handle / Tag        | Nhiệm vụ chính                                                                                                         | Công cụ Zink được gọi                                                                                           | Cấp bậc & Thẩm quyền              |
+| :--------- | :------------------- | :-------------------- | :------------------ | :--------------------------------------------------------------------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------- | :-------------------------------- |
+| `main`     | **Quản Lý**          | `1545436878835163156` | `@Quản Lý`          | Tiếp nhận yêu cầu, phân tích DAG, chỉ định Primary (`o1`/`o2`), điều phối phê duyệt, thông báo tổng kết               | `sessions_spawn` (chỉ gọi `o1`/`o2`), `sessions_yield`, `session_status`, `zink_knowledge_search`, `zink_skill_search` | Giám sát Quản trị (Governance)    |
+| `o1`       | **Điều Phối 1 (O1)** | `1545437953197744248` | `@Điều Phối 1 (O1)` | Giám sát thực thi ETL & Bảng tính (điều phối `excel`, `sql`, `python`), đăng `#approvals`, hỏi `#office`, đăng `#results`| `sessions_spawn` (`excel`, `sql`, `python`), `session_status`, `zink_knowledge_search`, `zink_skill_search`              | Giám sát Thực thi (Execution O1)  |
+| `o2`       | **Điều Phối 2 (O2)** | `1545438251966402661` | `@Điều Phối 2 (O2)` | Giám sát thực thi BI & Khoa học Dữ liệu (điều phối `power-bi`, `python`), đăng `#approvals`, hỏi `#office`, `#results`  | `sessions_spawn` (`power-bi`, `python`), `session_status`, `zink_n8n`, `zink_knowledge_search`, `zink_skill_search`    | Giám sát Thực thi (Execution O2)  |
+| `excel`    | **Excel**            | `1545438637750227104` | `@Excel`            | Chuyên viên Bảng tính (Spreadsheet Specialist) — chạy ngầm dưới quyền O1, xuất bản workbook `.xlsx` và ảnh preview `.svg` | `session_status`, `zink_excel`, `zink_skill_search`, `zink_skill_propose`, `zink_knowledge_search`              | Chuyên viên (Năng lực thuần túy)  |
+| `power-bi` | **PowerBI**          | `1545439082019164271` | `@PowerBI`          | Chuyên viên Báo cáo BI (BI Specialist) — chạy ngầm dưới quyền O2, thiết kế dashboard và công thức DAX                    | `session_status`, `zink_power_bi`, `zink_skill_search`, `zink_skill_propose`, `zink_knowledge_search`           | Chuyên viên (Năng lực thuần túy)  |
+| `sql`      | **SQL**              | `1545438861356966010` | `@SQL`              | Chuyên viên Truy vấn Dữ liệu (SQL Specialist) — chạy ngầm dưới quyền O1, thực thi kịch bản trích xuất ETL                | `session_status`, `zink_sql`, `zink_skill_search`, `zink_skill_propose`, `zink_knowledge_search`                | Chuyên viên (Năng lực thuần túy)  |
+| `python`   | **Python**           | `1545439279843508235` | `@Python`           | Chuyên viên Khoa học Dữ liệu (Data Science Specialist) — chạy ngầm dưới quyền O1 (ETL) hoặc O2 (Analytics/ML/Forecast)   | `session_status`, `zink_python`, `zink_n8n`, `zink_skill_search`, `zink_skill_propose`, `zink_knowledge_search` | Chuyên viên (Năng lực thuần túy)  |
 
 ---
 
 ### Hồ sơ Chi tiết Từng Agent
 
-#### 1. Agent `main` — Quản Lý (Coordinator Agent)
+#### 1. Agent `main` — Quản Lý (Governance Supervisor)
 
 - **Discord Handle:** `@Quản Lý` (ID: `1545436878835163156`)
-- **Chức năng chính:** Điểm tiếp nhận yêu cầu đầu tiên từ người vận hành trên kênh `#office` hoặc DM. Phân tích yêu cầu, phân loại bài toán (Work/Research), phân rã DAG (Directed Acyclic Graph) và lập Execution Brief.
+- **Chức năng chính:** Điểm tiếp nhận yêu cầu đầu tiên từ người vận hành trên kênh `#office` hoặc DM. Phân tích yêu cầu, phân loại bài toán (Work/Research), phân rã DAG và chỉ định duy nhất một Primary Coordinator (`o1` hoặc `o2`).
 - **Quyền hạn & Công cụ:**
-  - Được phép sử dụng `sessions_spawn` để giao nhiệm vụ con cho các sub-agent chuyên trách (`o1`, `o2`, `excel`, `power-bi`, `sql`, `python`) ở chế độ cô lập hoàn toàn (`context=isolated`, `mode=run`, `sandbox=require`).
-  - Được phép sử dụng `sessions_yield` để nhận kết quả dạng push-based bất đồng bộ từ các sub-agent.
+  - Được phép sử dụng `sessions_spawn` để giao nhiệm vụ con **chỉ cho hai điều phối viên (`o1`, `o2`)** ở chế độ cô lập hoàn toàn (`context=isolated`, `mode=run`, `sandbox=require`).
+  - Được phép sử dụng `sessions_yield` để nhận kết quả dạng push-based bất đồng bộ từ điều phối viên.
   - Sử dụng `session_status` để kiểm tra trạng thái luồng làm việc.
-- **Ranh giới an toàn & Giới hạn:**
-  - **Không** gọi trực tiếp các công cụ thực thi dữ liệu (`zink_excel`, `zink_power_bi`, `zink_sql`, `zink_python`, `zink_n8n`).
-  - Kiểm định toàn bộ kết quả đầu ra của sub-agent theo lược đồ hợp đồng `agent-result-payload-v1` (xác thực `outcome_claim`, `assumptions`, `limitations`, `self_validation`) trước khi phản hồi người dùng.
+  - Phát thông báo tổng kết cuối cùng (`FINAL_NOTIFICATION`) trên kênh `#office` sau khi người dùng đã nghiệm thu kết quả tại `#results`.
+- **Ranh giới an toàn & Giới hạn Bất biến:**
+  - **TUYỆT ĐỐI KHÔNG** tự gọi trực tiếp các chuyên viên (`excel`, `power-bi`, `sql`, `python`) hoặc tự thực thi nghiệp vụ kỹ thuật.
+  - **TUYỆT ĐỐI KHÔNG** tự nhấn `APPROVE`, `REJECT` (kế hoạch) hoặc `ACCEPT / COMPLETE`, `REJECT` (kết quả). Quyền này thuộc độc quyền của `User`.
+  - Không phát ngôn chi tiết quá trình thực thi thô (raw execution narration) lên kênh `#office`.
 
-#### 2. Agent `o1` — Điều Phối 1 (Knowledge Specialist)
+#### 2. Agent `o1` — Điều Phối 1 (Execution Supervisor — ETL & Spreadsheets)
 
 - **Discord Handle:** `@Điều Phối 1 (O1)` (ID: `1545437953197744248`)
-- **Chức năng chính:** Chuyên viên quản trị và khai thác tri thức. Chịu trách nhiệm tra cứu tài liệu tham khảo, tiêu chuẩn quy trình, tài liệu chuyên môn và lịch sử quyết định trong Zink Knowledgebase.
+- **Chức năng chính:** Giám sát thực thi toàn bộ các tác vụ trích xuất, chuyển đổi dữ liệu (ETL), truy vấn SQL và tạo lập bảng tính Excel.
 - **Quyền hạn & Công cụ:**
-  - Truy xuất Knowledgebase thông qua giao diện API nội bộ `http://127.0.0.1:8080/knowledge` (tìm kiếm vector HNSW, Full-Text Search FTS, trích xuất đoạn văn bản kèm metadata và nguồn gốc provenance).
-  - Sử dụng `session_status`.
+  - Lập kế hoạch thực thi chi tiết và phát hành thẻ phê duyệt kế hoạch (`### 🔖 [PHÊ DUYỆT THỰC THI]`) trên `#approvals`.
+  - Quản lý và điều phối các chuyên viên cấp dưới: `excel`, `sql`, `python` (cho mục đích ETL) thông qua `sessions_spawn`.
+  - Trực tiếp gửi tin nhắn làm rõ câu hỏi nghiệp vụ tới người dùng trên kênh `#office` khi gặp điểm mơ hồ (`WAITING_FOR_USER`).
+  - Sau khi kiểm định đa tầng thành công, phát sự kiện `EXECUTION_FINISHED` và đăng thẻ nghiệm thu kết quả kèm ảnh preview thực tế lên `#results`.
 - **Ranh giới an toàn & Giới hạn:**
-  - Thư mục nguồn Obsidian Vault của con người được mount ở chế độ **chỉ đọc (`read-only`)**; tuyệt đối không ghi đè, sửa đổi hay xóa tài liệu trong Vault.
-  - Không có quyền thao tác trực tiếp trên cơ sở dữ liệu phân tích hay các adapter ngoại vi.
+  - Thư mục nguồn Obsidian Vault của con người được mount ở chế độ **chỉ đọc (`read-only`)**; tuyệt đối không sửa đổi hay xóa tài liệu trong Vault.
+  - Không tự cấp quyền phê duyệt (`APPROVE`) hoặc tự nghiệm thu hoàn tất (`COMPLETE`).
 
-#### 3. Agent `o2` — Điều Phối 2 (Orchestrator)
+#### 3. Agent `o2` — Điều Phối 2 (Execution Supervisor — BI & Advanced Analytics)
 
 - **Discord Handle:** `@Điều Phối 2 (O2)` (ID: `1545438251966402661`)
-- **Chức năng chính:** Chuyên viên điều phối các chuỗi quy trình tất định (deterministic workflows) và tự động hóa tác vụ định kỳ giữa các hệ thống.
+- **Chức năng chính:** Giám sát thực thi các tác vụ trực quan hóa dữ liệu (Power BI Dashboard, DAX modeling), kịch bản khoa học dữ liệu, dự báo chuỗi thời gian (Forecasting), tối ưu hóa quy hoạch (Optimization) và tự động hóa n8n.
 - **Quyền hạn & Công cụ:**
-  - Sử dụng `zink_n8n` để kích hoạt các workflow đã được kiểm định và cấp phép trong n8n instance cục bộ (`http://127.0.0.1:5678`).
-  - Sử dụng `session_status`.
+  - Lập kế hoạch thực thi chi tiết và phát hành thẻ phê duyệt trên `#approvals`.
+  - Quản lý và điều phối các chuyên viên cấp dưới: `power-bi`, `python` (cho mục đích Data Viz, ML, Forecast) thông qua `sessions_spawn`.
+  - Sử dụng `zink_n8n` để kích hoạt các workflow chuẩn đã được cấp phép.
+  - Trực tiếp hỏi làm rõ người dùng trên `#office` và đăng thẻ kết quả lên `#results`.
 - **Ranh giới an toàn & Giới hạn:**
-  - Chỉ kích hoạt các mẫu workflow chuẩn (P1 - P10); không tự ý tạo mới hoặc sửa đổi cấu trúc node n8n trên production mà chưa có phê duyệt của operator.
+  - Không tự cấp quyền phê duyệt (`APPROVE`) hoặc tự nghiệm thu hoàn tất (`COMPLETE`).
 
-#### 4. Agent `excel` — Chuyên viên Bảng tính (Excel Specialist)
+#### 4. Các Chuyên viên Thực thi Ngầm (Specialist Agents: Excel, PowerBI, SQL, Python)
 
-- **Discord Handle:** `@Excel` (ID: `1545438637750227104`)
-- **Chức năng chính:** Xử lý, tính toán, định dạng và xuất bản các mô hình bảng tính `.xlsx`, bảng dữ liệu kiểm kê, báo cáo tài chính và supply chain planning.
-- **Quyền hạn & Công cụ:**
-  - Sử dụng `zink_excel` để thực thi các thao tác đọc/ghi bảng tính, áp dụng công thức, macro chuẩn hóa và tạo sheet báo cáo.
-  - Sử dụng template quản trị lưu trữ trong `zink-skill-store/templates/`.
-  - Sử dụng `session_status`.
-- **Ranh giới an toàn & Giới hạn:**
-  - Chỉ thao tác với các tệp tin trong môi trường sandbox cô lập của task hoặc thư mục artifact đã được chỉ định rõ ràng; không truy cập hệ thống tệp bên ngoài.
-
-#### 5. Agent `power-bi` — Chuyên viên Báo cáo BI (Power BI Specialist)
-
-- **Discord Handle:** `@PowerBI` (ID: `1545439082019164271`)
-- **Chức năng chính:** Thiết kế, cập nhật và trực quan hóa dữ liệu kinh doanh dưới dạng dashboard và báo cáo Power BI (`.pbix`).
-- **Quyền hạn & Công cụ:**
-  - Sử dụng `zink_power_bi` để sinh cấu trúc mô hình dữ liệu (semantic model), công thức DAX chuẩn, bố cục dashboard và định dạng báo cáo.
-  - Sử dụng `session_status`.
-- **Ranh giới an toàn & Giới hạn:**
-  - Tiêu thụ dữ liệu phân tích đã được tổng hợp ở tầng Gold; không can thiệp trực tiếp vào dữ liệu thô tầng Landing hoặc Silver.
+- **Vai trò:** Cung cấp năng lực tính toán và sinh artifact thuần túy:
+  - `@Excel` (`excel`): Đọc/ghi bảng tính `.xlsx`, sinh ảnh preview `.svg`.
+  - `@PowerBI` (`power-bi`): Sinh mô hình dữ liệu semantic và báo cáo BI.
+  - `@SQL` (`sql`): Truy vấn dữ liệu DuckDB/PostgreSQL/BigQuery.
+  - `@Python` (`python`): Xử lý thuật toán khoa học dữ liệu, tối ưu hóa và dự báo.
+- **Ranh giới An toàn Bất biến:**
+  - **Hoàn toàn không có quyền quản trị (No Governance Authority):** Cấm tham gia vào bất kỳ hành động phê duyệt, từ chối, chuyển đổi trạng thái task hay nghiệm thu kết quả nào.
+  - **Không phát ngôn trực tiếp trên Discord:** Mọi kết quả đầu ra được gửi ngược lại cho Coordinator cha (`o1` hoặc `o2`) tổng hợp và kiểm định trước khi trình lên `#results`. Mọi nỗ lực phát ngôn trực tiếp ra `#office` của chuyên viên đều bị plugin quản trị tự động chặn lại.
 
 #### 6. Agent `sql` — Chuyên viên Truy vấn Dữ liệu (SQL Specialist)
 
@@ -501,24 +497,27 @@ Mục này hướng dẫn chi tiết quy chế vận hành, phân định thẩm
 
 ### 1. Mô hình Phân cấp Thẩm quyền (Authority Hierarchy)
 
-Hệ thống thiết lập ranh giới quyền hạn phân cấp 5 tầng nhằm bảo đảm không có agent nào tự cấp quyền hoặc tự nghiệm thu kết quả:
+Hệ thống thiết lập ranh giới quyền hạn phân cấp nghiêm ngặt nhằm bảo đảm không có agent nào tự cấp quyền hoặc tự nghiệm thu kết quả:
 
 ```text
-[ User (Người Dùng / Operator) ]
-        │  ▲ (Duy nhất User có quyền: APPROVE, REJECT, ACCEPT, REQUEST_REVISION)
-        ▼  │
-[ Main Agent (@Quản Lý) ]
-        │  ▲ (Giám sát Quản trị & Điều phối, phát hành FINAL_NOTIFICATION trên #office)
-        ▼  │
-[ Primary Execution Coordinator (O1 hoặc O2) ]
-        │  ▲ (Chính xác 1 Coordinator chịu trách nhiệm giám sát thực thi task)
-        ▼  │
-[ Specialist Agents (Excel, PowerBI, SQL, Python) ]
-        │  ▲ (Năng lực thực thi chuyên biệt; TUYỆT ĐỐI KHÔNG can thiệp quản trị)
-        ▼  │
-[ Local Laptop Worker ]
-           (Kéo việc từ Queue, thực thi xử lý nặng, xuất bản artifact thật)
+USER / OWNER
+│
+└── MAIN / QUẢN LÝ
+    │
+    ├── O1 (Điều Phối 1: Excel, SQL, Python — Giám sát ETL & Bảng tính)
+    │   └── Specialists / Tools
+    │
+    └── O2 (Điều Phối 2: Power BI, Python — Giám sát BI & Khoa học Dữ liệu)
+        └── Specialists / Tools
 ```
+
+**Ý nghĩa và Phân định Vai trò:**
+- **User / Owner:** Final Authority — Người duy nhất có thẩm quyền phê duyệt kế hoạch (`APPROVE`), chấp thuận kết quả (`ACCEPT / COMPLETE`), từ chối (`REJECT`) hoặc yêu cầu chỉnh sửa (`REQUEST_REVISION`).
+- **Main / Quản Lý:** Control & Governance Supervisor — Tiếp nhận yêu cầu ban đầu, phân loại bài toán, chỉ định điều phối viên chính (Primary Coordinator `o1` hoặc `o2`), điều phối phê duyệt trên `#approvals`, theo dõi trạng thái hệ thống và phát thông báo tổng kết cuối cùng trên `#office`. Tuyệt đối không tự thực thi kỹ thuật và không tự spawn chuyên viên.
+- **O1 / O2:** Execution Supervisors — Giám sát thực thi, lập kế hoạch chi tiết, điều phối chuyên viên cấp dưới, trực tiếp hỏi làm rõ người dùng trên `#office`, phát sự kiện `EXECUTION_FINISHED` và đăng kết quả lên `#results`.
+- **Specialist (Excel, PowerBI, SQL, Python):** Capability Executors — Chuyên viên năng lực thực thi thuần túy chạy ngầm, không có thẩm quyền ra quyết định quản trị; kết quả trả về Coordinator cha.
+- **Worker (Local Laptop Worker):** Runtime Execution — Cung cấp môi trường tính toán cục bộ, kéo tác vụ từ hàng đợi (`QueueManager`), thực thi xử lý nặng và xuất bản artifact thật.
+- **Tool:** Capability — Năng lực công cụ thực thi, không phải thẩm quyền.
 
 #### Ma trận Thẩm quyền 5 Bộ (Actor + Channel + Task + State + Action)
 
@@ -542,35 +541,88 @@ _Nguyên tắc cốt lõi:_ Sự kiện `EXECUTION_FINISHED` chỉ đánh dấu 
 
 ### 2. Quy chuẩn Vận hành 4 Kênh Discord Chuyên biệt
 
-Hệ thống phân tách luồng giao tiếp thành 4 kênh Discord độc lập:
+Hệ thống phân tách luồng giao tiếp thành 4 kênh Discord độc lập, tuyệt đối không dùng Discord làm bus truyền thông điệp nội bộ giữa các agent (agent-to-agent bus):
 
-1. **Kênh `#office` — Bàn làm việc & Giao tiếp Trực tiếp:**
-   - Tiếp nhận lệnh từ người dùng; Main phân tích bài toán và phân rã nhiệm vụ.
-   - Khi điều phối viên (`O1`/`O2`) cần làm rõ câu hỏi nghiệp vụ, điều phối viên hỏi trực tiếp người dùng tại `#office`. Task tạm dừng ở `WAITING_FOR_USER`.
-   - Người dùng trả lời trực tiếp tại `#office` để đưa task trở lại `EXECUTING`.
-   - Sau khi task được nghiệm thu hoàn tất tại `#results`, `Main` phát thông báo tổng kết cuối cùng (`FINAL_NOTIFICATION`) trên `#office`.
+```text
+# office
+Command / clarification / final notification
 
-2. **Kênh `#approvals` — Phê duyệt Kế hoạch Thực thi:**
-   - Hiển thị thẻ kế hoạch (`formatGovernedApprovalCard`) gồm: mục tiêu, phạm vi ranh giới, dự toán tài nguyên, danh sách agent tham gia và token phiên làm việc.
-   - Người dùng nhấn nút:
-     - **[Duyệt Kế Hoạch]** (`APPROVE`): Đưa task vào hàng đợi `QUEUED`.
-     - **[Từ Chối]** (`REJECT`): Đóng task ở trạng thái `REJECTED`.
-     - **[Yêu Cầu Hiệu Chỉnh]** (`REQUEST_REVISION`): Chuyển về `REVISING` để cập nhật kế hoạch.
+# approvals
+Execution authorization
+
+# results
+Result review
+
+# incidents
+Failure / recovery
+```
+
+#### Sơ đồ Vòng đời Tác vụ Chuẩn tắc (Canonical Lifecycle)
+
+```text
+# office
+   ↓ (Người dùng gửi yêu cầu & Main phân tích gán Primary O1/O2)
+Main
+   ↓ (Kiểm tra đầy đủ công cụ, tri thức, quyền hạn)
+Preflight
+   ↓
+# approvals
+   ↓ (Duy nhất User có quyền bấm APPROVE)
+O1 / O2
+   ↓
+QUEUE
+   ↓ (Worker nhận việc)
+EXECUTION
+   ↓
+EXECUTION_FINISHED (Chỉ là sự kiện kỹ thuật, CHƯA PHẢI hoàn tất!)
+   ↓
+VALIDATION + PREVIEW (Kiểm định Đa tầng & Sinh ảnh preview thực tế)
+   ↓
+# results
+   ↓
+USER REVIEW (Duy nhất User bấm ACCEPT / REJECT / REQUEST_REVISION)
+   ↓ (Chỉ khi User bấm ACCEPT / COMPLETE)
+TASK = COMPLETE
+   ↓
+# office (Main gửi thông báo tổng kết cuối cùng)
+```
+
+#### Hướng dẫn Thao tác Thực tế Theo Từng Kênh:
+
+1. **Kênh `#office` — Giao việc, Làm rõ & Thông báo Hoàn tất:**
+   - **Giao việc:** Người dùng gửi yêu cầu bình thường (ví dụ: tag `@Quản Lý Hãy tạo bảng tính doanh thu tháng 9`). Main tiếp nhận, cấp mã định danh `task_id` (ví dụ: `TASK-042`) và chỉ định Primary Coordinator (`o1` hoặc `o2`).
+   - **Điều phối viên hỏi trực tiếp:** Khi cần làm rõ yêu cầu nghiệp vụ, O1/O2 gửi câu hỏi trực tiếp trên `#office` theo mẫu:
+     ```text
+     **TASK-042 | O1**
+     **Cần xác nhận:** [Nội dung câu hỏi nghiệp vụ]
+     **Lý do:** [Căn cứ kỹ thuật / dữ liệu]
+     Task chuyển trạng thái: `WAITING_FOR_USER`
+     ```
+     Người dùng phản hồi trực tiếp tại `#office` để tiếp tục luồng thực thi.
+   - **Thông báo Hoàn tất:** Sau khi người dùng đã nghiệm thu tại `#results`, Main phát thông báo tổng kết ngắn gọn trên `#office`. Tuyệt đối không đưa nhật ký thực thi thô (raw narration) làm loãng kênh.
+
+2. **Kênh `#approvals` — Cấp quyền Thực thi (Execution Authorization):**
+   - Mỗi task có một thẻ phê duyệt duy nhất hiển thị: `TASK_ID`, Plan version, Primary Coordinator, Kế hoạch thực thi, Rủi ro, Tiêu chuẩn kiểm định và Trạng thái hàng đợi.
+   - Các nút hành động:
+     - **[APPROVE]:** Đưa task vào hàng đợi `QUEUED` (Duy nhất User được bấm).
+     - **[REJECT]:** Hủy và đóng task ở trạng thái `REJECTED` (Duy nhất User được bấm).
+     - **[REQUEST REVISION]:** Chuyển task sang `REVISING` để cập nhật kế hoạch (User hoặc Main).
+   - Tuyệt đối không bắt đầu thực thi nếu kế hoạch chưa chuyển sang trạng thái `APPROVED`.
 
 3. **Kênh `#results` — Nghiệm thu Kết quả & Xem trước Dữ liệu Thực:**
-   - Chỉ xuất hiện khi task vượt qua quy trình Kiểm định Đa tầng (Multi-tier Validation).
-   - Hiển thị thẻ kết quả (`formatGovernedResultCard`) gồm tóm tắt kết quả, chứng thực kiểm tra kỹ thuật/kinh doanh và trích xuất dữ liệu thực tế (Real Artifact Preview: 5 dòng đầu CSV, bảng tổng hợp Excel hoặc trích đoạn JSON/Markdown). Tuyệt đối cấm sử dụng dữ liệu giả mạo (mock).
-   - Người dùng bấm nút:
-     - **[Nghiệm Thu Hoàn Tất]** (`ACCEPT_RESULT`): Chuyển task sang `COMPLETE`.
-     - **[Không Đạt / Từ Chối]** (`REJECT_RESULT`): Đóng task ở `REJECTED`.
-     - **[Yêu Cầu Chỉnh Sửa]** (`REQUEST_REVISION`): Chuyển task về `REVISING` kèm phản hồi.
+   - Đăng tải kết quả sau khi vượt qua kiểm định: `TASK_ID`, Attempt/version, Trạng thái thực thi, Kết quả kiểm tra kỹ thuật (Technical Validation), Kết quả kiểm tra nghiệp vụ (Business Validation), Ảnh Preview thực tế, Đường dẫn Artifact, Phát hiện chính.
+   - Các nút hành động:
+     - **[ACCEPT / COMPLETE]:** Người dùng xác nhận đạt yêu cầu; task chuyển sang `COMPLETE` và Main thông báo hoàn tất trên `#office`.
+     - **[REJECT]:** Người dùng từ chối kết quả; task chuyển sang `REJECTED`.
+     - **[REQUEST REVISION]:** Chuyển task sang `REVISING` kèm góp ý để thực thi lại phiên bản kế tiếp.
 
-4. **Kênh `#incidents` — Báo cáo Sự cố & Cảnh báo An toàn:**
-   - Tự động phát cảnh báo dạng thẻ đỏ (`formatIncidentCard`) khi:
-     - Xảy ra vi phạm ranh giới thẩm quyền (ví dụ: agent chuyên biệt cố ý tự duyệt).
-     - Kiểm định kỹ thuật thất bại (tệp rỗng, sai schema, thiếu trường dữ liệu).
-     - Kiểm định nghiệp vụ không đạt khiến kết quả bị chặn (`RESULT BLOCKED`).
-     - Worker crash hoặc mất kết nối quá hạn thời gian cho phép (heartbeat timeout).
+4. **Kênh `#incidents` — Giám sát & Khắc phục Sự cố:**
+   - Quy trình vòng đời sự cố:
+     $$\mathbf{RECEIVED \longrightarrow INVESTIGATING \longrightarrow REPAIRING \longrightarrow RESOLVED}$$
+   - Tự động phát thẻ cảnh báo đỏ kèm mã `incident_id` và liên kết với `task_id` liên quan khi:
+     - Vi phạm thẩm quyền hoặc sai lệch kênh.
+     - Kiểm định kỹ thuật thất bại hoặc kiểm định nghiệp vụ không đạt (`RESULT BLOCKED`).
+     - Worker mất kết nối quá hạn nhịp tim.
 
 ---
 
@@ -649,6 +701,58 @@ Ví dụ: `01-03-0042`, `01-00-0042`, `03-03-0105`.
 | `04-01-0089` | `TOPIC: 04`, `EXEC: 01`, `TASK: 0089` | SQL Pipeline | Kịch bản trích xuất ETL tự động từ cơ sở dữ liệu quan hệ cho Task #89. |
 | `05-02-0050` | `TOPIC: 05`, `EXEC: 02`, `TASK: 0050` | Power BI Modeling | Mô hình số liệu trực quan hóa DAX do O2/Power BI thiết lập cho Task #50. |
 | `06-04-0067` | `TOPIC: 06`, `EXEC: 04`, `TASK: 0067` | ML Forecasting | Mô hình dự báo chuỗi thời gian và độ chính xác MAPE do O2/Python tính toán cho Task #67. |
+
+---
+
+### 6. Phân định Lưu trữ Bộ nhớ Dài hạn (Long-Term Memory Ownership)
+
+Nhằm đảm bảo ranh giới dữ liệu không bị xung đột, trùng lặp và phân tán, hệ thống phân định độc quyền quyền sở hữu dữ liệu theo bảng sau (`ACTIVE.md` Mục 18):
+
+| Phân vùng Lưu trữ (Store) | Quyền Sở hữu Dữ liệu (Ownership) | Ý nghĩa, Ranh giới & Quy định Vận hành |
+| :--- | :--- | :--- |
+| **Knowledgebase** | Factual / Business Knowledge | Dữ liệu tri thức thực tế, tài liệu nghiên cứu tham khảo và ghi chép cá nhân của con người. |
+| **Skill Store** | Reusable Procedure | Các quy trình kỹ thuật, kỹ năng phân tích dữ liệu và mẫu template đã được chuẩn hóa. |
+| **Tools** | Executable Capability | Năng lực công cụ thực thi tính toán và xuất bản artifact thật (Excel, Power BI, SQL, Python). |
+| **Decision Ledger** | User Decisions | Sổ cái lưu các câu trả lời và quyết định đã được con người trực tiếp xác nhận (`isHumanConfirmed: true`). |
+| **Main Operational State** | Current Task / Worker / Governance | Trạng thái vòng đời tác vụ, hàng đợi, phân công điều phối và nhật ký chuyển đổi thời gian thực. |
+
+*Nguyên tắc tham chiếu:* Ưu tiên tham chiếu (reference) qua mã định danh có cấu trúc thay vì nhân bản (duplication) dữ liệu thô giữa các tầng bộ nhớ.
+
+---
+
+### 7. Các Quy tắc Quản trị Vận hành Bổ sung (Operational Governance Rules)
+
+#### 1. Nguyên tắc Điều phối viên Chính & Tư vấn (Primary / Consultant Rule)
+- Mỗi nhiệm vụ chỉ có **DUY NHẤT một Điều phối viên Chính (Primary Coordinator: O1 hoặc O2)** chịu trách nhiệm sở hữu luồng công việc, ban hành kế hoạch và đăng thẻ nghiệm thu kết quả.
+- Điều phối viên còn lại có thể tham gia với tư cách **Chuyên gia Tư vấn (Consultant)** để cung cấp thông tin hoặc ý kiến chuyên môn nhưng **tuyệt đối không đồng sở hữu (joint ownership)** nhiệm vụ.
+
+#### 2. Quy trình Thay đổi Kế hoạch Đáng kể (Significant Plan Change)
+- Trong quá trình `EXECUTING`, nếu O1/O2 nhận thấy cần thay đổi đáng kể về: phương pháp thực thi, phạm vi dữ liệu, nguồn dữ liệu, quy tắc kinh doanh, công cụ sử dụng, định dạng đầu ra, rủi ro hoặc tiêu chí nghiệm thu:
+- **Quy trình bắt buộc:**
+  $$\mathbf{PAUSE \longrightarrow REQUEST\_REVISION \longrightarrow \#approvals \longrightarrow USER\ DECISION}$$
+- Task tạm dừng ở `REVISING`; O1/O2 cập nhật phiên bản kế hoạch và chỉ tiếp tục thực thi sau khi người dùng đã duyệt phiên bản mới.
+
+#### 3. Thẩm quyền Ngữ nghĩa Thuộc về Con người (Human Semantic Authority)
+- Đối với các điểm mơ hồ về thuật ngữ hoặc ánh xạ ngữ nghĩa (semantic mapping):
+  $$\mathbf{DETECT \longrightarrow PROPOSE \longrightarrow \#office \longrightarrow USER\ DECISION \longrightarrow PERSIST}$$
+- Tuyệt đối cấm AI tự ý quyết định hoặc tự động gộp (merge) các khái niệm ngữ nghĩa khi chưa được người dùng phê duyệt trên `#office`.
+
+#### 4. Vòng lặp Học tập Bộ nhớ (Memory Learning Loop)
+- Sau khi nhiệm vụ được nghiệm thu hoàn tất (`COMPLETE`), các tri thức hoặc tiền lệ mới được phát hiện phải tuân thủ quy trình:
+  $$\mathbf{FEEDBACK \longrightarrow CANDIDATE\ PROPOSAL \longrightarrow \#office \longrightarrow USER\ CONFIRMS \longrightarrow PERSIST}$$
+- Không tự động ghi trực tiếp vào bộ nhớ dài hạn nếu người dùng chưa xác nhận. Không đưa đề xuất học tập vào diễn đàn `#approvals`.
+
+#### 5. Mô hình Embedding & Truy xuất Ngữ nghĩa (Embedding & Retrieval)
+- Sử dụng mô hình `bge-m3` (1024 chiều) chạy trên máy chủ Ollama cục bộ.
+- Chuỗi bao bọc ngữ nghĩa (`renderEmbeddingEnvelope`) chỉ đóng vai trò đầu vào sinh vector, tuyệt đối không ghi đè nội dung tài liệu gốc hoặc văn bản tìm kiếm toàn văn (FTS).
+- Tuyệt đối không dùng độ tương đồng vector (vector similarity) để giải mã cú pháp cấu trúc của Structured Reference ID.
+
+#### 6. Quy tắc Xử lý Sự cố & Phục hồi Thường gặp (Common Failure & Recovery Rules)
+1. **Worker Ngoại tuyến / Laptop Sleep:** Khi laptop tắt hoặc ngủ, tác vụ được bảo toàn nguyên vẹn trong hàng đợi bền vững `QueueManager` (`QUEUED` hoặc `WAITING_FOR_WORKER`). Khi laptop online trở lại, worker gửi lệnh `claimTask` nguyên tử để tiếp tục xử lý.
+2. **Worker Crash / Mất nguồn Đột ngột:** Control Plane phát hiện nhịp tim (heartbeat) bị gián đoạn quá thời hạn cho phép, tự động kích hoạt `detectAndRecoverStaleTasks` để thu hồi task bị treo và chuyển lại về `WAITING_FOR_WORKER`.
+3. **Kết quả Kỹ thuật Đạt nhưng Nghiệp vụ Sai:** Vi phạm chỉ số KPI khiến kết quả bị khóa lập tức ở trạng thái `RESULT BLOCKED`, tự động gửi cảnh báo thẻ đỏ lên `#incidents`; cấm chuyển sang trạng thái thành công.
+4. **Bảo vệ Chống Thao tác Cũ / Trùng lặp (Stale / Duplicate Protection):** Mọi tương tác nút bấm trên Discord đều gắn kèm `attemptToken`. Thao tác trên các lượt thử cũ bị hệ thống từ chối với mã lỗi `STALE_ACTION_REJECTED`.
+5. **Quản trị Ngoại tuyến (Governance Unavailable):** Hệ thống luôn tuân thủ nguyên tắc **Fail-Closed**; cấm bỏ qua (bypass) chốt an toàn và cấm tự động fallback về thực thi trực tiếp trên máy chủ chủ quyền (host fallback).
 
 ---
 
