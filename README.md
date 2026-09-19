@@ -41,15 +41,15 @@ Hệ thống OpenClaw quản trị cụm 7 agent vai trò cố định. Các age
 
 ### Bảng Tổng hợp Danh mục 7 Bot
 
-| Agent ID   | Tên hiển thị Discord | Snowflake ID          | Handle / Tag        | Nhiệm vụ chính                                                                                                         | Công cụ Zink được gọi                                                                                           | Cấp bậc & Thẩm quyền              |
-| :--------- | :------------------- | :-------------------- | :------------------ | :--------------------------------------------------------------------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------- | :-------------------------------- |
-| `main`     | **Quản Lý**          | `1545436878835163156` | `@Quản Lý`          | Tiếp nhận yêu cầu, phân tích DAG, chỉ định Primary (`o1`/`o2`), điều phối phê duyệt, thông báo tổng kết               | `sessions_spawn` (chỉ gọi `o1`/`o2`), `sessions_yield`, `session_status`, `zink_knowledge_search`, `zink_skill_search` | Giám sát Quản trị (Governance)    |
-| `o1`       | **Điều Phối 1 (O1)** | `1545437953197744248` | `@Điều Phối 1 (O1)` | Giám sát thực thi ETL & Bảng tính (điều phối `excel`, `sql`, `python`), đăng `#approvals`, hỏi `#office`, đăng `#results`| `sessions_spawn` (`excel`, `sql`, `python`), `session_status`, `zink_knowledge_search`, `zink_skill_search`              | Giám sát Thực thi (Execution O1)  |
-| `o2`       | **Điều Phối 2 (O2)** | `1545438251966402661` | `@Điều Phối 2 (O2)` | Giám sát thực thi BI & Khoa học Dữ liệu (điều phối `power-bi`, `python`), đăng `#approvals`, hỏi `#office`, `#results`  | `sessions_spawn` (`power-bi`, `python`), `session_status`, `zink_n8n`, `zink_knowledge_search`, `zink_skill_search`    | Giám sát Thực thi (Execution O2)  |
-| `excel`    | **Excel**            | `1545438637750227104` | `@Excel`            | Chuyên viên Bảng tính (Spreadsheet Specialist) — chạy ngầm dưới quyền O1, xuất bản workbook `.xlsx` và ảnh preview `.svg` | `session_status`, `zink_excel`, `zink_skill_search`, `zink_skill_propose`, `zink_knowledge_search`              | Chuyên viên (Năng lực thuần túy)  |
-| `power-bi` | **PowerBI**          | `1545439082019164271` | `@PowerBI`          | Chuyên viên Báo cáo BI (BI Specialist) — chạy ngầm dưới quyền O2, thiết kế dashboard và công thức DAX                    | `session_status`, `zink_power_bi`, `zink_skill_search`, `zink_skill_propose`, `zink_knowledge_search`           | Chuyên viên (Năng lực thuần túy)  |
-| `sql`      | **SQL**              | `1545438861356966010` | `@SQL`              | Chuyên viên Truy vấn Dữ liệu (SQL Specialist) — chạy ngầm dưới quyền O1, thực thi kịch bản trích xuất ETL                | `session_status`, `zink_sql`, `zink_skill_search`, `zink_skill_propose`, `zink_knowledge_search`                | Chuyên viên (Năng lực thuần túy)  |
-| `python`   | **Python**           | `1545439279843508235` | `@Python`           | Chuyên viên Khoa học Dữ liệu (Data Science Specialist) — chạy ngầm dưới quyền O1 (ETL) hoặc O2 (Analytics/ML/Forecast)   | `session_status`, `zink_python`, `zink_n8n`, `zink_skill_search`, `zink_skill_propose`, `zink_knowledge_search` | Chuyên viên (Năng lực thuần túy)  |
+| Agent ID   | Tên hiển thị Discord | Snowflake ID          | Handle / Tag        | Nhiệm vụ chính                                                                                                            | Công cụ Zink được gọi                                                                                                  | Cấp bậc & Thẩm quyền             |
+| :--------- | :------------------- | :-------------------- | :------------------ | :------------------------------------------------------------------------------------------------------------------------ | :--------------------------------------------------------------------------------------------------------------------- | :------------------------------- |
+| `main`     | **Quản Lý**          | `1545436878835163156` | `@Quản Lý`          | Tiếp nhận yêu cầu, phân tích DAG, chỉ định Primary (`o1`/`o2`), điều phối phê duyệt, thông báo tổng kết                   | `sessions_spawn` (chỉ gọi `o1`/`o2`), `sessions_yield`, `session_status`, `zink_knowledge_search`, `zink_skill_search` | Giám sát Quản trị (Governance)   |
+| `o1`       | **Điều Phối 1 (O1)** | `1545437953197744248` | `@Điều Phối 1 (O1)` | Giám sát thực thi ETL & Bảng tính (điều phối `excel`, `sql`, `python`), đăng `#approvals`, hỏi `#office`, đăng `#results` | `sessions_spawn` (`excel`, `sql`, `python`), `session_status`, `zink_knowledge_search`, `zink_skill_search`            | Giám sát Thực thi (Execution O1) |
+| `o2`       | **Điều Phối 2 (O2)** | `1545438251966402661` | `@Điều Phối 2 (O2)` | Giám sát thực thi BI & Khoa học Dữ liệu (điều phối `power-bi`, `python`), đăng `#approvals`, hỏi `#office`, `#results`    | `sessions_spawn` (`power-bi`, `python`), `session_status`, `zink_n8n`, `zink_knowledge_search`, `zink_skill_search`    | Giám sát Thực thi (Execution O2) |
+| `excel`    | **Excel**            | `1545438637750227104` | `@Excel`            | Chuyên viên Bảng tính (Spreadsheet Specialist) — chạy ngầm dưới quyền O1, xuất bản workbook `.xlsx` và ảnh preview `.svg` | `session_status`, `zink_excel`, `zink_skill_search`, `zink_skill_propose`, `zink_knowledge_search`                     | Chuyên viên (Năng lực thuần túy) |
+| `power-bi` | **PowerBI**          | `1545439082019164271` | `@PowerBI`          | Chuyên viên Báo cáo BI (BI Specialist) — chạy ngầm dưới quyền O2, thiết kế dashboard và công thức DAX                     | `session_status`, `zink_power_bi`, `zink_skill_search`, `zink_skill_propose`, `zink_knowledge_search`                  | Chuyên viên (Năng lực thuần túy) |
+| `sql`      | **SQL**              | `1545438861356966010` | `@SQL`              | Chuyên viên Truy vấn Dữ liệu (SQL Specialist) — chạy ngầm dưới quyền O1, thực thi kịch bản trích xuất ETL                 | `session_status`, `zink_sql`, `zink_skill_search`, `zink_skill_propose`, `zink_knowledge_search`                       | Chuyên viên (Năng lực thuần túy) |
+| `python`   | **Python**           | `1545439279843508235` | `@Python`           | Chuyên viên Khoa học Dữ liệu (Data Science Specialist) — chạy ngầm dưới quyền O1 (ETL) hoặc O2 (Analytics/ML/Forecast)    | `session_status`, `zink_python`, `zink_n8n`, `zink_skill_search`, `zink_skill_propose`, `zink_knowledge_search`        | Chuyên viên (Năng lực thuần túy) |
 
 ---
 
@@ -512,6 +512,7 @@ USER / OWNER
 ```
 
 **Ý nghĩa và Phân định Vai trò:**
+
 - **User / Owner:** Final Authority — Người duy nhất có thẩm quyền phê duyệt kế hoạch (`APPROVE`), chấp thuận kết quả (`ACCEPT / COMPLETE`), từ chối (`REJECT`) hoặc yêu cầu chỉnh sửa (`REQUEST_REVISION`).
 - **Main / Quản Lý:** Control & Governance Supervisor — Tiếp nhận yêu cầu ban đầu, phân loại bài toán, chỉ định điều phối viên chính (Primary Coordinator `o1` hoặc `o2`), điều phối phê duyệt trên `#approvals`, theo dõi trạng thái hệ thống và phát thông báo tổng kết cuối cùng trên `#office`. Tuyệt đối không tự thực thi kỹ thuật và không tự spawn chuyên viên.
 - **O1 / O2:** Execution Supervisors — Giám sát thực thi, lập kế hoạch chi tiết, điều phối chuyên viên cấp dưới, trực tiếp hỏi làm rõ người dùng trên `#office`, phát sự kiện `EXECUTION_FINISHED` và đăng kết quả lên `#results`.
@@ -587,18 +588,21 @@ TASK = COMPLETE
 # office (Main gửi thông báo tổng kết cuối cùng)
 ```
 
-#### Hướng dẫn Thao tác Thực tế Theo Từng Kênh:
+#### Hướng dẫn Thao tác Thực tế Theo Từng Kênh
 
 1. **Kênh `#office` — Giao việc, Làm rõ & Thông báo Hoàn tất:**
    - **Giao việc:** Người dùng gửi yêu cầu bình thường (ví dụ: tag `@Quản Lý Hãy tạo bảng tính doanh thu tháng 9`). Main tiếp nhận, cấp mã định danh `task_id` (ví dụ: `TASK-042`) và chỉ định Primary Coordinator (`o1` hoặc `o2`).
    - **Điều phối viên hỏi trực tiếp:** Khi cần làm rõ yêu cầu nghiệp vụ, O1/O2 gửi câu hỏi trực tiếp trên `#office` theo mẫu:
+
      ```text
      **TASK-042 | O1**
      **Cần xác nhận:** [Nội dung câu hỏi nghiệp vụ]
      **Lý do:** [Căn cứ kỹ thuật / dữ liệu]
      Task chuyển trạng thái: `WAITING_FOR_USER`
      ```
+
      Người dùng phản hồi trực tiếp tại `#office` để tiếp tục luồng thực thi.
+
    - **Thông báo Hoàn tất:** Sau khi người dùng đã nghiệm thu tại `#results`, Main phát thông báo tổng kết ngắn gọn trên `#office`. Tuyệt đối không đưa nhật ký thực thi thô (raw narration) làm loãng kênh.
 
 2. **Kênh `#approvals` — Cấp quyền Thực thi (Execution Authorization):**
@@ -670,37 +674,37 @@ Ví dụ: `01-03-0042`, `01-00-0042`, `03-03-0105`.
 
 ##### 1. Ma trận Mã Lĩnh vực (Topic Code Matrix - 2 chữ số)
 
-| Mã TOPIC | Lĩnh vực chuyên môn | Domain | Trọng trách quản lý | Ký hiệu |
-| :---: | :--- | :--- | :--- | :---: |
-| `01` | Supply Chain & Logistics (LSCM) | `office` / `data` | Chuỗi cung ứng, kho vận, vận tải | `LSCM` |
-| `02` | Knowledgebase & Research Ingestion | `general` | Thu nạp tài liệu nghiên cứu, tri thức con người | `KB` |
-| `03` | Office Automation & Spreadsheets | `office` | Tự động hóa bảng tính, báo cáo văn phòng (O1 / Excel) | `EXCEL` |
-| `04` | Relational Analytics & SQL | `data` | Truy vấn cơ sở dữ liệu quan hệ, phân tích dữ liệu (O1 / SQL) | `SQL` |
-| `05` | Business Intelligence & Reporting | `data` | Trực quan hóa dữ liệu, mô hình DAX, Dashboard (O2 / Power BI) | `POWER_BI` |
-| `06` | Data Engineering & Scripting | `engineering` | Kịch bản trích xuất, chuyển đổi và xử lý dữ liệu (O1, O2 / Python) | `PYTHON` |
-| `07` | System Governance & Lifecycle | `governance` | Kiểm soát hợp đồng, trạng thái tác vụ, chính sách kênh | `GOVERNANCE` |
+| Mã TOPIC | Lĩnh vực chuyên môn                | Domain            | Trọng trách quản lý                                                |   Ký hiệu    |
+| :------: | :--------------------------------- | :---------------- | :----------------------------------------------------------------- | :----------: |
+|   `01`   | Supply Chain & Logistics (LSCM)    | `office` / `data` | Chuỗi cung ứng, kho vận, vận tải                                   |    `LSCM`    |
+|   `02`   | Knowledgebase & Research Ingestion | `general`         | Thu nạp tài liệu nghiên cứu, tri thức con người                    |     `KB`     |
+|   `03`   | Office Automation & Spreadsheets   | `office`          | Tự động hóa bảng tính, báo cáo văn phòng (O1 / Excel)              |   `EXCEL`    |
+|   `04`   | Relational Analytics & SQL         | `data`            | Truy vấn cơ sở dữ liệu quan hệ, phân tích dữ liệu (O1 / SQL)       |    `SQL`     |
+|   `05`   | Business Intelligence & Reporting  | `data`            | Trực quan hóa dữ liệu, mô hình DAX, Dashboard (O2 / Power BI)      |  `POWER_BI`  |
+|   `06`   | Data Engineering & Scripting       | `engineering`     | Kịch bản trích xuất, chuyển đổi và xử lý dữ liệu (O1, O2 / Python) |   `PYTHON`   |
+|   `07`   | System Governance & Lifecycle      | `governance`      | Kiểm soát hợp đồng, trạng thái tác vụ, chính sách kênh             | `GOVERNANCE` |
 
 ##### 2. Ma trận Mã Chu kỳ Thực thi (Execution / Tool Code Matrix - 2 chữ số)
 
-| Mã EXEC | Loại hình thực thi | Tính chất tri thức | Ý nghĩa & Quy định |
-| :---: | :--- | :---: | :--- |
-| `00` | Personal Experience / Human-Contributed | Con người | **Bất biến:** Dành riêng cho tri thức, quy tắc hoặc kinh nghiệm do chính người dùng (User/Owner) trực tiếp đóng góp. AI không được tự ý ghi đè. |
-| `01` | Automated Pipeline / ETL | Hệ thống tự động | Dòng chảy xử lý dữ liệu và trích xuất tự động (O1: SQL / Python). |
-| `02` | Analytical & Statistical Modeling | Phân tích chuyên sâu | Mô hình hóa dữ liệu thống kê, phân rã chỉ số và DAX (O2: Power BI). |
-| `03` | Tool Direct Execution / Artifact Generation | Sinh Artifact | Thực thi công cụ chuyên trách trực tiếp sinh file output (O1: Excel, O2: Python chart). |
-| `04` | ML & Predictive Forecasting | Máy học & Dự báo | Huấn luyện mô hình ngoại vi, dự báo chuỗi thời gian (O2 / Python). |
-| `05` | Optimization & Operations Research | Tối ưu hóa | Thuật toán quy hoạch tuyến tính/phi tuyến, mô phỏng hoạt động chuỗi cung ứng (O2). |
+| Mã EXEC | Loại hình thực thi                          |  Tính chất tri thức  | Ý nghĩa & Quy định                                                                                                                              |
+| :-----: | :------------------------------------------ | :------------------: | :---------------------------------------------------------------------------------------------------------------------------------------------- |
+|  `00`   | Personal Experience / Human-Contributed     |      Con người       | **Bất biến:** Dành riêng cho tri thức, quy tắc hoặc kinh nghiệm do chính người dùng (User/Owner) trực tiếp đóng góp. AI không được tự ý ghi đè. |
+|  `01`   | Automated Pipeline / ETL                    |   Hệ thống tự động   | Dòng chảy xử lý dữ liệu và trích xuất tự động (O1: SQL / Python).                                                                               |
+|  `02`   | Analytical & Statistical Modeling           | Phân tích chuyên sâu | Mô hình hóa dữ liệu thống kê, phân rã chỉ số và DAX (O2: Power BI).                                                                             |
+|  `03`   | Tool Direct Execution / Artifact Generation |    Sinh Artifact     | Thực thi công cụ chuyên trách trực tiếp sinh file output (O1: Excel, O2: Python chart).                                                         |
+|  `04`   | ML & Predictive Forecasting                 |   Máy học & Dự báo   | Huấn luyện mô hình ngoại vi, dự báo chuỗi thời gian (O2 / Python).                                                                              |
+|  `05`   | Optimization & Operations Research          |      Tối ưu hóa      | Thuật toán quy hoạch tuyến tính/phi tuyến, mô phỏng hoạt động chuỗi cung ứng (O2).                                                              |
 
 ##### 3. Ví dụ Ma trận Định danh Thực tế
 
-| Mã Reference ID | Phân rã ngữ nghĩa | Loại hình | Ý nghĩa chi tiết |
-| :--- | :--- | :---: | :--- |
-| `01-00-0042` | `TOPIC: 01`, `EXEC: 00`, `TASK: 0042` | Tri thức con người | Kinh nghiệm thực tế của người dùng về chuỗi cung ứng cho Task #42 (bảo toàn nguyên vẹn). |
-| `01-03-0042` | `TOPIC: 01`, `EXEC: 03`, `TASK: 0042` | Tool Output | File bảng tính tính toán chuỗi cung ứng được sinh tự động bởi công cụ cho Task #42. |
-| `03-03-0105` | `TOPIC: 03`, `EXEC: 03`, `TASK: 0105` | Bảng tính Excel | File workbook `.xlsx` và ảnh preview `.svg` do O1/Excel thực hiện cho Task #105. |
-| `04-01-0089` | `TOPIC: 04`, `EXEC: 01`, `TASK: 0089` | SQL Pipeline | Kịch bản trích xuất ETL tự động từ cơ sở dữ liệu quan hệ cho Task #89. |
-| `05-02-0050` | `TOPIC: 05`, `EXEC: 02`, `TASK: 0050` | Power BI Modeling | Mô hình số liệu trực quan hóa DAX do O2/Power BI thiết lập cho Task #50. |
-| `06-04-0067` | `TOPIC: 06`, `EXEC: 04`, `TASK: 0067` | ML Forecasting | Mô hình dự báo chuỗi thời gian và độ chính xác MAPE do O2/Python tính toán cho Task #67. |
+| Mã Reference ID | Phân rã ngữ nghĩa                     |     Loại hình      | Ý nghĩa chi tiết                                                                         |
+| :-------------- | :------------------------------------ | :----------------: | :--------------------------------------------------------------------------------------- |
+| `01-00-0042`    | `TOPIC: 01`, `EXEC: 00`, `TASK: 0042` | Tri thức con người | Kinh nghiệm thực tế của người dùng về chuỗi cung ứng cho Task #42 (bảo toàn nguyên vẹn). |
+| `01-03-0042`    | `TOPIC: 01`, `EXEC: 03`, `TASK: 0042` |    Tool Output     | File bảng tính tính toán chuỗi cung ứng được sinh tự động bởi công cụ cho Task #42.      |
+| `03-03-0105`    | `TOPIC: 03`, `EXEC: 03`, `TASK: 0105` |  Bảng tính Excel   | File workbook `.xlsx` và ảnh preview `.svg` do O1/Excel thực hiện cho Task #105.         |
+| `04-01-0089`    | `TOPIC: 04`, `EXEC: 01`, `TASK: 0089` |    SQL Pipeline    | Kịch bản trích xuất ETL tự động từ cơ sở dữ liệu quan hệ cho Task #89.                   |
+| `05-02-0050`    | `TOPIC: 05`, `EXEC: 02`, `TASK: 0050` | Power BI Modeling  | Mô hình số liệu trực quan hóa DAX do O2/Power BI thiết lập cho Task #50.                 |
+| `06-04-0067`    | `TOPIC: 06`, `EXEC: 04`, `TASK: 0067` |   ML Forecasting   | Mô hình dự báo chuỗi thời gian và độ chính xác MAPE do O2/Python tính toán cho Task #67. |
 
 ---
 
@@ -708,46 +712,52 @@ Ví dụ: `01-03-0042`, `01-00-0042`, `03-03-0105`.
 
 Nhằm đảm bảo ranh giới dữ liệu không bị xung đột, trùng lặp và phân tán, hệ thống phân định độc quyền quyền sở hữu dữ liệu theo bảng sau (`ACTIVE.md` Mục 18):
 
-| Phân vùng Lưu trữ (Store) | Quyền Sở hữu Dữ liệu (Ownership) | Ý nghĩa, Ranh giới & Quy định Vận hành |
-| :--- | :--- | :--- |
-| **Knowledgebase** | Factual / Business Knowledge | Dữ liệu tri thức thực tế, tài liệu nghiên cứu tham khảo và ghi chép cá nhân của con người. |
-| **Skill Store** | Reusable Procedure | Các quy trình kỹ thuật, kỹ năng phân tích dữ liệu và mẫu template đã được chuẩn hóa. |
-| **Tools** | Executable Capability | Năng lực công cụ thực thi tính toán và xuất bản artifact thật (Excel, Power BI, SQL, Python). |
-| **Decision Ledger** | User Decisions | Sổ cái lưu các câu trả lời và quyết định đã được con người trực tiếp xác nhận (`isHumanConfirmed: true`). |
-| **Main Operational State** | Current Task / Worker / Governance | Trạng thái vòng đời tác vụ, hàng đợi, phân công điều phối và nhật ký chuyển đổi thời gian thực. |
+| Phân vùng Lưu trữ (Store)  | Quyền Sở hữu Dữ liệu (Ownership)   | Ý nghĩa, Ranh giới & Quy định Vận hành                                                                    |
+| :------------------------- | :--------------------------------- | :-------------------------------------------------------------------------------------------------------- |
+| **Knowledgebase**          | Factual / Business Knowledge       | Dữ liệu tri thức thực tế, tài liệu nghiên cứu tham khảo và ghi chép cá nhân của con người.                |
+| **Skill Store**            | Reusable Procedure                 | Các quy trình kỹ thuật, kỹ năng phân tích dữ liệu và mẫu template đã được chuẩn hóa.                      |
+| **Tools**                  | Executable Capability              | Năng lực công cụ thực thi tính toán và xuất bản artifact thật (Excel, Power BI, SQL, Python).             |
+| **Decision Ledger**        | User Decisions                     | Sổ cái lưu các câu trả lời và quyết định đã được con người trực tiếp xác nhận (`isHumanConfirmed: true`). |
+| **Main Operational State** | Current Task / Worker / Governance | Trạng thái vòng đời tác vụ, hàng đợi, phân công điều phối và nhật ký chuyển đổi thời gian thực.           |
 
-*Nguyên tắc tham chiếu:* Ưu tiên tham chiếu (reference) qua mã định danh có cấu trúc thay vì nhân bản (duplication) dữ liệu thô giữa các tầng bộ nhớ.
+_Nguyên tắc tham chiếu:_ Ưu tiên tham chiếu (reference) qua mã định danh có cấu trúc thay vì nhân bản (duplication) dữ liệu thô giữa các tầng bộ nhớ.
 
 ---
 
 ### 7. Các Quy tắc Quản trị Vận hành Bổ sung (Operational Governance Rules)
 
 #### 1. Nguyên tắc Điều phối viên Chính & Tư vấn (Primary / Consultant Rule)
+
 - Mỗi nhiệm vụ chỉ có **DUY NHẤT một Điều phối viên Chính (Primary Coordinator: O1 hoặc O2)** chịu trách nhiệm sở hữu luồng công việc, ban hành kế hoạch và đăng thẻ nghiệm thu kết quả.
 - Điều phối viên còn lại có thể tham gia với tư cách **Chuyên gia Tư vấn (Consultant)** để cung cấp thông tin hoặc ý kiến chuyên môn nhưng **tuyệt đối không đồng sở hữu (joint ownership)** nhiệm vụ.
 
 #### 2. Quy trình Thay đổi Kế hoạch Đáng kể (Significant Plan Change)
+
 - Trong quá trình `EXECUTING`, nếu O1/O2 nhận thấy cần thay đổi đáng kể về: phương pháp thực thi, phạm vi dữ liệu, nguồn dữ liệu, quy tắc kinh doanh, công cụ sử dụng, định dạng đầu ra, rủi ro hoặc tiêu chí nghiệm thu:
 - **Quy trình bắt buộc:**
   $$\mathbf{PAUSE \longrightarrow REQUEST\_REVISION \longrightarrow \#approvals \longrightarrow USER\ DECISION}$$
 - Task tạm dừng ở `REVISING`; O1/O2 cập nhật phiên bản kế hoạch và chỉ tiếp tục thực thi sau khi người dùng đã duyệt phiên bản mới.
 
 #### 3. Thẩm quyền Ngữ nghĩa Thuộc về Con người (Human Semantic Authority)
+
 - Đối với các điểm mơ hồ về thuật ngữ hoặc ánh xạ ngữ nghĩa (semantic mapping):
   $$\mathbf{DETECT \longrightarrow PROPOSE \longrightarrow \#office \longrightarrow USER\ DECISION \longrightarrow PERSIST}$$
 - Tuyệt đối cấm AI tự ý quyết định hoặc tự động gộp (merge) các khái niệm ngữ nghĩa khi chưa được người dùng phê duyệt trên `#office`.
 
 #### 4. Vòng lặp Học tập Bộ nhớ (Memory Learning Loop)
+
 - Sau khi nhiệm vụ được nghiệm thu hoàn tất (`COMPLETE`), các tri thức hoặc tiền lệ mới được phát hiện phải tuân thủ quy trình:
   $$\mathbf{FEEDBACK \longrightarrow CANDIDATE\ PROPOSAL \longrightarrow \#office \longrightarrow USER\ CONFIRMS \longrightarrow PERSIST}$$
 - Không tự động ghi trực tiếp vào bộ nhớ dài hạn nếu người dùng chưa xác nhận. Không đưa đề xuất học tập vào diễn đàn `#approvals`.
 
 #### 5. Mô hình Embedding & Truy xuất Ngữ nghĩa (Embedding & Retrieval)
+
 - Sử dụng mô hình `bge-m3` (1024 chiều) chạy trên máy chủ Ollama cục bộ.
 - Chuỗi bao bọc ngữ nghĩa (`renderEmbeddingEnvelope`) chỉ đóng vai trò đầu vào sinh vector, tuyệt đối không ghi đè nội dung tài liệu gốc hoặc văn bản tìm kiếm toàn văn (FTS).
 - Tuyệt đối không dùng độ tương đồng vector (vector similarity) để giải mã cú pháp cấu trúc của Structured Reference ID.
 
 #### 6. Quy tắc Xử lý Sự cố & Phục hồi Thường gặp (Common Failure & Recovery Rules)
+
 1. **Worker Ngoại tuyến / Laptop Sleep:** Khi laptop tắt hoặc ngủ, tác vụ được bảo toàn nguyên vẹn trong hàng đợi bền vững `QueueManager` (`QUEUED` hoặc `WAITING_FOR_WORKER`). Khi laptop online trở lại, worker gửi lệnh `claimTask` nguyên tử để tiếp tục xử lý.
 2. **Worker Crash / Mất nguồn Đột ngột:** Control Plane phát hiện nhịp tim (heartbeat) bị gián đoạn quá thời hạn cho phép, tự động kích hoạt `detectAndRecoverStaleTasks` để thu hồi task bị treo và chuyển lại về `WAITING_FOR_WORKER`.
 3. **Kết quả Kỹ thuật Đạt nhưng Nghiệp vụ Sai:** Vi phạm chỉ số KPI khiến kết quả bị khóa lập tức ở trạng thái `RESULT BLOCKED`, tự động gửi cảnh báo thẻ đỏ lên `#incidents`; cấm chuyển sang trạng thái thành công.

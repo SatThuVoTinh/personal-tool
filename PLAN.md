@@ -46,12 +46,12 @@ operations research and simulation remain first-class capabilities.
 ```text
 Milestone: M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Integration
 Task: M8/T2 — Governed Runtime, Authority, Memory & Reliability Hardening
-Task Status: IN PROGRESS
+Task Status: COMPLETE
 Planning Readiness: APPROVED
 Plan Revision: M8/T2-R9
-Execution Authorization: YES
-Authorized Task: M8/T2
-Execution Contract: docs/contracts/execution/ACTIVE.md
+Execution Authorization: NO
+Authorized Task: NONE
+Execution Contract: NONE
 Evidence Level: LOCAL-VERIFIED
 Task Branch: codex/m8-t2-governed-runtime-hardening
 Owner Approval: EXPLICIT — Owner approved restoring ACTIVE.md and adhering strictly to all ACTIVE.md criteria
