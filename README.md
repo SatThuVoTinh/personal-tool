@@ -209,20 +209,20 @@ ss -tnp | grep 443
 
 Để đảm bảo các bot luôn phản hồi 100% chính xác trên cả ứng dụng máy tính (Desktop) và ứng dụng điện thoại (Discord Mobile), người vận hành lưu ý các cơ chế giao tiếp sau:
 
-#### 1. Cơ chế Nhận diện Mention Đa hình (Polymorphic Mention Resolution)
+#### 1. Cơ chế Nhận diện Mention và Quy tắc Giao tiếp Nghiêm ngặt (Strict Explicit Mention)
 
-Hệ thống hỗ trợ 3 hình thức tag bot:
+Hệ thống tuân thủ nguyên tắc **CHỈ BOT ĐƯỢC TAG MỚI ĐƯỢC PHÉP NÓI CHUYỆN**:
 
-- **Native Mention (`<@ID>`):** Khi bạn gõ `@` và chọn tên bot từ danh sách gợi ý của Discord.
-- **Nickname Mention (`<@!ID>`):** Khi Discord Mobile hoặc Desktop gắn tag bot có biệt danh máy chủ.
-- **Plain-text Mention (Nhận diện văn bản tiếng Việt & tiếng Anh):** Khi bàn phím trên điện thoại tự động thêm khoảng trắng hoặc không hiện pop-up gợi ý, bạn hoàn toàn có thể gõ trực tiếp tên bot dạng text thuần. Hệ thống đã được tích hợp `groupChat.mentionPatterns` đa ngữ:
-  - Gọi Quản Lý: `@Quản Lý`, `@quản lý`, `@Quản lý`, `@main`
-  - Gọi Điều Phối 1: `@Điều Phối 1`, `@điều phối 1`, `@o1`, `@knowledge`
-  - Gọi Điều Phối 2: `@Điều Phối 2`, `@điều phối 2`, `@o2`, `@orchestrator`
-  - Gọi Excel: `@Excel`, `@excel`
-  - Gọi Power BI: `@PowerBI`, `@power-bi`, `@powerbi`
-  - Gọi SQL: `@SQL`, `@sql`
-  - Gọi Python: `@Python`, `@python`
+- **Bắt buộc Tag `@` rõ ràng (Explicit Mention):**
+  - **Native Mention (`<@ID>`):** Gõ ký tự `@` và chọn bot tương ứng từ pop-up danh sách thành viên của Discord.
+  - **Nickname Mention (`<@!ID>`):** Khi Discord Mobile hoặc Desktop gắn tag bot kèm biệt danh máy chủ.
+  - **Cú pháp tiền tố `@`:** Bắt buộc phải có tiền tố `@` phía trước tên bot (ví dụ: `@Quản Lý`, `@Excel`, `@Python`).
+- **Nghiêm cấm tự ý kích hoạt bằng chữ thường (No Plain-text Trigger):**
+  - Chỉ gõ tên thường trong câu mà **không có tag `@`** (ví dụ: gõ "Excel tính cái này", "Quản lý xem báo cáo") thì **tuyệt đối KHÔNG một bot nào được phép phản hồi**. Hệ thống giữ im lặng hoàn toàn.
+- **Chống xen ngang giữa các bot (`ignoreOtherMentions: true`):**
+  - Khi người dùng tag `@Quản Lý`, chỉ duy nhất `@Quản Lý` được phản hồi. Các bot khác (`@Excel`, `@Python`...) dù có thấy tên mình được nhắc trong câu nói cũng phải tuyệt đối giữ im lặng.
+- **Ranh giới Agent Chuyên biệt (Specialist Agents):**
+  - Các bot chuyên viên thực thi (`Excel`, `PowerBI`, `SQL`, `Python`) là sub-agent làm việc ngầm. Người dùng chỉ giao việc qua `@Quản Lý` (hoặc hai điều phối viên `@Điều Phối 1` / `@Điều Phối 2`). Các specialist không tự ý nhảy vào chat trực tiếp với người dùng trên kênh `#office`.
 
 #### 2. Thảo luận trong Diễn đàn Forum (`#results`, `#approvals`, `#incidents`)
 
