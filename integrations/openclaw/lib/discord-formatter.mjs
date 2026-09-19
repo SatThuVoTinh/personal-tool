@@ -658,7 +658,9 @@ export function formatGovernedResultCard({
     "- Bấm **[ACCEPT / COMPLETE]** để nghiệm thu và hoàn thành tác vụ.",
     "- Bấm **[REJECT]** để bác bỏ kết quả.",
     "- Bấm **[REQUEST REVISION]** để yêu cầu chạy lại/tinh chỉnh.",
-  ].filter((line) => line !== null).join("\n");
+  ]
+    .filter((line) => line !== null)
+    .join("\n");
 }
 
 /**

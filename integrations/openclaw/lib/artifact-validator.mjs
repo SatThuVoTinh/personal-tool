@@ -314,7 +314,11 @@ export function generateArtifactPreview({ filePath, maxRows = 5 }) {
       const pngPath = filePath.replace(/\.xlsx$/i, "_preview.png");
       const hasSvg = existsSync(svgPath);
       const hasPng = existsSync(pngPath);
-      const previewImg = hasPng ? path.basename(pngPath) : hasSvg ? path.basename(svgPath) : null;
+      const previewImg = hasPng
+        ? path.basename(pngPath)
+        : hasSvg
+          ? path.basename(svgPath)
+          : null;
       let text = `📊 **Bảng tính Excel:** \`${path.basename(filePath)}\` (${(stat.size / 1024).toFixed(1)} KB)`;
       if (previewImg) {
         text += `\n🖼️ **Hình ảnh Preview thực tế:** \`${previewImg}\` (đã đính kèm để xem trực tiếp)`;

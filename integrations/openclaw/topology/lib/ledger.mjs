@@ -150,7 +150,11 @@ export function inspectLedgerUpgrade(paths) {
   } catch {
     throw new Error("EXECUTION_STATE_UNKNOWN");
   }
-  const supportedVersions = new Set([GOVERNANCE_VERSION, "m7-t2-r12"]);
+  const supportedVersions = new Set([
+    GOVERNANCE_VERSION,
+    "m7-t2-r12",
+    "m7-t5-r13",
+  ]);
   if (supportedVersions.has(snapshot?.governance_version)) {
     readSnapshotLocked(paths, false);
     return "CURRENT";
@@ -193,7 +197,11 @@ function readSnapshotLocked(paths, repairSnapshot = true) {
   try {
     let snapshot = JSON.parse(readFileSync(paths.snapshot, "utf8"));
     validateContract("ledger-snapshot", snapshot, Number.MAX_SAFE_INTEGER);
-    const supportedVersions = new Set([GOVERNANCE_VERSION, "m7-t2-r12"]);
+    const supportedVersions = new Set([
+      GOVERNANCE_VERSION,
+      "m7-t2-r12",
+      "m7-t5-r13",
+    ]);
     if (
       !snapshot ||
       snapshot.schema_version !== SCHEMA_VERSION ||

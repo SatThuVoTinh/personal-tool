@@ -67,7 +67,9 @@ function resolveGovernance(config) {
 async function callGuard(method, event, context, signal) {
   if (signal?.aborted || typeof method !== "function") {
     if (typeof method !== "function") {
-      console.error("[zink-native-gate] callGuard: guard method is not a function or guard unregistered");
+      console.error(
+        "[zink-native-gate] callGuard: guard method is not a function or guard unregistered",
+      );
     }
     throw new Error("GOVERNANCE_UNAVAILABLE");
   }
@@ -193,7 +195,10 @@ export function installNativeToolGate(agent, config, context) {
       }
       return nativeDecision;
     } catch (err) {
-      console.error("[zink-native-gate:error] beforeToolCall blocked:", err?.message || err);
+      console.error(
+        "[zink-native-gate:error] beforeToolCall blocked:",
+        err?.message || err,
+      );
       // Never return exception text: a provider/plugin error may contain input.
       return { block: true, reason: "GOVERNANCE_UNAVAILABLE" };
     }

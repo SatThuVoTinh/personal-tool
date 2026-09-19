@@ -29,15 +29,7 @@ import {
 } from "./runtime.mjs";
 
 let policy;
-let AGENT_IDS = [
-  "main",
-  "o1",
-  "o2",
-  "excel",
-  "power-bi",
-  "sql",
-  "python",
-];
+let AGENT_IDS = ["main", "o1", "o2", "excel", "power-bi", "sql", "python"];
 let STACK_IDS = [
   "semantic",
   "intelligence",

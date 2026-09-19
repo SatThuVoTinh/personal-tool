@@ -264,6 +264,7 @@ export function applyWorkflowEvent(snapshot, type, payload) {
     );
     task.root_result = { ...payload };
     task.workflow_status = payload.outcome_status;
+    task.reason_code = payload.reason_code;
     if (terminal.has(task.workflow_status)) task.brief_state = "CLOSED";
     return next;
   }
@@ -297,10 +298,7 @@ export function applyWorkflowEvent(snapshot, type, payload) {
   }
   if (type === "WORKFLOW_RESULT_REVISION_REQUESTED") {
     exactKeys(payload, ["task_id", "actor", "channel", "feedback"]);
-    requireCondition(
-      ["user", "main"].includes(payload.actor),
-      "POLICY_DENIED",
-    );
+    requireCondition(["user", "main"].includes(payload.actor), "POLICY_DENIED");
     requireCondition(payload.channel === "results", "CHANNEL_MISMATCH");
     requireCondition(
       task.workflow_status === "RESULT_PENDING_REVIEW",
