@@ -27,6 +27,9 @@ import {
   parseStructuredReferenceId,
   isValidStructuredReferenceId,
   deduplicateRetrievalContext,
+  REFERENCE_TOPIC_CODES,
+  REFERENCE_EXECUTION_CODES,
+  resolveReferenceIdMeaning,
 } from "../zink-tools/common/semantic-contract.mjs";
 
 import { handleDiscordAction } from "../integrations/openclaw/plugins/zink-governance/index.mjs";
@@ -315,6 +318,30 @@ describe("M8/T2 Governed Runtime, Authority, Memory & Reliability Hardening — 
       () => parseStructuredReferenceId("abc-def-ghij"),
       /INVALID_REFERENCE_ID_FORMAT/,
     );
+
+    // Verify Canonical Reference ID Matrix tables and decoding
+    assert.equal(Object.keys(REFERENCE_TOPIC_CODES).length >= 7, true);
+    assert.equal(REFERENCE_TOPIC_CODES["01"].key, "LSCM");
+    assert.equal(REFERENCE_TOPIC_CODES["03"].key, "EXCEL");
+
+    assert.equal(REFERENCE_EXECUTION_CODES["00"].isHuman, true);
+    assert.equal(REFERENCE_EXECUTION_CODES["01"].isHuman, false);
+    assert.equal(REFERENCE_EXECUTION_CODES["03"].code, "03");
+
+    // Semantic Meaning Resolution
+    const meaning1 = resolveReferenceIdMeaning("01-03-0042");
+    assert.equal(meaning1.topic.key, "LSCM");
+    assert.equal(meaning1.execution.code, "03");
+    assert.match(meaning1.summary, /LSCM/);
+
+    const meaningHuman = resolveReferenceIdMeaning("01-00-0042");
+    assert.equal(meaningHuman.isHumanContributed, true);
+    assert.equal(meaningHuman.execution.isHuman, true);
+    assert.match(meaningHuman.summary, /Human-Contributed/);
+
+    const meaningExcel = resolveReferenceIdMeaning("03-03-0105");
+    assert.equal(meaningExcel.topic.key, "EXCEL");
+    assert.equal(meaningExcel.taskNumber, "0105");
   });
 
   // =========================================================================

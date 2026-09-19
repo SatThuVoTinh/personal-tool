@@ -608,10 +608,47 @@ Quy trình nghiệm thu kết quả tuân thủ nghiêm ngặt 2 tầng kiểm t
 Nhằm tránh việc agent liên tục hỏi lại người dùng các câu hỏi đã được trả lời trong quá khứ:
 
 - **Sổ cái Quyết định (Decision Ledger):** Lưu trữ bền vững các câu trả lời và quyết định đã được con người xác nhận (`isHumanConfirmed: true`). Trước khi gửi câu hỏi làm rõ trên `#office`, agent phải tra cứu Decision Ledger. Nếu đã có tiền lệ được xác nhận, agent áp dụng ngay mà không làm phiền người dùng.
-- **Mã Tham chiếu Có Cấu trúc (Structured Reference ID):**
-  - Cú pháp chuẩn: `TOPIC(2)-EXEC(2)-TASK(4)` (ví dụ: `SC-01-0042`).
-  - Trong đó `TOPIC` gồm 2 chữ cái viết hoa đại diện cho lĩnh vực (ví dụ: `SC` cho Supply Chain, `KB` cho Knowledgebase), `EXEC` gồm 2 chữ số đại diện cho chu kỳ thực thi (`00` dành riêng cho tài liệu do con người đóng góp), và `TASK` gồm 4 chữ số thứ tự.
 - **Lọc Trùng Ngữ cảnh (Context Deduplication):** Thuật toán `deduplicateRetrievalContext` tự động loại bỏ các đoạn thông tin trùng lặp nội dung được lấy từ nhiều nguồn khác nhau, tối ưu dung lượng ngữ cảnh gửi tới mô hình.
+
+#### Ma trận Mã Tham chiếu Có Cấu trúc (Structured Reference ID Matrix)
+
+Theo quy định tại `ACTIVE.md` (Mục 1, 21, 39, 40, 41), định danh tri thức, skill và kết quả thực thi tuân thủ cấu trúc tương thích 3 phân đoạn:
+$$\text{Cú pháp: } \mathbf{TOPIC(2) - EXEC(2) - TASK(4)}$$
+Ví dụ: `01-03-0042`, `01-00-0042`, `03-03-0105`.
+
+##### 1. Ma trận Mã Lĩnh vực (Topic Code Matrix - 2 chữ số)
+
+| Mã TOPIC | Lĩnh vực chuyên môn | Domain | Trọng trách quản lý | Ký hiệu |
+| :---: | :--- | :--- | :--- | :---: |
+| `01` | Supply Chain & Logistics (LSCM) | `office` / `data` | Chuỗi cung ứng, kho vận, vận tải | `LSCM` |
+| `02` | Knowledgebase & Research Ingestion | `general` | Thu nạp tài liệu nghiên cứu, tri thức con người | `KB` |
+| `03` | Office Automation & Spreadsheets | `office` | Tự động hóa bảng tính, báo cáo văn phòng (O1 / Excel) | `EXCEL` |
+| `04` | Relational Analytics & SQL | `data` | Truy vấn cơ sở dữ liệu quan hệ, phân tích dữ liệu (O1 / SQL) | `SQL` |
+| `05` | Business Intelligence & Reporting | `data` | Trực quan hóa dữ liệu, mô hình DAX, Dashboard (O2 / Power BI) | `POWER_BI` |
+| `06` | Data Engineering & Scripting | `engineering` | Kịch bản trích xuất, chuyển đổi và xử lý dữ liệu (O1, O2 / Python) | `PYTHON` |
+| `07` | System Governance & Lifecycle | `governance` | Kiểm soát hợp đồng, trạng thái tác vụ, chính sách kênh | `GOVERNANCE` |
+
+##### 2. Ma trận Mã Chu kỳ Thực thi (Execution / Tool Code Matrix - 2 chữ số)
+
+| Mã EXEC | Loại hình thực thi | Tính chất tri thức | Ý nghĩa & Quy định |
+| :---: | :--- | :---: | :--- |
+| `00` | Personal Experience / Human-Contributed | Con người | **Bất biến:** Dành riêng cho tri thức, quy tắc hoặc kinh nghiệm do chính người dùng (User/Owner) trực tiếp đóng góp. AI không được tự ý ghi đè. |
+| `01` | Automated Pipeline / ETL | Hệ thống tự động | Dòng chảy xử lý dữ liệu và trích xuất tự động (O1: SQL / Python). |
+| `02` | Analytical & Statistical Modeling | Phân tích chuyên sâu | Mô hình hóa dữ liệu thống kê, phân rã chỉ số và DAX (O2: Power BI). |
+| `03` | Tool Direct Execution / Artifact Generation | Sinh Artifact | Thực thi công cụ chuyên trách trực tiếp sinh file output (O1: Excel, O2: Python chart). |
+| `04` | ML & Predictive Forecasting | Máy học & Dự báo | Huấn luyện mô hình ngoại vi, dự báo chuỗi thời gian (O2 / Python). |
+| `05` | Optimization & Operations Research | Tối ưu hóa | Thuật toán quy hoạch tuyến tính/phi tuyến, mô phỏng hoạt động chuỗi cung ứng (O2). |
+
+##### 3. Ví dụ Ma trận Định danh Thực tế
+
+| Mã Reference ID | Phân rã ngữ nghĩa | Loại hình | Ý nghĩa chi tiết |
+| :--- | :--- | :---: | :--- |
+| `01-00-0042` | `TOPIC: 01`, `EXEC: 00`, `TASK: 0042` | Tri thức con người | Kinh nghiệm thực tế của người dùng về chuỗi cung ứng cho Task #42 (bảo toàn nguyên vẹn). |
+| `01-03-0042` | `TOPIC: 01`, `EXEC: 03`, `TASK: 0042` | Tool Output | File bảng tính tính toán chuỗi cung ứng được sinh tự động bởi công cụ cho Task #42. |
+| `03-03-0105` | `TOPIC: 03`, `EXEC: 03`, `TASK: 0105` | Bảng tính Excel | File workbook `.xlsx` và ảnh preview `.svg` do O1/Excel thực hiện cho Task #105. |
+| `04-01-0089` | `TOPIC: 04`, `EXEC: 01`, `TASK: 0089` | SQL Pipeline | Kịch bản trích xuất ETL tự động từ cơ sở dữ liệu quan hệ cho Task #89. |
+| `05-02-0050` | `TOPIC: 05`, `EXEC: 02`, `TASK: 0050` | Power BI Modeling | Mô hình số liệu trực quan hóa DAX do O2/Power BI thiết lập cho Task #50. |
+| `06-04-0067` | `TOPIC: 06`, `EXEC: 04`, `TASK: 0067` | ML Forecasting | Mô hình dự báo chuỗi thời gian và độ chính xác MAPE do O2/Python tính toán cho Task #67. |
 
 ---
 

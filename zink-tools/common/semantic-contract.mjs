@@ -202,6 +202,99 @@ export function prepareQueryEmbedding(params = {}) {
  */
 export const STRUCTURED_REFERENCE_ID_REGEX = /^(\d{2})-(\d{2})-(\d{4})$/u;
 
+/**
+ * Canonical Reference ID Matrix
+ * Implements ACTIVE.md Sections 1, 21, 39, 40, 41:
+ * - Unified Reference ID + README Matrix
+ * - Compatible across KB / Skill Store / Zink Tools
+ */
+export const REFERENCE_TOPIC_CODES = Object.freeze({
+  "01": Object.freeze({
+    code: "01",
+    name: "Supply Chain & Logistics",
+    domain: "office",
+    key: "LSCM",
+  }),
+  "02": Object.freeze({
+    code: "02",
+    name: "Knowledgebase & Research Ingestion",
+    domain: "general",
+    key: "KB",
+  }),
+  "03": Object.freeze({
+    code: "03",
+    name: "Office Automation & Spreadsheets",
+    domain: "office",
+    key: "EXCEL",
+  }),
+  "04": Object.freeze({
+    code: "04",
+    name: "Relational Analytics & SQL",
+    domain: "data",
+    key: "SQL",
+  }),
+  "05": Object.freeze({
+    code: "05",
+    name: "Business Intelligence & Reporting",
+    domain: "data",
+    key: "POWER_BI",
+  }),
+  "06": Object.freeze({
+    code: "06",
+    name: "Data Engineering & Scripting",
+    domain: "engineering",
+    key: "PYTHON",
+  }),
+  "07": Object.freeze({
+    code: "07",
+    name: "System Governance & Lifecycle",
+    domain: "governance",
+    key: "GOVERNANCE",
+  }),
+});
+
+export const REFERENCE_EXECUTION_CODES = Object.freeze({
+  "00": Object.freeze({
+    code: "00",
+    type: "Personal Experience / Human-Contributed",
+    isHuman: true,
+    description:
+      "Bất biến, dành riêng cho tri thức do con người trực tiếp đóng góp",
+  }),
+  "01": Object.freeze({
+    code: "01",
+    type: "Automated Pipeline / ETL",
+    isHuman: false,
+    description: "Dòng chảy xử lý dữ liệu và trích xuất tự động (O1: SQL/Python)",
+  }),
+  "02": Object.freeze({
+    code: "02",
+    type: "Analytical & Statistical Modeling",
+    isHuman: false,
+    description: "Mô hình phân tích dữ liệu, DAX và thống kê (O2: Power BI)",
+  }),
+  "03": Object.freeze({
+    code: "03",
+    type: "Tool Direct Execution / Artifact Generation",
+    isHuman: false,
+    description: "Thực thi công cụ trực tiếp sinh artifact/báo cáo (Excel/Python)",
+  }),
+  "04": Object.freeze({
+    code: "04",
+    type: "ML & Predictive Forecasting",
+    isHuman: false,
+    description:
+      "Học máy, huấn luyện ngoại vi và dự báo chuỗi thời gian (O2/Python)",
+  }),
+  "05": Object.freeze({
+    code: "05",
+    type: "Optimization & Simulation",
+    isHuman: false,
+    description:
+      "Thuật toán quy hoạch tuyến tính/phi tuyến, mô phỏng hoạt động (O2)",
+  }),
+});
+
 export function formatStructuredReferenceId({
   topicCode, // 0-99
   executionCode, // 0-99 (00 = human-contributed)
@@ -246,6 +339,35 @@ export function isValidStructuredReferenceId(id) {
   } catch {
     return false;
   }
+}
+
+/**
+ * Resolves full semantic meaning from a structured reference ID.
+ *
+ * @param {string} id
+ * @returns {object}
+ */
+export function resolveReferenceIdMeaning(id) {
+  const parsed = parseStructuredReferenceId(id);
+  const topic = REFERENCE_TOPIC_CODES[parsed.topicCode] || {
+    code: parsed.topicCode,
+    name: "Custom / Unregistered Topic",
+    domain: "general",
+    key: "CUSTOM",
+  };
+  const execution = REFERENCE_EXECUTION_CODES[parsed.executionCode] || {
+    code: parsed.executionCode,
+    type: "Unregistered Execution Type",
+    isHuman: parsed.isHumanContributed,
+    description: "Không xác định",
+  };
+
+  return {
+    ...parsed,
+    topic,
+    execution,
+    summary: `[${topic.key}] ${topic.name} | ${execution.type} | Task #${parsed.taskNumber}`,
+  };
 }
 
 /**
