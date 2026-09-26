@@ -3536,18 +3536,21 @@ export default {
       }
     });
     // Canonical Discord surface channel IDs (E18)
-    const CANONICAL_DISCORD_SURFACE_IDS = new Set(
-      [
-        config.officeChannelId,
-        config.approvalsChannelId,
-        config.resultsChannelId,
-        config.incidentsChannelId,
-        config.discordOfficeChannelId,
-        config.discordApprovalsForumId,
-        config.discordResultsForumId,
-        config.discordIncidentsForumId,
-      ].filter(Boolean),
-    );
+    const CANONICAL_DISCORD_SURFACE_IDS = new Set();
+    for (const rawId of [
+      config.officeChannelId,
+      config.approvalsChannelId,
+      config.resultsChannelId,
+      config.incidentsChannelId,
+      config.discordOfficeChannelId,
+      config.discordApprovalsForumId,
+      config.discordResultsForumId,
+      config.discordIncidentsForumId,
+    ].filter(Boolean)) {
+      CANONICAL_DISCORD_SURFACE_IDS.add(rawId);
+      CANONICAL_DISCORD_SURFACE_IDS.add(`channel:${rawId}`);
+      CANONICAL_DISCORD_SURFACE_IDS.add(`discord:${rawId}`);
+    }
 
     // Outbound broadcast mention patterns (E19)
     const OUTBOUND_BROADCAST_RE = /@(everyone|here)/gu;
@@ -3577,17 +3580,24 @@ export default {
       }
 
       // E18: Validate destination channel against canonical surfaces (when channel known)
-      const destChannel =
+      const rawDest =
         ctx.conversationId ??
         ctx.targetChannelId ??
         event.to?.conversationId ??
-        event.to?.channelId;
-      if (
-        destChannel &&
-        destChannel !== "discord" &&
-        CANONICAL_DISCORD_SURFACE_IDS.size > 0 &&
-        !CANONICAL_DISCORD_SURFACE_IDS.has(destChannel)
-      ) {
+        event.to?.channelId ??
+        (typeof event.to === "string" ? event.to : undefined);
+      const destChannel =
+        typeof rawDest === "string"
+          ? rawDest.replace(/^(channel|discord|user):/u, "").trim()
+          : rawDest;
+      const isCanonical =
+        !destChannel ||
+        destChannel === "discord" ||
+        CANONICAL_DISCORD_SURFACE_IDS.size === 0 ||
+        CANONICAL_DISCORD_SURFACE_IDS.has(destChannel) ||
+        CANONICAL_DISCORD_SURFACE_IDS.has(rawDest) ||
+        Boolean(ctx.threadId || event.threadId || ctx.parentChannelId || event.parentChannelId);
+      if (!isCanonical) {
         api.logger?.warn?.(
           `[zink-governance] message_sending blocked: non-canonical destination channel`,
         );
