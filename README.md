@@ -94,24 +94,36 @@ Hệ thống OpenClaw quản trị cụm 7 agent vai trò cố định. Các age
 - **Ranh giới an toàn & Giới hạn:**
   - Không tự cấp quyền phê duyệt (`APPROVE`) hoặc tự nghiệm thu hoàn tất (`COMPLETE`).
 
-#### 4. Các Chuyên viên Thực thi Ngầm (Specialist Agents: Excel, PowerBI, SQL, Python)
+#### 4. Agent `excel` — Chuyên viên Bảng tính (Spreadsheet Specialist)
 
-- **Vai trò:** Cung cấp năng lực tính toán và sinh artifact thuần túy:
-  - `@Excel` (`excel`): Đọc/ghi bảng tính `.xlsx`, sinh ảnh preview `.svg`.
-  - `@PowerBI` (`power-bi`): Sinh mô hình dữ liệu semantic và báo cáo BI.
-  - `@SQL` (`sql`): Truy vấn dữ liệu DuckDB/PostgreSQL/BigQuery.
-  - `@Python` (`python`): Xử lý thuật toán khoa học dữ liệu, tối ưu hóa và dự báo.
-- **Ranh giới An toàn Bất biến:**
-  - **Hoàn toàn không có quyền quản trị (No Governance Authority):** Cấm tham gia vào bất kỳ hành động phê duyệt, từ chối, chuyển đổi trạng thái task hay nghiệm thu kết quả nào.
-  - **Không phát ngôn trực tiếp trên Discord:** Mọi kết quả đầu ra được gửi ngược lại cho Coordinator cha (`o1` hoặc `o2`) tổng hợp và kiểm định trước khi trình lên `#results`. Mọi nỗ lực phát ngôn trực tiếp ra `#office` của chuyên viên đều bị plugin quản trị tự động chặn lại.
+- **Discord Handle:** `@Excel` (ID: `1545438637750227104`)
+- **Chức năng chính:** Chuyên trách xử lý, chuyển đổi dữ liệu và tạo lập bảng tính Excel (`.xlsx`), đồng thời sinh ảnh trực quan SVG preview cho các sheet đầu ra.
+- **Quyền hạn & Công cụ:**
+  - Chạy ngầm dưới quyền điều phối trực tiếp của `o1`.
+  - Sử dụng `zink_excel`, `zink_skill_search`, `zink_skill_propose`, `zink_knowledge_search`, `session_status`.
+- **Ranh giới an toàn & Giới hạn:**
+  - **Không có quyền quản trị:** Cấm tham gia phê duyệt hoặc tự ý phát ngôn trên Discord.
+  - File `.xlsx` xuất bản phải đi kèm preview trực quan dạng `.svg`, không lưu đè vào thư mục Git `artifacts/`.
+
+#### 5. Agent `power-bi` — Chuyên viên Báo cáo BI (BI Specialist)
+
+- **Discord Handle:** `@PowerBI` (ID: `1545439082019164271`)
+- **Chức năng chính:** Thiết kế mô hình dữ liệu quan hệ, viết công thức DAX và xuất bản báo cáo Power BI (`.pbix` / `.pbit`).
+- **Quyền hạn & Công cụ:**
+  - Chạy ngầm dưới quyền điều phối trực tiếp của `o2`.
+  - Sử dụng `zink_power_bi`, `zink_skill_search`, `zink_skill_propose`, `zink_knowledge_search`, `session_status`.
+- **Ranh giới an toàn & Giới hạn:**
+  - File report phải được kiểm định container PK\x03\x04 hợp lệ kèm thông tin kích thước và preview báo cáo.
+  - Cấm tự ý giao tiếp trực tiếp với người dùng trên `#office`.
 
 #### 6. Agent `sql` — Chuyên viên Truy vấn Dữ liệu (SQL Specialist)
 
 - **Discord Handle:** `@SQL` (ID: `1545438861356966010`)
 - **Chức năng chính:** Khảo sát, trích xuất và biến đổi dữ liệu phân tích thông qua các câu truy vấn SQL hiệu năng cao trên DuckDB, MotherDuck và BigQuery.
 - **Quyền hạn & Công cụ:**
+  - Chạy ngầm dưới quyền điều phối trực tiếp của `o1`.
   - Sử dụng `zink_sql` để gửi câu lệnh truy vấn tới DuckDB Governed Bridge trên Windows hoặc các cloud data warehouse.
-  - Sử dụng `session_status`.
+  - Sử dụng `session_status`, `zink_skill_search`, `zink_skill_propose`, `zink_knowledge_search`.
 - **Ranh giới an toàn & Giới hạn:**
   - **Chỉ đọc (`read-only`):** DuckDB Bridge kiểm soát chặt chẽ cú pháp (AST validation); cấm tuyệt đối các thao tác thay đổi schema tùy tiện, cấm `ATTACH`, `COPY`, cấm thoát khỏi thư mục cơ sở dữ liệu (`DUCKDB_FILESYSTEM_ACCESS_DENIED`) và cấm gọi lệnh shell máy chủ.
 
@@ -120,9 +132,10 @@ Hệ thống OpenClaw quản trị cụm 7 agent vai trò cố định. Các age
 - **Discord Handle:** `@Python` (ID: `1545439279843508235`)
 - **Chức năng chính:** Thực thi các bài toán khoa học quyết định phức tạp: phân tích thống kê, tối ưu hóa tuyến tính/phi tuyến, dự báo chuỗi thời gian, mô phỏng Monte Carlo và xử lý dữ liệu định lượng.
 - **Quyền hạn & Công cụ:**
+  - Chạy ngầm dưới quyền điều phối của `o1` (khi phục vụ ETL/data processing) hoặc `o2` (khi phục vụ Data Science/ML/Analytics).
   - Sử dụng `zink_python` để chạy các script Python phân tích trong môi trường container runtime bảo mật.
   - Sử dụng `zink_n8n` để kích hoạt pipeline tính toán khi cần thiết.
-  - Sử dụng `session_status`.
+  - Sử dụng `session_status`, `zink_skill_search`, `zink_skill_propose`, `zink_knowledge_search`.
 - **Ranh giới an toàn & Giới hạn:**
   - Chạy trong Docker container sandbox; tài nguyên compute nặng được điều hướng ra adapter ngoại vi (Kaggle/Databricks) có kiểm soát; mô hình học máy ngoại vi chỉ dừng ở mức đánh giá (`EVALUATED_NOT_PROMOTED`), cấm tự động đưa vào production.
 
@@ -324,7 +337,7 @@ Lệnh trên sẽ tự động chạy:
 
 1. `npm run format:check`: Kiểm tra định dạng mã nguồn.
 2. `npm run lint`: Phân tích tĩnh cú pháp JavaScript và Markdown.
-3. `npm test`: Chạy 112 bài kiểm thử nền tảng.
+3. `npm test`: Chạy toàn bộ 272 bài kiểm thử (13 test suites) bao phủ hợp đồng M1–M8, OpenClaw governance và DuckDB bridge.
 4. `npm run repo:check`: Kiểm tra toàn vẹn chính sách repository.
 
 ---
@@ -656,12 +669,21 @@ Hệ thống tách biệt hoàn toàn giữa **Control Plane** (chạy 24/7 trê
 
 Quy trình nghiệm thu kết quả tuân thủ nghiêm ngặt 2 tầng kiểm tra độc lập:
 
-1. **Tầng Kỹ thuật (Technical Validation):**
+1. **Tầng Kỹ thuật (Technical Validation & Multi-Format Data File Validation):**
    - Kiểm tra tệp artifact tồn tại trên đĩa, kích thước hợp lệ (lớn hơn ngưỡng byte tối thiểu).
-   - Xác thực cấu trúc dữ liệu theo định dạng (`csv`, `json`, `markdown`, `excel`): phân tích cú pháp hợp lệ, kiểm tra sự hiện diện của các cột/trường dữ liệu bắt buộc.
+   - **Xác thực và sinh Preview Đa định dạng (`artifact-validator.mjs`):**
+     - **Excel (`.xlsx`):** Phân tích workbook, kiểm tra số dòng/cột, sinh ảnh SVG preview trực quan các sheet đầu ra.
+     - **SQL (`.sql`):** Đọc UTF-8, đếm câu lệnh, phân loại DML/Read-only, preview 30 dòng đầu kèm chú thích phân tích an toàn (`sql/validator.mjs`).
+     - **Python (`.py`):** Phân tích AST, đếm hàm/class, phân loại import thư viện (Data Science: pandas, numpy, scipy, scikit-learn; Database: duckdb, psycopg2, sqlalchemy; File I/O: csv, json, openpyxl), preview 30 dòng đầu (`python/python-validator.mjs`).
+     - **Power BI (`.pbix`, `.pbit`):** Kiểm tra magic byte zip `PK\x03\x04`, xác thực tính toàn vẹn của container và dung lượng tệp.
+     - **Apache Parquet (`.parquet`):** Kiểm tra magic byte `PAR1` ở header và footer, xác nhận biên byte hợp lệ.
+     - **PDF (`.pdf`):** Kiểm tra magic byte `%PDF-`, trích xuất chuỗi phiên bản từ header.
+     - **Microsoft Word (`.docx`, `.doc`):** Kiểm tra magic byte zip `PK\x03\x04`, xác thực container tệp.
+     - **Markdown (`.md`):** Đọc UTF-8, đếm heading, trích xuất preview 20 dòng đầu.
+     - **CSV & JSON:** Xác thực cấu trúc bảng, kiểm tra sự hiện diện của các cột/trường dữ liệu bắt buộc.
 2. **Tầng Nghiệp vụ (Business Validation):**
    - Kiểm tra ràng buộc chỉ số KPI (giá trị tối thiểu, tối đa).
-   - Kiểm định tính hợp lý của số liệu tính toán.
+   - Kiểm định tính hợp lý của số liệu tính toán, phát hiện dữ liệu mock hoặc rỗng.
 
 **Nguyên tắc Bất biến Khóa Kết quả:**
 
@@ -775,6 +797,30 @@ _Nguyên tắc tham chiếu:_ Ưu tiên tham chiếu (reference) qua mã định
 3. **Kết quả Kỹ thuật Đạt nhưng Nghiệp vụ Sai:** Vi phạm chỉ số KPI khiến kết quả bị khóa lập tức ở trạng thái `RESULT BLOCKED`, tự động gửi cảnh báo thẻ đỏ lên `#incidents`; cấm chuyển sang trạng thái thành công.
 4. **Bảo vệ Chống Thao tác Cũ / Trùng lặp (Stale / Duplicate Protection):** Mọi tương tác nút bấm trên Discord đều gắn kèm `attemptToken`. Thao tác trên các lượt thử cũ bị hệ thống từ chối với mã lỗi `STALE_ACTION_REJECTED`.
 5. **Quản trị Ngoại tuyến (Governance Unavailable):** Hệ thống luôn tuân thủ nguyên tắc **Fail-Closed**; cấm bỏ qua (bypass) chốt an toàn và cấm tự động fallback về thực thi trực tiếp trên máy chủ chủ quyền (host fallback).
+
+---
+
+### 8. Khung Quản trị 15 Họ Nguyên nhân Gốc (Root-Cause Hardening Map — RC-01 đến RC-15)
+
+Nhằm đảm bảo hệ thống vận hành bền vững không xảy ra lỗi hồi quy, M8/T2.2 khóa cứng 15 họ nguyên nhân gốc tại tầng kiến trúc:
+
+| Họ Root Cause | Tên lĩnh vực Quản trị | Nguyên tắc & Ranh giới Khóa cứng tại Runtime |
+| :--- | :--- | :--- |
+| **RC-01** | Discord Ingress / Routing Authority | Cổng tiếp nhận kiểm tra trước khi gọi model; `@Quản Lý` là root owner duy nhất; từ chối mention trực tiếp chuyên viên (`SPECIALIST_NO_DIRECT_INGRESS`); chống duplicate event. |
+| **RC-02** | Agent Topology / Spawn Authorization | Khóa cứng cây phân cấp: `Main -> [O1, O2]`, `O1 -> [Excel, SQL, Python]`, `O2 -> [Power BI, Python]`, leaf -> `[]`; chặn Main gọi trực tiếp chuyên viên, cấm O1/O2 gọi chéo nhau. |
+| **RC-03** | Task Identity / Lineage / Idempotency | Mã tương quan bền vững (`task_id`), tra cứu chính xác; từ chối duplicate action hoặc xử lý lũy thừa không tạo execution mới. |
+| **RC-04** | Approval / Revision / Result Transaction | Bản ghi phê duyệt bất biến gắn liền mã băm kế hoạch; sửa đổi kế hoạch lập tức hủy hiệu lực phê duyệt cũ; độc quyền User duyệt. |
+| **RC-05** | Queue / Ledger / Lease / Recovery | Hàng đợi bền vững trên đĩa với atomic cross-process file lock, heartbeat fencing, tự động thu hồi task treo khi laptop tắt/ngủ. |
+| **RC-06** | Discord Outbound / Channel Authority | Tách bạch 4 kênh: `#office` (Main trao đổi người dùng), `#approvals` (duyệt kế hoạch), `#results` (nghiệm thu kết quả), `#incidents` (báo cáo lỗi). |
+| **RC-07** | Artifact / Result Delivery Truth | Loại bỏ đường dẫn tuyệt đối nội bộ và `file://` khỏi tin nhắn người dùng; tách riêng artifact lưu trữ ngoài Git. |
+| **RC-08** | Excel Execution Truth | Loại bỏ ghi đè vào Git `artifacts/`; xuất bản `.xlsx` kèm ảnh SVG preview trực quan từng sheet. |
+| **RC-09** | SQL Execution Truth | Chạy DuckDB engine thật qua Windows bridge; trả trạng thái thực thi rõ ràng (`REAL_EXECUTED`, `EMPTY_RESULT`, `TEST_SIMULATION`, `TIMEOUT`); cấm trả mock rows khi lỗi. |
+| **RC-10** | Python Execution Truth | Tách biệt stack ETL của O1 và stack Analytics/Forecast của O2; phân tích cú pháp AST và kiểm soát import thư viện. |
+| **RC-11** | Power BI Execution Truth | Kiểm tra magic byte zip `PK\x03\x04`, tính toàn vẹn của container `.pbix`/`.pbit` và tương quan preview dashboard. |
+| **RC-12** | External Adapter / Simulation Truth | Tách biệt rõ ràng chế độ mô phỏng (`TEST_SIMULATION`) và cấm dùng dữ liệu mô phỏng trong đường dẫn thành công của production. |
+| **RC-13** | Security / Path / Endpoint Isolation | Zero secret leaks; chặn mọi hành vi path traversal (`..`) hoặc truy cập file ngoài workspace; cấm bypass sandbox. |
+| **RC-14** | Semantic / Capability Boundary | Ánh xạ namespace được kiểm duyệt; lưu đề xuất skill vào thư mục chuyên dụng, không làm bẩn source tree. |
+| **RC-15** | Verification / CI / Schema Truth | Toàn bộ 272 bài kiểm thử qua 13 suites đạt 100% PASS; chất lượng code đạt chuẩn: diff sạch, lint 0 lỗi, repo check PASS. |
 
 ---
 
