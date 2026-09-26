@@ -18,7 +18,7 @@
       "const": "1.0.0"
     },
     "governance_version": {
-      "enum": ["m7-t2-r12", "m7-t5-r13", "m8-t2-r9"]
+      "enum": ["m7-t2-r12", "m7-t5-r13", "m8-t2-r9", "m8-t2.1-r3"]
     },
     "sequence": {
       "type": "integer",
@@ -126,11 +126,18 @@
                 "workflow_status": {
                   "enum": [
                     "ACTIVE",
+                    "QUEUED",
+                    "EXECUTING",
+                    "WAITING_FOR_WORKER",
+                    "WAITING_FOR_USER",
+                    "RESULT_PENDING_REVIEW",
+                    "REVISING",
                     "BLOCKED",
                     "COMPLETE",
                     "PARTIAL",
                     "FAILED",
-                    "CANCELLED"
+                    "CANCELLED",
+                    "REJECTED"
                   ]
                 },
                 "nodes": {
@@ -293,6 +300,14 @@
                         },
                         "runtime_reason_code": {
                           "enum": ["RUN_TIMEOUT", "EXECUTION_STATE_UNKNOWN"]
+                        },
+                        "recovery_needed_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "recovery_reason": {
+                          "type": "string",
+                          "maxLength": 128
                         }
                       }
                     }
@@ -383,6 +398,74 @@
                 "reason_code": {
                   "type": "string",
                   "maxLength": 128
+                },
+                "approved_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "rejected_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "rejection_reason": {
+                  "type": "string",
+                  "maxLength": 4096
+                },
+                "revision_requested_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "revision_feedback": {
+                  "type": "string",
+                  "maxLength": 4096
+                },
+                "claimed_by": {
+                  "type": "string",
+                  "maxLength": 256
+                },
+                "claimed_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "waiting_question": {
+                  "type": "string",
+                  "maxLength": 4096
+                },
+                "user_answer": {
+                  "type": "string",
+                  "maxLength": 4096
+                },
+                "user_accepted_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "user_rejected_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "user_principal_ref": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "approval_message_id": {
+                  "type": "string",
+                  "maxLength": 256
+                },
+                "approval_thread_id": {
+                  "type": "string",
+                  "maxLength": 256
+                },
+                "approval_scope_digest": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "result_pending_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "execution_payload_digest": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
                 }
               }
             },

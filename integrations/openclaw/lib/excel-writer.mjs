@@ -159,9 +159,13 @@ export function executeExcelOperation(params, baseDir = process.cwd()) {
   const normalizedPath = cleanPath.endsWith(".xlsx")
     ? cleanPath
     : `${cleanPath}.xlsx`;
+  const effectiveBase =
+    baseDir && typeof baseDir === "string" && baseDir !== "null"
+      ? baseDir
+      : path.resolve(process.cwd(), "artifacts");
   const targetPath = path.isAbsolute(normalizedPath)
     ? normalizedPath
-    : path.resolve(baseDir, normalizedPath);
+    : path.resolve(effectiveBase, normalizedPath);
 
   if (op === "load" || op === "read") {
     let checkPath = targetPath;
@@ -173,7 +177,7 @@ export function executeExcelOperation(params, baseDir = process.cwd()) {
     }
     if (!fs.existsSync(checkPath)) {
       return {
-        status: "error",
+        status: "ERROR",
         tool: "zink_excel",
         operation: op,
         file_path: rawPath,
@@ -202,7 +206,7 @@ export function executeExcelOperation(params, baseDir = process.cwd()) {
       exists = true;
     }
     return {
-      status: exists ? "success" : "error",
+      status: exists ? "success" : "ERROR",
       tool: "zink_excel",
       operation: "validate",
       file_path: rawPath,
@@ -243,42 +247,39 @@ export function executeExcelOperation(params, baseDir = process.cwd()) {
   const previewPath = targetPath.replace(/\.xlsx$/i, "_preview.svg");
   fs.writeFileSync(previewPath, previewSvg, "utf8");
 
-  // Also write a copy to current working directory if targetPath is in sandbox and not in repo root
-  try {
-    const isRepoRoot =
-      fs.existsSync(path.join(process.cwd(), "package.json")) &&
-      fs.existsSync(path.join(process.cwd(), "PLAN.md"));
-    if (!isRepoRoot) {
-      const cwdCopy = path.resolve(process.cwd(), path.basename(targetPath));
-      if (cwdCopy !== targetPath) {
-        fs.writeFileSync(cwdCopy, buf);
-        fs.writeFileSync(
-          cwdCopy.replace(/\.xlsx$/i, "_preview.svg"),
-          previewSvg,
-          "utf8",
-        );
-      }
-    }
-  } catch {
-    /* ignore secondary write */
-  }
+  // Generate real visual PNG preview of the spreadsheet
+  const previewPngPath = targetPath.replace(/\.xlsx$/i, "_preview.png");
+  renderSheetPreviewPng(rows, sheetName, previewPngPath);
+
+  const relativeToCwd = path
+    .relative(process.cwd(), targetPath)
+    .replace(/\\/g, "/");
+  const logicalFilePath = relativeToCwd.startsWith("..")
+    ? path.basename(targetPath)
+    : relativeToCwd;
 
   return {
     status: "success",
     tool: "zink_excel",
     operation: op,
-    file_path: rawPath,
-    container_path: `/workspace/${path.basename(targetPath)}`,
+    file_path: logicalFilePath,
+    container_path: logicalFilePath,
     absolute_path: targetPath,
     preview_image_path: previewPath,
     preview_image_file: path.basename(previewPath),
+    preview_svg_path: previewPath,
+    preview_png_path: previewPngPath,
+    preview_png_file: path.basename(previewPngPath),
     summary: {
       rows: rows.length,
       columns: rows[0]?.length || 1,
       sheets: [sheetName],
       size_bytes: buf.length,
       preview_image: path.basename(previewPath),
-      message: `Workbook ${op} completed successfully with real image preview at ${path.basename(previewPath)}`,
+      preview_png: path.basename(previewPngPath),
+      file_path: logicalFilePath,
+      absolute_path: targetPath,
+      message: `Workbook ${op} completed successfully with real image preview at ${path.basename(previewPath)} and ${path.basename(previewPngPath)}`,
     },
   };
 }
@@ -357,4 +358,580 @@ function escapeXml(unsafe) {
         return "&quot;";
     }
   });
+}
+
+export function renderSheetPreviewHtml(rows, sheetName = "Sheet1") {
+  const displayRows = rows.slice(0, 15);
+  const maxCols = Math.min(
+    8,
+    Math.max(...displayRows.map((r) => (Array.isArray(r) ? r.length : 1)), 1),
+  );
+
+  let theadHtml = "";
+  let tbodyHtml = "";
+
+  displayRows.forEach((row, r) => {
+    const isFirstRow = r === 0;
+    const isTotalRow =
+      Array.isArray(row) &&
+      row.some(
+        (cell) =>
+          typeof cell === "string" &&
+          (cell.includes("TỔNG") || cell.includes("TOTAL")),
+      );
+
+    let rowCells = "";
+    for (let c = 0; c < maxCols; c++) {
+      let val =
+        Array.isArray(row) && row[c] !== undefined && row[c] !== null
+          ? String(row[c])
+          : "";
+
+      if (isFirstRow) {
+        rowCells += `<th>${escapeXml(val)}</th>`;
+      } else {
+        let badgeHtml = null;
+        if (/^(ĐẠT|PASS|OK|XUẤT SẮC)$/i.test(val.trim())) {
+          badgeHtml = `<span class="badge badge-pass">${escapeXml(val)}</span>`;
+        } else if (/^(KHÔNG ĐẠT|FAIL|CẢNH BÁO)$/i.test(val.trim())) {
+          badgeHtml = `<span class="badge badge-fail">${escapeXml(val)}</span>`;
+        }
+
+        // Format number with commas if applicable
+        if (!badgeHtml && /^\d{4,}$/.test(val.trim())) {
+          val = Number(val).toLocaleString("en-US");
+        }
+
+        rowCells += `<td>${badgeHtml || escapeXml(val)}</td>`;
+      }
+    }
+
+    if (isFirstRow) {
+      theadHtml = `<tr>${rowCells}</tr>`;
+    } else {
+      const rowClass = isTotalRow ? ' class="total"' : "";
+      tbodyHtml += `<tr${rowClass}>${rowCells}</tr>`;
+    }
+  });
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body {
+    margin: 0;
+    padding: 20px;
+    background: #18191c;
+    color: #f2f3f5;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  }
+  .card {
+    background: #2b2d31;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+    border: 1px solid #383a40;
+    max-width: 920px;
+  }
+  .header {
+    background: #107c41;
+    color: white;
+    padding: 12px 20px;
+    font-size: 16px;
+    font-weight: bold;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  th {
+    background: #232428;
+    color: #949ba4;
+    padding: 10px 14px;
+    text-align: left;
+    font-size: 13px;
+    border-bottom: 1px solid #383a40;
+  }
+  td {
+    padding: 9px 14px;
+    font-size: 13px;
+    border-bottom: 1px solid #313338;
+    color: #dbdee1;
+  }
+  tr:nth-child(even) td {
+    background: #2e3035;
+  }
+  tr.total td {
+    background: #202225;
+    font-weight: bold;
+    color: #57f287;
+    border-top: 2px solid #57f287;
+  }
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: bold;
+  }
+  .badge-pass {
+    background: #23a55a;
+    color: white;
+  }
+  .badge-fail {
+    background: #da373c;
+    color: white;
+  }
+  .footer {
+    background: #232428;
+    padding: 8px 20px;
+    font-size: 12px;
+    color: #949ba4;
+  }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="header">
+    📊 Microsoft Excel Preview — ${escapeXml(sheetName)}
+  </div>
+  <table>
+    <thead>${theadHtml}</thead>
+    <tbody>${tbodyHtml}</tbody>
+  </table>
+  <div class="footer">
+    ✓ Real Data Verified • ${rows.length} rows total • Generated by Zink Excel Specialist
+  </div>
+</div>
+</body>
+</html>`;
+}
+
+// 5x7 font definitions for printable ASCII (32-126)
+const FONT_5X7 = {
+  " ": [0x00, 0x00, 0x00, 0x00, 0x00],
+  "!": [0x00, 0x00, 0x5f, 0x00, 0x00],
+  '"': [0x00, 0x07, 0x00, 0x07, 0x00],
+  "#": [0x14, 0x7f, 0x14, 0x7f, 0x14],
+  $: [0x24, 0x2a, 0x7f, 0x2a, 0x12],
+  "%": [0x23, 0x13, 0x08, 0x64, 0x62],
+  "&": [0x36, 0x49, 0x55, 0x22, 0x50],
+  "'": [0x00, 0x05, 0x03, 0x00, 0x00],
+  "(": [0x00, 0x1c, 0x22, 0x41, 0x00],
+  ")": [0x00, 0x41, 0x22, 0x1c, 0x00],
+  "*": [0x14, 0x08, 0x3e, 0x08, 0x14],
+  "+": [0x08, 0x08, 0x3e, 0x08, 0x08],
+  ",": [0x00, 0x50, 0x30, 0x00, 0x00],
+  "-": [0x08, 0x08, 0x08, 0x08, 0x08],
+  ".": [0x00, 0x60, 0x60, 0x00, 0x00],
+  "/": [0x20, 0x10, 0x08, 0x04, 0x02],
+  0: [0x3e, 0x51, 0x49, 0x45, 0x3e],
+  1: [0x00, 0x42, 0x7f, 0x40, 0x00],
+  2: [0x42, 0x61, 0x51, 0x49, 0x46],
+  3: [0x21, 0x41, 0x45, 0x4b, 0x31],
+  4: [0x18, 0x14, 0x12, 0x7f, 0x10],
+  5: [0x27, 0x45, 0x45, 0x45, 0x39],
+  6: [0x3c, 0x4a, 0x49, 0x49, 0x30],
+  7: [0x01, 0x71, 0x09, 0x05, 0x03],
+  8: [0x36, 0x49, 0x49, 0x49, 0x36],
+  9: [0x06, 0x49, 0x49, 0x29, 0x1e],
+  ":": [0x00, 0x36, 0x36, 0x00, 0x00],
+  ";": [0x00, 0x56, 0x36, 0x00, 0x00],
+  "<": [0x08, 0x14, 0x22, 0x41, 0x00],
+  "=": [0x14, 0x14, 0x14, 0x14, 0x14],
+  ">": [0x00, 0x41, 0x22, 0x14, 0x08],
+  "?": [0x02, 0x01, 0x51, 0x09, 0x06],
+  "@": [0x32, 0x49, 0x79, 0x41, 0x3e],
+  A: [0x7e, 0x11, 0x11, 0x11, 0x7e],
+  B: [0x7f, 0x49, 0x49, 0x49, 0x36],
+  C: [0x3e, 0x41, 0x41, 0x41, 0x22],
+  D: [0x7f, 0x41, 0x41, 0x22, 0x1c],
+  E: [0x7f, 0x49, 0x49, 0x49, 0x41],
+  F: [0x7f, 0x09, 0x09, 0x09, 0x01],
+  G: [0x3e, 0x41, 0x49, 0x49, 0x7a],
+  H: [0x7f, 0x08, 0x08, 0x08, 0x7f],
+  I: [0x00, 0x41, 0x7f, 0x41, 0x00],
+  J: [0x20, 0x40, 0x41, 0x3f, 0x01],
+  K: [0x7f, 0x08, 0x14, 0x22, 0x41],
+  L: [0x7f, 0x40, 0x40, 0x40, 0x40],
+  M: [0x7f, 0x02, 0x0c, 0x02, 0x7f],
+  N: [0x7f, 0x04, 0x08, 0x10, 0x7f],
+  O: [0x3e, 0x41, 0x41, 0x41, 0x3e],
+  P: [0x7f, 0x09, 0x09, 0x09, 0x06],
+  Q: [0x3e, 0x41, 0x51, 0x21, 0x5e],
+  R: [0x7f, 0x09, 0x19, 0x29, 0x46],
+  S: [0x46, 0x49, 0x49, 0x49, 0x31],
+  T: [0x01, 0x01, 0x7f, 0x01, 0x01],
+  U: [0x3f, 0x40, 0x40, 0x40, 0x3f],
+  V: [0x1f, 0x20, 0x40, 0x20, 0x1f],
+  W: [0x3f, 0x40, 0x38, 0x40, 0x3f],
+  X: [0x63, 0x14, 0x08, 0x14, 0x63],
+  Y: [0x07, 0x08, 0x70, 0x08, 0x07],
+  Z: [0x61, 0x51, 0x49, 0x45, 0x43],
+  "[": [0x00, 0x7f, 0x41, 0x41, 0x00],
+  "\\": [0x02, 0x04, 0x08, 0x10, 0x20],
+  "]": [0x00, 0x41, 0x41, 0x7f, 0x00],
+  "^": [0x04, 0x02, 0x01, 0x02, 0x04],
+  _: [0x40, 0x40, 0x40, 0x40, 0x40],
+  "`": [0x00, 0x01, 0x02, 0x04, 0x00],
+  a: [0x20, 0x54, 0x54, 0x54, 0x78],
+  b: [0x7f, 0x48, 0x44, 0x44, 0x38],
+  c: [0x38, 0x44, 0x44, 0x44, 0x20],
+  d: [0x38, 0x44, 0x44, 0x48, 0x7f],
+  e: [0x38, 0x54, 0x54, 0x54, 0x18],
+  f: [0x08, 0x7e, 0x09, 0x01, 0x02],
+  g: [0x0c, 0x52, 0x52, 0x52, 0x3e],
+  h: [0x7f, 0x08, 0x04, 0x04, 0x78],
+  i: [0x00, 0x44, 0x7d, 0x40, 0x00],
+  j: [0x20, 0x40, 0x44, 0x3d, 0x00],
+  k: [0x7f, 0x10, 0x28, 0x44, 0x00],
+  l: [0x00, 0x41, 0x7f, 0x40, 0x00],
+  m: [0x7c, 0x04, 0x18, 0x04, 0x78],
+  n: [0x7c, 0x08, 0x04, 0x04, 0x78],
+  o: [0x38, 0x44, 0x44, 0x44, 0x38],
+  p: [0x7c, 0x14, 0x14, 0x14, 0x08],
+  q: [0x08, 0x14, 0x14, 0x18, 0x7c],
+  r: [0x7c, 0x08, 0x04, 0x04, 0x08],
+  s: [0x48, 0x54, 0x54, 0x54, 0x20],
+  t: [0x04, 0x3f, 0x44, 0x40, 0x20],
+  u: [0x3c, 0x40, 0x40, 0x20, 0x7c],
+  v: [0x1c, 0x20, 0x40, 0x20, 0x1c],
+  w: [0x3c, 0x40, 0x30, 0x40, 0x3c],
+  x: [0x44, 0x28, 0x10, 0x28, 0x44],
+  y: [0x0c, 0x50, 0x50, 0x50, 0x3c],
+  z: [0x44, 0x64, 0x54, 0x4c, 0x44],
+  "{": [0x00, 0x08, 0x36, 0x41, 0x00],
+  "|": [0x00, 0x00, 0x7f, 0x00, 0x00],
+  "}": [0x00, 0x41, 0x36, 0x08, 0x00],
+  "~": [0x08, 0x04, 0x08, 0x10, 0x08],
+};
+
+function normalizeAscii(str) {
+  return String(str || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[đĐ]/g, (m) => (m === "đ" ? "d" : "D"));
+}
+
+function drawChar(
+  rgba,
+  width,
+  height,
+  ch,
+  startX,
+  startY,
+  scale,
+  r,
+  g,
+  b,
+  a = 255,
+) {
+  const glyph = FONT_5X7[ch] || FONT_5X7["?"] || [0x00, 0x00, 0x00, 0x00, 0x00];
+  for (let col = 0; col < 5; col++) {
+    const colBits = glyph[col];
+    for (let row = 0; row < 7; row++) {
+      if ((colBits & (1 << row)) !== 0) {
+        for (let dy = 0; dy < scale; dy++) {
+          for (let dx = 0; dx < scale; dx++) {
+            const px = startX + col * scale + dx;
+            const py = startY + row * scale + dy;
+            if (px >= 0 && px < width && py >= 0 && py < height) {
+              const idx = (py * width + px) * 4;
+              rgba[idx] = r;
+              rgba[idx + 1] = g;
+              rgba[idx + 2] = b;
+              rgba[idx + 3] = a;
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+function drawText(
+  rgba,
+  width,
+  height,
+  text,
+  startX,
+  startY,
+  scale = 1,
+  r = 255,
+  g = 255,
+  b = 255,
+  maxWidth = Infinity,
+) {
+  const clean = normalizeAscii(text);
+  let curX = startX;
+  const charWidth = 6 * scale;
+  for (let i = 0; i < clean.length; i++) {
+    if (curX + charWidth > startX + maxWidth) {
+      if (curX + 3 * charWidth <= startX + maxWidth) {
+        drawChar(rgba, width, height, ".", curX, startY, scale, r, g, b);
+        drawChar(
+          rgba,
+          width,
+          height,
+          ".",
+          curX + 4 * scale,
+          startY,
+          scale,
+          r,
+          g,
+          b,
+        );
+        drawChar(
+          rgba,
+          width,
+          height,
+          ".",
+          curX + 8 * scale,
+          startY,
+          scale,
+          r,
+          g,
+          b,
+        );
+      }
+      break;
+    }
+    drawChar(rgba, width, height, clean[i], curX, startY, scale, r, g, b);
+    curX += charWidth;
+  }
+}
+
+function fillRect(rgba, width, height, x0, y0, w, h, r, g, b, a = 255) {
+  const x1 = Math.min(width, Math.max(0, x0 + w));
+  const y1 = Math.min(height, Math.max(0, y0 + h));
+  const startX = Math.max(0, x0);
+  const startY = Math.max(0, y0);
+  for (let y = startY; y < y1; y++) {
+    for (let x = startX; x < x1; x++) {
+      const idx = (y * width + x) * 4;
+      rgba[idx] = r;
+      rgba[idx + 1] = g;
+      rgba[idx + 2] = b;
+      rgba[idx + 3] = a;
+    }
+  }
+}
+
+function extractTableData(rows) {
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return { headers: ["Column 1"], data: [["(No Data)"]], totalRows: 0 };
+  }
+  const first = rows[0];
+  if (Array.isArray(first)) {
+    if (rows.length > 1) {
+      return {
+        headers: first.map(String),
+        data: rows
+          .slice(1)
+          .map((r) => (Array.isArray(r) ? r.map(String) : [String(r)])),
+        totalRows: rows.length - 1,
+      };
+    } else {
+      return {
+        headers: first.map((_, i) => `Col ${i + 1}`),
+        data: [first.map(String)],
+        totalRows: 1,
+      };
+    }
+  } else if (typeof first === "object" && first !== null) {
+    const keys = Object.keys(first);
+    return {
+      headers: keys,
+      data: rows.map((r) => keys.map((k) => String(r[k] ?? ""))),
+      totalRows: rows.length,
+    };
+  } else {
+    return {
+      headers: ["Value"],
+      data: rows.map((r) => [String(r)]),
+      totalRows: rows.length,
+    };
+  }
+}
+
+export function renderSheetPreviewPng(rows, sheetName, targetPngPath) {
+  fs.mkdirSync(path.dirname(targetPngPath), { recursive: true });
+  const pngBuf = generatePureNodePng(rows, sheetName);
+  fs.writeFileSync(targetPngPath, pngBuf);
+  return targetPngPath;
+}
+
+function createPngChunk(type, data) {
+  const len = Buffer.alloc(4);
+  len.writeUInt32BE(data.length, 0);
+  const typeBuf = Buffer.from(type, "ascii");
+  const crc = calculateCrc32(Buffer.concat([typeBuf, data]));
+  const crcBuf = Buffer.alloc(4);
+  crcBuf.writeUInt32BE(crc >>> 0, 0);
+  return Buffer.concat([len, typeBuf, data, crcBuf]);
+}
+
+export function generatePureNodePng(rows, sheetName = "Sheet1") {
+  const width = 850;
+  const height = 440;
+  const rgba = Buffer.alloc(width * height * 4);
+
+  // Background #111827 (dark slate)
+  fillRect(rgba, width, height, 0, 0, width, height, 17, 24, 39);
+
+  // Excel Brand Header #107c41
+  fillRect(rgba, width, height, 0, 0, width, 48, 16, 124, 65);
+  drawText(
+    rgba,
+    width,
+    height,
+    `MICROSOFT EXCEL PREVIEW - ${String(sheetName).toUpperCase()}`,
+    20,
+    16,
+    2,
+    255,
+    255,
+    255,
+  );
+
+  const { headers, data, totalRows } = extractTableData(rows);
+
+  const marginX = 20;
+  const tableW = width - marginX * 2;
+  const colCount = Math.max(1, Math.min(headers.length, 7)); // max 7 columns visible
+  const colW = Math.floor(tableW / colCount);
+
+  // Table Header Background #1f2937
+  fillRect(rgba, width, height, marginX, 60, tableW, 32, 31, 41, 55);
+  // Bottom border of header #374151
+  fillRect(rgba, width, height, marginX, 91, tableW, 2, 55, 65, 81);
+
+  // Draw Header Labels
+  for (let c = 0; c < colCount; c++) {
+    const colName = headers[c] || `Col ${c + 1}`;
+    const x = marginX + c * colW + 8;
+    drawText(rgba, width, height, colName, x, 70, 1, 243, 244, 246, colW - 16);
+  }
+
+  // Draw Rows
+  const maxDisplayRows = 10;
+  const rowCount = Math.min(data.length, maxDisplayRows);
+  const rowH = 28;
+
+  for (let r = 0; r < rowCount; r++) {
+    const rowY = 93 + r * rowH;
+    const isEven = r % 2 === 0;
+    // Row background
+    if (isEven) {
+      fillRect(
+        rgba,
+        width,
+        height,
+        marginX,
+        rowY,
+        tableW,
+        rowH - 1,
+        24,
+        32,
+        47,
+      );
+    } else {
+      fillRect(
+        rgba,
+        width,
+        height,
+        marginX,
+        rowY,
+        tableW,
+        rowH - 1,
+        17,
+        24,
+        39,
+      );
+    }
+    // Subtle row divider line
+    fillRect(
+      rgba,
+      width,
+      height,
+      marginX,
+      rowY + rowH - 1,
+      tableW,
+      1,
+      38,
+      48,
+      65,
+    );
+
+    const rowCells = data[r] || [];
+    for (let c = 0; c < colCount; c++) {
+      const val = rowCells[c] !== undefined ? String(rowCells[c]) : "";
+      const x = marginX + c * colW + 8;
+      drawText(
+        rgba,
+        width,
+        height,
+        val,
+        x,
+        rowY + 9,
+        1,
+        226,
+        232,
+        240,
+        colW - 16,
+      );
+    }
+  }
+
+  // Footer bar #1f2937
+  const footerY = height - 36;
+  fillRect(rgba, width, height, marginX, footerY, tableW, 26, 31, 41, 55);
+  const footerText = `VERIFIED DATA: ${totalRows} total rows | Generated by Zink Specialist`;
+  drawText(
+    rgba,
+    width,
+    height,
+    footerText,
+    marginX + 12,
+    footerY + 8,
+    1,
+    156,
+    163,
+    175,
+  );
+
+  // PNG Framing
+  const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 6; // RGBA
+  ihdr[10] = 0;
+  ihdr[11] = 0;
+  ihdr[12] = 0;
+  const ihdrChunk = createPngChunk("IHDR", ihdr);
+
+  const scanlineLength = width * 4 + 1;
+  const filtered = Buffer.alloc(scanlineLength * height);
+  for (let y = 0; y < height; y++) {
+    filtered[y * scanlineLength] = 0;
+    rgba.copy(
+      filtered,
+      y * scanlineLength + 1,
+      y * width * 4,
+      (y + 1) * width * 4,
+    );
+  }
+  const idatChunk = createPngChunk(
+    "IDAT",
+    zlib.deflateSync(filtered, { level: 6 }),
+  );
+  const iendChunk = createPngChunk("IEND", Buffer.alloc(0));
+
+  return Buffer.concat([signature, ihdrChunk, idatChunk, iendChunk]);
 }

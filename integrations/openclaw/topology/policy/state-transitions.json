@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "governance_version": "m7-t2-r12",
+  "governance_version": "m8-t2.1-r3",
   "workflow_status": {
     "ACTIVE": ["BLOCKED", "COMPLETE", "PARTIAL", "FAILED", "CANCELLED"],
     "BLOCKED": ["ACTIVE", "FAILED", "CANCELLED"],

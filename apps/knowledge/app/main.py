@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from .config import Settings
 from .database import (
     AcceptedIndexRun,
+    ActiveIndex,
     ActiveIndexChangedError,
     KnowledgeDatabase,
     StateTransitionError,
@@ -71,6 +72,11 @@ class SearchRequest(BaseModel):
     path_prefix: str | None = None
     source_types: list[Literal["MARKDOWN", "PDF"]] | None = None
     rerank: bool = True
+    namespace: str | None = None
+    subtopic: str | None = None
+    secondary_topics: list[str] | None = None
+    capability: str | None = None
+    min_score: float | None = None
 
 
 DATABASE_ERRORS = (
@@ -206,11 +212,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return await request_validation_exception_handler(request, error)
 
     @app.get("/healthz")
-    async def healthz() -> dict[str, str]:
+    async def healthz() -> JSONResponse | dict[str, str]:
+        if not database.available:
+            return JSONResponse(
+                status_code=503,
+                content={"status": "unhealthy", "code": database.startup_error_code or "DATABASE_UNAVAILABLE"},
+            )
         return {"status": "ok"}
 
     @app.get("/readyz", response_model=None)
-    async def readyz() -> JSONResponse | dict[str, object]:
+    async def readyz(require_reranker: bool = False) -> JSONResponse | dict[str, object]:
         if not database.available:
             return JSONResponse(status_code=503, content={"status": "not_ready", "code": database.startup_error_code or "DATABASE_UNAVAILABLE"})
         try:
@@ -222,7 +233,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         if active_index is None:
             return JSONResponse(status_code=503, content={"status": "not_ready", "code": "NO_ACTIVE_INDEX"})
-        if app.state.reranker is None:
+        if require_reranker and app.state.reranker is None:
             return JSONResponse(status_code=503, content={"status": "not_ready", "code": "RERANKER_UNAVAILABLE"})
         try:
             actual_model = await model_probe.resolve(configured_settings.embedding_model)
@@ -380,8 +391,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             },
                         }
                     )
+                if request.min_score is not None:
+                    results = [r for r in results if r.get("rerank_score", 0) >= request.min_score]
                 results.sort(key=lambda item: (-item["rerank_score"], -item["rrf_score"], item["segment_id"]))
-                return {"index_id": active_index.id, "query": query, "results": results[:request.limit]}
+                bounded_results = results[:request.limit]
+                return {
+                    "index_id": active_index.id,
+                    "query": query,
+                    "semantic_contract_version": "zink-semantic-v2",
+                    "total_count": len(bounded_results),
+                    "results": bounded_results,
+                }
             raise HTTPException(status_code=503, detail={"code": "ACTIVE_INDEX_CHANGED"})
         except SearchValidationError as error:
             raise HTTPException(status_code=422, detail={"code": error.code}) from None

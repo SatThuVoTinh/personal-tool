@@ -191,13 +191,13 @@ ss -tnp | grep 443
 
 ### Danh mục Kênh Discord của Hệ thống
 
-| Kênh Discord            | Loại kênh                    | Snowflake ID          | Chức năng & Quy chuẩn                                                                                                                  |
-| :---------------------- | :--------------------------- | :-------------------- | :------------------------------------------------------------------------------------------------------------------------------------- |
-| **`#office`**           | Văn phòng chung (Text)       | `1545425766161063937` | Nơi tiếp nhận yêu cầu, giao việc và điều phối hoạt động chung. Hỗ trợ tag trực tiếp bot hoặc trao đổi với `@Quản Lý`.                  |
-| **`#results`**          | Kết quả phân tích (Forum)    | `1545696269010477056` | Diễn đàn đăng tải báo cáo, artifact và kết quả nghiệm thu của các task. Mọi bài viết là một Thread riêng biệt (`inheritParent: true`). |
-| **`#approvals`**        | Phê duyệt quyết định (Forum) | `1545696207316455527` | Nơi các agent gửi đề xuất giải quyết mâu thuẫn ngữ nghĩa (`BLOCKED_SEMANTIC_REVIEW`) chờ chủ sở hữu phê duyệt.                         |
-| **`#incidents`**        | Báo cáo sự cố (Forum)        | `1545696360018481182` | Kênh thông báo cảnh báo lỗi, vi phạm hợp đồng dữ liệu hoặc sự cố ranh giới an toàn.                                                    |
-| **Tin nhắn riêng (DM)** | Direct Message               | N/A                   | Dành riêng cho chủ sở hữu (`854005217715814432`) nhắn tin trực tiếp riêng cho từng bot.                                                |
+| Kênh Discord            | Loại kênh                    | Snowflake ID          | Chức năng & Quy chuẩn                                                                                                                                                                        |
+| :---------------------- | :--------------------------- | :-------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`#office`**           | Văn phòng chung (Text)       | `1545425766161063937` | Nơi tiếp nhận yêu cầu, giao việc và điều phối hoạt động chung. Hỗ trợ tag trực tiếp bot hoặc trao đổi với `@Quản Lý`. Bảo toàn mã `task_id` người dùng cung cấp.                             |
+| **`#results`**          | Kết quả phân tích (Forum)    | `1545696269010477056` | Diễn đàn đăng tải báo cáo, artifact và kết quả nghiệm thu của các task. Mọi bài viết là một Thread riêng biệt (`inheritParent: false` để fail-closed).                                       |
+| **`#approvals`**        | Phê duyệt quyết định (Forum) | `1545696207316455527` | Nơi các agent gửi đề xuất giải quyết mâu thuẫn ngữ nghĩa (`BLOCKED_SEMANTIC_REVIEW`) chờ chủ sở hữu phê duyệt.                                                                               |
+| **`#incidents`**        | Báo cáo sự cố (Forum)        | `1545696360018481182` | Kênh thông báo cảnh báo lỗi, vi phạm hợp đồng dữ liệu hoặc sự cố ranh giới an toàn.                                                                                                          |
+| **Tin nhắn riêng (DM)** | Direct Message               | N/A                   | Vô hiệu hóa (`channels.discord.directMessages.enabled: false`). Toàn bộ tương tác bắt buộc diễn ra trên các kênh máy chủ để đảm bảo tính minh bạch và lưu vết kiểm toán bền vững vào Ledger. |
 
 ---
 
@@ -223,42 +223,54 @@ Hệ thống tuân thủ nguyên tắc **CHỈ BOT ĐƯỢC TAG MỚI ĐƯỢC P
 #### 2. Thảo luận trong Diễn đàn Forum (`#results`, `#approvals`, `#incidents`)
 
 - Trên cả Desktop và Mobile, mỗi bài đăng trong Forum là một **Thread**.
-- Nhờ cấu hình `thread.inheritParent: true`, mọi bài đăng và phản hồi trong thread đều tự động kế thừa quyền hạn allowlist và phân quyền của kênh diễn đàn cha.
+- Cấu hình an toàn `thread.inheritParent: false` đảm bảo quyền hạn được kiểm soát độc lập, fail-closed an toàn trên từng bài viết thay vì ngầm thừa kế tự do.
 - Bạn chỉ cần mở thread và tag bot cần làm việc (ví dụ: `@Excel kiểm tra số liệu bảng này giúp anh`), bot sẽ phản hồi trực tiếp ngay trong thread đó.
 
-#### 3. Nhắn tin Trực tiếp Riêng (Direct Message — DM)
+#### 3. Chính sách Tin nhắn Trực tiếp (Direct Message — DM)
 
-- Trên Discord Mobile, bạn có thể bấm vào avatar của bất kỳ bot nào và chọn **Nhắn tin** (Send Message).
-- Cấu hình `dmPolicy: "allowlist"` kết hợp `allowFrom: ["854005217715814432"]` đảm bảo chỉ duy nhất chủ sở hữu được phép trò chuyện riêng tư với các bot qua tin nhắn DM; các tài khoản lạ sẽ bị từ chối tự động.
+- Nhằm phục vụ lưu vết kiểm toán bất biến và toàn vẹn của Ledger, hệ thống cấu hình `channels.discord.directMessages.enabled: false`. Mọi yêu cầu và phản hồi đều phải được định tuyến qua 4 bề mặt kênh máy chủ chính thức (`#office`, `#approvals`, `#results`, `#incidents`).
 
 #### 4. Quy trình Phê duyệt Kỹ năng Mới trên Diễn đàn `#approvals`
 
-- Khi một agent (`excel`, `power-bi`, `sql`, `python`, `o1`) học được kỹ năng mới hoặc giải pháp phân tích tái sử dụng, agent gọi `zink_skill_propose` để khởi tạo bản ghi `CANDIDATE`.
+- Khi một agent chuyên môn (`excel`, `power-bi`, `sql`, `python`) hoàn thiện giải pháp phân tích tái sử dụng, agent gọi `zink_skill_propose` để khởi tạo bản ghi `CANDIDATE`. (Các agent điều phối `main`, `o1`, `o2` không có quyền đề xuất kỹ năng theo ma trận `SKILL_STORE_ACCESS_MATRIX`).
 - Đề xuất được định danh bằng mã băm nội dung bất biến (immutable SHA-256 hash) và gửi thông báo vào diễn đàn `#approvals`.
-- **Phê duyệt:** Chủ sở hữu (`854005217715814432`) đọc nội dung đề xuất và trả lời trực tiếp trong thread với nội dung chứa từ khóa `APPROVED` (ví dụ: `APPROVED` hoặc `Đồng ý APPROVED`).
-- **Xác thực tự động:** Hệ thống `handleOwnerSkillApproval` sẽ xác thực danh tính chủ sở hữu và tính toàn vẹn của mã băm nội dung, sau đó tiến hành kích hoạt kỹ năng lên trạng thái `ACTIVE` trong Git canonical store và đồng bộ sang PostgreSQL vector index. Mọi nỗ lực giả mạo danh tính hoặc sai lệch mã băm đều bị từ chối fail-closed.
+- **Phê duyệt:** Chủ sở hữu (`854005217715814432`) đọc nội dung đề xuất và trả lời trực tiếp trong thread bằng tin nhắn chứa từ khóa `APPROVED` (ví dụ: `APPROVED` hoặc `Đồng ý APPROVED`).
+- **Xác thực tự động:** Hệ thống `handleOwnerSkillApproval` sẽ xác thực danh tính chủ sở hữu và tính toàn vẹn của mã băm nội dung, sau đó tiến hành kích hoạt kỹ năng lên trạng thái `ACTIVE` và đồng bộ sang PostgreSQL vector index (pgvector). Mọi nỗ lực giả mạo danh tính hoặc sai lệch mã băm đều bị từ chối fail-closed.
+
+#### 5. Thứ tự Ưu tiên Phân giải Ngữ nghĩa (Deterministic Semantic Resolver Precedence)
+
+Hệ thống định tuyến thông điệp dựa trên thứ tự ưu tiên tất định, không suy diễn:
+
+1. **Tag Mention rõ ràng (Explicit Mention):** Tag `<@ID>` hoặc `@Handle` bot đích trên Discord luôn có độ ưu tiên cao nhất.
+2. **Ngữ cảnh Task ID / Thread hiện hành (Task & Thread Correlation):** Nếu không có mention mới trong thread diễn đàn đã gán cho một task, điều phối viên đang quản lý task đó tiếp tục nhận quyền xử lý.
+3. **Phân rã Điều phối viên (Coordinator Assignment):** Các yêu cầu từ người dùng gửi tới `@Quản Lý` được phân loại thành bài toán ETL (chỉ định `o1`) hoặc Analytics/BI (chỉ định `o2`).
+4. **Mặc định Dự phòng (Safe Fallback):** Nếu thông điệp mơ hồ, hệ thống phát sinh câu hỏi làm rõ (`WAITING_FOR_USER`) thay vì tự ý giả định hay kích hoạt thực thi ngoài luồng.
 
 ---
 
-## 6. Danh mục Công cụ Zink có thể gọi (Callable Tools)
+## 6. Danh mục Công cụ Zink (Tool Taxonomy & Capability Registry)
 
-Hệ thống cung cấp đúng 8 công cụ Zink được phép thực thi có quản trị:
+Hệ thống phân định ranh giới kiến trúc rõ ràng giữa 3 nhóm công cụ:
 
-### Nhóm 1: Công cụ Thực thi Chuyên môn (Execution Specialist Tools)
+### Nhóm 1: 5 Giao diện Công cụ Thực thi có thể gọi (Callable Execution Tools)
 
-1. **`zink_excel`:** Hợp đồng gọi xử lý bảng tính Excel cho agent `excel`.
-2. **`zink_power_bi`:** Hợp đồng trực quan hóa báo cáo Power BI cho agent `power-bi`.
-3. **`zink_sql`:** Giao diện truy vấn SQL phân tích chỉ đọc (Lean Option B) cho agent `sql`.
-4. **`zink_python`:** Giao diện xử lý tính toán số và khoa học quyết định cho agent `python`.
-5. **`zink_n8n`:** Bộ điều hợp kích hoạt luồng công việc tất định cho agent `o2` và `python`.
+Các công cụ được gọi qua ranh giới quản trị (dispatched qua contract seam hoặc adapter):
 
-### Nhóm 2: Công cụ Bộ nhớ & Truy xuất Tri thức (Governed Memory & Semantic RAG Tools)
+1. **`zink_excel`:** Giao diện hợp đồng xử lý bảng tính Excel (`load`, `populate`, `validate`, `generate`) cho agent `excel` (contract seam).
+2. **`zink_power_bi`:** Giao diện hợp đồng báo cáo Power BI (`load`, `bind`, `update`, `validate`) cho agent `power-bi` (contract seam).
+3. **`zink_sql`:** Giao diện truy vấn SQL phân tích chỉ đọc (`SELECT`) có giới hạn `target_database` (`knowledge`, `analytics_read`) cho agent `sql` (contract seam).
+4. **`zink_python`:** Giao diện xử lý tính toán số và sandbox kịch bản Python (`entrypoint`, `stack`) cho agent `python` (contract seam).
+5. **`zink_n8n`:** Bộ điều hợp kích hoạt luồng công việc tất định (`data_plant_ingest`, `data_plant_sync`, `pipeline_notify`) cho agent `o2` và `python` (governed adapter).
 
-1. **`zink_skill_search`:** Tra cứu vector ngữ nghĩa trong Zink Skill Store (1024-dim BGE-M3, HNSW cosine distance, chỉ lọc skill trạng thái `ACTIVE`). Cho phép cả 7 agent truy xuất các kỹ năng phân tích và template chuẩn.
-2. **`zink_skill_propose`:** Cơ chế ghi nhớ 2 chiều (Human-in-the-Loop Memory) dành cho các agent chuyên môn (`excel`, `power-bi`, `sql`, `python`) và `o1`. Agent đề xuất kỹ năng mới dưới dạng `CANDIDATE` kèm hash định danh bất biến, đẩy vào kênh `#approvals`. Tuyệt đối không cho phép agent tự kích hoạt `ACTIVE`; bắt buộc có sự phê duyệt xác thực từ chủ sở hữu.
-3. **`zink_knowledge_search`:** Tra cứu ngữ nghĩa Knowledgebase một chiều (Vector HNSW + FTS + RRF reranker kèm trích dẫn source và bbox). Cho phép cả 7 agent tra cứu tài liệu và quy trình chuẩn từ Obsidian Vault mà không thể can thiệp sửa đổi nội dung nguồn.
+### Nhóm 2: 3 Công cụ Bộ nhớ & Truy xuất Tri thức (Governed Memory & Semantic RAG Tools)
 
-_4 Năng lực đặc tả (Schema-only capabilities):_ `zink_forecast`, `zink_optimization`, `zink_operations_research`, `zink_simulation` là các lược đồ định dạng bài toán toán học, không phải công cụ thực thi trực tiếp.
+1. **`zink_skill_search`:** Tra cứu vector ngữ nghĩa trong Zink Skill Store (1024-dim BGE-M3, HNSW cosine distance, chỉ lọc skill trạng thái `ACTIVE`). Cả 7 agent đều có quyền sử dụng.
+2. **`zink_knowledge_search`:** Tra cứu ngữ nghĩa Knowledgebase một chiều (Vector HNSW + FTS + RRF reranker kèm trích dẫn source). Cả 7 agent đều có quyền sử dụng.
+3. **`zink_skill_propose`:** Cơ chế ghi nhớ 2 chiều (Human-in-the-Loop Memory) dành độc quyền cho các chuyên viên (`excel`, `power-bi`, `sql`, `python`) đề xuất kỹ năng mới dưới dạng `CANDIDATE`.
+
+### Nhóm 3: 4 Năng lực Lược đồ Đặc tả (Schema-Only Specifications)
+
+_4 Năng lực đặc tả (Schema-only capabilities):_ `zink_forecast`, `zink_optimization`, `zink_operations_research`, `zink_simulation` là các lược đồ đặc tả định dạng bài toán toán học trong `zink-tools/contracts/tools/`, không phải là công cụ thực thi trực tiếp trên hệ thống cục bộ (`isExecutable: false`).
 
 ---
 
@@ -581,8 +593,8 @@ VALIDATION + PREVIEW (Kiểm định Đa tầng & Sinh ảnh preview thực tế
    ↓
 # results
    ↓
-USER REVIEW (Duy nhất User bấm ACCEPT / REJECT / REQUEST_REVISION)
-   ↓ (Chỉ khi User bấm ACCEPT / COMPLETE)
+USER REVIEW (Duy nhất User phản hồi lệnh APPROVE / REJECT / ACCEPT / REQUEST_REVISION)
+   ↓ (Chỉ khi User phản hồi ACCEPT hoặc COMPLETE)
 TASK = COMPLETE
    ↓
 # office (Main gửi thông báo tổng kết cuối cùng)
@@ -591,7 +603,7 @@ TASK = COMPLETE
 #### Hướng dẫn Thao tác Thực tế Theo Từng Kênh
 
 1. **Kênh `#office` — Giao việc, Làm rõ & Thông báo Hoàn tất:**
-   - **Giao việc:** Người dùng gửi yêu cầu bình thường (ví dụ: tag `@Quản Lý Hãy tạo bảng tính doanh thu tháng 9`). Main tiếp nhận, cấp mã định danh `task_id` (ví dụ: `TASK-042`) và chỉ định Primary Coordinator (`o1` hoặc `o2`).
+   - **Giao việc:** Người dùng gửi yêu cầu bình thường (ví dụ: tag `@Quản Lý Hãy tạo bảng tính doanh thu tháng 9`). Main tiếp nhận, bảo toàn mã định danh `task_id` do người dùng cung cấp (ví dụ: `TASK-042`) hoặc tự động sinh mã khi chưa có, đảm bảo không bị lược bỏ.
    - **Điều phối viên hỏi trực tiếp:** Khi cần làm rõ yêu cầu nghiệp vụ, O1/O2 gửi câu hỏi trực tiếp trên `#office` theo mẫu:
 
      ```text
@@ -607,18 +619,18 @@ TASK = COMPLETE
 
 2. **Kênh `#approvals` — Cấp quyền Thực thi (Execution Authorization):**
    - Mỗi task có một thẻ phê duyệt duy nhất hiển thị: `TASK_ID`, Plan version, Primary Coordinator, Kế hoạch thực thi, Rủi ro, Tiêu chuẩn kiểm định và Trạng thái hàng đợi.
-   - Các nút hành động:
-     - **[APPROVE]:** Đưa task vào hàng đợi `QUEUED` (Duy nhất User được bấm).
-     - **[REJECT]:** Hủy và đóng task ở trạng thái `REJECTED` (Duy nhất User được bấm).
-     - **[REQUEST REVISION]:** Chuyển task sang `REVISING` để cập nhật kế hoạch (User hoặc Main).
+   - Cú pháp phản hồi lệnh (Markdown Instructions — trả lời trực tiếp trong thread):
+     - **`APPROVE`:** Đưa task vào hàng đợi `QUEUED` (Duy nhất User có quyền).
+     - **`REJECT`:** Hủy và đóng task ở trạng thái `REJECTED` (Duy nhất User có quyền).
+     - **`REQUEST REVISION [nội dung góp ý]`:** Chuyển task sang `REVISING` để cập nhật kế hoạch.
    - Tuyệt đối không bắt đầu thực thi nếu kế hoạch chưa chuyển sang trạng thái `APPROVED`.
 
 3. **Kênh `#results` — Nghiệm thu Kết quả & Xem trước Dữ liệu Thực:**
-   - Đăng tải kết quả sau khi vượt qua kiểm định: `TASK_ID`, Attempt/version, Trạng thái thực thi, Kết quả kiểm tra kỹ thuật (Technical Validation), Kết quả kiểm tra nghiệp vụ (Business Validation), Ảnh Preview thực tế, Đường dẫn Artifact, Phát hiện chính.
-   - Các nút hành động:
-     - **[ACCEPT / COMPLETE]:** Người dùng xác nhận đạt yêu cầu; task chuyển sang `COMPLETE` và Main thông báo hoàn tất trên `#office`.
-     - **[REJECT]:** Người dùng từ chối kết quả; task chuyển sang `REJECTED`.
-     - **[REQUEST REVISION]:** Chuyển task sang `REVISING` kèm góp ý để thực thi lại phiên bản kế tiếp.
+   - Đăng tải kết quả sau khi vượt qua kiểm định: `TASK_ID`, Attempt/version, Trạng thái thực thi, Kết quả kiểm tra kỹ thuật (Technical Validation), Kết quả kiểm tra nghiệp vụ (Business Validation), Khung xem trước dữ liệu có cấu trúc (kèm ảnh Preview thực tế nếu có đối tượng `previewImage`), Đường dẫn Artifact, Phát hiện chính.
+   - Cú pháp phản hồi nghiệm thu (Markdown Instructions — trả lời trực tiếp trong thread):
+     - **`ACCEPT` hoặc `COMPLETE`:** Người dùng xác nhận đạt yêu cầu; task chuyển sang `COMPLETE` và Main thông báo hoàn tất trên `#office`.
+     - **`REJECT`:** Người dùng từ chối kết quả; task chuyển sang `REJECTED`.
+     - **`REQUEST REVISION [nội dung góp ý]`:** Chuyển task sang `REVISING` kèm góp ý để thực thi lại phiên bản kế tiếp.
 
 4. **Kênh `#incidents` — Giám sát & Khắc phục Sự cố:**
    - Quy trình vòng đời sự cố:

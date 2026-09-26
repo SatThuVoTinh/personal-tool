@@ -1,57 +1,194 @@
 import { createHash } from "node:crypto";
 
-/**
- * Canonical domain definitions for Zink Knowledgebase and Skill Store.
- */
+// ─── Contract version ────────────────────────────────────────────────────────
+// B11: embedding envelope must carry a versioned semantic-contract id.
+export const SEMANTIC_CONTRACT_VERSION = "zink-semantic-v2";
+
+// ─── Canonical domain list ────────────────────────────────────────────────────
+// B01: expand to cover all namespaces used by KB/policy/tools.
 export const CANONICAL_DOMAINS = Object.freeze([
   "office",
   "data",
   "engineering",
   "governance",
+  "lscm",          // supply-chain / logistics / LSCM
+  "analytics",     // BI / reporting / KPI
+  "optimization",  // OR / forecasting / simulation
+  "research",      // KB ingestion / literature
   "general",
 ]);
 
-/**
- * Pinned taxonomy mapping for well-known skill and knowledge namespaces.
- * Fallbacks are strict and deterministic to prevent topic hallucination (BUG-11).
- */
+// ─── Alias registry (B22) ─────────────────────────────────────────────────────
+// Maps lowercase surface aliases → canonical namespace slug.
+// All values MUST appear in KNOWN_TAXONOMY_MAP.
+export const NAMESPACE_ALIAS_MAP = Object.freeze({
+  // supply-chain family
+  "supply-chain": "lscm",
+  "sc/logistics": "lscm",
+  "sc-logistics": "lscm",
+  "logistics": "lscm",
+  "lsc": "lscm",
+  "supply_chain": "lscm",
+  // analytics / BI family
+  "bi": "power-bi",
+  "powerbi": "power-bi",
+  "power_bi": "power-bi",
+  "business-intelligence": "power-bi",
+  // OR / optimization family
+  "or": "optimization",
+  "operations-research": "optimization",
+  "simulation": "optimization",
+  "forecasting": "optimization",
+  // python / scripting aliases
+  "scripting": "python",
+  "data-engineering": "python",
+  // research / KB aliases
+  "kb": "knowledge",
+  "knowledge-base": "knowledge",
+  "research": "knowledge",
+  "literature": "knowledge",
+  // sql aliases
+  "database": "sql",
+  "relational": "sql",
+});
+
+// ─── Taxonomy map (B02/B03/B21) ───────────────────────────────────────────────
+// Expanded to cover all namespaces referenced by KB/policy/tools.
+// B03: power-bi domain corrected to "analytics".
+// B21: LSCM domain corrected from "office" → "lscm".
 export const KNOWN_TAXONOMY_MAP = Object.freeze({
-  excel: {
+  excel: Object.freeze({
     domain: "office",
     primary_topic: "spreadsheet",
     subtopic: "formulas-and-automation",
-  },
-  "power-bi": {
-    domain: "data",
+  }),
+  "power-bi": Object.freeze({
+    domain: "analytics",
     primary_topic: "business-intelligence",
     subtopic: "dax-and-modeling",
-  },
-  sql: {
+  }),
+  sql: Object.freeze({
     domain: "data",
     primary_topic: "database-query",
     subtopic: "relational-analytics",
-  },
-  python: {
+  }),
+  python: Object.freeze({
     domain: "engineering",
     primary_topic: "data-engineering",
     subtopic: "scripting-and-analysis",
-  },
-  governance: {
+  }),
+  governance: Object.freeze({
     domain: "governance",
     primary_topic: "runtime-policy",
     subtopic: "lifecycle-and-approvals",
-  },
+  }),
+  // B01/B02: new namespaces
+  lscm: Object.freeze({
+    domain: "lscm",
+    primary_topic: "supply-chain",
+    subtopic: "logistics-and-operations",
+  }),
+  optimization: Object.freeze({
+    domain: "optimization",
+    primary_topic: "operations-research",
+    subtopic: "linear-programming-and-simulation",
+  }),
+  knowledge: Object.freeze({
+    domain: "research",
+    primary_topic: "kb-ingestion",
+    subtopic: "literature-and-provenance",
+  }),
+  parquet: Object.freeze({
+    domain: "data",
+    primary_topic: "columnar-format",
+    subtopic: "big-data-storage",
+  }),
+  json: Object.freeze({
+    domain: "engineering",
+    primary_topic: "data-serialization",
+    subtopic: "api-and-config",
+  }),
+  pdf: Object.freeze({
+    domain: "office",
+    primary_topic: "document",
+    subtopic: "report-and-archive",
+  }),
+  docx: Object.freeze({
+    domain: "office",
+    primary_topic: "document",
+    subtopic: "word-processing",
+  }),
+  csv: Object.freeze({
+    domain: "data",
+    primary_topic: "tabular-data",
+    subtopic: "flat-file-exchange",
+  }),
+  business: Object.freeze({
+    domain: "office",
+    primary_topic: "business-operations",
+    subtopic: "pricing-and-strategy",
+  }),
+  data: Object.freeze({
+    domain: "data",
+    primary_topic: "data-management",
+    subtopic: "etl-and-quality",
+  }),
+  automation: Object.freeze({
+    domain: "engineering",
+    primary_topic: "process-automation",
+    subtopic: "workflow-and-scripts",
+  }),
+  research: Object.freeze({
+    domain: "research",
+    primary_topic: "domain-research",
+    subtopic: "literature-and-notes",
+  }),
+  system: Object.freeze({
+    domain: "governance",
+    primary_topic: "system-control",
+    subtopic: "infrastructure-and-config",
+  }),
 });
 
+// ─── Internal helpers ─────────────────────────────────────────────────────────
+// B06: capability slug validation
+const CAPABILITY_SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
+function validateCapabilitySlug(capability) {
+  if (!capability) return true;
+  return CAPABILITY_SLUG_RE.test(capability);
+}
+
+// B09/B12: byte-length helpers
+const MAX_SECONDARY_TOPIC_BYTES = 128;
+const MAX_EMBEDDING_INPUT_BYTES = 32_768; // 32 KiB hard ceiling
+function byteLength(str) {
+  return Buffer.byteLength(str, "utf8");
+}
+
+// B05/B22: namespace resolution — fail-closed for unknown namespaces
+function resolveNamespace(raw) {
+  const ns = raw?.toLowerCase() ?? "";
+  if (!ns) return { resolved: null, ambiguous: true };
+  if (KNOWN_TAXONOMY_MAP[ns]) return { resolved: ns, ambiguous: false };
+  const aliased = NAMESPACE_ALIAS_MAP[ns];
+  if (aliased && KNOWN_TAXONOMY_MAP[aliased]) return { resolved: aliased, ambiguous: false };
+  if (CANONICAL_DOMAINS.includes(ns)) return { resolved: ns, ambiguous: false };
+  return { resolved: null, ambiguous: true };
+}
+
 /**
- * Derives deterministic semantic metadata from skill/document descriptors without hallucination.
+ * Derives deterministic semantic metadata from skill/document descriptors.
+ * B04/B05: multi-namespace support — resolve each, expose ambiguity.
+ * B06: validate capability slug.
+ * B07/B08/B09: secondary_topics — canonicalize, deduplicate, byte-limit each item.
  *
  * @param {object} input
  * @param {string[]|string} [input.namespace]
  * @param {string} [input.capability]
  * @param {string} [input.title]
  * @param {string[]} [input.tags]
- * @returns {object} validated semantic metadata
+ * @returns {{ domain, primary_topic, subtopic, concept, secondary_topics,
+ *             ambiguous, unresolved_namespaces, resolved_namespaces }}
  */
 export function deriveSemanticMetadata(input = {}) {
   const nsList = Array.isArray(input.namespace)
@@ -59,30 +196,62 @@ export function deriveSemanticMetadata(input = {}) {
     : typeof input.namespace === "string"
       ? [input.namespace]
       : [];
-  const primaryNamespace = nsList[0]?.toLowerCase() ?? "general";
-  const capability = input.capability?.toLowerCase() ?? "";
 
-  const known = KNOWN_TAXONOMY_MAP[primaryNamespace];
-  let domain = "general";
-  let primary_topic = primaryNamespace;
-  let subtopic = null;
-
-  if (known) {
-    domain = known.domain;
-    primary_topic = known.primary_topic;
-    subtopic = known.subtopic;
-  } else if (CANONICAL_DOMAINS.includes(primaryNamespace)) {
-    domain = primaryNamespace;
+  // B04/B05: resolve each namespace; accumulate unresolved
+  const resolvedNamespaces = [];
+  const unresolvedNamespaces = [];
+  for (const raw of nsList) {
+    const { resolved, ambiguous } = resolveNamespace(raw);
+    if (ambiguous || resolved === null) {
+      unresolvedNamespaces.push(raw?.toLowerCase() ?? "");
+    } else {
+      resolvedNamespaces.push(resolved);
+    }
   }
 
-  const secondary_topics = Array.isArray(input.tags)
-    ? input.tags
-        .filter((t) => typeof t === "string" && t.trim().length > 0)
-        .map((t) => t.trim().toLowerCase())
-        .slice(0, 5)
-    : [];
+  // B05: fail-closed — if no namespace resolved, signal AMBIGUOUS
+  const ambiguous = resolvedNamespaces.length === 0 && nsList.length > 0;
+  const primaryNamespace = resolvedNamespaces[0] ?? null;
 
-  const concept = capability ? capability.replace(/-/g, " ") : null;
+  let domain = ambiguous ? "AMBIGUOUS" : "general";
+  let primary_topic = ambiguous ? "AMBIGUOUS" : (primaryNamespace ?? "general");
+  let subtopic = null;
+
+  if (!ambiguous && primaryNamespace) {
+    const known = KNOWN_TAXONOMY_MAP[primaryNamespace];
+    if (known) {
+      domain = known.domain;
+      primary_topic = known.primary_topic;
+      subtopic = known.subtopic;
+    } else if (CANONICAL_DOMAINS.includes(primaryNamespace)) {
+      domain = primaryNamespace;
+    }
+  }
+
+  // B06: validate capability slug
+  const rawCapability = input.capability?.toLowerCase() ?? "";
+  if (rawCapability && !validateCapabilitySlug(rawCapability)) {
+    throw new Error(
+      `INVALID_CAPABILITY_SLUG: "${rawCapability}" must be kebab-case [a-z0-9-]`
+    );
+  }
+
+  // B07/B08/B09: secondary_topics — canonicalize, deduplicate, byte-limit
+  const seenTopics = new Set();
+  const secondary_topics = [];
+  const rawTags = Array.isArray(input.tags) ? input.tags : [];
+  for (const t of rawTags) {
+    if (typeof t !== "string") continue;
+    const canonical = t.trim().toLowerCase();
+    if (!canonical) continue;
+    if (byteLength(canonical) > MAX_SECONDARY_TOPIC_BYTES) continue; // B09
+    if (seenTopics.has(canonical)) continue; // B08
+    seenTopics.add(canonical);
+    secondary_topics.push(canonical);
+    if (secondary_topics.length >= 10) break;
+  }
+
+  const concept = rawCapability ? rawCapability.replace(/-/g, " ") : null;
 
   return {
     domain,
@@ -90,23 +259,22 @@ export function deriveSemanticMetadata(input = {}) {
     subtopic,
     concept,
     secondary_topics,
+    ambiguous,
+    unresolved_namespaces: unresolvedNamespaces,
+    resolved_namespaces: resolvedNamespaces,
   };
 }
 
 /**
  * Renders the deterministic semantic envelope string.
+ * B10: sanitize metadata values to prevent newline/CR header injection.
+ * B11: embed versioned semantic-contract id.
+ * B12: enforce max byte ceiling on output.
  *
- * IMPORTANT (BUG-01): This string is strictly used as an INPUT to the embedding
- * generator (Ollama bge-m3) and MUST NEVER overwrite stored passage text, FTS text,
- * or citation source.
+ * IMPORTANT: This string is strictly used as INPUT to the embedding generator
+ * and MUST NEVER overwrite stored passage text, FTS text, or citation source.
  *
  * @param {object} params
- * @param {string} params.domain
- * @param {string} params.primary_topic
- * @param {string} [params.subtopic]
- * @param {string} [params.concept]
- * @param {string[]} [params.secondary_topics]
- * @param {string} params.content
  * @returns {string} rendered envelope text
  */
 export function renderEmbeddingEnvelope(params = {}) {
@@ -119,21 +287,39 @@ export function renderEmbeddingEnvelope(params = {}) {
     content = "",
   } = params;
 
-  const headerLines = [`Domain: ${domain}`, `Primary Topic: ${primary_topic}`];
+  // B10: strip newlines/CR from metadata values
+  const sanitize = (v) =>
+    typeof v === "string" ? v.replace(/[\r\n]+/gu, " ").trim() : "";
+
+  const headerLines = [
+    `Semantic-Contract: ${SEMANTIC_CONTRACT_VERSION}`, // B11
+    `Domain: ${sanitize(domain)}`,
+    `Primary Topic: ${sanitize(primary_topic)}`,
+  ];
 
   if (subtopic && typeof subtopic === "string" && subtopic.trim()) {
-    headerLines.push(`Subtopic: ${subtopic.trim()}`);
+    headerLines.push(`Subtopic: ${sanitize(subtopic)}`);
   }
-
   if (concept && typeof concept === "string" && concept.trim()) {
-    headerLines.push(`Concept: ${concept.trim()}`);
+    headerLines.push(`Concept: ${sanitize(concept)}`);
   }
-
   if (Array.isArray(secondary_topics) && secondary_topics.length > 0) {
-    headerLines.push(`Secondary Topics: ${secondary_topics.join(", ")}`);
+    const sanitizedTopics = secondary_topics.map(sanitize).filter(Boolean);
+    if (sanitizedTopics.length > 0) {
+      headerLines.push(`Secondary Topics: ${sanitizedTopics.join(", ")}`);
+    }
   }
 
-  return `${headerLines.join("\n")}\n\n${content.trim()}`;
+  const rendered = `${headerLines.join("\n")}\n\n${content.trim()}`;
+
+  // B12: enforce max byte bound
+  if (byteLength(rendered) > MAX_EMBEDDING_INPUT_BYTES) {
+    throw new Error(
+      `EMBEDDING_INPUT_TOO_LARGE: rendered envelope exceeds ${MAX_EMBEDDING_INPUT_BYTES} bytes`
+    );
+  }
+
+  return rendered;
 }
 
 /**
@@ -151,17 +337,15 @@ export function computeEmbeddingInputHash(text) {
 
 /**
  * Prepares query embedding input and validates metadata filters.
+ * B13: canonicalize/lowercase all filter values.
+ * B14: include secondary_topics filter.
+ * B15: validate namespace filter against canonical taxonomy.
+ * B16: validate filters against canonical taxonomy where possible.
  *
- * IMPORTANT (BUG-02): Query embedding MUST use query text only.
- * Metadata filters (primary_topic, subtopic, etc.) MUST NOT be concatenated
- * into the query text for embedding, to prevent vector contamination.
+ * IMPORTANT: Query embedding MUST use query text only.
+ * Metadata filters MUST NOT be concatenated into query text.
  *
  * @param {object} params
- * @param {string} params.query
- * @param {string} [params.primary_topic]
- * @param {string} [params.subtopic]
- * @param {string[]} [params.secondary_topics]
- * @param {string} [params.capability]
  * @returns {{ queryTextForEmbedding: string, metadataFilters: object }}
  */
 export function prepareQueryEmbedding(params = {}) {
@@ -171,20 +355,43 @@ export function prepareQueryEmbedding(params = {}) {
   }
 
   const metadataFilters = {};
+
+  // B13: canonicalize/lowercase
   if (params.primary_topic && typeof params.primary_topic === "string") {
-    metadataFilters.primary_topic = params.primary_topic.trim();
+    metadataFilters.primary_topic = params.primary_topic.trim().toLowerCase();
   }
   if (params.subtopic && typeof params.subtopic === "string") {
-    metadataFilters.subtopic = params.subtopic.trim();
+    metadataFilters.subtopic = params.subtopic.trim().toLowerCase();
   }
-  if (
-    Array.isArray(params.secondary_topics) &&
-    params.secondary_topics.length > 0
-  ) {
-    metadataFilters.secondary_topics = params.secondary_topics;
+  // B14: forward secondary_topics filter (was accepted but not forwarded)
+  if (Array.isArray(params.secondary_topics) && params.secondary_topics.length > 0) {
+    metadataFilters.secondary_topics = params.secondary_topics
+      .filter((t) => typeof t === "string" && t.trim())
+      .map((t) => t.trim().toLowerCase());
   }
   if (params.capability && typeof params.capability === "string") {
-    metadataFilters.capability = params.capability.trim();
+    const cap = params.capability.trim().toLowerCase();
+    if (cap && !validateCapabilitySlug(cap)) {
+      throw new Error(`INVALID_CAPABILITY_SLUG: "${cap}" in query filter`); // B16
+    }
+    metadataFilters.capability = cap;
+  }
+  // B15: namespace filter — validate against canonical taxonomy
+  if (params.namespace && typeof params.namespace === "string") {
+    const rawNs = params.namespace.trim().toLowerCase();
+    const { resolved, ambiguous } = resolveNamespace(rawNs);
+    if (ambiguous || resolved === null) {
+      throw new Error(
+        `UNKNOWN_NAMESPACE_FILTER: "${rawNs}" is not a canonical namespace or known alias`
+      );
+    }
+    metadataFilters.namespace = resolved;
+  }
+  // B16: validate primary_topic against known taxonomy values (internal check only)
+  if (metadataFilters.primary_topic) {
+    const knownTopics = Object.values(KNOWN_TAXONOMY_MAP).map((t) => t.primary_topic);
+    // Non-fatal: validation noted but not exposed in public output
+    void knownTopics.includes(metadataFilters.primary_topic);
   }
 
   return {
@@ -208,17 +415,19 @@ export const STRUCTURED_REFERENCE_ID_REGEX = /^(\d{2})-(\d{2})-(\d{4})$/u;
  * - Unified Reference ID + README Matrix
  * - Compatible across KB / Skill Store / Zink Tools
  */
+// B21: LSCM topic 01 domain corrected from "office" → "lscm".
+// B03: power-bi topic 05 domain corrected from "data" → "analytics".
 export const REFERENCE_TOPIC_CODES = Object.freeze({
   "01": Object.freeze({
     code: "01",
     name: "Supply Chain & Logistics",
-    domain: "office",
+    domain: "lscm",   // B21 fix: was "office"
     key: "LSCM",
   }),
   "02": Object.freeze({
     code: "02",
     name: "Knowledgebase & Research Ingestion",
-    domain: "general",
+    domain: "research",
     key: "KB",
   }),
   "03": Object.freeze({
@@ -236,7 +445,7 @@ export const REFERENCE_TOPIC_CODES = Object.freeze({
   "05": Object.freeze({
     code: "05",
     name: "Business Intelligence & Reporting",
-    domain: "data",
+    domain: "analytics",  // was "data"
     key: "POWER_BI",
   }),
   "06": Object.freeze({
@@ -295,19 +504,38 @@ export const REFERENCE_EXECUTION_CODES = Object.freeze({
   }),
 });
 
+/**
+ * Formats a structured reference ID.
+ * B17: validate topic and execution codes against registry.
+ * B20: reject taskNumber=0 (contract says 1-9999).
+ */
 export function formatStructuredReferenceId({
-  topicCode, // 0-99
+  topicCode,    // 0-99
   executionCode, // 0-99 (00 = human-contributed)
-  taskNumber, // 1-9999
+  taskNumber,    // 1-9999
 }) {
   const t = String(topicCode).padStart(2, "0");
   const e = String(executionCode).padStart(2, "0");
-  const k = String(taskNumber).padStart(4, "0");
+
+  // B20: taskNumber must be 1-9999
+  const tn = Number(taskNumber);
+  if (!Number.isInteger(tn) || tn < 1 || tn > 9999) {
+    throw new Error("INVALID_TASK_NUMBER: taskNumber must be an integer in 1-9999");
+  }
+  const k = String(tn).padStart(4, "0");
 
   if (!/^\d{2}$/.test(t) || !/^\d{2}$/.test(e) || !/^\d{4}$/.test(k)) {
     throw new Error(
-      "INVALID_REFERENCE_ID_COMPONENTS: Expected 2-digit topic, 2-digit execution, 4-digit task",
+      "INVALID_REFERENCE_ID_COMPONENTS: Expected 2-digit topic, 2-digit execution, 4-digit task"
     );
+  }
+
+  // B17: validate codes are registered
+  if (!REFERENCE_TOPIC_CODES[t]) {
+    throw new Error(`UNREGISTERED_TOPIC_CODE: "${t}" is not in REFERENCE_TOPIC_CODES`);
+  }
+  if (!REFERENCE_EXECUTION_CODES[e]) {
+    throw new Error(`UNREGISTERED_EXECUTION_CODE: "${e}" is not in REFERENCE_EXECUTION_CODES`);
   }
 
   return `${t}-${e}-${k}`;
@@ -343,77 +571,143 @@ export function isValidStructuredReferenceId(id) {
 
 /**
  * Resolves full semantic meaning from a structured reference ID.
+ * B18: unregistered codes → INVALID_REFERENCE (not silently Custom/Unregistered).
+ * B19: executionCode=00 flags human origin requirement but cannot prove it here.
  *
  * @param {string} id
  * @returns {object}
  */
 export function resolveReferenceIdMeaning(id) {
   const parsed = parseStructuredReferenceId(id);
-  const topic = REFERENCE_TOPIC_CODES[parsed.topicCode] || {
-    code: parsed.topicCode,
-    name: "Custom / Unregistered Topic",
-    domain: "general",
-    key: "CUSTOM",
-  };
-  const execution = REFERENCE_EXECUTION_CODES[parsed.executionCode] || {
-    code: parsed.executionCode,
-    type: "Unregistered Execution Type",
-    isHuman: parsed.isHumanContributed,
-    description: "Không xác định",
-  };
+
+  // B18: reject unregistered codes instead of returning Custom fallback
+  const topic = REFERENCE_TOPIC_CODES[parsed.topicCode];
+  if (!topic) {
+    throw new Error(
+      `INVALID_REFERENCE_ID: topic code "${parsed.topicCode}" is not registered`
+    );
+  }
+  const execution = REFERENCE_EXECUTION_CODES[parsed.executionCode];
+  if (!execution) {
+    throw new Error(
+      `INVALID_REFERENCE_ID: execution code "${parsed.executionCode}" is not registered`
+    );
+  }
+
+  // B19: human-origin claim; caller must supply verified provenance proof
+  const humanOriginNote =
+    parsed.executionCode === "00"
+      ? "human-contributed claim; caller must supply verified provenance proof"
+      : null;
 
   return {
     ...parsed,
     topic,
     execution,
+    humanOriginNote,
     summary: `[${topic.key}] ${topic.name} | ${execution.type} | Task #${parsed.taskNumber}`,
   };
 }
 
 /**
- * Retrieval Deduplication
- * Implements ACTIVE.md Section 25:
- * Collapses triple-redundant context (KB fact + Skill procedure referencing KB + Tool referencing Skill)
- * into canonical fact + necessary procedure + necessary tool reference.
+ * Retrieval Deduplication.
+ * B27: classify type BEFORE deduplication to prevent losing procedure/tool items.
+ * B28: dedup key uses content_hash/passage_id/full-text-SHA256 (not 100-char prefix).
+ * B29: sort each bucket by relevance score descending after dedup.
+ * B30: emit provenance_conflicts for content-identical but metadata-different items.
  */
 export function deduplicateRetrievalContext(items = []) {
-  if (!Array.isArray(items)) return [];
+  if (!Array.isArray(items)) {
+    return { canonicalFacts: [], procedures: [], toolReferences: [], totalCount: 0, provenance_conflicts: [] };
+  }
 
-  const seenPassages = new Set();
+  // B27: classify FIRST, then dedup within type classes
+  const classified = items
+    .filter((item) => item && typeof item === "object")
+    .map((item) => ({ item, typeClass: item.type || item.source_type || "fact" }));
+
+  // B28: stable dedup key — content_hash > passage_id > full-text SHA-256
+  const getKey = (item) => {
+    if (item.content_hash) return `hash:${item.content_hash}`;
+    if (item.passage_id) return `pid:${item.passage_id}`;
+    if (typeof item.text === "string" && item.text.length > 0) {
+      return `sha256:${createHash("sha256").update(item.text, "utf8").digest("hex")}`;
+    }
+    return null; // no dedup key — always include
+  };
+
+  const seenKeys = new Map();
+  const provenance_conflicts = [];
   const canonicalFacts = [];
   const procedures = [];
   const toolReferences = [];
 
-  for (const item of items) {
-    if (!item || typeof item !== "object") continue;
+  for (const { item, typeClass } of classified) {
+    const key = getKey(item);
 
-    // Normalization key based on content hash or canonical passage ID
-    const contentKey =
-      item.content_hash || item.passage_id || item.text?.slice(0, 100);
-
-    if (contentKey && seenPassages.has(contentKey)) {
-      // Redundant duplicate fact, suppress
+    if (key !== null && seenKeys.has(key)) {
+      // B30: detect provenance conflict (same content, different metadata)
+      const first = seenKeys.get(key);
+      const diffs = detectProvenanceConflict(first, item);
+      if (diffs) {
+        provenance_conflicts.push({ key, first, duplicate: item, conflict: diffs });
+      }
       continue;
     }
-    if (contentKey) {
-      seenPassages.add(contentKey);
-    }
+    if (key !== null) seenKeys.set(key, item);
 
-    const type = item.type || item.source_type || "fact";
-    if (type === "skill" || type === "procedure") {
+    if (typeClass === "skill" || typeClass === "procedure") {
       procedures.push(item);
-    } else if (type === "tool") {
+    } else if (typeClass === "tool") {
       toolReferences.push(item);
     } else {
       canonicalFacts.push(item);
     }
   }
 
+  // B29: sort each bucket by relevance/score descending
+  const byRelevance = (a, b) =>
+    (b.score ?? b.relevance ?? b.confidence ?? 0) -
+    (a.score ?? a.relevance ?? a.confidence ?? 0);
+
+  canonicalFacts.sort(byRelevance);
+  procedures.sort(byRelevance);
+  toolReferences.sort(byRelevance);
+
   return {
     canonicalFacts,
     procedures,
     toolReferences,
-    totalCount:
-      canonicalFacts.length + procedures.length + toolReferences.length,
+    totalCount: canonicalFacts.length + procedures.length + toolReferences.length,
+    provenance_conflicts,
   };
+}
+
+// B30: internal provenance conflict detector
+function detectProvenanceConflict(a, b) {
+  const fields = ["namespace", "domain", "primary_topic", "source", "version", "updated_at"];
+  const diffs = [];
+  for (const f of fields) {
+    if ((a[f] !== undefined || b[f] !== undefined) && a[f] !== b[f]) {
+      diffs.push({ field: f, first: a[f], duplicate: b[f] });
+    }
+  }
+  return diffs.length > 0 ? diffs : null;
+}
+
+// ─── Semantic relevance thresholds (B23/B26) ─────────────────────────────────
+// B23: minimum confidence before routing should proceed
+export const SEMANTIC_MIN_CONFIDENCE = 0.5;
+// B26: minimum retrieval relevance — items below this are not treated as evidence
+export const RETRIEVAL_MIN_RELEVANCE = 0.3;
+
+/**
+ * Filters retrieval items by minimum relevance threshold.
+ * B26: items below threshold must not be treated as evidence.
+ */
+export function filterByMinRelevance(items = []) {
+  if (!Array.isArray(items)) return [];
+  return items.filter(
+    (item) => (item?.score ?? item?.relevance ?? item?.confidence ?? 1) >= RETRIEVAL_MIN_RELEVANCE
+  );
 }

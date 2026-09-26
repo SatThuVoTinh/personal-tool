@@ -19,7 +19,7 @@
       "const": "1.0.0"
     },
     "governance_version": {
-      "enum": ["m7-t2-r12", "m7-t5-r13", "m8-t2-r9"]
+      "enum": ["m7-t2-r12", "m7-t5-r13", "m8-t2-r9", "m8-t2.1-r3"]
     },
     "sequence": {
       "type": "integer",
@@ -246,18 +246,43 @@
       "then": {
         "properties": {
           "payload": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["task_id", "envelope"],
-            "properties": {
-              "task_id": {
-                "type": "string",
-                "pattern": "^[a-f0-9]{64}$"
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["task_id", "envelope"],
+                "properties": {
+                  "task_id": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "envelope": {
+                    "$ref": "trusted-result-envelope.schema.json"
+                  }
+                }
               },
-              "envelope": {
-                "$ref": "trusted-result-envelope.schema.json"
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["task_id"],
+                "properties": {
+                  "task_id": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "worker_id": { "type": ["string", "null"] },
+                  "attempt": { "type": "integer", "minimum": 1 },
+                  "payload_digest": {
+                    "type": ["string", "null"],
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "technical_status": { "type": "string" },
+                  "business_status": { "type": "string" },
+                  "artifact_path": { "type": ["string", "null"] },
+                  "recorded_at": { "type": "string", "format": "date-time" }
+                }
               }
-            }
+            ]
           }
         }
       }

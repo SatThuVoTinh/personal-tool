@@ -1,3 +1,5 @@
+import path from "node:path";
+
 /**
  * Discord Output Sanitization & Formatting
  * Transforms internal GovernedResult envelopes into human-safe, clean Markdown messages for Discord.
@@ -28,15 +30,44 @@ const BANNED_PATTERNS = [
 ];
 
 /**
- * Strips all internal governance and sensitive tokens from text.
+ * Sanitizes an identifier (task ID, incident ID, tag, status, action)
+ * ensuring it contains no control characters, newlines, or Discord mention injections,
+ * while preserving legitimate task and digest strings.
  */
-export function sanitizeDiscordText(text) {
+export function sanitizeDiscordIdentifier(id) {
+  if (id === null || id === undefined) return "";
+  return (
+    String(id)
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\r\n\x00-\x1f\x7f]/g, "")
+      .replace(/@(everyone|here)/gi, "")
+      .replace(/<@[!&]?\d+>/g, "")
+      .trim()
+  );
+}
+
+/**
+ * Strips all internal governance and sensitive tokens from text.
+ * Uses a delimiter replacement rather than deleting tokens to prevent word-joining (F03).
+ * Supports preserveIdentifiers to maintain task IDs and public digests on card displays (F01, F02, F22).
+ */
+export function sanitizeDiscordText(
+  text,
+  { preserveIdentifiers = false, delimiter = " " } = {},
+) {
   if (typeof text !== "string") return "";
   let sanitized = text;
   for (const pattern of BANNED_PATTERNS) {
-    sanitized = sanitized.replace(pattern, "");
+    if (
+      preserveIdentifiers &&
+      (pattern.source.includes("a-f0-9]{64}") ||
+        pattern.source.includes("task-"))
+    ) {
+      continue;
+    }
+    sanitized = sanitized.replace(pattern, delimiter);
   }
-  return sanitized.trim();
+  return sanitized.replace(/[^\S\r\n]+/g, " ").trim();
 }
 
 /**
@@ -71,17 +102,8 @@ export function formatForDiscord(rawInput, { agentName = "Zink Bot" } = {}) {
         textContent = rawInput;
       }
     } else {
-      const firstBrace = trimmed.indexOf("{");
-      const lastBrace = trimmed.lastIndexOf("}");
-      if (firstBrace !== -1 && lastBrace > firstBrace) {
-        try {
-          parsed = JSON.parse(trimmed.slice(firstBrace, lastBrace + 1));
-        } catch {
-          textContent = rawInput;
-        }
-      } else {
-        textContent = rawInput;
-      }
+      // Do not perform opportunistic substring JSON extraction (F04)
+      textContent = rawInput;
     }
   }
 
@@ -152,28 +174,24 @@ export function formatForDiscord(rawInput, { agentName = "Zink Bot" } = {}) {
   if (parsed && typeof parsed === "object") {
     const candidate = parsed.payload ?? parsed;
     if (
-      candidate.action === "propose" ||
-      candidate.proposal ||
-      candidate.proposal_id ||
-      candidate.exact_operation ||
-      candidate.approval_id ||
-      candidate.type === "approval"
+      candidate.type === "approval" ||
+      (candidate.action === "propose" && candidate.proposal) ||
+      (candidate.proposal_id && candidate.capability) ||
+      (candidate.approval_id && candidate.exact_operation)
     ) {
       return formatApprovalNotification(candidate, { agentName });
     }
     if (
-      candidate.incident_id ||
-      candidate.severity ||
-      candidate.observed_state ||
-      candidate.type === "incident"
+      candidate.type === "incident" ||
+      (candidate.incident_id &&
+        (candidate.observed_state || candidate.severity))
     ) {
       return formatIncidentNotification(candidate, { agentName });
     }
     if (
-      candidate.result_id ||
-      candidate.deliverables ||
-      candidate.workflow_status ||
-      candidate.type === "result"
+      candidate.type === "result" ||
+      (candidate.result_id &&
+        (candidate.deliverables || candidate.summary || candidate.output))
     ) {
       return formatResultNotification(candidate, { agentName });
     }
@@ -230,12 +248,16 @@ export function formatGovernedEnvelope({
   action = "",
   agentName = "Zink Bot",
 } = {}) {
-  const cleanTitle = sanitizeDiscordText(title || "Thông báo Hệ thống");
+  const cleanTag = sanitizeDiscordIdentifier(tag || "");
+  const cleanTitle = sanitizeDiscordText(title || "Thông báo Hệ thống", {
+    preserveIdentifiers: true,
+  });
   const cleanPurpose = sanitizeDiscordText(
     purpose || "Thông báo từ tác vụ Zink",
+    { preserveIdentifiers: true },
   );
   const lines = [
-    `### ${tag} ${cleanTitle}`,
+    `### ${cleanTag} ${cleanTitle}`.trim(),
     `> **Mục đích:** ${cleanPurpose}`,
     "",
     "---",
@@ -513,13 +535,15 @@ export function formatOfficeClarificationQuestion({
   question,
   reason,
 }) {
-  const cleanTask = sanitizeDiscordText(taskId || "TASK-UNKNOWN");
-  const cleanAgent = sanitizeDiscordText(agentId.toUpperCase());
+  const cleanTask = sanitizeDiscordIdentifier(taskId || "TASK-UNKNOWN");
+  const cleanAgent = sanitizeDiscordIdentifier(agentId.toUpperCase());
   const cleanQuestion = sanitizeDiscordText(
     question || "Cần xác nhận thêm thông tin.",
+    { preserveIdentifiers: true },
   );
   const cleanReason = sanitizeDiscordText(
     reason || "Thiếu dữ kiện hoặc yêu cầu nghiệp vụ chưa rõ.",
+    { preserveIdentifiers: true },
   );
 
   return [
@@ -538,21 +562,35 @@ export function formatOfficeClarificationQuestion({
 
 /**
  * Formats the final completion/rejection notification in #office by Main.
- * Implements ACTIVE.md Section 8.
+ * Implements ACTIVE.md Section 8 and distinct states (F21).
  */
 export function formatOfficeFinalNotification({
   taskId,
   status = "COMPLETE",
   summary,
 }) {
-  const cleanTask = sanitizeDiscordText(taskId || "TASK-UNKNOWN");
-  const cleanSummary = sanitizeDiscordText(summary || "Tác vụ đã kết thúc.");
-  const isComplete = status === "COMPLETE";
+  const cleanTask = sanitizeDiscordIdentifier(taskId || "TASK-UNKNOWN");
+  const cleanSummary = sanitizeDiscordText(summary || "Tác vụ đã kết thúc.", {
+    preserveIdentifiers: true,
+  });
+
+  let statusText = "✅ ĐÃ HOÀN THÀNH (Đã được User nghiệm thu)";
+  if (status === "FAILED") {
+    statusText = "❌ THẤT BẠI (Gặp lỗi trong quá trình thực thi)";
+  } else if (status === "BLOCKED") {
+    statusText = "⛔ BỊ CHẶN (Cần can thiệp gỡ chặn / quyết định từ Owner)";
+  } else if (status === "PARTIAL") {
+    statusText = "⚠️ HOÀN THÀNH MỘT PHẦN (Cần xử lý thêm các phần chưa đạt)";
+  } else if (status === "CANCELLED") {
+    statusText = "🛑 ĐÃ HỦY BỎ";
+  } else if (status !== "COMPLETE") {
+    statusText = `ℹ️ TRẠNG THÁI: ${sanitizeDiscordIdentifier(status)}`;
+  }
 
   return [
     `📢 **[Quản Lý | Thông báo Cuối]** Tác vụ **${cleanTask}**`,
     "",
-    `**Kết quả:** ${isComplete ? "✅ ĐÃ HOÀN THÀNH (Đã được User nghiệm thu)" : "❌ ĐÃ TỪ CHỐI / HỦY BỎ"}`,
+    `**Kết quả:** ${statusText}`,
     "",
     "**Tóm tắt kết quả:**",
     cleanSummary,
@@ -561,7 +599,7 @@ export function formatOfficeFinalNotification({
 
 /**
  * Formats an Approval Card for #approvals with exact fields and buttons.
- * Implements ACTIVE.md Section 8.
+ * Implements ACTIVE.md Section 8, canonical action IDs, and verifiable digests (F17, F23).
  */
 export function formatGovernedApprovalCard({
   taskId,
@@ -571,27 +609,55 @@ export function formatGovernedApprovalCard({
   risk = "Thấp",
   validationCriteria = "",
   queueStatus = "APPROVAL_PENDING",
+  approvalId = null,
+  scopeDigest = null,
+  expiry = null,
 }) {
-  const cleanTask = sanitizeDiscordText(taskId || "TASK-UNKNOWN");
-  const cleanPlanVer = sanitizeDiscordText(planVersion);
-  const cleanPrimary = sanitizeDiscordText(primary);
-  const cleanPlan = sanitizeDiscordText(executionPlan);
+  const cleanTask = sanitizeDiscordIdentifier(taskId || "TASK-UNKNOWN");
+  const cleanPlanVer = sanitizeDiscordIdentifier(planVersion);
+  const cleanPrimary = sanitizeDiscordIdentifier(primary);
+  const cleanPlan = sanitizeDiscordText(executionPlan, {
+    preserveIdentifiers: true,
+  });
   const cleanRisk = sanitizeDiscordText(risk);
   const cleanCriteria = sanitizeDiscordText(
     validationCriteria || "Kiểm định kỹ thuật và nghiệp vụ",
+    { preserveIdentifiers: true },
   );
-  const cleanQueue = sanitizeDiscordText(queueStatus);
+  const cleanQueue = sanitizeDiscordIdentifier(queueStatus);
+  const cleanApprovalId = approvalId
+    ? sanitizeDiscordIdentifier(approvalId)
+    : `appr-${cleanTask}-${cleanPlanVer}`;
+  const actionApproveId = `zink:approval:approve:${cleanTask}:${cleanPlanVer}`;
+  const actionRejectId = `zink:approval:reject:${cleanTask}:${cleanPlanVer}`;
+  const actionRevisionId = `zink:approval:revision:${cleanTask}:${cleanPlanVer}`;
 
-  return [
+  const headerLines = [
     `### 🔖 [PHÊ DUYỆT THỰC THI] — Tác vụ ${cleanTask}`,
     "> **Lưu ý:** Chỉ User/Owner mới có thẩm quyền APPROVE hoặc REJECT kế hoạch thực thi.",
     "",
     "---",
     `**Mã tác vụ:** \`${cleanTask}\``,
+    `**Mã phê duyệt (Approval ID):** \`${cleanApprovalId}\``,
     `**Phiên bản kế hoạch:** \`${cleanPlanVer}\``,
     `**Điều phối chính (Primary):** \`${cleanPrimary}\``,
     `**Đánh giá rủi ro:** \`${cleanRisk}\``,
     `**Trạng thái hàng đợi:** \`${cleanQueue}\``,
+  ];
+
+  if (scopeDigest) {
+    headerLines.push(
+      `**Mã băm phạm vi (Scope Digest):** \`${sanitizeDiscordIdentifier(scopeDigest)}\``,
+    );
+  }
+  if (expiry) {
+    headerLines.push(
+      `**Thời hạn hiệu lực:** \`${sanitizeDiscordIdentifier(expiry)}\``,
+    );
+  }
+
+  return [
+    ...headerLines,
     "",
     "#### 📝 Kế hoạch Thực thi:",
     cleanPlan || "*(Chi tiết kế hoạch chưa được đính kèm)*",
@@ -600,16 +666,16 @@ export function formatGovernedApprovalCard({
     cleanCriteria,
     "",
     "---",
-    "**Thao tác dành cho User:**",
-    "- Bấm **[APPROVE]** để phê duyệt đưa vào hàng đợi thực thi.",
-    "- Bấm **[REJECT]** để từ chối kế hoạch.",
-    "- Bấm **[REQUEST REVISION]** để yêu cầu sửa đổi kế hoạch.",
+    "**Thao tác dành cho User (Buttons & Action IDs):**",
+    `- Bấm **[APPROVE]** (\`${actionApproveId}\`) để phê duyệt đưa vào hàng đợi thực thi.`,
+    `- Bấm **[REJECT]** (\`${actionRejectId}\`) để từ chối kế hoạch.`,
+    `- Bấm **[REQUEST REVISION]** (\`${actionRevisionId}\`) để yêu cầu sửa đổi kế hoạch.`,
   ].join("\n");
 }
 
 /**
  * Formats a Result Review Card for #results with exact fields, preview, and buttons.
- * Implements ACTIVE.md Section 8.
+ * Implements ACTIVE.md Section 8 and verified validation findings (F14, F15, F16, F18, F20, F23).
  */
 export function formatGovernedResultCard({
   taskId,
@@ -621,28 +687,50 @@ export function formatGovernedResultCard({
   previewImage = null,
   artifact = "",
   keyFindings = "",
+  resultDigest = null,
 }) {
-  const cleanTask = sanitizeDiscordText(taskId || "TASK-UNKNOWN");
+  const cleanTask = sanitizeDiscordIdentifier(taskId || "TASK-UNKNOWN");
+  const cleanStatus = sanitizeDiscordIdentifier(executionStatus);
+  const cleanTechVal = sanitizeDiscordIdentifier(technicalValidation);
+  const cleanBizVal = sanitizeDiscordIdentifier(businessValidation);
   const cleanFindings = sanitizeDiscordText(
     keyFindings || "Hoàn thành xử lý dữ liệu.",
+    { preserveIdentifiers: true },
   );
   const cleanArtifact = sanitizeDiscordText(
     artifact || "*(Không có tệp đính kèm)*",
+    { preserveIdentifiers: true },
   );
-  const previewImgSection = previewImage
-    ? `\n🖼️ **Hình ảnh Preview Trực quan (Screenshot/Render):** \`${sanitizeDiscordText(previewImage)}\` *(đã đính kèm)*\n`
-    : "";
+  const previewImgSection =
+    previewImage &&
+    typeof previewImage === "string" &&
+    !previewImage.includes("..")
+      ? `\n🖼️ **Hình ảnh Preview Trực quan (Screenshot/Render):** \`${sanitizeDiscordIdentifier(path.basename(previewImage))}\` *(đã đính kèm)*\n`
+      : "";
+  const actionAcceptId = `zink:result:accept:${cleanTask}:${attempt}`;
+  const actionRejectId = `zink:result:reject:${cleanTask}:${attempt}`;
+  const actionRevisionId = `zink:result:revision:${cleanTask}:${attempt}`;
 
-  return [
+  const headerLines = [
     `### 📋 [NGHIỆM THU KẾT QUẢ] — Tác vụ ${cleanTask}`,
     "> **Lưu ý:** Chỉ User/Owner mới có quyền ACCEPT / COMPLETE hoặc REJECT kết quả.",
     "",
     "---",
     `**Mã tác vụ:** \`${cleanTask}\``,
     `**Lần thử nghiệm (Attempt):** \`#${attempt}\``,
-    `**Trạng thái thực thi:** \`${executionStatus}\``,
-    `**Kiểm định Kỹ thuật:** \`${technicalValidation}\``,
-    `**Kiểm định Nghiệp vụ:** \`${businessValidation}\``,
+    `**Trạng thái thực thi:** \`${cleanStatus}\``,
+    `**Kiểm định Kỹ thuật:** \`${cleanTechVal}\``,
+    `**Kiểm định Nghiệp vụ:** \`${cleanBizVal}\``,
+  ];
+
+  if (resultDigest) {
+    headerLines.push(
+      `**Mã băm kết quả (Result Digest):** \`${sanitizeDiscordIdentifier(resultDigest)}\``,
+    );
+  }
+
+  return [
+    ...headerLines,
     "",
     "#### 🔍 Dữ liệu Mẫu & Xem trước Thực tế (Actual Preview):",
     preview || "*(Không có dữ liệu trích xuất)*",
@@ -654,10 +742,10 @@ export function formatGovernedResultCard({
     cleanFindings,
     "",
     "---",
-    "**Thao tác dành cho User:**",
-    "- Bấm **[ACCEPT / COMPLETE]** để nghiệm thu và hoàn thành tác vụ.",
-    "- Bấm **[REJECT]** để bác bỏ kết quả.",
-    "- Bấm **[REQUEST REVISION]** để yêu cầu chạy lại/tinh chỉnh.",
+    "**Thao tác dành cho User (Buttons & Action IDs):**",
+    `- Bấm **[ACCEPT / COMPLETE]** (\`${actionAcceptId}\`) để nghiệm thu và hoàn thành tác vụ.`,
+    `- Bấm **[REJECT]** (\`${actionRejectId}\`) để bác bỏ kết quả.`,
+    `- Bấm **[REQUEST REVISION]** (\`${actionRevisionId}\`) để yêu cầu chạy lại/tinh chỉnh.`,
   ]
     .filter((line) => line !== null)
     .join("\n");
@@ -665,7 +753,7 @@ export function formatGovernedResultCard({
 
 /**
  * Formats an Incident Card for #incidents with normalized lifecycle.
- * Implements ACTIVE.md Section 9:
+ * Implements ACTIVE.md Section 9 and sanitized status/severity (F13).
  * States: RECEIVED -> INVESTIGATING -> REPAIRING -> RESOLVED
  */
 export function formatIncidentCard({
@@ -677,29 +765,85 @@ export function formatIncidentCard({
   expected = "",
   action = "",
 }) {
-  const cleanIncId = sanitizeDiscordText(incidentId || "INC-" + Date.now());
+  const cleanIncId = sanitizeDiscordIdentifier(
+    incidentId || "INC-" + Date.now(),
+  );
   const cleanTask = taskId
-    ? ` (Liên kết: \`${sanitizeDiscordText(taskId)}\`)`
+    ? ` (Liên kết: \`${sanitizeDiscordIdentifier(taskId)}\`)`
     : "";
+  const cleanState = sanitizeDiscordIdentifier(state);
+  const cleanSeverity = sanitizeDiscordIdentifier(severity);
 
   return [
     `### 🚨 [SỰ CỐ] — ${cleanIncId}${cleanTask}`,
-    `> **Trạng thái:** \`${state}\` | **Mức độ:** \`${severity}\``,
+    `> **Trạng thái:** \`${cleanState}\` | **Mức độ:** \`${cleanSeverity}\``,
     "",
     "---",
     "**Hiện trạng quan sát (Observed):**",
     sanitizeDiscordText(
       observed || "Phát hiện bất thường trong quá trình thực thi.",
+      { preserveIdentifiers: true },
     ),
     "",
     "**Trạng thái kỳ vọng (Expected):**",
     sanitizeDiscordText(
       expected || "Hoạt động bình thường theo hợp đồng quy định.",
+      { preserveIdentifiers: true },
     ),
     "",
     "**Hành động xử lý & Khắc phục:**",
     sanitizeDiscordText(
       action || "Hệ thống đang tiến hành điều tra nguyên nhân.",
+      { preserveIdentifiers: true },
     ),
   ].join("\n");
+}
+
+/**
+ * Chunks a Discord message to respect platform text and line bounds (F10, F11).
+ * Default limit is 2000 chars per Discord message specification.
+ */
+export function chunkDiscordMessage(
+  text,
+  { limit = 2000, maxLines = null } = {},
+) {
+  if (typeof text !== "string") return [];
+  if (
+    text.length <= limit &&
+    (maxLines === null || text.split("\n").length <= maxLines)
+  ) {
+    return [text];
+  }
+  const chunks = [];
+  const lines = text.split("\n");
+  let currentChunk = [];
+  let currentLength = 0;
+
+  for (const line of lines) {
+    const lineLen = line.length + 1;
+    const lineCountExceeded =
+      maxLines !== null && currentChunk.length >= maxLines;
+    if (
+      (currentLength + lineLen > limit || lineCountExceeded) &&
+      currentChunk.length > 0
+    ) {
+      chunks.push(currentChunk.join("\n"));
+      currentChunk = [];
+      currentLength = 0;
+    }
+    if (line.length > limit) {
+      let remaining = line;
+      while (remaining.length > 0) {
+        chunks.push(remaining.slice(0, limit));
+        remaining = remaining.slice(limit);
+      }
+    } else {
+      currentChunk.push(line);
+      currentLength += lineLen;
+    }
+  }
+  if (currentChunk.length > 0) {
+    chunks.push(currentChunk.join("\n"));
+  }
+  return chunks;
 }

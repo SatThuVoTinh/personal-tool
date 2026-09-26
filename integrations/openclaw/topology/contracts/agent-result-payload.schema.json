@@ -17,7 +17,7 @@
   ],
   "properties": {
     "schema_version": { "const": "1.0.0" },
-    "governance_version": { "enum": ["m7-t2-r12", "m7-t5-r13"] },
+    "governance_version": { "enum": ["m7-t2-r12", "m7-t5-r13", "m8-t2-r9", "m8-t2.1-r3"] },
     "outcome_claim": { "enum": ["COMPLETE", "PARTIAL", "BLOCKED", "FAILED"] },
     "reason_claim": {
       "type": "string",

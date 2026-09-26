@@ -171,10 +171,21 @@ describe("M8/T2 Mandatory E2E Workflow & Failure Injection Suite", () => {
     assert.equal(res.nextState, TASK_STATES.REVISING);
   });
 
-  // Scenario 3: O1/O2 WAITING_FOR_USER
+  // Scenario 3: Main WAITING_FOR_USER (Main is sole authority for user clarification in #office per RC-06)
   test("Scenario 03: Direct clarification in #office moves task to WAITING_FOR_USER, user reply resumes", () => {
-    const ask = validateActionAuthority({
+    // O1 cannot directly ASK_USER in #office
+    const o1Ask = validateActionAuthority({
       actor: ACTORS.O1,
+      channel: CHANNELS.OFFICE,
+      taskId: "SCEN-03",
+      currentState: TASK_STATES.EXECUTING,
+      action: ACTIONS.ASK_USER,
+    });
+    assert.equal(o1Ask.allowed, false);
+    assert.match(o1Ask.reason, /Only Main can initiate user clarification/);
+
+    const ask = validateActionAuthority({
+      actor: ACTORS.MAIN,
       channel: CHANNELS.OFFICE,
       taskId: "SCEN-03",
       currentState: TASK_STATES.EXECUTING,

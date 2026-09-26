@@ -9,7 +9,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 
 import {
   canonicalHash,
@@ -19,7 +19,14 @@ import {
 } from "./canonical.mjs";
 import { readSnapshot, recordWorkflowEvent } from "./ledger.mjs";
 import { findSession, ownerRunIds } from "./workflow.mjs";
-import { validateContract } from "./schema.mjs";
+import {
+  validateContract,
+  validateContractSchema,
+  loadContractSchema,
+  checkSchema,
+  stableJson,
+  typeMatches,
+} from "./schema.mjs";
 import {
   createTrustedResultEnvelope,
   payloadDigest,
@@ -306,213 +313,14 @@ export function contractOnlySeam(toolId, params, decisionContext) {
   );
 }
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const contractsDir = path.resolve(
-  __dirname,
-  "../../../../zink-tools/contracts",
-);
-
-const schemaCache = new Map();
-function loadContractSchema(name) {
-  let cleanName = name;
-  if (cleanName.startsWith("tools/")) cleanName = cleanName.slice(6);
-  if (cleanName.endsWith(".schema.json")) cleanName = cleanName.slice(0, -12);
-
-  if (!schemaCache.has(cleanName)) {
-    let filePath = path.join(contractsDir, `${cleanName}.schema.json`);
-    if (!existsSync(filePath)) {
-      filePath = path.join(contractsDir, "tools", `${cleanName}.schema.json`);
-    }
-    if (!existsSync(filePath)) {
-      throw new Error("SCHEMA_VALIDATION_FAILED");
-    }
-    schemaCache.set(cleanName, JSON.parse(readFileSync(filePath, "utf8")));
-  }
-  return schemaCache.get(cleanName);
-}
-
-function typeMatches(type, value) {
-  if (type === "null") return value === null;
-  if (type === "array") return Array.isArray(value);
-  if (type === "object")
-    return value !== null && typeof value === "object" && !Array.isArray(value);
-  if (type === "integer") return Number.isSafeInteger(value);
-  if (type === "number")
-    return typeof value === "number" && Number.isFinite(value);
-  if (type === "string" || type === "boolean") return typeof value === type;
-  return false;
-}
-
-function resolveRef(ref, currentSchemaName) {
-  const [target, pointer = ""] = ref.split("#");
-  const schemaName = target ? target : currentSchemaName;
-  let root = loadContractSchema(schemaName);
-  let cur = root;
-  if (pointer && pointer.startsWith("/")) {
-    for (const part of pointer.split("/").slice(1)) {
-      const key = part.replaceAll("~1", "/").replaceAll("~0", "~");
-      if (!cur || typeof cur !== "object" || !Object.hasOwn(cur, key)) {
-        throw new Error("SCHEMA_VALIDATION_FAILED");
-      }
-      cur = cur[key];
-    }
-  }
-  return { schema: cur, schemaName };
-}
-
-function checkSchema(schema, value, currentSchemaName, depth = 0) {
-  if (depth > 64) throw new Error("SCHEMA_VALIDATION_FAILED");
-  if (schema === true) return;
-  if (schema === false || schema === undefined || value === undefined)
-    throw new Error("SCHEMA_VALIDATION_FAILED");
-
-  if (schema.$ref) {
-    const { schema: targetSchema, schemaName: newSchemaName } = resolveRef(
-      schema.$ref,
-      currentSchemaName,
-    );
-    checkSchema(targetSchema, value, newSchemaName, depth + 1);
-    return;
-  }
-
-  if (schema.type) {
-    const types = Array.isArray(schema.type) ? schema.type : [schema.type];
-    if (!types.some((t) => typeMatches(t, value))) {
-      throw new Error("SCHEMA_VALIDATION_FAILED");
-    }
-  }
-
-  if (Object.hasOwn(schema, "const")) {
-    if (JSON.stringify(value) !== JSON.stringify(schema.const)) {
-      throw new Error("SCHEMA_VALIDATION_FAILED");
-    }
-  }
-
-  if (schema.enum) {
-    if (
-      !schema.enum.some(
-        (item) => JSON.stringify(item) === JSON.stringify(value),
-      )
-    ) {
-      throw new Error("SCHEMA_VALIDATION_FAILED");
-    }
-  }
-
-  if (schema.oneOf) {
-    let matchCount = 0;
-    for (const branch of schema.oneOf) {
-      try {
-        checkSchema(branch, value, currentSchemaName, depth + 1);
-        matchCount++;
-      } catch {
-        void 0;
-      }
-    }
-    if (matchCount !== 1) {
-      throw new Error("SCHEMA_VALIDATION_FAILED");
-    }
-  }
-
-  if (schema.allOf) {
-    for (const branch of schema.allOf) {
-      checkSchema(branch, value, currentSchemaName, depth + 1);
-    }
-  }
-
-  if (schema.anyOf) {
-    let matched = false;
-    for (const branch of schema.anyOf) {
-      try {
-        checkSchema(branch, value, currentSchemaName, depth + 1);
-        matched = true;
-        break;
-      } catch {
-        void 0;
-      }
-    }
-    if (!matched) throw new Error("SCHEMA_VALIDATION_FAILED");
-  }
-
-  if (typeof value === "string") {
-    if (schema.minLength !== undefined && [...value].length < schema.minLength)
-      throw new Error("SCHEMA_VALIDATION_FAILED");
-    if (
-      schema.maxLength !== undefined &&
-      Buffer.byteLength(value, "utf8") > schema.maxLength
-    )
-      throw new Error("SCHEMA_VALIDATION_FAILED");
-    if (schema.pattern && !new RegExp(schema.pattern, "u").test(value))
-      throw new Error("SCHEMA_VALIDATION_FAILED");
-  }
-
-  if (typeof value === "number") {
-    if (schema.minimum !== undefined && value < schema.minimum)
-      throw new Error("SCHEMA_VALIDATION_FAILED");
-    if (schema.maximum !== undefined && value > schema.maximum)
-      throw new Error("SCHEMA_VALIDATION_FAILED");
-  }
-
-  if (Array.isArray(value)) {
-    if (schema.minItems !== undefined && value.length < schema.minItems)
-      throw new Error("SCHEMA_VALIDATION_FAILED");
-    if (schema.maxItems !== undefined && value.length > schema.maxItems)
-      throw new Error("SCHEMA_VALIDATION_FAILED");
-    if (schema.uniqueItems) {
-      const set = new Set(value.map((x) => JSON.stringify(x)));
-      if (set.size !== value.length)
-        throw new Error("SCHEMA_VALIDATION_FAILED");
-    }
-    if (schema.items) {
-      for (const item of value) {
-        checkSchema(schema.items, item, currentSchemaName, depth + 1);
-      }
-    }
-  } else if (value !== null && typeof value === "object") {
-    const keys = Object.keys(value);
-    if (
-      schema.minProperties !== undefined &&
-      keys.length < schema.minProperties
-    )
-      throw new Error("SCHEMA_VALIDATION_FAILED");
-    if (
-      schema.maxProperties !== undefined &&
-      keys.length > schema.maxProperties
-    )
-      throw new Error("SCHEMA_VALIDATION_FAILED");
-    if (schema.required) {
-      for (const req of schema.required) {
-        if (!Object.hasOwn(value, req))
-          throw new Error("SCHEMA_VALIDATION_FAILED");
-      }
-    }
-    const props = schema.properties || {};
-    for (const key of keys) {
-      if (Object.hasOwn(props, key)) {
-        checkSchema(props[key], value[key], currentSchemaName, depth + 1);
-      } else {
-        if (schema.additionalProperties === false) {
-          throw new Error("SCHEMA_VALIDATION_FAILED");
-        } else if (
-          schema.additionalProperties &&
-          typeof schema.additionalProperties === "object"
-        ) {
-          checkSchema(
-            schema.additionalProperties,
-            value[key],
-            currentSchemaName,
-            depth + 1,
-          );
-        }
-      }
-    }
-  }
-}
-
-export function validateContractSchema(schemaName, value) {
-  const rootSchema = loadContractSchema(schemaName);
-  checkSchema(rootSchema, value, schemaName);
-  return true;
-}
+// C06: Re-export canonical validator from schema.mjs (100% dialect equivalence)
+export {
+  validateContractSchema,
+  loadContractSchema,
+  checkSchema,
+  stableJson,
+  typeMatches,
+};
 
 export function resolveAuthenticatedApproval(paths, approvalId) {
   if (typeof approvalId !== "string" || !isUuidV4(approvalId)) {
@@ -652,7 +460,13 @@ export function consumeApprovalAtomically(paths, approvalId, claimScope) {
   }
 }
 
-export function createGovernanceGuard({ paths, manifestFor }) {
+export function createGovernanceGuard({
+  paths,
+  manifestFor,
+  _snapshotOverride,
+}) {
+  const getSnapshot = () => _snapshotOverride || readSnapshot(paths);
+
   function admitInitialBrief(owner, context, text) {
     assert(
       !owner.delegation && context.agentId === owner.task.root_agent_id,
@@ -776,7 +590,7 @@ export function createGovernanceGuard({ paths, manifestFor }) {
   return {
     beforeRunEnd(event, context) {
       const owner = findSession(
-        readSnapshot(paths),
+        getSnapshot(),
         context.sessionKey,
         context.runId,
       );
@@ -822,67 +636,60 @@ export function createGovernanceGuard({ paths, manifestFor }) {
         trimmed = trimmed.trim();
       }
 
-      let payload = null;
+      let payload;
       try {
         payload = JSON.parse(trimmed);
       } catch {
-        const firstBrace = trimmed.indexOf("{");
-        const lastBrace = trimmed.lastIndexOf("}");
-        if (firstBrace !== -1 && lastBrace > firstBrace) {
-          try {
-            payload = JSON.parse(trimmed.slice(firstBrace, lastBrace + 1));
-          } catch {
-            payload = null;
-          }
-        }
+        payload = null;
       }
 
-      if (
-        !payload ||
-        typeof payload !== "object" ||
-        Array.isArray(payload) ||
-        !payload.outcome_claim
+      assert(
+        payload &&
+          typeof payload === "object" &&
+          !Array.isArray(payload) &&
+          typeof payload.outcome_claim === "string",
+        "SCHEMA_INVALID",
+      );
+
+      if (!payload.schema_version) payload.schema_version = SCHEMA_VERSION;
+      if (!payload.governance_version)
+        payload.governance_version = GOVERNANCE_VERSION;
+      if (!payload.assumptions) payload.assumptions = [];
+      if (!payload.limitations) payload.limitations = [];
+      if (!payload.requested_prerequisites)
+        payload.requested_prerequisites = [];
+      if (!payload.agent_self_validation) {
+        payload.agent_self_validation =
+          "[UNVERIFIED_SELF_ASSERTION] Model self-claim: unverified";
+      } else if (
+        payload.governance_version !== "m7-t2-r12" &&
+        typeof payload.agent_self_validation === "string" &&
+        !payload.agent_self_validation.startsWith("[UNVERIFIED_SELF_ASSERTION]")
       ) {
-        const safeOutput = text.length > 16384 ? text.slice(0, 16384) : text;
-        payload = {
-          schema_version: SCHEMA_VERSION,
-          governance_version: GOVERNANCE_VERSION,
-          outcome_claim: "COMPLETE",
-          reason_claim: "NONE",
-          output: sanitizeDelegationText(safeOutput),
-          assumptions: [],
-          limitations: [],
-          requested_prerequisites: [],
-          agent_self_validation: "Direct interactive conversational response",
-        };
-      } else {
-        if (!payload.schema_version) payload.schema_version = SCHEMA_VERSION;
-        if (!payload.governance_version)
-          payload.governance_version = GOVERNANCE_VERSION;
-        if (!payload.assumptions) payload.assumptions = [];
-        if (!payload.limitations) payload.limitations = [];
-        if (!payload.requested_prerequisites)
-          payload.requested_prerequisites = [];
-        if (!payload.agent_self_validation) {
-          payload.agent_self_validation = "Model validated output";
-        }
-        if (typeof payload.output !== "string") {
-          payload.output = String(payload.output ?? "");
-        }
-        if (payload.output.length > 16384) {
-          payload.output = payload.output.slice(0, 16384);
-        }
-        payload.output = sanitizeDelegationText(payload.output);
-        payload.agent_self_validation = sanitizeDelegationText(
-          payload.agent_self_validation,
-        );
-        payload.assumptions = payload.assumptions.map((a) =>
-          sanitizeDelegationText(String(a)),
-        );
-        payload.limitations = payload.limitations.map((l) =>
-          sanitizeDelegationText(String(l)),
+        payload.agent_self_validation = `[UNVERIFIED_SELF_ASSERTION] ${payload.agent_self_validation}`;
+      }
+      if (typeof payload.output !== "string") {
+        payload.output = String(payload.output ?? "");
+      }
+      if (payload.output.length > 16384) {
+        payload.output = payload.output.slice(0, 16384);
+      }
+      payload.output = sanitizeDelegationText(payload.output);
+      payload.agent_self_validation = sanitizeDelegationText(
+        payload.agent_self_validation,
+      );
+      if (payload.agent_self_validation.length > 4096) {
+        payload.agent_self_validation = payload.agent_self_validation.slice(
+          0,
+          4096,
         );
       }
+      payload.assumptions = payload.assumptions.map((a) =>
+        sanitizeDelegationText(String(a)),
+      );
+      payload.limitations = payload.limitations.map((l) =>
+        sanitizeDelegationText(String(l)),
+      );
 
       validateAgentClaim(payload);
       for (const field of [
@@ -912,7 +719,7 @@ export function createGovernanceGuard({ paths, manifestFor }) {
     },
 
     beforeRun(_event, context) {
-      const snapshot = readSnapshot(paths);
+      const snapshot = getSnapshot();
       let owner;
       try {
         owner = findSession(snapshot, context.sessionKey, context.runId);
@@ -924,12 +731,33 @@ export function createGovernanceGuard({ paths, manifestFor }) {
           );
         });
         assert(candidates.length === 1, "EXECUTION_STATE_UNKNOWN");
-        const [task_id] = candidates[0];
+        const [task_id, task] = candidates[0];
+        const entry = task.continuations?.[context.runId];
         assert(
-          context.inputProvenance?.kind === "inter_session" &&
-            context.inputProvenance.sourceTool === "subagent_announce",
+          entry &&
+            context.inputProvenance?.kind === "inter_session" &&
+            context.inputProvenance.sourceTool === "subagent_announce" &&
+            context.inputProvenance.sourceSessionKey ===
+              entry.source_session_key,
           "LINEAGE_MISMATCH",
         );
+        // E13: Cryptographically bind inter-session trust to the trigger sender event & accepted payload digest
+        const trigger = Object.values(task.delegations || {}).find(
+          (run) => run.native_run_id === entry.trigger_run_id,
+        );
+        if (entry.trigger_run_id !== entry.previous_run_id) {
+          assert(
+            trigger && trigger.accepted_payload_digest,
+            "LINEAGE_MISMATCH",
+          );
+          if (context.inputProvenance.senderDigest) {
+            assert(
+              context.inputProvenance.senderDigest ===
+                trigger.accepted_payload_digest,
+              "LINEAGE_MISMATCH",
+            );
+          }
+        }
         const next = recordWorkflowEvent(
           paths,
           "WORKFLOW_CONTINUATION_STARTED",
@@ -1120,6 +948,16 @@ export function createGovernanceGuard({ paths, manifestFor }) {
           (item) => item.node_id === proposal.node_id,
         );
         assert(node && node.agent_id === params.agentId, "UNAUTHORIZED_TARGET");
+        const allowedSpawnTargets =
+          {
+            main: ["o1", "o2"],
+            o1: ["excel", "sql", "python"],
+            o2: ["power-bi", "python"],
+          }[context.agentId] ?? [];
+        assert(
+          allowedSpawnTargets.includes(params.agentId),
+          "UNAUTHORIZED_TARGET",
+        );
         if (owner.delegation)
           assert(
             node.stack_id === owner.delegation.stack_id,
@@ -1150,7 +988,9 @@ export function createGovernanceGuard({ paths, manifestFor }) {
               task.current_stack !== node.stack_id
                 ? 1
                 : 0),
-            delegated_runs: 71 - task.delegated_runs_used,
+            delegated_runs:
+              (proposal.governance_version === "m7-t2-r12" ? 71 : 72) -
+              task.delegated_runs_used,
           },
           requested_output_schema: "agent-result-payload.schema.json",
         };

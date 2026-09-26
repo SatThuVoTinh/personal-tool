@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import {
   appendFileSync,
   chmodSync,
@@ -128,6 +129,15 @@ export function ensureLedger(paths) {
     paths.snapshot,
     `${JSON.stringify(emptySnapshot(), null, 2)}\n`,
   );
+  if (paths.identityKey) {
+    if (!existsSync(paths.identityKey)) {
+      writeFileSync(paths.identityKey, `${randomBytes(32).toString("hex")}\n`, {
+        mode: 0o600,
+        flag: "wx",
+      });
+    }
+    chmodSync(paths.identityKey, 0o600);
+  }
   chmodSync(paths.events, 0o600);
   chmodSync(paths.snapshot, 0o600);
 }
@@ -152,8 +162,9 @@ export function inspectLedgerUpgrade(paths) {
   }
   const supportedVersions = new Set([
     GOVERNANCE_VERSION,
-    "m7-t2-r12",
+    "m8-t2-r9",
     "m7-t5-r13",
+    "m7-t2-r12",
   ]);
   if (supportedVersions.has(snapshot?.governance_version)) {
     readSnapshotLocked(paths, false);
@@ -199,8 +210,9 @@ function readSnapshotLocked(paths, repairSnapshot = true) {
     validateContract("ledger-snapshot", snapshot, Number.MAX_SAFE_INTEGER);
     const supportedVersions = new Set([
       GOVERNANCE_VERSION,
-      "m7-t2-r12",
+      "m8-t2-r9",
       "m7-t5-r13",
+      "m7-t2-r12",
     ]);
     if (
       !snapshot ||
@@ -252,6 +264,7 @@ function readSnapshotLocked(paths, repairSnapshot = true) {
           journalBudget,
           event.type,
           event.payload,
+          event.created_at,
         );
       if (event.sequence <= snapshot.sequence)
         anchoredBudget = journalBudget.tasks;
@@ -290,7 +303,12 @@ function readSnapshotLocked(paths, repairSnapshot = true) {
     for (const event of tail) {
       if (event.type.startsWith("WORKFLOW_")) {
         snapshot = {
-          ...applyWorkflowEvent(snapshot, event.type, event.payload),
+          ...applyWorkflowEvent(
+            snapshot,
+            event.type,
+            event.payload,
+            event.created_at,
+          ),
           sequence: event.sequence,
           last_event_digest: event.event_digest,
           updated_at: event.created_at,
@@ -374,14 +392,20 @@ export function appendEvent(paths, snapshot, type, payload = {}) {
   });
 }
 
-function appendEventLocked(paths, snapshot, type, payload) {
+function appendEventLocked(
+  paths,
+  snapshot,
+  type,
+  payload,
+  createdAt = utcNow(),
+) {
   const event = {
     schema_version: SCHEMA_VERSION,
     governance_version: GOVERNANCE_VERSION,
     sequence: snapshot.sequence + 1,
     type,
     payload,
-    created_at: utcNow(),
+    created_at: createdAt,
     previous_event_digest: snapshot.last_event_digest,
   };
   const event_digest = canonicalHash("zink-ledger-event-v1", event);
@@ -490,12 +514,13 @@ export function reserveBudgetAtomically(
 export function recordWorkflowEvent(paths, type, payload) {
   return withWriterLock(paths, () => {
     const current = readSnapshotLocked(paths);
-    const projected = applyWorkflowEvent(current, type, payload);
+    const createdAt = utcNow();
+    const projected = applyWorkflowEvent(current, type, payload, createdAt);
     if (
       canonicalHash("zink-ledger-event-v1", current) ===
       canonicalHash("zink-ledger-event-v1", projected)
     )
       return current;
-    return appendEventLocked(paths, projected, type, payload);
+    return appendEventLocked(paths, projected, type, payload, createdAt);
   });
 }

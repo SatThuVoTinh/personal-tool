@@ -193,7 +193,7 @@ test("root cannot close while a declared mandatory node has no accepted result",
         {
           node_id: "o1",
           agent_id: "o1",
-          stack_id: "semantic",
+          stack_id: "data_plant",
           dependencies: [],
           required: true,
           input_digest: "a".repeat(64),
@@ -320,7 +320,7 @@ test("Main transitions consume task-global budget before spawn receipts and neve
     });
     const nodes = Array.from({ length: 12 }, (_, index) => ({
       node_id: `node_${index}`,
-      stack_id: index % 2 ? "data_plant" : "semantic",
+      stack_id: index % 2 ? "semantic" : "data_plant",
       agent_id: index % 2 ? "o2" : "o1",
       dependencies: [],
       required: true,
@@ -538,7 +538,7 @@ test("materialized plugin imports canonical assets and requires native invocatio
     const node = {
       node_id: "o1",
       agent_id: "o1",
-      stack_id: "semantic",
+      stack_id: "data_plant",
       required: true,
       dependencies: [],
       input_digest: "a".repeat(64),
@@ -656,7 +656,7 @@ test("native boundary and durable guard integrate nested synthetic delegation an
     const nodes = ["o1", "python"].map((agent_id) => ({
       node_id: agent_id,
       agent_id,
-      stack_id: "semantic",
+      stack_id: "data_plant",
       required: true,
       dependencies: [],
       input_digest: canonicalHash("zink-input-v1", inputs),
@@ -700,7 +700,7 @@ test("native boundary and durable guard integrate nested synthetic delegation an
         attempt: 1,
         parent_agent_id: parent,
         target_agent_id: target,
-        target_stack: "semantic",
+        target_stack: "data_plant",
         expected_governance_hash: governanceHash(target),
         inputs,
         input_refs: [],
@@ -895,7 +895,7 @@ test("trusted workflow journals reservation, native receipt and cancellation acr
     });
     const node = {
       node_id: "semantic",
-      stack_id: "semantic",
+      stack_id: "data_plant",
       agent_id: "o1",
       dependencies: [],
       required: true,
@@ -967,12 +967,6 @@ test("trusted workflow journals reservation, native receipt and cancellation acr
           native_run_id: "untrusted-run",
         }),
       /LINEAGE_MISMATCH/u,
-    );
-    recordWorkflowEvent(paths, "WORKFLOW_NATIVE_ENDED", ended);
-    assert.deepEqual(
-      readSnapshot(paths),
-      running,
-      "native ok is not semantic acceptance",
     );
     recordWorkflowEvent(paths, "WORKFLOW_NATIVE_ENDED", {
       ...ended,

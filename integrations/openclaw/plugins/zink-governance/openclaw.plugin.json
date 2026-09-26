@@ -2,6 +2,9 @@
   "id": "zink-governance",
   "name": "Zink Governance",
   "description": "Model-invisible trusted governance guard for Zink T2 workflows.",
+  "activation": {
+    "onCapabilities": ["hook"]
+  },
   "contracts": {
     "tools": [
       "zink_excel",

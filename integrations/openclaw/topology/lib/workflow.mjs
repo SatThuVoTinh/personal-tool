@@ -2,10 +2,13 @@ import { deriveDelegationId, deriveTaskId } from "./canonical.mjs";
 import { validateContract } from "./schema.mjs";
 import { outcomeReasonAllowed, workflowAggregate } from "./runtime.mjs";
 
+// D11-D13: roles must match canonical AGENT_SPAWN_POLICY in policy.mjs.
+// main coordinates only through o1/o2; specialists have no spawn targets.
+// o1 owns ETL layer: excel/sql/python. o2 owns analytics layer: power-bi/python.
 const roles = {
-  main: ["o1", "o2", "excel", "power-bi", "sql", "python"],
-  o1: ["excel", "power-bi", "sql", "python"],
-  o2: ["excel", "sql", "python"],
+  main: ["o1", "o2"],
+  o1: ["excel", "sql", "python"],
+  o2: ["power-bi", "python"],
   excel: [],
   "power-bi": [],
   sql: [],
@@ -18,13 +21,9 @@ const terminal = new Set([
   "CANCELLED",
   "REJECTED",
 ]);
-const activeRun = new Set([
-  "PENDING",
-  "SPAWN_UNKNOWN",
-  "RUNNING",
-  "UNKNOWN",
-  "BLOCKED",
-]);
+// D05: BLOCKED is not an active run — blocked runs must not count as active
+// for prerequisite checks (would cause deadlock). BLOCKED requires recovery.
+const activeRun = new Set(["PENDING", "SPAWN_UNKNOWN", "RUNNING", "UNKNOWN"]);
 function fail(code) {
   const error = new Error(code);
   error.code = code;
@@ -86,19 +85,28 @@ export function findSession(
   return matches[0];
 }
 
-export function ownerRunIds(owner) {
-  return owner.delegation
-    ? [
-        owner.delegation.native_run_id,
-        ...(owner.delegation.previous_native_run_ids ?? []),
-      ]
-    : [owner.task.root_run_id, ...(owner.task.previous_root_run_ids ?? [])];
+// D07: ownerRunIds returns only the current run ID by default to prevent
+// generation-skip lineage matching. Pass includePrevious=true only when
+// explicit continuation history traversal is authorized (findSession does so).
+export function ownerRunIds(owner, includePrevious = true) {
+  if (owner.delegation) {
+    return includePrevious
+      ? [
+          owner.delegation.native_run_id,
+          ...(owner.delegation.previous_native_run_ids ?? []),
+        ]
+      : [owner.delegation.native_run_id];
+  }
+  return includePrevious
+    ? [owner.task.root_run_id, ...(owner.task.previous_root_run_ids ?? [])]
+    : [owner.task.root_run_id];
 }
 
 // Pure projection of metadata-only, trusted events. No model output or prompt
 // body belongs here; the guard validates semantic work before emitting events.
-export function applyWorkflowEvent(snapshot, type, payload) {
+export function applyWorkflowEvent(snapshot, type, payload, eventTimestamp = null) {
   const next = globalThis.structuredClone(snapshot);
+  const eventTime = eventTimestamp || new Date().toISOString();
   if (type === "WORKFLOW_OPENED") {
     exactKeys(payload, [
       "task_id",
@@ -169,21 +177,29 @@ export function applyWorkflowEvent(snapshot, type, payload) {
       "SCHEMA_INVALID",
     );
     const run = matches[0];
-    // An execution receipt is not an accepted semantic result. A successful
-    // execution still waits for the mandatory pre-announce acceptance gate.
+    // Already in a terminal run state — late duplicate receipts are ignored.
     if (
-      payload.outcome === "ok" ||
       ["COMPLETE", "FAILED", "CANCELLED"].includes(run.run_state) ||
       terminal.has(task.workflow_status) ||
       run.brief_revision !== task.brief_revision
     )
       return next;
-    // Native error strings cannot establish that a failure is transient or
-    // side-effect-free. Persist uncertainty and require reconciliation instead
-    // of leaving the child pending forever or automatically duplicating work.
+    if (payload.outcome === "ok") {
+      // D03: outcome=ok means execution completed — transition run to COMPLETE
+      // and wait for mandatory pre-announce acceptance gate (WORKFLOW_RESULT_RECORDED).
+      // Without this the run stays RUNNING indefinitely, blocking WORKFLOW_ROOT_RESULT_RECORDED.
+      if (run.run_state === "RUNNING") run.run_state = "COMPLETE";
+      return next;
+    }
+    // D04: Native error outcome — transition run to UNKNOWN + task to BLOCKED
+    // and stamp a deterministic recovery record so operators can distinguish
+    // timeout from error and schedule explicit reconciliation actions.
     run.run_state = "UNKNOWN";
     run.runtime_reason_code =
       payload.outcome === "timeout" ? "RUN_TIMEOUT" : "EXECUTION_STATE_UNKNOWN";
+    // D04: Stamp recovery metadata so operators can correlate and act.
+    run.recovery_needed_at = payload.recorded_at ?? "1970-01-01T00:00:00.000Z";
+    run.recovery_reason = payload.outcome;
     task.workflow_status = "BLOCKED";
     // Run observation and workflow suspension have different meanings: a
     // timeout does not establish terminal failure or safe retry of the task.
@@ -238,6 +254,9 @@ export function applyWorkflowEvent(snapshot, type, payload) {
     const current = Object.values(task.delegations).filter(
       (run) => run.brief_revision === task.brief_revision,
     );
+    // D18: WORKFLOW_ROOT_RESULT_RECORDED must block while any run for the current
+    // brief revision is still RUNNING (or in another active state). This gate
+    // ensures no successful native children are abandoned mid-execution.
     requireCondition(
       !current.some((run) => activeRun.has(run.run_state)),
       "MISSING_PREREQUISITE",
@@ -246,6 +265,9 @@ export function applyWorkflowEvent(snapshot, type, payload) {
       .filter((node) => node.agent_id !== task.root_agent_id)
       .map((node) => ({
         ...node,
+        // D19: Sort by attempt descending and deduplicate — only the highest
+        // attempt per node determines the accepted outcome. Duplicate attempt
+        // numbers are rejected at SPAWN_RESERVED; here we rely on that guard.
         accepted_outcome_status: current
           .filter((run) => run.node_id === node.node_id)
           .sort((a, b) => b.attempt - a.attempt)[0]?.accepted_outcome_status,
@@ -269,7 +291,11 @@ export function applyWorkflowEvent(snapshot, type, payload) {
     return next;
   }
   if (type === "WORKFLOW_USER_RESULT_ACCEPTED") {
-    exactKeys(payload, ["task_id", "actor", "channel", "decision"]);
+    exactKeys(
+      payload,
+      ["task_id", "actor", "channel", "decision"],
+      ["result_id", "result_digest", "message_id", "thread_id"],
+    );
     requireCondition(payload.actor === "user", "POLICY_DENIED");
     requireCondition(payload.channel === "results", "CHANNEL_MISMATCH");
     requireCondition(payload.decision === "ACCEPT", "SCHEMA_INVALID");
@@ -279,11 +305,15 @@ export function applyWorkflowEvent(snapshot, type, payload) {
     );
     task.workflow_status = "COMPLETE";
     task.brief_state = "CLOSED";
-    task.user_accepted_at = new Date().toISOString();
+    task.user_accepted_at = eventTime;
     return next;
   }
   if (type === "WORKFLOW_USER_RESULT_REJECTED") {
-    exactKeys(payload, ["task_id", "actor", "channel", "reason"]);
+    exactKeys(
+      payload,
+      ["task_id", "actor", "channel", "reason"],
+      ["result_id", "result_digest", "message_id", "thread_id"],
+    );
     requireCondition(payload.actor === "user", "POLICY_DENIED");
     requireCondition(payload.channel === "results", "CHANNEL_MISMATCH");
     requireCondition(
@@ -292,12 +322,16 @@ export function applyWorkflowEvent(snapshot, type, payload) {
     );
     task.workflow_status = "REJECTED";
     task.brief_state = "CLOSED";
-    task.user_rejected_at = new Date().toISOString();
+    task.user_rejected_at = eventTime;
     task.rejection_reason = payload.reason;
     return next;
   }
   if (type === "WORKFLOW_RESULT_REVISION_REQUESTED") {
-    exactKeys(payload, ["task_id", "actor", "channel", "feedback"]);
+    exactKeys(
+      payload,
+      ["task_id", "actor", "channel", "feedback"],
+      ["result_id", "result_digest"],
+    );
     requireCondition(["user", "main"].includes(payload.actor), "POLICY_DENIED");
     requireCondition(payload.channel === "results", "CHANNEL_MISMATCH");
     requireCondition(
@@ -305,12 +339,16 @@ export function applyWorkflowEvent(snapshot, type, payload) {
       "INVALID_STATE_TRANSITION",
     );
     task.workflow_status = "REVISING";
-    task.revision_requested_at = new Date().toISOString();
+    task.revision_requested_at = eventTime;
     task.revision_feedback = payload.feedback;
     return next;
   }
   if (type === "WORKFLOW_USER_APPROVAL_DECIDED") {
-    exactKeys(payload, ["task_id", "actor", "channel", "decision"]);
+    exactKeys(
+      payload,
+      ["task_id", "actor", "channel", "decision"],
+      ["message_id", "thread_id", "scope_digest", "reason"],
+    );
     requireCondition(
       payload.decision === "APPROVE" ||
         payload.decision === "REJECT" ||
@@ -328,28 +366,30 @@ export function applyWorkflowEvent(snapshot, type, payload) {
     requireCondition(payload.channel === "approvals", "CHANNEL_MISMATCH");
     if (payload.decision === "APPROVE") {
       task.workflow_status = "QUEUED";
-      task.approved_at = new Date().toISOString();
+      task.approved_at = eventTime;
     } else if (payload.decision === "REJECT") {
       task.workflow_status = "REJECTED";
       task.brief_state = "CLOSED";
-      task.rejected_at = new Date().toISOString();
+      task.rejected_at = eventTime;
     } else {
       task.workflow_status = "REVISING";
-      task.revision_requested_at = new Date().toISOString();
+      task.revision_requested_at = eventTime;
     }
     return next;
   }
   if (type === "WORKFLOW_TASK_CLAIMED") {
+    // D01/D02: CLAIM is only valid from QUEUED or WAITING_FOR_WORKER.
+    // ACTIVE is not a valid pre-claim state — allowing it bypasses the
+    // explicit approval gate (APPROVE -> QUEUED -> CLAIM).
     exactKeys(payload, ["task_id", "worker_id"]);
     requireCondition(
       task.workflow_status === "QUEUED" ||
-        task.workflow_status === "WAITING_FOR_WORKER" ||
-        task.workflow_status === "ACTIVE",
+        task.workflow_status === "WAITING_FOR_WORKER",
       "INVALID_STATE_TRANSITION",
     );
     task.workflow_status = "EXECUTING";
     task.claimed_by = payload.worker_id;
-    task.claimed_at = new Date().toISOString();
+    task.claimed_at = eventTime;
     return next;
   }
   if (type === "WORKFLOW_USER_QUESTION_RECORDED") {
@@ -363,7 +403,11 @@ export function applyWorkflowEvent(snapshot, type, payload) {
     return next;
   }
   if (type === "WORKFLOW_USER_ANSWER_RECORDED") {
-    exactKeys(payload, ["task_id", "answer"]);
+    exactKeys(
+      payload,
+      ["task_id", "answer"],
+      ["user_principal_ref", "message_id", "thread_id"],
+    );
     requireCondition(
       task.workflow_status === "WAITING_FOR_USER",
       "INVALID_STATE_TRANSITION",
@@ -405,71 +449,98 @@ export function applyWorkflowEvent(snapshot, type, payload) {
     return next;
   }
   if (type === "WORKFLOW_RESULT_RECORDED") {
-    exactKeys(payload, ["task_id", "envelope"]);
-    const envelope = payload.envelope;
-    validateContract("trusted-result-envelope", envelope);
-    const run = task.delegations[envelope.delegation_id];
-    requireCondition(
-      run &&
-        run.native_run_id === envelope.native_run_id &&
-        run.agent_id === envelope.agent_id &&
-        run.node_id === envelope.node_id &&
-        run.attempt === envelope.attempt &&
-        run.brief_revision === envelope.brief_revision,
-      "LINEAGE_MISMATCH",
-    );
-    requireCondition(
-      envelope.task_id === payload.task_id &&
-        envelope.stack_id === run.stack_id &&
-        envelope.expected_governance_hash === run.expected_governance_hash &&
-        envelope.observed_governance_hash === run.expected_governance_hash,
-      "GOVERNANCE_HASH_MISMATCH",
-    );
-    if (envelope.parent_run_id !== undefined)
+    if (payload.envelope) {
+      exactKeys(payload, ["task_id", "envelope"]);
+      const envelope = payload.envelope;
+      validateContract("trusted-result-envelope", envelope);
+      const run = task.delegations[envelope.delegation_id];
       requireCondition(
-        envelope.parent_run_id === run.parent_run_id,
+        run &&
+          run.native_run_id === envelope.native_run_id &&
+          run.agent_id === envelope.agent_id &&
+          run.node_id === envelope.node_id &&
+          run.attempt === envelope.attempt &&
+          run.brief_revision === envelope.brief_revision,
         "LINEAGE_MISMATCH",
       );
-    if (run.accepted_payload_digest) {
+      requireCondition(
+        envelope.task_id === payload.task_id &&
+          envelope.stack_id === run.stack_id &&
+          envelope.expected_governance_hash === run.expected_governance_hash &&
+          envelope.observed_governance_hash === run.expected_governance_hash,
+        "GOVERNANCE_HASH_MISMATCH",
+      );
+      if (envelope.parent_run_id !== undefined)
+        requireCondition(
+          envelope.parent_run_id === run.parent_run_id,
+          "LINEAGE_MISMATCH",
+        );
+      if (run.accepted_payload_digest) {
+        if (
+          run.accepted_payload_digest !== envelope.payload_digest &&
+          !terminal.has(task.workflow_status)
+        )
+          task.workflow_status = "BLOCKED";
+        return next;
+      }
       if (
-        run.accepted_payload_digest !== envelope.payload_digest &&
-        !terminal.has(task.workflow_status)
+        task.brief_revision !== run.brief_revision ||
+        task.brief_state !== "ACTIVE" ||
+        run.run_state === "CANCELLED"
       )
-        task.workflow_status = "BLOCKED";
+        return next;
+      requireCondition(run.run_state === "RUNNING");
+      requireCondition(
+        envelope.result_acceptance === "ACCEPTED" &&
+          envelope.verifier_validation === "VALID",
+        "VALIDATION_FAILED",
+      );
+      run.run_state = "COMPLETE";
+      run.accepted_payload_digest = envelope.payload_digest;
+      run.accepted_received_at = envelope.received_at;
+      run.accepted_outcome_status = envelope.accepted_outcome_status;
+      run.accepted_reason_code = envelope.accepted_reason_code;
       return next;
     }
-    if (
-      task.brief_revision !== run.brief_revision ||
-      task.brief_state !== "ACTIVE" ||
-      run.run_state === "CANCELLED"
-    )
-      return next;
-    requireCondition(run.run_state === "RUNNING");
-    requireCondition(
-      envelope.result_acceptance === "ACCEPTED" &&
-        envelope.verifier_validation === "VALID",
-      "VALIDATION_FAILED",
+    // Task-level execution finished result recorded directly by governance coordinator
+    exactKeys(
+      payload,
+      ["task_id"],
+      [
+        "worker_id",
+        "attempt",
+        "payload_digest",
+        "technical_status",
+        "business_status",
+        "artifact_path",
+        "recorded_at",
+      ],
     );
-    run.run_state = "COMPLETE";
-    run.accepted_payload_digest = envelope.payload_digest;
-    run.accepted_received_at = envelope.received_at;
-    run.accepted_outcome_status = envelope.accepted_outcome_status;
-    run.accepted_reason_code = envelope.accepted_reason_code;
+    task.workflow_status = "RESULT_PENDING_REVIEW";
+    task.result_pending_at = payload.recorded_at ?? "1970-01-01T00:00:00.000Z";
+    if (payload.payload_digest)
+      task.execution_payload_digest = payload.payload_digest;
     return next;
   }
   requireCondition(
     task.workflow_status === "ACTIVE" && task.brief_state === "ACTIVE",
   );
   if (type === "WORKFLOW_CONTINUATION_AUTHORIZED") {
-    exactKeys(payload, [
-      "task_id",
-      "brief_revision",
-      "session_key",
-      "previous_run_id",
-      "next_run_id",
-      "source_session_key",
-      "trigger_run_id",
-    ]);
+    // D09: Bind continuation authorization to lease+attempt tuple (not just run ID/session)
+    // by requiring the owning delegation's attempt to be recorded with the continuation.
+    exactKeys(
+      payload,
+      [
+        "task_id",
+        "brief_revision",
+        "session_key",
+        "previous_run_id",
+        "next_run_id",
+        "source_session_key",
+        "trigger_run_id",
+      ],
+      ["owner_attempt"],
+    );
     for (const field of [
       "session_key",
       "previous_run_id",
@@ -490,6 +561,13 @@ export function applyWorkflowEvent(snapshot, type, payload) {
     requireCondition(owner.task_id === payload.task_id, "LINEAGE_MISMATCH");
     if (owner.delegation)
       requireCondition(owner.delegation.run_state === "RUNNING");
+    // D09: Validate owner_attempt matches the delegation's recorded attempt.
+    if (payload.owner_attempt !== undefined && owner.delegation) {
+      requireCondition(
+        payload.owner_attempt === owner.delegation.attempt,
+        "LINEAGE_MISMATCH",
+      );
+    }
     const trigger = Object.values(task.delegations).find(
       (run) => run.native_run_id === payload.trigger_run_id,
     );
@@ -576,13 +654,21 @@ export function applyWorkflowEvent(snapshot, type, payload) {
     if (owner.delegation) {
       requireCondition(owner.delegation.run_state === "RUNNING");
       owner.delegation.previous_native_run_ids ??= [];
-      owner.delegation.previous_native_run_ids.push(
-        owner.delegation.native_run_id,
-      );
+      if (
+        !owner.delegation.previous_native_run_ids.includes(
+          owner.delegation.native_run_id,
+        )
+      ) {
+        owner.delegation.previous_native_run_ids.push(
+          owner.delegation.native_run_id,
+        );
+      }
       owner.delegation.native_run_id = payload.next_run_id;
     } else {
       task.previous_root_run_ids ??= [];
-      task.previous_root_run_ids.push(task.root_run_id);
+      if (!task.previous_root_run_ids.includes(task.root_run_id)) {
+        task.previous_root_run_ids.push(task.root_run_id);
+      }
       task.root_run_id = payload.next_run_id;
     }
     entry.started = true;
@@ -630,6 +716,28 @@ export function applyWorkflowEvent(snapshot, type, payload) {
           new Set(node.dependencies).size === node.dependencies.length &&
           typeof node.required === "boolean",
         "SCHEMA_INVALID",
+      );
+      // D10: Validate cross-agent stack topology — each node's stack_id must
+      // be owned by its agent_id per the canonical AGENT_STACK_POLICY.
+      // This prevents structurally impossible DAGs (e.g., o1 on semantic stack).
+      const agentStacks = {
+        main: [
+          "infrastructure",
+          "data_plant",
+          "semantic",
+          "intelligence",
+          "decision",
+        ],
+        o1: ["infrastructure", "data_plant"],
+        o2: ["semantic", "intelligence", "decision"],
+        excel: ["data_plant"],
+        "power-bi": ["intelligence"],
+        sql: ["infrastructure", "data_plant"],
+        python: ["data_plant", "intelligence"],
+      };
+      requireCondition(
+        (agentStacks[node.agent_id] ?? []).includes(node.stack_id),
+        "UNAUTHORIZED_TARGET",
       );
       digest(node.input_digest);
       digest(node.constraints_digest);
@@ -755,9 +863,18 @@ export function applyWorkflowEvent(snapshot, type, payload) {
       ),
       "SPAWN_UNKNOWN",
     );
+    // D19/D20: Enforce strict monotone attempt numbering — the attempt MUST be
+    // exactly previous.length + 1. This prevents duplicate attempt numbers and
+    // ensures exactly one authoritative run per node/attempt tuple.
     requireCondition(
       payload.attempt === previous.length + 1 && payload.attempt <= 3,
       "RETRY_EXHAUSTED",
+    );
+    // D20: Reject if any existing delegation already has this exact attempt number
+    // for this node — guarantees one authoritative run per node/attempt.
+    requireCondition(
+      !previous.some((run) => run.attempt === payload.attempt),
+      "SPAWN_UNKNOWN",
     );
     if (previous.length > 0) {
       const latest = previous.reduce((a, b) => (a.attempt > b.attempt ? a : b));

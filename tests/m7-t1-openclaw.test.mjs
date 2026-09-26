@@ -412,6 +412,9 @@ test("M7/T1 builds the exact minimal-tool, zero-command foundation", () => {
       discord: { enabled: true },
       "zink-governance": {
         enabled: true,
+        hooks: {
+          allowConversationAccess: true,
+        },
         config: {
           ledgerRoot: path.join(stateDir, "operator", "m7-t2", "ledger"),
           ownerDiscordId: identifiers.discordOwnerId,

@@ -40,6 +40,29 @@ TOPIC_TAGS: tuple[tuple[str, str], ...] = (
     ("Chinese", "#chinese"),
 )
 TOPIC_TO_TAG = dict(TOPIC_TAGS)
+CANONICAL_SLUG_TO_TOPIC: dict[str, str] = {
+    "ai": "AI",
+    "data": "Data",
+    "cloud": "Cloud",
+    "machine-learning": "Machine Learning",
+    "machinelearning": "Machine Learning",
+    "ml": "Machine Learning",
+    "logistics": "Logistics",
+    "supply-chain": "Supply Chain",
+    "supplychain": "Supply Chain",
+    "lscm": "Supply Chain",
+    "material-science": "Material Science",
+    "agricultural-science": "Agricultural Science",
+    "economic": "Economic",
+    "economics": "Economic",
+    "natural-science": "Natural Science",
+    "social-science": "Social Science",
+    "english": "English",
+    "chinese": "Chinese",
+}
+for slug, display_topic in CANONICAL_SLUG_TO_TOPIC.items():
+    if display_topic in TOPIC_TO_TAG:
+        TOPIC_TO_TAG[slug] = TOPIC_TO_TAG[display_topic]
 TAG_TO_TOPIC = {tag: topic for topic, tag in TOPIC_TAGS}
 ERROR_PRECEDENCE = {
     code: index

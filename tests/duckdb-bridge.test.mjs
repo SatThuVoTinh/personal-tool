@@ -252,4 +252,53 @@ describe("Governed DuckDB Windows Bridge (M7/T4 G4 & G5)", () => {
       },
     );
   });
+
+  test("Gate RC09.1: known SELECT fixture returns exact real rows and REAL_EXECUTED", async () => {
+    const res = await executeGovernedDuckDbQuery(validContext, {
+      query: "SELECT id, name FROM knowledge WHERE id = 1",
+      target_database: validDatabase,
+    });
+    assert.equal(res.execution_state, "REAL_EXECUTED");
+    assert.equal(res.row_count, 1);
+    assert.deepEqual(res.columns, ["id", "name"]);
+    assert.deepEqual(res.rows, [[1, "artifact-alpha"]]);
+  });
+
+  test("Gate RC09.2: query returning zero rows returns EMPTY_RESULT", async () => {
+    const res = await executeGovernedDuckDbQuery(validContext, {
+      query: "SELECT id, name FROM knowledge WHERE id = 9999",
+      target_database: validDatabase,
+    });
+    assert.equal(res.execution_state, "EMPTY_RESULT");
+    assert.equal(res.row_count, 0);
+    assert.deepEqual(res.rows, []);
+  });
+
+  test("Gate RC09.3: bad SQL referencing invalid column throws DUCKDB_EXECUTION_ERROR", async () => {
+    await assert.rejects(
+      async () => {
+        await executeGovernedDuckDbQuery(validContext, {
+          query: "SELECT invalid_column_xyz FROM knowledge",
+          target_database: validDatabase,
+        });
+      },
+      (err) => {
+        assert.equal(err.code, "DUCKDB_EXECUTION_ERROR");
+        return true;
+      },
+    );
+  });
+
+  test("Gate RC09.4: explicit simulationMode returns TEST_SIMULATION", async () => {
+    const res = await executeGovernedDuckDbQuery(
+      validContext,
+      {
+        query: validQuery,
+        target_database: validDatabase,
+      },
+      { simulationMode: true },
+    );
+    assert.equal(res.execution_state, "TEST_SIMULATION");
+    assert.equal(res.row_count, 2);
+  });
 });

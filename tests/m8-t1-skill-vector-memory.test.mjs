@@ -395,14 +395,17 @@ describe("M8/T1 Governed Skill Vector Store & Semantic Vector RAG", () => {
     assert.equal(excelMeta.subtopic, "formulas-and-automation");
     assert.equal(excelMeta.concept, "vlookup helper");
 
-    // Unmapped/unknown namespace: should fall back deterministically, never hallucinate
+    // Unmapped/unknown namespace: per B05 fix, must NOT silently fall back to "general".
+    // Unknown namespace is fail-closed → domain=AMBIGUOUS, primary_topic=AMBIGUOUS.
     const unknownMeta = deriveSemanticMetadata({
       namespace: ["custom-unknown-ns"],
       capability: "my-custom-tool",
     });
-    assert.equal(unknownMeta.domain, "general");
-    assert.equal(unknownMeta.primary_topic, "custom-unknown-ns");
+    assert.equal(unknownMeta.domain, "AMBIGUOUS");
+    assert.equal(unknownMeta.primary_topic, "AMBIGUOUS");
     assert.equal(unknownMeta.subtopic, null);
+    assert.equal(unknownMeta.ambiguous, true);
+    assert.deepEqual(unknownMeta.unresolved_namespaces, ["custom-unknown-ns"]);
   });
 
   // =========================================================================

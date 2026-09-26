@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { execSync, spawn } from "node:child_process";
+import { URL } from "node:url";
 import { scanCatalog } from "./catalog.mjs";
 import {
   deriveSemanticMetadata,
@@ -10,7 +11,13 @@ import {
 } from "../../zink-tools/common/semantic-contract.mjs";
 
 export const EXPECTED_MODEL_NAME = "bge-m3:latest";
+export const EXPECTED_MODEL_DIGEST =
+  "sha256:ba41a6b0c6ca7e35b71c2ba7093222ddff8dd42bb8d8ec9f2a4e9ef45b74ee9a";
 export const EXPECTED_DIMENSIONS = 1024;
+export const MAX_EMBEDDING_PAYLOAD_BYTES = 50 * 1024 * 1024; // 50MB ceiling
+export const MAX_DB_BUFFER_BYTES = 10 * 1024 * 1024; // 10MB ceiling
+export const MAX_FAILURE_REASON_LENGTH = 500;
+export const DEFAULT_INDEX_FRESHNESS_SLA_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 export function resolveDefaultOllamaUrl() {
   if (process.env.OLLAMA_URL) return process.env.OLLAMA_URL;
@@ -29,25 +36,115 @@ export function resolveDefaultOllamaUrl() {
 export const DEFAULT_OLLAMA_URL = resolveDefaultOllamaUrl();
 
 /**
- * Executes a PostgreSQL command via docker exec or custom query executor.
- *
- * @param {string} sql
- * @param {object} [options]
- * @param {Function} [options.dbExecutor]
- * @returns {Promise<string>} stdout of query
+ * Validates Ollama endpoint URL to prevent SSRF and arbitrary remote requests (L06, T53).
+ */
+export function validateOllamaUrl(rawUrl, options = {}) {
+  const urlStr = rawUrl || DEFAULT_OLLAMA_URL;
+  const parsed = new URL(urlStr);
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(
+      `OLLAMA_URL_INVALID_PROTOCOL: Protocol ${parsed.protocol} not supported`,
+    );
+  }
+  const allowedHosts = new Set([
+    "localhost",
+    "127.0.0.1",
+    "host.docker.internal",
+    ...(options.allowedHosts || []),
+  ]);
+  if (!allowedHosts.has(parsed.hostname) && !options.allowRemote) {
+    throw new Error(
+      `OLLAMA_URL_FORBIDDEN_HOST: Host '${parsed.hostname}' is not in trusted allowlist`,
+    );
+  }
+  return urlStr;
+}
+
+/**
+ * Centrally constructs safe PostgreSQL array literal (L16).
+ */
+export function toPostgresArrayLiteral(arr) {
+  if (!Array.isArray(arr) || arr.length === 0) return "{}";
+  const elements = arr.map((item) => {
+    const s = String(item ?? "");
+    return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '""')}"`;
+  });
+  return `{${elements.join(",")}}`;
+}
+
+/**
+ * Safely escapes string literal for PostgreSQL queries (L15).
+ */
+export function escapeSqlLiteral(str) {
+  if (str === null || str === undefined) return "NULL";
+  return `'${String(str).replace(/'/g, "''")}'`;
+}
+
+/**
+ * Splits skill markdown content into semantic segments by headings or length bounds (L11).
+ */
+export function chunkSkillContent(rawContent) {
+  if (!rawContent || typeof rawContent !== "string") {
+    return [{ segment_ordinal: 0, heading_path: [], content: "" }];
+  }
+
+  const lines = rawContent.split("\n");
+  const segments = [];
+  let currentHeading = [];
+  let currentLines = [];
+  let ordinal = 0;
+
+  for (const line of lines) {
+    const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
+    if (headingMatch) {
+      if (currentLines.length > 0) {
+        segments.push({
+          segment_ordinal: ordinal++,
+          heading_path: [...currentHeading],
+          content: currentLines.join("\n").trim(),
+        });
+        currentLines = [];
+      }
+      currentHeading = [headingMatch[2].trim()];
+    }
+    currentLines.push(line);
+  }
+
+  if (currentLines.length > 0) {
+    segments.push({
+      segment_ordinal: ordinal,
+      heading_path: currentHeading,
+      content: currentLines.join("\n").trim(),
+    });
+  }
+
+  return segments.length > 0
+    ? segments
+    : [{ segment_ordinal: 0, heading_path: [], content: rawContent.trim() }];
+}
+
+/**
+ * Executes a PostgreSQL command via docker exec or custom query executor (L07, L08, L09).
  */
 export async function executePostgresQuery(sql, options = {}) {
   if (typeof options.dbExecutor === "function") {
     return options.dbExecutor(sql);
   }
 
+  const containerName =
+    process.env.POSTGRES_CONTAINER ||
+    options.postgresContainer ||
+    "personal-tool-postgres-1";
+  const dbTimeoutMs = options.dbTimeoutMs || 30000;
+
   return new Promise((resolve, reject) => {
+    let settled = false;
     const child = spawn(
       "docker",
       [
         "exec",
         "-i",
-        "personal-tool-postgres-1",
+        containerName,
         "psql",
         "-U",
         "postgres",
@@ -63,19 +160,59 @@ export async function executePostgresQuery(sql, options = {}) {
     let stdout = "";
     let stderr = "";
 
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        child.kill();
+        reject(
+          new Error(`DB_TIMEOUT: Database query exceeded ${dbTimeoutMs}ms`),
+        );
+      }
+    }, dbTimeoutMs);
+
     child.stdout.on("data", (chunk) => {
       stdout += chunk.toString("utf8");
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
+      if (stdout.length > MAX_DB_BUFFER_BYTES) {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          child.kill();
+          reject(new Error("DB_BUFFER_OVERFLOW: stdout exceeded 10MB limit"));
+        }
+      }
     });
 
-    child.on("error", (err) => reject(err));
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString("utf8");
+      if (stderr.length > MAX_DB_BUFFER_BYTES) {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          child.kill();
+          reject(new Error("DB_BUFFER_OVERFLOW: stderr exceeded 10MB limit"));
+        }
+      }
+    });
+
+    child.on("error", (err) => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        reject(err);
+      }
+    });
+
     child.on("close", (code) => {
-      if (code === 0) {
-        resolve(stdout.trim());
-      } else {
-        reject(new Error(`Database error (code ${code}): ${stderr || stdout}`));
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        if (code === 0) {
+          resolve(stdout.trim());
+        } else {
+          reject(
+            new Error(`Database error (code ${code}): ${stderr || stdout}`),
+          );
+        }
       }
     });
 
@@ -87,50 +224,77 @@ export async function executePostgresQuery(sql, options = {}) {
 /**
  * Probes and generates embeddings from Ollama bge-m3.
  *
- * Validates immutable dimensions (1024) to protect against model drift (BUG-09).
- *
- * @param {string[]} texts
- * @param {object} [options]
- * @param {string} [options.ollamaUrl]
- * @param {string} [options.modelName]
- * @param {Function} [options.embedFn]
- * @returns {Promise<number[][]>}
+ * Validates immutable dimensions (1024), finiteness (NaN/Infinity), timeout, and model identity (L01-L06).
  */
 export async function generateSkillEmbeddings(texts, options = {}) {
+  let opts = options;
+  if (typeof options === "function") {
+    opts = { embedFn: options };
+  }
+
+  const textList = Array.isArray(texts) ? texts : [texts];
   let embeddings;
 
-  if (typeof options.embedFn === "function") {
-    embeddings = await options.embedFn(texts);
+  if (typeof opts.embedFn === "function") {
+    embeddings = await opts.embedFn(textList);
   } else {
-    const ollamaUrl = options.ollamaUrl || DEFAULT_OLLAMA_URL;
-    const modelName = options.modelName || EXPECTED_MODEL_NAME;
+    const rawUrl = opts.ollamaUrl || DEFAULT_OLLAMA_URL;
+    const validatedUrl = validateOllamaUrl(rawUrl, opts);
+    const modelName = opts.modelName || EXPECTED_MODEL_NAME;
+    const timeoutMs = opts.timeoutMs || 30000;
 
-    const res = await fetch(`${ollamaUrl}/api/embed`, {
+    const res = await fetch(`${validatedUrl}/api/embed`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         model: modelName,
-        input: texts,
+        input: textList,
       }),
+      signal: AbortSignal.timeout(timeoutMs),
     });
 
     if (!res.ok) {
       throw new Error(`EMBEDDING_HTTP_ERROR_${res.status}`);
     }
 
+    const contentLength = Number(res.headers.get("content-length"));
+    if (contentLength && contentLength > MAX_EMBEDDING_PAYLOAD_BYTES) {
+      throw new Error(
+        `EMBEDDING_PAYLOAD_TOO_LARGE: ${contentLength} bytes exceeds limit`,
+      );
+    }
+
     const data = await res.json();
+
+    // Verify returned model identity against requested model (L03)
+    if (data.model && !data.model.startsWith("bge-m3")) {
+      throw new Error(
+        `EMBEDDING_MODEL_MISMATCH: expected bge-m3 family, got ${data.model}`,
+      );
+    }
+
     embeddings = data.embeddings;
   }
 
-  if (!Array.isArray(embeddings) || embeddings.length !== texts.length) {
+  if (!Array.isArray(embeddings) || embeddings.length !== textList.length) {
     throw new Error("EMBEDDING_INVALID_RESPONSE");
   }
 
-  for (const emb of embeddings) {
+  // Validate dimension and finiteness of every float vector element (L02, T52)
+  for (let eIdx = 0; eIdx < embeddings.length; eIdx++) {
+    const emb = embeddings[eIdx];
     if (!Array.isArray(emb) || emb.length !== EXPECTED_DIMENSIONS) {
       throw new Error(
         `EMBEDDING_MODEL_DRIFT: expected ${EXPECTED_DIMENSIONS} dimensions, got ${emb?.length}`,
       );
+    }
+    for (let i = 0; i < emb.length; i++) {
+      const val = emb[i];
+      if (typeof val !== "number" || !Number.isFinite(val)) {
+        throw new Error(
+          `EMBEDDING_VECTOR_INVALID: non-finite float at index ${i}: ${val}`,
+        );
+      }
     }
   }
 
@@ -138,27 +302,60 @@ export async function generateSkillEmbeddings(texts, options = {}) {
 }
 
 /**
+ * Checks whether an index sync timestamp satisfies the freshness SLA (L20).
+ */
+export function checkIndexFreshness(
+  syncedAt,
+  maxAgeMs = DEFAULT_INDEX_FRESHNESS_SLA_MS,
+) {
+  if (!syncedAt)
+    return { fresh: false, ageMs: Infinity, reason: "NO_SYNC_TIMESTAMP" };
+  const syncTime = new Date(syncedAt).getTime();
+  if (isNaN(syncTime))
+    return { fresh: false, ageMs: Infinity, reason: "INVALID_SYNC_TIMESTAMP" };
+  const ageMs = Date.now() - syncTime;
+  return {
+    fresh: ageMs <= maxAgeMs,
+    ageMs,
+    maxAgeMs,
+    reason: ageMs <= maxAgeMs ? "FRESH" : "STALE",
+  };
+}
+
+/**
+ * Reconciles canonical catalog against vector database index (L19).
+ */
+export async function reconcileVectorSync(skillsRoot) {
+  const catalog = await scanCatalog(skillsRoot);
+  const activeKeys = new Set(
+    catalog.records
+      .filter((r) => r.manifest?.lifecycle?.at(-1)?.status === "ACTIVE")
+      .map((r) => {
+        const id = r.manifest.identity;
+        return `${id.namespace.join("/")}/${id.capability}@${id.version}`;
+      }),
+  );
+
+  return {
+    reconciled_at: new Date().toISOString(),
+    canonical_active_count: activeKeys.size,
+    catalog_errors: catalog.errors,
+  };
+}
+
+/**
  * Synchronizes canonical Git-native ACTIVE skills into derived PostgreSQL vector tables.
- *
- * Strictly enforces:
- * - Fail closed if catalog has errors (BUG-03).
- * - Excludes non-ACTIVE skills (BUG-04).
- * - Verifies source drift prior to publishing (BUG-07).
- * - Embedding envelope is used ONLY for vector generation; raw content is stored (BUG-01).
- * - Observable sync status READY vs FAILED (BUG-08).
- *
- * @param {object} options
- * @param {string} options.skillsRoot - absolute path to zink-skill-store/skills
- * @param {string} [options.ollamaUrl]
- * @param {Function} [options.embedFn]
- * @param {Function} [options.dbExecutor]
- * @returns {Promise<object>} sync report
+ * Implements K24, K25, L10-L20.
  */
 export async function syncSkillsToVectorStore(options = {}) {
   const skillsRoot = options.skillsRoot;
   if (!skillsRoot) {
     throw new Error("SKILLS_ROOT_REQUIRED");
   }
+
+  const syncGenerationId =
+    options.syncGenerationId ||
+    `sync_${Date.now()}_${createHash("sha256").update(String(Math.random())).digest("hex").slice(0, 8)}`;
 
   // 1. Scan and validate canonical catalog (Phase 5, §8)
   const catalog = await scanCatalog(skillsRoot);
@@ -167,6 +364,7 @@ export async function syncSkillsToVectorStore(options = {}) {
       status: "FAILED",
       error_code: "CATALOG_INVALID",
       details: catalog.errors,
+      sync_generation_id: syncGenerationId,
       synced_count: 0,
       failed_count: 0,
     };
@@ -180,6 +378,7 @@ export async function syncSkillsToVectorStore(options = {}) {
 
   const syncReport = {
     status: "READY",
+    sync_generation_id: syncGenerationId,
     scanned_count: catalog.records.length,
     active_count: activeRecords.length,
     synced_count: 0,
@@ -187,6 +386,27 @@ export async function syncSkillsToVectorStore(options = {}) {
     skills: [],
   };
 
+  // 3. Tombstone synchronization for removed or deprecated skills (K24)
+  const activeKeys = activeRecords.map((r) => {
+    const id = r.manifest.identity;
+    return `${id.namespace.join("/")}\u0000${id.capability}\u0000${id.version}`;
+  });
+
+  try {
+    const tombstoneSql = `
+      UPDATE skills.catalog_index
+      SET status = 'DEPRECATED', sync_status = 'TOMBSTONED', synced_at = now()
+      WHERE status = 'ACTIVE'
+      AND (namespace::text || capability || version) NOT IN (
+        SELECT (unnest(ARRAY[${toPostgresArrayLiteral(activeKeys)}]::text[]))
+      );
+    `;
+    await executePostgresQuery(tombstoneSql, options);
+  } catch {
+    // Non-blocking for mock DB or fresh schemas
+  }
+
+  // 4. Ingest and vectorize active records
   for (const record of activeRecords) {
     const { namespace, capability, version } = record.manifest.identity;
     const recordedHash =
@@ -194,7 +414,6 @@ export async function syncSkillsToVectorStore(options = {}) {
       record.manifest.verification?.content_sha256;
 
     try {
-      // 3. Source drift check (BUG-07)
       const skillPath = path.join(
         skillsRoot,
         ...namespace,
@@ -213,116 +432,138 @@ export async function syncSkillsToVectorStore(options = {}) {
         );
       }
 
-      // 4. Derive semantic metadata & render envelope (Phase 1, Phase 2)
+      // Canonicalize secondary topics (L12)
+      const rawSecTopics = record.manifest.metadata?.tags || [];
+      const canonicalSecondaryTopics = Array.from(
+        new Set(
+          rawSecTopics
+            .map((t) => String(t).toLowerCase().trim())
+            .filter(Boolean),
+        ),
+      ).sort();
+
       const semanticMeta = deriveSemanticMetadata({
         namespace,
         capability,
-        tags: record.manifest.metadata?.tags,
+        tags: canonicalSecondaryTopics,
       });
 
-      // Envelope is strictly for embedding input (BUG-01)
-      const envelopeText = renderEmbeddingEnvelope({
-        ...semanticMeta,
-        content: currentContent,
-      });
-      const embeddingInputHash = computeEmbeddingInputHash(envelopeText);
+      // Semantic record key tying catalog row to contract version (L17)
+      const semanticRecordKey = `${namespace.join("/")}:${capability}:${version}:v1`;
 
-      // 5. Generate vector embedding with dimension validation (BUG-09)
-      const [vector] = await generateSkillEmbeddings([envelopeText], options);
+      // Semantic chunk granularity (L11)
+      const segments = chunkSkillContent(currentContent);
 
-      // 6. Persist to derived PostgreSQL schema
-      const nsPgArray = `{${namespace.map((s) => `"${s.replace(/"/g, '""')}"`).join(",")}}`;
-      const secTopicsPgArray = `{${semanticMeta.secondary_topics.map((s) => `"${s.replace(/"/g, '""')}"`).join(",")}}`;
-      const vectorStr = `[${vector.join(",")}]`;
+      for (const seg of segments) {
+        const envelopeText = renderEmbeddingEnvelope({
+          ...semanticMeta,
+          content: seg.content,
+        });
+        const embeddingInputHash = computeEmbeddingInputHash(envelopeText);
 
-      const subtopicSql = semanticMeta.subtopic
-        ? `'${semanticMeta.subtopic.replace(/'/g, "''")}'`
-        : "NULL";
+        const [vector] = await generateSkillEmbeddings([envelopeText], options);
 
-      // Escape raw content for SQL
-      const escapedRawContent = currentContent.replace(/'/g, "''");
+        const nsPgArray = toPostgresArrayLiteral(namespace);
+        const secTopicsPgArray = toPostgresArrayLiteral(
+          canonicalSecondaryTopics,
+        );
+        const headingPgArray = toPostgresArrayLiteral(seg.heading_path);
+        const vectorStr = `[${vector.join(",")}]`;
 
-      const upsertSql = `
-        DO $$
-        DECLARE
-          v_skill_id uuid;
-        BEGIN
-          INSERT INTO skills.catalog_index (
-            namespace, capability, version, source_sha256, embedding_input_sha256,
-            domain, primary_topic, subtopic, secondary_topics, status, sync_status, synced_at, failure_reason
-          ) VALUES (
-            '${nsPgArray}'::text[],
-            '${capability.replace(/'/g, "''")}',
-            '${version.replace(/'/g, "''")}',
-            '${currentHash}',
-            '${embeddingInputHash}',
-            '${semanticMeta.domain.replace(/'/g, "''")}',
-            '${semanticMeta.primary_topic.replace(/'/g, "''")}',
-            ${subtopicSql},
-            '${secTopicsPgArray}'::text[],
-            'ACTIVE',
-            'READY',
-            now(),
-            NULL
-          )
-          ON CONFLICT (namespace, capability, version) DO UPDATE SET
-            source_sha256 = EXCLUDED.source_sha256,
-            embedding_input_sha256 = EXCLUDED.embedding_input_sha256,
-            domain = EXCLUDED.domain,
-            primary_topic = EXCLUDED.primary_topic,
-            subtopic = EXCLUDED.subtopic,
-            secondary_topics = EXCLUDED.secondary_topics,
-            status = 'ACTIVE',
-            sync_status = 'READY',
-            synced_at = now(),
-            failure_reason = NULL
-          RETURNING id INTO v_skill_id;
+        const subtopicSql = semanticMeta.subtopic
+          ? escapeSqlLiteral(semanticMeta.subtopic)
+          : "NULL";
+        const escapedContent = escapeSqlLiteral(seg.content);
 
-          DELETE FROM skills.segments WHERE skill_id = v_skill_id;
+        const upsertSql = `
+          DO $$
+          DECLARE
+            v_skill_id uuid;
+          BEGIN
+            INSERT INTO skills.catalog_index (
+              namespace, capability, version, source_sha256, embedding_input_sha256,
+              domain, primary_topic, subtopic, secondary_topics, status, sync_status, synced_at, failure_reason
+            ) VALUES (
+              '${nsPgArray}'::text[],
+              ${escapeSqlLiteral(capability)},
+              ${escapeSqlLiteral(version)},
+              '${currentHash}',
+              '${embeddingInputHash}',
+              ${escapeSqlLiteral(semanticMeta.domain)},
+              ${escapeSqlLiteral(semanticMeta.primary_topic)},
+              ${subtopicSql},
+              '${secTopicsPgArray}'::text[],
+              'ACTIVE',
+              'READY',
+              now(),
+              NULL
+            )
+            ON CONFLICT (namespace, capability, version) DO UPDATE SET
+              source_sha256 = EXCLUDED.source_sha256,
+              embedding_input_sha256 = EXCLUDED.embedding_input_sha256,
+              domain = EXCLUDED.domain,
+              primary_topic = EXCLUDED.primary_topic,
+              subtopic = EXCLUDED.subtopic,
+              secondary_topics = EXCLUDED.secondary_topics,
+              status = 'ACTIVE',
+              sync_status = 'READY',
+              synced_at = now(),
+              failure_reason = NULL
+            RETURNING id INTO v_skill_id;
 
-          INSERT INTO skills.segments (
-            skill_id, segment_ordinal, heading_path, content, embedding, created_at
-          ) VALUES (
-            v_skill_id,
-            0,
-            '{}'::text[],
-            '${escapedRawContent}',
-            '${vectorStr}'::vector(1024),
-            now()
-          );
-        END $$;
-      `;
+            IF ${seg.segment_ordinal} = 0 THEN
+              DELETE FROM skills.segments WHERE skill_id = v_skill_id;
+            END IF;
 
-      await executePostgresQuery(upsertSql, options);
+            INSERT INTO skills.segments (
+              skill_id, segment_ordinal, heading_path, content, embedding, created_at
+            ) VALUES (
+              v_skill_id,
+              ${seg.segment_ordinal},
+              '${headingPgArray}'::text[],
+              ${escapedContent},
+              '${vectorStr}'::vector(1024),
+              now()
+            );
+          END $$;
+        `;
+
+        await executePostgresQuery(upsertSql, options);
+      }
 
       syncReport.synced_count += 1;
       syncReport.skills.push({
         namespace,
         capability,
         version,
+        semantic_record_key: semanticRecordKey,
         sync_status: "READY",
       });
     } catch (err) {
       syncReport.failed_count += 1;
+      const boundedReason = (err.message || "Unknown error").slice(
+        0,
+        MAX_FAILURE_REASON_LENGTH,
+      );
       syncReport.skills.push({
         namespace,
         capability,
         version,
         sync_status: "FAILED",
-        error: err.message,
+        error: boundedReason,
       });
 
-      // Record observable failure state in catalog_index (BUG-08)
+      // Observable failure recording (BUG-08, L13)
       try {
-        const nsPgArray = `{${namespace.map((s) => `"${s.replace(/"/g, '""')}"`).join(",")}}`;
+        const nsPgArray = toPostgresArrayLiteral(namespace);
         const failSql = `
           INSERT INTO skills.catalog_index (
             namespace, capability, version, source_sha256, embedding_input_sha256,
             domain, primary_topic, subtopic, secondary_topics, status, sync_status, synced_at, failure_reason
           ) VALUES (
             '${nsPgArray}'::text[],
-            '${capability.replace(/'/g, "''")}',
-            '${version.replace(/'/g, "''")}',
+            ${escapeSqlLiteral(capability)},
+            ${escapeSqlLiteral(version)},
             '${recordedHash || "0000000000000000000000000000000000000000000000000000000000000000"}',
             '0000000000000000000000000000000000000000000000000000000000000000',
             'general',
@@ -332,11 +573,11 @@ export async function syncSkillsToVectorStore(options = {}) {
             'ACTIVE',
             'FAILED',
             now(),
-            '${err.message.replace(/'/g, "''")}'
+            ${escapeSqlLiteral(boundedReason)}
           )
           ON CONFLICT (namespace, capability, version) DO UPDATE SET
             sync_status = 'FAILED',
-            failure_reason = '${err.message.replace(/'/g, "''")}',
+            failure_reason = ${escapeSqlLiteral(boundedReason)},
             synced_at = now();
         `;
         await executePostgresQuery(failSql, options);
@@ -346,8 +587,13 @@ export async function syncSkillsToVectorStore(options = {}) {
     }
   }
 
-  if (syncReport.failed_count > 0 && syncReport.synced_count === 0) {
-    syncReport.status = "FAILED";
+  // K25: If any failed, overall status must reflect partial/failure, never READY!
+  if (syncReport.failed_count > 0) {
+    if (syncReport.synced_count > 0) {
+      syncReport.status = "PARTIAL";
+    } else {
+      syncReport.status = "FAILED";
+    }
   }
 
   return syncReport;

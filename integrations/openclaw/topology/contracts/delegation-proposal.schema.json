@@ -7,7 +7,7 @@
   "required": ["schema_version", "governance_version", "node_id", "inputs", "input_refs", "constraints", "validation_criteria"],
   "properties": {
     "schema_version": { "const": "1.0.0" },
-    "governance_version": { "enum": ["m7-t2-r12", "m7-t5-r13"] },
+    "governance_version": { "enum": ["m7-t2-r12", "m7-t5-r13", "m8-t2-r9", "m8-t2.1-r3"] },
     "node_id": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$" },
     "inputs": { "type": "string", "maxLength": 16384 },
     "input_refs": { "type": "array", "maxItems": 16, "items": { "$ref": "governed-reference.schema.json" } },
