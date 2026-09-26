@@ -1197,12 +1197,22 @@ export function buildComponentCustomId(actionType, taskId, revision) {
 // A16: Parse a custom_id back to its components. Returns null if malformed.
 export function parseComponentCustomId(customId) {
   if (typeof customId !== "string") return null;
+  let normalized = customId.trim();
+  if (normalized.startsWith("occomp:cid=")) {
+    normalized = normalized.slice("occomp:cid=".length).split(";")[0];
+  }
+  if (
+    !normalized.startsWith("zink:") &&
+    (normalized.startsWith("approval:") || normalized.startsWith("result:"))
+  ) {
+    normalized = `zink:${normalized}`;
+  }
   // Find the matching prefix from the namespace
   for (const [key, prefix] of Object.entries(
     DISCORD_COMPONENT_ACTION_NAMESPACE,
   )) {
-    if (customId.startsWith(prefix + ":")) {
-      const rest = customId.slice(prefix.length + 1);
+    if (normalized.startsWith(prefix + ":")) {
+      const rest = normalized.slice(prefix.length + 1);
       // rest is "{taskId}:{revision}" but taskId may contain colons → split from end
       const lastColon = rest.lastIndexOf(":");
       if (lastColon === -1) return null;

@@ -3642,6 +3642,50 @@ export default {
       };
     });
 
+    // Ensure OpenClaw's internal Discord component registry resolves zink governance buttons
+    const DISCORD_COMPONENT_ENTRIES_KEY = Symbol.for("openclaw.discord.componentEntries");
+    const ownerDiscordId = config.ownerDiscordId || "854005217715814432";
+    let componentEntriesStore = globalThis[DISCORD_COMPONENT_ENTRIES_KEY];
+    if (!componentEntriesStore || !(componentEntriesStore instanceof Map)) {
+      componentEntriesStore = new Map();
+      globalThis[DISCORD_COMPONENT_ENTRIES_KEY] = componentEntriesStore;
+    }
+    if (!componentEntriesStore._zinkPatched) {
+      const origGet = componentEntriesStore.get.bind(componentEntriesStore);
+      const origHas = componentEntriesStore.has.bind(componentEntriesStore);
+      componentEntriesStore.get = function (id) {
+        const found = origGet(id);
+        if (found) return found;
+        if (
+          typeof id === "string" &&
+          (id.startsWith("zink:") || id.startsWith("occomp:cid=zink:"))
+        ) {
+          const rawId = id.startsWith("occomp:cid=")
+            ? id.slice("occomp:cid=".length).split(";")[0]
+            : id;
+          return {
+            id: rawId,
+            kind: "button",
+            label: "Zink Governance Action",
+            callbackData: rawId,
+            reusable: true,
+            allowedUsers: [ownerDiscordId],
+          };
+        }
+        return undefined;
+      };
+      componentEntriesStore.has = function (id) {
+        if (origHas(id)) return true;
+        if (
+          typeof id === "string" &&
+          (id.startsWith("zink:") || id.startsWith("occomp:cid=zink:"))
+        )
+          return true;
+        return false;
+      };
+      componentEntriesStore._zinkPatched = true;
+    }
+
     // Interactive button callback handler for Discord components (namespace: "zink")
     if (typeof api.registerInteractiveHandler === "function") {
       api.registerInteractiveHandler({
@@ -3650,16 +3694,19 @@ export default {
         async handler(ctx) {
           try {
             const customId =
+              ctx.interaction?.payload ||
               ctx.interaction?.data?.custom_id ||
               ctx.interaction?.data ||
               ctx.customId ||
               "";
             const parsed = parseComponentCustomId(customId);
             if (!parsed) {
-              await ctx.respond?.reply?.({
-                text: "❌ Thao tác không hợp lệ.",
-                ephemeral: true,
-              });
+              const invalidMsg = "❌ Thao tác không hợp lệ.";
+              if (typeof ctx.respond?.followUp === "function") {
+                await ctx.respond.followUp({ text: invalidMsg, ephemeral: true });
+              } else if (typeof ctx.respond?.reply === "function") {
+                await ctx.respond.reply({ text: invalidMsg, ephemeral: true });
+              }
               return;
             }
 
@@ -3670,10 +3717,12 @@ export default {
               ctx.interaction?.user?.id ||
               ctx.interaction?.member?.user?.id;
             if (senderSnowflake !== ownerId) {
-              await ctx.respond?.reply?.({
-                text: "⛔ Bạn không có quyền phê duyệt kế hoạch này. Chỉ User/Owner mới có thẩm quyền.",
-                ephemeral: true,
-              });
+              const unauthMsg = "⛔ Bạn không có quyền phê duyệt kế hoạch này. Chỉ User/Owner mới có thẩm quyền.";
+              if (typeof ctx.respond?.followUp === "function") {
+                await ctx.respond.followUp({ text: unauthMsg, ephemeral: true });
+              } else if (typeof ctx.respond?.reply === "function") {
+                await ctx.respond.reply({ text: unauthMsg, ephemeral: true });
+              }
               return;
             }
 
@@ -3711,10 +3760,12 @@ export default {
               ? "RESULT_PENDING_REVIEW"
               : "APPROVAL_PENDING";
 
-            const threadId =
+            const threadId = (
               ctx.conversationId ||
               ctx.interaction?.channelId ||
-              ctx.interaction?.threadId;
+              ctx.interaction?.threadId ||
+              ""
+            ).replace(/^channel:/, "");
 
             const res = handleDiscordAction({
               actor: "user",
@@ -3748,7 +3799,12 @@ export default {
                   ? `🎉 **Đã nghiệm thu kết quả thành công!**\n- **Mã tác vụ:** \`${parsed.taskId}\`\n- **Trạng thái:** \`${res.nextState}\` (Hoàn tất thành công và lưu trữ an toàn trong sổ cái governance)`
                   : `✅ **Đã ghi nhận ${actionLabel} từ anh Zink!**\n- **Mã tác vụ:** \`${parsed.taskId}\`\n- **Trạng thái:** \`${res.nextState}\` (Đã đưa vào hàng đợi thực thi)`;
 
-              if (typeof ctx.respond?.reply === "function") {
+              if (typeof ctx.respond?.followUp === "function") {
+                await ctx.respond.followUp({
+                  text: confirmText,
+                  ephemeral: false,
+                });
+              } else if (typeof ctx.respond?.reply === "function") {
                 await ctx.respond.reply({
                   text: confirmText,
                   ephemeral: false,
@@ -3823,19 +3879,23 @@ export default {
                 }
               }
             } else {
-              await ctx.respond?.reply?.({
-                text: `⚠️ Không thể thực hiện: ${res.reason || "Lỗi xử lý"}`,
-                ephemeral: true,
-              });
+              const errMsg = `⚠️ Không thể thực hiện: ${res.reason || "Lỗi xử lý"}`;
+              if (typeof ctx.respond?.followUp === "function") {
+                await ctx.respond.followUp({ text: errMsg, ephemeral: true });
+              } else if (typeof ctx.respond?.reply === "function") {
+                await ctx.respond.reply({ text: errMsg, ephemeral: true });
+              }
             }
           } catch (intErr) {
             api.logger?.error?.(
               `[zink-governance] interactive callback error: ${intErr?.message}`,
             );
-            await ctx.respond?.reply?.({
-              text: `⚠️ Đã xảy ra lỗi: ${intErr?.message}`,
-              ephemeral: true,
-            });
+            const errMsg = `⚠️ Đã xảy ra lỗi: ${intErr?.message}`;
+            if (typeof ctx.respond?.followUp === "function") {
+              await ctx.respond.followUp({ text: errMsg, ephemeral: true });
+            } else if (typeof ctx.respond?.reply === "function") {
+              await ctx.respond.reply({ text: errMsg, ephemeral: true });
+            }
           }
         },
       });
