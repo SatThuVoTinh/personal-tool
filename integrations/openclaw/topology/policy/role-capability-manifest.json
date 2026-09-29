@@ -1,11 +1,14 @@
 {
   "schema_version": "1.0.0",
-  "governance_version": "m8-t2.2-r4",
+  "governance_version": "m8-t2.3-r5",
   "runtime_version": "2026.6.34",
   "roles": [
     {
       "id": "main",
-      "allowAgents": ["o1", "o2"],
+      "allowAgents": [
+        "o1",
+        "o2"
+      ],
       "tools": [
         "agents_list",
         "session_status",
@@ -16,39 +19,63 @@
     },
     {
       "id": "o1",
-      "allowAgents": ["excel", "sql", "python"],
-      "tools": ["sessions_spawn", "sessions_yield"],
+      "allowAgents": [
+        "excel",
+        "sql",
+        "python"
+      ],
+      "tools": [
+        "sessions_spawn",
+        "sessions_yield"
+      ],
       "capabilities": []
     },
     {
       "id": "o2",
-      "allowAgents": ["power-bi", "python"],
-      "tools": ["sessions_spawn", "sessions_yield"],
-      "capabilities": ["zink_n8n"]
+      "allowAgents": [
+        "power-bi",
+        "python"
+      ],
+      "tools": [
+        "sessions_spawn",
+        "sessions_yield"
+      ],
+      "capabilities": [
+        "zink_n8n"
+      ]
     },
     {
       "id": "excel",
       "allowAgents": [],
       "tools": [],
-      "capabilities": ["zink_excel"]
+      "capabilities": [
+        "zink_excel"
+      ]
     },
     {
       "id": "power-bi",
       "allowAgents": [],
       "tools": [],
-      "capabilities": ["zink_power_bi"]
+      "capabilities": [
+        "zink_power_bi"
+      ]
     },
     {
       "id": "sql",
       "allowAgents": [],
       "tools": [],
-      "capabilities": ["zink_sql"]
+      "capabilities": [
+        "zink_sql"
+      ]
     },
     {
       "id": "python",
       "allowAgents": [],
       "tools": [],
-      "capabilities": ["zink_python", "zink_n8n"]
+      "capabilities": [
+        "zink_python",
+        "zink_n8n"
+      ]
     }
   ]
 }

@@ -18,7 +18,14 @@
       "const": "1.0.0"
     },
     "governance_version": {
-      "enum": ["m7-t2-r12", "m7-t5-r13", "m8-t2-r9", "m8-t2.1-r3", "m8-t2.2-r4", "m8-t2.3-r5"]
+      "enum": [
+        "m7-t2-r12",
+        "m7-t5-r13",
+        "m8-t2-r9",
+        "m8-t2.1-r3",
+        "m8-t2.2-r4",
+        "m8-t2.3-r5"
+      ]
     },
     "sequence": {
       "type": "integer",
@@ -479,6 +486,11 @@
                   "format": "date-time"
                 },
                 "user_accepted_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "user_blocked_at": {
+                  "description": "When the owner accepted BLOCKED as the authoritative outcome of a reviewed result.",
                   "type": "string",
                   "format": "date-time"
                 },

@@ -19,7 +19,14 @@
       "const": "1.0.0"
     },
     "governance_version": {
-      "enum": ["m7-t2-r12", "m7-t5-r13", "m8-t2-r9", "m8-t2.1-r3", "m8-t2.2-r4", "m8-t2.3-r5"]
+      "enum": [
+        "m7-t2-r12",
+        "m7-t5-r13",
+        "m8-t2-r9",
+        "m8-t2.1-r3",
+        "m8-t2.2-r4",
+        "m8-t2.3-r5"
+      ]
     },
     "sequence": {
       "type": "integer",
@@ -36,6 +43,7 @@
         "WORKFLOW_ROOT_RESULT_RECORDED",
         "WORKFLOW_USER_RESULT_ACCEPTED",
         "WORKFLOW_USER_RESULT_REJECTED",
+        "WORKFLOW_USER_RESULT_BLOCKED",
         "WORKFLOW_RESULT_REVISION_REQUESTED",
         "WORKFLOW_USER_APPROVAL_DECIDED",
         "WORKFLOW_TASK_CLAIMED",
@@ -786,6 +794,66 @@
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 4096
+              },
+              "result_id": {
+                "type": ["string", "null"],
+                "maxLength": 128
+              },
+              "result_digest": {
+                "type": ["string", "null"],
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "message_id": {
+                "type": ["string", "null"],
+                "pattern": "^[1-9][0-9]{16,19}$"
+              },
+              "thread_id": {
+                "type": ["string", "null"],
+                "maxLength": 256
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "WORKFLOW_USER_RESULT_BLOCKED"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "description": "Owner verdict: the owner reviewed the result and accepted BLOCKED as the authoritative final outcome. This is NOT an execution or reconciliation event; an execution event that merely produces a blocked condition (WORKFLOW_NATIVE_ENDED, a duplicate root result, a conflicting delegated result) must not be expressed as this verdict.",
+            "additionalProperties": false,
+            "required": ["task_id", "actor", "channel", "decision", "reason"],
+            "properties": {
+              "task_id": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "actor": {
+                "const": "user"
+              },
+              "channel": {
+                "const": "results"
+              },
+              "decision": {
+                "const": "BLOCK"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              "reason_code": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
               },
               "result_id": {
                 "type": ["string", "null"],

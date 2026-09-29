@@ -535,6 +535,51 @@ export function applyWorkflowEvent(
     task.rejection_reason = payload.reason;
     return next;
   }
+  if (type === "WORKFLOW_USER_RESULT_BLOCKED") {
+    // Owner verdict (Phase C, 2026-09-29): the owner reviewed the result and
+    // accepted BLOCKED as the authoritative final outcome. This exists because
+    // the verdict model had no way to express that meaning: a root result whose
+    // outcome is BLOCKED used to end the task at BLOCKED, and under the verdict
+    // model it lands in RESULT_PENDING_REVIEW, from which COMPLETE / REJECTED /
+    // REVISING / CANCELLED were the only edges. REJECTED is NOT the same claim
+    // (a rejected result is one the owner refused, not one they accepted as
+    // blocked), so the gap was closed with its own verdict rather than by
+    // borrowing an existing state.
+    //
+    // It is deliberately distinct from an execution event that merely PRODUCES a
+    // blocked condition (WORKFLOW_NATIVE_ENDED transient failure, a duplicate
+    // root result, a conflicting delegated result). Those are not owner
+    // judgements and must never be expressed as this event.
+    exactKeys(
+      payload,
+      ["task_id", "actor", "channel", "decision", "reason"],
+      ["reason_code", "result_id", "result_digest", "message_id", "thread_id"],
+    );
+    requireCondition(payload.actor === "user", "POLICY_DENIED");
+    requireCondition(payload.channel === "results", "CHANNEL_MISMATCH");
+    requireCondition(payload.decision === "BLOCK", "SCHEMA_INVALID");
+    requireCondition(
+      task.workflow_status === "RESULT_PENDING_REVIEW",
+      "INVALID_STATE_TRANSITION",
+    );
+    requireResultIdentityMatch(task, payload, replayAnchored);
+    // The brief stays open: BLOCKED is recoverable (the task may be reconciled
+    // or cancelled), so the brief is NOT closed here. This matches the state a
+    // pre-verdict root result left behind.
+    task.workflow_status = "BLOCKED";
+    task.user_blocked_at = eventTime;
+    task.rejection_reason = payload.reason;
+    if (payload.reason_code !== undefined) {
+      requireCondition(
+        typeof payload.reason_code === "string" &&
+          payload.reason_code.length > 0 &&
+          payload.reason_code.length <= 128,
+        "SCHEMA_INVALID",
+      );
+      task.reason_code = payload.reason_code;
+    }
+    return next;
+  }
   if (type === "WORKFLOW_RESULT_REVISION_REQUESTED") {
     exactKeys(
       payload,

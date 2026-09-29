@@ -6,20 +6,50 @@
     "integrations/openclaw/topology/contracts/ledger-snapshot.schema.json"
   ],
   "schema_version": "1.0.0",
-  "governance_version": "m8-t2.2-r4",
+  "governance_version": "m8-t2.3-r5",
   "workflow_status": {
-    "ACTIVE": ["QUEUED", "REJECTED", "BLOCKED", "CANCELLED"],
-    "QUEUED": ["EXECUTING", "CANCELLED", "BLOCKED"],
+    "ACTIVE": [
+      "QUEUED",
+      "REJECTED",
+      "BLOCKED",
+      "CANCELLED"
+    ],
+    "QUEUED": [
+      "EXECUTING",
+      "CANCELLED",
+      "BLOCKED"
+    ],
     "EXECUTING": [
       "WAITING_FOR_USER",
       "RESULT_PENDING_REVIEW",
       "BLOCKED",
       "CANCELLED"
     ],
-    "WAITING_FOR_USER": ["EXECUTING", "CANCELLED", "BLOCKED"],
-    "RESULT_PENDING_REVIEW": ["COMPLETE", "REJECTED", "REVISING", "CANCELLED"],
-    "REVISING": ["QUEUED", "REJECTED", "CANCELLED", "BLOCKED"],
-    "BLOCKED": ["ACTIVE", "QUEUED", "EXECUTING", "FAILED", "CANCELLED"],
+    "WAITING_FOR_USER": [
+      "EXECUTING",
+      "CANCELLED",
+      "BLOCKED"
+    ],
+    "RESULT_PENDING_REVIEW": [
+      "COMPLETE",
+      "REJECTED",
+      "REVISING",
+      "CANCELLED",
+      "BLOCKED"
+    ],
+    "REVISING": [
+      "QUEUED",
+      "REJECTED",
+      "CANCELLED",
+      "BLOCKED"
+    ],
+    "BLOCKED": [
+      "ACTIVE",
+      "QUEUED",
+      "EXECUTING",
+      "FAILED",
+      "CANCELLED"
+    ],
     "COMPLETE": [],
     "PARTIAL": [],
     "FAILED": [],
@@ -27,14 +57,27 @@
     "REJECTED": []
   },
   "brief_state": {
-    "ACTIVE": ["SUPERSEDED", "CLOSED"],
+    "ACTIVE": [
+      "SUPERSEDED",
+      "CLOSED"
+    ],
     "SUPERSEDED": [],
     "CLOSED": []
   },
   "run_state": {
-    "SPAWN_UNKNOWN": ["RUNNING", "CANCELLED", "COMPLETE"],
-    "RUNNING": ["COMPLETE", "UNKNOWN", "CANCELLED"],
-    "UNKNOWN": ["FAILED"],
+    "SPAWN_UNKNOWN": [
+      "RUNNING",
+      "CANCELLED",
+      "COMPLETE"
+    ],
+    "RUNNING": [
+      "COMPLETE",
+      "UNKNOWN",
+      "CANCELLED"
+    ],
+    "UNKNOWN": [
+      "FAILED"
+    ],
     "COMPLETE": [],
     "FAILED": [],
     "CANCELLED": []

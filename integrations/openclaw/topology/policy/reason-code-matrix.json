@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "governance_version": "m8-t2.2-r4",
+  "governance_version": "m8-t2.3-r5",
   "agent_claims": [
     "NONE",
     "OPTIONAL_BRANCH_FAILED",
@@ -64,10 +64,17 @@
     "VALIDATION_FAILED",
     "WORKFLOW_BUDGET_EXHAUSTED"
   ],
-  "task_suspension_reasons": ["BLOCKED", "DUPLICATE_RESULT_CONFLICT"],
+  "task_suspension_reasons": [
+    "BLOCKED",
+    "DUPLICATE_RESULT_CONFLICT"
+  ],
   "outcome_compatibility": {
-    "COMPLETE": ["NONE"],
-    "PARTIAL": ["OPTIONAL_BRANCH_FAILED"],
+    "COMPLETE": [
+      "NONE"
+    ],
+    "PARTIAL": [
+      "OPTIONAL_BRANCH_FAILED"
+    ],
     "BLOCKED": [
       "MISSING_INPUT",
       "MISSING_PREREQUISITE",
@@ -93,7 +100,11 @@
       "TRANSIENT_RUNTIME_FAILURE",
       "ANNOUNCE_DELIVERY_FAILED"
     ],
-    "CANCELLED": ["OWNER_CANCELLED", "PARENT_CANCELLED", "SUPERSEDED_REVISION"]
+    "CANCELLED": [
+      "OWNER_CANCELLED",
+      "PARENT_CANCELLED",
+      "SUPERSEDED_REVISION"
+    ]
   },
   "tool_response_codes": [
     "ENGINE_NOT_IMPLEMENTED",
