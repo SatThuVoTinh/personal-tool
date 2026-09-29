@@ -197,6 +197,11 @@ function existingConfigMatches(configPath, context) {
     const migrated = JSON.parse(JSON.stringify(actual));
     try {
       migrated.channels.discord.streaming = { mode: "off" };
+      // Frozen M8/T1 delivery default restored in R4 builder: configs that
+      // predate it converge the same way streaming does.
+      if (migrated.channels.discord.replyToMode === undefined) {
+        migrated.channels.discord.replyToMode = "off";
+      }
       validateConfig(migrated, context);
     } catch {
       throw validationError;

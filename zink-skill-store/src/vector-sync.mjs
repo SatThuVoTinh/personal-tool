@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { execSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { URL } from "node:url";
 import { scanCatalog } from "./catalog.mjs";
 import {
@@ -20,17 +20,8 @@ export const MAX_FAILURE_REASON_LENGTH = 500;
 export const DEFAULT_INDEX_FRESHNESS_SLA_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 export function resolveDefaultOllamaUrl() {
-  if (process.env.OLLAMA_URL) return process.env.OLLAMA_URL;
-  if (process.platform === "linux") {
-    try {
-      const route = execSync("ip route show default", { encoding: "utf8" });
-      const match = route.match(/default\s+via\s+([0-9.]+)/);
-      if (match) return `http://${match[1]}:11434`;
-    } catch {
-      // Fall through to localhost
-    }
-  }
-  return "http://127.0.0.1:11434";
+  const configured = process.env.OLLAMA_URL?.trim();
+  return configured || null;
 }
 
 export const DEFAULT_OLLAMA_URL = resolveDefaultOllamaUrl();
@@ -39,7 +30,12 @@ export const DEFAULT_OLLAMA_URL = resolveDefaultOllamaUrl();
  * Validates Ollama endpoint URL to prevent SSRF and arbitrary remote requests (L06, T53).
  */
 export function validateOllamaUrl(rawUrl, options = {}) {
-  const urlStr = rawUrl || DEFAULT_OLLAMA_URL;
+  const urlStr = rawUrl ?? DEFAULT_OLLAMA_URL;
+  if (typeof urlStr !== "string" || urlStr.trim().length === 0) {
+    throw new Error(
+      "OLLAMA_URL_REQUIRED: Configure an approved Ollama endpoint",
+    );
+  }
   const parsed = new URL(urlStr);
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new Error(
@@ -238,7 +234,7 @@ export async function generateSkillEmbeddings(texts, options = {}) {
   if (typeof opts.embedFn === "function") {
     embeddings = await opts.embedFn(textList);
   } else {
-    const rawUrl = opts.ollamaUrl || DEFAULT_OLLAMA_URL;
+    const rawUrl = opts.ollamaUrl ?? DEFAULT_OLLAMA_URL;
     const validatedUrl = validateOllamaUrl(rawUrl, opts);
     const modelName = opts.modelName || EXPECTED_MODEL_NAME;
     const timeoutMs = opts.timeoutMs || 30000;
@@ -377,7 +373,7 @@ export async function syncSkillsToVectorStore(options = {}) {
   });
 
   const syncReport = {
-    status: "READY",
+    status: "RUNNING",
     sync_generation_id: syncGenerationId,
     scanned_count: catalog.records.length,
     active_count: activeRecords.length,
@@ -402,8 +398,14 @@ export async function syncSkillsToVectorStore(options = {}) {
       );
     `;
     await executePostgresQuery(tombstoneSql, options);
-  } catch {
-    // Non-blocking for mock DB or fresh schemas
+  } catch (error) {
+    syncReport.status = "FAILED";
+    syncReport.error_code = "VECTOR_TOMBSTONE_SYNC_FAILED";
+    syncReport.error = String(
+      error?.message || "Tombstone synchronization failed",
+    ).slice(0, MAX_FAILURE_REASON_LENGTH);
+    syncReport.failed_count = 1;
+    return syncReport;
   }
 
   // 4. Ingest and vectorize active records
@@ -594,6 +596,8 @@ export async function syncSkillsToVectorStore(options = {}) {
     } else {
       syncReport.status = "FAILED";
     }
+  } else {
+    syncReport.status = "READY";
   }
 
   return syncReport;

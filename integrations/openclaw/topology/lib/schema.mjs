@@ -146,24 +146,6 @@ export function resolveContractFilePath(name) {
       "zink-tools/contracts",
       `${cleanName}.schema.json`,
     ),
-    // 4. WSL repo mount
-    path.resolve(
-      "/mnt/c/Users/HOANG VINH/OneDrive/Documents/personal-tool/zink-tools/contracts/tools",
-      `${cleanName}.schema.json`,
-    ),
-    path.resolve(
-      "/mnt/c/Users/HOANG VINH/OneDrive/Documents/personal-tool/zink-tools/contracts",
-      `${cleanName}.schema.json`,
-    ),
-    // 5. Windows repo path
-    path.resolve(
-      "C:/Users/HOANG VINH/OneDrive/Documents/personal-tool/zink-tools/contracts/tools",
-      `${cleanName}.schema.json`,
-    ),
-    path.resolve(
-      "C:/Users/HOANG VINH/OneDrive/Documents/personal-tool/zink-tools/contracts",
-      `${cleanName}.schema.json`,
-    ),
   ];
 
   for (const candidate of candidatePaths) {

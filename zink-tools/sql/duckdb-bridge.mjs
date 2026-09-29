@@ -122,7 +122,9 @@ export function assertDuckDbSafety(query, parameters = []) {
           `Direct filesystem scan forbidden: ${pattern.source}`,
         );
       }
-      if (/powershell|cmd|wsl|docker|sh|bash|PRAGMA|INSTALL|LOAD/i.test(query)) {
+      if (
+        /powershell|cmd|wsl|docker|sh|bash|PRAGMA|INSTALL|LOAD/i.test(query)
+      ) {
         throw new DuckDbBridgeError(
           "DUCKDB_HOST_EXECUTION_DENIED",
           `Host execution or configuration command forbidden: ${pattern.source}`,
@@ -239,7 +241,9 @@ export async function executeGovernedDuckDbQuery(context, input, options = {}) {
     "CREATE TABLE IF NOT EXISTS knowledge (id INTEGER, name VARCHAR, category VARCHAR, value DOUBLE, created_at VARCHAR);",
     "INSERT INTO knowledge VALUES (1, 'artifact-alpha', 'silver', 100.5, '2026-09-14T00:00:00Z'), (2, 'artifact-beta', 'silver', 250.0, '2026-09-14T01:00:00Z');",
     "CREATE TABLE IF NOT EXISTS analytics_read AS SELECT * FROM knowledge;",
-    input.query.trim().endsWith(";") ? input.query.trim() : `${input.query.trim()};`,
+    input.query.trim().endsWith(";")
+      ? input.query.trim()
+      : `${input.query.trim()};`,
   ].join(" ");
 
   let parsedRows = [];
@@ -261,18 +265,6 @@ export async function executeGovernedDuckDbQuery(context, input, options = {}) {
       );
     }
     if (err.code === "ENOENT") {
-      // If duckdb binary is unavailable in host, fallback to controlled simulation only if permitted
-      if (options.allowFallbackSimulation) {
-        return Object.freeze({
-          execution_state: "TEST_SIMULATION",
-          row_count: 0,
-          columns: Object.freeze([]),
-          rows: Object.freeze([]),
-          execution_ms: Date.now() - startTime,
-          provider: "duckdb",
-          target_database: input.target_database,
-        });
-      }
       throw new DuckDbBridgeError(
         "DUCKDB_ENGINE_NOT_AVAILABLE",
         "DuckDB executable not found in PATH",

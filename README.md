@@ -337,7 +337,7 @@ Lệnh trên sẽ tự động chạy:
 
 1. `npm run format:check`: Kiểm tra định dạng mã nguồn.
 2. `npm run lint`: Phân tích tĩnh cú pháp JavaScript và Markdown.
-3. `npm test`: Chạy toàn bộ 272 bài kiểm thử (13 test suites) bao phủ hợp đồng M1–M8, OpenClaw governance và DuckDB bridge.
+3. `npm test`: Chạy toàn bộ 349 bài kiểm thử bao phủ hợp đồng M1–M8, OpenClaw governance và DuckDB bridge.
 4. `npm run repo:check`: Kiểm tra toàn vẹn chính sách repository.
 
 ---
@@ -500,19 +500,19 @@ Người vận hành và các agent tuyệt đối tuân thủ các điều cấ
 
 Bảng phân định trạng thái thực tế của 11 nhà cung cấp trong phiên bản V1:
 
-| Nhà cung cấp      | Trạng thái (State)  | Hợp đồng (Contract) | Kiểm thử mô phỏng (Mock) | Kiểm thử trực tiếp (Live) | Ghi chú vận hành                         |
-| ----------------- | ------------------- | ------------------- | ------------------------ | ------------------------- | ---------------------------------------- |
-| **n8n**           | `PROVISIONED`       | PASS                | PASS                     | PASS                      | Docker container localhost:5678 sẵn sàng |
-| **Cloudflare R2** | `PROVISIONED`       | PASS                | PASS                     | PASS                      | Quản lý Landing & Silver hoạt động       |
-| **DuckDB**        | `PROVISIONED`       | PASS                | PASS                     | PASS                      | Governed Windows Bridge bảo mật          |
-| **MotherDuck**    | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Sẵn sàng, kết nối khi cấp token          |
-| **BigQuery**      | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Sẵn sàng, kích hoạt khi có GCP ADC       |
-| **Kaggle**        | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Bounded runner có kiểm soát              |
-| **Databricks**    | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Batch compute adapter sẵn sàng           |
-| **MLflow Local**  | `PROVISIONED`       | PASS                | PASS                     | PASS                      | Ghi log thí nghiệm cục bộ hoạt động      |
-| **DagsHub**       | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Đồng bộ có chọn lọc sẵn sàng             |
-| **Hugging Face**  | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Đánh giá mô hình an toàn                 |
-| **Streamlit**     | `PROVISIONED`       | PASS                | PASS                     | PASS                      | Giao diện phân phối Gold localhost:8501  |
+| Nhà cung cấp      | Trạng thái (State)  | Hợp đồng (Contract) | Kiểm thử mô phỏng (Mock) | Kiểm thử trực tiếp (Live) | Ghi chú vận hành                                             |
+| ----------------- | ------------------- | ------------------- | ------------------------ | ------------------------- | ------------------------------------------------------------ |
+| **n8n**           | `PROVISIONED`       | PASS                | PASS                     | PASS                      | Docker container localhost:5678 sẵn sàng                     |
+| **Cloudflare R2** | `PROVISIONED`       | PASS                | PASS                     | PASS                      | Quản lý Landing & Silver hoạt động                           |
+| **DuckDB**        | `PROVISIONED`       | PASS                | PASS                     | PASS                      | Governed Windows Bridge; native CLI Windows đã được xác minh |
+| **MotherDuck**    | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Sẵn sàng, kết nối khi cấp token                              |
+| **BigQuery**      | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Sẵn sàng, kích hoạt khi có GCP ADC                           |
+| **Kaggle**        | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Bounded runner có kiểm soát                                  |
+| **Databricks**    | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Batch compute adapter sẵn sàng                               |
+| **MLflow Local**  | `PROVISIONED`       | PASS                | PASS                     | PASS                      | Ghi log thí nghiệm cục bộ hoạt động                          |
+| **DagsHub**       | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Đồng bộ có chọn lọc sẵn sàng                                 |
+| **Hugging Face**  | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Đánh giá mô hình an toàn                                     |
+| **Streamlit**     | `PROVISIONED`       | PASS                | PASS                     | PASS                      | Giao diện phân phối Gold localhost:8501                      |
 
 ---
 
@@ -542,24 +542,24 @@ USER / OWNER
 - **Main / Quản Lý:** Control & Governance Supervisor — Tiếp nhận yêu cầu ban đầu, phân loại bài toán, chỉ định điều phối viên chính (Primary Coordinator `o1` hoặc `o2`), điều phối phê duyệt trên `#approvals`, theo dõi trạng thái hệ thống và phát thông báo tổng kết cuối cùng trên `#office`. Tuyệt đối không tự thực thi kỹ thuật và không tự spawn chuyên viên.
 - **O1 / O2:** Execution Supervisors — Giám sát thực thi, lập kế hoạch chi tiết, điều phối chuyên viên cấp dưới, trực tiếp hỏi làm rõ người dùng trên `#office`, phát sự kiện `EXECUTION_FINISHED` và đăng kết quả lên `#results`.
 - **Specialist (Excel, PowerBI, SQL, Python):** Capability Executors — Chuyên viên năng lực thực thi thuần túy chạy ngầm, không có thẩm quyền ra quyết định quản trị; kết quả trả về Coordinator cha.
-- **Worker (Local Laptop Worker):** Runtime Execution — Cung cấp môi trường tính toán cục bộ, kéo tác vụ từ hàng đợi (`QueueManager`), thực thi xử lý nặng và xuất bản artifact thật.
+- **Execution agent:** Runtime Execution — Agent chuyên môn nhận node đã được duyệt từ hàng đợi (`QueueManager`), thực thi trong capability scope và xuất bản artifact thật.
 - **Tool:** Capability — Năng lực công cụ thực thi, không phải thẩm quyền.
 
 #### Ma trận Thẩm quyền 5 Bộ (Actor + Channel + Task + State + Action)
 
-| Hành động (`Action`)        | Kênh Discord  | Tác nhân được phép (`Actor`) | Trạng thái yêu cầu (`State`) | Trạng thái chuyển đổi (`Next State`) |
-| :-------------------------- | :------------ | :--------------------------- | :--------------------------- | :----------------------------------- |
-| `APPROVE`                   | `#approvals`  | Duy nhất `User`              | `APPROVAL_PENDING`           | `QUEUED`                             |
-| `REJECT_APPROVAL`           | `#approvals`  | Duy nhất `User`              | `APPROVAL_PENDING`           | `REJECTED`                           |
-| `REQUEST_REVISION_APPROVAL` | `#approvals`  | `User`, `Main`               | `APPROVAL_PENDING`, `EXECUT` | `REVISING`                           |
-| `ACCEPT_RESULT`             | `#results`    | Duy nhất `User`              | `RESULT_PENDING_REVIEW`      | `COMPLETE`                           |
-| `REJECT_RESULT`             | `#results`    | Duy nhất `User`              | `RESULT_PENDING_REVIEW`      | `REJECTED`                           |
-| `REQUEST_REVISION_RESULT`   | `#results`    | `User`, `Main`               | `RESULT_PENDING_REVIEW`      | `REVISING`                           |
-| `CLAIM`                     | N/A (Queue)   | `Worker`, `O1`, `O2`         | `QUEUED`, `WAIT_WORKER`      | `EXECUTING`                          |
-| `ASK_USER`                  | `#office`     | `O1`, `O2`, `Main`           | `EXECUTING`, `PREFLIGHT`     | `WAITING_FOR_USER`                   |
-| `ANSWER_USER`               | `#office`     | Duy nhất `User`              | `WAITING_FOR_USER`           | `EXECUTING`                          |
-| `EXECUTION_FINISHED`        | N/A (Runtime) | `O1`, `O2`, `Worker`         | `EXECUTING`                  | `RESULT_PENDING_REVIEW`              |
-| `FINAL_NOTIFICATION`        | `#office`     | Duy nhất `Main`              | `COMPLETE`, `REJECTED`       | Giữ nguyên trạng thái cuối           |
+| Hành động (`Action`)        | Kênh Discord  | Tác nhân được phép (`Actor`)  | Trạng thái yêu cầu (`State`) | Trạng thái chuyển đổi (`Next State`) |
+| :-------------------------- | :------------ | :---------------------------- | :--------------------------- | :----------------------------------- |
+| `APPROVE`                   | `#approvals`  | Duy nhất `User`               | `APPROVAL_PENDING`           | `QUEUED`                             |
+| `REJECT_APPROVAL`           | `#approvals`  | Duy nhất `User`               | `APPROVAL_PENDING`           | `REJECTED`                           |
+| `REQUEST_REVISION_APPROVAL` | `#approvals`  | `User`, `Main`                | `APPROVAL_PENDING`, `EXECUT` | `REVISING`                           |
+| `ACCEPT_RESULT`             | `#results`    | Duy nhất `User`               | `RESULT_PENDING_REVIEW`      | `COMPLETE`                           |
+| `REJECT_RESULT`             | `#results`    | Duy nhất `User`               | `RESULT_PENDING_REVIEW`      | `REJECTED`                           |
+| `REQUEST_REVISION_RESULT`   | `#results`    | `User`, `Main`                | `RESULT_PENDING_REVIEW`      | `REVISING`                           |
+| `CLAIM`                     | N/A (Queue)   | `Execution agent`, `O1`, `O2` | `QUEUED`                     | `EXECUTING`                          |
+| `ASK_USER`                  | `#office`     | `O1`, `O2`, `Main`            | `EXECUTING`, `PREFLIGHT`     | `WAITING_FOR_USER`                   |
+| `ANSWER_USER`               | `#office`     | Duy nhất `User`               | `WAITING_FOR_USER`           | `EXECUTING`                          |
+| `EXECUTION_FINISHED`        | N/A (Runtime) | `O1`, `O2`, `Execution agent` | `EXECUTING`                  | `RESULT_PENDING_REVIEW`              |
+| `FINAL_NOTIFICATION`        | `#office`     | Duy nhất `Main`               | `COMPLETE`, `REJECTED`       | Giữ nguyên trạng thái cuối           |
 
 _Nguyên tắc cốt lõi:_ Sự kiện `EXECUTION_FINISHED` chỉ đánh dấu kết thúc thực thi kỹ thuật. Nhiệm vụ chỉ được coi là hoàn tất (`COMPLETE`) khi người dùng trực tiếp nhấn nút **ACCEPT** trên thẻ nghiệm thu tại `#results`.
 
@@ -597,7 +597,7 @@ Preflight
 O1 / O2
    ↓
 QUEUE
-   ↓ (Worker nhận việc)
+   ↓ (Execution agent tự claim node)
 EXECUTION
    ↓
 EXECUTION_FINISHED (Chỉ là sự kiện kỹ thuật, CHƯA PHẢI hoàn tất!)
@@ -651,17 +651,17 @@ TASK = COMPLETE
    - Tự động phát thẻ cảnh báo đỏ kèm mã `incident_id` và liên kết với `task_id` liên quan khi:
      - Vi phạm thẩm quyền hoặc sai lệch kênh.
      - Kiểm định kỹ thuật thất bại hoặc kiểm định nghiệp vụ không đạt (`RESULT BLOCKED`).
-     - Worker mất kết nối quá hạn nhịp tim.
+     - Execution agent mất kết nối quá hạn nhịp tim.
 
 ---
 
-### 3. Cơ chế Hàng đợi & Phục hồi Worker Cục bộ (Local Laptop Worker)
+### 3. Cơ chế Hàng đợi & Phục hồi Execution Agent
 
-Hệ thống tách biệt hoàn toàn giữa **Control Plane** (chạy 24/7 trên máy chủ/VPS/môi trường luôn mở) và **Local Laptop Worker** (chạy trên laptop cá nhân của operator):
+Hệ thống tách biệt hoàn toàn giữa **Control Plane** (chạy 24/7 trên máy chủ/VPS/môi trường luôn mở) và **Execution Agent** (có thể ngoại tuyến hoặc khởi động lại độc lập):
 
-- **Xử lý khi Laptop tắt/sleep:** Khi laptop của worker ngoại tuyến, task được lưu trữ an toàn trong hàng đợi bền vững (`QueueManager`) ở trạng thái `QUEUED` hoặc `WAITING_FOR_WORKER`. Không có task nào bị mất mát dữ liệu.
-- **Tự động nhận việc (Atomic Claim):** Khi laptop khởi động lại và worker kết nối, worker thực hiện `claimTask` nguyên tử để khóa độc quyền task và bắt đầu thực thi.
-- **Giám sát nhịp tim (Heartbeat & Stale Recovery):** Worker cập nhật heartbeat định kỳ. Nếu worker bị tắt đột ngột hoặc mất nguồn, Control Plane định kỳ quét qua `detectAndRecoverStaleTasks` để thu hồi task bị treo và chuyển lại về `WAITING_FOR_WORKER` cho lượt chạy kế tiếp.
+- **Xử lý khi execution agent ngoại tuyến:** Khi execution agent ngoại tuyến, task được lưu trữ an toàn trong hàng đợi bền vững (`QueueManager`) ở trạng thái `QUEUED`. Không có task nào được giả định là đã thực thi.
+- **Tự động nhận việc (Atomic Claim):** Khi execution agent kết nối, agent thực hiện `claimTask` nguyên tử để khóa độc quyền task và bắt đầu thực thi theo lease.
+- **Giám sát nhịp tim (Heartbeat & Stale Recovery):** Execution agent cập nhật heartbeat định kỳ. Nếu agent bị tắt đột ngột hoặc mất nguồn, Control Plane định kỳ quét qua `detectAndRecoverStaleTasks` để thu hồi task bị treo và chuyển lại về `QUEUED` cho lượt chạy kế tiếp.
 
 ---
 
@@ -746,13 +746,13 @@ Ví dụ: `01-03-0042`, `01-00-0042`, `03-03-0105`.
 
 Nhằm đảm bảo ranh giới dữ liệu không bị xung đột, trùng lặp và phân tán, hệ thống phân định độc quyền quyền sở hữu dữ liệu theo bảng sau (`ACTIVE.md` Mục 18):
 
-| Phân vùng Lưu trữ (Store)  | Quyền Sở hữu Dữ liệu (Ownership)   | Ý nghĩa, Ranh giới & Quy định Vận hành                                                                    |
-| :------------------------- | :--------------------------------- | :-------------------------------------------------------------------------------------------------------- |
-| **Knowledgebase**          | Factual / Business Knowledge       | Dữ liệu tri thức thực tế, tài liệu nghiên cứu tham khảo và ghi chép cá nhân của con người.                |
-| **Skill Store**            | Reusable Procedure                 | Các quy trình kỹ thuật, kỹ năng phân tích dữ liệu và mẫu template đã được chuẩn hóa.                      |
-| **Tools**                  | Executable Capability              | Năng lực công cụ thực thi tính toán và xuất bản artifact thật (Excel, Power BI, SQL, Python).             |
-| **Decision Ledger**        | User Decisions                     | Sổ cái lưu các câu trả lời và quyết định đã được con người trực tiếp xác nhận (`isHumanConfirmed: true`). |
-| **Main Operational State** | Current Task / Worker / Governance | Trạng thái vòng đời tác vụ, hàng đợi, phân công điều phối và nhật ký chuyển đổi thời gian thực.           |
+| Phân vùng Lưu trữ (Store)  | Quyền Sở hữu Dữ liệu (Ownership)            | Ý nghĩa, Ranh giới & Quy định Vận hành                                                                    |
+| :------------------------- | :------------------------------------------ | :-------------------------------------------------------------------------------------------------------- |
+| **Knowledgebase**          | Factual / Business Knowledge                | Dữ liệu tri thức thực tế, tài liệu nghiên cứu tham khảo và ghi chép cá nhân của con người.                |
+| **Skill Store**            | Reusable Procedure                          | Các quy trình kỹ thuật, kỹ năng phân tích dữ liệu và mẫu template đã được chuẩn hóa.                      |
+| **Tools**                  | Executable Capability                       | Năng lực công cụ thực thi tính toán và xuất bản artifact thật (Excel, Power BI, SQL, Python).             |
+| **Decision Ledger**        | User Decisions                              | Sổ cái lưu các câu trả lời và quyết định đã được con người trực tiếp xác nhận (`isHumanConfirmed: true`). |
+| **Main Operational State** | Current Task / Execution Agent / Governance | Trạng thái vòng đời tác vụ, hàng đợi, phân công điều phối và nhật ký chuyển đổi thời gian thực.           |
 
 _Nguyên tắc tham chiếu:_ Ưu tiên tham chiếu (reference) qua mã định danh có cấu trúc thay vì nhân bản (duplication) dữ liệu thô giữa các tầng bộ nhớ.
 
@@ -792,8 +792,8 @@ _Nguyên tắc tham chiếu:_ Ưu tiên tham chiếu (reference) qua mã định
 
 #### 6. Quy tắc Xử lý Sự cố & Phục hồi Thường gặp (Common Failure & Recovery Rules)
 
-1. **Worker Ngoại tuyến / Laptop Sleep:** Khi laptop tắt hoặc ngủ, tác vụ được bảo toàn nguyên vẹn trong hàng đợi bền vững `QueueManager` (`QUEUED` hoặc `WAITING_FOR_WORKER`). Khi laptop online trở lại, worker gửi lệnh `claimTask` nguyên tử để tiếp tục xử lý.
-2. **Worker Crash / Mất nguồn Đột ngột:** Control Plane phát hiện nhịp tim (heartbeat) bị gián đoạn quá thời hạn cho phép, tự động kích hoạt `detectAndRecoverStaleTasks` để thu hồi task bị treo và chuyển lại về `WAITING_FOR_WORKER`.
+1. **Execution agent ngoại tuyến / Laptop Sleep:** Khi execution agent tạm dừng, tác vụ được bảo toàn trong hàng đợi bền vững `QueueManager` ở trạng thái `QUEUED`; không tạo artifact hay kết quả giả.
+2. **Execution agent crash / Mất nguồn đột ngột:** Control Plane phát hiện nhịp tim bị gián đoạn quá thời hạn cho phép, tự động kích hoạt `detectAndRecoverStaleTasks` để thu hồi task bị treo và chuyển lại về `QUEUED`.
 3. **Kết quả Kỹ thuật Đạt nhưng Nghiệp vụ Sai:** Vi phạm chỉ số KPI khiến kết quả bị khóa lập tức ở trạng thái `RESULT BLOCKED`, tự động gửi cảnh báo thẻ đỏ lên `#incidents`; cấm chuyển sang trạng thái thành công.
 4. **Bảo vệ Chống Thao tác Cũ / Trùng lặp (Stale / Duplicate Protection):** Mọi tương tác nút bấm trên Discord đều gắn kèm `attemptToken`. Thao tác trên các lượt thử cũ bị hệ thống từ chối với mã lỗi `STALE_ACTION_REJECTED`.
 5. **Quản trị Ngoại tuyến (Governance Unavailable):** Hệ thống luôn tuân thủ nguyên tắc **Fail-Closed**; cấm bỏ qua (bypass) chốt an toàn và cấm tự động fallback về thực thi trực tiếp trên máy chủ chủ quyền (host fallback).
@@ -804,23 +804,23 @@ _Nguyên tắc tham chiếu:_ Ưu tiên tham chiếu (reference) qua mã định
 
 Nhằm đảm bảo hệ thống vận hành bền vững không xảy ra lỗi hồi quy, M8/T2.2 khóa cứng 15 họ nguyên nhân gốc tại tầng kiến trúc:
 
-| Họ Root Cause | Tên lĩnh vực Quản trị | Nguyên tắc & Ranh giới Khóa cứng tại Runtime |
-| :--- | :--- | :--- |
-| **RC-01** | Discord Ingress / Routing Authority | Cổng tiếp nhận kiểm tra trước khi gọi model; `@Quản Lý` là root owner duy nhất; từ chối mention trực tiếp chuyên viên (`SPECIALIST_NO_DIRECT_INGRESS`); chống duplicate event. |
-| **RC-02** | Agent Topology / Spawn Authorization | Khóa cứng cây phân cấp: `Main -> [O1, O2]`, `O1 -> [Excel, SQL, Python]`, `O2 -> [Power BI, Python]`, leaf -> `[]`; chặn Main gọi trực tiếp chuyên viên, cấm O1/O2 gọi chéo nhau. |
-| **RC-03** | Task Identity / Lineage / Idempotency | Mã tương quan bền vững (`task_id`), tra cứu chính xác; từ chối duplicate action hoặc xử lý lũy thừa không tạo execution mới. |
-| **RC-04** | Approval / Revision / Result Transaction | Bản ghi phê duyệt bất biến gắn liền mã băm kế hoạch; sửa đổi kế hoạch lập tức hủy hiệu lực phê duyệt cũ; độc quyền User duyệt. |
-| **RC-05** | Queue / Ledger / Lease / Recovery | Hàng đợi bền vững trên đĩa với atomic cross-process file lock, heartbeat fencing, tự động thu hồi task treo khi laptop tắt/ngủ. |
-| **RC-06** | Discord Outbound / Channel Authority | Tách bạch 4 kênh: `#office` (Main trao đổi người dùng), `#approvals` (duyệt kế hoạch), `#results` (nghiệm thu kết quả), `#incidents` (báo cáo lỗi). |
-| **RC-07** | Artifact / Result Delivery Truth | Loại bỏ đường dẫn tuyệt đối nội bộ và `file://` khỏi tin nhắn người dùng; tách riêng artifact lưu trữ ngoài Git. |
-| **RC-08** | Excel Execution Truth | Loại bỏ ghi đè vào Git `artifacts/`; xuất bản `.xlsx` kèm ảnh SVG preview trực quan từng sheet. |
-| **RC-09** | SQL Execution Truth | Chạy DuckDB engine thật qua Windows bridge; trả trạng thái thực thi rõ ràng (`REAL_EXECUTED`, `EMPTY_RESULT`, `TEST_SIMULATION`, `TIMEOUT`); cấm trả mock rows khi lỗi. |
-| **RC-10** | Python Execution Truth | Tách biệt stack ETL của O1 và stack Analytics/Forecast của O2; phân tích cú pháp AST và kiểm soát import thư viện. |
-| **RC-11** | Power BI Execution Truth | Kiểm tra magic byte zip `PK\x03\x04`, tính toàn vẹn của container `.pbix`/`.pbit` và tương quan preview dashboard. |
-| **RC-12** | External Adapter / Simulation Truth | Tách biệt rõ ràng chế độ mô phỏng (`TEST_SIMULATION`) và cấm dùng dữ liệu mô phỏng trong đường dẫn thành công của production. |
-| **RC-13** | Security / Path / Endpoint Isolation | Zero secret leaks; chặn mọi hành vi path traversal (`..`) hoặc truy cập file ngoài workspace; cấm bypass sandbox. |
-| **RC-14** | Semantic / Capability Boundary | Ánh xạ namespace được kiểm duyệt; lưu đề xuất skill vào thư mục chuyên dụng, không làm bẩn source tree. |
-| **RC-15** | Verification / CI / Schema Truth | Toàn bộ 272 bài kiểm thử qua 13 suites đạt 100% PASS; chất lượng code đạt chuẩn: diff sạch, lint 0 lỗi, repo check PASS. |
+| Họ Root Cause | Tên lĩnh vực Quản trị                    | Nguyên tắc & Ranh giới Khóa cứng tại Runtime                                                                                                                                      |
+| :------------ | :--------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **RC-01**     | Discord Ingress / Routing Authority      | Cổng tiếp nhận kiểm tra trước khi gọi model; `@Quản Lý` là root owner duy nhất; từ chối mention trực tiếp chuyên viên (`SPECIALIST_NO_DIRECT_INGRESS`); chống duplicate event.    |
+| **RC-02**     | Agent Topology / Spawn Authorization     | Khóa cứng cây phân cấp: `Main -> [O1, O2]`, `O1 -> [Excel, SQL, Python]`, `O2 -> [Power BI, Python]`, leaf -> `[]`; chặn Main gọi trực tiếp chuyên viên, cấm O1/O2 gọi chéo nhau. |
+| **RC-03**     | Task Identity / Lineage / Idempotency    | Mã tương quan bền vững (`task_id`), tra cứu chính xác; từ chối duplicate action hoặc xử lý lũy thừa không tạo execution mới.                                                      |
+| **RC-04**     | Approval / Revision / Result Transaction | Bản ghi phê duyệt bất biến gắn liền mã băm kế hoạch; sửa đổi kế hoạch lập tức hủy hiệu lực phê duyệt cũ; độc quyền User duyệt.                                                    |
+| **RC-05**     | Queue / Ledger / Lease / Recovery        | Hàng đợi bền vững trên đĩa với atomic cross-process file lock, heartbeat fencing, tự động thu hồi task treo khi laptop tắt/ngủ.                                                   |
+| **RC-06**     | Discord Outbound / Channel Authority     | Tách bạch 4 kênh: `#office` (Main trao đổi người dùng), `#approvals` (duyệt kế hoạch), `#results` (nghiệm thu kết quả), `#incidents` (báo cáo lỗi).                               |
+| **RC-07**     | Artifact / Result Delivery Truth         | Loại bỏ đường dẫn tuyệt đối nội bộ và `file://` khỏi tin nhắn người dùng; tách riêng artifact lưu trữ ngoài Git.                                                                  |
+| **RC-08**     | Excel Execution Truth                    | Loại bỏ ghi đè vào Git `artifacts/`; xuất bản `.xlsx` kèm ảnh SVG preview trực quan từng sheet.                                                                                   |
+| **RC-09**     | SQL Execution Truth                      | Chạy DuckDB engine thật qua Windows bridge; trả trạng thái thực thi rõ ràng (`REAL_EXECUTED`, `EMPTY_RESULT`, `TEST_SIMULATION`, `TIMEOUT`); cấm trả mock rows khi lỗi.           |
+| **RC-10**     | Python Execution Truth                   | Tách biệt stack ETL của O1 và stack Analytics/Forecast của O2; phân tích cú pháp AST và kiểm soát import thư viện.                                                                |
+| **RC-11**     | Power BI Execution Truth                 | Kiểm tra magic byte zip `PK\x03\x04`, tính toàn vẹn của container `.pbix`/`.pbit` và tương quan preview dashboard.                                                                |
+| **RC-12**     | External Adapter / Simulation Truth      | Tách biệt rõ ràng chế độ mô phỏng (`TEST_SIMULATION`) và cấm dùng dữ liệu mô phỏng trong đường dẫn thành công của production.                                                     |
+| **RC-13**     | Security / Path / Endpoint Isolation     | Zero secret leaks; chặn mọi hành vi path traversal (`..`) hoặc truy cập file ngoài workspace; cấm bypass sandbox.                                                                 |
+| **RC-14**     | Semantic / Capability Boundary           | Ánh xạ namespace được kiểm duyệt; lưu đề xuất skill vào thư mục chuyên dụng, không làm bẩn source tree.                                                                           |
+| **RC-15**     | Verification / CI / Schema Truth         | 349/349 kiểm thử trực tiếp PASS trên 28 suite; DuckDB native bridge PASS; format, lint, diff và repo check PASS.                                                                  |
 
 ---
 

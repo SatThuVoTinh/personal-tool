@@ -91,10 +91,7 @@ function createZipArchive(files) {
   return Buffer.concat([...localHeaders, ...centralHeaders, eocd]);
 }
 
-export function buildWorkbookBuffer(
-  rows = [["đã ổn thưa anh"]],
-  sheetName = "Sheet1",
-) {
+export function buildWorkbookBuffer(rows = [], sheetName = "Sheet1") {
   let sheetRowsXml = "";
   for (let rIdx = 0; rIdx < rows.length; rIdx++) {
     const rowNum = rIdx + 1;
@@ -147,7 +144,7 @@ export function buildWorkbookBuffer(
   return createZipArchive(files);
 }
 
-export function executeExcelOperation(params, baseDir = process.cwd()) {
+export function executeExcelOperation(params, baseDir = null) {
   const op = params?.operation || "generate";
   const rawPath = params?.file_path || "workbook.xlsx";
   let cleanPath = rawPath;
@@ -162,26 +159,26 @@ export function executeExcelOperation(params, baseDir = process.cwd()) {
   const effectiveBase =
     baseDir && typeof baseDir === "string" && baseDir !== "null"
       ? baseDir
-      : path.resolve(process.cwd(), "artifacts");
+      : null;
+  if (!path.isAbsolute(normalizedPath) && !effectiveBase) {
+    throw new Error(
+      "ARTIFACT_BASE_REQUIRED: Relative workbook paths require an explicit workspace",
+    );
+  }
   const targetPath = path.isAbsolute(normalizedPath)
     ? normalizedPath
     : path.resolve(effectiveBase, normalizedPath);
+  const publicFileName = path.basename(targetPath);
 
   if (op === "load" || op === "read") {
     let checkPath = targetPath;
-    if (
-      !fs.existsSync(checkPath) &&
-      fs.existsSync(path.resolve(process.cwd(), normalizedPath))
-    ) {
-      checkPath = path.resolve(process.cwd(), normalizedPath);
-    }
     if (!fs.existsSync(checkPath)) {
       return {
         status: "ERROR",
         tool: "zink_excel",
         operation: op,
-        file_path: rawPath,
-        error: `File not found: ${rawPath}`,
+        file_path: publicFileName,
+        error: `File not found: ${publicFileName}`,
       };
     }
     const stat = fs.statSync(checkPath);
@@ -189,8 +186,7 @@ export function executeExcelOperation(params, baseDir = process.cwd()) {
       status: "success",
       tool: "zink_excel",
       operation: op,
-      file_path: rawPath,
-      absolute_path: checkPath,
+      file_path: publicFileName,
       summary: {
         exists: true,
         size_bytes: stat.size,
@@ -201,15 +197,12 @@ export function executeExcelOperation(params, baseDir = process.cwd()) {
   }
 
   if (op === "validate") {
-    let exists = fs.existsSync(targetPath);
-    if (!exists && fs.existsSync(path.resolve(process.cwd(), normalizedPath))) {
-      exists = true;
-    }
+    const exists = fs.existsSync(targetPath);
     return {
       status: exists ? "success" : "ERROR",
       tool: "zink_excel",
       operation: "validate",
-      file_path: rawPath,
+      file_path: publicFileName,
       summary: {
         valid: exists,
         rules_checked: params?.rules || ["file_existence", "extension_check"],
@@ -232,7 +225,9 @@ export function executeExcelOperation(params, baseDir = process.cwd()) {
   }
 
   if (rows.length === 0) {
-    rows = [["đã ổn thưa anh"]];
+    throw new Error(
+      "DATA_INPUT_REQUIRED: Data-bearing Excel operations require rows",
+    );
   }
 
   const sheetName =
@@ -251,12 +246,9 @@ export function executeExcelOperation(params, baseDir = process.cwd()) {
   const previewPngPath = targetPath.replace(/\.xlsx$/i, "_preview.png");
   renderSheetPreviewPng(rows, sheetName, previewPngPath);
 
-  const relativeToCwd = path
-    .relative(process.cwd(), targetPath)
-    .replace(/\\/g, "/");
-  const logicalFilePath = relativeToCwd.startsWith("..")
-    ? path.basename(targetPath)
-    : relativeToCwd;
+  const logicalFilePath = publicFileName;
+  const previewFileName = path.basename(previewPath);
+  const previewPngFileName = path.basename(previewPngPath);
 
   return {
     status: "success",
@@ -264,12 +256,11 @@ export function executeExcelOperation(params, baseDir = process.cwd()) {
     operation: op,
     file_path: logicalFilePath,
     container_path: logicalFilePath,
-    absolute_path: targetPath,
-    preview_image_path: previewPath,
-    preview_image_file: path.basename(previewPath),
-    preview_svg_path: previewPath,
-    preview_png_path: previewPngPath,
-    preview_png_file: path.basename(previewPngPath),
+    preview_image_path: previewFileName,
+    preview_image_file: previewFileName,
+    preview_svg_path: previewFileName,
+    preview_png_path: previewPngFileName,
+    preview_png_file: previewPngFileName,
     summary: {
       rows: rows.length,
       columns: rows[0]?.length || 1,
@@ -278,7 +269,6 @@ export function executeExcelOperation(params, baseDir = process.cwd()) {
       preview_image: path.basename(previewPath),
       preview_png: path.basename(previewPngPath),
       file_path: logicalFilePath,
-      absolute_path: targetPath,
       message: `Workbook ${op} completed successfully with real image preview at ${path.basename(previewPath)} and ${path.basename(previewPngPath)}`,
     },
   };
@@ -338,7 +328,7 @@ export function renderSheetPreviewSvg(rows, sheetName = "Sheet1") {
 
   const footerY =
     titleHeight + headerHeight + displayRows.length * rowHeight + 24;
-  svg += `  <text x="20" y="${footerY}" fill="#6a9955" font-size="12">✓ Real Data Verified • ${rows.length} rows total • Generated by Zink Excel Specialist</text>\n`;
+  svg += `  <text x="20" y="${footerY}" fill="#6a9955" font-size="12">Preview generated from supplied workbook data • ${rows.length} rows total</text>\n`;
   svg += `</svg>`;
   return svg;
 }
@@ -504,7 +494,7 @@ export function renderSheetPreviewHtml(rows, sheetName = "Sheet1") {
     <tbody>${tbodyHtml}</tbody>
   </table>
   <div class="footer">
-    ✓ Real Data Verified • ${rows.length} rows total • Generated by Zink Excel Specialist
+    Preview generated from supplied workbook data • ${rows.length} rows total
   </div>
 </div>
 </body>

@@ -18,7 +18,7 @@
       "const": "1.0.0"
     },
     "governance_version": {
-      "enum": ["m7-t2-r12", "m7-t5-r13", "m8-t2-r9", "m8-t2.1-r3"]
+      "enum": ["m7-t2-r12", "m7-t5-r13", "m8-t2-r9", "m8-t2.1-r3", "m8-t2.2-r4"]
     },
     "sequence": {
       "type": "integer",
@@ -128,7 +128,6 @@
                     "ACTIVE",
                     "QUEUED",
                     "EXECUTING",
-                    "WAITING_FOR_WORKER",
                     "WAITING_FOR_USER",
                     "RESULT_PENDING_REVIEW",
                     "REVISING",
@@ -299,7 +298,11 @@
                           "maxLength": 128
                         },
                         "runtime_reason_code": {
-                          "enum": ["RUN_TIMEOUT", "EXECUTION_STATE_UNKNOWN"]
+                          "enum": [
+                            "RUN_TIMEOUT",
+                            "TRANSIENT_RUNTIME_FAILURE",
+                            "EXECUTION_STATE_UNKNOWN"
+                          ]
                         },
                         "recovery_needed_at": {
                           "type": "string",
@@ -308,6 +311,31 @@
                         "recovery_reason": {
                           "type": "string",
                           "maxLength": 128
+                        },
+                        "reconciled_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "superseded_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "suspended_task_status": {
+                          "type": "string",
+                          "enum": [
+                            "ACTIVE",
+                            "QUEUED",
+                            "EXECUTING",
+                            "WAITING_FOR_USER",
+                            "RESULT_PENDING_REVIEW",
+                            "REVISING",
+                            "BLOCKED",
+                            "COMPLETE",
+                            "PARTIAL",
+                            "FAILED",
+                            "CANCELLED",
+                            "REJECTED"
+                          ]
                         }
                       }
                     }
@@ -366,6 +394,10 @@
                           "minLength": 1,
                           "maxLength": 256
                         },
+                        "owner_attempt": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
                         "started": {
                           "type": "boolean"
                         }
@@ -399,6 +431,25 @@
                   "type": "string",
                   "maxLength": 128
                 },
+                "reconciled_attempts": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "semantic_contract_status": {
+                  "$ref": "ledger-event.schema.json#/$defs/semantic_contract_status"
+                },
+                "accepted_reference_digests": {
+                  "type": "object",
+                  "maxProperties": 72,
+                  "additionalProperties": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  }
+                },
+                "approvals": {
+                  "type": "object",
+                  "maxProperties": 16
+                },
                 "approved_at": {
                   "type": "string",
                   "format": "date-time"
@@ -426,14 +477,6 @@
                 "claimed_at": {
                   "type": "string",
                   "format": "date-time"
-                },
-                "waiting_question": {
-                  "type": "string",
-                  "maxLength": 4096
-                },
-                "user_answer": {
-                  "type": "string",
-                  "maxLength": 4096
                 },
                 "user_accepted_at": {
                   "type": "string",
@@ -463,9 +506,72 @@
                   "type": "string",
                   "format": "date-time"
                 },
+                "waiting_question": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                },
+                "waiting_question_agent_id": {
+                  "enum": [
+                    "main",
+                    "o1",
+                    "o2",
+                    "excel",
+                    "power-bi",
+                    "sql",
+                    "python"
+                  ]
+                },
+                "waiting_question_session_key": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "waiting_question_run_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "user_answer": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                },
+                "user_answer_principal_ref": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "user_answer_message_id": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]{16,19}$"
+                },
                 "execution_payload_digest": {
                   "type": "string",
                   "pattern": "^[a-f0-9]{64}$"
+                },
+                "artifact_set_digest": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "result_artifacts": {
+                  "type": "array",
+                  "maxItems": 10,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["logical_path", "sha256"],
+                    "properties": {
+                      "logical_path": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 512
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$"
+                      }
+                    }
+                  }
                 }
               }
             },

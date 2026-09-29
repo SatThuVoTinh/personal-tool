@@ -16,7 +16,13 @@ export function registerNativeGuard(scope, guard) {
     typeof scope !== "string" ||
     !scope ||
     typeof guard?.beforeToolCall !== "function" ||
-    typeof guard?.beforeAnnounce !== "function"
+    typeof guard?.beforeAnnounce !== "function" ||
+    // T2/T3: quota telemetry and run-scoped model resolution are mandatory
+    // governance capabilities. A guard without them cannot enforce the
+    // self-quota / proactive-fallback contract, so registration fails closed.
+    typeof guard?.recordQuota !== "function" ||
+    typeof guard?.selfQuotaReceipt !== "function" ||
+    typeof guard?.resolveRunModel !== "function"
   )
     throw new Error("GOVERNANCE_REGISTRATION_INVALID");
   const entry = Object.freeze({
@@ -34,6 +40,12 @@ export function registerNativeGuard(scope, guard) {
         : undefined,
     beforeToolCall: guard.beforeToolCall.bind(guard),
     beforeAnnounce: guard.beforeAnnounce.bind(guard),
+    // T2/T3: quota publication, self receipt and run-scoped model resolution
+    // are required governance capabilities. Registration fails closed when the
+    // guard cannot enforce them, so there is no "quota but no enforcement" mode.
+    recordQuota: guard.recordQuota.bind(guard),
+    selfQuotaReceipt: guard.selfQuotaReceipt.bind(guard),
+    resolveRunModel: guard.resolveRunModel.bind(guard),
   });
   registry().set(scope, entry);
   return () => {
@@ -167,8 +179,18 @@ export function installNativeToolGate(agent, config, context) {
         trusted,
         signal,
       );
-      if (decision?.allow !== true)
-        return { block: true, reason: "GOVERNANCE_DENIED" };
+      if (decision?.allow !== true) {
+        // A blocked call keeps its canonical reason code when the guard
+        // supplied one. The code is a fixed governance identifier, never
+        // caller data, so surfacing it is safe and makes the refusal
+        // auditable instead of collapsing every denial into one opaque code.
+        const reason =
+          typeof decision?.reason === "string" &&
+          /^[A-Z][A-Z0-9_]{0,63}$/u.test(decision.reason)
+            ? decision.reason
+            : "GOVERNANCE_DENIED";
+        return { block: true, reason };
+      }
       if (decision.spawnLabel !== undefined) {
         if (
           event.toolCall.name !== "sessions_spawn" ||
@@ -206,6 +228,63 @@ export function installNativeToolGate(agent, config, context) {
   installedAgents.add(agent);
 }
 
+/**
+ * T2: publish one provider-usage snapshot that the host runtime already owns.
+ * The snapshot must carry the identity of the agent whose provider quota it is.
+ * Invalid or cross-agent payloads are rejected. No network I/O is performed
+ * here and no secret material is read or returned.
+ */
+export async function recordNativeQuota(config, snapshot) {
+  const governance = resolveGovernance(config);
+  if (!governance.enabled) return false;
+  if (typeof governance.guard?.recordQuota !== "function") {
+    throw new Error("GOVERNANCE_UNAVAILABLE");
+  }
+  return governance.guard.recordQuota(snapshot);
+}
+
+/**
+ * T2: read-only, self-scoped quota receipt for prompt context. The agentId is
+ * taken from trusted runtime context, never from a model-supplied parameter.
+ */
+export async function selfNativeQuota(config, context) {
+  const governance = resolveGovernance(config);
+  if (!governance.enabled) return null;
+  if (typeof governance.guard?.selfQuotaReceipt !== "function") {
+    throw new Error("GOVERNANCE_UNAVAILABLE");
+  }
+  if (typeof context?.agentId !== "string" || context.agentId.length === 0) {
+    throw new Error("GOVERNANCE_CONTEXT_MISSING");
+  }
+  return governance.guard.selfQuotaReceipt(context.agentId);
+}
+
+/**
+ * T3: run-scoped model resolution. The returned model applies to the CURRENT
+ * run only. This function performs no persisted write: it never creates a
+ * session override, never mutates modelOverrideSource and never pins a model
+ * into session state.
+ */
+export async function resolveNativeRunModel(config, context) {
+  const governance = resolveGovernance(config);
+  if (!governance.enabled) return null;
+  if (typeof governance.guard?.resolveRunModel !== "function") {
+    throw new Error("GOVERNANCE_UNAVAILABLE");
+  }
+  if (
+    typeof context?.agentId !== "string" ||
+    typeof context?.sessionKey !== "string" ||
+    typeof context?.runId !== "string"
+  ) {
+    throw new Error("GOVERNANCE_CONTEXT_MISSING");
+  }
+  return governance.guard.resolveRunModel({
+    agentId: context.agentId,
+    sessionKey: context.sessionKey,
+    runId: context.runId,
+  });
+}
+
 export async function enterNativeRun(config, context, signal) {
   const governance = resolveGovernance(config);
   if (!governance.enabled) return;
@@ -220,6 +299,12 @@ export async function enterNativeRun(config, context, signal) {
         channelId: context.channelId,
         senderId: context.senderId,
         currentMessageId: context.currentMessageId,
+        message: context.message,
+        content: context.content,
+        mentions: context.mentions,
+        mentionRoles: context.mentionRoles,
+        author: context.author,
+        isBot: context.isBot,
         inputProvenance: context.inputProvenance
           ? Object.freeze({ ...context.inputProvenance })
           : undefined,

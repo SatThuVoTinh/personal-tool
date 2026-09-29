@@ -14,6 +14,7 @@ import {
 import {
   syncSkillsToVectorStore,
   generateSkillEmbeddings,
+  validateOllamaUrl,
   EXPECTED_DIMENSIONS,
 } from "../zink-skill-store/src/vector-sync.mjs";
 
@@ -178,7 +179,10 @@ describe("M8/T1 Governed Skill Vector Store & Semantic Vector RAG", () => {
   // Test 4: BUG-05 — zink_skill_propose produces CANDIDATE only and cannot self-activate
   // =========================================================================
   test("BUG-05: zink_skill_propose generates deterministic CANDIDATE proposal and prevents self-activation", async () => {
-    const adapter = new SkillAdapter();
+    const proposalStorageDir = await mkdtemp(
+      path.join(os.tmpdir(), "zink-skill-proposals-"),
+    );
+    const adapter = new SkillAdapter(undefined, { proposalStorageDir });
     const content =
       "# DAX Performance Tuning\n\nUse KEEPFILTERS instead of FILTER for performance.";
     const contentSha = createHash("sha256")
@@ -210,6 +214,7 @@ describe("M8/T1 Governed Skill Vector Store & Semantic Vector RAG", () => {
       content_sha256: contentSha,
     });
     assert.equal(result.proposal.proposal_id, expectedId);
+    await rm(proposalStorageDir, { recursive: true, force: true });
   });
 
   // =========================================================================
@@ -378,6 +383,7 @@ describe("M8/T1 Governed Skill Vector Store & Semantic Vector RAG", () => {
     });
     assert.equal(valid.length, 1);
     assert.equal(valid[0].length, 1024);
+    assert.throws(() => validateOllamaUrl(""), /OLLAMA_URL_REQUIRED/u);
   });
 
   // =========================================================================
@@ -668,7 +674,11 @@ describe("M8/T1 Governed Skill Vector Store & Semantic Vector RAG", () => {
   // =========================================================================
   test("zink_skill_propose connects to Approval flow: registers pending proposal and returns Approval Request packet", async () => {
     let proposeTool = null;
+    const proposalStorageDir = await mkdtemp(
+      path.join(os.tmpdir(), "zink-governance-proposals-"),
+    );
     const mockHostApi = {
+      pluginConfig: { ledgerRoot: proposalStorageDir },
       registerTool: (t) => {
         if (t.id === "zink_skill_propose") proposeTool = t;
       },
@@ -678,13 +688,18 @@ describe("M8/T1 Governed Skill Vector Store & Semantic Vector RAG", () => {
     assert.ok(proposeTool, "zink_skill_propose tool must be registered");
 
     const content = "# Dynamic Array Filter\n\nFilter multi criteria in Excel.";
-    const proposeResult = await proposeTool.execute("call-1", {
-      namespace: "excel",
-      capability: "filter-multi-criteria",
-      version: "1.0.0",
-      content,
-      reason: "Optimize filtering on large dataset",
-    });
+    // M7-049: tool calls carry the trusted caller identity in context.
+    // zink_skill_propose authorizes specialist proposers.
+    const proposeResult = await proposeTool.execute(
+      { agent: "excel" },
+      {
+        namespace: "excel",
+        capability: "filter-multi-criteria",
+        version: "1.0.0",
+        content,
+        reason: "Optimize filtering on large dataset",
+      },
+    );
 
     assert.ok(proposeResult?.content?.[0]?.text);
     const parsedPacket = JSON.parse(proposeResult.content[0].text);
@@ -710,5 +725,6 @@ describe("M8/T1 Governed Skill Vector Store & Semantic Vector RAG", () => {
       /### 🔖 \[PHÊ DUYỆT\] Đề xuất Skill: filter-multi-criteria/u,
     );
     assert.match(formattedMessage, /Duyệt đề xuất: /u);
+    await rm(proposalStorageDir, { recursive: true, force: true });
   });
 });

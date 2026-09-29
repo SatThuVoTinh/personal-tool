@@ -2,7 +2,7 @@ import test, { describe } from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
 import os from "node:os";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { setTimeout } from "node:timers/promises";
@@ -27,7 +27,14 @@ import {
 } from "../integrations/openclaw/lib/authority.mjs";
 
 import { validateContract } from "../integrations/openclaw/topology/lib/schema.mjs";
+import { buildSpawnProposal } from "../integrations/openclaw/topology/lib/canonical.mjs";
 import { applyWorkflowEvent } from "../integrations/openclaw/topology/lib/workflow.mjs";
+import {
+  ensureLedger,
+  inspectLedgerUpgrade,
+  readSnapshot,
+  ledgerPaths,
+} from "../integrations/openclaw/topology/lib/ledger.mjs";
 
 import { QueueManager } from "../integrations/openclaw/lib/queue-manager.mjs";
 
@@ -56,7 +63,10 @@ import {
   resolveReferenceIdMeaning,
 } from "../zink-tools/common/semantic-contract.mjs";
 
-import { handleDiscordAction } from "../integrations/openclaw/plugins/zink-governance/index.mjs";
+import {
+  evaluateToolAccess,
+  handleDiscordAction,
+} from "../integrations/openclaw/plugins/zink-governance/index.mjs";
 
 import {
   formatOfficeClarificationQuestion,
@@ -162,7 +172,7 @@ describe("M8/T2 Governed Runtime, Authority, Memory & Reliability Hardening — 
   });
 
   // =========================================================================
-  // BUG-M8T2-03: Decoupled Queue with atomic single claim and offline worker resilience
+  // BUG-M8T2-03: Decoupled Queue with atomic single claim and offline execution agent resilience
   // =========================================================================
   test("BUG-M8T2-03: QueueManager prevents dual claims and detects stale heartbeat", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "zink-queue-test-"));
@@ -178,19 +188,24 @@ describe("M8/T2 Governed Runtime, Authority, Memory & Reliability Hardening — 
       });
       assert.equal(enqueued.status, TASK_STATES.QUEUED);
 
-      // Worker 1 claims task
+      // Execution agent 1 claims task (M7-010: claimant must be the
+      // designated coordinator or a listed required capability)
       const claim1 = qm.claimTask({
-        workerId: "worker-1",
+        agentId: "excel",
         capabilities: ["excel"],
         leaseSeconds: 2,
       });
       assert.equal(claim1.claimed, true);
-      assert.equal(claim1.task.claimedBy, "worker-1");
+      assert.equal(claim1.task.claimedBy, "excel");
       assert.equal(claim1.task.status, TASK_STATES.EXECUTING);
 
-      // Worker 2 attempts to claim same task -> DENIED (already executing)
+      // Execution agent 2 attempts to claim same task -> DENIED (already executing)
       assert.throws(
-        () => qm.claimTaskById({ taskId: "TASK-003", workerId: "worker-2" }),
+        () =>
+          qm.claimTaskById({
+            taskId: "TASK-003",
+            agentId: "o2",
+          }),
         /CONCURRENT_CLAIM_DENIED/,
       );
 
@@ -203,11 +218,66 @@ describe("M8/T2 Governed Runtime, Authority, Memory & Reliability Hardening — 
       assert.equal(staleRecovered[0].taskId, "TASK-003");
 
       const taskAfterStale = qm.getTask("TASK-003");
-      assert.equal(taskAfterStale.status, TASK_STATES.WAITING_FOR_WORKER);
+      assert.equal(taskAfterStale.status, TASK_STATES.QUEUED);
       assert.equal(taskAfterStale.claimedBy, null);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
+  });
+
+  test("R4: QueueManager fails closed on storage read and write errors", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "zink-queue-fail-"));
+    try {
+      const unreadableQueue = path.join(tempDir, "unreadable.json");
+      await writeFile(unreadableQueue, "not-json", "utf8");
+      assert.throws(
+        () => new QueueManager({ storagePath: unreadableQueue }),
+        /QUEUE_STORAGE_READ_FAILED/u,
+      );
+
+      const storageBlocker = path.join(tempDir, "storage-blocker");
+      await writeFile(storageBlocker, "not-a-directory", "utf8");
+      const blockedQueue = path.join(storageBlocker, "queue.json");
+      const qm = new QueueManager({ storagePath: blockedQueue });
+      assert.throws(
+        () =>
+          qm.enqueueTask({
+            taskId: "QUEUE-WRITE-FAIL",
+            primaryCoordinator: "o1",
+          }),
+        /QUEUE_STORAGE_WRITE_FAILED/u,
+      );
+      assert.equal(qm.getTask("QUEUE-WRITE-FAIL"), null);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("R4: Skill Store tool access requires a governed, non-global namespace", () => {
+    assert.equal(
+      evaluateToolAccess("excel", "zink_skill_search", {
+        namespace: "excel",
+      }).allowed,
+      true,
+    );
+    assert.deepEqual(
+      evaluateToolAccess("excel", "zink_skill_search", {
+        namespace: "all",
+      }),
+      { allowed: false, reason: "NAMESPACE_ACCESS_DENIED" },
+    );
+    assert.deepEqual(
+      evaluateToolAccess("excel", "zink_skill_search", {
+        namespace: "unknown-namespace",
+      }),
+      { allowed: false, reason: "NAMESPACE_ACCESS_DENIED" },
+    );
+    assert.deepEqual(
+      evaluateToolAccess("excel", "zink_skill_search", {
+        namespace: "",
+      }),
+      { allowed: false, reason: "NAMESPACE_ACCESS_DENIED" },
+    );
   });
 
   // =========================================================================
@@ -288,9 +358,17 @@ describe("M8/T2 Governed Runtime, Authority, Memory & Reliability Hardening — 
       });
       assert.equal(recorded.topic, "LSCM");
 
-      // 3. Query finds prior decision
-      assert.equal(dl.hasDecision("LSCM", "baseline"), true);
-      const matches = dl.queryDecisions({ topic: "LSCM", query: "forecast" });
+      // 3. Query finds prior decision (M7-036: exact governed question —
+      // substring generalization never matches)
+      assert.equal(
+        dl.hasDecision("LSCM", "What forecast baseline should be used?"),
+        true,
+      );
+      assert.equal(dl.hasDecision("LSCM", "baseline"), false);
+      const matches = dl.queryDecisions({
+        topic: "LSCM",
+        query: "What forecast baseline should be used?",
+      });
       assert.equal(matches.length, 1);
       assert.equal(matches[0].decision, "Use 2026 fiscal baseline model");
 
@@ -478,9 +556,9 @@ describe("M8/T2 Governed Runtime, Authority, Memory & Reliability Hardening — 
       taskId: "TASK-042",
       state: "INVESTIGATING",
       severity: "HIGH",
-      observed: "Worker disconnect during processing",
+      observed: "Execution agent disconnect during processing",
       expected: "Heartbeat maintained every 60s",
-      action: "Re-queueing task to waiting worker",
+      action: "Re-queueing task to waiting execution agent",
     });
     assert.match(incCard, /SỰ CỐ/);
     assert.match(incCard, /INC-001/);
@@ -504,7 +582,7 @@ describe("M8/T2 Governed Runtime, Authority, Memory & Reliability Hardening — 
     // O2 manages Analytics & Visualization specialists
     assert.deepEqual([...AGENT_SPAWN_POLICY.o2], ["power-bi", "python"]);
 
-    // Specialists have empty spawn lists (pure execution workers)
+    // Specialists have empty spawn lists (pure execution execution agents)
     for (const spec of ["excel", "power-bi", "sql", "python"]) {
       assert.deepEqual([...AGENT_SPAWN_POLICY[spec]], []);
     }
@@ -534,6 +612,9 @@ describe("M8/T2 Governed Runtime, Authority, Memory & Reliability Hardening — 
       assert.equal(res.status, "success");
       assert.ok(res.preview_image_path);
       assert.match(res.preview_image_path, /revenue_report_preview\.svg$/);
+      assert.equal(Object.hasOwn(res, "absolute_path"), false);
+      assert.equal(res.preview_image_path, "revenue_report_preview.svg");
+      assert.equal(JSON.stringify(res).includes(tempDir), false);
 
       // Verify artifact evaluation detects Excel and links real visual preview
       const gate = evaluateResultGate({
@@ -1021,7 +1102,7 @@ if __name__ == "__main__":
 
 describe("M8/T2.1 Hardening & Regression Suite (A-Series, H-Series, C-Series, D-Series)", () => {
   describe("Queue & Lease Fencing (H01, H04, H05, H08, H10)", () => {
-    test("H01: finishExecution fences by workerId, leaseId, attempt", async () => {
+    test("H01: finishExecution fences by agentId, leaseId, attempt", async () => {
       const tempDir = await mkdtemp(path.join(os.tmpdir(), "zink-h-test-"));
       const qm = new QueueManager({
         storagePath: path.join(tempDir, "q.json"),
@@ -1033,24 +1114,24 @@ describe("M8/T2.1 Hardening & Regression Suite (A-Series, H-Series, C-Series, D-
       });
       const { leaseId } = qm.claimTaskById({
         taskId: "T-H01",
-        workerId: "worker-1",
+        agentId: "o1",
       });
       assert.ok(leaseId);
       assert.throws(
         () =>
           qm.finishExecution({
             taskId: "T-H01",
-            workerId: "worker-2",
+            agentId: "o2",
             leaseId,
             attempt: 1,
           }),
-        /WORKER_MISMATCH/,
+        /AGENT_MISMATCH/,
       );
       assert.throws(
         () =>
           qm.finishExecution({
             taskId: "T-H01",
-            workerId: "worker-1",
+            agentId: "o1",
             leaseId: "wrong-lease",
             attempt: 1,
           }),
@@ -1060,7 +1141,7 @@ describe("M8/T2.1 Hardening & Regression Suite (A-Series, H-Series, C-Series, D-
         () =>
           qm.finishExecution({
             taskId: "T-H01",
-            workerId: "worker-1",
+            agentId: "o1",
             leaseId,
             attempt: 99,
           }),
@@ -1068,7 +1149,7 @@ describe("M8/T2.1 Hardening & Regression Suite (A-Series, H-Series, C-Series, D-
       );
       const res = qm.finishExecution({
         taskId: "T-H01",
-        workerId: "worker-1",
+        agentId: "o1",
         leaseId,
         attempt: 1,
         resultSummary: "completed successfully",
@@ -1091,17 +1172,24 @@ describe("M8/T2.1 Hardening & Regression Suite (A-Series, H-Series, C-Series, D-
       });
       const { leaseId } = qm.claimTaskById({
         taskId: "T-H04",
-        workerId: "worker-zombie",
+        agentId: "o1",
       });
-      const task = qm.getTask("T-H04");
-      task.lastHeartbeatAt = new Date(Date.now() - 700000).toISOString();
+      // Backdate the heartbeat durably: withLock reloads the persisted
+      // projection, so in-memory-only edits are not authoritative.
+      const stored = JSON.parse(readFileSync(qm.storagePath, "utf8"));
+      for (const item of stored) {
+        if (item.taskId === "T-H04") {
+          item.lastHeartbeatAt = new Date(Date.now() - 700000).toISOString();
+        }
+      }
+      writeFileSync(qm.storagePath, JSON.stringify(stored, null, 2), "utf8");
       const recovered = qm.detectAndRecoverStaleTasks({
         staleThresholdSeconds: 600,
       });
       assert.equal(recovered.length, 1);
       assert.equal(recovered[0].revokedLeaseId, leaseId);
       const updated = qm.getTask("T-H04");
-      assert.equal(updated.status, TASK_STATES.WAITING_FOR_WORKER);
+      assert.equal(updated.status, TASK_STATES.QUEUED);
       assert.equal(updated.leaseId, null);
       assert.equal(updated.attempt, 2);
       await rm(tempDir, { recursive: true, force: true });
@@ -1119,7 +1207,7 @@ describe("M8/T2.1 Hardening & Regression Suite (A-Series, H-Series, C-Series, D-
         taskPayload: {},
       });
       assert.equal(qm._projectionVersion, 1);
-      qm.claimTaskById({ taskId: "T-H08", workerId: "worker-1" });
+      qm.claimTaskById({ taskId: "T-H08", agentId: "o1" });
       assert.equal(qm._projectionVersion, 2);
       await rm(tempDir, { recursive: true, force: true });
     });
@@ -1131,12 +1219,15 @@ describe("M8/T2.1 Hardening & Regression Suite (A-Series, H-Series, C-Series, D-
       const qm2 = new QueueManager({ storagePath: queueFile });
 
       qm1.enqueueTask({ taskId: "T-H02", primaryCoordinator: "o1" });
-      const c1 = qm1.claimTaskById({ taskId: "T-H02", workerId: "worker-A" });
+      const c1 = qm1.claimTaskById({
+        taskId: "T-H02",
+        agentId: "o1",
+      });
       assert.equal(c1.claimed, true);
 
       // qm2 must see task is already claimed and reject concurrent claim
       assert.throws(
-        () => qm2.claimTaskById({ taskId: "T-H02", workerId: "worker-B" }),
+        () => qm2.claimTaskById({ taskId: "T-H02", agentId: "o2" }),
         /CONCURRENT_CLAIM_DENIED/,
         "H02: concurrent claim from second QM instance must be denied",
       );
@@ -1145,7 +1236,7 @@ describe("M8/T2.1 Hardening & Regression Suite (A-Series, H-Series, C-Series, D-
       const raw = readFileSync(queueFile, "utf8");
       const data = JSON.parse(raw);
       assert.equal(data.length, 1);
-      assert.equal(data[0].claimedBy, "worker-A");
+      assert.equal(data[0].claimedBy, "o1");
       await rm(tempDir, { recursive: true, force: true });
     });
 
@@ -1210,17 +1301,29 @@ describe("M8/T2.1 Hardening & Regression Suite (A-Series, H-Series, C-Series, D-
   });
 
   describe("Discord Ingress & Identity (A01-A10, A23-A29)", () => {
-    test("A01 & A06: resolveIngressRouting creates unambiguous routing for valid coordinator mention", () => {
+    test("A01 & A06: resolveIngressRouting admits only an explicit Main mention", () => {
       const res = resolveIngressRouting({
+        message: {
+          content: "Hey @main process this data",
+          mentions: [{ username: "main" }],
+        },
+      });
+      assert.equal(res.intent, "DELEGATE_TO_MAIN");
+      assert.equal(res.confidence, 1.0);
+      assert.equal(res.needs_clarification, false);
+      assert.deepEqual(res.target_agents, ["main"]);
+
+      const directCoordinator = resolveIngressRouting({
         message: {
           content: "Hey @o1 process this data",
           mentions: [{ username: "o1" }],
         },
       });
-      assert.equal(res.intent, "DELEGATE_TO_O1");
-      assert.equal(res.confidence, 1.0);
-      assert.equal(res.needs_clarification, false);
-      assert.deepEqual(res.target_agents, ["o1"]);
+      assert.equal(directCoordinator.needs_clarification, true);
+      assert.match(
+        directCoordinator.clarification_reason,
+        /NON_MAIN_DIRECT_INGRESS/,
+      );
     });
 
     test("A02: @everyone and @here reject execution fanning out", () => {
@@ -1246,7 +1349,7 @@ describe("M8/T2.1 Hardening & Regression Suite (A-Series, H-Series, C-Series, D-
     });
 
     test("A04 & A07: CANONICAL_AGENT_ROSTER and AGENT_ROSTER_VERSION pass validation", () => {
-      assert.equal(AGENT_ROSTER_VERSION, "m8-t2.1-r3");
+      assert.equal(AGENT_ROSTER_VERSION, "m8-t2.2-r4");
       assert.ok(validateAgentRoster(CANONICAL_AGENT_ROSTER));
     });
 
@@ -1331,7 +1434,7 @@ describe("M8/T2.1 Hardening & Regression Suite (A-Series, H-Series, C-Series, D-
     test("C01 & C02: schema validator supports finite floats and integers", () => {
       const validRef = {
         schema_version: "1.0.0",
-        governance_version: "m8-t2.1-r3",
+        governance_version: "m8-t2.2-r4",
         ref_id: "a".repeat(64),
         ref_type: "document",
         producer_task_id: "b".repeat(64),
@@ -1355,7 +1458,7 @@ describe("M8/T2.1 Hardening & Regression Suite (A-Series, H-Series, C-Series, D-
     test("C03: date-time format accepts RFC 3339 timezone offsets", () => {
       const validRefWithOffset = {
         schema_version: "1.0.0",
-        governance_version: "m8-t2.1-r3",
+        governance_version: "m8-t2.2-r4",
         ref_id: "a".repeat(64),
         ref_type: "document",
         producer_task_id: "b".repeat(64),
@@ -1383,7 +1486,7 @@ describe("M8/T2.1 Hardening & Regression Suite (A-Series, H-Series, C-Series, D-
       const snapshot = {
         sequence: 1,
         schema_version: "1.0.0",
-        governance_version: "m8-t2.1-r3",
+        governance_version: "m8-t2.2-r4",
         last_event_digest: "a".repeat(64),
         tasks: {
           [taskId]: {
@@ -1402,7 +1505,7 @@ describe("M8/T2.1 Hardening & Regression Suite (A-Series, H-Series, C-Series, D-
         () =>
           applyWorkflowEvent(snapshot, "WORKFLOW_TASK_CLAIMED", {
             task_id: taskId,
-            worker_id: "worker-1",
+            agent_id: "execution agent-1",
           }),
         /INVALID_STATE_TRANSITION/,
       );
@@ -1415,7 +1518,7 @@ describe("M8/T2.1 Hardening & Regression Suite (A-Series, H-Series, C-Series, D-
       return {
         sequence: 1,
         schema_version: "1.0.0",
-        governance_version: "m8-t2.1-r3",
+        governance_version: "m8-t2.2-r4",
         last_event_digest: "a".repeat(64),
         tasks: {
           [taskId]: {
@@ -1599,6 +1702,7 @@ describe("M8/T2.1 Hardening & Regression Suite (A-Series, H-Series, C-Series, D-
           applyWorkflowEvent(snap, "WORKFLOW_BRIEF_ACTIVATED", {
             task_id: taskId,
             brief_revision: 1,
+            semantic_contract_status: "VALID",
             nodes: [node],
           }),
         /UNAUTHORIZED_TARGET/,
@@ -1626,6 +1730,7 @@ describe("M8/T2.1 Hardening & Regression Suite (A-Series, H-Series, C-Series, D-
           applyWorkflowEvent(snap, "WORKFLOW_BRIEF_ACTIVATED", {
             task_id: taskId,
             brief_revision: 1,
+            semantic_contract_status: "VALID",
             nodes: [node],
           }),
         "D10: o1 on data_plant stack must be accepted",
@@ -1686,7 +1791,10 @@ describe("M8/T2.1 Hardening & Regression Suite (A-Series, H-Series, C-Series, D-
       const taskId = "d".repeat(64);
       const firstDelegationId = "f1".padEnd(64, "0");
       const snap = makeSnapshot(taskId, {
-        workflow_status: "ACTIVE",
+        // M7-020: a spawn reservation is a post-approval event, so the
+        // fixture carries approval evidence and a post-approval status.
+        workflow_status: "QUEUED",
+        approved_at: "2026-09-01T00:00:00.000Z",
         brief_revision: 1,
         current_stack: "data_plant",
         delegated_runs_used: 1,
@@ -1718,21 +1826,24 @@ describe("M8/T2.1 Hardening & Regression Suite (A-Series, H-Series, C-Series, D-
           },
         },
       });
-      // Attempt to reserve with attempt=1 again (duplicate)
+      // Attempt to reserve with attempt=1 again (duplicate). M8-055: the
+      // canonical builder derives both ids, so only the attempt number and the
+      // tool call id differ from the committed reservation.
       const dupPayload = {
-        task_id: taskId,
-        brief_revision: 1,
-        node_id: "node1",
-        agent_id: "o1",
-        parent_agent_id: "main",
-        parent_session_key: "sess-root",
-        parent_run_id: "run-root",
-        tool_call_id: "tc-2",
-        turn: 2,
-        attempt: 1, // duplicate — should be rejected
+        ...buildSpawnProposal({
+          task_id: taskId,
+          brief_revision: 1,
+          node_id: "node1",
+          agent_id: "o1",
+          parent_agent_id: "main",
+          parent_session_key: "sess-root",
+          parent_run_id: "run-root",
+          tool_call_id: "tc-2",
+          turn: 2,
+          attempt: 1, // duplicate — should be rejected
+          expected_governance_hash: "a".repeat(64),
+        }),
         delegation_id: firstDelegationId,
-        expected_governance_hash: "a".repeat(64),
-        request_digest: "b".repeat(64),
       };
       assert.throws(
         () => applyWorkflowEvent(snap, "WORKFLOW_SPAWN_RESERVED", dupPayload),
@@ -1753,7 +1864,7 @@ describe("M8/T2.1 Hardening & Regression Suite (A-Series, H-Series, C-Series, D-
       const snapshot = {
         sequence: 1,
         schema_version: "1.0.0",
-        governance_version: "m8-t2.1-r3",
+        governance_version: "m8-t2.2-r4",
         last_event_digest: "a".repeat(64),
         tasks: {},
       };
@@ -1801,7 +1912,7 @@ describe("M8/T2.1 Hardening & Regression Suite (A-Series, H-Series, C-Series, D-
       const snapshot = {
         sequence: 1,
         schema_version: "1.0.0",
-        governance_version: "m8-t2.1-r3",
+        governance_version: "m8-t2.2-r4",
         last_event_digest: "a".repeat(64),
         tasks: {},
       };
@@ -1840,28 +1951,34 @@ describe("M8/T2.1 Hardening & Regression Suite (A-Series, H-Series, C-Series, D-
     });
 
     // E06: spawn with governance hash must fail if manifest unavailable
-    test("E06: spawn is blocked when manifest hash is unavailable (zero-hash forbidden)", () => {
-      // We verify the policy: zero-governance-hash ("0".repeat(64)) is no longer the fallback.
-      // The code path now returns { allow: false, reason: "GOVERNANCE_HASH_MISSING" }.
-      // We confirm via code inspection that the old "0".repeat(64) fallback is removed.
-      const pluginSrc = readFileSync(
-        fileURLToPath(
-          new URL(
-            "../integrations/openclaw/plugins/zink-governance/index.mjs",
-            import.meta.url,
-          ),
-        ),
-        "utf8",
-      );
-      // The old "0".repeat(64) fallback line must NOT be present
-      assert.ok(
-        !pluginSrc.includes('"0".repeat(64)'),
-        'E06: zero governance hash fallback "0".repeat(64) must be removed from plugin',
-      );
-      assert.ok(
-        pluginSrc.includes("GOVERNANCE_HASH_MISSING"),
-        "E06: GOVERNANCE_HASH_MISSING error code must be present as block reason",
-      );
+    // M7-019: this used to assert that the string "GOVERNANCE_HASH_MISSING"
+    // appears in the plugin source. That was a source-grep, not a proof: the
+    // manifest-hash policy now lives in the ONE canonical spawn gate, and the
+    // live adapter delegates to it. The zero-hash fallback is still forbidden;
+    // the behavioural proof is in tests/m7-lane-k-spawn-gate.test.mjs
+    // ("a target without a governance manifest is blocked, and no zero hash is
+    // ever reserved"). What remains here is only the check that no code path
+    // reintroduces a literal zero hash.
+    test("E06: zero governance hash is not a fallback anywhere in the runtime", () => {
+      const sources = [
+        "../integrations/openclaw/plugins/zink-governance/index.mjs",
+        "../integrations/openclaw/topology/lib/guard.mjs",
+        "../integrations/openclaw/topology/lib/canonical.mjs",
+      ];
+      for (const relative of sources) {
+        const src = readFileSync(
+          fileURLToPath(new URL(relative, import.meta.url)),
+          "utf8",
+        );
+        assert.ok(
+          !src.includes('"0".repeat(64)'),
+          `E06: zero governance hash fallback must not appear in ${relative}`,
+        );
+        assert.ok(
+          !/expected_governance_hash\s*[:=]\s*["'`]0{64}["'`]/.test(src),
+          `E06: a literal zero governance hash must not be assigned in ${relative}`,
+        );
+      }
     });
 
     // E07: spawn reservation write failure must block spawn
@@ -2090,8 +2207,8 @@ describe("M8/T2.1 Hardening & Regression Suite (A-Series, H-Series, C-Series, D-
       );
     });
 
-    // H01 fence: finishExecution workerId/leaseId/attempt — already covered in BUG-M8T2-06 and H01 suite
-    test("G14: handleExecutionFinished enforces worker lease fence before artifact finalization", async () => {
+    // H01 fence: finishExecution agentId/leaseId/attempt — already covered in BUG-M8T2-06 and H01 suite
+    test("G14: handleExecutionFinished enforces execution agent lease fence before artifact finalization", async () => {
       const { handleExecutionFinished } =
         await import("../integrations/openclaw/plugins/zink-governance/index.mjs");
       const os_mod = await import("node:os");
@@ -2119,15 +2236,15 @@ describe("M8/T2.1 Hardening & Regression Suite (A-Series, H-Series, C-Series, D-
           requiredCapabilities: [],
         });
         const claim = qm.claimTask({
-          workerId: "correct-worker",
+          agentId: "o1",
           capabilities: [],
         });
         assert.ok(claim.claimed);
 
-        // Wrong workerId — must return FAILED
-        const badWorker = await handleExecutionFinished({
+        // Wrong agentId — must return FAILED
+        const badExecutionAgent = await handleExecutionFinished({
           taskId,
-          workerId: "wrong-worker",
+          agentId: "o2",
           artifactPath: artFile,
           technicalConfig: {
             expectedType: "csv",
@@ -2138,9 +2255,9 @@ describe("M8/T2.1 Hardening & Regression Suite (A-Series, H-Series, C-Series, D-
           queueManager: qm,
         });
         assert.equal(
-          badWorker.status,
+          badExecutionAgent.status,
           "FAILED",
-          "G14: wrong workerId must return FAILED",
+          "G14: wrong agentId must return FAILED",
         );
       } finally {
         await fs_mod.rm(tempDir, { recursive: true, force: true });
@@ -2293,7 +2410,7 @@ describe("M8/T2.1 Hardening & Regression Suite (A-Series, H-Series, C-Series, D-
           requiredCapabilities: [],
         });
         const claim = qm.claimTask({
-          workerId: "worker-g20",
+          agentId: "o1",
           capabilities: [],
         });
         assert.ok(claim.claimed);
@@ -2301,9 +2418,9 @@ describe("M8/T2.1 Hardening & Regression Suite (A-Series, H-Series, C-Series, D-
         const idemKey = "idem-" + Date.now();
         const first = await handleExecutionFinished({
           taskId,
-          workerId: "worker-g20",
+          agentId: "o1",
           leaseId: claim.leaseId,
-          attempt: claim.attempt,
+          attempt: claim.task.attempt,
           artifactPath: artFile,
           technicalConfig: {
             expectedType: "csv",
@@ -2319,7 +2436,7 @@ describe("M8/T2.1 Hardening & Regression Suite (A-Series, H-Series, C-Series, D-
         // Second call with same idempotencyKey must return ALREADY_COMPLETED
         const second = await handleExecutionFinished({
           taskId,
-          workerId: "worker-g20",
+          agentId: "o1",
           artifactPath: artFile,
           queueManager: qm,
           idempotencyKey: idemKey,
@@ -2362,14 +2479,17 @@ describe("M8/T2.1 Hardening & Regression Suite (A-Series, H-Series, C-Series, D-
       const snapshot = {
         sequence: 1,
         schema_version: "1.0.0",
-        governance_version: "m8-t2.1-r3",
+        governance_version: "m8-t2.2-r4",
         last_event_digest: "a".repeat(64),
         tasks: {
           [taskId]: {
             task_id: taskId,
             brief_revision: 1,
             brief_state: "ACTIVE",
-            workflow_status: "ACTIVE",
+            // M7-020: a continuation continues approved work, so the fixture
+            // carries approval evidence and a post-approval status.
+            workflow_status: "EXECUTING",
+            approved_at: "2026-09-01T00:00:00.000Z",
             root_agent_id: "main",
             root_session_key: "agent:main:s1",
             root_run_id: "root-run-1",
@@ -2450,7 +2570,22 @@ describe("M8/T2.1 Hardening & Regression Suite (A-Series, H-Series, C-Series, D-
     });
 
     // D16 & D17: delegated_runs budget parity
-    test("D16 & D17: delegated_runs budget uses 72 for M8 governance version", () => {
+    test("D16 & D17: delegated_runs budget uses 72 for M8 governance version", async () => {
+      // The ceiling is canonical (BUDGETS) and only the version-specific delta
+      // is declared by the guard. A source-grep for a literal `71 : 72` no
+      // longer proved anything once the ceiling stopped being restated inline,
+      // so this asserts the authority and the delta instead.
+      const { BUDGETS } =
+        await import("../integrations/openclaw/topology/lib/ledger.mjs");
+      assert.equal(
+        BUDGETS.maxTotalDelegatedRunsPerTask,
+        72,
+        "D16: the canonical delegation ceiling is 72",
+      );
+      assert.equal(BUDGETS.maxBriefRevisionsPerTask, 16);
+      assert.equal(BUDGETS.maxStackTransitionsPerTask, 10);
+      // D17: the legacy m7-t2-r12 carve-out reduces the ceiling by exactly one,
+      // expressed as a named delta rather than as a restated ceiling.
       const guardSrc = readFileSync(
         fileURLToPath(
           new URL(
@@ -2461,10 +2596,14 @@ describe("M8/T2.1 Hardening & Regression Suite (A-Series, H-Series, C-Series, D-
         "utf8",
       );
       assert.ok(
-        guardSrc.includes(
-          '(proposal.governance_version === "m7-t2-r12" ? 71 : 72)',
-        ),
-        "D16: guard must allocate 72 delegated runs for M8 governance version",
+        guardSrc.includes('"m7-t2-r12": 1'),
+        "D17: the legacy governance version must carry a one-run carve-out",
+      );
+      // The guard must read the canonical ceiling, never restate it.
+      assert.ok(
+        guardSrc.includes("BUDGETS.maxTotalDelegatedRunsPerTask -") &&
+          !/\?\s*71\s*:\s*72/u.test(guardSrc),
+        "the delegation ceiling must come from BUDGETS, not a restated literal",
       );
     });
 
@@ -2658,6 +2797,102 @@ describe("A-Series: Discord Component Callback Schema & Interaction Guards (A14-
     });
     assert.equal(result.valid, false);
     assert.equal(result.reason, "MISSING_THREAD_CORRELATION");
+  });
+
+  test("A23: built custom_ids stay compatible with the native 2026.6.34 custom_id grammar", () => {
+    // openclaw@2026.6.34 native parseCustomId splits segments on ";" and
+    // parses name=value pairs; our ids must never contain those delimiters
+    // so the native parser yields key "zink" without misparsing.
+    for (const actionType of Object.values(
+      DISCORD_COMPONENT_ACTION_NAMESPACE,
+    )) {
+      const customId = buildComponentCustomId(actionType, "task-01", "3");
+      assert.equal(customId.includes(";"), false);
+      assert.equal(customId.includes("="), false);
+      const parsed = parseComponentCustomId(customId);
+      assert.equal(parsed.actionType, actionType);
+      assert.equal(parsed.taskId, "task-01");
+      assert.equal(parsed.revision, "3");
+    }
+  });
+
+  test("A23: parseComponentCustomId accepts the native occomp:cid= envelope", () => {
+    const inner = buildComponentCustomId(
+      DISCORD_COMPONENT_ACTION_NAMESPACE.RESULT_ACCEPT,
+      "task-07",
+      "1",
+    );
+    const parsed = parseComponentCustomId(`occomp:cid=${inner};ttl=60000`);
+    assert.equal(parsed.actionKey, "RESULT_ACCEPT");
+    assert.equal(parsed.taskId, "task-07");
+    assert.equal(parsed.revision, "1");
+  });
+
+  test("A23: plugin keeps the native interaction boundary (no private registry)", () => {
+    const pluginPath = path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "..",
+      "integrations",
+      "openclaw",
+      "plugins",
+      "zink-governance",
+      "index.mjs",
+    );
+    const source = readFileSync(pluginPath, "utf8");
+    assert.equal(
+      source.includes('Symbol.for("openclaw.discord.componentEntries")'),
+      false,
+      "private component registry marker must be absent",
+    );
+    assert.equal(
+      source.includes("_zinkPatched"),
+      false,
+      "registry monkeypatch marker must be absent",
+    );
+    assert.match(
+      source,
+      /api\.registerInteractiveHandler\(\{\s*channel:\s*"discord",\s*namespace:\s*"zink"/,
+      "native interactive handler registration (discord/zink) must exist",
+    );
+  });
+
+  test("A25: ensureLedger creates an R4-compatible ledger (CURRENT, m8-t2.2-r4)", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "zink-r4-ledger-"));
+    try {
+      const paths = ledgerPaths(stateDir);
+      ensureLedger(paths);
+      assert.equal(inspectLedgerUpgrade(paths), "CURRENT");
+      const snapshot = readSnapshot(paths);
+      assert.equal(snapshot.governance_version, "m8-t2.2-r4");
+      assert.equal(snapshot.sequence, 0);
+      assert.deepEqual(snapshot.tasks, {});
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  test("A25: incompatible legacy ledger stays BLOCKED (fail-closed preserved)", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "zink-r4-ledger-"));
+    try {
+      const paths = ledgerPaths(stateDir);
+      ensureLedger(paths);
+      const { writeFileSync } = await import("node:fs");
+      writeFileSync(
+        paths.events,
+        JSON.stringify({
+          sequence: 1,
+          schema_version: "1.0.0",
+          governance_version: "m7-t2-r11",
+          created_at: "2026-01-01T00:00:00.000Z",
+          type: "UNKNOWN_STATE_CHANGE",
+          payload: {},
+          event_digest: "0".repeat(64),
+        }) + "\n",
+      );
+      assert.throws(() => readSnapshot(paths), /Ledger corruption/);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
   });
 
   test("A24: validateContextVisibilityForThread warns when thread not in allowlist", () => {

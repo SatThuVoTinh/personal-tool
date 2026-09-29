@@ -4,13 +4,27 @@
   "title": "Semantic delegation proposal (not trusted lineage)",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "governance_version", "node_id", "inputs", "input_refs", "constraints", "validation_criteria"],
+  "required": [
+    "schema_version",
+    "governance_version",
+    "node_id",
+    "inputs",
+    "input_refs",
+    "constraints",
+    "validation_criteria"
+  ],
   "properties": {
     "schema_version": { "const": "1.0.0" },
-    "governance_version": { "enum": ["m7-t2-r12", "m7-t5-r13", "m8-t2-r9", "m8-t2.1-r3"] },
+    "governance_version": {
+      "enum": ["m7-t2-r12", "m7-t5-r13", "m8-t2-r9", "m8-t2.1-r3", "m8-t2.2-r4"]
+    },
     "node_id": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$" },
     "inputs": { "type": "string", "maxLength": 16384 },
-    "input_refs": { "type": "array", "maxItems": 16, "items": { "$ref": "governed-reference.schema.json" } },
+    "input_refs": {
+      "type": "array",
+      "maxItems": 16,
+      "items": { "$ref": "governed-reference.schema.json" }
+    },
     "constraints": { "type": "string", "maxLength": 4096 },
     "validation_criteria": { "type": "string", "maxLength": 4096 }
   }

@@ -260,8 +260,8 @@ describe("M7/T5 Runtime Governance Remediation Comprehensive Test Suite", () => 
   // T5.5 — Governance Version Synchronization (BUG-02)
   // =========================================================================
   describe("T5.5 — Governance Version Synchronization (BUG-02)", () => {
-    test("BUG-02: Canonical GOVERNANCE_VERSION is m7-t5-r13", () => {
-      assert.equal(GOVERNANCE_VERSION, "m7-t5-r13");
+    test("BUG-02: Canonical GOVERNANCE_VERSION is the active R4 revision", () => {
+      assert.equal(GOVERNANCE_VERSION, "m8-t2.2-r4");
     });
 
     test("BUG-02: Schemas accept both historical m7-t2-r12 and current m7-t5-r13", () => {
@@ -462,7 +462,7 @@ describe("M7/T5 Runtime Governance Remediation Comprehensive Test Suite", () => 
       );
     });
 
-    test("BUG-08: executeGovernedSkillQuery allows discover and read, but forbids publish and admin", async () => {
+    test("BUG-08: executeGovernedSkillQuery allows discover and fails closed for missing skills", async () => {
       const discoverRes = await executeGovernedSkillQuery({
         action: "discover",
         namespace: "all",
@@ -470,12 +470,14 @@ describe("M7/T5 Runtime Governance Remediation Comprehensive Test Suite", () => 
       assert.equal(discoverRes.governed_status, "SUCCESS");
       assert.ok(Array.isArray(discoverRes.skills));
 
-      const readRes = await executeGovernedSkillQuery({
-        action: "read",
-        skill_id: "skill-excel",
-      });
-      assert.equal(readRes.governed_status, "SUCCESS");
-      assert.ok(readRes.skill_content);
+      await assert.rejects(
+        () =>
+          executeGovernedSkillQuery({
+            action: "read",
+            skill_id: "skill-excel",
+          }),
+        /SKILL_NOT_FOUND/u,
+      );
 
       await assert.rejects(
         () =>
@@ -630,7 +632,7 @@ describe("M7/T5 Runtime Governance Remediation Comprehensive Test Suite", () => 
     test("12. Delegation privilege escalation is denied per DELEGATION_TABLE", () => {
       // main can only delegate zink_excel to o1 or o2, not directly to excel
       const mainTargets = DELEGATION_TABLE.main.zink_excel;
-      assert.deepEqual(mainTargets, ["o1", "o2"]);
+      assert.deepEqual(mainTargets, ["o1"]);
       assert.ok(
         !mainTargets.includes("excel"),
         "main must not escalate directly to specialist excel",

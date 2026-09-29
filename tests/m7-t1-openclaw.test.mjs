@@ -19,6 +19,7 @@ import {
   AGENT_DEFINITIONS,
   AGENT_GOOGLE_PROFILES,
   AGENT_IDS,
+  AGENT_MENTION_PATTERNS,
   DISCORD_SURFACE_IDENTIFIERS,
   GOOGLE_PROFILE_IDS,
   MODEL_ALLOWLIST,
@@ -358,10 +359,14 @@ test("M7/T1 builds the exact minimal-tool, zero-command foundation", () => {
       path.join(stateDir, "agents", agent.id, "agent"),
     );
     assert.deepEqual(agent.skills, []);
+    // T1: main additionally holds session_status for read-only status
+    // inspection. guard.mjs denies every mutating argument, including `model`,
+    // for every agent. Specialists receive no session-control capability.
     const expectedTools = { profile: "minimal" };
     if (agent.id === "main") {
       expectedTools.alsoAllow = [
         "agents_list",
+        "session_status",
         "sessions_spawn",
         "sessions_yield",
       ];
@@ -384,6 +389,29 @@ test("M7/T1 builds the exact minimal-tool, zero-command foundation", () => {
       },
     });
   }
+  test("R4 mention grammar: every agent carries its frozen mention pattern", () => {
+    for (const agent of config.agents.list) {
+      const patterns = AGENT_MENTION_PATTERNS[agent.id];
+      assert.ok(
+        Array.isArray(patterns) && patterns.length > 0,
+        `${agent.id} must have frozen mention patterns`,
+      );
+      assert.deepEqual(agent.groupChat.mentionPatterns, patterns);
+      for (const pattern of patterns) {
+        assert.doesNotThrow(
+          () => new RegExp(pattern, "u"),
+          `${agent.id} pattern must compile`,
+        );
+      }
+    }
+    // R4 PATCH-E: stale pre-R4 display names must not wake coordinators.
+    const o1Text = AGENT_MENTION_PATTERNS.o1.join("\n");
+    const o2Text = AGENT_MENTION_PATTERNS.o2.join("\n");
+    assert.equal(o1Text.includes("knowledge"), false);
+    assert.equal(o2Text.includes("orchestrator"), false);
+    assert.match(o1Text, /1545437953197744248/);
+    assert.match(o2Text, /1545438251966402661/);
+  });
   assert.deepEqual(config.commands, {
     native: false,
     nativeSkills: false,

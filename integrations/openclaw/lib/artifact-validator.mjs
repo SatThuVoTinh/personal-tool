@@ -1286,14 +1286,49 @@ export function generateArtifactPreview({ filePath, maxRows = 5 }) {
  */
 export function evaluateResultGate({
   artifactPath,
+  artifactSet = null,
   technicalConfig = {},
   businessData = {},
   businessConfig = {},
 }) {
+  // M8-051: the primary member of the ordered set carries the format and
+  // field checks, and EVERY member must pass the path-security tier. A
+  // trailing member may never reach the queue or the ledger without it.
+  const orderedSet =
+    Array.isArray(artifactSet) && artifactSet.length > 0
+      ? artifactSet.map((member) =>
+          typeof member === "string" ? member : (member?.logical_path ?? null),
+        )
+      : [artifactPath];
+
+  const primaryPath = orderedSet[0] ?? artifactPath;
   const technical = validateTechnicalArtifact({
-    filePath: artifactPath,
+    filePath: primaryPath,
     ...technicalConfig,
   });
+
+  if (technical.status === VALIDATION_STATUS.PASS && orderedSet.length > 1) {
+    const offending = orderedSet
+      .slice(1)
+      .find(
+        (member) =>
+          typeof member !== "string" ||
+          !path.isAbsolute(member) ||
+          member.startsWith("\\\\") ||
+          member.startsWith("//"),
+      );
+    if (offending !== undefined) {
+      technical.status = VALIDATION_STATUS.FAIL;
+      technical.checks.artifactSetPathSecurity = false;
+      technical.errors.push(
+        `INVALID_PATH_SECONDARY_ARTIFACT: every artifact in the delivered set must be an absolute, non-UNC path, received: "${String(offending)}"`,
+      );
+    } else {
+      technical.checks.artifactSetPathSecurity = true;
+    }
+  } else if (technical.status === VALIDATION_STATUS.PASS) {
+    technical.checks.artifactSetPathSecurity = true;
+  }
 
   const business = validateBusinessLogic({
     data: businessData,
@@ -1312,7 +1347,7 @@ export function evaluateResultGate({
     blockedReason = `RESULT BLOCKED: Technical check passed, but Business validation failed: ${business.errors.join("; ")}`;
   }
 
-  const preview = generateArtifactPreview({ filePath: artifactPath });
+  const preview = generateArtifactPreview({ filePath: primaryPath });
 
   return {
     overallStatus,
@@ -1322,6 +1357,7 @@ export function evaluateResultGate({
     business,
     technicalValidation: technical,
     businessValidation: business,
+    primaryArtifactPath: primaryPath,
     preview,
   };
 }

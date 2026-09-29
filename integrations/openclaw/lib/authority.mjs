@@ -10,7 +10,7 @@
  * 3. O1/O2 are execution supervisors: detailed plan, coordinate specialists, direct user questions in #office,
  *    emit EXECUTION_FINISHED event, submit result, propose revision. O1/O2 CANNOT APPROVE or ACCEPT/COMPLETE.
  * 4. Specialist (Excel, Power BI, SQL, Python): Capability execution only; NO governance authority.
- * 5. Worker: Runtime execution only. Claims queued tasks.
+ * 5. Specialist: Runtime execution only. Claims its own queued execution node.
  * 6. EXECUTION_FINISHED is an event, NOT human completion.
  */
 
@@ -23,7 +23,6 @@ export const ACTORS = Object.freeze({
   POWER_BI: "power-bi",
   SQL: "sql",
   PYTHON: "python",
-  WORKER: "worker",
 });
 
 export const CHANNELS = Object.freeze({
@@ -38,7 +37,6 @@ export const TASK_STATES = Object.freeze({
   PREFLIGHT: "PREFLIGHT",
   APPROVAL_PENDING: "APPROVAL_PENDING",
   QUEUED: "QUEUED",
-  WAITING_FOR_WORKER: "WAITING_FOR_WORKER",
   EXECUTING: "EXECUTING",
   WAITING_FOR_USER: "WAITING_FOR_USER",
   EXECUTION_FINISHED: "EXECUTION_FINISHED",
@@ -57,7 +55,7 @@ export const ACTIONS = Object.freeze({
   REJECT_APPROVAL: "REJECT_APPROVAL",
   REQUEST_REVISION_APPROVAL: "REQUEST_REVISION_APPROVAL",
 
-  // Queue & Worker actions
+  // Queue & execution-agent actions
   CLAIM: "CLAIM",
 
   // Office interaction actions
@@ -104,7 +102,6 @@ export function normalizeActor(actor) {
   if (a === "power-bi" || a === "powerbi") return ACTORS.POWER_BI;
   if (a === "sql") return ACTORS.SQL;
   if (a === "python") return ACTORS.PYTHON;
-  if (a === "worker" || a === "local-worker") return ACTORS.WORKER;
   return a;
 }
 
@@ -165,12 +162,18 @@ export function validateActionAuthority({
   // -------------------------------------------------------------------------
   // Rule 0: Specialist Enforcement (Specialists cannot take governance actions)
   // -------------------------------------------------------------------------
-  if (
-    normActor === ACTORS.EXCEL ||
-    normActor === ACTORS.POWER_BI ||
-    normActor === ACTORS.SQL ||
-    normActor === ACTORS.PYTHON
-  ) {
+  const isSpecialist = [
+    ACTORS.EXCEL,
+    ACTORS.POWER_BI,
+    ACTORS.SQL,
+    ACTORS.PYTHON,
+  ].includes(normActor);
+  const executionActions = new Set([
+    ACTIONS.CLAIM,
+    ACTIONS.EXECUTION_FINISHED,
+    ACTIONS.SUBMIT_RESULT,
+  ]);
+  if (isSpecialist && !executionActions.has(normAction)) {
     return {
       allowed: false,
       reason: `SPECIALIST_NO_GOVERNANCE: Specialist ${normActor} has execution capability only and cannot take governance action ${normAction}`,
@@ -296,24 +299,26 @@ export function validateActionAuthority({
   }
 
   // -------------------------------------------------------------------------
-  // Rule 3: Queue & Worker Claim
+  // Rule 3: Queue & Execution-Agent Claim
   // -------------------------------------------------------------------------
   if (normAction === ACTIONS.CLAIM) {
     if (
-      normActor !== ACTORS.WORKER &&
-      normActor !== ACTORS.O1 &&
-      normActor !== ACTORS.O2
+      ![
+        ACTORS.O1,
+        ACTORS.O2,
+        ACTORS.EXCEL,
+        ACTORS.POWER_BI,
+        ACTORS.SQL,
+        ACTORS.PYTHON,
+      ].includes(normActor)
     ) {
       return {
         allowed: false,
         reason:
-          "AUTHORITY_DENIED: Only worker or designated execution coordinator can claim task",
+          "AUTHORITY_DENIED: Only the designated coordinator or execution agent can claim task",
       };
     }
-    if (
-      normState !== TASK_STATES.QUEUED &&
-      normState !== TASK_STATES.WAITING_FOR_WORKER
-    ) {
+    if (normState !== TASK_STATES.QUEUED) {
       return {
         allowed: false,
         reason: `INVALID_STATE_TRANSITION: Cannot claim task in state ${normState}`,
@@ -376,7 +381,7 @@ export function validateActionAuthority({
   }
 
   // -------------------------------------------------------------------------
-  // Rule 5: Execution Finished Event (O1/O2/Worker -> Validation -> Review)
+  // Rule 5: Execution Finished Event (specialist/coordinator -> Validation -> Review)
   // EXECUTION_FINISHED is an event, NOT human completion!
   // -------------------------------------------------------------------------
   if (
@@ -384,15 +389,19 @@ export function validateActionAuthority({
     normAction === ACTIONS.SUBMIT_RESULT
   ) {
     if (
-      normActor !== ACTORS.O1 &&
-      normActor !== ACTORS.O2 &&
-      normActor !== ACTORS.WORKER &&
-      normActor !== ACTORS.MAIN
+      ![
+        ACTORS.O1,
+        ACTORS.O2,
+        ACTORS.EXCEL,
+        ACTORS.POWER_BI,
+        ACTORS.SQL,
+        ACTORS.PYTHON,
+      ].includes(normActor)
     ) {
       return {
         allowed: false,
         reason:
-          "AUTHORITY_DENIED: Only execution supervisors or worker can emit EXECUTION_FINISHED",
+          "AUTHORITY_DENIED: Only the designated coordinator or execution agent can emit EXECUTION_FINISHED",
       };
     }
     if (
@@ -473,6 +482,12 @@ export function validateActionAuthority({
   };
 }
 
+// M7-003: single tool-access authority. Direct-execution grants (L2/L3)
+// must stay within the canonical callable policy (TOOL_POLICY in
+// policy.mjs): L3 ⟺ listed. L2 is read-only (execute denied by the
+// canonical evaluator). "delegate" is spawn topology, never direct
+// execution. Contract-only tools have no entry and are always denied.
+// A build-time regression test enforces this equivalence mechanically.
 export const ZINK_TOOLS_ACCESS_MATRIX = Object.freeze({
   main: Object.freeze({
     zink_excel: "delegate",
@@ -491,7 +506,7 @@ export const ZINK_TOOLS_ACCESS_MATRIX = Object.freeze({
   o2: Object.freeze({
     zink_excel: "delegate",
     zink_power_bi: "delegate",
-    zink_sql: "L3",
+    zink_sql: "L0",
     zink_python: "delegate",
     zink_n8n: "L3",
   }),
@@ -519,7 +534,7 @@ export const ZINK_TOOLS_ACCESS_MATRIX = Object.freeze({
   python: Object.freeze({
     zink_excel: "L0",
     zink_power_bi: "L0",
-    zink_sql: "L3",
+    zink_sql: "L0",
     zink_python: "L3",
     zink_n8n: "L3",
   }),
@@ -553,8 +568,8 @@ export const AGENT_IDS = Object.freeze([
 
 export const AGENT_DEFINITIONS = Object.freeze([
   Object.freeze({ id: "main", name: "Main" }),
-  Object.freeze({ id: "o1", name: "Knowledge" }),
-  Object.freeze({ id: "o2", name: "Operations" }),
+  Object.freeze({ id: "o1", name: "ETL Coordinator" }),
+  Object.freeze({ id: "o2", name: "Analytics Coordinator" }),
   Object.freeze({ id: "excel", name: "Excel" }),
   Object.freeze({ id: "power-bi", name: "Power BI" }),
   Object.freeze({ id: "sql", name: "SQL" }),
@@ -588,7 +603,7 @@ export const DISCORD_SURFACE_IDENTIFIERS = Object.freeze([
   "discordIncidentsForumId",
 ]);
 
-export const AGENT_ROSTER_VERSION = "m8-t2.1-r3";
+export const AGENT_ROSTER_VERSION = "m8-t2.2-r4";
 
 // A27: Explicit account ownership marker
 export const ACCOUNT_OWNERSHIP_MAP = Object.freeze({
@@ -610,7 +625,7 @@ export const ACCOUNT_OWNERSHIP_MAP = Object.freeze({
     agentId: "o2",
     role: "coordinator",
     isPrimaryCoordinator: false,
-    domain: "infrastructure_data_plant",
+    domain: "analytics_visualization",
     accountType: "bot",
   }),
   excel: Object.freeze({
@@ -910,38 +925,23 @@ export function resolveIngressRouting({
     targetAgents = ["main"];
   } else if (mentionedAgents.length === 1) {
     const candidate = mentionedAgents[0];
-    if (["excel", "power-bi", "sql", "python"].includes(candidate)) {
+    if (candidate !== "main") {
       isAmbiguous = true;
       needsClarification = true;
-      clarificationReason = `SPECIALIST_NO_DIRECT_INGRESS: Specialist ${candidate} cannot be directly invoked. Please direct requests to @main, @o1, or @o2.`;
+      clarificationReason = `NON_MAIN_DIRECT_INGRESS: Agent ${candidate} cannot be directly invoked. Please direct requests to @main.`;
     } else {
       targetAgents = [candidate];
     }
   } else if (mentionedAgents.length > 1) {
-    const nonSpecialists = mentionedAgents.filter(
-      (a) => !["excel", "power-bi", "sql", "python"].includes(a),
-    );
-    if (nonSpecialists.length === 1) {
-      targetAgents = [nonSpecialists[0]];
-    } else if (nonSpecialists.length > 1) {
-      isAmbiguous = true;
-      needsClarification = true;
-      clarificationReason = `CONFLICTING_TARGETS: Multiple coordinators mentioned (${nonSpecialists.join(", ")}). Please specify a single coordinator.`;
-    } else {
-      isAmbiguous = true;
-      needsClarification = true;
-      clarificationReason = `SPECIALIST_NO_DIRECT_INGRESS: Specialists (${mentionedAgents.join(", ")}) cannot be directly invoked. Please direct requests to @main, @o1, or @o2.`;
-    }
+    isAmbiguous = true;
+    needsClarification = true;
+    clarificationReason = `NON_MAIN_DIRECT_INGRESS: Only @main may own Discord ingress (mentioned: ${mentionedAgents.join(", ")}).`;
   } else {
-    // 0 mentions: check thread or context
-    if (context?.boundAgentId && AGENT_IDS.includes(context.boundAgentId)) {
-      targetAgents = [context.boundAgentId];
-    } else {
-      isAmbiguous = true;
-      needsClarification = true;
-      clarificationReason =
-        "MISSING_MENTION: No coordinator agent mentioned. Please mention @main, @o1, or @o2.";
-    }
+    // R4: no mention means no model/session/spawn admission.
+    isAmbiguous = true;
+    needsClarification = true;
+    clarificationReason =
+      "MISSING_MENTION: No @main mention. Discord ingress is not admitted.";
   }
 
   const primaryTarget = targetAgents[0] ?? null;
@@ -976,7 +976,7 @@ export function resolveIngressRouting({
     target_agents: Object.freeze([...targetAgents]),
     confidence: isAmbiguous ? 0.0 : 1.0,
     provenance: "discord_ingress",
-    semantic_contract_version: "m8-t2.1-r3",
+    semantic_contract_version: "m8-t2.2-r4",
     ambiguous: isAmbiguous,
     needs_clarification: needsClarification,
     clarification_reason: clarificationReason,
@@ -1283,7 +1283,7 @@ export function validateComponentThreadCorrelation({
 }
 
 // A24: Context visibility guard — warns when contextVisibility=allowlist and
-// no explicit allowlist entry covers the worker/coordinator session thread.
+// no explicit allowlist entry covers an execution-agent/coordinator session thread.
 // This is informational; the OpenClaw runtime enforces actual access control.
 export function validateContextVisibilityForThread({
   contextVisibility,

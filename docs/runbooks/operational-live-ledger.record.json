@@ -1,0 +1,38 @@
+{
+  "kind": "operational-live-ledger-record",
+  "classification": "OPERATIONAL-LIVE",
+  "correction": {
+    "original_classification": "TEST_STATE_NOT_OPERATIONAL",
+    "correct_classification": "OPERATIONAL-LIVE",
+    "reason": "Evidence audit 2026-09-28: gateway service active/running with zink-governance extension deployed; event chain seq 1 (WORKFLOW_OPENED) to 103 (WORKFLOW_CONTINUATION_STARTED) with 37 tasks; runtime reads/writes this exact path on every governance turn (readSnapshot/recordWorkflowEvent/appendEvent with stale-snapshot rejection). No provenance of retirement or fixture ownership exists.",
+    "evidence": "systemctl ActiveState=active/SubState=running; ledgerPaths(defaultStateDir) == this path; plugin/guard/ledger call sites",
+    "date": "2026-09-28",
+    "revision": "M8/T2.2-R4 state-correction task"
+  },
+  "location": "~/.openclaw-zink/operator/m7-t2/ledger",
+  "files": {
+    "snapshot.json": {
+      "bytes": 80171,
+      "sha256": "6ffa7354bbedbb0f64704a1882481c30adf00261ec5179ba81239f09da630ad6",
+      "mtime": "2026-09-26T12:20:08+07:00"
+    },
+    "events.jsonl": {
+      "bytes": 96707,
+      "sha256": "f3505d5d0faf06109420498c38526052c9230206803728b53aa49669dd9aa9b0",
+      "mtime": "2026-09-26T12:20:08+07:00"
+    }
+  },
+  "ledger": {
+    "governance_version": "m7-t5-r13",
+    "schema_version": "1.0.0",
+    "sequence": 103,
+    "tasks": 37,
+    "events": 103,
+    "first_event": "seq=1 WORKFLOW_OPENED",
+    "last_event": "seq=103 WORKFLOW_CONTINUATION_STARTED",
+    "known_incompatibility": "event seq=25 fails R4 EVENT_SCHEMA enum; preflight fail-closed BLOCKED per RC-05"
+  },
+  "rule": "The ledger is an operational governance state store. m7-t5-r13 is NOT a test fixture. m7-t5-r13 is NOT an archive. Do not reset, mutate, migrate, or use as --apply target without a separate authorized live-ledger migration. Task content is intentionally NOT copied here.",
+  "placement_note": "This record lives under docs/runbooks/ rather than integrations/openclaw/topology/fixtures/ because that directory is reserved for synthetic-only fixtures and this file declares itself to be the opposite. It contains hashes and metadata only: no task content, no credentials, no message text.",
+  "recorded_by": "M8/T2.2-R4 state-correction task"
+}

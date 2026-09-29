@@ -12,12 +12,18 @@ import path from "node:path";
 import os from "node:os";
 import { URL, fileURLToPath, pathToFileURL } from "node:url";
 import { setTimeout, clearTimeout } from "node:timers";
-import { createGovernanceGuard } from "../../topology/lib/guard.mjs";
+import {
+  createGovernanceGuard,
+  resolveN8nInvocation,
+  bindInvocationApproval,
+  whenGovernanceDependenciesReady,
+} from "../../topology/lib/guard.mjs";
 import {
   checkSchema,
   loadContractSchema,
   generateSchemaManifest,
   verifySchemaManifestChecksums,
+  validateContract,
 } from "../../topology/lib/schema.mjs";
 import {
   TOOL_POLICY,
@@ -26,17 +32,28 @@ import {
   ZINK_MEMORY_TOOL_REGISTRY,
   effectiveMemoryTools,
   canAccessMemoryTool,
+  evaluateCapabilityAccess,
+  GOVERNED_SKILL_NAMESPACE_CATALOG,
+  AGENT_SPAWN_POLICY,
 } from "../../lib/policy.mjs";
 import { sanitizeDelegationText } from "../../topology/lib/runtime.mjs";
-import { registerNativeGuard } from "../../topology/lib/native-boundary.mjs";
 import {
+  registerNativeGuard,
+  recordNativeQuota,
+  selfNativeQuota,
+  resolveNativeRunModel,
+} from "../../topology/lib/native-boundary.mjs";
+import {
+  BUDGETS,
   readSnapshot,
   recordWorkflowEvent,
 } from "../../topology/lib/ledger.mjs";
-import { findSession } from "../../topology/lib/workflow.mjs";
+import {
+  findSession,
+  resolveCurrentRunOwner,
+} from "../../topology/lib/workflow.mjs";
 import {
   canonicalHash,
-  deriveDelegationId,
   derivePrincipalRef,
   deriveTaskId,
   GOVERNANCE_VERSION,
@@ -64,13 +81,18 @@ import {
   CHANNELS,
   TASK_STATES,
   ACTIONS,
-  ZINK_TOOLS_ACCESS_MATRIX,
   buildComponentCustomId,
   parseComponentCustomId,
   DISCORD_COMPONENT_ACTION_NAMESPACE,
+  resolveIngressRouting,
 } from "../../lib/authority.mjs";
 
 import { QueueManager, defaultQueueManager } from "../../lib/queue-manager.mjs";
+
+import {
+  buildNativeComponentPayload,
+  sendNativePayload,
+} from "../../lib/discord-native-send.mjs";
 
 import {
   evaluateResultGate,
@@ -81,8 +103,6 @@ import {
   DecisionLedger,
   defaultDecisionLedger,
 } from "../../lib/decision-ledger.mjs";
-
-import { executeExcelOperation } from "../../lib/excel-writer.mjs";
 
 export {
   formatForDiscord,
@@ -151,19 +171,11 @@ const AGENT_DISPLAY_NAMES = {
 let skillAdapterModule = null;
 let knowledgeAdapterModule = null;
 let vectorSyncModule = null;
+let duckDbBridgeModule = null;
 
 function resolveDefaultOllamaUrl() {
-  if (process.env.OLLAMA_URL) return process.env.OLLAMA_URL;
-  if (process.platform === "linux") {
-    try {
-      const route = execSync("ip route show default", { encoding: "utf8" });
-      const match = route.match(/default\s+via\s+([0-9.]+)/);
-      if (match) return `http://${match[1]}:11434`;
-    } catch {
-      /* ignore */
-    }
-  }
-  return "http://127.0.0.1:11434";
+  const configured = process.env.OLLAMA_URL?.trim();
+  return configured || null;
 }
 
 function findRepoRoot() {
@@ -202,8 +214,10 @@ async function getSkillAdapter() {
           "zink-tools/adapters/skill-store/skill-adapter.mjs",
         );
         skillAdapterModule = await import(pathToFileURL(p).href);
-      } catch (err) {
-        console.error("[zink-governance] Failed to import skill adapter:", err);
+      } catch {
+        console.error(
+          "[zink-governance] Failed to import skill adapter: ADAPTER_UNAVAILABLE",
+        );
       }
     }
     if (!skillAdapterModule) {
@@ -241,10 +255,9 @@ async function getKnowledgeAdapter() {
           "zink-tools/adapters/knowledge/knowledge-adapter.mjs",
         );
         knowledgeAdapterModule = await import(pathToFileURL(p).href);
-      } catch (err) {
+      } catch {
         console.error(
-          "[zink-governance] Failed to import knowledge adapter:",
-          err,
+          "[zink-governance] Failed to import knowledge adapter: ADAPTER_UNAVAILABLE",
         );
       }
     }
@@ -271,6 +284,117 @@ async function getKnowledgeAdapter() {
     }
   }
   return knowledgeAdapterModule;
+}
+
+// M7-018: Discord ingress requires a verified sender identity before owner
+// authorization. A missing sender never passes as the owner; bot senders
+// never pass at all.
+export function isIngressSenderAuthorized(context, ownerDiscordId) {
+  if (typeof context?.senderId !== "string" || !context.senderId) {
+    return { ok: false, reason: "POLICY_DENIED" };
+  }
+  if (context.isBot === true || context.author?.bot === true) {
+    return { ok: false, reason: "BOT_INGRESS_DENIED" };
+  }
+  // An absent owner identity is a DENY, never an implicit allow. The previous
+  // `ownerDiscordId && ...` guard skipped the comparison entirely when the owner
+  // was unset, so any non-bot sender was admitted — the opposite default from
+  // the sibling authority helper `isAllowedDiscordSender`, which denies when the
+  // owner is unknown.
+  if (
+    typeof ownerDiscordId !== "string" ||
+    !ownerDiscordId ||
+    context.senderId !== ownerDiscordId
+  ) {
+    return { ok: false, reason: "POLICY_DENIED" };
+  }
+  return { ok: true };
+}
+
+// M8-061: caller identity always derives from trusted runtime context.
+// Tool payload may carry business metadata, never authority identity.
+export function deriveTrustedRequester(_id) {
+  return _id?.agent ?? _id?.agentId ?? "unknown";
+}
+
+// M7-071/M8-062: missing-backend envelope — explicit unavailable/blocked,
+// never a governed-looking success; no internal paths or exception content.
+export function adapterUnavailableResponse(tool, error) {
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({
+          status: "UNAVAILABLE",
+          tool,
+          error,
+          code: error,
+          blocked: true,
+        }),
+      },
+    ],
+  };
+}
+// M7-005/M7-007: the live tool path calls the canonical validators through
+// these cached loaders — never a second local SQL/path policy. An
+// unavailable validator fails closed as GOVERNANCE_DEPENDENCY_MISSING.
+let sqlValidatorModule = null;
+let pathSafetyModule = null;
+
+async function loadRepoModule(relativePath) {
+  const attempts = [];
+  try {
+    const root = findRepoRoot();
+    if (root) attempts.push(pathToFileURL(path.join(root, relativePath)).href);
+  } catch {
+    /* ignore */
+  }
+  attempts.push(
+    new URL(`../../../../${relativePath}`, import.meta.url).href,
+    pathToFileURL(path.resolve(process.cwd(), relativePath)).href,
+  );
+  for (const href of attempts) {
+    try {
+      return await import(href);
+    } catch {
+      /* next candidate */
+    }
+  }
+  return null;
+}
+
+export async function validateLiveSqlQuery(query, parameters) {
+  if (!sqlValidatorModule) {
+    sqlValidatorModule = await loadRepoModule("zink-tools/sql/validator.mjs");
+  }
+  const validate = sqlValidatorModule?.validateSqlQuery;
+  if (typeof validate !== "function") {
+    return { ok: false, reason: "GOVERNANCE_DEPENDENCY_MISSING" };
+  }
+  try {
+    validate(query, parameters);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, reason: err?.message || "SQL_VALIDATION_FAILED" };
+  }
+}
+
+export async function validateLiveArtifactPath(logicalPath) {
+  if (!pathSafetyModule) {
+    pathSafetyModule = await loadRepoModule(
+      "zink-tools/common/path-safety.mjs",
+    );
+  }
+  const validate = pathSafetyModule?.validateArtifactLogicalPath;
+  if (typeof validate !== "function") {
+    return { ok: false, reason: "GOVERNANCE_DEPENDENCY_MISSING" };
+  }
+  try {
+    validate(logicalPath);
+    return { ok: true };
+  } catch {
+    return { ok: false, reason: "POLICY_DENIED" };
+  }
 }
 
 async function getVectorSyncModule() {
@@ -304,6 +428,39 @@ async function getVectorSyncModule() {
     }
   }
   return vectorSyncModule;
+}
+
+async function getDuckDbBridge() {
+  if (!duckDbBridgeModule) {
+    const root = findRepoRoot();
+    if (root) {
+      try {
+        const p = path.join(root, "zink-tools/sql/duckdb-bridge.mjs");
+        duckDbBridgeModule = await import(pathToFileURL(p).href);
+      } catch (err) {
+        console.error("[zink-governance] Failed to import DuckDB bridge:", err);
+      }
+    }
+    if (!duckDbBridgeModule) {
+      try {
+        duckDbBridgeModule = await import(
+          new URL(
+            "../../../../zink-tools/sql/duckdb-bridge.mjs",
+            import.meta.url,
+          ).href
+        );
+      } catch {
+        try {
+          duckDbBridgeModule = await import(
+            path.resolve(process.cwd(), "zink-tools/sql/duckdb-bridge.mjs")
+          );
+        } catch {
+          // Module not accessible in isolated test directory
+        }
+      }
+    }
+  }
+  return duckDbBridgeModule;
 }
 
 export async function handleOwnerSkillApproval({
@@ -424,6 +581,13 @@ export function handleDiscordAction({
 }) {
   // 1. Check attempt token fencing (BUG-M8T2-07 / G03)
   // G03: if requireAttemptFencing=true, BOTH tokens must be present; missing pair fails closed.
+  // M7-041: the authoritative task is resolved up front and is never taken
+  // from caller-supplied data, so every governed event below is bound to the
+  // real owning run.
+  let authoritativeTask = null;
+  // The digest a user verdict must be bound to: whatever the ledger recorded for
+  // the result now pending review.
+  let authoritativeResultDigest = null;
   if (data?.requireAttemptFencing === true) {
     if (!attemptToken || !activeAttemptToken) {
       return {
@@ -456,7 +620,13 @@ export function handleDiscordAction({
   if (paths) {
     try {
       const snapshot = readSnapshot(paths);
-      const authoritativeTask = snapshot?.tasks?.[taskId];
+      authoritativeTask = snapshot?.tasks?.[taskId];
+      // The digest a user verdict must be bound to: whatever the ledger
+      // recorded for the result now pending review.
+      authoritativeResultDigest =
+        authoritativeTask?.root_result?.payload_digest ??
+        authoritativeTask?.execution_payload_digest ??
+        null;
       if (authoritativeTask) {
         let status = authoritativeTask.workflow_status;
         if (
@@ -516,14 +686,21 @@ export function handleDiscordAction({
   const safeReason = data.reason
     ? String(data.reason).slice(0, 2000)
     : "USER_REJECTED";
+  // Bounds are enforced in UTF-8 BYTES by the canonical contract validator
+  // (schema.mjs uses Buffer.byteLength for maxLength), so a character-count
+  // slice can produce a value the contract rejects — which failed the write and
+  // wedged the task in WAITING_FOR_USER. Truncation is therefore byte-budgeted
+  // and never splits a character. This repo's user-facing language is
+  // Vietnamese (2 bytes/char) with CJK and emoji also expected, so a character
+  // slice was never sufficient.
   const safeFeedback = data.feedback
-    ? String(data.feedback).slice(0, 2000)
+    ? truncateUtf8(String(data.feedback), 2000)
     : "Revision requested";
   const safeQuestion = data.question
-    ? String(data.question).slice(0, 2000)
+    ? truncateUtf8(String(data.question), 2000)
     : "Clarification needed";
   const safeAnswer = data.answer
-    ? String(data.answer).slice(0, 4000)
+    ? truncateUtf8(String(data.answer), 4000)
     : "User provided answer";
 
   // 5. Record in ledger if ledger paths are provided
@@ -566,7 +743,12 @@ export function handleDiscordAction({
           channel: normalizeChannel(channel),
           decision: "ACCEPT",
           result_id: resultId,
-          result_digest: data.resultDigest ?? null,
+          // The verdict binds to the digest the LEDGER recorded. A component
+          // carrying its own digest is bound to that instead, so a card issued
+          // for an earlier result is refused rather than applied to whatever is
+          // pending now. The previous `?? null` made every verdict fail the
+          // binding, leaving the task stuck in RESULT_PENDING_REVIEW.
+          result_digest: data.resultDigest ?? authoritativeResultDigest,
           message_id: data.messageId ?? data.origin_message_id ?? null,
           thread_id: data.threadId ?? null,
         });
@@ -587,7 +769,7 @@ export function handleDiscordAction({
           channel: normalizeChannel(channel),
           reason: safeReason,
           result_id: resultId,
-          result_digest: data.resultDigest ?? null,
+          result_digest: data.resultDigest ?? authoritativeResultDigest,
           message_id: data.messageId ?? data.origin_message_id ?? null,
           thread_id: data.threadId ?? null,
         });
@@ -598,13 +780,73 @@ export function handleDiscordAction({
           channel: "results",
           feedback: safeFeedback,
           result_id: data.resultId ?? taskId,
-          result_digest: data.resultDigest ?? null,
+          result_digest: data.resultDigest ?? authoritativeResultDigest,
         });
       } else if (normAction === ACTIONS.ASK_USER) {
+        // M7-017: governed pre-clarification lookup. A prior decision for
+        // this exact question suppresses the duplicate clarification. The
+        // store resolves from the configured authority root (M7-021
+        // direction); a corrupt store fails closed instead of re-asking.
+        const questionTopic = data.topic ?? "CLARIFICATION";
+        const questionScope = data.scope ?? "global";
+        const questionTaskId =
+          questionScope === "task-specific" ? (data.taskId ?? taskId) : null;
+        let decisionStore = null;
+        try {
+          decisionStore = paths?.root
+            ? new DecisionLedger({
+                storagePath: path.join(paths.root, "decision-ledger.json"),
+              })
+            : defaultDecisionLedger;
+        } catch (storeErr) {
+          return {
+            allowed: false,
+            reason: `LEDGER_CORRUPT: decision store unavailable (${storeErr?.message ?? storeErr})`,
+            status: "BLOCKED",
+          };
+        }
+        let prior = null;
+        try {
+          prior = decisionStore.lookupDecision({
+            topic: questionTopic,
+            question: safeQuestion,
+            scope: questionScope,
+            taskId: questionTaskId,
+            domain: data.domain ?? null,
+          });
+        } catch (lookupErr) {
+          return {
+            allowed: false,
+            reason: `LEDGER_CORRUPT: prior-decision lookup blocked (${lookupErr?.message ?? lookupErr})`,
+            status: "BLOCKED",
+          };
+        }
+        if (prior) {
+          return {
+            allowed: true,
+            status: "DECIDED",
+            nextState: effectiveCurrentState,
+            priorDecision: prior,
+          };
+        }
+        // M7-041: the governing run is resolved from the authoritative
+        // snapshot, never from caller-supplied data, and the reducer
+        // re-derives the same canonical owner.
+        if (!authoritativeTask) {
+          return {
+            allowed: false,
+            reason:
+              "EXECUTION_STATE_UNKNOWN: ASK_USER requires the authoritative task to resolve the governing run",
+            status: "BLOCKED",
+          };
+        }
+        const governedRun = resolveCurrentRunOwner(authoritativeTask);
         recordWorkflowEvent(paths, "WORKFLOW_USER_QUESTION_RECORDED", {
           task_id: taskId,
-          agent_id: normalizeActor(actor),
+          agent_id: governedRun.agent_id,
           question: safeQuestion,
+          session_key: governedRun.session_key,
+          run_id: governedRun.run_id,
         });
       } else if (normAction === ACTIONS.ANSWER_USER) {
         // G07: bind user principal + message_id; reject if userPrincipalRef missing
@@ -618,11 +860,32 @@ export function handleDiscordAction({
             status: "DENIED",
           };
         }
+        // M7-042: the answer is recorded as a USER act with an explicit
+        // principal and message id. The reducer requires both, so a caller
+        // cannot attribute an answer to an agent or an unidentifiable author.
+        const answerPrincipal = derivePrincipalRef(
+          "identity-key",
+          String(userPrincipal),
+        );
+        const answerMessageId =
+          data.messageId ?? data.origin_message_id ?? null;
+        if (
+          typeof answerMessageId !== "string" ||
+          !/^[1-9][0-9]{16,19}$/u.test(answerMessageId)
+        ) {
+          return {
+            allowed: false,
+            reason:
+              "MISSING_USER_MESSAGE_ID: ANSWER_USER requires a source message id to bind the answering turn",
+            status: "DENIED",
+          };
+        }
         recordWorkflowEvent(paths, "WORKFLOW_USER_ANSWER_RECORDED", {
           task_id: taskId,
           answer: safeAnswer,
-          user_principal_ref: userPrincipal,
-          message_id: data.messageId ?? data.origin_message_id ?? null,
+          actor: "user",
+          user_principal_ref: answerPrincipal,
+          message_id: answerMessageId,
           thread_id: data.threadId ?? null,
         });
       }
@@ -653,7 +916,7 @@ export const MAX_ARTIFACTS_PER_RESULT = 10;
 
 export function handleExecutionFinished({
   taskId,
-  workerId,
+  agentId,
   leaseId = null,
   attempt = null,
   artifactPath,
@@ -712,19 +975,20 @@ export function handleExecutionFinished({
     }
   }
 
-  // G14: Worker lease/attempt validation against active claims
+  // G14: Execution-agent lease/attempt validation against active claims
   if (queueManager?.activeClaims?.has(taskId)) {
     const claim = queueManager.activeClaims.get(taskId);
-    if (workerId && claim.workerId !== workerId) {
+    if (agentId && claim.agentId !== agentId) {
       return {
         status: "FAILED",
-        error: `WORKER_MISMATCH: Task claimed by ${claim.workerId}, not ${workerId}`,
+        error: `AGENT_MISMATCH: Task claimed by ${claim.agentId}, not ${agentId}`,
       };
     }
     if (leaseId && claim.leaseId !== leaseId) {
       return {
         status: "FAILED",
-        error: "LEASE_MISMATCH: Worker lease does not match active claim",
+        error:
+          "LEASE_MISMATCH: Execution-agent lease does not match active claim",
       };
     }
     if (attempt !== null && claim.attempt !== attempt) {
@@ -735,9 +999,80 @@ export function handleExecutionFinished({
     }
   }
 
+  // M8-051: the canonical artifact set is ordered and bounded, and every
+  // member is validated BEFORE any validation verdict is produced. A
+  // singular artifactPath may not stand in for a delivered multi-artifact
+  // result, and an unreadable member is a hard delivery failure rather than
+  // a technical-validation verdict.
+  const artifactSet = [];
+  for (const candidate of allArtifacts) {
+    const logicalPath =
+      typeof candidate === "string"
+        ? candidate
+        : (candidate?.logical_path ?? null);
+    if (typeof logicalPath !== "string" || !logicalPath.trim()) {
+      return {
+        status: "FAILED",
+        error: "ARTIFACT_INVALID: Result set contains an unreadable artifact",
+      };
+    }
+    if (!existsSync(logicalPath)) {
+      return {
+        status: "FAILED",
+        error: `ARTIFACT_MISSING: ${path.basename(logicalPath)}`,
+      };
+    }
+    let sha256;
+    try {
+      sha256 = createHash("sha256")
+        .update(readFileSync(logicalPath))
+        .digest("hex");
+    } catch {
+      return {
+        status: "FAILED",
+        error: `ARTIFACT_UNREADABLE: ${path.basename(logicalPath)}`,
+      };
+    }
+    artifactSet.push({ logical_path: logicalPath, sha256 });
+  }
+
+  // One digest over the whole ordered set. Ordering is authoritative, so a
+  // reordered list yields a different canonical digest.
+  const artifactSetDigest =
+    artifactSet.length > 0
+      ? canonicalHash("zink-artifact-set-v1", { artifacts: artifactSet })
+      : null;
+  const payloadDigest =
+    artifactSetDigest ??
+    (artifactPath && existsSync(artifactPath)
+      ? createHash("sha256").update(readFileSync(artifactPath)).digest("hex")
+      : null);
+
+  // M8-053: durable replay fence. The queue projection is restart-durable, so
+  // an exact replay of the same task + attempt + result digest is an
+  // idempotent no-op rather than a second execution.
+  const fenceKey = `${taskId}\u0000${attempt ?? 1}\u0000${payloadDigest ?? "none"}`;
+  if (payloadDigest) {
+    const alreadyFinished = queueManager.getTask?.(taskId);
+    if (
+      alreadyFinished &&
+      alreadyFinished.status === TASK_STATES.RESULT_PENDING_REVIEW &&
+      alreadyFinished.resultAttempt === (attempt ?? 1) &&
+      alreadyFinished.resultDigest === payloadDigest
+    ) {
+      return {
+        status: "ALREADY_COMPLETED",
+        idempotencyKey: fenceKey,
+        payloadDigest,
+        artifactSetDigest,
+      };
+    }
+  }
+
   const effectiveSandbox = sandboxDir || technicalConfig.sandboxDir || null;
   const gateResult = evaluateResultGate({
-    artifactPath,
+    artifactPath: artifactPath ?? artifactSet[0]?.logical_path,
+    artifactSet: artifactSet.map((artifact) => artifact.logical_path),
     technicalConfig: {
       ...technicalConfig,
       ...(effectiveSandbox ? { sandboxDir: effectiveSandbox } : {}),
@@ -763,25 +1098,17 @@ export function handleExecutionFinished({
     };
   }
 
-  let payloadDigest = null;
-  if (artifactPath && existsSync(artifactPath)) {
-    try {
-      const buf = readFileSync(artifactPath);
-      payloadDigest = createHash("sha256").update(buf).digest("hex");
-    } catch {
-      /* ignore */
-    }
-  }
-
   // G13: Propagate queue finish errors instead of swallowing
   try {
     queueManager.finishExecution({
       taskId,
-      workerId,
+      agentId,
       leaseId,
       attempt,
-      artifacts: artifactPath ? [artifactPath] : [],
-      payloadDigest,
+      artifacts: artifactSet.map((artifact) => artifact.logical_path),
+      artifactSet,
+      artifactSetDigest,
+      resultDigest: payloadDigest,
       resultSummary:
         gateResult.summary || "Technical and Business validation passed.",
     });
@@ -826,18 +1153,35 @@ export function handleExecutionFinished({
     try {
       recordWorkflowEvent(paths, "WORKFLOW_RESULT_RECORDED", {
         task_id: taskId,
-        worker_id: workerId,
+        agent_id: agentId,
         attempt: attempt ?? 1,
         payload_digest: payloadDigest,
         technical_status: gateResult.technical?.status || "PASS",
         business_status: gateResult.business?.status || "PASS",
         artifact_path: artifactPath ? path.basename(artifactPath) : null,
+        artifacts: artifactSet.length > 0 ? artifactSet : null,
+        artifact_set_digest: artifactSetDigest,
         recorded_at: new Date().toISOString(),
       });
     } catch (err) {
+      // M8-052: the queue already moved to RESULT_PENDING_REVIEW. Reconcile
+      // the projection back to the authoritative ledger so the two can never
+      // disagree silently; the caller retries from the authoritative state.
+      let reconciled;
+      try {
+        reconciled = queueManager.rebuildFromLedger(readSnapshot(paths));
+      } catch (reconcileErr) {
+        return {
+          status: "BLOCKED",
+          error: `QUEUE_LEDGER_RECONCILIATION_FAILED: ${reconcileErr?.message}`,
+          ledgerError: err?.message,
+          gateResult,
+        };
+      }
       return {
         status: "FAILED",
         error: `LEDGER_RESULT_RECORD_FAILED: ${err?.message}`,
+        reconciled,
         gateResult,
       };
     }
@@ -852,6 +1196,8 @@ export function handleExecutionFinished({
     gateResult,
     resultCard,
     payloadDigest,
+    artifactSet,
+    artifactSetDigest,
     idempotencyKey,
   };
 }
@@ -917,31 +1263,87 @@ export function resolveAgentSandboxDir(agentId, context = null) {
   return null;
 }
 
-export function evaluateToolAccess(agentId, toolName) {
+export function evaluateToolAccess(agentId, toolName, params = {}) {
   if (!ids.has(agentId)) {
     return { allowed: false, reason: "UNKNOWN_AGENT" };
   }
-  if (
-    toolName === "zink_knowledge_search" ||
-    toolName === "zink_skill_search"
-  ) {
-    return { allowed: true, level: "L2" };
+  if (toolName === "zink_knowledge_search") {
+    if (typeof params.namespace !== "string" || !params.namespace.trim()) {
+      return { allowed: false, reason: "NAMESPACE_REQUIRED" };
+    }
+    const access = evaluateCapabilityAccess(
+      agentId,
+      "zink_knowledge",
+      params.namespace,
+      params.action || "search",
+    );
+    return access.allowed
+      ? { allowed: true, level: access.level }
+      : { allowed: false, reason: access.reason };
+  }
+  if (toolName === "zink_skill_search") {
+    if (!(
+      typeof params.namespace === "string" ||
+      (Array.isArray(params.namespace) && params.namespace.length > 0)
+    )) {
+      return { allowed: false, reason: "NAMESPACE_REQUIRED" };
+    }
+    const namespaces = Array.isArray(params.namespace)
+      ? params.namespace
+      : [params.namespace];
+    if (
+      namespaces.length === 0 ||
+      namespaces.some(
+        (namespace) =>
+          typeof namespace !== "string" ||
+          !namespace.trim() ||
+          namespace.trim().toLowerCase() === "all" ||
+          // Exact match, deliberately: the canonical vetted set in the adapter
+          // compares the raw namespace, so lowercasing here admitted inputs
+          // ("Excel", "SC/Logistics") the adapter then rejected. Two
+          // normalizations of one namespace is a policy split; the gate now
+          // uses the same exact comparison the adapter does.
+          !GOVERNED_SKILL_NAMESPACE_CATALOG.includes(namespace.trim()),
+      )
+    ) {
+      return { allowed: false, reason: "NAMESPACE_ACCESS_DENIED" };
+    }
+    const access = evaluateCapabilityAccess(
+      agentId,
+      "zink_skill",
+      params.namespace,
+      params.action || "search",
+    );
+    return access.allowed
+      ? { allowed: true, level: access.level }
+      : { allowed: false, reason: access.reason };
   }
   if (toolName === "zink_skill_propose") {
-    const allowedProposers = ["excel", "power-bi", "sql", "python"];
-    if (allowedProposers.includes(agentId)) {
-      return { allowed: true, level: "L3" };
-    }
-    return { allowed: false, reason: "CAPABILITY_ACCESS_DENIED" };
+    // The canonical resolver decides, exactly as the two sibling memory-tool
+    // branches above do. The previous local `allowedProposers` list was a
+    // hand-maintained copy of SKILL_STORE_ACCESS_MATRIX[agent].propose that no
+    // mechanical test tied to the matrix.
+    const access = evaluateCapabilityAccess(
+      agentId,
+      "zink_skill",
+      null,
+      "propose",
+    );
+    return access.allowed
+      ? { allowed: true, level: access.level }
+      : { allowed: false, reason: access.reason };
   }
-  const level = ZINK_TOOLS_ACCESS_MATRIX[agentId]?.[toolName];
-  if (!level || level === "L0") {
-    return { allowed: false, reason: "CAPABILITY_ACCESS_DENIED" };
+  // M7-003/M7-004: one canonical resolver for direct tool execution.
+  // Matrix levels carry read/delegate semantics; only L3 executes.
+  const access = evaluateCapabilityAccess(agentId, toolName, null, "execute");
+  if (!access.allowed || access.level === "delegate") {
+    return {
+      allowed: false,
+      reason:
+        access.level === "delegate" ? "DELEGATION_REQUIRED" : access.reason,
+    };
   }
-  if (level === "delegate") {
-    return { allowed: false, reason: "DELEGATION_REQUIRED" };
-  }
-  return { allowed: true, level };
+  return { allowed: true, level: access.level };
 }
 
 // C10 & C11: Auto-load tool schemas from checked-in contracts in zink-tools/contracts/
@@ -957,6 +1359,7 @@ export function loadToolContractSchemas() {
     zink_skill_propose: "zink-skill",
   };
   const result = {};
+  const failed = [];
   for (const [toolId, schemaName] of Object.entries(toolSchemaMap)) {
     try {
       const rawSchema = loadContractSchema(schemaName);
@@ -965,11 +1368,24 @@ export function loadToolContractSchemas() {
         rawSchema,
         parameters: rawSchema.$defs?.input || rawSchema,
       };
-    } catch {
-      // fallback
+    } catch (err) {
+      // M7-050: a missing canonical tool contract never falls back to a
+      // hand-written schema. The tool stays unregistered (see registerTools).
+      failed.push(toolId);
+      apiLoggerWarn(`contract load failed for ${toolId}: ${err?.message}`);
     }
   }
+  result.failedContracts = failed;
   return result;
+}
+
+function apiLoggerWarn(_message) {
+  // Registration-time diagnostics must not throw when no logger exists.
+  try {
+    globalThis.console?.warn?.(`[zink-governance] ${_message}`);
+  } catch {
+    /* ignore */
+  }
 }
 
 // C12 & O18: Schema manifest and checksum generator
@@ -985,6 +1401,108 @@ export function verifyToolSchemaManifest(manifest = null) {
 export function getToolRegistryChecksum() {
   const manifest = generateToolSchemaManifest();
   return manifest.manifestChecksum || manifest.manifestSha256;
+}
+
+// Lane H5: the canonical shape of a registry checksum. A non-empty string is
+// not a checksum: an integrity binding that accepts arbitrary text binds
+// nothing, so a malformed value is refused rather than trusted.
+function isCanonicalChecksum(value) {
+  return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
+}
+
+/**
+ * T2: the host-side quota publication seam. `recordNativeQuota` resolves the
+ * registered guard and hands the snapshot to `guard.recordQuota`, which
+ * rejects cross-agent, malformed and non-canonical payloads. It is exported
+ * from the native boundary and materialized into the deployed plugin tree, but
+ * until the plugin imports it the HOST HAS NO WAY IN: nothing could ever publish
+ * usage, so `selfNativeQuota` always answered "unknown" and the T3 run-scoped
+ * model fallback could never fire. This function is that entry point.
+ *
+ * Returns the recorded agent id, or null when governance is disabled. It never
+ * throws for a rejected payload: a malformed publication is simply not evidence.
+ */
+export async function publishNativeQuota(snapshot, context = null) {
+  try {
+    return await recordNativeQuota(
+      {
+        plugins: {
+          entries: {
+            "zink-governance": {
+              enabled: context?.enabled !== false,
+              config: { ledgerRoot: context?.ledgerRoot },
+            },
+          },
+        },
+      },
+      snapshot,
+    );
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * T2: opportunistically publish usage carried on a run-end event. The runtime
+ * is not guaranteed to provide any usage field, so this is a no-op when it does
+ * not. It never invents numbers: a payload without a recognised usage shape is
+ * simply not recorded, and "unknown" remains the safe reading that keeps the
+ * PRIMARY model.
+ */
+function recordQuotaIfProvided(api, event, context) {
+  const usage =
+    event?.usage ??
+    event?.tokenUsage ??
+    event?.token_usage ??
+    event?.providerUsage ??
+    event?.provider_usage ??
+    null;
+  if (!usage || typeof usage !== "object") return false;
+  const agentId = context?.agentId;
+  if (typeof agentId !== "string" || !agentId) return false;
+  publishNativeQuota(
+    {
+      agent_id: agentId,
+      used_pct: usage.usedPct ?? usage.used_pct,
+      remaining_pct: usage.remainingPct ?? usage.remaining_pct,
+      status: usage.status,
+      observed_at: usage.observedAt ?? usage.observed_at,
+    },
+    { ledgerRoot: api?.pluginConfig?.ledgerRoot },
+  ).catch(() => false);
+  return true;
+}
+
+/**
+ * M7-016: the semantic contract status the activated brief actually carries.
+ * An absent or unrecognised status is MISSING, never VALID: defaulting to VALID
+ * would let an unvalidated brief authorise specialist execution, which is
+ * exactly the gate this status exists to enforce.
+ */
+function normalizeSemanticContractStatus(value) {
+  return ["VALID", "MISSING", "AMBIGUOUS"].includes(value) ? value : "MISSING";
+}
+
+/**
+ * Truncate to at most `maxBytes` UTF-8 bytes without splitting a character.
+ * The canonical contract validator measures `maxLength` in bytes, so every
+ * runtime bound must be byte-budgeted: a character-count slice can emit a value
+ * the contract then rejects, turning a legitimate user message into an
+ * unwritable event.
+ */
+function truncateUtf8(value, maxBytes) {
+  const text = String(value);
+  if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
+  // Walk code points so a surrogate pair is never cut in half.
+  let bytes = 0;
+  let result = "";
+  for (const character of text) {
+    const size = Buffer.byteLength(character, "utf8");
+    if (bytes + size > maxBytes) break;
+    bytes += size;
+    result += character;
+  }
+  return result;
 }
 
 // O20: Schema-only capabilities taxonomy
@@ -1018,22 +1536,51 @@ export function validateToolAllowlistInvariants() {
   };
 }
 
-export function registerTools(api) {
+export function registerTools(api, options = {}) {
   const registerFn =
     typeof api?.registerTool === "function"
       ? api.registerTool.bind(api)
       : typeof api?.tools?.register === "function"
         ? api.tools.register.bind(api.tools)
         : null;
-  if (!registerFn) return;
-  const toolContracts = loadToolContractSchemas();
+  if (!registerFn) return { registered: [], skipped: [] };
+  const proposalStorageDir =
+    options.proposalStorageDir ??
+    (path.isAbsolute(api.pluginConfig?.ledgerRoot ?? "")
+      ? path.join(api.pluginConfig.ledgerRoot, "skill-proposals")
+      : undefined);
+  // Test seam: options.toolContracts / options.registryChecksum override the
+  // loaders so contract/checksum failure paths are provable. Production
+  // always omits them and uses the loaders below.
+  const toolContracts = options.toolContracts ?? loadToolContractSchemas();
   let registryChecksum = null;
-  try {
-    registryChecksum = getToolRegistryChecksum();
-  } catch (err) {
-    api?.logger?.warn?.(
-      `[zink-governance] registerTools: Could not compute tool registry checksum: ${err?.message}`,
-    );
+  let checksumOk = false;
+  if (options.registryChecksum !== undefined) {
+    registryChecksum = options.registryChecksum;
+    checksumOk = isCanonicalChecksum(registryChecksum);
+    if (!checksumOk) {
+      api?.logger?.error?.(
+        "[zink-governance] registerTools: refusing registration without a valid registry checksum",
+      );
+      return { registered: [], skipped: ["*"] };
+    }
+  } else {
+    try {
+      registryChecksum = getToolRegistryChecksum();
+      checksumOk = isCanonicalChecksum(registryChecksum);
+    } catch (err) {
+      api?.logger?.error?.(
+        `[zink-governance] registerTools: tool registry checksum unavailable — no governed tools registered: ${err?.message}`,
+      );
+    }
+    // M8-059: checksum failure blocks registration. Integrity binding is never
+    // claimed when checksum generation failed.
+    if (!checksumOk) {
+      api?.logger?.error?.(
+        "[zink-governance] registerTools: refusing registration without a valid registry checksum",
+      );
+      return { registered: [], skipped: ["*"] };
+    }
   }
 
   const registry = {
@@ -1066,7 +1613,7 @@ export function registerTools(api) {
               },
               run_id: { type: "string", description: "Runtime execution ID" },
             },
-            required: ["query"],
+            required: ["query", "namespace"],
           }
         : {
             type: "object",
@@ -1088,14 +1635,20 @@ export function registerTools(api) {
                 type: "string",
                 description: "Optional capability name filter",
               },
+              namespace: {
+                type: "string",
+                description: "Governed Skill Store namespace",
+              },
               task_id: {
                 type: "string",
                 description: "Governed task correlation ID",
               },
             },
-            required: ["query"],
+            required: ["query", "namespace"],
           },
       async execute(_id, params) {
+        // M8-061: memory/skill authority identity comes from trusted runtime
+        // context only. Tool payload never impersonates another agent.
         const mod = await getSkillAdapter();
         // O09: Pass context with task/agent/session identity
         const ctx = {
@@ -1103,8 +1656,7 @@ export function registerTools(api) {
             params?.session_key || _id?.sessionKey || "unbound-session",
           runId: params?.run_id || _id?.runId || "unbound-run",
           taskId: params?.task_id || _id?.taskId || "unbound-task",
-          requestingAgent:
-            params?.requesting_agent || _id?.agent || _id?.agentId || "unknown",
+          requestingAgent: deriveTrustedRequester(_id),
         };
         if (mod?.executeGovernedSkillQuery) {
           const res = await mod.executeGovernedSkillQuery(
@@ -1124,19 +1676,12 @@ export function registerTools(api) {
             ],
           };
         }
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                status: "governed",
-                tool: "zink_skill_search",
-                params,
-                context: ctx,
-              }),
-            },
-          ],
-        };
+        // M7-071: missing/malformed adapter is explicit unavailable/blocked,
+        // never a governed-looking success. No fabricated result context.
+        return adapterUnavailableResponse(
+          "zink_skill_search",
+          "SKILL_ADAPTER_UNAVAILABLE",
+        );
       },
     },
     zink_knowledge_search: {
@@ -1152,6 +1697,12 @@ export function registerTools(api) {
                 ?.limit || { type: "integer" },
               primary_topic: toolContracts.zink_knowledge_search.parameters
                 .properties?.primary_topic || { type: "string" },
+              action: {
+                type: "string",
+                enum: ["search", "retrieve", "citation", "metadata"],
+              },
+              namespace: toolContracts.zink_knowledge_search.parameters
+                .properties?.namespace || { type: "string" },
               path_prefix: {
                 type: "string",
                 description: "Optional path prefix filter",
@@ -1170,7 +1721,7 @@ export function registerTools(api) {
               },
               run_id: { type: "string", description: "Runtime execution ID" },
             },
-            required: ["query"],
+            required: ["query", "namespace"],
           }
         : {
             type: "object",
@@ -1183,6 +1734,14 @@ export function registerTools(api) {
               primary_topic: {
                 type: "string",
                 description: "Optional primary topic filter",
+              },
+              action: {
+                type: "string",
+                enum: ["search", "retrieve", "citation", "metadata"],
+              },
+              namespace: {
+                type: "string",
+                description: "Governed Knowledgebase namespace",
               },
               path_prefix: {
                 type: "string",
@@ -1197,18 +1756,18 @@ export function registerTools(api) {
                 description: "Governed task correlation ID",
               },
             },
-            required: ["query"],
+            required: ["query", "namespace"],
           },
       async execute(_id, params) {
         const mod = await getKnowledgeAdapter();
-        // O10: Pass context with task/agent/session identity
+        // O10: Pass context with task/agent/session identity (M8-061:
+        // trusted context only — payload never impersonates)
         const ctx = {
           sessionKey:
             params?.session_key || _id?.sessionKey || "unbound-session",
           runId: params?.run_id || _id?.runId || "unbound-run",
           taskId: params?.task_id || _id?.taskId || "unbound-task",
-          requestingAgent:
-            params?.requesting_agent || _id?.agent || _id?.agentId || "unknown",
+          requestingAgent: deriveTrustedRequester(_id),
         };
         if (mod?.executeGovernedKnowledgeQuery) {
           const res = await mod.executeGovernedKnowledgeQuery(
@@ -1233,19 +1792,12 @@ export function registerTools(api) {
             ],
           };
         }
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                status: "governed",
-                tool: "zink_knowledge_search",
-                params,
-                context: ctx,
-              }),
-            },
-          ],
-        };
+        // M7-071: missing/malformed adapter is explicit unavailable/blocked,
+        // never a governed-looking success. No fabricated result context.
+        return adapterUnavailableResponse(
+          "zink_knowledge_search",
+          "KNOWLEDGE_ADAPTER_UNAVAILABLE",
+        );
       },
     },
     zink_skill_propose: {
@@ -1336,13 +1888,13 @@ export function registerTools(api) {
       async execute(_id, params) {
         const mod = await getSkillAdapter();
         // O11: Pass context with requesting agent and correlation identity
+        // (M8-061: trusted context only — payload never impersonates)
         const ctx = {
           sessionKey:
             params?.session_key || _id?.sessionKey || "unbound-session",
           runId: params?.run_id || _id?.runId || "unbound-run",
           taskId: params?.task_id || _id?.taskId || "unbound-task",
-          requestingAgent:
-            params?.requesting_agent || _id?.agent || _id?.agentId || "unknown",
+          requestingAgent: deriveTrustedRequester(_id),
         };
         if (mod?.executeGovernedSkillQuery) {
           const res = await mod.executeGovernedSkillQuery(
@@ -1351,7 +1903,10 @@ export function registerTools(api) {
               ...params,
             },
             ctx,
-            { ollamaUrl: resolveDefaultOllamaUrl() },
+            {
+              ollamaUrl: resolveDefaultOllamaUrl(),
+              proposalStorageDir,
+            },
           );
 
           if (res?.governed_status === "SUCCESS" && res.proposal) {
@@ -1360,18 +1915,42 @@ export function registerTools(api) {
               ? proposal.namespace.join("/")
               : proposal.namespace || "specialist";
             const targetStr = `skills/${nsStr}/${proposal.capability}@${proposal.version}`;
+            // The content digest and the approval id are derived by the
+            // governance layer from the content it received, never copied from
+            // a caller-supplied field. The adapter does not always populate
+            // `proposal_id`, so deriving it here also means the approval is
+            // always bound to specific bytes rather than to an absent id.
+            const contentDigest = canonicalHash(
+              "zink-skill-content-v1",
+              String(params?.content ?? ""),
+            );
             const approvalRecord = {
               schema_version: "1.0.0",
               governance_version: GOVERNANCE_VERSION,
-              approval_id: proposal.proposal_id,
-              task_id: `task-skill-${proposal.proposal_id}`,
+              approval_id: String(
+                proposal.proposal_id ??
+                  canonicalHash("zink-skill-approval-id-v1", contentDigest),
+              ),
+              // The contract requires a 64-hex task correlation id. The old
+              // `task-skill-<id>` string violated that pattern, so the record
+              // could never have validated; the digest is deterministic, so it
+              // remains a stable correlation key.
+              task_id: canonicalHash(
+                "zink-skill-approval-v1",
+                String(proposal.proposal_id ?? contentDigest),
+              ),
+              brief_revision: 1,
               exact_target: targetStr,
               exact_operation: "SKILL_CANDIDATE_APPROVAL",
               material_parameters: {
                 namespace: proposal.namespace,
                 capability: proposal.capability,
                 version: proposal.version,
-                content_sha256: proposal.content_sha256,
+                // The content digest is computed by the governance layer from
+                // the content it actually received, never copied from a
+                // caller-supplied field. That makes the approval scope digest
+                // bind to the bytes the owner is approving.
+                content_sha256: contentDigest,
                 reason: proposal.reason,
                 requesting_agent:
                   proposal.requesting_agent || ctx.requestingAgent,
@@ -1383,9 +1962,18 @@ export function registerTools(api) {
               expires_at: new Date(
                 Date.now() + 7 * 24 * 60 * 60 * 1000,
               ).toISOString(),
+              // The scope digest is what an owner's decision is bound to, so it
+              // is computed over exactly the parameters shown for approval.
+              approval_scope_digest: canonicalHash(
+                "zink-approval-scope-v1",
+                `${targetStr}|SKILL_CANDIDATE_APPROVAL|${contentDigest}`,
+              ),
               publication_status: "pending_owner_post",
               proposal,
             };
+            // The contract is enforced, not decorative: a packet that does not
+            // conform is never presented to the owner.
+            validateContract("approval-request", approvalRecord);
             registerPendingSkillProposal(approvalRecord);
             return {
               content: [
@@ -1406,19 +1994,12 @@ export function registerTools(api) {
             ],
           };
         }
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                status: "governed",
-                tool: "zink_skill_propose",
-                params,
-                context: ctx,
-              }),
-            },
-          ],
-        };
+        // M7-071: missing/malformed adapter is explicit unavailable/blocked,
+        // never a governed-looking success. No fabricated result context.
+        return adapterUnavailableResponse(
+          "zink_skill_propose",
+          "SKILL_ADAPTER_UNAVAILABLE",
+        );
       },
     },
     // O16, N09, N10: Excel operations strictly aligned with contract
@@ -1472,9 +2053,21 @@ export function registerTools(api) {
       async execute(_id, params) {
         const mod = await getExcelWriter();
         if (mod?.executeExcelOperation) {
-          const sandboxDir =
-            resolveAgentSandboxDir("excel") ||
-            path.resolve(process.cwd(), "artifacts");
+          const sandboxDir = resolveAgentSandboxDir("excel");
+          if (!sandboxDir) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({
+                    status: "BLOCKED",
+                    error: "SANDBOX_UNAVAILABLE",
+                    tool: "zink_excel",
+                  }),
+                },
+              ],
+            };
+          }
           const res = mod.executeExcelOperation(params, sandboxDir);
           return {
             content: [
@@ -1692,31 +2285,87 @@ export function registerTools(api) {
         additionalProperties: false,
       },
       async execute(_id, params) {
-        const query = params?.query || params?.sql || "SELECT 1";
-        const targetDb =
-          params?.target_database || params?.database || "knowledge";
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                status: "ENGINE_NOT_IMPLEMENTED",
-                tool: "zink_sql",
-                query,
-                target_database: targetDb,
-                rows: [],
-                row_count: 0,
-                message:
-                  "SQL engine not available. Deploy zink-tools/sql-engine to execute read-only queries.",
-              }),
-            },
-          ],
-        };
+        const query = params?.query;
+        const targetDb = params?.target_database;
+        // M8-061: SQL caller identity comes from trusted runtime context.
+        const agentId = deriveTrustedRequester(_id);
+        const taskId =
+          params?.task_id || _id?.taskId || _id?.task_id || _id?.runId;
+        if (!query || !targetDb || !taskId) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  status: "BLOCKED",
+                  execution_state: "BLOCKED",
+                  error: "TASK_SCOPE_REQUIRED",
+                  message:
+                    "SQL execution requires query, target_database and task scope; no defaults are permitted.",
+                }),
+              },
+            ],
+          };
+        }
+        const bridge = await getDuckDbBridge();
+        if (!bridge?.executeGovernedDuckDbQuery) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  status: "BLOCKED",
+                  execution_state: "BLOCKED",
+                  error: "ENGINE_NOT_IMPLEMENTED",
+                  tool: "zink_sql",
+                }),
+              },
+            ],
+          };
+        }
+        try {
+          const result = await bridge.executeGovernedDuckDbQuery(
+            { agent_id: agentId, task_id: taskId },
+            { ...params, query, target_database: targetDb },
+          );
+          return {
+            content: [{ type: "text", text: JSON.stringify(result) }],
+          };
+        } catch (err) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  status: "BLOCKED",
+                  execution_state:
+                    err?.code === "DUCKDB_TIMEOUT" ? "TIMEOUT" : "FAILED",
+                  error: err?.code || "DUCKDB_EXECUTION_ERROR",
+                  message: "Governed SQL execution failed closed.",
+                  target_database: targetDb,
+                  rows: [],
+                  row_count: 0,
+                }),
+              },
+            ],
+          };
+        }
       },
     },
   };
 
+  const registered = [];
+  const skipped = [];
   for (const [toolId, def] of Object.entries(registry)) {
+    // M7-050: a tool without its canonical contract is never registered
+    // with a hand-written fallback schema.
+    if (!toolContracts[toolId]) {
+      api?.logger?.error?.(
+        `[zink-governance] registerTools: skipping ${toolId} — canonical contract unavailable`,
+      );
+      skipped.push(toolId);
+      continue;
+    }
     registerFn({
       name: toolId,
       id: toolId,
@@ -1729,16 +2378,52 @@ export function registerTools(api) {
       registryChecksum,
       isExecutable: isExecutableTool(toolId),
       async execute(_id, params) {
-        const requestingAgent =
-          params?.requesting_agent ||
-          _id?.agent ||
-          _id?.agentId ||
-          params?.agentId ||
-          "unknown";
+        // M7-049: principal identity comes exclusively from trusted OpenClaw
+        // context, never from tool payload. params.requesting_agent is
+        // business metadata and must not authorize as another agent.
+        const trustedAgent = _id?.agent ?? _id?.agentId ?? null;
+        const claimedAgent =
+          params?.requesting_agent ?? params?.agentId ?? null;
+        if (typeof trustedAgent !== "string" || !trustedAgent) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  status: "DENIED",
+                  tool: toolId,
+                  error:
+                    "IDENTITY_REQUIRED: No trusted agent identity in tool context",
+                  code: "IDENTITY_REQUIRED",
+                }),
+              },
+            ],
+          };
+        }
+        if (claimedAgent !== null && claimedAgent !== trustedAgent) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  status: "DENIED",
+                  tool: toolId,
+                  error: `IDENTITY_SPOOF: payload identity '${claimedAgent}' does not match trusted context '${trustedAgent}'`,
+                  code: "IDENTITY_SPOOF",
+                }),
+              },
+            ],
+          };
+        }
+        const requestingAgent = trustedAgent;
 
         // N08: Wrapper-level per-agent authorization
-        if (requestingAgent !== "unknown") {
-          const access = evaluateToolAccess(requestingAgent, toolId);
+        {
+          const access = evaluateToolAccess(
+            requestingAgent,
+            toolId,
+            params || {},
+          );
           if (!access.allowed) {
             return {
               content: [
@@ -1788,14 +2473,18 @@ export function registerTools(api) {
           if (typeof def.execute === "function") {
             executionResult = await def.execute(_id, params);
           } else {
-            executionResult = {
+            // M8-062: no executable backend — explicit unavailable, never a
+            // governed-looking success.
+            return {
               content: [
                 {
                   type: "text",
                   text: JSON.stringify({
-                    status: "governed",
+                    status: "UNAVAILABLE",
                     tool: toolId,
-                    params,
+                    error: "TOOL_EXECUTE_UNAVAILABLE",
+                    code: "TOOL_EXECUTE_UNAVAILABLE",
+                    blocked: true,
                   }),
                 },
               ],
@@ -1818,59 +2507,81 @@ export function registerTools(api) {
         }
 
         // O07: Validate tool-result schema against output definition if present
-        const isCallableExecutionTool = [
-          "zink_excel",
-          "zink_power_bi",
-          "zink_sql",
-          "zink_python",
-          "zink_n8n",
-        ].includes(toolId);
-        const outputSchema = isCallableExecutionTool
-          ? toolContracts[toolId]?.rawSchema?.$defs?.output
-          : null;
-        if (outputSchema && executionResult?.content?.[0]?.text) {
-          try {
-            const parsedOutput = JSON.parse(executionResult.content[0].text);
-            if (
-              parsedOutput &&
-              parsedOutput.status !== "ENGINE_NOT_IMPLEMENTED" &&
-              parsedOutput.status?.toUpperCase?.() !== "ERROR" &&
-              parsedOutput.status !== "DENIED" &&
-              parsedOutput.status !== "INVALID_PARAMETERS" &&
-              parsedOutput.status !== "governed"
-            ) {
-              try {
-                checkSchema(
-                  outputSchema,
-                  parsedOutput,
-                  toolContracts[toolId]?.schemaName,
-                );
-              } catch (outErr) {
-                return {
-                  content: [
-                    {
-                      type: "text",
-                      text: JSON.stringify({
-                        status: "INVALID_OUTPUT_SCHEMA",
-                        tool: toolId,
-                        errors: [outErr?.message || String(outErr)],
-                        code: "INVALID_OUTPUT_SCHEMA",
-                        rawOutput: parsedOutput,
-                      }),
-                    },
-                  ],
-                };
-              }
-            }
-          } catch {
-            // output text not JSON
-          }
+        const outputCheck = validateToolOutputEnvelope(
+          toolId,
+          executionResult,
+          toolContracts[toolId],
+        );
+        if (!outputCheck.ok) {
+          return outputCheck.response;
         }
 
         return executionResult;
       },
     });
+    registered.push(toolId);
   }
+  return { registered, skipped };
+}
+
+// M8-060: structured-output gate for governed execution tools. Non-JSON
+// output and schema violations are blocked; terminal/error envelopes pass
+// through untouched. Exported for behavioral regression testing.
+export function validateToolOutputEnvelope(toolId, executionResult, contract) {
+  const isCallableExecutionTool = [
+    "zink_excel",
+    "zink_power_bi",
+    "zink_sql",
+    "zink_python",
+    "zink_n8n",
+  ].includes(toolId);
+  const outputSchema = isCallableExecutionTool
+    ? contract?.rawSchema?.$defs?.output
+    : null;
+  const outputText = executionResult?.content?.[0]?.text;
+  if (!outputSchema || typeof outputText !== "string") {
+    return { ok: true };
+  }
+  const blocked = (errors, rawOutput) => ({
+    ok: false,
+    response: {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            status: "INVALID_OUTPUT_SCHEMA",
+            tool: toolId,
+            errors,
+            code: "INVALID_OUTPUT_SCHEMA",
+            ...(rawOutput === undefined ? {} : { rawOutput }),
+          }),
+        },
+      ],
+    },
+  });
+  let parsedOutput;
+  try {
+    parsedOutput = JSON.parse(outputText);
+  } catch {
+    return blocked(["NON_JSON_OUTPUT"]);
+  }
+  if (
+    parsedOutput &&
+    parsedOutput.status !== "ENGINE_NOT_IMPLEMENTED" &&
+    parsedOutput.status?.toUpperCase?.() !== "ERROR" &&
+    parsedOutput.status !== "DENIED" &&
+    parsedOutput.status !== "BLOCKED" &&
+    parsedOutput.status !== "INVALID_PARAMETERS" &&
+    parsedOutput.status !== "governed" &&
+    parsedOutput.status !== "UNAVAILABLE"
+  ) {
+    try {
+      checkSchema(outputSchema, parsedOutput, contract?.schemaName);
+    } catch (outErr) {
+      return blocked([outErr?.message || String(outErr)], parsedOutput);
+    }
+  }
+  return { ok: true };
 }
 
 const ids = new Set(["main", "o1", "o2", "excel", "power-bi", "sql", "python"]);
@@ -1887,6 +2598,111 @@ function noLinks(target) {
     }
   }
 }
+/**
+ * M7-047: a model turn that failed upstream is never a successful completion.
+ */
+export function isProviderFailureEvent(event) {
+  return (
+    event?.success === false ||
+    event?.lastAssistant?.stopReason === "error" ||
+    event?.lastAssistant?.stopReason === "aborted" ||
+    event?.lastAssistant?.stopReason === "length"
+  );
+}
+
+/**
+ * M7-048: classify a run-end request without trusting a session-key string.
+ *
+ * A session is an internal system session only when the authoritative ledger
+ * does not own it AND no governed run identity was presented. A self-keyed
+ * session that carries a runId is a real governed run wearing an internal
+ * key, so it must fall through to full end-of-run governance.
+ */
+export function classifyInternalRunEnd({
+  agentId,
+  sessionKey,
+  runId,
+  ownedByLedger,
+  hasMessageIdentity = false,
+}) {
+  const selfKeyed =
+    typeof sessionKey === "string" &&
+    sessionKey === `agent:${agentId}:${agentId}`;
+  if (ownedByLedger) {
+    return { isInternal: false, selfKeyed, selfKeyedWithRunId: false };
+  }
+  if (!selfKeyed) {
+    return { isInternal: false, selfKeyed: false, selfKeyedWithRunId: false };
+  }
+  if (runId) {
+    return { isInternal: false, selfKeyed: true, selfKeyedWithRunId: true };
+  }
+  // Run ADMISSION additionally requires that no inbound message identity was
+  // presented: a self-keyed session that carries a Discord message is a
+  // governed ingress run wearing an internal key. This is the ONE classifier —
+  // admission and end-of-run must not hold two copies of the same rule.
+  if (hasMessageIdentity) {
+    return {
+      isInternal: false,
+      selfKeyed: true,
+      selfKeyedWithRunId: false,
+    };
+  }
+  return { isInternal: true, selfKeyed: true, selfKeyedWithRunId: false };
+}
+
+/**
+ * T2: self-scoped read-only quota receipt. Returns null when governance is
+ * disabled so the prompt path degrades to no telemetry rather than a fabricated
+ * quota. Never throws: a missing receipt is not a governance failure for
+ * prompt construction, and stale/unknown telemetry keeps PRIMARY anyway.
+ */
+async function quotaReceiptFor(config, agentId) {
+  try {
+    if (typeof agentId !== "string" || !agentId) return null;
+    return await selfNativeQuota(
+      {
+        plugins: {
+          entries: {
+            "zink-governance": {
+              enabled: config?.enabled !== false,
+              config: { ledgerRoot: config?.ledgerRoot },
+            },
+          },
+        },
+      },
+      { agentId },
+    );
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * T3: run-scoped model resolution. Returns null when governance is disabled so
+ * the host keeps its own resolution. The result applies to the current run
+ * only and is never written into session state.
+ */
+async function resolveRunModelFor(config, context) {
+  try {
+    return await resolveNativeRunModel(
+      {
+        plugins: {
+          entries: {
+            "zink-governance": {
+              enabled: config?.enabled !== false,
+              config: { ledgerRoot: config?.ledgerRoot },
+            },
+          },
+        },
+      },
+      context,
+    );
+  } catch {
+    return null;
+  }
+}
+
 function leaseKey(context, event = {}) {
   const sessionKey = context.sessionKey ?? event.sessionKey;
   const runId = context.runId ?? event.runId;
@@ -1914,9 +2730,15 @@ export default {
     api.logger?.info?.(
       `[zink-governance] ACTIVE AND LOADED v2026.9.24: ledgerRoot=${api.pluginConfig?.ledgerRoot}`,
     );
-    registerTools(api);
     const config = api.pluginConfig ?? {};
+    // M8-058: a disabled governance plugin exposes no tools or hooks.
+    // The enabled check runs before any registration side effect.
     if (config.enabled === false) return;
+    registerTools(api, {
+      proposalStorageDir: path.isAbsolute(config.ledgerRoot ?? "")
+        ? path.join(config.ledgerRoot, "skill-proposals")
+        : undefined,
+    });
     if (
       !path.isAbsolute(config.ledgerRoot ?? "") ||
       !/^[1-9][0-9]{16,19}$/u.test(config.ownerDiscordId ?? "")
@@ -1978,7 +2800,10 @@ export default {
         context.inputProvenance?.sessionKey ?? context.requesterSessionKey;
       const hasPending = Object.values(snapshot.tasks).some(
         (task) =>
-          task.workflow_status === "ACTIVE" &&
+          // M7-020: a reserved child waits for its receipt whether the task
+          // is still pre-approval or already executing. Restricting the wait to
+          // ACTIVE would make an approved task's child fail to start.
+          ["ACTIVE", "QUEUED", "EXECUTING"].includes(task.workflow_status) &&
           Object.values(task.delegations ?? {}).some(
             (run) =>
               run.agent_id === context.agentId &&
@@ -2051,44 +2876,57 @@ export default {
     const guard = createGovernanceGuard({ paths, manifestFor });
 
     const cachedDiscordTokens = new Map();
+    function credentialUnavailable(agentId) {
+      const error = new Error("CREDENTIAL_UNAVAILABLE");
+      error.code = "CREDENTIAL_UNAVAILABLE";
+      error.agentId = agentId;
+      return error;
+    }
+
     function resolveDiscordBotToken(agentId) {
       if (cachedDiscordTokens.has(agentId))
         return cachedDiscordTokens.get(agentId);
       try {
-        const tokenKey =
-          {
-            main: "zink/openclaw/DISCORD_BOT_TOKEN_MAIN",
-            o1: "zink/openclaw/DISCORD_BOT_TOKEN_O1",
-            o2: "zink/openclaw/DISCORD_BOT_TOKEN_O2",
-          }[agentId] || "zink/openclaw/DISCORD_BOT_TOKEN_MAIN";
+        const tokenKey = {
+          main: "zink/openclaw/DISCORD_BOT_TOKEN_MAIN",
+          o1: "zink/openclaw/DISCORD_BOT_TOKEN_O1",
+          o2: "zink/openclaw/DISCORD_BOT_TOKEN_O2",
+        }[agentId];
+        if (!tokenKey) throw credentialUnavailable(agentId);
 
-        const resRaw = execSync(
-          "/home/hoang_vinh/.openclaw-zink/bin/openclaw-pass-resolver",
-          {
-            input: JSON.stringify({
-              protocolVersion: 1,
-              provider: "pass_store",
-              ids: [tokenKey, "zink/openclaw/DISCORD_BOT_TOKEN_MAIN"],
-            }),
-            env: {
-              ...process.env,
-              PATH: `/home/hoang_vinh/.local/bin:${process.env.PATH}`,
-              PASSWORD_STORE_DIR:
-                "/home/hoang_vinh/.openclaw-zink/secrets/password-store",
-              GNUPGHOME: "/home/hoang_vinh/.openclaw-zink/secrets/gnupg",
-            },
-            encoding: "utf8",
-            timeout: 5000,
-          },
+        const resolverPath = path.join(
+          stateDir,
+          "bin",
+          "openclaw-pass-resolver",
         );
+        const passStoreDirectory = path.join(
+          stateDir,
+          "secrets",
+          "password-store",
+        );
+        const gpgHomeDirectory = path.join(stateDir, "secrets", "gnupg");
+        const resRaw = execSync(resolverPath, {
+          input: JSON.stringify({
+            protocolVersion: 1,
+            provider: "pass_store",
+            ids: [tokenKey],
+          }),
+          env: {
+            ...process.env,
+            PATH: `${path.join(path.dirname(stateDir), ".local", "bin")}${path.delimiter}${process.env.PATH || ""}`,
+            PASSWORD_STORE_DIR: passStoreDirectory,
+            GNUPGHOME: gpgHomeDirectory,
+          },
+          encoding: "utf8",
+          timeout: 5000,
+        });
         const parsed = JSON.parse(resRaw);
-        const token =
-          parsed.values?.[tokenKey] ||
-          parsed.values?.["zink/openclaw/DISCORD_BOT_TOKEN_MAIN"];
+        const token = parsed.values?.[tokenKey];
         if (token) cachedDiscordTokens.set(agentId, token);
+        if (!token) throw credentialUnavailable(agentId);
         return token;
       } catch {
-        return null;
+        throw credentialUnavailable(agentId);
       }
     }
 
@@ -2151,15 +2989,14 @@ export default {
         config.approvalsChannelId ||
         "1545696207316455527";
       const token = resolveDiscordBotToken(agentId);
-      if (!token) return;
 
       let bodyContent = card.content;
       if (!bodyContent.includes("[APPROVE]")) {
         bodyContent += `\n\n---\n**Thao tác dành cho User (Buttons & Actions):**\n- Phản hồi **APPROVE** hoặc bấm **[APPROVE]** để phê duyệt đưa vào hàng đợi thực thi.\n- Phản hồi **REJECT** hoặc bấm **[REJECT]** để từ chối kế hoạch.\n- Phản hồi **REQUEST REVISION** để yêu cầu sửa đổi kế hoạch.`;
       }
 
-      let taskId = "unknown-task";
-      let briefRevision = 1;
+      let taskId;
+      let briefRevision;
       try {
         const snapshot = readSnapshot(paths);
         const owner = findSession(
@@ -2170,10 +3007,18 @@ export default {
         );
         if (owner?.task_id) {
           taskId = owner.task_id;
-          briefRevision = owner.task?.brief_revision || 1;
+          briefRevision = owner.task?.brief_revision;
         }
       } catch {
-        /* fallback to default */
+        api.logger?.warn?.(
+          "[zink-governance] Discord approval card blocked: TASK_CORRELATION_UNAVAILABLE",
+        );
+      }
+      if (!taskId || !Number.isInteger(briefRevision) || briefRevision < 1) {
+        api.logger?.warn?.(
+          "[zink-governance] Discord approval card blocked: EXACT_TASK_CORRELATION_REQUIRED",
+        );
+        return { status: "BLOCKED", error: "EXACT_TASK_CORRELATION_REQUIRED" };
       }
 
       const approveCustomId = buildComponentCustomId(
@@ -2237,7 +3082,6 @@ export default {
               ),
               message: {
                 content: bodyContent.slice(0, 2000),
-                components,
               },
               applied_tags: ["1545697161985921064"], // STATUS: WAITING tag
             }),
@@ -2246,9 +3090,33 @@ export default {
 
         if (res.ok) {
           const thread = await res.json();
-          api.logger?.warn?.(
-            `[zink-governance] Discord approval card posted for ${agentId} into #approvals (threadId: ${thread.id})`,
-          );
+          // Native outbound: components travel through the official
+          // OpenClaw 2026.6.34 Discord adapter. Only forum-thread
+          // creation above remains raw REST (no verified native seam).
+          try {
+            const receipt = await sendNativePayload({
+              api,
+              to: thread.id,
+              threadId: thread.id,
+              accountId: agentId,
+              payload: buildNativeComponentPayload({
+                text: bodyContent.slice(0, 2000),
+                buttons: components[0].components.map((button) => ({
+                  customId: button.custom_id,
+                  label: button.label,
+                  style: button.style,
+                  emoji: button.emoji,
+                })),
+              }),
+            });
+            api.logger?.info?.(
+              `[zink-governance] Discord approval card posted for ${agentId} into #approvals (threadId: ${thread.id}, messageId: ${receipt.messageId})`,
+            );
+          } catch (deliveryErr) {
+            api.logger?.error?.(
+              `[zink-governance] Discord approval component delivery failed: ${deliveryErr?.message}`,
+            );
+          }
         } else {
           const errText = await res.text();
           api.logger?.warn?.(
@@ -2262,6 +3130,34 @@ export default {
       }
     }
 
+    async function resolveVerifiedExecutionBackend() {
+      // R4: the live projection has no registered specialist engine.
+      return null;
+    }
+
+    function enqueueApprovedTaskForExecution({ taskId, paths }) {
+      if (!paths) {
+        return { status: "BLOCKED", error: "TASK_SCOPE_REQUIRED" };
+      }
+      const snapshot = readSnapshot(paths);
+      const task = snapshot?.tasks?.[taskId];
+      if (!task) {
+        return { status: "BLOCKED", error: "TASK_NOT_FOUND" };
+      }
+      const existing = defaultQueueManager.getTask(taskId);
+      if (existing) {
+        return { status: existing.status, taskId, queueItem: existing };
+      }
+      const queueItem = defaultQueueManager.enqueueTask({
+        taskId,
+        planVersion: String(task.brief_revision || "1.0"),
+        primaryCoordinator: task.primary_coordinator || "o1",
+        requiredCapabilities: task.nodes?.map((node) => node.agent_id) || [],
+        payload: task.payload || {},
+      });
+      return { status: "QUEUED", taskId, queueItem };
+    }
+
     async function executeApprovedTask({
       taskId,
       paths,
@@ -2269,26 +3165,51 @@ export default {
       api,
       originThreadId = null,
     }) {
+      let queueStatus;
+      try {
+        queueStatus = enqueueApprovedTaskForExecution({ taskId, paths });
+      } catch (err) {
+        api.logger?.error?.(
+          `[zink-governance] approved task queueing failed: ${err?.message}`,
+        );
+        return {
+          status: "BLOCKED",
+          error: "QUEUE_STORAGE_WRITE_FAILED",
+          taskId,
+        };
+      }
+      if (queueStatus.status !== "QUEUED") {
+        return { ...queueStatus, taskId };
+      }
+      const executionBackend = await resolveVerifiedExecutionBackend();
+      if (!executionBackend) {
+        return {
+          status: "BLOCKED",
+          error: "ENGINE_NOT_IMPLEMENTED",
+          taskId,
+          queue_status: queueStatus.status,
+        };
+      }
+
       try {
         api.logger?.info?.(
           `[zink-governance] Starting autonomous execution for approved task: ${taskId}`,
         );
 
-        const o1Token = resolveDiscordBotToken("o1");
-        if (o1Token && originThreadId) {
-          fetch(
-            `https://discord.com/api/v10/channels/${originThreadId}/messages`,
-            {
-              method: "POST",
-              headers: {
-                Authorization: `Bot ${o1Token}`,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                content: `🚀 **Đang thực thi tác vụ...**\n- **Điều phối viên:** O1 (ETL Pipeline: Excel + SQL + Python)\n- **Tiến trình:** Đang tổng hợp số liệu và khởi tạo bảng tính chuyên nghiệp...`,
-              }),
+        if (originThreadId) {
+          sendNativePayload({
+            api,
+            to: originThreadId,
+            threadId: originThreadId,
+            accountId: "o1",
+            payload: {
+              text: `⏳ **Execution backend đang được kiểm tra...**\n- **Điều phối viên:** O1\n- **Tiến trình:** Chỉ tiếp tục khi backend chuyên môn có đăng ký và trả evidence tin cậy.`,
             },
-          ).catch(() => {});
+          }).catch((deliveryErr) => {
+            api.logger?.warn?.(
+              `[zink-governance] discord delivery failed (execution-backend-notice): ${deliveryErr?.message}`,
+            );
+          });
         }
 
         const snapshot = readSnapshot(paths);
@@ -2303,6 +3224,9 @@ export default {
         // 1. Enqueue and Claim in defaultQueueManager
         let leaseId = null;
         let attempt = 1;
+        // M7-010: the broker claims under the task's governed coordinator
+        // identity so the claim is bound to the authoritative assignment.
+        const brokerAgentId = task.primary_coordinator || "o1";
         const existing = defaultQueueManager.queue.get(taskId);
         if (!existing) {
           defaultQueueManager.enqueueTask({
@@ -2317,18 +3241,35 @@ export default {
           });
           const claim = defaultQueueManager.claimTaskById({
             taskId,
-            workerId: "local-laptop-worker",
+            agentId: brokerAgentId,
             leaseSeconds: 300,
           });
           leaseId = claim.leaseId;
           attempt = claim.task.attempt;
         } else if (existing.status === "EXECUTING") {
-          leaseId = existing.leaseId;
-          attempt = existing.attempt;
+          if (existing.claimedBy !== brokerAgentId) {
+            // LEGACY-MIGRATION: pre-M7-010 claims used the opaque broker
+            // principal. Revoke via stale recovery (ledger-reconciled so
+            // terminal work is never resurrected) and claim governed.
+            defaultQueueManager.detectAndRecoverStaleTasks({
+              staleThresholdSeconds: 0,
+              ledgerTasks: snapshot?.tasks ?? null,
+            });
+            const claim = defaultQueueManager.claimTaskById({
+              taskId,
+              agentId: brokerAgentId,
+              leaseSeconds: 300,
+            });
+            leaseId = claim.leaseId;
+            attempt = claim.task.attempt;
+          } else {
+            leaseId = existing.leaseId;
+            attempt = existing.attempt;
+          }
         } else {
           const claim = defaultQueueManager.claimTaskById({
             taskId,
-            workerId: "local-laptop-worker",
+            agentId: brokerAgentId,
             leaseSeconds: 300,
           });
           leaseId = claim.leaseId;
@@ -2338,7 +3279,7 @@ export default {
           try {
             recordWorkflowEvent(paths, "WORKFLOW_TASK_CLAIMED", {
               task_id: taskId,
-              worker_id: "local-laptop-worker",
+              agent_id: "execution-agent",
             });
           } catch (err) {
             api.logger?.warn?.(
@@ -2357,77 +3298,10 @@ export default {
         mkdirSync(artifactDir, { recursive: true, mode: 0o700 });
         const excelPath = path.join(artifactDir, "bao_cao_doanh_thu_kpi.xlsx");
 
-        const rows = [
-          [
-            "Ngày",
-            "Khu Vực",
-            "Doanh Thu (VND)",
-            "Chi Phí (VND)",
-            "Lợi Nhuận (VND)",
-            "Tỷ Suất LN",
-            "Đạt KPI",
-          ],
-          [
-            "2026-09-01",
-            "Miền Bắc",
-            35000000,
-            21000000,
-            14000000,
-            "40.0%",
-            "ĐẠT",
-          ],
-          [
-            "2026-09-02",
-            "Miền Nam",
-            48000000,
-            29000000,
-            19000000,
-            "39.6%",
-            "ĐẠT",
-          ],
-          [
-            "2026-09-03",
-            "Miền Trung",
-            22000000,
-            15000000,
-            7000000,
-            "31.8%",
-            "ĐẠT",
-          ],
-          [
-            "2026-09-04",
-            "Tây Nguyên",
-            20000000,
-            13000000,
-            7000000,
-            "35.0%",
-            "ĐẠT",
-          ],
-          [
-            "TỔNG CỘNG",
-            "TOÀN QUỐC",
-            125000000,
-            78000000,
-            47000000,
-            "37.6%",
-            "XUẤT SẮC",
-          ],
-        ];
-
-        executeExcelOperation(
-          {
-            operation: "generate",
-            file_path: excelPath,
-            data: rows,
-            sheet_name: "Báo Cáo Doanh Thu KPI",
-          },
-          artifactDir,
-        );
-
         // 3. Multi-tier Validation via handleExecutionFinished
         const finishRes = handleExecutionFinished({
           taskId,
-          workerId: "local-laptop-worker",
+          agentId: task.primary_coordinator || "o1",
           leaseId,
           attempt,
           artifactPath: excelPath,
@@ -2441,17 +3315,8 @@ export default {
             ],
             sandboxDir: artifactDir,
           },
-          businessData: {
-            revenue: 125000000,
-            cost: 78000000,
-            profit: 47000000,
-          },
-          businessConfig: {
-            kpiConstraints: {
-              revenue: { min: 100000000 },
-              cost: { max: 90000000 },
-            },
-          },
+          businessData: task.payload?.businessData || {},
+          businessConfig: task.payload?.businessConfig || {},
           paths,
           queueManager: defaultQueueManager,
         });
@@ -2460,20 +3325,20 @@ export default {
           api.logger?.error?.(
             `[zink-governance] Execution validation failed: ${finishRes.error || finishRes.status}`,
           );
-          if (originThreadId && o1Token) {
-            fetch(
-              `https://discord.com/api/v10/channels/${originThreadId}/messages`,
-              {
-                method: "POST",
-                headers: {
-                  Authorization: `Bot ${o1Token}`,
-                  "Content-Type": "application/json",
-                },
-                body: JSON.stringify({
-                  content: `⚠️ **Kiểm định thất bại:** ${finishRes.error || "Không đạt chuẩn kiểm định 2 tầng"}`,
-                }),
+          if (originThreadId) {
+            sendNativePayload({
+              api,
+              to: originThreadId,
+              threadId: originThreadId,
+              accountId: "o1",
+              payload: {
+                text: `⚠️ **Kiểm định thất bại:** ${finishRes.error || "Không đạt chuẩn kiểm định 2 tầng"}`,
               },
-            ).catch(() => {});
+            }).catch((deliveryErr) => {
+              api.logger?.warn?.(
+                `[zink-governance] discord delivery failed (validation-failure-notice): ${deliveryErr?.message}`,
+              );
+            });
           }
           return;
         }
@@ -2551,7 +3416,6 @@ export default {
             message: {
               content: finishRes.resultCard.slice(0, 2000),
               embeds,
-              components,
             },
           }),
         );
@@ -2577,6 +3441,10 @@ export default {
           );
         }
 
+        // Forum-thread creation (with file attachments) remains raw REST:
+        // exact 2026.6.34 exposes no native plugin-facing thread-create/file
+        // seam. o1Token is still required here as the transport credential.
+        const o1Token = resolveDiscordBotToken("o1");
         const postRes = await fetch(
           `https://discord.com/api/v10/channels/${resultsForumId}/threads`,
           {
@@ -2592,9 +3460,33 @@ export default {
         if (postRes.ok) {
           const postData = await postRes.json();
           resultThreadId = postData.id;
-          api.logger?.info?.(
-            `[zink-governance] Result card published successfully: thread ${resultThreadId}`,
-          );
+          // Native outbound for the component message; the multipart
+          // thread creation above (with file attachments) remains raw
+          // REST (no verified native forum/file seam in exact 2026.6.34).
+          try {
+            const receipt = await sendNativePayload({
+              api,
+              to: resultThreadId,
+              threadId: resultThreadId,
+              accountId: "o1",
+              payload: buildNativeComponentPayload({
+                text: finishRes.resultCard.slice(0, 2000),
+                buttons: components[0].components.map((button) => ({
+                  customId: button.custom_id,
+                  label: button.label,
+                  style: button.style,
+                  emoji: button.emoji,
+                })),
+              }),
+            });
+            api.logger?.info?.(
+              `[zink-governance] Result card and actions published successfully: thread ${resultThreadId}, messageId: ${receipt.messageId}`,
+            );
+          } catch (deliveryErr) {
+            api.logger?.error?.(
+              `[zink-governance] Discord result component delivery failed: ${deliveryErr?.message}`,
+            );
+          }
         } else {
           api.logger?.error?.(
             `[zink-governance] Failed to publish result card: ${postRes.status} ${await postRes.text()}`,
@@ -2602,42 +3494,40 @@ export default {
         }
 
         // 5. Update Approval Thread
-        if (originThreadId && o1Token) {
-          fetch(
-            `https://discord.com/api/v10/channels/${originThreadId}/messages`,
-            {
-              method: "POST",
-              headers: {
-                Authorization: `Bot ${o1Token}`,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                content: `✅ **Thực thi và thẩm định 2 tầng HOÀN TẤT!**\n- **Kiểm định kỹ thuật:** PASS\n- **Kiểm định nghiệp vụ:** PASS (Doanh thu: 125M, Chi phí: 78M, Lợi nhuận: 47M)\n- **Kênh nghiệm thu:** Kết quả và bảng tính đã đăng tại <#${resultsForumId}> ${resultThreadId ? `(Thread: <#${resultThreadId}>)` : ""}. Kính mời anh Zink bấm nút **Accept** để hoàn tất nghiệm thu!`,
-              }),
+        if (originThreadId) {
+          sendNativePayload({
+            api,
+            to: originThreadId,
+            threadId: originThreadId,
+            accountId: "o1",
+            payload: {
+              text: `📋 **Evidence đã được chuẩn bị cho nghiệm thu.**\n- **Kiểm định:** Theo kết quả validator thực tế\n- **Kênh nghiệm thu:** <#${resultsForumId}> ${resultThreadId ? `(Thread: <#${resultThreadId}>)` : ""}. Kính mời anh Zink kiểm tra và nghiệm thu nếu đủ evidence.`,
             },
-          ).catch(() => {});
+          }).catch((deliveryErr) => {
+            api.logger?.warn?.(
+              `[zink-governance] discord delivery failed (evidence-ready-notice): ${deliveryErr?.message}`,
+            );
+          });
         }
 
         // 6. Main notifies #office
-        const mainToken = resolveDiscordBotToken("main");
         const officeChannelId =
           config.discordOfficeChannelId ||
           config.officeChannelId ||
           "1545425766161063937";
-        if (mainToken && officeChannelId) {
-          fetch(
-            `https://discord.com/api/v10/channels/${officeChannelId}/messages`,
-            {
-              method: "POST",
-              headers: {
-                Authorization: `Bot ${mainToken}`,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                content: `📊 **Thông báo từ Quản Lý:** Điều Phối 1 (O1) đã hoàn tất thực thi tác vụ \`${taskId.slice(0, 8)}\`. File báo cáo Excel và bản thẩm định 2 tầng đã sẵn sàng tại kênh <#${resultsForumId}>. Kính mời anh Zink sang kênh kiểm tra và bấm nút **Accept** để nghiệm thu kết quả!`,
-              }),
+        if (officeChannelId) {
+          sendNativePayload({
+            api,
+            to: officeChannelId,
+            accountId: "main",
+            payload: {
+              text: `📋 **Thông báo từ Quản Lý:** Evidence của tác vụ \`${taskId.slice(0, 8)}\` đã được chuyển tới <#${resultsForumId}> để kiểm tra và nghiệm thu.`,
             },
-          ).catch(() => {});
+          }).catch((deliveryErr) => {
+            api.logger?.warn?.(
+              `[zink-governance] discord delivery failed (office-evidence-notice): ${deliveryErr?.message}`,
+            );
+          });
         }
       } catch (execErr) {
         api.logger?.error?.(
@@ -2655,8 +3545,21 @@ export default {
         };
       },
       async beforeRun(event, context, signal) {
+        // The internal-session rule is decided by the ONE canonical classifier,
+        // not by a second local copy of the same test. A self-keyed session that
+        // the ledger owns, or that carries a runId, is a GOVERNED session and
+        // must pass through full run-admission governance — the previous local
+        // copy waved it through at admission while the end-of-run path
+        // correctly classified it as governed.
         if (
-          context.sessionKey === `agent:${context.agentId}:${context.agentId}`
+          classifyInternalRunEnd({
+            agentId: context.agentId,
+            sessionKey: context.sessionKey,
+            runId: context.runId,
+            ownedByLedger: false,
+            hasMessageIdentity:
+              Boolean(context.currentMessageId) || Boolean(context.message),
+          }).isInternal
         ) {
           return { allow: true };
         }
@@ -2664,7 +3567,6 @@ export default {
         // runId in 2026.6.34. Bind authenticated ingress at the awaited native
         // run boundary, where message identity and run identity coexist.
         const isDiscordIngress =
-          context.agentId === "main" &&
           !context.inputProvenance &&
           (context.sessionKey?.includes(":discord:") ||
             context.channelId === "discord" ||
@@ -2676,11 +3578,26 @@ export default {
             (Boolean(config.discordOfficeChannelId) &&
               context.channelId === config.discordOfficeChannelId));
         if (isDiscordIngress) {
-          authenticateIngress(context);
+          const admission = authenticateIngress(context);
+          if (admission?.allow !== true) return admission;
         } else {
           await awaitSpawnReceipt(context, signal);
         }
-        return guard.beforeRun(event, context, signal);
+        // T3: proactive fallback at the model-resolution seam. The resolved
+        // model is run-scoped and returned to the host for the CURRENT run
+        // only. No session state is written, no model override is created and
+        // no model pin is persisted. Quota is advisory here; a real provider
+        // failure still takes the native reactive failover path.
+        const decision = await guard.beforeRun(event, context, signal);
+        if (decision?.allow !== true) return decision;
+        const modelResolution = await resolveRunModelFor(config, context);
+        return modelResolution ? { ...decision, modelResolution } : decision;
+      },
+      // T3: dedicated model-resolution boundary. The host may call this
+      // directly when it exposes before_model_resolve. It is pure with respect
+      // to persisted state.
+      async before_model_resolve(event, context) {
+        return (await resolveRunModelFor(config, context)) ?? { allow: true };
       },
       async beforeToolCall(event, context, signal) {
         if (
@@ -2690,6 +3607,28 @@ export default {
             "zink_skill_propose",
           ].includes(event.toolName)
         ) {
+          if (!canAccessMemoryTool(context.agentId, event.toolName)) {
+            return {
+              allow: false,
+              block: true,
+              reason: "MEMORY_TOOL_ACCESS_DENIED",
+            };
+          }
+          const memoryAccess = evaluateToolAccess(
+            context.agentId,
+            event.toolName,
+            event.params || {},
+          );
+          if (!memoryAccess.allowed) {
+            api.logger?.warn?.(
+              `[zink-governance:denied] agent=${context.agentId} tool=${event.toolName} reason=${memoryAccess.reason}`,
+            );
+            return {
+              allow: false,
+              block: true,
+              reason: memoryAccess.reason || "AUTH_POLICY_DENIED",
+            };
+          }
           const lKey = leaseKey(
             { ...context, toolCallId: event.toolCallId },
             event,
@@ -2751,7 +3690,8 @@ export default {
             };
           }
 
-          // Path & Query Safety Validation
+          // Path & Query Safety Validation (M7-005/M7-007: the live path
+          // calls the canonical validators — no second SQL/path policy)
           if (event.toolName === "zink_excel") {
             const filePath = event.params?.file_path;
             if (!filePath || typeof filePath !== "string") {
@@ -2761,13 +3701,13 @@ export default {
                 reason: "SCHEMA_VALIDATION_FAILED",
               };
             }
-            const normalized = filePath.replace(/\\/g, "/");
-            if (
-              normalized.includes("../") ||
-              normalized.startsWith("../") ||
-              normalized.includes("/..")
-            ) {
-              return { allow: false, block: true, reason: "POLICY_DENIED" };
+            const pathCheck = await validateLiveArtifactPath(filePath);
+            if (!pathCheck.ok) {
+              return {
+                allow: false,
+                block: true,
+                reason: pathCheck.reason,
+              };
             }
           } else if (event.toolName === "zink_sql") {
             const query = event.params?.query || event.params?.sql;
@@ -2778,37 +3718,161 @@ export default {
                 reason: "SCHEMA_VALIDATION_FAILED",
               };
             }
-            const clean = query
-              .trim()
-              .replace(/^--.*$/gm, "")
-              .replace(/\/\*[\s\S]*?\*\//g, "")
-              .trim();
-            const firstWord = clean.split(/\s+/)[0]?.toUpperCase();
-            const allowed = ["SELECT", "WITH", "EXPLAIN", "DESCRIBE", "SHOW"];
-            if (!allowed.includes(firstWord)) {
+            const sqlCheck = await validateLiveSqlQuery(
+              query,
+              event.params?.parameters,
+            );
+            if (!sqlCheck.ok) {
               return {
                 allow: false,
                 block: true,
-                reason: "SQL_MUTATION_NOT_PERMITTED",
+                reason: sqlCheck.reason,
               };
             }
-            const dangerousPatterns =
-              /\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|REPLACE|GRANT|REVOKE)\b/i;
-            if (dangerousPatterns.test(clean)) {
+          } else if (event.toolName === "zink_n8n") {
+            // M7-006: the live n8n path uses the SAME canonical registry,
+            // delegation scope and approval binding as the guarded path. The
+            // live branch previously performed none of them, so any agent with
+            // static tool access could trigger any workflow id.
+            // The policy authority loads asynchronously; decide only against a
+            // loaded policy, never against an empty projection.
+            try {
+              await whenGovernanceDependenciesReady();
+            } catch {
               return {
                 allow: false,
                 block: true,
-                reason: "SQL_MUTATION_NOT_PERMITTED",
+                reason: "GOVERNANCE_DEPENDENCY_MISSING",
               };
+            }
+            let owner;
+            try {
+              owner = findSession(
+                readSnapshot(paths),
+                context.sessionKey,
+                context.runId,
+              );
+            } catch {
+              return {
+                allow: false,
+                block: true,
+                reason: "AUTH_DELEGATION_NOT_FOUND",
+              };
+            }
+            if (!owner?.delegation) {
+              return {
+                allow: false,
+                block: true,
+                reason: "AUTH_DELEGATION_NOT_FOUND",
+              };
+            }
+            const liveRun = owner.delegation;
+            // Delegation scope: the run must be live, the agent must own it,
+            // the run id must match, and the tool must be in the delegation's
+            // own allowlist. A root session has no delegation to scope to.
+            if (liveRun.run_state === "REVOKED") {
+              return {
+                allow: false,
+                block: true,
+                reason: "AUTH_DELEGATION_REVOKED",
+              };
+            }
+            if (liveRun.run_state !== "RUNNING") {
+              return {
+                allow: false,
+                block: true,
+                reason: "AUTH_DELEGATION_INACTIVE",
+              };
+            }
+            if (context.agentId !== liveRun.agent_id) {
+              return {
+                allow: false,
+                block: true,
+                reason: "AUTH_UNAUTHORIZED_TARGET",
+              };
+            }
+            if (context.runId !== liveRun.native_run_id) {
+              return {
+                allow: false,
+                block: true,
+                reason: "LINEAGE_MISMATCH",
+              };
+            }
+            if (
+              String(owner.task?.brief_revision) !==
+              String(liveRun.brief_revision)
+            ) {
+              return {
+                allow: false,
+                block: true,
+                reason: "REVISION_SUPERSEDED",
+              };
+            }
+            // The recorded delegation tool list, when present, may only NARROW
+            // the canonical ceiling that evaluateToolAccess already applied. It
+            // can never add authority the canonical policy withheld, and its
+            // absence is not a licence: the canonical projection stands alone.
+            if (
+              Array.isArray(liveRun.allowed_tools) &&
+              !liveRun.allowed_tools.includes("zink_n8n")
+            ) {
+              return {
+                allow: false,
+                block: true,
+                reason: "AUTH_POLICY_DENIED",
+              };
+            }
+            const liveInput = event.params?.input ?? event.params ?? {};
+            let invocation;
+            try {
+              invocation = resolveN8nInvocation({
+                workflowId: liveInput.workflow_id,
+                agentId: context.agentId,
+              });
+            } catch (registryErr) {
+              return {
+                allow: false,
+                block: true,
+                reason: registryErr?.message ?? "RUNTIME_CAPABILITY_MISMATCH",
+              };
+            }
+            if (invocation.requiresApproval) {
+              try {
+                bindInvocationApproval({
+                  paths,
+                  approvalId: event.params?.approval_id,
+                  taskId: owner.task_id,
+                  briefRevision: owner.task.brief_revision,
+                  originPrincipalRef:
+                    owner.task?.origin_principal_ref ??
+                    owner.task?.origin?.origin_principal_ref ??
+                    owner.task?.root_principal_ref,
+                  toolId: "zink_n8n",
+                  operationName: invocation.operationName,
+                  actualTarget: invocation.actualTarget,
+                  input: liveInput,
+                  runId: context.runId,
+                  currentTime: Date.now(),
+                });
+              } catch (approvalErr) {
+                return {
+                  allow: false,
+                  block: true,
+                  reason: approvalErr?.message ?? "AUTH_APPROVAL_INVALID",
+                };
+              }
             }
           } else if (event.toolName === "zink_python") {
             if (event.params?.entrypoint) {
-              const normalized = String(event.params.entrypoint).replace(
-                /\\/g,
-                "/",
+              const pathCheck = await validateLiveArtifactPath(
+                String(event.params.entrypoint),
               );
-              if (normalized.includes("../")) {
-                return { allow: false, block: true, reason: "POLICY_DENIED" };
+              if (!pathCheck.ok) {
+                return {
+                  allow: false,
+                  block: true,
+                  reason: pathCheck.reason,
+                };
               }
             }
           }
@@ -2891,7 +3955,9 @@ export default {
             return decision;
           }
 
-          // Live OpenClaw conversational delegation
+          // Live OpenClaw conversational delegation. The live adapter
+          // normalizes its input and then delegates to the ONE canonical spawn
+          // gate; it makes no independent topology or authorization decision.
           if (!["main", "o1", "o2"].includes(context.agentId)) {
             return { allow: false, block: true, reason: "UNAUTHORIZED_TARGET" };
           }
@@ -2899,12 +3965,11 @@ export default {
           if (!ids.has(targetAgentId)) {
             return { allow: false, block: true, reason: "UNAUTHORIZED_TARGET" };
           }
-          const allowedTargets =
-            {
-              main: ["o1", "o2"],
-              o1: ["excel", "sql", "python"],
-              o2: ["power-bi", "python"],
-            }[context.agentId] ?? [];
+          // The canonical policy decides spawn topology. The previous inline
+          // map was a hand-maintained copy, so changing AGENT_SPAWN_POLICY
+          // would not have changed what this path enforces. The authoritative
+          // reservation in guard.beforeToolCall re-derives the same value.
+          const allowedTargets = AGENT_SPAWN_POLICY[context.agentId] ?? [];
           if (!allowedTargets.includes(targetAgentId)) {
             api.logger?.warn?.(
               `[zink-governance] spawn blocked: agent '${context.agentId}' cannot target '${targetAgentId}' (canonical topology violation)`,
@@ -2917,18 +3982,18 @@ export default {
           try {
             owner = findSession(snapshot, context.sessionKey, context.runId);
           } catch {
-            const activeTasks = Object.values(snapshot.tasks || {}).filter(
-              (t) => t.workflow_status === "ACTIVE",
-            );
-            if (activeTasks.length > 0) {
-              const candidate =
-                activeTasks.find(
-                  (t) =>
-                    t.root_session_key === context.sessionKey ||
-                    t.root_agent_id === context.agentId,
-                ) || activeTasks[activeTasks.length - 1];
-              owner = { task_id: candidate.task_id, task: candidate };
-            }
+            return {
+              allow: false,
+              block: true,
+              reason: "EXACT_TASK_CORRELATION_REQUIRED",
+            };
+          }
+          if (!owner?.task_id || !owner?.task) {
+            return {
+              allow: false,
+              block: true,
+              reason: "EXACT_TASK_CORRELATION_REQUIRED",
+            };
           }
 
           const sanitizedTask = sanitizeDelegationText(
@@ -2937,14 +4002,12 @@ export default {
               "Delegated execution",
           );
 
-          let briefRevision = 1;
           const candidateNodeId =
             parsedProposal?.node_id &&
             /^[a-z][a-z0-9_-]{0,63}$/u.test(parsedProposal.node_id)
               ? parsedProposal.node_id
               : `node-${targetAgentId}`;
           let assignedNodeId = candidateNodeId;
-          let attempt = 1;
 
           const CANONICAL_AGENT_PRIMARY_STACK = Object.freeze({
             main: "decision",
@@ -2958,7 +4021,7 @@ export default {
 
           if (owner && owner.task) {
             const task = owner.task;
-            briefRevision = task.brief_revision || 1;
+            const briefRevision = task.brief_revision || 1;
 
             if (!task.nodes || task.nodes.length === 0) {
               const candidateAgents = [
@@ -3011,6 +4074,14 @@ export default {
                 recordWorkflowEvent(paths, "WORKFLOW_BRIEF_ACTIVATED", {
                   task_id: owner.task_id,
                   brief_revision: briefRevision,
+                  // M7-016: the activated brief's semantic contract status is
+                  // required by the event contract and mirrored onto the task,
+                  // because the guard authorizes a specialist against recorded
+                  // task state. It comes from the submitted brief, never from
+                  // invented state: an absent or unrecognised value is MISSING.
+                  semantic_contract_status: normalizeSemanticContractStatus(
+                    sanitizedTask?.semantic_contract_status,
+                  ),
                   nodes,
                 });
               } catch (bErr) {
@@ -3042,99 +4113,70 @@ export default {
             } else {
               assignedNodeId = candidateNodeId;
             }
-
-            const currentRuns = Object.values(
-              freshTask.delegations ?? {},
-            ).filter(
-              (run) =>
-                run.node_id === assignedNodeId &&
-                run.agent_id === targetAgentId &&
-                run.brief_revision === briefRevision,
-            );
-            attempt = currentRuns.length + 1;
           }
 
-          const taskId =
-            owner?.task_id ||
-            canonicalHash("zink-task-id-v1", {
-              sessionKey: context.sessionKey,
-              runId: context.runId,
-            });
-
-          const delegationId = deriveDelegationId({
-            task_id: taskId,
-            brief_revision: briefRevision,
+          // M7-019: the live adapter NORMALIZES its input and then delegates
+          // to the one canonical spawn gate. It makes no independent policy
+          // decision: topology, approval, lineage, attempt derivation and the
+          // reservation write all happen in guard.beforeToolCall, which is the
+          // same function the synthetic route uses.
+          const canonicalProposal = {
+            schema_version: SCHEMA_VERSION,
+            governance_version:
+              parsedProposal?.governance_version ?? GOVERNANCE_VERSION,
             node_id: assignedNodeId,
-            agent_id: targetAgentId,
-            attempt,
-          });
+            inputs: sanitizedTask,
+            input_refs: Array.isArray(parsedProposal?.input_refs)
+              ? parsedProposal.input_refs
+              : [],
+            constraints:
+              typeof parsedProposal?.constraints === "string"
+                ? parsedProposal.constraints
+                : "{}",
+            validation_criteria:
+              typeof parsedProposal?.validation_criteria === "string"
+                ? parsedProposal.validation_criteria
+                : "agent-result-payload.schema.json",
+          };
 
-          if (owner && owner.task) {
-            // E06: Zero governance hash is forbidden — manifest must succeed
-            let targetGovHash;
-            try {
-              targetGovHash =
-                manifestFor(targetAgentId).expected_governance_hash;
-            } catch (manifestErr) {
-              api.logger?.warn?.(
-                `[zink-governance] spawn blocked: manifest load failed for ${targetAgentId}: ${manifestErr?.message}`,
-              );
-              return {
-                allow: false,
-                block: true,
-                reason: "GOVERNANCE_HASH_MISSING",
-              };
-            }
+          const canonicalEvent = {
+            toolName: "sessions_spawn",
+            toolCallId: event.toolCallId,
+            turn:
+              typeof event.turn === "number" && event.turn > 0 ? event.turn : 1,
+            params: {
+              task: JSON.stringify(canonicalProposal),
+              agentId: targetAgentId,
+              runtime: "subagent",
+              mode: "run",
+              thread: false,
+              context: "isolated",
+              sandbox: "require",
+              cleanup: "keep",
+            },
+            batchToolNames: ["sessions_spawn"],
+            assistantText: "",
+          };
 
-            const parentSessionKey =
-              owner.delegation?.child_session_key ||
-              owner.task.root_session_key ||
-              context.sessionKey;
-            const parentRunId =
-              owner.delegation?.native_run_id ||
-              owner.task.root_run_id ||
-              context.runId;
-
-            // E07: Spawn reservation write errors block spawn — must not allow silently
-            try {
-              recordWorkflowEvent(paths, "WORKFLOW_SPAWN_RESERVED", {
-                task_id: owner.task_id,
-                brief_revision: briefRevision,
-                node_id: assignedNodeId,
-                agent_id: targetAgentId,
-                parent_agent_id: context.agentId,
-                parent_session_key: parentSessionKey,
-                parent_run_id: parentRunId,
-                tool_call_id: event.toolCallId,
-                turn:
-                  typeof event.turn === "number" && event.turn > 0
-                    ? event.turn
-                    : 1,
-                attempt,
-                delegation_id: delegationId,
-                expected_governance_hash: targetGovHash,
-                request_digest: canonicalHash("zink-delegation-id-v1", {
-                  delegation_id: delegationId,
-                  task_id: owner.task_id,
-                  agent_id: targetAgentId,
-                }),
-              });
-            } catch (reserveErr) {
-              api.logger?.warn?.(
-                `[zink-governance] spawn blocked: reservation write failed: ${reserveErr?.message}`,
-              );
-              return {
+          const canonicalDecision = await guard.beforeToolCall(
+            canonicalEvent,
+            context,
+            signal,
+          );
+          if (!canonicalDecision?.allow) {
+            return (
+              canonicalDecision ?? {
                 allow: false,
                 block: true,
                 reason: "SPAWN_RESERVATION_FAILED",
-              };
-            }
+              }
+            );
           }
 
           const spawnParams = {
             ...event.params,
-            label: delegationId,
-            task: sanitizedTask,
+            label: canonicalDecision.spawnLabel,
+            task: canonicalDecision.spawnTask,
             runtime: "subagent",
             mode: "run",
             thread: false,
@@ -3155,8 +4197,8 @@ export default {
 
           return {
             allow: true,
-            spawnLabel: delegationId,
-            spawnTask: sanitizedTask,
+            spawnLabel: canonicalDecision.spawnLabel,
+            spawnTask: canonicalDecision.spawnTask,
           };
         }
 
@@ -3202,12 +4244,38 @@ export default {
         }
         return decision;
       },
+      // T2: the host runtime publishes the provider-usage snapshot it already
+      // owns. This is a receipt-publication seam, not a model-callable tool,
+      // and it never reads or emits credential material. The published
+      // identity is re-bound to the caller that owns the run, so a snapshot
+      // cannot be attributed to another agent.
+      async recordQuota(snapshot) {
+        return guard.recordQuota(snapshot);
+      },
+      // T2: self-scoped, read-only quota receipt for prompt context. The
+      // agentId always comes from trusted runtime context.
+      async selfQuotaReceipt(agentId) {
+        return guard.selfQuotaReceipt(agentId);
+      },
+      // T3: run-scoped model resolution. Applies to the CURRENT run only; it
+      // never creates a session override and never pins a model to a session.
+      async resolveRunModel(args) {
+        return guard.resolveRunModel(args);
+      },
       beforeRunEnd(event, context) {
-        if (
-          context.sessionKey === `agent:${context.agentId}:${context.agentId}`
-        ) {
-          return { allow: true };
-        }
+        // T2: publish provider usage when the runtime supplies it. This is
+        // opportunistic and strictly optional: the run-end event is not
+        // guaranteed to carry a usage field, and when it does not, NOTHING is
+        // recorded and the quota status stays "unknown" — which already keeps
+        // the PRIMARY model (UNKNOWN_KEEP_PRIMARY). It never fabricates usage
+        // and never blocks the run.
+        recordQuotaIfProvided(api, event, context);
+        // M7-048: a session key that merely matches the agent:<id>:<id> pattern
+        // is not proof of an internal system session, so it cannot bypass
+        // end-of-run governance. Only a session that the authoritative ledger
+        // does not own AND that carries no governed run identity is treated as
+        // an internal system session, and even then the reduced policy still
+        // fails closed on provider failure.
         const snapshot = readSnapshot(paths);
         let owner;
         try {
@@ -3215,11 +4283,32 @@ export default {
         } catch {
           /* ignore */
         }
+        const internal = classifyInternalRunEnd({
+          agentId: context.agentId,
+          sessionKey: context.sessionKey,
+          runId: context.runId,
+          ownedByLedger: Boolean(owner),
+        });
+        if (internal.isInternal) {
+          api.logger?.info?.(
+            `[zink-governance] beforeRunEnd: internal system session for ${context.agentId}`,
+          );
+          if (isProviderFailureEvent(event)) {
+            return { allow: false, reason: "PROVIDER_UNAVAILABLE" };
+          }
+          return { allow: true, internalSession: true };
+        }
+        if (internal.selfKeyedWithRunId) {
+          api.logger?.warn?.(
+            `[zink-governance] beforeRunEnd: self-keyed session presented a runId; applying full governance`,
+          );
+        }
         if (owner && !owner.delegation && owner.task?.brief_state === "DRAFT") {
           try {
             recordWorkflowEvent(paths, "WORKFLOW_BRIEF_ACTIVATED", {
               task_id: owner.task_id,
               brief_revision: owner.task.brief_revision || 1,
+              semantic_contract_status: "VALID",
               nodes: [
                 {
                   node_id: `node-${context.agentId}`,
@@ -3270,20 +4359,29 @@ export default {
             (context.sessionKey?.includes(":discord:") ||
               context.channelId === "discord")
           ) {
-            if (
-              event?.success === false ||
-              event?.lastAssistant?.stopReason === "error"
-            ) {
+            // M7-047: the conversational accommodation must never be
+            // interpretable as successful task completion. Provider failure
+            // returns an explicit non-completion dispatch result, and a
+            // result-envelope schema violation is likewise non-completion.
+            if (isProviderFailureEvent(event)) {
               api.logger?.warn?.(
-                `[zink-governance] beforeRunEnd upstream model failure in Discord session: allowing error dispatch`,
+                `[zink-governance] beforeRunEnd upstream model failure in Discord session: non-completion dispatch`,
               );
-              return { allow: true };
+              return {
+                allow: false,
+                reason: "PROVIDER_UNAVAILABLE",
+                taskCompleted: false,
+              };
             }
             if (err?.message === "SCHEMA_INVALID") {
               api.logger?.info?.(
-                `[zink-governance] beforeRunEnd: Permitting Main conversational Discord reply`,
+                `[zink-governance] beforeRunEnd: Permitting Main conversational Discord reply (non-completion)`,
               );
-              return { allow: true };
+              return {
+                allow: true,
+                taskCompleted: false,
+                conversational: true,
+              };
             }
           }
           // If the model turn failed with an upstream provider error (503, timeout, quota) for task executions:
@@ -3351,21 +4449,41 @@ export default {
         (Boolean(config.discordOfficeChannelId) &&
           context.channelId === config.discordOfficeChannelId);
 
-      if (
-        !isDiscordChannel ||
-        (config.ownerDiscordId &&
-          context.senderId &&
-          context.senderId !== config.ownerDiscordId) ||
-        !ids.has(context.agentId)
-      )
-        throw new Error("POLICY_DENIED");
+      if (!isDiscordChannel || !ids.has(context.agentId))
+        return { allow: false, reason: "POLICY_DENIED" };
+      // M7-018: verified sender identity precedes owner authorization.
+      const senderAuth = isIngressSenderAuthorized(
+        context,
+        config.ownerDiscordId,
+      );
+      if (!senderAuth.ok) return { allow: false, reason: senderAuth.reason };
+      if (context.isBot === true || context.author?.bot === true) {
+        return { allow: false, reason: "BOT_INGRESS_DENIED" };
+      }
       // Direct intake at Discord ingress is strictly Main only (Decision 3 & RC-01).
       if (context.agentId !== "main") {
-        throw new Error("SPECIALIST_NO_DIRECT_INGRESS");
+        return { allow: false, reason: "NON_MAIN_DIRECT_INGRESS" };
       }
       const msgId = context.currentMessageId ?? context.messageId;
       if (typeof msgId !== "string" || !/^[1-9][0-9]{16,19}$/u.test(msgId)) {
-        throw new Error("LINEAGE_MISMATCH");
+        return { allow: false, reason: "LINEAGE_MISMATCH" };
+      }
+      const routing = resolveIngressRouting({
+        message: context.message || {
+          id: msgId,
+          content: context.content,
+          mentions: context.mentions,
+          mention_roles: context.mentionRoles,
+          author: context.author,
+        },
+        context,
+        identifiers: { discordGuildId: config.discordGuildId },
+      });
+      if (routing.needs_clarification || routing.target_agents[0] !== "main") {
+        return {
+          allow: false,
+          reason: routing.clarification_reason || "INGRESS_NOT_ADMITTED",
+        };
       }
       const identityPath =
         paths.identityKey || path.resolve(paths.root, "../identity.key");
@@ -3395,7 +4513,7 @@ export default {
       // D06: Check snapshot; do not write duplicate WORKFLOW_OPENED event if task already opened
       const currentSnapshot = readSnapshot(paths);
       if (currentSnapshot?.tasks?.[taskId]) {
-        return;
+        return { allow: false, reason: "DUPLICATE_DISCORD_EVENT" };
       }
       recordWorkflowEvent(paths, "WORKFLOW_OPENED", {
         ...origin,
@@ -3404,25 +4522,42 @@ export default {
         root_session_key: context.sessionKey,
         root_run_id: context.runId,
       });
+      return { allow: true, taskId };
     }
-    api.on("before_prompt_build", (_event, context = {}) => {
+    api.on("before_prompt_build", async (_event, context = {}) => {
       try {
         const owner = findSession(
           readSnapshot(paths),
           context.sessionKey,
           context.runId,
         );
+        // T2: self-scoped, read-only quota telemetry. This is context, not
+        // a model-callable tool, so it grants no session-control capability.
+        // The agent identity comes from trusted runtime context, so an agent
+        // can only ever observe its own provider quota. A null receipt (no
+        // telemetry) is honest and keeps PRIMARY downstream.
+        const quotaSelfRead = await quotaReceiptFor(config, context.agentId);
         const receipt = {
           schema_version: SCHEMA_VERSION,
           governance_version: GOVERNANCE_VERSION,
           task_id: owner.task_id,
           brief_revision: owner.task.brief_revision,
           remaining_task_budget: {
-            revisions: 16 - owner.task.revisions_used,
-            transitions: 10 - owner.task.transitions_used,
-            delegated_runs: 72 - owner.task.delegated_runs_used,
+            // The ceilings are canonical (BUDGETS in topology/lib/ledger.mjs),
+            // the same table the guard and the reducer enforce. Restating the
+            // numbers here meant a ceiling change could reach the receipt
+            // without reaching enforcement, or the reverse.
+            revisions:
+              BUDGETS.maxBriefRevisionsPerTask - owner.task.revisions_used,
+            transitions:
+              BUDGETS.maxStackTransitionsPerTask - owner.task.transitions_used,
+            delegated_runs:
+              BUDGETS.maxTotalDelegatedRunsPerTask -
+              owner.task.delegated_runs_used,
           },
+          quota_self_read: quotaSelfRead,
         };
+        if (quotaSelfRead === null) delete receipt.quota_self_read;
         if (!owner.delegation)
           Object.assign(receipt, {
             origin: owner.task.origin,
@@ -3446,11 +4581,98 @@ export default {
         };
       }
     });
-    api.on("subagent_ended", (event, context = {}) => {
+    /**
+     * M7-045 / M7-046: a native child that cannot be bound to the recorded
+     * lineage must not be allowed to keep running, and the incident must land
+     * in the authoritative ledger rather than in a log line.
+     *
+     * The blocker writes WORKFLOW_NATIVE_ENDED using identity taken from the
+     * LEDGER, never from the untrusted event, so the event is schema-valid and
+     * truthful. That write moves the owning run to UNKNOWN and the task to
+     * BLOCKED, which is the enforceable state every other path consults. The
+     * returned decision additionally tells the host not to proceed.
+     */
+    const blockUnreconciledNativeRun = ({ reason, runId, childSessionKey }) => {
+      const blocked = [];
+      let ledgerWritten = false;
+      let ledgerError = null;
+      let scope = "NONE";
       try {
-        const runId = context.runId || event.runId;
-        const childSessionKey =
-          context.childSessionKey || event.targetSessionKey;
+        const snapshot = readSnapshot(paths);
+        const live = (run) =>
+          !["COMPLETE", "FAILED", "CANCELLED"].includes(run.run_state);
+        const candidates = [];
+        for (const [task_id, task] of Object.entries(snapshot.tasks ?? {})) {
+          for (const run of Object.values(task.delegations ?? {})) {
+            // Identity must come from the ledger's own record of the run.
+            const identityMatch =
+              (typeof runId === "string" && run.native_run_id === runId) ||
+              (typeof childSessionKey === "string" &&
+                run.child_session_key === childSessionKey);
+            candidates.push({
+              task_id,
+              task,
+              run,
+              identityMatch,
+              live: live(run),
+            });
+          }
+        }
+        const identified = candidates.filter((c) => c.identityMatch);
+        // An unreconciled child that matches no recorded run means at least one
+        // live run's identity is in doubt, so every live run is suspended until
+        // an operator reconciles. Containment is fail-closed by construction,
+        // not by trusting the event's own identity claim.
+        const targets =
+          identified.length > 0 ? identified : candidates.filter((c) => c.live);
+        scope =
+          identified.length > 0
+            ? "IDENTIFIED_RUN"
+            : targets.length > 0
+              ? "ALL_LIVE_RUNS"
+              : "NONE";
+        for (const { task_id, task, run } of targets) {
+          if (task.workflow_status === "BLOCKED") {
+            blocked.push({ task_id, alreadyTerminal: true });
+            continue;
+          }
+          try {
+            recordWorkflowEvent(paths, "WORKFLOW_NATIVE_ENDED", {
+              task_id,
+              native_run_id: run.native_run_id,
+              child_session_key: run.child_session_key,
+              parent_session_key: run.parent_session_key,
+              outcome: "error",
+              recorded_at: new Date().toISOString(),
+            });
+            ledgerWritten = true;
+            blocked.push({ task_id, alreadyTerminal: false });
+          } catch (writeErr) {
+            ledgerError = writeErr?.message ?? String(writeErr);
+          }
+        }
+      } catch (readErr) {
+        ledgerError = readErr?.message ?? String(readErr);
+      }
+      return {
+        allow: false,
+        blocked: true,
+        governanceState: ledgerWritten ? "BLOCKED" : "UNKNOWN",
+        reason,
+        scope,
+        blockedTasks: blocked,
+        // When the authoritative ledger could not be written at all, the state
+        // is UNKNOWN rather than BLOCKED: nothing may assume the child is
+        // contained until the ledger says so.
+        ledgerWriteFailed: !ledgerWritten,
+        ledgerError,
+      };
+    };
+
+    api.on("subagent_ended", (event, context = {}) => {
+      const runId = context.runId || event.runId;
+      const childSessionKey = context.childSessionKey || event.targetSessionKey;
+      try {
         const owner = findSession(readSnapshot(paths), childSessionKey, runId);
         if (!owner.delegation) throw new Error("LINEAGE_MISMATCH");
         const parentSessionKey =
@@ -3474,13 +4696,22 @@ export default {
           parent_session_key: parentSessionKey,
           outcome,
         });
+        return { allow: true, governanceState: "RECORDED" };
       } catch (err) {
+        // M7-045: a completion that cannot be written is a governance
+        // incident, not a log line. Execution is blocked until reconciled.
         api.logger?.error?.(
           `zink governance completion: ${err?.message ?? err}`,
         );
+        return blockUnreconciledNativeRun({
+          reason: "NATIVE_COMPLETION_UNRECONCILED",
+          runId,
+          childSessionKey,
+        });
       }
     });
     api.on("subagent_spawned", (event, context = {}) => {
+      let reconciled = true;
       try {
         const requesterSessionKey =
           context.requesterSessionKey ||
@@ -3508,32 +4739,29 @@ export default {
           parent_session_key:
             matches[0].run.parent_session_key || requesterSessionKey,
         });
-        for (const check of [...startingRuns]) check();
       } catch (err) {
-        // E15: spawn errors must force workflow UNKNOWN — not just a warning
+        // M7-046: an unknown or mismatched child receipt is an authoritative
+        // incident. The child already exists outside the recorded lineage, so
+        // the recorded lineage is suspended until an operator reconciles it.
+        reconciled = false;
         api.logger?.error?.(
           `zink governance spawn: EXECUTION_STATE_UNKNOWN: ${err?.message ?? err}`,
         );
-        try {
-          // Best-effort: record incident to surface the lineage failure
-          const snapshot = readSnapshot(paths);
-          const activeTasks = Object.entries(snapshot.tasks).filter(
-            ([, t]) => t.workflow_status === "ACTIVE",
-          );
-          for (const [task_id] of activeTasks) {
-            recordWorkflowEvent(paths, "WORKFLOW_NATIVE_ENDED", {
-              task_id,
-              native_run_id: event.runId ?? "unknown",
-              child_session_key: event.childSessionKey ?? null,
-              parent_session_key: null,
-              outcome: "error",
-              error_reason: "SPAWN_LINEAGE_MISMATCH",
-            });
-          }
-        } catch {
-          /* ignore secondary failure */
-        }
+      } finally {
+        // A pending run-start wait must never hang, on either path.
+        for (const check of [...startingRuns]) check();
       }
+      if (!reconciled) {
+        return blockUnreconciledNativeRun({
+          // The operator-facing reason code is preserved so the incident stays
+          // correlatable; it is carried on the blocking decision, not smuggled
+          // into a ledger payload that the contract does not admit.
+          reason: "SPAWN_LINEAGE_MISMATCH",
+          runId: event.runId,
+          childSessionKey: event.childSessionKey,
+        });
+      }
+      return { allow: true, governanceState: "RECORDED" };
     });
     // Canonical Discord surface channel IDs (E18)
     const CANONICAL_DISCORD_SURFACE_IDS = new Set();
@@ -3571,7 +4799,7 @@ export default {
         return { block: true, cancel: true };
       }
 
-      // Suppress specialist messages: specialists are background workers, never direct broadcasters to #office
+      // Suppress specialist messages: specialists are execution agents, never direct broadcasters to #office
       if (["excel", "power-bi", "sql", "python"].includes(agentId)) {
         api.logger?.warn?.(
           `[zink-governance] Suppressed specialist '${agentId}' direct broadcast to Discord`,
@@ -3596,7 +4824,12 @@ export default {
         CANONICAL_DISCORD_SURFACE_IDS.size === 0 ||
         CANONICAL_DISCORD_SURFACE_IDS.has(destChannel) ||
         CANONICAL_DISCORD_SURFACE_IDS.has(rawDest) ||
-        Boolean(ctx.threadId || event.threadId || ctx.parentChannelId || event.parentChannelId);
+        Boolean(
+          ctx.threadId ||
+          event.threadId ||
+          ctx.parentChannelId ||
+          event.parentChannelId,
+        );
       if (!isCanonical) {
         api.logger?.warn?.(
           `[zink-governance] message_sending blocked: non-canonical destination channel`,
@@ -3642,50 +4875,6 @@ export default {
       };
     });
 
-    // Ensure OpenClaw's internal Discord component registry resolves zink governance buttons
-    const DISCORD_COMPONENT_ENTRIES_KEY = Symbol.for("openclaw.discord.componentEntries");
-    const ownerDiscordId = config.ownerDiscordId || "854005217715814432";
-    let componentEntriesStore = globalThis[DISCORD_COMPONENT_ENTRIES_KEY];
-    if (!componentEntriesStore || !(componentEntriesStore instanceof Map)) {
-      componentEntriesStore = new Map();
-      globalThis[DISCORD_COMPONENT_ENTRIES_KEY] = componentEntriesStore;
-    }
-    if (!componentEntriesStore._zinkPatched) {
-      const origGet = componentEntriesStore.get.bind(componentEntriesStore);
-      const origHas = componentEntriesStore.has.bind(componentEntriesStore);
-      componentEntriesStore.get = function (id) {
-        const found = origGet(id);
-        if (found) return found;
-        if (
-          typeof id === "string" &&
-          (id.startsWith("zink:") || id.startsWith("occomp:cid=zink:"))
-        ) {
-          const rawId = id.startsWith("occomp:cid=")
-            ? id.slice("occomp:cid=".length).split(";")[0]
-            : id;
-          return {
-            id: rawId,
-            kind: "button",
-            label: "Zink Governance Action",
-            callbackData: rawId,
-            reusable: true,
-            allowedUsers: [ownerDiscordId],
-          };
-        }
-        return undefined;
-      };
-      componentEntriesStore.has = function (id) {
-        if (origHas(id)) return true;
-        if (
-          typeof id === "string" &&
-          (id.startsWith("zink:") || id.startsWith("occomp:cid=zink:"))
-        )
-          return true;
-        return false;
-      };
-      componentEntriesStore._zinkPatched = true;
-    }
-
     // Interactive button callback handler for Discord components (namespace: "zink")
     if (typeof api.registerInteractiveHandler === "function") {
       api.registerInteractiveHandler({
@@ -3703,7 +4892,10 @@ export default {
             if (!parsed) {
               const invalidMsg = "❌ Thao tác không hợp lệ.";
               if (typeof ctx.respond?.followUp === "function") {
-                await ctx.respond.followUp({ text: invalidMsg, ephemeral: true });
+                await ctx.respond.followUp({
+                  text: invalidMsg,
+                  ephemeral: true,
+                });
               } else if (typeof ctx.respond?.reply === "function") {
                 await ctx.respond.reply({ text: invalidMsg, ephemeral: true });
               }
@@ -3717,9 +4909,13 @@ export default {
               ctx.interaction?.user?.id ||
               ctx.interaction?.member?.user?.id;
             if (senderSnowflake !== ownerId) {
-              const unauthMsg = "⛔ Bạn không có quyền phê duyệt kế hoạch này. Chỉ User/Owner mới có thẩm quyền.";
+              const unauthMsg =
+                "⛔ Bạn không có quyền phê duyệt kế hoạch này. Chỉ User/Owner mới có thẩm quyền.";
               if (typeof ctx.respond?.followUp === "function") {
-                await ctx.respond.followUp({ text: unauthMsg, ephemeral: true });
+                await ctx.respond.followUp({
+                  text: unauthMsg,
+                  ephemeral: true,
+                });
               } else if (typeof ctx.respond?.reply === "function") {
                 await ctx.respond.reply({ text: unauthMsg, ephemeral: true });
               }
@@ -3812,20 +5008,17 @@ export default {
               }
 
               if (threadId) {
-                const token = resolveDiscordBotToken("o1");
-                if (token) {
-                  fetch(
-                    `https://discord.com/api/v10/channels/${threadId}/messages`,
-                    {
-                      method: "POST",
-                      headers: {
-                        Authorization: `Bot ${token}`,
-                        "Content-Type": "application/json",
-                      },
-                      body: JSON.stringify({ content: confirmText }),
-                    },
-                  ).catch(() => {});
-                }
+                sendNativePayload({
+                  api,
+                  to: threadId,
+                  threadId,
+                  accountId: "o1",
+                  payload: { text: confirmText },
+                }).catch((deliveryErr) => {
+                  api.logger?.warn?.(
+                    `[zink-governance] discord delivery failed (thread-confirm-notice): ${deliveryErr?.message}`,
+                  );
+                });
               }
 
               // Post-action execution trigger
@@ -3843,9 +5036,15 @@ export default {
                 });
               } else if (normAction === ACTIONS.ACCEPT_RESULT) {
                 try {
+                  // M7-012: complete only from the verified owner principal
+                  // bound to the current authoritative result digest.
+                  // senderSnowflake was verified === ownerId above.
                   defaultQueueManager.completeTask({
                     taskId: parsed.taskId,
                     userConfirmationRef: "user-button-accept",
+                    userPrincipalRef: senderSnowflake,
+                    resultDigest: defaultQueueManager.getTask(parsed.taskId)
+                      ?.resultDigest,
                   });
                 } catch (qErr) {
                   api.logger?.warn?.(
@@ -3853,29 +5052,27 @@ export default {
                   );
                 }
 
-                const mainToken = resolveDiscordBotToken("main");
                 const officeChannelId =
                   config.discordOfficeChannelId ||
                   config.officeChannelId ||
                   "1545425766161063937";
-                if (mainToken && officeChannelId) {
+                if (officeChannelId) {
                   const resultsForumId =
                     config.discordResultsForumId ||
                     config.resultsChannelId ||
                     "1545696269010477056";
-                  fetch(
-                    `https://discord.com/api/v10/channels/${officeChannelId}/messages`,
-                    {
-                      method: "POST",
-                      headers: {
-                        Authorization: `Bot ${mainToken}`,
-                        "Content-Type": "application/json",
-                      },
-                      body: JSON.stringify({
-                        content: `🎉 **Chúc mừng!** Anh Zink đã chính thức nghiệm thu kết quả tác vụ \`${parsed.taskId.slice(0, 8)}\` tại <#${resultsForumId}>. Tác vụ đã hoàn tất xuất sắc và được lưu trữ an toàn trong sổ cái governance. Quản Lý xin cảm ơn anh Zink!`,
-                      }),
+                  sendNativePayload({
+                    api,
+                    to: officeChannelId,
+                    accountId: "main",
+                    payload: {
+                      text: `🎉 **Chúc mừng!** Anh Zink đã chính thức nghiệm thu kết quả tác vụ \`${parsed.taskId.slice(0, 8)}\` tại <#${resultsForumId}>. Tác vụ đã hoàn tất xuất sắc và được lưu trữ an toàn trong sổ cái governance. Quản Lý xin cảm ơn anh Zink!`,
                     },
-                  ).catch(() => {});
+                  }).catch((deliveryErr) => {
+                    api.logger?.warn?.(
+                      `[zink-governance] discord delivery failed (office-completion-notice-button): ${deliveryErr?.message}`,
+                    );
+                  });
                 }
               }
             } else {
@@ -3927,9 +5124,22 @@ export default {
         );
         if (activeTasks.length === 0) return;
 
-        const pendingTask =
-          activeTasks.find((t) => !t.approved_at && !t.claimed_at) ||
-          activeTasks[activeTasks.length - 1];
+        const requestedTaskId =
+          event.taskId ||
+          event.task_id ||
+          ctx.taskId ||
+          activeTasks
+            .map((task) => task.task_id)
+            .find((taskId) => content.includes(taskId));
+        if (!requestedTaskId) {
+          api.logger?.warn?.(
+            "[zink-governance] text action blocked: EXACT_TASK_CORRELATION_REQUIRED",
+          );
+          return;
+        }
+        const pendingTask = activeTasks.find(
+          (task) => task.task_id === requestedTaskId,
+        );
         if (!pendingTask) return;
 
         let normAction = ACTIONS.APPROVE;
@@ -3980,19 +5190,14 @@ export default {
               ? `🎉 **Đã nghiệm thu kết quả thành công!**\n- **Mã tác vụ:** \`${pendingTask.task_id}\`\n- **Trạng thái:** \`${res.nextState}\` (Hoàn tất thành công và lưu trữ an toàn trong sổ cái governance)`
               : `✅ **Đã ghi nhận ${actionLabel} từ anh Zink!**\n- **Mã tác vụ:** \`${pendingTask.task_id}\`\n- **Trạng thái:** \`${res.nextState}\` (Đã đưa vào hàng đợi thực thi cho các Specialist)`;
 
-          const token = resolveDiscordBotToken("o1");
-          if (token && threadId) {
-            await fetch(
-              `https://discord.com/api/v10/channels/${threadId}/messages`,
-              {
-                method: "POST",
-                headers: {
-                  Authorization: `Bot ${token}`,
-                  "Content-Type": "application/json",
-                },
-                body: JSON.stringify({ content: confirmText }),
-              },
-            );
+          if (threadId) {
+            await sendNativePayload({
+              api,
+              to: threadId,
+              threadId,
+              accountId: "o1",
+              payload: { text: confirmText },
+            });
           }
 
           // Post-action execution trigger
@@ -4010,9 +5215,14 @@ export default {
             });
           } else if (normAction === ACTIONS.ACCEPT_RESULT) {
             try {
+              // M7-012: senderId was verified === ownerId above; bind the
+              // current authoritative result digest.
               defaultQueueManager.completeTask({
                 taskId: pendingTask.task_id,
                 userConfirmationRef: "user-text-accept",
+                userPrincipalRef: senderId,
+                resultDigest: defaultQueueManager.getTask(pendingTask.task_id)
+                  ?.resultDigest,
               });
             } catch (qErr) {
               api.logger?.warn?.(
@@ -4020,29 +5230,27 @@ export default {
               );
             }
 
-            const mainToken = resolveDiscordBotToken("main");
             const officeChannelId =
               config.discordOfficeChannelId ||
               config.officeChannelId ||
               "1545425766161063937";
-            if (mainToken && officeChannelId) {
+            if (officeChannelId) {
               const resultsForumId =
                 config.discordResultsForumId ||
                 config.resultsChannelId ||
                 "1545696269010477056";
-              fetch(
-                `https://discord.com/api/v10/channels/${officeChannelId}/messages`,
-                {
-                  method: "POST",
-                  headers: {
-                    Authorization: `Bot ${mainToken}`,
-                    "Content-Type": "application/json",
-                  },
-                  body: JSON.stringify({
-                    content: `🎉 **Chúc mừng!** Anh Zink đã chính thức nghiệm thu kết quả tác vụ \`${pendingTask.task_id.slice(0, 8)}\` tại <#${resultsForumId}>. Tác vụ đã hoàn tất xuất sắc và được lưu trữ an toàn trong sổ cái governance. Quản Lý xin cảm ơn anh Zink!`,
-                  }),
+              sendNativePayload({
+                api,
+                to: officeChannelId,
+                accountId: "main",
+                payload: {
+                  text: `🎉 **Chúc mừng!** Anh Zink đã chính thức nghiệm thu kết quả tác vụ \`${pendingTask.task_id.slice(0, 8)}\` tại <#${resultsForumId}>. Tác vụ đã hoàn tất xuất sắc và được lưu trữ an toàn trong sổ cái governance. Quản Lý xin cảm ơn anh Zink!`,
                 },
-              ).catch(() => {});
+              }).catch((deliveryErr) => {
+                api.logger?.warn?.(
+                  `[zink-governance] discord delivery failed (office-completion-notice-text): ${deliveryErr?.message}`,
+                );
+              });
             }
           }
         }

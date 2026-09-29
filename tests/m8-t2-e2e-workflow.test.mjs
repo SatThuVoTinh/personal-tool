@@ -38,7 +38,7 @@ describe("M8/T2 Mandatory E2E Workflow & Failure Injection Suite", () => {
   // =========================================================================
   // Happy Path: End-to-End Canonical Flow
   // =========================================================================
-  test("E2E Happy Path: Complete flow from #office to #approvals to Worker to #results to #office", async () => {
+  test("E2E Happy Path: Complete flow from #office to #approvals to Execution agent to #results to #office", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "zink-e2e-happy-"));
     const queueFile = path.join(tempDir, "queue.json");
     const artifactFile = path.join(tempDir, "report.csv");
@@ -72,15 +72,16 @@ describe("M8/T2 Mandatory E2E Workflow & Failure Injection Suite", () => {
       });
       assert.equal(queuedItem.status, TASK_STATES.QUEUED);
 
-      // 5. Worker connects and claims task -> EXECUTING
+      // 5. Coordinator connects and claims task -> EXECUTING (M7-010:
+      // claimant must be the designated coordinator or listed capability)
       const claim = qm.claimTask({
-        workerId: "local-laptop-worker",
+        agentId: "o1",
         capabilities: ["python", "sql"],
       });
       assert.equal(claim.claimed, true);
       assert.equal(claim.task.status, TASK_STATES.EXECUTING);
 
-      // 6. Worker generates real artifact
+      // 6. Execution agent generates real artifact
       await writeFile(
         artifactFile,
         "date,revenue,cost\n2026-09-01,1000,600\n2026-09-02,1200,700",
@@ -90,7 +91,9 @@ describe("M8/T2 Mandatory E2E Workflow & Failure Injection Suite", () => {
       // 7. O1 emits EXECUTION_FINISHED event with Multi-tier Validation
       const finishRes = handleExecutionFinished({
         taskId,
-        workerId: "local-laptop-worker",
+        agentId: "o1",
+        leaseId: claim.leaseId,
+        attempt: claim.task.attempt,
         artifactPath: artifactFile,
         technicalConfig: {
           expectedType: "csv",
@@ -120,10 +123,12 @@ describe("M8/T2 Mandatory E2E Workflow & Failure Injection Suite", () => {
       assert.equal(userAccept.allowed, true);
       assert.equal(userAccept.nextState, TASK_STATES.COMPLETE);
 
-      // 10. Queue marked COMPLETE
+      // 10. Queue marked COMPLETE (M7-012: verified user + current digest)
       const completedQueue = qm.completeTask({
         taskId,
         userConfirmationRef: "user-click-accept",
+        userPrincipalRef: "user-1",
+        resultDigest: qm.getTask(taskId)?.resultDigest,
       });
       assert.equal(completedQueue.status, TASK_STATES.COMPLETE);
 
@@ -218,8 +223,8 @@ describe("M8/T2 Mandatory E2E Workflow & Failure Injection Suite", () => {
     assert.equal(res.nextState, TASK_STATES.REVISING);
   });
 
-  // Scenario 5 & 6: Worker offline and reconnect
-  test("Scenario 05 & 06: Worker offline keeps task in QUEUED/WAITING_FOR_WORKER; worker claims on reconnect", async () => {
+  // Scenario 5 & 6: Execution agent offline and reconnect
+  test("Scenario 05 & 06: Execution agent offline keeps task in QUEUED/QUEUED; execution agent claims on reconnect", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "zink-scen-5-"));
     try {
       const qm = new QueueManager({
@@ -227,12 +232,12 @@ describe("M8/T2 Mandatory E2E Workflow & Failure Injection Suite", () => {
       });
       qm.enqueueTask({ taskId: "SCEN-05", primaryCoordinator: "o1" });
 
-      // No worker available yet -> task stays QUEUED
+      // No execution agent available yet -> task stays QUEUED
       assert.equal(qm.getTask("SCEN-05").status, TASK_STATES.QUEUED);
 
-      // Worker reconnects later and claims
+      // Execution agent reconnects later and claims (as assigned coordinator)
       const claim = qm.claimTask({
-        workerId: "worker-reconnected",
+        agentId: "o1",
         capabilities: [],
       });
       assert.equal(claim.claimed, true);
@@ -243,25 +248,22 @@ describe("M8/T2 Mandatory E2E Workflow & Failure Injection Suite", () => {
     }
   });
 
-  // Scenario 7: Worker crash & stale recovery
-  test("Scenario 07: Worker crash detected via stale heartbeat; recovers task for retry", async () => {
+  // Scenario 7: Execution agent crash & stale recovery
+  test("Scenario 07: Execution agent crash detected via stale heartbeat; recovers task for retry", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "zink-scen-7-"));
     try {
       const qm = new QueueManager({
         storagePath: path.join(tempDir, "q.json"),
       });
       qm.enqueueTask({ taskId: "SCEN-07", primaryCoordinator: "o2" });
-      qm.claimTask({ workerId: "crashing-worker", leaseSeconds: 1 });
+      qm.claimTask({ agentId: "o2", leaseSeconds: 1 });
 
       await setTimeout(60);
       const stale = qm.detectAndRecoverStaleTasks({
         staleThresholdSeconds: 0.04,
       });
       assert.equal(stale.length, 1);
-      assert.equal(
-        qm.getTask("SCEN-07").status,
-        TASK_STATES.WAITING_FOR_WORKER,
-      );
+      assert.equal(qm.getTask("SCEN-07").status, TASK_STATES.QUEUED);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -438,7 +440,11 @@ describe("M8/T2 Mandatory E2E Workflow & Failure Injection Suite", () => {
         decision: "Revenue is defined as Net Revenue after returns",
         confirmedBy: "854005217715814432",
       });
-      assert.equal(dl.hasDecision("SEMANTICS", "revenue"), true);
+      assert.equal(
+        dl.hasDecision("SEMANTICS", "Is revenue gross or net?"),
+        true,
+      );
+      assert.equal(dl.hasDecision("SEMANTICS", "revenue"), false);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

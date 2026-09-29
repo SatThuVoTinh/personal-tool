@@ -9,7 +9,6 @@ import {
   openSync,
   readFileSync,
   renameSync,
-  rmdirSync,
   writeFileSync,
   lstatSync,
 } from "node:fs";
@@ -17,6 +16,7 @@ import path from "node:path";
 import process from "node:process";
 import { applyWorkflowEvent } from "./workflow.mjs";
 import { validateContract } from "./schema.mjs";
+import { withFileLockSync, lockDirFor } from "../../lib/file-lock.mjs";
 import {
   canonicalHash,
   utcNow,
@@ -345,37 +345,33 @@ function readSnapshotLocked(paths, repairSnapshot = true) {
 
 function withWriterLock(paths, operation) {
   ensureLedger(paths);
-  const lock = path.join(paths.root, "writer.lock");
-  const deadline = Date.now() + 5000;
-  let acquired = false;
-  let lastCause;
-  while (Date.now() < deadline) {
-    try {
-      mkdirSync(lock, { mode: 0o700 });
-      acquired = true;
-      break;
-    } catch (cause) {
-      if (cause?.code !== "EEXIST") {
-        lastCause = cause;
-        break;
-      }
-      lastCause = cause;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-    }
-  }
-  if (!acquired) {
-    const error = new Error("Ledger writer unavailable", { cause: lastCause });
-    error.code = "EXECUTION_STATE_UNKNOWN";
-    throw error;
-  }
+  const lock = lockDirFor(paths.root, "writer.lock");
   try {
-    return operation();
-  } finally {
-    rmdirSync(lock);
+    return withFileLockSync(lock, () => operation());
+  } catch (err) {
+    if (err?.code === "FILE_LOCK_BUSY") {
+      const error = new Error("Ledger writer unavailable", {
+        cause: err,
+      });
+      error.code = "EXECUTION_STATE_UNKNOWN";
+      throw error;
+    }
+    throw err;
   }
 }
 
 export function appendEvent(paths, snapshot, type, payload = {}) {
+  // M7-002: single authoritative commit path. Workflow-governed event types
+  // must reduce through applyWorkflowEvent via recordWorkflowEvent; the raw
+  // writer persists audit/metadata events only and can never advance the
+  // workflow projection on its own.
+  if (typeof type === "string" && type.startsWith("WORKFLOW_")) {
+    const error = new Error(
+      "WORKFLOW_COMMIT_PATH_REQUIRED: workflow events must commit via recordWorkflowEvent",
+    );
+    error.code = "WORKFLOW_COMMIT_PATH_REQUIRED";
+    throw error;
+  }
   return withWriterLock(paths, () => {
     const current = readSnapshotLocked(paths);
     if (

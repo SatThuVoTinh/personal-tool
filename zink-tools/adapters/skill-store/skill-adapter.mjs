@@ -55,7 +55,7 @@ export const VETTED_ROOT_NAMESPACES = new Set([
 ]);
 
 export const MAX_PROPOSAL_CONTENT_BYTES = 128 * 1024; // 128KB
-export const MAX_PROPOSAL_REASON_BYTES = 4 * 1024;    // 4KB
+export const MAX_PROPOSAL_REASON_BYTES = 4 * 1024; // 4KB
 
 /**
  * Derives proposal ID based on skill identity, version, content hash, and optional nonce (K17).
@@ -161,7 +161,8 @@ export class SkillAdapter {
             for (const rec of catalog.records) {
               const lifecycle = rec.manifest?.lifecycle;
               const isActive =
-                Array.isArray(lifecycle) && lifecycle.at(-1)?.status === "ACTIVE";
+                Array.isArray(lifecycle) &&
+                lifecycle.at(-1)?.status === "ACTIVE";
               if (!isActive) continue;
 
               const idInfo = rec.manifest?.identity || {};
@@ -200,12 +201,18 @@ export class SkillAdapter {
                   const full = path.join(dir, ent.name);
                   const manifestPath = path.join(full, "manifest.json");
                   const skillMdPath = path.join(full, "SKILL.md");
-                  if (fs.existsSync(manifestPath) && fs.existsSync(skillMdPath)) {
+                  if (
+                    fs.existsSync(manifestPath) &&
+                    fs.existsSync(skillMdPath)
+                  ) {
                     try {
-                      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+                      const manifest = JSON.parse(
+                        fs.readFileSync(manifestPath, "utf8"),
+                      );
                       const lifecycle = manifest.lifecycle;
                       const isActive =
-                        Array.isArray(lifecycle) && lifecycle.at(-1)?.status === "ACTIVE";
+                        Array.isArray(lifecycle) &&
+                        lifecycle.at(-1)?.status === "ACTIVE";
                       if (isActive) {
                         const idInfo = manifest.identity || {};
                         const nsArr = Array.isArray(idInfo.namespace)
@@ -261,7 +268,9 @@ export class SkillAdapter {
                 let desc = `Governed skill category: ${ent.name}`;
                 if (fs.existsSync(manifestPath)) {
                   try {
-                    const mf = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+                    const mf = JSON.parse(
+                      fs.readFileSync(manifestPath, "utf8"),
+                    );
                     isActive =
                       mf.lifecycle?.at(-1)?.status === "ACTIVE" ||
                       mf.status === "ACTIVE";
@@ -315,7 +324,11 @@ export class SkillAdapter {
             record.manifest?.content?.sha256 ||
             record.manifest?.verification?.content_sha256;
 
-          if (action === "validate" && recordedHash && currentHash !== recordedHash) {
+          if (
+            action === "validate" &&
+            recordedHash &&
+            currentHash !== recordedHash
+          ) {
             throw new SkillAdapterError(
               `SOURCE_DRIFT_DETECTED: content hash ${currentHash} does not match manifest ${recordedHash}`,
               "SKILL_SOURCE_DRIFT",
@@ -340,12 +353,17 @@ export class SkillAdapter {
         }
 
         if (!storedSkill) {
-          storedSkill = {
-            skill_id,
-            lifecycle_state: "approved",
-            content: `Governed skill descriptor for ${skill_id}`,
-            signature: "verified-provenance",
-          };
+          throw new SkillAdapterError(
+            `Skill ${skill_id} was not found in the governed store`,
+            "SKILL_NOT_FOUND",
+          );
+        }
+
+        if (storedSkill.lifecycle_state !== "ACTIVE") {
+          throw new SkillAdapterError(
+            `Skill ${skill_id} is not ACTIVE`,
+            "SKILL_NOT_ACTIVE",
+          );
         }
 
         return {
@@ -394,12 +412,10 @@ export class SkillAdapter {
         }
 
         if (!storedSkill) {
-          storedSkill = {
-            skill_id,
-            lifecycle_state: "active",
-            content: `Template application parameters for ${skill_id}`,
-            signature: "verified-provenance",
-          };
+          throw new SkillAdapterError(
+            `Skill ${skill_id} was not found in the governed store`,
+            "SKILL_NOT_FOUND",
+          );
         }
 
         return {
@@ -774,19 +790,26 @@ export class SkillAdapter {
           created_at: new Date().toISOString(),
         };
 
-        // Persist lifecycle record if explicit storage directory is configured
-        const proposalsDir = this.options.proposalStorageDir || null;
-        if (proposalsDir) {
-          try {
-            fs.mkdirSync(proposalsDir, { recursive: true });
-            fs.writeFileSync(
-              path.join(proposalsDir, `${proposal_id}.json`),
-              JSON.stringify(proposal, null, 2),
-              "utf8",
-            );
-          } catch {
-            // Non-blocking in read-only environment
-          }
+        // Proposal persistence is part of the governed transaction.
+        const proposalsDir = this.options.proposalStorageDir;
+        if (!proposalsDir || typeof proposalsDir !== "string") {
+          throw new SkillAdapterError(
+            "A governed proposal storage directory is required",
+            "SKILL_PROPOSAL_PERSIST_FAILED",
+          );
+        }
+        try {
+          fs.mkdirSync(proposalsDir, { recursive: true });
+          fs.writeFileSync(
+            path.join(proposalsDir, `${proposal_id}.json`),
+            JSON.stringify(proposal, null, 2),
+            "utf8",
+          );
+        } catch (error) {
+          throw new SkillAdapterError(
+            `Skill proposal persistence failed: ${error?.message}`,
+            "SKILL_PROPOSAL_PERSIST_FAILED",
+          );
         }
 
         if (typeof this.options.onProposal === "function") {

@@ -1,10 +1,11 @@
 # OpenClaw T2 Trusted Governance Runtime
 
-This directory provisions the owner-approved M7/T2-R11 OpenClaw profile. It is
-intentionally a private seven-bot Discord conversation foundation with the
-frozen five-stack topology, not the Zink Tools bridge. The model agents remain
-bounded; trusted builder/operator and the model-invisible `zink-governance`
-plugin enforce topology, ledger, lineage, budgets and result acceptance.
+This directory provisions the owner-approved OpenClaw profile. It is
+intentionally a private seven-agent Discord conversation foundation with Main,
+O1/O2 coordinators and specialist agents, not the Zink Tools bridge. The model
+agents remain bounded; trusted builder/operator and the model-invisible
+`zink-governance` plugin enforce topology, ledger, lineage, budgets and result
+acceptance.
 
 ## Safety boundary
 

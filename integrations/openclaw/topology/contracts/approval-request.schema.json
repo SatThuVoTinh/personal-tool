@@ -1,41 +1,110 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "zink://contracts/approval-request-v1",
-  "title": "ApprovalRequestPacketV1",
-  "type": "object",
-  "additionalProperties": false,
-  "required": [
-    "schema_version",
-    "governance_version",
-    "task_id",
-    "brief_revision",
-    "exact_target",
-    "exact_operation",
-    "material_parameters",
-    "impact",
-    "recovery_proposal",
-    "issued_at",
-    "expires_at",
-    "approval_scope_digest",
-    "publication_status"
-  ],
-  "properties": {
-    "schema_version": { "const": "1.0.0" },
-    "governance_version": { "enum": ["m7-t2-r12", "m7-t5-r13", "m8-t2-r9", "m8-t2.1-r3"] },
-    "task_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-    "brief_revision": { "type": "integer", "minimum": 1, "maximum": 16 },
-    "exact_target": { "type": "string", "maxLength": 1024 },
-    "exact_operation": { "type": "string", "maxLength": 1024 },
-    "material_parameters": {
+  "title": "ApprovalRequestV1",
+  "description": "An owner-approval record presented for a governed action. Two shapes exist and both are enforced: a Skill Store publication packet raised by a specialist, and a governed tool invocation approved through the canonical approval binding. The contract is applied to both, so it is authority rather than decoration.",
+  "oneOf": [
+    {
+      "title": "SkillApprovalPacket",
       "type": "object",
       "additionalProperties": false,
-      "maxProperties": 32
+      "required": [
+        "schema_version",
+        "governance_version",
+        "approval_id",
+        "task_id",
+        "brief_revision",
+        "exact_target",
+        "exact_operation",
+        "material_parameters",
+        "impact",
+        "recovery_proposal",
+        "issued_at",
+        "expires_at",
+        "approval_scope_digest",
+        "publication_status",
+        "proposal"
+      ],
+      "properties": {
+        "schema_version": { "const": "1.0.0" },
+        "governance_version": {
+          "enum": [
+            "m7-t2-r12",
+            "m7-t5-r13",
+            "m8-t2-r9",
+            "m8-t2.1-r3",
+            "m8-t2.2-r4"
+          ]
+        },
+        "approval_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "task_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "brief_revision": { "type": "integer", "minimum": 1, "maximum": 16 },
+        "exact_target": { "type": "string", "maxLength": 1024 },
+        "exact_operation": { "const": "SKILL_CANDIDATE_APPROVAL" },
+        "material_parameters": {
+          "type": "object",
+          "required": ["namespace", "capability", "version", "content_sha256"],
+          "properties": {
+            "namespace": {
+              "type": ["string", "array"],
+              "maxLength": 128,
+              "maxItems": 16,
+              "items": { "type": "string", "maxLength": 128 }
+            },
+            "capability": { "type": "string", "maxLength": 128 },
+            "version": { "type": "string", "maxLength": 64 },
+            "content_sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "reason": { "type": "string", "maxLength": 4096 },
+            "requesting_agent": { "type": "string", "maxLength": 64 }
+          },
+          "additionalProperties": false,
+          "maxProperties": 32
+        },
+        "impact": { "type": "string", "maxLength": 4096 },
+        "recovery_proposal": { "type": "string", "maxLength": 4096 },
+        "issued_at": { "type": "string", "format": "date-time" },
+        "expires_at": { "type": "string", "format": "date-time" },
+        "approval_scope_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "publication_status": { "const": "pending_owner_post" },
+        "proposal": { "type": "object" }
+      }
     },
-    "impact": { "type": "string", "maxLength": 4096 },
-    "recovery_proposal": { "type": "string", "maxLength": 4096 },
-    "issued_at": { "type": "string", "format": "date-time" },
-    "expires_at": { "type": "string", "format": "date-time" },
-    "approval_scope_digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-    "publication_status": { "const": "pending_owner_post" }
-  }
+    {
+      "title": "GovernedInvocationApproval",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "owner_principal_ref",
+        "task_id",
+        "brief_revision",
+        "tool_id",
+        "operation",
+        "exact_target",
+        "approval_scope_digest",
+        "expires_at"
+      ],
+      "properties": {
+        "owner_principal_ref": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "task_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "brief_revision": { "type": "integer", "minimum": 1, "maximum": 16 },
+        "tool_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "operation": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "exact_target": { "type": "string", "maxLength": 1024 },
+        "approval_scope_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "expires_at": { "type": "string", "format": "date-time" }
+      }
+    }
+  ]
 }

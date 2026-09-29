@@ -35,7 +35,7 @@ Evidence Level: NONE | LOCAL-VERIFIED | REMOTE-BACKED
 | M5 — Architecture contraction                                              | `COMPLETE`    | `REMOTE-BACKED`  | M5/T1-R2 synchronized canonical paths, documentation and the contracted Docker runtime without refactoring the accepted Knowledgebase application.                          |
 | M6 — Zink Skill Store                                                      | `COMPLETE`    | `REMOTE-BACKED`  | M6/T1-R4 task commit is remotely verified; governance closeout is recorded separately.                                                                                      |
 | M7 — Zink Tools + OpenClaw integration + V1 hardening                      | `COMPLETE`    | `REMOTE-BACKED`  | M7/T1-R19, M7/T2-R12, M7/T3-R16, M7/T4-R10, and M7/T5-R13 complete; runtime governance remediation, Discord 7-bot integration, and Zink tools specialist policies verified. |
-| M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Integration | `COMPLETE`    | `LOCAL-VERIFIED` | Tasks M8/T1 and M8/T2-R9 complete; runtime authority, memory and reliability hardening verified.            |
+| M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Integration | `IN PROGRESS` | `LOCAL-VERIFIED` | M8/T1 is complete; M8/T2.2-R4 implementation and final verification are in progress.                                                                                        |
 
 The former self-built L&SC Data Plant is replaced by a **logical external
 infrastructure flow**, not another repository module. Forecasting, optimization,
@@ -48,23 +48,42 @@ Milestone: M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Inte
 Task: M8/T2.2 — Root-Cause Governed Runtime, Discord, Semantic & Artifact Integrity Hardening
 Task Status: IN PROGRESS
 Planning Readiness: APPROVED
-Plan Revision: M8/T2.2-R3
+Plan Revision: M8/T2.2-R4
 Execution Authorization: YES
 Authorized Task: M8/T2.2 — Root-Cause Governed Runtime, Discord, Semantic & Artifact Integrity Hardening
 Execution Contract: docs/contracts/execution/ACTIVE.md
 Evidence Level: LOCAL-VERIFIED
 Task Branch: codex/m8-t2-governed-runtime-hardening
-Owner Approval: EXPLICIT — Owner approved executing ACTIVE.md (M8/T2.2-R3) strictly as plan
+Owner Approval: EXPLICIT — Owner approved executing ACTIVE.md (M8/T2.2-R4) strictly as plan
 ```
 
-M8/T2.2-R3 validated completion evidence:
+R4 validation snapshot (task remains IN PROGRESS): focused M8/T1, M8/T2 and
+native ingress suites PASS; focused DuckDB/M7-T4 gates PASS 27/27; full
+`npm test` PASS 349/349 across 28 suites; ESLint, Markdown lint, repository
+policy check, Prettier and `git diff --check` PASS. The owner-provided native
+Windows DuckDB CLI is available at the approved WinGet path. Remaining OPEN
+items are the unverified native OpenClaw component API, the approved
+nonblocking lock primitive, and the owner/runtime-dependent OpenClaw preflight.
+
+R4 implementation evidence: `zink_sql` uses the existing governed DuckDB bridge
+with exact task scope; approved tasks are durably enqueued before an unavailable
+execution backend returns `BLOCKED / ENGINE_NOT_IMPLEMENTED`; approval cards
+require exact task correlation; missing Discord credentials fail closed as
+`CREDENTIAL_UNAVAILABLE`; Excel sandbox and public artifact references fail
+closed without CWD/internal-path fallback; and no OpenClaw native conversational
+memory is enabled; Ollama embedding requests no longer infer a gateway or
+localhost endpoint. Native Discord component API verification, OpenClaw runtime
+preflight, and a nonblocking lock replacement remain `BLOCKED` under the R4
+no-invention rule.
+
+Prior M8/T2.2-R3 validated completion evidence (historical baseline; not R4 completion):
 
 - all 15 root-cause families (RC-01 through RC-15) defined in `docs/contracts/execution/ACTIVE.md` remediated, hardened, and verified with zero regressions;
 - RC-01 (Discord Ingress / Routing Authority): admission gate enforced prior to model calls; Main established as the sole root owner at ingress; specialist direct mentions rejected across all channels (`SPECIALIST_NO_DIRECT_INGRESS`); multi-capability requests directed solely to Main; duplicate Discord events deduplicated;
 - RC-02 (Agent Topology / Spawn Authorization): canonical topology locked in `role-capability-manifest.json` and runtime `guard.mjs` (`main -> [o1, o2]`, `o1 -> [excel, sql, python]`, `o2 -> [power-bi, python]`, leaf -> `[]`); Main direct spawn to specialists blocked; O1/O2 cross-spawn blocked; empty node lists blocked;
 - RC-03 (Task Identity / Lineage / Idempotency): durable correlation IDs and exact lookup enforcement; duplicate message IDs and actions rejected or answered idempotently without spawning new executions;
 - RC-04 (Approval / Revision / Result-Review Transaction): immutable approval records bound to exact scope digest and revision; plan revisions strictly invalidate prior approvals; User established as sole authority for Approve, Reject, and Accept;
-- RC-05 (Queue / Ledger / Lease / Recovery): persistent file-backed queue with atomic cross-process file locks, lease heartbeat fencing, worker attempt validation, and fail-closed state reconciliation;
+- RC-05 (Queue / Ledger / Lease / Recovery): persistent file-backed queue with atomic cross-process file locks, lease heartbeat fencing, execution-agent attempt validation, and fail-closed state reconciliation;
 - RC-06 (Discord Outbound / Channel Authority): canonical channel matrix enforced; `ASK_USER` in `#office` strictly restricted to Main in `validateActionAuthority()`; O1/O2 restricted to `#approvals`, `#results`, and `#incidents`;
 - RC-07 (Common Artifact / Result / Delivery Truth): complete lifecycle enforced; internal filesystem paths and raw `file://` URLs purged from user-facing outputs; user delivery separated from workspace file generation;
 - RC-08 (Excel Execution Truth): secondary writes to repository `artifacts/` purged; `.xlsx` workbooks generated with matching visual SVG previews; CWD fallbacks removed from delivery path;
@@ -80,7 +99,7 @@ M8/T2-R9 validated completion evidence:
 
 - strict 5-tuple action authority engine (`validateActionAuthority` in `integrations/openclaw/lib/authority.mjs`) implemented, enforcing User as the sole authority for plan approvals and result acceptance, isolating actions across 4 dedicated Discord channels (`#office`, `#approvals`, `#results`, `#incidents`), and strictly blocking specialist agents from governance actions (`SPECIALIST_NO_GOVERNANCE`);
 - technical execution finish decoupled from human task completion: `EXECUTION_FINISHED` transitions tasks to `RESULT_PENDING_REVIEW` with preview and validation, requiring explicit User `ACCEPT_RESULT` to transition to `COMPLETE`;
-- persistent file-backed `QueueManager` implemented in `integrations/openclaw/lib/queue-manager.mjs` with atomic single-worker claims, lease heartbeat renewal, and automatic stale task recovery (`detectAndRecoverStaleTasks`), cleanly decoupling the 24/7 Control Plane from Local Laptop Worker offline/sleep cycles;
+- persistent file-backed `QueueManager` implemented in `integrations/openclaw/lib/queue-manager.mjs` with atomic single-agent claims, lease heartbeat renewal, and automatic stale task recovery (`detectAndRecoverStaleTasks`), cleanly decoupling the 24/7 Control Plane from execution-agent offline/sleep cycles;
 - two-tier `evaluateResultGate` implemented in `integrations/openclaw/lib/artifact-validator.mjs` with technical integrity parsing and business KPI constraint verification, enforcing the critical invariant that Technical PASS + Business FAIL yields `RESULT BLOCKED` with real data previews and zero synthetic mocks;
 - human-confirmed `DecisionLedger` implemented in `integrations/openclaw/lib/decision-ledger.mjs` caching confirmed operator decisions and preventing redundant clarification questions;
 - structured reference IDs conforming to `TOPIC(2)-EXEC(2)-TASK(4)` with `00` reserved for human-contributed documents, and retrieval context deduplication (`deduplicateRetrievalContext`) implemented in `zink-tools/common/semantic-contract.mjs`;
@@ -441,28 +460,6 @@ read-only semantic RAG pipeline for Zink Knowledgebase:
   snowflakes, and Vietnamese text patterns with corrected punctuation lookahead) and
   Gateway stability ensured with `replyToMode: "off"`;
 - full verification suite passed with all 123 tests clean.
-
-### M8/T2 — Governed Runtime, Authority, Memory & Reliability Hardening
-
-Status: `IN PROGRESS`
-Task: `M8/T2 — Governed Runtime, Authority, Memory & Reliability Hardening`
-Task Status: `IN PROGRESS`
-Plan Revision: `M8/T2-R9`
-Planning Readiness: `APPROVED`
-Execution Authorization: `YES`
-Execution Contract: `docs/contracts/execution/ACTIVE.md`
-Evidence: `LOCAL-VERIFIED`
-Task Branch: `codex/m8-t2-governed-runtime-hardening`
-
-Scope defined under `docs/contracts/execution/ACTIVE.md`:
-- Always-On Control Plane with offline local worker support;
-- Strict Action Authority tuple validation (Actor + Channel + Task + State + Action);
-- Main/O1/O2 separation: O1/O2 execution supervision, Main governance/routing only;
-- Discord channels contract (#office, #approvals, #results, #incidents) with 3-way actions;
-- Persistent observable queue with worker claim/ACK and heartbeat monitoring;
-- Multi-tier validation (Technical + Business) with real artifact previews;
-- Normalized incident lifecycle and Discord delivery integrity;
-- Memory store isolation, unified Reference IDs (TOPIC-EXECUTION-TASK), Decision Ledger, and human semantic authority.
 
 ## 9. Deferred beyond V1
 

@@ -1,6 +1,11 @@
-import { deriveDelegationId, deriveTaskId } from "./canonical.mjs";
+import {
+  buildSpawnProposal,
+  canonicalHash,
+  deriveTaskId,
+} from "./canonical.mjs";
 import { validateContract } from "./schema.mjs";
 import { outcomeReasonAllowed, workflowAggregate } from "./runtime.mjs";
+import { AGENT_STACK_POLICY } from "../../lib/authority.mjs";
 
 // D11-D13: roles must match canonical AGENT_SPAWN_POLICY in policy.mjs.
 // main coordinates only through o1/o2; specialists have no spawn targets.
@@ -24,6 +29,12 @@ const terminal = new Set([
 // D05: BLOCKED is not an active run — blocked runs must not count as active
 // for prerequisite checks (would cause deadlock). BLOCKED requires recovery.
 const activeRun = new Set(["PENDING", "SPAWN_UNKNOWN", "RUNNING", "UNKNOWN"]);
+// M8-056: the documented transient-failure class. Only these reasons justify a
+// retry; every other failure class has no automatic or operator retry path.
+const TRANSIENT_FAILURE_CLASS = new Set([
+  "TRANSIENT_RUNTIME_FAILURE",
+  "RUN_TIMEOUT",
+]);
 function fail(code) {
   const error = new Error(code);
   error.code = code;
@@ -102,9 +113,65 @@ export function ownerRunIds(owner, includePrevious = true) {
     : [owner.task.root_run_id];
 }
 
+// M8-056: every node/attempt tuple is single-use, so an attempt is superseded
+// the moment a higher attempt exists for the same node and brief revision.
+// A late callback from a superseded attempt must not mutate current task state:
+// it can neither revive the run, nor mark it complete, nor block the live
+// attempt by forcing the task out of its current state.
+function isSupersededAttempt(task, run) {
+  if (!run) return false;
+  return Object.values(task.delegations ?? {}).some(
+    (other) =>
+      other !== run &&
+      other.node_id === run.node_id &&
+      other.brief_revision === run.brief_revision &&
+      Number(other.attempt) > Number(run.attempt),
+  );
+}
+
+// M7-041: the agent that owns a run identity. A run is owned by exactly one
+// agent, so an event claiming a different agent_id is a lineage violation, not
+// a presentation detail.
+function ownerRunAgentId(owner, task) {
+  return owner.delegation ? owner.delegation.agent_id : task.root_agent_id;
+}
+
+// M7-041: the canonical current run owner of a task. Exactly one run may be
+// live at a time: the single RUNNING delegation, otherwise the root run. Any
+// caller that must name the governing run takes it from here rather than from
+// caller-controlled data, and the reducer re-derives the same value.
+export function resolveCurrentRunOwner(task) {
+  const running = Object.values(task.delegations ?? {}).filter(
+    (run) => run.run_state === "RUNNING",
+  );
+  if (running.length > 1) {
+    fail("LINEAGE_MISMATCH");
+  }
+  if (running.length === 1) {
+    const run = running[0];
+    return {
+      agent_id: run.agent_id,
+      session_key: run.child_session_key,
+      run_id: run.native_run_id,
+      attempt: run.attempt,
+    };
+  }
+  return {
+    agent_id: task.root_agent_id,
+    session_key: task.root_session_key,
+    run_id: task.root_run_id,
+    attempt: null,
+  };
+}
+
 // Pure projection of metadata-only, trusted events. No model output or prompt
 // body belongs here; the guard validates semantic work before emitting events.
-export function applyWorkflowEvent(snapshot, type, payload, eventTimestamp = null) {
+export function applyWorkflowEvent(
+  snapshot,
+  type,
+  payload,
+  eventTimestamp = null,
+) {
   const next = globalThis.structuredClone(snapshot);
   const eventTime = eventTimestamp || new Date().toISOString();
   if (type === "WORKFLOW_OPENED") {
@@ -135,7 +202,18 @@ export function applyWorkflowEvent(snapshot, type, payload, eventTimestamp = nul
       deriveTaskId(payload) === payload.task_id,
       "LINEAGE_MISMATCH",
     );
-    if (Object.hasOwn(next.tasks, payload.task_id)) return next;
+    if (Object.hasOwn(next.tasks, payload.task_id)) {
+      const existing = next.tasks[payload.task_id];
+      const sameLineage =
+        existing.origin === payload.origin &&
+        existing.origin_principal_ref === payload.origin_principal_ref &&
+        existing.origin_message_id === payload.origin_message_id &&
+        existing.root_agent_id === payload.root_agent_id &&
+        existing.root_session_key === payload.root_session_key &&
+        existing.root_run_id === payload.root_run_id;
+      requireCondition(sameLineage, "LINEAGE_MISMATCH");
+      return next;
+    }
     next.tasks[payload.task_id] = {
       ...payload,
       revisions_used: 1,
@@ -156,13 +234,20 @@ export function applyWorkflowEvent(snapshot, type, payload, eventTimestamp = nul
     "EXECUTION_STATE_UNKNOWN",
   );
   if (type === "WORKFLOW_NATIVE_ENDED") {
-    exactKeys(payload, [
-      "task_id",
-      "native_run_id",
-      "child_session_key",
-      "parent_session_key",
-      "outcome",
-    ]);
+    // M7-044: recorded_at is an optional observed timestamp. When present it
+    // must be a valid ISO instant; otherwise the canonical event timestamp
+    // applies. Synthetic 1970 fallbacks are prohibited.
+    exactKeys(
+      payload,
+      [
+        "task_id",
+        "native_run_id",
+        "child_session_key",
+        "parent_session_key",
+        "outcome",
+      ],
+      ["recorded_at"],
+    );
     const matches = Object.values(task.delegations).filter(
       (run) =>
         run.native_run_id === payload.native_run_id &&
@@ -177,6 +262,9 @@ export function applyWorkflowEvent(snapshot, type, payload, eventTimestamp = nul
       "SCHEMA_INVALID",
     );
     const run = matches[0];
+    // M8-056: a superseded attempt's callback is late by definition. It must
+    // not block the live attempt by forcing the task out of its state.
+    if (isSupersededAttempt(task, run)) return next;
     // Already in a terminal run state — late duplicate receipts are ignored.
     if (
       ["COMPLETE", "FAILED", "CANCELLED"].includes(run.run_state) ||
@@ -194,22 +282,86 @@ export function applyWorkflowEvent(snapshot, type, payload, eventTimestamp = nul
     // D04: Native error outcome — transition run to UNKNOWN + task to BLOCKED
     // and stamp a deterministic recovery record so operators can distinguish
     // timeout from error and schedule explicit reconciliation actions.
+    // M8-056: every non-ok outcome is an observed runtime failure, so it maps
+    // to the documented transient failure class. `EXECUTION_STATE_UNKNOWN` is
+    // reserved for state the runtime genuinely cannot classify — it is not
+    // reachable from a reported outcome, and inventing it here would make the
+    // documented retry class unreachable.
     run.run_state = "UNKNOWN";
     run.runtime_reason_code =
-      payload.outcome === "timeout" ? "RUN_TIMEOUT" : "EXECUTION_STATE_UNKNOWN";
+      payload.outcome === "timeout"
+        ? "RUN_TIMEOUT"
+        : "TRANSIENT_RUNTIME_FAILURE";
     // D04: Stamp recovery metadata so operators can correlate and act.
-    run.recovery_needed_at = payload.recorded_at ?? "1970-01-01T00:00:00.000Z";
+    if (payload.recorded_at !== undefined) {
+      requireCondition(
+        typeof payload.recorded_at === "string" &&
+          !Number.isNaN(Date.parse(payload.recorded_at)),
+        "SCHEMA_INVALID",
+      );
+    }
+    run.recovery_needed_at = payload.recorded_at ?? eventTime;
     run.recovery_reason = payload.outcome;
+    // The suspended task status is recorded so a documented transient failure
+    // can be reconciled back to the state that was interrupted, rather than to
+    // a state the reducer invents at recovery time.
+    run.suspended_task_status = task.workflow_status;
     task.workflow_status = "BLOCKED";
     // Run observation and workflow suspension have different meanings: a
     // timeout does not establish terminal failure or safe retry of the task.
-    task.reason_code = "EXECUTION_STATE_UNKNOWN";
+    task.reason_code = "BLOCKED";
+    return next;
+  }
+  if (type === "WORKFLOW_TASK_RECONCILED") {
+    // M8-056: explicit terminal semantics for an old attempt. A run that failed
+    // for a DOCUMENTED transient reason may be reconciled, which stamps the old
+    // attempt FAILED (terminal, no longer active) and lifts the block. Any other
+    // failure class has no retry path — an operator must escalate instead of
+    // the state machine inventing one.
+    exactKeys(payload, [
+      "task_id",
+      "actor",
+      "reason_code",
+      "node_id",
+      "agent_id",
+    ]);
+    requireCondition(payload.actor === "main", "POLICY_DENIED");
+    requireCondition(
+      TRANSIENT_FAILURE_CLASS.has(payload.reason_code),
+      "POLICY_DENIED",
+    );
+    requireCondition(
+      task.workflow_status === "BLOCKED" && task.reason_code === "BLOCKED",
+      "INVALID_STATE_TRANSITION",
+    );
+    const stale = Object.values(task.delegations).filter(
+      (run) =>
+        run.node_id === payload.node_id &&
+        run.agent_id === payload.agent_id &&
+        run.brief_revision === task.brief_revision &&
+        run.run_state === "UNKNOWN",
+    );
+    requireCondition(stale.length === 1, "INVALID_STATE_TRANSITION");
+    reconcileTransientAttempt(task, stale[0], eventTime);
     return next;
   }
   if (type === "WORKFLOW_CANCELLED") {
-    exactKeys(payload, ["task_id", "reason_code"]);
+    // M7-072: cancellation carries the authoritative actor provenance.
+    // OWNER_CANCELLED is a user/owner decision; PARENT_CANCELLED is a
+    // coordinator (main) decision. No anonymous cancellation exists.
+    exactKeys(
+      payload,
+      ["task_id", "reason_code", "actor"],
+      ["channel", "message_id"],
+    );
     requireCondition(
       ["OWNER_CANCELLED", "PARENT_CANCELLED"].includes(payload.reason_code),
+      "POLICY_DENIED",
+    );
+    requireCondition(
+      (payload.reason_code === "OWNER_CANCELLED" && payload.actor === "user") ||
+        (payload.reason_code === "PARENT_CANCELLED" &&
+          payload.actor === "main"),
       "POLICY_DENIED",
     );
     requireCondition(!terminal.has(task.workflow_status));
@@ -284,10 +436,13 @@ export function applyWorkflowEvent(snapshot, type, payload, eventTimestamp = nul
       task.workflow_status === "ACTIVE",
       "INVALID_STATE_TRANSITION",
     );
-    task.root_result = { ...payload };
-    task.workflow_status = payload.outcome_status;
+    task.root_result = {
+      ...payload,
+      pending_outcome_status: payload.outcome_status,
+    };
+    task.workflow_status = "RESULT_PENDING_REVIEW";
+    task.result_pending_at = eventTime;
     task.reason_code = payload.reason_code;
-    if (terminal.has(task.workflow_status)) task.brief_state = "CLOSED";
     return next;
   }
   if (type === "WORKFLOW_USER_RESULT_ACCEPTED") {
@@ -303,6 +458,7 @@ export function applyWorkflowEvent(snapshot, type, payload, eventTimestamp = nul
       task.workflow_status === "RESULT_PENDING_REVIEW",
       "INVALID_STATE_TRANSITION",
     );
+    requireResultIdentityMatch(task, payload);
     task.workflow_status = "COMPLETE";
     task.brief_state = "CLOSED";
     task.user_accepted_at = eventTime;
@@ -320,6 +476,7 @@ export function applyWorkflowEvent(snapshot, type, payload, eventTimestamp = nul
       task.workflow_status === "RESULT_PENDING_REVIEW",
       "INVALID_STATE_TRANSITION",
     );
+    requireResultIdentityMatch(task, payload);
     task.workflow_status = "REJECTED";
     task.brief_state = "CLOSED";
     task.user_rejected_at = eventTime;
@@ -338,6 +495,7 @@ export function applyWorkflowEvent(snapshot, type, payload, eventTimestamp = nul
       task.workflow_status === "RESULT_PENDING_REVIEW",
       "INVALID_STATE_TRANSITION",
     );
+    requireResultIdentityMatch(task, payload);
     task.workflow_status = "REVISING";
     task.revision_requested_at = eventTime;
     task.revision_feedback = payload.feedback;
@@ -364,6 +522,14 @@ export function applyWorkflowEvent(snapshot, type, payload, eventTimestamp = nul
       );
     }
     requireCondition(payload.channel === "approvals", "CHANNEL_MISMATCH");
+    requireCondition(
+      !terminal.has(task.workflow_status),
+      "INVALID_STATE_TRANSITION",
+    );
+    requireCondition(
+      task.workflow_status === "ACTIVE" || task.workflow_status === "REVISING",
+      "INVALID_STATE_TRANSITION",
+    );
     if (payload.decision === "APPROVE") {
       task.workflow_status = "QUEUED";
       task.approved_at = eventTime;
@@ -378,42 +544,122 @@ export function applyWorkflowEvent(snapshot, type, payload, eventTimestamp = nul
     return next;
   }
   if (type === "WORKFLOW_TASK_CLAIMED") {
-    // D01/D02: CLAIM is only valid from QUEUED or WAITING_FOR_WORKER.
+    // D01/D02: CLAIM is only valid from the approved QUEUED state.
     // ACTIVE is not a valid pre-claim state — allowing it bypasses the
     // explicit approval gate (APPROVE -> QUEUED -> CLAIM).
-    exactKeys(payload, ["task_id", "worker_id"]);
+    exactKeys(payload, ["task_id", "agent_id"]);
     requireCondition(
-      task.workflow_status === "QUEUED" ||
-        task.workflow_status === "WAITING_FOR_WORKER",
+      task.workflow_status === "QUEUED",
       "INVALID_STATE_TRANSITION",
     );
     task.workflow_status = "EXECUTING";
-    task.claimed_by = payload.worker_id;
+    task.claimed_by = payload.agent_id;
     task.claimed_at = eventTime;
     return next;
   }
   if (type === "WORKFLOW_USER_QUESTION_RECORDED") {
-    exactKeys(payload, ["task_id", "agent_id", "question"]);
+    // M7-041: the question is attributable to the run that currently owns the
+    // task. A session-key string alone is not authority, so the payload must
+    // carry the governed run identity and the agent must be the run's owner.
+    exactKeys(payload, [
+      "task_id",
+      "agent_id",
+      "question",
+      "session_key",
+      "run_id",
+    ]);
     requireCondition(
       task.workflow_status === "EXECUTING",
       "INVALID_STATE_TRANSITION",
     );
+    identifier(payload.session_key);
+    identifier(payload.run_id);
+    const questionOwner = findSession(
+      next,
+      payload.session_key,
+      payload.run_id,
+    );
+    requireCondition(
+      questionOwner.task_id === payload.task_id,
+      "LINEAGE_MISMATCH",
+    );
+    // A stale or terminal run cannot pose a question for a live task.
+    requireCondition(
+      !questionOwner.delegation ||
+        questionOwner.delegation.run_state === "RUNNING",
+      "LINEAGE_MISMATCH",
+    );
+    requireCondition(
+      payload.agent_id === ownerRunAgentId(questionOwner, task),
+      "UNAUTHORIZED_TARGET",
+    );
+    // The named run must BE the canonical current owner. This is what makes a
+    // foreign or stale run unnameable rather than merely discouraged.
+    const currentOwner = resolveCurrentRunOwner(task);
+    requireCondition(
+      currentOwner.session_key === payload.session_key &&
+        currentOwner.run_id === payload.run_id &&
+        currentOwner.agent_id === payload.agent_id,
+      "LINEAGE_MISMATCH",
+    );
     task.workflow_status = "WAITING_FOR_USER";
     task.waiting_question = payload.question;
+    task.waiting_question_agent_id = payload.agent_id;
+    task.waiting_question_run_id = payload.run_id;
+    task.waiting_question_session_key = payload.session_key;
     return next;
   }
   if (type === "WORKFLOW_USER_ANSWER_RECORDED") {
+    // M7-042: the raw reducer is an authority, so the answer must carry the
+    // user principal and the originating message itself. Provenance cannot be
+    // delegated to a caller-controlled ingress layer.
     exactKeys(
       payload,
-      ["task_id", "answer"],
-      ["user_principal_ref", "message_id", "thread_id"],
+      ["task_id", "answer", "actor", "user_principal_ref", "message_id"],
+      ["thread_id"],
     );
     requireCondition(
       task.workflow_status === "WAITING_FOR_USER",
       "INVALID_STATE_TRANSITION",
     );
+    requireCondition(payload.actor === "user", "POLICY_DENIED");
+    requireCondition(
+      typeof payload.user_principal_ref === "string" &&
+        /^[a-f0-9]{64}$/u.test(payload.user_principal_ref),
+      "SCHEMA_INVALID",
+    );
+    requireCondition(
+      task.waiting_question_run_id !== undefined,
+      "INVALID_STATE_TRANSITION",
+    );
+    requireCondition(
+      typeof payload.message_id === "string" &&
+        /^[1-9][0-9]{16,19}$/u.test(payload.message_id),
+      "SCHEMA_INVALID",
+    );
+    // The answering run must be the run that posed the question, and that run
+    // must still be the governed owner of the task.
+    const answerOwner = findSession(
+      next,
+      task.waiting_question_session_key,
+      task.waiting_question_run_id,
+    );
+    requireCondition(
+      answerOwner.task_id === payload.task_id,
+      "LINEAGE_MISMATCH",
+    );
+    requireCondition(
+      !answerOwner.delegation || answerOwner.delegation.run_state === "RUNNING",
+      "LINEAGE_MISMATCH",
+    );
     task.workflow_status = "EXECUTING";
     task.user_answer = payload.answer;
+    task.user_answer_principal_ref = payload.user_principal_ref;
+    task.user_answer_message_id = payload.message_id;
+    // The question binding is released by removing it, not by writing an
+    // undefined value: a persisted snapshot must never carry an absent field.
+    delete task.waiting_question_run_id;
+    delete task.waiting_question_session_key;
     return next;
   }
   if (type === "WORKFLOW_SPAWN_RECEIVED") {
@@ -442,7 +688,16 @@ export function applyWorkflowEvent(snapshot, type, payload, eventTimestamp = nul
       );
       return next;
     }
+    if (terminal.has(task.workflow_status)) return next;
+    if (
+      run.run_state === "CANCELLED" ||
+      run.run_state === "FAILED" ||
+      run.run_state === "COMPLETE"
+    )
+      return next;
     // A delayed receipt supplies identity but cannot revive cancelled work.
+    // M8-056: nor can it revive a superseded attempt.
+    if (isSupersededAttempt(task, run)) return next;
     run.native_run_id = payload.native_run_id;
     run.child_session_key = payload.child_session_key;
     if (run.run_state === "SPAWN_UNKNOWN") run.run_state = "RUNNING";
@@ -475,14 +730,31 @@ export function applyWorkflowEvent(snapshot, type, payload, eventTimestamp = nul
           envelope.parent_run_id === run.parent_run_id,
           "LINEAGE_MISMATCH",
         );
+      // M8-056: a superseded attempt's result is a late callback. It must not
+      // complete the old run, and it must not satisfy another node's
+      // prerequisite on the strength of a result the live attempt supersedes.
+      if (isSupersededAttempt(task, run)) return next;
+      // A conflicting digest is a security event and is recorded even on a
+      // terminal task: two different results for one attempt must be visible
+      // to the audit, not silently dropped.
       if (run.accepted_payload_digest) {
         if (
           run.accepted_payload_digest !== envelope.payload_digest &&
           !terminal.has(task.workflow_status)
-        )
+        ) {
+          // Lane H1: a conflicting delegated result suspends the task AND
+          // records why. Blocking without a reason code leaves an operator no
+          // way to tell a lineage conflict from a runtime failure.
           task.workflow_status = "BLOCKED";
+          task.reason_code = "DUPLICATE_RESULT_CONFLICT";
+        }
         return next;
       }
+      // Lane H1: a terminal task is terminal in EVERY projection. A child that
+      // reports for the FIRST time after the task closed must not be able to
+      // move the run, because a mutated run in a closed task is a lineage the
+      // audit cannot explain.
+      if (terminal.has(task.workflow_status)) return next;
       if (
         task.brief_revision !== run.brief_revision ||
         task.brief_state !== "ACTIVE" ||
@@ -507,24 +779,73 @@ export function applyWorkflowEvent(snapshot, type, payload, eventTimestamp = nul
       payload,
       ["task_id"],
       [
-        "worker_id",
+        "agent_id",
         "attempt",
         "payload_digest",
         "technical_status",
         "business_status",
         "artifact_path",
+        "artifacts",
+        "artifact_set_digest",
         "recorded_at",
       ],
     );
+    requireCondition(
+      task.workflow_status === "EXECUTING",
+      "INVALID_STATE_TRANSITION",
+    );
+    // M8-051: the canonical artifact set is an ordered, bounded collection
+    // with one digest over the whole set. The set is authoritative: a
+    // singular artifact_path alone may not stand in for a delivered set.
+    if (payload.artifacts != null) {
+      requireCondition(
+        Array.isArray(payload.artifacts) && payload.artifacts.length <= 10,
+        "SCHEMA_INVALID",
+      );
+      const setDigest = canonicalHash("zink-artifact-set-v1", {
+        artifacts: payload.artifacts.map((artifact) => ({
+          logical_path: artifact.logical_path,
+          sha256: artifact.sha256,
+        })),
+      });
+      requireCondition(
+        payload.artifact_set_digest === setDigest,
+        "RESULT_MISMATCH",
+      );
+      task.result_artifacts = payload.artifacts.map((artifact) => ({
+        ...artifact,
+      }));
+      task.artifact_set_digest = setDigest;
+    }
     task.workflow_status = "RESULT_PENDING_REVIEW";
-    task.result_pending_at = payload.recorded_at ?? "1970-01-01T00:00:00.000Z";
+    task.result_pending_at = payload.recorded_at ?? eventTime;
     if (payload.payload_digest)
       task.execution_payload_digest = payload.payload_digest;
     return next;
   }
-  requireCondition(
-    task.workflow_status === "ACTIVE" && task.brief_state === "ACTIVE",
-  );
+  // M7-020: a spawn reservation creates governed work, so it is a
+  // POST-approval event and asserts the approval state itself. It must not
+  // trust that some upstream caller already approved the work: a task with no
+  // approval evidence can never have a delegation reserved.
+  if (type === "WORKFLOW_SPAWN_RESERVED") {
+    // M8-056: a documented transient failure is reconciled as part of the retry
+    // reservation. The task is BLOCKED at this point, so the post-approval gate
+    // below is evaluated against the restored state.
+    reconcileForRetry(task, payload.node_id, eventTime);
+    requirePostApprovalState(task);
+    return applySpawnReserved(next, task, payload);
+  }
+  // A continuation continues approved work, so it is post-approval too.
+  if (
+    type === "WORKFLOW_CONTINUATION_AUTHORIZED" ||
+    type === "WORKFLOW_CONTINUATION_STARTED"
+  ) {
+    requirePostApprovalState(task);
+  } else {
+    requireCondition(
+      task.workflow_status === "ACTIVE" && task.brief_state === "ACTIVE",
+    );
+  }
   if (type === "WORKFLOW_CONTINUATION_AUTHORIZED") {
     // D09: Bind continuation authorization to lease+attempt tuple (not just run ID/session)
     // by requiring the owning delegation's attempt to be recorded with the continuation.
@@ -561,8 +882,17 @@ export function applyWorkflowEvent(snapshot, type, payload, eventTimestamp = nul
     requireCondition(owner.task_id === payload.task_id, "LINEAGE_MISMATCH");
     if (owner.delegation)
       requireCondition(owner.delegation.run_state === "RUNNING");
-    // D09: Validate owner_attempt matches the delegation's recorded attempt.
-    if (payload.owner_attempt !== undefined && owner.delegation) {
+    // D09 / M7-043: the owner attempt binding is NOT optional. A delegated
+    // continuation that omits it, or presents a stale one, is denied: without
+    // the current attempt a continuation cannot be tied to the generation it
+    // claims to continue.
+    if (owner.delegation) {
+      requireCondition(
+        payload.owner_attempt !== undefined &&
+          Number.isInteger(payload.owner_attempt) &&
+          payload.owner_attempt >= 1,
+        "LINEAGE_MISMATCH",
+      );
       requireCondition(
         payload.owner_attempt === owner.delegation.attempt,
         "LINEAGE_MISMATCH",
@@ -675,7 +1005,23 @@ export function applyWorkflowEvent(snapshot, type, payload, eventTimestamp = nul
     return next;
   }
   if (type === "WORKFLOW_BRIEF_ACTIVATED") {
-    exactKeys(payload, ["task_id", "brief_revision", "nodes"]);
+    // M7-016: the brief's semantic contract status is REQUIRED, because
+    // execution-brief.schema.json requires it and the guard authorizes a
+    // specialist only when the TASK records a VALID semantic contract. The
+    // event previously did not carry it, so the task could never record it and
+    // every governed specialist was refused MISSING_PREREQUISITE.
+    exactKeys(payload, [
+      "task_id",
+      "brief_revision",
+      "semantic_contract_status",
+      "nodes",
+    ]);
+    requireCondition(
+      ["VALID", "MISSING", "AMBIGUOUS"].includes(
+        payload.semantic_contract_status,
+      ),
+      "SCHEMA_INVALID",
+    );
     requireCondition(
       Array.isArray(payload.nodes) &&
         payload.nodes.length > 0 &&
@@ -718,23 +1064,9 @@ export function applyWorkflowEvent(snapshot, type, payload, eventTimestamp = nul
         "SCHEMA_INVALID",
       );
       // D10: Validate cross-agent stack topology — each node's stack_id must
-      // be owned by its agent_id per the canonical AGENT_STACK_POLICY.
-      // This prevents structurally impossible DAGs (e.g., o1 on semantic stack).
-      const agentStacks = {
-        main: [
-          "infrastructure",
-          "data_plant",
-          "semantic",
-          "intelligence",
-          "decision",
-        ],
-        o1: ["infrastructure", "data_plant"],
-        o2: ["semantic", "intelligence", "decision"],
-        excel: ["data_plant"],
-        "power-bi": ["intelligence"],
-        sql: ["infrastructure", "data_plant"],
-        python: ["data_plant", "intelligence"],
-      };
+      // be owned by its agent_id per the canonical AGENT_STACK_POLICY
+      // (M7-037/M7-038: single source of truth, no duplicate literals).
+      const agentStacks = AGENT_STACK_POLICY;
       requireCondition(
         (agentStacks[node.agent_id] ?? []).includes(node.stack_id),
         "UNAUTHORIZED_TARGET",
@@ -766,159 +1098,254 @@ export function applyWorkflowEvent(snapshot, type, payload, eventTimestamp = nul
     }
     task.brief_revision = payload.brief_revision;
     task.nodes = payload.nodes;
-    return next;
-  }
-  if (type === "WORKFLOW_SPAWN_RESERVED") {
-    exactKeys(payload, [
-      "task_id",
-      "brief_revision",
-      "node_id",
-      "agent_id",
-      "parent_agent_id",
-      "parent_session_key",
-      "parent_run_id",
-      "tool_call_id",
-      "turn",
-      "attempt",
-      "delegation_id",
-      "expected_governance_hash",
-      "request_digest",
-    ]);
-    requireCondition(
-      payload.brief_revision === task.brief_revision,
-      "SUPERSEDED_REVISION",
-    );
-    digest(payload.expected_governance_hash);
-    digest(payload.request_digest);
-    identifier(payload.parent_run_id);
-    identifier(payload.parent_session_key);
-    identifier(payload.tool_call_id);
-    requireCondition(
-      Number.isSafeInteger(payload.turn) && payload.turn > 0,
-      "SCHEMA_INVALID",
-    );
-    requireCondition(
-      roles[payload.parent_agent_id]?.includes(payload.agent_id),
-      "UNAUTHORIZED_TARGET",
-    );
-    const parent = findSession(
-      next,
-      payload.parent_session_key,
-      payload.parent_run_id,
-    );
-    requireCondition(
-      parent.task_id === payload.task_id &&
-        (parent.delegation?.agent_id ?? task.root_agent_id) ===
-          payload.parent_agent_id,
-      "LINEAGE_MISMATCH",
-    );
-    if (parent.delegation)
-      requireCondition(
-        parent.delegation.run_state === "RUNNING" &&
-          parent.delegation.brief_revision === task.brief_revision,
-      );
-    const node = task.nodes.find((item) => item.node_id === payload.node_id);
-    requireCondition(
-      node && node.agent_id === payload.agent_id,
-      "UNAUTHORIZED_TARGET",
-    );
-    if (parent.delegation)
-      requireCondition(
-        node.stack_id === parent.delegation.stack_id,
-        "UNAUTHORIZED_TARGET",
-      );
-    if (payload.parent_agent_id === "main") {
-      if (task.current_stack && task.current_stack !== node.stack_id) {
-        requireCondition(
-          task.transitions_used < 10,
-          "WORKFLOW_BUDGET_EXHAUSTED",
-        );
-        task.transitions_used++;
-      }
-      // This authorization is journaled with the reservation, before native
-      // dispatch. Failure/lost receipt cannot refund a committed transition.
-      task.current_stack = node.stack_id;
-    }
-    const runs = Object.values(task.delegations);
-    const currentRuns = runs.filter(
-      (run) => run.brief_revision === task.brief_revision,
-    );
-    requireCondition(
-      node.dependencies.every((id) =>
-        currentRuns.some(
-          (run) =>
-            run.node_id === id && run.accepted_outcome_status === "COMPLETE",
-        ),
-      ),
-      "MISSING_PREREQUISITE",
-    );
-    const previous = currentRuns.filter(
-      (run) => run.node_id === payload.node_id,
-    );
-    requireCondition(
-      !previous.some(
-        (run) =>
-          activeRun.has(run.run_state) ||
-          run.accepted_outcome_status === "COMPLETE",
-      ),
-      "SPAWN_UNKNOWN",
-    );
-    // D19/D20: Enforce strict monotone attempt numbering — the attempt MUST be
-    // exactly previous.length + 1. This prevents duplicate attempt numbers and
-    // ensures exactly one authoritative run per node/attempt tuple.
-    requireCondition(
-      payload.attempt === previous.length + 1 && payload.attempt <= 3,
-      "RETRY_EXHAUSTED",
-    );
-    // D20: Reject if any existing delegation already has this exact attempt number
-    // for this node — guarantees one authoritative run per node/attempt.
-    requireCondition(
-      !previous.some((run) => run.attempt === payload.attempt),
-      "SPAWN_UNKNOWN",
-    );
-    if (previous.length > 0) {
-      const latest = previous.reduce((a, b) => (a.attempt > b.attempt ? a : b));
-      // A model-reported missing prerequisite/approval is not a retryable run
-      // failure. Only trusted transient execution evidence authorizes an
-      // unchanged-contract retry; corrections require governed revision work.
-      requireCondition(
-        latest.run_state === "FAILED" &&
-          latest.runtime_reason_code === "TRANSIENT_RUNTIME_FAILURE",
-        "OWNER_DECISION_REQUIRED",
-      );
-    }
-    requireCondition(
-      deriveDelegationId(payload) === payload.delegation_id &&
-        !task.delegations[payload.delegation_id],
-      "LINEAGE_MISMATCH",
-    );
-    requireCondition(
-      !runs.some(
-        (run) =>
-          run.parent_run_id === payload.parent_run_id &&
-          run.tool_call_id === payload.tool_call_id,
-      ),
-      "SPAWN_UNKNOWN",
-    );
-    requireCondition(
-      task.delegated_runs_used < 72,
-      "WORKFLOW_BUDGET_EXHAUSTED",
-    );
-    requireCondition(
-      runs.filter(
-        (run) =>
-          activeRun.has(run.run_state) &&
-          run.parent_session_key === payload.parent_session_key,
-      ).length < 4,
-      "RUNTIME_CAPABILITY_MISMATCH",
-    );
-    task.delegated_runs_used++;
-    task.delegations[payload.delegation_id] = {
-      ...payload,
-      stack_id: node.stack_id,
-      run_state: "SPAWN_UNKNOWN",
-    };
+    // M7-016: the task mirrors the activated brief's semantic contract status,
+    // so the guard authorizes a specialist against recorded task state rather
+    // than a caller-supplied brief document.
+    task.semantic_contract_status = payload.semantic_contract_status;
     return next;
   }
   fail("EXECUTION_STATE_UNKNOWN");
+}
+
+/**
+ * M8-056: the ONE reconcile action. A documented transient failure gets an
+ * explicit terminal state, so it can never be revived, and the task returns to
+ * the state the failure suspended — never to a state chosen at recovery time.
+ * Shared by the explicit WORKFLOW_TASK_RECONCILED event and by the retry
+ * reservation, so a reconciled attempt is identical whichever path reached it.
+ */
+function reconcileTransientAttempt(task, run, eventTime) {
+  run.run_state = "FAILED";
+  run.runtime_reason_code = TRANSIENT_FAILURE_CLASS.has(run.runtime_reason_code)
+    ? run.runtime_reason_code
+    : "TRANSIENT_RUNTIME_FAILURE";
+  run.reconciled_at = eventTime;
+  run.superseded_at = eventTime;
+  task.workflow_status = run.suspended_task_status ?? "ACTIVE";
+  delete task.reason_code;
+  task.reconciled_attempts = (task.reconciled_attempts ?? 0) + 1;
+}
+
+/**
+ * M8-056: a retry reservation IS the reconcile trigger. Reserving a fresh attempt
+ * for a node whose previous attempt is stuck in the documented transient class
+ * reconciles that attempt in the same atomic event. Without this the retry class
+ * was unreachable in production: a transient failure suspends the task to
+ * BLOCKED, a spawn requires a post-approval state, and no runtime emitted
+ * WORKFLOW_TASK_RECONCILED, so a transiently-failed task could never be retried
+ * or recovered at all. Only a DOCUMENTED transient reason qualifies; any other
+ * failure class still has no retry path and must be escalated.
+ *
+ * Returns true when an attempt was reconciled.
+ */
+function reconcileForRetry(task, nodeId, eventTime) {
+  if (task.workflow_status !== "BLOCKED" || task.reason_code !== "BLOCKED") {
+    return false;
+  }
+  const stale = Object.values(task.delegations ?? {}).filter(
+    (run) =>
+      run.node_id === nodeId &&
+      run.brief_revision === task.brief_revision &&
+      run.run_state === "UNKNOWN" &&
+      TRANSIENT_FAILURE_CLASS.has(run.runtime_reason_code),
+  );
+  if (stale.length !== 1) return false;
+  reconcileTransientAttempt(task, stale[0], eventTime);
+  return true;
+}
+
+/**
+ * M7-062: the ONE result-identity binding. A user verdict (accept, reject, or
+ * request a revision) must name the exact result it applies to, otherwise a
+ * verdict recorded against result A could be replayed against result B. The
+ * digest is authoritative; the legacy result id is accepted only when the
+ * digest is absent, and an unbound verdict is refused.
+ */
+function requireResultIdentityMatch(task, payload) {
+  const currentDigest =
+    task.root_result?.payload_digest ?? task.execution_payload_digest;
+  requireCondition(typeof currentDigest === "string", "RESULT_MISMATCH");
+  // `null` and `undefined` both mean "no digest supplied": a verdict naming no
+  // result could apply to any, so it must still fall through to the result-id
+  // binding rather than compare null against a string. Treating null as a
+  // supplied digest made EVERY verdict fail and wedged the task in review.
+  const suppliedDigest = payload.result_digest ?? undefined;
+  if (suppliedDigest !== undefined) {
+    requireCondition(suppliedDigest === currentDigest, "RESULT_MISMATCH");
+    return;
+  }
+  if (payload.result_id === undefined) fail("RESULT_MISMATCH");
+  requireCondition(
+    task.root_result?.result_id !== undefined &&
+      payload.result_id === task.root_result.result_id,
+    "RESULT_MISMATCH",
+  );
+}
+
+/**
+ * M7-020: the canonical post-approval state assertion. Work that creates a
+ * delegation or continues a run is only admissible once the owner has approved
+ * it and the task has not reached a terminal state. The assertion lives in the
+ * reducer, so no caller can assert approval on the owner's behalf.
+ */
+function requirePostApprovalState(task) {
+  requireCondition(
+    typeof task.approved_at === "string" &&
+      !Number.isNaN(Date.parse(task.approved_at)),
+    "AUTH_APPROVAL_REQUIRED",
+  );
+  requireCondition(
+    ["QUEUED", "EXECUTING"].includes(task.workflow_status),
+    "INVALID_STATE_TRANSITION",
+  );
+  requireCondition(task.brief_state === "ACTIVE", "SUPERSEDED_REVISION");
+}
+
+/** M7-020: the canonical spawn reservation, applied after the state gate. */
+function applySpawnReserved(next, task, payload) {
+  exactKeys(payload, [
+    "task_id",
+    "brief_revision",
+    "node_id",
+    "agent_id",
+    "parent_agent_id",
+    "parent_session_key",
+    "parent_run_id",
+    "tool_call_id",
+    "turn",
+    "attempt",
+    "delegation_id",
+    "expected_governance_hash",
+    "request_digest",
+  ]);
+  requireCondition(
+    payload.brief_revision === task.brief_revision,
+    "SUPERSEDED_REVISION",
+  );
+  digest(payload.expected_governance_hash);
+  digest(payload.request_digest);
+  identifier(payload.parent_run_id);
+  identifier(payload.parent_session_key);
+  identifier(payload.tool_call_id);
+  requireCondition(
+    Number.isSafeInteger(payload.turn) && payload.turn > 0,
+    "SCHEMA_INVALID",
+  );
+  requireCondition(
+    roles[payload.parent_agent_id]?.includes(payload.agent_id),
+    "UNAUTHORIZED_TARGET",
+  );
+  const parent = findSession(
+    next,
+    payload.parent_session_key,
+    payload.parent_run_id,
+  );
+  requireCondition(
+    parent.task_id === payload.task_id &&
+      (parent.delegation?.agent_id ?? task.root_agent_id) ===
+        payload.parent_agent_id,
+    "LINEAGE_MISMATCH",
+  );
+  if (parent.delegation)
+    requireCondition(
+      parent.delegation.run_state === "RUNNING" &&
+        parent.delegation.brief_revision === task.brief_revision,
+    );
+  const node = task.nodes.find((item) => item.node_id === payload.node_id);
+  requireCondition(
+    node && node.agent_id === payload.agent_id,
+    "UNAUTHORIZED_TARGET",
+  );
+  if (parent.delegation)
+    requireCondition(
+      node.stack_id === parent.delegation.stack_id,
+      "UNAUTHORIZED_TARGET",
+    );
+  if (payload.parent_agent_id === "main") {
+    if (task.current_stack && task.current_stack !== node.stack_id) {
+      requireCondition(task.transitions_used < 10, "WORKFLOW_BUDGET_EXHAUSTED");
+      task.transitions_used++;
+    }
+    // This authorization is journaled with the reservation, before native
+    // dispatch. Failure/lost receipt cannot refund a committed transition.
+    task.current_stack = node.stack_id;
+  }
+  const runs = Object.values(task.delegations);
+  const currentRuns = runs.filter(
+    (run) => run.brief_revision === task.brief_revision,
+  );
+  requireCondition(
+    node.dependencies.every((id) =>
+      currentRuns.some(
+        (run) =>
+          run.node_id === id && run.accepted_outcome_status === "COMPLETE",
+      ),
+    ),
+    "MISSING_PREREQUISITE",
+  );
+  const previous = currentRuns.filter((run) => run.node_id === payload.node_id);
+  requireCondition(
+    !previous.some(
+      (run) =>
+        activeRun.has(run.run_state) ||
+        run.accepted_outcome_status === "COMPLETE",
+    ),
+    "SPAWN_UNKNOWN",
+  );
+  // D19/D20: Enforce strict monotone attempt numbering — the attempt MUST be
+  // exactly previous.length + 1. This prevents duplicate attempt numbers and
+  // ensures exactly one authoritative run per node/attempt tuple.
+  requireCondition(
+    payload.attempt === previous.length + 1 && payload.attempt <= 3,
+    "RETRY_EXHAUSTED",
+  );
+  // D20: Reject if any existing delegation already has this exact attempt number
+  // for this node — guarantees one authoritative run per node/attempt.
+  requireCondition(
+    !previous.some((run) => run.attempt === payload.attempt),
+    "SPAWN_UNKNOWN",
+  );
+  if (previous.length > 0) {
+    const latest = previous.reduce((a, b) => (a.attempt > b.attempt ? a : b));
+    // A model-reported missing prerequisite/approval is not a retryable run
+    // failure. Only trusted transient execution evidence authorizes an
+    // unchanged-contract retry; corrections require governed revision work.
+    requireCondition(
+      latest.run_state === "FAILED" &&
+        latest.runtime_reason_code === "TRANSIENT_RUNTIME_FAILURE",
+      "OWNER_DECISION_REQUIRED",
+    );
+  }
+  // M8-055: re-derive through the same canonical builder the live adapter
+  // used, so both paths validate an identical serialization.
+  requireCondition(
+    buildSpawnProposal(payload).delegation_id === payload.delegation_id &&
+      buildSpawnProposal(payload).request_digest === payload.request_digest &&
+      !task.delegations[payload.delegation_id],
+    "LINEAGE_MISMATCH",
+  );
+  requireCondition(
+    !runs.some(
+      (run) =>
+        run.parent_run_id === payload.parent_run_id &&
+        run.tool_call_id === payload.tool_call_id,
+    ),
+    "SPAWN_UNKNOWN",
+  );
+  requireCondition(task.delegated_runs_used < 72, "WORKFLOW_BUDGET_EXHAUSTED");
+  requireCondition(
+    runs.filter(
+      (run) =>
+        activeRun.has(run.run_state) &&
+        run.parent_session_key === payload.parent_session_key,
+    ).length < 4,
+    "RUNTIME_CAPABILITY_MISMATCH",
+  );
+  task.delegated_runs_used++;
+  task.delegations[payload.delegation_id] = {
+    ...payload,
+    stack_id: node.stack_id,
+    run_state: "SPAWN_UNKNOWN",
+  };
+  return next;
 }
