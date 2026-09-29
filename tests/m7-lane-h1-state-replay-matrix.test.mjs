@@ -935,10 +935,12 @@ describe("Lane H1 — replay and idempotency matrix", () => {
     // on new writes only in the sense that the writer always emits it — the
     // READER must tolerate its absence, because briefs activated before R4
     // introduced the field carry no status and rejecting them makes the
-    // operational ledger unreadable. An omitted status therefore normalizes to
-    // an explicit MISSING rather than being refused, and MISSING authorizes
-    // nothing: the security invariant (no specialist without VALID) is
-    // unchanged, only the mechanism moved from refusal to normalization.
+    // operational ledger unreadable. An omitted status is therefore preserved
+    // as absent (the canonical hash drops undefined-valued keys, so replayed
+    // tasks stay hash-identical to snapshot tasks that predate the field)
+    // rather than refused, and absence authorizes nothing: the security
+    // invariant (no specialist without VALID) is unchanged, only the mechanism
+    // moved from refusal to preservation.
     const root = fixture();
     try {
       const paths = ledgerPaths(root);
@@ -961,12 +963,12 @@ describe("Lane H1 — replay and idempotency matrix", () => {
         brief_revision: 1,
         nodes: [briefNode("o1")],
       });
-      // The omission normalizes to MISSING on the recorded task ...
+      // The omission is preserved as absent on the recorded task ...
       assert.equal(
-        readSnapshot(paths).tasks[taskId].semantic_contract_status,
-        "MISSING",
+        "semantic_contract_status" in readSnapshot(paths).tasks[taskId],
+        false,
       );
-      // ... and MISSING authorizes no specialist.
+      // ... and absence authorizes no specialist.
       assert.equal(
         readSnapshot(paths).tasks[taskId].semantic_contract_status === "VALID",
         false,

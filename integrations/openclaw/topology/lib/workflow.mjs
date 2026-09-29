@@ -166,12 +166,27 @@ export function resolveCurrentRunOwner(task) {
 
 // Pure projection of metadata-only, trusted events. No model output or prompt
 // body belongs here; the guard validates semantic work before emitting events.
+//
+// `options.replayAnchored` is READ-VERIFICATION ONLY (option b of the 2026-09-29
+// live-ledger migration): when the canonical reader replays events already
+// incorporated into operator-accepted snapshot state (sequence at or below the
+// snapshot head), admission-policy preconditions are trusted rather than
+// re-litigated. Every event entered the journal through the strict writer path
+// under contemporary policy, so re-litigating evolved policy against history
+// can only reject legitimate operations — it cannot catch anything the strict
+// admission did not already govern. Structure, shapes, digests, chain linkage,
+// budget accounting, and the end-state hash compare all still apply; new tail
+// events and all writes stay fully strict. There is exactly one lenient caller
+// (the anchored loop in readSnapshotLocked); every other caller uses the
+// strict default.
 export function applyWorkflowEvent(
   snapshot,
   type,
   payload,
   eventTimestamp = null,
+  options = null,
 ) {
+  const replayAnchored = options?.replayAnchored === true;
   const next = globalThis.structuredClone(snapshot);
   const eventTime = eventTimestamp || new Date().toISOString();
   if (type === "WORKFLOW_OPENED") {
@@ -458,7 +473,7 @@ export function applyWorkflowEvent(
       task.workflow_status === "RESULT_PENDING_REVIEW",
       "INVALID_STATE_TRANSITION",
     );
-    requireResultIdentityMatch(task, payload);
+    requireResultIdentityMatch(task, payload, replayAnchored);
     task.workflow_status = "COMPLETE";
     task.brief_state = "CLOSED";
     task.user_accepted_at = eventTime;
@@ -476,7 +491,7 @@ export function applyWorkflowEvent(
       task.workflow_status === "RESULT_PENDING_REVIEW",
       "INVALID_STATE_TRANSITION",
     );
-    requireResultIdentityMatch(task, payload);
+    requireResultIdentityMatch(task, payload, replayAnchored);
     task.workflow_status = "REJECTED";
     task.brief_state = "CLOSED";
     task.user_rejected_at = eventTime;
@@ -495,7 +510,7 @@ export function applyWorkflowEvent(
       task.workflow_status === "RESULT_PENDING_REVIEW",
       "INVALID_STATE_TRANSITION",
     );
-    requireResultIdentityMatch(task, payload);
+    requireResultIdentityMatch(task, payload, replayAnchored);
     task.workflow_status = "REVISING";
     task.revision_requested_at = eventTime;
     task.revision_feedback = payload.feedback;
@@ -832,15 +847,17 @@ export function applyWorkflowEvent(
     // reservation. The task is BLOCKED at this point, so the post-approval gate
     // below is evaluated against the restored state.
     reconcileForRetry(task, payload.node_id, eventTime);
-    requirePostApprovalState(task);
-    return applySpawnReserved(next, task, payload);
+    // Option (b) migration: anchored replay trusts admission (see above).
+    if (!replayAnchored) requirePostApprovalState(task);
+    return applySpawnReserved(next, task, payload, replayAnchored);
   }
   // A continuation continues approved work, so it is post-approval too.
   if (
     type === "WORKFLOW_CONTINUATION_AUTHORIZED" ||
     type === "WORKFLOW_CONTINUATION_STARTED"
   ) {
-    requirePostApprovalState(task);
+    // Option (b) migration: anchored replay trusts admission (see above).
+    if (!replayAnchored) requirePostApprovalState(task);
   } else {
     requireCondition(
       task.workflow_status === "ACTIVE" && task.brief_state === "ACTIVE",
@@ -882,21 +899,29 @@ export function applyWorkflowEvent(
     requireCondition(owner.task_id === payload.task_id, "LINEAGE_MISMATCH");
     if (owner.delegation)
       requireCondition(owner.delegation.run_state === "RUNNING");
-    // D09 / M7-043: the owner attempt binding is NOT optional. A delegated
-    // continuation that omits it, or presents a stale one, is denied: without
-    // the current attempt a continuation cannot be tied to the generation it
-    // claims to continue.
+    // D09 / M7-043: the owner attempt binding ties a continuation to the
+    // generation it claims to continue. A present-but-stale attempt is denied
+    // in every mode. Presence itself is required on strict paths (writes,
+    // tail): the writer emits owner_attempt whenever the owner is a
+    // delegation, so an omission on a new write is hand-built, not
+    // writer-produced. Anchored replay tolerates absence (option b
+    // migration): continuations journaled before the field existed carry
+    // none, and the Sep-28 live build validates exactly this way.
     if (owner.delegation) {
-      requireCondition(
-        payload.owner_attempt !== undefined &&
-          Number.isInteger(payload.owner_attempt) &&
-          payload.owner_attempt >= 1,
-        "LINEAGE_MISMATCH",
-      );
-      requireCondition(
-        payload.owner_attempt === owner.delegation.attempt,
-        "LINEAGE_MISMATCH",
-      );
+      if (!replayAnchored) {
+        requireCondition(
+          payload.owner_attempt !== undefined &&
+            Number.isInteger(payload.owner_attempt) &&
+            payload.owner_attempt >= 1,
+          "LINEAGE_MISMATCH",
+        );
+      }
+      if (payload.owner_attempt !== undefined) {
+        requireCondition(
+          payload.owner_attempt === owner.delegation.attempt,
+          "LINEAGE_MISMATCH",
+        );
+      }
     }
     const trigger = Object.values(task.delegations).find(
       (run) => run.native_run_id === payload.trigger_run_id,
@@ -1013,19 +1038,24 @@ export function applyWorkflowEvent(
     //
     // R4 readability: briefs activated before the field existed carry no
     // status. Replaying them must not throw, or the operational ledger becomes
-    // unreadable. An absent status replays as MISSING — the truthful value for
-    // "no contract was recorded" — and MISSING authorizes nothing, exactly as
-    // an undefined status did, so fail-closed is preserved.
+    // unreadable. An absent status is preserved as-is (absent): the canonical
+    // hash drops undefined-valued keys, so replayed tasks stay hash-identical
+    // to snapshot tasks that predate the field. The guard authorizes only an
+    // explicit VALID, so an absent status authorizes nothing — fail-closed is
+    // preserved exactly as if the field were MISSING.
     exactKeys(
       payload,
       ["task_id", "brief_revision", "nodes"],
       ["semantic_contract_status"],
     );
-    const contractStatus = payload.semantic_contract_status ?? "MISSING";
-    requireCondition(
-      ["VALID", "MISSING", "AMBIGUOUS"].includes(contractStatus),
-      "SCHEMA_INVALID",
-    );
+    if (payload.semantic_contract_status !== undefined) {
+      requireCondition(
+        ["VALID", "MISSING", "AMBIGUOUS"].includes(
+          payload.semantic_contract_status,
+        ),
+        "SCHEMA_INVALID",
+      );
+    }
     requireCondition(
       Array.isArray(payload.nodes) &&
         payload.nodes.length > 0 &&
@@ -1104,9 +1134,15 @@ export function applyWorkflowEvent(
     task.nodes = payload.nodes;
     // M7-016: the task mirrors the activated brief's semantic contract status,
     // so the guard authorizes a specialist against recorded task state rather
-    // than a caller-supplied brief document. Pre-R4 briefs carry no status;
-    // they replay as MISSING (see above), which authorizes nothing.
-    task.semantic_contract_status = contractStatus;
+    // than a caller-supplied brief document. Pre-R4 briefs carry no status:
+    // the key is left ABSENT (not set to undefined — the contract validator
+    // sees own-properties regardless of value, so an undefined-valued key
+    // would fail additionalProperties). Absence stays hash-identical to
+    // snapshot tasks that predate the field, and the guard authorizes only an
+    // explicit VALID, so fail-closed is preserved.
+    if (payload.semantic_contract_status !== undefined) {
+      task.semantic_contract_status = payload.semantic_contract_status;
+    }
     return next;
   }
   fail("EXECUTION_STATE_UNKNOWN");
@@ -1166,7 +1202,7 @@ function reconcileForRetry(task, nodeId, eventTime) {
  * digest is authoritative; the legacy result id is accepted only when the
  * digest is absent, and an unbound verdict is refused.
  */
-function requireResultIdentityMatch(task, payload) {
+function requireResultIdentityMatch(task, payload, replayAnchored = false) {
   const currentDigest =
     task.root_result?.payload_digest ?? task.execution_payload_digest;
   requireCondition(typeof currentDigest === "string", "RESULT_MISMATCH");
@@ -1179,6 +1215,14 @@ function requireResultIdentityMatch(task, payload) {
     requireCondition(suppliedDigest === currentDigest, "RESULT_MISMATCH");
     return;
   }
+  // Option (b) migration: pre-R4 verdicts name a result id with no digest and
+  // no journaled root result to bind it to (the binding is an R4 admission
+  // rule). For anchored history the acceptance itself is operator-accepted —
+  // the user decision in Discord, reflected in the snapshot — so the id
+  // linkage is trusted rather than re-litigated. The task-status gate above
+  // (RESULT_PENDING_REVIEW) and the digest comparison when a digest IS
+  // supplied both still apply, and new verdicts stay fully bound.
+  if (replayAnchored) return;
   if (payload.result_id === undefined) fail("RESULT_MISMATCH");
   requireCondition(
     task.root_result?.result_id !== undefined &&
@@ -1207,7 +1251,7 @@ function requirePostApprovalState(task) {
 }
 
 /** M7-020: the canonical spawn reservation, applied after the state gate. */
-function applySpawnReserved(next, task, payload) {
+function applySpawnReserved(next, task, payload, replayAnchored = false) {
   exactKeys(payload, [
     "task_id",
     "brief_revision",
@@ -1322,10 +1366,18 @@ function applySpawnReserved(next, task, payload) {
     );
   }
   // M8-055: re-derive through the same canonical builder the live adapter
-  // used, so both paths validate an identical serialization.
+  // used, so both paths validate an identical serialization. The delegation
+  // identity derivation is stable across versions (it re-derives cleanly for
+  // every pre-R4 reserve in the operational ledger), so it keeps binding
+  // lineage on replay. The request-digest serialization changed in R4, so
+  // anchored replay (option b migration) trusts the journaled digest: the
+  // event digest plus the hash chain already bind those bytes against
+  // tampering, and re-litigating an evolved serialization can only reject
+  // legitimate history. New writes and tail replay stay exact.
+  const rederived = buildSpawnProposal(payload);
   requireCondition(
-    buildSpawnProposal(payload).delegation_id === payload.delegation_id &&
-      buildSpawnProposal(payload).request_digest === payload.request_digest &&
+    rederived.delegation_id === payload.delegation_id &&
+      (replayAnchored || rederived.request_digest === payload.request_digest) &&
       !task.delegations[payload.delegation_id],
     "LINEAGE_MISMATCH",
   );

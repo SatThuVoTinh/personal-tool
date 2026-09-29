@@ -265,6 +265,16 @@ function readSnapshotLocked(paths, repairSnapshot = true) {
           event.type,
           event.payload,
           event.created_at,
+          // Option (b) migration 2026-09-29: events at or below the snapshot
+          // head are operator-accepted history — replay trusts their admission
+          // (structure, effects, and the end-state hash compare below still
+          // verify everything checkable). Events beyond the head are
+          // unaccepted tail and stay fully strict. The flag MUST never be set
+          // for tail: admission policy is enforced at write time, and re-reads
+          // must not re-litigate it.
+          event.sequence <= snapshot.sequence
+            ? { replayAnchored: true }
+            : undefined,
         );
       if (event.sequence <= snapshot.sequence)
         anchoredBudget = journalBudget.tasks;
