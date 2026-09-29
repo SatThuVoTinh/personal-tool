@@ -406,6 +406,79 @@ describe("Lane G — policy & lifecycle contract reconciliation", () => {
     }
   });
 
+  it("a native backup taken while patching is restorable", async () => {
+    // `restoreNativePatch` refuses any manifest whose `runtime_version` does not
+    // resolve a pin. The manifest used to be declared separately in the two apply
+    // paths and the fresh-patch copy omitted `runtime_version`, so every backup
+    // taken during an actual patch was unrestorable while the re-take path looked
+    // fine. The builder is now shared, and this asserts the output satisfies the
+    // restore predicate for every supported release.
+    const {
+      nativeBackupManifest,
+      NATIVE_RUNTIME_PINS,
+      NATIVE_SUPPORTED_RUNTIME_VERSIONS,
+    } = await import("../integrations/openclaw/topology/lib/native-patch.mjs");
+    // The manifest must be declared in exactly ONE place. The defect was two
+    // declarations with divergent fields, so a second literal is the regression.
+    const moduleSource = readFileSync(
+      path.join(REPO, "integrations/openclaw/topology/lib/native-patch.mjs"),
+      "utf8",
+    );
+    const manifestLiterals = moduleSource.match(/version: "m7-t2-r12"/gu);
+    assert.equal(
+      manifestLiterals.length,
+      1,
+      "the backup manifest must be declared exactly once, in the shared builder",
+    );
+    assert.equal(
+      moduleSource.match(/const manifest = nativeBackupManifest\(root\);/gu)
+        .length,
+      2,
+      "both apply paths (fresh patch and re-take) must use the shared builder",
+    );
+    const root = mkdtempSync(path.join(os.tmpdir(), "zink-native-manifest-"));
+    try {
+      for (const version of NATIVE_SUPPORTED_RUNTIME_VERSIONS) {
+        writeFileSync(
+          path.join(root, "package.json"),
+          JSON.stringify({ name: "openclaw", version }),
+          "utf8",
+        );
+        const manifest = nativeBackupManifest(root);
+        assert.equal(
+          manifest.version,
+          "m7-t2-r12",
+          `${version}: manifest version`,
+        );
+        assert.equal(
+          manifest.runtime_version,
+          version,
+          `${version}: the manifest must record the release it was taken from`,
+        );
+        // The exact predicate `restoreNativePatch` applies before touching a file.
+        assert.ok(
+          NATIVE_RUNTIME_PINS[manifest.runtime_version],
+          `${version}: restore would reject this manifest as invalid`,
+        );
+        assert.equal(
+          path.resolve(root),
+          manifest.runtime_root,
+          `${version}: restore resolves the root and must match`,
+        );
+        assert.match(manifest.bridge_digest, /^[a-f0-9]{64}$/u);
+      }
+      // An unreadable manifest must NOT yield a manifest that claims a version.
+      rmSync(path.join(root, "package.json"));
+      assert.equal(
+        nativeBackupManifest(root).runtime_version,
+        null,
+        "an unreadable package.json must not be papered over with a version",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("M7-039: policy artifacts project the canonical sources", () => {
     const manifest = readJson(
       "integrations/openclaw/topology/policy/role-capability-manifest.json",

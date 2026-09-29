@@ -371,6 +371,25 @@ export function checkNativePatch(root) {
   return { status: "PATCHED", files: Object.keys(inspection) };
 }
 
+// The backup manifest is built in ONE place. `restoreNativePatch` requires
+// `runtime_version` to resolve a pin, and the two apply paths (fresh patch and
+// re-take on an already-patched host) previously declared the manifest
+// separately, so the fresh-patch manifest omitted the field and every backup
+// taken while actually patching was unrestorable.
+export function nativeBackupManifest(root) {
+  return {
+    version: "m7-t2-r12",
+    runtime_root: path.resolve(root),
+    // The OpenClaw release the backup was taken from. A restore has to
+    // resolve the SAME pin that produced the patch, and the file names in
+    // a backup are release-specific, so this is recorded explicitly rather
+    // than assumed to be the currently-deployed one.
+    runtime_version: resolveRuntimeVersion(root),
+    bridge_digest: sha256(bridgeContents()),
+    files: {},
+  };
+}
+
 export function applyNativePatch(root, backupRoot) {
   const inspection = inspectNativePatch(root);
   if (Object.values(inspection).every((entry) => entry.state === "PATCHED")) {
@@ -386,17 +405,7 @@ export function applyNativePatch(root, backupRoot) {
       if (!existsSync(manifestPath)) {
         assertNoLinks(backupRoot);
         mkdirSync(backupRoot, { recursive: true, mode: 0o700 });
-        const manifest = {
-          version: "m7-t2-r12",
-          runtime_root: path.resolve(root),
-          // The OpenClaw release the backup was taken from. A restore has to
-          // resolve the SAME pin that produced the patch, and the file names in
-          // a backup are release-specific, so this is recorded explicitly rather
-          // than assumed to be the currently-deployed one.
-          runtime_version: resolveRuntimeVersion(root),
-          bridge_digest: sha256(bridgeContents()),
-          files: {},
-        };
+        const manifest = nativeBackupManifest(root);
         for (const [file, entry] of Object.entries(inspection)) {
           const mode = lstatSync(path.join(root, "dist", file)).mode & 0o777;
           writeExclusive(path.join(backupRoot, file), entry.before, 0o600);
@@ -431,12 +440,7 @@ export function applyNativePatch(root, backupRoot) {
   ))
     throw new Error("NATIVE_BACKUP_MUST_BE_EXTERNAL");
   mkdirSync(backupRoot, { mode: 0o700 }); // Never overwrite an earlier backup.
-  const manifest = {
-    version: "m7-t2-r12",
-    runtime_root: path.resolve(root),
-    bridge_digest: sha256(bridgeContents()),
-    files: {},
-  };
+  const manifest = nativeBackupManifest(root);
   for (const [file, entry] of Object.entries(inspection)) {
     const mode = lstatSync(path.join(root, "dist", file)).mode & 0o777;
     writeExclusive(path.join(backupRoot, file), entry.before, 0o600);
