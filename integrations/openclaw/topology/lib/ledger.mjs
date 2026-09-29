@@ -162,6 +162,12 @@ export function inspectLedgerUpgrade(paths) {
   }
   const supportedVersions = new Set([
     GOVERNANCE_VERSION,
+    // m8-t2.2-r4 is RETAINED, not replaced: it is the version the deployed
+    // writer emitted, and dropping it would make every ledger it wrote
+    // permanently unreadable. It is ambiguous for replay semantics (see the
+    // reader's compatibility path) but its events remain valid.
+    "m8-t2.2-r4",
+    "m8-t2.1-r3",
     "m8-t2-r9",
     "m7-t5-r13",
     "m7-t2-r12",
@@ -210,6 +216,11 @@ function readSnapshotLocked(paths, repairSnapshot = true) {
     validateContract("ledger-snapshot", snapshot, Number.MAX_SAFE_INTEGER);
     const supportedVersions = new Set([
       GOVERNANCE_VERSION,
+      // RETAINED for readability, including the semantically ambiguous
+      // m8-t2.2-r4. Replaced versions would make the ledger they wrote
+      // permanently unreadable.
+      "m8-t2.2-r4",
+      "m8-t2.1-r3",
       "m8-t2-r9",
       "m7-t5-r13",
       "m7-t2-r12",
@@ -242,17 +253,43 @@ function readSnapshotLocked(paths, repairSnapshot = true) {
     // result written today would be re-resolved by its own read-back into the
     // pre-verdict model, contradicting the write it just produced.
     const hasAnchoredHead = snapshot.sequence > 0;
-    // Option (b) migration 2026-09-29: the journal declares its own era. Every
-    // event's digest covers its governance_version, so a journal carrying any
-    // pre-R4 stamp is a legacy-era journal whose anchored history was recorded
-    // under the pre-verdict root-result model. A journal of only current-version
-    // events is read under the current model, which is what the current writer
-    // produces — so a fresh ledger's root result is not re-resolved into the
-    // legacy model by its own read-back. This is derived from the event stream
-    // alone; the snapshot under verification is never consulted to choose it.
-    const journalIsPreVerdictEra = lines.some(
-      (line) => JSON.parse(line).governance_version !== GOVERNANCE_VERSION,
+    // Option (b) migration 2026-09-29 + Phase B (gap A) 2026-09-29: the
+    // writer-semantics discriminator is the event's OWN governance_version,
+    // which the event digest seals. Three classes, decided per event:
+    //
+    //   1. Current version  -> written by the current writer, so current
+    //      semantics. Unambiguous.
+    //   2. Pre-verdict version -> written by a pre-verdict writer, so
+    //      pre-verdict semantics. Unambiguous.
+    //   3. m8-t2.2-r4 -> AMBIGUOUS. That version was emitted by BOTH a
+    //      pre-verdict writer and the verdict writer, so the stamp alone cannot
+    //      say which. These keep the existing compatibility behaviour, which is
+    //      proven to reproduce the deployed writer's own states.
+    //
+    // The compatibility heuristic is confined to class 3. It could not be
+    // global: a new event lands inside the anchored prefix, so a journal-wide
+    // flag re-resolved the current writer's own write into the pre-verdict
+    // model and made a successful write unreadable.
+    const PRE_VERDICT_VERSIONS = new Set([
+      "m7-t2-r12",
+      "m7-t5-r13",
+      "m8-t2-r9",
+      "m8-t2.1-r3",
+    ]);
+    // Computed ONLY from the event stream: an ambiguous-era journal is one that
+    // carries any pre-verdict stamp. The snapshot under verification is never
+    // consulted, so this is not circular.
+    const journalHasPreVerdictStamp = lines.some((line) =>
+      PRE_VERDICT_VERSIONS.has(JSON.parse(line).governance_version),
     );
+    // Resolve one event's writer semantics from its own stamp alone. The
+    // m8-t2.2-r4 stamp is the ambiguous one: it falls through to the
+    // compatibility heuristic, because it was emitted by both writers.
+    const preVerdictForEvent = (event) => {
+      if (event.governance_version === GOVERNANCE_VERSION) return false;
+      if (PRE_VERDICT_VERSIONS.has(event.governance_version)) return true;
+      return journalHasPreVerdictStamp;
+    };
     for (const line of lines) {
       const event = JSON.parse(line);
       validateContract("ledger-event", event);
@@ -295,7 +332,7 @@ function readSnapshotLocked(paths, repairSnapshot = true) {
           hasAnchoredHead && event.sequence <= snapshot.sequence
             ? {
                 replayAnchored: true,
-                preVerdictRootResult: journalIsPreVerdictEra,
+                preVerdictRootResult: preVerdictForEvent(event),
               }
             : undefined,
         );

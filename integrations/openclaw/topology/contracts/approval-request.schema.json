@@ -33,7 +33,9 @@
             "m7-t5-r13",
             "m8-t2-r9",
             "m8-t2.1-r3",
-            "m8-t2.2-r4"
+            "m8-t2.2-r4",
+
+            "m8-t2.3-r5"
           ]
         },
         "approval_id": { "type": "string", "minLength": 1, "maxLength": 256 },

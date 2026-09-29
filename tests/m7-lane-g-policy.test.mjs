@@ -498,8 +498,12 @@ describe("Lane G — policy & lifecycle contract reconciliation", () => {
     try {
       const paths = ledgerPaths(root);
       ensureLedger(paths);
+      // A deterministic snowflake, not Date.now()+random: the id must always
+      // satisfy the contract's snowflake rule, and a variable-length random
+      // suffix made this test fail intermittently.
+      let snowflake = 96000000000000001n;
       const openTask = () => {
-        const messageId = `${Date.now()}${Math.floor(Math.random() * 1e6)}`;
+        const messageId = String(snowflake++);
         const taskId = deriveTaskId({
           origin: "discord",
           origin_principal_ref: "b".repeat(64),

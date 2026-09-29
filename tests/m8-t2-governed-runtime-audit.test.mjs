@@ -2856,16 +2856,63 @@ describe("A-Series: Discord Component Callback Schema & Interaction Guards (A14-
     );
   });
 
-  test("A25: ensureLedger creates an R4-compatible ledger (CURRENT, m8-t2.2-r4)", async () => {
+  test("A25: ensureLedger creates a current-contract ledger (CURRENT, m8-t2.3-r5)", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "zink-r4-ledger-"));
     try {
       const paths = ledgerPaths(stateDir);
       ensureLedger(paths);
       assert.equal(inspectLedgerUpgrade(paths), "CURRENT");
       const snapshot = readSnapshot(paths);
-      assert.equal(snapshot.governance_version, "m8-t2.2-r4");
+      // Phase B (gap A): a NEW ledger is stamped with the current, unambiguous
+      // writer-semantics contract.
+      assert.equal(snapshot.governance_version, "m8-t2.3-r5");
       assert.equal(snapshot.sequence, 0);
       assert.deepEqual(snapshot.tasks, {});
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  test("A25: a ledger stamped with a RETIRED version stays CURRENT and readable", async () => {
+    // The bump must not orphan history. Every previously-emitted version stays
+    // in the reader's supported set, so a ledger the deployed writer produced
+    // is still CURRENT and still readable.
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "zink-r4-ledger-"));
+    try {
+      for (const retired of [
+        "m8-t2.2-r4",
+        "m8-t2.1-r3",
+        "m8-t2-r9",
+        "m7-t5-r13",
+        "m7-t2-r12",
+      ]) {
+        const paths = ledgerPaths(stateDir);
+        ensureLedger(paths);
+        const current = readSnapshot(paths);
+        const restamped = {
+          ...current,
+          governance_version: retired,
+          sequence: 0,
+          last_event_digest: null,
+          ingress_ids: [],
+          tasks: {},
+          updated_at: current.updated_at,
+        };
+        writeFileSync(
+          paths.snapshot,
+          `${JSON.stringify(restamped, null, 2)}\n`,
+        );
+        assert.equal(
+          inspectLedgerUpgrade(paths),
+          "CURRENT",
+          `${retired}: must stay CURRENT`,
+        );
+        assert.equal(
+          readSnapshot(paths).governance_version,
+          retired,
+          `${retired}: must stay readable`,
+        );
+      }
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }

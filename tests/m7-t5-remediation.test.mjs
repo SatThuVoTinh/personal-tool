@@ -7,7 +7,10 @@ import {
   derivePrincipalRef,
 } from "../integrations/openclaw/topology/lib/canonical.mjs";
 
-import { validateContract } from "../integrations/openclaw/topology/lib/schema.mjs";
+import {
+  validateContract,
+  loadContractSchema,
+} from "../integrations/openclaw/topology/lib/schema.mjs";
 
 import {
   AGENT_IDS,
@@ -260,9 +263,63 @@ describe("M7/T5 Runtime Governance Remediation Comprehensive Test Suite", () => 
   // T5.5 — Governance Version Synchronization (BUG-02)
   // =========================================================================
   describe("T5.5 — Governance Version Synchronization (BUG-02)", () => {
-    test("BUG-02: Canonical GOVERNANCE_VERSION is the active R4 revision", () => {
-      assert.equal(GOVERNANCE_VERSION, "m8-t2.2-r4");
+    test("BUG-02: Canonical GOVERNANCE_VERSION is the active revision", () => {
+      // Phase B (gap A), 2026-09-29: the active version is m8-t2.3-r5, the
+      // first whose writer semantics are unambiguous. m8-t2.2-r4 is RETAINED
+      // in every contract enum because the deployed writer emitted it and
+      // dropping it would make those ledgers permanently unreadable.
+      assert.equal(GOVERNANCE_VERSION, "m8-t2.3-r5");
     });
+
+    test("BUG-02: every retired governance version stays readable", () => {
+      // The version bump must APPEND to the vocabulary, never replace it. A
+      // replaced version makes every ledger written under it unreadable, which
+      // is exactly the defect this repository already fixed once (the r3 -> r4
+      // enum replacement).
+      for (const contract of [
+        "agent-result-payload",
+        "approval-request",
+        "delegation-envelope",
+        "delegation-proposal",
+        "execution-brief",
+        "governance-manifest",
+        "governed-reference",
+        "incident",
+        "ledger-event",
+        "ledger-snapshot",
+        "result",
+        "trusted-result-envelope",
+      ]) {
+        const schema = loadContractSchema(contract);
+        const found = findVersionEnum(schema);
+        assert.ok(found, `${contract}: must declare a governance_version enum`);
+        for (const historical of [
+          "m7-t2-r12",
+          "m7-t5-r13",
+          "m8-t2-r9",
+          "m8-t2.1-r3",
+          "m8-t2.2-r4",
+          "m8-t2.3-r5",
+        ]) {
+          assert.ok(
+            found.includes(historical),
+            `${contract}: ${historical} must remain a valid governance_version`,
+          );
+        }
+      }
+    });
+
+    /** Find the governance_version enum anywhere in a contract. */
+    function findVersionEnum(node) {
+      if (!node || typeof node !== "object") return null;
+      if (Array.isArray(node.enum) && node.enum.includes("m8-t2.3-r5"))
+        return node.enum;
+      for (const value of Object.values(node)) {
+        const found = findVersionEnum(value);
+        if (found) return found;
+      }
+      return null;
+    }
 
     test("BUG-02: Schemas accept both historical m7-t2-r12 and current m7-t5-r13", () => {
       const validT5 = {

@@ -24,7 +24,7 @@
   "properties": {
     "schema_version": { "const": "1.0.0" },
     "governance_version": {
-      "enum": ["m7-t2-r12", "m7-t5-r13", "m8-t2-r9", "m8-t2.1-r3", "m8-t2.2-r4"]
+      "enum": ["m7-t2-r12", "m7-t5-r13", "m8-t2-r9", "m8-t2.1-r3", "m8-t2.2-r4", "m8-t2.3-r5"]
     },
     "result_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "task_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },

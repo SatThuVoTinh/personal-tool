@@ -1,6 +1,14 @@
 import { createHash, createHmac } from "node:crypto";
 
-export const GOVERNANCE_VERSION = "m8-t2.2-r4";
+// The governance version doubles as the WRITER-SEMANTICS discriminator, so it
+// must only ever be bumped when the reducer's meaning for an already-emitted
+// event is unchanged. m8-t2.2-r4 is deliberately NOT a unique discriminator:
+// two different writers emitted it, one resolving a root result directly to its
+// outcome (pre-verdict) and one routing it to owner review (verdict). It is
+// therefore retained forever and handled by the compatibility path, never
+// treated as evidence of verdict semantics. m8-t2.3-r5 is the first version
+// whose semantics are unambiguous: only the verdict-model writer emits it.
+export const GOVERNANCE_VERSION = "m8-t2.3-r5";
 export const SCHEMA_VERSION = "1.0.0";
 
 const SET_KEYS = new Set(["allowed_tools", "allowAgents", "allowed_stacks"]);
