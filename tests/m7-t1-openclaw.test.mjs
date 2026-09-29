@@ -990,6 +990,154 @@ test("M7/T1 builder upgrades only the exact R16 drop-in and rejects owned drift"
   }
 });
 
+test("M7/T1 builder converges a pre-R4 mention grammar and stays fail-closed otherwise", () => {
+  const root = temporaryDirectory();
+  try {
+    const environment = environmentForTemporaryHome(root);
+    const stateDir = path.join(root, ".openclaw-zink");
+    const systemdUserDir = path.join(root, ".config", "systemd", "user");
+    const script = path.join(
+      process.cwd(),
+      "integrations",
+      "openclaw",
+      "configure.mjs",
+    );
+    const apply = () =>
+      execFileSync(
+        process.execPath,
+        [
+          "--",
+          script,
+          "--state-dir",
+          stateDir,
+          "--systemd-user-dir",
+          systemdUserDir,
+          ...discordIdentifierArguments,
+          "--apply",
+        ],
+        { env: environment, stdio: "pipe" },
+      );
+
+    const configPath = path.join(stateDir, "openclaw.json");
+    apply();
+    const canonical = JSON.parse(readFileSync(configPath, "utf8"));
+
+    // M8/T2.2-R4 regenerated the mention grammar from AGENT_ALIASES and the
+    // orchestrators' `alsoAllow` from the canonical tool policy. A config
+    // written by a pre-R4 build differs in exactly those two fields: a
+    // hand-transcribed, diacritic-tolerant pattern, and a `main` allowlist
+    // that predates the `session_status` addition.
+    const preR4 = JSON.parse(JSON.stringify(canonical));
+    preR4.agents.list[0].groupChat.mentionPatterns = [
+      "(?:^|\\s|<@(?:!|&)?|@)(?:l[eê]g[aá]cy[-_]alias)(?:>|$|\\s|[:;.,!?\\-—~])",
+    ];
+    preR4.agents.list[0].tools.alsoAllow = ["agents_list", "sessions_spawn"];
+    writeFileSync(configPath, `${JSON.stringify(preR4, null, 2)}\n`, "utf8");
+
+    assert.doesNotThrow(apply, "a pre-R4 mention grammar must converge");
+    const converged = JSON.parse(readFileSync(configPath, "utf8"));
+    assert.deepEqual(
+      converged.agents.list[0].groupChat.mentionPatterns,
+      canonical.agents.list[0].groupChat.mentionPatterns,
+    );
+    assert.deepEqual(
+      converged.agents.list[0].tools.alsoAllow,
+      canonical.agents.list[0].tools.alsoAllow,
+    );
+    // The specialists' `alsoAllow` is non-enumerable in the policy, so it is
+    // absent from the stored config and must stay absent: convergence must not
+    // materialise a key the canonical config does not have.
+    assert.equal(
+      Object.hasOwn(converged.agents.list[3].tools, "alsoAllow"),
+      false,
+    );
+    assert.doesNotThrow(() =>
+      validateConfig(converged, { stateDir, identifiers }),
+    );
+
+    // Convergence is FIELD-SCOPED. The same mention drift carried alongside an
+    // unrelated difference must still fail closed, otherwise the migration
+    // would launder arbitrary config edits into an accepted config.
+    const mixed = JSON.parse(JSON.stringify(preR4));
+    mixed.agents.list[0].sandbox.docker.network = "bridge";
+    writeFileSync(configPath, `${JSON.stringify(mixed, null, 2)}\n`, "utf8");
+    assert.throws(apply, /Policy drift at agents/u);
+
+    // A roster change is not a version-evolved field either.
+    const roster = JSON.parse(JSON.stringify(canonical));
+    roster.agents.list.pop();
+    writeFileSync(configPath, `${JSON.stringify(roster, null, 2)}\n`, "utf8");
+    assert.throws(apply, /Policy drift at agents/u);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("M7/T1 builder recognizes the superseded WSL plugin build and still refuses unknown assets", () => {
+  const root = temporaryDirectory();
+  try {
+    const environment = environmentForTemporaryHome(root);
+    const stateDir = path.join(root, ".openclaw-zink");
+    const systemdUserDir = path.join(root, ".config", "systemd", "user");
+    const script = path.join(
+      process.cwd(),
+      "integrations",
+      "openclaw",
+      "configure.mjs",
+    );
+    const apply = () =>
+      execFileSync(
+        process.execPath,
+        [
+          "--",
+          script,
+          "--state-dir",
+          stateDir,
+          "--systemd-user-dir",
+          systemdUserDir,
+          ...discordIdentifierArguments,
+          "--apply",
+        ],
+        { env: environment, stdio: "pipe" },
+      );
+
+    const entryPath = path.join(
+      stateDir,
+      "extensions",
+      "zink-governance",
+      "index.mjs",
+    );
+    const assetPath = path.join(
+      stateDir,
+      "extensions",
+      "zink-governance",
+      "lib",
+      "canonical.mjs",
+    );
+
+    apply();
+    const canonicalEntry = readFileSync(entryPath, "utf8");
+    const canonicalAsset = readFileSync(assetPath, "utf8");
+
+    // A file the allowlist does not list is refused, and refused WITHOUT being
+    // overwritten: listing a prior build must not weaken the guard.
+    writeFileSync(assetPath, "unrecognized plugin asset\n", "utf8");
+    assert.throws(apply, /Governance plugin asset drift detected/u);
+    assert.equal(
+      readFileSync(assetPath, "utf8"),
+      "unrecognized plugin asset\n",
+    );
+
+    // Restore, then confirm the builder is idempotent on its own output.
+    writeFileSync(assetPath, canonicalAsset, "utf8");
+    assert.doesNotThrow(apply);
+    assert.equal(readFileSync(assetPath, "utf8"), canonicalAsset);
+    assert.equal(readFileSync(entryPath, "utf8"), canonicalEntry);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("M7/T1 rejects non-snowflake Discord identifiers", () => {
   assert.throws(
     () => parseIdentifiers({ ...identifiers, discordOwnerId: "not-an-id" }),

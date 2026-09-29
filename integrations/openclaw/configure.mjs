@@ -55,9 +55,86 @@ const STARTING_GOVERNANCE_ENTRYPOINT_SHA256 =
   "26bb3b447bdc039925fa568ae89beb1969319ce8b6c86236eb715c2c6224ebf0";
 const INTERMEDIATE_GOVERNANCE_ENTRYPOINT_SHA256 =
   "a384e509ebac2c47f4a50e758b2bb697e87cc50721367ae20948d11d4f24b06b";
-const LEGACY_GOVERNANCE_MANIFEST_R11_SHA256 =
-  "02c805e7909b9ca35711cc5888bc889fe9c9a566f09f580ba614682682ce41ca";
+const LEGACY_GOVERNANCE_MANIFEST_R11_SHA256 = Object.freeze([
+  "02c805e7909b9ca35711cc5888bc889fe9c9a566f09f580ba614682682ce41ca",
+  // The manifest of the superseded WSL deployment recognized on 2026-09-30
+  // under the same owner authorization as the asset list.
+  "5026959d41a76c531f37caa6297b3b0b010ee17cedd7bdd3806447600c98a18d",
+]);
+// Digests of prior audited plugin builds that the current build may overwrite.
+//
+// The 2026-09-30 group is the plugin tree that was live on the WSL gateway
+// before the R5 deployment. Unlike every other entry here, its provenance is
+// NOT established: regenerating the assets at `01489aa` (the commit before R4)
+// reproduces only 7 of its 29 files, and the deployed `openclaw.json` beside it
+// matches no commit either, so the whole deployment came from an uncommitted
+// build. It is listed because the owner explicitly authorized recognizing it as
+// a superseded predecessor on 2026-09-30, not because it was audited here.
+//
+// These entries only ever permit OVERWRITING the listed file with the current
+// build's own bytes. They do not make the old content trusted, and an
+// unrecognised digest still fails closed.
 const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
+  "contracts/agent-result-payload.schema.json": Object.freeze([
+    "48bcbf6b64daae63a3d7a917ac8f17790ba1468b4ed78182df5d1de59cd34717",
+  ]),
+  "contracts/approval-request.schema.json": Object.freeze([
+    "a4866a323a17e7e4e0243afb4f771e2d3db2116034a7bd6a615501b0ae3d2e54",
+  ]),
+  "contracts/delegation-envelope.schema.json": Object.freeze([
+    "cc5023418300cd616b9ced2bff752c2903a07ef2a3e2e0e29c16968e7e90af97",
+  ]),
+  "contracts/delegation-proposal.schema.json": Object.freeze([
+    "efd4371cacf396dc618cc84c8663a114f06b034c13737937b48aa0b895b2d6e0",
+  ]),
+  "contracts/execution-brief.schema.json": Object.freeze([
+    "514001e3edfd31a128b82f2c3944761214fd5d2ef7439d8033d914180410f5e4",
+  ]),
+  "contracts/governance-manifest.schema.json": Object.freeze([
+    "f980bfd5474c8d057be92fee136779490ba93ed944295e4d173c54d7082e24c5",
+  ]),
+  "contracts/governed-reference.schema.json": Object.freeze([
+    "e3eabb880bd46b4fccdb7b7b3767ad4be42a6d8ec4894c72959cfbf8a572c02e",
+  ]),
+  "contracts/incident.schema.json": Object.freeze([
+    "9d70678804bfc3059f3a2218babda4f4c1b55486bde5c6da5ef8c4f114fcc242",
+  ]),
+  "contracts/ledger-event.schema.json": Object.freeze([
+    "e636b2452916ad8d1391a90844c0eaa3bc1c84e4aef8ede1361e3cee70143f15",
+  ]),
+  "contracts/ledger-snapshot.schema.json": Object.freeze([
+    "3cde5162ae845a9b7066a623a9c4c8896f1fc6b77f2b5983ad506a9dfcbc0151",
+  ]),
+  "contracts/result.schema.json": Object.freeze([
+    "9440dfb87b3daf358b11dc7b59b62586c68786235d99d717daf9783b9a6e4540",
+  ]),
+  "contracts/trusted-result-envelope.schema.json": Object.freeze([
+    "5d40c23152bba749826797eb0271c47a20f3aab910bcad2852428618ad9f0ec9",
+  ]),
+  "governance-manifests.json": Object.freeze([
+    "5026959d41a76c531f37caa6297b3b0b010ee17cedd7bdd3806447600c98a18d",
+  ]),
+  "lib/artifact-validator.mjs": Object.freeze([
+    "0b35496fdebe5e204bfc4395057e9a54e5635060a1af1fe47146dd391ebeac79",
+  ]),
+  "lib/authority.mjs": Object.freeze([
+    "1e6eb2659f3d671ec62e6c57f28088bfcfffef3d637ec0f898d8ef18fc426b13",
+  ]),
+  "lib/canonical.mjs": Object.freeze([
+    "c6c0515ab3b1ade07d94d8b5969cd425456db2b5fff56847ba7ef0030989b203",
+  ]),
+  "lib/decision-ledger.mjs": Object.freeze([
+    "cec8776c771d4cf521a664fa7dd62aa5e14b54cc05389b30be51bc03b4c51a6e",
+  ]),
+  "lib/policy.mjs": Object.freeze([
+    "0584ca5fd8698ef986a7a41f31d1b735997bc1f7fb879f91a1df90ad191603e5",
+  ]),
+  "lib/queue-manager.mjs": Object.freeze([
+    "a8021088a4e9373fcf74cf4dd31433c8606b9505eaf74c5fa922839ee716776a",
+  ]),
+  "lib/schema.mjs": Object.freeze([
+    "869a2254975f60432c596a115acee1fc0e03893224b925c5a54334dc532d1cee",
+  ]),
   "lib/guard.mjs": Object.freeze([
     "3d017828de32ed2d9ecdfc7c78e1828f3b4f8a13f88a51aabdd8ddff81443029",
     "00cce929877bfab0864b16519dfa0276bb2955053d348b3e298c4121c3784100",
@@ -66,6 +143,7 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     "a6b6f452255d22bee7d3b8b860da4fddef85bafa299fcbaf519dd76cfca075e9",
     "b230651ec4fa9b5a123c10e319438918c0763f99287f5223da1a71d1aebe213a",
     "efdcea2457db29f20603fa0cf948fd8e0261f78d3ec3f863637a56befdf8f784",
+    "c66587e10db3f35c8c03ff430360e1abe4bc2268613ae78d1e2bd8837dca0173",
   ]),
   "lib/native-boundary.mjs": Object.freeze([
     "4b77356f2a843f26040a7cd3312c896469aff33cc472bc6c02fdd5c472bd1234",
@@ -73,16 +151,22 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     "25759e86e53d962bcb00a13eedd63ea028abb31c212ae2874a84bfd041509809",
     "164b17293cf4ac63089ad2ea1afe96bc24b39450bc3332820bc9f5fff654e253",
     "8dbd524a49a8b65959e74f0aaf37516a7a211759bd0a3d047dfd1e73863bd741",
+    "6308a7c37745f2a8214a5ad47f9dd3fa0af00d1479ea9676d15bd3a6eb8ea29a",
   ]),
   "lib/runtime.mjs": Object.freeze([
     "6a522c73efacf8b593d63ee55e18b5d02c3675340e0593142a5c2fea8dc6e24a",
   ]),
   "lib/ledger.mjs": Object.freeze([
     "d7f406e9dfa8f45d117f555bed18d2bf4c63ed966c3dd0588d221a54b9e87255",
+    "50efeec64203240014b93479900a51251efbf0f286cc170feb93facf5a954148",
   ]),
   "lib/workflow.mjs": Object.freeze([
     "14bb6a5575b3f25e7d04aafb28eb1e95b0b5b2a21b15b6b5dec787aaaf94f907",
     "19dc0eb40b216fbc898afd8dfc66f5c6aae4da15d1d2a6e5923753e13fcb09f0",
+    "ff2ca8d3abbef43081756d68b553e23f036bbed302f6ffdf0075c045f8f1f5e2",
+  ]),
+  "policy/reason-code-matrix.json": Object.freeze([
+    "982896fe4fcc856728f8348058f19b69d89eabd9974bdaf4311c4afa510fc200",
   ]),
 });
 
@@ -191,17 +275,72 @@ function existingConfigMatches(configPath, context) {
     } catch {
       // fall through to the fail-closed drift error below
     }
-    if (actual.channels?.discord?.streaming !== undefined) {
+    // Field-scoped convergence. Each migration below replaces ONLY the fields
+    // it owns, and `validateConfig` then has to accept the RESULT, so a config
+    // that differs in any other respect still fails closed: convergence can
+    // never launder unrelated drift into an accepted config.
+    const expectedConfig = buildConfig(context);
+    const migrated = JSON.parse(JSON.stringify(actual));
+    let converged = false;
+    const discord = migrated.channels?.discord;
+    if (discord && discord.streaming === undefined) {
+      discord.streaming = { mode: "off" };
+      converged = true;
+    }
+    // Frozen M8/T1 delivery default restored in R4 builder: configs that
+    // predate it converge the same way streaming does.
+    if (discord && discord.replyToMode === undefined) {
+      discord.replyToMode = "off";
+      converged = true;
+    }
+    // M8/T2.2-R4 regenerated the Discord mention grammar from AGENT_ALIASES
+    // and the orchestrators' `alsoAllow` from the canonical tool policy,
+    // replacing values that earlier builds hand-transcribed. A config written
+    // by such a build differs in exactly these two fields, so regenerating them
+    // from the canonical source is the same kind of convergence as the two
+    // above. The aliases R4 dropped are dropped on purpose: the alias table is
+    // asserted absent in tests/m7-lane-g-policy.test.mjs, so this is the R4
+    // behaviour arriving late, not a new policy.
+    //
+    // The shape is matched field-by-field rather than as a whole-config literal
+    // because the drifted config was produced by an uncommitted build and is
+    // not reproducible from any commit, so there is no prior generator to
+    // derive a legacy literal from.
+    //
+    // `alsoAllow` is converged ONLY where the policy serializes it. For the
+    // specialists `buildConfig` defines it non-enumerable, so it is absent from
+    // the stored config and `validateConfig` never compares it; writing an
+    // enumerable `[]` there would add a key the policy does not have and turn
+    // an accepted config into a drifting one.
+    const liveAgents = Array.isArray(migrated.agents?.list)
+      ? migrated.agents.list
+      : null;
+    if (liveAgents && liveAgents.length === expectedConfig.agents.list.length)
+      for (const [index, agent] of liveAgents.entries()) {
+        const expectedAgent = expectedConfig.agents.list[index];
+        const expectedAllow = expectedAgent.tools.alsoAllow ?? [];
+        if (
+          agent.groupChat &&
+          JSON.stringify(agent.groupChat.mentionPatterns) !==
+            JSON.stringify(expectedAgent.groupChat.mentionPatterns)
+        ) {
+          agent.groupChat.mentionPatterns =
+            expectedAgent.groupChat.mentionPatterns;
+          converged = true;
+        }
+        if (
+          expectedAllow.length > 0 &&
+          JSON.stringify(agent.tools?.alsoAllow) !==
+            JSON.stringify(expectedAllow)
+        ) {
+          agent.tools.alsoAllow = expectedAllow;
+          converged = true;
+        }
+      }
+    if (!converged) {
       throw validationError;
     }
-    const migrated = JSON.parse(JSON.stringify(actual));
     try {
-      migrated.channels.discord.streaming = { mode: "off" };
-      // Frozen M8/T1 delivery default restored in R4 builder: configs that
-      // predate it converge the same way streaming does.
-      if (migrated.channels.discord.replyToMode === undefined) {
-        migrated.channels.discord.replyToMode = "off";
-      }
       validateConfig(migrated, context);
     } catch {
       throw validationError;
@@ -466,6 +605,9 @@ async function main() {
       "af0ce312e23a0d3be9a10c3bb350b3d6b7d345b1ca7fc49ae13efd41219e5c93",
       "fdb72c9f058cb29e3ba4e3ae3a394d1f84e805a274e8614e592018d073e88015",
       "17b4be782cebc34df7a363c095865653cc8351ba50e08c1206ce4981d6c7e6d1",
+      // The entrypoint of the superseded WSL deployment recognized on
+      // 2026-09-30 under the same owner authorization as the asset list.
+      "09f1d8e66f2b9fca35180d9e0d208f644cedf34824e4cd18bb9f229b51cec1c7",
     ],
   );
   assertRegularOrMissing(output.identityKeyPath);
@@ -543,7 +685,7 @@ async function main() {
     "Governance plugin manifest",
     0o600,
     [],
-    [LEGACY_GOVERNANCE_MANIFEST_R11_SHA256],
+    LEGACY_GOVERNANCE_MANIFEST_R11_SHA256,
   );
   materializeOwnedFile(
     output.governancePluginPackagePath,
@@ -571,6 +713,9 @@ async function main() {
       "af0ce312e23a0d3be9a10c3bb350b3d6b7d345b1ca7fc49ae13efd41219e5c93",
       "fdb72c9f058cb29e3ba4e3ae3a394d1f84e805a274e8614e592018d073e88015",
       "17b4be782cebc34df7a363c095865653cc8351ba50e08c1206ce4981d6c7e6d1",
+      // The entrypoint of the superseded WSL deployment recognized on
+      // 2026-09-30 under the same owner authorization as the asset list.
+      "09f1d8e66f2b9fca35180d9e0d208f644cedf34824e4cd18bb9f229b51cec1c7",
     ],
   );
   if (!existsSync(output.identityKeyPath))
