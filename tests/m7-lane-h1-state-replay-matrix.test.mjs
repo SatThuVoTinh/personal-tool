@@ -931,8 +931,14 @@ describe("Lane H1 — replay and idempotency matrix", () => {
         rmSync(root, { recursive: true, force: true });
       }
     }
-    // The event contract REQUIRES the field: omitting it is refused, so a brief
-    // can never be activated without a declared semantic contract status.
+    // R4 readability (live-ledger migration 2026-09-29): the field is REQUIRED
+    // on new writes only in the sense that the writer always emits it — the
+    // READER must tolerate its absence, because briefs activated before R4
+    // introduced the field carry no status and rejecting them makes the
+    // operational ledger unreadable. An omitted status therefore normalizes to
+    // an explicit MISSING rather than being refused, and MISSING authorizes
+    // nothing: the security invariant (no specialist without VALID) is
+    // unchanged, only the mechanism moved from refusal to normalization.
     const root = fixture();
     try {
       const paths = ledgerPaths(root);
@@ -950,21 +956,21 @@ describe("Lane H1 — replay and idempotency matrix", () => {
         root_session_key: "main-session",
         root_run_id: "main-run",
       });
-      assert.throws(
-        () =>
-          recordWorkflowEvent(paths, "WORKFLOW_BRIEF_ACTIVATED", {
-            task_id: taskId,
-            brief_revision: 1,
-            nodes: [briefNode("o1")],
-          }),
-        (err) => {
-          assert.equal(
-            typeof err?.code === "string",
-            true,
-            "an omitted semantic contract status must be refused with a code",
-          );
-          return true;
-        },
+      recordWorkflowEvent(paths, "WORKFLOW_BRIEF_ACTIVATED", {
+        task_id: taskId,
+        brief_revision: 1,
+        nodes: [briefNode("o1")],
+      });
+      // The omission normalizes to MISSING on the recorded task ...
+      assert.equal(
+        readSnapshot(paths).tasks[taskId].semantic_contract_status,
+        "MISSING",
+      );
+      // ... and MISSING authorizes no specialist.
+      assert.equal(
+        readSnapshot(paths).tasks[taskId].semantic_contract_status === "VALID",
+        false,
+        "a status-less brief must not authorize a specialist",
       );
     } finally {
       rmSync(root, { recursive: true, force: true });

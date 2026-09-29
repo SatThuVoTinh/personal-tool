@@ -1005,21 +1005,25 @@ export function applyWorkflowEvent(
     return next;
   }
   if (type === "WORKFLOW_BRIEF_ACTIVATED") {
-    // M7-016: the brief's semantic contract status is REQUIRED, because
-    // execution-brief.schema.json requires it and the guard authorizes a
-    // specialist only when the TASK records a VALID semantic contract. The
+    // M7-016: the brief's semantic contract status is REQUIRED on new writes,
+    // because execution-brief.schema.json requires it and the guard authorizes
+    // a specialist only when the TASK records a VALID semantic contract. The
     // event previously did not carry it, so the task could never record it and
     // every governed specialist was refused MISSING_PREREQUISITE.
-    exactKeys(payload, [
-      "task_id",
-      "brief_revision",
-      "semantic_contract_status",
-      "nodes",
-    ]);
+    //
+    // R4 readability: briefs activated before the field existed carry no
+    // status. Replaying them must not throw, or the operational ledger becomes
+    // unreadable. An absent status replays as MISSING — the truthful value for
+    // "no contract was recorded" — and MISSING authorizes nothing, exactly as
+    // an undefined status did, so fail-closed is preserved.
+    exactKeys(
+      payload,
+      ["task_id", "brief_revision", "nodes"],
+      ["semantic_contract_status"],
+    );
+    const contractStatus = payload.semantic_contract_status ?? "MISSING";
     requireCondition(
-      ["VALID", "MISSING", "AMBIGUOUS"].includes(
-        payload.semantic_contract_status,
-      ),
+      ["VALID", "MISSING", "AMBIGUOUS"].includes(contractStatus),
       "SCHEMA_INVALID",
     );
     requireCondition(
@@ -1100,8 +1104,9 @@ export function applyWorkflowEvent(
     task.nodes = payload.nodes;
     // M7-016: the task mirrors the activated brief's semantic contract status,
     // so the guard authorizes a specialist against recorded task state rather
-    // than a caller-supplied brief document.
-    task.semantic_contract_status = payload.semantic_contract_status;
+    // than a caller-supplied brief document. Pre-R4 briefs carry no status;
+    // they replay as MISSING (see above), which authorizes nothing.
+    task.semantic_contract_status = contractStatus;
     return next;
   }
   fail("EXECUTION_STATE_UNKNOWN");

@@ -20,7 +20,14 @@ import {
   TOPOLOGY_POLICY,
 } from "../integrations/openclaw/lib/policy.mjs";
 import { BUDGETS } from "../integrations/openclaw/topology/lib/ledger.mjs";
+import {
+  ensureLedger,
+  ledgerPaths,
+  readSnapshot,
+  recordWorkflowEvent,
+} from "../integrations/openclaw/topology/lib/ledger.mjs";
 import { resolveContractFilePath } from "../integrations/openclaw/topology/lib/schema.mjs";
+import { validateContract } from "../integrations/openclaw/topology/lib/schema.mjs";
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const readJson = (rel) =>
@@ -474,6 +481,119 @@ describe("Lane G — policy & lifecycle contract reconciliation", () => {
         null,
         "an unreadable package.json must not be papered over with a version",
       );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("the ledger agent vocabulary admits ad-hoc identities by shape", () => {
+    // Live-ledger migration 2026-09-29: the operational ledger journals claims
+    // and results by an ad-hoc worker identity outside the seven governed
+    // agents. A closed agent enum in the event contract made that legitimate
+    // history unreadable without preventing anything — execution authority
+    // lives in the guard's spawn topology and the reducer's run ownership, not
+    // in this vocabulary. The vocabulary is therefore open-world with a shape
+    // rule, so history stays readable while malformed identities still fail.
+    const root = mkdtempSync(path.join(os.tmpdir(), "zink-agent-shape-"));
+    try {
+      const paths = ledgerPaths(root);
+      ensureLedger(paths);
+      const openTask = () => {
+        const messageId = `${Date.now()}${Math.floor(Math.random() * 1e6)}`;
+        const taskId = deriveTaskId({
+          origin: "discord",
+          origin_principal_ref: "b".repeat(64),
+          origin_message_id: messageId,
+        });
+        recordWorkflowEvent(paths, "WORKFLOW_OPENED", {
+          origin: "discord",
+          origin_principal_ref: "b".repeat(64),
+          origin_message_id: messageId,
+          task_id: taskId,
+          root_agent_id: "main",
+          root_session_key: "shape-session",
+          root_run_id: "shape-run",
+        });
+        recordWorkflowEvent(paths, "WORKFLOW_BRIEF_ACTIVATED", {
+          task_id: taskId,
+          brief_revision: 1,
+          semantic_contract_status: "VALID",
+          nodes: [
+            {
+              node_id: "node-o1",
+              agent_id: "o1",
+              stack_id: "data_plant",
+              dependencies: [],
+              required: true,
+              input_digest: "c".repeat(64),
+              constraints_digest: "c".repeat(64),
+              validation_digest: "c".repeat(64),
+            },
+          ],
+        });
+        recordWorkflowEvent(paths, "WORKFLOW_USER_APPROVAL_DECIDED", {
+          task_id: taskId,
+          actor: "user",
+          channel: "approvals",
+          decision: "APPROVE",
+        });
+        return taskId;
+      };
+      // The ad-hoc shape observed in the operational ledger validates and
+      // replays end to end.
+      const adHoc = openTask();
+      recordWorkflowEvent(paths, "WORKFLOW_TASK_CLAIMED", {
+        task_id: adHoc,
+        agent_id: "local-laptop-worker",
+      });
+      assert.equal(
+        readSnapshot(paths).tasks[adHoc].claimed_by,
+        "local-laptop-worker",
+      );
+      for (const line of readFileSync(paths.events, "utf8")
+        .split("\n")
+        .filter(Boolean)) {
+        validateContract("ledger-event", JSON.parse(line));
+      }
+      // Every governed identity still validates.
+      for (const agent of [
+        "main",
+        "o1",
+        "o2",
+        "excel",
+        "power-bi",
+        "sql",
+        "python",
+      ]) {
+        const taskId = openTask();
+        recordWorkflowEvent(paths, "WORKFLOW_TASK_CLAIMED", {
+          task_id: taskId,
+          agent_id: agent,
+        });
+        assert.equal(readSnapshot(paths).tasks[taskId].claimed_by, agent);
+      }
+      // Malformed identities are still refused: the shape rule bites.
+      for (const bad of [
+        "",
+        "UPPER",
+        "-leading",
+        "has space",
+        "a".repeat(65),
+      ]) {
+        const taskId = openTask();
+        assert.throws(
+          () =>
+            recordWorkflowEvent(paths, "WORKFLOW_TASK_CLAIMED", {
+              task_id: taskId,
+              agent_id: bad,
+            }),
+          (err) => {
+            assert.equal(typeof err?.code === "string", true);
+            return true;
+          },
+          `agent_id ${JSON.stringify(bad)} must be refused`,
+        );
+      }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

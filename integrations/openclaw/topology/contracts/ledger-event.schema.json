@@ -147,13 +147,9 @@
         "properties": {
           "payload": {
             "type": "object",
+            "description": "semantic_contract_status is required on new writes (the writer always emits it) but optional for reads: briefs activated before R4 carry no status, and rejecting legitimate history makes the ledger unreadable. The reducer replays an absent status as MISSING, which authorizes nothing.",
             "additionalProperties": false,
-            "required": [
-              "task_id",
-              "brief_revision",
-              "semantic_contract_status",
-              "nodes"
-            ],
+            "required": ["task_id", "brief_revision", "nodes"],
             "properties": {
               "task_id": {
                 "type": "string",
@@ -237,15 +233,9 @@
                 "maxLength": 256
               },
               "agent_id": {
-                "enum": [
-                  "main",
-                  "o1",
-                  "o2",
-                  "excel",
-                  "power-bi",
-                  "sql",
-                  "python"
-                ]
+                "description": "Open-world agent identity. The ledger records what executed, including ad-hoc identities outside the governed spawn topology; execution authority is enforced by the guard and reducer, not by this vocabulary. A closed enum here makes legitimate history unreadable without preventing anything.",
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_-]{0,63}$"
               },
               "parent_session_key": {
                 "type": "string",
@@ -280,15 +270,9 @@
                 "type": "object"
               },
               "agent_id": {
-                "enum": [
-                  "main",
-                  "o1",
-                  "o2",
-                  "excel",
-                  "power-bi",
-                  "sql",
-                  "python"
-                ]
+                "description": "Open-world agent identity. The ledger records what executed, including ad-hoc identities outside the governed spawn topology; execution authority is enforced by the guard and reducer, not by this vocabulary. A closed enum here makes legitimate history unreadable without preventing anything.",
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_-]{0,63}$"
               },
               "attempt": {
                 "type": "integer",
@@ -371,15 +355,9 @@
                 "pattern": "^[a-f0-9]{64}$"
               },
               "agent_id": {
-                "enum": [
-                  "main",
-                  "o1",
-                  "o2",
-                  "excel",
-                  "power-bi",
-                  "sql",
-                  "python"
-                ]
+                "description": "Open-world agent identity. The ledger records what executed, including ad-hoc identities outside the governed spawn topology; execution authority is enforced by the guard and reducer, not by this vocabulary. A closed enum here makes legitimate history unreadable without preventing anything.",
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_-]{0,63}$"
               },
               "question": {
                 "type": "string",
@@ -487,15 +465,9 @@
                 "pattern": "^[a-z][a-z0-9_-]{0,63}$"
               },
               "agent_id": {
-                "enum": [
-                  "main",
-                  "o1",
-                  "o2",
-                  "excel",
-                  "power-bi",
-                  "sql",
-                  "python"
-                ]
+                "description": "Open-world agent identity. The ledger records what executed, including ad-hoc identities outside the governed spawn topology; execution authority is enforced by the guard and reducer, not by this vocabulary. A closed enum here makes legitimate history unreadable without preventing anything.",
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_-]{0,63}$"
               }
             }
           }
@@ -645,15 +617,9 @@
                 "maxLength": 256
               },
               "agent_id": {
-                "enum": [
-                  "main",
-                  "o1",
-                  "o2",
-                  "excel",
-                  "power-bi",
-                  "sql",
-                  "python"
-                ]
+                "description": "Open-world agent identity. The ledger records what executed, including ad-hoc identities outside the governed spawn topology; execution authority is enforced by the guard and reducer, not by this vocabulary. A closed enum here makes legitimate history unreadable without preventing anything.",
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_-]{0,63}$"
               }
             }
           }
@@ -905,15 +871,9 @@
                 "pattern": "^[a-f0-9]{64}$"
               },
               "agent_id": {
-                "enum": [
-                  "main",
-                  "o1",
-                  "o2",
-                  "excel",
-                  "power-bi",
-                  "sql",
-                  "python"
-                ]
+                "description": "Open-world agent identity. The ledger records what executed, including ad-hoc identities outside the governed spawn topology; execution authority is enforced by the guard and reducer, not by this vocabulary. A closed enum here makes legitimate history unreadable without preventing anything.",
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_-]{0,63}$"
               }
             }
           }
@@ -1021,7 +981,9 @@
           "pattern": "^[a-z][a-z0-9_-]{0,63}$"
         },
         "agent_id": {
-          "enum": ["main", "o1", "o2", "excel", "power-bi", "sql", "python"]
+          "description": "Open-world agent identity. The ledger records what executed, including ad-hoc identities outside the governed spawn topology; execution authority is enforced by the guard and reducer, not by this vocabulary. A closed enum here makes legitimate history unreadable without preventing anything.",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,63}$"
         },
         "stack_id": {
           "enum": [
@@ -1134,7 +1096,9 @@
           "pattern": "^[a-z][a-z0-9_-]{0,63}$"
         },
         "agent_id": {
-          "enum": ["main", "o1", "o2", "excel", "power-bi", "sql", "python"]
+          "description": "Open-world agent identity. The ledger records what executed, including ad-hoc identities outside the governed spawn topology; execution authority is enforced by the guard and reducer, not by this vocabulary. A closed enum here makes legitimate history unreadable without preventing anything.",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,63}$"
         },
         "parent_agent_id": {
           "enum": ["main", "o1", "o2", "excel", "power-bi", "sql", "python"]
@@ -1259,7 +1223,9 @@
           "maxLength": 256
         },
         "agent_id": {
-          "enum": ["main", "o1", "o2", "excel", "power-bi", "sql", "python"]
+          "description": "Open-world agent identity. The ledger records what executed, including ad-hoc identities outside the governed spawn topology; execution authority is enforced by the guard and reducer, not by this vocabulary. A closed enum here makes legitimate history unreadable without preventing anything.",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,63}$"
         },
         "payload_digest": {
           "type": "string",
