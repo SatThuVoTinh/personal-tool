@@ -35,6 +35,22 @@ const TRANSIENT_FAILURE_CLASS = new Set([
   "TRANSIENT_RUNTIME_FAILURE",
   "RUN_TIMEOUT",
 ]);
+// Pre-verdict-model root-result resolution (option b migration 2026-09-29).
+// The operational ledger's root results were journaled while the reducer
+// resolved a root result DIRECTLY to its recorded outcome; the owner-verdict
+// model (RESULT_PENDING_REVIEW, so the owner's verdict is what closes the task)
+// was introduced in m8-t2.2-r4, after that history was written. A single
+// event's governance_version stamp cannot discriminate the two eras: the
+// live Sep-24/28 writer stamped its events m8-t2.2-r4 while still using direct
+// resolution, so seq 26 is r4-stamped yet pre-verdict. An event's own fields
+// cannot discriminate either, since that means re-deriving the resolution from
+// the very fields being resolved, and the snapshot cannot be consulted because
+// it is the value being verified (circular). The JOURNAL as a whole can: a
+// journal carrying any pre-R4-stamped event is a legacy-era journal, because
+// those stamps are sealed into the digest chain. The verifier derives that
+// declaration from the event stream and passes it down, so the resolution is
+// chosen from evidence outside the compared value. The deployed build's reducer
+// (which reads this ledger 37/37) implements exactly the pre-verdict resolution.
 function fail(code) {
   const error = new Error(code);
   error.code = code;
@@ -187,6 +203,11 @@ export function applyWorkflowEvent(
   options = null,
 ) {
   const replayAnchored = options?.replayAnchored === true;
+  // Only ever set by the anchored replay loop, and only when the journal
+  // declares a pre-R4 era (see PRE_VERDICT_ROOT_RESULT). A caller supplying it
+  // on a write is ignored: `replayAnchored` is required for it to be read.
+  const preVerdictRootResult =
+    replayAnchored && options?.preVerdictRootResult === true;
   const next = globalThis.structuredClone(snapshot);
   const eventTime = eventTimestamp || new Date().toISOString();
   if (type === "WORKFLOW_OPENED") {
@@ -451,6 +472,22 @@ export function applyWorkflowEvent(
       task.workflow_status === "ACTIVE",
       "INVALID_STATE_TRANSITION",
     );
+    // Pre-verdict-model resolution for anchored history (see the
+    // PRE_VERDICT_ROOT_RESULT note above). The verifier sets this only when the
+    // journal itself declares a legacy era: it contains at least one event
+    // stamped with a pre-R4 governance version, whose digests chain-lock the
+    // whole journal. That declaration comes from the event stream, not from the
+    // snapshot being verified, so selecting the resolution with it is not
+    // circular. A journal that contains only current-version events is read
+    // under the current verdict model, which is what the current writer
+    // produces and what the read-back must reproduce.
+    if (replayAnchored && preVerdictRootResult) {
+      task.root_result = { ...payload };
+      task.workflow_status = payload.outcome_status;
+      task.reason_code = payload.reason_code;
+      if (terminal.has(task.workflow_status)) task.brief_state = "CLOSED";
+      return next;
+    }
     task.root_result = {
       ...payload,
       pending_outcome_status: payload.outcome_status,

@@ -234,6 +234,25 @@ function readSnapshotLocked(paths, repairSnapshot = true) {
     const tail = [];
     let journalBudget = { tasks: {} };
     let anchoredBudget = journalBudget.tasks;
+    // Option (b) migration 2026-09-29: anchored trust is a property of a
+    // ledger that HAS recorded, operator-accepted history, so it requires a
+    // recorded head. A ledger with no head (sequence 0, the state of a freshly
+    // created or freshly reset ledger) has no anchored history at all, so every
+    // event in it is replayed under the current semantics. Without this, a root
+    // result written today would be re-resolved by its own read-back into the
+    // pre-verdict model, contradicting the write it just produced.
+    const hasAnchoredHead = snapshot.sequence > 0;
+    // Option (b) migration 2026-09-29: the journal declares its own era. Every
+    // event's digest covers its governance_version, so a journal carrying any
+    // pre-R4 stamp is a legacy-era journal whose anchored history was recorded
+    // under the pre-verdict root-result model. A journal of only current-version
+    // events is read under the current model, which is what the current writer
+    // produces — so a fresh ledger's root result is not re-resolved into the
+    // legacy model by its own read-back. This is derived from the event stream
+    // alone; the snapshot under verification is never consulted to choose it.
+    const journalIsPreVerdictEra = lines.some(
+      (line) => JSON.parse(line).governance_version !== GOVERNANCE_VERSION,
+    );
     for (const line of lines) {
       const event = JSON.parse(line);
       validateContract("ledger-event", event);
@@ -268,12 +287,16 @@ function readSnapshotLocked(paths, repairSnapshot = true) {
           // Option (b) migration 2026-09-29: events at or below the snapshot
           // head are operator-accepted history — replay trusts their admission
           // (structure, effects, and the end-state hash compare below still
-          // verify everything checkable). Events beyond the head are
-          // unaccepted tail and stay fully strict. The flag MUST never be set
-          // for tail: admission policy is enforced at write time, and re-reads
-          // must not re-litigate it.
-          event.sequence <= snapshot.sequence
-            ? { replayAnchored: true }
+          // verify everything checkable) and reproduces the transitions the
+          // deployed build performed. Events beyond the head are unaccepted
+          // tail and stay fully strict. The flag MUST never be set for tail:
+          // admission policy is enforced at write time, and re-reads must not
+          // re-litigate it.
+          hasAnchoredHead && event.sequence <= snapshot.sequence
+            ? {
+                replayAnchored: true,
+                preVerdictRootResult: journalIsPreVerdictEra,
+              }
             : undefined,
         );
       if (event.sequence <= snapshot.sequence)

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -24,13 +24,16 @@ function fixture() {
   return mkdtempSync(path.join(os.tmpdir(), "m8-t2-anchored-"));
 }
 
-function node(agentId) {
+function node(agentId, required = true) {
   return {
     node_id: agentId,
     agent_id: agentId,
     stack_id: "data_plant",
     dependencies: [],
-    required: true,
+    // The operational ledger's root-result briefs carry no REQUIRED nodes, so
+    // the aggregate gate (COMPLETE outcome + a required node => aggregate
+    // COMPLETE) does not gate a root result for a non-root agent.
+    required,
     input_digest: canonicalHash("zink-input-v1", "work"),
     constraints_digest: canonicalHash("zink-constraints-v1", "{}"),
     validation_digest: canonicalHash(
@@ -58,7 +61,7 @@ function openTask(paths, status = "VALID") {
     task_id: taskId,
     brief_revision: 1,
     semantic_contract_status: status,
-    nodes: [node("o1")],
+    nodes: [node("o1", false)],
   });
   return taskId;
 }
@@ -89,6 +92,79 @@ function proposal(taskId) {
 }
 
 const ANCHORED = { replayAnchored: true };
+// What the verifier passes for a journal it has declared legacy-era.
+const LEGACY = { replayAnchored: true, preVerdictRootResult: true };
+
+const LEGACY_VERSION = "m7-t5-r13";
+
+/**
+ * Rewrite the fixture journal as a pre-R4 ledger: every event re-stamped with
+ * the legacy governance version, the root result appended and projected under
+ * the pre-verdict model, and the chain plus snapshot re-sealed together so the
+ * journal is internally consistent — exactly like a real historical ledger.
+ * The canonical writer path refuses raw workflow events (M7-002), so a fixture
+ * modelling a pre-R4 writer seals the lines itself. No real data is involved.
+ */
+function writeLegacyJournal(paths, rootResultPayload) {
+  const existing = readFileSync(paths.events, "utf8")
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+  const createdAt = "2026-09-01T00:00:00.000Z";
+  // The legacy journal is rebuilt from an empty projection so the snapshot
+  // records the same states the events describe, under the legacy version.
+  const legacyOptions = LEGACY;
+  // The journal is re-sealed below, so each event's existing digest is
+  // recomputed; drop it rather than carrying a stale value.
+  const unsigned = existing.map((event) => {
+    const body = { ...event, governance_version: LEGACY_VERSION };
+    delete body.event_digest;
+    body.previous_event_digest = null;
+    return body;
+  });
+  const rootResult = {
+    schema_version: "1.0.0",
+    governance_version: LEGACY_VERSION,
+    sequence: unsigned.length + 1,
+    type: "WORKFLOW_ROOT_RESULT_RECORDED",
+    payload: rootResultPayload,
+    created_at: createdAt,
+    previous_event_digest: null,
+  };
+  const bodies = [...unsigned, rootResult];
+
+  // Seal the chain, projecting effects in order so the anchored replay the
+  // verifier performs reproduces exactly these states.
+  // The journal projection starts as the empty budget ledger, exactly as the
+  // verifier's own anchored replay does.
+  let projection = { tasks: {} };
+  let previous = null;
+  const lines = bodies.map((body) => {
+    const signed = { ...body, previous_event_digest: previous };
+    const event_digest = canonicalHash("zink-ledger-event-v1", signed);
+    previous = event_digest;
+    projection = applyWorkflowEvent(
+      projection,
+      signed.type,
+      signed.payload,
+      signed.created_at,
+      legacyOptions,
+    );
+    return JSON.stringify({ ...signed, event_digest });
+  });
+  writeFileSync(paths.events, `${lines.join("\n")}\n`);
+  const snapshot = {
+    schema_version: "1.0.0",
+    governance_version: LEGACY_VERSION,
+    sequence: bodies.length,
+    last_event_digest: previous,
+    ingress_ids: [],
+    tasks: projection.tasks,
+    updated_at: createdAt,
+  };
+  writeFileSync(paths.snapshot, `${JSON.stringify(snapshot, null, 2)}\n`);
+  return { snapshot, events: bodies.length };
+}
 
 describe("M8/T2.2-R4 option (b) — anchored replay trusts admission", () => {
   it("an unapproved reserve replays anchored but is refused everywhere strict", () => {
@@ -250,6 +326,183 @@ describe("M8/T2.2-R4 option (b) — anchored replay trusts admission", () => {
       );
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("a root result resolves to its recorded outcome anchored; strict paths hold for review", () => {
+    // Every root result in the operational ledger was journaled while the
+    // reducer resolved it DIRECTLY to its recorded outcome. The owner-verdict
+    // model was introduced in m8-t2.2-r4. Anchored replay reproduces the
+    // transition the deployed build performed; new writes still require the
+    // owner's verdict. The journal's governance_version stamp cannot
+    // discriminate the two eras (the live writer stamped m8-t2.2-r4 while
+    // using direct resolution), so the replay trust boundary is the
+    // discriminator — and it is non-circular.
+    const root = fixture();
+    try {
+      const paths = ledgerPaths(root);
+      ensureLedger(paths);
+      for (const [outcome, expected, closesBrief] of [
+        ["COMPLETE", "COMPLETE", "CLOSED"],
+        ["BLOCKED", "BLOCKED", "ACTIVE"],
+      ]) {
+        const taskId = openTask(paths);
+        const event = {
+          task_id: taskId,
+          brief_revision: 1,
+          native_run_id: "main-run",
+          agent_id: "main",
+          payload_digest: "1".repeat(64),
+          outcome_status: outcome,
+          reason_code: outcome === "COMPLETE" ? "NONE" : "POLICY_DENIED",
+          governance_hash: governanceHash("main"),
+        };
+        // Strict (default): the owner verdict is what closes the task.
+        const strict = applyWorkflowEvent(
+          readSnapshot(paths),
+          "WORKFLOW_ROOT_RESULT_RECORDED",
+          event,
+        );
+        assert.equal(
+          strict.tasks[taskId].workflow_status,
+          "RESULT_PENDING_REVIEW",
+        );
+        assert.equal(
+          "pending_outcome_status" in strict.tasks[taskId].root_result,
+          true,
+        );
+        assert.equal("result_pending_at" in strict.tasks[taskId], true);
+        // Anchored replay: the recorded outcome, as the deployed build applied
+        // it, but ONLY when the verifier declares a legacy-era journal. The
+        // declaration is derived from the event stream, so a current-version
+        // journal is never re-resolved into the legacy model.
+        const anchored = applyWorkflowEvent(
+          readSnapshot(paths),
+          "WORKFLOW_ROOT_RESULT_RECORDED",
+          event,
+          null,
+          LEGACY,
+        );
+        assert.equal(anchored.tasks[taskId].workflow_status, expected);
+        assert.equal(anchored.tasks[taskId].brief_state, closesBrief);
+        assert.equal(
+          "result_pending_at" in anchored.tasks[taskId],
+          false,
+          "pre-verdict history has no pending timestamp",
+        );
+        assert.equal(
+          "pending_outcome_status" in anchored.tasks[taskId].root_result,
+          false,
+          "pre-verdict history records the outcome, not a pending projection",
+        );
+        // The root result is byte-identical to the journaled payload in the
+        // anchored projection, so the recorded outcome is preserved verbatim.
+        assert.equal(
+          canonicalHash(
+            "zink-ledger-event-v1",
+            anchored.tasks[taskId].root_result,
+          ),
+          canonicalHash("zink-ledger-event-v1", event),
+        );
+
+        // An anchored event in a CURRENT-version journal keeps the verdict
+        // model, so a fresh ledger's root result is not re-resolved into the
+        // legacy model by its own read-back.
+        const currentEra = applyWorkflowEvent(
+          readSnapshot(paths),
+          "WORKFLOW_ROOT_RESULT_RECORDED",
+          event,
+          null,
+          ANCHORED,
+        );
+        assert.equal(
+          currentEra.tasks[taskId].workflow_status,
+          "RESULT_PENDING_REVIEW",
+          "a current-version journal must replay under the current model",
+        );
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("the verifier reads a legacy-era journal and a current-era journal correctly", () => {
+    // End-to-end coverage of the READ path, which is the only place the era
+    // declaration is derived. A journal carrying any pre-R4-stamped event is
+    // legacy-era; the verifier must read it, and must read a current-era
+    // journal under the current model. This is what distinguishes the fix from
+    // one that merely widens the reducer: a mutation that erases the
+    // declaration is caught here, not only in the unit test above.
+    const legacy = fixture();
+    try {
+      const paths = ledgerPaths(legacy);
+      ensureLedger(paths);
+      const taskId = openTask(paths);
+      const event = {
+        task_id: taskId,
+        brief_revision: 1,
+        native_run_id: "main-run",
+        agent_id: "main",
+        payload_digest: "1".repeat(64),
+        outcome_status: "COMPLETE",
+        reason_code: "NONE",
+        governance_hash: governanceHash("main"),
+      };
+      // The root result is then recorded the way the deployed build recorded
+      // it: pre-R4 stamps, pre-verdict end state, everything re-sealed into one
+      // digest-linked journal whose snapshot records that same end state. This
+      // is the exact shape the operational ledger is in.
+      const committed = writeLegacyJournal(paths, event);
+      assert.equal(
+        committed.snapshot.tasks[taskId].workflow_status,
+        "COMPLETE",
+      );
+      // The verifier accepts the journal as-is: it must not be re-resolved
+      // into the verdict model.
+      const read = readSnapshot(paths);
+      assert.equal(read.tasks[taskId].workflow_status, "COMPLETE");
+      assert.equal(
+        "result_pending_at" in read.tasks[taskId],
+        false,
+        "a legacy-era journal must not gain verdict-model fields",
+      );
+    } finally {
+      rmSync(legacy, { recursive: true, force: true });
+    }
+  });
+
+  it("a current-era journal is read back under the current model", () => {
+    // The other half of the era boundary: a journal with no pre-R4 stamp is
+    // read under the verdict model, so the root result a current writer records
+    // survives its own read-back. Without this the fix would rewrite the state
+    // of every ledger written from now on.
+    const current = fixture();
+    try {
+      const paths = ledgerPaths(current);
+      ensureLedger(paths);
+      const taskId = openTask(paths);
+      recordWorkflowEvent(paths, "WORKFLOW_ROOT_RESULT_RECORDED", {
+        task_id: taskId,
+        brief_revision: 1,
+        native_run_id: "main-run",
+        agent_id: "main",
+        payload_digest: "1".repeat(64),
+        outcome_status: "COMPLETE",
+        reason_code: "NONE",
+        governance_hash: governanceHash("main"),
+      });
+      const read = readSnapshot(paths);
+      assert.equal(
+        read.tasks[taskId].workflow_status,
+        "RESULT_PENDING_REVIEW",
+        "a current-era root result must stay pending review across a read",
+      );
+      assert.equal(
+        read.tasks[taskId].root_result.pending_outcome_status,
+        "COMPLETE",
+      );
+    } finally {
+      rmSync(current, { recursive: true, force: true });
     }
   });
 
