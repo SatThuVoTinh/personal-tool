@@ -70,10 +70,13 @@ Owner Approval: EXPLICIT — Owner authorized R7 remediation, controlled live
   accepted the R14 implementation and its live preflight. Owner acknowledged
   the duplicated entrypoint allowlist as protected technical debt, not a blocker,
   and R16 full-apply rehearsal on an exact clone of the live R7 runtime.
-Deployment Authorized: NO
+Deployment Authorized: YES
 ```
 
-`Deployment Authorized: NO`. Both prior single-attempt authorizations are
+`Deployment Authorized: YES` — single attempt, granted by the owner on
+2026-09-30 after R16 closed, to deploy the already-verified R16 artifact to the
+live runtime. This authorization is consumed by that one attempt. Both prior
+single-attempt authorizations are
 consumed and closed: `b8597fe` (failed at `native-backup-prune`) and `7520f39`
 (aborted at the transaction-snapshot stage). Neither is carried forward, and R15
 creates no deployment authorization. A preflight PASS is never an apply

@@ -7,9 +7,9 @@ Execution Authorization: YES
 Owner Approval: EXPLICIT — owner authorized R16 on 2026-09-30, declining a further
   live deployment and instead requiring the complete corrected apply path to be
   rehearsed against a byte-exact clone of the current live R7 runtime.
-Deployment Authorized: NO
-Lifecycle: CLOSED — 2026-09-30, as the final revision of `M8/T2.2`
-Deployment Status: NOT DEPLOYED
+Deployment Authorized: YES
+Lifecycle: CLOSED - 2026-09-30, as the final revision of `M8/T2.2`
+Deployment Status: AUTHORIZED - NOT YET DEPLOYED
 
 R16 is repository-only and creates no deployment authorization. Both prior
 single-attempt authorizations (`b8597fe`, `7520f39`) are consumed and closed.
@@ -77,9 +77,17 @@ not create a production ledger task, and do not delete or rewrite any
 transaction. Commits are local and unpushed.
 
 Lifecycle: R16 is `CLOSED` as the final revision of `M8/T2.2`. `Deployment
-Authorized` remains `NO` and `Deployment Status` remains `NOT DEPLOYED`. The live
-runtime remains R7 and byte-identical, and the ledger is unchanged. No R17 is
-created.
+Authorized` is `YES` for ONE attempt, granted by the owner on 2026-09-30 to
+deploy the verified R16 artifact to the live runtime; that attempt consumes the
+authorization. Until the attempt completes, `Deployment Status` is not yet
+deployed. The live runtime remains R7 and byte-identical, and the ledger is
+unchanged. No R17 is created.
+
+This live deployment is a separate authorized operation from the R16 rehearsal.
+The rehearsal constraints in section 2 — no live gateway restart, no real
+systemctl, no live mutation — governed the rehearsal and are superseded for this
+one attempt only, by the explicit authorization recorded above. The rehearsal
+itself remains immutable evidence.
 
 ## 9. Result
 
