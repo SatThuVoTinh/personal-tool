@@ -461,6 +461,19 @@
                   "type": "string",
                   "format": "date-time"
                 },
+                "approval_requested_at": {
+                  "description": "R6: set only by WORKFLOW_APPROVAL_REQUESTED. OPTIONAL and never required, so every pre-R6 snapshot still validates under additionalProperties:false. Its ABSENCE is what makes a task non-approvable, so a task recorded before this event existed can never acquire an approval opportunity by replay.",
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "approval_requested_by": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "approval_requested_run_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
                 "rejected_at": {
                   "type": "string",
                   "format": "date-time"

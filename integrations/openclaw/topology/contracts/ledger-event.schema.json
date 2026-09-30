@@ -46,6 +46,7 @@
         "WORKFLOW_USER_RESULT_BLOCKED",
         "WORKFLOW_RESULT_REVISION_REQUESTED",
         "WORKFLOW_USER_APPROVAL_DECIDED",
+        "WORKFLOW_APPROVAL_REQUESTED",
         "WORKFLOW_TASK_CLAIMED",
         "WORKFLOW_USER_QUESTION_RECORDED",
         "WORKFLOW_USER_ANSWER_RECORDED",
@@ -913,6 +914,48 @@
               "result_digest": {
                 "type": ["string", "null"],
                 "pattern": "^[a-f0-9]{64}$"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "WORKFLOW_APPROVAL_REQUESTED"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["task_id", "agent_id", "session_key", "run_id"],
+            "properties": {
+              "task_id": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "agent_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "session_key": {
+                "description": "M7-041 attribution: the request is attributable to the run that owns the task, so the ledger records WHICH governed run surfaced the approval opportunity rather than trusting a caller or a UI payload.",
+                "type": "string",
+                "minLength": 1
+              },
+              "run_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "brief_revision": {
+                "description": "The brief revision this request refers to, when one is active. Purely audit context: the approval request and the execution brief are independent concepts and a request does NOT require a brief.",
+                "type": "integer",
+                "minimum": 1
               }
             }
           }

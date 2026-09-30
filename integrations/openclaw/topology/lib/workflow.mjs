@@ -640,6 +640,60 @@ export function applyWorkflowEvent(
     }
     return next;
   }
+  if (type === "WORKFLOW_APPROVAL_REQUESTED") {
+    // R6: the approval REQUEST is its own governed fact, independent of the
+    // execution brief. Before this event existed, "approvable" was inferred from
+    // `ACTIVE && !approved_at && !claimed_at`, and WORKFLOW_OPENED sets
+    // workflow_status to ACTIVE — so every freshly opened task looked
+    // approval-pending and the owner could approve a request that was never
+    // surfaced. Only a recorded request may create an approval opportunity.
+    //
+    // workflow_status is deliberately left at ACTIVE. Several guards require
+    // ACTIVE, so introducing a real APPROVAL_PENDING status would change the
+    // meaning of already-emitted events; "approvable" is instead a predicate
+    // over this projection (see isApprovalPending below).
+    exactKeys(
+      payload,
+      ["task_id", "agent_id", "session_key", "run_id"],
+      ["brief_revision"],
+    );
+    identifier(payload.session_key);
+    identifier(payload.run_id);
+    requireCondition(
+      typeof payload.agent_id === "string" && payload.agent_id.length > 0,
+      "SCHEMA_INVALID",
+    );
+    if (payload.brief_revision !== undefined)
+      requireCondition(
+        Number.isInteger(payload.brief_revision) && payload.brief_revision >= 1,
+        "SCHEMA_INVALID",
+      );
+    requireCondition(
+      !terminal.has(task.workflow_status),
+      "INVALID_STATE_TRANSITION",
+    );
+    const revisionCycle = task.workflow_status === "REVISING";
+    requireCondition(
+      task.workflow_status === "ACTIVE" || revisionCycle,
+      "INVALID_STATE_TRANSITION",
+    );
+    if (task.approval_requested_at && !revisionCycle) {
+      // Idempotent retry: the SAME owning run re-requesting is a no-op, so a
+      // retry after a failed card post cannot create a second opportunity.
+      if (
+        task.approval_requested_by === payload.agent_id &&
+        task.approval_requested_run_id === payload.run_id
+      )
+        return next;
+      // A DIFFERENT requester while one is already pending would advertise a
+      // second approval opportunity for the same task.
+      fail("INVALID_STATE_TRANSITION");
+    }
+    task.approval_requested_at = eventTime;
+    task.approval_requested_by = payload.agent_id;
+    task.approval_requested_run_id = payload.run_id;
+    return next;
+  }
   if (type === "WORKFLOW_TASK_CLAIMED") {
     // D01/D02: CLAIM is only valid from the approved QUEUED state.
     // ACTIVE is not a valid pre-claim state — allowing it bypasses the

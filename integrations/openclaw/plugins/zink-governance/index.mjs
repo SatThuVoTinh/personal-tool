@@ -629,8 +629,15 @@ export function handleDiscordAction({
         null;
       if (authoritativeTask) {
         let status = authoritativeTask.workflow_status;
+        // R6: APPROVAL_PENDING is derived from a RECORDED approval request, not
+        // inferred from an open task. WORKFLOW_OPENED sets workflow_status to
+        // ACTIVE, so the previous `ACTIVE && !approved_at && !claimed_at`
+        // inference relabelled every freshly opened task as approval-pending and
+        // let the owner approve a request that was never surfaced. Only
+        // WORKFLOW_APPROVAL_REQUESTED may create an approval opportunity.
         if (
           status === "ACTIVE" &&
+          authoritativeTask.approval_requested_at &&
           !authoritativeTask.approved_at &&
           !authoritativeTask.claimed_at
         ) {
@@ -3065,6 +3072,44 @@ export default {
           ],
         },
       ];
+
+      // R6 — RECORD THE REQUEST BEFORE THE CARD IS ADVERTISED.
+      //
+      // The ledger is authoritative for whether an approval opportunity exists.
+      // If the card were posted first, the UI would advertise an approval the
+      // ledger does not know about, recreating the original semantic gap in the
+      // opposite direction. So the event is appended (and read back) first, and
+      // ANY failure here returns WITHOUT posting.
+      //
+      // The task is resolved from the ledger via the owning run, never parsed out
+      // of the model's own card text, which is untrusted evidence. An
+      // unresolvable or ambiguous run therefore fails closed.
+      try {
+        const owner = findSession(
+          readSnapshot(paths),
+          childSessionKey,
+          event.childRunId,
+          false,
+        );
+        const requestTaskId = owner.task_id;
+        recordWorkflowEvent(paths, "WORKFLOW_APPROVAL_REQUESTED", {
+          task_id: requestTaskId,
+          agent_id: agentId,
+          session_key: childSessionKey,
+          run_id: event.childRunId,
+        });
+        // Read-back: the request must be visible in the authoritative snapshot
+        // before anything is surfaced to the owner.
+        const confirmed = readSnapshot(paths);
+        if (!confirmed?.tasks?.[requestTaskId]?.approval_requested_at) {
+          throw new Error("APPROVAL_REQUEST_NOT_DURABLE");
+        }
+      } catch (requestError) {
+        api.logger?.warn?.(
+          `[zink-governance] approval request NOT recorded; card suppressed: ${requestError?.message}`,
+        );
+        return;
+      }
 
       try {
         const res = await fetch(
