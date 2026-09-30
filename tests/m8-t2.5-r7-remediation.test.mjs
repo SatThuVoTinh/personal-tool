@@ -122,7 +122,10 @@ const heartbeatRun = (runId) => ({
   agentId: "main",
   sessionKey: "agent:main:main",
   runId,
-  content: HEARTBEAT,
+  // R10: identified by the host-assigned trigger plus the canonical host
+  // heartbeat representation, not by user-visible message content.
+  trigger: "heartbeat",
+  transcriptPrompt: HEARTBEAT,
 });
 
 // ---------------------------------------------------------------------------
@@ -260,11 +263,24 @@ test("G1: a self-keyed run that is not the liveness sentinel is not exempt", asy
   });
 });
 
-test("G1: the sentinel alone does not exempt a run that carries a mention", async () => {
+test("G1: mentions are not a G1 condition, but a mention-bearing Discord run is still refused", async () => {
   await withPlugin(async ({ native }) => {
-    await assert.rejects(
+    // R10 retired "no mentions" / "not bot-author": those fields do not exist at
+    // the native admission anchor. `mentions` is deliberately NOT treated as a
+    // disqualifier and NOT treated as an `undefined` check, which would be
+    // vacuous. The non-Discord condition is what excludes mention-bearing runs.
+    await assert.doesNotReject(
       enterNativeRun(native, {
         ...heartbeatRun("hb-with-mention"),
+        mentions: [{ username: "main" }],
+      }),
+    );
+    // A real mention-bearing Discord ingress is still refused outright.
+    await assert.rejects(
+      enterNativeRun(native, {
+        ...heartbeatRun("hb-mention-discord"),
+        channelId: "discord",
+        senderId: "223456789012345678",
         mentions: [{ username: "main" }],
       }),
       (error) => {
@@ -391,19 +407,24 @@ test("A: the heartbeat exemption requires every G1 predicate", async () => {
     agentId: "main",
     sessionKey: "agent:main:main",
     runId: "g1-matrix",
-    content: "[OpenClaw heartbeat poll]",
+    trigger: "heartbeat",
+    transcriptPrompt: "[OpenClaw heartbeat poll]",
   };
   await withPlugin(async ({ native }) => {
     // Baseline: the unmodified qualifying shape is admitted.
     await enterNativeRun(native, { ...qualifying, runId: "g1-matrix-base" });
 
-    // Each mutation below breaks exactly one predicate and must NOT be exempt.
+    // Each mutation below breaks exactly one R10 predicate and must NOT be exempt.
     const disqualified = [
       ["not self-keyed", { sessionKey: "agent:main:other" }],
+      ["no host trigger", { trigger: "user" }],
+      ["undefined trigger", { trigger: undefined }],
+      ["alternative trigger", { trigger: "cron" }],
       [
-        "wrong content",
-        { content: "[OpenClaw heartbeat poll] and also do ETL" },
+        "wrong sentinel",
+        { transcriptPrompt: "[OpenClaw heartbeat poll] and also do ETL" },
       ],
+      ["no sentinel", { transcriptPrompt: undefined }],
       [
         "inter-session provenance",
         {
@@ -416,8 +437,6 @@ test("A: the heartbeat exemption requires every G1 predicate", async () => {
       ],
       ["discord channel id", { channelId: "discord" }],
       ["discord in session key", { sessionKey: "agent:main:main:discord:1" }],
-      ["carries a mention", { mentions: [{ username: "main" }] }],
-      ["bot author", { isBot: true }],
     ];
     for (const [label, override] of disqualified) {
       await assert.rejects(

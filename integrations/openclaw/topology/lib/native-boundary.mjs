@@ -305,6 +305,12 @@ export async function enterNativeRun(config, context, signal) {
         mentionRoles: context.mentionRoles,
         author: context.author,
         isBot: context.isBot,
+        // R10: the host-assigned run discriminator and the canonical host
+        // heartbeat representation. Both are plain strings the host already
+        // holds at the injection anchor; neither is user content, a message
+        // object, or Discord-layer data.
+        trigger: context.trigger,
+        transcriptPrompt: context.transcriptPrompt,
         inputProvenance: context.inputProvenance
           ? Object.freeze({ ...context.inputProvenance })
           : undefined,

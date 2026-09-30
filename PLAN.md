@@ -48,16 +48,17 @@ Milestone: M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Inte
 Task: M8/T2.2 — Root-Cause Governed Runtime, Discord, Semantic & Artifact Integrity Hardening
 Task Status: IN PROGRESS
 Planning Readiness: APPROVED
-Plan Revision: M8/T2.2-R8
+Plan Revision: M8/T2.2-R10
 Execution Authorization: YES
 Authorized Task: M8/T2.2 — Root-Cause Governed Runtime, Discord, Semantic & Artifact Integrity Hardening
 Execution Contract: docs/contracts/execution/ACTIVE.md
 Evidence Level: LOCAL-VERIFIED
 Task Branch: codex/m8-t2-governed-runtime-hardening
-Owner Approval: EXPLICIT — Owner authorized M8/T2.2-R7 remediation, then
-  controlled live deployment of R5+R6+R7, a one-time restoration of the
-  verified pre-incident R5 baseline, and M8/T2.2-R8 provenance remediation.
-Deployment Authorized: YES
+Owner Approval: EXPLICIT — Owner authorized R7 remediation, controlled live
+  deployment, one-time R5 baseline restoration, R8 provenance remediation, R9
+  (blocked, superseded), and R10 G1 contract correction using the
+  host-authoritative heartbeat trigger. R10 deployment is NOT authorized.
+Deployment Authorized: NO
 ```
 
 ### 4.1 Revision lineage reconciliation (2026-09-30)
@@ -66,13 +67,15 @@ Deployment Authorized: YES
 carried R5 and R6 implementation. The plan was never revised for either, so
 `ACTIVE.md` and `PLAN.md` no longer described the same work. Reconciled state:
 
-| Revision   | Status      | Implementation evidence                                                                                                                       |
-| ---------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| M8/T2.2-R4 | Implemented | R4 validation snapshot below. Superseded as the active revision.                                                                              |
-| M8/T2.2-R5 | Implemented | `652ac0c` config convergence, `9a6702f` V15 packaging, `9713872` V16 rewriter self-match.                                                     |
-| M8/T2.2-R6 | Implemented | `2e1f8c4` `WORKFLOW_APPROVAL_REQUESTED` contract, `2d1121f` provenance-gated asset allowlist.                                                 |
-| M8/T2.2-R7 | Implemented | `a0118bc` heartbeat admission, boundary diagnosability, apply safety; `a1bf942` advisory-hook correction; `96e1b80` deployment authorization. |
-| M8/T2.2-R8 | IN PROGRESS | Authorized 2026-09-30. Active contract: `docs/contracts/execution/ACTIVE.md`. Repository-only; does not deploy.                               |
+| Revision    | Status      | Implementation evidence                                                                                                                                           |
+| ----------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M8/T2.2-R4  | Implemented | R4 validation snapshot below. Superseded as the active revision.                                                                                                  |
+| M8/T2.2-R5  | Implemented | `652ac0c` config convergence, `9a6702f` V15 packaging, `9713872` V16 rewriter self-match.                                                                         |
+| M8/T2.2-R6  | Implemented | `2e1f8c4` `WORKFLOW_APPROVAL_REQUESTED` contract, `2d1121f` provenance-gated asset allowlist.                                                                     |
+| M8/T2.2-R7  | Implemented | `a0118bc` heartbeat admission, boundary diagnosability, apply safety; `a1bf942` advisory-hook correction; `96e1b80` deployment authorization.                     |
+| M8/T2.2-R8  | Implemented | `4f5cc6d` verified R5 `lib/native-boundary.mjs` approved-predecessor digest. Live preflight then returned `builder_preflight: PASS`, `installed_mutation: false`. |
+| M8/T2.2-R9  | BLOCKED     | Authorized 2026-09-30. Superseded by R10: G1 condition 5 is unobservable at the native seam; see §4.6.                                                            |
+| M8/T2.2-R10 | IN PROGRESS | Authorized 2026-09-30. G1 contract correction using the host-authoritative heartbeat trigger. Repository-only, not deployed; see §4.7.                            |
 
 All revisions are local commits on `codex/m8-t2-governed-runtime-hardening`; none
 has been pushed.
@@ -202,6 +205,78 @@ measurement error, since it counted current-build digests as absent from a table
 that by design holds only predecessors.
 
 R8 adds that single digest and nothing else. It does not deploy.
+
+### 4.6 M8/T2.2-R9 — G1 enforcement-context correction (BLOCKED)
+
+The controlled live deployment of `4f5cc6d` succeeded: the corrected operator
+applied the R6+R7 build, the native bridge was re-synced to the R7 artifact, the
+gateway restarted exactly once with no config-watcher restart and no restart
+loop, and the production ledger was untouched. G2 was confirmed live — the host
+logged `GOVERNANCE_RUN_UNAVAILABLE | EXECUTION_STATE_UNKNOWN` for the first
+time.
+
+**Phase 5 failed.** The real heartbeat was still rejected, so no exemption
+applied. Cause: the native patch injects only `agentId`, `sessionKey`, `runId`,
+`inputProvenance`, `channelId`, `senderId`, `currentMessageId`
+(`selection-DopzNY3I.js:12235-12240`). It never passes `content`, `message`,
+`mentions` or `isBot`, so `isPureLivenessHeartbeat` cannot observe the sentinel
+and always returns false. The R7 G1 unit tests called `enterNativeRun` directly
+with a context richer than production supplies; that false confidence is the
+defect.
+
+A read-only audit of the installed `v2026.6.34` source established what is
+actually observable at that anchor:
+
+| G1 condition                    | Observable | Evidence                                                                                                                                                                                                 |
+| ------------------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1 self-keyed session            | yes        | `params.sessionKey`, `params.agentId`                                                                                                                                                                    |
+| 2 exact sentinel                | yes        | `params.transcriptPrompt`, assigned `HEARTBEAT_TRANSCRIPT_PROMPT` at `get-reply-CICEttbD.js:3015` only when the host set `isHeartbeat`; also `params.prompt`, sanitized at `selection-DopzNY3I.js:10961` |
+| 3 no inter-session provenance   | yes        | `params.inputProvenance`, already passed                                                                                                                                                                 |
+| 4 not Discord ingress           | yes        | `params.messageChannel ?? params.messageProvider`, already passed                                                                                                                                        |
+| 5 no mention and not bot-author | **no**     | zero occurrences of `mentions` or any bot-author field in `runEmbeddedAttempt`                                                                                                                           |
+
+Condition 5 does not exist at the seam. `mentions` is produced only in the
+Discord ingress layer (`accounts-CT0uPrw7.js:228-290`, `bot-CS65Z7r1.js:5137`)
+and is never forwarded into the embedded-run params. No run-scoped bot-author
+field exists at all.
+
+A host-authoritative alternative exists: `embedded-agent-CGzgLLU-.js:4061`
+computes `isHeartbeatTrigger: params.trigger === "heartbeat"`, and
+`params.trigger` is read throughout `runEmbeddedAttempt`. That is a boolean the
+host sets, not a string matched from message content.
+
+Enforcing condition 5 as written would require patching the Discord ingress layer
+or forwarding large request objects, both of which R9 forbids. R9 therefore
+requires an owner decision and no implementation work has been started.
+
+### 4.7 M8/T2.2-R10 — G1 contract correction (host-authoritative trigger)
+
+R9 is superseded by owner decision. G1 now uses the host-assigned trigger as
+its primary discriminator, and the unobservable "no mentions / not bot-author"
+condition is retired rather than replaced by an `undefined` check.
+
+**Trigger provenance, proven against installed `v2026.6.34`:**
+`agent-runner.runtime-BUWW8f6n.js:3092` and
+`reply-usage-state-BKK3wzWk.js:1510,1958,2090` compute
+`trigger: opts?.isHeartbeat === true ? "heartbeat" : "user"` — a strict binary
+with no other producer. `isHeartbeat: true` is assigned in exactly one place in
+the bundle, `heartbeat-runner-BTpzFMjQ.js:1320`, inside the heartbeat scheduler;
+every other occurrence is a read. The content-based
+`isHeartbeatUserMessage()` (`heartbeat-filter-D8UEwGGH.js:170`) does match the
+sentinel, but it is a transcript-artifact filter consumed by diagnostics, memory
+indexing and transcript pathing, and never sets `isHeartbeat` on a run. A
+Discord message containing the sentinel therefore cannot become a heartbeat, and
+`isHeartbeat` is never derived from inbound content.
+
+**G1 requires all of:** `trigger === "heartbeat"`; self-keyed session; the exact
+sentinel in `transcriptPrompt` or `prompt`; no `inputProvenance`; not Discord
+ingress. The native patch gains only `params.trigger` and
+`params.transcriptPrompt` — both already present at the existing anchor — so no
+Discord-layer patch and no forwarded message objects are introduced.
+
+`classifyInternalRunEnd`, G2, G3, R6 semantics, the operator-apply mutation gate,
+preflight semantics and the asset allowlist are untouched. R10 is repository-only
+and is not deployed.
 
 R4 validation snapshot (task remains IN PROGRESS): focused M8/T1, M8/T2 and
 native ingress suites PASS; focused DuckDB/M7-T4 gates PASS 27/27; full

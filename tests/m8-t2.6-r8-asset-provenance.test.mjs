@@ -31,10 +31,14 @@ const CONFIGURE_SOURCE = readFileSync(CONFIGURE, "utf8");
 const R5_NATIVE_BOUNDARY_SHA256 =
   "49352d47ac88798cc918c654875f84241a7efbb1d5a661c64b77e7efbacf3be9";
 
-// The R7 G2 hunk and its R5 predecessor. Deriving the R5 body this way keeps the
-// test hermetic (no git, no network) while still PROVING identity: the digest
-// assertion below fails loudly if the R7 hunk ever changes shape.
-const R7_HUNK = `  } catch (error) {
+// Every change this file's boundary has received SINCE the R5 build. The R5 body
+// is the current source with all of them reverted; the digest assertion below is
+// what proves the derivation is exact, so a missed hunk fails loudly rather than
+// silently weakening the allowlist test.
+const POST_R5_HUNKS = [
+  // R7 G2: cause preservation + diagnostic logging.
+  [
+    `  } catch (error) {
     // R7 G2: the host-visible contract string is unchanged, but the original
     // failure is preserved as the cause so a governance verdict and a genuine
     // execution-state fault stay distinguishable. Only the fixed error message
@@ -44,10 +48,23 @@ const R7_HUNK = `  } catch (error) {
       error?.message ?? error,
     );
     throw new Error("GOVERNANCE_RUN_UNAVAILABLE", { cause: error });
-  }`;
-const R5_HUNK = `  } catch {
+  }`,
+    `  } catch {
     throw new Error("GOVERNANCE_RUN_UNAVAILABLE");
-  }`;
+  }`,
+  ],
+  // R10: the host-assigned heartbeat discriminator forwarded to the guard.
+  [
+    `        // R10: the host-assigned run discriminator and the canonical host
+        // heartbeat representation. Both are plain strings the host already
+        // holds at the injection anchor; neither is user content, a message
+        // object, or Discord-layer data.
+        trigger: context.trigger,
+        transcriptPrompt: context.transcriptPrompt,
+`,
+    ``,
+  ],
+];
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 
@@ -63,11 +80,14 @@ const r5NativeBoundaryBody = () => {
     ),
     "utf8",
   );
-  assert.ok(
-    current.includes(R7_HUNK),
-    "the R7 G2 hunk must still be present for the R5 body to be derivable",
-  );
-  const derived = current.replace(R7_HUNK, R5_HUNK);
+  let derived = current;
+  for (const [after, before] of POST_R5_HUNKS) {
+    assert.ok(
+      derived.includes(after),
+      "every post-R5 hunk must still be present for the R5 body to be derivable",
+    );
+    derived = derived.replace(after, before);
+  }
   assert.equal(
     sha256(derived),
     R5_NATIVE_BOUNDARY_SHA256,

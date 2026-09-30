@@ -95,7 +95,8 @@ const selectionPatch = `${selectionAnchor}
 \t\t\t\tagentId: sessionAgentId, sessionKey: params.sessionKey, runId: params.runId,
 \t\t\t\tinputProvenance: params.inputProvenance,
 \t\t\t\tchannelId: params.messageChannel ?? params.messageProvider,
-\t\t\t\tsenderId: params.senderId, currentMessageId: params.currentMessageId
+\t\t\t\tsenderId: params.senderId, currentMessageId: params.currentMessageId,
+\t\t\t\ttrigger: params.trigger, transcriptPrompt: params.transcriptPrompt
 \t\t\t}, params.abortSignal);
 \t\t\tinstallNativeToolGate(activeSession.agent, params.config, {
 \t\t\t\tagentId: sessionAgentId, sessionKey: params.sessionKey, runId: params.runId

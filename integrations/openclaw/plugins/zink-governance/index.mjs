@@ -2618,23 +2618,35 @@ export function isProviderFailureEvent(event) {
 }
 
 /**
- * R7 G1 (Option A): the exact sentinel OpenClaw injects for its periodic
- * liveness poll. A qualifying heartbeat is an INTERNAL run: it requires no
- * ledger task and no ledger session, and none is fabricated for it.
+ * R10 G1 (Option A, corrected) — the pure-liveness heartbeat exemption.
  *
- * The exemption is bounded by its inverse. Any other content, any mention, any
- * bot author, any inter-session provenance, or any Discord ingress fails this
- * predicate and continues through the normal governed path, so it is never a
- * general exemption for an arbitrary self-keyed `agent:<id>:<id>` run.
+ * A qualifying run is an INTERNAL run: it requires no ledger task and no ledger
+ * session, and none is fabricated for it. Every condition below must hold.
+ *
+ * 1. `trigger === "heartbeat"`. This is the PRIMARY discriminator and it is
+ *    HOST-ASSIGNED, never content-derived. The host computes it as
+ *    `opts?.isHeartbeat === true ? "heartbeat" : "user"` — a strict binary whose
+ *    only producer is the heartbeat scheduler. A user message that merely
+ *    contains the sentinel cannot produce it.
+ * 2. Self-keyed session.
+ * 3. The exact sentinel in the canonical host-provided heartbeat representation.
+ * 4. No inter-session / continuation provenance.
+ * 5. Not Discord ingress.
+ *
+ * R10 correction: the former "no mentions" and "not bot-author" conditions are
+ * RETIRED. Those fields do not exist at the native admission anchor — `mentions`
+ * is produced only in the Discord ingress layer and no run-scoped bot-author
+ * field exists at all. They are deliberately NOT replaced by an
+ * `mentions === undefined` test, which would be vacuous and would recreate the
+ * false confidence of R9. Condition 5 already excludes every Discord-shaped run,
+ * which is the only source of mentions and bot authorship in this topology.
  */
 const HEARTBEAT_LIVENESS_SENTINEL = "[OpenClaw heartbeat poll]";
 
 export function isPureLivenessHeartbeat(context) {
   if (!context || typeof context !== "object") return false;
+  if (context.trigger !== "heartbeat") return false;
   if (context.inputProvenance) return false;
-  if (Array.isArray(context.mentions) && context.mentions.length > 0)
-    return false;
-  if (context.isBot) return false;
   const { agentId, sessionKey } = context;
   if (typeof agentId !== "string" || typeof sessionKey !== "string")
     return false;
@@ -2649,8 +2661,8 @@ export function isPureLivenessHeartbeat(context) {
     if (context[key] === "discord") return false;
   }
   return (
-    context.content === HEARTBEAT_LIVENESS_SENTINEL ||
-    context.message === HEARTBEAT_LIVENESS_SENTINEL
+    context.transcriptPrompt === HEARTBEAT_LIVENESS_SENTINEL ||
+    context.prompt === HEARTBEAT_LIVENESS_SENTINEL
   );
 }
 
