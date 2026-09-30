@@ -56,9 +56,10 @@ Evidence Level: LOCAL-VERIFIED
 Task Branch: codex/m8-t2-governed-runtime-hardening
 Owner Approval: EXPLICIT — Owner authorized R7 remediation, controlled live
   deployment, one-time R5 baseline restoration, R8 provenance remediation, R9
-  (blocked, superseded), and R10 G1 contract correction using the
-  host-authoritative heartbeat trigger. R10 deployment is NOT authorized.
-Deployment Authorized: NO
+  (blocked, superseded), R10 G1 contract correction using the host-authoritative
+  heartbeat trigger, and R10 live deployment of committed implementation
+  3bea651b778fa51abdc9a59fb439213d2900d736.
+Deployment Authorized: YES
 ```
 
 ### 4.1 Revision lineage reconciliation (2026-09-30)
