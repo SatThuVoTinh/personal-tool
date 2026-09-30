@@ -621,6 +621,26 @@ export const GOVERNANCE_PLUGIN_TEMPLATE = path.resolve(
   "plugins",
   GOVERNANCE_PLUGIN_ID,
 );
+// V15: the deployed plugin looks its own contracts up through this literal, and
+// it is a `path.resolve` ARGUMENT, not an import specifier, so the import
+// rewriters below never saw it.
+//
+// The two layouts genuinely disagree, which is why this is a string rewrite and
+// not a change to GOVERNANCE_PLUGIN_TEMPLATE: that constant must be
+// `<repo>/integrations/openclaw/plugins/zink-governance` at build time, but the
+// deployed tree is flattened and has no `plugins/` or `topology/` segment at
+// all. In the deployed tree it resolves to `<plugin>/plugins/zink-governance`,
+// so the two leading `..` land on `<plugin>` and `topology/` is the only wrong
+// segment. Dropping it yields `<plugin>/contracts`, which is exactly where
+// `governancePluginFiles` materializes the contracts, byte for byte.
+//
+// The patterns are assembled rather than written literally because
+// `governancePluginFiles` rewrites policy.mjs's OWN source text: a literal
+// search pattern would appear inside `content` and rewrite the rule that
+// contains it. That is not hypothetical — the pre-existing `"../topology/lib/`
+// rule self-rewrote to a no-op `replaceAll('"./', '"./')` in the deployed copy.
+const SOURCE_CONTRACTS_LOOKUP = `../../${"topology/contracts"}`;
+const DEPLOYED_CONTRACTS_LOOKUP = `../../${"contracts"}`;
 const PASS_RESOLVER_TEMPLATE = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
@@ -1028,6 +1048,13 @@ export function governancePluginFiles() {
     );
     if (libFile === "policy.mjs") {
       content = content.replaceAll('"../topology/lib/', '"./');
+      // V15: see SOURCE_CONTRACTS_LOOKUP. No fallback is added, so a missing or
+      // unreadable contract still raises ENOENT exactly as it did in the
+      // repository layout: this relocates the lookup, it does not soften it.
+      content = content.replaceAll(
+        `"${SOURCE_CONTRACTS_LOOKUP}"`,
+        `"${DEPLOYED_CONTRACTS_LOOKUP}"`,
+      );
     }
     assets[`lib/${libFile}`] = content;
   }

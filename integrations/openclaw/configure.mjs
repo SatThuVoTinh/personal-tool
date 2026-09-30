@@ -128,6 +128,11 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
   ]),
   "lib/policy.mjs": Object.freeze([
     "0584ca5fd8698ef986a7a41f31d1b735997bc1f7fb879f91a1df90ad191603e5",
+    // The accepted R5 build (652ac0c), whose provenance IS established: this
+    // digest was reproduced by packaging the same file at that commit. Listed
+    // only so the V15 contracts-lookup fix can replace it. Contrast the
+    // 2026-09-30 group above, whose provenance is explicitly NOT established.
+    "d2f3e7203f327041a5678234d8fd302f20e06c7b7b2fbf8b1c079317858e4d2a",
   ]),
   "lib/queue-manager.mjs": Object.freeze([
     "a8021088a4e9373fcf74cf4dd31433c8606b9505eaf74c5fa922839ee716776a",
