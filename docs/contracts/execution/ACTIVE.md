@@ -1,16 +1,136 @@
-ACTIVE.md — M8/T2.2-R15 Attempt-Scoped Transaction Identity
+ACTIVE.md — M8/T2.2-R16 Full Apply Rehearsal on a Live-Runtime Clone
+
+Task ID: M8/T2.2
+Plan Revision: M8/T2.2-R16
+Planning Readiness: APPROVED
+Execution Authorization: YES
+Owner Approval: EXPLICIT — owner authorized R16 on 2026-09-30, declining a further
+  live deployment and instead requiring the complete corrected apply path to be
+  rehearsed against a byte-exact clone of the current live R7 runtime.
+Deployment Authorized: NO
+
+R16 is repository-only and creates no deployment authorization. Both prior
+single-attempt authorizations (`b8597fe`, `7520f39`) are consumed and closed.
+
+## 1. Objective
+
+Exercise the COMPLETE corrected R10 deployment path against a byte-exact clone of
+the CURRENT LIVE R7 runtime, without mutating the live runtime.
+
+The one operation never yet executed anywhere is the R7 native predecessor WRITE
+to R10. R14 proved the transformation is derivable in memory and that preflight
+recognizes the R7 host; the write itself has never run, live or cloned.
+
+## 2. Constraints
+
+Every external effect is isolated. The real corrected orchestration code, the real
+`configure.mjs`, the real native patcher and the real transaction machinery are
+used; only the effects that would touch the host are injected — gateway restart,
+systemctl, and process supervision.
+
+There is NO live gateway restart, NO real systemctl, NO live OpenClaw or WSL
+mutation, NO Discord message, NO real heartbeat, and NO production ledger write.
+The only writes are inside the isolated rehearsal root.
+
+`operator-apply.mjs` is NOT invoked: it binds hardcoded live absolute paths and a
+real `systemctl` restart. The rehearsal drives the same `applyRuntime`
+orchestration with the same dependency surface, pointed at the clone, which is the
+only way to exercise the real algorithm without the live effects.
+
+## 3. Native write proof
+
+Starting from the cloned R7 state, the rehearsal must prove
+`R7 → exact predecessor recognition → R10 derived in memory → R10 written`, and
+that no intermediate BASELINE bytes are ever written to the clone. The
+predecessor branch is proven to be the one taken, the fresh-patch branch is
+proven not to have run, and the resulting bytes must be exactly R10.
+
+## 4. Coverage
+
+Complete apply stage trace; post-apply validation of config, governance, native
+digests, plugin state, injection fields, version and transaction completion;
+controlled failure injection at every mutation boundary; and the exact historical
+repeat-attempt collision scenario driven through the real orchestration.
+
+## 5. Allowed scope
+
+- `tests/**`, `package.json` (test registration only), `PLAN.md`, this contract.
+
+## 6. Excluded scope
+
+No production code change is expected or authorized by R16. The G1, G2, G3, R6,
+R13 and R14 contracts and the R15 transaction identity are unchanged and are
+asserted unchanged.
+
+## 7. Mandatory stop
+
+R16 ends after the isolated rehearsal. A rehearsal PASS is NOT live deployment
+validation and does not authorize a deployment.
+
+## 8. Handoff
+
+Repository only. Do not deploy, do not run live `operator-apply`, do not restart
+the gateway, do not mutate WSL, do not send a heartbeat or a Discord message, do
+not create a production ledger task, and do not delete or rewrite any
+transaction. Commits are local and unpushed. R16 is not closed under this
+contract, and no R17 is created automatically.
+
+## 9. Result
+
+**PASS.** `tests/m8-t2.13-r16-apply-rehearsal.test.mjs`, 16 tests, run by
+`integrations/openclaw/topology/fixtures/runtime-regression/r16-rehearsal.mjs`.
+
+A relocated byte copy was rejected as a clone. `buildConfig` embeds absolute
+`stateDir` paths, so identical `openclaw.json` bytes pass at the original path
+and fail at any other one with `Policy drift at agents`. The clone is instead a
+private mount namespace in which the three live roots are overlayfs-mounted with
+the live directories as the LOWER LAYER, so the clone IS the live runtime and
+cannot drift from it.
+
+The complete stage trace ran in order. The R7 → R10 native write landed:
+`selection` `b4316736` → `555f37da`, `bridge` `33b3feef` → `50af7d4a`, with the
+bridge equal to the repository R10 boundary and both native injection fields
+present in the written selection. The overlay upper layer — a deterministic
+record of writes, because copy-up happens exactly when a lower file is written —
+contains exactly those two files and no third, and `native-r12` is byte-identical,
+so no baseline was written: the sequence is `R7 → R10`, never `R7 → BASELINE →
+R10`.
+
+All eight failure boundaries rolled back to the exact attempt preimage, with
+`rollbackSucceeded` set only after live byte verification and
+`restoreValidationReason` null. A gateway that never restarts back leaves
+`rollbackSucceeded` false even though the bytes are restored, which is the
+intended conservative behaviour. Preflight failure mutated nothing and attempted
+no rollback. The R15 collision was replayed through the real orchestration: A
+fails and rolls back to R7, B then reaches native mutation on the same preimage
+with a different attempt ID, an identical `preimageDigest`, and no
+`TRANSACTION_ALREADY_EXISTS`. The R10 artifacts regenerate deterministically from
+the pinned baseline and are byte-identical to the predecessor route's output.
+
+Live environment after: all 15 components and 4 subtrees byte-identical; gateway
+`MainPID=98288`, `NRestarts=0`, `ActiveEnterTimestamp` unchanged; ledger 103
+events, sequence 103, 37 tasks. NOT DEPLOYED.
+
+Deployment path status after this revision: the R7 → R10 native write, the
+post-apply runtime verification and the restart stage are all now exercised. The
+only remaining unexercised step is a live deployment itself, which stays
+unauthorized.
+
+---
+
+# Historical: M8/T2.2-R15 (implemented, work committed)
+
+R15's commit `c73173f` stands. Retained as history; R16 does not modify it.
+
+## R15 header
 
 Task ID: M8/T2.2
 Plan Revision: M8/T2.2-R15
 Planning Readiness: APPROVED
 Execution Authorization: YES
-Owner Approval: EXPLICIT — owner authorized R15 on 2026-09-30 after the second
-  R10 deployment attempt aborted before mutation with
-  `ROLLBACK_SAFETY_UNAVAILABLE`.
 Deployment Authorized: NO
 
-R15 is repository-only. It creates no deployment authorization. Both prior
-single-attempt authorizations (`b8597fe`, `7520f39`) are consumed and closed.
+## 1. Objective
 
 Branch: codex/m8-t2-governed-runtime-hardening
 Predecessor revisions: R3-R6, R7, R8, R10, R11, R12, R13, R14 (Implemented);

@@ -48,7 +48,7 @@ Milestone: M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Inte
 Task: M8/T2.2 — Root-Cause Governed Runtime, Discord, Semantic & Artifact Integrity Hardening
 Task Status: IN PROGRESS
 Planning Readiness: APPROVED
-Plan Revision: M8/T2.2-R15
+Plan Revision: M8/T2.2-R16
 Execution Authorization: YES
 Authorized Task: M8/T2.2 — Root-Cause Governed Runtime, Discord, Semantic & Artifact Integrity Hardening
 Execution Contract: docs/contracts/execution/ACTIVE.md
@@ -68,7 +68,8 @@ Owner Approval: EXPLICIT — Owner authorized R7 remediation, controlled live
   is derived from the preimage and therefore collides with the retained record of
   the previous attempt), and R15 attempt-scoped transaction identity. Owner
   accepted the R14 implementation and its live preflight. Owner acknowledged
-  the duplicated entrypoint allowlist as protected technical debt, not a blocker.
+  the duplicated entrypoint allowlist as protected technical debt, not a blocker,
+  and R16 full-apply rehearsal on an exact clone of the live R7 runtime.
 Deployment Authorized: NO
 ```
 
@@ -89,20 +90,21 @@ consumed its own authorization record `dc466c6` and is closed.
 carried R5 and R6 implementation. The plan was never revised for either, so
 `ACTIVE.md` and `PLAN.md` no longer described the same work. Reconciled state:
 
-| Revision    | Status      | Implementation evidence                                                                                                                                           |
-| ----------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| M8/T2.2-R4  | Implemented | R4 validation snapshot below. Superseded as the active revision.                                                                                                  |
-| M8/T2.2-R5  | Implemented | `652ac0c` config convergence, `9a6702f` V15 packaging, `9713872` V16 rewriter self-match.                                                                         |
-| M8/T2.2-R6  | Implemented | `2e1f8c4` `WORKFLOW_APPROVAL_REQUESTED` contract, `2d1121f` provenance-gated asset allowlist.                                                                     |
-| M8/T2.2-R7  | Implemented | `a0118bc` heartbeat admission, boundary diagnosability, apply safety; `a1bf942` advisory-hook correction; `96e1b80` deployment authorization.                     |
-| M8/T2.2-R8  | Implemented | `4f5cc6d` verified R5 `lib/native-boundary.mjs` approved-predecessor digest. Live preflight then returned `builder_preflight: PASS`, `installed_mutation: false`. |
-| M8/T2.2-R9  | BLOCKED     | Authorized 2026-09-30. Superseded by R10: G1 condition 5 is unobservable at the native seam; see §4.6.                                                            |
-| M8/T2.2-R10 | Implemented | `3bea651` G1 contract correction using the host-authoritative heartbeat trigger. Deployment `dc466c6` attempted and STOPPED pre-apply; NOT deployed.              |
-| M8/T2.2-R11 | Implemented | `ab0dda2` transaction snapshot gates mutation, restores the exact preimage, and licenses `rollbackSucceeded` only on live verification. Accepted by the owner.         |
-| M8/T2.2-R12 | Implemented | `47beb1c` durable transaction snapshot, orphan detection, verified post-apply, and the recovery authorization gate. Accepted as the rollback-safety baseline.                |
-| M8/T2.2-R13 | Implemented | `2d8dc54` the two R7 predecessor governance-asset digests, byte-proven from the live runtime and the R7 commit. Live preflight then PASSed.                            |
+| Revision    | Status      | Implementation evidence                                                                                                                                                         |
+| ----------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M8/T2.2-R4  | Implemented | R4 validation snapshot below. Superseded as the active revision.                                                                                                                |
+| M8/T2.2-R5  | Implemented | `652ac0c` config convergence, `9a6702f` V15 packaging, `9713872` V16 rewriter self-match.                                                                                       |
+| M8/T2.2-R6  | Implemented | `2e1f8c4` `WORKFLOW_APPROVAL_REQUESTED` contract, `2d1121f` provenance-gated asset allowlist.                                                                                   |
+| M8/T2.2-R7  | Implemented | `a0118bc` heartbeat admission, boundary diagnosability, apply safety; `a1bf942` advisory-hook correction; `96e1b80` deployment authorization.                                   |
+| M8/T2.2-R8  | Implemented | `4f5cc6d` verified R5 `lib/native-boundary.mjs` approved-predecessor digest. Live preflight then returned `builder_preflight: PASS`, `installed_mutation: false`.               |
+| M8/T2.2-R9  | BLOCKED     | Authorized 2026-09-30. Superseded by R10: G1 condition 5 is unobservable at the native seam; see §4.6.                                                                          |
+| M8/T2.2-R10 | Implemented | `3bea651` G1 contract correction using the host-authoritative heartbeat trigger. Deployment `dc466c6` attempted and STOPPED pre-apply; NOT deployed.                            |
+| M8/T2.2-R11 | Implemented | `ab0dda2` transaction snapshot gates mutation, restores the exact preimage, and licenses `rollbackSucceeded` only on live verification. Accepted by the owner.                  |
+| M8/T2.2-R12 | Implemented | `47beb1c` durable transaction snapshot, orphan detection, verified post-apply, and the recovery authorization gate. Accepted as the rollback-safety baseline.                   |
+| M8/T2.2-R13 | Implemented | `2d8dc54` the two R7 predecessor governance-asset digests, byte-proven from the live runtime and the R7 commit. Live preflight then PASSed.                                     |
 | M8/T2.2-R14 | Implemented | `c41a7a5` native patch lineage: the deployed R7 patch is a recognized predecessor, so R7 -> R10 is derivable in memory. Live preflight then recognized `PREDECESSOR R7 -> R10`. |
-| M8/T2.2-R15 | IN PROGRESS | Authorized 2026-09-30. Attempt-scoped transaction identity: separate `attemptId` from `preimageDigest`. Repository-only, not deployed; see A4.12. |
+| M8/T2.2-R15 | Implemented | `c73173f` attempt-scoped transaction identity: `attemptId` separated from `preimageDigest`; completed attempts no longer block a repeat. 17/15 falsified. Not deployed.         |
+| M8/T2.2-R16 | IN PROGRESS | Authorized 2026-09-30. Full apply rehearsal on a byte-exact clone of the live R7 runtime. Isolated; not deployed; see A4.13.                                                    |
 
 All revisions are local commits on `codex/m8-t2-governed-runtime-hardening`; none
 has been pushed.
@@ -365,7 +367,7 @@ is never silently deleted, resumed, or rolled back.
 `operator-rollback.mjs` invokes `restoreNativePatch` against `native-r12` and
 `restoreT1RuntimeFiles` against `backups/r12`, with no authorization check at
 all. That installs the 2026-09-11 T1 config, the clean native baseline, and no
-governance extension. R11 stopped the *apply* path from reaching it, but the
+governance extension. R11 stopped the _apply_ path from reaching it, but the
 command itself remains unguarded. R12 adds an explicit recovery authorization
 that cannot be inferred from `Deployment Authorized`, `Execution Authorization`,
 or the mere presence of a backup, requires the target to be named, and discloses
@@ -477,6 +479,63 @@ transactions only.
 R15 is repository-only: no deployment, no live apply, no transaction deletion or
 rewrite, no allowlist change, and no change to the R10 G1 contract, the R13
 allowlist, or the R14 native lineage.
+
+### 4.13 M8/T2.2-R16 — full apply rehearsal on an exact clone of the live runtime
+
+The owner declined a third live deployment and instead required the complete
+corrected R10 apply path to be exercised end to end against a byte-exact clone of
+the CURRENT LIVE R7 runtime, because three operations had still never run
+anywhere: the R7 native predecessor WRITE to R10, the post-apply runtime
+verification, and a genuine restart.
+
+**Why a copy was not sufficient.** `buildConfig` embeds absolute `stateDir` paths
+in `agents`, `auth`, `plugins.paths` and the systemd drop-in. A byte-exact copy of
+`openclaw.json` relocated to another root can therefore never pass the builder's
+own preflight — proven directly: an identical copy at `/tmp` fails with `Policy
+drift at agents` while the same bytes at the original path pass. Any directory
+copy is a fidelity lie.
+
+**Isolation mechanism.** The clone is a private mount namespace
+(`unshare --map-root-user --mount`) in which `/home/hoang_vinh/.openclaw-zink`,
+the OpenClaw package root and `~/.config/systemd/user` are each overlaid with
+overlayfs whose LOWER LAYER IS THE LIVE DIRECTORY. Byte-exactness is therefore
+structural, not copied: every in-scope byte is the live byte by construction.
+Writes land only in the overlay upper layer, which doubles as a deterministic
+record of which files were written. The namespace cannot outlive the process, so
+a crash cannot leak a mount or a write into the host, and the running gateway —
+which never entered the namespace — keeps the real inodes.
+
+Only the gateway restart is injected, because the real effect is `systemctl
+--user restart`. The real `applyRuntime` orchestration, the real `configure.mjs`
+as a child process, the real native patcher and the real transaction machinery
+are all used unmodified. `operator-apply.mjs` is deliberately not invoked: it
+binds absolute live paths and a real restart, so using it would be the mutation
+R16 forbids.
+
+**Result: PASS.** The complete stage trace runs in order and the R7 → R10 native
+write lands. Exactly two native files were written — `dist/selection-*.js` at
+`555f37da` and `dist/zink-governance-boundary.mjs` at `50af7d4a` — and the
+overlay upper layer shows no third native file, no `native-r12` backup and no
+baseline bytes anywhere. The write history is therefore `R7 → R10`, not
+`R7 → BASELINE → R10`, measured rather than argued.
+
+All eight controlled failure boundaries roll back to the exact attempt preimage
+with `rollbackSucceeded` licensed only after live byte verification. A gateway
+that cannot restart back never licenses a verified rollback. The historical R15
+collision scenario was replayed through the real orchestration: attempt A fails
+and rolls back, attempt B reaches the native mutation on the same preimage with a
+distinct attempt ID and no `TRANSACTION_ALREADY_EXISTS`.
+
+The R10 artifacts were regenerated from the pinned baseline preimages twice,
+deterministically, and are byte-identical to the output of the R7 → R10 route.
+
+Live environment after the rehearsal: all 15 components and 4 subtrees
+byte-identical, gateway `MainPID=98288` with `NRestarts=0` unchanged, ledger at
+103 events / sequence 103 / 37 tasks unchanged. **NOT DEPLOYED.**
+
+R16 is repository-only and creates no deployment authorization.
+`Deployment Authorized` remains `NO`; R16 is not closed under this contract and
+no R17 is created automatically.
 
 R4 validation snapshot (task remains IN PROGRESS): focused M8/T1, M8/T2 and
 native ingress suites PASS; focused DuckDB/M7-T4 gates PASS 27/27; full
