@@ -92,8 +92,11 @@ does not deploy:
 - **G2** — `native-boundary.mjs` preserves the original failure as `.cause` and
   logs the fixed error message. The host-visible `GOVERNANCE_RUN_UNAVAILABLE`
   string is unchanged.
-- **G3** — `before_prompt_build()` fails closed for an unresolvable governed run
-  instead of injecting a degraded context and proceeding.
+- **G3** — `before_prompt_build()` is **advisory only** and returns an explicit
+  `BLOCKED` governance context for an unresolvable run. It is deliberately not
+  used as an enforcement mechanism, because the OpenClaw host swallows anything
+  thrown from it. The enforcing control is the native governance boundary; see
+  §4.4.
 - **DS** — `operator-apply.mjs` enforces `PRE-FLIGHT FAILURE = ZERO RUNTIME
 MUTATION` by running the existing preflight and gating rollback on a real
   mutation boundary.
@@ -130,6 +133,46 @@ unchanged by this work: `openclaw.json` `b96aca41…` (14798 bytes); live
 `operator/m7-t2/backups/r12/quarantined-t2/`; `selection-DopzNY3I.js` at the
 clean baseline `a5698c55…`; `zink-governance-boundary.mjs` absent; production
 ledger 103 events, `d794d99d…` / `bbdf3aec…`.
+
+### 4.4 Discord-lane enforcement seam (R7 correction)
+
+An audit of the installed OpenClaw `2026.6.34` host established where an
+unresolvable governed run is actually stopped on the Discord lane.
+
+`before_prompt_build` **cannot** enforce. Its result type
+(`PluginHookBeforePromptBuildResult`) exposes only `systemPrompt`,
+`prependContext`, `appendContext`, `prependSystemContext` and
+`appendSystemContext` — there is no decision or block channel.
+`runModifyingHook` (`dist/hook-runner-global-D_43rcnU.js:481`) catches every
+handler exception via `handleHookError` and returns `undefined`, and both call
+sites add a second swallow (`dist/attempt.prompt-helpers-B7ATxx0y.js:126-130`,
+`dist/agent-harness-runtime-DjK3eIXB.js:143-145`). A throw there is therefore
+fail-open. R7 consequently reverted G3 to the explicit `BLOCKED` prependContext
+and keeps the hook advisory.
+
+`before_agent_run` does have blocking semantics, but only in
+`dist/cli-runner-B0eKIePw.js:761-777`, which is the **CLI** runner. The Discord
+lane does not use it, so CLI behaviour must not be read as Discord behaviour.
+
+The enforcing seam on the Discord lane is the **native governance boundary**.
+The pinned patcher injects `await enterNativeRun(...)` at
+`dist/selection-DopzNY3I.js:12232`, immediately after
+`const activeSession = session;` inside `runEmbeddedAttempt`
+(`dist/selection-DopzNY3I.js:10960-14467`). The model invocation
+`activeSession.prompt` is defined at `12847` and invoked at `13754`/`13765`, so
+the gate precedes the model call by roughly 520 lines.
+
+Live evidence from the gateway log for the governance-active window
+`2026-09-30T01:20:45Z-01:21:05Z` (`dist` log `/tmp/openclaw/openclaw-2026-09-30.log`):
+the turn ended in `lane task error: lane=main ... GOVERNANCE_RUN_UNAVAILABLE`
+then `Embedded agent failed before reply`, with **zero** `model-fetch` events.
+In the governance-absent window the same heartbeat produced
+`[model-fetch] start ... status=200`. The model was therefore not invoked while
+the boundary rejected the run.
+
+No new enforcement mechanism is introduced. The native boundary already
+enforces the admission decision, so enforcement is not duplicated in another
+hook, and R6 approval semantics and ledger semantics are unchanged.
 
 R4 validation snapshot (task remains IN PROGRESS): focused M8/T1, M8/T2 and
 native ingress suites PASS; focused DuckDB/M7-T4 gates PASS 27/27; full

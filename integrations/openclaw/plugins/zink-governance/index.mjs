@@ -4661,14 +4661,24 @@ export default {
           prependContext: prepend,
         };
       } catch (error) {
-        // R7 G3: an unresolvable governed execution must not be laundered into a
-        // degraded prompt context and then allowed to proceed as though
-        // governance had completed. Fail closed, keeping the contract reason
-        // code that `findSession` raised.
+        // R7 correction: before_prompt_build is an ADVISORY OpenClaw hook. Its
+        // result type has no blocking channel, runModifyingHook() catches every
+        // handler exception, and both host call sites additionally swallow the
+        // rejection. Throwing here is therefore fail-OPEN: the turn would
+        // continue with no governance instruction at all.
+        //
+        // So this hook stays advisory and returns an explicit BLOCKED
+        // instruction instead. The enforcing control for an unresolvable run is
+        // the native governance boundary (enterNativeRun -> beforeRun), which
+        // the host does propagate: it fails the turn with
+        // GOVERNANCE_RUN_UNAVAILABLE and preserves the cause.
         api.logger?.error?.(
           `zink governance before_prompt_build: ${error?.message ?? error}`,
         );
-        throw error;
+        return {
+          prependContext:
+            "[Trusted governance] EXECUTION_STATE_UNKNOWN. Do not delegate; report BLOCKED.",
+        };
       }
     });
     /**

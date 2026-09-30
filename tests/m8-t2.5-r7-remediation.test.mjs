@@ -296,21 +296,53 @@ test("G1: the sentinel does not exempt a Discord ingress run", async () => {
 // G3 — before_prompt_build must not launder an unresolvable run.
 // ---------------------------------------------------------------------------
 
-test("G3: before_prompt_build fails closed for an unresolvable governed run", async () => {
-  await withPlugin(async ({ hooks }) => {
+test("G3: an unresolvable governed run gets an explicit BLOCKED context, not silence", async () => {
+  await withPlugin(async ({ hooks, logged }) => {
+    // R7 correction: before_prompt_build is an ADVISORY OpenClaw hook. The host
+    // catches and swallows anything thrown here, so throwing is fail-OPEN. The
+    // run must instead receive an explicit BLOCKED governance instruction.
+    const result = await hooks.get("before_prompt_build")(
+      {},
+      {
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        runId: "unresolved-governed-run",
+        content: "please do the work",
+      },
+    );
+    assert.match(result.prependContext, /EXECUTION_STATE_UNKNOWN/u);
+    assert.match(result.prependContext, /BLOCKED/u);
+    // It must not be laundered into a normal-looking governance receipt.
+    assert.equal(
+      result.prependContext.includes("[Trusted governance receipt]"),
+      false,
+    );
+    // The diagnostic must still reach the operator.
+    assert.equal(
+      logged.some((line) => line.includes("before_prompt_build")),
+      true,
+    );
+    assert.equal(
+      logged.some((line) => line.includes("EXECUTION_STATE_UNKNOWN")),
+      true,
+    );
+  });
+});
+
+test("G3: an unresolved non-heartbeat run never receives the heartbeat exemption", async () => {
+  await withPlugin(async ({ native }) => {
     await assert.rejects(
-      hooks.get("before_prompt_build")(
-        {},
-        {
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          runId: "unresolved-governed-run",
-          content: "please do the work",
-        },
-      ),
+      enterNativeRun(native, {
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        runId: "unresolved-not-heartbeat",
+        content: "please do the work",
+      }),
       (error) => {
-        // Fail closed with the contract reason code, not a degraded context.
-        assert.equal(error.message, "EXECUTION_STATE_UNKNOWN");
+        // Admission still fails closed at the native boundary, which IS an
+        // enforcing seam. That is the real control; the hook is advisory.
+        assert.equal(error.message, "GOVERNANCE_RUN_UNAVAILABLE");
+        assert.equal(error.cause?.message, "EXECUTION_STATE_UNKNOWN");
         return true;
       },
     );
@@ -347,6 +379,141 @@ test("G3: a genuinely governed run still receives its governance receipt", async
     assert.ok(task_id, "the governed ingress must create exactly one task");
     const receipt = await hooks.get("before_prompt_build")({}, governed);
     assert.match(receipt.prependContext, new RegExp(task_id, "u"));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A. The G1 exemption is qualified: all five predicates must hold.
+// ---------------------------------------------------------------------------
+
+test("A: the heartbeat exemption requires every G1 predicate", async () => {
+  const qualifying = {
+    agentId: "main",
+    sessionKey: "agent:main:main",
+    runId: "g1-matrix",
+    content: "[OpenClaw heartbeat poll]",
+  };
+  await withPlugin(async ({ native }) => {
+    // Baseline: the unmodified qualifying shape is admitted.
+    await enterNativeRun(native, { ...qualifying, runId: "g1-matrix-base" });
+
+    // Each mutation below breaks exactly one predicate and must NOT be exempt.
+    const disqualified = [
+      ["not self-keyed", { sessionKey: "agent:main:other" }],
+      [
+        "wrong content",
+        { content: "[OpenClaw heartbeat poll] and also do ETL" },
+      ],
+      [
+        "inter-session provenance",
+        {
+          inputProvenance: {
+            kind: "inter_session",
+            sourceTool: "subagent_announce",
+            sourceSessionKey: "agent:o1:o1",
+          },
+        },
+      ],
+      ["discord channel id", { channelId: "discord" }],
+      ["discord in session key", { sessionKey: "agent:main:main:discord:1" }],
+      ["carries a mention", { mentions: [{ username: "main" }] }],
+      ["bot author", { isBot: true }],
+    ];
+    for (const [label, override] of disqualified) {
+      await assert.rejects(
+        enterNativeRun(native, {
+          ...qualifying,
+          runId: `g1-matrix-${label.replace(/\W+/gu, "-")}`,
+          ...override,
+        }),
+        (error) => {
+          assert.equal(error.message, "GOVERNANCE_RUN_UNAVAILABLE");
+          return true;
+        },
+        `must not be exempt: ${label}`,
+      );
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// C. The real enforcement seam: the native governance boundary.
+//
+// before_prompt_build is advisory and cannot block. enterNativeRun is reached
+// on the lane path at selection-DopzNY3I.js:12232 inside runEmbeddedAttempt
+// (10960-14467), which is ~520 lines before the model invocation
+// activeSession.prompt at 12847/13754. The host propagates the rejection, so a
+// Discord-shaped unresolved governed run is stopped before any model call.
+// ---------------------------------------------------------------------------
+
+test("C: a Discord-shaped unresolved governed run is blocked at the native boundary", async () => {
+  await withPlugin(async ({ paths, native, logged }) => {
+    const before = readSnapshot(paths);
+    // Discord-shaped: discord channel, owner sender, real message id, and an
+    // inter-session provenance shape that the ledger cannot resolve. This is
+    // the exact class of run that produced EXECUTION_STATE_UNKNOWN in
+    // production.
+    await assert.rejects(
+      enterNativeRun(native, {
+        channelId: "discord",
+        agentId: "o1",
+        senderId: OWNER,
+        currentMessageId: "123456789012346001",
+        content: "@main please run the quarterly ETL",
+        mentions: [{ username: "main" }],
+        sessionKey: "discord:1545425763707129928:1545696207316455527",
+        runId: "discord-unresolved-run",
+        inputProvenance: {
+          kind: "inter_session",
+          sourceTool: "subagent_announce",
+          sourceSessionKey: "agent:main:main",
+        },
+      }),
+      (error) => {
+        // Host-visible contract string is byte-identical to pre-R7.
+        assert.equal(error.message, "GOVERNANCE_RUN_UNAVAILABLE");
+        // The underlying fault remains diagnosable.
+        assert.equal(error.cause?.message, "EXECUTION_STATE_UNKNOWN");
+        return true;
+      },
+    );
+    // Admission refused, so no execution was ever represented in the ledger:
+    // nothing downstream (prompt, model, tools) has an owner to run as.
+    const after = readSnapshot(paths);
+    assert.equal(after.sequence, before.sequence);
+    assert.deepEqual(after.tasks, before.tasks);
+    assert.equal(Object.keys(after.tasks).length, 0);
+    // And the boundary named the real lower-level failure for the operator.
+    assert.equal(
+      logged.some((line) => line.includes("before_prompt_build")),
+      false,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// E. Discord ingress semantics are unchanged.
+// ---------------------------------------------------------------------------
+
+test("E: a valid owner Discord ingress run is still admitted and creates its task", async () => {
+  await withPlugin(async ({ paths, native }) => {
+    const context = {
+      channelId: "discord",
+      agentId: "main",
+      senderId: OWNER,
+      currentMessageId: "123456789012346002",
+      content: "@main ordinary request",
+      mentions: [{ username: "main" }],
+      sessionKey: "main-session",
+      runId: "discord-valid-run",
+    };
+    await enterNativeRun(native, context);
+    const snapshot = readSnapshot(paths);
+    const task_id = Object.keys(snapshot.tasks)[0];
+    assert.ok(task_id, "a valid owner Discord ingress must create one task");
+    // A replay of the identical message id must not create a second task.
+    await assert.rejects(enterNativeRun(native, context));
+    assert.equal(Object.keys(readSnapshot(paths).tasks).length, 1);
   });
 });
 
