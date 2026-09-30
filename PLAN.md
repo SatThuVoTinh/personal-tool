@@ -46,7 +46,7 @@ operations research and simulation remain first-class capabilities.
 ```text
 Milestone: M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Integration
 Task: M8/T2.2 — Root-Cause Governed Runtime, Discord, Semantic & Artifact Integrity Hardening
-Task Status: IN PROGRESS
+Task Status: CLOSED
 Planning Readiness: APPROVED
 Plan Revision: M8/T2.2-R16
 Execution Authorization: YES
@@ -71,7 +71,14 @@ Owner Approval: EXPLICIT — Owner authorized R7 remediation, controlled live
   the duplicated entrypoint allowlist as protected technical debt, not a blocker,
   and R16 full-apply rehearsal on an exact clone of the live R7 runtime.
 Deployment Authorized: YES
+Deployment Status: DEPLOYED
 ```
+
+`Deployment Status: DEPLOYED`. The single attempt authorized on 2026-09-30 ran
+`operator-apply.mjs` — the repository's authorized live deployment mechanism —
+against the real live runtime, with no namespace and no simulation. It returned
+`{"status":"PASS","stage":"applied"}` with `transactionStatus: complete`. The
+live runtime is R10. Exact digests and stage trace are in §4.13.2.
 
 `Deployment Authorized: YES` — single attempt, granted by the owner on
 2026-09-30 after R16 closed, to deploy the already-verified R16 artifact to the
@@ -548,6 +555,80 @@ R16 is repository-only and creates no deployment authorization. R16 is `CLOSED`
 as the final revision of `M8/T2.2`. `Deployment Authorized` remains `NO`,
 `Deployment Status` remains `NOT DEPLOYED`, the live runtime remains R7 and
 byte-identical, and the ledger is unchanged. No R17 is created.
+
+#### 4.13.2 R16 live deployment — DEPLOYED
+
+The single authorized attempt ran on 2026-09-30 through `operator-apply.mjs`, the
+repository's authorized live deployment mechanism, against the real live runtime.
+No mount namespace, no rehearsal, no simulation. The authorization was recorded
+in both authoritative sources and committed as `075f46d` before any runtime
+contact.
+
+Result: `{"status":"PASS","stage":"applied","mutationStarted":true,
+"rollbackRequired":false,"rollbackAttempted":false,"rollbackSucceeded":false,
+"reason":null,"attemptId":"txn-1ba7689b6908d601122834e426939541bc72106736b2a5a15b48d539a063a8d4",
+"transactionStatus":"complete"}`. Every stage ran in order through
+`runtime-verify`. No rollback was required and none was attempted; success was
+licensed by live byte verification, not by self-report.
+
+Live state, measured directly after the apply:
+
+| Component                            | Before (R7)                                                        | After (R10)                                                        |
+| ------------------------------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| `openclaw.json`                      | `5db19403521b0db84b29408fb4a194460f14a50b391e887873c03c5f1b560658` | unchanged — the R7 config was already current                      |
+| extension `index.mjs`                | `74582778e5d58ce6a26dec3514b9a73ad5f8964f892023b37221f8a85b5ff215` | `e5b220b4a3b023f6d7b26561964f6204f0d004267b208cddab90adb6043b8bd7` |
+| extension `lib/native-boundary.mjs`  | `33b3feefdfd473dc0d6d09b0ae7b8e39b394fa93a1247fe117bc58757f075412` | `50af7d4ae10b519340b8dc13af3e2b219041fb28991e2a777ea815b537d2c7c2` |
+| `dist/selection-DopzNY3I.js`         | `b431673602bf2f6eca55f8635f226dddbf06cf19e83c5488cc154d4db3d94512` | `555f37dae8eec1fbbd35e25ae28222dc5e8d6965e383500695a93900e9d8ddf5` |
+| `dist/zink-governance-boundary.mjs`  | `33b3feefdfd473dc0d6d09b0ae7b8e39b394fa93a1247fe117bc58757f075412` | `50af7d4ae10b519340b8dc13af3e2b219041fb28991e2a777ea815b537d2c7c2` |
+| `dist/subagent-announce-Bh1QyKiE.js` | `e3b110f77cbd52ec86e935ff9ee3926b2730802a1cd4d42e65c56624dc19dc87` | unchanged — already R10                                            |
+
+The live native write went `R7 → R10` directly. `native-r12` still holds 3 files
+with mtime `2026-09-30 01:00:14`, proving the baseline-writing branch never ran —
+the same result R16 measured on the clone.
+
+Independent post-apply verification, not taken from the apply's own report:
+
+- the real `checkNativePatch` returns `PATCHED` for both pinned sources;
+- the live bridge equals the repository R10 boundary `native-boundary.mjs`;
+- the deployed extension tree matches `governancePluginFiles()` byte-for-byte
+  across **34 of 34 files**, entrypoint `e5b220b4…` included;
+- the written selection carries `trigger: params.trigger` and
+  `transcriptPrompt: params.transcriptPrompt`;
+- `GOVERNANCE_VERSION = "m8-t2.3-r5"`, the G1 trigger predicate and the G2
+  `GOVERNANCE_RUN_UNAVAILABLE` code are present;
+- three plugins configured: `discord`, `google`, `zink-governance`.
+
+The gateway restarted for real and serves the new code: `active (running)`,
+`NRestarts=0`, `[zink-governance] ACTIVE AND LOADED`, `http server listening
+(3 plugins)`, `[heartbeat] started`. `NRestarts` stayed 0 throughout; the
+repeated stop/start entries in the journal come from distinct systemd PIDs, i.e.
+WSL instance restarts in this environment, not a crash loop of one process.
+
+Transaction: a new attempt record `txn-1ba7689b…` — schema v2, the R15
+random 64-hex identity — `status: complete`, snapshot `verified: true`, marked
+complete only after verification. The retained historical record
+`txn-02edeb0bf364e3931fffd9e1e5fe904b` is untouched and still verifies.
+
+Ledger integrity: `events.jsonl` `d794d99d0be87683feed34735005db864b71d049499b69de4a32a14d58c5dda2`
+and `snapshot.json` `bbdf3aec34ae92b60b5e6a661c890b9e60f5bcf9bbecc1062cec6d16d9a12f9a`
+are byte-identical before and after — 103 events, sequence 103, 37 tasks. The
+deployment wrote no ledger event.
+
+`backups/r12` is untouched: 14 files, mtime `2026-09-30 11:18:26`. No quarantine
+was created. No rehearsal scratch and no stray overlay mounts remain.
+
+Behavioural evidence: `GOVERNANCE_RUN_UNAVAILABLE` occurrences after the
+deployment are **0**; the same window before it contained 6, and the last
+occurrence anywhere was `17:20:53`, hours before the apply. Every error line
+after the deployment is a Discord gateway WebSocket close with code `1006`
+during a WSL reboot, plus one aborted OpenRouter pricing fetch — 7 lines after
+against 22 before, and unrelated to governance.
+
+One honest limitation: no complete heartbeat _cycle_ has been observed yet
+because WSL restarts roughly every one to two minutes in this environment while
+the heartbeat cadence is about thirty minutes, so the scheduler is restarted
+before it can complete a run. The failure that R10 exists to fix has stopped
+occurring; end-to-end cadence confirmation needs a WSL instance that stays up.
 
 #### 4.13.1 R16 findings closed
 

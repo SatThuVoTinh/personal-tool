@@ -9,7 +9,7 @@ Owner Approval: EXPLICIT — owner authorized R16 on 2026-09-30, declining a fur
   rehearsed against a byte-exact clone of the current live R7 runtime.
 Deployment Authorized: YES
 Lifecycle: CLOSED - 2026-09-30, as the final revision of `M8/T2.2`
-Deployment Status: AUTHORIZED - NOT YET DEPLOYED
+Deployment Status: DEPLOYED
 
 R16 is repository-only and creates no deployment authorization. Both prior
 single-attempt authorizations (`b8597fe`, `7520f39`) are consumed and closed.
@@ -77,17 +77,67 @@ not create a production ledger task, and do not delete or rewrite any
 transaction. Commits are local and unpushed.
 
 Lifecycle: R16 is `CLOSED` as the final revision of `M8/T2.2`. `Deployment
-Authorized` is `YES` for ONE attempt, granted by the owner on 2026-09-30 to
-deploy the verified R16 artifact to the live runtime; that attempt consumes the
-authorization. Until the attempt completes, `Deployment Status` is not yet
-deployed. The live runtime remains R7 and byte-identical, and the ledger is
-unchanged. No R17 is created.
+Authorized` was `YES` for ONE attempt, granted by the owner on 2026-09-30, and
+that attempt has been consumed by the deployment recorded in section 10. The live
+runtime is R10. The ledger is byte-identical. No R17 is created.
 
-This live deployment is a separate authorized operation from the R16 rehearsal.
+This live deployment was a separate authorized operation from the R16 rehearsal.
 The rehearsal constraints in section 2 — no live gateway restart, no real
-systemctl, no live mutation — governed the rehearsal and are superseded for this
-one attempt only, by the explicit authorization recorded above. The rehearsal
-itself remains immutable evidence.
+systemctl, no live mutation — governed the rehearsal and were superseded for the
+one deployment attempt only, by the explicit authorization recorded above. The
+rehearsal itself remains immutable evidence and is unchanged.
+
+## 10. Live deployment result
+
+**DEPLOYED.** 2026-09-30, one authorized attempt, run through
+`operator-apply.mjs` against the real live runtime with no namespace and no
+simulation. Authorization was recorded in both authoritative sources and
+committed as `075f46d` before any runtime contact.
+
+The apply returned `{"status":"PASS","stage":"applied","mutationStarted":true,
+"rollbackRequired":false,"rollbackAttempted":false,"rollbackSucceeded":false,
+"reason":null,"transactionStatus":"complete"}`. All stages ran in order through
+`runtime-verify`. No rollback was required or attempted, and success was licensed
+by live byte verification rather than by self-report.
+
+The live native write went `R7 → R10` directly: selection
+`b4316736…` → `555f37dae8eec1fbbd35e25ae28222dc5e8d6965e383500695a93900e9d8ddf5`,
+bridge `33b3feef…` → `50af7d4ae10b519340b8dc13af3e2b219041fb28991e2a777ea815b537d2c7c2`.
+The extension entrypoint moved `74582778…` → `e5b220b4…` and the installed
+boundary `33b3feef…` → `50af7d4a…`. `openclaw.json` is unchanged at
+`5db19403…` because the R7 config was already current. `native-r12` still holds
+3 files at its prior mtime, so the baseline-writing branch never ran.
+
+Independently verified after the apply: `checkNativePatch` returns `PATCHED` for
+both sources; the live bridge equals the repository R10 boundary; the deployed
+extension tree matches `governancePluginFiles()` byte-for-byte across 34 of 34
+files; `trigger` and `transcriptPrompt` are present in the written selection;
+`GOVERNANCE_VERSION = "m8-t2.3-r5"` with the G1 predicate and the G2 code intact;
+three plugins configured. The gateway restarted for real and serves the new code
+— `active (running)`, `NRestarts=0`, plugin loaded, http listening, heartbeat
+started. `NRestarts` never rose; the repeated stop/start entries in the journal
+are distinct WSL instance boots, not a crash loop.
+
+Transaction `txn-1ba7689b6908d601122834e426939541bc72106736b2a5a15b48d539a063a8d4`
+is schema v2, `complete`, and snapshot-verified — the R15 random attempt identity,
+marked complete only after verification. The retained historical record
+`txn-02edeb0bf364e3931fffd9e1e5fe904b` is untouched and still verifies.
+
+Ledger unchanged: `events.jsonl` `d794d99d…`, `snapshot.json` `bbdf3aec…`,
+103 events, sequence 103, 37 tasks — byte-identical before and after.
+`backups/r12` untouched at 14 files. No quarantine, no rehearsal scratch, no
+stray mounts.
+
+`GOVERNANCE_RUN_UNAVAILABLE` after the deployment: **0**. The last occurrence
+anywhere was `17:20:53`, hours before the apply. Post-deployment error lines are
+Discord WebSocket closes with code `1006` during WSL reboots — 7 after against
+22 before — and are unrelated to governance.
+
+Stated limitation: no complete heartbeat cycle has been observed yet, because WSL
+restarts roughly every one to two minutes here while the cadence is about thirty
+minutes, so the scheduler is restarted before finishing a run. The failure R10
+exists to fix has stopped occurring; cadence confirmation needs a longer-lived
+WSL instance.
 
 ## 9. Result
 
