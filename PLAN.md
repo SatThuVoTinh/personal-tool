@@ -35,7 +35,7 @@ Evidence Level: NONE | LOCAL-VERIFIED | REMOTE-BACKED
 | M5 — Architecture contraction                                              | `COMPLETE`    | `REMOTE-BACKED`  | M5/T1-R2 synchronized canonical paths, documentation and the contracted Docker runtime without refactoring the accepted Knowledgebase application.                          |
 | M6 — Zink Skill Store                                                      | `COMPLETE`    | `REMOTE-BACKED`  | M6/T1-R4 task commit is remotely verified; governance closeout is recorded separately.                                                                                      |
 | M7 — Zink Tools + OpenClaw integration + V1 hardening                      | `COMPLETE`    | `REMOTE-BACKED`  | M7/T1-R19, M7/T2-R12, M7/T3-R16, M7/T4-R10, and M7/T5-R13 complete; runtime governance remediation, Discord 7-bot integration, and Zink tools specialist policies verified. |
-| M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Integration | `IN PROGRESS` | `LOCAL-VERIFIED` | M8/T1 is complete; M8/T2.2-R4 implementation and final verification are in progress.                                                                                        |
+| M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Integration | `IN PROGRESS` | `LOCAL-VERIFIED` | M8/T1 is complete; M8/T2.2 R4/R5/R6 are implemented; M8/T2.2-R7 (heartbeat admission, boundary diagnosability, apply safety) is in progress. Deployment is not authorized.  |
 
 The former self-built L&SC Data Plant is replaced by a **logical external
 infrastructure flow**, not another repository module. Forecasting, optimization,
@@ -48,14 +48,88 @@ Milestone: M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Inte
 Task: M8/T2.2 — Root-Cause Governed Runtime, Discord, Semantic & Artifact Integrity Hardening
 Task Status: IN PROGRESS
 Planning Readiness: APPROVED
-Plan Revision: M8/T2.2-R4
+Plan Revision: M8/T2.2-R7
 Execution Authorization: YES
 Authorized Task: M8/T2.2 — Root-Cause Governed Runtime, Discord, Semantic & Artifact Integrity Hardening
 Execution Contract: docs/contracts/execution/ACTIVE.md
 Evidence Level: LOCAL-VERIFIED
 Task Branch: codex/m8-t2-governed-runtime-hardening
-Owner Approval: EXPLICIT — Owner approved executing ACTIVE.md (M8/T2.2-R4) strictly as plan
+Owner Approval: EXPLICIT — Owner authorized M8/T2.2-R7 remediation on 2026-09-30 and
+  explicitly withheld deployment authority. Deployment is NOT authorized.
+Deployment Authorized: NO
 ```
+
+### 4.1 Revision lineage reconciliation (2026-09-30)
+
+`PLAN.md` previously recorded `Plan Revision: M8/T2.2-R4` while the branch already
+carried R5 and R6 implementation. The plan was never revised for either, so
+`ACTIVE.md` and `PLAN.md` no longer described the same work. Reconciled state:
+
+| Revision   | Status      | Implementation evidence                                                                       |
+| ---------- | ----------- | --------------------------------------------------------------------------------------------- |
+| M8/T2.2-R4 | Implemented | R4 validation snapshot below. Superseded as the active revision.                              |
+| M8/T2.2-R5 | Implemented | `652ac0c` config convergence, `9a6702f` V15 packaging, `9713872` V16 rewriter self-match.     |
+| M8/T2.2-R6 | Implemented | `2e1f8c4` `WORKFLOW_APPROVAL_REQUESTED` contract, `2d1121f` provenance-gated asset allowlist. |
+| M8/T2.2-R7 | IN PROGRESS | Authorized 2026-09-30. Active contract: `docs/contracts/execution/ACTIVE.md`.                 |
+
+All revisions are local commits on `codex/m8-t2-governed-runtime-hardening`; none
+has been pushed.
+
+The superseded git-ignored R3/R4 remediation backlog was archived to
+`docs/contracts/m7-m8-red-team-backlog.md` so that replacing the transient
+`ACTIVE.md` did not destroy unrecoverable content. That archive is
+non-authoritative historical record and grants no execution authority.
+
+### 4.2 M8/T2.2-R7 scope
+
+R7 closes three defects proven by a read-only forensic audit on 2026-09-30, and
+does not deploy:
+
+- **G1** — Option A, INTERNAL/EXEMPT, for the pure liveness heartbeat poll only.
+  A qualifying heartbeat requires no ledger task or session and none is
+  fabricated. The exemption is bounded by its inverse and is not a general
+  exemption for arbitrary `agent:main:main` runs.
+- **G2** — `native-boundary.mjs` preserves the original failure as `.cause` and
+  logs the fixed error message. The host-visible `GOVERNANCE_RUN_UNAVAILABLE`
+  string is unchanged.
+- **G3** — `before_prompt_build()` fails closed for an unresolvable governed run
+  instead of injecting a degraded context and proceeding.
+- **DS** — `operator-apply.mjs` enforces `PRE-FLIGHT FAILURE = ZERO RUNTIME
+MUTATION` by running the existing preflight and gating rollback on a real
+  mutation boundary.
+
+The heartbeat failure began 2026-09-11T23:51:55+07:00 and predates R5/R6. The
+production ledger was verified unmodified throughout
+(`d794d99d…` / `bbdf3aec…`, mtime 2026-09-28 17:26:11) and must remain untouched.
+
+### 4.3 M8/T2.2-R7 implementation state and pending deployment
+
+The R7 repository remediation is implemented and validated as a single local
+implementation commit on `codex/m8-t2-governed-runtime-hardening`. Validation
+evidence for that commit: 18 new focused R7 tests; full `npm test` 651 tests /
+79 suites / 649 pass / 0 fail / 2 skipped; `npm run lint` exit 0;
+`npm run format:check` clean; `npm run repo:check` passed; `git diff --check`
+clean. The 2 skips are the pre-existing R6 production-ledger replay tests that
+skip on Windows, where the production ledger is not mounted.
+
+R7 remains the active execution task and is **not** closed. `ACTIVE.md` remains
+present and authoritative; the execution-contract pointer stays set; and
+`Execution Authorization: YES` continues to authorize repository R7 remediation
+only. Deployment is gated separately by `Deployment Authorized: NO`.
+
+The live runtime has deliberately **not** been restored. The repository now
+contains the G1/G2/G3 fixes while the quarantined R5 runtime does not, so
+restoring R5 before validating the new behavior would reintroduce the proven
+heartbeat failure. Restoration is therefore sequenced after an isolated
+validation of the new `before_prompt_build` fail-closed behavior against the
+OpenClaw host hook path.
+
+Runtime state at the close of R7 implementation, verified read-only and
+unchanged by this work: `openclaw.json` `b96aca41…` (14798 bytes); live
+`extensions/zink-governance` absent with the R5/R6-era build still present in
+`operator/m7-t2/backups/r12/quarantined-t2/`; `selection-DopzNY3I.js` at the
+clean baseline `a5698c55…`; `zink-governance-boundary.mjs` absent; production
+ledger 103 events, `d794d99d…` / `bbdf3aec…`.
 
 R4 validation snapshot (task remains IN PROGRESS): focused M8/T1, M8/T2 and
 native ingress suites PASS; focused DuckDB/M7-T4 gates PASS 27/27; full

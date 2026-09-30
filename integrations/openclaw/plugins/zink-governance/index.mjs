@@ -2618,6 +2618,43 @@ export function isProviderFailureEvent(event) {
 }
 
 /**
+ * R7 G1 (Option A): the exact sentinel OpenClaw injects for its periodic
+ * liveness poll. A qualifying heartbeat is an INTERNAL run: it requires no
+ * ledger task and no ledger session, and none is fabricated for it.
+ *
+ * The exemption is bounded by its inverse. Any other content, any mention, any
+ * bot author, any inter-session provenance, or any Discord ingress fails this
+ * predicate and continues through the normal governed path, so it is never a
+ * general exemption for an arbitrary self-keyed `agent:<id>:<id>` run.
+ */
+const HEARTBEAT_LIVENESS_SENTINEL = "[OpenClaw heartbeat poll]";
+
+export function isPureLivenessHeartbeat(context) {
+  if (!context || typeof context !== "object") return false;
+  if (context.inputProvenance) return false;
+  if (Array.isArray(context.mentions) && context.mentions.length > 0)
+    return false;
+  if (context.isBot) return false;
+  const { agentId, sessionKey } = context;
+  if (typeof agentId !== "string" || typeof sessionKey !== "string")
+    return false;
+  if (sessionKey !== `agent:${agentId}:${agentId}`) return false;
+  if (sessionKey.includes(":discord:")) return false;
+  for (const key of [
+    "channelId",
+    "channel",
+    "messageChannel",
+    "messageProvider",
+  ]) {
+    if (context[key] === "discord") return false;
+  }
+  return (
+    context.content === HEARTBEAT_LIVENESS_SENTINEL ||
+    context.message === HEARTBEAT_LIVENESS_SENTINEL
+  );
+}
+
+/**
  * M7-048: classify a run-end request without trusting a session-key string.
  *
  * A session is an internal system session only when the authoritative ledger
@@ -3590,6 +3627,10 @@ export default {
         };
       },
       async beforeRun(event, context, signal) {
+        // R7 G1: a pure liveness heartbeat is an internal run and is exempt from
+        // ledger ownership. It is admitted before the classifier below, which
+        // deliberately refuses any self-keyed session that carries a runId.
+        if (isPureLivenessHeartbeat(context)) return { allow: true };
         // The internal-session rule is decided by the ONE canonical classifier,
         // not by a second local copy of the same test. A self-keyed session that
         // the ledger owns, or that carries a runId, is a GOVERNED session and
@@ -4570,6 +4611,9 @@ export default {
       return { allow: true, taskId };
     }
     api.on("before_prompt_build", async (_event, context = {}) => {
+      // R7 G1: an exempt heartbeat has no ledger owner by design, so no
+      // governance receipt is built for it. Nothing is fabricated.
+      if (isPureLivenessHeartbeat(context)) return {};
       try {
         const owner = findSession(
           readSnapshot(paths),
@@ -4617,13 +4661,14 @@ export default {
           prependContext: prepend,
         };
       } catch (error) {
+        // R7 G3: an unresolvable governed execution must not be laundered into a
+        // degraded prompt context and then allowed to proceed as though
+        // governance had completed. Fail closed, keeping the contract reason
+        // code that `findSession` raised.
         api.logger?.error?.(
-          `zink governance before_prompt_build: EXECUTION_STATE_UNKNOWN (${error?.message ?? error})`,
+          `zink governance before_prompt_build: ${error?.message ?? error}`,
         );
-        return {
-          prependContext:
-            "[Trusted governance] EXECUTION_STATE_UNKNOWN. Do not delegate; report BLOCKED.",
-        };
+        throw error;
       }
     });
     /**

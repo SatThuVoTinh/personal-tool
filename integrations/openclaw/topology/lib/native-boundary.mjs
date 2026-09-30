@@ -312,8 +312,16 @@ export async function enterNativeRun(config, context, signal) {
       signal,
     );
     if (decision?.allow !== true) throw new Error("GOVERNANCE_DENIED");
-  } catch {
-    throw new Error("GOVERNANCE_RUN_UNAVAILABLE");
+  } catch (error) {
+    // R7 G2: the host-visible contract string is unchanged, but the original
+    // failure is preserved as the cause so a governance verdict and a genuine
+    // execution-state fault stay distinguishable. Only the fixed error message
+    // is logged: never the stack, the run context, or message content.
+    console.error(
+      "[zink-native-gate] enterNativeRun:",
+      error?.message ?? error,
+    );
+    throw new Error("GOVERNANCE_RUN_UNAVAILABLE", { cause: error });
   }
 }
 
