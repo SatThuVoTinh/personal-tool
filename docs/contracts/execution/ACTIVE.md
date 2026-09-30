@@ -111,10 +111,21 @@ Live environment after: all 15 components and 4 subtrees byte-identical; gateway
 `MainPID=98288`, `NRestarts=0`, `ActiveEnterTimestamp` unchanged; ledger 103
 events, sequence 103, 37 tasks. NOT DEPLOYED.
 
-Deployment path status after this revision: the R7 → R10 native write, the
-post-apply runtime verification and the restart stage are all now exercised. The
-only remaining unexercised step is a live deployment itself, which stays
-unauthorized.
+Deployment path status after this revision, stated precisely:
+
+- the R7 → R10 native predecessor WRITE is genuinely exercised — real patcher,
+  real bytes, on a byte-exact clone of the live runtime;
+- the post-apply runtime verification is genuinely exercised — the real
+  `verifyLiveRestore(..., { postApply: true })` byte comparison ran and licensed
+  the apply, and its failure path rolled back;
+- the gateway restart stage is **NOT** exercised. It ran only as an injected
+  no-op. No real `systemctl --user restart` and no real `is-active` observation
+  has ever executed, on the live runtime or on a clone. Its orchestration
+  position, ordering and rollback interaction are proven; its effect is not.
+
+So the deployment path is proven up to, but not including, the restart itself.
+The remaining unexercised steps are the real restart and a live deployment, and
+a live deployment stays unauthorized.
 
 ---
 

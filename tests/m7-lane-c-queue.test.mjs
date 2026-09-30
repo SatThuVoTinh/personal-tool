@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { setTimeout } from "node:timers/promises";
 import { QueueManager } from "../integrations/openclaw/lib/queue-manager.mjs";
 import { consumeApprovalAtomically } from "../integrations/openclaw/topology/lib/guard.mjs";
 
@@ -204,13 +205,20 @@ describe("Lane C — queue projection & lease authority", () => {
     );
   });
 
-  it("M7-025: stale recovery never resurrects ledger-closed work", () => {
+  it("M7-025: stale recovery never resurrects ledger-closed work", async () => {
     const qm = freshQueue();
     enqueue(qm, "s-cancelled");
     const c1 = claimAs(qm, "s-cancelled", "o1");
     enqueue(qm, "s-active");
     const c2 = claimAs(qm, "s-active", "o1");
     assert.ok(c1.leaseId && c2.leaseId);
+    // Staleness is `heartbeat age > threshold`, strictly. Even with a zero
+    // threshold the heartbeat must be measurably older than "now", so the clock
+    // has to actually advance first. Without this the test asserts timer
+    // resolution instead of the ledger-closure rule it exists to check, and it
+    // fails whenever the claim and the recovery land in the same millisecond —
+    // measured at roughly 40% of runs on tmpfs, and never on NTFS.
+    await setTimeout(10);
     const recovered = qm.detectAndRecoverStaleTasks({
       staleThresholdSeconds: 0,
       ledgerTasks: {

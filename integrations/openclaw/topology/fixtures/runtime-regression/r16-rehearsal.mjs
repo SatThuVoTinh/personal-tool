@@ -153,6 +153,26 @@ try {
   );
 } catch (error) {
   status = error.status ?? 1;
+  // R16: a rehearsal that could not run must say WHY. A bare non-zero exit made
+  // "the namespace is unavailable on this kernel", "the suite file is missing"
+  // and "the suite genuinely failed" indistinguishable to an operator — and a
+  // rehearsal that never ran is indistinguishable from a passing one.
+  if (error.code === "ENOENT")
+    report(
+      "REHEARSAL COULD NOT START: 'unshare' is not available on this host.",
+    );
+  else if (error.stderr && String(error.stderr).trim())
+    report(
+      `REHEARSAL COULD NOT START: ${String(error.stderr)
+        .trim()
+        .split("\n")
+        .slice(0, 6)
+        .join("\n  ")}`,
+    );
+  else
+    report(
+      `REHEARSAL COULD NOT START: exit ${status} with no diagnostic output.`,
+    );
 }
 
 // --- 3. the real runtime, after -------------------------------------------

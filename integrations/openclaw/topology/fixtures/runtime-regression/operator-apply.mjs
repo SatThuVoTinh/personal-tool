@@ -150,27 +150,19 @@ const report = await applyRuntime({
   verifyLiveRestore: (snapshot, options) =>
     verifyLiveRestore({ stateDir, runtimeRoot }, snapshot, options),
   restartScopedGateway,
-  // R11: retained as an ADDITIONAL semantic health signal only. It is not
-  // sufficient on its own: `config validate` accepts any config the current
-  // policy recognises, including a superseded baseline, so it cannot detect a
-  // wrong-but-valid restore. `verifyLiveRestore` compares bytes and is what
-  // actually licenses `rollbackSucceeded`.
-  validateConfig() {
-    execFileSync(
-      "/home/hoang_vinh/.local/bin/openclaw",
-      ["--profile", "zink", "config", "validate"],
-      {
-        env: {
-          ...process.env,
-          OPENCLAW_PROFILE: "zink",
-          OPENCLAW_STATE_DIR: stateDir,
-        },
-        stdio: ["ignore", "pipe", "pipe"],
-        timeout: 60000,
-        maxBuffer: 65536,
-      },
-    );
-  },
+  // R16: there is deliberately NO external `openclaw config validate` step here.
+  // It used to be wired as a dependency described as an "additional semantic
+  // health signal", but `applyRuntime` never called it, so the deployment path
+  // performed no such validation while the comment implied it did.
+  //
+  // Removing it is the correct fix rather than calling it: `config validate`
+  // accepts any config the current policy recognises, including a superseded
+  // baseline, so it cannot detect a wrong-but-valid restore and would add a
+  // failure mode to a path whose gate must be byte comparison. `verifyLiveRestore`
+  // compares bytes against the attempt's own preimage and is the only thing that
+  // licenses `rollbackSucceeded` or a successful apply. Config correctness is
+  // separately enforced at build time by the builder's own `--preflight` and
+  // `policy.validateConfig`, which run before the mutation boundary.
   classifyReason: classifyApplyReason,
 });
 
