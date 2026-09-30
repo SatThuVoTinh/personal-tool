@@ -90,21 +90,21 @@ consumed its own authorization record `dc466c6` and is closed.
 carried R5 and R6 implementation. The plan was never revised for either, so
 `ACTIVE.md` and `PLAN.md` no longer described the same work. Reconciled state:
 
-| Revision    | Status      | Implementation evidence                                                                                                                                                         |
-| ----------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| M8/T2.2-R4  | Implemented | R4 validation snapshot below. Superseded as the active revision.                                                                                                                |
-| M8/T2.2-R5  | Implemented | `652ac0c` config convergence, `9a6702f` V15 packaging, `9713872` V16 rewriter self-match.                                                                                       |
-| M8/T2.2-R6  | Implemented | `2e1f8c4` `WORKFLOW_APPROVAL_REQUESTED` contract, `2d1121f` provenance-gated asset allowlist.                                                                                   |
-| M8/T2.2-R7  | Implemented | `a0118bc` heartbeat admission, boundary diagnosability, apply safety; `a1bf942` advisory-hook correction; `96e1b80` deployment authorization.                                   |
-| M8/T2.2-R8  | Implemented | `4f5cc6d` verified R5 `lib/native-boundary.mjs` approved-predecessor digest. Live preflight then returned `builder_preflight: PASS`, `installed_mutation: false`.               |
-| M8/T2.2-R9  | BLOCKED     | Authorized 2026-09-30. Superseded by R10: G1 condition 5 is unobservable at the native seam; see §4.6.                                                                          |
-| M8/T2.2-R10 | Implemented | `3bea651` G1 contract correction using the host-authoritative heartbeat trigger. Deployment `dc466c6` attempted and STOPPED pre-apply; NOT deployed.                            |
-| M8/T2.2-R11 | Implemented | `ab0dda2` transaction snapshot gates mutation, restores the exact preimage, and licenses `rollbackSucceeded` only on live verification. Accepted by the owner.                  |
-| M8/T2.2-R12 | Implemented | `47beb1c` durable transaction snapshot, orphan detection, verified post-apply, and the recovery authorization gate. Accepted as the rollback-safety baseline.                   |
-| M8/T2.2-R13 | Implemented | `2d8dc54` the two R7 predecessor governance-asset digests, byte-proven from the live runtime and the R7 commit. Live preflight then PASSed.                                     |
-| M8/T2.2-R14 | Implemented | `c41a7a5` native patch lineage: the deployed R7 patch is a recognized predecessor, so R7 -> R10 is derivable in memory. Live preflight then recognized `PREDECESSOR R7 -> R10`. |
-| M8/T2.2-R15 | Implemented | `c73173f` attempt-scoped transaction identity: `attemptId` separated from `preimageDigest`; completed attempts no longer block a repeat. 17/15 falsified. Not deployed.         |
-| M8/T2.2-R16 | IN PROGRESS | Authorized 2026-09-30. Full apply rehearsal on a byte-exact clone of the live R7 runtime. Isolated; not deployed; see A4.13.                                                    |
+| Revision    | Status      | Implementation evidence                                                                                                                                                                                                                           |
+| ----------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M8/T2.2-R4  | Implemented | R4 validation snapshot below. Superseded as the active revision.                                                                                                                                                                                  |
+| M8/T2.2-R5  | Implemented | `652ac0c` config convergence, `9a6702f` V15 packaging, `9713872` V16 rewriter self-match.                                                                                                                                                         |
+| M8/T2.2-R6  | Implemented | `2e1f8c4` `WORKFLOW_APPROVAL_REQUESTED` contract, `2d1121f` provenance-gated asset allowlist.                                                                                                                                                     |
+| M8/T2.2-R7  | Implemented | `a0118bc` heartbeat admission, boundary diagnosability, apply safety; `a1bf942` advisory-hook correction; `96e1b80` deployment authorization.                                                                                                     |
+| M8/T2.2-R8  | Implemented | `4f5cc6d` verified R5 `lib/native-boundary.mjs` approved-predecessor digest. Live preflight then returned `builder_preflight: PASS`, `installed_mutation: false`.                                                                                 |
+| M8/T2.2-R9  | BLOCKED     | Authorized 2026-09-30. Superseded by R10: G1 condition 5 is unobservable at the native seam; see §4.6.                                                                                                                                            |
+| M8/T2.2-R10 | Implemented | `3bea651` G1 contract correction using the host-authoritative heartbeat trigger. Deployment `dc466c6` attempted and STOPPED pre-apply; NOT deployed.                                                                                              |
+| M8/T2.2-R11 | Implemented | `ab0dda2` transaction snapshot gates mutation, restores the exact preimage, and licenses `rollbackSucceeded` only on live verification. Accepted by the owner.                                                                                    |
+| M8/T2.2-R12 | Implemented | `47beb1c` durable transaction snapshot, orphan detection, verified post-apply, and the recovery authorization gate. Accepted as the rollback-safety baseline.                                                                                     |
+| M8/T2.2-R13 | Implemented | `2d8dc54` the two R7 predecessor governance-asset digests, byte-proven from the live runtime and the R7 commit. Live preflight then PASSed.                                                                                                       |
+| M8/T2.2-R14 | Implemented | `c41a7a5` native patch lineage: the deployed R7 patch is a recognized predecessor, so R7 -> R10 is derivable in memory. Live preflight then recognized `PREDECESSOR R7 -> R10`.                                                                   |
+| M8/T2.2-R15 | Implemented | `c73173f` attempt-scoped transaction identity: `attemptId` separated from `preimageDigest`; completed attempts no longer block a repeat. 17/15 falsified. Not deployed.                                                                           |
+| M8/T2.2-R16 | CLOSED      | Authorized 2026-09-30. Closed 2026-09-30 as the final revision of M8/T2.2: full apply rehearsal on a byte-exact clone of the live R7 runtime, 16/16 in WSL, 17/17 findings fixed, 0 remaining genuine defects. Isolated; not deployed; see A4.13. |
 
 All revisions are local commits on `codex/m8-t2-governed-runtime-hardening`; none
 has been pushed.
@@ -541,9 +541,10 @@ Live environment after the rehearsal: all 15 components and 4 subtrees
 byte-identical, gateway `MainPID=98288` with `NRestarts=0` unchanged, ledger at
 103 events / sequence 103 / 37 tasks unchanged. **NOT DEPLOYED.**
 
-R16 is repository-only and creates no deployment authorization.
-`Deployment Authorized` remains `NO`; R16 is not closed under this contract and
-no R17 is created automatically.
+R16 is repository-only and creates no deployment authorization. R16 is `CLOSED`
+as the final revision of `M8/T2.2`. `Deployment Authorized` remains `NO`,
+`Deployment Status` remains `NOT DEPLOYED`, the live runtime remains R7 and
+byte-identical, and the ledger is unchanged. No R17 is created.
 
 #### 4.13.1 R16 findings closed
 

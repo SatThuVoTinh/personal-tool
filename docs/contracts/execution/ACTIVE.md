@@ -8,6 +8,8 @@ Owner Approval: EXPLICIT — owner authorized R16 on 2026-09-30, declining a fur
   live deployment and instead requiring the complete corrected apply path to be
   rehearsed against a byte-exact clone of the current live R7 runtime.
 Deployment Authorized: NO
+Lifecycle: CLOSED — 2026-09-30, as the final revision of `M8/T2.2`
+Deployment Status: NOT DEPLOYED
 
 R16 is repository-only and creates no deployment authorization. Both prior
 single-attempt authorizations (`b8597fe`, `7520f39`) are consumed and closed.
@@ -72,8 +74,12 @@ validation and does not authorize a deployment.
 Repository only. Do not deploy, do not run live `operator-apply`, do not restart
 the gateway, do not mutate WSL, do not send a heartbeat or a Discord message, do
 not create a production ledger task, and do not delete or rewrite any
-transaction. Commits are local and unpushed. R16 is not closed under this
-contract, and no R17 is created automatically.
+transaction. Commits are local and unpushed.
+
+Lifecycle: R16 is `CLOSED` as the final revision of `M8/T2.2`. `Deployment
+Authorized` remains `NO` and `Deployment Status` remains `NOT DEPLOYED`. The live
+runtime remains R7 and byte-identical, and the ledger is unchanged. No R17 is
+created.
 
 ## 9. Result
 
