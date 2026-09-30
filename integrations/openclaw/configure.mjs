@@ -782,6 +782,12 @@ async function main() {
       // R13 exists to remove. The R10 digest is deliberately NOT listed: it is
       // the current build and is already accepted by content comparison.
       "74582778e5d58ce6a26dec3514b9a73ad5f8964f892023b37221f8a85b5ff215",
+      // M8/T2.2-R17: the outgoing R10 entrypoint, listed here as well as in the
+      // preflight gate above for the same reason R13's entry is duplicated per
+      // mode: admitting the predecessor in one mode and not the other would let
+      // --preflight PASS and then --apply refuse. The R17 digest is deliberately
+      // NOT listed: it is the current build and is accepted by content comparison.
+      "e5b220b4a3b023f6d7b26561964f6204f0d004267b208cddab90adb6043b8bd7",
     ],
   );
   if (!existsSync(output.identityKeyPath))
