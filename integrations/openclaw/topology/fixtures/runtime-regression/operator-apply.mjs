@@ -4,6 +4,11 @@
 // R7 DS: the sequence, the mutation boundary and the rollback condition live in
 // apply-orchestration.mjs, which is covered by tests that never touch WSL. This
 // file supplies the real, trusted effects only.
+//
+// R11: the rollback target is the transaction snapshot of the exact live runtime
+// taken immediately before this apply. The historical `backups/r12` T1 baseline
+// and the `native-r12` clean preimages are NOT rollback targets for this path;
+// they remain deliberate historical-recovery evidence.
 import { execFileSync } from "node:child_process";
 import { existsSync, lstatSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
@@ -13,13 +18,17 @@ import {
   applyNativePatch,
   checkNativePatch,
   inspectNativePatch,
-  restoreNativePatch,
 } from "../../lib/native-patch.mjs";
-import { restoreT1RuntimeFiles } from "../../lib/runtime-backup.mjs";
 import {
   assertNoSymlinkComponents,
   parseIdentifiers,
 } from "../../../lib/policy.mjs";
+import {
+  createTransactionSnapshot,
+  restoreTransactionSnapshot,
+  verifyLiveRestore,
+  verifyTransactionSnapshot,
+} from "../../lib/transaction-snapshot.mjs";
 import { applyRuntime, classifyApplyReason } from "./apply-orchestration.mjs";
 
 const stateDir = "/home/hoang_vinh/.openclaw-zink";
@@ -111,13 +120,25 @@ const report = await applyRuntime({
   },
   applyNativePatch: () => applyNativePatch(runtimeRoot, nativeBackup),
   checkNativePatch: () => checkNativePatch(runtimeRoot),
-  restoreNativePatch: () => {
-    if (existsSync(path.join(nativeBackup, "manifest.json")))
-      restoreNativePatch(runtimeRoot, nativeBackup);
-  },
-  restoreT1RuntimeFiles: (identifiers) =>
-    restoreT1RuntimeFiles({ stateDir, identifiers }),
+  // R11: the rollback target is the exact live state captured immediately before
+  // this apply, not `backups/r12/t1-config.json` (captured 2026-09-11) and not
+  // the `native-r12` clean preimages. `restoreNativePatch` and
+  // `restoreT1RuntimeFiles` are deliberately NOT wired here: the first
+  // de-patches the runtime and drops the bridge, the second installs a
+  // superseded config and quarantines the governance extension. Both remain
+  // available for deliberate historical recovery via operator-rollback.mjs.
+  createTransactionSnapshot: () =>
+    createTransactionSnapshot({ stateDir, runtimeRoot }),
+  verifyTransactionSnapshot,
+  restoreTransactionSnapshot,
+  verifyLiveRestore: (snapshot) =>
+    verifyLiveRestore({ stateDir, runtimeRoot }, snapshot),
   restartScopedGateway,
+  // R11: retained as an ADDITIONAL semantic health signal only. It is not
+  // sufficient on its own: `config validate` accepts any config the current
+  // policy recognises, including a superseded baseline, so it cannot detect a
+  // wrong-but-valid restore. `verifyLiveRestore` compares bytes and is what
+  // actually licenses `rollbackSucceeded`.
   validateConfig() {
     execFileSync(
       "/home/hoang_vinh/.local/bin/openclaw",

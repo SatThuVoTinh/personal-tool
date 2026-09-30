@@ -545,7 +545,15 @@ test("E: a valid owner Discord ingress run is still admitted and creates its tas
 // destroyed a working runtime on 2026-09-30.
 // ---------------------------------------------------------------------------
 
-/** A recording dependency set. `failAt` names the stage that throws. */
+/**
+ * A recording dependency set. `failAt` names the stage that throws.
+ *
+ * R11 replaced the two restore helpers with the transaction snapshot: a
+ * pre-mutation capture of the exact live runtime, its re-verification, a restore
+ * of that preimage, and a live comparison that alone licenses success. The R7
+ * invariant is unchanged and still asserted below — a preflight failure mutates
+ * nothing and restores nothing.
+ */
 function applyDeps(failAt, overrides = {}) {
   const calls = [];
   const step = (stage, value) => {
@@ -553,6 +561,10 @@ function applyDeps(failAt, overrides = {}) {
     if (failAt === stage) throw new Error(`synthetic failure at ${stage}`);
     return typeof value === "function" ? value() : value;
   };
+  // The synthetic snapshot is opaque here: this suite proves the ORCHESTRATION
+  // contract, and transaction-snapshot.test.mjs proves the snapshot's own
+  // correctness against a real filesystem.
+  const syntheticSnapshot = { synthetic: true };
   const deps = {
     calls,
     readIdentifiers: () => step("readIdentifiers", "synthetic-identifiers"),
@@ -560,21 +572,32 @@ function applyDeps(failAt, overrides = {}) {
       calls.push(`runBuilder:${mode}`);
       if (failAt === `runBuilder:${mode}`) throw new Error(`drift at ${mode}`);
     },
+    createTransactionSnapshot: () =>
+      step("createTransactionSnapshot", syntheticSnapshot),
+    verifyTransactionSnapshot: (snapshot) => {
+      assert.equal(snapshot, syntheticSnapshot);
+      return step("verifyTransactionSnapshot", { verified: true });
+    },
     pruneQuarantine: () => step("pruneQuarantine"),
     pruneStaleNativeBackup: () => step("pruneStaleNativeBackup"),
     applyNativePatch: () => step("applyNativePatch"),
     checkNativePatch: () => step("checkNativePatch"),
-    restoreNativePatch: () => step("restoreNativePatch"),
-    restoreT1RuntimeFiles: async () => step("restoreT1RuntimeFiles"),
+    restoreTransactionSnapshot: (snapshot) => {
+      assert.equal(snapshot, syntheticSnapshot);
+      return step("restoreTransactionSnapshot", { restored: true });
+    },
+    verifyLiveRestore: (snapshot) => {
+      assert.equal(snapshot, syntheticSnapshot);
+      return step("verifyLiveRestore", { restored: true, mismatches: [] });
+    },
     restartScopedGateway: () => step("restartScopedGateway"),
-    validateConfig: () => step("validateConfig"),
     classifyReason: (error) => String(error?.message ?? error),
   };
   for (const [key, value] of Object.entries(overrides)) deps[key] = value;
   return deps;
 }
 
-const RESTORE_CALLS = ["restoreNativePatch", "restoreT1RuntimeFiles"];
+const RESTORE_CALLS = ["restoreTransactionSnapshot", "verifyLiveRestore"];
 const ROLLBACK_CALLS = [...RESTORE_CALLS, "restartScopedGateway"];
 
 test("DS: a preflight failure mutates nothing and rolls nothing back", async () => {
@@ -634,8 +657,8 @@ test("DS: a failure on the first mutating call still rolls back", async () => {
 
 test("DS: a rollback failure is reported alongside the original failure", async () => {
   const deps = applyDeps("applyNativePatch", {
-    restoreT1RuntimeFiles: () => {
-      deps.calls.push("restoreT1RuntimeFiles");
+    restoreTransactionSnapshot: () => {
+      deps.calls.push("restoreTransactionSnapshot");
       throw new Error("synthetic rollback failure");
     },
   });

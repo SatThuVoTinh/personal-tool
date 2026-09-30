@@ -48,7 +48,7 @@ Milestone: M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Inte
 Task: M8/T2.2 — Root-Cause Governed Runtime, Discord, Semantic & Artifact Integrity Hardening
 Task Status: IN PROGRESS
 Planning Readiness: APPROVED
-Plan Revision: M8/T2.2-R10
+Plan Revision: M8/T2.2-R11
 Execution Authorization: YES
 Authorized Task: M8/T2.2 — Root-Cause Governed Runtime, Discord, Semantic & Artifact Integrity Hardening
 Execution Contract: docs/contracts/execution/ACTIVE.md
@@ -56,11 +56,16 @@ Evidence Level: LOCAL-VERIFIED
 Task Branch: codex/m8-t2-governed-runtime-hardening
 Owner Approval: EXPLICIT — Owner authorized R7 remediation, controlled live
   deployment, one-time R5 baseline restoration, R8 provenance remediation, R9
-  (blocked, superseded), R10 G1 contract correction using the host-authoritative
-  heartbeat trigger, and R10 live deployment of committed implementation
-  3bea651b778fa51abdc9a59fb439213d2900d736.
-Deployment Authorized: YES
+  (blocked, superseded), R10 G1 contract correction, and R10 live deployment
+  (attempted 2026-09-30 and STOPPED before `--apply` at the rollback-safety
+  gate with zero mutation). Owner then authorized R11 transactional live
+  rollback safety.
+Deployment Authorized: NO
 ```
+
+`Deployment Authorized` is reconciled to `NO` for R11 in both authoritative
+sources. The R10 deployment attempt consumed its own authorization record
+`dc466c6` and is closed; it is not carried forward.
 
 ### 4.1 Revision lineage reconciliation (2026-09-30)
 
@@ -76,7 +81,8 @@ carried R5 and R6 implementation. The plan was never revised for either, so
 | M8/T2.2-R7  | Implemented | `a0118bc` heartbeat admission, boundary diagnosability, apply safety; `a1bf942` advisory-hook correction; `96e1b80` deployment authorization.                     |
 | M8/T2.2-R8  | Implemented | `4f5cc6d` verified R5 `lib/native-boundary.mjs` approved-predecessor digest. Live preflight then returned `builder_preflight: PASS`, `installed_mutation: false`. |
 | M8/T2.2-R9  | BLOCKED     | Authorized 2026-09-30. Superseded by R10: G1 condition 5 is unobservable at the native seam; see §4.6.                                                            |
-| M8/T2.2-R10 | IN PROGRESS | Authorized 2026-09-30. G1 contract correction using the host-authoritative heartbeat trigger. Repository-only, not deployed; see §4.7.                            |
+| M8/T2.2-R10 | Implemented | `3bea651` G1 contract correction using the host-authoritative heartbeat trigger. Deployment `dc466c6` attempted and STOPPED pre-apply; NOT deployed.              |
+| M8/T2.2-R11 | IN PROGRESS | Authorized 2026-09-30. Transactional live rollback safety. Repository-only, not deployed; see §4.8.                                                               |
 
 All revisions are local commits on `codex/m8-t2-governed-runtime-hardening`; none
 has been pushed.
@@ -278,6 +284,45 @@ Discord-layer patch and no forwarded message objects are introduced.
 `classifyInternalRunEnd`, G2, G3, R6 semantics, the operator-apply mutation gate,
 preflight semantics and the asset allowlist are untouched. R10 is repository-only
 and is not deployed.
+
+### 4.8 M8/T2.2-R11 — transactional live rollback safety
+
+The authorized R10 live deployment (`dc466c6`) was attempted on 2026-09-30 and
+**STOPPED before `--apply`** at the owner's Phase 1 rollback-safety gate, with
+zero mutation proven by identical before/after runtime and ledger hashes and an
+unchanged gateway PID. Two independent blockers were found.
+
+**Blocker 1 — the rollback target is a historical baseline, not the current
+runtime.** `operator-apply.mjs:112-119` wires rollback to
+`restoreNativePatch(runtimeRoot, native-r12)` and
+`restoreT1RuntimeFiles({ stateDir, identifiers })`. `native-r12` holds the clean
+upstream BASELINE preimages, so that restore removes the native patch and the
+bridge. `restoreT1RuntimeFiles` writes `backups/r12/t1-config.json`, captured
+2026-09-11 17:36:24, over the live config and renames the governance extension
+into quarantine. A mid-apply failure would therefore leave the 2026-09-11 T1
+config `b96aca41…` instead of the live R7 config `5db19403…`, with no
+governance plugin installed. `runtime-backup.mjs:107` returns early when the
+backup root exists, so no in-operator path ever captures a fresh snapshot.
+
+**Blocker 2 — the asset gate refuses the R10 build.** R7→R10 changes exactly two
+generated-extension files, and neither outgoing digest is allowlisted:
+`lib/native-boundary.mjs` `33b3feef…` → `50af7d4a…`, and entrypoint
+`74582778…` → `e5b220b4…`. `--preflight` returned `Governance plugin asset drift
+detected`. The R10 digests were deliberately NOT added.
+
+**Additional defect found during the same audit.**
+`apply-orchestration.mjs:114-124` sets `rollbackSucceeded = true` as soon as the
+restore helpers return, while `restoreT1RuntimeFiles` itself reports
+`liveBaselineValidation: "NOT RUN"` and is documented "Never reports a live
+rollback PASS". A rollback leaving the runtime ungoverned is reported as
+successful.
+
+R11 replaces "restore the old baseline" with "restore the exact transaction
+preimage", gates mutation on a verified transaction-scoped snapshot, and
+replaces "the restore returned" with "the live runtime was verified".
+`backups/r12` is neither deleted nor repurposed and remains historical recovery
+evidence. R11 is repository-only: no deployment, no live rollback, no second
+deployment attempt, and the R10 allowlist entries are not added.
 
 R4 validation snapshot (task remains IN PROGRESS): focused M8/T1, M8/T2 and
 native ingress suites PASS; focused DuckDB/M7-T4 gates PASS 27/27; full
