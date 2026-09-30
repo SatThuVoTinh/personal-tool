@@ -133,6 +133,10 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // only so the V15 contracts-lookup fix can replace it. Contrast the
     // 2026-09-30 group above, whose provenance is explicitly NOT established.
     "d2f3e7203f327041a5678234d8fd302f20e06c7b7b2fbf8b1c079317858e4d2a",
+    // The accepted V15 build (9a6702f), established the same way, listed only so
+    // the V16 self-safe rewrite mechanism can replace it. Same classification as
+    // the entry above; the semantics of this table are unchanged.
+    "5bbcbdbf39cdee8f568f48ce613450ea203f04ca39ee360f213456e4977e74f8",
   ]),
   "lib/queue-manager.mjs": Object.freeze([
     "a8021088a4e9373fcf74cf4dd31433c8606b9505eaf74c5fa922839ee716776a",

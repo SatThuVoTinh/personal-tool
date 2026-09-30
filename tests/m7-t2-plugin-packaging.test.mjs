@@ -23,7 +23,10 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { governancePluginFiles } from "../integrations/openclaw/lib/policy.mjs";
+import {
+  governancePluginFiles,
+  PACKAGE_REWRITES,
+} from "../integrations/openclaw/lib/policy.mjs";
 
 const REPO_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -203,6 +206,226 @@ describe("V15 — the deployed plugin resolves its own topology contracts", () =
         pathToFileURL(path.join(root, "lib", "policy.mjs")).href
       );
       assert.throws(() => deployed.governanceHash("main"), /ENOENT/u);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// V16: the rewriter used to rewrite its own rewrite specification.
+//
+// governancePluginFiles packages policy.mjs, and policy.mjs is where the rewrite
+// rules were written as inline string literals. A literal rule therefore occurs
+// inside the very file its own pass rewrites, and the pass destroyed it: the
+// deployed copy carried replaceAll('"./', '"./') instead of the real
+// import-flattening rule, a silent no-op that disabled the rewrite for every
+// later build.
+//
+// A no-op rule cannot be detected by applying it — a no-op is a fixed point — so
+// these tests assert the SEMANTIC invariant instead: the rewrite specification
+// evaluated from the packaged bytes must equal the specification evaluated from
+// the source. That needs no restated expectations, so it cannot drift from the
+// implementation, and it covers every rule including ones added later.
+describe("V16 — the packaging rewriter cannot rewrite its own specification", () => {
+  const importDeployedTable = async () => {
+    const { assets } = governancePluginFiles();
+    const root = deployShape(assets);
+    try {
+      const deployed = await import(
+        pathToFileURL(path.join(root, "lib", "policy.mjs")).href
+      );
+      return { root, assets, deployed, text: assets["lib/policy.mjs"] };
+    } catch (error) {
+      rmSync(root, { recursive: true, force: true });
+      throw error;
+    }
+  };
+
+  it("A. the packaged policy.mjs carries the SAME rewrite table as the source", async () => {
+    const { root, deployed } = await importDeployedTable();
+    try {
+      assert.deepStrictEqual(
+        deployed.PACKAGE_REWRITES,
+        PACKAGE_REWRITES,
+        "the rewrite specification must survive self-packaging unchanged",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("D. the topology/lib import rule is functional, not a silent no-op", async () => {
+    const { root, text } = await importDeployedTable();
+    try {
+      // The rule's EFFECT is the proof. If the rule had degenerated to
+      // '"./' -> '"./' the import below would still be present in the packaged
+      // bytes, because nothing would have removed it.
+      assert.ok(
+        !text.includes('"../topology/lib/canonical.mjs'),
+        "the policy.mjs canonical import must actually be rewritten",
+      );
+      assert.ok(
+        text.includes('from "./canonical.mjs"'),
+        "the flattened import must be present in the packaged bytes",
+      );
+      // And the rule that did it must still be specified, not consumed.
+      assert.ok(
+        text.includes("PACKAGE_REWRITES"),
+        "the rewrite table must be present in the packaged bytes",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("B. the entrypoint rewrite rules survive and are functional", async () => {
+    const { assets, deployed, root } = await importDeployedTable();
+    try {
+      const entrypointRules = deployed.PACKAGE_REWRITES.entrypoint;
+      assert.strictEqual(entrypointRules.length, 2);
+      assert.deepStrictEqual(entrypointRules, PACKAGE_REWRITES.entrypoint);
+
+      const entrypoint = assets["index.mjs"] ?? null;
+      const packaged = governancePluginFiles().entrypoint;
+      assert.ok(
+        !packaged.includes('"../../topology/lib/'),
+        "entrypoint topology imports must be rewritten",
+      );
+      assert.ok(
+        !packaged.includes('"../../lib/'),
+        "entrypoint shared lib imports must be rewritten",
+      );
+      void entrypoint;
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("C. the ../../lib/ rule survives and is functional for the topology modules", async () => {
+    const { assets, deployed, root } = await importDeployedTable();
+    try {
+      assert.deepStrictEqual(
+        deployed.PACKAGE_REWRITES["topology/lib"],
+        PACKAGE_REWRITES["topology/lib"],
+      );
+      // guard, ledger and workflow are the modules that actually import
+      // shared lib/ siblings, so they are the observable effect of this rule.
+      for (const name of ["guard", "ledger", "workflow"]) {
+        assert.ok(
+          !assets[`lib/${name}.mjs`].includes('"../../lib/'),
+          `${name}.mjs must have its shared lib imports rewritten`,
+        );
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("E. the V15 contract-path fix is unaffected by the V16 mechanism", async () => {
+    const { assets, deployed, text, root } = await importDeployedTable();
+    try {
+      assert.ok(
+        text.includes('"../../contracts"'),
+        "the deployed contracts lookup must still be in place",
+      );
+      assert.ok(
+        !text.includes('"../../topology/contracts"'),
+        "the repository-only lookup must still be gone",
+      );
+      // And it must still actually resolve on deployed-shaped bytes.
+      assert.match(deployed.governanceHash("main"), /^[0-9a-f]{64}$/u);
+      assert.equal(
+        deployed.governanceHash("main"),
+        JSON.parse(assets["governance-manifests.json"]).main.governance_hash,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("F. no rule degenerates, reaches the source tree, or embeds a host path", async () => {
+    const { root, text } = await importDeployedTable();
+    try {
+      for (const [target, rules] of Object.entries(PACKAGE_REWRITES))
+        for (const [, replacement] of rules) {
+          assert.ok(
+            !path.isAbsolute(replacement) && !replacement.includes("/home/"),
+            `${target}: replacement must stay relative, got ${replacement}`,
+          );
+          assert.ok(
+            !replacement.includes("integrations/openclaw"),
+            `${target}: replacement must not point at the source tree`,
+          );
+        }
+
+      // The self-safety invariant, checked on the PACKAGED bytes rather than on
+      // source: if any search pattern occurred contiguously in this file, that
+      // rule's own pass would consume it. Every pattern is assembled, so none
+      // may appear. This is deliberately a literal check — it is immune to
+      // prose, and it is exactly the condition that caused the original defect.
+      for (const [search] of Object.values(PACKAGE_REWRITES).flat())
+        assert.ok(
+          !text.includes(search),
+          `the packaged policy.mjs must not contain the search literal ${search}`,
+        );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("G. every governed rewrite rule is non-degenerate and effective", async () => {
+    const { root, deployed } = await importDeployedTable();
+    try {
+      const sources = {
+        "topology/lib": [
+          "canonical",
+          "guard",
+          "ledger",
+          "workflow",
+          "schema",
+          "runtime",
+          "native-boundary",
+        ].map((n) => repoFile(`integrations/openclaw/topology/lib/${n}.mjs`)),
+        "lib/policy.mjs": [repoFile("integrations/openclaw/lib/policy.mjs")],
+        entrypoint: [
+          repoFile("integrations/openclaw/plugins/zink-governance/index.mjs"),
+        ],
+      };
+
+      const targets = Object.keys(deployed.PACKAGE_REWRITES);
+      assert.ok(targets.length > 0, "the rewrite table must not be empty");
+      // Mechanical coverage: every target the packager can rewrite is declared,
+      // so a future inline replaceAll cannot bypass the table unnoticed.
+      for (const expected of ["topology/lib", "lib/policy.mjs", "entrypoint"])
+        assert.ok(
+          targets.includes(expected),
+          `${expected} must be governed by the rewrite table`,
+        );
+
+      let ruleCount = 0;
+      for (const [target, rules] of Object.entries(deployed.PACKAGE_REWRITES)) {
+        assert.ok(rules.length > 0, `${target} must declare at least one rule`);
+        for (const [search, replacement] of rules) {
+          ruleCount += 1;
+          assert.equal(typeof search, "string");
+          assert.ok(search.length > 0, `${target}: empty search pattern`);
+          assert.notEqual(
+            search,
+            replacement,
+            `${target}: rule ${search} is a no-op and would be invisible`,
+          );
+          // EFFECTIVENESS: the rule must actually match its target's source.
+          // A vacuous rule would silently stop flattening imports.
+          assert.ok(
+            sources[target].some((body) => body.includes(search)),
+            `${target}: rule ${search} matches nothing in its target`,
+          );
+        }
+      }
+      assert.ok(
+        ruleCount >= 5,
+        `expected the full rule set, enumerated only ${ruleCount}`,
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

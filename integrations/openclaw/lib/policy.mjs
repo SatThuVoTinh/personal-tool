@@ -641,6 +641,54 @@ export const GOVERNANCE_PLUGIN_TEMPLATE = path.resolve(
 // rule self-rewrote to a no-op `replaceAll('"./', '"./')` in the deployed copy.
 const SOURCE_CONTRACTS_LOOKUP = `../../${"topology/contracts"}`;
 const DEPLOYED_CONTRACTS_LOOKUP = `../../${"contracts"}`;
+// V16: the packaging rewrite specification, declared as DATA.
+//
+// `governancePluginFiles` rewrites policy.mjs's OWN source text, so a rule
+// written as a literal in this file would match itself and be destroyed by its
+// own pass. That is not hypothetical: the historical "../topology/lib/" rule
+// self-rewrote to the no-op '"./' -> '"./' in the deployed copy, silently
+// disabling the import flattening for every later build.
+//
+// Two properties make the mechanism self-safe rather than merely patched:
+//
+//  1. Every search pattern is ASSEMBLED from path segments by `spec()`, so the
+//     finished literal never occurs contiguously in this file. A rule therefore
+//     cannot become its own search target, for the rules that exist today and
+//     for any rule added later.
+//  2. The specification is one frozen table applied by one function, instead of
+//     inline `replaceAll` calls spread across three branches. That makes the
+//     complete rule set enumerable, so the packaged bytes can be verified
+//     against the source table instead of against grepped literals.
+const spec = (...segments) => `"${segments.join("/")}`;
+
+export const PACKAGE_REWRITES = Object.freeze({
+  // Topology modules import shared lib/ siblings relatively; the installed
+  // plugin flattens them into one lib/ tree (M7-037 packaging rule).
+  "topology/lib": Object.freeze([
+    Object.freeze([`${spec("..", "..", "lib")}/`, '"./']),
+  ]),
+  "lib/policy.mjs": Object.freeze([
+    Object.freeze([`${spec("..", "topology", "lib")}/`, '"./']),
+    // V15: relocating the contracts lookup is not the same as softening it. No
+    // fallback is added, so a missing or unreadable contract still raises
+    // ENOENT exactly as it did in the repository layout.
+    Object.freeze([
+      `"${SOURCE_CONTRACTS_LOOKUP}"`,
+      `"${DEPLOYED_CONTRACTS_LOOKUP}"`,
+    ]),
+  ]),
+  entrypoint: Object.freeze([
+    Object.freeze([`${spec("..", "..", "topology", "lib")}/`, '"./lib/']),
+    Object.freeze([`${spec("..", "..", "lib")}/`, '"./lib/']),
+  ]),
+});
+
+function applyPackageRewrites(target, content) {
+  let result = content;
+  for (const [search, replacement] of PACKAGE_REWRITES[target] ?? [])
+    result = result.replaceAll(search, replacement);
+  return result;
+}
 const PASS_RESOLVER_TEMPLATE = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
@@ -1022,10 +1070,10 @@ export function governancePluginFiles() {
     "runtime.mjs",
     "native-boundary.mjs",
   ]) {
-    let content = readFileSync(path.join(topology, "lib", file), "utf8");
-    // Topology files import shared lib/ siblings relatively; the installed
-    // plugin flattens them into one lib/ tree (M7-037 packaging rule).
-    content = content.replaceAll('"../../lib/', '"./');
+    const content = applyPackageRewrites(
+      "topology/lib",
+      readFileSync(path.join(topology, "lib", file), "utf8"),
+    );
     assets[`lib/${file}`] = content;
   }
   for (const libFile of [
@@ -1042,21 +1090,13 @@ export function governancePluginFiles() {
     // loads this dynamically, so it must be materialized in the deployed tree.
     "quota-telemetry.mjs",
   ]) {
-    let content = readFileSync(
-      path.resolve(GOVERNANCE_PLUGIN_TEMPLATE, `../../lib/${libFile}`),
-      "utf8",
+    assets[`lib/${libFile}`] = applyPackageRewrites(
+      `lib/${libFile}`,
+      readFileSync(
+        path.resolve(GOVERNANCE_PLUGIN_TEMPLATE, `../../lib/${libFile}`),
+        "utf8",
+      ),
     );
-    if (libFile === "policy.mjs") {
-      content = content.replaceAll('"../topology/lib/', '"./');
-      // V15: see SOURCE_CONTRACTS_LOOKUP. No fallback is added, so a missing or
-      // unreadable contract still raises ENOENT exactly as it did in the
-      // repository layout: this relocates the lookup, it does not soften it.
-      content = content.replaceAll(
-        `"${SOURCE_CONTRACTS_LOOKUP}"`,
-        `"${DEPLOYED_CONTRACTS_LOOKUP}"`,
-      );
-    }
-    assets[`lib/${libFile}`] = content;
   }
   for (const file of readdirSync(path.join(topology, "contracts")).sort()) {
     if (!/^[a-z-]+\.schema\.json$/u.test(file)) continue;
@@ -1094,12 +1134,10 @@ export function governancePluginFiles() {
       path.join(GOVERNANCE_PLUGIN_TEMPLATE, "package.json"),
       "utf8",
     ),
-    entrypoint: readFileSync(
-      path.join(GOVERNANCE_PLUGIN_TEMPLATE, "index.mjs"),
-      "utf8",
-    )
-      .replaceAll('"../../topology/lib/', '"./lib/')
-      .replaceAll('"../../lib/', '"./lib/'),
+    entrypoint: applyPackageRewrites(
+      "entrypoint",
+      readFileSync(path.join(GOVERNANCE_PLUGIN_TEMPLATE, "index.mjs"), "utf8"),
+    ),
   });
 }
 
