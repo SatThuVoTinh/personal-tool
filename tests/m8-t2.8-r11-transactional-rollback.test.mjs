@@ -189,6 +189,17 @@ function harness(rt, { failAt = null, liveMutation = mutateToR10 } = {}) {
         record("snapshot:verify");
         return verifyTransactionSnapshot(snapshot);
       },
+      // R12 durability seams. This suite still proves the R11 in-memory contract;
+      // durability, integrity and orphan handling are covered by
+      // m8-t2.9-r12-durable-recovery.test.mjs against a real filesystem.
+      findOrphanedTransaction: () => [],
+      persistTransactionSnapshot: (snapshot) => {
+        record("snapshot:persist");
+        return { ...snapshot, transactionId: "txn-synthetic", snapshot };
+      },
+      markTransactionComplete: () => {
+        record("snapshot:complete");
+      },
       pruneQuarantine: () => {
         record("prune:quarantine");
         if (failAt === "quarantine-prune") throw new Error("EACCES");
@@ -226,7 +237,12 @@ function harness(rt, { failAt = null, liveMutation = mutateToR10 } = {}) {
         verifyTransactionSnapshot(snapshot);
         return restoreTransactionSnapshot(snapshot);
       },
-      verifyLiveRestore: (snapshot) => {
+      verifyLiveRestore: (snapshot, options) => {
+        if (options?.postApply) {
+          // The mutation really ran, so the post-apply check passes.
+          record("verify:applied");
+          return { applied: true, unrestored: [] };
+        }
         record("rollback:validate");
         return verifyLiveRestore(rt, snapshot);
       },

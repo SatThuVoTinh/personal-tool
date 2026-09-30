@@ -562,9 +562,13 @@ function applyDeps(failAt, overrides = {}) {
     return typeof value === "function" ? value() : value;
   };
   // The synthetic snapshot is opaque here: this suite proves the ORCHESTRATION
-  // contract, and transaction-snapshot.test.mjs proves the snapshot's own
-  // correctness against a real filesystem.
+  // contract, and the R11/R12 suites prove the snapshot's own correctness
+  // against a real filesystem.
   const syntheticSnapshot = { synthetic: true };
+  const syntheticTransaction = {
+    transactionId: "txn-synthetic",
+    snapshot: syntheticSnapshot,
+  };
   const deps = {
     calls,
     readIdentifiers: () => step("readIdentifiers", "synthetic-identifiers"),
@@ -578,6 +582,15 @@ function applyDeps(failAt, overrides = {}) {
       assert.equal(snapshot, syntheticSnapshot);
       return step("verifyTransactionSnapshot", { verified: true });
     },
+    // R12 durability seams. The R7 invariant under test is unchanged — a
+    // preflight failure mutates nothing and restores nothing — and durability is
+    // covered by m8-t2.9-r12-durable-recovery.test.mjs.
+    findOrphanedTransaction: () => [],
+    persistTransactionSnapshot: (snapshot) => {
+      assert.equal(snapshot, syntheticSnapshot);
+      return step("persistTransactionSnapshot", syntheticTransaction);
+    },
+    markTransactionComplete: () => step("markTransactionComplete"),
     pruneQuarantine: () => step("pruneQuarantine"),
     pruneStaleNativeBackup: () => step("pruneStaleNativeBackup"),
     applyNativePatch: () => step("applyNativePatch"),
@@ -586,8 +599,10 @@ function applyDeps(failAt, overrides = {}) {
       assert.equal(snapshot, syntheticSnapshot);
       return step("restoreTransactionSnapshot", { restored: true });
     },
-    verifyLiveRestore: (snapshot) => {
+    verifyLiveRestore: (snapshot, options) => {
       assert.equal(snapshot, syntheticSnapshot);
+      if (options?.postApply)
+        return step("verifyLiveRestore", { applied: true, unrestored: [] });
       return step("verifyLiveRestore", { restored: true, mismatches: [] });
     },
     restartScopedGateway: () => step("restartScopedGateway"),
@@ -694,9 +709,15 @@ test("DS: a successful apply performs no rollback at all", async () => {
   // The gateway restart IS part of a successful apply; only the restoring
   // operations must be absent.
   assert.equal(deps.calls.includes("restartScopedGateway"), true);
-  for (const call of RESTORE_CALLS) {
-    assert.equal(deps.calls.includes(call), false, `${call} must not run`);
-  }
+  // R12: nothing is RESTORED on a successful apply. `verifyLiveRestore` does
+  // legitimately run, but with `postApply`, to confirm the mutation actually
+  // landed — a self-reported success is not evidence of a deployment. So the
+  // restoring call is asserted absent, and the verifying one is asserted to have
+  // been used in its post-apply sense.
+  assert.equal(deps.calls.includes("restoreTransactionSnapshot"), false);
+  assert.equal(deps.calls.includes("verifyLiveRestore"), true);
+  assert.equal(result.transactionStatus, "complete");
+  assert.ok(result.transactionId);
 });
 
 test("DS: repeated identical failures report deterministically", async () => {

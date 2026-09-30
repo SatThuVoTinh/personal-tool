@@ -25,6 +25,9 @@ import {
 } from "../../../lib/policy.mjs";
 import {
   createTransactionSnapshot,
+  findOrphanedTransaction,
+  markTransactionComplete,
+  persistTransactionSnapshot,
   restoreTransactionSnapshot,
   verifyLiveRestore,
   verifyTransactionSnapshot,
@@ -130,9 +133,22 @@ const report = await applyRuntime({
   createTransactionSnapshot: () =>
     createTransactionSnapshot({ stateDir, runtimeRoot }),
   verifyTransactionSnapshot,
+  // R12: the preimage is persisted and re-read before mutation, so a process
+  // that dies mid-apply still leaves a usable recovery target. `persist`
+  // re-reads and verifies what it wrote, so a snapshot that cannot be re-loaded
+  // never authorizes mutation.
+  persistTransactionSnapshot: (snapshot) =>
+    persistTransactionSnapshot(stateDir, snapshot, {
+      createdAt: new Date().toISOString(),
+    }),
+  findOrphanedTransaction: () => findOrphanedTransaction(stateDir),
+  markTransactionComplete: (id) => markTransactionComplete(stateDir, id),
   restoreTransactionSnapshot,
-  verifyLiveRestore: (snapshot) =>
-    verifyLiveRestore({ stateDir, runtimeRoot }, snapshot),
+  // R12: the same byte comparison serves both directions. After a rollback it
+  // asks "was the preimage restored?"; after a successful apply it asks "did
+  // the mutation actually land?". A self-reported apply is not evidence.
+  verifyLiveRestore: (snapshot, options) =>
+    verifyLiveRestore({ stateDir, runtimeRoot }, snapshot, options),
   restartScopedGateway,
   // R11: retained as an ADDITIONAL semantic health signal only. It is not
   // sufficient on its own: `config validate` accepts any config the current

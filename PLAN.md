@@ -48,7 +48,7 @@ Milestone: M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Inte
 Task: M8/T2.2 — Root-Cause Governed Runtime, Discord, Semantic & Artifact Integrity Hardening
 Task Status: IN PROGRESS
 Planning Readiness: APPROVED
-Plan Revision: M8/T2.2-R11
+Plan Revision: M8/T2.2-R12
 Execution Authorization: YES
 Authorized Task: M8/T2.2 — Root-Cause Governed Runtime, Discord, Semantic & Artifact Integrity Hardening
 Execution Contract: docs/contracts/execution/ACTIVE.md
@@ -56,16 +56,17 @@ Evidence Level: LOCAL-VERIFIED
 Task Branch: codex/m8-t2-governed-runtime-hardening
 Owner Approval: EXPLICIT — Owner authorized R7 remediation, controlled live
   deployment, one-time R5 baseline restoration, R8 provenance remediation, R9
-  (blocked, superseded), R10 G1 contract correction, and R10 live deployment
+  (blocked, superseded), R10 G1 contract correction, R10 live deployment
   (attempted 2026-09-30 and STOPPED before `--apply` at the rollback-safety
-  gate with zero mutation). Owner then authorized R11 transactional live
-  rollback safety.
+  gate with zero mutation), R11 transactional live rollback safety, and R12
+  durable transaction recovery safety. Owner accepted R11 as the correction to
+  automatic rollback semantics.
 Deployment Authorized: NO
 ```
 
-`Deployment Authorized` is reconciled to `NO` for R11 in both authoritative
-sources. The R10 deployment attempt consumed its own authorization record
-`dc466c6` and is closed; it is not carried forward.
+`Deployment Authorized` remains `NO` in both authoritative sources. R12 creates no
+deployment authorization. The R10 deployment attempt consumed its own
+authorization record `dc466c6` and is closed; it is not carried forward.
 
 ### 4.1 Revision lineage reconciliation (2026-09-30)
 
@@ -82,7 +83,8 @@ carried R5 and R6 implementation. The plan was never revised for either, so
 | M8/T2.2-R8  | Implemented | `4f5cc6d` verified R5 `lib/native-boundary.mjs` approved-predecessor digest. Live preflight then returned `builder_preflight: PASS`, `installed_mutation: false`. |
 | M8/T2.2-R9  | BLOCKED     | Authorized 2026-09-30. Superseded by R10: G1 condition 5 is unobservable at the native seam; see §4.6.                                                            |
 | M8/T2.2-R10 | Implemented | `3bea651` G1 contract correction using the host-authoritative heartbeat trigger. Deployment `dc466c6` attempted and STOPPED pre-apply; NOT deployed.              |
-| M8/T2.2-R11 | IN PROGRESS | Authorized 2026-09-30. Transactional live rollback safety. Repository-only, not deployed; see §4.8.                                                               |
+| M8/T2.2-R11 | Implemented | `ab0dda2` transaction snapshot gates mutation, restores the exact preimage, and licenses `rollbackSucceeded` only on live verification. Accepted by the owner.         |
+| M8/T2.2-R12 | IN PROGRESS | Authorized 2026-09-30. Durable transaction snapshot plus an authorization gate on the historical rollback path. Repository-only, not deployed; see §4.9.  |
 
 All revisions are local commits on `codex/m8-t2-governed-runtime-hardening`; none
 has been pushed.
@@ -323,6 +325,39 @@ replaces "the restore returned" with "the live runtime was verified".
 `backups/r12` is neither deleted nor repurposed and remains historical recovery
 evidence. R11 is repository-only: no deployment, no live rollback, no second
 deployment attempt, and the R10 allowlist entries are not added.
+
+### 4.9 M8/T2.2-R12 — durable transaction recovery safety
+
+The owner accepted R11 as the correction to automatic rollback semantics and
+authorized R12 to harden the two recovery boundaries R11 deliberately left open.
+
+**Objective 1 — the snapshot must survive a process failure.** R11's transaction
+snapshot is in-memory. That is sufficient for a synchronous mutation failure,
+because the orchestrator is still alive to restore from it. It is not sufficient
+if the apply process disappears after mutation begins: there is then no recovery
+target, and no record that a mutation was in progress at all, so the next apply
+cannot tell a clean runtime from a half-mutated one. R12 persists the snapshot
+and a transaction record under a dedicated transaction-state directory in the
+existing operator state area, marks the transaction complete on verified success,
+and refuses a new apply when it finds a transaction that started but never
+completed. An orphan is reported and requires an explicit recovery decision; it
+is never silently deleted, resumed, or rolled back.
+
+**Objective 2 — the historical rollback path needs an authorization gate.**
+`operator-rollback.mjs` invokes `restoreNativePatch` against `native-r12` and
+`restoreT1RuntimeFiles` against `backups/r12`, with no authorization check at
+all. That installs the 2026-09-11 T1 config, the clean native baseline, and no
+governance extension. R11 stopped the *apply* path from reaching it, but the
+command itself remains unguarded. R12 adds an explicit recovery authorization
+that cannot be inferred from `Deployment Authorized`, `Execution Authorization`,
+or the mere presence of a backup, requires the target to be named, and discloses
+what will be installed before any mutation. Automatic transaction rollback and
+historical recovery stay distinct actions.
+
+`backups/r12` and `operator-rollback.mjs` are both retained, and the historical
+target is unchanged. The R10 outgoing digests are NOT added. R11's automatic
+rollback logic is extended only where durability requires it. R12 is
+repository-only: no deployment, no live apply, no live historical rollback.
 
 R4 validation snapshot (task remains IN PROGRESS): focused M8/T1, M8/T2 and
 native ingress suites PASS; focused DuckDB/M7-T4 gates PASS 27/27; full

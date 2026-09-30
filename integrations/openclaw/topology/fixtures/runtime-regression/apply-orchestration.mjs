@@ -29,17 +29,37 @@
 // on failure, and emits `rollbackSucceeded: true` only after the live bytes
 // match the snapshot.
 //
+// R12 adds a third invariant, because an in-memory snapshot does not survive
+// this process dying mid-mutation:
+//
+//     MUTATION REQUIRES A DURABLE TRANSACTION, AND A CRASH IS NEVER SILENT
+//
+// The snapshot is persisted and re-read before mutation, the transaction is
+// marked complete only after a verified outcome, and a new apply refuses to
+// start when it finds a transaction that started but never completed. An orphan
+// is reported by ID and left in place: recovery is an explicit owner decision,
+// never an automatic one.
+//
 // Every runtime effect is injected so both invariants are testable without WSL,
 // systemctl, or a live OpenClaw process. This module performs no I/O itself.
 import {
+  ORPHANED_TRANSACTION,
   RESTORE_UNVERIFIED,
   ROLLBACK_SAFETY_UNAVAILABLE,
+  TRANSACTION_STATUS,
 } from "../../lib/transaction-snapshot.mjs";
+
+/**
+ * Reported when the apply returned success but the live runtime does not reflect
+ * it. A self-reported success is not evidence of a successful deployment.
+ */
+export const APPLY_NOT_VERIFIED = "APPLY_NOT_VERIFIED";
 
 /** Ordered stages. The reported `stage` on failure is the one that threw. */
 export const APPLY_STAGES = [
   "identifiers",
   "builder-preflight",
+  "orphan-check",
   "transaction-snapshot",
   "builder-apply",
   "quarantine-prune",
@@ -47,6 +67,7 @@ export const APPLY_STAGES = [
   "native-patch",
   "native-verify",
   "gateway-restart",
+  "runtime-verify",
 ];
 
 /**
@@ -80,9 +101,10 @@ export async function applyRuntime(deps) {
   let mutationStarted = false;
   let identifiers;
   // Declared out here, not inside the `try`, because the rollback path in the
-  // `catch` needs the transaction preimage. A `let` inside the `try` block is
-  // not visible to its own `catch`.
+  // `catch` needs the transaction preimage and its record. A `let` inside the
+  // `try` block is not visible to its own `catch`.
   let snapshot;
+  let transaction;
   try {
     stage = "identifiers";
     identifiers = deps.readIdentifiers();
@@ -93,15 +115,45 @@ export async function applyRuntime(deps) {
     stage = "builder-preflight";
     deps.runBuilder("--preflight", identifiers);
 
+    // R12: refuse to start a new apply while a previous transaction is
+    // unresolved. A transaction that started but never completed means the
+    // process may have died mid-mutation, so the live runtime cannot be assumed
+    // clean. The orphan is reported by ID and is neither deleted, resumed nor
+    // rolled back: recovery is an explicit owner decision.
+    stage = "orphan-check";
+    const orphans = deps.findOrphanedTransaction();
+    if (orphans.length > 0)
+      return {
+        status: "FAIL",
+        stage,
+        mutationStarted: false,
+        rollbackRequired: false,
+        rollbackAttempted: false,
+        rollbackSucceeded: false,
+        reason: ORPHANED_TRANSACTION,
+        orphanedTransactionIds: orphans.map((entry) => entry.transactionId),
+        rollbackReason: null,
+        restoreValidationReason: null,
+        restoreMismatches: null,
+        transactionId: null,
+        transactionStatus: null,
+      };
+
     // R11: establish the rollback target BEFORE the first mutating call. A
     // transaction snapshot is the exact live runtime state immediately before
     // this apply, so rollback can restore what was actually there rather than a
     // historical r12/T1 baseline. It is read-only, so taking it is not itself a
     // mutation. If it cannot be created and verified, nothing below may run.
+    //
+    // R12: the snapshot is also PERSISTED, and re-read to prove durability,
+    // before mutation. An in-memory snapshot does not survive this process
+    // dying mid-apply, which would leave no recovery target at all.
     stage = "transaction-snapshot";
     try {
       snapshot = deps.createTransactionSnapshot();
       deps.verifyTransactionSnapshot(snapshot);
+      transaction = deps.persistTransactionSnapshot(snapshot);
+      deps.verifyTransactionSnapshot(transaction.snapshot);
     } catch {
       // Do not surface the underlying cause: it can carry a filesystem path.
       // The operator needs one fact — rollback safety is not established.
@@ -113,9 +165,12 @@ export async function applyRuntime(deps) {
         rollbackAttempted: false,
         rollbackSucceeded: false,
         reason: ROLLBACK_SAFETY_UNAVAILABLE,
+        orphanedTransactionIds: null,
         rollbackReason: null,
         restoreValidationReason: null,
         restoreMismatches: null,
+        transactionId: null,
+        transactionStatus: null,
       };
     }
 
@@ -138,6 +193,37 @@ export async function applyRuntime(deps) {
     stage = "gateway-restart";
     deps.restartScopedGateway();
 
+    // R12: the apply completed. Verify the live runtime, and only then mark the
+    // transaction complete — an unverified apply must not be able to close its
+    // own transaction and erase the evidence that it was in flight.
+    stage = "runtime-verify";
+    const finalVerdict = deps.verifyLiveRestore(snapshot, { postApply: true });
+    if (!finalVerdict?.applied) {
+      // The apply returned success but the runtime does not reflect it. Treat
+      // this as a failure at or after mutation: roll back and report honestly.
+      const failure = {
+        status: "FAIL",
+        stage,
+        mutationStarted: true,
+        rollbackRequired: true,
+        rollbackAttempted: true,
+        rollbackSucceeded: false,
+        reason: APPLY_NOT_VERIFIED,
+        orphanedTransactionIds: null,
+        rollbackReason: null,
+        restoreValidationReason: null,
+        restoreMismatches: null,
+        transactionId: transaction?.transactionId ?? null,
+        transactionStatus: transaction?.status ?? null,
+      };
+      return attemptRollback(deps, snapshot, failure);
+    }
+
+    // R12: record the transaction as complete. The preimage is retained; there
+    // is no repository retention policy for transaction state yet, and silently
+    // deleting a recovery target is the behaviour R11/R12 exist to prevent.
+    deps.markTransactionComplete(transaction.transactionId);
+
     return {
       status: "PASS",
       stage: "applied",
@@ -146,9 +232,12 @@ export async function applyRuntime(deps) {
       rollbackAttempted: false,
       rollbackSucceeded: false,
       reason: null,
+      orphanedTransactionIds: null,
       rollbackReason: null,
       restoreValidationReason: null,
       restoreMismatches: null,
+      transactionId: transaction?.transactionId ?? null,
+      transactionStatus: TRANSACTION_STATUS.COMPLETE,
     };
   } catch (error) {
     // Only a failure at or after the mutation boundary may restore anything.
@@ -161,47 +250,71 @@ export async function applyRuntime(deps) {
       rollbackAttempted: false,
       rollbackSucceeded: false,
       reason: deps.classifyReason(error),
-      rollbackReason: null,
+      orphanedTransactionIds: null,
       // R11: a restore failure and a restore-VALIDATION failure are distinct
       // facts and are never collapsed into one another.
+      rollbackReason: null,
       restoreValidationReason: null,
       restoreMismatches: null,
+      transactionId: transaction?.transactionId ?? null,
+      transactionStatus: transaction?.status ?? null,
     };
     if (!rollbackRequired) return report;
-    report.rollbackAttempted = true;
-    try {
-      // R11: restore the exact transaction preimage. The historical r12/T1
-      // baseline is NOT a rollback target; it is recovery evidence.
-      //
-      // The snapshot is re-verified first, so a snapshot altered between capture
-      // and rollback is refused instead of trusted.
-      deps.verifyTransactionSnapshot(snapshot);
-      deps.restoreTransactionSnapshot(snapshot);
-    } catch (rollbackError) {
-      // A failed rollback must never mask the failure that triggered it.
-      report.rollbackReason = deps.classifyReason(rollbackError);
-      return report;
-    }
-    // R11: a completed restore is not a successful rollback. The live runtime
-    // is compared against the snapshot, and the gateway is observed afterwards
-    // so a watcher or supervisor restart cannot be mistaken for a restored one.
-    let verdict;
-    try {
-      deps.restartScopedGateway();
-      verdict = deps.verifyLiveRestore(snapshot);
-    } catch (validationError) {
-      report.rollbackReason ??= deps.classifyReason(validationError);
-      report.restoreValidationReason = RESTORE_UNVERIFIED;
-      return report;
-    }
-    if (!verdict?.restored) {
-      report.restoreValidationReason = RESTORE_UNVERIFIED;
-      report.restoreMismatches = verdict?.mismatches ?? null;
-      return report;
-    }
-    report.rollbackSucceeded = true;
+    return attemptRollback(deps, snapshot, report);
+  }
+}
+
+/**
+ * R11 rollback semantics, factored so the failure path and the
+ * apply-returned-but-unverified path share one implementation.
+ *
+ * Restores the exact transaction preimage, then licenses success only after the
+ * live bytes match. A restore that returns while the runtime differs is a
+ * failure, which is precisely the false positive the R7 rule accepted.
+ */
+function attemptRollback(deps, snapshot, report) {
+  report.rollbackAttempted = true;
+  try {
+    // The snapshot is re-verified first, so a snapshot altered between capture
+    // and rollback is refused instead of trusted.
+    deps.verifyTransactionSnapshot(snapshot);
+    deps.restoreTransactionSnapshot(snapshot);
+  } catch (rollbackError) {
+    // A failed rollback must never mask the failure that triggered it.
+    report.rollbackReason = deps.classifyReason(rollbackError);
     return report;
   }
+  // The gateway is restarted and observed before validation, so a watcher or
+  // supervisor restart cannot be mistaken for a restored runtime.
+  let verdict;
+  try {
+    deps.restartScopedGateway();
+    verdict = deps.verifyLiveRestore(snapshot);
+  } catch (validationError) {
+    report.rollbackReason ??= deps.classifyReason(validationError);
+    report.restoreValidationReason = RESTORE_UNVERIFIED;
+    return report;
+  }
+  if (!verdict?.restored) {
+    report.restoreValidationReason = RESTORE_UNVERIFIED;
+    report.restoreMismatches = verdict?.mismatches ?? null;
+    return report;
+  }
+  // R12: the rollback was verified, so this transaction is resolved. It is
+  // marked complete so it cannot be mistaken for a crash-orphan and block the
+  // next apply.
+  try {
+    deps.markTransactionComplete(report.transactionId);
+    report.transactionStatus = TRANSACTION_STATUS.COMPLETE;
+  } catch (error) {
+    // A verified rollback with an unmarkable record leaves an orphan. That is
+    // reported rather than hidden: the next apply will refuse and require an
+    // explicit recovery decision, which is the safe outcome.
+    report.restoreValidationReason = RESTORE_UNVERIFIED;
+    report.rollbackReason ??= deps.classifyReason(error);
+  }
+  report.rollbackSucceeded = true;
+  return report;
 }
 
 /**
