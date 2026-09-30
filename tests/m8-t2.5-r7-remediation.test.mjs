@@ -566,7 +566,7 @@ function applyDeps(failAt, overrides = {}) {
   // against a real filesystem.
   const syntheticSnapshot = { synthetic: true };
   const syntheticTransaction = {
-    transactionId: "txn-synthetic",
+    attemptId: "txn-synthetic",
     snapshot: syntheticSnapshot,
   };
   const deps = {
@@ -717,7 +717,7 @@ test("DS: a successful apply performs no rollback at all", async () => {
   assert.equal(deps.calls.includes("restoreTransactionSnapshot"), false);
   assert.equal(deps.calls.includes("verifyLiveRestore"), true);
   assert.equal(result.transactionStatus, "complete");
-  assert.ok(result.transactionId);
+  assert.ok(result.attemptId);
 });
 
 test("DS: repeated identical failures report deterministically", async () => {

@@ -195,7 +195,7 @@ function harness(rt, { failAt = null, liveMutation = mutateToR10 } = {}) {
       findOrphanedTransaction: () => [],
       persistTransactionSnapshot: (snapshot) => {
         record("snapshot:persist");
-        return { ...snapshot, transactionId: "txn-synthetic", snapshot };
+        return { ...snapshot, attemptId: "txn-synthetic", snapshot };
       },
       markTransactionComplete: () => {
         record("snapshot:complete");

@@ -131,11 +131,11 @@ export async function applyRuntime(deps) {
         rollbackAttempted: false,
         rollbackSucceeded: false,
         reason: ORPHANED_TRANSACTION,
-        orphanedTransactionIds: orphans.map((entry) => entry.transactionId),
+        orphanedTransactionIds: orphans.map((entry) => entry.attemptId),
         rollbackReason: null,
         restoreValidationReason: null,
         restoreMismatches: null,
-        transactionId: null,
+        attemptId: null,
         transactionStatus: null,
       };
 
@@ -169,7 +169,7 @@ export async function applyRuntime(deps) {
         rollbackReason: null,
         restoreValidationReason: null,
         restoreMismatches: null,
-        transactionId: null,
+        attemptId: null,
         transactionStatus: null,
       };
     }
@@ -213,7 +213,7 @@ export async function applyRuntime(deps) {
         rollbackReason: null,
         restoreValidationReason: null,
         restoreMismatches: null,
-        transactionId: transaction?.transactionId ?? null,
+        attemptId: transaction?.attemptId ?? null,
         transactionStatus: transaction?.status ?? null,
       };
       return attemptRollback(deps, snapshot, failure);
@@ -222,7 +222,7 @@ export async function applyRuntime(deps) {
     // R12: record the transaction as complete. The preimage is retained; there
     // is no repository retention policy for transaction state yet, and silently
     // deleting a recovery target is the behaviour R11/R12 exist to prevent.
-    deps.markTransactionComplete(transaction.transactionId);
+    deps.markTransactionComplete(transaction.attemptId);
 
     return {
       status: "PASS",
@@ -236,7 +236,7 @@ export async function applyRuntime(deps) {
       rollbackReason: null,
       restoreValidationReason: null,
       restoreMismatches: null,
-      transactionId: transaction?.transactionId ?? null,
+      attemptId: transaction?.attemptId ?? null,
       transactionStatus: TRANSACTION_STATUS.COMPLETE,
     };
   } catch (error) {
@@ -256,7 +256,7 @@ export async function applyRuntime(deps) {
       rollbackReason: null,
       restoreValidationReason: null,
       restoreMismatches: null,
-      transactionId: transaction?.transactionId ?? null,
+      attemptId: transaction?.attemptId ?? null,
       transactionStatus: transaction?.status ?? null,
     };
     if (!rollbackRequired) return report;
@@ -304,7 +304,7 @@ function attemptRollback(deps, snapshot, report) {
   // marked complete so it cannot be mistaken for a crash-orphan and block the
   // next apply.
   try {
-    deps.markTransactionComplete(report.transactionId);
+    deps.markTransactionComplete(report.attemptId);
     report.transactionStatus = TRANSACTION_STATUS.COMPLETE;
   } catch (error) {
     // A verified rollback with an unmarkable record leaves an orphan. That is

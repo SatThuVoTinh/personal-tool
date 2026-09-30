@@ -286,12 +286,7 @@ test("R12 1: the transaction snapshot is written durably under the state area", 
     // Every recorded preimage file is on disk, byte-exact.
     for (const [relative, entry] of Object.entries(snapshot.files)) {
       if (!entry.existed) continue;
-      const stored = path.join(
-        root,
-        record.transactionId,
-        "preimage",
-        relative,
-      );
+      const stored = path.join(root, record.attemptId, "preimage", relative);
       assert.equal(readFileSync(stored, "utf8"), entry.body, relative);
     }
   } finally {
@@ -307,21 +302,21 @@ test("R12 2: the record verifies, and its integrity binding detects tampering", 
       createdAt: "2026-09-30T00:00:00.000Z",
     });
     // Re-reads and re-hashes: a clean load proves the manifest binds the bytes.
-    const loaded = loadTransaction(rt.stateDir, record.transactionId);
+    const loaded = loadTransaction(rt.stateDir, record.attemptId);
     assert.equal(loaded.status, TRANSACTION_STATUS.STARTED);
     assert.equal(verifyTransactionSnapshot(loaded.snapshot).verified, true);
 
     // Tamper with the recorded digest; the integrity binding must refuse it.
     const recordPath = path.join(
       transactionRoot(rt.stateDir),
-      record.transactionId,
+      record.attemptId,
       "transaction.json",
     );
     const onDisk = JSON.parse(readFileSync(recordPath, "utf8"));
     onDisk.files["openclaw.json"].sha256 = "0".repeat(64);
     writeFileSync(recordPath, JSON.stringify(onDisk, null, 2));
     assert.throws(
-      () => loadTransaction(rt.stateDir, record.transactionId),
+      () => loadTransaction(rt.stateDir, record.attemptId),
       /TRANSACTION_MANIFEST_INTEGRITY_FAILED/u,
     );
   } finally {
@@ -340,8 +335,8 @@ test("R12 3: the snapshot survives reconstruction of the orchestrator", () => {
     // The process died: half the runtime was mutated and never rolled back.
     mutateToR10(rt);
     // A brand new process, holding nothing from the first one.
-    const recovered = loadTransaction(rt.stateDir, recordA.transactionId);
-    assert.equal(recovered.transactionId, recordA.transactionId);
+    const recovered = loadTransaction(rt.stateDir, recordA.attemptId);
+    assert.equal(recovered.attemptId, recordA.attemptId);
     // And it restores the real preimage, byte for byte.
     restoreTransactionSnapshot(recovered.snapshot);
     assert.deepEqual(liveDigests(rt), R7_DIGESTS);
@@ -374,7 +369,7 @@ test("R12 5: a successful apply verifies the runtime and marks the transaction c
     const report = await applyRuntime(deps);
     assert.equal(report.status, "PASS");
     assert.equal(report.transactionStatus, TRANSACTION_STATUS.COMPLETE);
-    assert.ok(report.transactionId);
+    assert.ok(report.attemptId);
     assert.equal(
       calls.includes("verify:applied"),
       true,
@@ -382,7 +377,7 @@ test("R12 5: a successful apply verifies the runtime and marks the transaction c
     );
     assert.equal(calls.includes("snapshot:complete"), true);
     // The record on disk really is complete.
-    const loaded = loadTransaction(rt.stateDir, report.transactionId);
+    const loaded = loadTransaction(rt.stateDir, report.attemptId);
     assert.equal(loaded.status, TRANSACTION_STATUS.COMPLETE);
     // The live runtime is the applied state, not the preimage.
     assert.equal(
@@ -421,11 +416,11 @@ test("R12 7: an incomplete transaction is detected", () => {
     );
     const orphans = findOrphanedTransaction(rt.stateDir);
     assert.equal(orphans.length, 1);
-    assert.equal(orphans[0].transactionId, record.transactionId);
+    assert.equal(orphans[0].attemptId, record.attemptId);
     assert.equal(orphans[0].reason, ORPHANED_TRANSACTION);
 
     // Once resolved, it is no longer an orphan.
-    markTransactionComplete(rt.stateDir, record.transactionId);
+    markTransactionComplete(rt.stateDir, record.attemptId);
     assert.deepEqual(findOrphanedTransaction(rt.stateDir), []);
   } finally {
     rt.dispose();
@@ -451,7 +446,7 @@ test("R12 8: an incomplete transaction blocks a new apply", async () => {
     assert.equal(report.mutationStarted, false);
     assert.equal(report.rollbackAttempted, false);
     // The orphan ID is reported so an operator can decide what to do.
-    assert.deepEqual(report.orphanedTransactionIds, [orphan.transactionId]);
+    assert.deepEqual(report.orphanedTransactionIds, [orphan.attemptId]);
     // Nothing was deleted, resumed, or rolled back.
     assert.equal(
       readFileSync(path.join(rt.stateDir, "openclaw.json"), "utf8"),
@@ -482,13 +477,13 @@ test("R12 9: a corrupted snapshot file is refused", () => {
     // Corrupt a preimage byte without touching the record.
     const stored = path.join(
       transactionRoot(rt.stateDir),
-      record.transactionId,
+      record.attemptId,
       "preimage",
       "openclaw.json",
     );
     writeFileSync(stored, "corrupted\n");
     assert.throws(
-      () => loadTransaction(rt.stateDir, record.transactionId),
+      () => loadTransaction(rt.stateDir, record.attemptId),
       /TRANSACTION_SNAPSHOT_DIGEST_MISMATCH/u,
     );
   } finally {
@@ -507,13 +502,13 @@ test("R12 10: a missing snapshot file is refused", () => {
     rmSync(
       path.join(
         transactionRoot(rt.stateDir),
-        record.transactionId,
+        record.attemptId,
         "preimage",
         "openclaw.json",
       ),
     );
     assert.throws(
-      () => loadTransaction(rt.stateDir, record.transactionId),
+      () => loadTransaction(rt.stateDir, record.attemptId),
       /TRANSACTION_SNAPSHOT_INCOMPLETE/u,
     );
   } finally {
@@ -531,7 +526,7 @@ test("R12 11: a traversal in the record is refused", () => {
     );
     const recordPath = path.join(
       transactionRoot(rt.stateDir),
-      record.transactionId,
+      record.attemptId,
       "transaction.json",
     );
     const onDisk = JSON.parse(readFileSync(recordPath, "utf8"));
@@ -543,7 +538,7 @@ test("R12 11: a traversal in the record is refused", () => {
     writeFileSync(recordPath, JSON.stringify(onDisk, null, 2));
     // Either the integrity binding or the path check refuses it; never a write
     // outside the transaction directory.
-    assert.throws(() => loadTransaction(rt.stateDir, record.transactionId));
+    assert.throws(() => loadTransaction(rt.stateDir, record.attemptId));
     assert.equal(
       existsOutside(rt.stateDir, "escape.mjs"),
       false,
@@ -573,24 +568,36 @@ test("R12 12: a non-transaction ID is refused", () => {
   }
 });
 
-test("R12 13: an existing transaction is never silently replaced", () => {
+test("R12 13: a transaction is never overwritten when its attempt ID is forced to collide", () => {
   const rt = buildRuntime();
   try {
     const snapshot = createTransactionSnapshot(rt);
     const first = persistTransactionSnapshot(rt.stateDir, snapshot, {
       createdAt: "2026-09-30T00:00:00.000Z",
     });
-    // The same pre-apply runtime yields the same ID, so a second persist must
-    // refuse rather than overwrite the existing recovery target.
+    // R15: the directory is keyed by ATTEMPT identity, not by the preimage, so a
+    // second attempt from the same runtime legitimately gets its own record. The
+    // no-overwrite guarantee is now proven by forcing the SAME attempt ID, which
+    // is the only way the collision can actually occur.
+    const second = persistTransactionSnapshot(rt.stateDir, snapshot, {
+      createdAt: "2026-09-30T01:00:00.000Z",
+    });
+    assert.notEqual(second.attemptId, first.attemptId);
+    assert.equal(
+      second.preimageDigest,
+      first.preimageDigest,
+      "both attempts record the identical preimage identity",
+    );
     assert.throws(
       () =>
         persistTransactionSnapshot(rt.stateDir, snapshot, {
-          createdAt: "2026-09-30T01:00:00.000Z",
+          createdAt: "2026-09-30T02:00:00.000Z",
+          attemptId: first.attemptId,
         }),
       /TRANSACTION_ALREADY_EXISTS/u,
     );
     assert.equal(
-      loadTransaction(rt.stateDir, first.transactionId).createdAt,
+      loadTransaction(rt.stateDir, first.attemptId).createdAt,
       "2026-09-30T00:00:00.000Z",
       "the original record must be untouched",
     );
@@ -629,14 +636,14 @@ test("R12 15: an unreadable transaction directory is reported, not ignored", () 
     writeFileSync(
       path.join(
         transactionRoot(rt.stateDir),
-        record.transactionId,
+        record.attemptId,
         "transaction.json",
       ),
       "{ not json",
     );
     const orphans = findOrphanedTransaction(rt.stateDir);
     assert.equal(orphans.length, 1, "unresolved state must be visible");
-    assert.equal(orphans[0].transactionId, record.transactionId);
+    assert.equal(orphans[0].attemptId, record.attemptId);
     assert.equal(orphans[0].status, "unreadable");
   } finally {
     rt.dispose();
@@ -673,10 +680,7 @@ test("R12 17: an orphan is never silently deleted", async () => {
       createTransactionSnapshot(rt),
       { createdAt: "2026-09-30T00:00:00.000Z" },
     );
-    const directory = path.join(
-      transactionRoot(rt.stateDir),
-      record.transactionId,
-    );
+    const directory = path.join(transactionRoot(rt.stateDir), record.attemptId);
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const { deps } = harness(rt);
       const result = await applyRuntime(deps);
@@ -688,7 +692,7 @@ test("R12 17: an orphan is never silently deleted", async () => {
       );
     }
     // Still fully recoverable after three refused attempts.
-    const recovered = loadTransaction(rt.stateDir, record.transactionId);
+    const recovered = loadTransaction(rt.stateDir, record.attemptId);
     assert.equal(verifyTransactionSnapshot(recovered.snapshot).verified, true);
   } finally {
     rt.dispose();

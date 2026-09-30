@@ -27,7 +27,7 @@
 //     snapshot can.
 //   * The snapshot is verified by re-hashing every body it holds, so a tampered
 //     or truncated snapshot is rejected before it is used to restore anything.
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   chmodSync,
   closeSync,
@@ -367,8 +367,19 @@ export const DURABILITY_UNAVAILABLE = "TRANSACTION_DURABILITY_UNAVAILABLE";
 const TRANSACTION_ROOT = "transactions";
 const RECORD_NAME = "transaction.json";
 const PREIMAGE_DIR = "preimage";
-const RECORD_SCHEMA = "zink-transaction-record/1";
-const TRANSACTION_ID = /^txn-[a-f0-9]{32}$/u;
+const RECORD_SCHEMA = "zink-transaction-record/2";
+const LEGACY_RECORD_SCHEMA = "zink-transaction-record/1";
+/**
+ * A legacy R12 record directory: 32 hex characters, DERIVED FROM THE PREIMAGE.
+ * Those records stay readable and are never migrated, renamed or deleted.
+ */
+const LEGACY_TRANSACTION_ID = /^txn-[a-f0-9]{32}$/u;
+/**
+ * An R15 record directory: 64 hex characters of cryptographic randomness,
+ * generated once per apply attempt. It identifies the ATTEMPT, not the preimage.
+ */
+const ATTEMPT_ID = /^txn-[a-f0-9]{64}$/u;
+const TRANSACTION_ID = /^txn-[a-f0-9]{32}(?:[a-f0-9]{32})?$/u;
 
 /**
  * The transaction-state directory. Never `backups/r12` and never `native-r12`:
@@ -410,15 +421,33 @@ function writeExclusiveFile(file, body, mode = 0o600) {
 }
 
 /**
- * A transaction ID that is also the directory name, so a record and its
- * snapshot can never be separated.
+ * M8/T2.2-R15 — ATTEMPT identity and PREIMAGE identity are different things.
  *
- * Derived from the preimage itself rather than a clock or counter, so the same
- * pre-apply runtime always yields the same ID. That matters for recovery: an
- * operator reading a transaction ID can be certain it names one specific
- * preimage and nothing else.
+ * R12 keyed the transaction directory on the preimage digest. That made a
+ * completed, cleanly rolled-back attempt a PERMANENT blocker for any later
+ * attempt from the same state: the restored runtime matches the old preimage, the
+ * derived ID repeats, and `persistTransactionSnapshot` refuses. The second
+ * authorized R10 deployment attempt died exactly there, before any mutation.
+ *
+ * The two identities are now separate:
+ *
+ * - `attemptId` — WHICH apply attempt this is. Cryptographically random, unique
+ *   per attempt, and the filesystem uniqueness key. It uses the same primitive the
+ *   governance identity key already uses, so it is collision-resistant and is
+ *   neither a timestamp nor a custom scheme.
+ * - `preimageDigest` — WHICH exact runtime state this attempt started from.
+ *   Deterministic, and retained in full, so preimage evidence is never replaced
+ *   by the attempt ID.
+ *
+ * Two attempts from the same preimage are legitimate: they receive distinct
+ * attempt IDs and distinct directories, and both record the same preimage digest.
  */
-function deriveTransactionId(snapshot) {
+function generateAttemptId() {
+  return `txn-${randomBytes(32).toString("hex")}`;
+}
+
+/** The deterministic identity of the pre-apply runtime, over every component. */
+function derivePreimageDigest(snapshot) {
   const binding = Object.entries(snapshot.files)
     .map(
       ([relative, entry]) =>
@@ -426,7 +455,7 @@ function deriveTransactionId(snapshot) {
     )
     .sort()
     .join("\n");
-  return `txn-${digest(binding).slice(0, 32)}`;
+  return digest(binding);
 }
 
 /** Integrity binding over the record's own content, excluding the binding. */
@@ -439,25 +468,33 @@ function manifestDigest(record) {
 /**
  * Persist the snapshot durably and record the transaction as `started`.
  *
- * Written `0o600` inside a `0o700` directory, exclusively, so an existing
- * transaction is never silently replaced. Only the preimage files required for
- * an exact restore are written: no secrets beyond those, no unrelated
- * filesystem content, and no broad recursive system snapshot.
+ * Written `0o600` inside a `0o700` directory, created EXCLUSIVELY, so an existing
+ * transaction can never be overwritten even if an attempt ID were ever forced to
+ * collide. Only the preimage files required for an exact restore are written: no
+ * secrets beyond those, no unrelated filesystem content, and no broad recursive
+ * system snapshot.
  *
- * The record is read back and verified before returning, so persistence is
- * proven rather than assumed. A snapshot that cannot be re-read must never be
- * allowed to authorize mutation.
+ * The record is read back and verified before returning, so persistence is proven
+ * rather than assumed. A snapshot that cannot be re-read must never be allowed to
+ * authorize mutation.
+ *
+ * `attemptId` may be supplied so a caller can pin a specific attempt, but it is
+ * generated once here by default and is never derived from the preimage.
  */
-export function persistTransactionSnapshot(stateDir, snapshot, { createdAt }) {
+export function persistTransactionSnapshot(
+  stateDir,
+  snapshot,
+  { createdAt, attemptId } = {},
+) {
   verifyTransactionSnapshot(snapshot);
   if (typeof createdAt !== "string" || !createdAt)
     throw new Error("TRANSACTION_TIMESTAMP_REQUIRED");
 
   const root = transactionRoot(stateDir);
-  const id = deriveTransactionId(snapshot);
-  // The ID is hash-derived, never caller text, so it cannot traverse. Asserted
+  const id = attemptId ?? generateAttemptId();
+  // Generated or supplied hex, never caller prose, so it cannot traverse. Asserted
   // anyway: this is the recovery path, and recovery must fail closed.
-  if (!TRANSACTION_ID.test(id) || path.basename(id) !== id)
+  if (!ATTEMPT_ID.test(id) || path.basename(id) !== id)
     throw new Error("TRANSACTION_ID_INVALID");
 
   if (!existsSync(root)) {
@@ -491,7 +528,11 @@ export function persistTransactionSnapshot(stateDir, snapshot, { createdAt }) {
 
   const record = {
     schema: RECORD_SCHEMA,
-    transactionId: id,
+    // WHICH attempt this is.
+    attemptId: id,
+    // WHICH exact runtime state it started from. Deterministic, and derived from
+    // the component manifest so the two can never disagree.
+    preimageDigest: derivePreimageDigest(snapshot),
     createdAt,
     status: TRANSACTION_STATUS.STARTED,
     snapshotPath: PREIMAGE_DIR,
@@ -512,12 +553,18 @@ export function persistTransactionSnapshot(stateDir, snapshot, { createdAt }) {
 }
 
 /**
- * Load and verify a persisted transaction.
+ * Load and verify a persisted transaction by its attempt ID.
  *
  * The manifest integrity binding is checked first, then every preimage file is
- * re-hashed against the record, so a corrupted snapshot is refused before it
- * can restore anything. A record whose file list is internally inconsistent is
+ * re-hashed against the record, so a corrupted snapshot is refused before it can
+ * restore anything. A record whose file list is internally inconsistent is
  * rejected rather than partially trusted.
+ *
+ * R15 is FORWARD-COMPATIBLE with R12 records, which named the directory with a
+ * preimage-derived `transactionId` and carried no `preimageDigest`. Those records
+ * are read exactly as they were written: never migrated, renamed or deleted. The
+ * returned object always exposes `attemptId` and `preimageDigest` so callers
+ * need not care which schema they hold.
  */
 export function loadTransaction(stateDir, id) {
   if (!TRANSACTION_ID.test(id) || path.basename(id) !== id)
@@ -535,13 +582,21 @@ export function loadTransaction(stateDir, id) {
     throw new Error("TRANSACTION_PERMISSION_MISMATCH");
 
   const record = JSON.parse(readFileSync(recordPath, "utf8"));
+  const legacy = record.schema === LEGACY_RECORD_SCHEMA;
   if (
-    record.schema !== RECORD_SCHEMA ||
-    record.transactionId !== id ||
+    ![RECORD_SCHEMA, LEGACY_RECORD_SCHEMA].includes(record.schema) ||
+    // R15 records bind the attempt; R12 records bind the preimage-derived ID.
+    (legacy
+      ? record.transactionId !== id || LEGACY_TRANSACTION_ID.test(id) === false
+      : record.attemptId !== id || ATTEMPT_ID.test(id) === false) ||
     !Object.values(TRANSACTION_STATUS).includes(record.status) ||
     typeof record.createdAt !== "string" ||
     record.snapshotPath !== PREIMAGE_DIR ||
     typeof record.manifestDigest !== "string" ||
+    // An R15 record must carry the preimage identity it claims.
+    (!legacy &&
+      (typeof record.preimageDigest !== "string" ||
+        record.preimageDigest.length !== 64)) ||
     manifestDigest(record) !== record.manifestDigest
   )
     throw new Error("TRANSACTION_MANIFEST_INTEGRITY_FAILED");
@@ -583,22 +638,40 @@ export function loadTransaction(stateDir, id) {
     };
   }
   verifyTransactionSnapshot(snapshot);
-  return { ...record, snapshot };
+  // Normalize across schemas: a caller always sees `attemptId` and
+  // `preimageDigest`. For a legacy record the directory ID *was* the preimage
+  // identity, so the two are the same value by construction.
+  return {
+    ...record,
+    attemptId: id,
+    preimageDigest: record.preimageDigest ?? id.replace(/^txn-/u, ""),
+    schemaVersion: legacy ? 1 : 2,
+    snapshot,
+  };
 }
 
 /**
- * Mark a transaction complete.
+ * Mark a transaction complete, addressed by its attempt ID.
+ *
+ * The ONLY field that ever changes is the lifecycle status: the preimage, the
+ * attempt ID, the preimage digest, the creation timestamp and the manifest
+ * binding are all immutable, so a completed record stays exactly the evidence it
+ * was when written.
  *
  * The preimage is RETAINED, not deleted. The repository has no retention policy
  * for transaction state yet, and silently removing a recovery target is exactly
  * the class of behaviour R11 and R12 exist to prevent. Retention is a later
  * owner decision, not something to assume here.
  */
-export function markTransactionComplete(stateDir, id) {
-  const recordPath = path.join(transactionRoot(stateDir), id, RECORD_NAME);
+export function markTransactionComplete(stateDir, attemptId) {
+  const recordPath = path.join(
+    transactionRoot(stateDir),
+    attemptId,
+    RECORD_NAME,
+  );
   noLinks(recordPath);
   const record = JSON.parse(readFileSync(recordPath, "utf8"));
-  if (record.transactionId !== id)
+  if (record.attemptId !== attemptId && record.transactionId !== attemptId)
     throw new Error("TRANSACTION_RECORD_INVALID");
   if (manifestDigest(record) !== record.manifestDigest)
     throw new Error("TRANSACTION_MANIFEST_INTEGRITY_FAILED");
@@ -614,10 +687,17 @@ export function markTransactionComplete(stateDir, id) {
 /**
  * Find a transaction that started but never completed.
  *
- * This is the crash detector. It only reads: it never deletes, resumes or rolls
- * anything back. A found orphan is the caller's signal to refuse and to ask for
- * an explicit recovery decision, so a crash cannot produce an ambiguous second
- * deployment.
+ * This is the crash detector, and R15 deliberately leaves it alone. A transaction
+ * left `started` by a process that disappeared is reported so the caller can
+ * refuse and ask for an explicit recovery decision.
+ *
+ * What R15 does NOT do is treat a COMPLETED transaction as an orphan, and does not
+ * treat a shared preimage digest as one either. Several completed attempts from
+ * the same preimage are history, not unresolved state: the first deployment
+ * rollback was exactly that, and treating it as unresolved permanently blocked the
+ * next apply.
+ *
+ * Read-only: it never deletes, resumes or rolls anything back.
  */
 export function findOrphanedTransaction(stateDir) {
   const root = transactionRoot(stateDir);
@@ -632,7 +712,7 @@ export function findOrphanedTransaction(stateDir) {
       // An unreadable transaction directory is itself unresolved state. Report
       // it by ID so the operator can see it, rather than treating it as absent.
       orphans.push({
-        transactionId: entry.name,
+        attemptId: entry.name,
         status: "unreadable",
         createdAt: null,
         reason: "TRANSACTION_RECORD_UNREADABLE",
@@ -641,13 +721,14 @@ export function findOrphanedTransaction(stateDir) {
     }
     if (record.status === TRANSACTION_STATUS.STARTED)
       orphans.push({
-        transactionId: record.transactionId,
+        attemptId: record.attemptId,
+        preimageDigest: record.preimageDigest,
         status: record.status,
         createdAt: record.createdAt,
         reason: ORPHANED_TRANSACTION,
       });
   }
   return orphans.sort((left, right) =>
-    left.transactionId.localeCompare(right.transactionId),
+    left.attemptId.localeCompare(right.attemptId),
   );
 }

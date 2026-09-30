@@ -48,7 +48,7 @@ Milestone: M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Inte
 Task: M8/T2.2 — Root-Cause Governed Runtime, Discord, Semantic & Artifact Integrity Hardening
 Task Status: IN PROGRESS
 Planning Readiness: APPROVED
-Plan Revision: M8/T2.2-R14
+Plan Revision: M8/T2.2-R15
 Execution Authorization: YES
 Authorized Task: M8/T2.2 — Root-Cause Governed Runtime, Discord, Semantic & Artifact Integrity Hardening
 Execution Contract: docs/contracts/execution/ACTIVE.md
@@ -62,20 +62,22 @@ Owner Approval: EXPLICIT — Owner authorized R7 remediation, controlled live
   (authorization `b8597fe`, ONE attempt, FAILED at `native-backup-prune` with
   `NATIVE_SOURCE_DRIFT`; the R12 rollback restored the exact R7 preimage and
   verified it, with the ledger untouched), R14 native patch lineage
-  compatibility, and the FINAL R10 live deployment of the state descending from
-  R14 implementation `c41a7a5f53e0058692b7cc44e00ef1b9c9e19f4a`. Owner accepted
-  the R14 implementation and its live preflight, and declined to create R15 before
-  deployment. Owner acknowledged the duplicated entrypoint allowlist as
-  protected technical debt, not a blocker.
-Deployment Authorized: YES
+  compatibility, a second R10 live deployment attempt (authorization `7520f39`,
+  ONE attempt, ABORTED at the transaction-snapshot stage with
+  `ROLLBACK_SAFETY_UNAVAILABLE` and zero mutation, because the R12 transaction ID
+  is derived from the preimage and therefore collides with the retained record of
+  the previous attempt), and R15 attempt-scoped transaction identity. Owner
+  accepted the R14 implementation and its live preflight. Owner acknowledged
+  the duplicated entrypoint allowlist as protected technical debt, not a blocker.
+Deployment Authorized: NO
 ```
 
-`Deployment Authorized: YES` authorizes exactly ONE controlled live deployment of
-the R10 implementation from the HEAD containing this record, which descends from
-R14 `c41a7a5f53e0058692b7cc44e00ef1b9c9e19f4a`. It is not a standing
-authorization: no second attempt, no retry, no historical rollback. A preflight
-PASS is not an apply authorization. The earlier `b8597fe` authorization was
-consumed by its single attempt and is not carried forward.
+`Deployment Authorized: NO`. Both prior single-attempt authorizations are
+consumed and closed: `b8597fe` (failed at `native-backup-prune`) and `7520f39`
+(aborted at the transaction-snapshot stage). Neither is carried forward, and R15
+creates no deployment authorization. A preflight PASS is never an apply
+authorization, and neither `Execution Authorization`, `Planning Readiness`, nor
+`Owner Approval` implies one.
 
 `Deployment Authorized` remains `NO` in both authoritative sources. R13 creates no
 deployment authorization and self-authorizes nothing. The R10 deployment attempt
@@ -99,7 +101,8 @@ carried R5 and R6 implementation. The plan was never revised for either, so
 | M8/T2.2-R11 | Implemented | `ab0dda2` transaction snapshot gates mutation, restores the exact preimage, and licenses `rollbackSucceeded` only on live verification. Accepted by the owner.         |
 | M8/T2.2-R12 | Implemented | `47beb1c` durable transaction snapshot, orphan detection, verified post-apply, and the recovery authorization gate. Accepted as the rollback-safety baseline.                |
 | M8/T2.2-R13 | Implemented | `2d8dc54` the two R7 predecessor governance-asset digests, byte-proven from the live runtime and the R7 commit. Live preflight then PASSed.                            |
-| M8/T2.2-R14 | IN PROGRESS | Authorized 2026-09-30. Native patch lineage compatibility: recognize the deployed R7 state so R7 → R10 is possible. No deployment target; see §4.11.                    |
+| M8/T2.2-R14 | Implemented | `c41a7a5` native patch lineage: the deployed R7 patch is a recognized predecessor, so R7 -> R10 is derivable in memory. Live preflight then recognized `PREDECESSOR R7 -> R10`. |
+| M8/T2.2-R15 | IN PROGRESS | Authorized 2026-09-30. Attempt-scoped transaction identity: separate `attemptId` from `preimageDigest`. Repository-only, not deployed; see A4.12. |
 
 All revisions are local commits on `codex/m8-t2-governed-runtime-hardening`; none
 has been pushed.
@@ -432,6 +435,48 @@ extra entries would widen the recognized surface for no reason.
 R14 is repository remediation plus a live preflight. No deployment target.
 `NATIVE_RUNTIME_PINS` and the R8/R13 allowlists are unchanged, and no new
 allowlist entry is added as a side effect.
+
+### 4.12 M8/T2.2-R15 — attempt-scoped transaction identity
+
+The second R10 deployment attempt (authorization `7520f39`, one attempt) ABORTED
+before any mutation at the `transaction-snapshot` stage with
+`ROLLBACK_SAFETY_UNAVAILABLE`. Zero runtime, ledger and gateway change.
+
+Root cause, established read-only: R12 derives the transaction directory name
+from the PREIMAGE DIGEST. The first attempt's rollback restored the runtime
+byte-exactly, so all 38 recorded components of the live runtime still match that
+attempt's retained preimage exactly. The derived ID is therefore the same, and
+`persistTransactionSnapshot` refuses with `TRANSACTION_ALREADY_EXISTS`. A
+completed record from a prior attempt permanently blocks the next attempt against
+the same preimage, and nothing in the repository can clear it. Orphan detection
+does not see it either, because the record's status is `complete`, not orphaned.
+
+This conflates two different concepts. `preimageDigest` answers "which exact
+runtime state did this attempt start from?" and is deterministic, which is
+correct. `attemptId` answers "which apply attempt was this?" and must be unique
+per attempt. Using the first as the filesystem uniqueness key makes a successful
+or cleanly rolled-back attempt permanently prevent any future attempt from the
+same state.
+
+R15 separates them: the transaction directory is keyed by a cryptographically
+random `attemptId`, while the record continues to carry the full deterministic
+`preimageDigest` and the complete component manifest, so preimage traceability is
+preserved and is never replaced by the attempt ID. Two attempts against the same
+preimage become valid, each with its own attempt ID and its own independently
+recoverable snapshot. A completed transaction is evidence, not a blocker.
+
+Orphan semantics are unchanged in principle: a transaction left `started` when
+its process disappears is still detected and still blocks a new apply, and is
+never silently deleted, resumed or rolled back. History is not concurrency.
+
+The existing completed record `txn-02edeb0bf364e3931fffd9e1e5fe904b` is a valid
+historical recovery record. R15 is forward-compatible with it and does NOT
+rewrite, rename, migrate or delete it; the new scheme applies to new
+transactions only.
+
+R15 is repository-only: no deployment, no live apply, no transaction deletion or
+rewrite, no allowlist change, and no change to the R10 G1 contract, the R13
+allowlist, or the R14 native lineage.
 
 R4 validation snapshot (task remains IN PROGRESS): focused M8/T1, M8/T2 and
 native ingress suites PASS; focused DuckDB/M7-T4 gates PASS 27/27; full

@@ -1,21 +1,145 @@
-ACTIVE.md — M8/T2.2-R14 Native Patch Lineage Compatibility
+ACTIVE.md — M8/T2.2-R15 Attempt-Scoped Transaction Identity
+
+Task ID: M8/T2.2
+Plan Revision: M8/T2.2-R15
+Planning Readiness: APPROVED
+Execution Authorization: YES
+Owner Approval: EXPLICIT — owner authorized R15 on 2026-09-30 after the second
+  R10 deployment attempt aborted before mutation with
+  `ROLLBACK_SAFETY_UNAVAILABLE`.
+Deployment Authorized: NO
+
+R15 is repository-only. It creates no deployment authorization. Both prior
+single-attempt authorizations (`b8597fe`, `7520f39`) are consumed and closed.
+
+Branch: codex/m8-t2-governed-runtime-hardening
+Predecessor revisions: R3-R6, R7, R8, R10, R11, R12, R13, R14 (Implemented);
+  R9 (BLOCKED, superseded). See PLAN.md §4.1.
+
+## 1. Objective
+
+Separate transaction **attempt identity** from **preimage identity**.
+
+R12 keys the transaction directory on the preimage digest. The first deployment
+attempt's rollback restored the runtime byte-exactly, so the live runtime still
+matches that attempt's retained preimage on all 38 recorded components, the
+derived ID is unchanged, and the next apply is permanently refused with
+`TRANSACTION_ALREADY_EXISTS`. A completed record from a prior attempt has become
+an un-clearable blocker. Orphan detection cannot see it, because the record's
+status is `complete`.
+
+That conflates two different questions:
+
+- `preimageDigest` — "which exact runtime state did this attempt start from?"
+  Deterministic, and correct as such.
+- `attemptId` — "which apply attempt was this?" Unique per attempt.
+
+## 2. Identity model
+
+The transaction directory is keyed by `attemptId`, never by `preimageDigest`.
+The record retains the full deterministic preimage evidence: the complete
+component manifest, per-file digests, per-file modes, the manifest integrity
+binding, the aggregate `preimageDigest`, the creation timestamp, and the attempt
+ID.
+
+`attemptId` uses the repository's existing cryptographic convention
+(`randomBytes(32).toString("hex")`, as already used for the governance identity
+key), so it is collision-resistant, not a timestamp or custom scheme, and safe
+for concurrent attempts. The directory is created exclusively, so no existing
+transaction can ever be overwritten.
+
+Two attempts against the same preimage are valid and legitimate: each has its
+own `attemptId`, its own directory, and its own independently recoverable
+snapshot, while both manifests record the identical `preimageDigest`.
+
+## 3. Invariants
+
+- **Attempt identity is unique and random**; preimage identity is deterministic.
+  The two are never conflated, and preimage evidence is never replaced by the
+  attempt ID.
+- **Completed transactions are retained.** They are evidence, not blockers. A
+  new attempt never requires deleting or manually resolving an earlier one.
+- **Transaction records are immutable.** Only the lifecycle status may transition
+  forward.
+- **Orphan safety is unchanged.** A transaction left `started` by a process that
+  disappeared is still detected, still blocks a new apply, and is never silently
+  deleted, resumed or rolled back. A `complete` record is never treated as an
+  orphan, and a shared `preimageDigest` is never treated as one either.
+- **History is not concurrency.** A completed preimage permits a new attempt; an
+  active or mutating transaction remains protected. No broad locking redesign is
+  introduced; the existing exclusive-create and orphan gate are preserved and
+  verified.
+- **Durability order is preserved.** Attempt ID → exclusive directory → manifest
+  → snapshot → re-read verification, and only then mutation. A persistence
+  failure yields `mutationStarted = false` with the runtime untouched.
+- **Rollback targeting is explicit and unchanged in substance.** A rollback
+  restores the snapshot of THAT attempt, selected by `currentAttemptId`. It is
+  never the repository state, the latest transaction, the r12/T1 baseline,
+  another attempt with the same preimage, or whichever record sorts first.
+
+## 4. Historical preservation
+
+The existing completed record `txn-02edeb0bf364e3931fffd9e1e5fe904b` is a valid
+historical recovery record and must remain intact. R15 is forward-compatible
+with it and does NOT rewrite, rename, migrate or delete it. The attempt-scoped
+scheme applies to new transactions only.
+
+## 5. Allowed scope
+
+- `integrations/openclaw/topology/lib/transaction-snapshot.mjs` — attempt
+  identity, preimage digest, record shape and the loaders.
+- `integrations/openclaw/topology/fixtures/runtime-regression/apply-orchestration.mjs`
+  — only where passing the attempt ID through is required.
+- `tests/**`, `package.json` (test registration only), `PLAN.md`, this contract.
+
+## 6. Excluded scope
+
+Unchanged: the R10 G1 contract and `trigger === "heartbeat"`, G2 cause
+preservation, G3 advisory behaviour, R6 approval semantics, the R8/R13 asset
+allowlists, the R14 native patch lineage, `configure.mjs`, `native-patch.mjs`,
+`native-boundary.mjs`, and the production ledger.
+
+R15 must not delete, rewrite or manually resolve any transaction record, add
+automatic orphan cleanup, loosen transaction uniqueness, overwrite an existing
+transaction, or change retention policy.
+
+## 7. Acceptance criteria
+
+- Two attempts against the same preimage get distinct attempt IDs and distinct
+  directories, and neither blocks the other.
+- Both manifests record the identical preimage digest, and both snapshots are
+  independently recoverable.
+- A completed transaction is retained and a later attempt succeeds without any
+  manual resolution.
+- No existing transaction is ever overwritten; a forced ID collision is refused.
+- Orphan detection, orphan blocking, exact-preimage rollback, live restore
+  validation and historical recovery separation all still hold.
+- `NATIVE_SOURCE_DRIFT`, the G1 contract and the R13 allowlist are untouched.
+- Focused and full repository validation pass; `git diff --check` is clean.
+
+## 8. Handoff
+
+Repository remediation only. Do not deploy, do not run live `operator-apply`, do
+not clear, delete or rewrite any transaction, do not add R10 allowlist entries,
+do not restart OpenClaw, gateway or WSL, and do not write the ledger. Commits
+are local and unpushed. R15 is not closed under this contract.
+
+---
+
+# Historical: M8/T2.2-R14 (implemented, work committed)
+
+R14's commit `c41a7a5` stands and is accepted by the owner. Retained below as
+history; R15 does not modify it.
+
+## R14 header
 
 Task ID: M8/T2.2
 Plan Revision: M8/T2.2-R14
 Planning Readiness: APPROVED
 Execution Authorization: YES
-Owner Approval: EXPLICIT — owner authorized R14 on 2026-09-30 after the R10
-  deployment attempt failed at `native-backup-prune` with `NATIVE_SOURCE_DRIFT`,
-  accepted the R14 implementation and its live preflight, and on 2026-09-30
-  authorized the final R10 live deployment of the state descending from R14
-  `c41a7a5f53e0058692b7cc44e00ef1b9c9e19f4a`. No R15 is required first.
-Deployment Authorized: YES
+Deployment Authorized: NO
 
-`Deployment Authorized: YES` is a single-attempt authorization for one
-controlled live apply from the HEAD that contains the committed authorization
-record. It is not inferred from `Execution Authorization`, `Planning Readiness`,
-`Owner Approval`, or any previous deployment authorization, and it does not
-permit a second attempt, a retry, or a historical rollback.
+## 1. Objective
 
 Branch: codex/m8-t2-governed-runtime-hardening
 Predecessor revisions: R3-R6, R7, R8, R10, R11, R12, R13 (Implemented); R9
