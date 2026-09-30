@@ -58,18 +58,24 @@ Owner Approval: EXPLICIT — Owner authorized R7 remediation, controlled live
   deployment, one-time R5 baseline restoration, R8 provenance remediation, R9
   (blocked, superseded), R10 G1 contract correction, R11 transactional live
   rollback safety, R12 durable transaction recovery safety, R13 the narrow R7
-  predecessor provenance allowlist correction, the FINAL R10 live deployment
+  predecessor provenance allowlist correction, an R10 live deployment attempt
   (authorization `b8597fe`, ONE attempt, FAILED at `native-backup-prune` with
   `NATIVE_SOURCE_DRIFT`; the R12 rollback restored the exact R7 preimage and
-  verified it, with the ledger untouched), and R14 native patch lineage
-  compatibility. Owner acknowledged the duplicated entrypoint allowlist as
+  verified it, with the ledger untouched), R14 native patch lineage
+  compatibility, and the FINAL R10 live deployment of the state descending from
+  R14 implementation `c41a7a5f53e0058692b7cc44e00ef1b9c9e19f4a`. Owner accepted
+  the R14 implementation and its live preflight, and declined to create R15 before
+  deployment. Owner acknowledged the duplicated entrypoint allowlist as
   protected technical debt, not a blocker.
-Deployment Authorized: NO
+Deployment Authorized: YES
 ```
 
-`Deployment Authorized: NO`. The `b8597fe` authorization was consumed by its
-single attempt and is closed; it is not carried forward. R14 is repository
-remediation plus a live preflight, and creates no deployment authorization.
+`Deployment Authorized: YES` authorizes exactly ONE controlled live deployment of
+the R10 implementation from the HEAD containing this record, which descends from
+R14 `c41a7a5f53e0058692b7cc44e00ef1b9c9e19f4a`. It is not a standing
+authorization: no second attempt, no retry, no historical rollback. A preflight
+PASS is not an apply authorization. The earlier `b8597fe` authorization was
+consumed by its single attempt and is not carried forward.
 
 `Deployment Authorized` remains `NO` in both authoritative sources. R13 creates no
 deployment authorization and self-authorizes nothing. The R10 deployment attempt
