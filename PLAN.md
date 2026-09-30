@@ -59,10 +59,18 @@ Owner Approval: EXPLICIT — Owner authorized R7 remediation, controlled live
   (blocked, superseded), R10 G1 contract correction, R10 live deployment
   (attempted 2026-09-30 and STOPPED before `--apply` at the rollback-safety
   gate with zero mutation), R11 transactional live rollback safety, R12 durable
-  transaction recovery safety, and R13 the narrow R7 predecessor provenance
-  allowlist correction. Owner accepted R12 as the rollback-safety baseline.
-Deployment Authorized: NO
+  transaction recovery safety, R13 the narrow R7 predecessor provenance
+  allowlist correction, and the FINAL R10 live deployment of the verified
+  committed lineage R10 `3bea651` / R11 `ab0dda2` / R12 `47beb1c` / R13
+  `2d8dc54`. Owner acknowledged the duplicated entrypoint allowlist as protected
+  technical debt, not a deployment blocker, and declined to create R14 for it.
+Deployment Authorized: YES
 ```
+
+`Deployment Authorized: YES` authorizes exactly ONE controlled live deployment of
+the R10 implementation from the HEAD that contains this record. It is not a
+standing authorization: no second attempt, no retry, and no historical rollback.
+A preflight PASS is not an apply authorization.
 
 `Deployment Authorized` remains `NO` in both authoritative sources. R13 creates no
 deployment authorization and self-authorizes nothing. The R10 deployment attempt
