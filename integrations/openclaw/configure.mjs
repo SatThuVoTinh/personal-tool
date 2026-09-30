@@ -101,9 +101,13 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
   ]),
   "contracts/ledger-event.schema.json": Object.freeze([
     "e636b2452916ad8d1391a90844c0eaa3bc1c84e4aef8ede1361e3cee70143f15",
+    // The accepted V16 build (9713872), established by packaging that commit.
+    // Listed only so the R6 WORKFLOW_APPROVAL_REQUESTED contract can replace it.
+    "12ac1bbf2f034e2d3f9ba98d1916c69eddb0e0035b618f1293f2e61f85f0c228",
   ]),
   "contracts/ledger-snapshot.schema.json": Object.freeze([
     "3cde5162ae845a9b7066a623a9c4c8896f1fc6b77f2b5983ad506a9dfcbc0151",
+    "01138d85c148c06c4cfc7d6cdfd844db70a2c5b9990e21cf92810fd8ee2b50c5",
   ]),
   "contracts/result.schema.json": Object.freeze([
     "9440dfb87b3daf358b11dc7b59b62586c68786235d99d717daf9783b9a6e4540",
@@ -173,6 +177,8 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     "14bb6a5575b3f25e7d04aafb28eb1e95b0b5b2a21b15b6b5dec787aaaf94f907",
     "19dc0eb40b216fbc898afd8dfc66f5c6aae4da15d1d2a6e5923753e13fcb09f0",
     "ff2ca8d3abbef43081756d68b553e23f036bbed302f6ffdf0075c045f8f1f5e2",
+    // The accepted V16 build (9713872), established by packaging that commit.
+    "1a1913e3d3d0923dec0089812242ccd1f7221ea535ad4d85b554dce1587e9407",
   ]),
   "policy/reason-code-matrix.json": Object.freeze([
     "982896fe4fcc856728f8348058f19b69d89eabd9974bdaf4311c4afa510fc200",
@@ -617,6 +623,9 @@ async function main() {
       // The entrypoint of the superseded WSL deployment recognized on
       // 2026-09-30 under the same owner authorization as the asset list.
       "09f1d8e66f2b9fca35180d9e0d208f644cedf34824e4cd18bb9f229b51cec1c7",
+      // The accepted R5/V15/V16 build (652ac0c lineage), established by
+      // packaging that commit, listed only so the R6 emission path can replace it.
+      "e77689c94ba066bd854549750044f78dcf9d97cc3de73420893851c0a800b10a",
     ],
   );
   assertRegularOrMissing(output.identityKeyPath);
@@ -725,6 +734,9 @@ async function main() {
       // The entrypoint of the superseded WSL deployment recognized on
       // 2026-09-30 under the same owner authorization as the asset list.
       "09f1d8e66f2b9fca35180d9e0d208f644cedf34824e4cd18bb9f229b51cec1c7",
+      // The accepted R5/V15/V16 build (652ac0c lineage), established by
+      // packaging that commit, listed only so the R6 emission path can replace it.
+      "e77689c94ba066bd854549750044f78dcf9d97cc3de73420893851c0a800b10a",
     ],
   );
   if (!existsSync(output.identityKeyPath))
