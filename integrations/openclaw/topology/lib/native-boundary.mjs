@@ -371,6 +371,15 @@ export async function finishNativeRun(config, event, context) {
         agentId: context.agentId,
         sessionKey: context.sessionKey,
         runId: context.runId,
+        // R17: the run-end seam must see the same host-authoritative fields the
+        // admission seam already receives. `enterNativeRun` forwards these, so a
+        // run that admission recognises as a pure liveness heartbeat could not be
+        // recognised at run-end, which forced a self-keyed heartbeat that carries
+        // a runId into full governance and surfaced as
+        // GOVERNANCE_COMPLETION_UNAVAILABLE. Forwarded read-only and consulted
+        // only by `isPureLivenessHeartbeat`; nothing else reads them here.
+        trigger: context.trigger,
+        transcriptPrompt: context.transcriptPrompt,
       }),
     );
     if (decision?.allow !== true) throw new Error("GOVERNANCE_DENIED");

@@ -100,8 +100,8 @@ const ANNOUNCE =
   "e3b110f77cbd52ec86e935ff9ee3926b2730802a1cd4d42e65c56624dc19dc87";
 const R7_BRIDGE =
   "33b3feefdfd473dc0d6d09b0ae7b8e39b394fa93a1247fe117bc58757f075412";
-const R10_BRIDGE =
-  "50af7d4ae10b519340b8dc13af3e2b219041fb28991e2a777ea815b537d2c7c2";
+const CURRENT_BRIDGE =
+  "4567ce268064cb7729ace6ebc122dcaa2f1a938fa6b59143e3baeddd7c3a9a14";
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 const readDigest = (file) => sha256(readFileSync(file, "utf8"));
@@ -507,7 +507,7 @@ test(
       const after = stateDigests();
       assert.equal(after.selection, R10_SELECTION, "R7 -> R10 selection write");
       assert.equal(after.announce, ANNOUNCE, "the announce was already R10");
-      assert.equal(after.bridge, R10_BRIDGE, "R7 -> R10 bridge write");
+      assert.equal(after.bridge, CURRENT_BRIDGE, "R7 -> R10 bridge write");
 
       // C: the bridge is the repository-generated R10 boundary, not a copy.
       assert.equal(
@@ -621,7 +621,7 @@ test(
       );
       assert.equal(
         readDigest(path.join(RUNTIME_ROOT, "dist", BRIDGE_FILE)),
-        R10_BRIDGE,
+        CURRENT_BRIDGE,
       );
 
       // D: plugin state.
@@ -1004,7 +1004,7 @@ test(
       assert.deepEqual(first, second);
       // And byte-identical to what the R7 -> R10 route produced in the apply above.
       assert.equal(first.selection, R10_SELECTION, "selection");
-      assert.equal(first.bridge, R10_BRIDGE, "bridge");
+      assert.equal(first.bridge, CURRENT_BRIDGE, "bridge");
       assert.equal(first.announce, ANNOUNCE, "announce");
       // The baseline preimage really is a different artifact.
       assert.equal(

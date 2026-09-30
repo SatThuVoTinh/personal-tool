@@ -52,8 +52,8 @@ const R10_ANNOUNCE =
   "e3b110f77cbd52ec86e935ff9ee3926b2730802a1cd4d42e65c56624dc19dc87";
 const R7_BRIDGE =
   "33b3feefdfd473dc0d6d09b0ae7b8e39b394fa93a1247fe117bc58757f075412";
-const R10_BRIDGE =
-  "50af7d4ae10b519340b8dc13af3e2b219041fb28991e2a777ea815b537d2c7c2";
+const CURRENT_BRIDGE =
+  "4567ce268064cb7729ace6ebc122dcaa2f1a938fa6b59143e3baeddd7c3a9a14";
 
 /** The R7 signature, as the predecessor descriptor records it. */
 const selectionPatchR7 = `\t\t\tconst activeSession = session;
@@ -314,7 +314,7 @@ test(
             "utf8",
           ),
         ),
-        R10_BRIDGE,
+        CURRENT_BRIDGE,
       );
       assert.equal(checkNativePatch(rt.root).status, "PATCHED");
     } finally {
@@ -625,7 +625,7 @@ test(
             "utf8",
           ),
         ),
-        R10_BRIDGE,
+        CURRENT_BRIDGE,
       );
     } finally {
       rt.dispose();

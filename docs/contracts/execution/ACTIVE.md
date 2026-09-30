@@ -193,7 +193,79 @@ a live deployment stays unauthorized.
 
 ---
 
-# Historical: M8/T2.2-R15 (implemented, work committed)
+ACTIVE.md — M8/T2.2-R17 Run-End Governance Parity for the Liveness Heartbeat
+
+Task ID: M8/T2.2
+Plan Revision: M8/T2.2-R17
+Planning Readiness: APPROVED
+Execution Authorization: YES
+Owner Approval: EXPLICIT — owner authorized R17 on 2026-09-30 as a RED,
+  owner-decision change to the run-end governance contract, after live
+  observation of the deployed R10 runtime proved the remaining blocker.
+Deployment Authorized: YES
+Lifecycle: IN PROGRESS — single deployment attempt
+Deployment Status: AUTHORIZED - NOT YET DEPLOYED
+
+R17 is a post-deployment correction. R16 remains the historical deployed
+revision and its evidence is not rewritten.
+
+## R17 1. Objective
+
+A heartbeat observed live after the R16 deployment executed the full chain
+(poll -> governance admission -> Docker sandbox provisioning -> sandbox
+execution -> real model execution) and then failed at run-end with
+`GOVERNANCE_COMPLETION_UNAVAILABLE` and `EXECUTION_STATE_UNKNOWN`. R10 fixed
+admission; the run-end seam still refused the exemption.
+
+## R17 2. Root cause
+
+Two defects, both proven from the deployed artifact and the journal line
+`beforeRunEnd: self-keyed session presented a runId; applying full governance`.
+
+1. `finishNativeRun` built the run-end context with only `agentId`,
+   `sessionKey` and `runId`. It dropped `trigger` and `transcriptPrompt`, which
+   `enterNativeRun` already forwards at admission. Run-end therefore could not
+   recognise a heartbeat even in principle.
+2. `classifyInternalRunEnd` refused the internal exemption whenever a `runId`
+   was present, unconditionally. R10 deliberately left this seam unmodified, so
+   admission and run-end applied different rules to the same run.
+
+## R17 3. The change
+
+`native-boundary.mjs` `finishNativeRun` forwards `trigger` and
+`transcriptPrompt` into the run-end context, mirroring `enterNativeRun` exactly.
+Read-only, and consulted only by the existing predicate.
+
+`index.mjs` `classifyInternalRunEnd` accepts one new input,
+`pureLivenessHeartbeat`, and only skips the `runId` refusal when it is true.
+The call site passes the verdict of the pre-existing `isPureLivenessHeartbeat`,
+so ONE predicate serves both seams and no second copy of the rule exists.
+
+Ordering is unchanged and still fails closed: a ledger-owned session is refused
+before the new input is read, a non-self-keyed run is refused, a run carrying a
+message identity is refused, and the new input defaults to `false` so every
+pre-existing caller behaves exactly as before. Only a run that independently
+satisfies the full heartbeat predicate — host `trigger === "heartbeat"`, no
+input provenance, self-keyed session, no Discord provenance, exact liveness
+sentinel — is exempted.
+
+## R17 4. Provenance consequence
+
+`native-boundary.mjs` is a provenance-pinned governance asset, so changing it
+changes its digest and cascades, exactly as R7 and R10 did. The deployed R10
+boundary and entrypoint are therefore added to the asset allowlist as recognized
+predecessors, the post-R5 provenance hunks gain an R17 entry so the derived R5
+digest still reproduces exactly, and the current-build digest pins move.
+
+## R17 5. Handoff
+
+Single authorized deployment attempt. No sandbox policy change, no host
+fallback, no weakening of fail-closed behaviour. R16 evidence untouched. No
+automatic R18.
+
+---
+
+# Historical: M8/T2.2-R16 (closed, deployed)
 
 R15's commit `c73173f` stands. Retained as history; R16 does not modify it.
 

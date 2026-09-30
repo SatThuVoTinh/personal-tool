@@ -64,6 +64,24 @@ const POST_R5_HUNKS = [
 `,
     ``,
   ],
+  // R17: the run-end seam forwards the same two host-authoritative fields the
+  // admission seam already forwards, so one predicate serves both. Inverted here
+  // for the same reason as the R10 hunk above: without it the derived R5 body
+  // would carry R17 code, stop reproducing the packaged R5 digest, and silently
+  // break the provenance chain.
+  [
+    `        // R17: the run-end seam must see the same host-authoritative fields the
+        // admission seam already receives. \`enterNativeRun\` forwards these, so a
+        // run that admission recognises as a pure liveness heartbeat could not be
+        // recognised at run-end, which forced a self-keyed heartbeat that carries
+        // a runId into full governance and surfaced as
+        // GOVERNANCE_COMPLETION_UNAVAILABLE. Forwarded read-only and consulted
+        // only by \`isPureLivenessHeartbeat\`; nothing else reads them here.
+        trigger: context.trigger,
+        transcriptPrompt: context.transcriptPrompt,
+`,
+    ``,
+  ],
 ];
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");

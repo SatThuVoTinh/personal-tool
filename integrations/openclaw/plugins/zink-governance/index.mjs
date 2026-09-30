@@ -2680,6 +2680,7 @@ export function classifyInternalRunEnd({
   runId,
   ownedByLedger,
   hasMessageIdentity = false,
+  pureLivenessHeartbeat = false,
 }) {
   const selfKeyed =
     typeof sessionKey === "string" &&
@@ -2690,7 +2691,15 @@ export function classifyInternalRunEnd({
   if (!selfKeyed) {
     return { isInternal: false, selfKeyed: false, selfKeyedWithRunId: false };
   }
-  if (runId) {
+  // R17: a PURE liveness heartbeat is exempt here for the same reason it is
+  // exempt at admission, and it is the same rule, not a second copy of it: the
+  // caller passes the verdict of `isPureLivenessHeartbeat`, which requires the
+  // host `trigger === "heartbeat"`, no input provenance, a self-keyed session,
+  // no Discord provenance and the exact liveness sentinel. The runId refusal
+  // below is untouched for every other run, so a governed self-keyed run that
+  // merely carries a runId still receives full end-of-run governance, and a
+  // ledger-owned session was already refused above regardless of this flag.
+  if (runId && !pureLivenessHeartbeat) {
     return { isInternal: false, selfKeyed: true, selfKeyedWithRunId: true };
   }
   // Run ADMISSION additionally requires that no inbound message identity was
@@ -4386,6 +4395,10 @@ export default {
           sessionKey: context.sessionKey,
           runId: context.runId,
           ownedByLedger: Boolean(owner),
+          // R17: the run-end seam now receives the same liveness fields the
+          // admission seam already receives, so it can reuse the ONE predicate
+          // instead of holding a second, weaker copy of the rule.
+          pureLivenessHeartbeat: isPureLivenessHeartbeat(context),
         });
         if (internal.isInternal) {
           api.logger?.info?.(

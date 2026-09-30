@@ -179,6 +179,13 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // digest is deliberately NOT listed: it is the current build and is already
     // accepted by content comparison.
     "33b3feefdfd473dc0d6d09b0ae7b8e39b394fa93a1247fe117bc58757f075412",
+    // M8/T2.2-R17: the outgoing R10 build currently deployed, byte-proven against
+    // the live runtime at this exact path and cross-checked against the live dist
+    // bridge on 2026-09-30 after the R16 deployment. R17 changes only this file,
+    // so without this entry --preflight refuses the deployed R10 extension and the
+    // R17 deployment is unreachable. The R17 digest is deliberately NOT listed:
+    // it is the current build and is already accepted by content comparison.
+    "50af7d4ae10b519340b8dc13af3e2b219041fb28991e2a777ea815b537d2c7c2",
   ]),
   "lib/runtime.mjs": Object.freeze([
     "6a522c73efacf8b593d63ee55e18b5d02c3675340e0593142a5c2fea8dc6e24a",
@@ -648,6 +655,13 @@ async function main() {
       // deliberately NOT listed: it is the current build and is already accepted
       // by content comparison.
       "74582778e5d58ce6a26dec3514b9a73ad5f8964f892023b37221f8a85b5ff215",
+      // M8/T2.2-R17: the outgoing R10 entrypoint currently deployed, byte-proven
+      // against the live runtime at this exact path on 2026-09-30 after the R16
+      // deployment. R17 changes the entrypoint (run-end governance parity), so
+      // without this entry --preflight refuses the deployed R10 extension and the
+      // R17 deployment is unreachable. The R17 digest is deliberately NOT listed:
+      // it is the current build and is already accepted by content comparison.
+      "e5b220b4a3b023f6d7b26561964f6204f0d004267b208cddab90adb6043b8bd7",
     ],
   );
   assertRegularOrMissing(output.identityKeyPath);

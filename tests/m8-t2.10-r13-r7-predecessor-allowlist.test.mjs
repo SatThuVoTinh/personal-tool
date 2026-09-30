@@ -67,11 +67,11 @@ const R5_NATIVE_BOUNDARY_SHA256 =
 const R5_ENTRYPOINT_SHA256 =
   "e77689c94ba066bd854549750044f78dcf9d97cc3de73420893851c0a800b10a";
 
-/** The R10 digests. These are the CURRENT build, and must NOT be listed. */
+/** The CURRENT build digests (R17). These must NOT be listed. */
 const R10_NATIVE_BOUNDARY_SHA256 =
-  "50af7d4ae10b519340b8dc13af3e2b219041fb28991e2a777ea815b537d2c7c2";
+  "4567ce268064cb7729ace6ebc122dcaa2f1a938fa6b59143e3baeddd7c3a9a14";
 const R10_ENTRYPOINT_SHA256 =
-  "e5b220b4a3b023f6d7b26561964f6204f0d004267b208cddab90adb6043b8bd7";
+  "d01c210b0cc13f01d6d294223ae400a30ef6407c962d5b46e2f199474f799a1d";
 
 /** The commit carrying the R7-era plugin source: R10's immediate parent. */
 const R7_SOURCE_COMMIT = "4f5cc6d";
@@ -350,7 +350,7 @@ test("R13 1: each R7 digest is listed exactly once, under its own path", () => {
   );
 });
 
-test("R13 2: the R10 incoming digests are NOT listed anywhere", () => {
+test("R13 2: the current build digests are NOT listed anywhere", () => {
   for (const digest of [R10_NATIVE_BOUNDARY_SHA256, R10_ENTRYPOINT_SHA256]) {
     assert.equal(
       CONFIGURE_SOURCE.includes(digest),
@@ -485,6 +485,23 @@ function r5BoundaryBody() {
         // heartbeat representation. Both are plain strings the host already
         // holds at the injection anchor; neither is user content, a message
         // object, or Discord-layer data.
+        trigger: context.trigger,
+        transcriptPrompt: context.transcriptPrompt,
+`,
+      ``,
+    ],
+    // R17: the run-end seam forwards the same two host-authoritative fields the
+    // admission seam already forwards. Inverted for the same reason as the R10
+    // hunk: without it the derived R5 body would carry R17 code and stop
+    // reproducing the packaged R5 digest.
+    [
+      `        // R17: the run-end seam must see the same host-authoritative fields the
+        // admission seam already receives. \`enterNativeRun\` forwards these, so a
+        // run that admission recognises as a pure liveness heartbeat could not be
+        // recognised at run-end, which forced a self-keyed heartbeat that carries
+        // a runId into full governance and surfaced as
+        // GOVERNANCE_COMPLETION_UNAVAILABLE. Forwarded read-only and consulted
+        // only by \`isPureLivenessHeartbeat\`; nothing else reads them here.
         trigger: context.trigger,
         transcriptPrompt: context.transcriptPrompt,
 `,
