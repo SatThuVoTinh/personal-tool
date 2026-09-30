@@ -55,8 +55,11 @@ Execution Contract: docs/contracts/execution/ACTIVE.md
 Evidence Level: LOCAL-VERIFIED
 Task Branch: codex/m8-t2-governed-runtime-hardening
 Owner Approval: EXPLICIT — Owner authorized M8/T2.2-R7 remediation on 2026-09-30 and
-  explicitly withheld deployment authority. Deployment is NOT authorized.
-Deployment Authorized: NO
+  subsequently granted explicit owner authorization for controlled live
+  deployment of the R5 + R6 + R7 runtime, including the three authorized live
+  validation executions.
+Execution Authorization: YES
+Deployment Authorized: YES
 ```
 
 ### 4.1 Revision lineage reconciliation (2026-09-30)
