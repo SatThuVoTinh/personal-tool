@@ -189,6 +189,120 @@ function replaceOnce(source, before, after) {
   return source.replace(before, () => after);
 }
 
+// M8/T2.2-R14 — native patch LINEAGE compatibility.
+//
+// The patcher previously modelled the runtime as a two-state toggle: the exact
+// upstream baseline, or the exact patched state this patcher generates itself.
+// That is not how the deployment graph actually goes. R7 changed the selection
+// injection, so the host carries the R7 patch, and the R10 patcher could not
+// recognise it: the patcher inverts only ITS OWN patch string, found none, and
+// failed closed with NATIVE_SOURCE_DRIFT. That is how the authorized R10
+// deployment was lost on 2026-09-30.
+//
+// A predecessor is recognised by EXACT identity, never by a heuristic: its own
+// source digest, its own patch signature, and the pinned baseline digest that
+// inverting that signature must reproduce. Recognition additionally requires the
+// predecessor signature to begin with the SAME revert anchor the current patch
+// uses, so the transition is a region substitution performed entirely in memory
+// and the live runtime is never exposed to an unpatched intermediate state.
+//
+// For R10 the only required predecessor is R7. R5 and R6 are deliberately NOT
+// listed: the actual deployment graph requires only R7, and an entry for a
+// revision nothing depends on would widen the recognized surface for nothing.
+const selectionPatchR7 = `${selectionAnchor}
+\t\t\tawait enterNativeRun(params.config, {
+\t\t\t\tagentId: sessionAgentId, sessionKey: params.sessionKey, runId: params.runId,
+\t\t\t\tinputProvenance: params.inputProvenance,
+\t\t\t\tchannelId: params.messageChannel ?? params.messageProvider,
+\t\t\t\tsenderId: params.senderId, currentMessageId: params.currentMessageId
+\t\t\t}, params.abortSignal);
+\t\t\tinstallNativeToolGate(activeSession.agent, params.config, {
+\t\t\t\tagentId: sessionAgentId, sessionKey: params.sessionKey, runId: params.runId
+\t\t\t});`;
+
+/**
+ * Approved patch predecessors, per runtime release AND per artifact.
+ *
+ * A descriptor binds one artifact for one release. A digest recorded for one
+ * artifact never authorizes another, so it cannot be replayed across the
+ * governed surface.
+ *
+ * - `revision` — predecessor identity, for operator-facing diagnostics.
+ * - `sourceSignature` — the exact text the predecessor injected in place of
+ *   `supersedes`.
+ * - `supersedes` — the current replacement it replaces, which binds the
+ *   descriptor to ONE exact edit slot rather than to a position or an offset.
+ * - `sourceDigest` — the exact sha256 of the predecessor-patched artifact.
+ * - `successorRevision` — the revision this descriptor exists to reach.
+ *
+ * Only the differing edit is recorded. A bundle's other edits are byte-identical
+ * between the two revisions and are reused rather than duplicated: duplicating
+ * them would let the two revisions drift apart in exactly the way this mechanism
+ * exists to prevent.
+ */
+const NATIVE_PATCH_PREDECESSORS = Object.freeze({
+  "2026.6.34": Object.freeze({
+    "selection-DopzNY3I.js": Object.freeze({
+      revision: "R7",
+      sourceSignature: selectionPatchR7,
+      supersedes: selectionPatch,
+      sourceDigest:
+        "b431673602bf2f6eca55f8635f226dddbf06cf19e83c5488cc154d4db3d94512",
+      successorRevision: "R10",
+    }),
+  }),
+});
+
+/**
+ * Recognise an approved predecessor and return the current patched output,
+ * derived entirely in memory.
+ *
+ * Returns `null` for anything that is not an exact approved predecessor, so the
+ * caller keeps failing closed. The predecessor's edit set is the current one with
+ * the single superseded slot replaced, and recognition requires that inverting
+ * that set reproduces the PINNED baseline byte for byte. The baseline therefore
+ * exists only in memory and is never written to the live runtime.
+ */
+function applyPredecessor({ file, source, version, edits, entry }) {
+  const descriptor = NATIVE_PATCH_PREDECESSORS[version]?.[file];
+  if (!descriptor) return null;
+  // Exact state identity, never a heuristic.
+  if (sha256(source) !== descriptor.sourceDigest) return null;
+  // Bind to one exact edit slot; refuse if the predecessor names a replacement
+  // the current set does not contain.
+  const slot = edits.findIndex(([, after]) => after === descriptor.supersedes);
+  if (slot === -1) return null;
+  const predecessorEdits = edits.map((pair, index) =>
+    index === slot ? [pair[0], descriptor.sourceSignature] : pair,
+  );
+  let before;
+  try {
+    before = [...predecessorEdits]
+      .reverse()
+      .reduce(
+        (text, [original, replacement]) =>
+          replaceOnce(text, replacement, original),
+        source,
+      );
+  } catch {
+    return null;
+  }
+  if (sha256(before) !== entry.sha256) return null;
+  const after = edits.reduce(
+    (text, [from, to]) => replaceOnce(text, from, to),
+    before,
+  );
+  return {
+    state: "PREDECESSOR",
+    predecessorRevision: descriptor.revision,
+    successorRevision: descriptor.successorRevision,
+    before,
+    after,
+    beforeDigest: sha256(before),
+    afterDigest: sha256(after),
+  };
+}
+
 export function transformNativeSource(file, source, version) {
   // Resolve the edit set and the expected hash from the pin for the release the
   // caller resolved, never from a single global table: that is what made a host
@@ -211,6 +325,9 @@ export function transformNativeSource(file, source, version) {
       afterDigest: sha256(after),
     };
   }
+  // R14: an approved predecessor patch revision transforms forward in memory.
+  const predecessor = applyPredecessor({ file, source, version, edits, entry });
+  if (predecessor) return predecessor;
   // Already-patched is accepted only if exact inverse restores the frozen hash.
   let before;
   try {
@@ -393,6 +510,39 @@ export function nativeBackupManifest(root) {
 
 export function applyNativePatch(root, backupRoot) {
   const inspection = inspectNativePatch(root);
+  // R14: a host carrying an approved predecessor patch revision is upgraded by
+  // writing the successor directly. The predecessor's baseline exists only in
+  // memory, inside the transform, so the live runtime is never written back to
+  // the unpatched upstream baseline even momentarily.
+  if (Object.values(inspection).some((e) => e.state === "PREDECESSOR")) {
+    if (
+      !Object.values(inspection).every((e) =>
+        ["BASELINE", "PATCHED", "PREDECESSOR"].includes(e.state),
+      )
+    )
+      throw new Error("NATIVE_PATCH_PARTIAL_STATE");
+    // Derive the whole plan in memory BEFORE the first write, so a failure here
+    // cannot leave a half-converted runtime.
+    const plan = Object.entries(inspection)
+      .filter(([, entry]) => entry.state !== "PATCHED")
+      .map(([file, entry]) => ({
+        file,
+        after: entry.after,
+        mode: lstatSync(path.join(root, "dist", file)).mode & 0o777,
+      }));
+    assertNoLinks(bridgeFile(root));
+    if (
+      !existsSync(bridgeFile(root)) ||
+      sha256(readFileSync(bridgeFile(root))) !== sha256(bridgeContents())
+    )
+      replaceAtomic(bridgeFile(root), bridgeContents(), 0o600);
+    for (const { file, after, mode } of plan)
+      replaceAtomic(path.join(root, "dist", file), after, mode);
+    // `checkNativePatch` is the same verification the other paths end with: every
+    // pinned source must now invert exactly to the baseline, and the bridge must
+    // be the current repository boundary.
+    return checkNativePatch(root);
+  }
   if (Object.values(inspection).every((entry) => entry.state === "PATCHED")) {
     if (
       !existsSync(bridgeFile(root)) ||

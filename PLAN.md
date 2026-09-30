@@ -48,7 +48,7 @@ Milestone: M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Inte
 Task: M8/T2.2 — Root-Cause Governed Runtime, Discord, Semantic & Artifact Integrity Hardening
 Task Status: IN PROGRESS
 Planning Readiness: APPROVED
-Plan Revision: M8/T2.2-R13
+Plan Revision: M8/T2.2-R14
 Execution Authorization: YES
 Authorized Task: M8/T2.2 — Root-Cause Governed Runtime, Discord, Semantic & Artifact Integrity Hardening
 Execution Contract: docs/contracts/execution/ACTIVE.md
@@ -56,21 +56,20 @@ Evidence Level: LOCAL-VERIFIED
 Task Branch: codex/m8-t2-governed-runtime-hardening
 Owner Approval: EXPLICIT — Owner authorized R7 remediation, controlled live
   deployment, one-time R5 baseline restoration, R8 provenance remediation, R9
-  (blocked, superseded), R10 G1 contract correction, R10 live deployment
-  (attempted 2026-09-30 and STOPPED before `--apply` at the rollback-safety
-  gate with zero mutation), R11 transactional live rollback safety, R12 durable
-  transaction recovery safety, R13 the narrow R7 predecessor provenance
-  allowlist correction, and the FINAL R10 live deployment of the verified
-  committed lineage R10 `3bea651` / R11 `ab0dda2` / R12 `47beb1c` / R13
-  `2d8dc54`. Owner acknowledged the duplicated entrypoint allowlist as protected
-  technical debt, not a deployment blocker, and declined to create R14 for it.
-Deployment Authorized: YES
+  (blocked, superseded), R10 G1 contract correction, R11 transactional live
+  rollback safety, R12 durable transaction recovery safety, R13 the narrow R7
+  predecessor provenance allowlist correction, the FINAL R10 live deployment
+  (authorization `b8597fe`, ONE attempt, FAILED at `native-backup-prune` with
+  `NATIVE_SOURCE_DRIFT`; the R12 rollback restored the exact R7 preimage and
+  verified it, with the ledger untouched), and R14 native patch lineage
+  compatibility. Owner acknowledged the duplicated entrypoint allowlist as
+  protected technical debt, not a blocker.
+Deployment Authorized: NO
 ```
 
-`Deployment Authorized: YES` authorizes exactly ONE controlled live deployment of
-the R10 implementation from the HEAD that contains this record. It is not a
-standing authorization: no second attempt, no retry, and no historical rollback.
-A preflight PASS is not an apply authorization.
+`Deployment Authorized: NO`. The `b8597fe` authorization was consumed by its
+single attempt and is closed; it is not carried forward. R14 is repository
+remediation plus a live preflight, and creates no deployment authorization.
 
 `Deployment Authorized` remains `NO` in both authoritative sources. R13 creates no
 deployment authorization and self-authorizes nothing. The R10 deployment attempt
@@ -93,7 +92,8 @@ carried R5 and R6 implementation. The plan was never revised for either, so
 | M8/T2.2-R10 | Implemented | `3bea651` G1 contract correction using the host-authoritative heartbeat trigger. Deployment `dc466c6` attempted and STOPPED pre-apply; NOT deployed.              |
 | M8/T2.2-R11 | Implemented | `ab0dda2` transaction snapshot gates mutation, restores the exact preimage, and licenses `rollbackSucceeded` only on live verification. Accepted by the owner.         |
 | M8/T2.2-R12 | Implemented | `47beb1c` durable transaction snapshot, orphan detection, verified post-apply, and the recovery authorization gate. Accepted as the rollback-safety baseline.                |
-| M8/T2.2-R13 | IN PROGRESS | Authorized 2026-09-30. The two missing R7 predecessor governance-asset digests. Ends at preflight; not deployed; see §4.10.                                          |
+| M8/T2.2-R13 | Implemented | `2d8dc54` the two R7 predecessor governance-asset digests, byte-proven from the live runtime and the R7 commit. Live preflight then PASSed.                            |
+| M8/T2.2-R14 | IN PROGRESS | Authorized 2026-09-30. Native patch lineage compatibility: recognize the deployed R7 state so R7 → R10 is possible. No deployment target; see §4.11.                    |
 
 All revisions are local commits on `codex/m8-t2-governed-runtime-hardening`; none
 has been pushed.
@@ -395,6 +395,37 @@ R13 ends at the preflight result. A preflight PASS is not authorization to apply
 tests and ledger-mutating tests are all out of scope, and `Deployment Authorized`
 stays `NO`. Transaction retention and orphan handling are intentionally left as
 deferred operational-hardening decisions and are not touched.
+
+### 4.11 M8/T2.2-R14 — native patch lineage compatibility
+
+The `b8597fe` deployment attempt consumed its single authorized attempt and FAILED
+at `native-backup-prune` with `NATIVE_SOURCE_DRIFT` (`native-patch.mjs:225`).
+
+Root cause, established read-only against the live host: the R10 patcher
+recognizes only the exact upstream baseline or the exact patched state it
+generates itself. It classifies a file as patched solely by replacing its own
+patch string and checking that the inverse hashes to the pinned baseline
+`a5698c55`. The live host carries the **R7** injection — the R10 patch string is
+absent (0 occurrences) and the R7-shaped injection is present (1 occurrence) — so
+the inverse fails and neither branch is reachable. `applyNativePatch` itself would
+have been blocked at the next stage; the prune merely hit it first.
+
+R13 was necessary but not sufficient. No asset allowlist entry could have
+prevented this, because it is a patch-lineage question, not a provenance one.
+
+R14 models the runtime as an ordered lineage — `BASELINE → R7 → R10`, plus
+`BASELINE → R10` — with four recognized states: baseline, explicitly recognized
+predecessor, exact current patched, and unknown. Recognition is provenance-bound
+to an exact source digest, exact patch signature, exact inverse, and exact
+resulting baseline digest, and is bound per artifact. The R7 → R10 transition is
+derived entirely in memory, so the live runtime never passes through an unpatched
+intermediate state. For R10 the only required predecessor is R7; R5 and R6 are
+deliberately not added, because the actual deployment graph requires only R7 and
+extra entries would widen the recognized surface for no reason.
+
+R14 is repository remediation plus a live preflight. No deployment target.
+`NATIVE_RUNTIME_PINS` and the R8/R13 allowlists are unchanged, and no new
+allowlist entry is added as a side effect.
 
 R4 validation snapshot (task remains IN PROGRESS): focused M8/T1, M8/T2 and
 native ingress suites PASS; focused DuckDB/M7-T4 gates PASS 27/27; full
