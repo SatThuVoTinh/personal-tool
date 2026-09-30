@@ -48,17 +48,15 @@ Milestone: M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Inte
 Task: M8/T2.2 — Root-Cause Governed Runtime, Discord, Semantic & Artifact Integrity Hardening
 Task Status: IN PROGRESS
 Planning Readiness: APPROVED
-Plan Revision: M8/T2.2-R7
+Plan Revision: M8/T2.2-R8
 Execution Authorization: YES
 Authorized Task: M8/T2.2 — Root-Cause Governed Runtime, Discord, Semantic & Artifact Integrity Hardening
 Execution Contract: docs/contracts/execution/ACTIVE.md
 Evidence Level: LOCAL-VERIFIED
 Task Branch: codex/m8-t2-governed-runtime-hardening
-Owner Approval: EXPLICIT — Owner authorized M8/T2.2-R7 remediation on 2026-09-30 and
-  subsequently granted explicit owner authorization for controlled live
-  deployment of the R5 + R6 + R7 runtime, including the three authorized live
-  validation executions.
-Execution Authorization: YES
+Owner Approval: EXPLICIT — Owner authorized M8/T2.2-R7 remediation, then
+  controlled live deployment of R5+R6+R7, a one-time restoration of the
+  verified pre-incident R5 baseline, and M8/T2.2-R8 provenance remediation.
 Deployment Authorized: YES
 ```
 
@@ -68,12 +66,13 @@ Deployment Authorized: YES
 carried R5 and R6 implementation. The plan was never revised for either, so
 `ACTIVE.md` and `PLAN.md` no longer described the same work. Reconciled state:
 
-| Revision   | Status      | Implementation evidence                                                                       |
-| ---------- | ----------- | --------------------------------------------------------------------------------------------- |
-| M8/T2.2-R4 | Implemented | R4 validation snapshot below. Superseded as the active revision.                              |
-| M8/T2.2-R5 | Implemented | `652ac0c` config convergence, `9a6702f` V15 packaging, `9713872` V16 rewriter self-match.     |
-| M8/T2.2-R6 | Implemented | `2e1f8c4` `WORKFLOW_APPROVAL_REQUESTED` contract, `2d1121f` provenance-gated asset allowlist. |
-| M8/T2.2-R7 | IN PROGRESS | Authorized 2026-09-30. Active contract: `docs/contracts/execution/ACTIVE.md`.                 |
+| Revision   | Status      | Implementation evidence                                                                                                                       |
+| ---------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| M8/T2.2-R4 | Implemented | R4 validation snapshot below. Superseded as the active revision.                                                                              |
+| M8/T2.2-R5 | Implemented | `652ac0c` config convergence, `9a6702f` V15 packaging, `9713872` V16 rewriter self-match.                                                     |
+| M8/T2.2-R6 | Implemented | `2e1f8c4` `WORKFLOW_APPROVAL_REQUESTED` contract, `2d1121f` provenance-gated asset allowlist.                                                 |
+| M8/T2.2-R7 | Implemented | `a0118bc` heartbeat admission, boundary diagnosability, apply safety; `a1bf942` advisory-hook correction; `96e1b80` deployment authorization. |
+| M8/T2.2-R8 | IN PROGRESS | Authorized 2026-09-30. Active contract: `docs/contracts/execution/ACTIVE.md`. Repository-only; does not deploy.                               |
 
 All revisions are local commits on `codex/m8-t2-governed-runtime-hardening`; none
 has been pushed.
@@ -176,6 +175,33 @@ the boundary rejected the run.
 No new enforcement mechanism is introduced. The native boundary already
 enforces the admission decision, so enforcement is not duplicated in another
 hook, and R6 approval semantics and ledger semantics are unchanged.
+
+### 4.5 M8/T2.2-R8 — verified R5 governance-asset provenance
+
+Deployment of R6+R7 was attempted under owner authorization and is blocked at
+`configure.mjs --preflight`. Two independent gates were found, and the first was
+cleared by restoring the verified pre-incident R5 baseline (a one-time owner
+authorized recovery, executed and verified byte-exact against the recorded
+`native-r12` manifest: selection `b4316736…`, announce `e3b110f7…`, bridge
+`49352d47…`, config `5db19403…`, extension `e77689c9…`, ledger untouched at 103
+events / sequence 103 / 37 tasks).
+
+The second gate is the asset allowlist. `configure.mjs:581-591` accepts a
+deployed asset only when it is missing, equal to the current build, or an
+approved predecessor digest. The restored R5 extension differs from the current
+build in exactly one governed asset, `lib/native-boundary.mjs`, because R7
+changed only that file.
+
+Provenance was established by packaging, not inference: materializing
+`governancePluginFiles()` from the R5-era tree at commit `9713872` reproduces
+all 33 deployed R5 asset bytes exactly, with 0 mismatches and 0 absent. Across
+the 31 paths in `pluginFiles.assets`, 27 have R5 bytes identical to the current
+build and are already accepted by content comparison, and 3 are already
+allowlisted. **Exactly one digest is missing** — an earlier estimate of 30 was a
+measurement error, since it counted current-build digests as absent from a table
+that by design holds only predecessors.
+
+R8 adds that single digest and nothing else. It does not deploy.
 
 R4 validation snapshot (task remains IN PROGRESS): focused M8/T1, M8/T2 and
 native ingress suites PASS; focused DuckDB/M7-T4 gates PASS 27/27; full

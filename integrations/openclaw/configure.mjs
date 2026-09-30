@@ -165,6 +165,11 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     "164b17293cf4ac63089ad2ea1afe96bc24b39450bc3332820bc9f5fff654e253",
     "8dbd524a49a8b65959e74f0aaf37516a7a211759bd0a3d047dfd1e73863bd741",
     "6308a7c37745f2a8214a5ad47f9dd3fa0af00d1479ea9676d15bd3a6eb8ea29a",
+    // M8/T2.2-R8: the accepted R5 build (9713872), established by packaging that
+    // commit and matching the restored pre-incident extension byte-for-byte. R7
+    // changed only this file, so without this entry --preflight refuses the whole
+    // verified R5 extension and --apply becomes unreachable on it.
+    "49352d47ac88798cc918c654875f84241a7efbb1d5a661c64b77e7efbacf3be9",
   ]),
   "lib/runtime.mjs": Object.freeze([
     "6a522c73efacf8b593d63ee55e18b5d02c3675340e0593142a5c2fea8dc6e24a",
