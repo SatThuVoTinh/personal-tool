@@ -48,7 +48,7 @@ Milestone: M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Inte
 Task: M8/T2.2 — Root-Cause Governed Runtime, Discord, Semantic & Artifact Integrity Hardening
 Task Status: IN PROGRESS
 Planning Readiness: APPROVED
-Plan Revision: M8/T2.2-R12
+Plan Revision: M8/T2.2-R13
 Execution Authorization: YES
 Authorized Task: M8/T2.2 — Root-Cause Governed Runtime, Discord, Semantic & Artifact Integrity Hardening
 Execution Contract: docs/contracts/execution/ACTIVE.md
@@ -58,15 +58,15 @@ Owner Approval: EXPLICIT — Owner authorized R7 remediation, controlled live
   deployment, one-time R5 baseline restoration, R8 provenance remediation, R9
   (blocked, superseded), R10 G1 contract correction, R10 live deployment
   (attempted 2026-09-30 and STOPPED before `--apply` at the rollback-safety
-  gate with zero mutation), R11 transactional live rollback safety, and R12
-  durable transaction recovery safety. Owner accepted R11 as the correction to
-  automatic rollback semantics.
+  gate with zero mutation), R11 transactional live rollback safety, R12 durable
+  transaction recovery safety, and R13 the narrow R7 predecessor provenance
+  allowlist correction. Owner accepted R12 as the rollback-safety baseline.
 Deployment Authorized: NO
 ```
 
-`Deployment Authorized` remains `NO` in both authoritative sources. R12 creates no
-deployment authorization. The R10 deployment attempt consumed its own
-authorization record `dc466c6` and is closed; it is not carried forward.
+`Deployment Authorized` remains `NO` in both authoritative sources. R13 creates no
+deployment authorization and self-authorizes nothing. The R10 deployment attempt
+consumed its own authorization record `dc466c6` and is closed.
 
 ### 4.1 Revision lineage reconciliation (2026-09-30)
 
@@ -84,7 +84,8 @@ carried R5 and R6 implementation. The plan was never revised for either, so
 | M8/T2.2-R9  | BLOCKED     | Authorized 2026-09-30. Superseded by R10: G1 condition 5 is unobservable at the native seam; see §4.6.                                                            |
 | M8/T2.2-R10 | Implemented | `3bea651` G1 contract correction using the host-authoritative heartbeat trigger. Deployment `dc466c6` attempted and STOPPED pre-apply; NOT deployed.              |
 | M8/T2.2-R11 | Implemented | `ab0dda2` transaction snapshot gates mutation, restores the exact preimage, and licenses `rollbackSucceeded` only on live verification. Accepted by the owner.         |
-| M8/T2.2-R12 | IN PROGRESS | Authorized 2026-09-30. Durable transaction snapshot plus an authorization gate on the historical rollback path. Repository-only, not deployed; see §4.9.  |
+| M8/T2.2-R12 | Implemented | `47beb1c` durable transaction snapshot, orphan detection, verified post-apply, and the recovery authorization gate. Accepted as the rollback-safety baseline.                |
+| M8/T2.2-R13 | IN PROGRESS | Authorized 2026-09-30. The two missing R7 predecessor governance-asset digests. Ends at preflight; not deployed; see §4.10.                                          |
 
 All revisions are local commits on `codex/m8-t2-governed-runtime-hardening`; none
 has been pushed.
@@ -358,6 +359,34 @@ historical recovery stay distinct actions.
 target is unchanged. The R10 outgoing digests are NOT added. R11's automatic
 rollback logic is extended only where durability requires it. R12 is
 repository-only: no deployment, no live apply, no live historical rollback.
+
+### 4.10 M8/T2.2-R13 — R7 predecessor provenance allowlist
+
+The owner accepted R12 as the rollback-safety baseline and scoped R13 to the one
+remaining blocker on the R10 deployment: `configure.mjs --preflight` refuses the
+currently deployed R7 governance extension with `Governance plugin asset drift
+detected`.
+
+R7 changed exactly two generated-extension files relative to R5: the native
+boundary and the entrypoint. Every other R7 asset is byte-identical to the
+current build and is already accepted by content comparison, and the R5
+predecessor digests R8 recorded remain in place. So exactly two approved
+predecessor identities are missing, and R13 adds exactly those two — the OUTGOING
+live R7 digests, each bound to its own path:
+
+- `lib/native-boundary.mjs` → `33b3feefdfd473dc…`
+- `index.mjs` → `74582778e5d58ce6…`
+
+The R10 INCOMING digests (`50af7d4a…`, `e5b220b4…`) are NOT added; they are the
+current build and are already accepted by content comparison. R13 changes one
+data table and no logic, validation order, path semantics or comparison
+semantics.
+
+R13 ends at the preflight result. A preflight PASS is not authorization to apply:
+`--apply`, `operator-apply`, native mutation, gateway restart, heartbeat, Discord
+tests and ledger-mutating tests are all out of scope, and `Deployment Authorized`
+stays `NO`. Transaction retention and orphan handling are intentionally left as
+deferred operational-hardening decisions and are not touched.
 
 R4 validation snapshot (task remains IN PROGRESS): focused M8/T1, M8/T2 and
 native ingress suites PASS; focused DuckDB/M7-T4 gates PASS 27/27; full

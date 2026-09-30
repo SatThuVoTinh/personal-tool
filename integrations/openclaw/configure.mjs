@@ -170,6 +170,15 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // changed only this file, so without this entry --preflight refuses the whole
     // verified R5 extension and --apply becomes unreachable on it.
     "49352d47ac88798cc918c654875f84241a7efbb1d5a661c64b77e7efbacf3be9",
+    // M8/T2.2-R13: the outgoing R7 build currently deployed, byte-proven
+    // against the live runtime at this exact path on 2026-09-30
+    // (extensions/zink-governance/lib/native-boundary.mjs, 13981 bytes) and
+    // cross-checked against the live dist bridge. R10 is the only revision that
+    // changes this file after R7, so without this entry --preflight refuses the
+    // deployed R7 extension and the R10 deployment is unreachable. The R10
+    // digest is deliberately NOT listed: it is the current build and is already
+    // accepted by content comparison.
+    "33b3feefdfd473dc0d6d09b0ae7b8e39b394fa93a1247fe117bc58757f075412",
   ]),
   "lib/runtime.mjs": Object.freeze([
     "6a522c73efacf8b593d63ee55e18b5d02c3675340e0593142a5c2fea8dc6e24a",
@@ -631,6 +640,14 @@ async function main() {
       // The accepted R5/V15/V16 build (652ac0c lineage), established by
       // packaging that commit, listed only so the R6 emission path can replace it.
       "e77689c94ba066bd854549750044f78dcf9d97cc3de73420893851c0a800b10a",
+      // M8/T2.2-R13: the outgoing R7 entrypoint currently deployed, byte-proven
+      // against the live runtime at this exact path on 2026-09-30
+      // (extensions/zink-governance/index.mjs, 192895 bytes). R10 is the only
+      // revision that changes the entrypoint after R7, so without this entry
+      // --preflight refuses the deployed R7 extension. The R10 digest is
+      // deliberately NOT listed: it is the current build and is already accepted
+      // by content comparison.
+      "74582778e5d58ce6a26dec3514b9a73ad5f8964f892023b37221f8a85b5ff215",
     ],
   );
   assertRegularOrMissing(output.identityKeyPath);
@@ -742,6 +759,15 @@ async function main() {
       // The accepted R5/V15/V16 build (652ac0c lineage), established by
       // packaging that commit, listed only so the R6 emission path can replace it.
       "e77689c94ba066bd854549750044f78dcf9d97cc3de73420893851c0a800b10a",
+      // M8/T2.2-R13: the outgoing R7 entrypoint currently deployed, byte-proven
+      // against the live runtime at this exact path on 2026-09-30
+      // (extensions/zink-governance/index.mjs, 192895 bytes). Listed here as well
+      // as in the preflight gate above because that list is duplicated per mode:
+      // admitting the predecessor in one mode and not the other would let
+      // --preflight PASS and then --apply refuse, which is exactly the deadlock
+      // R13 exists to remove. The R10 digest is deliberately NOT listed: it is
+      // the current build and is already accepted by content comparison.
+      "74582778e5d58ce6a26dec3514b9a73ad5f8964f892023b37221f8a85b5ff215",
     ],
   );
   if (!existsSync(output.identityKeyPath))
