@@ -7,7 +7,10 @@ Execution Authorization: YES
 Owner Approval: EXPLICIT -- owner authorized completion of M8/T2.2 on
   2026-10-01, including this final revision, and directed that the remaining
   false-positive governance state be eliminated at the correct seam.
-Deployment Authorized: YES
+Deployment Authorized: YES (R19 - consumed by the R19 deployment attempt)
+Deployment Authorized: YES (owner-identity hygiene - single attempt, granted by
+  the owner as part of the instruction to finish all PR #18 remediation
+  end-to-end; remediation deployment only, no lineage change, no R20)
 Deployment Authorized Scope: ONE authorized deployment attempt against the
   real live runtime through `operator-apply.mjs`. No rehearsal namespace, no
   simulation, no automatic retry, no manual heartbeat trigger.
@@ -309,6 +312,61 @@ is admitted in both per-mode allowlists so a deployment is reachable, but the
 deployment itself is NOT authorized and was NOT performed. Until it is, the live
 runtime retains the baked-in fallback. This is recorded as an open, owner-decision
 item rather than as completed remediation.
+
+**Follow-up remediation (same PR, authorized completion instruction).** The owner
+directed finishing all PR #18 remediation end-to-end, which extends this item
+beyond the first fix without reopening M8/T2.2 (still CLOSED at R19; no R20):
+
+* A whole-tree production scan found a THIRD owner-identity location the first
+  fix missed: `normalizeActor` in `lib/authority.mjs` treated the same account
+  snowflake as an alias for the `USER` actor, and `ACTORS.USER` gates owner-level
+  actions at five sites. It now resolves through `isConfiguredOwnerActor`, which
+  honors only a well-formed `DISCORD_OWNER_ID` and otherwise recognizes no
+  snowflake. `DISCORD_OWNER_ID` is not set in the deployed environment and the
+  live approval path passes the literal role `"user"`, so the alias never carried
+  live authority — but the identity-confusion surface is closed regardless.
+* All five outbound Discord routing sites (approval card, result card, office
+  notice x3) previously fell back to hardcoded production channels/forums, so an
+  unconfigured runtime would still post into a real surface configuration never
+  designated. Each now resolves through `resolveDiscordDestination` from validated
+  configuration only and declines to send when the destination is unresolved.
+  The built plugin config now carries the four validated surface ids (the plugin
+  schema already declared them and forbids additional properties), so the live
+  deployment keeps posting exactly where it does today.
+* The `.gitleaks.toml` policy allowlists synthetic ids under `tests/` only, so
+  the real account identifier was replaced by a synthetic fixture value across
+  all test files and the README example. Production call sites pass role names;
+  the one test file that passed a raw snowflake as the actor now uses `"user"`
+  and carries an explicit negative proving a raw snowflake is denied.
+* Remaining literals are classified and documented: bot/role/alias roster tables
+  (routing identity, never authorization — decisions use normalized names), the
+  forum `STATUS:WAITING` tag (workflow semantics, applied only to threads the
+  plugin itself opens), the A30 prompt-text fallbacks (tested, documented
+  baseline), and the probe's synthetic message-id seed.
+* `secret-scan`: reproduced locally with the exact CI binary (8.24.3) and range
+  flags — `no leaks found`, exit 0 — after adding exactly the three historical
+  fingerprints to `.gitleaksignore`. History rewrite was rejected: it would
+  renumber every commit and break the R13 `R7_SOURCE_COMMIT` pin, all provenance
+  `git show` references, and the open PR. A planted new literal fallback and a
+  planted token pattern are both still detected with the suppression in place,
+  proving it is fingerprint-narrow.
+* `dependency-audit`: the only failures were `brace-expansion` (high, transitive
+  via `eslint -> minimatch`) and `js-yaml` + `markdown-it` (via dev-only
+  `markdownlint-cli2`). Remediated by the preferred order: direct parent bump
+  (`markdownlint-cli2` 0.23.2 -> 0.23.3) plus `npm audit fix` for the transitive
+  (`brace-expansion` 5.0.9 -> 5.0.12). The repository has no production
+  dependencies at all, so the production runtime is untouched. Lockfile diff is
+  confined to those two subtrees; `npm run lint` still passes with the new
+  markdownlint. `npm audit --audit-level=high` now reports 0 vulnerabilities.
+
+Coverage grew to `tests/m8-t2.17-owner-identity-hygiene.test.mjs` (13 tests):
+source invariants for owner literals and routing fallbacks, fail-closed
+`normalizeActor` with/without/malformed env, config-carries-targets,
+config-refuses-invalid, channel-access uses the same ids, plus the original
+approval-binding tests. Falsified: reintroducing the literals fails 4/6;
+weakening `parseIdentifiers` fails exactly the validation test; restoring one
+routing fallback fails exactly the routing test; every negative passes under
+every revert.
 
 Not acted on, pending decision: Discord channel and forum-tag identifiers also
 appear as literals in production plugin source. These are server surface

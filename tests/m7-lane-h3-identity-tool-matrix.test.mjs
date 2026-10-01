@@ -27,7 +27,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const OWNER = "854005217715814432";
+const OWNER = "123456789012345678";
 const IMPOSTOR = "999999999999999999";
 /** A registered agent bot snowflake, from the canonical authority table. */
 const AGENT_BOT_ID = DISCORD_BOT_IDS.o1;

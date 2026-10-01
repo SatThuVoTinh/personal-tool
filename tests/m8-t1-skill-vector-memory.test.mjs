@@ -229,7 +229,7 @@ describe("M8/T1 Governed Skill Vector Store & Semantic Vector RAG", () => {
       // The expected principal is bound explicitly rather than defaulted by the
       // implementation. Production source must not carry any account identifier,
       // so the fixture supplies one here; `.gitleaks.toml` allows that in tests.
-      const OWNER_SNOWFLAKE = "854005217715814432";
+      const OWNER_SNOWFLAKE = "123456789012345678";
       const validHash = "a".repeat(64);
 
       // 1. Rejects wrong owner snowflake

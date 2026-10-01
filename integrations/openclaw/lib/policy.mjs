@@ -885,6 +885,18 @@ export function buildConfig({ stateDir, identifiers }) {
                     "ledger",
                   ),
                   ownerDiscordId: identifiers.discordOwnerId,
+                  // Outbound Discord destinations, from VALIDATED configuration.
+                  // `parseIdentifiers` refuses to build a configuration whose
+                  // surface ids are not valid snowflakes, so these are always
+                  // well-formed here. The plugin resolves every outbound post
+                  // target from these fields and has no fallback: a destination
+                  // that configuration does not supply is never posted to.
+                  // Declared in openclaw.plugin.json's configSchema, which
+                  // forbids additional properties and pins the snowflake shape.
+                  discordOfficeChannelId: identifiers.discordOfficeChannelId,
+                  discordResultsForumId: identifiers.discordResultsForumId,
+                  discordApprovalsForumId: identifiers.discordApprovalsForumId,
+                  discordIncidentsForumId: identifiers.discordIncidentsForumId,
                 },
               }
             : { enabled: true },

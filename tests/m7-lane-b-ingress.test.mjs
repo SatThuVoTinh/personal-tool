@@ -144,7 +144,7 @@ describe("Lane B — tool ingress & contract authority", () => {
   });
 
   it("M7-018: ingress sender identity matrix", () => {
-    const owner = "854005217715814432";
+    const owner = "123456789012345678";
     assert.equal(
       isIngressSenderAuthorized({ senderId: owner }, owner).ok,
       true,

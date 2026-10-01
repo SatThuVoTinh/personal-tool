@@ -29,7 +29,7 @@ function makeQueue(dir, name = "queue.json") {
   return new QueueManager({ storagePath: path.join(dir, name) });
 }
 
-const OWNER_PRINCIPAL = "854005217715814432";
+const OWNER_PRINCIPAL = "123456789012345678";
 const REF = "f".repeat(64);
 
 function governedTask(root) {

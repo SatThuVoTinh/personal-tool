@@ -79,19 +79,49 @@ export const ACTIONS = Object.freeze({
 });
 
 /**
+ * A Discord snowflake, validated. Shared shape with `parseIdentifiers` in
+ * policy.mjs, which is the canonical place a configured identity is admitted.
+ */
+const SNOWFLAKE = /^[1-9][0-9]{16,19}$/u;
+
+/**
+ * The owner actor, derived from CONFIGURATION only.
+ *
+ * This used to be a hardcoded account snowflake in this function. Two problems,
+ * one of them a security problem rather than a hygiene one:
+ *
+ *   1. It placed a real account identifier in production source, which this
+ *      repository's own `.gitleaks.toml` deliberately does not allowlist outside
+ *      `tests/`.
+ *   2. `normalizeActor` feeds `validateActionAuthority`, and `ACTORS.USER` is the
+ *      actor that passes owner-level governance actions. A baked-in literal
+ *      therefore made the OWNER AUTHORIZATION IDENTITY a source constant instead
+ *      of a deployment decision.
+ *
+ * The identity now comes only from `DISCORD_OWNER_ID`, and only when it is a
+ * well-formed snowflake. When it is absent or malformed no account snowflake is
+ * recognised as the owner at all, which is the fail-closed direction: an
+ * unrecognised actor falls through `normalizeActor` unchanged and is then denied
+ * by the `normActor !== ACTORS.USER` gates.
+ *
+ * The live approval path passes the literal role `"user"`, which is matched on
+ * its own merits above, so this branch never carried live authority.
+ */
+function isConfiguredOwnerActor(lowerCasedActor) {
+  const configured =
+    typeof process !== "undefined" ? process.env?.DISCORD_OWNER_ID : undefined;
+  if (typeof configured !== "string" || !SNOWFLAKE.test(configured))
+    return false;
+  return lowerCasedActor === configured.toLowerCase();
+}
+
+/**
  * Normalizes input strings to canonical enum values.
  */
 export function normalizeActor(actor) {
   if (!actor || typeof actor !== "string") return null;
   const a = actor.toLowerCase().trim();
-  if (
-    a === "user" ||
-    a === "owner" ||
-    a === "854005217715814432" ||
-    (typeof process !== "undefined" &&
-      process.env?.DISCORD_OWNER_ID &&
-      a === process.env.DISCORD_OWNER_ID.toLowerCase())
-  )
+  if (a === "user" || a === "owner" || isConfiguredOwnerActor(a))
     return ACTORS.USER;
   if (a === "main" || a === "quanly" || a === "quản lý") return ACTORS.MAIN;
   if (a === "o1" || a === "điều phối 1" || a === "dieu phoi 1")
@@ -576,6 +606,15 @@ export const AGENT_DEFINITIONS = Object.freeze([
   Object.freeze({ id: "python", name: "Python" }),
 ]);
 
+// Canonical agent identity registry: bot account ids, role ids and mention
+// aliases for the deployed roster. These are ROUTING and RESOLUTION data, not
+// authorization material: they map an observed Discord identity to an agent
+// name, and every authorization decision is taken afterwards on the normalized
+// NAME by `validateActionAuthority`. No entry here can grant authority on its
+// own, and the OWNER's account id deliberately does NOT appear here — owner
+// identity comes only from validated configuration (see `isConfiguredOwnerActor`
+// and `resolveOwnerDiscordId`). Changing a bot or role id is a roster change,
+// not a permission change.
 export const DISCORD_BOT_IDS = Object.freeze({
   main: "1545436878835163156",
   o1: "1545437953197744248",

@@ -2905,6 +2905,28 @@ function resolveOwnerDiscordId(config) {
     : undefined;
 }
 
+/**
+ * An outbound Discord destination, from validated configuration only.
+ *
+ * Every call site previously fell back to a hardcoded production channel or
+ * forum id, which meant that a runtime whose configuration was missing or
+ * incomplete would still post into a specific real Discord surface that
+ * configuration never designated. That is precisely the cross-channel-write
+ * hazard, so there is no fallback at all: a destination that configuration does
+ * not supply is unresolved, and every caller then declines to send.
+ *
+ * Returning `undefined` is the fail-closed signal. Callers must not substitute a
+ * default, and must not treat a missing destination as "broadcast anywhere".
+ */
+function resolveDiscordDestination(config, ...fieldNames) {
+  for (const field of fieldNames) {
+    const value = config?.[field];
+    if (typeof value === "string" && /^[1-9][0-9]{16,19}$/u.test(value))
+      return value;
+  }
+  return undefined;
+}
+
 export default {
   id: "zink-governance",
   name: "Zink Governance",
@@ -3171,10 +3193,19 @@ export default {
       const card = extractApprovalCard(payload.output);
       if (!card) return;
 
-      const approvalsForumId =
-        config.discordApprovalsForumId ||
-        config.approvalsChannelId ||
-        "1545696207316455527";
+      const approvalsForumId = resolveDiscordDestination(
+        config,
+        "discordApprovalsForumId",
+        "approvalsChannelId",
+      );
+      if (!approvalsForumId) {
+        // Fail closed: without a configured destination the approval card is not
+        // posted anywhere rather than posted into a hardcoded production forum.
+        api.logger?.error?.(
+          "[zink-governance] approval card not posted: no configured approvals forum",
+        );
+        return;
+      }
       const token = resolveDiscordBotToken(agentId);
 
       let bodyContent = card.content;
@@ -3308,6 +3339,10 @@ export default {
               message: {
                 content: bodyContent.slice(0, 2000),
               },
+              // The forum's STATUS:WAITING tag, a stable workflow-semantics constant of
+              // the approvals surface itself (not an identity and not authentication
+              // material). It is applied only to threads the plugin itself opens in the
+              // configured approvals forum, so it cannot redirect anything anywhere.
               applied_tags: ["1545697161985921064"], // STATUS: WAITING tag
             }),
           },
@@ -3569,10 +3604,19 @@ export default {
         }
 
         // 4. Publish Result Card to Discord #results forum
-        const resultsForumId =
-          config.discordResultsForumId ||
-          config.resultsChannelId ||
-          "1545696269010477056";
+        const resultsForumId = resolveDiscordDestination(
+          config,
+          "discordResultsForumId",
+          "resultsChannelId",
+        );
+        if (!resultsForumId) {
+          // Fail closed: with no configured destination the card is published
+          // nowhere, not into a hardcoded production forum.
+          api.logger?.error?.(
+            "[zink-governance] result card not published: no configured results forum",
+          );
+          return;
+        }
         const resultId = finishRes.payloadDigest?.slice(0, 8) || "v1";
 
         const components = [
@@ -3736,10 +3780,11 @@ export default {
         }
 
         // 6. Main notifies #office
-        const officeChannelId =
-          config.discordOfficeChannelId ||
-          config.officeChannelId ||
-          "1545425766161063937";
+        const officeChannelId = resolveDiscordDestination(
+          config,
+          "discordOfficeChannelId",
+          "officeChannelId",
+        );
         if (officeChannelId) {
           sendNativePayload({
             api,
@@ -5319,15 +5364,20 @@ export default {
                   );
                 }
 
-                const officeChannelId =
-                  config.discordOfficeChannelId ||
-                  config.officeChannelId ||
-                  "1545425766161063937";
-                if (officeChannelId) {
-                  const resultsForumId =
-                    config.discordResultsForumId ||
-                    config.resultsChannelId ||
-                    "1545696269010477056";
+                const officeChannelId = resolveDiscordDestination(
+                  config,
+                  "discordOfficeChannelId",
+                  "officeChannelId",
+                );
+                const resultsForumId = resolveDiscordDestination(
+                  config,
+                  "discordResultsForumId",
+                  "resultsChannelId",
+                );
+                // Both destinations must be configured: the notice text names the
+                // results forum, so posting with an unresolved forum would render
+                // a dangling mention into an undesignated channel.
+                if (officeChannelId && resultsForumId) {
                   sendNativePayload({
                     api,
                     to: officeChannelId,
@@ -5497,15 +5547,20 @@ export default {
               );
             }
 
-            const officeChannelId =
-              config.discordOfficeChannelId ||
-              config.officeChannelId ||
-              "1545425766161063937";
-            if (officeChannelId) {
-              const resultsForumId =
-                config.discordResultsForumId ||
-                config.resultsChannelId ||
-                "1545696269010477056";
+            const officeChannelId = resolveDiscordDestination(
+              config,
+              "discordOfficeChannelId",
+              "officeChannelId",
+            );
+            const resultsForumId = resolveDiscordDestination(
+              config,
+              "discordResultsForumId",
+              "resultsChannelId",
+            );
+            // Both destinations must be configured: the notice text names the
+            // results forum, so posting with an unresolved forum would render
+            // a dangling mention into an undesignated channel.
+            if (officeChannelId && resultsForumId) {
               sendNativePayload({
                 api,
                 to: officeChannelId,

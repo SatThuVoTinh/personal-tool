@@ -438,7 +438,7 @@ describe("M8/T2 Mandatory E2E Workflow & Failure Injection Suite", () => {
         topic: "SEMANTICS",
         question: "Is revenue gross or net?",
         decision: "Revenue is defined as Net Revenue after returns",
-        confirmedBy: "854005217715814432",
+        confirmedBy: "123456789012345678",
       });
       assert.equal(
         dl.hasDecision("SEMANTICS", "Is revenue gross or net?"),

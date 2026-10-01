@@ -71,7 +71,7 @@ const R5_ENTRYPOINT_SHA256 =
 const R10_NATIVE_BOUNDARY_SHA256 =
   "d88bff80aeb3d7531e5a0dceba4e7ba856d085e64a87cbb414c9f295284d81e3";
 const R10_ENTRYPOINT_SHA256 =
-  "6323dec9157877630cffe2123d05dc2a18d0a7421d4627851570fe71d6e507c3";
+  "2271b56bc7f0ed3a3446e4474c411c1a6132a4e3c1a2edfedb5e6907d8340b5d";
 
 /**
  * The outgoing R17 entrypoint, admitted by R19 so the authorized deployment is

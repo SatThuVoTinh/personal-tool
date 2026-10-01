@@ -247,7 +247,7 @@ Hệ thống tuân thủ nguyên tắc **CHỈ BOT ĐƯỢC TAG MỚI ĐƯỢC P
 
 - Khi một agent chuyên môn (`excel`, `power-bi`, `sql`, `python`) hoàn thiện giải pháp phân tích tái sử dụng, agent gọi `zink_skill_propose` để khởi tạo bản ghi `CANDIDATE`. (Các agent điều phối `main`, `o1`, `o2` không có quyền đề xuất kỹ năng theo ma trận `SKILL_STORE_ACCESS_MATRIX`).
 - Đề xuất được định danh bằng mã băm nội dung bất biến (immutable SHA-256 hash) và gửi thông báo vào diễn đàn `#approvals`.
-- **Phê duyệt:** Chủ sở hữu (`854005217715814432`) đọc nội dung đề xuất và trả lời trực tiếp trong thread bằng tin nhắn chứa từ khóa `APPROVED` (ví dụ: `APPROVED` hoặc `Đồng ý APPROVED`).
+- **Phê duyệt:** Chủ sở hữu (`123456789012345678`) đọc nội dung đề xuất và trả lời trực tiếp trong thread bằng tin nhắn chứa từ khóa `APPROVED` (ví dụ: `APPROVED` hoặc `Đồng ý APPROVED`).
 - **Xác thực tự động:** Hệ thống `handleOwnerSkillApproval` sẽ xác thực danh tính chủ sở hữu và tính toàn vẹn của mã băm nội dung, sau đó tiến hành kích hoạt kỹ năng lên trạng thái `ACTIVE` và đồng bộ sang PostgreSQL vector index (pgvector). Mọi nỗ lực giả mạo danh tính hoặc sai lệch mã băm đều bị từ chối fail-closed.
 
 #### 5. Thứ tự Ưu tiên Phân giải Ngữ nghĩa (Deterministic Semantic Resolver Precedence)

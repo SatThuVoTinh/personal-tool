@@ -353,7 +353,7 @@ describe("M8/T2 Governed Runtime, Authority, Memory & Reliability Hardening — 
         question: "What forecast baseline should be used?",
         decision: "Use 2026 fiscal baseline model",
         scope: "global",
-        confirmedBy: "854005217715814432",
+        confirmedBy: "123456789012345678",
         tags: ["forecast", "baseline"],
       });
       assert.equal(recorded.topic, "LSCM");

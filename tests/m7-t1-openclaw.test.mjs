@@ -446,6 +446,13 @@ test("M7/T1 builds the exact minimal-tool, zero-command foundation", () => {
         config: {
           ledgerRoot: path.join(stateDir, "operator", "m7-t2", "ledger"),
           ownerDiscordId: identifiers.discordOwnerId,
+          // Outbound Discord destinations come from the same validated
+          // identifiers. Pinned here so the built config carries exactly these
+          // four destinations — no more, no less, and never a literal.
+          discordOfficeChannelId: identifiers.discordOfficeChannelId,
+          discordResultsForumId: identifiers.discordResultsForumId,
+          discordApprovalsForumId: identifiers.discordApprovalsForumId,
+          discordIncidentsForumId: identifiers.discordIncidentsForumId,
         },
       },
     },

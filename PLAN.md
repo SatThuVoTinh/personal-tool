@@ -76,6 +76,9 @@ Deployment Authorized: YES (R18 - single attempt, granted by the owner on
   2026-10-01)
 Deployment Authorized: YES (R19 - single attempt, granted by the owner on
   2026-10-01 as authorized completion of M8/T2.2)
+Deployment Authorized: YES (owner-identity hygiene - single attempt, granted by
+  the owner as part of the instruction to finish all PR #18 remediation
+  end-to-end; consumed by that one attempt; remediation deployment only)
 ```
 
 `Deployment Status: DEPLOYED - R18 LIVE AND VERIFIED FOR ITS AUTHORIZED SEAM;
@@ -1000,6 +1003,43 @@ repository policy and `git diff --check` all exit 0.
 contains the literals; the repository build is `6323dec9`. A deployment
 authorization is required and has NOT been requested or assumed, so this is
 tracked as an OPEN item rather than completed remediation. Owner decision needed.
+
+**Follow-up remediation (same PR, completing instruction).** The owner authorized
+finishing all PR #18 remediation end-to-end, which extends this item without
+reopening M8/T2.2 (still CLOSED at R19; no R20). Full scope and evidence are in
+ACTIVE.md R19 10; in brief:
+
+* a third owner-identity location found by whole-tree scan and closed:
+  `normalizeActor` in `lib/authority.mjs` aliased the same account snowflake to
+  the `USER` actor, which gates owner-level actions at five sites. Now honors
+  only a well-formed `DISCORD_OWNER_ID`, otherwise recognizes no snowflake;
+* all five outbound Discord routing sites now resolve destinations from validated
+  configuration only (`resolveDiscordDestination`) and decline to send when
+  unresolved; the built plugin config now carries the four validated surface ids
+  (already declared in the plugin schema), so live posting targets are unchanged;
+* the real account identifier replaced by a synthetic fixture value across all
+  test files and the README example; the one test passing a raw snowflake as the
+  actor now uses the production-legitimate role name plus an explicit negative;
+* `secret-scan` reproduced locally with CI's exact binary and flags — `no leaks
+  found` — after suppressing exactly the three historical fingerprints (history
+  rewrite rejected: it would break the R13 commit pin, all provenance `git show`
+  references, and the open PR). Planted new secrets are still detected;
+* `dependency-audit` remediated within supported constraints: direct parent bump
+  `markdownlint-cli2` 0.23.2 -> 0.23.3 plus `npm audit fix` for transitive
+  `brace-expansion` 5.0.9 -> 5.0.12. No production dependencies exist; lockfile
+  diff confined to those subtrees; audit now reports 0 vulnerabilities.
+
+Validation at commit time: `npm test` green, hygiene suite 13/13 with falsified
+negatives, lint/Prettier/repo-policy/`git diff --check` clean. Deployment of the
+corrected build follows under its own single-attempt authorization below.
+
+`Deployment Authorized: YES (owner-identity hygiene - single attempt)` — granted
+by the owner as part of the instruction to finish all PR #18 remediation
+end-to-end, to deploy the locally verified hygiene build to the live runtime
+through `operator-apply.mjs`. ONE attempt. No rehearsal namespace, no simulation,
+no automatic retry, no manual heartbeat trigger. This authorization is consumed by
+that one attempt. It deploys remediation only; it does not reopen M8/T2.2, modify
+the native runtime lineage, or create R20.
 
 Not acted on, pending decision: Discord channel/forum-tag literals also appear in
 production plugin source (server surface identifiers, not personal data; not

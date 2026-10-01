@@ -38,7 +38,7 @@ describe("Lane D — decision ledger authority (M7-022/023/033/070)", () => {
         ledger.recordDecision({
           topic: "T",
           decision: "D",
-          confirmedBy: "854005217715814432",
+          confirmedBy: "123456789012345678",
         }),
       /LEDGER_WRITE_FAILED/,
     );
@@ -52,7 +52,7 @@ describe("Lane D — decision ledger authority (M7-022/023/033/070)", () => {
         ledger.recordDecision({
           topic: "T",
           decision: "D",
-          confirmedBy: "854005217715814432",
+          confirmedBy: "123456789012345678",
           scope: "universe",
         }),
       /DECISION_SCOPE_INVALID/,
@@ -62,7 +62,7 @@ describe("Lane D — decision ledger authority (M7-022/023/033/070)", () => {
         ledger.recordDecision({
           topic: "T",
           decision: "D",
-          confirmedBy: "854005217715814432",
+          confirmedBy: "123456789012345678",
           scope: "task-specific",
           context: {},
         }),
@@ -71,7 +71,7 @@ describe("Lane D — decision ledger authority (M7-022/023/033/070)", () => {
     const rec = ledger.recordDecision({
       topic: "T",
       decision: "D",
-      confirmedBy: "854005217715814432",
+      confirmedBy: "123456789012345678",
       scope: "GLOBAL",
       context: {},
     });
@@ -85,14 +85,14 @@ describe("Lane D — decision ledger authority (M7-022/023/033/070)", () => {
       topic: "T",
       question: "Q",
       decision: "yes",
-      confirmedBy: "854005217715814432",
+      confirmedBy: "123456789012345678",
     });
     const replay = ledger.recordDecision({
       decisionId: "D1",
       topic: "T",
       question: "Q",
       decision: "yes",
-      confirmedBy: "854005217715814432",
+      confirmedBy: "123456789012345678",
     });
     assert.equal(replay.decisionId, "D1");
     assert.throws(
@@ -102,7 +102,7 @@ describe("Lane D — decision ledger authority (M7-022/023/033/070)", () => {
           topic: "T",
           question: "Q",
           decision: "no — changed",
-          confirmedBy: "854005217715814432",
+          confirmedBy: "123456789012345678",
         }),
       { code: "DECISION_ID_CONFLICT" },
     );
@@ -162,9 +162,9 @@ describe("Lane D — decision ledger authority (M7-022/023/033/070)", () => {
     const rec = ledger.recordDecision({
       topic: "T",
       decision: "D",
-      confirmedBy: "854005217715814432",
+      confirmedBy: "123456789012345678",
     });
-    assert.equal(rec.confirmedBy, "854005217715814432");
+    assert.equal(rec.confirmedBy, "123456789012345678");
     const digestRec = ledger.recordDecision({
       decisionId: "dig-1",
       topic: "T",
@@ -182,7 +182,7 @@ describe("Lane D — decision ledger authority (M7-022/023/033/070)", () => {
       question: "Which baseline?",
       decision: "2026 baseline",
       scope: "task-specific",
-      confirmedBy: "854005217715814432",
+      confirmedBy: "123456789012345678",
       context: { taskId: "task-1" },
     });
     ledger.recordDecision({
@@ -191,7 +191,7 @@ describe("Lane D — decision ledger authority (M7-022/023/033/070)", () => {
       question: "Which currency?",
       decision: "VND",
       scope: "global",
-      confirmedBy: "854005217715814432",
+      confirmedBy: "123456789012345678",
     });
     assert.equal(
       ledger.hasDecision("T", "Which baseline?", {
@@ -216,7 +216,7 @@ describe("Lane D — decision ledger authority (M7-022/023/033/070)", () => {
       topic: "TAX",
       question: "What is the VAT rate?",
       decision: "10 percent",
-      confirmedBy: "854005217715814432",
+      confirmedBy: "123456789012345678",
     });
     assert.equal(ledger.hasDecision("TAX", "VAT"), false);
     assert.equal(ledger.hasDecision("TAX", "What is the CIT rate?"), false);
@@ -234,7 +234,7 @@ describe("Lane D — decision ledger authority (M7-022/023/033/070)", () => {
       topic: "T",
       question: "Proceed?",
       decision: "Yes, proceed",
-      confirmedBy: "854005217715814432",
+      confirmedBy: "123456789012345678",
     });
     const held = ledger.shouldClarify({ topic: "T", question: "Proceed?" });
     assert.equal(held.ask, false);

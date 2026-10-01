@@ -500,7 +500,7 @@ describe("M8-054 — result digest is bound to the record", () => {
           qm.completeTask({
             taskId: "d-2",
             userConfirmationRef: "ref",
-            userPrincipalRef: "854005217715814432",
+            userPrincipalRef: "123456789012345678",
             resultDigest: "b".repeat(64),
           }),
         { message: /RESULT_MISMATCH/u },

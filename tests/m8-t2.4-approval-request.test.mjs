@@ -289,7 +289,7 @@ async function pluginHarness(tag) {
   plugin.register({
     pluginConfig: {
       ledgerRoot,
-      ownerDiscordId: "854005217715814432",
+      ownerDiscordId: "123456789012345678",
       enabled: true,
     },
     on: (n, f) => hooks.set(n, f),
@@ -303,7 +303,8 @@ async function pluginHarness(tag) {
   return { root, paths: ledgerPaths(root), hooks, logs, ledgerRoot };
 }
 
-const OWNER = "854005217715814432";
+// (No OWNER constant: the authorized-actor path uses the role name "user",
+// exactly as production does. See test E2 for the snowflake-as-actor negative.)
 
 describe("R6 — approval semantics through the deployed plugin", () => {
   it("C. APPROVE on an OPENED task with NO request is rejected", async () => {
@@ -315,7 +316,7 @@ describe("R6 — approval semantics through the deployed plugin", () => {
         (
           await import("../integrations/openclaw/plugins/zink-governance/index.mjs")
         ).handleDiscordAction({
-          actor: OWNER,
+          actor: "user",
           channel: "approvals",
           taskId,
           action: "APPROVE",
@@ -333,6 +334,9 @@ describe("R6 — approval semantics through the deployed plugin", () => {
     }
   });
 
+  // The actor below is the production-legitimate role name. Production proves the
+  // owner at the sender gate and never passes a raw account snowflake here;
+  // a snowflake-as-actor case is covered separately by test E2 above.
   it("D. after a recorded request, owner APPROVE reaches QUEUED", async () => {
     const h = await pluginHarness("withrequest");
     try {
@@ -345,7 +349,7 @@ describe("R6 — approval semantics through the deployed plugin", () => {
       const res = (
         await import("../integrations/openclaw/plugins/zink-governance/index.mjs")
       ).handleDiscordAction({
-        actor: OWNER,
+        actor: "user",
         channel: "approvals",
         taskId,
         action: "APPROVE",
@@ -355,6 +359,37 @@ describe("R6 — approval semantics through the deployed plugin", () => {
       const task = readSnapshot(h.paths).tasks[taskId];
       assert.equal(task.workflow_status, "QUEUED");
       assert.ok(task.approved_at, "the decision must be recorded");
+    } finally {
+      rmSync(h.root, { recursive: true, force: true });
+    }
+  });
+
+  // Production never passes a raw account snowflake as the actor: the owner is
+  // proven at the sender gate (sender vs validated configured owner) and only
+  // the role name travels into handleDiscordAction. A raw snowflake must
+  // therefore NOT be treated as an authorized actor, even when it matches the
+  // configured owner id — identity is established before this function, never
+  // by it.
+  it("E2. a raw account snowflake is not an authorized actor", async () => {
+    const h = await pluginHarness("snowflake");
+    try {
+      const taskId = openTask(h.paths);
+      recordWorkflowEvent(
+        h.paths,
+        "WORKFLOW_APPROVAL_REQUESTED",
+        request(taskId),
+      );
+      const res = (
+        await import("../integrations/openclaw/plugins/zink-governance/index.mjs")
+      ).handleDiscordAction({
+        actor: "123456789012345678",
+        channel: "approvals",
+        taskId,
+        action: "APPROVE",
+        paths: h.paths,
+      });
+      assert.equal(res.allowed, false);
+      assert.match(res.reason, /AUTHORITY_DENIED/u);
     } finally {
       rmSync(h.root, { recursive: true, force: true });
     }
@@ -372,21 +407,21 @@ describe("R6 — approval semantics through the deployed plugin", () => {
         request(taskId),
       );
       const dup = mod.handleDiscordAction({
-        actor: OWNER,
+        actor: "user",
         channel: "approvals",
         taskId,
         action: "APPROVE",
         paths: h.paths,
       });
       mod.handleDiscordAction({
-        actor: OWNER,
+        actor: "user",
         channel: "approvals",
         taskId,
         action: "APPROVE",
         paths: h.paths,
       });
       const second = mod.handleDiscordAction({
-        actor: OWNER,
+        actor: "user",
         channel: "approvals",
         taskId,
         action: "APPROVE",
@@ -413,7 +448,7 @@ describe("R6 — approval semantics through the deployed plugin", () => {
       assert.match(nonOwner.reason, /AUTHORITY_DENIED/u);
 
       const wrongChannel = mod.handleDiscordAction({
-        actor: OWNER,
+        actor: "user",
         channel: "results",
         taskId: task2,
         action: "APPROVE",
@@ -433,7 +468,7 @@ describe("R6 — approval semantics through the deployed plugin", () => {
         await import("../integrations/openclaw/plugins/zink-governance/index.mjs");
       const taskId = openTask(h.paths);
       mod.handleDiscordAction({
-        actor: OWNER,
+        actor: "user",
         channel: "approvals",
         taskId,
         action: "APPROVE",
