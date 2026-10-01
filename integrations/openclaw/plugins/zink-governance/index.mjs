@@ -468,7 +468,13 @@ export async function handleOwnerSkillApproval({
   proposalId,
   contentSha256,
   skillsRoot,
-  expectedOwnerId = "854005217715814432",
+  // No default, deliberately. A hardcoded default would place a real account
+  // identifier in production source — forbidden outside `tests/` by this
+  // repository's own `.gitleaks.toml` — and, worse, would keep authorizing that
+  // account whenever a caller forgot to bind the expected principal. The
+  // parameter is required so the exact-identity binding is always explicit, and
+  // an omitted value fails the comparison below and denies the approval.
+  expectedOwnerId,
   options = {},
 }) {
   // Exact owner snowflake binding (BUG-06)
@@ -2876,6 +2882,29 @@ function leaseKey(context, event = {}) {
   });
 }
 
+/**
+ * The owner's Discord account id, from validated configuration only.
+ *
+ * This identity is deliberately NEVER hardcoded. A baked-in fallback would put a
+ * real account identifier into source — a privacy leak, and one the repository's
+ * own `.gitleaks.toml` policy forbids outside `tests/` — and it would be worse
+ * than a leak: if configuration were ever absent or unreadable, that fallback
+ * would silently keep authorizing one specific account, so the authorization
+ * gate would depend on a source constant instead of on deployed configuration.
+ *
+ * `parseIdentifiers` refuses to build a configuration whose owner id is not a
+ * valid Discord snowflake, so a real deployment always supplies one. Absence
+ * therefore means "cannot prove who the owner is", and the correct answer is to
+ * authorize nobody. Every caller compares a sender against this value, so an
+ * `undefined` result denies the action and the gate fails closed.
+ */
+function resolveOwnerDiscordId(config) {
+  const ownerId = config?.ownerDiscordId;
+  return typeof ownerId === "string" && /^[0-9]{17,19}$/u.test(ownerId)
+    ? ownerId
+    : undefined;
+}
+
 export default {
   id: "zink-governance",
   name: "Zink Governance",
@@ -5140,7 +5169,7 @@ export default {
               return;
             }
 
-            const ownerId = config.ownerDiscordId || "854005217715814432";
+            const ownerId = resolveOwnerDiscordId(config);
             const senderSnowflake =
               ctx.senderId ||
               ctx.interaction?.senderId ||
@@ -5347,7 +5376,7 @@ export default {
         if (!approveMatch) return;
 
         const actionWord = approveMatch[1].replace(/[ _-]/g, "_");
-        const ownerId = config.ownerDiscordId || "854005217715814432";
+        const ownerId = resolveOwnerDiscordId(config);
         const senderId = event.senderId || ctx.senderId;
         if (senderId !== ownerId) return;
 

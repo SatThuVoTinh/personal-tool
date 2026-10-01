@@ -67,11 +67,11 @@ const R5_NATIVE_BOUNDARY_SHA256 =
 const R5_ENTRYPOINT_SHA256 =
   "e77689c94ba066bd854549750044f78dcf9d97cc3de73420893851c0a800b10a";
 
-/** The CURRENT build digests (R19). These must NOT be listed. */
+/** The CURRENT build digests (owner-identity hygiene). NOT listed. */
 const R10_NATIVE_BOUNDARY_SHA256 =
   "d88bff80aeb3d7531e5a0dceba4e7ba856d085e64a87cbb414c9f295284d81e3";
 const R10_ENTRYPOINT_SHA256 =
-  "bae7bdf358f35c43c5308c4b0b24a1da57b55bbc609d1ff3a7e32daf65182eca";
+  "6323dec9157877630cffe2123d05dc2a18d0a7421d4627851570fe71d6e507c3";
 
 /**
  * The outgoing R17 entrypoint, admitted by R19 so the authorized deployment is
@@ -79,6 +79,13 @@ const R10_ENTRYPOINT_SHA256 =
  */
 const R17_OUTGOING_ENTRYPOINT_SHA256 =
   "d01c210b0cc13f01d6d294223ae400a30ef6407c962d5b46e2f199474f799a1d";
+
+/**
+ * The outgoing R19 entrypoint, currently live, admitted by the owner-identity
+ * hygiene fix so the next authorized deployment is reachable.
+ */
+const R19_OUTGOING_ENTRYPOINT_SHA256 =
+  "bae7bdf358f35c43c5308c4b0b24a1da57b55bbc609d1ff3a7e32daf65182eca";
 
 /** The commit carrying the R7-era plugin source: R10's immediate parent. */
 const R7_SOURCE_COMMIT = "4f5cc6d";
@@ -375,15 +382,20 @@ test("R13 3: the R5 predecessors R8 added are preserved", () => {
     );
 });
 
-test("R13 3b: the outgoing R17 entrypoint R19 admits is listed in BOTH modes", () => {
+test("R13 3b: each outgoing entrypoint is listed in BOTH modes", () => {
   // The entrypoint allowlist is duplicated per builder mode. Admitting the
   // predecessor in one mode and not the other would let --preflight PASS and
   // then --apply refuse, which is the deadlock R13 exists to remove.
-  assert.equal(
-    CONFIGURE_SOURCE.split(R17_OUTGOING_ENTRYPOINT_SHA256).length - 1,
-    2,
-    "the outgoing R17 entrypoint must be admitted in the preflight AND apply gates",
-  );
+  for (const [digest, label] of [
+    [R17_OUTGOING_ENTRYPOINT_SHA256, "R17 outgoing"],
+    [R19_OUTGOING_ENTRYPOINT_SHA256, "R19 outgoing"],
+  ]) {
+    assert.equal(
+      CONFIGURE_SOURCE.split(digest).length - 1,
+      2,
+      `the ${label} entrypoint must be admitted in the preflight AND apply gates`,
+    );
+  }
 });
 
 // ---------------------------------------------------------------------------

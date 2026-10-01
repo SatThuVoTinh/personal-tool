@@ -678,6 +678,12 @@ async function main() {
       // R19 deployment is unreachable. The R19 digest is deliberately NOT listed:
       // it is the current build and is already accepted by content comparison.
       "d01c210b0cc13f01d6d294223ae400a30ef6407c962d5b46e2f199474f799a1d",
+      // Owner-identity hygiene: the outgoing R19 entrypoint currently deployed,
+      // which removed a real account identifier that was hardcoded as a fallback
+      // inside two owner authorization gates. Admitted here so the next authorized
+      // deployment is reachable. The new digest is deliberately NOT listed: it is
+      // the current build and is accepted by content comparison.
+      "bae7bdf358f35c43c5308c4b0b24a1da57b55bbc609d1ff3a7e32daf65182eca",
     ],
   );
   assertRegularOrMissing(output.identityKeyPath);
@@ -810,6 +816,10 @@ async function main() {
       // --preflight PASS and then --apply refuse. The R19 digest is deliberately
       // NOT listed: it is the current build and is accepted by content comparison.
       "d01c210b0cc13f01d6d294223ae400a30ef6407c962d5b46e2f199474f799a1d",
+      // Owner-identity hygiene: the outgoing R19 entrypoint currently deployed,
+      // listed here as well as in the preflight gate above for the same
+      // per-mode-duplication reason.
+      "bae7bdf358f35c43c5308c4b0b24a1da57b55bbc609d1ff3a7e32daf65182eca",
     ],
   );
   if (!existsSync(output.identityKeyPath))

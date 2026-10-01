@@ -226,6 +226,10 @@ describe("M8/T1 Governed Skill Vector Store & Semantic Vector RAG", () => {
     );
     try {
       const validProposalId = "prop-123456789";
+      // The expected principal is bound explicitly rather than defaulted by the
+      // implementation. Production source must not carry any account identifier,
+      // so the fixture supplies one here; `.gitleaks.toml` allows that in tests.
+      const OWNER_SNOWFLAKE = "854005217715814432";
       const validHash = "a".repeat(64);
 
       // 1. Rejects wrong owner snowflake
@@ -244,7 +248,8 @@ describe("M8/T1 Governed Skill Vector Store & Semantic Vector RAG", () => {
       await assert.rejects(
         () =>
           handleOwnerSkillApproval({
-            ownerDiscordId: "854005217715814432",
+            ownerDiscordId: OWNER_SNOWFLAKE,
+            expectedOwnerId: OWNER_SNOWFLAKE,
             proposalId: validProposalId,
             contentSha256: "invalid-hash",
             skillsRoot: tempDir,
@@ -256,7 +261,8 @@ describe("M8/T1 Governed Skill Vector Store & Semantic Vector RAG", () => {
       await assert.rejects(
         () =>
           handleOwnerSkillApproval({
-            ownerDiscordId: "854005217715814432",
+            ownerDiscordId: OWNER_SNOWFLAKE,
+            expectedOwnerId: OWNER_SNOWFLAKE,
             proposalId: "",
             contentSha256: validHash,
             skillsRoot: tempDir,
@@ -266,7 +272,8 @@ describe("M8/T1 Governed Skill Vector Store & Semantic Vector RAG", () => {
 
       // 4. Accepts valid owner + proposal + hash
       const approvalResult = await handleOwnerSkillApproval({
-        ownerDiscordId: "854005217715814432",
+        ownerDiscordId: OWNER_SNOWFLAKE,
+        expectedOwnerId: OWNER_SNOWFLAKE,
         proposalId: validProposalId,
         contentSha256: validHash,
         skillsRoot: tempDir,

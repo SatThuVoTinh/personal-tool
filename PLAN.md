@@ -950,6 +950,53 @@ transcript poll then reply. `beforeRunEnd: internal system session` rose from 0
 to 2 and the self-keyed full-governance refusal stopped at 40. One pre-existing,
 separate seam remains open and is recorded in ACTIVE.md R18 9; no R19 created.
 
+### 4.16 Owner-identity hygiene — security remediation (NOT DEPLOYED)
+
+Publishing the branch surfaced a real defect through the repository's own
+`secret-scan` CI gate (three `discord-client-id` findings; `quality-gate` passed).
+It is **not** a regression from R18/R19 and it is **absent from `main`**: the
+literals were introduced 2026-09-26 in `01489aa` / `0e5a899`.
+
+`.gitleaks.toml` allowlists synthetic Discord IDs under `tests/` and the
+orchestration README but deliberately NOT production plugin source, so this was a
+true positive and was fixed in source rather than suppressed.
+
+Two real account identifiers were hardcoded as fallbacks inside owner
+authorization gates: `config.ownerDiscordId || "<snowflake>"` (approval-button
+gate and approve/reject action gate) and `expectedOwnerId = "<snowflake>"` as a
+default parameter of `handleOwnerSkillApproval`. Beyond the privacy exposure, an
+authorization gate falling back to a source constant stops depending on deployed
+configuration — if config were absent, it would keep authorizing one specific
+account.
+
+The fix removes both fallbacks. `resolveOwnerDiscordId(config)` yields the
+configured id only when it is a valid snowflake and `undefined` otherwise, so both
+gates deny when the owner cannot be proven; `expectedOwnerId` has no default.
+`parseIdentifiers` already refuses to build a config whose owner id is invalid, so
+the fail-closed path is unreachable in a real deployment.
+
+Files: `integrations/openclaw/plugins/zink-governance/index.mjs`,
+`integrations/openclaw/configure.mjs` (outgoing R19 digest admitted in both
+per-mode lists), `tests/m8-t2.17-owner-identity-hygiene.test.mjs` (new, 6 tests,
+falsified 4/6), `tests/m8-t2.10-r13-r7-predecessor-allowlist.test.mjs`,
+`tests/m8-t1-skill-vector-memory.test.mjs`, `package.json`.
+
+Validation: `npm test` 859 tests / 817 pass / 0 fail / 42 skipped; lint, Prettier,
+repository policy and `git diff --check` all exit 0.
+
+**Status: NOT DEPLOYED.** The live runtime still carries `bae7bdf3`, which
+contains the literals; the repository build is `6323dec9`. A deployment
+authorization is required and has NOT been requested or assumed, so this is
+tracked as an OPEN item rather than completed remediation. Owner decision needed.
+
+Not acted on, pending decision: Discord channel/forum-tag literals also appear in
+production plugin source (server surface identifiers, not personal data; not
+flagged by gitleaks; removing them is a broader behavioural change). And
+`dependency-audit` fails on `brace-expansion` (high), `js-yaml` and `markdown-it`
+— but `package-lock.json` is byte-identical between `main` and this branch, so
+that is a pre-existing baseline failure, not a regression, and no dependency
+change was made.
+
 ## 5. Canonical target architecture
 
 The repository retains three logical modules.

@@ -241,6 +241,60 @@ neither is inside R19's authorized seam, so neither is done and no R20 is
 created. Recorded as a known, understood, non-blocking content variance rather
 than an open governance defect.
 
+## R19 10. Owner-identity hygiene (security remediation, NOT DEPLOYED)
+
+Publishing the branch surfaced a genuine defect through the repository's OWN CI
+gate: `secret-scan` failed with three `discord-client-id` findings, and
+`quality-gate` passed. This was not caused by R18 or R19; the literals were
+introduced on 2026-09-26 in `01489aa` / `0e5a899` and were absent from `main`.
+
+The repository's `.gitleaks.toml` allowlists synthetic Discord IDs and fixtures
+under `tests/` and the orchestration README, and deliberately does NOT allowlist
+production plugin source. So this was a true positive, not a false one, and the
+correct response was to fix the source rather than suppress the finding.
+
+Two real account identifiers were hardcoded as fallbacks inside OWNER
+AUTHORIZATION GATES:
+
+1. `config.ownerDiscordId || "<snowflake>"` at the approval-button gate and at
+   the approve/reject action gate;
+2. `expectedOwnerId = "<snowflake>"` as a default parameter of
+   `handleOwnerSkillApproval`.
+
+These were worse than a privacy leak. An authorization gate that falls back to a
+source constant no longer depends on deployed configuration: if configuration
+were ever absent or unreadable, that fallback would keep authorizing one specific
+account. Absence must fail closed instead.
+
+The fix removes both fallbacks. `resolveOwnerDiscordId(config)` returns the
+configured id only when it is a string matching a Discord snowflake, and
+`undefined` otherwise, so both gates deny when the owner cannot be proven.
+`expectedOwnerId` now has no default, so an omitted binding denies.
+`parseIdentifiers` already refuses to build a configuration whose owner id is not
+a valid snowflake, so a real deployment always supplies one and the fail-closed
+path is unreachable in practice.
+
+Coverage: `tests/m8-t2.17-owner-identity-hygiene.test.mjs`, 6 tests, falsified by
+reintroducing the literals (4 of 6 fail). `M8/T2.2` suite now 859 tests / 817
+pass / 0 fail / 42 skipped; lint, Prettier, repository policy and
+`git diff --check` all exit 0.
+
+**NOT DEPLOYED.** The live runtime still carries entrypoint `bae7bdf3`, which
+contains the literals. The repository build is `6323dec9`. The outgoing R19 digest
+is admitted in both per-mode allowlists so a deployment is reachable, but the
+deployment itself is NOT authorized and was NOT performed. Until it is, the live
+runtime retains the baked-in fallback. This is recorded as an open, owner-decision
+item rather than as completed remediation.
+
+Two residual observations, deliberately not acted on without a decision:
+Discord channel and forum-tag identifiers also appear as literals in production
+plugin source. These are server surface identifiers rather than personal user
+data, gitleaks does not flag them, and removing them is a broader behavioural
+change than this remediation. Separately, `dependency-audit` fails on
+`brace-expansion` (high), `js-yaml` and `markdown-it`; `package-lock.json` is
+byte-identical between `main` and this branch, so that is a pre-existing baseline
+failure and not a regression from this work. No dependency change was made.
+
 ---
 
 # Historical: M8/T2.2-R18 (deployed; run-end liveness propagation)
