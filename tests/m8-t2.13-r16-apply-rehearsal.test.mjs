@@ -101,7 +101,7 @@ const ANNOUNCE =
 const R7_BRIDGE =
   "33b3feefdfd473dc0d6d09b0ae7b8e39b394fa93a1247fe117bc58757f075412";
 const CURRENT_BRIDGE =
-  "4567ce268064cb7729ace6ebc122dcaa2f1a938fa6b59143e3baeddd7c3a9a14";
+  "d88bff80aeb3d7531e5a0dceba4e7ba856d085e64a87cbb414c9f295284d81e3";
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 const readDigest = (file) => sha256(readFileSync(file, "utf8"));

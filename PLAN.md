@@ -48,7 +48,7 @@ Milestone: M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Inte
 Task: M8/T2.2 — Root-Cause Governed Runtime, Discord, Semantic & Artifact Integrity Hardening
 Task Status: CLOSED
 Planning Readiness: APPROVED
-Plan Revision: M8/T2.2-R17
+Plan Revision: M8/T2.2-R18
 Execution Authorization: YES
 Authorized Task: M8/T2.2 — Root-Cause Governed Runtime, Discord, Semantic & Artifact Integrity Hardening
 Execution Contract: docs/contracts/execution/ACTIVE.md
@@ -72,27 +72,55 @@ Owner Approval: EXPLICIT — Owner authorized R7 remediation, controlled live
   and R16 full-apply rehearsal on an exact clone of the live R7 runtime.
 Deployment Authorized: YES
 Deployment Authorized: YES (R17 - consumed)
+Deployment Authorized: YES (R18 - single attempt, granted by the owner on
+  2026-10-01)
 ```
 
-`Deployment Status: DEPLOYED`. The single attempt authorized on 2026-09-30 ran
+`Deployment Status: AUTHORIZED - NOT YET DEPLOYED` for R18. R16 and R17 are
+both deployed and closed as deployed revisions.
+
+`Deployment Authorized: YES (R18 - single attempt)` — granted by the owner on
+2026-10-01 as the final technical fix, to deploy the locally verified R18
+artifact to the live runtime through `operator-apply.mjs`, the repository's
+authorized live deployment mechanism. ONE attempt. No rehearsal namespace, no
+simulation, no automatic retry, no manual heartbeat trigger. This authorization
+is consumed by that one attempt.
+
+### 4.0.1 Historical deployment record (R16, R17 — retained, not rewritten)
+
+The single attempt authorized on 2026-09-30 after R16 closed ran
 `operator-apply.mjs` — the repository's authorized live deployment mechanism —
 against the real live runtime, with no namespace and no simulation. It returned
 `{"status":"PASS","stage":"applied"}` with `transactionStatus: complete`. The
-live runtime is R10. Exact digests and stage trace are in §4.13.2.
+live runtime became R10. Exact digests and stage trace are in §4.13.2.
 
-`Deployment Authorized: YES` — single attempt, granted by the owner on
-2026-09-30 after R16 closed, to deploy the already-verified R16 artifact to the
-live runtime. This authorization is consumed by that one attempt. Both prior
-single-attempt authorizations are
-consumed and closed: `b8597fe` (failed at `native-backup-prune`) and `7520f39`
-(aborted at the transaction-snapshot stage). Neither is carried forward, and R15
-creates no deployment authorization. A preflight PASS is never an apply
-authorization, and neither `Execution Authorization`, `Planning Readiness`, nor
-`Owner Approval` implies one.
+That authorization was single-attempt and was consumed by that one attempt. Both
+prior single-attempt authorizations are consumed and closed: `b8597fe` (failed
+at `native-backup-prune`) and `7520f39` (aborted at the transaction-snapshot
+stage). Neither is carried forward, and R15 creates no deployment
+authorization. R17 was authorized separately and is likewise consumed. A
+preflight PASS is never an apply authorization, and neither `Execution
+Authorization`, `Planning Readiness`, nor `Owner Approval` implies one.
 
-`Deployment Authorized` remains `NO` in both authoritative sources. R13 creates no
-deployment authorization and self-authorizes nothing. The R10 deployment attempt
-consumed its own authorization record `dc466c6` and is closed.
+R18 targets the one remaining operational gap: the heartbeat executes the full
+chain and then fails at the run-end seam. The cause is proven and was not
+re-diagnosed — the host forwards `trigger` and `transcriptPrompt` to
+`enterNativeRun` but not to `finishNativeRun`, so the run-end context never
+carries them and `isPureLivenessHeartbeat` cannot fire there. R18 recovers them
+at the boundary, keyed by `runId`, at the moment admission accepts the run.
+
+**Recorded deviation, for the owner.** The owner named `native-patch.mjs` as
+the primary change. R18 does not touch it. Threading the fields through the
+selection's call site would change the installed `selection-*.js`, requiring a
+new R10 predecessor descriptor and breaking the R7 lineage, because R7 would
+then differ from the current edit set in two slots — which the single-slot
+predecessor descriptor cannot express. Recovering the values at the boundary
+fixes the identical defect with the pinned native runtime byte-identical, so the
+deployed selection `555f37da` remains recognized by content comparison with no
+descriptor change. No material decision changes: no new module, dependency,
+persistent state, public API, topology, security boundary or gate. The
+mechanism is `ACTIVE.md` R18 3; the positives are falsified and reproduce the
+exact live `GOVERNANCE_COMPLETION_UNAVAILABLE` when the fix is reverted.
 
 ### 4.1 Revision lineage reconciliation (2026-09-30)
 
@@ -115,7 +143,8 @@ carried R5 and R6 implementation. The plan was never revised for either, so
 | M8/T2.2-R14 | Implemented           | `c41a7a5` native patch lineage: the deployed R7 patch is a recognized predecessor, so R7 -> R10 is derivable in memory. Live preflight then recognized `PREDECESSOR R7 -> R10`.                                                                 |
 | M8/T2.2-R15 | Implemented           | `c73173f` attempt-scoped transaction identity: `attemptId` separated from `preimageDigest`; completed attempts no longer block a repeat. 17/15 falsified. Not deployed.                                                                         |
 | M8/T2.2-R16 | CLOSED                | Authorized 2026-09-30; deployed 2026-09-30 as the live runtime (R10). Superseded as the implementation revision by the authorized post-deployment correction R17; R16 evidence is historical and unchanged. See A4.13.                          |
-| M8/T2.2-R17 | IMPLEMENTED, GAP OPEN | Authorized 2026-09-30 as a post-deployment RED correction to the R10 run-end governance contract: run-end parity for the pure liveness heartbeat. 10 focused tests, falsified 7 pass / 3 fail. Single deployment attempt authorized. See A4.14. |
+| M8/T2.2-R17 | DEPLOYED, GAP OPEN | Authorized 2026-09-30 as a post-deployment RED correction to the R10 run-end governance contract: run-end parity for the pure liveness heartbeat. 10 focused tests, falsified 7 pass / 3 fail. Deployed 2026-09-30 as the live runtime (R17 build). Superseded as the implementation revision by R18, which closed the remaining blocker; R17 evidence is historical and unchanged. See A4.14. |
+| M8/T2.2-R18 | IMPLEMENTED, AUTHORIZED | Authorized 2026-10-01 as the final technical fix for the proven `finishNativeRun` context-propagation defect: the admission-time liveness discriminator is recovered at the run-end seam so both seams apply one predicate. 15 focused tests, falsified 4 fail / 11 pass. Fix is in `native-boundary.mjs`; `native-patch.mjs` is byte-identical, so the deployed selection `555f37da` stays recognized and the R7/R10 lineage is intact. Single deployment attempt authorized. See ACTIVE.md R18. |
 
 All revisions are local commits on `codex/m8-t2-governed-runtime-hardening`; none
 has been pushed.
@@ -804,6 +833,61 @@ Markdown is ignored by PDF discovery; `zink_source: pdf` is not required.
 M4/T5 is closed for current planning purposes. Architecture contraction must not
 refactor or destabilize the accepted M3/M4 Knowledgebase runtime unless a later,
 separately approved migration explicitly authorizes it.
+
+### 4.15 M8/T2.2-R18 — run-end liveness propagation (final technical fix)
+
+**Proven defect, not re-diagnosed.** The host forwards `trigger` and
+`transcriptPrompt` to `enterNativeRun` but not to `finishNativeRun`: the run-end
+call in the patched selection passes only `{ agentId, sessionKey, runId }`. R17
+made the boundary forward both fields and made the classifier accept the
+heartbeat verdict, but the host never supplies them at that seam, so
+`isPureLivenessHeartbeat` returned false there regardless. Live signature:
+`internal session = 0` while `beforeRunEnd: self-keyed session presented a
+runId; applying full governance` incremented alongside
+`GOVERNANCE_COMPLETION_UNAVAILABLE`.
+
+**The change.** `native-boundary.mjs` only. `enterNativeRun` records
+`{ trigger, transcriptPrompt }` under the run's `runId` when admission ACCEPTS
+the run — after the accept check, so a denied or failed admission leaves no
+record and stays fully governed. `finishNativeRun` takes that record once and
+resolves the context as `context.trigger ?? liveness?.trigger`, so the seam
+stays authoritative whenever the host does speak. The store is a module-level
+`Map` bounded at 256 with oldest-first eviction; eviction degrades to full
+governance, never to a bypass. `classifyInternalRunEnd` is not modified: one
+predicate, one rule.
+
+**Deviation from the named mechanism, recorded for the owner.** The owner named
+`native-patch.mjs` as the primary change. R18 does not touch it, and the reason
+is recorded in ACTIVE.md R18 3: a call-site edit changes the installed
+`selection-*.js`, which requires a new R10 predecessor descriptor and breaks the
+R7 lineage, because R7 would then differ from the current edit set in two slots,
+which the single-slot descriptor cannot express. The boundary fix closes the
+identical defect with `native-patch.mjs` byte-identical, so the deployed
+selection `555f37da` stays recognized by content comparison with no descriptor
+change. No material decision changes.
+
+**Files changed.** `integrations/openclaw/topology/lib/native-boundary.mjs`
+(implementation); `integrations/openclaw/configure.mjs` (adds the deployed R17
+boundary digest `4567ce26` to the asset allowlist as a recognized predecessor);
+`tests/m8-t2.6-r8-asset-provenance.test.mjs` and
+`tests/m8-t2.10-r13-r7-predecessor-allowlist.test.mjs` (post-R5 provenance hunks
+gain four R18 entries; the derived R5 digest `49352d47` still reproduces
+exactly, byte-verified in both copies);
+`tests/m8-t2.15-r18-runend-liveness-propagation.test.mjs` (new, 15 tests);
+`tests/m8-t2.11-r14-native-lineage.test.mjs`,
+`tests/m8-t2.13-r16-apply-rehearsal.test.mjs` and the R13 current-build digest
+pins move to the new boundary digest `d88bff80`; `package.json` adds the R18
+test to `npm test`. `native-patch.mjs` is byte-identical, pinned by test R18 13.
+
+**Falsification.** Reverting only the boundary change fails tests 1, 2, 3, 8 and
+14 — and test 2 reproduces the exact live error
+`GOVERNANCE_COMPLETION_UNAVAILABLE must not be raised:
+GOVERNANCE_COMPLETION_UNAVAILABLE`. All eleven negative tests still pass on the
+revert, proving they pin preserved behaviour rather than the new behaviour.
+
+**Local validation.** R18 15/15. R17+R18 25/25. R8 12/12. R13 17/17. Full
+`npm test` 838 tests / 796 pass / 0 fail / 42 skipped. `npm run lint`,
+`npm run format:check`, `npm run repo:check` and `git diff --check` all exit 0.
 
 ## 5. Canonical target architecture
 

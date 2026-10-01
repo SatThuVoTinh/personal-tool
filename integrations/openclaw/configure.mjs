@@ -186,6 +186,15 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // R17 deployment is unreachable. The R17 digest is deliberately NOT listed:
     // it is the current build and is already accepted by content comparison.
     "50af7d4ae10b519340b8dc13af3e2b219041fb28991e2a777ea815b537d2c7c2",
+    // M8/T2.2-R18: the outgoing R17 build currently deployed, byte-proven against
+    // the live runtime at this exact path and cross-checked against the live dist
+    // bridge after the R17 deployment. R18 changes only this file -- it recovers
+    // the admission-time heartbeat discriminator at the run-end seam so both seams
+    // classify a run with one predicate -- so without this entry --preflight
+    // refuses the deployed R17 extension and the R18 deployment is unreachable.
+    // The R18 digest is deliberately NOT listed: it is the current build and is
+    // already accepted by content comparison.
+    "4567ce268064cb7729ace6ebc122dcaa2f1a938fa6b59143e3baeddd7c3a9a14",
   ]),
   "lib/runtime.mjs": Object.freeze([
     "6a522c73efacf8b593d63ee55e18b5d02c3675340e0593142a5c2fea8dc6e24a",

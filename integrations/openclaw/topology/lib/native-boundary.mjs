@@ -285,6 +285,39 @@ export async function resolveNativeRunModel(config, context) {
   });
 }
 
+// R18: the admission-time liveness discriminator, recovered at run-end.
+//
+// The host forwards `trigger` and `transcriptPrompt` to `enterNativeRun` but NOT
+// to `finishNativeRun` (its run-end call passes only agentId/sessionKey/runId).
+// Without them at run-end, `isPureLivenessHeartbeat` returns false there even
+// though admission recognised the same run as a pure liveness heartbeat, so the
+// run-end seam applied full governance and failed with
+// GOVERNANCE_COMPLETION_UNAVAILABLE. Threading them through the pinned selection
+// would change the installed selection and break the R7/R10 native lineage; this
+// records them per run at admission and recovers them at run-end so BOTH seams
+// classify a run with the single predicate. A run that never passed admission has
+// no record and therefore keeps the existing full-governance behaviour.
+//
+// Bounded so a run that dies before run-end cannot grow this without limit.
+const RUN_LIVENESS = new Map();
+const RUN_LIVENESS_LIMIT = 256;
+
+function rememberRunLiveness(runId, trigger, transcriptPrompt) {
+  if (typeof runId !== "string" || runId === "") return;
+  if (RUN_LIVENESS.size >= RUN_LIVENESS_LIMIT) {
+    const oldest = RUN_LIVENESS.keys().next().value;
+    RUN_LIVENESS.delete(oldest);
+  }
+  RUN_LIVENESS.set(runId, { trigger, transcriptPrompt });
+}
+
+function takeRunLiveness(runId) {
+  if (typeof runId !== "string" || runId === "") return undefined;
+  const record = RUN_LIVENESS.get(runId);
+  RUN_LIVENESS.delete(runId);
+  return record;
+}
+
 export async function enterNativeRun(config, context, signal) {
   const governance = resolveGovernance(config);
   if (!governance.enabled) return;
@@ -318,6 +351,14 @@ export async function enterNativeRun(config, context, signal) {
       signal,
     );
     if (decision?.allow !== true) throw new Error("GOVERNANCE_DENIED");
+    // R18: record the discriminator only for a run admission ACCEPTED, so the
+    // record means precisely "admission recognised this run". A denied or failed
+    // admission leaves no record and its run-end therefore keeps full governance.
+    rememberRunLiveness(
+      context.runId,
+      context.trigger,
+      context.transcriptPrompt,
+    );
   } catch (error) {
     // R7 G2: the host-visible contract string is unchanged, but the original
     // failure is preserved as the cause so a governance verdict and a genuine
@@ -363,6 +404,10 @@ export async function gateNativeAnnounce(config, event, signal) {
 export async function finishNativeRun(config, event, context) {
   const governance = resolveGovernance(config);
   if (!governance.enabled) return;
+  // R18: prefer anything the host passes at this seam, then fall back to the
+  // values recorded at admission for this runId, so admission and run-end apply
+  // the same predicate to the same execution.
+  const liveness = takeRunLiveness(context.runId);
   try {
     const decision = await callGuard(
       governance.guard?.beforeRunEnd,
@@ -371,15 +416,9 @@ export async function finishNativeRun(config, event, context) {
         agentId: context.agentId,
         sessionKey: context.sessionKey,
         runId: context.runId,
-        // R17: the run-end seam must see the same host-authoritative fields the
-        // admission seam already receives. `enterNativeRun` forwards these, so a
-        // run that admission recognises as a pure liveness heartbeat could not be
-        // recognised at run-end, which forced a self-keyed heartbeat that carries
-        // a runId into full governance and surfaced as
-        // GOVERNANCE_COMPLETION_UNAVAILABLE. Forwarded read-only and consulted
-        // only by `isPureLivenessHeartbeat`; nothing else reads them here.
-        trigger: context.trigger,
-        transcriptPrompt: context.transcriptPrompt,
+        trigger: context.trigger ?? liveness?.trigger,
+        transcriptPrompt:
+          context.transcriptPrompt ?? liveness?.transcriptPrompt,
       }),
     );
     if (decision?.allow !== true) throw new Error("GOVERNANCE_DENIED");

@@ -67,9 +67,9 @@ const R5_NATIVE_BOUNDARY_SHA256 =
 const R5_ENTRYPOINT_SHA256 =
   "e77689c94ba066bd854549750044f78dcf9d97cc3de73420893851c0a800b10a";
 
-/** The CURRENT build digests (R17). These must NOT be listed. */
+/** The CURRENT build digests (R18). These must NOT be listed. */
 const R10_NATIVE_BOUNDARY_SHA256 =
-  "4567ce268064cb7729ace6ebc122dcaa2f1a938fa6b59143e3baeddd7c3a9a14";
+  "d88bff80aeb3d7531e5a0dceba4e7ba856d085e64a87cbb414c9f295284d81e3";
 const R10_ENTRYPOINT_SHA256 =
   "d01c210b0cc13f01d6d294223ae400a30ef6407c962d5b46e2f199474f799a1d";
 
@@ -490,20 +490,72 @@ function r5BoundaryBody() {
 `,
       ``,
     ],
-    // R17: the run-end seam forwards the same two host-authoritative fields the
-    // admission seam already forwards. Inverted for the same reason as the R10
-    // hunk: without it the derived R5 body would carry R17 code and stop
-    // reproducing the packaged R5 digest.
+    // R18: admission-time liveness recovery (module helpers). Inverted so the
+    // derived R5 body reproduces the packaged R5 digest exactly.
     [
-      `        // R17: the run-end seam must see the same host-authoritative fields the
-        // admission seam already receives. \`enterNativeRun\` forwards these, so a
-        // run that admission recognises as a pure liveness heartbeat could not be
-        // recognised at run-end, which forced a self-keyed heartbeat that carries
-        // a runId into full governance and surfaced as
-        // GOVERNANCE_COMPLETION_UNAVAILABLE. Forwarded read-only and consulted
-        // only by \`isPureLivenessHeartbeat\`; nothing else reads them here.
-        trigger: context.trigger,
-        transcriptPrompt: context.transcriptPrompt,
+      `// R18: the admission-time liveness discriminator, recovered at run-end.
+//
+// The host forwards \`trigger\` and \`transcriptPrompt\` to \`enterNativeRun\` but NOT
+// to \`finishNativeRun\` (its run-end call passes only agentId/sessionKey/runId).
+// Without them at run-end, \`isPureLivenessHeartbeat\` returns false there even
+// though admission recognised the same run as a pure liveness heartbeat, so the
+// run-end seam applied full governance and failed with
+// GOVERNANCE_COMPLETION_UNAVAILABLE. Threading them through the pinned selection
+// would change the installed selection and break the R7/R10 native lineage; this
+// records them per run at admission and recovers them at run-end so BOTH seams
+// classify a run with the single predicate. A run that never passed admission has
+// no record and therefore keeps the existing full-governance behaviour.
+//
+// Bounded so a run that dies before run-end cannot grow this without limit.
+const RUN_LIVENESS = new Map();
+const RUN_LIVENESS_LIMIT = 256;
+
+function rememberRunLiveness(runId, trigger, transcriptPrompt) {
+  if (typeof runId !== "string" || runId === "") return;
+  if (RUN_LIVENESS.size >= RUN_LIVENESS_LIMIT) {
+    const oldest = RUN_LIVENESS.keys().next().value;
+    RUN_LIVENESS.delete(oldest);
+  }
+  RUN_LIVENESS.set(runId, { trigger, transcriptPrompt });
+}
+
+function takeRunLiveness(runId) {
+  if (typeof runId !== "string" || runId === "") return undefined;
+  const record = RUN_LIVENESS.get(runId);
+  RUN_LIVENESS.delete(runId);
+  return record;
+}
+
+`,
+      ``,
+    ],
+    // R18: the per-run liveness record, created only for an accepted admission.
+    [
+      `    // R18: record the discriminator only for a run admission ACCEPTED, so the
+    // record means precisely "admission recognised this run". A denied or failed
+    // admission leaves no record and its run-end therefore keeps full governance.
+    rememberRunLiveness(
+      context.runId,
+      context.trigger,
+      context.transcriptPrompt,
+    );
+`,
+      ``,
+    ],
+    // R18: run-end prefers the admission record for this runId.
+    [
+      `  // R18: prefer anything the host passes at this seam, then fall back to the
+  // values recorded at admission for this runId, so admission and run-end apply
+  // the same predicate to the same execution.
+  const liveness = takeRunLiveness(context.runId);
+`,
+      ``,
+    ],
+    // R18: the run-end guard context carries the recovered discriminator.
+    [
+      `        trigger: context.trigger ?? liveness?.trigger,
+        transcriptPrompt:
+          context.transcriptPrompt ?? liveness?.transcriptPrompt,
 `,
       ``,
     ],
