@@ -2,12 +2,18 @@
   "id": "zink-governance",
   "name": "Zink Governance",
   "description": "Model-invisible trusted governance guard for Zink T2 workflows.",
+  "activation": {
+    "onCapabilities": ["hook"]
+  },
   "contracts": {
     "tools": [
       "zink_excel",
+      "zink_knowledge_search",
       "zink_n8n",
       "zink_power_bi",
       "zink_python",
+      "zink_skill_propose",
+      "zink_skill_search",
       "zink_sql"
     ]
   },
@@ -18,7 +24,23 @@
       "ledgerRoot": { "type": "string" },
       "ownerDiscordId": { "type": "string", "pattern": "^[1-9][0-9]{16,19}$" },
       "ownerPrincipalRef": { "type": "string" },
-      "enabled": { "type": "boolean" }
+      "enabled": { "type": "boolean" },
+      "discordOfficeChannelId": {
+        "type": "string",
+        "pattern": "^[1-9][0-9]{16,19}$"
+      },
+      "discordResultsForumId": {
+        "type": "string",
+        "pattern": "^[1-9][0-9]{16,19}$"
+      },
+      "discordApprovalsForumId": {
+        "type": "string",
+        "pattern": "^[1-9][0-9]{16,19}$"
+      },
+      "discordIncidentsForumId": {
+        "type": "string",
+        "pattern": "^[1-9][0-9]{16,19}$"
+      }
     }
   }
 }

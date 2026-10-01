@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import {
   appendFileSync,
   chmodSync,
@@ -8,7 +9,6 @@ import {
   openSync,
   readFileSync,
   renameSync,
-  rmdirSync,
   writeFileSync,
   lstatSync,
 } from "node:fs";
@@ -16,6 +16,7 @@ import path from "node:path";
 import process from "node:process";
 import { applyWorkflowEvent } from "./workflow.mjs";
 import { validateContract } from "./schema.mjs";
+import { withFileLockSync, lockDirFor } from "../../lib/file-lock.mjs";
 import {
   canonicalHash,
   utcNow,
@@ -128,6 +129,15 @@ export function ensureLedger(paths) {
     paths.snapshot,
     `${JSON.stringify(emptySnapshot(), null, 2)}\n`,
   );
+  if (paths.identityKey) {
+    if (!existsSync(paths.identityKey)) {
+      writeFileSync(paths.identityKey, `${randomBytes(32).toString("hex")}\n`, {
+        mode: 0o600,
+        flag: "wx",
+      });
+    }
+    chmodSync(paths.identityKey, 0o600);
+  }
   chmodSync(paths.events, 0o600);
   chmodSync(paths.snapshot, 0o600);
 }
@@ -150,7 +160,18 @@ export function inspectLedgerUpgrade(paths) {
   } catch {
     throw new Error("EXECUTION_STATE_UNKNOWN");
   }
-  const supportedVersions = new Set([GOVERNANCE_VERSION, "m7-t2-r12"]);
+  const supportedVersions = new Set([
+    GOVERNANCE_VERSION,
+    // m8-t2.2-r4 is RETAINED, not replaced: it is the version the deployed
+    // writer emitted, and dropping it would make every ledger it wrote
+    // permanently unreadable. It is ambiguous for replay semantics (see the
+    // reader's compatibility path) but its events remain valid.
+    "m8-t2.2-r4",
+    "m8-t2.1-r3",
+    "m8-t2-r9",
+    "m7-t5-r13",
+    "m7-t2-r12",
+  ]);
   if (supportedVersions.has(snapshot?.governance_version)) {
     readSnapshotLocked(paths, false);
     return "CURRENT";
@@ -193,7 +214,17 @@ function readSnapshotLocked(paths, repairSnapshot = true) {
   try {
     let snapshot = JSON.parse(readFileSync(paths.snapshot, "utf8"));
     validateContract("ledger-snapshot", snapshot, Number.MAX_SAFE_INTEGER);
-    const supportedVersions = new Set([GOVERNANCE_VERSION, "m7-t2-r12"]);
+    const supportedVersions = new Set([
+      GOVERNANCE_VERSION,
+      // RETAINED for readability, including the semantically ambiguous
+      // m8-t2.2-r4. Replaced versions would make the ledger they wrote
+      // permanently unreadable.
+      "m8-t2.2-r4",
+      "m8-t2.1-r3",
+      "m8-t2-r9",
+      "m7-t5-r13",
+      "m7-t2-r12",
+    ]);
     if (
       !snapshot ||
       snapshot.schema_version !== SCHEMA_VERSION ||
@@ -214,6 +245,51 @@ function readSnapshotLocked(paths, repairSnapshot = true) {
     const tail = [];
     let journalBudget = { tasks: {} };
     let anchoredBudget = journalBudget.tasks;
+    // Option (b) migration 2026-09-29: anchored trust is a property of a
+    // ledger that HAS recorded, operator-accepted history, so it requires a
+    // recorded head. A ledger with no head (sequence 0, the state of a freshly
+    // created or freshly reset ledger) has no anchored history at all, so every
+    // event in it is replayed under the current semantics. Without this, a root
+    // result written today would be re-resolved by its own read-back into the
+    // pre-verdict model, contradicting the write it just produced.
+    const hasAnchoredHead = snapshot.sequence > 0;
+    // Option (b) migration 2026-09-29 + Phase B (gap A) 2026-09-29: the
+    // writer-semantics discriminator is the event's OWN governance_version,
+    // which the event digest seals. Three classes, decided per event:
+    //
+    //   1. Current version  -> written by the current writer, so current
+    //      semantics. Unambiguous.
+    //   2. Pre-verdict version -> written by a pre-verdict writer, so
+    //      pre-verdict semantics. Unambiguous.
+    //   3. m8-t2.2-r4 -> AMBIGUOUS. That version was emitted by BOTH a
+    //      pre-verdict writer and the verdict writer, so the stamp alone cannot
+    //      say which. These keep the existing compatibility behaviour, which is
+    //      proven to reproduce the deployed writer's own states.
+    //
+    // The compatibility heuristic is confined to class 3. It could not be
+    // global: a new event lands inside the anchored prefix, so a journal-wide
+    // flag re-resolved the current writer's own write into the pre-verdict
+    // model and made a successful write unreadable.
+    const PRE_VERDICT_VERSIONS = new Set([
+      "m7-t2-r12",
+      "m7-t5-r13",
+      "m8-t2-r9",
+      "m8-t2.1-r3",
+    ]);
+    // Computed ONLY from the event stream: an ambiguous-era journal is one that
+    // carries any pre-verdict stamp. The snapshot under verification is never
+    // consulted, so this is not circular.
+    const journalHasPreVerdictStamp = lines.some((line) =>
+      PRE_VERDICT_VERSIONS.has(JSON.parse(line).governance_version),
+    );
+    // Resolve one event's writer semantics from its own stamp alone. The
+    // m8-t2.2-r4 stamp is the ambiguous one: it falls through to the
+    // compatibility heuristic, because it was emitted by both writers.
+    const preVerdictForEvent = (event) => {
+      if (event.governance_version === GOVERNANCE_VERSION) return false;
+      if (PRE_VERDICT_VERSIONS.has(event.governance_version)) return true;
+      return journalHasPreVerdictStamp;
+    };
     for (const line of lines) {
       const event = JSON.parse(line);
       validateContract("ledger-event", event);
@@ -244,6 +320,21 @@ function readSnapshotLocked(paths, repairSnapshot = true) {
           journalBudget,
           event.type,
           event.payload,
+          event.created_at,
+          // Option (b) migration 2026-09-29: events at or below the snapshot
+          // head are operator-accepted history — replay trusts their admission
+          // (structure, effects, and the end-state hash compare below still
+          // verify everything checkable) and reproduces the transitions the
+          // deployed build performed. Events beyond the head are unaccepted
+          // tail and stay fully strict. The flag MUST never be set for tail:
+          // admission policy is enforced at write time, and re-reads must not
+          // re-litigate it.
+          hasAnchoredHead && event.sequence <= snapshot.sequence
+            ? {
+                replayAnchored: true,
+                preVerdictRootResult: preVerdictForEvent(event),
+              }
+            : undefined,
         );
       if (event.sequence <= snapshot.sequence)
         anchoredBudget = journalBudget.tasks;
@@ -282,7 +373,12 @@ function readSnapshotLocked(paths, repairSnapshot = true) {
     for (const event of tail) {
       if (event.type.startsWith("WORKFLOW_")) {
         snapshot = {
-          ...applyWorkflowEvent(snapshot, event.type, event.payload),
+          ...applyWorkflowEvent(
+            snapshot,
+            event.type,
+            event.payload,
+            event.created_at,
+          ),
           sequence: event.sequence,
           last_event_digest: event.event_digest,
           updated_at: event.created_at,
@@ -319,37 +415,33 @@ function readSnapshotLocked(paths, repairSnapshot = true) {
 
 function withWriterLock(paths, operation) {
   ensureLedger(paths);
-  const lock = path.join(paths.root, "writer.lock");
-  const deadline = Date.now() + 5000;
-  let acquired = false;
-  let lastCause;
-  while (Date.now() < deadline) {
-    try {
-      mkdirSync(lock, { mode: 0o700 });
-      acquired = true;
-      break;
-    } catch (cause) {
-      if (cause?.code !== "EEXIST") {
-        lastCause = cause;
-        break;
-      }
-      lastCause = cause;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-    }
-  }
-  if (!acquired) {
-    const error = new Error("Ledger writer unavailable", { cause: lastCause });
-    error.code = "EXECUTION_STATE_UNKNOWN";
-    throw error;
-  }
+  const lock = lockDirFor(paths.root, "writer.lock");
   try {
-    return operation();
-  } finally {
-    rmdirSync(lock);
+    return withFileLockSync(lock, () => operation());
+  } catch (err) {
+    if (err?.code === "FILE_LOCK_BUSY") {
+      const error = new Error("Ledger writer unavailable", {
+        cause: err,
+      });
+      error.code = "EXECUTION_STATE_UNKNOWN";
+      throw error;
+    }
+    throw err;
   }
 }
 
 export function appendEvent(paths, snapshot, type, payload = {}) {
+  // M7-002: single authoritative commit path. Workflow-governed event types
+  // must reduce through applyWorkflowEvent via recordWorkflowEvent; the raw
+  // writer persists audit/metadata events only and can never advance the
+  // workflow projection on its own.
+  if (typeof type === "string" && type.startsWith("WORKFLOW_")) {
+    const error = new Error(
+      "WORKFLOW_COMMIT_PATH_REQUIRED: workflow events must commit via recordWorkflowEvent",
+    );
+    error.code = "WORKFLOW_COMMIT_PATH_REQUIRED";
+    throw error;
+  }
   return withWriterLock(paths, () => {
     const current = readSnapshotLocked(paths);
     if (
@@ -366,14 +458,20 @@ export function appendEvent(paths, snapshot, type, payload = {}) {
   });
 }
 
-function appendEventLocked(paths, snapshot, type, payload) {
+function appendEventLocked(
+  paths,
+  snapshot,
+  type,
+  payload,
+  createdAt = utcNow(),
+) {
   const event = {
     schema_version: SCHEMA_VERSION,
     governance_version: GOVERNANCE_VERSION,
     sequence: snapshot.sequence + 1,
     type,
     payload,
-    created_at: utcNow(),
+    created_at: createdAt,
     previous_event_digest: snapshot.last_event_digest,
   };
   const event_digest = canonicalHash("zink-ledger-event-v1", event);
@@ -482,12 +580,13 @@ export function reserveBudgetAtomically(
 export function recordWorkflowEvent(paths, type, payload) {
   return withWriterLock(paths, () => {
     const current = readSnapshotLocked(paths);
-    const projected = applyWorkflowEvent(current, type, payload);
+    const createdAt = utcNow();
+    const projected = applyWorkflowEvent(current, type, payload, createdAt);
     if (
       canonicalHash("zink-ledger-event-v1", current) ===
       canonicalHash("zink-ledger-event-v1", projected)
     )
       return current;
-    return appendEventLocked(paths, projected, type, payload);
+    return appendEventLocked(paths, projected, type, payload, createdAt);
   });
 }

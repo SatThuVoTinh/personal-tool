@@ -1,29 +1,88 @@
 {
+  "_note": "M7-039: this file is a dormant projection of the canonical lifecycle and is NOT runtime authority — the reducer in integrations/openclaw/topology/lib/workflow.mjs is. It is retained because it is the only human-readable statement of the state machine, so it is CORRECTED to match the reducer rather than left to contradict it. If the two ever disagree, the reducer and the ledger contracts are authoritative. Canonical sources: integrations/openclaw/topology/lib/workflow.mjs (reducer), integrations/openclaw/topology/contracts/ledger-event.schema.json and ledger-snapshot.schema.json (projections).",
+  "_canonical_sources": [
+    "integrations/openclaw/topology/lib/workflow.mjs",
+    "integrations/openclaw/topology/contracts/ledger-event.schema.json",
+    "integrations/openclaw/topology/contracts/ledger-snapshot.schema.json"
+  ],
   "schema_version": "1.0.0",
-  "governance_version": "m7-t2-r12",
+  "governance_version": "m8-t2.3-r5",
   "workflow_status": {
-    "ACTIVE": ["BLOCKED", "COMPLETE", "PARTIAL", "FAILED", "CANCELLED"],
-    "BLOCKED": ["ACTIVE", "FAILED", "CANCELLED"],
+    "ACTIVE": [
+      "QUEUED",
+      "REJECTED",
+      "BLOCKED",
+      "CANCELLED"
+    ],
+    "QUEUED": [
+      "EXECUTING",
+      "CANCELLED",
+      "BLOCKED"
+    ],
+    "EXECUTING": [
+      "WAITING_FOR_USER",
+      "RESULT_PENDING_REVIEW",
+      "BLOCKED",
+      "CANCELLED"
+    ],
+    "WAITING_FOR_USER": [
+      "EXECUTING",
+      "CANCELLED",
+      "BLOCKED"
+    ],
+    "RESULT_PENDING_REVIEW": [
+      "COMPLETE",
+      "REJECTED",
+      "REVISING",
+      "CANCELLED",
+      "BLOCKED"
+    ],
+    "REVISING": [
+      "QUEUED",
+      "REJECTED",
+      "CANCELLED",
+      "BLOCKED"
+    ],
+    "BLOCKED": [
+      "ACTIVE",
+      "QUEUED",
+      "EXECUTING",
+      "FAILED",
+      "CANCELLED"
+    ],
     "COMPLETE": [],
     "PARTIAL": [],
     "FAILED": [],
-    "CANCELLED": []
+    "CANCELLED": [],
+    "REJECTED": []
   },
   "brief_state": {
-    "ACTIVE": ["SUPERSEDED", "CLOSED"],
+    "ACTIVE": [
+      "SUPERSEDED",
+      "CLOSED"
+    ],
     "SUPERSEDED": [],
     "CLOSED": []
   },
   "run_state": {
-    "PENDING": ["SPAWN_UNKNOWN", "RUNNING", "BLOCKED", "CANCELLED", "UNKNOWN"],
-    "SPAWN_UNKNOWN": ["RUNNING", "BLOCKED", "CANCELLED", "UNKNOWN"],
-    "RUNNING": ["COMPLETE", "FAILED", "BLOCKED", "CANCELLED", "UNKNOWN"],
-    "BLOCKED": ["RUNNING", "FAILED", "CANCELLED"],
+    "SPAWN_UNKNOWN": [
+      "RUNNING",
+      "CANCELLED",
+      "COMPLETE"
+    ],
+    "RUNNING": [
+      "COMPLETE",
+      "UNKNOWN",
+      "CANCELLED"
+    ],
+    "UNKNOWN": [
+      "FAILED"
+    ],
     "COMPLETE": [],
     "FAILED": [],
-    "CANCELLED": [],
-    "UNKNOWN": ["BLOCKED", "CANCELLED"]
+    "CANCELLED": []
   },
+  "_run_state_note": "M8-056: a run only becomes UNKNOWN through a reported non-ok native end, and only a DOCUMENTED transient failure class (RUN_TIMEOUT, TRANSIENT_RUNTIME_FAILURE) may be reconciled, which stamps it FAILED. Every other failure class has no retry path and must be escalated. UNKNOWN -> FAILED is therefore the only edge out of UNKNOWN, and a superseded attempt (a higher attempt exists for the same node and brief revision) is terminal wherever it sits.",
   "result_acceptance": [
     "PENDING",
     "ACCEPTED",

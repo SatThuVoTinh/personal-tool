@@ -1,2 +1,5 @@
 d73f20cc5fd5fd14533b34e2840517c49b9989b1:integrations/openclaw/orchestration/README.md:generic-api-key:142
 4872314c686bcc92797acc68483b8b68fe4ee8ca:tests/m7-t2-openclaw.test.mjs:discord-client-id:1308
+0e5a899b4b29482a4d927480a47175a5fd3b5616:integrations/openclaw/plugins/zink-governance/index.mjs:discord-client-id:3647
+01489aa996aef7ab04789ba3bb08dcd0b0974c68:integrations/openclaw/plugins/zink-governance/index.mjs:discord-client-id:3656
+01489aa996aef7ab04789ba3bb08dcd0b0974c68:integrations/openclaw/plugins/zink-governance/index.mjs:discord-client-id:3845

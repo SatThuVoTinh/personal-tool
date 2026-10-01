@@ -1,5 +1,14 @@
 // Trusted operator-only live apply. Identifier values, config bodies, secrets
 // and raw child-process errors must never enter model-visible output.
+//
+// R7 DS: the sequence, the mutation boundary and the rollback condition live in
+// apply-orchestration.mjs, which is covered by tests that never touch WSL. This
+// file supplies the real, trusted effects only.
+//
+// R11: the rollback target is the transaction snapshot of the exact live runtime
+// taken immediately before this apply. The historical `backups/r12` T1 baseline
+// and the `native-r12` clean preimages are NOT rollback targets for this path;
+// they remain deliberate historical-recovery evidence.
 import { execFileSync } from "node:child_process";
 import { existsSync, lstatSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
@@ -9,13 +18,21 @@ import {
   applyNativePatch,
   checkNativePatch,
   inspectNativePatch,
-  restoreNativePatch,
 } from "../../lib/native-patch.mjs";
-import { restoreT1RuntimeFiles } from "../../lib/runtime-backup.mjs";
 import {
   assertNoSymlinkComponents,
   parseIdentifiers,
 } from "../../../lib/policy.mjs";
+import {
+  createTransactionSnapshot,
+  findOrphanedTransaction,
+  markTransactionComplete,
+  persistTransactionSnapshot,
+  restoreTransactionSnapshot,
+  verifyLiveRestore,
+  verifyTransactionSnapshot,
+} from "../../lib/transaction-snapshot.mjs";
+import { applyRuntime, classifyApplyReason } from "./apply-orchestration.mjs";
 
 const stateDir = "/home/hoang_vinh/.openclaw-zink";
 const runtimeRoot = "/home/hoang_vinh/.local/lib/node_modules/openclaw";
@@ -79,71 +96,75 @@ function restartScopedGateway() {
   if (state !== "active") throw new Error("GATEWAY_NOT_ACTIVE");
 }
 
-async function rollback(identifiers) {
-  const nativeManifest = path.join(nativeBackup, "manifest.json");
-  if (existsSync(nativeManifest)) restoreNativePatch(runtimeRoot, nativeBackup);
-  await restoreT1RuntimeFiles({ stateDir, identifiers });
-  restartScopedGateway();
-  execFileSync(
-    "/home/hoang_vinh/.local/bin/openclaw",
-    ["--profile", "zink", "config", "validate"],
-    {
-      env: {
-        ...process.env,
-        OPENCLAW_PROFILE: "zink",
-        OPENCLAW_STATE_DIR: stateDir,
-      },
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: 60000,
-      maxBuffer: 65536,
-    },
-  );
-}
+const oldQuarantine = path.join(
+  stateDir,
+  "operator",
+  "m7-t2",
+  "backups",
+  "r12",
+  "quarantined-t2",
+);
 
-let stage = "identifiers";
-let identifiers;
-try {
-  identifiers = readIdentifiers();
-  stage = "builder";
-  runBuilder("--apply", identifiers);
-  stage = "native-patch";
-  const oldQuarantine = path.join(
-    stateDir,
-    "operator",
-    "m7-t2",
-    "backups",
-    "r12",
-    "quarantined-t2",
-  );
-  if (existsSync(oldQuarantine))
-    rmSync(oldQuarantine, { recursive: true, force: true });
-  if (existsSync(nativeBackup)) {
+const report = await applyRuntime({
+  readIdentifiers,
+  runBuilder,
+  pruneQuarantine() {
+    if (existsSync(oldQuarantine))
+      rmSync(oldQuarantine, { recursive: true, force: true });
+  },
+  pruneStaleNativeBackup() {
+    if (!existsSync(nativeBackup)) return;
     const inspection = inspectNativePatch(runtimeRoot);
     if (
       Object.values(inspection).every((entry) => entry.state === "BASELINE")
     ) {
       rmSync(nativeBackup, { recursive: true, force: true });
     }
-  }
-  applyNativePatch(runtimeRoot, nativeBackup);
-  checkNativePatch(runtimeRoot);
-  stage = "gateway-restart";
-  restartScopedGateway();
-  process.stdout.write(
-    `${JSON.stringify({ status: "PASS", stage: "applied", rollback_ready: true })}\n`,
-  );
-} catch {
-  let recovery = "NOT_ATTEMPTED";
-  try {
-    if (identifiers) {
-      await rollback(identifiers);
-      recovery = "RESTORED";
-    }
-  } catch {
-    recovery = "FAILED";
-  }
-  process.stdout.write(
-    `${JSON.stringify({ status: "FAIL", stage, recovery })}\n`,
-  );
-  process.exitCode = 1;
-}
+  },
+  applyNativePatch: () => applyNativePatch(runtimeRoot, nativeBackup),
+  checkNativePatch: () => checkNativePatch(runtimeRoot),
+  // R11: the rollback target is the exact live state captured immediately before
+  // this apply, not `backups/r12/t1-config.json` (captured 2026-09-11) and not
+  // the `native-r12` clean preimages. `restoreNativePatch` and
+  // `restoreT1RuntimeFiles` are deliberately NOT wired here: the first
+  // de-patches the runtime and drops the bridge, the second installs a
+  // superseded config and quarantines the governance extension. Both remain
+  // available for deliberate historical recovery via operator-rollback.mjs.
+  createTransactionSnapshot: () =>
+    createTransactionSnapshot({ stateDir, runtimeRoot }),
+  verifyTransactionSnapshot,
+  // R12: the preimage is persisted and re-read before mutation, so a process
+  // that dies mid-apply still leaves a usable recovery target. `persist`
+  // re-reads and verifies what it wrote, so a snapshot that cannot be re-loaded
+  // never authorizes mutation.
+  persistTransactionSnapshot: (snapshot) =>
+    persistTransactionSnapshot(stateDir, snapshot, {
+      createdAt: new Date().toISOString(),
+    }),
+  findOrphanedTransaction: () => findOrphanedTransaction(stateDir),
+  markTransactionComplete: (id) => markTransactionComplete(stateDir, id),
+  restoreTransactionSnapshot,
+  // R12: the same byte comparison serves both directions. After a rollback it
+  // asks "was the preimage restored?"; after a successful apply it asks "did
+  // the mutation actually land?". A self-reported apply is not evidence.
+  verifyLiveRestore: (snapshot, options) =>
+    verifyLiveRestore({ stateDir, runtimeRoot }, snapshot, options),
+  restartScopedGateway,
+  // R16: there is deliberately NO external `openclaw config validate` step here.
+  // It used to be wired as a dependency described as an "additional semantic
+  // health signal", but `applyRuntime` never called it, so the deployment path
+  // performed no such validation while the comment implied it did.
+  //
+  // Removing it is the correct fix rather than calling it: `config validate`
+  // accepts any config the current policy recognises, including a superseded
+  // baseline, so it cannot detect a wrong-but-valid restore and would add a
+  // failure mode to a path whose gate must be byte comparison. `verifyLiveRestore`
+  // compares bytes against the attempt's own preimage and is the only thing that
+  // licenses `rollbackSucceeded` or a successful apply. Config correctness is
+  // separately enforced at build time by the builder's own `--preflight` and
+  // `policy.validateConfig`, which run before the mutation boundary.
+  classifyReason: classifyApplyReason,
+});
+
+process.stdout.write(`${JSON.stringify(report)}\n`);
+if (report.status !== "PASS") process.exitCode = 1;

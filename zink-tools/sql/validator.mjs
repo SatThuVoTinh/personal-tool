@@ -538,3 +538,57 @@ function validateParameterBinding(placeholders, parameters) {
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// SQL file content analyzer (static — no execution)
+// ---------------------------------------------------------------------------
+
+const FILE_MUTATION_KEYWORDS = new Set([
+  "INSERT", "UPDATE", "DELETE", "MERGE", "DROP", "ALTER",
+  "CREATE", "TRUNCATE", "REPLACE", "GRANT", "REVOKE",
+]);
+
+/**
+ * Statically analyzes the content of a SQL script file.
+ * Does NOT execute the SQL. Intended for preview and risk assessment.
+ *
+ * @param {string} content - Raw SQL file content
+ * @returns {{ statementCount: number, hasMutations: boolean, mutationKeywords: string[], firstStatement: string }}
+ */
+export function validateSqlFileContent(content) {
+  if (typeof content !== "string") {
+    throw new Error("SQL_CONTENT_INVALID: content must be a string");
+  }
+
+  // Remove single-line comments
+  const stripped = content
+    .replace(/--[^\n]*/g, " ")
+    .replace(/\/\*[\s\S]*?\*\//g, " ");
+
+  // Count statements by semicolon delimiters (crude but practical for file analysis)
+  const rawStatements = stripped
+    .split(";")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+
+  const statementCount = rawStatements.length;
+
+  // Detect mutation keywords across the whole file
+  const foundMutations = [];
+  const upperContent = stripped.toUpperCase();
+  for (const kw of FILE_MUTATION_KEYWORDS) {
+    const re = new RegExp(`\\b${kw}\\b`);
+    if (re.test(upperContent)) {
+      foundMutations.push(kw);
+    }
+  }
+
+  const firstStatement = rawStatements[0] ?? "";
+
+  return {
+    statementCount,
+    hasMutations: foundMutations.length > 0,
+    mutationKeywords: foundMutations,
+    firstStatement,
+  };
+}

@@ -1,4 +1,9 @@
-import { canonicalHash, deriveDelegationId, utcNow } from "./canonical.mjs";
+import {
+  canonicalHash,
+  deriveDelegationId,
+  utcNow,
+  GOVERNANCE_VERSION,
+} from "./canonical.mjs";
 import { validateContract } from "./schema.mjs";
 import { readFileSync } from "node:fs";
 import { URL } from "node:url";
@@ -110,7 +115,7 @@ export function createTrustedResultEnvelope({
     normalizeAgentOutcome(payload, lineage.attempt);
   const envelope = {
     schema_version: "1.0.0",
-    governance_version: "m7-t2-r12",
+    governance_version: GOVERNANCE_VERSION,
     task_id: lineage.task_id,
     brief_revision: lineage.brief_revision,
     node_id: lineage.node_id,

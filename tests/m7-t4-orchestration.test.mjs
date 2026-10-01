@@ -10,6 +10,7 @@ import {
 } from "../integrations/openclaw/lib/policy.mjs";
 
 import { executeGovernedDuckDbQuery } from "../zink-tools/sql/duckdb-bridge.mjs";
+import { duckDbSkip } from "./helpers/duckdb-availability.mjs";
 
 import {
   R2StorageAdapter,
@@ -117,24 +118,31 @@ describe("M7/T4 External Infrastructure & Governed Orchestration (G0 - G20)", ()
     assert.equal(p1.landing_artifact.bucket, "landing");
   });
 
-  test("Gate G4 & G5: Governed DuckDB Bridge Authorization & Escape Denial", async () => {
-    const valid = await executeGovernedDuckDbQuery(
-      { agent_id: "sql", task_id: context.task_id },
-      { query: "SELECT id, name FROM knowledge", target_database: "knowledge" },
-    );
-    assert.equal(valid.provider, "duckdb");
+  test(
+    "Gate G4 & G5: Governed DuckDB Bridge Authorization & Escape Denial",
+    { skip: duckDbSkip() },
+    async () => {
+      const valid = await executeGovernedDuckDbQuery(
+        { agent_id: "sql", task_id: context.task_id },
+        {
+          query: "SELECT id, name FROM knowledge",
+          target_database: "knowledge",
+        },
+      );
+      assert.equal(valid.provider, "duckdb");
 
-    // Denial of arbitrary path
-    await assert.rejects(
-      async () => {
-        await executeGovernedDuckDbQuery(
-          { agent_id: "sql", task_id: context.task_id },
-          { query: "ATTACH 'bad.db' AS bad", target_database: "knowledge" },
-        );
-      },
-      (err) => err.code === "DUCKDB_FILESYSTEM_ACCESS_DENIED",
-    );
-  });
+      // Denial of arbitrary path
+      await assert.rejects(
+        async () => {
+          await executeGovernedDuckDbQuery(
+            { agent_id: "sql", task_id: context.task_id },
+            { query: "ATTACH 'bad.db' AS bad", target_database: "knowledge" },
+          );
+        },
+        (err) => err.code === "DUCKDB_FILESYSTEM_ACCESS_DENIED",
+      );
+    },
+  );
 
   test("Gate G6: Orchestration Pattern P1 & P2", async () => {
     // P1: Ingest to Landing

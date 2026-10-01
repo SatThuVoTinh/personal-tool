@@ -19,7 +19,14 @@
       "const": "1.0.0"
     },
     "governance_version": {
-      "enum": ["m7-t2-r12", "m7-t5-r13"]
+      "enum": [
+        "m7-t2-r12",
+        "m7-t5-r13",
+        "m8-t2-r9",
+        "m8-t2.1-r3",
+        "m8-t2.2-r4",
+        "m8-t2.3-r5"
+      ]
     },
     "sequence": {
       "type": "integer",
@@ -34,7 +41,17 @@
         "WORKFLOW_SPAWN_RECEIVED",
         "WORKFLOW_RESULT_RECORDED",
         "WORKFLOW_ROOT_RESULT_RECORDED",
+        "WORKFLOW_USER_RESULT_ACCEPTED",
+        "WORKFLOW_USER_RESULT_REJECTED",
+        "WORKFLOW_USER_RESULT_BLOCKED",
+        "WORKFLOW_RESULT_REVISION_REQUESTED",
+        "WORKFLOW_USER_APPROVAL_DECIDED",
+        "WORKFLOW_APPROVAL_REQUESTED",
+        "WORKFLOW_TASK_CLAIMED",
+        "WORKFLOW_USER_QUESTION_RECORDED",
+        "WORKFLOW_USER_ANSWER_RECORDED",
         "WORKFLOW_CANCELLED",
+        "WORKFLOW_TASK_RECONCILED",
         "WORKFLOW_CONTINUATION_AUTHORIZED",
         "WORKFLOW_CONTINUATION_STARTED",
         "BUDGET_RESERVED",
@@ -60,7 +77,13 @@
   },
   "allOf": [
     {
-      "if": { "properties": { "type": { "const": "WORKFLOW_NATIVE_ENDED" } } },
+      "if": {
+        "properties": {
+          "type": {
+            "const": "WORKFLOW_NATIVE_ENDED"
+          }
+        }
+      },
       "then": {
         "properties": {
           "payload": {
@@ -74,7 +97,10 @@
               "outcome"
             ],
             "properties": {
-              "task_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+              "task_id": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
               "native_run_id": {
                 "type": "string",
                 "minLength": 1,
@@ -92,6 +118,10 @@
               },
               "outcome": {
                 "enum": ["ok", "error", "timeout", "killed", "reset", "deleted"]
+              },
+              "recorded_at": {
+                "type": "string",
+                "format": "date-time"
               }
             }
           }
@@ -126,6 +156,7 @@
         "properties": {
           "payload": {
             "type": "object",
+            "description": "semantic_contract_status is required on new writes (the writer always emits it) but optional for reads: briefs activated before R4 carry no status, and rejecting legitimate history makes the ledger unreadable. The reducer replays an absent status as MISSING, which authorizes nothing.",
             "additionalProperties": false,
             "required": ["task_id", "brief_revision", "nodes"],
             "properties": {
@@ -137,6 +168,9 @@
                 "type": "integer",
                 "minimum": 1,
                 "maximum": 16
+              },
+              "semantic_contract_status": {
+                "$ref": "#/$defs/semantic_contract_status"
               },
               "nodes": {
                 "type": "array",
@@ -208,15 +242,9 @@
                 "maxLength": 256
               },
               "agent_id": {
-                "enum": [
-                  "main",
-                  "o1",
-                  "o2",
-                  "excel",
-                  "power-bi",
-                  "sql",
-                  "python"
-                ]
+                "description": "Open-world agent identity. The ledger records what executed, including ad-hoc identities outside the governed spawn topology; execution authority is enforced by the guard and reducer, not by this vocabulary. A closed enum here makes legitimate history unreadable without preventing anything.",
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_-]{0,63}$"
               },
               "parent_session_key": {
                 "type": "string",
@@ -241,14 +269,53 @@
           "payload": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["task_id", "envelope"],
+            "required": ["task_id"],
             "properties": {
               "task_id": {
                 "type": "string",
                 "pattern": "^[a-f0-9]{64}$"
               },
               "envelope": {
-                "$ref": "trusted-result-envelope.schema.json"
+                "type": "object"
+              },
+              "agent_id": {
+                "description": "Open-world agent identity. The ledger records what executed, including ad-hoc identities outside the governed spawn topology; execution authority is enforced by the guard and reducer, not by this vocabulary. A closed enum here makes legitimate history unreadable without preventing anything.",
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+              },
+              "attempt": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "payload_digest": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "technical_status": {
+                "enum": ["PASS", "FAIL", "SKIPPED"]
+              },
+              "business_status": {
+                "enum": ["PASS", "FAIL", "SKIPPED"]
+              },
+              "artifact_path": {
+                "type": ["string", "null"],
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              "artifacts": {
+                "type": ["array", "null"],
+                "maxItems": 10,
+                "items": {
+                  "type": "object"
+                }
+              },
+              "artifact_set_digest": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "recorded_at": {
+                "type": ["string", "null"],
+                "format": "date-time"
               }
             }
           }
@@ -275,6 +342,151 @@
       "if": {
         "properties": {
           "type": {
+            "const": "WORKFLOW_USER_QUESTION_RECORDED"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "task_id",
+              "agent_id",
+              "question",
+              "session_key",
+              "run_id"
+            ],
+            "properties": {
+              "task_id": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "agent_id": {
+                "description": "Open-world agent identity. The ledger records what executed, including ad-hoc identities outside the governed spawn topology; execution authority is enforced by the guard and reducer, not by this vocabulary. A closed enum here makes legitimate history unreadable without preventing anything.",
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+              },
+              "question": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              "session_key": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "run_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "WORKFLOW_USER_ANSWER_RECORDED"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "task_id",
+              "answer",
+              "actor",
+              "user_principal_ref",
+              "message_id"
+            ],
+            "properties": {
+              "task_id": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "answer": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              "actor": {
+                "const": "user"
+              },
+              "user_principal_ref": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "message_id": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]{16,19}$"
+              },
+              "thread_id": {
+                "type": ["string", "null"],
+                "maxLength": 256
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "WORKFLOW_TASK_RECONCILED"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "task_id",
+              "actor",
+              "reason_code",
+              "node_id",
+              "agent_id"
+            ],
+            "properties": {
+              "task_id": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "actor": {
+                "const": "main"
+              },
+              "reason_code": {
+                "enum": ["TRANSIENT_RUNTIME_FAILURE", "RUN_TIMEOUT"]
+              },
+              "node_id": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+              },
+              "agent_id": {
+                "description": "Open-world agent identity. The ledger records what executed, including ad-hoc identities outside the governed spawn topology; execution authority is enforced by the guard and reducer, not by this vocabulary. A closed enum here makes legitimate history unreadable without preventing anything.",
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
             "const": "WORKFLOW_CANCELLED"
           }
         }
@@ -284,7 +496,7 @@
           "payload": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["task_id", "reason_code"],
+            "required": ["task_id", "reason_code", "actor"],
             "properties": {
               "task_id": {
                 "type": "string",
@@ -292,6 +504,15 @@
               },
               "reason_code": {
                 "enum": ["OWNER_CANCELLED", "PARENT_CANCELLED"]
+              },
+              "actor": {
+                "enum": ["user", "main"]
+              },
+              "channel": {
+                "type": "string"
+              },
+              "message_id": {
+                "type": "string"
               }
             }
           }
@@ -309,7 +530,57 @@
       "then": {
         "properties": {
           "payload": {
-            "$ref": "#/$defs/continuation"
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "task_id",
+              "brief_revision",
+              "session_key",
+              "previous_run_id",
+              "next_run_id",
+              "source_session_key",
+              "trigger_run_id"
+            ],
+            "properties": {
+              "task_id": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "brief_revision": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 16
+              },
+              "session_key": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "previous_run_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "next_run_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "source_session_key": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "trigger_run_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "owner_attempt": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
           }
         }
       }
@@ -339,12 +610,12 @@
                 "type": "string",
                 "pattern": "^[a-f0-9]{64}$"
               },
-              "next_run_id": {
+              "session_key": {
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 256
               },
-              "session_key": {
+              "next_run_id": {
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 256
@@ -355,15 +626,9 @@
                 "maxLength": 256
               },
               "agent_id": {
-                "enum": [
-                  "main",
-                  "o1",
-                  "o2",
-                  "excel",
-                  "power-bi",
-                  "sql",
-                  "python"
-                ]
+                "description": "Open-world agent identity. The ledger records what executed, including ad-hoc identities outside the governed spawn topology; execution authority is enforced by the guard and reducer, not by this vocabulary. A closed enum here makes legitimate history unreadable without preventing anything.",
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_-]{0,63}$"
               }
             }
           }
@@ -451,9 +716,341 @@
           }
         }
       }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "WORKFLOW_USER_RESULT_ACCEPTED"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["task_id", "actor", "channel", "decision"],
+            "properties": {
+              "task_id": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "actor": {
+                "const": "user"
+              },
+              "channel": {
+                "const": "results"
+              },
+              "decision": {
+                "const": "ACCEPT"
+              },
+              "result_id": {
+                "type": ["string", "null"],
+                "maxLength": 128
+              },
+              "result_digest": {
+                "type": ["string", "null"],
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "message_id": {
+                "type": ["string", "null"],
+                "pattern": "^[1-9][0-9]{16,19}$"
+              },
+              "thread_id": {
+                "type": ["string", "null"],
+                "maxLength": 256
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "WORKFLOW_USER_RESULT_REJECTED"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["task_id", "actor", "channel", "reason"],
+            "properties": {
+              "task_id": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "actor": {
+                "const": "user"
+              },
+              "channel": {
+                "const": "results"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              "result_id": {
+                "type": ["string", "null"],
+                "maxLength": 128
+              },
+              "result_digest": {
+                "type": ["string", "null"],
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "message_id": {
+                "type": ["string", "null"],
+                "pattern": "^[1-9][0-9]{16,19}$"
+              },
+              "thread_id": {
+                "type": ["string", "null"],
+                "maxLength": 256
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "WORKFLOW_USER_RESULT_BLOCKED"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "description": "Owner verdict: the owner reviewed the result and accepted BLOCKED as the authoritative final outcome. This is NOT an execution or reconciliation event; an execution event that merely produces a blocked condition (WORKFLOW_NATIVE_ENDED, a duplicate root result, a conflicting delegated result) must not be expressed as this verdict.",
+            "additionalProperties": false,
+            "required": ["task_id", "actor", "channel", "decision", "reason"],
+            "properties": {
+              "task_id": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "actor": {
+                "const": "user"
+              },
+              "channel": {
+                "const": "results"
+              },
+              "decision": {
+                "const": "BLOCK"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              "reason_code": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "result_id": {
+                "type": ["string", "null"],
+                "maxLength": 128
+              },
+              "result_digest": {
+                "type": ["string", "null"],
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "message_id": {
+                "type": ["string", "null"],
+                "pattern": "^[1-9][0-9]{16,19}$"
+              },
+              "thread_id": {
+                "type": ["string", "null"],
+                "maxLength": 256
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "WORKFLOW_RESULT_REVISION_REQUESTED"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["task_id", "actor", "channel", "feedback"],
+            "properties": {
+              "task_id": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "actor": {
+                "const": "user"
+              },
+              "channel": {
+                "const": "results"
+              },
+              "feedback": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              "result_id": {
+                "type": ["string", "null"],
+                "maxLength": 128
+              },
+              "result_digest": {
+                "type": ["string", "null"],
+                "pattern": "^[a-f0-9]{64}$"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "WORKFLOW_APPROVAL_REQUESTED"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["task_id", "agent_id", "session_key", "run_id"],
+            "properties": {
+              "task_id": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "agent_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "session_key": {
+                "description": "M7-041 attribution: the request is attributable to the run that owns the task, so the ledger records WHICH governed run surfaced the approval opportunity rather than trusting a caller or a UI payload.",
+                "type": "string",
+                "minLength": 1
+              },
+              "run_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "brief_revision": {
+                "description": "The brief revision this request refers to, when one is active. Purely audit context: the approval request and the execution brief are independent concepts and a request does NOT require a brief.",
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "WORKFLOW_TASK_CLAIMED"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["task_id", "agent_id"],
+            "properties": {
+              "task_id": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "agent_id": {
+                "description": "Open-world agent identity. The ledger records what executed, including ad-hoc identities outside the governed spawn topology; execution authority is enforced by the guard and reducer, not by this vocabulary. A closed enum here makes legitimate history unreadable without preventing anything.",
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "WORKFLOW_USER_APPROVAL_DECIDED"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["task_id", "actor", "channel", "decision"],
+            "properties": {
+              "task_id": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "actor": {
+                "const": "user"
+              },
+              "channel": {
+                "enum": ["approvals", "results"]
+              },
+              "decision": {
+                "enum": [
+                  "APPROVE",
+                  "REJECT",
+                  "ACCEPT",
+                  "REJECT_RESULT",
+                  "REQUEST_REVISION_RESULT"
+                ]
+              },
+              "message_id": {
+                "type": ["string", "null"],
+                "pattern": "^[1-9][0-9]{16,19}$"
+              },
+              "thread_id": {
+                "type": ["string", "null"],
+                "maxLength": 256
+              },
+              "scope_digest": {
+                "type": ["string", "null"],
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "reason": {
+                "type": ["string", "null"],
+                "maxLength": 4096
+              }
+            }
+          }
+        }
+      }
     }
   ],
   "$defs": {
+    "semantic_contract_status": {
+      "enum": ["VALID", "MISSING", "AMBIGUOUS"]
+    },
     "counters": {
       "type": "object",
       "additionalProperties": false,
@@ -495,7 +1092,9 @@
           "pattern": "^[a-z][a-z0-9_-]{0,63}$"
         },
         "agent_id": {
-          "enum": ["main", "o1", "o2", "excel", "power-bi", "sql", "python"]
+          "description": "Open-world agent identity. The ledger records what executed, including ad-hoc identities outside the governed spawn topology; execution authority is enforced by the guard and reducer, not by this vocabulary. A closed enum here makes legitimate history unreadable without preventing anything.",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,63}$"
         },
         "stack_id": {
           "enum": [
@@ -608,7 +1207,9 @@
           "pattern": "^[a-z][a-z0-9_-]{0,63}$"
         },
         "agent_id": {
-          "enum": ["main", "o1", "o2", "excel", "power-bi", "sql", "python"]
+          "description": "Open-world agent identity. The ledger records what executed, including ad-hoc identities outside the governed spawn topology; execution authority is enforced by the guard and reducer, not by this vocabulary. A closed enum here makes legitimate history unreadable without preventing anything.",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,63}$"
         },
         "parent_agent_id": {
           "enum": ["main", "o1", "o2", "excel", "power-bi", "sql", "python"]
@@ -697,6 +1298,10 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 256
+        },
+        "owner_attempt": {
+          "type": "integer",
+          "minimum": 1
         }
       }
     },
@@ -729,7 +1334,9 @@
           "maxLength": 256
         },
         "agent_id": {
-          "enum": ["main", "o1", "o2", "excel", "power-bi", "sql", "python"]
+          "description": "Open-world agent identity. The ledger records what executed, including ad-hoc identities outside the governed spawn topology; execution authority is enforced by the guard and reducer, not by this vocabulary. A closed enum here makes legitimate history unreadable without preventing anything.",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,63}$"
         },
         "payload_digest": {
           "type": "string",
@@ -745,6 +1352,9 @@
         "governance_hash": {
           "type": "string",
           "pattern": "^[a-f0-9]{64}$"
+        },
+        "pending_outcome_status": {
+          "enum": ["COMPLETE", "PARTIAL", "BLOCKED", "FAILED"]
         }
       }
     }

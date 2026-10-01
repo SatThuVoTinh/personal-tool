@@ -16,7 +16,13 @@ export function registerNativeGuard(scope, guard) {
     typeof scope !== "string" ||
     !scope ||
     typeof guard?.beforeToolCall !== "function" ||
-    typeof guard?.beforeAnnounce !== "function"
+    typeof guard?.beforeAnnounce !== "function" ||
+    // T2/T3: quota telemetry and run-scoped model resolution are mandatory
+    // governance capabilities. A guard without them cannot enforce the
+    // self-quota / proactive-fallback contract, so registration fails closed.
+    typeof guard?.recordQuota !== "function" ||
+    typeof guard?.selfQuotaReceipt !== "function" ||
+    typeof guard?.resolveRunModel !== "function"
   )
     throw new Error("GOVERNANCE_REGISTRATION_INVALID");
   const entry = Object.freeze({
@@ -34,6 +40,12 @@ export function registerNativeGuard(scope, guard) {
         : undefined,
     beforeToolCall: guard.beforeToolCall.bind(guard),
     beforeAnnounce: guard.beforeAnnounce.bind(guard),
+    // T2/T3: quota publication, self receipt and run-scoped model resolution
+    // are required governance capabilities. Registration fails closed when the
+    // guard cannot enforce them, so there is no "quota but no enforcement" mode.
+    recordQuota: guard.recordQuota.bind(guard),
+    selfQuotaReceipt: guard.selfQuotaReceipt.bind(guard),
+    resolveRunModel: guard.resolveRunModel.bind(guard),
   });
   registry().set(scope, entry);
   return () => {
@@ -45,15 +57,34 @@ function resolveGovernance(config) {
   const entry = config?.plugins?.entries?.["zink-governance"];
   if (entry?.enabled !== true) return { enabled: false };
   const scope = entry.config?.ledgerRoot;
+  let guard = typeof scope === "string" ? registry().get(scope) : undefined;
+  if (!guard && typeof scope === "string") {
+    // Normalization check in case of path separator / trailing slash differences
+    const normScope = scope.replace(/\\/g, "/").replace(/\/+$/, "");
+    for (const [registeredScope, registeredGuard] of registry().entries()) {
+      if (
+        registeredScope.replace(/\\/g, "/").replace(/\/+$/, "") === normScope
+      ) {
+        guard = registeredGuard;
+        break;
+      }
+    }
+  }
   return {
     enabled: true,
-    guard: typeof scope === "string" ? registry().get(scope) : undefined,
+    guard,
   };
 }
 
 async function callGuard(method, event, context, signal) {
-  if (signal?.aborted || typeof method !== "function")
+  if (signal?.aborted || typeof method !== "function") {
+    if (typeof method !== "function") {
+      console.error(
+        "[zink-native-gate] callGuard: guard method is not a function or guard unregistered",
+      );
+    }
     throw new Error("GOVERNANCE_UNAVAILABLE");
+  }
   let abort;
   const interrupted = new Promise((_, reject) => {
     abort = () => reject(new Error("GOVERNANCE_ABORTED"));
@@ -148,8 +179,18 @@ export function installNativeToolGate(agent, config, context) {
         trusted,
         signal,
       );
-      if (decision?.allow !== true)
-        return { block: true, reason: "GOVERNANCE_DENIED" };
+      if (decision?.allow !== true) {
+        // A blocked call keeps its canonical reason code when the guard
+        // supplied one. The code is a fixed governance identifier, never
+        // caller data, so surfacing it is safe and makes the refusal
+        // auditable instead of collapsing every denial into one opaque code.
+        const reason =
+          typeof decision?.reason === "string" &&
+          /^[A-Z][A-Z0-9_]{0,63}$/u.test(decision.reason)
+            ? decision.reason
+            : "GOVERNANCE_DENIED";
+        return { block: true, reason };
+      }
       if (decision.spawnLabel !== undefined) {
         if (
           event.toolCall.name !== "sessions_spawn" ||
@@ -175,12 +216,106 @@ export function installNativeToolGate(agent, config, context) {
         delete event.args.taskName;
       }
       return nativeDecision;
-    } catch {
+    } catch (err) {
+      console.error(
+        "[zink-native-gate:error] beforeToolCall blocked:",
+        err?.message || err,
+      );
       // Never return exception text: a provider/plugin error may contain input.
       return { block: true, reason: "GOVERNANCE_UNAVAILABLE" };
     }
   };
   installedAgents.add(agent);
+}
+
+/**
+ * T2: publish one provider-usage snapshot that the host runtime already owns.
+ * The snapshot must carry the identity of the agent whose provider quota it is.
+ * Invalid or cross-agent payloads are rejected. No network I/O is performed
+ * here and no secret material is read or returned.
+ */
+export async function recordNativeQuota(config, snapshot) {
+  const governance = resolveGovernance(config);
+  if (!governance.enabled) return false;
+  if (typeof governance.guard?.recordQuota !== "function") {
+    throw new Error("GOVERNANCE_UNAVAILABLE");
+  }
+  return governance.guard.recordQuota(snapshot);
+}
+
+/**
+ * T2: read-only, self-scoped quota receipt for prompt context. The agentId is
+ * taken from trusted runtime context, never from a model-supplied parameter.
+ */
+export async function selfNativeQuota(config, context) {
+  const governance = resolveGovernance(config);
+  if (!governance.enabled) return null;
+  if (typeof governance.guard?.selfQuotaReceipt !== "function") {
+    throw new Error("GOVERNANCE_UNAVAILABLE");
+  }
+  if (typeof context?.agentId !== "string" || context.agentId.length === 0) {
+    throw new Error("GOVERNANCE_CONTEXT_MISSING");
+  }
+  return governance.guard.selfQuotaReceipt(context.agentId);
+}
+
+/**
+ * T3: run-scoped model resolution. The returned model applies to the CURRENT
+ * run only. This function performs no persisted write: it never creates a
+ * session override, never mutates modelOverrideSource and never pins a model
+ * into session state.
+ */
+export async function resolveNativeRunModel(config, context) {
+  const governance = resolveGovernance(config);
+  if (!governance.enabled) return null;
+  if (typeof governance.guard?.resolveRunModel !== "function") {
+    throw new Error("GOVERNANCE_UNAVAILABLE");
+  }
+  if (
+    typeof context?.agentId !== "string" ||
+    typeof context?.sessionKey !== "string" ||
+    typeof context?.runId !== "string"
+  ) {
+    throw new Error("GOVERNANCE_CONTEXT_MISSING");
+  }
+  return governance.guard.resolveRunModel({
+    agentId: context.agentId,
+    sessionKey: context.sessionKey,
+    runId: context.runId,
+  });
+}
+
+// R18: the admission-time liveness discriminator, recovered at run-end.
+//
+// The host forwards `trigger` and `transcriptPrompt` to `enterNativeRun` but NOT
+// to `finishNativeRun` (its run-end call passes only agentId/sessionKey/runId).
+// Without them at run-end, `isPureLivenessHeartbeat` returns false there even
+// though admission recognised the same run as a pure liveness heartbeat, so the
+// run-end seam applied full governance and failed with
+// GOVERNANCE_COMPLETION_UNAVAILABLE. Threading them through the pinned selection
+// would change the installed selection and break the R7/R10 native lineage; this
+// records them per run at admission and recovers them at run-end so BOTH seams
+// classify a run with the single predicate. A run that never passed admission has
+// no record and therefore keeps the existing full-governance behaviour.
+//
+// Bounded so a run that dies before run-end cannot grow this without limit.
+const RUN_LIVENESS = new Map();
+const RUN_LIVENESS_LIMIT = 256;
+
+function rememberRunLiveness(runId, trigger, transcriptPrompt) {
+  if (typeof runId !== "string" || runId === "") return;
+  if (RUN_LIVENESS.size >= RUN_LIVENESS_LIMIT) {
+    const oldest = RUN_LIVENESS.keys().next().value;
+    RUN_LIVENESS.delete(oldest);
+  }
+  RUN_LIVENESS.set(runId, { trigger, transcriptPrompt });
+}
+
+function takeRunLiveness(runId) {
+  if (typeof runId !== "string" || runId === "") return undefined;
+  const record = RUN_LIVENESS.get(runId);
+  RUN_LIVENESS.delete(runId);
+  return record;
 }
 
 export async function enterNativeRun(config, context, signal) {
@@ -197,6 +332,18 @@ export async function enterNativeRun(config, context, signal) {
         channelId: context.channelId,
         senderId: context.senderId,
         currentMessageId: context.currentMessageId,
+        message: context.message,
+        content: context.content,
+        mentions: context.mentions,
+        mentionRoles: context.mentionRoles,
+        author: context.author,
+        isBot: context.isBot,
+        // R10: the host-assigned run discriminator and the canonical host
+        // heartbeat representation. Both are plain strings the host already
+        // holds at the injection anchor; neither is user content, a message
+        // object, or Discord-layer data.
+        trigger: context.trigger,
+        transcriptPrompt: context.transcriptPrompt,
         inputProvenance: context.inputProvenance
           ? Object.freeze({ ...context.inputProvenance })
           : undefined,
@@ -204,8 +351,24 @@ export async function enterNativeRun(config, context, signal) {
       signal,
     );
     if (decision?.allow !== true) throw new Error("GOVERNANCE_DENIED");
-  } catch {
-    throw new Error("GOVERNANCE_RUN_UNAVAILABLE");
+    // R18: record the discriminator only for a run admission ACCEPTED, so the
+    // record means precisely "admission recognised this run". A denied or failed
+    // admission leaves no record and its run-end therefore keeps full governance.
+    rememberRunLiveness(
+      context.runId,
+      context.trigger,
+      context.transcriptPrompt,
+    );
+  } catch (error) {
+    // R7 G2: the host-visible contract string is unchanged, but the original
+    // failure is preserved as the cause so a governance verdict and a genuine
+    // execution-state fault stay distinguishable. Only the fixed error message
+    // is logged: never the stack, the run context, or message content.
+    console.error(
+      "[zink-native-gate] enterNativeRun:",
+      error?.message ?? error,
+    );
+    throw new Error("GOVERNANCE_RUN_UNAVAILABLE", { cause: error });
   }
 }
 
@@ -241,6 +404,10 @@ export async function gateNativeAnnounce(config, event, signal) {
 export async function finishNativeRun(config, event, context) {
   const governance = resolveGovernance(config);
   if (!governance.enabled) return;
+  // R18: prefer anything the host passes at this seam, then fall back to the
+  // values recorded at admission for this runId, so admission and run-end apply
+  // the same predicate to the same execution.
+  const liveness = takeRunLiveness(context.runId);
   try {
     const decision = await callGuard(
       governance.guard?.beforeRunEnd,
@@ -249,6 +416,9 @@ export async function finishNativeRun(config, event, context) {
         agentId: context.agentId,
         sessionKey: context.sessionKey,
         runId: context.runId,
+        trigger: context.trigger ?? liveness?.trigger,
+        transcriptPrompt:
+          context.transcriptPrompt ?? liveness?.transcriptPrompt,
       }),
     );
     if (decision?.allow !== true) throw new Error("GOVERNANCE_DENIED");

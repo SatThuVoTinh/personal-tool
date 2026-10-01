@@ -1,6 +1,14 @@
 import { createHash, createHmac } from "node:crypto";
 
-export const GOVERNANCE_VERSION = "m7-t5-r13";
+// The governance version doubles as the WRITER-SEMANTICS discriminator, so it
+// must only ever be bumped when the reducer's meaning for an already-emitted
+// event is unchanged. m8-t2.2-r4 is deliberately NOT a unique discriminator:
+// two different writers emitted it, one resolving a root result directly to its
+// outcome (pre-verdict) and one routing it to owner review (verdict). It is
+// therefore retained forever and handled by the compatibility path, never
+// treated as evidence of verdict semantics. m8-t2.3-r5 is the first version
+// whose semantics are unambiguous: only the verdict-model writer emits it.
+export const GOVERNANCE_VERSION = "m8-t2.3-r5";
 export const SCHEMA_VERSION = "1.0.0";
 
 const SET_KEYS = new Set(["allowed_tools", "allowAgents", "allowed_stacks"]);
@@ -121,6 +129,59 @@ export function deriveDelegationId({
     agent_id,
     attempt,
   });
+}
+
+export const SPAWN_PROPOSAL_KEYS = Object.freeze([
+  "task_id",
+  "brief_revision",
+  "node_id",
+  "agent_id",
+  "parent_agent_id",
+  "parent_session_key",
+  "parent_run_id",
+  "tool_call_id",
+  "turn",
+  "attempt",
+  "expected_governance_hash",
+]);
+
+/**
+ * M8-055: the single canonical spawn-proposal builder. Both the live plugin
+ * adapter and the reducer consume this exact shape, so the delegation id and
+ * the request digest can never be derived from two divergent serializations.
+ */
+export function buildSpawnProposal(fields) {
+  const missing = SPAWN_PROPOSAL_KEYS.filter(
+    (key) => fields?.[key] === undefined,
+  );
+  if (missing.length > 0) {
+    throw new TypeError(`SPAWN_PROPOSAL_INCOMPLETE: ${missing.join(",")}`);
+  }
+  const proposal = {
+    task_id: fields.task_id,
+    brief_revision: fields.brief_revision,
+    node_id: fields.node_id,
+    agent_id: fields.agent_id,
+    parent_agent_id: fields.parent_agent_id,
+    parent_session_key: fields.parent_session_key,
+    parent_run_id: fields.parent_run_id,
+    tool_call_id: fields.tool_call_id,
+    turn: fields.turn,
+    attempt: fields.attempt,
+    expected_governance_hash: fields.expected_governance_hash,
+  };
+  const delegation_id = deriveDelegationId(proposal);
+  return {
+    ...proposal,
+    delegation_id,
+    // The request digest binds the WHOLE request tuple, so a tampered lineage
+    // field (tool call id, turn, parent run, governance hash) changes it even
+    // though it is not part of the delegation identity.
+    request_digest: canonicalHash("zink-spawn-request-v1", {
+      ...proposal,
+      delegation_id,
+    }),
+  };
 }
 
 export function deriveReferenceId(value) {

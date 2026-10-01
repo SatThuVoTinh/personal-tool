@@ -47,11 +47,16 @@ function createMockLedger() {
     events: path.join(tempDir, "events.jsonl"),
   };
 
+  // The canonical approval contract requires a 64-hex task correlation id, the
+  // same shape as a derived task id. The previous literal "task-test-01" was
+  // never contract-conforming, so the approval record it produced could not
+  // have validated.
+  const TASK_ID = "c".repeat(64);
   const deterministicSnapshot = {
     sequence: 1,
     tasks: {
-      "task-test-01": {
-        task_id: "task-test-01",
+      [TASK_ID]: {
+        task_id: TASK_ID,
         workflow_status: "ACTIVE",
         brief_state: "ACTIVE",
         brief_revision: 1,
@@ -275,22 +280,51 @@ describe("T3 Domain A - Registry & Capability Policy", () => {
       registerTool: (t) => registered.push(t.id),
     };
     registerTools(mockHostApi);
-    const expected = [
+    const expectedRegistered = [
+      "zink_excel",
+      "zink_power_bi",
+      "zink_sql",
+      "zink_python",
+      "zink_n8n",
+      "zink_skill_search",
+      "zink_knowledge_search",
+      "zink_skill_propose",
+    ];
+    const expectedCallable = [
       "zink_excel",
       "zink_power_bi",
       "zink_sql",
       "zink_python",
       "zink_n8n",
     ];
-    assert.deepStrictEqual(registered.sort(), expected.sort());
+    assert.deepStrictEqual(registered.sort(), expectedRegistered.sort());
     assert.deepStrictEqual(
       Object.keys(CALLABLE_TOOL_REGISTRY).sort(),
-      expected.sort(),
+      expectedCallable.sort(),
     );
     assert.deepStrictEqual(
       Object.keys(CALLABLE_DISPATCH_REGISTRY).sort(),
-      expected.sort(),
+      expectedCallable.sort(),
     );
+  });
+
+  test("R4: zink_sql rejects unscoped execution instead of applying fake defaults", async () => {
+    let sqlTool = null;
+    registerTools({
+      registerTool: (tool) => {
+        if (tool.id === "zink_sql") sqlTool = tool;
+      },
+    });
+
+    const result = await sqlTool.execute(
+      { agent: "sql" },
+      { query: "SELECT id FROM knowledge", target_database: "knowledge" },
+    );
+    const payload = JSON.parse(result.content[0].text);
+
+    assert.equal(payload.status, "BLOCKED");
+    assert.equal(payload.execution_state, "BLOCKED");
+    assert.equal(payload.error, "TASK_SCOPE_REQUIRED");
   });
 
   test("AC 7: Operation-Level Policy Authority", () => {
@@ -410,7 +444,7 @@ describe("T3 Domain B - Schema & Closed Object Models", () => {
       },
       provenance: {
         delegation_id: "00000000-0000-4000-8000-000000000004",
-        task_id: "task-test-01",
+        task_id: "c".repeat(64),
         session_key: "test-session-python",
       },
     };
@@ -454,7 +488,7 @@ describe("T3 Domain C - Guard & Dual-Path Authorization", () => {
             query: "SELECT id FROM users",
             target_database: "knowledge",
           },
-          provenance: { task_id: "task-test-01", session_key: "main-session" },
+          provenance: { task_id: "c".repeat(64), session_key: "main-session" },
         },
       };
 
@@ -504,7 +538,7 @@ describe("T3 Domain C - Guard & Dual-Path Authorization", () => {
             query: "SELECT id FROM users",
             target_database: "knowledge",
           },
-          provenance: { task_id: "task-test-01", session_key: "sess-01" },
+          provenance: { task_id: "c".repeat(64), session_key: "sess-01" },
         },
       };
       await assert.rejects(
@@ -551,7 +585,7 @@ describe("T3 Domain C - Guard & Dual-Path Authorization", () => {
             query: "SELECT id FROM users",
             target_database: "knowledge",
           },
-          provenance: { task_id: "task-test-01", session_key: "main-session" },
+          provenance: { task_id: "c".repeat(64), session_key: "main-session" },
         },
       };
       const decision = await fixture.guard.beforeToolCall(event, sqlContext);
@@ -613,7 +647,7 @@ describe("T3 Domain C - Guard & Dual-Path Authorization", () => {
             query: "SELECT id FROM users",
             target_database: "knowledge",
           },
-          provenance: { task_id: "task-test-01", session_key: "main-session" },
+          provenance: { task_id: "c".repeat(64), session_key: "main-session" },
         },
       };
       await assert.rejects(
@@ -671,7 +705,7 @@ describe("T3 Domain D - Authenticated Approvals & Anti-Replay", () => {
           },
           provenance: {
             delegation_id: "00000000-0000-4000-8000-000000000002",
-            task_id: "task-test-01",
+            task_id: "c".repeat(64),
             session_key: "test-session-excel",
           },
         },
@@ -721,7 +755,7 @@ describe("T3 Domain D - Authenticated Approvals & Anti-Replay", () => {
       };
 
       const validApprovalId = "11111111-1111-4000-8000-111111111111";
-      const task_id = "task-test-01";
+      const task_id = "c".repeat(64);
       const brief_revision = 1;
       const tool_id = "zink_excel";
       const operation = "populate";
@@ -743,7 +777,11 @@ describe("T3 Domain D - Authenticated Approvals & Anti-Replay", () => {
       const approvalsDir = path.join(fixture.paths.root, "approvals");
       fs.mkdirSync(approvalsDir, { recursive: true });
       const approvalRecord = {
-        owner_principal_ref: "owner-discord-12345",
+        // The canonical contract requires a 64-hex principal reference, the
+        // same shape as origin_principal_ref. The previous placeholder was a
+        // human-readable string the contract would have refused, so the record
+        // was never actually conforming.
+        owner_principal_ref: "b".repeat(64),
         task_id,
         brief_revision,
         tool_id,
@@ -841,7 +879,7 @@ describe("T3 Domain D - Authenticated Approvals & Anti-Replay", () => {
           },
           provenance: {
             delegation_id: "00000000-0000-4000-8000-000000000002",
-            task_id: "task-test-01",
+            task_id: "c".repeat(64),
             session_key: "test-session-excel",
           },
         },

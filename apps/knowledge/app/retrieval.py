@@ -74,8 +74,17 @@ def normalize_filters(
     primary_topic: str | None, tags_all: list[str] | None, path_prefix: str | None
 ) -> SearchFilters:
     topic = primary_topic.strip() if primary_topic is not None else None
-    if topic is not None and topic not in TOPIC_TO_TAG:
-        raise SearchValidationError("INVALID_SEARCH_REQUEST")
+    if topic is not None:
+        if topic in TOPIC_TO_TAG:
+            pass
+        elif topic.lower() in TOPIC_TO_TAG:
+            topic = topic.lower()
+        elif topic.lower().replace("_", "-") in TOPIC_TO_TAG:
+            topic = topic.lower().replace("_", "-")
+        else:
+            raise SearchValidationError("INVALID_SEARCH_REQUEST")
+        from .markdown_adapter import CANONICAL_SLUG_TO_TOPIC
+        topic = CANONICAL_SLUG_TO_TOPIC.get(topic, topic)
     normalized_tags: set[str] = set()
     for tag in tags_all or []:
         if not isinstance(tag, str):

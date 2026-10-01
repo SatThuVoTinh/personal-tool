@@ -1,26 +1,40 @@
 import test, { describe } from "node:test";
 import assert from "node:assert/strict";
 import { executeGovernedDuckDbQuery } from "../zink-tools/sql/duckdb-bridge.mjs";
+import {
+  duckDbEngineAvailable,
+  duckDbSkip,
+} from "./helpers/duckdb-availability.mjs";
 
 describe("Governed DuckDB Windows Bridge (M7/T4 G4 & G5)", () => {
   const validContext = { agent_id: "sql", task_id: "task-test-01" };
   const validQuery = "SELECT id, name FROM knowledge";
   const validDatabase = "knowledge";
 
-  test("Gate 4.1: allowed resource + allowed query -> PASS", async () => {
-    const result = await executeGovernedDuckDbQuery(validContext, {
-      query: validQuery,
-      target_database: validDatabase,
-      max_rows: 50,
-    });
+  // Gates that assert rows a live DuckDB engine must produce are real execution
+  // gates. Where the engine is not installed they are NOT RUN, not FAIL: an
+  // absent external runtime is an environment limitation, and reporting it as a
+  // failure is indistinguishable from a regression. The denial gates below are
+  // deliberately NOT skipped — authorization and safety are proven before the
+  // engine is ever invoked, so they are verifiable on every host.
+  test(
+    "Gate 4.1: allowed resource + allowed query -> PASS",
+    { skip: duckDbSkip() },
+    async () => {
+      const result = await executeGovernedDuckDbQuery(validContext, {
+        query: validQuery,
+        target_database: validDatabase,
+        max_rows: 50,
+      });
 
-    assert.ok(result);
-    assert.equal(result.provider, "duckdb");
-    assert.equal(result.target_database, "knowledge");
-    assert.ok(Array.isArray(result.columns));
-    assert.ok(Array.isArray(result.rows));
-    assert.ok(result.row_count >= 0);
-  });
+      assert.ok(result);
+      assert.equal(result.provider, "duckdb");
+      assert.equal(result.target_database, "knowledge");
+      assert.ok(Array.isArray(result.columns));
+      assert.ok(Array.isArray(result.rows));
+      assert.ok(result.row_count >= 0);
+    },
+  );
 
   test("Gate 4.2: unauthorized caller agent -> DENY (DUCKDB_UNAUTHORIZED_CALLER)", async () => {
     const unauthorizedContexts = [
@@ -251,5 +265,90 @@ describe("Governed DuckDB Windows Bridge (M7/T4 G4 & G5)", () => {
         return true;
       },
     );
+  });
+
+  test(
+    "Gate RC09.1: known SELECT fixture returns exact real rows and REAL_EXECUTED",
+    { skip: duckDbSkip() },
+    async () => {
+      const res = await executeGovernedDuckDbQuery(validContext, {
+        query: "SELECT id, name FROM knowledge WHERE id = 1",
+        target_database: validDatabase,
+      });
+      assert.equal(res.execution_state, "REAL_EXECUTED");
+      assert.equal(res.row_count, 1);
+      assert.deepEqual(res.columns, ["id", "name"]);
+      assert.deepEqual(res.rows, [[1, "artifact-alpha"]]);
+    },
+  );
+
+  test(
+    "Gate RC09.2: query returning zero rows returns EMPTY_RESULT",
+    { skip: duckDbSkip() },
+    async () => {
+      const res = await executeGovernedDuckDbQuery(validContext, {
+        query: "SELECT id, name FROM knowledge WHERE id = 9999",
+        target_database: validDatabase,
+      });
+      assert.equal(res.execution_state, "EMPTY_RESULT");
+      assert.equal(res.row_count, 0);
+      assert.deepEqual(res.rows, []);
+    },
+  );
+
+  test(
+    "Gate RC09.3: bad SQL referencing invalid column throws DUCKDB_EXECUTION_ERROR",
+    { skip: duckDbSkip() },
+    async () => {
+      await assert.rejects(
+        async () => {
+          await executeGovernedDuckDbQuery(validContext, {
+            query: "SELECT invalid_column_xyz FROM knowledge",
+            target_database: validDatabase,
+          });
+        },
+        (err) => {
+          assert.equal(err.code, "DUCKDB_EXECUTION_ERROR");
+          return true;
+        },
+      );
+    },
+  );
+
+  // The one gate that is meaningful on every host, with or without the engine.
+  // It asserts that an absent engine is reported as an explicit condition and
+  // never degrades into rows, and — on a host that does have the engine — that
+  // the same call really does execute, which is what proves the availability
+  // probe is not quietly hiding a failure behind a skip.
+  test("Gate E1: engine availability is classified, never masked", async () => {
+    const call = () =>
+      executeGovernedDuckDbQuery(validContext, {
+        query: validQuery,
+        target_database: validDatabase,
+      });
+
+    if (duckDbEngineAvailable()) {
+      const res = await call();
+      assert.equal(res.execution_state, "REAL_EXECUTED");
+      assert.ok(res.row_count >= 0);
+      return;
+    }
+    await assert.rejects(call, (err) => {
+      assert.equal(err.code, "DUCKDB_ENGINE_NOT_AVAILABLE");
+      return true;
+    });
+  });
+
+  test("Gate RC09.4: explicit simulationMode returns TEST_SIMULATION", async () => {
+    const res = await executeGovernedDuckDbQuery(
+      validContext,
+      {
+        query: validQuery,
+        target_database: validDatabase,
+      },
+      { simulationMode: true },
+    );
+    assert.equal(res.execution_state, "TEST_SIMULATION");
+    assert.equal(res.row_count, 2);
   });
 });

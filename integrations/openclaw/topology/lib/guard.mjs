@@ -1,25 +1,28 @@
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
-import {
-  existsSync,
-  readFileSync,
-  writeFileSync,
-  mkdirSync,
-  rmdirSync,
-} from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL, fileURLToPath } from "node:url";
+
+const _moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
 import {
+  buildSpawnProposal,
   canonicalHash,
-  deriveDelegationId,
   GOVERNANCE_VERSION,
   SCHEMA_VERSION,
 } from "./canonical.mjs";
-import { readSnapshot, recordWorkflowEvent } from "./ledger.mjs";
+import { readSnapshot, recordWorkflowEvent, BUDGETS } from "./ledger.mjs";
 import { findSession, ownerRunIds } from "./workflow.mjs";
-import { validateContract } from "./schema.mjs";
+import {
+  validateContract,
+  validateContractSchema,
+  loadContractSchema,
+  checkSchema,
+  stableJson,
+  typeMatches,
+} from "./schema.mjs";
 import {
   createTrustedResultEnvelope,
   payloadDigest,
@@ -27,13 +30,34 @@ import {
   validateAgentClaim,
   normalizeAgentOutcome,
 } from "./runtime.mjs";
+import { withFileLockSync, lockDirFor } from "../../lib/file-lock.mjs";
+// Spawn topology is a policy decision, so it is read from the one canonical
+// policy module. The deployed plugin flattens this to "./policy.mjs".
+import { AGENT_SPAWN_POLICY } from "../../lib/policy.mjs";
 
 let policy;
-let AGENT_IDS = [];
-let STACK_IDS = [];
+let AGENT_IDS = ["main", "o1", "o2", "excel", "power-bi", "sql", "python"];
+let STACK_IDS = [
+  "semantic",
+  "intelligence",
+  "decision",
+  "infrastructure",
+  "data_plant",
+];
+// M8-067: the delegation-run ceiling is reduced by one for the legacy
+// m7-t2-r12 governance version. The CEILING itself is canonical (BUDGETS in
+// ledger.mjs); only this version-specific delta is declared here, so there is
+// exactly one number that decides how many runs a task may have.
+const LEGACY_DELEGATED_RUN_CARVE_OUT = Object.freeze({ "m7-t2-r12": 1 });
+
+// T1: the built-in tool authority lives in policy.mjs ONLY. There is no
+// module-level default projection here: without the policy module the guard
+// fails closed rather than falling back to a divergent local copy. The previous
+// local default listed `subagent_announce`, which the canonical list omits, so
+// the two selected different code paths for the same tool id. An empty list is
+// the fail-closed state, not a permissive one: a built-in tool is simply not
+// recognised as one until the policy module is loaded.
 let OPENCLAW_BUILT_IN_TOOL_IDS = [];
-let BUILT_IN_TOOL_POLICY = {};
-let TOOL_POLICY = {};
 let OPERATION_POLICY = {};
 let AUTHORIZATION_MODES = {};
 let AUTHORIZATION_MODE_BY_TOOL = {};
@@ -44,12 +68,29 @@ let N8N_WORKFLOW_REGISTRY = {};
 let ZINK_CAPABILITY_REGISTRY = {};
 let T3_GLOBAL_TIMEOUT_CEILING_MS = 30000;
 let T3_GLOBAL_MEMORY_CEILING_MB = 512;
-let deriveApprovalMaterialParameters = () => ({});
-let deriveApprovalScopeDigest = () => "";
-let validateArtifactLogicalPath = () => {};
-let validateSqlQuery = () => {};
-let invokeN8n = async () => {};
+// M7-008: mandatory governance validators must be loaded before use. A
+// missing validator fails closed with GOVERNANCE_DEPENDENCY_MISSING —
+// never with a no-op fallback that silently allows.
+let deriveApprovalMaterialParameters;
+let deriveApprovalScopeDigest;
+let validateArtifactLogicalPath;
+let validateSqlQuery;
+let invokeN8n;
 let N8nAdapterError = Error;
+let depsApprovalLoaded = false;
+let depsPolicyLoaded = false;
+let depsPathSafetyLoaded = false;
+let depsSqlLoaded = false;
+let depsN8nLoaded = false;
+let depsQuotaLoaded = false;
+let quotaTelemetry = null;
+
+function requireDep(loaded, code = "GOVERNANCE_DEPENDENCY_MISSING") {
+  if (!loaded) fail(code);
+}
+function requireQuotaDep() {
+  if (!depsQuotaLoaded) fail("GOVERNANCE_DEPENDENCY_MISSING");
+}
 
 let depsLoaded = false;
 let depsPromise = null;
@@ -58,21 +99,26 @@ async function ensureDependencies() {
   if (depsLoaded) return;
   if (!depsPromise) {
     depsPromise = (async () => {
-      try {
-        policy = await import("../../lib/policy.mjs");
-      } catch {
-        const candidates = [
-          path.resolve(process.cwd(), "integrations/openclaw/lib/policy.mjs"),
-          "/mnt/c/Users/HOANG VINH/OneDrive/Documents/personal-tool/integrations/openclaw/lib/policy.mjs",
-          "C:/Users/HOANG VINH/OneDrive/Documents/personal-tool/integrations/openclaw/lib/policy.mjs",
-        ];
-        for (const candidate of candidates) {
-          try {
-            policy = await import(pathToFileURL(candidate).href);
-            if (policy) break;
-          } catch {
-            /* ignore */
+      policy = null;
+      // M7-063: package-relative and cwd-relative resolution only.
+      // Machine-specific absolute paths are prohibited here.
+      const policyCandidates = [
+        "../../lib/policy.mjs",
+        path.resolve(process.cwd(), "integrations/openclaw/lib/policy.mjs"),
+      ];
+      for (const candidate of policyCandidates) {
+        try {
+          const href = candidate.startsWith(".")
+            ? pathToFileURL(path.resolve(pathToFileURL(_moduleDir), candidate))
+                .href
+            : pathToFileURL(candidate).href;
+          const loaded = await import(href);
+          if (loaded?.BUILT_IN_TOOL_POLICY) {
+            policy = loaded;
+            break;
           }
+        } catch {
+          /* next candidate */
         }
       }
 
@@ -80,8 +126,6 @@ async function ensureDependencies() {
         AGENT_IDS = policy.AGENT_IDS ?? [];
         STACK_IDS = policy.STACK_IDS ?? [];
         OPENCLAW_BUILT_IN_TOOL_IDS = policy.OPENCLAW_BUILT_IN_TOOL_IDS ?? [];
-        BUILT_IN_TOOL_POLICY = policy.BUILT_IN_TOOL_POLICY ?? {};
-        TOOL_POLICY = policy.TOOL_POLICY ?? {};
         OPERATION_POLICY = policy.OPERATION_POLICY ?? {};
         AUTHORIZATION_MODES = policy.AUTHORIZATION_MODES ?? {};
         AUTHORIZATION_MODE_BY_TOOL = policy.AUTHORIZATION_MODE_BY_TOOL ?? {};
@@ -94,78 +138,104 @@ async function ensureDependencies() {
           policy.T3_GLOBAL_TIMEOUT_CEILING_MS ?? 30000;
         T3_GLOBAL_MEMORY_CEILING_MB = policy.T3_GLOBAL_MEMORY_CEILING_MB ?? 512;
         deriveApprovalMaterialParameters =
-          policy.deriveApprovalMaterialParameters ?? (() => ({}));
-        deriveApprovalScopeDigest =
-          policy.deriveApprovalScopeDigest ?? (() => "");
+          policy.deriveApprovalMaterialParameters ?? null;
+        deriveApprovalScopeDigest = policy.deriveApprovalScopeDigest ?? null;
+        depsApprovalLoaded =
+          typeof deriveApprovalMaterialParameters === "function" &&
+          typeof deriveApprovalScopeDigest === "function";
       }
+      // T1: the policy module is the single tool authority. Without it there
+      // is no authority, so the guard fails closed instead of using the
+      // module-level default projection.
+      depsPolicyLoaded =
+        policy !== null &&
+        typeof policy.BUILT_IN_TOOL_POLICY === "object" &&
+        typeof policy.isSessionStatusReadOnlyArgs === "function";
 
-      let pathSafety;
-      try {
-        pathSafety =
-          await import("../../../../zink-tools/common/path-safety.mjs");
-      } catch {
-        const candidates = [
-          path.resolve(process.cwd(), "zink-tools/common/path-safety.mjs"),
-          "/mnt/c/Users/HOANG VINH/OneDrive/Documents/personal-tool/zink-tools/common/path-safety.mjs",
-          "C:/Users/HOANG VINH/OneDrive/Documents/personal-tool/zink-tools/common/path-safety.mjs",
-        ];
-        for (const candidate of candidates) {
-          try {
-            pathSafety = await import(pathToFileURL(candidate).href);
-            if (pathSafety) break;
-          } catch {
-            /* ignore */
+      // T2/T3: quota telemetry is a mandatory governance dependency. Missing
+      // it fails closed — never silently degrading to a fabricated quota.
+      quotaTelemetry = null;
+      const quotaCandidates = [
+        path.resolve(_moduleDir, "../../lib/quota-telemetry.mjs"),
+        path.resolve(
+          process.cwd(),
+          "integrations/openclaw/lib/quota-telemetry.mjs",
+        ),
+      ];
+      for (const candidate of quotaCandidates) {
+        try {
+          const loaded = await import(pathToFileURL(candidate).href);
+          if (typeof loaded?.recordQuotaSnapshot === "function") {
+            quotaTelemetry = loaded;
+            break;
           }
+        } catch {
+          /* next candidate */
         }
       }
+      depsQuotaLoaded =
+        quotaTelemetry !== null &&
+        typeof quotaTelemetry.recordQuotaSnapshot === "function" &&
+        typeof quotaTelemetry.buildSelfQuotaReceipt === "function" &&
+        typeof quotaTelemetry.resolveRuntimeModel === "function";
+
+      // M7-063: resolve shared zink-tools modules from the module directory
+      // first, then the working directory. Machine-specific absolute paths are
+      // prohibited. Every dependency is fail-closed: a missing validator is
+      // GOVERNANCE_DEPENDENCY_MISSING, never a no-op allow.
+      const loadShared = async (relativePath) => {
+        const shared = [
+          path.resolve(_moduleDir, "../../../../" + relativePath),
+          path.resolve(process.cwd(), relativePath),
+        ];
+        for (const candidate of shared) {
+          try {
+            const loaded = await import(pathToFileURL(candidate).href);
+            if (loaded) return loaded;
+          } catch {
+            /* next candidate */
+          }
+        }
+        return null;
+      };
+
+      const pathSafety = await loadShared("zink-tools/common/path-safety.mjs");
       validateArtifactLogicalPath =
-        pathSafety?.validateArtifactLogicalPath ?? (() => {});
+        typeof pathSafety?.validateArtifactLogicalPath === "function"
+          ? pathSafety.validateArtifactLogicalPath
+          : null;
+      depsPathSafetyLoaded = validateArtifactLogicalPath !== null;
 
-      let sqlValidator;
-      try {
-        sqlValidator = await import("../../../../zink-tools/sql/validator.mjs");
-      } catch {
-        const candidates = [
-          path.resolve(process.cwd(), "zink-tools/sql/validator.mjs"),
-          "/mnt/c/Users/HOANG VINH/OneDrive/Documents/personal-tool/zink-tools/sql/validator.mjs",
-          "C:/Users/HOANG VINH/OneDrive/Documents/personal-tool/zink-tools/sql/validator.mjs",
-        ];
-        for (const candidate of candidates) {
-          try {
-            sqlValidator = await import(pathToFileURL(candidate).href);
-            if (sqlValidator) break;
-          } catch {
-            /* ignore */
-          }
-        }
-      }
-      validateSqlQuery = sqlValidator?.validateSqlQuery ?? (() => {});
+      const sqlValidator = await loadShared("zink-tools/sql/validator.mjs");
+      validateSqlQuery =
+        typeof sqlValidator?.validateSqlQuery === "function"
+          ? sqlValidator.validateSqlQuery
+          : null;
+      depsSqlLoaded = validateSqlQuery !== null;
 
-      let n8nAdapter;
-      try {
-        n8nAdapter = await import("../../../../zink-tools/n8n/trigger.mjs");
-      } catch {
-        const candidates = [
-          path.resolve(process.cwd(), "zink-tools/n8n/trigger.mjs"),
-          "/mnt/c/Users/HOANG VINH/OneDrive/Documents/personal-tool/zink-tools/n8n/trigger.mjs",
-          "C:/Users/HOANG VINH/OneDrive/Documents/personal-tool/zink-tools/n8n/trigger.mjs",
-        ];
-        for (const candidate of candidates) {
-          try {
-            n8nAdapter = await import(pathToFileURL(candidate).href);
-            if (n8nAdapter) break;
-          } catch {
-            /* ignore */
-          }
-        }
-      }
-      invokeN8n = n8nAdapter?.invokeN8n ?? (async () => {});
+      const n8nAdapter = await loadShared("zink-tools/n8n/trigger.mjs");
+      invokeN8n =
+        typeof n8nAdapter?.invokeN8n === "function"
+          ? n8nAdapter.invokeN8n
+          : null;
       N8nAdapterError = n8nAdapter?.N8nAdapterError ?? Error;
+      depsN8nLoaded = invokeN8n !== null;
 
       depsLoaded = true;
     })();
   }
   await depsPromise;
+}
+
+/**
+ * The governance dependencies (policy authority, validators, adapters) load
+ * asynchronously. Callers that need the loaded policy — such as the live tool
+ * path — await this before deciding, so a policy that is not yet loaded fails
+ * as "not ready" rather than as a silent pass against an empty projection.
+ */
+export async function whenGovernanceDependenciesReady() {
+  await ensureDependencies();
+  return Object.freeze({ ready: depsLoaded, policyLoaded: depsPolicyLoaded });
 }
 
 function fail(code) {
@@ -200,6 +270,127 @@ export function isUuidV4(str) {
       str,
     )
   );
+}
+
+/**
+ * M7-006: the single canonical n8n invocation decision. Both the guarded
+ * tool-call path and the live OpenClaw tool path resolve the workflow, the
+ * operation, the target and the approval requirement HERE, so an n8n trigger
+ * can never be authorized by one registry lookup on one path and skipped on the
+ * other.
+ *
+ * Fails closed with the canonical reason code; never returns undefined.
+ */
+export function resolveN8nInvocation({
+  workflowId,
+  agentId,
+  toolId = "zink_n8n",
+}) {
+  // The policy module is the single tool authority. Without it there is no
+  // authority to decide against, so this fails closed rather than deciding
+  // against an empty projection.
+  requireDep(depsPolicyLoaded);
+  const workflowDef =
+    typeof workflowId === "string"
+      ? N8N_WORKFLOW_REGISTRY[workflowId]
+      : undefined;
+  // An unregistered workflow id is a capability mismatch, not a pass.
+  if (!workflowDef) fail("RUNTIME_CAPABILITY_MISMATCH");
+  // The workflow allowlist is agent-scoped, exactly as the guarded path applies it.
+  if (!workflowDef.allowedAgents?.includes(agentId)) {
+    fail("AUTH_POLICY_DENIED");
+  }
+  const opPolicy = OPERATION_POLICY[toolId]?.trigger;
+  if (!opPolicy) fail("RUNTIME_CAPABILITY_MISMATCH");
+  return Object.freeze({
+    workflowId,
+    workflowDef,
+    toolId,
+    operationName: "trigger",
+    actualTarget: workflowId,
+    requiresApproval: opPolicy.requiresApproval === true,
+    timeoutMs: workflowDef.timeoutMs,
+  });
+}
+
+/**
+ * M7-006: the single canonical approval binding for one tool invocation. The
+ * guarded path and the live path both bind an approval here, so an approval can
+ * never be required on one path and optional on the other.
+ */
+export function bindInvocationApproval({
+  paths,
+  approvalId,
+  taskId,
+  briefRevision,
+  originPrincipalRef,
+  toolId,
+  operationName,
+  actualTarget,
+  input,
+  runId,
+  currentTime,
+}) {
+  requireDep(depsPolicyLoaded);
+  if (approvalId === undefined || approvalId === null) {
+    fail("AUTH_APPROVAL_REQUIRED");
+  }
+  if (typeof approvalId !== "string" || !isUuidV4(approvalId)) {
+    fail("AUTH_APPROVAL_INVALID");
+  }
+  const record = resolveAuthenticatedApproval(paths, approvalId);
+  if (!record || typeof record !== "object") fail("AUTH_APPROVAL_INVALID");
+  if (originPrincipalRef) {
+    assert(
+      record.owner_principal_ref === originPrincipalRef,
+      "AUTH_APPROVAL_INVALID",
+    );
+  }
+  assert(record.task_id === taskId, "AUTH_APPROVAL_INVALID");
+  assert(
+    String(record.brief_revision) === String(briefRevision),
+    "AUTH_APPROVAL_INVALID",
+  );
+  assert(
+    record.tool_id === toolId && record.operation === operationName,
+    "AUTH_APPROVAL_INVALID",
+  );
+  assert(record.exact_target === actualTarget, "AUTH_APPROVAL_INVALID");
+  const expiryMs = Date.parse(record.expires_at);
+  if (Number.isNaN(expiryMs) || currentTime > expiryMs) {
+    fail("AUTH_APPROVAL_EXPIRED");
+  }
+  const materialParameters = (() => {
+    requireDep(depsApprovalLoaded);
+    return deriveApprovalMaterialParameters(toolId, operationName, input);
+  })();
+  const expectedDigest = (() => {
+    requireDep(depsApprovalLoaded);
+    return deriveApprovalScopeDigest({
+      task_id: record.task_id,
+      brief_revision: record.brief_revision,
+      tool_id: record.tool_id,
+      operation: record.operation,
+      exact_target: record.exact_target,
+      material_parameters: materialParameters,
+      expires_at: record.expires_at,
+    });
+  })();
+  assert(
+    record.approval_scope_digest === expectedDigest,
+    "AUTH_APPROVAL_INVALID",
+  );
+  const claimResult = consumeApprovalAtomically(paths, approvalId, {
+    task_id: record.task_id,
+    brief_revision: record.brief_revision,
+    tool_id: record.tool_id,
+    operation: record.operation,
+    exact_target: record.exact_target,
+    approval_scope_digest: record.approval_scope_digest,
+    run_id: runId,
+  });
+  if (!claimResult) fail("AUTH_APPROVAL_REPLAYED");
+  return expiryMs;
 }
 
 export function deepFreeze(object) {
@@ -286,213 +477,14 @@ export function contractOnlySeam(toolId, params, decisionContext) {
   );
 }
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const contractsDir = path.resolve(
-  __dirname,
-  "../../../../zink-tools/contracts",
-);
-
-const schemaCache = new Map();
-function loadContractSchema(name) {
-  let cleanName = name;
-  if (cleanName.startsWith("tools/")) cleanName = cleanName.slice(6);
-  if (cleanName.endsWith(".schema.json")) cleanName = cleanName.slice(0, -12);
-
-  if (!schemaCache.has(cleanName)) {
-    let filePath = path.join(contractsDir, `${cleanName}.schema.json`);
-    if (!existsSync(filePath)) {
-      filePath = path.join(contractsDir, "tools", `${cleanName}.schema.json`);
-    }
-    if (!existsSync(filePath)) {
-      throw new Error("SCHEMA_VALIDATION_FAILED");
-    }
-    schemaCache.set(cleanName, JSON.parse(readFileSync(filePath, "utf8")));
-  }
-  return schemaCache.get(cleanName);
-}
-
-function typeMatches(type, value) {
-  if (type === "null") return value === null;
-  if (type === "array") return Array.isArray(value);
-  if (type === "object")
-    return value !== null && typeof value === "object" && !Array.isArray(value);
-  if (type === "integer") return Number.isSafeInteger(value);
-  if (type === "number")
-    return typeof value === "number" && Number.isFinite(value);
-  if (type === "string" || type === "boolean") return typeof value === type;
-  return false;
-}
-
-function resolveRef(ref, currentSchemaName) {
-  const [target, pointer = ""] = ref.split("#");
-  const schemaName = target ? target : currentSchemaName;
-  let root = loadContractSchema(schemaName);
-  let cur = root;
-  if (pointer && pointer.startsWith("/")) {
-    for (const part of pointer.split("/").slice(1)) {
-      const key = part.replaceAll("~1", "/").replaceAll("~0", "~");
-      if (!cur || typeof cur !== "object" || !Object.hasOwn(cur, key)) {
-        throw new Error("SCHEMA_VALIDATION_FAILED");
-      }
-      cur = cur[key];
-    }
-  }
-  return { schema: cur, schemaName };
-}
-
-function checkSchema(schema, value, currentSchemaName, depth = 0) {
-  if (depth > 64) throw new Error("SCHEMA_VALIDATION_FAILED");
-  if (schema === true) return;
-  if (schema === false || schema === undefined || value === undefined)
-    throw new Error("SCHEMA_VALIDATION_FAILED");
-
-  if (schema.$ref) {
-    const { schema: targetSchema, schemaName: newSchemaName } = resolveRef(
-      schema.$ref,
-      currentSchemaName,
-    );
-    checkSchema(targetSchema, value, newSchemaName, depth + 1);
-    return;
-  }
-
-  if (schema.type) {
-    const types = Array.isArray(schema.type) ? schema.type : [schema.type];
-    if (!types.some((t) => typeMatches(t, value))) {
-      throw new Error("SCHEMA_VALIDATION_FAILED");
-    }
-  }
-
-  if (Object.hasOwn(schema, "const")) {
-    if (JSON.stringify(value) !== JSON.stringify(schema.const)) {
-      throw new Error("SCHEMA_VALIDATION_FAILED");
-    }
-  }
-
-  if (schema.enum) {
-    if (
-      !schema.enum.some(
-        (item) => JSON.stringify(item) === JSON.stringify(value),
-      )
-    ) {
-      throw new Error("SCHEMA_VALIDATION_FAILED");
-    }
-  }
-
-  if (schema.oneOf) {
-    let matchCount = 0;
-    for (const branch of schema.oneOf) {
-      try {
-        checkSchema(branch, value, currentSchemaName, depth + 1);
-        matchCount++;
-      } catch {
-        void 0;
-      }
-    }
-    if (matchCount !== 1) {
-      throw new Error("SCHEMA_VALIDATION_FAILED");
-    }
-  }
-
-  if (schema.allOf) {
-    for (const branch of schema.allOf) {
-      checkSchema(branch, value, currentSchemaName, depth + 1);
-    }
-  }
-
-  if (schema.anyOf) {
-    let matched = false;
-    for (const branch of schema.anyOf) {
-      try {
-        checkSchema(branch, value, currentSchemaName, depth + 1);
-        matched = true;
-        break;
-      } catch {
-        void 0;
-      }
-    }
-    if (!matched) throw new Error("SCHEMA_VALIDATION_FAILED");
-  }
-
-  if (typeof value === "string") {
-    if (schema.minLength !== undefined && [...value].length < schema.minLength)
-      throw new Error("SCHEMA_VALIDATION_FAILED");
-    if (
-      schema.maxLength !== undefined &&
-      Buffer.byteLength(value, "utf8") > schema.maxLength
-    )
-      throw new Error("SCHEMA_VALIDATION_FAILED");
-    if (schema.pattern && !new RegExp(schema.pattern, "u").test(value))
-      throw new Error("SCHEMA_VALIDATION_FAILED");
-  }
-
-  if (typeof value === "number") {
-    if (schema.minimum !== undefined && value < schema.minimum)
-      throw new Error("SCHEMA_VALIDATION_FAILED");
-    if (schema.maximum !== undefined && value > schema.maximum)
-      throw new Error("SCHEMA_VALIDATION_FAILED");
-  }
-
-  if (Array.isArray(value)) {
-    if (schema.minItems !== undefined && value.length < schema.minItems)
-      throw new Error("SCHEMA_VALIDATION_FAILED");
-    if (schema.maxItems !== undefined && value.length > schema.maxItems)
-      throw new Error("SCHEMA_VALIDATION_FAILED");
-    if (schema.uniqueItems) {
-      const set = new Set(value.map((x) => JSON.stringify(x)));
-      if (set.size !== value.length)
-        throw new Error("SCHEMA_VALIDATION_FAILED");
-    }
-    if (schema.items) {
-      for (const item of value) {
-        checkSchema(schema.items, item, currentSchemaName, depth + 1);
-      }
-    }
-  } else if (value !== null && typeof value === "object") {
-    const keys = Object.keys(value);
-    if (
-      schema.minProperties !== undefined &&
-      keys.length < schema.minProperties
-    )
-      throw new Error("SCHEMA_VALIDATION_FAILED");
-    if (
-      schema.maxProperties !== undefined &&
-      keys.length > schema.maxProperties
-    )
-      throw new Error("SCHEMA_VALIDATION_FAILED");
-    if (schema.required) {
-      for (const req of schema.required) {
-        if (!Object.hasOwn(value, req))
-          throw new Error("SCHEMA_VALIDATION_FAILED");
-      }
-    }
-    const props = schema.properties || {};
-    for (const key of keys) {
-      if (Object.hasOwn(props, key)) {
-        checkSchema(props[key], value[key], currentSchemaName, depth + 1);
-      } else {
-        if (schema.additionalProperties === false) {
-          throw new Error("SCHEMA_VALIDATION_FAILED");
-        } else if (
-          schema.additionalProperties &&
-          typeof schema.additionalProperties === "object"
-        ) {
-          checkSchema(
-            schema.additionalProperties,
-            value[key],
-            currentSchemaName,
-            depth + 1,
-          );
-        }
-      }
-    }
-  }
-}
-
-export function validateContractSchema(schemaName, value) {
-  const rootSchema = loadContractSchema(schemaName);
-  checkSchema(rootSchema, value, schemaName);
-  return true;
-}
+// C06: Re-export canonical validator from schema.mjs (100% dialect equivalence)
+export {
+  validateContractSchema,
+  loadContractSchema,
+  checkSchema,
+  stableJson,
+  typeMatches,
+};
 
 export function resolveAuthenticatedApproval(paths, approvalId) {
   if (typeof approvalId !== "string" || !isUuidV4(approvalId)) {
@@ -504,18 +496,24 @@ export function resolveAuthenticatedApproval(paths, approvalId) {
     validateApprovalRecord8Fields(rec);
     return rec;
   }
+  // (A record that exists but fails the contract is a hard denial above, not a
+  // fall-through to a later source.)
   if (paths && paths.root) {
     const approvalsFile = path.join(paths.root, "approvals.json");
     if (existsSync(approvalsFile)) {
+      let data;
       try {
-        const data = JSON.parse(readFileSync(approvalsFile, "utf8"));
-        if (data && data[approvalId]) {
-          const rec = data[approvalId];
-          validateApprovalRecord8Fields(rec);
-          return rec;
-        }
+        data = JSON.parse(readFileSync(approvalsFile, "utf8"));
       } catch {
-        void 0;
+        data = undefined;
+      }
+      if (data && data[approvalId]) {
+        // An approval record that EXISTS but does not satisfy the canonical
+        // contract is an explicit invalid-approval denial, not an absent one:
+        // silently degrading it to "not found" hides a tampered record behind a
+        // generic refusal.
+        validateApprovalRecord8Fields(data[approvalId]);
+        return data[approvalId];
       }
     }
     const individualApprovalFile = path.join(
@@ -524,25 +522,21 @@ export function resolveAuthenticatedApproval(paths, approvalId) {
       `${approvalId}.json`,
     );
     if (existsSync(individualApprovalFile)) {
-      try {
-        const rec = JSON.parse(readFileSync(individualApprovalFile, "utf8"));
-        validateApprovalRecord8Fields(rec);
-        return rec;
-      } catch {
-        void 0;
-      }
+      const rec = JSON.parse(readFileSync(individualApprovalFile, "utf8"));
+      validateApprovalRecord8Fields(rec);
+      return rec;
     }
+    let snapshot;
     try {
-      const snapshot = readSnapshot(paths);
-      for (const task of Object.values(snapshot.tasks || {})) {
-        if (task.approvals && task.approvals[approvalId]) {
-          const rec = task.approvals[approvalId];
-          validateApprovalRecord8Fields(rec);
-          return rec;
-        }
-      }
+      snapshot = readSnapshot(paths);
     } catch {
-      void 0;
+      snapshot = undefined;
+    }
+    for (const task of Object.values(snapshot?.tasks || {})) {
+      if (task.approvals && task.approvals[approvalId]) {
+        validateApprovalRecord8Fields(task.approvals[approvalId]);
+        return task.approvals[approvalId];
+      }
     }
   }
   return null;
@@ -563,6 +557,15 @@ function validateApprovalRecord8Fields(record) {
     if (!record || record[field] === undefined || record[field] === null) {
       throw new Error("AUTH_APPROVAL_INVALID");
     }
+  }
+  // The presence check above is a shape assertion; the canonical contract is
+  // the authority on the record's actual shape and value formats. Validating
+  // here means the guard's approval path can never accept a record the
+  // published contract would refuse.
+  try {
+    validateContract("approval-request", record);
+  } catch {
+    throw new Error("AUTH_APPROVAL_INVALID");
   }
 }
 
@@ -587,52 +590,103 @@ export function consumeApprovalAtomically(paths, approvalId, claimScope) {
     return true;
   }
 
-  const lock = path.join(paths.root, "writer.lock");
-  const deadline = Date.now() + 5000;
-  let acquired = false;
-  while (Date.now() < deadline) {
-    try {
-      mkdirSync(lock, { mode: 0o700 });
-      acquired = true;
-      break;
-    } catch (e) {
-      if (e?.code !== "EEXIST") break;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-    }
-  }
-  if (!acquired) {
-    throw new Error("EXECUTION_STATE_UNKNOWN");
-  }
+  const lock = lockDirFor(paths.root, "writer.lock");
   try {
-    const consumedFile = path.join(paths.root, "consumed-approvals.json");
-    let consumed = {};
-    if (existsSync(consumedFile)) {
-      try {
-        consumed = JSON.parse(readFileSync(consumedFile, "utf8"));
-      } catch {
-        consumed = {};
+    return withFileLockSync(lock, () => {
+      const consumedFile = path.join(paths.root, "consumed-approvals.json");
+      let consumed = {};
+      if (existsSync(consumedFile)) {
+        // M7-024: corrupt one-time-approval storage fails closed. A corrupt
+        // replay-protection store is never reinterpreted as empty history.
+        try {
+          consumed = JSON.parse(readFileSync(consumedFile, "utf8"));
+        } catch (err) {
+          throw new Error("EXECUTION_STATE_UNKNOWN", { cause: err });
+        }
+        if (
+          !consumed ||
+          typeof consumed !== "object" ||
+          Array.isArray(consumed)
+        ) {
+          throw new Error("EXECUTION_STATE_UNKNOWN");
+        }
       }
+      if (consumed[approvalId] || memConsumed.has(approvalId)) {
+        return false;
+      }
+      consumed[approvalId] = {
+        consumed_at: new Date().toISOString(),
+        claimScope,
+      };
+      memConsumed.set(approvalId, consumed[approvalId]);
+      writeFileSync(consumedFile, JSON.stringify(consumed, null, 2), "utf8");
+      return true;
+    });
+  } catch (err) {
+    if (err?.code === "FILE_LOCK_BUSY") {
+      throw new Error("EXECUTION_STATE_UNKNOWN", { cause: err });
     }
-    if (consumed[approvalId] || memConsumed.has(approvalId)) {
-      return false;
-    }
-    consumed[approvalId] = {
-      consumed_at: new Date().toISOString(),
-      claimScope,
-    };
-    memConsumed.set(approvalId, consumed[approvalId]);
-    writeFileSync(consumedFile, JSON.stringify(consumed, null, 2), "utf8");
-    return true;
-  } finally {
-    try {
-      rmdirSync(lock);
-    } catch {
-      void 0;
-    }
+    throw err;
   }
 }
 
-export function createGovernanceGuard({ paths, manifestFor }) {
+export function createGovernanceGuard({
+  paths,
+  manifestFor,
+  _snapshotOverride,
+  quotaStore = null,
+}) {
+  const getSnapshot = () => _snapshotOverride || readSnapshot(paths);
+  // T2/T3: process-local, agent-scoped. Never persisted; the host runtime owns
+  // the canonical provider-usage source and publishes snapshots into it.
+  // The store is created inline rather than via the telemetry module's factory
+  // because the guard is constructible BEFORE the async dependency load
+  // completes, and the store must exist unconditionally from construction.
+  const quota = quotaStore ?? {
+    snapshots: new Map(),
+    latches: new Map(),
+  };
+
+  /**
+   * T2: record one provider-usage snapshot for the agent that owns it.
+   * Rejects cross-agent, malformed and non-canonical payloads. No I/O.
+   */
+  async function recordQuota(snapshot) {
+    await ensureDependencies();
+    requireQuotaDep();
+    return quotaTelemetry.recordQuotaSnapshot(quota, snapshot);
+  }
+
+  /**
+   * T2: self-scoped read-only receipt. No parameter can widen the result to
+   * another agent.
+   */
+  async function selfQuotaReceipt(agentId, now = Date.now()) {
+    await ensureDependencies();
+    requireQuotaDep();
+    return quotaTelemetry.buildSelfQuotaReceipt(quota, agentId, now);
+  }
+
+  /**
+   * T3: run-scoped model resolution. Performs no persisted write; the returned
+   * model applies to the current run only and is never pinned to the session.
+   */
+  async function resolveRunModel({
+    agentId,
+    sessionKey,
+    runId,
+    now = Date.now(),
+  }) {
+    await ensureDependencies();
+    requireQuotaDep();
+    const owner = findSession(getSnapshot(), sessionKey, runId);
+    assert(
+      (owner.delegation?.agent_id ?? owner.task.root_agent_id) === agentId,
+      "LINEAGE_MISMATCH",
+    );
+    return quotaTelemetry.resolveRuntimeModel({ store: quota, agentId, now });
+  }
+
   function admitInitialBrief(owner, context, text) {
     assert(
       !owner.delegation && context.agentId === owner.task.root_agent_id,
@@ -754,9 +808,22 @@ export function createGovernanceGuard({ paths, manifestFor }) {
   }
 
   return {
+    // T2: agent-scoped read-only quota receipt. No model-callable tool, no
+    // credential material, no other agent's data.
+    selfQuotaReceipt(agentId, now) {
+      return selfQuotaReceipt(agentId, now);
+    },
+    // T2: host-owned provider-usage publication seam.
+    recordQuota(snapshot) {
+      return recordQuota(snapshot);
+    },
+    // T3: run-scoped model resolution. Never writes session state.
+    resolveRunModel(args) {
+      return resolveRunModel(args);
+    },
     beforeRunEnd(event, context) {
       const owner = findSession(
-        readSnapshot(paths),
+        getSnapshot(),
         context.sessionKey,
         context.runId,
       );
@@ -767,11 +834,24 @@ export function createGovernanceGuard({ paths, manifestFor }) {
       );
       if (owner.delegation || event.yielded === true) return { allow: true };
       assert(event.success === true, "EXECUTION_STATE_UNKNOWN");
-      assert(
-        owner.task.workflow_status === "ACTIVE" &&
-          owner.task.brief_state === "ACTIVE",
-        "INVALID_STATE_TRANSITION",
-      );
+      // M7-020: the root result closes governed work, so it requires an active
+      // brief. The approval requirement belongs on the spawn RESERVATION, which
+      // is the authority; a task that never activated a brief keeps the
+      // pre-approval ACTIVE requirement.
+      if (owner.task.nodes.length > 0) {
+        assert(
+          ["ACTIVE", "QUEUED", "EXECUTING"].includes(
+            owner.task.workflow_status,
+          ) && owner.task.brief_state === "ACTIVE",
+          "INVALID_STATE_TRANSITION",
+        );
+      } else {
+        assert(
+          owner.task.workflow_status === "ACTIVE" &&
+            owner.task.brief_state === "ACTIVE",
+          "INVALID_STATE_TRANSITION",
+        );
+      }
       const message = event.lastAssistant;
       assert(
         message?.role === "assistant" && Array.isArray(message.content),
@@ -802,67 +882,60 @@ export function createGovernanceGuard({ paths, manifestFor }) {
         trimmed = trimmed.trim();
       }
 
-      let payload = null;
+      let payload;
       try {
         payload = JSON.parse(trimmed);
       } catch {
-        const firstBrace = trimmed.indexOf("{");
-        const lastBrace = trimmed.lastIndexOf("}");
-        if (firstBrace !== -1 && lastBrace > firstBrace) {
-          try {
-            payload = JSON.parse(trimmed.slice(firstBrace, lastBrace + 1));
-          } catch {
-            payload = null;
-          }
-        }
+        payload = null;
       }
 
-      if (
-        !payload ||
-        typeof payload !== "object" ||
-        Array.isArray(payload) ||
-        !payload.outcome_claim
+      assert(
+        payload &&
+          typeof payload === "object" &&
+          !Array.isArray(payload) &&
+          typeof payload.outcome_claim === "string",
+        "SCHEMA_INVALID",
+      );
+
+      if (!payload.schema_version) payload.schema_version = SCHEMA_VERSION;
+      if (!payload.governance_version)
+        payload.governance_version = GOVERNANCE_VERSION;
+      if (!payload.assumptions) payload.assumptions = [];
+      if (!payload.limitations) payload.limitations = [];
+      if (!payload.requested_prerequisites)
+        payload.requested_prerequisites = [];
+      if (!payload.agent_self_validation) {
+        payload.agent_self_validation =
+          "[UNVERIFIED_SELF_ASSERTION] Model self-claim: unverified";
+      } else if (
+        payload.governance_version !== "m7-t2-r12" &&
+        typeof payload.agent_self_validation === "string" &&
+        !payload.agent_self_validation.startsWith("[UNVERIFIED_SELF_ASSERTION]")
       ) {
-        const safeOutput = text.length > 16384 ? text.slice(0, 16384) : text;
-        payload = {
-          schema_version: SCHEMA_VERSION,
-          governance_version: GOVERNANCE_VERSION,
-          outcome_claim: "COMPLETE",
-          reason_claim: "NONE",
-          output: sanitizeDelegationText(safeOutput),
-          assumptions: [],
-          limitations: [],
-          requested_prerequisites: [],
-          agent_self_validation: "Direct interactive conversational response",
-        };
-      } else {
-        if (!payload.schema_version) payload.schema_version = SCHEMA_VERSION;
-        if (!payload.governance_version)
-          payload.governance_version = GOVERNANCE_VERSION;
-        if (!payload.assumptions) payload.assumptions = [];
-        if (!payload.limitations) payload.limitations = [];
-        if (!payload.requested_prerequisites)
-          payload.requested_prerequisites = [];
-        if (!payload.agent_self_validation) {
-          payload.agent_self_validation = "Model validated output";
-        }
-        if (typeof payload.output !== "string") {
-          payload.output = String(payload.output ?? "");
-        }
-        if (payload.output.length > 16384) {
-          payload.output = payload.output.slice(0, 16384);
-        }
-        payload.output = sanitizeDelegationText(payload.output);
-        payload.agent_self_validation = sanitizeDelegationText(
-          payload.agent_self_validation,
-        );
-        payload.assumptions = payload.assumptions.map((a) =>
-          sanitizeDelegationText(String(a)),
-        );
-        payload.limitations = payload.limitations.map((l) =>
-          sanitizeDelegationText(String(l)),
+        payload.agent_self_validation = `[UNVERIFIED_SELF_ASSERTION] ${payload.agent_self_validation}`;
+      }
+      if (typeof payload.output !== "string") {
+        payload.output = String(payload.output ?? "");
+      }
+      if (payload.output.length > 16384) {
+        payload.output = payload.output.slice(0, 16384);
+      }
+      payload.output = sanitizeDelegationText(payload.output);
+      payload.agent_self_validation = sanitizeDelegationText(
+        payload.agent_self_validation,
+      );
+      if (payload.agent_self_validation.length > 4096) {
+        payload.agent_self_validation = payload.agent_self_validation.slice(
+          0,
+          4096,
         );
       }
+      payload.assumptions = payload.assumptions.map((a) =>
+        sanitizeDelegationText(String(a)),
+      );
+      payload.limitations = payload.limitations.map((l) =>
+        sanitizeDelegationText(String(l)),
+      );
 
       validateAgentClaim(payload);
       for (const field of [
@@ -892,7 +965,7 @@ export function createGovernanceGuard({ paths, manifestFor }) {
     },
 
     beforeRun(_event, context) {
-      const snapshot = readSnapshot(paths);
+      const snapshot = getSnapshot();
       let owner;
       try {
         owner = findSession(snapshot, context.sessionKey, context.runId);
@@ -904,12 +977,33 @@ export function createGovernanceGuard({ paths, manifestFor }) {
           );
         });
         assert(candidates.length === 1, "EXECUTION_STATE_UNKNOWN");
-        const [task_id] = candidates[0];
+        const [task_id, task] = candidates[0];
+        const entry = task.continuations?.[context.runId];
         assert(
-          context.inputProvenance?.kind === "inter_session" &&
-            context.inputProvenance.sourceTool === "subagent_announce",
+          entry &&
+            context.inputProvenance?.kind === "inter_session" &&
+            context.inputProvenance.sourceTool === "subagent_announce" &&
+            context.inputProvenance.sourceSessionKey ===
+              entry.source_session_key,
           "LINEAGE_MISMATCH",
         );
+        // E13: Cryptographically bind inter-session trust to the trigger sender event & accepted payload digest
+        const trigger = Object.values(task.delegations || {}).find(
+          (run) => run.native_run_id === entry.trigger_run_id,
+        );
+        if (entry.trigger_run_id !== entry.previous_run_id) {
+          assert(
+            trigger && trigger.accepted_payload_digest,
+            "LINEAGE_MISMATCH",
+          );
+          if (context.inputProvenance.senderDigest) {
+            assert(
+              context.inputProvenance.senderDigest ===
+                trigger.accepted_payload_digest,
+              "LINEAGE_MISMATCH",
+            );
+          }
+        }
         const next = recordWorkflowEvent(
           paths,
           "WORKFLOW_CONTINUATION_STARTED",
@@ -923,9 +1017,14 @@ export function createGovernanceGuard({ paths, manifestFor }) {
         );
         owner = findSession(next, context.sessionKey, context.runId);
       }
+      // M7-020: this is RUN ADMISSION, not work authorization. A native run may
+      // enter a task whether or not the work has been approved; the approval
+      // requirement lives on the spawn RESERVATION, which is where the bypass
+      // seam was. Admission is refused only for a terminal or unbriefed task.
       assert(
-        owner.task.workflow_status === "ACTIVE" &&
-          owner.task.brief_state === "ACTIVE",
+        ["ACTIVE", "QUEUED", "EXECUTING"].includes(
+          owner.task.workflow_status,
+        ) && owner.task.brief_state === "ACTIVE",
         "INVALID_STATE_TRANSITION",
       );
       assert(
@@ -989,9 +1088,13 @@ export function createGovernanceGuard({ paths, manifestFor }) {
 
       // 3. Tool Classification & Built-in Pass-Through
       if (OPENCLAW_BUILT_IN_TOOL_IDS.includes(candidateToolId)) {
+        // T1: one canonical tool authority. Every built-in tool, including
+        // session_status, is checked against the same BUILT_IN_TOOL_POLICY
+        // projection from policy.mjs. There is no exempt tool. A missing
+        // policy module fails closed rather than defaulting to a local copy.
+        requireDep(depsPolicyLoaded);
         if (
-          candidateToolId !== "session_status" &&
-          !BUILT_IN_TOOL_POLICY[agentId]?.includes(candidateToolId)
+          !policy?.BUILT_IN_TOOL_POLICY?.[agentId]?.includes(candidateToolId)
         ) {
           fail("AUTH_POLICY_DENIED");
         }
@@ -1012,10 +1115,20 @@ export function createGovernanceGuard({ paths, manifestFor }) {
             context.agentId,
           "LINEAGE_MISMATCH",
         );
-        assert(
-          task.workflow_status === "ACTIVE" && task.brief_state === "ACTIVE",
-          "INVALID_STATE_TRANSITION",
-        );
+        // M7-020: a spawn reservation is a POST-approval event, matching the
+        // reducer. The pre-flight check states the same condition the
+        // authoritative reservation will enforce, so the two cannot disagree
+        // about whether the work was approved. Read-only session inspection is
+        // not governed work and is unaffected.
+        if (event.toolName === "sessions_spawn") {
+          assert(
+            typeof task.approved_at === "string" &&
+              !Number.isNaN(Date.parse(task.approved_at)) &&
+              ["QUEUED", "EXECUTING"].includes(task.workflow_status) &&
+              task.brief_state === "ACTIVE",
+            "AUTH_APPROVAL_REQUIRED",
+          );
+        }
         if (owner.delegation)
           assert(
             owner.delegation.run_state === "RUNNING" &&
@@ -1058,15 +1171,27 @@ export function createGovernanceGuard({ paths, manifestFor }) {
             ["session_status", "agents_list"].includes(event.toolName),
             "POLICY_DENIED",
           );
-          assert(
-            !event.params ||
-              Object.keys(event.params).length === 0 ||
-              (event.toolName === "session_status" &&
-                (event.params.sessionKey === undefined ||
-                  event.params.sessionKey === "current" ||
-                  event.params.sessionKey === context.sessionKey)),
-            "POLICY_DENIED",
-          );
+          if (event.toolName === "session_status") {
+            // T1: session_status is read-only status inspection. Any argument
+            // that could mutate session state — `model` being the session
+            // override vector — is denied for EVERY agent, Main included.
+            assert(
+              policy?.isSessionStatusReadOnlyArgs(event.params),
+              "POLICY_DENIED",
+            );
+            assert(
+              !event.params ||
+                event.params.sessionKey === undefined ||
+                event.params.sessionKey === "current" ||
+                event.params.sessionKey === context.sessionKey,
+              "POLICY_DENIED",
+            );
+          } else {
+            assert(
+              !event.params || Object.keys(event.params).length === 0,
+              "POLICY_DENIED",
+            );
+          }
           return { allow: true };
         }
         const params = event.params;
@@ -1100,6 +1225,15 @@ export function createGovernanceGuard({ paths, manifestFor }) {
           (item) => item.node_id === proposal.node_id,
         );
         assert(node && node.agent_id === params.agentId, "UNAUTHORIZED_TARGET");
+        // Spawn topology comes from the canonical AGENT_SPAWN_POLICY, not a
+        // local copy. The previous inline map was a hand-maintained duplicate:
+        // changing the policy would have changed the OpenClaw config and the
+        // governance manifest while leaving enforcement unchanged.
+        const allowedSpawnTargets = AGENT_SPAWN_POLICY[context.agentId] ?? [];
+        assert(
+          allowedSpawnTargets.includes(params.agentId),
+          "UNAUTHORIZED_TARGET",
+        );
         if (owner.delegation)
           assert(
             node.stack_id === owner.delegation.stack_id,
@@ -1121,23 +1255,43 @@ export function createGovernanceGuard({ paths, manifestFor }) {
                 item.node_id === node.node_id,
             ).length + 1,
           remaining_task_budget: {
-            revisions: 16 - task.revisions_used,
+            // The resource ceilings come from the canonical BUDGETS table, not
+            // from literals restated here. The m7-t2-r12 legacy carve-out is
+            // expressed as a named delta so the ceiling itself stays in one
+            // place: a change to BUDGETS must change what is reported.
+            revisions: BUDGETS.maxBriefRevisionsPerTask - task.revisions_used,
             transitions:
-              10 -
+              BUDGETS.maxStackTransitionsPerTask -
               task.transitions_used -
               (context.agentId === "main" &&
               task.current_stack &&
               task.current_stack !== node.stack_id
                 ? 1
                 : 0),
-            delegated_runs: 71 - task.delegated_runs_used,
+            delegated_runs:
+              BUDGETS.maxTotalDelegatedRunsPerTask -
+              LEGACY_DELEGATED_RUN_CARVE_OUT[
+                proposal.governance_version ?? ""
+              ] -
+              task.delegated_runs_used,
           },
           requested_output_schema: "agent-result-payload.schema.json",
         };
-        handoff.delegation_id = deriveDelegationId({
-          ...handoff,
+        // M8-055: the handoff id and the reservation id come from the same
+        // canonical builder over the same identity tuple.
+        handoff.delegation_id = buildSpawnProposal({
+          task_id: owner.task_id,
+          brief_revision: task.brief_revision,
+          node_id: node.node_id,
           agent_id: params.agentId,
-        });
+          parent_agent_id: context.agentId,
+          parent_session_key: context.sessionKey,
+          parent_run_id: context.runId,
+          tool_call_id: event.toolCallId,
+          turn: event.turn,
+          attempt: handoff.attempt,
+          expected_governance_hash: handoff.expected_governance_hash,
+        }).delegation_id;
         assert(
           Object.values(handoff.remaining_task_budget).every(
             (value) => value >= 0,
@@ -1165,7 +1319,10 @@ export function createGovernanceGuard({ paths, manifestFor }) {
               canonicalHash("zink-reference-v1", ref),
             "REFERENCE_INVALID",
           );
-        const spec = {
+        // M8-055: this governed route and the live adapter route both build
+        // the reservation through the same canonical builder, so the
+        // delegation id and request digest cannot diverge between them.
+        const spec = buildSpawnProposal({
           task_id: owner.task_id,
           brief_revision: task.brief_revision,
           node_id: node.node_id,
@@ -1176,12 +1333,10 @@ export function createGovernanceGuard({ paths, manifestFor }) {
           tool_call_id: event.toolCallId,
           turn: event.turn,
           attempt: handoff.attempt,
-          delegation_id: handoff.delegation_id,
           expected_governance_hash: handoff.expected_governance_hash,
-          request_digest: canonicalHash("zink-delegation-id-v1", handoff),
-        };
+        });
         assert(
-          deriveDelegationId(spec) === spec.delegation_id,
+          spec.delegation_id === handoff.delegation_id,
           "LINEAGE_MISMATCH",
         );
         recordWorkflowEvent(paths, "WORKFLOW_SPAWN_RESERVED", spec);
@@ -1236,6 +1391,7 @@ export function createGovernanceGuard({ paths, manifestFor }) {
         candidateToolId === "zink_excel" &&
         validatedParams.input?.file_path
       ) {
+        requireDep(depsPathSafetyLoaded);
         try {
           validateArtifactLogicalPath(validatedParams.input.file_path);
         } catch {
@@ -1246,6 +1402,7 @@ export function createGovernanceGuard({ paths, manifestFor }) {
         candidateToolId === "zink_python" &&
         validatedParams.input?.entrypoint
       ) {
+        requireDep(depsPathSafetyLoaded);
         try {
           validateArtifactLogicalPath(validatedParams.input.entrypoint);
         } catch {
@@ -1253,9 +1410,20 @@ export function createGovernanceGuard({ paths, manifestFor }) {
         }
       }
 
-      // 7. Monotonic Authorization Verification
-      if (!TOOL_POLICY[agentId]?.includes(candidateToolId)) {
-        fail("AUTH_POLICY_DENIED");
+      // 7. Monotonic Authorization Verification (M7-003/M7-004: the same
+      // canonical resolver as every other tool-ingress path — matrix
+      // levels enforced, delegation never executes directly).
+      {
+        requireDep(typeof policy?.evaluateCapabilityAccess === "function");
+        const directAccess = policy.evaluateCapabilityAccess(
+          agentId,
+          candidateToolId,
+          null,
+          "execute",
+        );
+        if (!directAccess.allowed || directAccess.level === "delegate") {
+          fail("AUTH_POLICY_DENIED");
+        }
       }
 
       // 8. Effective Constraints Computation
@@ -1263,10 +1431,13 @@ export function createGovernanceGuard({ paths, manifestFor }) {
         (validatedParams.constraints?.timeout_seconds ?? 300) * 1000;
       let workflowLimitMs = Infinity;
       if (candidateToolId === "zink_n8n") {
-        const workflowDef =
-          N8N_WORKFLOW_REGISTRY[validatedParams.input.workflow_id];
-        if (!workflowDef) fail("RUNTIME_CAPABILITY_MISMATCH");
-        workflowLimitMs = workflowDef.timeoutMs;
+        // M7-006: one canonical registry resolution for both paths.
+        const invocation = resolveN8nInvocation({
+          workflowId: validatedParams.input.workflow_id,
+          agentId,
+          toolId: candidateToolId,
+        });
+        workflowLimitMs = invocation.timeoutMs;
       }
       const effective_timeout_ms = Math.min(
         callerTimeoutMs,
@@ -1290,6 +1461,7 @@ export function createGovernanceGuard({ paths, manifestFor }) {
 
       if (authorizationMode === "read_only") {
         // Read-only path (zink_sql)
+        requireDep(depsSqlLoaded);
         validateSqlQuery(
           validatedParams.input.query,
           validatedParams.input.parameters,
@@ -1422,8 +1594,13 @@ export function createGovernanceGuard({ paths, manifestFor }) {
           );
         }
         if (candidateToolId === "zink_n8n") {
-          const wf = N8N_WORKFLOW_REGISTRY[validatedParams.input.workflow_id];
-          assert(wf?.allowedAgents?.includes(agentId), "AUTH_POLICY_DENIED");
+          // M7-006: the registry and agent allowlist are resolved by the one
+          // canonical helper the live path also uses.
+          resolveN8nInvocation({
+            workflowId: validatedParams.input.workflow_id,
+            agentId,
+            toolId: candidateToolId,
+          });
         }
 
         const operationName =
@@ -1450,73 +1627,24 @@ export function createGovernanceGuard({ paths, manifestFor }) {
         if (!opPolicy) fail("RUNTIME_CAPABILITY_MISMATCH");
 
         if (opPolicy.requiresApproval === true) {
-          const approvalId = validatedParams.approval_id;
-          if (approvalId === undefined || approvalId === null)
-            fail("AUTH_APPROVAL_REQUIRED");
-          if (typeof approvalId !== "string" || !isUuidV4(approvalId))
-            fail("AUTH_APPROVAL_INVALID");
-
-          const record = resolveAuthenticatedApproval(paths, approvalId);
-          if (!record || typeof record !== "object")
-            fail("AUTH_APPROVAL_INVALID");
-          const expectedPrincipal =
-            ownerSession.task.origin_principal_ref ??
-            ownerSession.task.origin?.origin_principal_ref ??
-            ownerSession.task.root_principal_ref;
-          if (expectedPrincipal) {
-            assert(
-              record.owner_principal_ref === expectedPrincipal,
-              "AUTH_APPROVAL_INVALID",
-            );
-          }
-          assert(
-            record.task_id === delTaskId &&
-              String(record.brief_revision) ===
-                String(ownerSession.task.brief_revision),
-            "AUTH_APPROVAL_INVALID",
-          );
-          assert(
-            record.tool_id === candidateToolId &&
-              record.operation === operationName,
-            "AUTH_APPROVAL_INVALID",
-          );
-          assert(record.exact_target === actualTarget, "AUTH_APPROVAL_INVALID");
-
-          const expiryMs = Date.parse(record.expires_at);
-          if (Number.isNaN(expiryMs) || currentTime > expiryMs) {
-            fail("AUTH_APPROVAL_EXPIRED");
-          }
-          approvalExpiryMs = expiryMs;
-
-          const materialParameters = deriveApprovalMaterialParameters(
-            candidateToolId,
+          // M7-006: the approval binding lives in one canonical helper, so the
+          // live path cannot make approval optional.
+          approvalExpiryMs = bindInvocationApproval({
+            paths,
+            approvalId: validatedParams.approval_id,
+            taskId: delTaskId,
+            briefRevision: ownerSession.task.brief_revision,
+            originPrincipalRef:
+              ownerSession.task.origin_principal_ref ??
+              ownerSession.task.origin?.origin_principal_ref ??
+              ownerSession.task.root_principal_ref,
+            toolId: candidateToolId,
             operationName,
-            validatedParams.input,
-          );
-          const expectedDigest = deriveApprovalScopeDigest({
-            task_id: record.task_id,
-            brief_revision: record.brief_revision,
-            tool_id: record.tool_id,
-            operation: record.operation,
-            exact_target: record.exact_target,
-            material_parameters: materialParameters,
-            expires_at: record.expires_at,
+            actualTarget,
+            input: validatedParams.input,
+            runId,
+            currentTime,
           });
-          assert(
-            record.approval_scope_digest === expectedDigest,
-            "AUTH_APPROVAL_INVALID",
-          );
-
-          const claimResult = consumeApprovalAtomically(paths, approvalId, {
-            task_id: record.task_id,
-            brief_revision: record.brief_revision,
-            tool_id: record.tool_id,
-            operation: record.operation,
-            exact_target: record.exact_target,
-            approval_scope_digest: record.approval_scope_digest,
-            run_id: runId,
-          });
-          if (!claimResult) fail("AUTH_APPROVAL_REPLAYED");
         }
 
         scope = {
@@ -1559,6 +1687,7 @@ export function createGovernanceGuard({ paths, manifestFor }) {
       const target = CALLABLE_DISPATCH_REGISTRY[candidateToolId];
       if (!DISPATCH_TARGETS.includes(target))
         fail("RUNTIME_CAPABILITY_MISMATCH");
+      if (target === "adapter") requireDep(depsN8nLoaded);
 
       let rawResult;
       try {
@@ -1614,6 +1743,7 @@ export function createGovernanceGuard({ paths, manifestFor }) {
         fail("SCHEMA_VALIDATION_FAILED");
       }
       if (Array.isArray(rawResult.artifacts)) {
+        requireDep(depsPathSafetyLoaded);
         for (const artifact of rawResult.artifacts) {
           try {
             validateArtifactLogicalPath(artifact.logical_path);
@@ -1665,6 +1795,9 @@ export function createGovernanceGuard({ paths, manifestFor }) {
           next_run_id: event.nextRunId,
           source_session_key: run.child_session_key,
           trigger_run_id: run.native_run_id,
+          // M7-043: the owner attempt is mandatory, so it is always bound
+          // from the live delegation rather than left to the reducer.
+          owner_attempt: run.attempt,
         });
         return {
           action: "deliver",
@@ -1788,7 +1921,7 @@ export function createGovernanceGuard({ paths, manifestFor }) {
         } else {
           const parent =
             task.root_session_key === run.parent_session_key
-              ? { native_run_id: task.root_run_id }
+              ? { native_run_id: task.root_run_id, attempt: null }
               : Object.values(task.delegations).find(
                   (item) =>
                     item.child_session_key === run.parent_session_key &&
@@ -1803,6 +1936,10 @@ export function createGovernanceGuard({ paths, manifestFor }) {
             next_run_id: event.nextRunId,
             source_session_key: run.child_session_key,
             trigger_run_id: run.native_run_id,
+            // M7-043: mandatory owner attempt. It is present exactly when the
+            // continuation owner is a delegation, which is the only case the
+            // reducer requires it for.
+            ...(parent.attempt ? { owner_attempt: parent.attempt } : {}),
           });
         }
       }

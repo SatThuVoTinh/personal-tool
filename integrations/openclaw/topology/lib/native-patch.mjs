@@ -16,17 +16,76 @@ import path from "node:path";
 import process from "node:process";
 import { URL } from "node:url";
 
-export const NATIVE_SOURCE_BASELINE = Object.freeze({
-  "selection-DopzNY3I.js":
-    "a5698c5523e87ad454cf89e4a5c940689403f7b6eac6f3d14c7205f1e3071ed6",
-  "subagent-announce-Bh1QyKiE.js":
-    "764e6ffa2524a03cd8a5d15a8621cb5594f733a91f05311e45b012b727077994",
+// The OpenClaw releases this patch is verified against, keyed BY VERSION.
+//
+// A bundle hash only means something for the release that produced it: every
+// OpenClaw release renames its bundles, so an unversioned hash table silently
+// becomes a set of stale filenames the moment the host upgrades. Keying by
+// version makes the trust anchor explicit, lets `inspectNativePatch` resolve the
+// host to exactly one verified pin, and turns "the host moved" into a named
+// condition instead of an unexplained missing file.
+//
+// Each entry is established by reading the release, not by hashing whatever is
+// on disk: the anchors must be present and UNIQUE (replaceOnce enforces
+// uniqueness), each injection point must be the same code path it was chosen
+// for, and the run-id prerequisite must be positively identified as the module
+// that derives `runId` from the request idempotency key.
+export const NATIVE_RUNTIME_PINS = Object.freeze({
+  "2026.6.34": Object.freeze({
+    runIdSource: "dist/agent-FRfbCcij.js",
+    runIdSourceSha256:
+      "7972dc078d111d2b4132589ce85c0881f2a56583297c221f62b83f2cee465f25",
+    sources: Object.freeze({
+      "selection-DopzNY3I.js": Object.freeze({
+        role: "selection",
+        sha256:
+          "a5698c5523e87ad454cf89e4a5c940689403f7b6eac6f3d14c7205f1e3071ed6",
+      }),
+      "subagent-announce-Bh1QyKiE.js": Object.freeze({
+        role: "announce",
+        sha256:
+          "764e6ffa2524a03cd8a5d15a8621cb5594f733a91f05311e45b012b727077994",
+      }),
+    }),
+  }),
+  "2026.7.1-2": Object.freeze({
+    // Verified: all 10 anchors present and unique; `const activeSession =
+    // session;` still follows session resolution before the turn,
+    // `const acceptedSessionSpawns = ...` still follows the llm_output hook at
+    // run end, and the two announce anchors are still the descendant-wake and
+    // completion gates.
+    runIdSource: "dist/subagent-control-CXT-voKm.js",
+    // Verified: this module performs
+    //   `const idempotencyKey = crypto.randomUUID(); let runId = idempotencyKey;`
+    // i.e. it is the native agent handler that binds runId to the request
+    // idempotency key used by the scoped announce transformation.
+    runIdSourceSha256:
+      "d11cf9e48cc63f88716a7cb6c8e81d9188469d76af4ab4f691d9934cf1d2e140",
+    sources: Object.freeze({
+      "selection-JInn13lc.js": Object.freeze({
+        role: "selection",
+        sha256:
+          "ccff13111aa60369ac9d88b526a58a7df1f733f1d99d205c01c6186036957e66",
+      }),
+      "subagent-announce-BH7YpLmx.js": Object.freeze({
+        role: "announce",
+        sha256:
+          "03f150dff16b9ce8679b0d27f697f3b6dd7726cfa0a4f65d329b9364cb307169",
+      }),
+    }),
+  }),
 });
-// Read-only prerequisite: the native agent handler binds runId exactly to the
-// request idempotency key used by the scoped announce transformation.
-const RUN_ID_SOURCE = "dist/agent-FRfbCcij.js";
-const RUN_ID_SOURCE_SHA256 =
-  "7972dc078d111d2b4132589ce85c0881f2a56583297c221f62b83f2cee465f25";
+
+// The release the deployment was originally pinned to. Kept as a named constant
+// because the README/runbook and the migration path both refer to it.
+export const NATIVE_PINNED_RUNTIME_VERSION = "2026.6.34";
+// Every release this patch may be applied to.
+export const NATIVE_SUPPORTED_RUNTIME_VERSIONS = Object.freeze(
+  Object.keys(NATIVE_RUNTIME_PINS),
+);
+// The pin used when no host version has been resolved.
+export const NATIVE_SOURCE_BASELINE =
+  NATIVE_RUNTIME_PINS[NATIVE_PINNED_RUNTIME_VERSION].sources;
 export const sha256 = (value) =>
   createHash("sha256").update(value).digest("hex");
 
@@ -36,7 +95,8 @@ const selectionPatch = `${selectionAnchor}
 \t\t\t\tagentId: sessionAgentId, sessionKey: params.sessionKey, runId: params.runId,
 \t\t\t\tinputProvenance: params.inputProvenance,
 \t\t\t\tchannelId: params.messageChannel ?? params.messageProvider,
-\t\t\t\tsenderId: params.senderId, currentMessageId: params.currentMessageId
+\t\t\t\tsenderId: params.senderId, currentMessageId: params.currentMessageId,
+\t\t\t\ttrigger: params.trigger, transcriptPrompt: params.transcriptPrompt
 \t\t\t}, params.abortSignal);
 \t\t\tinstallNativeToolGate(activeSession.agent, params.config, {
 \t\t\t\tagentId: sessionAgentId, sessionKey: params.sessionKey, runId: params.runId
@@ -68,48 +128,60 @@ const finalPatch = `\t\tconst zinkCompletionGate = await gateNativeAnnounce(suba
 \t\t}
 ${finalAnchor}`;
 
-const transformations = {
-  "selection-DopzNY3I.js": [
-    [
-      "import { a as normalizeLowercaseStringOrEmpty",
-      'import { enterNativeRun, installNativeToolGate, finishNativeRun, sanitizeNativePrompt } from "./zink-governance-boundary.mjs";\nimport { a as normalizeLowercaseStringOrEmpty',
-    ],
-    [
-      "async function runEmbeddedAttempt(params) {",
-      "async function runEmbeddedAttempt(params) {\n\tparams = { ...params, prompt: await sanitizeNativePrompt(params.config, params.prompt) };",
-    ],
-    [selectionAnchor, selectionPatch],
-    [
-      "\t\t\tconst acceptedSessionSpawns = getAcceptedSessionSpawns();",
-      `\t\t\tawait finishNativeRun(params.config, {
+// The edit sets are defined ONCE, by the ROLE a bundle plays, and each release's
+// pin references a role. Duplicating the patch text per release would let two
+// releases drift apart in exactly the way the duplicated-policy findings
+// describe, so the text lives here and only the filenames+hashes are per-release.
+const SELECTION_EDITS = [
+  [
+    "import { a as normalizeLowercaseStringOrEmpty",
+    'import { enterNativeRun, installNativeToolGate, finishNativeRun, sanitizeNativePrompt } from "./zink-governance-boundary.mjs";\nimport { a as normalizeLowercaseStringOrEmpty',
+  ],
+  [
+    "async function runEmbeddedAttempt(params) {",
+    "async function runEmbeddedAttempt(params) {\n\tparams = { ...params, prompt: await sanitizeNativePrompt(params.config, params.prompt) };",
+  ],
+  [selectionAnchor, selectionPatch],
+  [
+    "\t\t\tconst acceptedSessionSpawns = getAcceptedSessionSpawns();",
+    `\t\t\tawait finishNativeRun(params.config, {
 \t\t\t\tlastAssistant, yielded: yieldDetected,
 \t\t\t\tsuccess: !aborted && !promptError && !timedOut && !idleTimedOut,
-\t\t\t\ttimedOut: timedOut || idleTimedOut
+\t\t\t\ttimedOut: timedOut || idleTimedOut,
+\t\t\t\t// Provider usage for the completed turn, when the runtime reports it.
+\t\t\t\t// Absent is normal: the quota seam then stays "unknown", which already
+\t\t\t\t// keeps the PRIMARY model.
+\t\t\t\tusage: typeof attemptUsage === "undefined" ? null : attemptUsage
 \t\t\t}, { agentId: sessionAgentId, sessionKey: params.sessionKey, runId: params.runId });
 \t\t\tconst acceptedSessionSpawns = getAcceptedSessionSpawns();`,
-    ],
   ],
-  "subagent-announce-Bh1QyKiE.js": [
-    [
-      "import { c as normalizeOptionalString }",
-      'import { gateNativeAnnounce } from "./zink-governance-boundary.mjs";\nimport { c as normalizeOptionalString }',
-    ],
-    [
-      "\t\t\t\tfindings: childCompletionFindings,",
-      "\t\t\t\tfindings: zinkWakeGate.governed ? zinkWakeGate.receipt : childCompletionFindings,",
-    ],
-    [wakeAnchor, wakePatch],
-    [
-      "\t\tif (!childCompletionFindings) {",
-      '\t\tif (subagentAnnounceDeps.getRuntimeConfig()?.plugins?.entries?.["zink-governance"]?.enabled === true) childCompletionFindings = void 0;\n\t\tif (!childCompletionFindings) {',
-    ],
-    [
-      '\t\tconst findings = childCompletionFindings || reply || "(no output)";',
-      '\t\tlet findings = childCompletionFindings || reply || "(no output)";',
-    ],
-    [finalAnchor, finalPatch],
+];
+
+const ANNOUNCE_EDITS = [
+  [
+    "import { c as normalizeOptionalString }",
+    'import { gateNativeAnnounce } from "./zink-governance-boundary.mjs";\nimport { c as normalizeOptionalString }',
   ],
-};
+  [
+    "\t\t\t\tfindings: childCompletionFindings,",
+    "\t\t\t\tfindings: zinkWakeGate.governed ? zinkWakeGate.receipt : childCompletionFindings,",
+  ],
+  [wakeAnchor, wakePatch],
+  [
+    "\t\tif (!childCompletionFindings) {",
+    '\t\tif (subagentAnnounceDeps.getRuntimeConfig()?.plugins?.entries?.["zink-governance"]?.enabled === true) childCompletionFindings = void 0;\n\t\tif (!childCompletionFindings) {',
+  ],
+  [
+    '\t\tconst findings = childCompletionFindings || reply || "(no output)";',
+    '\t\tlet findings = childCompletionFindings || reply || "(no output)";',
+  ],
+  [finalAnchor, finalPatch],
+];
+
+const EDITS_BY_ROLE = Object.freeze({
+  selection: SELECTION_EDITS,
+  announce: ANNOUNCE_EDITS,
+});
 
 function replaceOnce(source, before, after) {
   if (source.split(before).length !== 2)
@@ -117,10 +189,130 @@ function replaceOnce(source, before, after) {
   return source.replace(before, () => after);
 }
 
-export function transformNativeSource(file, source) {
-  const edits = transformations[file];
+// M8/T2.2-R14 — native patch LINEAGE compatibility.
+//
+// The patcher previously modelled the runtime as a two-state toggle: the exact
+// upstream baseline, or the exact patched state this patcher generates itself.
+// That is not how the deployment graph actually goes. R7 changed the selection
+// injection, so the host carries the R7 patch, and the R10 patcher could not
+// recognise it: the patcher inverts only ITS OWN patch string, found none, and
+// failed closed with NATIVE_SOURCE_DRIFT. That is how the authorized R10
+// deployment was lost on 2026-09-30.
+//
+// A predecessor is recognised by EXACT identity, never by a heuristic: its own
+// source digest, its own patch signature, and the pinned baseline digest that
+// inverting that signature must reproduce. Recognition additionally requires the
+// predecessor signature to begin with the SAME revert anchor the current patch
+// uses, so the transition is a region substitution performed entirely in memory
+// and the live runtime is never exposed to an unpatched intermediate state.
+//
+// For R10 the only required predecessor is R7. R5 and R6 are deliberately NOT
+// listed: the actual deployment graph requires only R7, and an entry for a
+// revision nothing depends on would widen the recognized surface for nothing.
+const selectionPatchR7 = `${selectionAnchor}
+\t\t\tawait enterNativeRun(params.config, {
+\t\t\t\tagentId: sessionAgentId, sessionKey: params.sessionKey, runId: params.runId,
+\t\t\t\tinputProvenance: params.inputProvenance,
+\t\t\t\tchannelId: params.messageChannel ?? params.messageProvider,
+\t\t\t\tsenderId: params.senderId, currentMessageId: params.currentMessageId
+\t\t\t}, params.abortSignal);
+\t\t\tinstallNativeToolGate(activeSession.agent, params.config, {
+\t\t\t\tagentId: sessionAgentId, sessionKey: params.sessionKey, runId: params.runId
+\t\t\t});`;
+
+/**
+ * Approved patch predecessors, per runtime release AND per artifact.
+ *
+ * A descriptor binds one artifact for one release. A digest recorded for one
+ * artifact never authorizes another, so it cannot be replayed across the
+ * governed surface.
+ *
+ * - `revision` — predecessor identity, for operator-facing diagnostics.
+ * - `sourceSignature` — the exact text the predecessor injected in place of
+ *   `supersedes`.
+ * - `supersedes` — the current replacement it replaces, which binds the
+ *   descriptor to ONE exact edit slot rather than to a position or an offset.
+ * - `sourceDigest` — the exact sha256 of the predecessor-patched artifact.
+ * - `successorRevision` — the revision this descriptor exists to reach.
+ *
+ * Only the differing edit is recorded. A bundle's other edits are byte-identical
+ * between the two revisions and are reused rather than duplicated: duplicating
+ * them would let the two revisions drift apart in exactly the way this mechanism
+ * exists to prevent.
+ */
+const NATIVE_PATCH_PREDECESSORS = Object.freeze({
+  "2026.6.34": Object.freeze({
+    "selection-DopzNY3I.js": Object.freeze({
+      revision: "R7",
+      sourceSignature: selectionPatchR7,
+      supersedes: selectionPatch,
+      sourceDigest:
+        "b431673602bf2f6eca55f8635f226dddbf06cf19e83c5488cc154d4db3d94512",
+      successorRevision: "R10",
+    }),
+  }),
+});
+
+/**
+ * Recognise an approved predecessor and return the current patched output,
+ * derived entirely in memory.
+ *
+ * Returns `null` for anything that is not an exact approved predecessor, so the
+ * caller keeps failing closed. The predecessor's edit set is the current one with
+ * the single superseded slot replaced, and recognition requires that inverting
+ * that set reproduces the PINNED baseline byte for byte. The baseline therefore
+ * exists only in memory and is never written to the live runtime.
+ */
+function applyPredecessor({ file, source, version, edits, entry }) {
+  const descriptor = NATIVE_PATCH_PREDECESSORS[version]?.[file];
+  if (!descriptor) return null;
+  // Exact state identity, never a heuristic.
+  if (sha256(source) !== descriptor.sourceDigest) return null;
+  // Bind to one exact edit slot; refuse if the predecessor names a replacement
+  // the current set does not contain.
+  const slot = edits.findIndex(([, after]) => after === descriptor.supersedes);
+  if (slot === -1) return null;
+  const predecessorEdits = edits.map((pair, index) =>
+    index === slot ? [pair[0], descriptor.sourceSignature] : pair,
+  );
+  let before;
+  try {
+    before = [...predecessorEdits]
+      .reverse()
+      .reduce(
+        (text, [original, replacement]) =>
+          replaceOnce(text, replacement, original),
+        source,
+      );
+  } catch {
+    return null;
+  }
+  if (sha256(before) !== entry.sha256) return null;
+  const after = edits.reduce(
+    (text, [from, to]) => replaceOnce(text, from, to),
+    before,
+  );
+  return {
+    state: "PREDECESSOR",
+    predecessorRevision: descriptor.revision,
+    successorRevision: descriptor.successorRevision,
+    before,
+    after,
+    beforeDigest: sha256(before),
+    afterDigest: sha256(after),
+  };
+}
+
+export function transformNativeSource(file, source, version) {
+  // Resolve the edit set and the expected hash from the pin for the release the
+  // caller resolved, never from a single global table: that is what made a host
+  // on a newer release look like an unexplained missing file.
+  const pin = NATIVE_RUNTIME_PINS[version];
+  const entry = pin?.sources?.[file];
+  if (!entry) throw new Error("NATIVE_PATCH_TARGET_DENIED");
+  const edits = EDITS_BY_ROLE[entry.role];
   if (!edits) throw new Error("NATIVE_PATCH_TARGET_DENIED");
-  if (sha256(source) === NATIVE_SOURCE_BASELINE[file]) {
+  if (sha256(source) === entry.sha256) {
     const after = edits.reduce(
       (text, [before, replacement]) => replaceOnce(text, before, replacement),
       source,
@@ -133,6 +325,9 @@ export function transformNativeSource(file, source) {
       afterDigest: sha256(after),
     };
   }
+  // R14: an approved predecessor patch revision transforms forward in memory.
+  const predecessor = applyPredecessor({ file, source, version, edits, entry });
+  if (predecessor) return predecessor;
   // Already-patched is accepted only if exact inverse restores the frozen hash.
   let before;
   try {
@@ -146,8 +341,7 @@ export function transformNativeSource(file, source) {
   } catch {
     throw new Error("NATIVE_SOURCE_DRIFT");
   }
-  if (sha256(before) !== NATIVE_SOURCE_BASELINE[file])
-    throw new Error("NATIVE_SOURCE_DRIFT");
+  if (sha256(before) !== entry.sha256) throw new Error("NATIVE_SOURCE_DRIFT");
   return {
     state: "PATCHED",
     before,
@@ -155,6 +349,16 @@ export function transformNativeSource(file, source) {
     beforeDigest: sha256(before),
     afterDigest: sha256(source),
   };
+}
+
+/** The OpenClaw release installed under `root`, or null when unreadable. */
+function resolveRuntimeVersion(root) {
+  try {
+    return JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"))
+      .version;
+  } catch {
+    return null;
+  }
 }
 
 export function inspectNativePatch(root) {
@@ -166,32 +370,57 @@ export function inspectNativePatch(root) {
       throw new Error("NATIVE_ROOT_SYMLINK");
     cursor = path.dirname(cursor);
   }
+  // The runtime version is read FIRST and resolves the pin. A host on a release
+  // this patch has not been verified against is a NAMED condition, not a bare
+  // ENOENT about a hashed filename: an unverified release must never be
+  // patched, and the operator has to be told which releases are supported.
+  let installedVersion = resolveRuntimeVersion(root);
+  if (!installedVersion) throw new Error("NATIVE_MANIFEST_UNREADABLE");
+  const pin = NATIVE_RUNTIME_PINS[installedVersion];
+  if (!pin) {
+    const error = new Error(
+      `NATIVE_VERSION_MISMATCH: this patch is verified against OpenClaw ${NATIVE_SUPPORTED_RUNTIME_VERSIONS.join(", ")} but the host has ${installedVersion}. An unverified release is never patched; adding one is a separately authorized runtime migration.`,
+    );
+    error.code = "NATIVE_VERSION_MISMATCH";
+    error.expected = NATIVE_SUPPORTED_RUNTIME_VERSIONS;
+    error.actual = installedVersion;
+    throw error;
+  }
+
+  // Fail closed with a governance code, never a raw filesystem error, when a
+  // pinned prerequisite is absent.
   for (const target of [
     "package.json",
     "dist",
-    RUN_ID_SOURCE,
-    ...Object.keys(NATIVE_SOURCE_BASELINE).map((file) =>
-      path.join("dist", file),
-    ),
-  ])
-    if (lstatSync(path.join(root, target)).isSymbolicLink())
-      throw new Error("NATIVE_TARGET_SYMLINK");
+    pin.runIdSource,
+    ...Object.keys(pin.sources).map((file) => path.join("dist", file)),
+  ]) {
+    const full = path.join(root, target);
+    let stats;
+    try {
+      stats = lstatSync(full);
+    } catch {
+      const error = new Error(
+        `NATIVE_SOURCE_DRIFT: pinned artifact ${target} is absent from OpenClaw ${installedVersion}`,
+      );
+      error.code = "NATIVE_SOURCE_DRIFT";
+      error.artifact = target;
+      throw error;
+    }
+    if (stats.isSymbolicLink()) throw new Error("NATIVE_TARGET_SYMLINK");
+  }
   if (
-    sha256(readFileSync(path.join(root, RUN_ID_SOURCE))) !==
-    RUN_ID_SOURCE_SHA256
+    sha256(readFileSync(path.join(root, pin.runIdSource))) !==
+    pin.runIdSourceSha256
   )
     throw new Error("NATIVE_RUN_ID_SOURCE_DRIFT");
-  if (
-    JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"))
-      .version !== "2026.6.34"
-  )
-    throw new Error("NATIVE_VERSION_MISMATCH");
   return Object.fromEntries(
-    Object.keys(NATIVE_SOURCE_BASELINE).map((file) => [
+    Object.keys(pin.sources).map((file) => [
       file,
       transformNativeSource(
         file,
         readFileSync(path.join(root, "dist", file), "utf8"),
+        installedVersion,
       ),
     ]),
   );
@@ -260,8 +489,60 @@ export function checkNativePatch(root) {
   return { status: "PATCHED", files: Object.keys(inspection) };
 }
 
+// The backup manifest is built in ONE place. `restoreNativePatch` requires
+// `runtime_version` to resolve a pin, and the two apply paths (fresh patch and
+// re-take on an already-patched host) previously declared the manifest
+// separately, so the fresh-patch manifest omitted the field and every backup
+// taken while actually patching was unrestorable.
+export function nativeBackupManifest(root) {
+  return {
+    version: "m7-t2-r12",
+    runtime_root: path.resolve(root),
+    // The OpenClaw release the backup was taken from. A restore has to
+    // resolve the SAME pin that produced the patch, and the file names in
+    // a backup are release-specific, so this is recorded explicitly rather
+    // than assumed to be the currently-deployed one.
+    runtime_version: resolveRuntimeVersion(root),
+    bridge_digest: sha256(bridgeContents()),
+    files: {},
+  };
+}
+
 export function applyNativePatch(root, backupRoot) {
   const inspection = inspectNativePatch(root);
+  // R14: a host carrying an approved predecessor patch revision is upgraded by
+  // writing the successor directly. The predecessor's baseline exists only in
+  // memory, inside the transform, so the live runtime is never written back to
+  // the unpatched upstream baseline even momentarily.
+  if (Object.values(inspection).some((e) => e.state === "PREDECESSOR")) {
+    if (
+      !Object.values(inspection).every((e) =>
+        ["BASELINE", "PATCHED", "PREDECESSOR"].includes(e.state),
+      )
+    )
+      throw new Error("NATIVE_PATCH_PARTIAL_STATE");
+    // Derive the whole plan in memory BEFORE the first write, so a failure here
+    // cannot leave a half-converted runtime.
+    const plan = Object.entries(inspection)
+      .filter(([, entry]) => entry.state !== "PATCHED")
+      .map(([file, entry]) => ({
+        file,
+        after: entry.after,
+        mode: lstatSync(path.join(root, "dist", file)).mode & 0o777,
+      }));
+    assertNoLinks(bridgeFile(root));
+    if (
+      !existsSync(bridgeFile(root)) ||
+      sha256(readFileSync(bridgeFile(root))) !== sha256(bridgeContents())
+    )
+      replaceAtomic(bridgeFile(root), bridgeContents(), 0o600);
+    for (const { file, after, mode } of plan)
+      replaceAtomic(path.join(root, "dist", file), after, mode);
+    // `checkNativePatch` is the same verification the other paths end with: every
+    // pinned source must now invert exactly to the baseline, and the bridge must
+    // be the current repository boundary.
+    return checkNativePatch(root);
+  }
   if (Object.values(inspection).every((entry) => entry.state === "PATCHED")) {
     if (
       !existsSync(bridgeFile(root)) ||
@@ -275,12 +556,7 @@ export function applyNativePatch(root, backupRoot) {
       if (!existsSync(manifestPath)) {
         assertNoLinks(backupRoot);
         mkdirSync(backupRoot, { recursive: true, mode: 0o700 });
-        const manifest = {
-          version: "m7-t2-r12",
-          runtime_root: path.resolve(root),
-          bridge_digest: sha256(bridgeContents()),
-          files: {},
-        };
+        const manifest = nativeBackupManifest(root);
         for (const [file, entry] of Object.entries(inspection)) {
           const mode = lstatSync(path.join(root, "dist", file)).mode & 0o777;
           writeExclusive(path.join(backupRoot, file), entry.before, 0o600);
@@ -315,12 +591,7 @@ export function applyNativePatch(root, backupRoot) {
   ))
     throw new Error("NATIVE_BACKUP_MUST_BE_EXTERNAL");
   mkdirSync(backupRoot, { mode: 0o700 }); // Never overwrite an earlier backup.
-  const manifest = {
-    version: "m7-t2-r12",
-    runtime_root: path.resolve(root),
-    bridge_digest: sha256(bridgeContents()),
-    files: {},
-  };
+  const manifest = nativeBackupManifest(root);
   for (const [file, entry] of Object.entries(inspection)) {
     const mode = lstatSync(path.join(root, "dist", file)).mode & 0o777;
     writeExclusive(path.join(backupRoot, file), entry.before, 0o600);
@@ -363,8 +634,11 @@ export function restoreNativePatch(root, backupRoot) {
   if (
     manifest.version !== "m7-t2-r12" ||
     manifest.runtime_root !== path.resolve(root) ||
+    !NATIVE_RUNTIME_PINS[manifest.runtime_version] ||
     Object.keys(manifest.files).sort().join() !==
-      Object.keys(NATIVE_SOURCE_BASELINE).sort().join()
+      Object.keys(NATIVE_RUNTIME_PINS[manifest.runtime_version].sources)
+        .sort()
+        .join()
   )
     throw new Error("NATIVE_BACKUP_MANIFEST_INVALID");
   const originals = {};
@@ -375,7 +649,11 @@ export function restoreNativePatch(root, backupRoot) {
     assertNoLinks(backup);
     assertNoLinks(target);
     const contents = readFileSync(backup, "utf8");
-    const transformed = transformNativeSource(file, contents);
+    const transformed = transformNativeSource(
+      file,
+      contents,
+      manifest.runtime_version,
+    );
     if (
       transformed.state !== "BASELINE" ||
       transformed.beforeDigest !== expected.before_digest ||

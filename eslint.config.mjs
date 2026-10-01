@@ -6,7 +6,13 @@ export default [
   },
   js.configs.recommended,
   {
-    files: ['scripts/**/*.mjs', 'tests/**/*.mjs'],
+    files: [
+      'scripts/**/*.mjs',
+      'tests/**/*.mjs',
+      'zink-skill-store/**/*.mjs',
+      'zink-tools/**/*.mjs',
+      'integrations/**/*.mjs',
+    ],
     languageOptions: {
       ecmaVersion: 'latest',
       sourceType: 'module',
@@ -14,6 +20,11 @@ export default [
         Buffer: 'readonly',
         console: 'readonly',
         process: 'readonly',
+        fetch: 'readonly',
+        URL: 'readonly',
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly',
+        AbortSignal: 'readonly',
       },
     },
   },

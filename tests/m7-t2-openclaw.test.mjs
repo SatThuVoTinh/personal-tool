@@ -153,9 +153,35 @@ test("native root completion closes only validated work and leaves BLOCKED brief
         assert.deepEqual(readSnapshot(paths), beforeAcceptance);
       }
       await finishNativeRun(nativeConfig(paths.root), event, context);
+      const pending = readSnapshot(paths).tasks[task_id];
+      assert.equal(pending.workflow_status, "RESULT_PENDING_REVIEW");
+      assert.equal(pending.brief_state, "ACTIVE");
+      assert.equal(
+        pending.root_result.pending_outcome_status,
+        blocked ? "BLOCKED" : "COMPLETE",
+      );
+      assert.equal(pending.root_result.payload_digest, payloadDigest(payload));
+      assert.equal(JSON.stringify(pending).includes(payload.output), false);
+      if (blocked) {
+        recordWorkflowEvent(paths, "WORKFLOW_USER_RESULT_REJECTED", {
+          task_id,
+          actor: "user",
+          channel: "results",
+          reason: "EXECUTION_BLOCKED",
+          result_digest: payloadDigest(payload),
+        });
+      } else {
+        recordWorkflowEvent(paths, "WORKFLOW_USER_RESULT_ACCEPTED", {
+          task_id,
+          actor: "user",
+          channel: "results",
+          decision: "ACCEPT",
+          result_digest: payloadDigest(payload),
+        });
+      }
       const task = readSnapshot(paths).tasks[task_id];
-      assert.equal(task.workflow_status, blocked ? "BLOCKED" : "COMPLETE");
-      assert.equal(task.brief_state, blocked ? "ACTIVE" : "CLOSED");
+      assert.equal(task.workflow_status, blocked ? "REJECTED" : "COMPLETE");
+      assert.equal(task.brief_state, "CLOSED");
       assert.equal(task.root_result.payload_digest, payloadDigest(payload));
       assert.equal(JSON.stringify(task).includes(payload.output), false);
       await assert.rejects(
@@ -189,11 +215,12 @@ test("root cannot close while a declared mandatory node has no accepted result",
     recordWorkflowEvent(paths, "WORKFLOW_BRIEF_ACTIVATED", {
       task_id,
       brief_revision: 1,
+      semantic_contract_status: "VALID",
       nodes: [
         {
           node_id: "o1",
           agent_id: "o1",
-          stack_id: "semantic",
+          stack_id: "data_plant",
           dependencies: [],
           required: true,
           input_digest: "a".repeat(64),
@@ -320,7 +347,7 @@ test("Main transitions consume task-global budget before spawn receipts and neve
     });
     const nodes = Array.from({ length: 12 }, (_, index) => ({
       node_id: `node_${index}`,
-      stack_id: index % 2 ? "data_plant" : "semantic",
+      stack_id: index % 2 ? "semantic" : "data_plant",
       agent_id: index % 2 ? "o2" : "o1",
       dependencies: [],
       required: true,
@@ -331,10 +358,23 @@ test("Main transitions consume task-global budget before spawn receipts and neve
     recordWorkflowEvent(paths, "WORKFLOW_BRIEF_ACTIVATED", {
       task_id,
       brief_revision: 1,
+      semantic_contract_status: "VALID",
       nodes,
     });
+    // M7-020: a spawn reservation creates governed work, so the owner
+    // approval is recorded first.
+    recordWorkflowEvent(paths, "WORKFLOW_USER_APPROVAL_DECIDED", {
+      task_id,
+      actor: "user",
+      channel: "approvals",
+      decision: "APPROVE",
+    });
+
     for (const [index, node] of nodes.entries()) {
-      const spec = {
+      // M8-055: the canonical builder derives both the delegation id and the
+      // request digest. The old fixture hand-wrote request_digest, which is
+      // exactly the divergent serialization M8-055 removes.
+      const spec = buildSpawnProposal({
         task_id,
         brief_revision: 1,
         node_id: node.node_id,
@@ -346,9 +386,7 @@ test("Main transitions consume task-global budget before spawn receipts and neve
         turn: index + 1,
         attempt: 1,
         expected_governance_hash: governanceHash(node.agent_id),
-        request_digest: "e".repeat(64),
-      };
-      spec.delegation_id = deriveDelegationId(spec);
+      });
       if (index === 11) {
         assert.throws(
           () => recordWorkflowEvent(paths, "WORKFLOW_SPAWN_RESERVED", spec),
@@ -476,19 +514,40 @@ test("materialized plugin imports canonical assets and requires native invocatio
       agentId: "main",
       senderId: fakeOwner,
       currentMessageId: "123456789012345679",
+      content: "@main ordinary request",
+      mentions: [{ username: "main" }],
       sessionKey: "main-session",
       runId: "main-run",
     });
     const snapshot = readSnapshot(paths);
     assert.equal(Object.keys(snapshot.tasks).length, 1);
-    await enterNativeRun(nativeConfig(paths.root), {
-      channelId: "discord",
-      agentId: "main",
-      senderId: fakeOwner,
-      currentMessageId: "123456789012345679",
-      sessionKey: "main-session",
-      runId: "main-run",
-    });
+    await assert.rejects(
+      enterNativeRun(nativeConfig(paths.root), {
+        channelId: "discord",
+        agentId: "main",
+        senderId: fakeOwner,
+        currentMessageId: "123456789012345680",
+        content: "ordinary request without coordinator mention",
+        mentions: [],
+        sessionKey: "main-session",
+        runId: "main-run-no-mention",
+      }),
+      /GOVERNANCE_RUN_UNAVAILABLE/u,
+    );
+    assert.equal(readSnapshot(paths).sequence, snapshot.sequence);
+    await assert.rejects(
+      enterNativeRun(nativeConfig(paths.root), {
+        channelId: "discord",
+        agentId: "main",
+        senderId: fakeOwner,
+        currentMessageId: "123456789012345679",
+        content: "@main ordinary request",
+        mentions: [{ username: "main" }],
+        sessionKey: "main-session",
+        runId: "main-run",
+      }),
+      /GOVERNANCE_RUN_UNAVAILABLE/u,
+    );
     assert.equal(readSnapshot(paths).sequence, snapshot.sequence);
     await assert.rejects(
       enterNativeRun(nativeConfig(paths.root), {
@@ -496,6 +555,8 @@ test("materialized plugin imports canonical assets and requires native invocatio
         agentId: "main",
         senderId: "223456789012345678",
         currentMessageId: "123456789012345679",
+        content: "@main ordinary request",
+        mentions: [{ username: "main" }],
         sessionKey: "main-session",
         runId: "main-run",
       }),
@@ -533,12 +594,12 @@ test("materialized plugin imports canonical assets and requires native invocatio
       ).block,
       true,
     );
-    const receipt = hooks.get("before_prompt_build")({}, context);
+    const receipt = await hooks.get("before_prompt_build")({}, context);
     assert.match(receipt.prependContext, new RegExp(task_id, "u"));
     const node = {
       node_id: "o1",
       agent_id: "o1",
-      stack_id: "semantic",
+      stack_id: "data_plant",
       required: true,
       dependencies: [],
       input_digest: "a".repeat(64),
@@ -548,9 +609,19 @@ test("materialized plugin imports canonical assets and requires native invocatio
     recordWorkflowEvent(paths, "WORKFLOW_BRIEF_ACTIVATED", {
       task_id,
       brief_revision: 1,
+      semantic_contract_status: "VALID",
       nodes: [node],
     });
-    const spawn = {
+    // M7-020: a spawn reservation creates governed work, so the owner
+    // approval is recorded first.
+    recordWorkflowEvent(paths, "WORKFLOW_USER_APPROVAL_DECIDED", {
+      task_id,
+      actor: "user",
+      channel: "approvals",
+      decision: "APPROVE",
+    });
+
+    const spawn = buildSpawnProposal({
       task_id,
       brief_revision: 1,
       node_id: "o1",
@@ -562,9 +633,7 @@ test("materialized plugin imports canonical assets and requires native invocatio
       turn: 1,
       attempt: 1,
       expected_governance_hash: governanceHash("o1"),
-      request_digest: "d".repeat(64),
-    };
-    spawn.delegation_id = deriveDelegationId(spawn);
+    });
     recordWorkflowEvent(paths, "WORKFLOW_SPAWN_RESERVED", spawn);
     let childStarted = false;
     const childStart = enterNativeRun(nativeConfig(paths.root), {
@@ -656,7 +725,7 @@ test("native boundary and durable guard integrate nested synthetic delegation an
     const nodes = ["o1", "python"].map((agent_id) => ({
       node_id: agent_id,
       agent_id,
-      stack_id: "semantic",
+      stack_id: "data_plant",
       required: true,
       dependencies: [],
       input_digest: canonicalHash("zink-input-v1", inputs),
@@ -669,7 +738,16 @@ test("native boundary and durable guard integrate nested synthetic delegation an
     recordWorkflowEvent(paths, "WORKFLOW_BRIEF_ACTIVATED", {
       task_id,
       brief_revision: 1,
+      semantic_contract_status: "VALID",
       nodes,
+    });
+    // M7-020: a spawn reservation creates governed work, so the owner approval
+    // is recorded first.
+    recordWorkflowEvent(paths, "WORKFLOW_USER_APPROVAL_DECIDED", {
+      task_id,
+      actor: "user",
+      channel: "approvals",
+      decision: "APPROVE",
     });
     const manifestFor = (agentId) => ({
       expected_governance_hash: governanceHash(agentId),
@@ -700,7 +778,7 @@ test("native boundary and durable guard integrate nested synthetic delegation an
         attempt: 1,
         parent_agent_id: parent,
         target_agent_id: target,
-        target_stack: "semantic",
+        target_stack: "data_plant",
         expected_governance_hash: governanceHash(target),
         inputs,
         input_refs: [],
@@ -713,15 +791,27 @@ test("native boundary and durable guard integrate nested synthetic delegation an
         },
         requested_output_schema: "agent-result-payload.schema.json",
       };
-      handoff.delegation_id = deriveDelegationId({
-        ...handoff,
-        agent_id: target,
-      });
       return handoff;
     };
     const spawn = async (agent, parent, target) => {
       const handoff = handoffFor(parent, target);
       const event = nativeEvent(["sessions_spawn"]);
+      // M8-055: the handoff delegation id is derived from the exact proposal
+      // the adapter will reserve, so the id carried to the child and the id
+      // recorded in the ledger are the same canonical value.
+      handoff.delegation_id = buildSpawnProposal({
+        task_id,
+        brief_revision: 1,
+        node_id: target,
+        agent_id: target,
+        parent_agent_id: parent,
+        parent_session_key: `${parent}-session`,
+        parent_run_id: parent === "main" ? "main-run" : `${parent}-run`,
+        tool_call_id: event.toolCall.id,
+        turn: 1,
+        attempt: 1,
+        expected_governance_hash: governanceHash(target),
+      }).delegation_id;
       event.args = {
         task: JSON.stringify(
           Object.fromEntries(
@@ -857,6 +947,7 @@ test("native boundary and durable guard integrate nested synthetic delegation an
     recordWorkflowEvent(paths, "WORKFLOW_CANCELLED", {
       task_id,
       reason_code: "OWNER_CANCELLED",
+      actor: "user",
     });
     await assert.rejects(
       enterNativeRun(nativeConfig(scope), {
@@ -895,7 +986,7 @@ test("trusted workflow journals reservation, native receipt and cancellation acr
     });
     const node = {
       node_id: "semantic",
-      stack_id: "semantic",
+      stack_id: "data_plant",
       agent_id: "o1",
       dependencies: [],
       required: true,
@@ -906,10 +997,20 @@ test("trusted workflow journals reservation, native receipt and cancellation acr
     recordWorkflowEvent(paths, "WORKFLOW_BRIEF_ACTIVATED", {
       task_id,
       brief_revision: 1,
+      semantic_contract_status: "VALID",
       nodes: [node],
     });
+    // M7-020: a spawn reservation creates governed work, so the owner
+    // approval is recorded first.
+    recordWorkflowEvent(paths, "WORKFLOW_USER_APPROVAL_DECIDED", {
+      task_id,
+      actor: "user",
+      channel: "approvals",
+      decision: "APPROVE",
+    });
+
     const before = readSnapshot(paths);
-    const run = {
+    const run = buildSpawnProposal({
       task_id,
       brief_revision: 1,
       node_id: node.node_id,
@@ -921,9 +1022,7 @@ test("trusted workflow journals reservation, native receipt and cancellation acr
       turn: 1,
       attempt: 1,
       expected_governance_hash: "e".repeat(64),
-      request_digest: "f".repeat(64),
-    };
-    run.delegation_id = deriveDelegationId(run);
+    });
     const committed = recordWorkflowEvent(
       paths,
       "WORKFLOW_SPAWN_RESERVED",
@@ -968,12 +1067,6 @@ test("trusted workflow journals reservation, native receipt and cancellation acr
         }),
       /LINEAGE_MISMATCH/u,
     );
-    recordWorkflowEvent(paths, "WORKFLOW_NATIVE_ENDED", ended);
-    assert.deepEqual(
-      readSnapshot(paths),
-      running,
-      "native ok is not semantic acceptance",
-    );
     recordWorkflowEvent(paths, "WORKFLOW_NATIVE_ENDED", {
       ...ended,
       outcome: "timeout",
@@ -984,14 +1077,21 @@ test("trusted workflow journals reservation, native receipt and cancellation acr
       suspended.tasks[task_id].delegations[run.delegation_id].run_state,
       "UNKNOWN",
     );
-    assert.equal(
-      suspended.tasks[task_id].reason_code,
-      "EXECUTION_STATE_UNKNOWN",
-    );
+    // M8-056: task.reason_code names the SUSPENSION, and the run's
+    // runtime_reason_code names the FAILURE CLASS. The two fields previously
+    // shared one vocabulary, so the same value meant "blocked" at task level and
+    // "unknown state" at run level. The failure class is asserted on the run
+    // below, which is where a retry decision reads it from.
+    assert.equal(suspended.tasks[task_id].reason_code, "BLOCKED");
     assert.equal(
       suspended.tasks[task_id].delegations[run.delegation_id]
         .runtime_reason_code,
       "RUN_TIMEOUT",
+    );
+    assert.equal(
+      suspended.tasks[task_id].delegations[run.delegation_id]
+        .suspended_task_status,
+      "QUEUED",
     );
     writeFileSync(paths.snapshot, JSON.stringify(running));
     assert.deepEqual(
@@ -1010,6 +1110,7 @@ test("trusted workflow journals reservation, native receipt and cancellation acr
     recordWorkflowEvent(paths, "WORKFLOW_CANCELLED", {
       task_id,
       reason_code: "OWNER_CANCELLED",
+      actor: "user",
     });
     recordWorkflowEvent(paths, "WORKFLOW_SPAWN_RECEIVED", receipt);
     const cancelled = readSnapshot(paths);
@@ -1032,6 +1133,7 @@ test("trusted workflow journals reservation, native receipt and cancellation acr
         recordWorkflowEvent(paths, "WORKFLOW_BRIEF_ACTIVATED", {
           task_id,
           brief_revision: 2,
+          semantic_contract_status: "VALID",
           nodes: [node],
         }),
       /INVALID_STATE_TRANSITION/u,
@@ -1160,16 +1262,39 @@ test("ledger corruption errors do not echo malformed persisted content", () => {
   }
 });
 
+/**
+ * T2/T3: a registered guard must also provide the mandatory self-quota and
+ * run-scoped model-resolution capabilities. Bridge tests use synthetic guards
+ * that are not about quota, so they supply inert stubs. The production
+ * invariant (registration fails closed without them) is asserted separately in
+ * the quota suites, so these stubs weaken no security assertion.
+ */
+function withQuotaCapabilities(guard) {
+  return {
+    recordQuota: () => false,
+    selfQuotaReceipt: () => null,
+    resolveRunModel: () => ({
+      model: "synthetic/primary",
+      run_scoped: true,
+      session_override: false,
+    }),
+    ...guard,
+  };
+}
+
 test("R12 native bridge blocks every sibling before any execution", async () => {
   let guards = 0;
   let original = 0;
-  const unregister = registerNativeGuard("synthetic-batch", {
-    beforeToolCall: () => {
-      guards++;
-      return { allow: true };
-    },
-    beforeAnnounce: () => ({ action: "discard" }),
-  });
+  const unregister = registerNativeGuard(
+    "synthetic-batch",
+    withQuotaCapabilities({
+      beforeToolCall: () => {
+        guards++;
+        return { allow: true };
+      },
+      beforeAnnounce: () => ({ action: "discard" }),
+    }),
+  );
   try {
     const agent = {
       beforeToolCall: () => {
@@ -1200,13 +1325,16 @@ test("R12 native bridge blocks every sibling before any execution", async () => 
 
 test("R12 native bridge rejects malformed batch identities before callbacks", async () => {
   let called = 0;
-  const unregister = registerNativeGuard("synthetic-identities", {
-    beforeToolCall: () => {
-      called++;
-      return { allow: true };
-    },
-    beforeAnnounce: () => ({ action: "discard" }),
-  });
+  const unregister = registerNativeGuard(
+    "synthetic-identities",
+    withQuotaCapabilities({
+      beforeToolCall: () => {
+        called++;
+        return { allow: true };
+      },
+      beforeAnnounce: () => ({ action: "discard" }),
+    }),
+  );
   try {
     const agent = {
       beforeToolCall: () => {
@@ -1243,12 +1371,15 @@ test("R12 missing guard, rejected decision and abort fail closed", async () => {
     (await agent.beforeToolCall(nativeEvent(["sessions_spawn"]))).block,
     true,
   );
-  const unregister = registerNativeGuard("synthetic-unavailable", {
-    beforeToolCall: async () => new Promise(() => {}),
-    beforeAnnounce: () => {
-      throw new Error("fake-sensitive-error");
-    },
-  });
+  const unregister = registerNativeGuard(
+    "synthetic-unavailable",
+    withQuotaCapabilities({
+      beforeToolCall: async () => new Promise(() => {}),
+      beforeAnnounce: () => {
+        throw new Error("fake-sensitive-error");
+      },
+    }),
+  );
   try {
     const controller = new globalThis.AbortController();
     const pending = agent.beforeToolCall(
@@ -1268,10 +1399,13 @@ test("R12 missing guard, rejected decision and abort fail closed", async () => {
 
 test("R12 native announce exposes only bounded accepted receipts", async () => {
   let decision = { action: "deliver", receipt: "accepted synthetic receipt" };
-  const unregister = registerNativeGuard("synthetic-announce", {
-    beforeToolCall: () => ({ allow: true }),
-    beforeAnnounce: () => decision,
-  });
+  const unregister = registerNativeGuard(
+    "synthetic-announce",
+    withQuotaCapabilities({
+      beforeToolCall: () => ({ allow: true }),
+      beforeAnnounce: () => decision,
+    }),
+  );
   try {
     const config = nativeConfig("synthetic-announce");
     assert.deepEqual(await gateNativeAnnounce(config, {}), {
@@ -1403,7 +1537,7 @@ import {
 import {
   canonicalHash,
   canonicalJson,
-  deriveDelegationId,
+  buildSpawnProposal,
   derivePrincipalRef,
   deriveTaskId,
 } from "../integrations/openclaw/topology/lib/canonical.mjs";
@@ -1513,9 +1647,62 @@ test("R11 canonical identity and delegation hashes are deterministic and domain 
     agent_id: "o1",
     attempt: 1,
   };
+  // M8-055: the canonical builder is deterministic and every field is bound
+  // into the delegation id, so a mutated proposal cannot reuse the id.
+  const proposalFields = {
+    ...delegation,
+    parent_agent_id: "main",
+    parent_session_key: "main-session",
+    parent_run_id: "main-run",
+    tool_call_id: "call-1",
+    turn: 1,
+    expected_governance_hash: "c".repeat(64),
+  };
+  const first = buildSpawnProposal(proposalFields);
   assert.equal(
-    deriveDelegationId(delegation),
-    deriveDelegationId({ ...delegation }),
+    first.delegation_id,
+    buildSpawnProposal({ ...proposalFields }).delegation_id,
+  );
+  assert.equal(
+    first.request_digest,
+    buildSpawnProposal({ ...proposalFields }).request_digest,
+  );
+  // The canonical delegation id binds exactly the five identity fields. Any
+  // mutation inside that tuple must change the id.
+  for (const mutated of [
+    { attempt: 2 },
+    { node_id: "decision" },
+    { agent_id: "o2" },
+    { brief_revision: 2 },
+    { task_id: "e".repeat(64) },
+  ]) {
+    const variant = buildSpawnProposal({ ...proposalFields, ...mutated });
+    assert.notEqual(
+      variant.delegation_id,
+      first.delegation_id,
+      `identity mutation must change the id: ${JSON.stringify(mutated)}`,
+    );
+  }
+  // The remaining fields are lineage evidence, not id inputs. The reducer
+  // validates them independently (parent lineage, duplicate tool_call_id),
+  // so a tampered value there is rejected on its own invariant.
+  for (const mutated of [
+    { tool_call_id: "call-2" },
+    { parent_run_id: "main-run-2" },
+    { turn: 2 },
+    { expected_governance_hash: "d".repeat(64) },
+  ]) {
+    const variant = buildSpawnProposal({ ...proposalFields, ...mutated });
+    assert.notEqual(
+      variant.request_digest,
+      first.request_digest,
+      `lineage mutation must change the request digest: ${JSON.stringify(mutated)}`,
+    );
+  }
+  // An incomplete proposal is rejected, never half-derived.
+  assert.throws(
+    () => buildSpawnProposal({ ...proposalFields, tool_call_id: undefined }),
+    /SPAWN_PROPOSAL_INCOMPLETE/,
   );
 });
 
