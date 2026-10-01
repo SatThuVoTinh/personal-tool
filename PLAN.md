@@ -46,7 +46,7 @@ operations research and simulation remain first-class capabilities.
 ```text
 Milestone: M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Integration
 Task: M8/T2.2 — Root-Cause Governed Runtime, Discord, Semantic & Artifact Integrity Hardening
-Task Status: CLOSED
+Task Status: IN PROGRESS
 Planning Readiness: APPROVED
 Plan Revision: M8/T2.2-R18
 Execution Authorization: YES
@@ -76,8 +76,33 @@ Deployment Authorized: YES (R18 - single attempt, granted by the owner on
   2026-10-01)
 ```
 
-`Deployment Status: AUTHORIZED - NOT YET DEPLOYED` for R18. R16 and R17 are
-both deployed and closed as deployed revisions.
+`Deployment Status: DEPLOYED - R18 LIVE AND VERIFIED FOR ITS AUTHORIZED SEAM;
+ONE PRE-EXISTING SEPARATE ITEM REMAINS OPEN`. The single authorized attempt ran
+`operator-apply.mjs` — the repository's authorized live deployment mechanism —
+against the real live runtime, with no namespace and no simulation. It returned
+PASS at stage `applied`, `transactionStatus: complete`, attempt
+`txn-546134d1e917bea39046eae142e15b6453e589babe427c1bbf875399c1f773a5`. This
+authorization is consumed by that one attempt.
+
+R18 is deployed and its defect is closed live. `beforeRunEnd: internal system
+session` went from 0 to 2, and `beforeRunEnd: self-keyed session presented a
+runId; applying full governance` stopped entirely (it had reached 40). A clean
+real scheduler heartbeat at `2026-10-01T02:50:52Z` completed the whole chain
+with `GOVERNANCE_RUN_UNAVAILABLE = 0`, `GOVERNANCE_COMPLETION_UNAVAILABLE = 0`,
+run-end/lane `EXECUTION_STATE_UNKNOWN = 0`, `sandboxErr = 0`, `laneErr = 0`,
+first-candidate `status=200`, and a transcript poll then reply 3.3s later.
+Digests, ledger and runtime integrity are in ACTIVE.md R18 8.
+
+`M8/T2.2` is deliberately NOT returned to CLOSED. One item remains open and it
+is not R18's: the advisory, fail-open `before_prompt_build` hook emits
+`EXECUTION_STATE_UNKNOWN` once per poll and its `BLOCKED` instruction is why the
+poll replies `outcome_claim: BLOCKED`. That seam is reached through the host
+hook runner with a run context that carries `trigger` but neither
+`transcriptPrompt` nor `prompt`, so the heartbeat exemption that hook already
+intends can never fire there. The `BLOCKED` reply is present continuously in the
+transcript back to `2026-09-30T21:21:01Z`, before R16, R17 and R18, so it is
+pre-existing and not a regression. Closing it is an owner decision and no R19
+is created. See ACTIVE.md R18 9.
 
 `Deployment Authorized: YES (R18 - single attempt)` — granted by the owner on
 2026-10-01 as the final technical fix, to deploy the locally verified R18
@@ -144,7 +169,7 @@ carried R5 and R6 implementation. The plan was never revised for either, so
 | M8/T2.2-R15 | Implemented           | `c73173f` attempt-scoped transaction identity: `attemptId` separated from `preimageDigest`; completed attempts no longer block a repeat. 17/15 falsified. Not deployed.                                                                         |
 | M8/T2.2-R16 | CLOSED                | Authorized 2026-09-30; deployed 2026-09-30 as the live runtime (R10). Superseded as the implementation revision by the authorized post-deployment correction R17; R16 evidence is historical and unchanged. See A4.13.                          |
 | M8/T2.2-R17 | DEPLOYED, GAP OPEN | Authorized 2026-09-30 as a post-deployment RED correction to the R10 run-end governance contract: run-end parity for the pure liveness heartbeat. 10 focused tests, falsified 7 pass / 3 fail. Deployed 2026-09-30 as the live runtime (R17 build). Superseded as the implementation revision by R18, which closed the remaining blocker; R17 evidence is historical and unchanged. See A4.14. |
-| M8/T2.2-R18 | IMPLEMENTED, AUTHORIZED | Authorized 2026-10-01 as the final technical fix for the proven `finishNativeRun` context-propagation defect: the admission-time liveness discriminator is recovered at the run-end seam so both seams apply one predicate. 15 focused tests, falsified 4 fail / 11 pass. Fix is in `native-boundary.mjs`; `native-patch.mjs` is byte-identical, so the deployed selection `555f37da` stays recognized and the R7/R10 lineage is intact. Single deployment attempt authorized. See ACTIVE.md R18. |
+| M8/T2.2-R18 | DEPLOYED, VERIFIED | Authorized 2026-10-01 as the final technical fix for the proven `finishNativeRun` context-propagation defect: the admission-time liveness discriminator is recovered at the run-end seam so both seams apply one predicate. 15 focused tests, falsified 4 fail / 11 pass. Fix is in `native-boundary.mjs`; `native-patch.mjs` is byte-identical, so the deployed selection `555f37da` stays recognized and the R7/R10 lineage is intact. Deployed 2026-10-01, PASS at stage `applied`, and verified live: run-end internal session 0 -> 2, self-keyed full governance stopped at 40, clean 02:50:52Z heartbeat with every run-end counter at 0. One pre-existing separate seam remains open (ACTIVE.md R18 9); no R19 created. See ACTIVE.md R18. |
 
 All revisions are local commits on `codex/m8-t2-governed-runtime-hardening`; none
 has been pushed.
@@ -888,6 +913,20 @@ revert, proving they pin preserved behaviour rather than the new behaviour.
 **Local validation.** R18 15/15. R17+R18 25/25. R8 12/12. R13 17/17. Full
 `npm test` 838 tests / 796 pass / 0 fail / 42 skipped. `npm run lint`,
 `npm run format:check`, `npm run repo:check` and `git diff --check` all exit 0.
+
+**Live verification.** Deployed through `operator-apply.mjs` with one authorized
+attempt: PASS at stage `applied`, `transactionStatus: complete`, no rollback,
+attempt `txn-546134d1e917bea39046eae142e15b6453e589babe427c1bbf875399c1f773a5`.
+Live dist bridge and extension boundary both `d88bff80`, byte-identical to the
+repository artifact; selection `555f37da` and entrypoint `d01c210b` unchanged;
+native patch `PATCHED`; ledger `d794d99d` / 103 events byte-identical; WSL
+`boot_id` unchanged; gateway active with `NRestarts=0`. A real scheduled
+heartbeat at `2026-10-01T02:50:52Z` completed the full chain with
+`GOVERNANCE_RUN_UNAVAILABLE = 0`, `GOVERNANCE_COMPLETION_UNAVAILABLE = 0`,
+run-end/lane `EXECUTION_STATE_UNKNOWN = 0`, `sandboxErr = 0`, `laneErr = 0`, and
+transcript poll then reply. `beforeRunEnd: internal system session` rose from 0
+to 2 and the self-keyed full-governance refusal stopped at 40. One pre-existing,
+separate seam remains open and is recorded in ACTIVE.md R18 9; no R19 created.
 
 ## 5. Canonical target architecture
 

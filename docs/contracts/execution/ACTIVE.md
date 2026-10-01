@@ -10,8 +10,11 @@ Deployment Authorized: YES
 Deployment Authorized Scope: ONE authorized deployment attempt against the
   real live runtime through `operator-apply.mjs`. No rehearsal namespace, no
   simulation, no automatic retry, no manual heartbeat trigger.
-Lifecycle: AUTHORIZED - IMPLEMENTED, LOCAL-VERIFIED, NOT YET DEPLOYED
-Deployment Status: AUTHORIZED - NOT YET DEPLOYED
+Lifecycle: DEPLOYED AND VERIFIED for its authorized seam; one pre-existing,
+  unrelated seam remains open (see R18 9)
+Deployment Status: DEPLOYED - PASS at stage `applied`, `transactionStatus:
+  complete`, attempt `txn-546134d1e917bea39046eae142e15b6453e589babe427c1b
+bf875399c1f773a5`
 
 R18 is a targeted corrective revision. R16 and R17 remain historical
 deployed revisions and their evidence is not rewritten.
@@ -114,6 +117,96 @@ and live R18 digests matching the repository artifact.
 No R19 is created. A Google `503 UNAVAILABLE` is an upstream capacity
 condition, is classified separately, and is retried through a subsequent
 legitimate scheduler execution rather than worked around in the repository.
+
+## R18 8. Deployed result
+
+`operator-apply.mjs` — the authorized live mechanism, no namespace, no
+simulation — returned `{"status":"PASS","stage":"applied","mutationStarted":
+true,"rollbackRequired":false,"rollbackAttempted":false,"attemptId":"txn-5461
+34d1e917bea39046eae142e15b6453e589babe427c1bbf875399c1f773a5","transactionSt
+atus":"complete"}`. Preflight before the attempt returned
+`{"identifiers":"VALID","builder_preflight":"PASS","installed_mutation":false}`
+and still does after it.
+
+Live, independently verified by sha256 outside the deployer: dist bridge and
+extension `lib/native-boundary.mjs` both `d88bff80aeb3d7531e5a0dceba4e7ba856d0
+85e64a87cbb414c9f295284d81e3`, byte-identical to the repository artifact.
+Selection `555f37da` unchanged, entrypoint `d01c210b` unchanged, native patch
+`PATCHED` for both files. Ledger `d794d99d`, 103 events, sequence 103, byte-
+identical. WSL `boot_id` `ed9ffd50-a0e2-4b43-9cde-cecf0824c3c2` unchanged
+across the deployment. Gateway active, `NRestarts=0`, pid 35319 after the
+expected restart.
+
+**The defect is closed live.** Across the whole post-deployment window
+`beforeRunEnd: internal system session` went from 0 to 2, and
+`beforeRunEnd: self-keyed session presented a runId; applying full governance`
+stopped entirely (it had reached 40 before the deployment).
+
+A clean, real, scheduler-generated heartbeat at `2026-10-01T02:50:52Z`:
+
+    09:50:52.041  [agents/tool-policy] tool policy removed 33 tool(s) via tools.profile (minimal)
+    09:50:52.044  [agents/tool-policy] tool policy removed 1 tool(s) via sandbox tools.allow
+    09:50:52.669  [model-fetch] start model=gemini-flash-latest
+    09:50:56.845  [model-fetch] response model=gemini-flash-latest status=200
+    09:50:58.069  [zink-governance] beforeRunEnd: internal system session for main
+
+Counters for that poll alone: `GOVERNANCE_RUN_UNAVAILABLE = 0`,
+`GOVERNANCE_COMPLETION_UNAVAILABLE = 0`, run-end/lane
+`EXECUTION_STATE_UNKNOWN = 0`, `sandboxErr = 0`, `laneErr = 0`, run-end internal
+session `= 1`, self-keyed full governance `= 0`, first-candidate `status=200`.
+Transcript poll `02:50:52.569Z` then reply `02:50:57.851Z`, 748 -> 751 lines,
+both post-deployment.
+
+The `02:20:54Z` poll immediately before it is also useful evidence rather than a
+failure: its first candidate hit a Google `429 RESOURCE_EXHAUSTED`
+("You exceeded your current quota"), which the provider-failure path converts
+to `allow:false, PROVIDER_UNAVAILABLE` by design, so `GOVERNANCE_COMPLETION_
+UNAVAILABLE` appears for that candidate only. The fallback candidate
+`gemini-flash-lite-latest` returned `status=200` and finished with
+`beforeRunEnd: internal system session` and `candidate_succeeded, next=none`,
+and no lane error. This is an upstream capacity condition classified
+separately, not a repository defect.
+
+## R18 9. The one item still open, and why it is NOT R18's
+
+`EXECUTION_STATE_UNKNOWN` is not 0 in absolute terms. It appears exactly once
+per poll, from a different seam:
+
+    [plugins] zink governance before_prompt_build: EXECUTION_STATE_UNKNOWN
+
+That is the advisory, deliberately fail-OPEN `before_prompt_build` hook
+(`index.mjs`, the R7 G1 correction), not the native run-end boundary R18
+changed. It logs the string and returns an explicit
+`[Trusted governance] EXECUTION_STATE_UNKNOWN. Do not delegate; report BLOCKED.`
+instruction. It is the enforcing control's advisory counterpart, and the
+enforcing control (`enterNativeRun` -> `beforeRun` -> `finishNativeRun`) is what
+now passes.
+
+Proven cause, read-only from the live runtime. The host invokes
+`runBeforePromptBuild(promptEvent, params.hookCtx)`, so the hook's second
+argument IS the run context, and that context DOES carry `trigger`
+(`params.hookCtx.trigger === "heartbeat"` is the very condition the host uses to
+fire its own heartbeat contribution hook). But `isPureLivenessHeartbeat` also
+requires `transcriptPrompt === "[OpenClaw heartbeat poll]"` OR
+`prompt === "[OpenClaw heartbeat poll]"`, and `hookCtx` carries neither — the
+sentinel lives in the turn's prompt, not in the run context. So the exemption
+that `index.mjs` already intends at that hook (`if (isPureLivenessHeartbeat(
+context)) return {};`) can never fire there, the ledger lookup finds no owner
+(a heartbeat has none by design), and the advisory BLOCKED instruction is
+injected. The model then obeys it, which is why the poll's reply carries
+`outcome_claim: BLOCKED, reason_claim: POLICY_DENIED`.
+
+This is pre-existing and predates R16, R17 and R18: that `BLOCKED` reply is
+present continuously in the transcript back to `2026-09-30T21:21:01Z`, before
+any of these revisions. It is a different seam reached through the host's hook
+runner, outside the native boundary's control, so the R18 record cannot reach
+it.
+
+Closing it requires an owner decision, because it means either changing what the
+host passes at that hook — a pinned-native change — or teaching the hook an
+alternative heartbeat discriminator from `hookCtx` alone. That is new
+authorization, so NO R19 is created here and `M8/T2.2` is NOT declared closed.
+R18 is complete for the defect it was authorized to fix.
 
 ---
 
