@@ -67,10 +67,17 @@ const R5_NATIVE_BOUNDARY_SHA256 =
 const R5_ENTRYPOINT_SHA256 =
   "e77689c94ba066bd854549750044f78dcf9d97cc3de73420893851c0a800b10a";
 
-/** The CURRENT build digests (R18). These must NOT be listed. */
+/** The CURRENT build digests (R19). These must NOT be listed. */
 const R10_NATIVE_BOUNDARY_SHA256 =
   "d88bff80aeb3d7531e5a0dceba4e7ba856d085e64a87cbb414c9f295284d81e3";
 const R10_ENTRYPOINT_SHA256 =
+  "bae7bdf358f35c43c5308c4b0b24a1da57b55bbc609d1ff3a7e32daf65182eca";
+
+/**
+ * The outgoing R17 entrypoint, admitted by R19 so the authorized deployment is
+ * reachable. This is the digest the live runtime carried immediately before R19.
+ */
+const R17_OUTGOING_ENTRYPOINT_SHA256 =
   "d01c210b0cc13f01d6d294223ae400a30ef6407c962d5b46e2f199474f799a1d";
 
 /** The commit carrying the R7-era plugin source: R10's immediate parent. */
@@ -366,6 +373,17 @@ test("R13 3: the R5 predecessors R8 added are preserved", () => {
       CONFIGURE_SOURCE.includes(digest),
       `${digest.slice(0, 16)} must be preserved`,
     );
+});
+
+test("R13 3b: the outgoing R17 entrypoint R19 admits is listed in BOTH modes", () => {
+  // The entrypoint allowlist is duplicated per builder mode. Admitting the
+  // predecessor in one mode and not the other would let --preflight PASS and
+  // then --apply refuse, which is the deadlock R13 exists to remove.
+  assert.equal(
+    CONFIGURE_SOURCE.split(R17_OUTGOING_ENTRYPOINT_SHA256).length - 1,
+    2,
+    "the outgoing R17 entrypoint must be admitted in the preflight AND apply gates",
+  );
 });
 
 // ---------------------------------------------------------------------------

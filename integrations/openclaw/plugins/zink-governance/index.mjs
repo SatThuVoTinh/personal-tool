@@ -2666,6 +2666,99 @@ export function isPureLivenessHeartbeat(context) {
   );
 }
 
+// M8/T2.2-R19 — the admission-time liveness discriminator, recovered at the
+// prompt-build seam.
+//
+// The host invokes the advisory `before_prompt_build` hook as
+// `runBeforePromptBuild(promptEvent, params.hookCtx)`, and `hookCtx` is built
+// with only runId/trace/agentId/sessionKey/sessionId/workspaceDir/modelProviderId/
+// modelId/trigger plus channel and identity fields. It carries `trigger`, which
+// the host itself relies on (`hookCtx.trigger === "heartbeat"` gates its own
+// heartbeat contribution hook), but it carries NEITHER `transcriptPrompt` NOR
+// `prompt`: the liveness sentinel lives in the turn's transcript body, not in the
+// run context. So `isPureLivenessHeartbeat` could never match at that seam even
+// though admission had already accepted the very same run as a pure liveness
+// heartbeat. The hook therefore fell through to a ledger lookup, a heartbeat has
+// no ledger owner by design, and it emitted the fail-open
+// `EXECUTION_STATE_UNKNOWN ... report BLOCKED` instruction — which is why every
+// live poll replied `outcome_claim: BLOCKED`.
+//
+// The recovery is deliberately local to this module rather than a cross-module
+// read of the native boundary. The boundary exists in two distinct module
+// instances at runtime (`dist/zink-governance-boundary.mjs` is what the pinned
+// selection imports, while `lib/native-boundary.mjs` is the packaged copy this
+// plugin would import), each with its own module state, so a cross-instance read
+// would observe an empty store. Instead this plugin records the host-provided
+// discriminator inside its OWN `beforeRun` guard — the callback the boundary
+// invokes at admission, carrying the same `trigger`/`transcriptPrompt` the
+// predicate already evaluates — and reads it back here. One predicate, one rule,
+// no second copy of the liveness test.
+//
+// Safety properties, matching the R18 boundary pattern:
+//   * The record holds DATA, never a verdict. The exemption is still decided by
+//     re-running `isPureLivenessHeartbeat`, and every other guard (self-keyed
+//     session, no input provenance, no Discord provenance) is evaluated against
+//     the HOOK's own context, not against the record. Nothing here can grant an
+//     exemption the predicate would not have granted on its own.
+//   * `trigger` is host-assigned (`opts?.isHeartbeat === true ? "heartbeat" :
+//     "user"`), so a user message that merely contains the sentinel still arrives
+//     with `trigger: "user"` and is fully governed. Recovery cannot be spoofed.
+//   * Keyed strictly by the host `runId`, which is unique per run, so one run's
+//     record can never be read by another.
+//   * Bounded, with oldest-first eviction. A run that dies before run-end cannot
+//     grow the store, and an evicted record DEGRADES TO GOVERNANCE: the predicate
+//     then fails and the run stays fully governed. Eviction never yields a bypass.
+//   * Consumed at the run-end seam, which runs after prompt build.
+const ADMISSION_LIVENESS = new Map();
+const ADMISSION_LIVENESS_LIMIT = 256;
+
+function rememberAdmissionLiveness(runId, trigger, transcriptPrompt) {
+  if (typeof runId !== "string" || runId === "") return;
+  if (ADMISSION_LIVENESS.size >= ADMISSION_LIVENESS_LIMIT)
+    ADMISSION_LIVENESS.delete(ADMISSION_LIVENESS.keys().next().value);
+  ADMISSION_LIVENESS.set(runId, { trigger, transcriptPrompt });
+}
+
+/** Read-only: prompt build must not consume what the run-end seam still needs. */
+function readAdmissionLiveness(runId) {
+  if (typeof runId !== "string" || runId === "") return undefined;
+  return ADMISSION_LIVENESS.get(runId);
+}
+
+function forgetAdmissionLiveness(runId) {
+  if (typeof runId !== "string" || runId === "") return;
+  ADMISSION_LIVENESS.delete(runId);
+}
+
+/**
+ * The ONE heartbeat decision, applied identically at every seam.
+ *
+ * `context` is always the host's own run context for the seam in question. When
+ * that context already carries the discriminator the fast path applies. Otherwise
+ * the admission-time record is consulted, so a seam whose host context omits the
+ * sentinel reaches the same verdict on the same run.
+ *
+ * A context that does not CORROBORATE the record fails closed. In production the
+ * hook context's `trigger` and the admission record's `trigger` are the same
+ * `params.trigger` from the same `runEmbeddedAttempt`, so they always agree.
+ * Requiring them to agree exactly means the exemption rests on TWO independent
+ * host-authored facts rather than on the record alone: a missing, absent or
+ * differing trigger is treated as ambiguous and stays governed. Recovery may
+ * therefore only SUPPLY the sentinel, which is the one field this seam's host
+ * context genuinely omits.
+ */
+function isLivenessHeartbeat(context) {
+  if (isPureLivenessHeartbeat(context)) return true;
+  const liveness = readAdmissionLiveness(context?.runId);
+  if (!liveness) return false;
+  if (context.trigger !== liveness.trigger) return false;
+  return isPureLivenessHeartbeat({
+    ...context,
+    trigger: liveness.trigger,
+    transcriptPrompt: liveness.transcriptPrompt,
+  });
+}
+
 /**
  * M7-048: classify a run-end request without trusting a session-key string.
  *
@@ -3648,6 +3741,16 @@ export default {
         };
       },
       async beforeRun(event, context, signal) {
+        // R19: record the host-provided discriminator this admission evaluated, so
+        // the prompt-build seam — whose host context omits the sentinel — can
+        // re-run the SAME predicate on the SAME run instead of reporting a false
+        // EXECUTION_STATE_UNKNOWN. Data only; the verdict is still taken by
+        // `isLivenessHeartbeat`. Bounded and consumed at run-end.
+        rememberAdmissionLiveness(
+          context.runId,
+          context.trigger,
+          context.transcriptPrompt,
+        );
         // R7 G1: a pure liveness heartbeat is an internal run and is exempt from
         // ledger ownership. It is admitted before the classifier below, which
         // deliberately refuses any self-keyed session that carries a runId.
@@ -4370,6 +4473,10 @@ export default {
         return guard.resolveRunModel(args);
       },
       beforeRunEnd(event, context) {
+        // R19: prompt build has already consumed what it needed, so the
+        // admission-time record has no remaining consumer. Dropping it here keeps
+        // the store scoped to one run lifecycle; the bound remains the backstop.
+        forgetAdmissionLiveness(context.runId);
         // T2: publish provider usage when the runtime supplies it. This is
         // opportunistic and strictly optional: the run-end event is not
         // guaranteed to carry a usage field, and when it does not, NOTHING is
@@ -4638,7 +4745,13 @@ export default {
     api.on("before_prompt_build", async (_event, context = {}) => {
       // R7 G1: an exempt heartbeat has no ledger owner by design, so no
       // governance receipt is built for it. Nothing is fabricated.
-      if (isPureLivenessHeartbeat(context)) return {};
+      //
+      // R19: the host context here omits the liveness sentinel, so this seam needs
+      // the admission-time discriminator to reach the verdict admission already
+      // reached on this same run. Without it every heartbeat fell through to a
+      // ledger lookup, found no owner, and emitted the fail-open
+      // `EXECUTION_STATE_UNKNOWN ... report BLOCKED` instruction.
+      if (isLivenessHeartbeat(context)) return {};
       try {
         const owner = findSession(
           readSnapshot(paths),

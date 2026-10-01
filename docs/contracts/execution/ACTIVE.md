@@ -1,4 +1,149 @@
-ACTIVE.md -- M8/T2.2-R18 Run-End Liveness Propagation
+ACTIVE.md -- M8/T2.2-R19 Prompt-Build Liveness Exemption (final revision)
+
+Task ID: M8/T2.2
+Plan Revision: M8/T2.2-R19
+Planning Readiness: APPROVED
+Execution Authorization: YES
+Owner Approval: EXPLICIT -- owner authorized completion of M8/T2.2 on
+  2026-10-01, including this final revision, and directed that the remaining
+  false-positive governance state be eliminated at the correct seam.
+Deployment Authorized: YES
+Deployment Authorized Scope: ONE authorized deployment attempt against the
+  real live runtime through `operator-apply.mjs`. No rehearsal namespace, no
+  simulation, no automatic retry, no manual heartbeat trigger.
+Lifecycle: AUTHORIZED - IMPLEMENTED, LOCAL-VERIFIED, NOT YET DEPLOYED
+Deployment Status: AUTHORIZED - NOT YET DEPLOYED
+
+R19 is the final revision. R18 remains deployed and is NOT modified by R19: the
+pinned native runtime, `native-boundary.mjs` and its R18 recovery are untouched,
+and R18's negative protections are asserted by R19's own suite.
+
+## R19 1. Objective
+
+Eliminate the last false-positive governance state. After R18 the heartbeat
+executed and completed its governed run, but the advisory prompt-build seam still
+reported `EXECUTION_STATE_UNKNOWN` once per poll and injected a
+`report BLOCKED` instruction, so every live poll replied
+`outcome_claim: BLOCKED`.
+
+## R19 2. Root cause, proven from the live runtime
+
+`isPureLivenessHeartbeat` has exactly three call sites: admission, run-end and
+prompt build. R18 fixed run-end. Prompt build was still broken, for a structural
+reason in the host contract rather than a plugin mistake.
+
+The host invokes the hook as `runBeforePromptBuild(promptEvent, params.hookCtx)`.
+Reading the patched runtime directly:
+
+* `hookCtx` is built in `runEmbeddedAttempt` from `params.runId`, a diagnostic
+  trace, `agentId`, `sessionKey`, `sessionId`, `workspaceDir`,
+  `modelProviderId`, `modelId`, `params.trigger`, plus channel and identity
+  fields. It carries `trigger`.
+* It carries NEITHER `transcriptPrompt` NOR `prompt`. The liveness sentinel is a
+  transcript-body constant (`[OpenClaw heartbeat poll]`), assigned as
+  `transcriptBody` for a heartbeat, while the model-facing turn prompt is a
+  different string entirely.
+* `promptEvent.prompt` is `params.prompt`, the model-facing heartbeat prompt, so
+  it is not the sentinel either and cannot substitute.
+
+`isPureLivenessHeartbeat` requires the sentinel, so it returned false at this
+seam for every heartbeat. The hook fell through to `findSession`, a heartbeat
+has no ledger owner by design, and the catch branch emitted its deliberate
+fail-open instruction. The host applies that prepend to the turn, and the model
+obeyed it.
+
+Ordering was verified rather than assumed: `enterNativeRun` is injected at the
+top of `runEmbeddedAttempt` and `before_prompt_build` is invoked later in the
+same function, both using the identical `params.runId`. The admission-time
+discriminator therefore exists before the prompt-build seam needs it.
+
+## R19 3. The change
+
+Entirely inside `index.mjs`. No native runtime change, no new module, no
+dependency, no configuration, no persistent state.
+
+The plugin's own `beforeRun` guard -- the callback the native boundary invokes at
+admission, and which already receives the host `trigger` and `transcriptPrompt`
+that the predicate evaluates -- records those two values under the host `runId`.
+The prompt-build seam reads that record back and re-runs the ONE predicate.
+
+The record is plugin-local on purpose. The native boundary exists as TWO module
+instances at runtime: `dist/zink-governance-boundary.mjs`, which the pinned
+selection imports, and the packaged `lib/native-boundary.mjs`, which the plugin
+would import. Each holds its own module state, so a cross-instance read would
+always observe an empty store. The plugin's own guard is the one seam genuinely
+shared by both, and it needs no import at all.
+
+`isLivenessHeartbeat` is the single decision helper used at this seam. It tries
+the raw context first, then the recovered discriminator. It holds data, never a
+verdict.
+
+## R19 4. Why this cannot become a bypass
+
+* The store holds DATA. The exemption is still decided by re-running
+  `isPureLivenessHeartbeat`, and `agentId`, `sessionKey`, `inputProvenance` and
+  every Discord marker are taken from the HOOK's own context, never from the
+  record. Nothing here can grant an exemption the predicate would not grant.
+* `trigger` is host-assigned (`opts?.isHeartbeat === true ? "heartbeat" :
+  "user"`), so a user message whose entire body is the sentinel still arrives
+  with `trigger: "user"` and stays fully governed.
+* Recovery requires the hook context's `trigger` to CORROBORATE the record
+  exactly. A missing or differing trigger is ambiguous and fails closed, so the
+  exemption rests on two independent host-authored facts rather than the record
+  alone. This was tightened during review after a first draft tolerated an
+  absent trigger.
+* Keyed strictly by the host `runId`; one run's record is unreachable from
+  another.
+* Bounded at 256 with oldest-first eviction, and eviction DEGRADES TO GOVERNANCE:
+  the predicate then fails and the run stays governed. Eviction never yields a
+  bypass.
+* Consumed at the run-end seam, which runs after prompt build.
+* The fail-open `BLOCKED` instruction is retained and still fires for genuinely
+  unresolvable runs; it is not suppressed, only no longer misapplied.
+
+## R19 5. Provenance consequence
+
+`native-boundary.mjs` is UNCHANGED, so R18's boundary digest `d88bff80` stays the
+current build and no boundary allowlist entry, provenance hunk or lineage
+descriptor changes. `index.mjs` does change, so the outgoing deployed R17
+entrypoint `d01c210b` joins the entrypoint allowlist as a recognized predecessor
+in BOTH duplicated per-mode lists, and the current-build entrypoint pin moves to
+the new packaged digest.
+
+## R19 6. Tests
+
+`tests/m8-t2.16-r19-promptbuild-liveness.test.mjs`, 14 tests. They materialize
+the REAL packaged extension into a temp tree, register the plugin, and drive the
+REAL seams: `enterNativeRun` for admission and the real `before_prompt_build`
+handler with a context reproduced exactly as the live runtime builds `hookCtx`.
+Every positive drives that sentinel-less shape, so none can pass through a field
+the real host never sends.
+
+Falsified three ways, each proving an independent component is load-bearing:
+reverting only the prompt-build seam fails 5 tests; removing only the record
+write fails 3; removing only the corroboration guard fails exactly the ambiguity
+negative. Every negative passes under all three reverts, proving they pin
+preserved behaviour rather than the new behaviour.
+
+Regression: R17+R18+R19 39/39, R10 14/14 (heartbeat injection contract), R7
+22/22 (owns the prompt-build advisory contract), R8 12/12, R13 18/18, and full
+`npm test` 853 tests / 811 pass / 0 fail / 42 skipped. Lint, Prettier,
+repository policy and `git diff --check` all exit 0.
+
+## R19 7. Closure condition
+
+M8/T2.2 closes only when the live runtime shows a real scheduler heartbeat with
+the advisory prompt-build `EXECUTION_STATE_UNKNOWN` at 0, no
+`outcome_claim: BLOCKED` on the poll reply, run-end governance still internal,
+every run-end/lane counter at 0, no new `sandboxErr`/`laneErr`, WSL `boot_id`
+unchanged, gateway stable, ledger intact, and live digests matching the
+repository artifact. A Google `503`/`429` is an upstream capacity condition,
+classified separately and retried through a subsequent legitimate scheduler
+execution.
+
+---
+
+# Historical: M8/T2.2-R18 (deployed; run-end liveness propagation)
 
 Task ID: M8/T2.2
 Plan Revision: M8/T2.2-R18

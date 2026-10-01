@@ -48,7 +48,7 @@ Milestone: M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Inte
 Task: M8/T2.2 — Root-Cause Governed Runtime, Discord, Semantic & Artifact Integrity Hardening
 Task Status: IN PROGRESS
 Planning Readiness: APPROVED
-Plan Revision: M8/T2.2-R18
+Plan Revision: M8/T2.2-R19
 Execution Authorization: YES
 Authorized Task: M8/T2.2 — Root-Cause Governed Runtime, Discord, Semantic & Artifact Integrity Hardening
 Execution Contract: docs/contracts/execution/ACTIVE.md
@@ -74,6 +74,8 @@ Deployment Authorized: YES
 Deployment Authorized: YES (R17 - consumed)
 Deployment Authorized: YES (R18 - single attempt, granted by the owner on
   2026-10-01)
+Deployment Authorized: YES (R19 - single attempt, granted by the owner on
+  2026-10-01 as authorized completion of M8/T2.2)
 ```
 
 `Deployment Status: DEPLOYED - R18 LIVE AND VERIFIED FOR ITS AUTHORIZED SEAM;
@@ -93,16 +95,15 @@ run-end/lane `EXECUTION_STATE_UNKNOWN = 0`, `sandboxErr = 0`, `laneErr = 0`,
 first-candidate `status=200`, and a transcript poll then reply 3.3s later.
 Digests, ledger and runtime integrity are in ACTIVE.md R18 8.
 
-`M8/T2.2` is deliberately NOT returned to CLOSED. One item remains open and it
-is not R18's: the advisory, fail-open `before_prompt_build` hook emits
+`M8/T2.2` is NOT yet closed. R19 is authorized and targets the one item R18
+identified and left open: the advisory `before_prompt_build` hook emitted
 `EXECUTION_STATE_UNKNOWN` once per poll and its `BLOCKED` instruction is why the
-poll replies `outcome_claim: BLOCKED`. That seam is reached through the host
-hook runner with a run context that carries `trigger` but neither
+poll replied `outcome_claim: BLOCKED`. R18 9 proved the cause from the live
+runtime: the hook receives `params.hookCtx`, which carries `trigger` but neither
 `transcriptPrompt` nor `prompt`, so the heartbeat exemption that hook already
-intends can never fire there. The `BLOCKED` reply is present continuously in the
-transcript back to `2026-09-30T21:21:01Z`, before R16, R17 and R18, so it is
-pre-existing and not a regression. Closing it is an owner decision and no R19
-is created. See ACTIVE.md R18 9.
+intends can never fire there. R19 fixes it at that seam by recovering the
+admission-time discriminator inside the plugin's own guard. See ACTIVE.md R19.
+Closure follows live verification of that fix; no R20 is created.
 
 `Deployment Authorized: YES (R18 - single attempt)` — granted by the owner on
 2026-10-01 as the final technical fix, to deploy the locally verified R18
@@ -169,7 +170,8 @@ carried R5 and R6 implementation. The plan was never revised for either, so
 | M8/T2.2-R15 | Implemented           | `c73173f` attempt-scoped transaction identity: `attemptId` separated from `preimageDigest`; completed attempts no longer block a repeat. 17/15 falsified. Not deployed.                                                                         |
 | M8/T2.2-R16 | CLOSED                | Authorized 2026-09-30; deployed 2026-09-30 as the live runtime (R10). Superseded as the implementation revision by the authorized post-deployment correction R17; R16 evidence is historical and unchanged. See A4.13.                          |
 | M8/T2.2-R17 | DEPLOYED, GAP OPEN | Authorized 2026-09-30 as a post-deployment RED correction to the R10 run-end governance contract: run-end parity for the pure liveness heartbeat. 10 focused tests, falsified 7 pass / 3 fail. Deployed 2026-09-30 as the live runtime (R17 build). Superseded as the implementation revision by R18, which closed the remaining blocker; R17 evidence is historical and unchanged. See A4.14. |
-| M8/T2.2-R18 | DEPLOYED, VERIFIED | Authorized 2026-10-01 as the final technical fix for the proven `finishNativeRun` context-propagation defect: the admission-time liveness discriminator is recovered at the run-end seam so both seams apply one predicate. 15 focused tests, falsified 4 fail / 11 pass. Fix is in `native-boundary.mjs`; `native-patch.mjs` is byte-identical, so the deployed selection `555f37da` stays recognized and the R7/R10 lineage is intact. Deployed 2026-10-01, PASS at stage `applied`, and verified live: run-end internal session 0 -> 2, self-keyed full governance stopped at 40, clean 02:50:52Z heartbeat with every run-end counter at 0. One pre-existing separate seam remains open (ACTIVE.md R18 9); no R19 created. See ACTIVE.md R18. |
+| M8/T2.2-R18 | DEPLOYED, VERIFIED | Authorized 2026-10-01 as the technical fix for the proven `finishNativeRun` context-propagation defect: the admission-time liveness discriminator is recovered at the run-end seam so both seams apply one predicate. 15 focused tests, falsified 4 fail / 11 pass. Fix is in `native-boundary.mjs`; `native-patch.mjs` is byte-identical, so the deployed selection `555f37da` stays recognized and the R7/R10 lineage is intact. Deployed 2026-10-01, PASS at stage `applied`, and verified live: run-end internal session 0 -> 2, self-keyed full governance stopped at 40, clean 02:50:52Z heartbeat with every run-end counter at 0. Unchanged by R19. See ACTIVE.md R18. |
+| M8/T2.2-R19 | IMPLEMENTED, AUTHORIZED | Authorized 2026-10-01 as the final revision completing M8/T2.2: the advisory `before_prompt_build` seam recovers the admission-time liveness discriminator so a heartbeat is recognized there and no longer reported `EXECUTION_STATE_UNKNOWN` or told to report BLOCKED. Fix is confined to `index.mjs`; `native-boundary.mjs` and the pinned native runtime are untouched, so R18 stays intact and no lineage changes. 14 tests, falsified three ways (5 / 3 / 1 failures). Single deployment attempt authorized. See ACTIVE.md R19. |
 
 All revisions are local commits on `codex/m8-t2-governed-runtime-hardening`; none
 has been pushed.

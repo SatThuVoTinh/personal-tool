@@ -671,6 +671,13 @@ async function main() {
       // R17 deployment is unreachable. The R17 digest is deliberately NOT listed:
       // it is the current build and is already accepted by content comparison.
       "e5b220b4a3b023f6d7b26561964f6204f0d004267b208cddab90adb6043b8bd7",
+      // M8/T2.2-R19: the outgoing R17 entrypoint currently deployed, byte-proven
+      // against the live runtime at this exact path after the R18 deployment.
+      // R19 changes the entrypoint (the prompt-build liveness exemption), so
+      // without this entry --preflight refuses the deployed R17 extension and the
+      // R19 deployment is unreachable. The R19 digest is deliberately NOT listed:
+      // it is the current build and is already accepted by content comparison.
+      "d01c210b0cc13f01d6d294223ae400a30ef6407c962d5b46e2f199474f799a1d",
     ],
   );
   assertRegularOrMissing(output.identityKeyPath);
@@ -797,6 +804,12 @@ async function main() {
       // --preflight PASS and then --apply refuse. The R17 digest is deliberately
       // NOT listed: it is the current build and is accepted by content comparison.
       "e5b220b4a3b023f6d7b26561964f6204f0d004267b208cddab90adb6043b8bd7",
+      // M8/T2.2-R19: the outgoing R17 entrypoint, listed here as well as in the
+      // preflight gate above for the same reason R13's entry is duplicated per
+      // mode: admitting the predecessor in one mode and not the other would let
+      // --preflight PASS and then --apply refuse. The R19 digest is deliberately
+      // NOT listed: it is the current build and is accepted by content comparison.
+      "d01c210b0cc13f01d6d294223ae400a30ef6407c962d5b46e2f199474f799a1d",
     ],
   );
   if (!existsSync(output.identityKeyPath))
