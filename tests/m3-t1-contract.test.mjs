@@ -136,7 +136,11 @@ test("M3/T1 migration scopes sources and segments by index identity", () => {
 test("M3/T1 readiness verifies the active index embedding digest and dimensions", () => {
   const service = readFileSync(servicePath, "utf8");
 
-  assert.match(service, /@app\.get\("\/healthz"\)/);
+  // `/healthz` returns `JSONResponse | dict[...]`, which the pinned
+  // FastAPI/Pydantic pair rejects during route registration unless response
+  // model generation is disabled. Pin the exact bootable form so the route
+  // cannot silently regress into a service that cannot import `app.main`.
+  assert.match(service, /@app\.get\("\/healthz", response_model=None\)/);
   assert.match(service, /@app\.get\("\/readyz", response_model=None\)/);
   assert.match(service, /NO_ACTIVE_INDEX/);
   assert.match(service, /EMBEDDING_MODEL_UNAVAILABLE/);

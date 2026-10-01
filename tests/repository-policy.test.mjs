@@ -81,6 +81,17 @@ jobs:
           test "$(npm --version)" = "12.0.2"
       - run: npm ci
       - run: npm run verify
+  python-quality:
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.13"
+      - run: pip install --disable-pip-version-check "uv==0.12.5"
+      - run: uv sync --locked
+      - run: npm run test:knowledge
 `;
 
 const VALID_SECURITY_WORKFLOW = `name: Security
@@ -229,6 +240,8 @@ test("rejects placeholder-like npm scripts and Make targets", () => {
         "format:check": "true",
         lint: "TODO",
         test: "node --test",
+        "test:knowledge":
+          "uv run --directory apps/knowledge --locked python -m pytest tests -q",
         "repo:check": "node scripts/repository-check.mjs",
         verify: "npm run verify",
       },
@@ -244,6 +257,190 @@ test("rejects placeholder-like npm scripts and Make targets", () => {
   assert.ok(
     failures.some((failure) =>
       failure.includes("Make target install must run npm ci."),
+    ),
+  );
+});
+
+test("requires a blocking Knowledgebase Python job in CI", () => {
+  withTemporaryDirectory((repositoryRoot) => {
+    writeWorkflow(
+      repositoryRoot,
+      "ci.yml",
+      VALID_CI_WORKFLOW.replace(/^ {2}python-quality:[\s\S]*$/mu, ""),
+    );
+    writeWorkflow(repositoryRoot, "security.yml", VALID_SECURITY_WORKFLOW);
+    const failures = checkWorkflowDefinitions(repositoryRoot);
+    assert.ok(
+      failures.some((failure) =>
+        failure.includes("missing job python-quality"),
+      ),
+    );
+  });
+
+  withTemporaryDirectory((repositoryRoot) => {
+    writeWorkflow(
+      repositoryRoot,
+      "ci.yml",
+      VALID_CI_WORKFLOW.replace(
+        "  python-quality:\n",
+        "  python-quality:\n    continue-on-error: true\n",
+      ),
+    );
+    writeWorkflow(repositoryRoot, "security.yml", VALID_SECURITY_WORKFLOW);
+    assert.ok(
+      checkWorkflowDefinitions(repositoryRoot).some((failure) =>
+        failure.includes("must block on failure"),
+      ),
+    );
+  });
+
+  withTemporaryDirectory((repositoryRoot) => {
+    writeWorkflow(
+      repositoryRoot,
+      "ci.yml",
+      VALID_CI_WORKFLOW.replace(
+        "      - run: npm run test:knowledge",
+        "      - run: npm run test:knowledge\n        continue-on-error: true",
+      ),
+    );
+    writeWorkflow(repositoryRoot, "security.yml", VALID_SECURITY_WORKFLOW);
+    const failures = checkWorkflowDefinitions(repositoryRoot);
+    assert.ok(
+      failures.some((failure) => failure.includes("must block on failure")),
+    );
+  });
+});
+
+test("rejects a CI job that drops or reorders the Knowledgebase suite", () => {
+  withTemporaryDirectory((repositoryRoot) => {
+    writeWorkflow(
+      repositoryRoot,
+      "ci.yml",
+      VALID_CI_WORKFLOW.replace("      - run: npm run test:knowledge\n", ""),
+    );
+    writeWorkflow(repositoryRoot, "security.yml", VALID_SECURITY_WORKFLOW);
+    assert.ok(
+      checkWorkflowDefinitions(repositoryRoot).some((failure) =>
+        failure.includes(
+          "must contain executable command `npm run test:knowledge`",
+        ),
+      ),
+    );
+  });
+
+  withTemporaryDirectory((repositoryRoot) => {
+    writeWorkflow(
+      repositoryRoot,
+      "ci.yml",
+      VALID_CI_WORKFLOW.replace(
+        "      - run: uv sync --locked\n      - run: npm run test:knowledge",
+        "      - run: npm run test:knowledge\n      - run: uv sync --locked",
+      ),
+    );
+    writeWorkflow(repositoryRoot, "security.yml", VALID_SECURITY_WORKFLOW);
+    assert.ok(
+      checkWorkflowDefinitions(repositoryRoot).some((failure) =>
+        failure.includes("must appear in the required order"),
+      ),
+    );
+  });
+});
+
+test("rejects pulling the pdf-runtime closure into the Python CI job", () => {
+  withTemporaryDirectory((repositoryRoot) => {
+    writeWorkflow(
+      repositoryRoot,
+      "ci.yml",
+      VALID_CI_WORKFLOW.replace(
+        "      - run: uv sync --locked",
+        "      - run: uv sync --locked --directory pdf-runtime",
+      ),
+    );
+    writeWorkflow(repositoryRoot, "security.yml", VALID_SECURITY_WORKFLOW);
+    assert.ok(
+      checkWorkflowDefinitions(repositoryRoot).some((failure) =>
+        failure.includes("must not install the pdf-runtime closure"),
+      ),
+    );
+  });
+});
+
+test("rejects a verify gate that omits the Knowledgebase Python stage", () => {
+  const validScripts = {
+    format: "prettier --write README.md",
+    "format:check": "prettier --check README.md",
+    lint: "eslint scripts",
+    test: "node --test tests",
+    "test:knowledge":
+      "uv run --directory apps/knowledge --locked python -m pytest tests -q",
+    "repo:check": "node scripts/repository-check.mjs",
+  };
+
+  const withoutPython = {
+    scripts: {
+      ...validScripts,
+      verify:
+        "npm run format:check && npm run lint && npm test && npm run repo:check",
+    },
+  };
+  assert.ok(
+    checkCommandDefinitions(withoutPython, "install:\n\tnpm ci\n").some(
+      (failure) => failure.includes("verify must run the documented"),
+    ),
+  );
+
+  const outOfOrder = {
+    scripts: {
+      ...validScripts,
+      verify:
+        "npm run format:check && npm run test:knowledge && npm run lint && npm test && npm run repo:check",
+    },
+  };
+  assert.ok(
+    checkCommandDefinitions(outOfOrder, "install:\n\tnpm ci\n").some(
+      (failure) => failure.includes("verify must run the documented"),
+    ),
+  );
+
+  const complete = {
+    scripts: {
+      ...validScripts,
+      verify:
+        "npm run format:check && npm run lint && npm test && npm run test:knowledge && npm run repo:check",
+    },
+  };
+  assert.deepEqual(
+    checkCommandDefinitions(complete, "install:\n\tnpm ci\n").filter(
+      (failure) => failure.includes("verify must run the documented"),
+    ),
+    [],
+  );
+});
+
+test("requires a Knowledgebase Python test script and Make target", () => {
+  const failures = checkCommandDefinitions(
+    {
+      scripts: {
+        format: "prettier --write README.md",
+        "format:check": "prettier --check README.md",
+        lint: "eslint scripts",
+        test: "node --test tests",
+        "repo:check": "node scripts/repository-check.mjs",
+        verify:
+          "npm run format:check && npm run lint && npm test && npm run test:knowledge && npm run repo:check",
+      },
+    },
+    "install:\n\tnpm ci\n",
+  );
+
+  assert.ok(
+    failures.includes(
+      "npm script is missing or placeholder-like: test:knowledge",
+    ),
+  );
+  assert.ok(
+    failures.includes(
+      "Make target test-knowledge must run npm run test:knowledge.",
     ),
   );
 });

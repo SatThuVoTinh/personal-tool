@@ -526,7 +526,10 @@ class PdfBuildLifecycleTests(unittest.IsolatedAsyncioTestCase):
         def changing_hash(path: Path) -> str:
             nonlocal changed
             digest = sha256_file(path)
-            if path == self.pdf and not changed:
+            # Compare resolved paths: on Windows the production resolver returns
+            # the 8.3 short-name spelling, so a raw equality check would never
+            # match the fixture and the drift would never be injected.
+            if path.resolve() == self.pdf.resolve() and not changed:
                 self.pdf.write_bytes(b"changed fixture")
                 changed = True
             return digest

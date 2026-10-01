@@ -338,7 +338,10 @@ Lệnh trên sẽ tự động chạy:
 1. `npm run format:check`: Kiểm tra định dạng mã nguồn.
 2. `npm run lint`: Phân tích tĩnh cú pháp JavaScript và Markdown.
 3. `npm test`: Chạy toàn bộ bài kiểm thử bao phủ hợp đồng M1–M8, OpenClaw governance và DuckDB bridge (số lượng bài kiểm thử lấy từ kết quả chạy thực tế, không ghi cứng).
-4. `npm run repo:check`: Kiểm tra toàn vẹn chính sách repository.
+4. `npm run test:knowledge`: Chạy bài kiểm thử Python của Zink Knowledgebase qua `uv run --directory apps/knowledge --locked` (pytest từ `uv.lock`). Yêu cầu `KNOWLEDGE_TOKENIZER_PATH` trỏ tới `tokenizer.json` của bge-reranker-v2-m3.
+5. `npm run repo:check`: Kiểm tra toàn vẹn chính sách repository.
+
+Bộ kiểm thử `pdf-runtime` là Linux/x86_64-specific và kéo theo torch/docling, nên CI cố ý **không** chạy bước này. Trạng thái của nó là `NOT RUN`, không phải PASS.
 
 ---
 

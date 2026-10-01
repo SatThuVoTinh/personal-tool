@@ -211,7 +211,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         return await request_validation_exception_handler(request, error)
 
-    @app.get("/healthz")
+    @app.get("/healthz", response_model=None)
     async def healthz() -> JSONResponse | dict[str, str]:
         if not database.available:
             return JSONResponse(

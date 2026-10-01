@@ -143,6 +143,30 @@ All notable, validated changes to Personal Tool are documented here.
 
 ### Fixed
 
+- Fixed a Zink Knowledgebase boot failure. `GET /healthz` in
+  `apps/knowledge/app/main.py` declared the return annotation
+  `JSONResponse | dict[str, str]` without `response_model=None`, so the pinned
+  FastAPI 0.133.0 / Pydantic 2.13.4 pair raised `FastAPIError` while
+  registering the route. `import app.main` and therefore the container's
+  `uvicorn app.main:app` command failed at startup, independent of database
+  availability. The fix adds `response_model=None`, matching the `/readyz` route
+  immediately below it, and changes no response contract, no dependency version,
+  and no unrelated code. The regression entered in commit `01489aa`; the running
+  `personal-tool/knowledge:m3` image predates it (revision `0a64b0b`) and was
+  therefore not affected. No deployment or runtime change was made.
+- Fixed the absence of a Python quality gate. The Knowledgebase Python suite was
+  never executed by `npm run verify` or CI, so the boot failure above shipped
+  undetected. Added `npm run test:knowledge` (and a `test-knowledge` Make target)
+  running `uv run --directory apps/knowledge --locked python -m pytest tests -q`
+  against the existing `uv.lock`, pinned `pytest==9.1.1` in a new `dev`
+  dependency group that the runtime image does not install, inserted the stage
+  into `npm run verify` between `npm test` and `npm run repo:check`, and added a
+  blocking `CI / python-quality` job using SHA-pinned `actions/setup-python`,
+  `uv sync --locked`, and a checksum-verified suite tokenizer.
+  `repository-policy.mjs` now enforces the verify stage order and the presence,
+  ordering, blocking behaviour, and pdf-runtime exclusion of that CI job, with
+  matching policy tests. The Linux/x86_64-only `pdf-runtime` suite remains an
+  explicit `NOT RUN` in CI rather than an implied pass.
 - Fixed specialist bot direct Discord mention leakage by enforcing `SPECIALIST_NO_DIRECT_INGRESS` in `integrations/openclaw/lib/authority.mjs` and the governance plugin, ensuring specialist agents reject direct ingress mentions across all channels and never converse directly on `#office`.
 - Fixed mock SQL row leakage by enabling real DuckDB execution via `zink-tools/sql/duckdb-bridge.mjs` and enforcing discrete execution states (`REAL_EXECUTED`, `EMPTY_RESULT`, `TEST_SIMULATION`, `TIMEOUT`) that fail closed upon syntax or binder errors.
 - Fixed workspace artifact dirtying by eliminating secondary writes to repository `artifacts/` during Excel and artifact generation, strictly isolating persistent artifacts to designated out-of-repo storage.

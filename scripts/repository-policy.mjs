@@ -19,8 +19,23 @@ const REQUIRED_SCRIPTS = [
   "format:check",
   "lint",
   "test",
+  "test:knowledge",
   "repo:check",
   "verify",
+];
+
+// `npm run verify` is the single fail-fast quality gate. The stage order is
+// part of the contract: fast static checks first, then the JavaScript suite,
+// then the Knowledgebase Python suite, then repository policy validation.
+// A missing stage must fail the policy check rather than silently shrink the
+// gate, which is why this is a fixed sequence instead of a loose membership
+// test.
+const REQUIRED_VERIFY_STAGES = [
+  "npm run format:check",
+  "npm run lint",
+  "npm test",
+  "npm run test:knowledge",
+  "npm run repo:check",
 ];
 
 const MAKE_TARGETS = {
@@ -29,6 +44,7 @@ const MAKE_TARGETS = {
   "format-check": "npm run format:check",
   lint: "npm run lint",
   test: "npm test",
+  "test-knowledge": "npm run test:knowledge",
   "repo-check": "npm run repo:check",
   verify: "npm run verify",
 };
@@ -41,6 +57,7 @@ const WORKFLOW_PATHS = {
 const ACTIONS = {
   checkout: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
   setupNode: "actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38",
+  setupPython: "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
   gitleaks: "gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e",
 };
 
@@ -352,6 +369,103 @@ function checkCiWorkflow(workflowPath, workflow, failures) {
     },
     failures,
   );
+
+  checkPythonQualityJob(workflowPath, workflow, failures);
+}
+
+const PYTHON_QUALITY_JOB = "python-quality";
+
+// The Knowledgebase Python suite is a blocking gate, so the policy refuses to
+// accept a CI workflow where that job is absent, non-blocking, or no longer
+// runs the suite. Without this, deleting the job would silently return the
+// Python tier to unverified.
+function checkPythonQualityJob(workflowPath, workflow, failures) {
+  const steps = workflowSteps(
+    workflowPath,
+    workflow,
+    PYTHON_QUALITY_JOB,
+    failures,
+  );
+
+  if (!steps.length) {
+    return;
+  }
+
+  const job = workflow.jobs?.[PYTHON_QUALITY_JOB];
+  if (job?.["continue-on-error"] === true) {
+    failures.push(
+      formatWorkflowFailure(
+        workflowPath,
+        `job ${PYTHON_QUALITY_JOB} must block on failure.`,
+      ),
+    );
+  }
+
+  if (actionStepIndex(steps, ACTIONS.setupPython) < 0) {
+    failures.push(
+      formatWorkflowFailure(
+        workflowPath,
+        `job ${PYTHON_QUALITY_JOB} must use pinned actions/setup-python.`,
+      ),
+    );
+  }
+
+  const syncIndex = runStepIndex(steps, "uv sync --locked");
+  const suiteIndex = runStepIndex(steps, "npm run test:knowledge");
+  checkOrderedStepIndexes(
+    workflowPath,
+    PYTHON_QUALITY_JOB,
+    {
+      "command `uv sync --locked`": syncIndex,
+      "command `npm run test:knowledge`": suiteIndex,
+    },
+    failures,
+  );
+
+  // pdf-runtime is Linux/x86_64-only and pulls the torch/docling stack. It must
+  // stay an explicit NOT RUN in CI rather than being installed here or implied.
+  for (const step of steps) {
+    if (!isObject(step)) {
+      continue;
+    }
+    if (typeof step.run === "string") {
+      if (
+        step.run.includes("pdf-runtime") ||
+        step.run.includes("zink_pdf_runtime")
+      ) {
+        failures.push(
+          formatWorkflowFailure(
+            workflowPath,
+            `job ${PYTHON_QUALITY_JOB} must not install the pdf-runtime closure.`,
+          ),
+        );
+      }
+      // A step-level override would silently downgrade the gate to advisory
+      // even though the job itself still fails on a red suite.
+      if (
+        step.run.trim() === "npm run test:knowledge" &&
+        step["continue-on-error"] === true
+      ) {
+        failures.push(
+          formatWorkflowFailure(
+            workflowPath,
+            `job ${PYTHON_QUALITY_JOB} must block on failure.`,
+          ),
+        );
+      }
+    }
+    if (
+      step.uses === ACTIONS.setupPython &&
+      step["continue-on-error"] === true
+    ) {
+      failures.push(
+        formatWorkflowFailure(
+          workflowPath,
+          `job ${PYTHON_QUALITY_JOB} must block on failure.`,
+        ),
+      );
+    }
+  }
 }
 
 function checkSecurityWorkflow(workflowPath, workflow, failures) {
@@ -595,12 +709,15 @@ export function checkCommandDefinitions(packageJson, makefile) {
     }
   }
 
+  const verify = scripts.verify;
   if (
-    scripts.verify !==
-    "npm run format:check && npm run lint && npm test && npm run repo:check"
+    typeof verify !== "string" ||
+    verify !== REQUIRED_VERIFY_STAGES.join(" && ")
   ) {
     failures.push(
-      "npm script verify must run the documented fail-fast quality gate.",
+      `npm script verify must run the documented fail-fast quality gate in order: ${REQUIRED_VERIFY_STAGES.join(
+        " && ",
+      )}.`,
     );
   }
 

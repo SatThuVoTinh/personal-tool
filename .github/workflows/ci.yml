@@ -41,3 +41,44 @@ jobs:
         run: npm ci
       - name: Run quality gate
         run: npm run verify
+
+  # The Knowledgebase Python suite is a blocking gate. The runtime service and
+  # this job share one pinned lockfile, so a Python regression that would break
+  # the deployed service fails CI instead of reaching a release.
+  python-quality:
+    name: python-quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install uv
+        run: pip install --disable-pip-version-check "uv==0.12.5"
+      - name: Verify Python version
+        run: python -c "import sys; assert sys.version_info[:2] == (3, 13), sys.version"
+      # The suite tokenizes real text through the pinned bge-reranker-v2-m3
+      # tokenizer. Fetch the exact bytes the runtime image uses and prove the
+      # checksum so the gate cannot silently degrade to a different tokenizer.
+      - name: Fetch pinned tokenizer
+        run: |
+          mkdir -p "${{ runner.temp }}/knowledge-artifacts"
+          curl --fail --location --silent --show-error \
+            --output "${{ runner.temp }}/knowledge-artifacts/tokenizer.json" \
+            "https://huggingface.co/BAAI/bge-reranker-v2-m3/resolve/953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e/tokenizer.json"
+          echo "69564b696052886ed0ac63fa393e928384e0f8caada38c1f4864a9bfbf379c15  ${{ runner.temp }}/knowledge-artifacts/tokenizer.json" | sha256sum --check --strict
+      - name: Install locked Knowledgebase dependencies
+        working-directory: apps/knowledge
+        run: uv sync --locked
+      # pdf-runtime is deliberately not installed here: its lock is restricted
+      # to linux/x86_64 and pulls the torch/docling stack. That suite stays an
+      # explicit NOT RUN in CI rather than an assumed pass.
+      - name: Run Knowledgebase Python suite
+        env:
+          KNOWLEDGE_TOKENIZER_PATH: ${{ runner.temp }}/knowledge-artifacts/tokenizer.json
+        run: npm run test:knowledge

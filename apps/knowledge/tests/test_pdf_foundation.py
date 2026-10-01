@@ -175,13 +175,20 @@ class PdfFoundationTests(unittest.TestCase):
         with self.assertRaisesRegex(PdfFoundationError, "PDF_SOURCE_PATH_INVALID"):
             parse_pdf_sidecar(vault, path)
 
+    @unittest.skipUnless(hasattr(os, "symlink"), "symbolic links are unavailable")
     def test_basename_scan_does_not_traverse_linked_directory(self) -> None:
         temporary, vault = self.make_vault()
         self.addCleanup(temporary.cleanup)
         outside = Path(temporary.name) / "outside"
         outside.mkdir()
         (outside / "linked.pdf").write_bytes(b"%PDF-outside")
-        os.symlink(outside, vault / "linked", target_is_directory=True)
+        try:
+            os.symlink(outside, vault / "linked", target_is_directory=True)
+        except OSError as error:
+            # Windows requires SeCreateSymbolicLinkPrivilege for this. The
+            # production rejection of linked directories is still covered by the
+            # file-level link test; only the directory-link case is unrunnable.
+            self.skipTest(f"directory symlinks cannot be created: {error}")
         path = self.write_sidecar(vault, "linked.md", "linked.pdf")
         with self.assertRaisesRegex(PdfFoundationError, "PDF_SOURCE_PATH_INVALID"):
             parse_pdf_sidecar(vault, path)
