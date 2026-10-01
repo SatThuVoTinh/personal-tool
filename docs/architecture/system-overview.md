@@ -16,9 +16,14 @@ neither is nested under Knowledgebase.
 ## Orchestration boundary
 
 OpenClaw owns agent orchestration, routing, permissions and model-tool execution.
-n8n owns deterministic workflow execution and run state. OpenClaw-to-Skill-Store
-is a reserved thin adapter boundary through Zink Tools. It is documentation only
-in M5/T1-R2 and has no implementation, API or service.
+n8n owns deterministic workflow execution and run state. OpenClaw reaches Skill
+Store through the governed Zink Tools boundary: `zink_skill_search` for
+ACTIVE-only semantic retrieval and `zink_skill_propose` for candidate proposals.
+A proposal is durably stored, confirmed by the owner on the dedicated #office
+learning path with an exact content binding, materialized into the canonical
+Git-native store by trusted internal promotion, and then derived into the
+pgvector index. The vector index is derived; the Git-native store is the source
+of truth.
 
 For M7/T2, the model-invisible `zink-governance` OpenClaw integration enforces
 the approved five-stack topology. Its trusted operator ledger owns task dedupe,

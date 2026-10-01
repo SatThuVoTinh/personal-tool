@@ -270,13 +270,52 @@ describe("M8/T1 Governed Skill Vector Store & Semantic Vector RAG", () => {
         /APPROVAL_PROPOSAL_ID_REQUIRED/,
       );
 
-      // 4. Accepts valid owner + proposal + hash
+      // 4. Fails closed when no durable proposal exists, even for a valid
+      // owner and hash. An unknown proposal is never "probably okay".
+      await assert.rejects(
+        () =>
+          handleOwnerSkillApproval({
+            ownerDiscordId: OWNER_SNOWFLAKE,
+            expectedOwnerId: OWNER_SNOWFLAKE,
+            proposalId: validProposalId,
+            contentSha256: validHash,
+            namespace: ["office"],
+            capability: "ghost-skill",
+            version: "1.0.0",
+            skillsRoot: tempDir,
+            proposalStorageDir: path.join(tempDir, "proposals"),
+          }),
+        /APPROVAL_UNKNOWN_PROPOSAL/,
+      );
+
+      // 5. Accepts a valid owner approval bound to the exact durable proposal
+      // and materializes the canonical skill.
+      const { SkillAdapter: ProposalAdapter } =
+        await import("../zink-tools/adapters/skill-store/skill-adapter.mjs");
+      const proposalDir = path.join(tempDir, "proposals");
+      const proposing = new ProposalAdapter(undefined, {
+        proposalStorageDir: proposalDir,
+      });
+      const content = "# Bug06 Skill\n\nGoverned content.";
+      const proposed = await proposing.querySkillStore({
+        action: "propose",
+        namespace: ["office"],
+        capability: "bug06-skill",
+        version: "1.0.0",
+        content,
+        reason: "BUG-06 governed approval",
+        requesting_agent: "excel",
+      });
       const approvalResult = await handleOwnerSkillApproval({
         ownerDiscordId: OWNER_SNOWFLAKE,
         expectedOwnerId: OWNER_SNOWFLAKE,
-        proposalId: validProposalId,
-        contentSha256: validHash,
-        skillsRoot: tempDir,
+        proposalId: proposed.proposal.proposal_id,
+        contentSha256: proposed.proposal.content_sha256,
+        namespace: ["office"],
+        capability: "bug06-skill",
+        version: "1.0.0",
+        skillsRoot: path.join(tempDir, "skills"),
+        proposalStorageDir: proposalDir,
         options: {
           embedFn: async () => [new Array(1024).fill(0.01)],
           dbExecutor: async () => "",
@@ -284,6 +323,7 @@ describe("M8/T1 Governed Skill Vector Store & Semantic Vector RAG", () => {
       });
 
       assert.ok(approvalResult);
+      assert.equal(approvalResult.approval_status, "APPROVED");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

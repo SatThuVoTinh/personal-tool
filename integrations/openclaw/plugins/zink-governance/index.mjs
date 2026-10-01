@@ -1,9 +1,13 @@
 import { createHash, randomBytes } from "node:crypto";
 import {
+  closeSync,
   existsSync,
+  fsyncSync,
   lstatSync,
+  openSync,
   readFileSync,
   readdirSync,
+  renameSync,
   writeFileSync,
   mkdirSync,
 } from "node:fs";
@@ -81,7 +85,9 @@ import {
   CHANNELS,
   TASK_STATES,
   ACTIONS,
+  APPROVAL_SUBJECT_TYPES,
   buildComponentCustomId,
+  buildSkillComponentCustomId,
   parseComponentCustomId,
   DISCORD_COMPONENT_ACTION_NAMESPACE,
   resolveIngressRouting,
@@ -152,10 +158,96 @@ export function registerPendingSkillProposal(approvalRecord) {
   if (proposalId) {
     globalThis[PENDING_PROPOSALS_KEY].set(proposalId, approvalRecord);
   }
+  const directProposalId =
+    approvalRecord.proposal_id || approvalRecord.proposal?.proposal_id;
+  if (directProposalId && directProposalId !== proposalId) {
+    globalThis[PENDING_PROPOSALS_KEY].set(directProposalId, approvalRecord);
+  }
 }
 
 export function getPendingSkillProposal(proposalId) {
   return globalThis[PENDING_PROPOSALS_KEY]?.get(proposalId) || null;
+}
+
+// ---------------------------------------------------------------------------
+// Durable skill-proposal store.
+//
+// The file under the governed operator state directory
+// (`<ledgerRoot>/skill-proposals/<proposal_id>.json`) is AUTHORITATIVE for
+// pending skill proposals. The in-memory map above is a cache/index only:
+// after a process restart the proposal must still resolve from disk, replay
+// must still be rejected idempotently, and a missing record must fail
+// closed. Proposal ids are 32-hex digests, so the derived filename can
+// never escape the store directory.
+// ---------------------------------------------------------------------------
+
+const PROPOSAL_ID_PATTERN = /^[a-f0-9]{32}$/u;
+const CONTENT_SHA_PATTERN = /^[a-f0-9]{64}$/u;
+
+export function skillProposalFilePath(proposalStorageDir, proposalId) {
+  if (typeof proposalStorageDir !== "string" || !proposalStorageDir)
+    return null;
+  if (typeof proposalId !== "string" || !PROPOSAL_ID_PATTERN.test(proposalId))
+    return null;
+  return path.join(proposalStorageDir, `${proposalId}.json`);
+}
+
+export function skillApprovalFilePath(proposalStorageDir, proposalId) {
+  const proposalFile = skillProposalFilePath(proposalStorageDir, proposalId);
+  if (!proposalFile) return null;
+  return `${proposalFile}.approval.json`;
+}
+
+function writeJsonAtomicSync(filePath, value) {
+  mkdirSync(path.dirname(filePath), { recursive: true });
+  const tmp = `${filePath}.tmp-${process.pid}-${Date.now()}-${randomBytes(4).toString("hex")}`;
+  const fd = openSync(tmp, "w");
+  try {
+    writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  renameSync(tmp, filePath);
+}
+
+function readJsonStrictSync(filePath) {
+  return JSON.parse(readFileSync(filePath, "utf8"));
+}
+
+export function readDurableSkillProposal(proposalStorageDir, proposalId) {
+  const file = skillProposalFilePath(proposalStorageDir, proposalId);
+  if (!file) return null;
+  try {
+    const record = readJsonStrictSync(file);
+    if (!record || record.proposal_id !== proposalId) return null;
+    return record;
+  } catch {
+    // A partially written or corrupt file is never a valid proposal.
+    return null;
+  }
+}
+
+function rawContentSha256(text) {
+  return createHash("sha256")
+    .update(String(text ?? ""), "utf8")
+    .digest("hex");
+}
+
+/**
+ * Corroborates an approval binding against the durable proposal. A full
+ * 64-hex digest must match exactly; the compact 16-hex button fragment
+ * (Discord caps custom_id at 100 chars) must prefix the stored digest.
+ * This is corroboration only — the approval itself always binds the exact
+ * bytes read back from the durable store.
+ */
+function skillProposalBindingMatches(stored, contentSha256) {
+  if (!stored || typeof contentSha256 !== "string") return false;
+  return (
+    contentSha256 === stored.content_sha256 ||
+    (/^[a-f0-9]{16}$/u.test(contentSha256) &&
+      stored.content_sha256.startsWith(contentSha256))
+  );
 }
 
 const AGENT_DISPLAY_NAMES = {
@@ -467,7 +559,12 @@ export async function handleOwnerSkillApproval({
   ownerDiscordId,
   proposalId,
   contentSha256,
+  namespace,
+  capability,
+  version,
+  subjectType = APPROVAL_SUBJECT_TYPES.SKILL_CANDIDATE_APPROVAL,
   skillsRoot,
+  proposalStorageDir,
   // No default, deliberately. A hardcoded default would place a real account
   // identifier in production source — forbidden outside `tests/` by this
   // repository's own `.gitleaks.toml` — and, worse, would keep authorizing that
@@ -475,9 +572,17 @@ export async function handleOwnerSkillApproval({
   // parameter is required so the exact-identity binding is always explicit, and
   // an omitted value fails the comparison below and denies the approval.
   expectedOwnerId,
+  decisionRef = "PLAN:M8/T3-R1",
   options = {},
 }) {
-  // Exact owner snowflake binding (BUG-06)
+  // Distinct governance subject: a skill approval is never an execution-plan
+  // approval and vice versa. The wrong subject on this path is denied.
+  if (subjectType !== APPROVAL_SUBJECT_TYPES.SKILL_CANDIDATE_APPROVAL) {
+    throw new Error(
+      "APPROVAL_SUBJECT_MISMATCH: expected SKILL_CANDIDATE_APPROVAL on the skill approval path",
+    );
+  }
+  // Exact owner snowflake binding (BUG-06). An absent owner identity denies.
   if (ownerDiscordId !== expectedOwnerId) {
     throw new Error(
       "APPROVAL_OWNER_MISMATCH: Unauthorized principal cannot approve skills",
@@ -488,83 +593,633 @@ export async function handleOwnerSkillApproval({
       "APPROVAL_PROPOSAL_ID_REQUIRED: Missing proposal ID binding",
     );
   }
-  if (!contentSha256 || !/^[a-f0-9]{64}$/u.test(contentSha256)) {
+  if (!contentSha256 || !CONTENT_SHA_PATTERN.test(contentSha256)) {
     throw new Error(
       "APPROVAL_CONTENT_HASH_INVALID: Content hash must be 64-character SHA-256",
     );
   }
-
-  // K18: Distinct approval transaction identity
-  const approvalTransactionId = `appr_${createHash("sha256").update(`${proposalId}:${contentSha256}:${Date.now()}:${Math.random()}`).digest("hex").slice(0, 24)}`;
-
-  // K19 & K22: Proposal record verification
-  const pendingRecord =
-    options.proposalRecord || getPendingSkillProposal(proposalId);
-  if (pendingRecord) {
-    const recContentSha =
-      pendingRecord.content_sha256 ||
-      pendingRecord.proposal?.content_sha256 ||
-      pendingRecord.contentSha256;
-    if (recContentSha && recContentSha !== contentSha256) {
-      throw new Error(
-        "APPROVAL_PROPOSAL_MISMATCH: Content hash does not match approved proposal record",
-      );
-    }
-    const recProposalId =
-      pendingRecord.proposal_id ||
-      pendingRecord.approval_id ||
-      pendingRecord.proposal?.proposal_id;
-    if (recProposalId && recProposalId !== proposalId) {
-      throw new Error(
-        "APPROVAL_PROPOSAL_MISMATCH: Proposal ID does not match registered record",
-      );
-    }
-  }
-
-  // K21: Verify skill exists if skillsRoot provided and skill target specified
+  const nsArray = Array.isArray(namespace)
+    ? namespace
+    : typeof namespace === "string" && namespace
+      ? [namespace]
+      : null;
   if (
-    skillsRoot &&
-    options.capability &&
-    options.namespace &&
-    options.version
+    !nsArray ||
+    typeof capability !== "string" ||
+    typeof version !== "string"
   ) {
-    const nsParts = Array.isArray(options.namespace)
-      ? options.namespace
-      : [options.namespace];
-    const skillPath = path.join(
-      skillsRoot,
-      ...nsParts,
-      options.capability,
-      options.version,
-      "SKILL.md",
+    throw new Error(
+      "APPROVAL_IDENTITY_REQUIRED: namespace, capability and version must bind the approval",
     );
-    if (!existsSync(skillPath)) {
+  }
+  const storeDir = proposalStorageDir ?? options.proposalStorageDir;
+  if (!storeDir || typeof storeDir !== "string") {
+    throw new Error(
+      "PROPOSAL_STORE_UNAVAILABLE: durable proposal store is not configured",
+    );
+  }
+  if (!skillsRoot || typeof skillsRoot !== "string") {
+    throw new Error(
+      "SKILLS_ROOT_REQUIRED: canonical Skill Store root is required",
+    );
+  }
+
+  // The durable record is authoritative. A missing, unreadable or partial
+  // record fails closed — it is never treated as "probably okay".
+  const stored = readDurableSkillProposal(storeDir, proposalId);
+  if (!stored) {
+    throw new Error(
+      "APPROVAL_UNKNOWN_PROPOSAL: no durable proposal for this approval",
+    );
+  }
+
+  // Exact proposal binding: identity and content must all match.
+  const storedNs = Array.isArray(stored.namespace)
+    ? stored.namespace
+    : [stored.namespace];
+  if (
+    stored.content_sha256 !== contentSha256 ||
+    storedNs.join("/") !== nsArray.join("/") ||
+    stored.capability !== capability ||
+    stored.version !== version
+  ) {
+    throw new Error(
+      "APPROVAL_PROPOSAL_MISMATCH: approval does not bind the stored proposal exactly",
+    );
+  }
+
+  // Terminal and lifecycle states.
+  if (stored.status === "REJECTED") {
+    throw new Error("APPROVAL_PROPOSAL_REJECTED: candidate was rejected");
+  }
+  if (
+    typeof stored.expires_at === "string" &&
+    Number.isFinite(Date.parse(stored.expires_at)) &&
+    Date.parse(stored.expires_at) <= Date.now()
+  ) {
+    try {
+      writeJsonAtomicSync(skillProposalFilePath(storeDir, proposalId), {
+        ...stored,
+        status: "EXPIRED",
+      });
+    } catch {
+      /* best effort */
+    }
+    throw new Error("APPROVAL_PROPOSAL_EXPIRED: candidate is expired");
+  }
+  if (stored.status === "EXPIRED") {
+    throw new Error("APPROVAL_PROPOSAL_EXPIRED: candidate is expired");
+  }
+  if (stored.status === "CONFLICTED") {
+    throw new Error(
+      "APPROVAL_SKILL_CONFLICT: candidate conflicts with canonical state",
+    );
+  }
+  if (
+    stored.status !== "CANDIDATE" &&
+    stored.status !== "APPROVED" &&
+    stored.status !== "MATERIALIZED" &&
+    stored.status !== "READY"
+  ) {
+    throw new Error(
+      `APPROVAL_PROPOSAL_STATE_INVALID: unexpected status ${stored.status}`,
+    );
+  }
+
+  // Idempotent replay: the exact same approval binding already completed.
+  const approvalFile = skillApprovalFilePath(storeDir, proposalId);
+  let completed = null;
+  try {
+    completed = readJsonStrictSync(approvalFile);
+  } catch {
+    /* absent or unreadable: no completed approval */
+  }
+  if (completed?.approval_status === "APPROVED") {
+    const sameBinding =
+      completed.proposal_id === proposalId &&
+      completed.content_sha256 === contentSha256 &&
+      (completed.namespace ?? []).join("/") === nsArray.join("/") &&
+      completed.capability === capability &&
+      completed.version === version;
+    if (!sameBinding) {
       throw new Error(
-        `APPROVAL_SKILL_VERSION_MISSING: Skill version ${options.version} not found in store`,
+        "APPROVAL_PROPOSAL_MISMATCH: a different approval already consumed this proposal id",
       );
+    }
+    // The canonical record must still hold the approved bytes. Approval
+    // replay after canonical tampering is drift, not idempotent success.
+    try {
+      const canonicalBytes = readFileSync(
+        path.join(skillsRoot, ...nsArray, capability, version, "SKILL.md"),
+      );
+      if (rawContentSha256(canonicalBytes) !== contentSha256) {
+        throw new Error(
+          "APPROVAL_CANONICAL_DRIFT: canonical bytes no longer match the approved digest",
+        );
+      }
+    } catch (error) {
+      if (error?.message?.startsWith("APPROVAL_CANONICAL_DRIFT")) throw error;
+      throw new Error(
+        `APPROVAL_CANONICAL_DRIFT: canonical record is unreadable (${error?.code ?? error?.message})`,
+        { cause: error },
+      );
+    }
+    return { ...completed, idempotent: true };
+  }
+
+  // The owner approves the exact bytes that will be persisted.
+  if (
+    typeof stored.content !== "string" ||
+    rawContentSha256(stored.content) !== contentSha256
+  ) {
+    throw new Error(
+      "APPROVAL_PROPOSAL_MISMATCH: durable content does not match the approved digest",
+    );
+  }
+
+  // Canonical Skill Store write is the source-of-truth commit point.
+  // Trusted internal promotion only: agents propose, governance promotes.
+  const catalogMod = await loadRepoModule("zink-skill-store/src/catalog.mjs");
+  const promote = catalogMod?.promoteApprovedSkill;
+  if (typeof promote !== "function") {
+    throw new Error(
+      "APPROVAL_PROMOTE_UNAVAILABLE: canonical Skill Store writer is unavailable",
+    );
+  }
+  let canonical;
+  try {
+    canonical = await promote({
+      skillsRoot,
+      namespace: nsArray,
+      capability,
+      version,
+      content: stored.content,
+      requestingActor: stored.requesting_agent ?? "unknown",
+      ownerActor: "owner",
+      decisionRef,
+    });
+  } catch (error) {
+    if (
+      error?.code === "SKILL_ACTIVE_CONFLICT" ||
+      error?.code === "SKILL_VERSION_CONFLICT"
+    ) {
+      try {
+        writeJsonAtomicSync(skillProposalFilePath(storeDir, proposalId), {
+          ...stored,
+          status: "CONFLICTED",
+        });
+      } catch {
+        /* best effort */
+      }
+      throw new Error(
+        `APPROVAL_SKILL_CONFLICT: ${error?.message ?? "canonical conflict"}`,
+        {
+          cause: error,
+        },
+      );
+    }
+    throw error;
+  }
+  try {
+    writeJsonAtomicSync(skillProposalFilePath(storeDir, proposalId), {
+      ...stored,
+      status: "MATERIALIZED",
+    });
+  } catch {
+    /* best effort: canonical truth already holds */
+  }
+
+  // pgvector is derived from canonical ACTIVE state, never the reverse. A
+  // sync failure keeps the canonical record authoritative and is reported
+  // as a derived-index failure; it never rolls the canonical write back.
+  let vectorSync;
+  try {
+    const report = options.vectorSyncFn
+      ? await options.vectorSyncFn({ skillsRoot, proposal: stored })
+      : await (
+          await getVectorSyncModule()
+        ).syncSkillsToVectorStore({ skillsRoot, ...options });
+    vectorSync = {
+      status: report?.status ?? "UNKNOWN",
+      synced_count: report?.synced_count ?? 0,
+    };
+    try {
+      writeJsonAtomicSync(skillProposalFilePath(storeDir, proposalId), {
+        ...stored,
+        status: report?.status === "READY" ? "READY" : "INDEX_FAILED",
+      });
+    } catch {
+      /* best effort */
+    }
+  } catch (error) {
+    vectorSync = {
+      status: "FAILED",
+      error: String(error?.message ?? error).slice(0, 500),
+    };
+    try {
+      writeJsonAtomicSync(skillProposalFilePath(storeDir, proposalId), {
+        ...stored,
+        status: "INDEX_FAILED",
+      });
+    } catch {
+      /* best effort */
     }
   }
 
-  // K20: Vector sync module availability (Fail-Closed)
-  const syncMod = await getVectorSyncModule();
-  if (!syncMod || typeof syncMod.syncSkillsToVectorStore !== "function") {
-    throw new Error(
-      "VECTOR_SYNC_UNAVAILABLE: Cannot complete approval without vector sync module",
-    );
-  }
-
-  // K23: Atomic proposal -> approval -> vector-sync transition
-  const syncResult = await syncMod.syncSkillsToVectorStore({
-    skillsRoot,
-    ...options,
-  });
-
-  return {
-    ...syncResult,
+  // K18: distinct approval transaction identity for this governance act.
+  const approvalTransactionId = `appr_${createHash("sha256")
+    .update(
+      `${proposalId}:${contentSha256}:${Date.now()}:${randomBytes(8).toString("hex")}`,
+    )
+    .digest("hex")
+    .slice(0, 24)}`;
+  const record = {
     approval_transaction_id: approvalTransactionId,
     proposal_id: proposalId,
+    content_sha256: contentSha256,
+    namespace: nsArray,
+    capability,
+    version,
+    subject_type: APPROVAL_SUBJECT_TYPES.SKILL_CANDIDATE_APPROVAL,
     approval_status: "APPROVED",
+    canonical,
+    vector_sync: vectorSync,
+    approved_at: new Date().toISOString(),
   };
+  try {
+    writeJsonAtomicSync(approvalFile, record);
+  } catch {
+    /* best effort: canonical truth already holds */
+  }
+  globalThis[PENDING_PROPOSALS_KEY].set(proposalId, {
+    ...stored,
+    status: "READY",
+    approval_id: approvalTransactionId,
+  });
+  return record;
+}
+
+/**
+ * Owner confirmation for a taught decision candidate.
+ *
+ * USER EXPLICITLY TEACHES -> candidate (untrusted, unpersisted) ->
+ * classification -> OWNER CONFIRMS -> DecisionLedger persists -> a new
+ * session looks it up. Only `preference-decision` candidates land in the
+ * ledger; every other classification is routed elsewhere and this call
+ * persists nothing. Observed answers alone never reach the ledger: only
+ * this owner-confirmed path writes.
+ */
+export async function handleOwnerDecisionConfirmation({
+  senderId,
+  config,
+  candidate,
+  ledgerStoragePath,
+  mode = "record",
+  options = {},
+}) {
+  const ownerId = resolveOwnerDiscordId(config);
+  if (!ownerId || senderId !== ownerId) {
+    throw new Error(
+      "DECISION_OWNER_MISMATCH: only the owner can confirm memory",
+    );
+  }
+  if (!candidate || typeof candidate !== "object") {
+    throw new Error("DECISION_CANDIDATE_REQUIRED");
+  }
+  const { MEMORY_CLASSIFICATIONS: classifications } =
+    await import("../../lib/decision-ledger.mjs");
+  if (!classifications.includes(candidate.classification)) {
+    throw new Error(
+      "DECISION_CANDIDATE_AMBIGUOUS: classification is required before memory may form",
+    );
+  }
+  if (candidate.classification !== "preference-decision") {
+    const routes = {
+      "reusable-procedure": "SKILL_PROPOSAL_PATH",
+      "factual-knowledge": "KNOWLEDGE_GOVERNANCE_PATH",
+      "operational-state": "WORKFLOW_STATE_ONLY",
+    };
+    const notes = {
+      "reusable-procedure":
+        "Use proposeSkillFromTeaching to create a governed skill candidate; nothing was persisted by this call.",
+      "factual-knowledge":
+        "User-written Knowledgebase persistence is intentionally deferred in M8/T3: the Knowledgebase adapter forbids ingestion/update by contract and the human-owned Vault is read-only. This routing persists nothing and must not be reported as stored knowledge.",
+      "operational-state":
+        "Current task/execution state only; never long-term memory. Nothing was persisted.",
+    };
+    return {
+      status: "ROUTED",
+      route: routes[candidate.classification] ?? "UNKNOWN",
+      persisted: false,
+      note: notes[candidate.classification] ?? "Nothing was persisted.",
+    };
+  }
+  const storagePath =
+    ledgerStoragePath ??
+    options.ledgerStoragePath ??
+    (path.isAbsolute(config?.ledgerRoot ?? "")
+      ? path.join(config.ledgerRoot, "decision-ledger.json")
+      : null);
+  if (!storagePath) {
+    throw new Error(
+      "DECISION_STORE_UNAVAILABLE: decision ledger path is not configured",
+    );
+  }
+  const { DecisionLedger } = await import("../../lib/decision-ledger.mjs");
+  const ledger = new DecisionLedger({ storagePath });
+  if (mode === "correct") {
+    const corrected = ledger.correctDecision({
+      topic: candidate.topic,
+      question: candidate.question,
+      decision: candidate.proposed_decision,
+      scope: candidate.scope,
+      confirmedBy: ownerId,
+      context: {
+        ...(candidate.context ?? {}),
+        ...(candidate.task_id ? { taskId: candidate.task_id } : {}),
+        ...(candidate.domain ? { domain: candidate.domain } : {}),
+        candidate_key: candidate.candidate_key,
+      },
+      tags: ["owner-confirmed", "correction"],
+    });
+    return {
+      status: "CORRECTED",
+      decision: corrected,
+      persisted: true,
+    };
+  }
+  if (mode !== "record") {
+    throw new Error(`DECISION_MODE_INVALID: unknown mode ${mode}`);
+  }
+  const recorded = ledger.recordDecision({
+    topic: candidate.topic,
+    question: candidate.question,
+    decision: candidate.proposed_decision,
+    scope: candidate.scope,
+    confirmedBy: ownerId,
+    context: {
+      ...(candidate.context ?? {}),
+      ...(candidate.task_id ? { taskId: candidate.task_id } : {}),
+      ...(candidate.domain ? { domain: candidate.domain } : {}),
+      candidate_key: candidate.candidate_key,
+    },
+    tags: ["owner-confirmed"],
+  });
+  return { status: "RECORDED", decision: recorded, persisted: true };
+}
+
+/**
+ * Bridges an owner-confirmed reusable-procedure teaching into the existing
+ * governed skill proposal infrastructure. The teaching must already carry
+ * classification `reusable-procedure` (anything else fails closed here);
+ * the exact procedure bytes become a CANDIDATE proposal that still needs
+ * owner approval — this bridge never activates anything by itself.
+ */
+export async function proposeSkillFromTeaching({
+  teaching,
+  namespace,
+  capability,
+  version,
+  content,
+  reason,
+  requestingAgent,
+  proposalStorageDir,
+  context = {},
+  options = {},
+}) {
+  if (!teaching || teaching.classification !== "reusable-procedure") {
+    throw new Error(
+      "TEACHING_NOT_A_SKILL: only reusable-procedure teachings may enter the skill proposal path",
+    );
+  }
+  const nsArray =
+    namespace ??
+    (Array.isArray(teaching.namespace)
+      ? teaching.namespace
+      : typeof teaching.namespace === "string"
+        ? [teaching.namespace]
+        : null);
+  const capabilitySlug = capability ?? teaching.capability;
+  const versionString = version ?? teaching.version;
+  const procedureBytes = content ?? teaching.content;
+  if (
+    !nsArray ||
+    typeof capabilitySlug !== "string" ||
+    typeof versionString !== "string" ||
+    typeof procedureBytes !== "string" ||
+    !procedureBytes.trim()
+  ) {
+    throw new Error(
+      "TEACHING_CONTENT_REQUIRED: namespace, capability, version and exact procedure bytes are required",
+    );
+  }
+  const storeDir = proposalStorageDir ?? options.proposalStorageDir;
+  if (!storeDir || typeof storeDir !== "string") {
+    throw new Error(
+      "PROPOSAL_STORE_UNAVAILABLE: durable proposal store is not configured",
+    );
+  }
+  const skillMod = await getSkillAdapter();
+  const Adapter = skillMod?.SkillAdapter;
+  if (typeof Adapter !== "function") {
+    throw new Error(
+      "SKILL_ADAPTER_UNAVAILABLE: cannot propose without the skill adapter",
+    );
+  }
+  const adapter = new Adapter(undefined, {
+    proposalStorageDir: storeDir,
+    ...options,
+  });
+  const result = await adapter.querySkillStore(
+    {
+      action: "propose",
+      namespace: nsArray,
+      capability: capabilitySlug,
+      version: versionString,
+      content: procedureBytes,
+      reason:
+        reason ?? teaching.reason ?? "Promoted from owner-confirmed teaching",
+      requesting_agent:
+        requestingAgent ?? teaching.requesting_agent ?? context?.agentId,
+    },
+    { agentId: requestingAgent ?? teaching.requesting_agent ?? "unknown" },
+  );
+  if (result?.governed_status !== "SUCCESS" || !result?.proposal) {
+    throw new Error(
+      `SKILL_PROPOSAL_FAILED: ${result?.error ?? "proposal was not accepted"}`,
+    );
+  }
+  return { status: "CANDIDATE_PROPOSED", proposal: result.proposal };
+}
+
+/**
+ * Skill rejection on the dedicated learning path. Owner-only, bound to the
+ * exact durable proposal. A rejected candidate can never become ACTIVE.
+ */
+export async function handleOwnerSkillRejection({
+  ownerDiscordId,
+  expectedOwnerId,
+  proposalId,
+  proposalStorageDir,
+  options = {},
+}) {
+  if (ownerDiscordId !== expectedOwnerId) {
+    throw new Error(
+      "APPROVAL_OWNER_MISMATCH: Unauthorized principal cannot reject skills",
+    );
+  }
+  const storeDir = proposalStorageDir ?? options.proposalStorageDir;
+  if (!storeDir || typeof storeDir !== "string") {
+    throw new Error(
+      "PROPOSAL_STORE_UNAVAILABLE: durable proposal store is not configured",
+    );
+  }
+  const stored = readDurableSkillProposal(storeDir, proposalId);
+  if (!stored) {
+    throw new Error(
+      "APPROVAL_UNKNOWN_PROPOSAL: no durable proposal for this rejection",
+    );
+  }
+  if (stored.status !== "CANDIDATE") {
+    throw new Error(
+      `APPROVAL_ALREADY_DECIDED: candidate is already ${stored.status}`,
+    );
+  }
+  writeJsonAtomicSync(skillProposalFilePath(storeDir, proposalId), {
+    ...stored,
+    status: "REJECTED",
+  });
+  return { proposal_id: proposalId, approval_status: "REJECTED" };
+}
+
+/**
+ * Builds the #office learning-confirmation card for a skill candidate:
+ * human-readable proposal text plus native approve/reject buttons whose
+ * custom_ids bind the exact proposal (and corroborate the content digest
+ * within Discord's 100-char custom_id ceiling). The buttons round-trip
+ * through `handleSkillDiscordAction`; posting the card to #office is the
+ * poster's job and is not performed here.
+ */
+export function buildSkillProposalCard(proposal) {
+  if (!proposal || typeof proposal !== "object") {
+    throw new Error("SKILL_CARD_PROPOSAL_REQUIRED");
+  }
+  const text = formatApprovalNotification({ proposal });
+  const approveCustomId = buildSkillComponentCustomId(
+    DISCORD_COMPONENT_ACTION_NAMESPACE.SKILL_APPROVE,
+    proposal.proposal_id,
+    proposal.content_sha256,
+  );
+  const rejectCustomId = buildSkillComponentCustomId(
+    DISCORD_COMPONENT_ACTION_NAMESPACE.SKILL_REJECT,
+    proposal.proposal_id,
+    proposal.content_sha256,
+  );
+  return {
+    text,
+    proposal_id: proposal.proposal_id,
+    content_sha256: proposal.content_sha256,
+    buttons: [
+      {
+        customId: approveCustomId,
+        label: "Approve skill",
+        style: 3,
+        emoji: { name: "✅" },
+      },
+      {
+        customId: rejectCustomId,
+        label: "Reject",
+        style: 4,
+        emoji: { name: "❌" },
+      },
+    ],
+  };
+}
+
+/**
+ * Dedicated Discord learning-confirmation handler for skill proposals.
+ *
+ * This is the ONLY Discord path that may approve or reject a skill
+ * candidate. It operates on the skill proposal identity (proposal_id plus
+ * exact content digest), posts to the #office learning surface, and never
+ * touches the workflow ledger, the execution queue, or
+ * `executeApprovedTask`. The generic execution-plan APPROVE path must
+ * never reach here and this path must never reach it.
+ */
+export async function handleSkillDiscordAction({
+  action,
+  proposalId,
+  contentSha256,
+  senderId,
+  config,
+  skillsRoot,
+  proposalStorageDir,
+  notify,
+  options = {},
+}) {
+  const ownerId = resolveOwnerDiscordId(config);
+  if (!ownerId || senderId !== ownerId) {
+    return { ok: false, reason: "APPROVAL_OWNER_MISMATCH" };
+  }
+  if (action === "reject") {
+    try {
+      const storeDir = proposalStorageDir ?? options.proposalStorageDir;
+      const stored = readDurableSkillProposal(storeDir, proposalId);
+      if (!skillProposalBindingMatches(stored, contentSha256)) {
+        return { ok: false, reason: "APPROVAL_PROPOSAL_MISMATCH" };
+      }
+      const result = await handleOwnerSkillRejection({
+        ownerDiscordId: senderId,
+        expectedOwnerId: ownerId,
+        proposalId,
+        proposalStorageDir: storeDir,
+        options,
+      });
+      await notify?.({
+        channel: "office",
+        text: `📝 Skill proposal \`${proposalId}\` rejected. It can never become ACTIVE.`,
+      });
+      return { ok: true, status: "REJECTED", ...result };
+    } catch (error) {
+      return { ok: false, reason: error?.message ?? String(error) };
+    }
+  }
+  if (action !== "approve") {
+    return { ok: false, reason: "UNKNOWN_SKILL_ACTION" };
+  }
+  try {
+    const storeDir = proposalStorageDir ?? options.proposalStorageDir;
+    const stored = readDurableSkillProposal(storeDir, proposalId);
+    if (!stored) {
+      return { ok: false, reason: "APPROVAL_UNKNOWN_PROPOSAL" };
+    }
+    // The button corroborates identity only; the approval below binds the
+    // exact bytes read back from the durable store.
+    if (!skillProposalBindingMatches(stored, contentSha256)) {
+      return { ok: false, reason: "APPROVAL_PROPOSAL_MISMATCH" };
+    }
+    const approval = await handleOwnerSkillApproval({
+      ownerDiscordId: senderId,
+      expectedOwnerId: ownerId,
+      proposalId,
+      // Exact server-side binding: the approval always names the full
+      // stored digest, never the button corroborator.
+      contentSha256: stored.content_sha256,
+      namespace: stored.namespace,
+      capability: stored.capability,
+      version: stored.version,
+      skillsRoot,
+      proposalStorageDir: storeDir,
+      options,
+    });
+    await notify?.({
+      channel: "office",
+      text: `✅ Skill \`${stored.capability}\` v${stored.version} approved and materialized as ACTIVE.`,
+    });
+    return { ok: true, status: "APPROVED", approval };
+  } catch (error) {
+    return { ok: false, reason: error?.message ?? String(error) };
+  }
 }
 
 /**
@@ -617,6 +1272,20 @@ export function handleDiscordAction({
         status: "STALE",
       };
     }
+  }
+
+  // Discriminated approval subjects: a skill-candidate approval is a
+  // governance transaction on the dedicated #office learning path. It must
+  // never queue workflow execution through this generic handler.
+  if (
+    data?.approvalSubject === APPROVAL_SUBJECT_TYPES.SKILL_CANDIDATE_APPROVAL
+  ) {
+    return {
+      allowed: false,
+      reason:
+        "SKILL_APPROVAL_SEPARATE_PATH: skill approvals use the dedicated skill approval path, never the execution approval handler",
+      status: "DENIED",
+    };
   }
 
   // 2. Authoritative State & Primary Coordinator resolution (G01, G02)
@@ -1928,30 +2597,28 @@ export function registerTools(api, options = {}) {
               ? proposal.namespace.join("/")
               : proposal.namespace || "specialist";
             const targetStr = `skills/${nsStr}/${proposal.capability}@${proposal.version}`;
-            // The content digest and the approval id are derived by the
-            // governance layer from the content it received, never copied from
-            // a caller-supplied field. The adapter does not always populate
-            // `proposal_id`, so deriving it here also means the approval is
-            // always bound to specific bytes rather than to an absent id.
-            const contentDigest = canonicalHash(
-              "zink-skill-content-v1",
-              String(params?.content ?? ""),
-            );
+            // content_sha256 is the RAW SHA-256 of the exact bytes that will
+            // become canonical SKILL.md — the same digest the adapter
+            // computed over the trimmed proposal content. It is reproduced
+            // here from the received content (never copied from a
+            // caller-supplied field) and must equal the adapter's digest;
+            // otherwise the two layers disagree about what the owner approves.
+            const rawContent = String(params?.content ?? "").trim();
+            const contentDigest = rawContentSha256(rawContent);
+            if (contentDigest !== proposal.content_sha256) {
+              throw new Error(
+                "SKILL_CONTENT_DIGEST_DIVERGED: governance digest does not match the proposal digest",
+              );
+            }
             const approvalRecord = {
               schema_version: "1.0.0",
               governance_version: GOVERNANCE_VERSION,
+              subject_type: APPROVAL_SUBJECT_TYPES.SKILL_CANDIDATE_APPROVAL,
               approval_id: String(
                 proposal.proposal_id ??
-                  canonicalHash("zink-skill-approval-id-v1", contentDigest),
+                  `appr_${createHash("sha256").update(contentDigest).digest("hex").slice(0, 24)}`,
               ),
-              // The contract requires a 64-hex task correlation id. The old
-              // `task-skill-<id>` string violated that pattern, so the record
-              // could never have validated; the digest is deterministic, so it
-              // remains a stable correlation key.
-              task_id: canonicalHash(
-                "zink-skill-approval-v1",
-                String(proposal.proposal_id ?? contentDigest),
-              ),
+              proposal_id: String(proposal.proposal_id),
               brief_revision: 1,
               exact_target: targetStr,
               exact_operation: "SKILL_CANDIDATE_APPROVAL",
@@ -1959,10 +2626,7 @@ export function registerTools(api, options = {}) {
                 namespace: proposal.namespace,
                 capability: proposal.capability,
                 version: proposal.version,
-                // The content digest is computed by the governance layer from
-                // the content it actually received, never copied from a
-                // caller-supplied field. That makes the approval scope digest
-                // bind to the bytes the owner is approving.
+                // The raw content digest: the owner approves these exact bytes.
                 content_sha256: contentDigest,
                 reason: proposal.reason,
                 requesting_agent:
@@ -1975,11 +2639,12 @@ export function registerTools(api, options = {}) {
               expires_at: new Date(
                 Date.now() + 7 * 24 * 60 * 60 * 1000,
               ).toISOString(),
-              // The scope digest is what an owner's decision is bound to, so it
-              // is computed over exactly the parameters shown for approval.
+              // The scope digest binds target, operation, proposal identity
+              // and exact content. It is a separate field and never overloads
+              // content_sha256.
               approval_scope_digest: canonicalHash(
                 "zink-approval-scope-v1",
-                `${targetStr}|SKILL_CANDIDATE_APPROVAL|${contentDigest}`,
+                `${targetStr}|SKILL_CANDIDATE_APPROVAL|${proposal.proposal_id}:${contentDigest}`,
               ),
               publication_status: "pending_owner_post",
               proposal,
@@ -5210,6 +5875,71 @@ export default {
                 });
               } else if (typeof ctx.respond?.reply === "function") {
                 await ctx.respond.reply({ text: invalidMsg, ephemeral: true });
+              }
+              return;
+            }
+
+            // Dedicated skill-learning path. A skill candidate is a
+            // governance transaction, never a workflow task: this branch
+            // must never reach handleDiscordAction or executeApprovedTask,
+            // and the execution approval path must never reach skill state.
+            if (
+              parsed.actionKey === "SKILL_APPROVE" ||
+              parsed.actionKey === "SKILL_REJECT"
+            ) {
+              const skillSender =
+                ctx.senderId ||
+                ctx.interaction?.senderId ||
+                ctx.interaction?.user?.id ||
+                ctx.interaction?.member?.user?.id;
+              const repoRoot = findRepoRoot();
+              const skillResult = await handleSkillDiscordAction({
+                action:
+                  parsed.actionKey === "SKILL_APPROVE" ? "approve" : "reject",
+                proposalId: parsed.taskId,
+                contentSha256: parsed.revision,
+                senderId: skillSender,
+                config,
+                skillsRoot: repoRoot
+                  ? path.join(repoRoot, "zink-skill-store", "skills")
+                  : undefined,
+                proposalStorageDir: path.isAbsolute(config.ledgerRoot ?? "")
+                  ? path.join(config.ledgerRoot, "skill-proposals")
+                  : undefined,
+                notify: async ({ text }) => {
+                  const officeId = resolveDiscordDestination(
+                    config,
+                    "discordOfficeChannelId",
+                    "officeChannelId",
+                  );
+                  if (!officeId) return;
+                  try {
+                    await sendNativePayload({
+                      api,
+                      to: officeId,
+                      accountId: "main",
+                      payload: { text },
+                    });
+                  } catch (deliveryErr) {
+                    api.logger?.warn?.(
+                      `[zink-governance] skill office notice failed: ${deliveryErr?.message}`,
+                    );
+                  }
+                },
+              });
+              const skillMsg = skillResult.ok
+                ? `✅ ${skillResult.status === "APPROVED" ? "Đã phê duyệt và materialize skill" : "Đã từ chối skill"} (proposal \`${parsed.taskId}\`).`
+                : `⛔ Skill approval bị từ chối: ${skillResult.reason}`;
+              if (typeof ctx.respond?.followUp === "function") {
+                await ctx.respond.followUp({
+                  text: skillMsg,
+                  ephemeral: !skillResult.ok,
+                });
+              } else if (typeof ctx.respond?.reply === "function") {
+                await ctx.respond.reply({
+                  text: skillMsg,
+                  ephemeral: !skillResult.ok,
+                });
               }
               return;
             }

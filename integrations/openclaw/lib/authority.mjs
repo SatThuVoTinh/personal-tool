@@ -1218,6 +1218,19 @@ export const DISCORD_COMPONENT_ACTION_NAMESPACE = Object.freeze({
   RESULT_ACCEPT: "zink:result:accept",
   RESULT_REJECT: "zink:result:reject",
   RESULT_REVISION: "zink:result:revision",
+  // Skill learning actions (target: #office learning confirmation).
+  // A skill proposal is a governance transaction, never a workflow task,
+  // so it must never share the execution approval action identity.
+  SKILL_APPROVE: "zink:skill:approve",
+  SKILL_REJECT: "zink:skill:reject",
+});
+
+// Discriminated approval subjects. Execution-plan approval authorizes queue
+// execution; skill-candidate approval authorizes canonical Skill Store
+// materialization. One subject must never be honored on the other's path.
+export const APPROVAL_SUBJECT_TYPES = Object.freeze({
+  EXECUTION_PLAN_APPROVAL: "EXECUTION_PLAN_APPROVAL",
+  SKILL_CANDIDATE_APPROVAL: "SKILL_CANDIDATE_APPROVAL",
 });
 
 // A16/A17: Build a namespaced custom_id string bound to task + revision.
@@ -1262,6 +1275,34 @@ export function parseComponentCustomId(customId) {
     }
   }
   return null;
+}
+
+// M8/T3: compact skill-button identity. A full proposal+digest binding
+// (`zink:skill:approve:<32hex>:<64hex>`) is 116 characters and Discord
+// native buttons cap custom_id at 100. The button therefore carries the
+// 32-hex proposal id plus a 16-hex digest corroborator (68 chars total);
+// the approval itself always binds the exact bytes stored server-side.
+// A click corroborates identity; it never substitutes for the stored digest.
+export const SKILL_BUTTON_DIGEST_PREFIX_LENGTH = 16;
+
+export function buildSkillComponentCustomId(
+  actionType,
+  proposalId,
+  contentSha256,
+) {
+  if (
+    actionType !== DISCORD_COMPONENT_ACTION_NAMESPACE.SKILL_APPROVE &&
+    actionType !== DISCORD_COMPONENT_ACTION_NAMESPACE.SKILL_REJECT
+  )
+    throw new Error(`Unknown skill action type: ${actionType}`);
+  if (typeof proposalId !== "string" || !/^[a-f0-9]{32}$/u.test(proposalId))
+    throw new Error("proposalId must be a 32-character hex digest");
+  if (
+    typeof contentSha256 !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(contentSha256)
+  )
+    throw new Error("contentSha256 must be a 64-character hex digest");
+  return `${actionType}:${proposalId}:${contentSha256.slice(0, SKILL_BUTTON_DIGEST_PREFIX_LENGTH)}`;
 }
 
 // A19: Stale interaction rejection — returns true when the parsed custom_id's

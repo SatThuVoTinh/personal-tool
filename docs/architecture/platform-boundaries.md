@@ -15,8 +15,11 @@ not share research Knowledgebase indexes and does not infer ACTIVE promotion.
 
 Tools is a small callable boundary for Excel, Power BI, SQL, Python, n8n and
 decision-science capabilities. It owns neither orchestration state nor persistent
-Knowledge/Skill internals. OpenClaw-to-Skill-Store is a reserved future thin
-adapter boundary, not M5/T1-R2 implementation scope.
+Knowledge/Skill internals. Through it, OpenClaw agents call `zink_skill_search`
+(ACTIVE-only retrieval) and `zink_skill_propose` (CANDIDATE proposal); owner
+confirmation and canonical promotion happen in governed runtime code, not in
+Tools, and cross-project effects use approved APIs/contracts and never direct
+mutation of another owner's database, vector store or object store.
 
 ## Infrastructure
 

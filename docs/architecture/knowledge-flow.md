@@ -12,7 +12,11 @@ Owner-built skill/template candidate
 
 OpenClaw
   -> Zink Tools boundary
-  -> future thin Skill Store adapter (reserved only)
+  -> SkillAdapter search (ACTIVE-only) / propose (CANDIDATE-only)
+  -> durable proposal record
+  -> #office owner confirmation (exact content binding)
+  -> trusted canonical promotion to ACTIVE
+  -> derived pgvector sync (READY)
 ```
 
 Knowledgebase and Skill Store are separate logical stores. Research and candidate

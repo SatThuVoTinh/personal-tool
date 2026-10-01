@@ -11,8 +11,9 @@
       "required": [
         "schema_version",
         "governance_version",
+        "subject_type",
         "approval_id",
-        "task_id",
+        "proposal_id",
         "brief_revision",
         "exact_target",
         "exact_operation",
@@ -39,7 +40,8 @@
           ]
         },
         "approval_id": { "type": "string", "minLength": 1, "maxLength": 256 },
-        "task_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "subject_type": { "const": "SKILL_CANDIDATE_APPROVAL" },
+        "proposal_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "brief_revision": { "type": "integer", "minimum": 1, "maximum": 16 },
         "exact_target": { "type": "string", "maxLength": 1024 },
         "exact_operation": { "const": "SKILL_CANDIDATE_APPROVAL" },

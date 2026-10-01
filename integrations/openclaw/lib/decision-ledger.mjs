@@ -35,6 +35,73 @@ function resolveDefaultStoragePath() {
 
 const DECISION_SCOPES = Object.freeze(["global", "domain", "task-specific"]);
 
+// Governed teaching classifications. A candidate must carry exactly one.
+// Anything else — including an explicit "ambiguous" — fails closed and
+// persists nothing: the owner must classify before memory may form.
+export const MEMORY_CLASSIFICATIONS = Object.freeze([
+  "preference-decision",
+  "reusable-procedure",
+  "factual-knowledge",
+  "operational-state",
+]);
+
+/**
+ * Builds an untrusted decision candidate. Pure: persists nothing.
+ * Only `preference-decision` candidates may later be confirmed into the
+ * ledger; every other classification routes elsewhere and never lands here.
+ */
+export function buildDecisionCandidate({
+  topic,
+  question,
+  proposedDecision,
+  scope = "global",
+  taskId = null,
+  domain = null,
+  context = {},
+  classification,
+}) {
+  if (!MEMORY_CLASSIFICATIONS.includes(classification)) {
+    failLedger("DECISION_CANDIDATE_AMBIGUOUS");
+  }
+  if (typeof topic !== "string" || !topic.trim()) {
+    failLedger("DECISION_CANDIDATE_INVALID");
+  }
+  if (typeof proposedDecision !== "string" || !proposedDecision.trim()) {
+    failLedger("DECISION_CANDIDATE_INVALID");
+  }
+  const normalizedScope = String(scope ?? "global")
+    .toLowerCase()
+    .trim();
+  if (!DECISION_SCOPES.includes(normalizedScope)) {
+    failLedger("DECISION_SCOPE_INVALID");
+  }
+  if (normalizedScope === "task-specific" && !taskId) {
+    failLedger("DECISION_TASK_IDENTITY_REQUIRED");
+  }
+  if (normalizedScope === "domain" && !domain) {
+    failLedger("DECISION_DOMAIN_REQUIRED");
+  }
+  const candidateKey = canonicalDecisionKey({
+    topic,
+    question: question ?? "",
+    scope: normalizedScope,
+    taskId,
+    domain,
+  });
+  return {
+    candidate_key: candidateKey,
+    topic: String(topic).toUpperCase().trim(),
+    question: question ?? "",
+    proposed_decision: String(proposedDecision).trim(),
+    scope: normalizedScope,
+    task_id: normalizedScope === "task-specific" ? taskId : null,
+    domain: normalizedScope === "domain" ? String(domain) : null,
+    context,
+    classification,
+    created_at: new Date().toISOString(),
+  };
+}
+
 // M7-034: only principals in verified-identity shape are recorded — a raw
 // Discord snowflake or a derived 64-hex principal digest. Arbitrary display
 // names can never be stored as the "verified user".
@@ -197,6 +264,15 @@ export class DecisionLedger {
   /**
    * Records a user-confirmed decision.
    * Requires confirmedBy (user snowflake / identity).
+   *
+   * Only trusted governance code may call this, after an explicit owner
+   * confirmation has passed the authority gate. Observed answers and
+   * behavior are operational evidence, never implicit input here.
+   *
+   * Identity is deterministic: without an explicit decisionId, the id
+   * derives from the governed question key, so confirming the same teaching
+   * twice is idempotent, while a different decision for the same governed
+   * question is a fail-closed conflict.
    */
   recordDecision({
     decisionId,
@@ -231,7 +307,16 @@ export class DecisionLedger {
 
     const id =
       decisionId ||
-      `dec-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      `dec-${canonicalDecisionKey({
+        topic,
+        question: question || "",
+        scope: normalizedScope,
+        taskId:
+          normalizedScope === "task-specific"
+            ? (context?.taskId ?? context?.task_id ?? null)
+            : null,
+        domain: normalizedScope === "domain" ? (context?.domain ?? null) : null,
+      }).slice(0, 16)}`;
     const record = {
       decisionId: id,
       topic: topic.toUpperCase().trim(),
@@ -246,10 +331,40 @@ export class DecisionLedger {
 
     const existing = this.decisions.get(id);
     if (existing) {
-      if (canonicalRecordBytes(existing) === canonicalRecordBytes(record)) {
-        return existing;
+      // Same governed identity with a different decision is a conflict:
+      // the owner must resolve it explicitly, never silently overwrite.
+      const key = canonicalDecisionKey({
+        topic: record.topic,
+        question: record.question,
+        scope: record.scope,
+        taskId: context?.taskId ?? context?.task_id ?? null,
+        domain: context?.domain ?? null,
+      });
+      if (recordKey(existing) !== key) {
+        failLedger("DECISION_ID_CONFLICT");
       }
-      failLedger("DECISION_ID_CONFLICT");
+      if (!existing.superseded) {
+        if (canonicalRecordBytes(existing) === canonicalRecordBytes(record)) {
+          return existing;
+        }
+        failLedger("DECISION_ID_CONFLICT");
+      }
+      // This governed identity was corrected: the deterministic id now
+      // belongs to the chain, so answer against the chain's AUTHORITATIVE
+      // record. Replaying the current decision stays idempotent, while
+      // re-asserting the superseded value fails closed and must go through
+      // the explicit correction path.
+      const authoritative = Array.from(this.decisions.values()).find(
+        (d) => !d.superseded && recordKey(d) === key,
+      );
+      if (
+        authoritative &&
+        authoritative.decision === record.decision &&
+        authoritative.scope === record.scope
+      ) {
+        return authoritative;
+      }
+      failLedger("DECISION_SUPERSEDED_CORRECTION_REQUIRED");
     }
     this.decisions.set(id, record);
     try {
@@ -260,6 +375,94 @@ export class DecisionLedger {
       throw err;
     }
     return record;
+  }
+
+  /**
+   * Explicit owner correction of an existing decision. The old record is
+   * superseded (kept as audit history, excluded from all applicable
+   * lookups) and exactly one new authoritative record takes its place,
+   * so two contradictory active decisions for one scope can never coexist.
+   * Raw `recordDecision` stays fail-closed on conflict; only this path,
+   * driven by an explicit owner correction, may supersede.
+   */
+  correctDecision({
+    topic,
+    question,
+    decision,
+    scope = "global",
+    confirmedBy,
+    context = {},
+    tags = [],
+  }) {
+    if (!topic || !decision) {
+      throw new Error("TOPIC_AND_DECISION_REQUIRED");
+    }
+    if (!isVerifiedPrincipalRef(confirmedBy)) {
+      throw new Error(
+        "HUMAN_CONFIRMATION_REQUIRED: Agents cannot author decisions without a verified user principal",
+      );
+    }
+    this.assertUsable();
+    const normalizedScope = String(scope).toLowerCase().trim();
+    if (!DECISION_SCOPES.includes(normalizedScope)) {
+      throw new Error(`DECISION_SCOPE_INVALID: ${scope}`);
+    }
+    const key = canonicalDecisionKey({
+      topic,
+      question: question || "",
+      scope: normalizedScope,
+      taskId:
+        normalizedScope === "task-specific"
+          ? (context?.taskId ?? context?.task_id ?? null)
+          : null,
+      domain: normalizedScope === "domain" ? (context?.domain ?? null) : null,
+    });
+    const chain = Array.from(this.decisions.values()).filter(
+      (d) => recordKey(d) === key,
+    );
+    const active = chain.find((d) => !d.superseded) ?? null;
+    if (!active) {
+      failLedger("DECISION_NOT_FOUND");
+    }
+    if (
+      active.decision === String(decision).trim() &&
+      active.scope === normalizedScope
+    ) {
+      return active;
+    }
+    const now = new Date().toISOString();
+    const successorId = `dec-${key.slice(0, 12)}-s${chain.length + 1}`;
+    if (this.decisions.has(successorId)) {
+      failLedger("DECISION_ID_CONFLICT");
+    }
+    const successor = {
+      decisionId: successorId,
+      topic: String(topic).toUpperCase().trim(),
+      question: question || "",
+      decision: String(decision).trim(),
+      scope: normalizedScope,
+      confirmedBy,
+      confirmedAt: now,
+      context,
+      tags: tags.map((t) => String(t).toLowerCase()),
+      supersedes: active.decisionId,
+    };
+    const supersededActive = {
+      ...active,
+      superseded: true,
+      superseded_by: successorId,
+      superseded_at: now,
+    };
+    this.decisions.set(active.decisionId, supersededActive);
+    this.decisions.set(successorId, successor);
+    try {
+      this.save();
+    } catch (err) {
+      this.decisions.set(active.decisionId, active);
+      this.decisions.delete(successorId);
+      throw err;
+    }
+    return successor;
   }
 
   /**
@@ -285,6 +488,9 @@ export class DecisionLedger {
     const results = [];
 
     for (const d of this.decisions.values()) {
+      // Superseded records are audit history, never applicable answers.
+      // Fresh lookups therefore see only the authoritative decision.
+      if (d.superseded) continue;
       if (normTopic && d.topic !== normTopic) continue;
       if (normScope && d.scope !== normScope) continue;
 

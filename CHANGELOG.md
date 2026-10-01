@@ -8,6 +8,41 @@ All notable, validated changes to Personal Tool are documented here.
 
 ### Added
 
+- Completed locally verified M8/T3 Governed Long-Term Memory Learning Loop:
+  made the Zink user-teaching lifecycle work end-to-end without changing the
+  three-module architecture, seven-agent topology, governance model, security
+  boundary, or OpenClaw native-memory disablement (`slots.memory = "none"`).
+  Decision memory now runs teach → explicit classification → owner confirmation
+  (`handleOwnerDecisionConfirmation`) → `DecisionLedger` persistence with
+  deterministic identity, idempotent confirm and scope containment intact.
+  Skill learning now runs specialist proposal → durable atomic proposal record
+  carrying the exact content bytes → dedicated `#office` skill approval
+  (`zink:skill:approve`/`zink:skill:reject`, `SKILL_CANDIDATE_APPROVAL`) that
+  never touches the workflow ledger, queue, or `executeApprovedTask` → trusted
+  canonical promotion (`SKILL.md` + `manifest.json`, `CANDIDATE` then `ACTIVE`,
+  one ACTIVE per capability, fail-closed conflicts) → derived pgvector sync
+  from canonical ACTIVE state with canonical-truth-preserving failure reports.
+  Unknown, missing, expired, rejected, mismatched, conflicting, wrong-owner and
+  wrong-subject approvals all fail closed; exact replays are idempotent and
+  post-approval canonical drift is detected. Unified `content_sha256` to the
+  raw SHA-256 of the exact canonical bytes across proposal, approval, manifest
+  and tests; removed the fake workflow `task_id` from skill approvals in favor
+  of a discriminated proposal identity; removed the legacy `namespaces`
+  discover fallback; added `NO_MATCH` to the skill tool contract; completed
+  crash-safe canonical publication (stage → validate → atomic rename, with
+  residue healing) and explicit owner correction with supersession for the
+  Decision Ledger; bridged owner-confirmed reusable-procedure teachings into
+  the existing skill proposal infrastructure; and proved fresh-session
+  retrieval for both decision and skill memory plus the full negative matrix
+  in `tests/m8-t3-governed-memory-learning.test.mjs` (41 focused tests, full
+  repository suite green). Documented the durable Decision Ledger lifecycle in
+  `docs/contracts/decision-ledger.md` and proved that a search hit leads to
+  canonical approved procedure reuse via `canonical_skill_id`. User-written
+  Knowledgebase persistence remains intentionally deferred (adapter forbids
+  ingestion by contract); factual teachings route honestly with
+  `persisted: false`. Live OpenClaw runtime validation was not performed from
+  this environment.
+
 - Completed locally verified M8/T2.2-R3 Root-Cause Governed Runtime, Discord, Semantic & Artifact Integrity Hardening:
   remediated and hardened all 15 root-cause families (RC-01 through RC-15) defined in `ACTIVE.md`; enforced ingress admission gate prior to model invocations with `@Quản Lý` (Main) established as the sole root owner and specialist direct mentions strictly rejected across all channels (`SPECIALIST_NO_DIRECT_INGRESS`); locked canonical topology in `role-capability-manifest.json` and runtime `guard.mjs` (`main -> [o1, o2]`, `o1 -> [excel, sql, python]`, `o2 -> [power-bi, python]`, leaf -> `[]`) blocking direct Main-to-specialist dispatch and O1/O2 cross-spawning; established durable correlation IDs and exact task lookups preventing duplicate executions; bound approval records to immutable plan content hashes, enforcing plan revision invalidation and User-only authorization for Approve/Reject/Accept; implemented file-backed `QueueManager` with atomic cross-process file locks, lease heartbeat fencing, worker attempt validation, and fail-closed state reconciliation; decoupled technical execution finish from task completion so that `EXECUTION_FINISHED` transitions to `RESULT_PENDING_REVIEW` requiring explicit User `ACCEPT_RESULT` to transition to `COMPLETE`; purged internal filesystem paths and raw `file://` URLs from user-facing delivery; eliminated secondary writes to repository `artifacts/`, outputting `.xlsx` workbooks with matching SVG sheet previews; enabled real DuckDB engine execution with canonical fixtures, discrete execution states (`REAL_EXECUTED`, `EMPTY_RESULT`, `TEST_SIMULATION`, `TIMEOUT`), and fail-closed syntax/binder validation without returning mock sample rows; enforced strict Python stack scoping between O1 ETL and O2 analytics/visualization; verified PK\x03\x04 container integrity for Power BI; prevented secret leaks, path traversal (`..`), and sandbox bypass; and expanded the repository test suite to 272 tests across 13 test suites (including `duckdb-bridge.test.mjs`) with 100% pass rate.
 

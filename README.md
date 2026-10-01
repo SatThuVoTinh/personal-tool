@@ -243,12 +243,12 @@ Hệ thống tuân thủ nguyên tắc **CHỈ BOT ĐƯỢC TAG MỚI ĐƯỢC P
 
 - Nhằm phục vụ lưu vết kiểm toán bất biến và toàn vẹn của Ledger, hệ thống cấu hình `channels.discord.directMessages.enabled: false`. Mọi yêu cầu và phản hồi đều phải được định tuyến qua 4 bề mặt kênh máy chủ chính thức (`#office`, `#approvals`, `#results`, `#incidents`).
 
-#### 4. Quy trình Phê duyệt Kỹ năng Mới trên Diễn đàn `#approvals`
+#### 4. Quy trình Phê duyệt Kỹ năng Mới trên Kênh `#office`
 
-- Khi một agent chuyên môn (`excel`, `power-bi`, `sql`, `python`) hoàn thiện giải pháp phân tích tái sử dụng, agent gọi `zink_skill_propose` để khởi tạo bản ghi `CANDIDATE`. (Các agent điều phối `main`, `o1`, `o2` không có quyền đề xuất kỹ năng theo ma trận `SKILL_STORE_ACCESS_MATRIX`).
-- Đề xuất được định danh bằng mã băm nội dung bất biến (immutable SHA-256 hash) và gửi thông báo vào diễn đàn `#approvals`.
-- **Phê duyệt:** Chủ sở hữu (`123456789012345678`) đọc nội dung đề xuất và trả lời trực tiếp trong thread bằng tin nhắn chứa từ khóa `APPROVED` (ví dụ: `APPROVED` hoặc `Đồng ý APPROVED`).
-- **Xác thực tự động:** Hệ thống `handleOwnerSkillApproval` sẽ xác thực danh tính chủ sở hữu và tính toàn vẹn của mã băm nội dung, sau đó tiến hành kích hoạt kỹ năng lên trạng thái `ACTIVE` và đồng bộ sang PostgreSQL vector index (pgvector). Mọi nỗ lực giả mạo danh tính hoặc sai lệch mã băm đều bị từ chối fail-closed.
+- Khi một agent chuyên môn (`excel`, `power-bi`, `sql`, `python`) hoàn thiện giải pháp phân tích tái sử dụng, agent gọi `zink_skill_propose` để khởi tạo bản ghi `CANDIDATE` được lưu bền vững (durable proposal). (Các agent điều phối `main`, `o1`, `o2` không có quyền đề xuất kỹ năng theo ma trận `SKILL_STORE_ACCESS_MATRIX`). Đề xuất đơn thuần không tạo skill chuẩn tắc.
+- Đề xuất được định danh bằng mã băm nội dung bất biến (raw SHA-256 của đúng các byte sẽ trở thành `SKILL.md`) và thông báo xác nhận học tập được gửi tới kênh `#office` (không dùng diễn đàn `#approvals` của phê duyệt thực thi).
+- **Phê duyệt:** Chủ sở hữu đọc nội dung đề xuất và bấm nút phê duyệt skill chuyên biệt (`zink:skill:approve`) gắn chặt proposal và mã băm nội dung. Phê duyệt skill và phê duyệt kế hoạch thực thi (`APPROVE`) là hai đường quản trị phân biệt, không bao giờ đi chung.
+- **Xác thực tự động:** Hệ thống `handleOwnerSkillApproval` sẽ xác thực danh tính chủ sở hữu, tính toàn vẹn của mã băm nội dung và ràng buộc identity, sau đó tiến hành materialize skill chuẩn tắc (`SKILL.md` + `manifest.json`, trạng thái `ACTIVE`) bằng mã nội bộ tin cậy rồi mới đồng bộ dẫn xuất sang PostgreSQL vector index (pgvector). Đề xuất lạ/không tồn tại, hết hạn, bị từ chối hoặc xung đột đều bị từ chối fail-closed; lỗi đồng bộ vector không bao giờ rollback bản chuẩn tắc.
 
 #### 5. Thứ tự Ưu tiên Phân giải Ngữ nghĩa (Deterministic Semantic Resolver Precedence)
 
@@ -337,7 +337,7 @@ Lệnh trên sẽ tự động chạy:
 
 1. `npm run format:check`: Kiểm tra định dạng mã nguồn.
 2. `npm run lint`: Phân tích tĩnh cú pháp JavaScript và Markdown.
-3. `npm test`: Chạy toàn bộ 349 bài kiểm thử bao phủ hợp đồng M1–M8, OpenClaw governance và DuckDB bridge.
+3. `npm test`: Chạy toàn bộ bài kiểm thử bao phủ hợp đồng M1–M8, OpenClaw governance và DuckDB bridge (số lượng bài kiểm thử lấy từ kết quả chạy thực tế, không ghi cứng).
 4. `npm run repo:check`: Kiểm tra toàn vẹn chính sách repository.
 
 ---
@@ -783,6 +783,8 @@ _Nguyên tắc tham chiếu:_ Ưu tiên tham chiếu (reference) qua mã định
 - Sau khi nhiệm vụ được nghiệm thu hoàn tất (`COMPLETE`), các tri thức hoặc tiền lệ mới được phát hiện phải tuân thủ quy trình:
   $$\mathbf{FEEDBACK \longrightarrow CANDIDATE\ PROPOSAL \longrightarrow \#office \longrightarrow USER\ CONFIRMS \longrightarrow PERSIST}$$
 - Không tự động ghi trực tiếp vào bộ nhớ dài hạn nếu người dùng chưa xác nhận. Không đưa đề xuất học tập vào diễn đàn `#approvals`.
+- Ứng viên được phân loại rõ ràng trước khi persist: quy tắc/quyết định vận hành đã xác nhận thuộc về Decision Ledger (tra cứu chính xác theo scope); quy trình tái sử dụng thuộc về Skill Store (đề xuất `CANDIDATE`, chỉ `ACTIVE` sau phê duyệt chủ sở hữu với ràng buộc đúng-bytes); trạng thái task hiện hành không phải bộ nhớ dài hạn. Phân loại mơ hồ thì không persist (fail-closed).
+- Trạng thái hỗ trợ (M8/T3): Decision và Skill learning đã triển khai đầy đủ (persist + truy xuất fresh-session). Tri thức thực tế (factual/reference) được phân loại và định tuyến nhưng **chủ ý chưa triển khai** persist do người dùng ghi trực tiếp vào Knowledgebase trong milestone này (adapter cấm ingestion theo hợp đồng, Vault nguồn chỉ đọc) — routing trung thực báo `persisted: false`, không giả vờ đã lưu. Chưa kiểm chứng live (môi trường dev không có Discord/runtime live).
 
 #### 5. Mô hình Embedding & Truy xuất Ngữ nghĩa (Embedding & Retrieval)
 
@@ -820,7 +822,7 @@ Nhằm đảm bảo hệ thống vận hành bền vững không xảy ra lỗi 
 | **RC-12**     | External Adapter / Simulation Truth      | Tách biệt rõ ràng chế độ mô phỏng (`TEST_SIMULATION`) và cấm dùng dữ liệu mô phỏng trong đường dẫn thành công của production.                                                     |
 | **RC-13**     | Security / Path / Endpoint Isolation     | Zero secret leaks; chặn mọi hành vi path traversal (`..`) hoặc truy cập file ngoài workspace; cấm bypass sandbox.                                                                 |
 | **RC-14**     | Semantic / Capability Boundary           | Ánh xạ namespace được kiểm duyệt; lưu đề xuất skill vào thư mục chuyên dụng, không làm bẩn source tree.                                                                           |
-| **RC-15**     | Verification / CI / Schema Truth         | 349/349 kiểm thử trực tiếp PASS trên 28 suite; DuckDB native bridge PASS; format, lint, diff và repo check PASS.                                                                  |
+| **RC-15**     | Verification / CI / Schema Truth         | Toàn bộ kiểm thử trực tiếp PASS (`npm test` xanh, xem kết quả chạy thực tế); DuckDB native bridge PASS; format, lint, diff và repo check PASS.                                    |
 
 ---
 

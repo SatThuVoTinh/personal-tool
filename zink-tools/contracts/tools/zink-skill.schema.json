@@ -126,7 +126,13 @@
             "reason": { "type": "string" },
             "status": { "type": "string", "enum": ["CANDIDATE"] }
           },
-          "required": ["proposal_id", "capability", "version", "content_sha256", "status"],
+          "required": [
+            "proposal_id",
+            "capability",
+            "version",
+            "content_sha256",
+            "status"
+          ],
           "additionalProperties": true
         },
         "total_count": {
@@ -134,7 +140,7 @@
         },
         "governed_status": {
           "type": "string",
-          "enum": ["SUCCESS", "CONTROLLED_FAILURE"]
+          "enum": ["SUCCESS", "NO_MATCH", "CONTROLLED_FAILURE"]
         },
         "error": {
           "type": "string"

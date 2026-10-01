@@ -119,21 +119,48 @@ test("owner hygiene: a wrong expectedOwnerId still denies", async () => {
 });
 
 test("owner hygiene: a correctly bound pair still authorizes", async () => {
-  const result = await handleOwnerSkillApproval({
-    ownerDiscordId: OWNER,
-    proposalId: "prop-1",
-    contentSha256: "a".repeat(64),
-    skillsRoot: ".",
-    expectedOwnerId: OWNER,
-    options: {
-      embedFn: async () => [new Array(1024).fill(0.01)],
-      dbExecutor: async () => "",
-    },
-  });
-  assert.ok(
-    result,
-    "the exact-identity binding must still work when satisfied",
-  );
+  // A correctly bound approval authorizes only against the exact durable
+  // proposal: owner identity plus proposal identity plus content digest.
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const os = await import("node:os");
+  const { SkillAdapter } =
+    await import("../zink-tools/adapters/skill-store/skill-adapter.mjs");
+  const root = await mkdtemp(path.join(os.default.tmpdir(), "zink-hyg-"));
+  try {
+    const proposalStorageDir = path.join(root, "proposals");
+    const proposing = new SkillAdapter(undefined, { proposalStorageDir });
+    const content = "# Hygiene Skill\n\nGoverned content.";
+    const proposed = await proposing.querySkillStore({
+      action: "propose",
+      namespace: ["office"],
+      capability: "hygiene-skill",
+      version: "1.0.0",
+      content,
+      reason: "owner hygiene binding",
+      requesting_agent: "excel",
+    });
+    const result = await handleOwnerSkillApproval({
+      ownerDiscordId: OWNER,
+      proposalId: proposed.proposal.proposal_id,
+      contentSha256: proposed.proposal.content_sha256,
+      namespace: ["office"],
+      capability: "hygiene-skill",
+      version: "1.0.0",
+      skillsRoot: path.join(root, "skills"),
+      proposalStorageDir,
+      expectedOwnerId: OWNER,
+      options: {
+        embedFn: async () => [new Array(1024).fill(0.01)],
+        dbExecutor: async () => "",
+      },
+    });
+    assert.ok(
+      result && result.approval_status === "APPROVED",
+      "the exact-identity binding must still work when satisfied",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("owner hygiene: the resolver returns undefined for unusable config", () => {
@@ -151,8 +178,10 @@ test("owner hygiene: the resolver returns undefined for unusable config", () => 
   );
   assert.equal(
     (source.match(/resolveOwnerDiscordId\(config\)/gu) || []).length,
-    3,
-    "one definition and both owner gates must use it",
+    5,
+    "one definition and all four owner gates must use it (execution approval " +
+      "button gate, execution approve/reject action gate, skill learning " +
+      "confirmation gate, decision confirmation gate)",
   );
 });
 

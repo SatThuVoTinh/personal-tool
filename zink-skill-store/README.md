@@ -28,13 +28,14 @@ zink-skill-store/
 ├── bin/
 │   └── skill-store.mjs             # CLI kiểm tra (validate) và truy xuất (get)
 ├── src/
-│   └── catalog.mjs                 # Logic quét catalog, kiểm tra schema và băm SHA-256
+│   ├── catalog.mjs                 # Logic quét catalog, kiểm tra schema, băm SHA-256 và promotion chuẩn tắc nội bộ
+│   └── vector-sync.mjs             # Đồng bộ dẫn xuất Git -> PostgreSQL vector (chỉ skill ACTIVE)
 ├── skills/                         # Thư mục gốc chứa các kỹ năng đã được chuẩn hóa
 │   └── <namespace...>/             # Phân cấp danh mục (tối đa 8 cấp, vd: supply-chain/inventory)
 │       └── <capability>/           # Tên kỹ năng cụ thể (vd: safety-stock)
-│           └── <version>/          # Phiên bản SemVer (vd: 1.0.0 hoặc v1.0.0)
+│           └── <version>/          # Phiên bản SemVer (vd: 1.0.0)
 │               ├── manifest.json   # Tệp đặc tả cấu hình, metadata và băm SHA-256
-│               └── skill.md        # Tệp hướng dẫn thực thi kỹ năng (Markdown UTF-8)
+│               └── SKILL.md        # Tệp hướng dẫn thực thi kỹ năng (Markdown UTF-8, đúng tên file)
 └── templates/                      # Kho lưu trữ template báo cáo chuẩn do chủ sở hữu phê duyệt
     ├── excel/                      # Template bảng tính Excel (.xlsx)
     └── power-bi/                   # Template báo cáo Power BI (.pbix)
@@ -50,49 +51,90 @@ zink-skill-store/
 
 ## 3. Quy chuẩn Tệp Cấu hình Kỹ năng
 
-Mỗi phiên bản kỹ năng bắt buộc phải chứa đúng 2 tệp: `skill.md` và `manifest.json`.
+Mỗi phiên bản kỹ năng bắt buộc phải chứa đúng 2 tệp: `SKILL.md` và `manifest.json`
+(tên file chính xác, phân biệt hoa thường; thư mục version không chứa tệp nào khác).
 
-### 3.1. Tệp nội dung kỹ năng (`skill.md`)
+### 3.1. Tệp nội dung kỹ năng (`SKILL.md`)
 
-- Định dạng văn bản thuần UTF-8 Markdown.
+- Định dạng văn bản thuần UTF-8 Markdown, tối đa 262.144 byte.
 - Chứa toàn bộ hướng dẫn nghiệp vụ, công thức toán học, thuật toán, mã nguồn mẫu hoặc các tham số cần thiết để AI Agent thực thi kỹ năng.
 
 ### 3.2. Tệp đặc tả (`manifest.json`)
 
-Phải tuân thủ schema JSON đóng với các trường bắt buộc sau:
+Phải tuân thủ schema JSON đóng với đúng 5 trường gốc sau:
 
 ```json
 {
-  "name": "safety-stock",
-  "namespace": "supply-chain/inventory",
-  "version": "1.0.0",
-  "status": "ACTIVE",
-  "description": "Thuật toán tính toán tồn kho an toàn động dựa trên độ biến động nhu cầu và thời gian bổ hàng.",
-  "entrypoint": "skill.md",
-  "sha256": "3a8b4c9e1f2d3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b",
-  "tags": ["inventory", "safety-stock", "supply-chain", "lead-time"]
+  "schema_version": 1,
+  "identity": {
+    "namespace": ["supply-chain", "inventory"],
+    "capability": "safety-stock",
+    "version": "1.0.0"
+  },
+  "content": {
+    "path": "SKILL.md",
+    "sha256": "MÃ_SHA256_CỦA_FILE_SKILL_MD"
+  },
+  "provenance": {
+    "source_type": "demonstration",
+    "references": [{ "type": "plan", "ref": "M8/T3-R1" }]
+  },
+  "lifecycle": [
+    { "status": "CANDIDATE", "at": "2026-10-01T00:00:00Z", "actor": "excel" },
+    {
+      "status": "ACTIVE",
+      "at": "2026-10-01T00:00:00Z",
+      "actor": "owner",
+      "decision_ref": "PLAN:M8/T3-R1"
+    }
+  ]
 }
 ```
 
-- **`name`:** Tên kỹ năng, phải trùng khớp hoàn toàn với tên thư mục `<capability>`.
-- **`namespace`:** Không gian tên phân cấp, khớp với đường dẫn thư mục `<namespace...>`.
-- **`version`:** Phiên bản ngữ nghĩa SemVer (vd: `1.0.0`).
-- **`status`:** Trạng thái vòng đời. Chỉ chấp nhận một trong 4 giá trị:
-  - `ACTIVE`: Phiên bản hoạt động chính thức (mỗi capability chỉ được có duy nhất 1 phiên bản ACTIVE).
-  - `DRAFT`: Đang trong giai đoạn phát triển hoặc kiểm thử.
-  - `DEPRECATED`: Phiên bản cũ không còn khuyến nghị sử dụng.
-  - `ARCHIVED`: Đã lưu trữ lịch sử, không sử dụng cho tác vụ mới.
-- **`entrypoint`:** Bắt buộc phải là `"skill.md"`.
-- **`sha256`:** Chuỗi băm SHA-256 viết thường (64 ký tự hex) của tệp `skill.md`.
-- **`tags`:** Mảng chuỗi nhãn phân loại phục vụ tìm kiếm.
+- **`identity`:** Định danh ổn định namespace + capability + version, phải khớp
+  hoàn toàn với đường dẫn thư mục.
+- **`content.sha256`:** Chuỗi băm SHA-256 viết thường (64 ký tự hex) của đúng
+  các byte file `SKILL.md`. Mọi chỉnh sửa nội dung sau khi tạo manifest đều bị
+  phát hiện (`CONTENT_DIGEST_MISMATCH` / `SOURCE_DRIFT_DETECTED`).
+- **`provenance`:** `source_type` thuộc
+  `owner-authored | demonstration | execution | correction | research`;
+  tối đa 32 reference (`repository | url | plan | git`).
+- **`lifecycle`:** Trạng thái vòng đời. Chỉ chấp nhận một trong 4 giá trị,
+  theo đúng một trong các chuỗi sau:
+  - `[CANDIDATE]`: bản nháp chờ phê duyệt (không bao giờ được index vector,
+    không bao giờ trả về khi truy xuất).
+  - `[CANDIDATE, ACTIVE]`: phiên bản hoạt động chính thức (mỗi capability chỉ
+    được có duy nhất 1 phiên bản ACTIVE).
+  - `[CANDIDATE, ACTIVE, DEPRECATED]`: phiên bản cũ không còn khuyến nghị.
+  - `[CANDIDATE, REJECTED]`: đề xuất bị từ chối, không bao giờ thành ACTIVE.
+  - Mọi sự kiện từ `ACTIVE` trở đi bắt buộc có `decision_ref` dạng
+    `PLAN:M../T..-R..`.
 
 ---
 
-## 4. Hướng dẫn Từng Bước Thêm Kỹ Năng Mới (Skill Onboarding)
+## 4. Thêm Kỹ Năng Mới (Skill Onboarding)
 
-Để thêm một kỹ năng phân tích mới vào hệ thống, thực hiện tuần tự theo 6 bước sau:
+Có đúng 2 đường thêm kỹ năng. Đường (a) là đường chuẩn cho mọi kỹ năng do
+agent học được; đường (b) chỉ dành cho owner tự biên soạn bootstrap.
 
-### Bước 1: Khởi tạo cấu trúc thư mục
+### Đường (a): Vòng lặp học tập được quản trị (chuẩn)
+
+1. Agent chuyên môn gọi `zink_skill_propose` với đầy đủ nội dung `SKILL.md`.
+   Công cụ chỉ tạo bản ghi `CANDIDATE` lưu bền vững (durable proposal) —
+   không tự kích hoạt, không tự publish.
+2. Chủ sở hữu xem đúng nội dung đề xuất tại kênh `#office` và phê duyệt bằng
+   action skill chuyên biệt (`zink:skill:approve`) gắn chặt proposal và mã băm
+   nội dung. Phê duyệt skill không bao giờ đi qua phê duyệt kế hoạch thực thi.
+3. Mã nội bộ tin cậy materialize cặp file chuẩn tắc (`SKILL.md` +
+   `manifest.json`, vòng đời `CANDIDATE` rồi `ACTIVE`) rồi mới đồng bộ dẫn
+   xuất sang PostgreSQL vector. Đề xuất lạ/không tồn tại, hết hạn, bị từ chối
+   hoặc xung đột đều bị từ chối fail-closed.
+
+Tuyệt đối không tự tạo/sửa file trong `skills/` để "kích hoạt" một kỹ năng:
+catalog fail-closed sẽ phát hiện digest mismatch và toàn bộ truy xuất chuẩn
+tắc bị chặn cho đến khi sửa đúng.
+
+### Đường (b): Owner tự biên soạn bootstrap (hiếm)
 
 Tạo thư mục tương ứng với namespace, capability và phiên bản:
 
@@ -100,62 +142,16 @@ Tạo thư mục tương ứng với namespace, capability và phiên bản:
 New-Item -ItemType Directory -Path "zink-skill-store/skills/supply-chain/inventory/safety-stock/1.0.0" -Force
 ```
 
-### Bước 2: Soạn thảo tệp hướng dẫn nghiệp vụ (`skill.md`)
-
-Tạo tệp `skill.md` trong thư mục vừa tạo với nội dung nghiệp vụ chi tiết (mã hóa UTF-8 không BOM):
-
-```powershell
-@'
-# Kỹ năng Tính Tồn Kho An Toàn (Safety Stock Calculation)
-
-## Mục đích
-Tính toán mức tồn kho an toàn nhằm bảo vệ chuỗi cung ứng trước sự biến động của nhu cầu và thời gian giao hàng (lead time).
-
-## Công thức chuẩn
-SS = Z * sqrt( (LeadTime_Avg * (Demand_StdDev ^ 2)) + ((Demand_Avg ^ 2) * (LeadTime_StdDev ^ 2)) )
-
-Trong đó:
-* Z: Hệ số mức dịch vụ (Service Level Factor), vd: 95% -> Z = 1.65.
-* Demand_Avg, Demand_StdDev: Nhu cầu trung bình và độ lệch chuẩn nhu cầu.
-* LeadTime_Avg, LeadTime_StdDev: Thời gian giao hàng trung bình và độ lệch chuẩn.
-'@ | Out-File -FilePath "zink-skill-store/skills/supply-chain/inventory/safety-stock/1.0.0/skill.md" -Encoding utf8
-```
-
-### Bước 3: Tính toán mã băm SHA-256 chính xác của `skill.md`
-
-Sử dụng PowerShell hoặc Node.js để lấy chuỗi SHA-256 chuẩn:
-
-- **Cách 1: Bằng lệnh PowerShell:**
+Soạn thảo tệp `SKILL.md` (mã hóa UTF-8 không BOM), tính SHA-256 của đúng các
+byte file:
 
 ```powershell
-$hash = (Get-FileHash -Algorithm SHA256 -Path "zink-skill-store/skills/supply-chain/inventory/safety-stock/1.0.0/skill.md").Hash.ToLower()
-Write-Host "Mã SHA-256 là: $hash"
+$hash = (Get-FileHash -Algorithm SHA256 -Path "zink-skill-store/skills/supply-chain/inventory/safety-stock/1.0.0/SKILL.md").Hash.ToLower()
 ```
 
-- **Cách 2: Bằng lệnh Node.js:**
-
-```powershell
-node -e "const crypto=require('crypto'),fs=require('fs'); console.log(crypto.createHash('sha256').update(fs.readFileSync('zink-skill-store/skills/supply-chain/inventory/safety-stock/1.0.0/skill.md')).digest('hex'))"
-```
-
-### Bước 4: Khởi tạo tệp đặc tả `manifest.json`
-
-Tạo tệp `manifest.json` và điền giá trị hash vừa thu được:
-
-```powershell
-@'
-{
-  "name": "safety-stock",
-  "namespace": "supply-chain/inventory",
-  "version": "1.0.0",
-  "status": "ACTIVE",
-  "description": "Thuật toán tính toán tồn kho an toàn động dựa trên biến động nhu cầu và lead time.",
-  "entrypoint": "skill.md",
-  "sha256": "MÃ_HASH_VỪA_TÍNH_Ở_BƯỚC_3",
-  "tags": ["inventory", "safety-stock", "supply-chain"]
-}
-'@ | Out-File -FilePath "zink-skill-store/skills/supply-chain/inventory/safety-stock/1.0.0/manifest.json" -Encoding utf8
-```
+Tạo `manifest.json` theo đúng schema tại mục 3 (identity khớp đường dẫn,
+`content.sha256` bằng hash vừa tính, lifecycle `CANDIDATE` rồi `ACTIVE` kèm
+`decision_ref` hợp lệ), sau đó chạy `validate` ở bước 5.
 
 ### Bước 5: Kiểm tra tính hợp lệ toàn diện của kho kỹ năng (`validate`)
 
@@ -171,15 +167,19 @@ Nếu thành công, màn hình sẽ in ra:
 { "status": "valid", "manifest_count": 1 }
 ```
 
+Catalog fail-closed: một bản ghi lỗi làm toàn bộ catalog không hợp lệ, kể cả
+các bản ghi đúng khác — không có chế độ "đọc được phần đúng".
+
 ### Bước 6: Kiểm tra truy xuất kỹ năng (`get`)
 
-Thử nghiệm truy xuất nội dung kỹ năng bằng lệnh `get`:
+Thử nghiệm truy xuất nội dung kỹ năng bằng lệnh `get` (chỉ trả về đúng phiên
+bản `ACTIVE`):
 
 ```powershell
 node zink-skill-store/bin/skill-store.mjs get --namespace supply-chain/inventory --capability safety-stock
 ```
 
-Kết quả trả về JSON chứa đầy đủ `manifest` và nội dung Markdown `skill.md`.
+Kết quả trả về JSON chứa đầy đủ `manifest` và nội dung Markdown `SKILL.md`.
 
 ---
 
@@ -213,9 +213,9 @@ Các mẫu báo cáo chuẩn lưu trữ tại `templates/`:
 
 ## 7. Xử lý Sự cố Thường Gặp (Troubleshooting)
 
-| Vấn đề                                                | Nguyên nhân                                                          | Cách khắc phục                                                                                                                      |
-| ----------------------------------------------------- | -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| Lệnh `validate` trả về mã 2 kèm lỗi `SHA256_MISMATCH` | Tệp `skill.md` đã bị chỉnh sửa sau khi tạo manifest                  | Chạy lại lệnh tính SHA-256 ở Bước 3 và cập nhật trường `sha256` trong `manifest.json`. Chú ý định dạng mã hóa UTF-8 (không có BOM). |
-| Lệnh `get` trả về `ACTIVE_SKILL_NOT_FOUND` (mã 3)     | Kỹ năng có tồn tại nhưng đang ở trạng thái `DRAFT` hoặc `DEPRECATED` | Nếu kỹ năng đã sẵn sàng sử dụng, đổi `"status": "ACTIVE"` trong `manifest.json`.                                                    |
-| Lỗi `CLI_INPUT_INVALID` (mã 4)                        | Tên namespace hoặc capability chứa chữ in hoa hoặc ký tự `_`         | Đổi tên thư mục và tham số sang chữ thường, dùng dấu gạch ngang `-` (vd: `supply-chain` thay vì `SupplyChain` hay `supply_chain`).  |
-| Lỗi trùng lặp phiên bản (`DUPLICATE_VERSION`)         | Có 2 thư mục kỹ năng cùng khai báo một phiên bản                     | Đảm bảo mỗi phiên bản là duy nhất trong cùng một capability.                                                                        |
+| Vấn đề                                              | Nguyên nhân                                                                           | Cách khắc phục                                                                                                                                                                  |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Lệnh `validate` trả về mã 2 kèm lỗi digest mismatch | Tệp `SKILL.md` đã bị chỉnh sửa sau khi tạo manifest                                   | Không tự sửa hash để "khớp": nội dung chuẩn tắc chỉ thay đổi qua promotion được phê duyệt; kiểm tra vòng đời và nguồn gốc bản ghi. Chú ý định dạng mã hóa UTF-8 (không có BOM). |
+| Lệnh `get` trả về `ACTIVE_SKILL_NOT_FOUND` (mã 3)   | Kỹ năng có tồn tại nhưng đang ở trạng thái `CANDIDATE`/`REJECTED` hoặc catalog có lỗi | Đề xuất `CANDIDATE` phải qua phê duyệt chủ sở hữu mới thành `ACTIVE`; bản ghi `REJECTED` không bao giờ thành `ACTIVE`. Kiểm tra lại cờ `--namespace`, `--capability`.           |
+| Lỗi `CLI_INPUT_INVALID` (mã 4)                      | Tên namespace hoặc capability chứa chữ in hoa hoặc ký tự `_`                          | Đổi tên thư mục và tham số sang chữ thường, dùng dấu gạch ngang `-` (vd: `supply-chain` thay vì `SupplyChain` hay `supply_chain`).                                              |
+| Lỗi trùng lặp phiên bản (`DUPLICATE_VERSION`)       | Có 2 thư mục kỹ năng cùng khai báo một phiên bản                                      | Đảm bảo mỗi phiên bản là duy nhất trong cùng một capability.                                                                                                                    |

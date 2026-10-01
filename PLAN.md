@@ -1307,6 +1307,66 @@ read-only semantic RAG pipeline for Zink Knowledgebase:
   Gateway stability ensured with `replyToMode: "off"`;
 - full verification suite passed with all 123 tests clean.
 
+### M8/T3 - Governed Long-Term Memory Learning Loop (owner-authorized follow-up)
+
+Status: `IMPLEMENTED (local)`
+Task: `M8/T3 - make the Zink long-term memory / learning architecture work end-to-end`
+Plan Revision: `M8/T3-R1`
+Planning Readiness: `APPROVED`
+Execution Authorization: `YES` (explicit owner instruction, 2026-10-01 session)
+Execution Contract: `NONE` (`docs/contracts/execution/ACTIVE.md` R19 is retained
+unchanged as the closed M8/T2.2 historical record; the owner session instruction
+is the implementation authority for M8/T3)
+Evidence: `LOCAL-VERIFIED`
+Owner acceptance: not claimed
+Task Branch: `codex/m8-t2-governed-runtime-hardening`
+
+M8/T3 does not reopen M8/T2.2 (CLOSED at R19, no R20) and does not change the
+three-module architecture, seven-agent topology, governance model, security
+boundary, or OpenClaw native-memory disablement.
+
+Implemented in this revision:
+
+- Skill learning: durable atomic proposals holding the exact approved bytes,
+  a dedicated `#office` skill approval identity (`zink:skill:approve` /
+  `zink:skill:reject`) that is distinct from execution-plan approval, and a
+  trusted internal canonical writer (`promoteApprovedSkill`) that publishes
+  `SKILL.md` + `manifest.json` as ONE logical unit (stage -> validate -> single
+  atomic rename) with residue healing, then derives the pgvector index.
+- Decision learning: deterministic record identity, idempotent exact replay, and
+  explicit owner correction with supersession, so exactly one authoritative
+  decision per governed key is applicable in a fresh process.
+- Reuse proof: search results now carry `canonical_skill_id`, which resolves
+  through the canonical read/apply boundary to the exact approved `SKILL.md`.
+- Contract/repair work preserved from the earlier part of this task:
+  `subject_type` + `proposal_id` in the approval packet (no workflow `task_id`),
+  `NO_MATCH` in the skill tool contract, removal of the legacy `namespaces`
+  discover fallback, and the single canonical `content_sha256` of the exact
+  bytes.
+- Documentation: `docs/contracts/skill-store/agent-skill-store.md`, the new
+  `docs/contracts/decision-ledger.md`, the three architecture pages, the
+  `zink-skill-store/README.md`, root `README.md` and `CHANGELOG.md` now describe
+  the proven runtime and separate implemented from deferred behavior.
+
+Intentionally deferred (not claimed as working):
+
+- User-written Knowledgebase persistence. The Knowledgebase adapter forbids
+  ingestion/update by contract and the human-owned Vault is read-only, so
+  factual/reference teachings route honestly with `persisted: false` instead of
+  pretending to be stored.
+- A governed deprecation path, so promoting a new version of a capability that
+  already has an ACTIVE version still fails closed.
+
+Validation: `npm test` 910 tests / 868 pass / 0 fail / 42 skipped (pre-existing
+environment skips: R14/R16/production-ledger on Windows, unchanged by this
+revision); `npm run lint`, `npm run format:check`, `npm run repo:check` and
+`git diff --check` all exit 0. Focused proof:
+`tests/m8-t3-governed-memory-learning.test.mjs`, 41 tests, 41 pass, 0 fail.
+
+Not live-verified: no live OpenClaw runtime, no live Discord card delivery, no
+deployment, and no real pgvector/Ollama end-to-end run. Those were not attempted
+from this environment and are not claimed.
+
 ## 9. Deferred beyond V1
 
 Unless separately approved:

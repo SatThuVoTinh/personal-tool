@@ -729,6 +729,13 @@ async function main() {
       // deployment is reachable. The new digest is deliberately NOT listed: it is
       // the current build and is accepted by content comparison.
       "bae7bdf358f35c43c5308c4b0b24a1da57b55bbc609d1ff3a7e32daf65182eca",
+      // M8/T3: the outgoing hygiene entrypoint currently deployed, byte-proven
+      // as the packaged build before the governed-memory learning loop changed
+      // the entrypoint (durable skill proposals, fail-closed skill approval,
+      // #office learning path). Admitted here so the next authorized
+      // deployment is reachable. The new digest is deliberately NOT listed:
+      // it is the current build and is accepted by content comparison.
+      "2271b56bc7f0ed3a3446e4474c411c1a6132a4e3c1a2edfedb5e6907d8340b5d",
     ],
   );
   assertRegularOrMissing(output.identityKeyPath);
@@ -865,6 +872,9 @@ async function main() {
       // listed here as well as in the preflight gate above for the same
       // per-mode-duplication reason.
       "bae7bdf358f35c43c5308c4b0b24a1da57b55bbc609d1ff3a7e32daf65182eca",
+      // M8/T3: the outgoing hygiene entrypoint, listed here as well as in the
+      // preflight gate above for the same per-mode-duplication reason.
+      "2271b56bc7f0ed3a3446e4474c411c1a6132a4e3c1a2edfedb5e6907d8340b5d",
     ],
   );
   if (!existsSync(output.identityKeyPath))

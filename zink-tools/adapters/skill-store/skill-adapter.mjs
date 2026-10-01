@@ -117,6 +117,31 @@ function findSkillRecordOnDisk(skillsDir, targetSkillId) {
   return walk(skillsDir);
 }
 
+/**
+ * Atomically persists one JSON record: temp file, write, fsync, rename.
+ * A partially written file is never treated as a valid proposal.
+ */
+function writeJsonAtomicSync(filePath, value) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tmp = `${filePath}.tmp-${process.pid}-${Date.now()}-${randomBytes(4).toString("hex")}`;
+  const fd = fs.openSync(tmp, "w");
+  try {
+    fs.writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+  fs.renameSync(tmp, filePath);
+}
+
+function readJsonIfExistsSync(filePath) {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
 export class SkillAdapter {
   constructor(skillStoreRoot, options = {}) {
     this.root =
@@ -250,48 +275,10 @@ export class SkillAdapter {
           }
         }
 
-        // Fallback: check namespaces directory if skillsDir is empty
-        if (found.length === 0) {
-          const namespacesDir = path.join(this.root, "namespaces");
-          if (fs.existsSync(namespacesDir)) {
-            const entries = fs.readdirSync(namespacesDir, {
-              withFileTypes: true,
-            });
-            for (const ent of entries) {
-              if (ent.isDirectory() && !ent.name.startsWith("_")) {
-                const manifestPath = path.join(
-                  namespacesDir,
-                  ent.name,
-                  "manifest.json",
-                );
-                let isActive = true;
-                let desc = `Governed skill category: ${ent.name}`;
-                if (fs.existsSync(manifestPath)) {
-                  try {
-                    const mf = JSON.parse(
-                      fs.readFileSync(manifestPath, "utf8"),
-                    );
-                    isActive =
-                      mf.lifecycle?.at(-1)?.status === "ACTIVE" ||
-                      mf.status === "ACTIVE";
-                    desc = mf.description || desc;
-                  } catch {
-                    isActive = false;
-                  }
-                }
-                if (isActive) {
-                  found.push({
-                    skill_id: `skill-${ent.name}`,
-                    name: ent.name,
-                    namespace: ent.name,
-                    lifecycle_state: "active",
-                    description: desc,
-                  });
-                }
-              }
-            }
-          }
-        }
+        // The legacy `namespaces/` tree is not a canonical source. It bypasses
+        // catalog validation, lifecycle rules and content hashing, so it must
+        // never yield a discoverable skill. There is no fallback: when the
+        // canonical `skills/` tree holds no ACTIVE skill, discovery is empty.
 
         return {
           action: "discover",
@@ -621,8 +608,15 @@ export class SkillAdapter {
           if (item.score < minScore) continue;
 
           // K11: Include embedding model, version, and input hash provenance
+          const hitNamespace = Array.isArray(item.namespace)
+            ? item.namespace
+            : [item.namespace];
           results.push({
             skill_id: item.skill_id,
+            // Canonical reuse identity: the search hit alone is a segment
+            // excerpt, never the procedure. This id resolves through the
+            // canonical read/apply boundary to the exact approved SKILL.md.
+            canonical_skill_id: `${hitNamespace.join("/")}/${item.capability}`,
             namespace: item.namespace,
             capability: item.capability,
             version: item.version,
@@ -668,10 +662,12 @@ export class SkillAdapter {
           content,
           reason,
           requesting_agent,
-          nonce: inputNonce,
-          expires_at: inputExpiresAt,
           tags: inputTags,
         } = input;
+
+        // NOTE: nonce/expiry are never accepted from model input. Replay
+        // boundaries are generated in trusted code below; a model must not
+        // decide its own replay window.
 
         if (!capability || !SLUG_PATTERN.test(capability)) {
           throw new SkillAdapterError(
@@ -752,24 +748,26 @@ export class SkillAdapter {
           );
         }
 
-        // K14: Expiry, nonce, and proposal replay token
-        const nonce = inputNonce || null;
-        const expires_at =
-          inputExpiresAt ||
-          new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+        // K14: trusted replay boundary. Expiry and nonce are generated here,
+        // never taken from model input.
+        const nonce = randomBytes(8).toString("hex");
+        const expires_at = new Date(
+          Date.now() + 7 * 24 * 60 * 60 * 1000,
+        ).toISOString();
         const proposal_token = createHash("sha256")
           .update(
-            `${parsedNamespace.join("/")}:${capability}:${skillVersion}:${content_sha256}:${nonce || "none"}:${expires_at}`,
+            `${parsedNamespace.join("/")}:${capability}:${skillVersion}:${content_sha256}:${nonce}:${expires_at}`,
           )
           .digest("hex");
 
-        // K17: Proposal ID with nonce support to avoid collapsing independent proposals
+        // K17: proposal identity is deterministic over skill identity plus
+        // exact content bytes, so an identical repeat proposal is the same
+        // proposal rather than a duplicate.
         const proposal_id = deriveProposalId({
           namespace: parsedNamespace,
           capability,
           version: skillVersion,
           content_sha256,
-          nonce,
         });
 
         const proposal = {
@@ -783,6 +781,9 @@ export class SkillAdapter {
           domain: semanticMeta.domain,
           primary_topic: semanticMeta.primary_topic,
           content_sha256,
+          // The exact bytes the owner will approve. The durable proposal is
+          // the authority for what materialization may write.
+          content: rawContent,
           requesting_agent:
             requesting_agent || context?.agentId || "specialist",
           reason: reason.trim(),
@@ -790,7 +791,9 @@ export class SkillAdapter {
           created_at: new Date().toISOString(),
         };
 
-        // Proposal persistence is part of the governed transaction.
+        // Proposal persistence is part of the governed transaction and is
+        // atomic: temp file, fsync, rename. An identical live CANDIDATE is
+        // returned as-is so repeats keep one stable identity.
         const proposalsDir = this.options.proposalStorageDir;
         if (!proposalsDir || typeof proposalsDir !== "string") {
           throw new SkillAdapterError(
@@ -799,13 +802,42 @@ export class SkillAdapter {
           );
         }
         try {
-          fs.mkdirSync(proposalsDir, { recursive: true });
-          fs.writeFileSync(
-            path.join(proposalsDir, `${proposal_id}.json`),
-            JSON.stringify(proposal, null, 2),
-            "utf8",
-          );
+          const proposalPath = path.join(proposalsDir, `${proposal_id}.json`);
+          const existing = readJsonIfExistsSync(proposalPath);
+          const sameBytes =
+            existing?.proposal_id === proposal_id &&
+            existing?.content_sha256 === content_sha256 &&
+            typeof existing?.content === "string";
+          if (
+            sameBytes &&
+            existing?.status === "CANDIDATE" &&
+            typeof existing?.expires_at === "string" &&
+            Date.parse(existing.expires_at) > Date.now()
+          ) {
+            return {
+              action: "propose",
+              proposal: existing,
+              governed_status: "SUCCESS",
+            };
+          }
+          if (
+            sameBytes &&
+            (existing?.status === "APPROVED" ||
+              existing?.status === "MATERIALIZED" ||
+              existing?.status === "READY" ||
+              existing?.status === "INDEX_FAILED")
+          ) {
+            // Already decided past candidacy: never regress the durable
+            // record back to CANDIDATE.
+            return {
+              action: "propose",
+              proposal: existing,
+              governed_status: "SUCCESS",
+            };
+          }
+          writeJsonAtomicSync(proposalPath, proposal);
         } catch (error) {
+          if (error instanceof SkillAdapterError) throw error;
           throw new SkillAdapterError(
             `Skill proposal persistence failed: ${error?.message}`,
             "SKILL_PROPOSAL_PERSIST_FAILED",

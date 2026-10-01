@@ -1,5 +1,15 @@
-import { createHash } from "node:crypto";
-import { lstat, readdir, readFile, realpath } from "node:fs/promises";
+import { createHash, randomBytes } from "node:crypto";
+import {
+  lstat,
+  mkdir,
+  open,
+  readdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  rmdir,
+} from "node:fs/promises";
 import path from "node:path";
 import { URL } from "node:url";
 import { TextDecoder } from "node:util";
@@ -743,5 +753,403 @@ export function catalogError(details) {
       message: "Skill Store catalog is invalid.",
       details,
     },
+  };
+}
+
+function canonicalTimestamp(date = new Date()) {
+  return date.toISOString().replace(/\.\d{3}Z$/u, "Z");
+}
+
+function writerError(code, message) {
+  const error = new Error(`${code}: ${message}`);
+  error.code = code;
+  throw error;
+}
+
+async function writeFileAtomic(filePath, bytes) {
+  await mkdir(path.dirname(filePath), { recursive: true });
+  const tmp = `${filePath}.tmp-${process.pid}-${Date.now()}-${randomBytes(4).toString("hex")}`;
+  const handle = await open(tmp, "w");
+  try {
+    await handle.writeFile(bytes);
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  await rename(tmp, filePath);
+}
+
+function stagingName(version) {
+  return `${version}.pending-${process.pid}-${Date.now()}-${randomBytes(4).toString("hex")}`;
+}
+
+/**
+ * Validates one complete staged version directory before it may be
+ * published. Returns the catalog diagnostics; only an empty error list
+ * admits the pair to canonical state.
+ */
+export async function validateStagedVersion(directory, parts) {
+  const errors = [];
+  const records = [];
+  await validateVersion(directory, parts, errors, records, { value: 0 });
+  return { errors, records };
+}
+
+async function fsyncDirectoryBestEffort(dir) {
+  try {
+    const handle = await open(dir, "r");
+    try {
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    /* durability hint only; atomicity comes from the rename below */
+  }
+}
+
+/**
+ * Removes this writer's own residue: stale `<version>.pending-*` staging
+ * directories under the capability parent, and an incomplete version
+ * directory that holds no manifest at all. Neither is ever canonical —
+ * the catalog recognizes only complete validated pairs — so removing
+ * them cannot destroy canonical truth.
+ */
+async function healWriterResidue(skillsRoot, parentDir, versionDir, version) {
+  try {
+    const entries = await readdir(parentDir);
+    for (const entry of entries) {
+      if (entry.startsWith(`${version}.pending-`)) {
+        await rm(path.join(parentDir, entry), {
+          recursive: true,
+          force: true,
+        });
+      }
+    }
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  try {
+    const info = await lstat(versionDir);
+    if (!info.isDirectory() || info.isSymbolicLink()) return;
+    try {
+      await lstat(path.join(versionDir, "manifest.json"));
+    } catch (error) {
+      if (error?.code === "ENOENT") {
+        await rm(versionDir, { recursive: true, force: true });
+        await pruneEmptyParents(parentDir, skillsRoot);
+      }
+    }
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+}
+
+/**
+ * Removes directories left empty by healing, walking up from `fromDir`
+ * toward (and excluding) `stopDir`. Only empty directories are removed;
+ * the first non-empty directory stops the walk.
+ */
+async function pruneEmptyParents(fromDir, stopDir) {
+  // The walk removes directories, so it must have a real boundary. An
+  // unset/relative root never authorizes upward pruning.
+  if (typeof stopDir !== "string" || stopDir === "") return;
+  let cursor = fromDir;
+  while (cursor !== stopDir && cursor.startsWith(stopDir)) {
+    let entries;
+    try {
+      entries = await readdir(cursor);
+    } catch (error) {
+      if (error?.code === "ENOENT") return;
+      throw error;
+    }
+    if (entries.length > 0) return;
+    try {
+      await rmdir(cursor);
+    } catch (error) {
+      // Filled concurrently after the emptiness check: no longer ours to
+      // prune. Anything else is a real filesystem failure.
+      if (error?.code === "ENOTEMPTY" || error?.code === "EEXIST") return;
+      throw error;
+    }
+    const parent = path.dirname(cursor);
+    if (parent === cursor) return;
+    cursor = parent;
+  }
+}
+
+/**
+ * Trusted canonical Skill Store promotion.
+ *
+ * This is the ONLY writer that may create or update canonical
+ * `SKILL.md` / `manifest.json` records. It is internal/trusted code:
+ * agents may propose candidates, but only an owner approval may invoke
+ * this path (via the governed approval handler). It is never exposed as
+ * a model-visible tool.
+ *
+ * Semantics:
+ * - validates identity grammar before touching the filesystem, so no
+ *   model-supplied string can become an arbitrary write target;
+ * - content_sha256 is the raw SHA-256 of the exact bytes written;
+ * - lifecycle is CANDIDATE then ACTIVE in one governed transition;
+ * - identical repeat promotion is idempotent (ALREADY_ACTIVE);
+ * - same version with different bytes, or another ACTIVE version of the
+ *   same capability, is a fail-closed conflict;
+ * - the written record is re-validated through scanCatalog and rolled
+ *   back when invalid.
+ */
+export async function promoteApprovedSkill({
+  skillsRoot,
+  namespace,
+  capability,
+  version,
+  content,
+  requestingActor = "unknown",
+  ownerActor = "owner",
+  decisionRef,
+  sourceType = "demonstration",
+  references = [{ type: "plan", ref: "M8/T3-R1" }],
+  at = null,
+}) {
+  const nsArray = Array.isArray(namespace) ? namespace : [namespace];
+  if (
+    !Array.isArray(nsArray) ||
+    nsArray.length < 1 ||
+    nsArray.length > 8 ||
+    !nsArray.every(
+      (segment) => typeof segment === "string" && SLUG.test(segment),
+    ) ||
+    typeof capability !== "string" ||
+    !SLUG.test(capability) ||
+    typeof version !== "string" ||
+    !VERSION.test(version)
+  ) {
+    writerError(
+      "SKILL_IDENTITY_INVALID",
+      "namespace/capability/version do not satisfy catalog grammar.",
+    );
+  }
+  if (typeof content !== "string" || content.length === 0) {
+    writerError("SKILL_IDENTITY_INVALID", "content must be non-empty.");
+  }
+  const contentBytes = Buffer.from(content, "utf8");
+  if (contentBytes.length > 262_144) {
+    writerError(
+      "SKILL_IDENTITY_INVALID",
+      "content exceeds the 262,144-byte catalog ceiling.",
+    );
+  }
+  if (typeof decisionRef !== "string" || !DECISION.test(decisionRef)) {
+    writerError(
+      "DECISION_REF_INVALID",
+      "decision_ref must be a governed PLAN:M../T..-R.. reference.",
+    );
+  }
+  if (!SOURCE_TYPES.has(sourceType)) {
+    writerError("SKILL_IDENTITY_INVALID", "provenance source_type is invalid.");
+  }
+  if (!Array.isArray(references) || references.length > 32) {
+    writerError("SKILL_IDENTITY_INVALID", "provenance references are invalid.");
+  }
+  for (const reference of references) {
+    if (
+      !isObject(reference) ||
+      !REFERENCE_TYPES.has(reference.type) ||
+      !nonEmpty(reference.ref) ||
+      Object.keys(reference).length !== 2 ||
+      (reference.type === "repository" &&
+        !validRepositoryReference(reference.ref)) ||
+      (reference.type === "url" && !validUrl(reference.ref)) ||
+      (reference.type === "plan" && !PLAN_REF.test(reference.ref)) ||
+      (reference.type === "git" && !GIT_SHA.test(reference.ref))
+    ) {
+      writerError(
+        "SKILL_IDENTITY_INVALID",
+        "a provenance reference is invalid for its type.",
+      );
+    }
+  }
+  if (!nonEmpty(requestingActor) || !nonEmpty(ownerActor)) {
+    writerError(
+      "SKILL_IDENTITY_INVALID",
+      "lifecycle actors must be non-empty.",
+    );
+  }
+
+  const contentSha256 = createHash("sha256").update(contentBytes).digest("hex");
+  const versionDir = path.join(skillsRoot, ...nsArray, capability, version);
+  const manifestPath = path.join(versionDir, "manifest.json");
+  const markdownPath = path.join(versionDir, "SKILL.md");
+  const parentDir = path.join(skillsRoot, ...nsArray, capability);
+
+  // Heal interrupted publications first, so residue from a killed publisher
+  // can neither poison the health check below nor masquerade as canonical.
+  await healWriterResidue(skillsRoot, parentDir, versionDir, version);
+
+  let versionDirPresent = false;
+  try {
+    const info = await lstat(versionDir);
+    if (!info.isDirectory() || info.isSymbolicLink()) {
+      writerError(
+        "SKILL_VERSION_CONFLICT",
+        "version path is not a regular directory.",
+      );
+    }
+    versionDirPresent = true;
+    for (const file of [manifestPath, markdownPath]) {
+      const fileInfo = await lstat(file);
+      if (!fileInfo.isFile() || fileInfo.isSymbolicLink()) {
+        writerError(
+          "SKILL_VERSION_CONFLICT",
+          "version files must be regular non-link files.",
+        );
+      }
+    }
+    const [manifestBytes, markdownBytes] = await Promise.all([
+      readFile(manifestPath),
+      readFile(markdownPath),
+    ]);
+    const existingManifest = JSON.parse(
+      new TextDecoder("utf-8").decode(manifestBytes),
+    );
+    const currentHash = createHash("sha256")
+      .update(markdownBytes)
+      .digest("hex");
+    const recordedHash = existingManifest?.content?.sha256;
+    const lastStatus = Array.isArray(existingManifest?.lifecycle)
+      ? existingManifest.lifecycle.at(-1)?.status
+      : null;
+    if (
+      recordedHash === contentSha256 &&
+      currentHash === contentSha256 &&
+      lastStatus === "ACTIVE"
+    ) {
+      return {
+        status: "ALREADY_ACTIVE",
+        content_sha256: contentSha256,
+        namespace: nsArray,
+        capability,
+        version,
+      };
+    }
+    if (recordedHash !== currentHash) {
+      writerError(
+        "SKILL_SOURCE_DRIFT",
+        "existing canonical bytes do not match their manifest digest.",
+      );
+    }
+    writerError(
+      "SKILL_VERSION_CONFLICT",
+      "version already exists with different content or state.",
+    );
+  } catch (error) {
+    if (error?.code === "ENOENT" && !versionDirPresent) {
+      /* absent version directory: proceed to promotion below */
+    } else if (
+      error?.code === "SKILL_VERSION_CONFLICT" ||
+      error?.code === "SKILL_SOURCE_DRIFT"
+    ) {
+      throw error;
+    } else {
+      writerError(
+        "SKILL_VERSION_CONFLICT",
+        `existing version is unreadable: ${error?.message ?? error}`,
+      );
+    }
+  }
+
+  await mkdir(skillsRoot, { recursive: true });
+  const catalog = await scanCatalog(skillsRoot);
+  const catalogUsable =
+    catalog.errors.length === 0 ||
+    (catalog.errors.length === 1 &&
+      catalog.errors[0]?.code === "SKILLS_ROOT_MISSING");
+  if (!catalogUsable) {
+    writerError(
+      "CATALOG_INVALID",
+      "catalog has pre-existing errors; promotion refused.",
+    );
+  }
+  const clash = (catalog.records ?? []).find(
+    (record) =>
+      record.manifest?.identity?.namespace?.join("/") === nsArray.join("/") &&
+      record.manifest?.identity?.capability === capability &&
+      record.manifest?.lifecycle?.at(-1)?.status === "ACTIVE",
+  );
+  if (clash) {
+    writerError(
+      "SKILL_ACTIVE_CONFLICT",
+      `capability already has ACTIVE version ${clash.manifest.identity.version}; deprecate it before promoting ${version}.`,
+    );
+  }
+
+  const stamp =
+    typeof at === "string" && validTimestamp(at) ? at : canonicalTimestamp();
+  const manifest = {
+    schema_version: 1,
+    identity: { namespace: nsArray, capability, version },
+    content: { path: "SKILL.md", sha256: contentSha256 },
+    provenance: { source_type: sourceType, references },
+    lifecycle: [
+      { status: "CANDIDATE", at: stamp, actor: String(requestingActor) },
+      {
+        status: "ACTIVE",
+        at: stamp,
+        actor: String(ownerActor),
+        decision_ref: decisionRef,
+      },
+    ],
+  };
+
+  // SKILL.md + manifest.json are ONE logical publication. They are staged
+  // as a complete pair, validated as a pair, and published by one atomic
+  // rename — never written into the canonical directory file by file.
+  await mkdir(parentDir, { recursive: true });
+  const stagingDir = path.join(parentDir, stagingName(version));
+  await mkdir(stagingDir, { recursive: true });
+  try {
+    await writeFileAtomic(path.join(stagingDir, "SKILL.md"), contentBytes);
+    await writeFileAtomic(
+      path.join(stagingDir, "manifest.json"),
+      Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, "utf8"),
+    );
+    const staged = await validateStagedVersion(stagingDir, [
+      ...nsArray,
+      capability,
+      version,
+    ]);
+    if (staged.errors.length > 0) {
+      writerError(
+        "CATALOG_INVALID",
+        `staged record failed validation: ${staged.errors[0]?.code ?? "unknown"}.`,
+      );
+    }
+    await rename(stagingDir, versionDir);
+  } catch (error) {
+    await rm(stagingDir, { recursive: true, force: true });
+    if (error?.code === "SKILL_IDENTITY_INVALID") throw error;
+    if (error?.code === "CATALOG_INVALID") throw error;
+    writerError(
+      "SKILL_PUBLISH_FAILED",
+      `canonical publication failed: ${error?.message ?? error}`,
+    );
+  }
+  await fsyncDirectoryBestEffort(parentDir);
+
+  const reverified = await scanCatalog(skillsRoot);
+  if (reverified.errors.length > 0) {
+    await rm(versionDir, { recursive: true, force: true });
+    writerError(
+      "CATALOG_INVALID",
+      `promoted record failed re-validation: ${reverified.errors[0]?.code ?? "unknown"}.`,
+    );
+  }
+
+  return {
+    status: "ACTIVE",
+    content_sha256: contentSha256,
+    namespace: nsArray,
+    capability,
+    version,
   };
 }

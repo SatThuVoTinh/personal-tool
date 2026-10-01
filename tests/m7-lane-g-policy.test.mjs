@@ -214,11 +214,14 @@ describe("Lane G — policy & lifecycle contract reconciliation", () => {
     const content = "# skill";
     const contentDigest = canonicalHash("zink-skill-content-v1", content);
     // Shape 1: the skill publication packet the live propose path builds.
+    // A skill approval is a governance transaction with its own proposal
+    // identity; it carries no workflow task id at all.
     const skillPacket = {
       schema_version: "1.0.0",
       governance_version: "m8-t2.2-r4",
+      subject_type: "SKILL_CANDIDATE_APPROVAL",
       approval_id: "prop-1",
-      task_id: canonicalHash("zink-skill-approval-v1", "prop-1"),
+      proposal_id: "prop-1",
       brief_revision: 1,
       exact_target: "skills/excel/filter@1.0.0",
       exact_operation: "SKILL_CANDIDATE_APPROVAL",
@@ -271,7 +274,7 @@ describe("Lane G — policy & lifecycle contract reconciliation", () => {
         { ...invocationApproval, approval_scope_digest: undefined },
       ],
       [
-        "a skill packet whose task id is not a digest",
+        "a skill packet carrying a workflow task id",
         { ...skillPacket, task_id: "task-skill-prop-1" },
       ],
     ]) {

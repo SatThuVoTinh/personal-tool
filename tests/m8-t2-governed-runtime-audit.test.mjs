@@ -2647,9 +2647,9 @@ describe("M8/T2.1 Hardening & Regression Suite (A-Series, H-Series, C-Series, D-
 });
 
 describe("A-Series: Discord Component Callback Schema & Interaction Guards (A14-A22, A24, A30)", () => {
-  test("A14: DISCORD_COMPONENT_ACTION_NAMESPACE contains exactly 6 canonical action types", () => {
+  test("A14: DISCORD_COMPONENT_ACTION_NAMESPACE contains exactly 8 canonical action types", () => {
     const keys = Object.keys(DISCORD_COMPONENT_ACTION_NAMESPACE);
-    assert.equal(keys.length, 6, "Must define exactly 6 action types");
+    assert.equal(keys.length, 8, "Must define exactly 8 action types");
     assert.ok(
       DISCORD_COMPONENT_ACTION_NAMESPACE.APPROVAL_APPROVE.startsWith(
         "zink:approval:",
@@ -2659,6 +2659,16 @@ describe("A-Series: Discord Component Callback Schema & Interaction Guards (A14-
       DISCORD_COMPONENT_ACTION_NAMESPACE.RESULT_ACCEPT.startsWith(
         "zink:result:",
       ),
+    );
+    // M8/T3: the skill-learning pair lives in its own namespace so a skill
+    // approval can never route through the execution approval handler.
+    assert.ok(
+      DISCORD_COMPONENT_ACTION_NAMESPACE.SKILL_APPROVE.startsWith(
+        "zink:skill:",
+      ),
+    );
+    assert.ok(
+      DISCORD_COMPONENT_ACTION_NAMESPACE.SKILL_REJECT.startsWith("zink:skill:"),
     );
   });
 

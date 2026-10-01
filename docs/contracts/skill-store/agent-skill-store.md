@@ -3,8 +3,8 @@
 ## Purpose
 
 Zink Skill Store owns governed reusable skills and owner-built template assets.
-It is logically isolated from Zink Knowledgebase indexes and is not a runtime
-implemented by M5/T1-R2.
+It is logically isolated from Zink Knowledgebase indexes. OpenClaw reaches it
+only through the governed Zink Tools boundary described below.
 
 ## Git-native governed skills
 
@@ -47,6 +47,35 @@ Excel and Power BI templates use a Git + external-storage hybrid:
 
 ## Boundaries
 
-OpenClaw reaches Skill Store only through a future thin adapter at the Zink Tools
-boundary. M5/T1-R2 documents and reserves that boundary only; it does not
-implement the adapter, a Skill Store runtime, APIs or persistence.
+OpenClaw reaches Skill Store only through the governed Zink Tools boundary.
+
+**Model-visible interface** (callable tools, untrusted proposal content):
+
+```text
+zink_skill_search   # ACTIVE-only semantic retrieval (READY index rows only)
+zink_skill_propose  # CANDIDATE proposal only; never self-activates
+skill-store validate
+skill-store get --namespace <slash-separated namespace> --capability <slug>
+```
+
+**Trusted internal interface** (never model-visible, owner approval required):
+
+```text
+owner confirmation in #office (dedicated zink:skill:* action identity,
+  never the execution-plan APPROVE)
+  -> canonical promotion (SKILL.md + manifest.json, CANDIDATE then ACTIVE)
+  -> derived pgvector sync from canonical ACTIVE state
+```
+
+The #office learning card is built by `buildSkillProposalCard`: proposal text
+plus native approve/reject buttons whose custom_ids bind the exact proposal
+(`zink:skill:<approve|reject>:<proposal_id>:<digest-prefix>`, within Discord's
+100-char custom_id ceiling). The click corroborates identity; the approval
+itself always binds the exact bytes stored server-side. Live Discord delivery
+of these cards was not verified from the development environment.
+
+`get` returns only the exact `ACTIVE` version after validation of the complete
+catalog. A proposal alone creates no canonical skill; only the owner-confirmed
+promotion writes canonical files, and only canonical ACTIVE records become
+searchable after the derived index reports READY. pgvector is derived and is
+never the source of truth.

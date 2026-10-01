@@ -70,7 +70,18 @@ const R5_ENTRYPOINT_SHA256 =
 /** The CURRENT build digests (owner-identity hygiene). NOT listed. */
 const R10_NATIVE_BOUNDARY_SHA256 =
   "d88bff80aeb3d7531e5a0dceba4e7ba856d085e64a87cbb414c9f295284d81e3";
+/**
+ * The CURRENT packaged entrypoint (M8/T3 governed-memory learning loop).
+ * Updated from the hygiene build digest 2271b56b… exactly as R13/R19 moved
+ * their pins when the entrypoint changed: the packaged entrypoint is a
+ * provenance-pinned governance asset, so any entrypoint change moves this
+ * pin and admits the outgoing digest as a recognized predecessor. NOT listed.
+ */
 const R10_ENTRYPOINT_SHA256 =
+  "a3dbf945deae82c1c07b419d6f1af1724f70a336c88331d4a772dfc93420ab92";
+
+/** The outgoing owner-identity-hygiene entrypoint (M8/T3 predecessor). */
+const HYGIENE_OUTGOING_ENTRYPOINT_SHA256 =
   "2271b56bc7f0ed3a3446e4474c411c1a6132a4e3c1a2edfedb5e6907d8340b5d";
 
 /**
@@ -403,6 +414,7 @@ test("R13 3b: each outgoing entrypoint is listed in BOTH modes", () => {
   for (const [digest, label] of [
     [R17_OUTGOING_ENTRYPOINT_SHA256, "R17 outgoing"],
     [R19_OUTGOING_ENTRYPOINT_SHA256, "R19 outgoing"],
+    [HYGIENE_OUTGOING_ENTRYPOINT_SHA256, "hygiene outgoing"],
   ]) {
     assert.equal(
       CONFIGURE_SOURCE.split(digest).length - 1,
