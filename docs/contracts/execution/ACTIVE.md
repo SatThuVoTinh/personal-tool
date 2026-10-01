@@ -11,8 +11,10 @@ Deployment Authorized: YES
 Deployment Authorized Scope: ONE authorized deployment attempt against the
   real live runtime through `operator-apply.mjs`. No rehearsal namespace, no
   simulation, no automatic retry, no manual heartbeat trigger.
-Lifecycle: AUTHORIZED - IMPLEMENTED, LOCAL-VERIFIED, NOT YET DEPLOYED
-Deployment Status: AUTHORIZED - NOT YET DEPLOYED
+Lifecycle: DEPLOYED AND VERIFIED - M8/T2.2 CLOSED on the governance objective
+Deployment Status: DEPLOYED - PASS at stage `applied`, `transactionStatus:
+  complete`, attempt `txn-6c4fc50d9b584c23f2121c8edada159a02e70ca87cb4150d0f6cf
+4de23d7b0c1`
 
 R19 is the final revision. R18 remains deployed and is NOT modified by R19: the
 pinned native runtime, `native-boundary.mjs` and its R18 recovery are untouched,
@@ -140,6 +142,104 @@ unchanged, gateway stable, ledger intact, and live digests matching the
 repository artifact. A Google `503`/`429` is an upstream capacity condition,
 classified separately and retried through a subsequent legitimate scheduler
 execution.
+
+## R19 8. Deployed result and live evidence
+
+`operator-apply.mjs` returned `{"status":"PASS","stage":"applied","mutationStarte
+d":true,"rollbackRequired":false,"rollbackAttempted":false,"attemptId":"txn-6c4
+fc50d9b584c23f2121c8edada159a02e70ca87cb4150d0f6cf4de23d7b0c1","transactionSta
+tus":"complete"}`. Preflight returned
+`{"identifiers":"VALID","builder_preflight":"PASS","installed_mutation":false}`
+before the attempt.
+
+Live, verified by sha256 outside the deployer: extension `index.mjs` `bae7bdf3`
+is byte-identical to the repository packaged artifact. Boundary and dist bridge
+remain `d88bff80` -- R18's build, untouched -- and selection `555f37da` is
+unchanged, so no lineage moved. Native patch `PATCHED` for both files. Ledger
+`d794d99d`, 103 events, sequence 103, byte-identical. WSL `boot_id`
+`ed9ffd50-a0e2-4b43-9cde-cecf0824c3c2` unchanged across the deployment. Gateway
+active, `NRestarts=0`, pid 38132 after the expected restart. Docker engine
+29.5.3.
+
+A clean, real, scheduler-generated heartbeat at `2026-10-01T04:50:55Z`:
+
+    11:50:57.211  [model-fetch] response model=gemini-flash-latest status=200
+    11:50:58.140  [zink-governance] beforeRunEnd: internal system session for main
+
+Every counter for that heartbeat, with the two governance states reported
+SEPARATELY as they must be:
+
+| Counter | Value |
+| --- | --- |
+| `GOVERNANCE_RUN_UNAVAILABLE` | 0 |
+| `GOVERNANCE_COMPLETION_UNAVAILABLE` | 0 |
+| run-end / lane `EXECUTION_STATE_UNKNOWN` | 0 |
+| **advisory `before_prompt_build` `EXECUTION_STATE_UNKNOWN`** | **0** |
+| `EXECUTION_STATE_UNKNOWN` anywhere in the window | 0 |
+| `sandboxErr` | 0 |
+| `laneErr` | 0 |
+| `beforeRunEnd: internal system session` (R18 holds) | 1 |
+| `self-keyed session presented a runId` | 0 |
+| model `429` / `503` | 0 |
+
+Across the whole post-deployment window: `before_prompt_build
+EXECUTION_STATE_UNKNOWN` = 0, `EXECUTION_STATE_UNKNOWN` anywhere = 0,
+`beforeRunEnd: internal system session` = 3, `self-keyed full governance` = 0,
+`GOVERNANCE_RUN_UNAVAILABLE` = 0, `sandboxErr` = 0, and 7 Discord bot clients
+connected, so ordinary governed execution is unaffected.
+
+The immediately preceding `04:20:54Z` poll is upstream evidence, not a
+regression: its first candidate hit a Google `429 RESOURCE_EXHAUSTED`, which the
+provider-failure path converts to `PROVIDER_UNAVAILABLE` and therefore to
+`GOVERNANCE_COMPLETION_UNAVAILABLE` for that candidate alone. That poll's
+`before_prompt_build` state was still 0, which proves the fix is independent of
+the provider condition. The fallback candidate then returned `status=200` and
+finished `candidate_succeeded, next=none`.
+
+Transcript continuity is intact and causally linked. The `04:50` poll is
+`4155c8fb` (parent `673f06d1`, `04:50:52.182Z`, `[OpenClaw heartbeat poll]`)
+answered by `9fd4e3d1` (parent `4155c8fb`, `04:50:57.948Z`), both
+post-deployment, poll before reply, 762 -> 765 lines.
+
+## R19 9. One residual, explained precisely, and NOT a governance defect
+
+Heartbeat reply CONTENT is not fully deterministic. The `04:20` poll replied a
+plain `HEARTBEAT_OK`; the `04:50` poll replied a governed result envelope with
+`outcome_claim: BLOCKED, reason_claim: POLICY_DENIED` and an output beginning
+"Execution state unknown."
+
+That envelope is MODEL-GENERATED, not governance-injected, and the evidence is
+direct:
+
+* The plugin registers exactly one prompt-affecting hook, `before_prompt_build`.
+  It does not register `heartbeat_prompt_contribution`, `agent_turn_prepare` or
+  `before_agent_start`, so there is no other governance-controlled injection
+  point in the prompt-build path.
+* In BOTH the `04:20` and `04:50` windows that hook logged nothing and emitted no
+  instruction, and `EXECUTION_STATE_UNKNOWN` does not appear anywhere. The `04:20`
+  turn nonetheless said `HEARTBEAT_OK` and the `04:50` turn said `BLOCKED`, from
+  identical (empty) governance input. The difference is the model, not the
+  governance layer.
+* The standing system prompt instructs the agent to report `BLOCKED` /
+  `CONTROLLED_FAILURE` when it cannot observe or validate a governed state, and
+  to consume only references with `validation_status=VALID`. A heartbeat
+  deliberately has no governed task, so `BLOCKED` is a reachable model choice.
+  R18-era `BLOCKED` replies also remain in the session transcript and plausibly
+  reinforce the pattern.
+
+This is a false negative in CONTENT, not a governance bypass: it grants nothing,
+weakens no control, and every governance counter is objectively 0. R19 fixed the
+cause the owner identified -- the false-positive `EXECUTION_STATE_UNKNOWN` at the
+advisory seam -- and that is eliminated.
+
+Making the reply content deterministic would require changing what the model is
+told: either amending the standing governance instruction contract in
+`policy.mjs`, which alters model input for EVERY agent and turn, or registering
+the host's `heartbeat_prompt_contribution` hook to inject a liveness
+acknowledgement. Both are material decisions to the model's input contract, and
+neither is inside R19's authorized seam, so neither is done and no R20 is
+created. Recorded as a known, understood, non-blocking content variance rather
+than an open governance defect.
 
 ---
 
