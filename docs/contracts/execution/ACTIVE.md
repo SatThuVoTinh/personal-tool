@@ -313,6 +313,10 @@ deployment itself is NOT authorized and was NOT performed. Until it is, the live
 runtime retains the baked-in fallback. This is recorded as an open, owner-decision
 item rather than as completed remediation.
 
+**Update: DEPLOYED under the follow-up authorization below.** The paragraph above
+is retained as the state at the time it was written; the deployment record
+follows at the end of this section.
+
 **Follow-up remediation (same PR, authorized completion instruction).** The owner
 directed finishing all PR #18 remediation end-to-end, which extends this item
 beyond the first fix without reopening M8/T2.2 (still CLOSED at R19; no R20):
@@ -368,10 +372,47 @@ weakening `parseIdentifiers` fails exactly the validation test; restoring one
 routing fallback fails exactly the routing test; every negative passes under
 every revert.
 
-Not acted on, pending decision: Discord channel and forum-tag identifiers also
-appear as literals in production plugin source. These are server surface
-identifiers rather than personal user data, gitleaks does not flag them, and
-removing them is a broader behavioural change than this remediation.
+Update: the channel/forum routing literals above were subsequently acted on
+after all — the "broader behavioural change" turned out to be five contained
+call-site edits plus four config fields the schema already declared, so leaving
+them would have preserved a real cross-channel-write hazard. What remains as
+deliberately-kept constants: the forum `STATUS:WAITING` tag (workflow semantics
+on threads the plugin itself opens), the bot/role/alias roster tables (routing
+identity, never authorization), and the tested A30 prompt-text baselines. Each
+carries its documented reason in source.
+
+## R19 11. Hygiene deployment record
+
+`operator-apply.mjs` returned PASS at stage `applied`,
+`transactionStatus: complete`, no rollback, attempt
+`txn-a126766b9ac9cc0a42cb92b28eb678408c20b8401c2ee6a5bc715851ad6d5527`. This
+consumed the single-attempt hygiene authorization recorded in PLAN.md 4.16.
+
+Two deployment-path issues were met and resolved without weakening any gate:
+
+* The new plugin-config fields made `builder-preflight` report `Policy drift`,
+  which by design blocks `builder-apply`. This was resolved through the
+  repository's own field-scoped convergence mechanism in `configure.mjs`: only
+  MISSING surface-id fields are filled from the canonical build, a
+  present-but-different value still fails closed, and the final validation must
+  accept the result.
+* The changed packaged assets (`lib/policy.mjs`, `lib/authority.mjs`) needed
+  their outgoing R19 digests admitted as recognized predecessors, exactly as
+  every previous revision did. Both digests were byte-proven — one from
+  committed source directly, one through the two documented packaging rewrites.
+
+Live, verified by sha256 outside the deployer: extension `index.mjs`
+`2271b56b` byte-identical to the repository packaged artifact; boundary
+`d88bff80` and selection `555f37da` unchanged; native patch `PATCHED`; zero
+occurrences of the owner literal in the live `index.mjs`, `lib/policy.mjs` and
+`lib/authority.mjs`; the live plugin config carries all four validated
+destinations plus the owner id; WSL `boot_id` unchanged; gateway active with
+`NRestarts=0`; ledger byte-identical. A real post-deployment heartbeat fired
+run-end internal session twice, kept advisory prompt-build
+`EXECUTION_STATE_UNKNOWN` at 0 with no routing-resolution errors, and completed
+through the fallback candidate after an upstream 429 on the first — the
+classified-upstream pattern R19 documented. R19's governance behaviour is intact
+after this deployment.
 
 ---
 

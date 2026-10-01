@@ -87,6 +87,20 @@ const R17_OUTGOING_ENTRYPOINT_SHA256 =
 const R19_OUTGOING_ENTRYPOINT_SHA256 =
   "bae7bdf358f35c43c5308c4b0b24a1da57b55bbc609d1ff3a7e32daf65182eca";
 
+/**
+ * The outgoing R19 builds of the two lib assets this remediation changes,
+ * byte-verified against the live runtime. Admitted as recognized predecessors
+ * so the deployment is reachable; the new digests stay unlisted as current
+ * builds accepted by content comparison.
+ */
+const R19_OUTGOING_POLICY_SHA256 =
+  "5a1d991977b6b5bb3c510f9e193f21b8300766ef6271a6316acb9a77ed4b6776";
+const R19_OUTGOING_AUTHORITY_SHA256 =
+  "50a0b47860cb4cce29fc4f4d40d7c57813035324bc2e490a6f184754212e3e82";
+
+/** The commit carrying the R19 plugin source now deployed live. */
+const R19_SOURCE_COMMIT = "4b9eb0f";
+
 /** The commit carrying the R7-era plugin source: R10's immediate parent. */
 const R7_SOURCE_COMMIT = "4f5cc6d";
 
@@ -486,6 +500,70 @@ test("R13 D: the R5 predecessors remain accepted", async () => {
     // reverted, exactly as the R8 suite derives it.
     writeFileSync(p.asset("lib/native-boundary.mjs"), r5BoundaryBody(), "utf8");
     assert.doesNotThrow(p.preflight);
+  } finally {
+    rmSync(p.root, { recursive: true, force: true });
+  }
+});
+
+test("R13 D2: the outgoing R19 lib assets are proven from committed source", () => {
+  // authority.mjs is packaged without rewrites, so its committed source must
+  // hash to the live digest directly.
+  assert.equal(
+    sha256(
+      gitShow(R19_SOURCE_COMMIT, "integrations/openclaw/lib/authority.mjs"),
+    ),
+    R19_OUTGOING_AUTHORITY_SHA256,
+    "the committed R19 authority source must reproduce the live digest",
+  );
+  // policy.mjs is packaged with exactly the two rewrites declared in
+  // PACKAGE_REWRITES["lib/policy.mjs"]; replicating them must reproduce live.
+  const packaged = gitShow(
+    R19_SOURCE_COMMIT,
+    "integrations/openclaw/lib/policy.mjs",
+  )
+    .split('"../topology/lib/')
+    .join('"./')
+    .split('"../../topology/contracts"')
+    .join('"../../contracts"');
+  assert.equal(
+    sha256(packaged),
+    R19_OUTGOING_POLICY_SHA256,
+    "the committed R19 policy source must reproduce the live digest",
+  );
+});
+
+test("R13 D3: the outgoing R19 lib assets are accepted and converge", async () => {
+  const p = provisioned();
+  try {
+    writeFileSync(
+      p.asset("lib/authority.mjs"),
+      gitShow(R19_SOURCE_COMMIT, "integrations/openclaw/lib/authority.mjs"),
+      "utf8",
+    );
+    const packaged = gitShow(
+      R19_SOURCE_COMMIT,
+      "integrations/openclaw/lib/policy.mjs",
+    )
+      .split('"../topology/lib/')
+      .join('"./')
+      .split('"../../topology/contracts"')
+      .join('"../../contracts"');
+    writeFileSync(p.asset("lib/policy.mjs"), packaged, "utf8");
+    // The outgoing R19 lib assets must be accepted as recognized predecessors.
+    assert.doesNotThrow(p.preflight);
+    // And apply must converge them onto the current build, not leave them.
+    p.apply();
+    const files = await currentBuild();
+    assert.equal(
+      sha256(readFileSync(p.asset("lib/authority.mjs"), "utf8")),
+      sha256(files.assets["lib/authority.mjs"]),
+      "an accepted predecessor must be upgraded onto the current build",
+    );
+    assert.equal(
+      sha256(readFileSync(p.asset("lib/policy.mjs"), "utf8")),
+      sha256(files.assets["lib/policy.mjs"]),
+      "an accepted predecessor must be upgraded onto the current build",
+    );
   } finally {
     rmSync(p.root, { recursive: true, force: true });
   }

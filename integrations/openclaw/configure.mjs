@@ -123,6 +123,14 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
   ]),
   "lib/authority.mjs": Object.freeze([
     "1e6eb2659f3d671ec62e6c57f28088bfcfffef3d637ec0f898d8ef18fc426b13",
+    // Owner-identity hygiene follow-up: the outgoing R19 build currently
+    // deployed, byte-verified against the live runtime at this exact path.
+    // This revision changes this file (the owner alias is now resolved from
+    // configuration), so without this entry --preflight refuses the deployed
+    // R19 extension and the deployment is unreachable. The new digest is
+    // deliberately NOT listed: it is the current build and is already accepted
+    // by content comparison.
+    "50a0b47860cb4cce29fc4f4d40d7c57813035324bc2e490a6f184754212e3e82",
   ]),
   "lib/canonical.mjs": Object.freeze([
     "c6c0515ab3b1ade07d94d8b5969cd425456db2b5fff56847ba7ef0030989b203",
@@ -141,6 +149,14 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // the V16 self-safe rewrite mechanism can replace it. Same classification as
     // the entry above; the semantics of this table are unchanged.
     "5bbcbdbf39cdee8f568f48ce613450ea203f04ca39ee360f213456e4977e74f8",
+    // Owner-identity hygiene follow-up: the outgoing R19 build currently
+    // deployed, byte-verified against the live runtime at this exact path.
+    // This revision changes this file (the built plugin config now carries the
+    // validated Discord surface ids), so without this entry --preflight refuses
+    // the deployed R19 extension and the deployment is unreachable. The new
+    // digest is deliberately NOT listed: it is the current build and is already
+    // accepted by content comparison.
+    "5a1d991977b6b5bb3c510f9e193f21b8300766ef6271a6316acb9a77ed4b6776",
   ]),
   "lib/queue-manager.mjs": Object.freeze([
     "a8021088a4e9373fcf74cf4dd31433c8606b9505eaf74c5fa922839ee716776a",
@@ -382,6 +398,35 @@ function existingConfigMatches(configPath, context) {
           converged = true;
         }
       }
+    // Owner-identity hygiene follow-up: the built zink-governance plugin config
+    // now carries the four validated Discord surface ids, so outbound routing
+    // targets resolve from configuration instead of hardcoded production
+    // fallbacks. A config written by an earlier build differs in exactly these
+    // four fields, so filling them from the canonical build is the same kind of
+    // convergence as the cases above. Only MISSING fields are filled, in the
+    // same key order the policy serializes them; a present-but-different value
+    // is NOT overwritten here, so a hand-edited destination still fails closed
+    // in the final validation below.
+    const livePluginConfig =
+      migrated.plugins?.entries?.[GOVERNANCE_PLUGIN_ID]?.config;
+    const expectedPluginConfig =
+      expectedConfig.plugins?.entries?.[GOVERNANCE_PLUGIN_ID]?.config;
+    if (livePluginConfig && expectedPluginConfig) {
+      for (const field of [
+        "discordOfficeChannelId",
+        "discordResultsForumId",
+        "discordApprovalsForumId",
+        "discordIncidentsForumId",
+      ]) {
+        if (
+          livePluginConfig[field] === undefined &&
+          typeof expectedPluginConfig[field] === "string"
+        ) {
+          livePluginConfig[field] = expectedPluginConfig[field];
+          converged = true;
+        }
+      }
+    }
     if (!converged) {
       throw validationError;
     }
