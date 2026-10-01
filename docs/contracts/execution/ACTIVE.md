@@ -246,7 +246,31 @@ than an open governance defect.
 Publishing the branch surfaced a genuine defect through the repository's OWN CI
 gate: `secret-scan` failed with three `discord-client-id` findings, and
 `quality-gate` passed. This was not caused by R18 or R19; the literals were
-introduced on 2026-09-26 in `01489aa` / `0e5a899` and were absent from `main`.
+introduced on 2026-09-26 in `01489aa` / `0e5a899`.
+
+**Baseline status, stated precisely.** Both CI failures are PRE-EXISTING on
+`main`, not regressions from this work, and neither can be cleared by a
+forward fix:
+
+* `main`'s own `Security` workflow has concluded `failure` since at least
+  2026-09-28, with the IDENTICAL three `discord-client-id` findings at the same
+  lines of the same file. gitleaks scans git HISTORY rather than the checked-out
+  tree, so removing the literals from current source cannot clear a finding that
+  lives in the commit that introduced them. `main`'s copy of
+  `integrations/openclaw/plugins/zink-governance/index.mjs` is a 549-byte stub and
+  does not contain them; the finding comes from history.
+* `dependency-audit` passed on `main` when it last ran, but `package-lock.json` is
+  byte-identical between `main` and this branch, so the result is determined by
+  the lockfile plus the CURRENT advisory database. The `brace-expansion` advisories
+  were published after that run, so the same lockfile now fails. No dependency was
+  changed and no lockfile was regenerated.
+
+Consequently no `.gitleaksignore` entry was added and no dependency was touched.
+Suppressing a long-standing finding on `main`, or bumping dependencies to clear an
+advisory the owner did not ask about, are both owner decisions rather than
+incidental cleanups. The fix below removes the exposure from every future state
+of the source; clearing the historical CI finding would require an explicitly
+authorized history rewrite.
 
 The repository's `.gitleaks.toml` allowlists synthetic Discord IDs and fixtures
 under `tests/` and the orchestration README, and deliberately does NOT allowlist
@@ -286,14 +310,10 @@ deployment itself is NOT authorized and was NOT performed. Until it is, the live
 runtime retains the baked-in fallback. This is recorded as an open, owner-decision
 item rather than as completed remediation.
 
-Two residual observations, deliberately not acted on without a decision:
-Discord channel and forum-tag identifiers also appear as literals in production
-plugin source. These are server surface identifiers rather than personal user
-data, gitleaks does not flag them, and removing them is a broader behavioural
-change than this remediation. Separately, `dependency-audit` fails on
-`brace-expansion` (high), `js-yaml` and `markdown-it`; `package-lock.json` is
-byte-identical between `main` and this branch, so that is a pre-existing baseline
-failure and not a regression from this work. No dependency change was made.
+Not acted on, pending decision: Discord channel and forum-tag identifiers also
+appear as literals in production plugin source. These are server surface
+identifiers rather than personal user data, gitleaks does not flag them, and
+removing them is a broader behavioural change than this remediation.
 
 ---
 

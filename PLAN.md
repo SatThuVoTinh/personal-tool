@@ -954,8 +954,20 @@ separate seam remains open and is recorded in ACTIVE.md R18 9; no R19 created.
 
 Publishing the branch surfaced a real defect through the repository's own
 `secret-scan` CI gate (three `discord-client-id` findings; `quality-gate` passed).
-It is **not** a regression from R18/R19 and it is **absent from `main`**: the
-literals were introduced 2026-09-26 in `01489aa` / `0e5a899`.
+It is **not** a regression from R18/R19: the literals were introduced 2026-09-26 in
+`01489aa` / `0e5a899`.
+
+**Both CI failures are pre-existing on `main`, and neither is clearable by a
+forward fix.** `main`'s own `Security` workflow has concluded `failure` since at
+least 2026-09-28 with the IDENTICAL three findings at the same lines, because
+gitleaks scans git HISTORY, not the checked-out tree — and `main`'s copy of the
+plugin file is a 549-byte stub that does not contain them. `dependency-audit`
+passed on `main` when it last ran, but `package-lock.json` is byte-identical
+between `main` and this branch, so the outcome is decided by the lockfile plus
+the CURRENT advisory database; the `brace-expansion` advisories post-date that
+run. No `.gitleaksignore` entry was added and no dependency was touched, because
+suppressing a long-standing finding on `main`, or bumping dependencies the owner
+did not ask about, are owner decisions rather than incidental cleanup.
 
 `.gitleaks.toml` allowlists synthetic Discord IDs under `tests/` and the
 orchestration README but deliberately NOT production plugin source, so this was a
@@ -991,11 +1003,7 @@ tracked as an OPEN item rather than completed remediation. Owner decision needed
 
 Not acted on, pending decision: Discord channel/forum-tag literals also appear in
 production plugin source (server surface identifiers, not personal data; not
-flagged by gitleaks; removing them is a broader behavioural change). And
-`dependency-audit` fails on `brace-expansion` (high), `js-yaml` and `markdown-it`
-— but `package-lock.json` is byte-identical between `main` and this branch, so
-that is a pre-existing baseline failure, not a regression, and no dependency
-change was made.
+flagged by gitleaks; removing them is a broader behavioural change).
 
 ## 5. Canonical target architecture
 
