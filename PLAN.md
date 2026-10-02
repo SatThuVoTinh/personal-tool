@@ -36,7 +36,7 @@ Evidence Level: NONE | LOCAL-VERIFIED | REMOTE-BACKED
 | M6 — Zink Skill Store                                                      | `COMPLETE`    | `REMOTE-BACKED`  | M6/T1-R4 task commit is remotely verified; governance closeout is recorded separately.                                                                                      |
 | M7 — Zink Tools + OpenClaw integration + V1 hardening                      | `COMPLETE`    | `REMOTE-BACKED`  | M7/T1-R19, M7/T2-R12, M7/T3-R16, M7/T4-R10, and M7/T5-R13 complete; runtime governance remediation, Discord 7-bot integration, and Zink tools specialist policies verified. |
 | M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Integration | `IN PROGRESS` | `LOCAL-VERIFIED` | M8/T1 is complete; M8/T2.2 R4/R5/R6 are implemented; M8/T2.2-R7 (heartbeat admission, boundary diagnosability, apply safety) is in progress. Deployment is not authorized.  |
-| M10 - Governed coordinator runtime binding | `IN PROGRESS` | `LOCAL-VERIFIED` | M10/T2-R1 implementation explicitly owner-authorized; execution contract is `docs/contracts/coordinator-session-binding.md`. |
+| M10 - Governed coordinator runtime binding | `IN PROGRESS` | `LOCAL-VERIFIED` | M10/T2-R2 (coordinator execution authority) implemented and locally verified after the M10/T2-R1 pre-live safety audit; execution contract is `docs/contracts/execution/ACTIVE.md`, behavior contract is `docs/contracts/coordinator-session-binding.md`. Not deployed; no live execution. |
 
 The former self-built L&SC Data Plant is replaced by a **logical external
 infrastructure flow**, not another repository module. Forecasting, optimization,
@@ -1368,20 +1368,50 @@ Not live-verified: no live OpenClaw runtime, no live Discord card delivery, no
 deployment, and no real pgvector/Ollama end-to-end run. Those were not attempted
 from this environment and are not claimed.
 
-### M10/T2 - Coordinator session binding (owner-authorized implementation)
+### M10/T2 - Coordinator session binding and execution authority (owner-authorized implementation)
 
 Status: `IN PROGRESS`
-Task: `M10/T2 - bind a gateway-started coordinator run to its claimed queue attempt`
-Plan Revision: `M10/T2-R1`
+Task: `M10/T2 - bind a gateway-started coordinator run to its claimed queue attempt, and fence that binding to current execution authority`
+Plan Revision: `M10/T2-R2`
+Parent Revision: `M10/T2-R1` (implementation commit `64ded50`)
 Planning Readiness: `APPROVED`
-Execution Authorization: `YES`
-Execution Contract: `docs/contracts/coordinator-session-binding.md`
+Execution Authorization: `YES` (repository implementation only)
+Execution Contract: `docs/contracts/execution/ACTIVE.md`
+Behavior Contract: `docs/contracts/coordinator-session-binding.md` (§1-§13 the
+approved design package, §14 the R2 execution-authority addendum)
 Evidence: `LOCAL-VERIFIED`
 Owner Approval: EXPLICIT - Owner approved implementation of M10/T2-R1 exactly
 per the frozen RED design contract, scope items 1-10 only, with the listed
 exclusions (no new agents/queue/broker/service/memory, no pin upgrade, no
-result-ingestion redesign, no fabricated lineage, no topology change).
-Approval covers implementation only, not live execution.
+result-ingestion redesign, no fabricated lineage, no topology change), and
+authorized the M10/T2-R2 safety remediation derived from the M10/T2-R1 pre-live
+safety audit. Approval covers implementation only, not live execution and not
+deployment.
+Deployment Authorized: `NO`
+Deployment Status: `NOT DEPLOYED`
+Live Execution: `NO`
+Safety Audit: the R1 pre-live audit returned `PRE-LIVE SAFETY AUDIT FOUND SAFETY
+ISSUE - LIVE BLOCKED` (post-lease spawn authority, attempt isolation at the
+mutation boundary, `QUEUED`-window containment fallthrough). R2 remediates all
+three and is locally verified. The pre-live re-audit re-confirmed all six static
+claims from the working tree and the live-state forensic pass resolved the one
+open discrepancy (see below); no live entry criterion has been satisfied because
+no live execution has occurred and no live-verification authorization exists.
+
+Live-state forensic result (read-only, recorded in ACTIVE.md R2 10): an earlier
+re-audit reported the authoritative live ledger as empty. That was a WRONG-PATH
+observation. The authoritative state directory is
+`/home/hoang_vinh/.openclaw-zink` inside WSL Ubuntu, where service
+`openclaw-gateway-zink.service` is loaded and active; its ledger matches the
+recorded evidence exactly (`events.jsonl` 96701 bytes / sha256 `d794d99d…` /
+103 lines, `snapshot.json` 80172 bytes / sha256 `bbdf3aec…` / sequence 103 /
+37 tasks, mtime 2026-09-28T17:26:11 +0700), as do the recorded live extension
+`2271b56b` and boundary `d88bff80`. A separate, older Windows-side state
+directory (`C:\Users\HOANG VINH\.openclaw-zink`, `m7-t2-r12` lineage, OpenClaw
+2026.7.1-2) holds an empty ledger and is NOT the runtime's state dir. The
+recorded live evidence is therefore CURRENT, no ledger data was lost, and no
+restore is required. The earlier claim that no live task was claimable is
+WITHDRAWN.
 
 M10/T2 does not reopen any closed task. The RED analysis established
 `SESSION_BINDING_STATUS = ADDITIVE_EVENT_REQUIRED`: no existing workflow event
@@ -1393,9 +1423,77 @@ sessions and spawn-bound delegations. The implemented event is
 task. Coordinator result ingestion and live execution remain not verified: no
 real coordinator turn has been started from this repository.
 
-Implementation evidence: `npm run verify` green (JS 1058 tests / 1016 pass /
-0 fail / 42 skipped; Python 131 passed; lint/format/repo-check clean);
-focused M10 suites pass. See CHANGELOG.md Unreleased entry.
+R2 keeps the architecture and separates three concepts R1 conflated: `binding`
+is historical identity and attribution, `attempt` is the execution generation
+and supersession fence, `lease` is current execution authority. A historical
+binding NEVER authorizes a governed mutation on its own. The fence is enforced at
+the authoritative mutation: the spawn reservation commits inside the queue's own
+critical section (`QueueManager.withExecutionFence`), and `applySpawnReserved`
+independently refuses a superseded generation or a task no longer claimed by that
+coordinator. Coordinator lifecycle classification moved from queue liveness to
+identity, so a superseded coordinator run ending while its queue item is `QUEUED`
+is still handled narrowly and can never reach the generic `ALL_LIVE_RUNS`
+containment sweep; the authoritative binding also wins over the queue claim
+holder, so a specialist holding its own live claim cannot make a bound
+coordinator run containment-eligible; genuine unreconciled native containment is
+unchanged.
+Provenance: the outgoing R1 packaged entrypoint is admitted as a recognized
+predecessor in both per-mode lists, and `native-boundary.mjs` is untouched, so no
+lineage moved.
+
+Implementation evidence: focused M10 suites 81/81 (R2 18, R1 42, T1 21); full
+`npm test` 1077 tests / 1035 pass / 0 fail / 42 skipped (pre-existing Windows
+ledger-replay skips); lint exit 0; format clean; repository policy passed;
+`git diff --check` clean. Python knowledge suite NOT RUN - prerequisite
+unavailable in this environment (`KNOWLEDGE_TOKENIZER_PATH` and the tokenizer
+model are absent; no Python or knowledge file is touched by this change).
+Falsified four ways: reverting the classification fix fails exactly R2-D and
+R2-E, removing the guard-side fence fails R2-A2/B/F/G/J2/J4, removing the reducer
+fence fails exactly R2-C and R2-C2, and reverting only the binding-over-claim-
+holder rule fails exactly R2-K. An independent coverage review of the uncommitted
+R2 tree found that last gap - a fully bound coordinator run was still contained
+when a specialist held the live claim, because a specialist is an assigned
+claimant for its own queue item - and it is fixed in this revision.
+See CHANGELOG.md Unreleased entry and ACTIVE.md R2 (R2 1-9 for the
+implementation and the pre-live re-audit, R2 10 for the live-state forensic
+result, R2 11 for the repository closure and artifact freeze).
+
+Repository closure (R2 11): the apply-mode entrypoint predecessor list was
+missing six digests the preflight gate admits, which would have let
+`--preflight` PASS and `--apply` refuse from an intermediate build. All six were
+re-derived from the commits that produced them using the repository's own
+procedure (materialize the commit's `integrations/openclaw` tree, call
+`governancePluginFiles()`, hash the packaged entrypoint) and only then admitted:
+`a3dbf945…`=2ef4bd64, `118db9a7…`=adc1a49f, `4bb0c1e1…`=598481c9,
+`36ed858c…`=eed43f60, `0940eb77…`=9f52fcd6, `4a957b24…`=dc868066. None was ever
+the deployed live build, and the current-build digest is still not admitted. Tests
+`R13 2h` and `R13 2i` pin the six admissions and the structural per-mode parity
+invariant so the class cannot re-open.
+
+Residual dispositions at closure: the unbound-ambiguity path to generic
+containment is an `ACCEPTED SEPARATE SAFETY DECISION` — narrowing its blast radius
+would assume the owner of an unrecorded native child, which is the exact fact the
+fail-closed sweep refuses to assume, so it is documented rather than patched. The
+unfenced `brief_state === "DRAFT"` run-end branch is `UNREACHABLE UNDER CURRENT
+CONTRACT`, pinned by test `R2-DRAFT`. Host lifecycle semantics remain NOT PROVEN
+and require a separately authorized live window.
+
+Remaining blockers to a live window, in order: (1) no live-verification
+authorization; (2) the live runtime carries `2271b56b`, which predates all
+M10/T2 code, so R2 cannot be exercised live without a separate deployment
+authorization; (3) host lifecycle-event semantics for `api.runtime.subagent.run`
+are NOT PROVEN and observable only inside an authorized window.
+
+Deployment/runtime provenance has been traced and cleared (ACTIVE.md R2 10.4):
+`operator-apply.mjs` targets `/home/hoang_vinh/.openclaw-zink` and
+`/home/hoang_vinh/.local/lib/node_modules/openclaw` (OpenClaw `2026.6.34`), and
+that is exactly the package and state dir the live `openclaw-gateway-zink.service`
+ExecStarts; `dist/selection-DopzNY3I.js` is present there at sha256
+`555f37da…` and the dist bridge is `d88bff80…`, matching the recorded live
+lineage. The Windows npm install (`2026.7.1-2`, `selection-JInn13lc.js`) is a
+second, separately pinned lineage and is not the deployment target; an earlier
+report of it as a lineage discrepancy was a wrong-path observation and is
+withdrawn.
 
 ## 9. Deferred beyond V1
 
@@ -1419,6 +1517,6 @@ Unless separately approved:
 | Five Stack             | Functional processing layers; agents may serve more than one stack.                                                 |
 | L&SC Data Plant        | Logical external-infrastructure/data-compute flow only; no platform runtime.                                        |
 | Model artifacts        | Heavy artifacts stay external; repository keeps only lightweight metadata/config/evaluation references when needed. |
-| Coordinator binding    | M10/T2-R1 implementation owner-authorized (`docs/contracts/coordinator-session-binding.md`); additive event required and implemented; live execution and result ingestion remain future work. |
+| Coordinator binding    | M10/T2-R2 (parent R1) implemented and locally verified; binding = historical identity, attempt = execution generation, lease = current execution authority; live execution and result ingestion remain future work and are not authorized. |
 | OpenClaw               | External runtime/orchestrator and task-mode classifier.                                                             |
 | n8n                    | Deterministic workflow/trigger/schedule plumbing.                                                                   |

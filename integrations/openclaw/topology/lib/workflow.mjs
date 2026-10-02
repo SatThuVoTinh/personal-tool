@@ -1565,11 +1565,41 @@ function applySpawnReserved(next, task, payload, replayAnchored = false) {
       parent.delegation.run_state === "RUNNING" &&
         parent.delegation.brief_revision === task.brief_revision,
     );
-  // M10/T2: a bound coordinator parent has no delegation run_state to check.
-  // Parent liveness for coordinator runs is queue-lease liveness, enforced at
-  // claim time and by stale recovery — not re-checked here. A run that
-  // outlives its lease can still reserve until its turn ends; spawn budgets
-  // bound the blast radius. This residual is documented, not silent.
+  // M10/T2-R2: a bound coordinator parent is fenced by EXECUTION GENERATION.
+  //
+  // A coordinator has no delegation run_state, so liveness cannot be read from
+  // the delegation projection — and the historical binding deliberately
+  // survives stale recovery as audit history. Therefore a superseded generation
+  // must be refused here, at the authoritative commit path, and the task must
+  // still be claimed by that coordinator.
+  //
+  // Lease liveness itself is queue-owned and is NOT re-derived in the reducer:
+  // the queue is a separate store behind its own lock, so the ledger cannot see
+  // a revocation atomically. That half of the fence is enforced one level up, at
+  // the mutation seam (QueueManager.withExecutionFence), which holds the queue
+  // critical section across this same commit. The two halves are complementary:
+  // this one survives any caller that bypassed the queue seam, and the queue one
+  // closes the revocation window.
+  //
+  // This throws inside the cloned projection, so a denied coordinator
+  // reservation commits nothing at all — including the retry reconciliation
+  // performed by the caller before this function ran.
+  if (parent.coordinatorRun) {
+    const boundAttempts = Object.keys(task.coordinator_runs ?? {})
+      .map((key) => Number(key))
+      .filter((value) => Number.isSafeInteger(value) && value >= 1);
+    requireCondition(boundAttempts.length > 0, "LINEAGE_MISMATCH");
+    // A superseded attempt never reserves again: once a higher attempt holds a
+    // binding, the older generation is history only.
+    requireCondition(
+      Math.max(...boundAttempts) === parent.coordinatorRun.attempt,
+      "SUPERSEDED_REVISION",
+    );
+    requireCondition(
+      task.claimed_by === parent.coordinatorRun.coordinator,
+      "POLICY_DENIED",
+    );
+  }
   const node = task.nodes.find((item) => item.node_id === payload.node_id);
   requireCondition(
     node && node.agent_id === payload.agent_id,

@@ -4259,7 +4259,18 @@ export default {
         allowed_tools: expected.allowed_tools,
       };
     };
-    const guard = createGovernanceGuard({ paths, manifestFor });
+    const guard = createGovernanceGuard({
+      paths,
+      manifestFor,
+      // M10/T2-R2: the queue projection is the lease authority, so a
+      // coordinator's governed mutation is committed inside the queue's own
+      // critical section. This is the same lock claim/recovery already use, so a
+      // stale recovery cannot interleave between the authority check and the
+      // ledger commit. Deliberately bound to the singleton the pickup loop uses,
+      // so both observe exactly the same queue state.
+      queueExecutionFence: (fence, operation) =>
+        defaultQueueManager.withExecutionFence(fence, operation),
+    });
 
     const cachedDiscordTokens = new Map();
     function credentialUnavailable(agentId) {
@@ -4840,40 +4851,56 @@ export default {
     }
 
     /**
-     * M10/T2: recognize a gateway-started coordinator run from its session
-     * identity. Recognition is strict and layered:
+     * M10/T2-R2: classify a gateway-started coordinator run from its session
+     * identity. Classification is what keeps a coordinator lifecycle event out of
+     * the generic native-delegation containment path, so it is decided on
+     * IDENTITY and never on queue liveness:
      *  1. the session key must parse as the approved coordinator shape AND name
      *     the observed agent — a key alone never attributes a run;
-     *  2. the queue must hold that task EXECUTING, claimed by that coordinator
-     *     — the live claim is what makes this OUR run rather than a coincidence;
-     *  3. the ledger binding (session_key + run_id for the claimed attempt) is
-     *     consulted when `requireBinding` is set. Authority-adjacent decisions
-     *     (run-end bypass, spawn/end attribution) require it; purely advisory
-     *     context (prompt build) may proceed on the queue claim alone so a
-     *     first prompt that races the bind write still gets truthful context.
-     * Anything less returns null and the caller keeps its existing fail-closed
-     * behavior. Nothing here writes state.
+     *  2. the ledger must hold the exact binding for that (session_key, run_id)
+     *     and that attempt, OR the queue must hold a LIVE claim (EXECUTING) by
+     *     that coordinator. Either fact alone is sufficient to know this identity
+     *     is a governed coordinator run of that task.
+     *
+     * Why queue status left classification. Requiring EXECUTING meant a
+     * coordinator run ending in the window between stale recovery and the next
+     * pickup — when the queue item is QUEUED — was classified as unrecognizable,
+     * fell through to the delegation path, matched no delegation, and reached the
+     * generic containment sweep that suspends every live run in the ledger. A
+     * superseded coordinator run is still a coordinator run.
+     *
+     * `requireBinding` keeps the stricter rule for authority-adjacent decisions
+     * (the run-end completion bypass), which is never satisfied by a queue claim
+     * alone. `requireLiveClaim` keeps the advisory rule for prompt build, which
+     * must describe the CURRENT execution and therefore may not serve a
+     * superseded run from its historical binding.
+     *
+     * An EXECUTING item claimed by a DIFFERENT agent is not ours — UNLESS the
+     * ledger holds the exact binding for this identity, in which case identity is
+     * proven by the authoritative record and the claim holder is irrelevant to
+     * classification (a specialist is itself an assigned claimant for its queue
+     * item under M7-010, so `claimedBy` differing from the coordinator is a
+     * legitimate state, not evidence of a foreign run). Anything less returns null
+     * and the caller keeps its existing fail-closed behavior.
+     * Nothing here writes state and nothing here grants execution authority.
      */
     function resolveCoordinatorRun(
       sessionKey,
       runId,
       agentId,
-      { requireBinding = false } = {},
+      { requireBinding = false, requireLiveClaim = false } = {},
     ) {
       const parsed = parseCoordinatorSessionKey(sessionKey);
       if (!parsed) return null;
       // Lifecycle events do not always carry the agent identity (notably
       // subagent_ended). When present it must agree with the key; when absent
-      // the coordinator is taken from the key and then confirmed by the queue
-      // claim and the ledger binding below — the key alone never attributes.
+      // the coordinator is taken from the key and then confirmed by the ledger
+      // binding and the queue claim below — the key alone never attributes.
       const coordinator =
         typeof agentId === "string" && agentId.length > 0
           ? agentId
           : parsed.coordinator;
       if (parsed.coordinator !== coordinator) return null;
-      const queueItem = defaultQueueManager.getTask(parsed.taskId);
-      if (!queueItem || queueItem.status !== "EXECUTING") return null;
-      if (queueItem.claimedBy !== parsed.coordinator) return null;
       // A snapshot read failure means the binding cannot be established, which
       // is indistinguishable from absent for recognition purposes; the caller
       // keeps its fail-closed behavior either way.
@@ -4883,14 +4910,37 @@ export default {
             readSnapshot(paths),
             sessionKey,
             runId,
-            agentId,
+            coordinator,
           );
         } catch {
           return null;
         }
       })();
-      const binding = found?.coordinatorRun ?? null;
+      const binding =
+        found && found.coordinatorRun.attempt === parsed.attempt
+          ? found.coordinatorRun
+          : null;
       if (requireBinding && !binding) return null;
+      const queueItem = defaultQueueManager.getTask(parsed.taskId) ?? null;
+      let claimedLive = false;
+      if (queueItem?.status === "EXECUTING") {
+        if (queueItem.claimedBy === parsed.coordinator) {
+          claimedLive = true;
+        } else if (!binding) {
+          // A live claim held by a different agent is somebody else's
+          // execution, and with no authoritative binding this identity is only a
+          // coincidence. Fail closed exactly as before.
+          return null;
+        }
+        // A binding DOES match, so the identity is proven regardless of who
+        // holds the live claim. A specialist is an assigned claimant for its own
+        // queue item (M7-010), so `claimedBy` can legitimately differ from the
+        // coordinator; refusing recognition here would push a reconciled
+        // coordinator run into the generic containment sweep that design
+        // contract 2.6 forbids.
+      }
+      if (requireLiveClaim && !claimedLive) return null;
+      if (!binding && !claimedLive) return null;
       return {
         taskId: parsed.taskId,
         coordinator: parsed.coordinator,
@@ -4898,7 +4948,29 @@ export default {
         queueItem,
         binding,
         bound: Boolean(binding),
+        claimedLive,
       };
+    }
+
+    /**
+     * M10/T2-R2: record a coordinator-originated task mutation only while that
+     * coordinator still holds current execution authority, using the same queue
+     * critical section the stale-recovery path holds. Delegates and Main keep the
+     * existing unfenced path, whose own rules are unchanged.
+     */
+    function recordCoordinatorFenced(owner, type, payload) {
+      if (!owner?.coordinatorRun) {
+        return recordWorkflowEvent(paths, type, payload);
+      }
+      return defaultQueueManager.withExecutionFence(
+        {
+          taskId: owner.task_id,
+          claimedBy: owner.coordinatorRun.coordinator,
+          leaseId: owner.coordinatorRun.lease_id,
+          attempt: owner.coordinatorRun.attempt,
+        },
+        () => recordWorkflowEvent(paths, type, payload),
+      );
     }
 
     /**
@@ -5539,7 +5611,10 @@ export default {
               }
 
               try {
-                recordWorkflowEvent(paths, "WORKFLOW_BRIEF_ACTIVATED", {
+                // M10/T2-R2: this is a coordinator-originated task mutation, so
+                // it commits under current execution authority like the spawn
+                // reservation does. A superseded coordinator records nothing.
+                recordCoordinatorFenced(owner, "WORKFLOW_BRIEF_ACTIVATED", {
                   task_id: owner.task_id,
                   brief_revision: briefRevision,
                   // M7-016: the activated brief's semantic contract status is
@@ -6029,14 +6104,18 @@ export default {
       // M10/T2: a recognized coordinator run gets its authoritative brief as
       // advisory context — never the unresolvable-run BLOCKED instruction
       // below, which would sabotage the turn it is meant to serve. Recognition
-      // here needs only the queue claim (advisory level), so a first prompt
-      // that races the ledger bind write still starts from truthful state.
+      // here needs a LIVE queue claim (advisory level), so a first prompt that
+      // races the ledger bind write still starts from truthful state while a
+      // SUPERSEDED run is not served stale coordinator context. M10/T2-R2 made
+      // "live" explicit: recognition for this seam requires the claim to be
+      // current, never satisfied by a historical binding alone.
       // Authority for everything the turn does still comes from the ledger
       // binding via the guard, never from this text.
       const coordinatedPrompt = resolveCoordinatorRun(
         context.sessionKey,
         context.runId,
         context.agentId,
+        { requireLiveClaim: true },
       );
       if (coordinatedPrompt) {
         const brief =
@@ -6228,6 +6307,12 @@ export default {
       // layer started itself. No result is recorded here (result ingestion is a
       // separate future task); the queue/ledger state advances only through the
       // existing lease and stale-recovery semantics.
+      // M10/T2-R2: recognition is on identity, so this stays narrow for a
+      // SUPERSEDED run too. Before R2 a coordinator ending while its queue item
+      // was QUEUED (the window between stale recovery and the next pickup) fell
+      // through here, matched no delegation, and reached the ALL_LIVE_RUNS
+      // containment sweep. It is still classified as a coordinator run and still
+      // records nothing.
       const coordinatedEnd = resolveCoordinatorRun(
         childSessionKey,
         runId,
@@ -6283,6 +6368,9 @@ export default {
       // it must not enter the delegation-matching path below, which would treat
       // it as a lineage mismatch. Benign acknowledgment only; the ledger
       // binding recorded at pickup time is the authoritative record.
+      // M10/T2-R2: identity-based recognition, so a coordinator spawn observed
+      // while the queue item is QUEUED is still recognized and never reaches the
+      // ALL_LIVE_RUNS containment sweep below.
       const coordinatedSpawn = resolveCoordinatorRun(
         event.childSessionKey,
         event.runId,

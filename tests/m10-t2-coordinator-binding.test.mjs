@@ -356,16 +356,52 @@ function boundLedger(root) {
     task_id: taskId,
     agent_id: "o1",
   });
+  // M10/T2-R2: the queue claim is created BEFORE the bind, so the binding names
+  // the real lease the claim issued. A coordinator's governed mutation is
+  // committed under current execution authority, and authority comes from that
+  // lease, so a fixture whose binding names an unrelated literal would no longer
+  // be a realistic authorized coordinator run.
+  const queue = new QueueManager({
+    storagePath: path.join(root, "queue", "task-queue.json"),
+  });
+  queue.enqueueTask({
+    taskId,
+    primaryCoordinator: "o1",
+    requiredCapabilities: ["excel", "sql", "power-bi"],
+    payload: { brief: inputs },
+  });
+  const claim = queue.claimTaskById({ taskId, agentId: "o1" });
   const sessionKey = `agent:o1:coordinator:${taskId}:attempt-1`;
   recordWorkflowEvent(paths, "WORKFLOW_COORDINATOR_RUN_BOUND", {
     task_id: taskId,
     coordinator: "o1",
     attempt: 1,
-    lease_id: "lease-guard-1",
+    lease_id: claim.leaseId,
     session_key: sessionKey,
     run_id: "run-guard-1",
   });
-  return { paths, taskId, sessionKey, runId: "run-guard-1", inputs };
+  return {
+    paths,
+    taskId,
+    sessionKey,
+    runId: "run-guard-1",
+    inputs,
+    queue,
+    leaseId: claim.leaseId,
+  };
+}
+
+/**
+ * M10/T2-R2: the guard needs the queue's current-execution-authority seam before
+ * a bound coordinator may mutate anything.
+ */
+function fencedGuard(paths, queue) {
+  return createGovernanceGuard({
+    paths,
+    manifestFor,
+    queueExecutionFence: (fence, operation) =>
+      queue.withExecutionFence(fence, operation),
+  });
 }
 
 function spawnProposal(inputs, nodeId = "node-excel") {
@@ -465,8 +501,8 @@ test("R16c: guard.beforeRun refuses a bound session under the wrong agent", asyn
 test("R15: a bound o1 spawns excel through the governed gate", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "zink-bindspawn-"));
   try {
-    const { paths, sessionKey, runId, inputs } = boundLedger(root);
-    const guard = createGovernanceGuard({ paths, manifestFor });
+    const { paths, sessionKey, runId, inputs, queue } = boundLedger(root);
+    const guard = fencedGuard(paths, queue);
     const decision = await guard.beforeToolCall(
       spawnEvent("excel", spawnProposal(inputs)),
       { agentId: "o1", sessionKey, runId },
@@ -482,8 +518,8 @@ test("R15: a bound o1 spawns excel through the governed gate", async () => {
 test("R15b: a bound o1 cannot spawn outside canonical topology", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "zink-bindspawn-"));
   try {
-    const { paths, sessionKey, runId, inputs } = boundLedger(root);
-    const guard = createGovernanceGuard({ paths, manifestFor });
+    const { paths, sessionKey, runId, inputs, queue } = boundLedger(root);
+    const guard = fencedGuard(paths, queue);
     await assert.rejects(
       async () =>
         guard.beforeToolCall(
@@ -504,8 +540,8 @@ test("R15b: a bound o1 cannot spawn outside canonical topology", async () => {
 test("R15c: a forbidden coordinator/specialist pair never reaches the gate", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "zink-bindspawn-"));
   try {
-    const { paths, sessionKey, runId, inputs } = boundLedger(root);
-    const guard = createGovernanceGuard({ paths, manifestFor });
+    const { paths, sessionKey, runId, inputs, queue } = boundLedger(root);
+    const guard = fencedGuard(paths, queue);
     // o2 never appears in this task's binding; spawning as o2 from o1's
     // session must fail identity, not topology.
     await assert.rejects(
@@ -528,8 +564,8 @@ test("R15c: a forbidden coordinator/specialist pair never reaches the gate", asy
 test("R15d: main cannot borrow a bound coordinator session", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "zink-bindspawn-"));
   try {
-    const { paths, sessionKey, runId, inputs } = boundLedger(root);
-    const guard = createGovernanceGuard({ paths, manifestFor });
+    const { paths, sessionKey, runId, inputs, queue } = boundLedger(root);
+    const guard = fencedGuard(paths, queue);
     await assert.rejects(
       async () =>
         guard.beforeToolCall(

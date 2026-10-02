@@ -8,7 +8,52 @@ All notable, validated changes to Personal Tool are documented here.
 
 ### Added
 
-- Implemented owner-authorized M10/T2 coordinator session binding and real
+- Implemented the owner-authorized M10/T2-R2 coordinator execution-authority
+  remediation, closing the safety issue the M10/T2-R1 pre-live audit proved: a
+  coordinator runtime could outlive its queue lease and, because every governed
+  consumer resolved identity from the historical binding alone, could still
+  reserve governed work, write onto a task a newer attempt owned, and — in the
+  `QUEUED` window between stale recovery and the next pickup — be misclassified
+  at run end into the generic `ALL_LIVE_RUNS` containment sweep. Binding
+  (historical identity and attribution), attempt (execution generation) and
+  lease (current execution authority) are now distinct: a binding alone never
+  authorizes a mutation. The fence sits at the authoritative mutation — the
+  spawn reservation commits inside the queue's own critical section through
+  `QueueManager.withExecutionFence`, so stale recovery cannot interleave with
+  the commit, and the ledger independently refuses a superseded generation or a
+  task no longer claimed by that coordinator. Historical bindings are preserved
+  and remain resolvable for attribution; the new attempt executes normally;
+  idempotency is unchanged; a coordinator run still cannot produce a completion
+  claim or a result; and genuine unreconciled native containment is untouched.
+  An independent coverage review of the uncommitted tree additionally found that
+  a fully bound coordinator run was still routed into generic containment when a
+  specialist held the live claim on the same queue item — legitimate, because a
+  listed required capability is itself an assigned claimant — and that the
+  authoritative binding must win over the claim holder; it is fixed here and
+  covered in both directions. 18 regression tests, including deterministic
+  fencing and TOCTOU evidence, falsified four ways. Deployment Authorized: NO.
+  Not deployed; no live execution. A read-only pre-live re-audit re-confirmed
+  every static safety claim, and a read-only forensic pass established that the
+  authoritative live state directory is `/home/hoang_vinh/.openclaw-zink` inside
+  WSL, where the ledger matches the recorded digests, event count and task count
+  exactly; an earlier "empty live ledger" finding is therefore withdrawn as a
+  wrong-path observation against a separate, older Windows-side state directory.
+  No historical evidence, digest, lineage or native artifact was altered.
+  Closed the remaining repository-level gaps and froze the artifact: the
+  apply-mode entrypoint predecessor list was missing six digests the preflight
+  gate admits (the per-mode deadlock class R13 documents). Each was re-derived
+  from the commit that produced it — materializing that commit's
+  `integrations/openclaw` tree and hashing the packaged entrypoint — and only then
+  admitted; none was ever the deployed live build and the current build is still
+  admitted by content comparison rather than by entry. Two regression tests pin
+  the six admissions and the structural invariant that the apply-mode list never
+  admits fewer predecessors than the preflight list. The unbound-ambiguity path to
+  generic `ALL_LIVE_RUNS` containment is recorded as an accepted separate safety
+  decision rather than narrowed, because narrowing it would assume the owner of an
+  unrecorded native child. The unfenced `brief_state === "DRAFT"` run-end branch
+  is proven unreachable under the current reducer and pinned by test. Deployment
+  Authorized: NO; not deployed; no live execution.
+- Implemented owner-authorized M10/T2-R1 coordinator session binding and real
   coordinator runtime pickup: approved tasks now move from durable `QUEUED`
   through atomic coordinator claim, a real governed `o1`/`o2` turn started via
   the verified pinned-OpenClaw seam (`api.runtime.subagent.run()` with
@@ -17,14 +62,18 @@ All notable, validated changes to Personal Tool are documented here.
   Bound coordinators resolve distinctly from Main/root everywhere (admission,
   spawn gate with canonical `AGENT_SPAWN_POLICY` containment, run-model
   resolution, reservation parentage), receive advisory brief context instead
-  of the unresolvable-run BLOCKED instruction, end without false completion
-  claims, and are recognized (never contained) by the subagent lifecycle
-  hooks. The production pickup loop runs single-flight on the existing plugin
+  of the unresolvable-run BLOCKED instruction, and end without false completion
+  claims. The production pickup loop runs single-flight on the existing plugin
   lifecycle with clean gateway-stop shutdown. Coordinator result ingestion
   remains a separate future task; a completed coordinator run leaves the task
   to existing lease/stale-recovery semantics rather than recording an
   unvalidated result. Not live-verified: no real coordinator turn has been
   started from this repository.
+  Superseded in one respect by M10/T2-R2 above: the R1 entry claimed the
+  subagent lifecycle hooks recognize a coordinator run and never contain it.
+  That was true only while the queue item was `EXECUTING`; R1's own commit
+  message is retained unaltered as historical evidence of the claim that was
+  found to be inaccurate.
 - Completed locally verified M8/T3 Governed Long-Term Memory Learning Loop:
   made the Zink user-teaching lifecycle work end-to-end without changing the
   three-module architecture, seven-agent topology, governance model, security

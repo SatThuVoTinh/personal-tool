@@ -1,11 +1,392 @@
-ACTIVE.md -- M10/T2-R1 Coordinator Session Binding (STATUS NOTE -- NOT THE CONTRACT)
+ACTIVE.md -- M10/T2-R2 Coordinator Execution Authority (CURRENT EXECUTION CONTRACT)
 
-> Implementation of M10/T2-R1 is owner-authorized with the execution contract
-> at docs/contracts/coordinator-session-binding.md (see PLAN.md). This file
-> remains non-authoritative: PLAN.md does not point at it for M10/T2, so by
-> the execution-contract protocol it grants nothing. The RED design revision
-> below is retained as the reviewed package. The M8/T2.2-R19 record further
-> below is retained unchanged as history.
+Task ID: M10/T2
+Plan Revision: M10/T2-R2
+Parent Revision: M10/T2-R1 (implementation commit `64ded50`)
+Planning Readiness: APPROVED
+Execution Authorization: YES (repository implementation only)
+Owner Approval: EXPLICIT -- owner authorized the M10/T2-R2 safety remediation
+  described below, derived from the M10/T2-R1 pre-live safety audit
+Execution Contract: docs/contracts/execution/ACTIVE.md (this file)
+Design / Behavior Contract: docs/contracts/coordinator-session-binding.md
+  (§1-§13 the approved design package; §14 the R2 authority addendum)
+PLAN Pointer: PLAN.md §3 (M10 row) and §8 M10/T2 entry
+Evidence Level: LOCAL-VERIFIED
+Deployment Authorized: NO
+Deployment Status: NOT DEPLOYED
+Live Execution: NO
+Lifecycle: IN PROGRESS -- implemented and locally verified; the live
+  verification window remains blocked and requires separate owner authorization
+
+## R2 1. Objective
+
+Establish the three invariants the M10/T2-R1 pre-live safety audit found
+missing, without changing the architecture and without weakening any existing
+governance invariant:
+
+```text
+a coordinator run that outlives its queue lease loses execution authority
+a superseded attempt cannot create governed mutation
+a coordinator lifecycle event cannot reach generic ALL_LIVE_RUNS containment
+```
+
+## R2 2. Audit position being remediated
+
+```text
+LEASE_OUTLIVING_RUNTIME        UNSAFE
+ATTEMPT_ISOLATION              identity-only; task writes unscoped by generation
+RUN_END_ISOLATION              ledger-safe; no false completion
+POST_LEASE_SPAWN_AUTHORITY     YES -- historical binding alone kept authorizing
+CONTAINMENT_SAFETY             UNSAFE in the QUEUED window
+IDEMPOTENCY                    sound and unchanged
+FINAL STATUS                   PRE-LIVE SAFETY AUDIT FOUND SAFETY ISSUE -- LIVE BLOCKED
+```
+
+## R2 3. Root cause
+
+```text
+historical identity / attribution  !=  current execution authority
+```
+
+R1 resolved every governed consumer from the ledger binding. The binding
+survives stale recovery by design, so it kept resolving a run whose lease had
+been revoked, and the run could still reserve governed work. Separately, run-end
+classification was conditional on a live `EXECUTING` queue item, so a superseded
+coordinator run ending in the `QUEUED` window was misclassified and reached the
+generic containment sweep.
+
+## R2 4. The change
+
+Four files. No new module, service, queue, broker, store, configuration knob,
+extension point, agent, topology change, dependency, or persistent state. No
+native runtime, `native-patch.mjs`, or `native-boundary.mjs` change, so no
+lineage moved (`lib/native-boundary.mjs` remains `d88bff80`).
+
+- `integrations/openclaw/lib/queue-manager.mjs` -- `withExecutionFence(fence,
+  operation)`: the current-execution-authority seam. Runs the caller's
+  authoritative commit inside the queue critical section, after re-deriving the
+  attempt generation, `EXECUTING` status, claimant, live lease and lease expiry
+  from the durable projection. Every failure mode denies; contention denies as
+  `QUEUE_LOCK_TIMEOUT`. No new lock: this is the lock `claimTaskById` and
+  `detectAndRecoverStaleTasks` already hold.
+- `integrations/openclaw/topology/lib/guard.mjs` -- `queueExecutionFence`
+  injected dependency plus `commitCoordinatorMutation`. The spawn reservation,
+  which is the authorization artifact, is committed through the fence when the
+  caller is a bound coordinator. A guard without the seam fails closed
+  (`EXECUTION_STATE_UNKNOWN`). Delegation and root parents are untouched.
+- `integrations/openclaw/topology/lib/workflow.mjs` -- `applySpawnReserved`
+  refuses a coordinator parent whose binding is not the highest bound attempt
+  (`SUPERSEDED_REVISION`) or whose task is no longer claimed by that coordinator
+  (`POLICY_DENIED`). This is the ledger-side half of the fence, inside the
+  writer lock, and it refuses a caller that bypassed the queue seam.
+- `integrations/openclaw/plugins/zink-governance/index.mjs` -- binds the guard to
+  the same queue singleton the pickup loop uses; coordinator lifecycle
+  classification moved from queue liveness to identity (§14.5 of the contract);
+  the authoritative BINDING wins over the queue claim holder, so a specialist
+  holding its own live claim can no longer push a reconciled coordinator run into
+  generic containment; prompt build requires a live claim by that coordinator;
+  the live spawn path's brief activation is fenced.
+
+## R2 5. Why the TOCTOU window is closed
+
+A pre-check before the write is not a fence. The authoritative commit runs
+inside the queue's own critical section, so `detectAndRecoverStaleTasks` -- the
+only revocation path, and it holds that same lock -- can neither interleave with
+nor precede-and-invalidate the commit. Proven deterministically: inside the
+fenced operation the lock is held (`tryAcquire` returns false) and a nested
+recovery attempt is refused with `QUEUE_LOCK_TIMEOUT`, leaving the item
+`EXECUTING` (`R2-J1`); and the exact sequence "identity resolves and admission
+passes, then recovery revokes, then mutation attempted" is refused with no
+reservation in the journal (`R2-J2`). Lock ordering is queue-then-ledger and no
+path inverts it (`R2-J4`).
+
+## R2 6. Tests
+
+`tests/m10-t2-r2-coordinator-execution-authority.test.mjs`, 18 tests: current
+coordinator authorized (A, A2); revoked lease denied with history intact (B);
+attempt isolation at the reducer with the queue seam bypassed (C, C2);
+`QUEUED`-window end and spawn never reaching containment (D, E); a bound
+coordinator stays narrow even when a SPECIALIST holds the live claim (K) while
+the unbound complement is still contained (K2); genuine unreconciled native
+containment unchanged (E2); attribution preserved while authority is gone (F);
+the new attempt works and is unaffected by the old one (G); idempotency
+unchanged (H); no identity borrowing (I); fencing and race evidence (J1-J4).
+
+Falsified four ways, each independent component load-bearing: reverting the
+classification fix fails exactly D and E (and the pre-fix path is observed
+returning `scope: ALL_LIVE_RUNS` with the unrelated delegation forced to
+`UNKNOWN` and the task to `BLOCKED`); removing the guard-side fence fails A2, B,
+F, G, J2, J4; removing the reducer fence fails exactly C and C2; reverting only
+the binding-over-claim-holder rule fails exactly K while K2 keeps passing.
+Every other test passes under each revert, so they pin preserved behaviour.
+
+R2-K was added after an INDEPENDENT COVERAGE REVIEW of the uncommitted R2 tree
+found that the first R2 implementation still refused recognition when the live
+claim was held by a different agent, reproducing `ALL_LIVE_RUNS` containment
+for a fully bound coordinator run — reachable in production because a specialist
+is an assigned claimant for its own queue item. That is the same defect class as
+R2 blocker 3 and is fixed here; the fix is additive in the safe direction only,
+because a bound identity now classifies narrowly instead of being contained, and
+the unbound complement (K2) is unchanged.
+
+## R2 7. Provenance consequence
+
+`index.mjs` changed, so the outgoing R1 packaged entrypoint
+`fa243547f04675685d06bfadd64fa11602fe071fe764a84d328414e7b53dfe89` is admitted
+as a recognized predecessor in BOTH per-mode lists in `integrations/openclaw/
+configure.mjs` (byte-proven from `governancePluginFiles()`; the new current-build
+entrypoint is `a1c8957bbeb2845c61953cf12cf395deae4c9dbae536b486d6748c2944961460`
+and is deliberately not listed). Admitting in one mode only would let
+`--preflight` PASS and `--apply` refuse, which is the R13/R17 deadlock class;
+`tests/m8-t2.10-r13-r7-predecessor-allowlist.test.mjs` now pins both admissions.
+`native-boundary.mjs` is untouched, so no boundary allowlist entry, provenance
+hunk, or lineage descriptor changes.
+
+## R2 8. Validation
+
+Focused M10 suites 81/81 (R2 18, R1 42, T1 21). Full `npm test` 1077 tests /
+1035 pass / 0 fail / 42 skipped (the skips are the pre-existing
+production-ledger replays that skip on Windows). `npm run lint` exit 0,
+`npm run format:check` clean, `npm run repo:check` passed, `git diff --check`
+clean. Python knowledge suite: NOT RUN -- prerequisite unavailable
+(`KNOWLEDGE_TOKENIZER_PATH` and the tokenizer model are absent in this
+environment; no Python or knowledge file is touched by this change).
+
+## R2 9. Status discipline
+
+Implementation: FIXED. Tests: VERIFIED. Safety audit: the original findings are
+remediated and locally verified. The pre-live re-audit and the live-state
+forensic pass are recorded in R2 10. Deployment Authorized: NO. Deployment
+Status: NOT DEPLOYED. Live Execution: NO. This revision is NOT CLOSED: closing
+it requires the owner's live-verification decision, which is not granted here.
+
+## R2 10. Pre-live re-audit and live-state forensic pass (read-only)
+
+Both passes were read-only. No gateway control, no deployment, no ledger or
+config mutation, no result operation, no quota. WSL was already running; only
+metadata queries and file digests were read.
+
+### R2 10.1 Code-level safety re-audit
+
+All six static claims re-confirmed from the working tree: lease fencing
+(`withExecutionFence`, authority presented from the binding), attempt isolation
+(reducer `applySpawnReserved`), single authoritative `WORKFLOW_SPAWN_RESERVED`
+write path, identity-first coordinator lifecycle classification, admission with
+zero side effect (snapshot and journal byte-identical), and queue-lock-then-
+ledger-lock ordering with no inverse path (`topology/lib` never imports the
+queue module).
+
+### R2 10.2 G1 — why the observed live ledger appeared empty
+
+An earlier re-audit reported the authoritative live ledger as EMPTY
+(`events.jsonl` 0 bytes, `snapshot` sequence 0), contradicting the recorded
+103-event/37-task evidence. That observation was WRONG-PATH and is corrected
+here. The repository's recorded live-state evidence is CURRENT and correct.
+
+Two state directories exist on this host:
+
+| State directory | Lineage | Ledger |
+| --- | --- | --- |
+| `/home/hoang_vinh/.openclaw-zink` (WSL Ubuntu) | live gateway profile `zink`, OpenClaw v2026.6.34, service `openclaw-gateway-zink.service` loaded and active | **AUTHORITATIVE** |
+| `C:\Users\HOANG VINH\.openclaw-zink` (Windows) | older `m7-t2-r12` lineage, OpenClaw 2026.7.1-2, whole tree written 2026-09-29T07:56Z | empty (0 bytes) — not the runtime's state dir |
+
+Authoritative ledger, measured read-only and byte-identical to the record:
+
+```text
+events.jsonl    96701 bytes  sha256 d794d99d0be87683feed34735005db864b71d049499b69de4a32a14d58c5dda2  103 lines
+snapshot.json   80172 bytes  sha256 bbdf3aec34ae92b60b5e6a661c890b9e60f5bcf9bbecc1062cec6d16d9a12f9a  sequence 103, 37 tasks
+mtime           2026-09-28T17:26:11 +0700 (unchanged since the recorded evidence was taken)
+configured ledgerRoot  /home/hoang_vinh/.openclaw-zink/operator/m7-t2/ledger  (WSL config)
+live extension  index.mjs sha256 2271b56b…  (204972 bytes)   matches the recorded live build
+live boundary   lib/native-boundary.mjs sha256 d88bff80…       matches the recorded live build
+live service    openclaw-gateway-zink.service — loaded, active, running, profile zink, v2026.6.34
+```
+
+Consequences: the live ledger is intact, no data was lost, no restore is needed,
+and the recorded digests require no reconciliation. A path-doubled artifact
+exists at
+`…/operator/m7-t2/ledger/operator/m7-t2/ledger/{events.jsonl 0 B, snapshot.json 196 B}`
+dated 2026-09-25 — the shape produced by resolving `ledgerPaths()` against a
+directory that was already the ledger root. That is the only observed mechanism
+that could ever present an empty ledger at a valid-looking path, and it is a
+historical artifact, not the configured root.
+
+### R2 10.3 Live-window blockers after the correction
+
+The blockers are unchanged in substance but two of them are now stated
+correctly:
+
+1. `Deployment Authorized: NO` / `Live Execution: NO` — no live-verification
+   authorization exists for this or any earlier revision.
+2. The live runtime carries extension `2271b56b`, which predates ALL M10/T2
+   code (R1 `fa243547`, R2 `d1ce6386`). No live window could exercise any R2
+   invariant until R2 is deployed, and deployment is a separate authorization.
+3. Host lifecycle semantics — whether the pinned host emits
+   `subagent_ended`/`subagent_spawned` for `api.runtime.subagent.run`
+   executions — remain NOT PROVEN and are observable only during an authorized
+   live window. The contract itself still hedges this (§2.6).
+
+The earlier claim that the live ledger offered no claimable task is WITHDRAWN:
+the authoritative ledger holds 37 tasks at sequence 103 and was never empty.
+
+### R2 10.4 Deployment/runtime provenance — traced and CLEARED
+
+> Reconciliation note: the first version of this section recorded a
+> deployment-lineage discrepancy between a Windows npm package and the recorded
+> live lineage. That was a second wrong-path observation, of the same class as
+> G1, and it is corrected here. Nothing else in this record changes.
+
+The deployment mechanism was traced from source to the filesystem, read-only.
+
+```text
+operator-apply.mjs  (integrations/openclaw/topology/fixtures/runtime-regression/)
+  stateDir   = /home/hoang_vinh/.openclaw-zink
+  runtimeRoot= /home/hoang_vinh/.local/lib/node_modules/openclaw
+  service    = openclaw-gateway-zink.service  (systemctl --user restart)
+  builder    = execFileSync(process.execPath, ["integrations/openclaw/configure.mjs",
+                 mode, "--state-dir", stateDir, ...identifiers], { cwd: repository })
+  repository = derived from import.meta.url
+  native     = applyNativePatch(runtimeRoot, …) / checkNativePatch(runtimeRoot)
+  gate       = verifyLiveRestore({ stateDir, runtimeRoot }, snapshot) — byte
+               comparison against the attempt's own preimage
+```
+
+Measured deployment package root and the live service agree on every row:
+
+| Fact | Deployment path | Live runtime | Verdict |
+| --- | --- | --- | --- |
+| state dir | `/home/hoang_vinh/.openclaw-zink` (hardcoded) | `OPENCLAW_STATE_DIR=/home/hoang_vinh/.openclaw-zink` | MATCH |
+| package root | `/home/hoang_vinh/.local/lib/node_modules/openclaw` (hardcoded) | `ExecStart` argv → same path | MATCH |
+| OpenClaw version | `2026.6.34` (`package.json` sha `69ca98aa…`) | `2026.6.34` (unit label + `OPENCLAW_SERVICE_VERSION`) | MATCH |
+| native selection | `dist/selection-DopzNY3I.js` | same file, 644878 B | MATCH |
+| selection sha256 | `555f37dae8eec1fbbd35e25ae28222dc5e8d6965e383500695a93900e9d8ddf5` | same bytes, mtime 2026-09-30 23:54 | MATCH |
+| dist native bridge | `dist/zink-governance-boundary.mjs` | `d88bff80aeb3d7531e5a0dceba4e7ba856d085e64a87cbb414c9f295284d81e3` | MATCH |
+| governance tree | `<stateDir>/extensions/zink-governance` | `index.mjs` `2271b56b…` | MATCH (recorded live build) |
+| HOME / user | `~/.openclaw-zink` required by `configure.mjs:524-535` | `HOME=/home/hoang_vinh`, user `hoang_vinh` | MATCH |
+
+The Windows npm install (`C:\Users\HOANG VINH\AppData\Roaming\npm\openclaw`,
+version `2026.7.1-2`, `selection-JInn13lc.js`) is a SECOND lineage. It is not the
+deployment target and not the gateway's `ExecStart`. It is not drift: both
+lineages are explicit pins in `NATIVE_RUNTIME_PINS`
+(`topology/lib/native-patch.mjs:33-77`) — `2026.6.34 → selection-DopzNY3I.js`
+and `2026.7.1-2 → selection-JInn13lc.js`. The patcher reads the installed
+`package.json` version first and selects that pin; an unverified release fails
+closed with `NATIVE_VERSION_MISMATCH` and any preimage mismatch fails closed with
+`NATIVE_SOURCE_DRIFT`.
+
+The repository is reachable from inside WSL through the `/mnt/c` mount, and the
+deployment inputs are byte-identical across that boundary
+(`operator-apply.mjs` `860f766f…`, `configure.mjs` `9b5c121e…`,
+`policy.mjs` `af48955d…`), so an authorized deployment would ship THIS working
+tree. The node binary systemd uses is
+`/home/hoang_vinh/.local/lib/node-v24.15.0-linux-x64/bin/node`.
+
+Why an authorized apply cannot combine the R2 governance artifact with the wrong
+native lineage: the extension is written into the WSL state dir and the native
+patch into the WSL runtime root, both referenced by the same hardcoded constants
+as the service that ExecStarts that root; an unsupported release, a drifted
+preimage, or a post-image that does not byte-match the attempt's own preimage all
+fail closed. Invoking the mechanism outside WSL fails closed too, because
+`configure.mjs` requires the state dir to resolve to that user's
+`~/.openclaw-zink` and the hardcoded Linux paths cannot resolve under a Windows
+runtime.
+
+Allowlist semantics were re-checked and are unrelated to package identity:
+`2271b56b…` (live), `fa243547…` (R1 build) and `a1c8957b…` (intermediate R2
+build) are admitted predecessors in both per-mode lists; the current build
+`d1ce6386…` is deliberately unlisted and accepted by content comparison. An
+allowlist entry proves artifact recognition, never runtime package identity.
+
+No native artifact, lineage, digest, or historical record was modified by this
+pass; it is a documentation reconciliation only.
+
+### R2 11. Repository closure (artifact freeze)
+
+Closure scope: every actionable repository-level M10/T2 gap, all applicable tests,
+governance synchronization, and the artifact freeze. No deployment, no live
+execution, no gateway control, no native change.
+
+**11.1 Provenance predecessor gap — CLOSED, PROVEN AND ADMITTED.** The
+apply-mode predecessor list admitted six fewer entrypoint digests than the
+preflight gate, which would let `--preflight` PASS and `--apply` refuse from an
+intermediate build — the per-mode deadlock R13 documents. Each of the six was
+re-derived with the repository's own procedure (materialize that commit's
+`integrations/openclaw` tree, call `governancePluginFiles()`, sha256 the packaged
+entrypoint) before admission:
+
+| Digest (abbrev) | Derived from commit | Commit subject |
+| --- | --- | --- |
+| `a3dbf945…` | `2ef4bd64` | feat(m8/t3): governed long-term memory learning loop |
+| `118db9a7…` | `adc1a49f` | remove hardcoded demo execution and false backend claims |
+| `4bb0c1e1…` | `598481c9` | make the approved-task handoff honest and queue-consistent |
+| `36ed858c…` | `eed43f60` | stop duplicate approval re-sending a delivered notification |
+| `0940eb77…` | `9f52fcd6` | truthful notification persistence and close the send race |
+| `4a957b24…` | `dc868066` | unify the first/duplicate approval notification guard |
+
+None of the six was ever the deployed live build, so admission widens nothing
+live. The current-build digest is deliberately NOT admitted. Two tests were added:
+`R13 2h` pins all six in both lists, and `R13 2i` pins the structural invariant
+that the apply-mode list never admits fewer predecessors than the preflight list,
+so the class cannot re-open.
+
+**11.2 Unbound-ambiguity residual — ACCEPTED SEPARATE SAFETY DECISION.** Not
+patched. The sweep's purpose is to refuse to assume which run an unrecorded
+native child belongs to; narrowing its blast radius would assume exactly that.
+R2 fixed the actual defect (misclassification of a BOUND identity) without
+touching the guarantee. Changing it is an owner decision under `AGENTS.md` §7.
+See `docs/contracts/coordinator-session-binding.md` §14.5.
+
+**11.3 `brief_state === "DRAFT"` branch — UNREACHABLE UNDER CURRENT CONTRACT.**
+The unfenced run-end activation branch is not a live gap: the reducer assigns
+`brief_state` only `ACTIVE` (WORKFLOW_OPENED) or `CLOSED` (terminal outcomes),
+and `TASK_STATES.DRAFT` in `lib/authority.mjs` is the queue task-state
+vocabulary, never `brief_state`. `R2-DRAFT` pins all three facts, including a
+behavioural check on a real ledger.
+
+**11.4 Mutation coverage re-confirmed after all edits.**
+`WORKFLOW_SPAWN_RESERVED` still has exactly one production write
+(`guard.mjs:1438`, fenced); the other coordinator-reachable mutation
+(`WORKFLOW_BRIEF_ACTIVATED`, `index.mjs:5617`) remains fenced;
+`WORKFLOW_ROOT_RESULT_RECORDED` is refused for coordinators (`guard.mjs:842`);
+`WORKFLOW_CONTINUATION_AUTHORIZED`/`STARTED` and `WORKFLOW_SPAWN_RECEIVED` are
+delegation-only; the task-level `WORKFLOW_RESULT_RECORDED` sits behind the
+pre-existing M7-029 queue fence. No hidden coordinator mutation path exists.
+
+**11.5 Live state retained, untouched.** Authoritative ledger `d794d99d…` /
+`bbdf3aec…`, sequence 103, 37 tasks; live extension `2271b56b…`; live boundary
+`d88bff80…`; live selection `555f37da…`. The empty Windows-side tree remains
+classified as a separate wrong-path / older-lineage observation, not a data-loss
+event.
+
+**11.6 Host lifecycle semantics — NOT PROVEN.** No authorized live execution has
+occurred, so whether the pinned host emits `subagent_ended`/`subagent_spawned`
+for `api.runtime.subagent.run` executions remains unverified. Static evidence is
+not substituted for it.
+
+**11.7 Closure state.** Implementation complete and verified; safety remediation
+verified; ledger reconciliation resolved; deployment provenance cleared; artifact
+frozen by this closure commit; deployment NOT performed; live verification NOT
+run; `Deployment Authorized: NO`. Deployment and the live window remain separate
+owner authorizations.
+
+---
+
+# Historical: M10/T2-R1 Coordinator Session Binding (status note, superseded as the pointer)
+
+> M10/T2-R1 was implemented under the owner approval recorded in PLAN.md §8,
+> with this file carrying a non-authoritative status note because PLAN.md then
+> pointed at the design contract instead of here. PLAN.md now points at this
+> file for M10/T2 at revision M10/T2-R2. The R1 status note is retained below
+> unchanged as historical evidence; its own claim that the file "grants
+> nothing" described the pointer state at the time, and is no longer true.
+>
+> One R1 statement is now known to be inaccurate and is corrected rather than
+> preserved as fact: the R1 commit message and the R1 CHANGELOG entry say bound
+> coordinator runs are "recognized (never contained) by the subagent lifecycle
+> hooks". That held only while the queue item was `EXECUTING`; in the
+> `QUEUED` window between stale recovery and the next pickup it was false, and
+> M10/T2-R2 fixes the behaviour. See `docs/contracts/coordinator-session-binding.md`
+> §14.5.
 
 Task ID: M10/T2
 Plan Revision: M10/T2-R1
@@ -16,6 +397,8 @@ Owner Approval: EXPLICIT -- owner approved M10/T2-R1 implementation per the
 Execution Contract: docs/contracts/coordinator-session-binding.md (NOT this file)
 Design Contract: docs/contracts/coordinator-session-binding.md
 PLAN Pointer: PLAN.md §3 (M10 row, NOT STARTED) and §8 M10/T2 entry (DRAFT/NO)
+  -- historical pointer state at R1, superseded: PLAN.md §3 now reads
+  `IN PROGRESS` for M10 and points the M10 execution contract at this file.
 
 ## Objective
 

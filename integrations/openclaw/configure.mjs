@@ -784,6 +784,24 @@ async function main() {
       // deployment is reachable. The new digest is deliberately NOT listed: it
       // is the current build and is accepted by content comparison.
       "4a957b246533ab8e55f88172daa3667ae06cda10dc1d1e8c0858a18e31895663",
+      // Coordinator execution authority (M10/T2-R2): the outgoing entrypoint,
+      // byte-proven as the packaged build before a coordinator run could outlive
+      // its queue lease, before a superseded attempt could reserve governed work
+      // onto a task a newer attempt owned, and before a coordinator run ending in
+      // the QUEUED window could be misclassified into the ALL_LIVE_RUNS
+      // containment sweep. Admitted here so the next authorized deployment is
+      // reachable. The new digest is deliberately NOT listed: it is the current
+      // build and is accepted by content comparison.
+      "fa243547f04675685d06bfadd64fa11602fe071fe764a84d328414e7b53dfe89",
+      // Coordinator execution authority, coverage-review revision: the outgoing
+      // entrypoint, byte-proven as the packaged build before the
+      // binding-over-claim-holder rule was added (a bound coordinator run was
+      // still routed into generic containment when a specialist held the live
+      // claim on the same queue item). Never deployed; admitted so the deployment
+      // path stays reachable from either R2 build. The new digest is deliberately
+      // NOT listed: it is the current build and is accepted by content
+      // comparison.
+      "a1c8957bbeb2845c61953cf12cf395deae4c9dbae536b486d6748c2944961460",
     ],
   );
   assertRegularOrMissing(output.identityKeyPath);
@@ -923,6 +941,40 @@ async function main() {
       // M8/T3: the outgoing hygiene entrypoint, listed here as well as in the
       // preflight gate above for the same per-mode-duplication reason.
       "2271b56bc7f0ed3a3446e4474c411c1a6132a4e3c1a2edfedb5e6907d8340b5d",
+      // Coordinator execution authority (M10/T2-R2): the outgoing coordinator
+      // session-binding entrypoint, listed here as well as in the preflight gate
+      // above for the same per-mode-duplication reason R13 documents. Admitting
+      // the predecessor in one mode and not the other would let --preflight PASS
+      // and then --apply refuse. The new digest is deliberately NOT listed: it is
+      // the current build and is accepted by content comparison.
+      "fa243547f04675685d06bfadd64fa11602fe071fe764a84d328414e7b53dfe89",
+      // Coordinator execution authority, coverage-review revision: listed here
+      // as well as in the preflight gate above for the same per-mode-duplication
+      // reason. Never deployed.
+      "a1c8957bbeb2845c61953cf12cf395deae4c9dbae536b486d6748c2944961460",
+      // M10/T2-R2 closure: the six entrypoint predecessors that the preflight
+      // gate admits and this apply-mode list did not. Each is the packaged build
+      // PRODUCED BY the commit named below, re-derived with the repository's own
+      // procedure (materialize that commit's integrations/openclaw tree, call
+      // governancePluginFiles(), sha256 the packaged entrypoint), so each is a
+      // real historical artifact rather than a value copied from the other list:
+      //   a3dbf945  2ef4bd64  feat(m8/t3) governed long-term memory learning loop
+      //   118db9a7  adc1a49f  remove hardcoded demo execution / false backends
+      //   4bb0c1e1  598481c9  make the approved-task handoff honest
+      //   36ed858c  eed43f60  stop duplicate approval re-sending a notification
+      //   0940eb77  9f52fcd6  truthful notification persistence + send race
+      //   4a957b24  dc868066  unify the first/duplicate approval notification guard
+      // None of these was ever the live runtime's deployed build, so admitting
+      // them widens nothing live; it only makes an apply-mode run reachable from
+      // the intermediate builds the preflight gate already recognizes. The
+      // current-build digest is deliberately NOT listed: it is accepted by
+      // content comparison.
+      "a3dbf945deae82c1c07b419d6f1af1724f70a336c88331d4a772dfc93420ab92",
+      "118db9a746a0757dbea2d15c5d8d9585a298a1ca0d235a6b13a3a8513fb2bcac",
+      "4bb0c1e12b4116340fb80f9cc136082200c7506fa691623bc922414f0bd92845",
+      "36ed858c74dd09423d0afc74ff2fc8eb589843f163fb8ffccf8bcc912f097ce9",
+      "0940eb77d5796f29d819331e92a7c00c4f9230eb1185dce3de7b524a37e2f7c2",
+      "4a957b246533ab8e55f88172daa3667ae06cda10dc1d1e8c0858a18e31895663",
     ],
   );
   if (!existsSync(output.identityKeyPath))

@@ -79,7 +79,23 @@ const R10_NATIVE_BOUNDARY_SHA256 =
  * NOT listed.
  */
 const R10_ENTRYPOINT_SHA256 =
+  "d1ce63868680ea5f89721ae8b42f07f6f033a840606cdc3a7cd7b6556b3ab593";
+
+/**
+ * The outgoing entrypoint before the coordinator execution-authority
+ * remediation (M10/T2-R2), admitted as a recognized predecessor in BOTH per-mode
+ * lists so the next authorized deployment is reachable.
+ */
+const COORDINATOR_AUTHORITY_OUTGOING_ENTRYPOINT_SHA256 =
   "fa243547f04675685d06bfadd64fa11602fe071fe764a84d328414e7b53dfe89";
+
+/**
+ * The outgoing entrypoint of the first R2 build, superseded when the independent
+ * coverage review added the binding-over-claim-holder rule. Never deployed;
+ * admitted so the deployment path stays reachable from either R2 build.
+ */
+const COORDINATOR_AUTHORITY_REVIEW_OUTGOING_ENTRYPOINT_SHA256 =
+  "a1c8957bbeb2845c61953cf12cf395deae4c9dbae536b486d6748c2944961460";
 
 /**
  * The outgoing entrypoint before coordinator session binding (M10/T2),
@@ -486,6 +502,102 @@ test("R13 2f: the outgoing session-binding entrypoint is admitted", () => {
   assert.notEqual(
     R10_ENTRYPOINT_SHA256,
     SESSION_BINDING_OUTGOING_ENTRYPOINT_SHA256,
+  );
+});
+
+/**
+ * M10/T2-R2 closure. Six entrypoint predecessors the preflight gate admitted
+ * were missing from the apply-mode list, so an apply run from one of those
+ * intermediate builds would pass `--preflight` and then be refused by `--apply`
+ * — the exact per-mode deadlock R13 documents. Each digest below was re-derived
+ * from the commit named in its comment by materializing that commit's
+ * `integrations/openclaw` tree and hashing the packaged entrypoint, so these are
+ * proven historical builds, not values copied across.
+ */
+const PER_MODE_PARITY_DIGESTS = Object.freeze({
+  "2ef4bd64 M8/T3":
+    "a3dbf945deae82c1c07b419d6f1af1724f70a336c88331d4a772dfc93420ab92",
+  "adc1a49f handoff-semantics":
+    "118db9a746a0757dbea2d15c5d8d9585a298a1ca0d235a6b13a3a8513fb2bcac",
+  "598481c9 duplicate-notify":
+    "4bb0c1e12b4116340fb80f9cc136082200c7506fa691623bc922414f0bd92845",
+  "eed43f60 persistence-truth":
+    "36ed858c74dd09423d0afc74ff2fc8eb589843f163fb8ffccf8bcc912f097ce9",
+  "9f52fcd6 first-approval-guard":
+    "0940eb77d5796f29d819331e92a7c00c4f9230eb1185dce3de7b524a37e2f7c2",
+  "dc868066 session-binding":
+    "4a957b246533ab8e55f88172daa3667ae06cda10dc1d1e8c0858a18e31895663",
+});
+
+test("R13 2h: the six closed apply-mode predecessors are admitted in BOTH per-mode lists", () => {
+  for (const [label, digest] of Object.entries(PER_MODE_PARITY_DIGESTS)) {
+    assert.equal(
+      CONFIGURE_SOURCE.split(digest).length - 1,
+      2,
+      `${label} (${digest.slice(0, 16)}) must be admitted in the preflight list ` +
+        "AND the apply list, or --preflight would PASS and --apply would refuse",
+    );
+    assert.notEqual(
+      R10_ENTRYPOINT_SHA256,
+      digest,
+      `${label} is a predecessor, never the current build`,
+    );
+  }
+  assert.equal(Object.keys(PER_MODE_PARITY_DIGESTS).length, 6);
+});
+
+test("R13 2i: the apply-mode predecessor list never admits fewer entries than the preflight list", () => {
+  // Structural guard for the whole class, not just the six closed here: the two
+  // per-mode lists must stay in parity, so a future entrypoint change cannot
+  // re-open the apply-mode deadlock.
+  const anchor =
+    '"2271b56bc7f0ed3a3446e4474c411c1a6132a4e3c1a2edfedb5e6907d8340b5d"';
+  const first = CONFIGURE_SOURCE.indexOf(anchor);
+  const second = CONFIGURE_SOURCE.indexOf(anchor, first + 1);
+  assert.notEqual(first, -1, "the per-mode anchor must exist");
+  assert.notEqual(second, -1, "the anchor must appear in BOTH per-mode lists");
+  const digestsOf = (from) => {
+    const open = CONFIGURE_SOURCE.lastIndexOf("[", from);
+    const close = CONFIGURE_SOURCE.indexOf("]", from);
+    return [
+      ...new Set(
+        [
+          ...CONFIGURE_SOURCE.slice(open + 1, close).matchAll(
+            /"([a-f0-9]{64})"/g,
+          ),
+        ].map((m) => m[1]),
+      ),
+    ];
+  };
+  const preflight = digestsOf(first);
+  const apply = new Set(digestsOf(second));
+  const missing = preflight.filter((digest) => !apply.has(digest));
+  assert.deepEqual(
+    missing,
+    [],
+    `apply-mode list is missing predecessors: ${missing
+      .map((d) => d.slice(0, 16))
+      .join(", ")}`,
+  );
+});
+
+test("R13 2g: the outgoing coordinator-authority entrypoint is admitted in BOTH per-mode lists", () => {
+  for (const digest of [
+    COORDINATOR_AUTHORITY_OUTGOING_ENTRYPOINT_SHA256,
+    COORDINATOR_AUTHORITY_REVIEW_OUTGOING_ENTRYPOINT_SHA256,
+  ]) {
+    const occurrences = CONFIGURE_SOURCE.split(digest).length - 1;
+    assert.equal(
+      occurrences,
+      2,
+      `${digest.slice(0, 16)} must be admitted in the preflight list AND the ` +
+        "apply list, or --preflight would PASS and --apply would refuse",
+    );
+    assert.notEqual(R10_ENTRYPOINT_SHA256, digest);
+  }
+  assert.notEqual(
+    COORDINATOR_AUTHORITY_OUTGOING_ENTRYPOINT_SHA256,
+    COORDINATOR_AUTHORITY_REVIEW_OUTGOING_ENTRYPOINT_SHA256,
   );
 });
 

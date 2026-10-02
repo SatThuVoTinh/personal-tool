@@ -639,6 +639,15 @@ export function createGovernanceGuard({
   manifestFor,
   _snapshotOverride,
   quotaStore = null,
+  // M10/T2-R2: the queue is the lease authority, so current execution authority
+  // is established through the queue's own critical section rather than through
+  // the ledger. Production binds `(fence, operation) => queueManager
+  // .withExecutionFence(fence, operation)`. It is REQUIRED for coordinator
+  // mutation and deliberately absent for every other caller: a bound
+  // coordinator can mutate nothing without it, and delegation/root parents are
+  // unaffected. It is injected rather than imported so this module keeps no
+  // dependency edge to the queue projection.
+  queueExecutionFence = null,
 }) {
   const getSnapshot = () => _snapshotOverride || readSnapshot(paths);
   // T2/T3: process-local, agent-scoped. Never persisted; the host runtime owns
@@ -650,6 +659,41 @@ export function createGovernanceGuard({
     snapshots: new Map(),
     latches: new Map(),
   };
+
+  /**
+   * M10/T2-R2: commit one coordinator-originated governed mutation under CURRENT
+   * execution authority.
+   *
+   * A ledger binding is HISTORICAL IDENTITY: it survives stale recovery so the
+   * run can still be attributed. It is not execution authority. The queue lease
+   * is execution authority, and the queue is the only store that can revoke it,
+   * so the commit is executed inside the queue critical section itself. A lease
+   * revoked between identity resolution and this commit therefore cannot land:
+   * recovery takes the same lock and either precedes the whole fenced commit or
+   * follows it.
+   *
+   * Without an available authority seam the answer is a denial, never a
+   * fallback: an unestablished fence is EXECUTION_STATE_UNKNOWN, exactly like
+   * every other unresolvable governed state in this module.
+   */
+  function commitCoordinatorMutation(owner, commit) {
+    if (typeof queueExecutionFence !== "function") {
+      fail("EXECUTION_STATE_UNKNOWN");
+    }
+    const binding = owner.coordinatorRun;
+    return queueExecutionFence(
+      {
+        taskId: owner.task_id,
+        claimedBy: binding.coordinator,
+        // The lease and the attempt come from the BINDING, not from the caller:
+        // a caller can therefore only present the authority its own binding
+        // recorded, and the queue decides whether that authority is still live.
+        leaseId: binding.lease_id,
+        attempt: binding.attempt,
+      },
+      commit,
+    );
+  }
 
   /**
    * T2: record one provider-usage snapshot for the agent that owns it.
@@ -1385,7 +1429,18 @@ export function createGovernanceGuard({
           spec.delegation_id === handoff.delegation_id,
           "LINEAGE_MISMATCH",
         );
-        recordWorkflowEvent(paths, "WORKFLOW_SPAWN_RESERVED", spec);
+        // M10/T2-R2: the reservation is the authorization artifact, so this is
+        // the authoritative mutation boundary. A coordinator parent commits it
+        // under current execution authority; every other parent keeps the
+        // existing unfenced path, whose pre-approval, topology, budget and
+        // lineage rules are unchanged.
+        const commitReservation = () =>
+          recordWorkflowEvent(paths, "WORKFLOW_SPAWN_RESERVED", spec);
+        if (owner.coordinatorRun) {
+          commitCoordinatorMutation(owner, commitReservation);
+        } else {
+          commitReservation();
+        }
         return {
           allow: true,
           spawnLabel: spec.delegation_id,

@@ -34,6 +34,9 @@ import { withFileLockSync, lockDirFor } from "./file-lock.mjs";
  *   is a routing aid (M8-057: ANY-match), never the final authorization.
  * - M7-028/M7-029/M7-030: heartbeat/finish/reclaim require the current
  *   leaseId fence; finish additionally requires agentId + attempt.
+ * - M10/T2-R2: withExecutionFence() is the queue's current-execution-authority
+ *   seam. It runs an authoritative commit inside the queue critical section so
+ *   a lease revoked by stale recovery cannot interleave with that commit.
  * - M8-054: finishExecution binds an explicit resultDigest over the result.
  */
 
@@ -446,6 +449,101 @@ export class QueueManager {
       }
       throw err;
     }
+  }
+
+  /**
+   * M10/T2-R2: run `operation` inside the queue critical section, and only
+   * while the named execution still holds CURRENT execution authority.
+   *
+   * Why this exists. A queue lease answers "does this execution still possess
+   * current execution authority?", which is a different question from the one a
+   * ledger binding answers ("which task/run did this session belong to?").
+   * Stale recovery revokes the lease and increments the attempt generation, but
+   * the historical binding survives as audit history — so a governance consumer
+   * that trusted the binding alone kept authorizing governed mutation for a run
+   * whose authority had already been revoked.
+   *
+   * Why the operation runs HERE and not in a caller-side pre-check. A pre-check
+   * is a TOCTOU hole: recovery could revoke the lease between the check and the
+   * authoritative write. `withExecutionFence` therefore holds the SAME queue
+   * file lock that `claimTaskById` and `detectAndRecoverStaleTasks` hold, and it
+   * runs the caller's authoritative commit inside that critical section, so a
+   * revocation cannot interleave with the commit. This is the existing
+   * cross-process mechanism, not a new lock or service.
+   *
+   * Lock ordering: queue lock is always taken BEFORE the ledger writer lock
+   * (the operation it wraps commits a ledger event). No path in this repository
+   * takes the ledger writer lock and then the queue lock, so the ordering has no
+   * cycle.
+   *
+   * `withLock` reloads the projection from durable storage first, so a revoked
+   * or superseded lease can never be observed as live through a stale in-memory
+   * copy. Every failure mode denies: an absent task, a non-EXECUTING status, a
+   * different claimant, a mismatched or absent lease, a superseded attempt
+   * generation, and an elapsed lease expiry. Contention surfaces as the
+   * pre-existing QUEUE_LOCK_TIMEOUT, which is also a denial.
+   *
+   * @param {{taskId: string, claimedBy: string, leaseId: string, attempt: number}} fence
+   * @param {() => unknown} operation
+   */
+  withExecutionFence(fence, operation) {
+    if (typeof operation !== "function") {
+      throw new TypeError(
+        "QUEUE_FENCE_CONTRACT_INVALID: operation is required",
+      );
+    }
+    const taskId = fence?.taskId;
+    if (typeof taskId !== "string" || taskId.length === 0) {
+      throw new TypeError("QUEUE_FENCE_CONTRACT_INVALID: taskId is required");
+    }
+    return this.withLock(() => {
+      const item = this.queue.get(taskId);
+      if (!item) {
+        throw new Error(
+          `EXECUTION_FENCE_REVOKED: ${taskId} is absent from the queue projection`,
+        );
+      }
+      // The attempt generation is checked first: it is the fence that
+      // supersession actually moves, and a higher generation means this
+      // execution is history no matter what the rest of the item still says.
+      if (
+        !Number.isSafeInteger(fence.attempt) ||
+        item.attempt !== fence.attempt
+      ) {
+        throw new Error(
+          `EXECUTION_FENCE_SUPERSEDED: ${taskId} is at attempt ${item.attempt}, not ${fence.attempt}`,
+        );
+      }
+      if (item.status !== TASK_STATES.EXECUTING) {
+        throw new Error(
+          `EXECUTION_FENCE_REVOKED: ${taskId} is ${item.status}, not EXECUTING`,
+        );
+      }
+      if (item.claimedBy !== fence.claimedBy) {
+        throw new Error(
+          `EXECUTION_FENCE_REVOKED: ${taskId} is claimed by ${item.claimedBy}, not ${fence.claimedBy}`,
+        );
+      }
+      if (
+        typeof fence.leaseId !== "string" ||
+        fence.leaseId.length === 0 ||
+        item.leaseId !== fence.leaseId
+      ) {
+        throw new Error(
+          `EXECUTION_FENCE_REVOKED: ${taskId} no longer holds the presented lease`,
+        );
+      }
+      if (
+        typeof item.leaseExpiresAt === "string" &&
+        !Number.isNaN(Date.parse(item.leaseExpiresAt)) &&
+        Date.parse(item.leaseExpiresAt) <= Date.now()
+      ) {
+        throw new Error(
+          `EXECUTION_FENCE_EXPIRED: ${taskId} lease expired at ${item.leaseExpiresAt}`,
+        );
+      }
+      return operation(item);
+    });
   }
 
   /**
