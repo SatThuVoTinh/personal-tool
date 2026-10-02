@@ -71,13 +71,21 @@ const R5_ENTRYPOINT_SHA256 =
 const R10_NATIVE_BOUNDARY_SHA256 =
   "d88bff80aeb3d7531e5a0dceba4e7ba856d085e64a87cbb414c9f295284d81e3";
 /**
- * The CURRENT packaged entrypoint (M8/T3 governed-memory learning loop).
- * Updated from the hygiene build digest 2271b56b… exactly as R13/R19 moved
- * their pins when the entrypoint changed: the packaged entrypoint is a
- * provenance-pinned governance asset, so any entrypoint change moves this
- * pin and admits the outgoing digest as a recognized predecessor. NOT listed.
+ * The CURRENT packaged entrypoint, after the functional-truth remediation.
+ * Updated from the M8/T3 digest a3dbf945… exactly as R13/R19 moved their pins
+ * when the entrypoint changed: the packaged entrypoint is a provenance-pinned
+ * governance asset, so any entrypoint change moves this pin and admits the
+ * outgoing digest as a recognized predecessor (now listed in configure.mjs).
+ * NOT listed.
  */
 const R10_ENTRYPOINT_SHA256 =
+  "118db9a746a0757dbea2d15c5d8d9585a298a1ca0d235a6b13a3a8513fb2bcac";
+
+/**
+ * The outgoing M8/T3 entrypoint, admitted as a recognized predecessor so the
+ * next authorized deployment of the remediation build is reachable.
+ */
+const M8T3_OUTGOING_ENTRYPOINT_SHA256 =
   "a3dbf945deae82c1c07b419d6f1af1724f70a336c88331d4a772dfc93420ab92";
 
 /** The outgoing owner-identity-hygiene entrypoint (M8/T3 predecessor). */
@@ -397,6 +405,19 @@ test("R13 2: the current build digests are NOT listed anywhere", () => {
       `${digest.slice(0, 16)} is the current build and must not be allowlisted`,
     );
   }
+});
+
+test("R13 2a: the outgoing M8/T3 entrypoint is admitted as a predecessor", () => {
+  // The functional-truth remediation changed the packaged entrypoint, so the
+  // outgoing digest must be recognized as a predecessor exactly like every
+  // prior authorized entrypoint change. Without this, the next authorized
+  // deployment of the remediation build would be unreachable.
+  assert.ok(
+    CONFIGURE_SOURCE.includes(M8T3_OUTGOING_ENTRYPOINT_SHA256),
+    `${M8T3_OUTGOING_ENTRYPOINT_SHA256.slice(0, 16)} must be preserved`,
+  );
+  // The remediation pin must not accidentally equal the digest it replaced.
+  assert.notEqual(R10_ENTRYPOINT_SHA256, M8T3_OUTGOING_ENTRYPOINT_SHA256);
 });
 
 test("R13 3: the R5 predecessors R8 added are preserved", () => {

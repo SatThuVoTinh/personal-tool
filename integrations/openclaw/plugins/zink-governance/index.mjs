@@ -91,9 +91,14 @@ import {
   parseComponentCustomId,
   DISCORD_COMPONENT_ACTION_NAMESPACE,
   resolveIngressRouting,
+  AGENT_IDS,
 } from "../../lib/authority.mjs";
 
-import { QueueManager, defaultQueueManager } from "../../lib/queue-manager.mjs";
+import {
+  QueueManager,
+  defaultQueueManager,
+  isExecutableCoordinator,
+} from "../../lib/queue-manager.mjs";
 
 import {
   buildNativeComponentPayload,
@@ -1909,6 +1914,49 @@ async function getExcelWriter() {
   return excelWriterModule;
 }
 
+/**
+ * Derive the governed execution target for an approved task from the
+ * AUTHORITATIVE task record.
+ *
+ * Nothing here is a default. A missing or non-executable coordinator, an empty
+ * DAG, and a DAG naming an agent outside the canonical roster are all fail-closed
+ * BLOCKED outcomes, because guessing would mean running work under an identity
+ * the owner never approved. The coordinator is never assumed to be "o1" and the
+ * specialist set is never assumed to be a fixed list: both come from the task
+ * the owner actually approved, so the plugin cannot dispatch a task to a
+ * capability that was never part of its plan.
+ */
+export function deriveGovernedDispatchTarget(task) {
+  if (!task || typeof task !== "object") {
+    return {
+      ok: false,
+      error: "TASK_NOT_FOUND",
+    };
+  }
+  const coordinator = task.primary_coordinator;
+  if (!isExecutableCoordinator(coordinator)) {
+    return {
+      ok: false,
+      error: "COORDINATOR_NOT_EXECUTABLE",
+    };
+  }
+  const requiredCapabilities = (Array.isArray(task.nodes) ? task.nodes : [])
+    .map((node) => node?.agent_id)
+    .filter((agentId) => typeof agentId === "string" && agentId.length > 0);
+  // The roster is canonical, so a DAG naming an unknown agent is a governance
+  // defect and must not be narrowed into a runnable subset.
+  const unknown = requiredCapabilities.filter(
+    (agentId) => !AGENT_IDS.includes(agentId),
+  );
+  if (unknown.length > 0) {
+    return { ok: false, error: "UNKNOWN_SPECIALIST_IN_DAG" };
+  }
+  if (requiredCapabilities.length === 0) {
+    return { ok: false, error: "NO_EXECUTABLE_SPECIALIST" };
+  }
+  return { ok: true, coordinator, requiredCapabilities };
+}
+
 export function resolveAgentSandboxDir(agentId, context = null) {
   if (!agentId || typeof agentId !== "string") {
     return null;
@@ -2798,15 +2846,27 @@ export function registerTools(api, options = {}) {
         required: ["workflow_id", "payload"],
       },
       async execute(_id, params) {
+        // The real n8n path is NOT this function. `beforeToolCall` performs the
+        // governance checks and then dispatches through the one canonical guard
+        // seam, which issues the immutable AuthorizationDecisionContext and calls
+        // the real `invokeN8n` adapter, returning its validated tool-result
+        // envelope. Reaching this body therefore means the governed dispatch did
+        // not produce a result, so the only truthful answer is a fail-closed
+        // BLOCKED. Returning a fabricated ENGINE_NOT_IMPLEMENTED here would
+        // claim the real adapter is absent when it is present, and would let a
+        // model read a governed capability as unimplemented.
         return {
           content: [
             {
               type: "text",
               text: JSON.stringify({
-                status: "ENGINE_NOT_IMPLEMENTED",
+                status: "BLOCKED",
+                execution_state: "BLOCKED",
+                error: "N8N_GOVERNED_DISPATCH_REQUIRED",
                 tool: "zink_n8n",
                 workflow_id: params?.workflow_id,
-                message: `n8n engine not available. Deploy zink-tools/n8n-adapter to trigger workflow ${params?.workflow_id}.`,
+                message:
+                  "n8n executes only through the governed dispatch seam. No governed result was produced, so no workflow was triggered.",
               }),
             },
           ],
@@ -2854,22 +2914,25 @@ export function registerTools(api, options = {}) {
         required: ["operation", "model"],
       },
       async execute(_id, params) {
-        const targetModel =
-          params?.model ||
-          params?.model_name ||
-          params?.dataset_name ||
-          "DefaultModel";
+        // No Power BI executor exists anywhere in the repository. A local
+        // stand-in, a URL string, or a fabricated receipt would be a fake
+        // success, so this stays explicitly not-implemented and reports BLOCKED
+        // so the governance layer can never record a result for work that did
+        // not happen.
         const op = params?.operation || "validate";
         return {
           content: [
             {
               type: "text",
               text: JSON.stringify({
-                status: "ENGINE_NOT_IMPLEMENTED",
+                status: "BLOCKED",
+                execution_state: "BLOCKED",
+                error: "ENGINE_NOT_IMPLEMENTED",
                 tool: "zink_power_bi",
                 operation: op,
-                model: targetModel,
-                message: `Power BI engine not available. Deploy zink-tools/power-bi-engine to execute operation '${op}' on model '${targetModel}'.`,
+                implemented: false,
+                message:
+                  "No Power BI executor is implemented in this repository. No model was created, refreshed, or validated. This capability is NOT IMPLEMENTED.",
               }),
             },
           ],
@@ -2909,17 +2972,24 @@ export function registerTools(api, options = {}) {
         additionalProperties: false,
       },
       async execute(_id, params) {
+        // No Python sandbox is implemented. Host `python`, `child_process`,
+        // PowerShell, WSL, and Docker-from-host are all deliberately NOT used
+        // here: each would execute model-influenced input outside the governed
+        // boundary. Stays explicitly not-implemented and reports BLOCKED.
         return {
           content: [
             {
               type: "text",
               text: JSON.stringify({
-                status: "ENGINE_NOT_IMPLEMENTED",
+                status: "BLOCKED",
+                execution_state: "BLOCKED",
+                error: "ENGINE_NOT_IMPLEMENTED",
                 tool: "zink_python",
                 entrypoint: params?.entrypoint,
                 stack: params?.stack,
+                implemented: false,
                 message:
-                  "Python sandbox not available. Deploy zink-tools/python-sandbox to enable real script execution.",
+                  "No governed Python sandbox is implemented. No script was executed. This capability is NOT IMPLEMENTED.",
               }),
             },
           ],
@@ -4055,12 +4125,7 @@ export default {
       }
     }
 
-    async function resolveVerifiedExecutionBackend() {
-      // R4: the live projection has no registered specialist engine.
-      return null;
-    }
-
-    function enqueueApprovedTaskForExecution({ taskId, paths }) {
+    function enqueueApprovedTaskForExecution({ taskId, paths, dispatch }) {
       if (!paths) {
         return { status: "BLOCKED", error: "TASK_SCOPE_REQUIRED" };
       }
@@ -4071,18 +4136,36 @@ export default {
       }
       const existing = defaultQueueManager.getTask(taskId);
       if (existing) {
+        // A late or duplicate approval must never start a second execution.
         return { status: existing.status, taskId, queueItem: existing };
       }
       const queueItem = defaultQueueManager.enqueueTask({
         taskId,
         planVersion: String(task.brief_revision || "1.0"),
-        primaryCoordinator: task.primary_coordinator || "o1",
-        requiredCapabilities: task.nodes?.map((node) => node.agent_id) || [],
+        primaryCoordinator: dispatch.coordinator,
+        requiredCapabilities: dispatch.requiredCapabilities,
         payload: task.payload || {},
       });
       return { status: "QUEUED", taskId, queueItem };
     }
 
+    /**
+     * Post-approval dispatch.
+     *
+     * The governance plugin is a governance layer, NOT an executor. It never
+     * runs a task, never fabricates an artifact, and never claims a result. Its
+     * only job here is to make the approved task truthfully available to the
+     * authoritative coordinator, which performs the specialist delegation
+     * through the one canonical `sessions_spawn` gate. The previous
+     * implementation claimed the task itself and then executed a hardcoded
+     * revenue/KPI Excel demo, so an arbitrary approved task could silently
+     * produce a fixed demo artifact and a success card. That entire path is
+     * removed rather than gated.
+     *
+     * Returns a durable, truthful outcome. When the dispatch precondition does
+     * not hold nothing is enqueued, so the queue never claims a task is waiting
+     * for an execution that cannot start.
+     */
     async function executeApprovedTask({
       taskId,
       paths,
@@ -4090,9 +4173,30 @@ export default {
       api,
       originThreadId = null,
     }) {
+      const snapshot = paths ? readSnapshot(paths) : null;
+      const task = snapshot?.tasks?.[taskId];
+      const dispatch = deriveGovernedDispatchTarget(task);
+      if (!dispatch.ok) {
+        // Fail closed BEFORE any durable queue write: a task that cannot be
+        // dispatched must not appear queued for execution.
+        api.logger?.error?.(
+          `[zink-governance] approved task not dispatched: ${dispatch.error} (task ${taskId})`,
+        );
+        return {
+          status: "BLOCKED",
+          error: dispatch.error,
+          taskId,
+          queue_status: "NOT_QUEUED",
+        };
+      }
+
       let queueStatus;
       try {
-        queueStatus = enqueueApprovedTaskForExecution({ taskId, paths });
+        queueStatus = enqueueApprovedTaskForExecution({
+          taskId,
+          paths,
+          dispatch,
+        });
       } catch (err) {
         api.logger?.error?.(
           `[zink-governance] approved task queueing failed: ${err?.message}`,
@@ -4101,374 +4205,81 @@ export default {
           status: "BLOCKED",
           error: "QUEUE_STORAGE_WRITE_FAILED",
           taskId,
+          queue_status: "NOT_QUEUED",
         };
       }
       if (queueStatus.status !== "QUEUED") {
+        // Includes the idempotent duplicate-approval case: the task is already
+        // present, so the authoritative status is returned and no second
+        // release is attempted.
         return { ...queueStatus, taskId };
       }
-      const executionBackend = await resolveVerifiedExecutionBackend();
-      if (!executionBackend) {
+
+      // Release to the coordinator the authoritative task already names. That
+      // coordinator's own governed turn performs the specialist delegation; this
+      // plugin never selects a specialist and never spawns one.
+      const noticeText =
+        `✅ **Tác vụ đã được duyệt và đưa vào hàng đợi thực thi.**\n` +
+        `- **Mã tác vụ:** \`${taskId}\`\n` +
+        `- **Điều phối viên:** \`${dispatch.coordinator}\`\n` +
+        `- **Chuyên môn được yêu cầu:** ${dispatch.requiredCapabilities
+          .map((id) => `\`${id}\``)
+          .join(", ")}\n` +
+        `- **Trạng thái:** \`QUEUED\`. Chưa có chuyên môn nào thực thi. ` +
+        `Điều phối viên sẽ ủy thác qua cổng \`sessions_spawn\` có kiểm soát; ` +
+        `chỉ khi chuyên môn trả evidence thật, kết quả mới được đăng lên #results để nghiệm thu.`;
+
+      const officeChannelId = resolveDiscordDestination(
+        config,
+        "discordOfficeChannelId",
+        "officeChannelId",
+      );
+      const target = originThreadId || officeChannelId;
+      if (!target) {
+        // The task is truthfully QUEUED, but releasing it to the coordinator is
+        // what turns QUEUED into real execution, so an undeliverable release is
+        // reported rather than treated as dispatched.
+        api.logger?.error?.(
+          `[zink-governance] approved task queued but not released: no coordinator destination (task ${taskId})`,
+        );
         return {
           status: "BLOCKED",
-          error: "ENGINE_NOT_IMPLEMENTED",
+          error: "COORDINATOR_DESTINATION_UNRESOLVED",
           taskId,
           queue_status: queueStatus.status,
         };
       }
 
       try {
-        api.logger?.info?.(
-          `[zink-governance] Starting autonomous execution for approved task: ${taskId}`,
-        );
-
-        if (originThreadId) {
-          sendNativePayload({
-            api,
-            to: originThreadId,
-            threadId: originThreadId,
-            accountId: "o1",
-            payload: {
-              text: `⏳ **Execution backend đang được kiểm tra...**\n- **Điều phối viên:** O1\n- **Tiến trình:** Chỉ tiếp tục khi backend chuyên môn có đăng ký và trả evidence tin cậy.`,
-            },
-          }).catch((deliveryErr) => {
-            api.logger?.warn?.(
-              `[zink-governance] discord delivery failed (execution-backend-notice): ${deliveryErr?.message}`,
-            );
-          });
-        }
-
-        const snapshot = readSnapshot(paths);
-        const task = snapshot?.tasks?.[taskId];
-        if (!task) {
-          api.logger?.warn?.(
-            `[zink-governance] executeApprovedTask: task not found ${taskId}`,
-          );
-          return;
-        }
-
-        // 1. Enqueue and Claim in defaultQueueManager
-        let leaseId = null;
-        let attempt = 1;
-        // M7-010: the broker claims under the task's governed coordinator
-        // identity so the claim is bound to the authoritative assignment.
-        const brokerAgentId = task.primary_coordinator || "o1";
-        const existing = defaultQueueManager.queue.get(taskId);
-        if (!existing) {
-          defaultQueueManager.enqueueTask({
-            taskId,
-            planVersion: String(task.brief_revision || "1.0"),
-            primaryCoordinator: task.primary_coordinator || "o1",
-            requiredCapabilities: task.nodes?.map((n) => n.agent_id) || [
-              "excel",
-              "sql",
-              "python",
-            ],
-          });
-          const claim = defaultQueueManager.claimTaskById({
-            taskId,
-            agentId: brokerAgentId,
-            leaseSeconds: 300,
-          });
-          leaseId = claim.leaseId;
-          attempt = claim.task.attempt;
-        } else if (existing.status === "EXECUTING") {
-          if (existing.claimedBy !== brokerAgentId) {
-            // LEGACY-MIGRATION: pre-M7-010 claims used the opaque broker
-            // principal. Revoke via stale recovery (ledger-reconciled so
-            // terminal work is never resurrected) and claim governed.
-            defaultQueueManager.detectAndRecoverStaleTasks({
-              staleThresholdSeconds: 0,
-              ledgerTasks: snapshot?.tasks ?? null,
-            });
-            const claim = defaultQueueManager.claimTaskById({
-              taskId,
-              agentId: brokerAgentId,
-              leaseSeconds: 300,
-            });
-            leaseId = claim.leaseId;
-            attempt = claim.task.attempt;
-          } else {
-            leaseId = existing.leaseId;
-            attempt = existing.attempt;
-          }
-        } else {
-          const claim = defaultQueueManager.claimTaskById({
-            taskId,
-            agentId: brokerAgentId,
-            leaseSeconds: 300,
-          });
-          leaseId = claim.leaseId;
-        }
-
-        if (paths && task.workflow_status === "QUEUED") {
-          try {
-            recordWorkflowEvent(paths, "WORKFLOW_TASK_CLAIMED", {
-              task_id: taskId,
-              agent_id: "execution-agent",
-            });
-          } catch (err) {
-            api.logger?.warn?.(
-              `[zink-governance] executeApprovedTask: record WORKFLOW_TASK_CLAIMED error: ${err.message}`,
-            );
-          }
-        }
-
-        // 2. Execute Specialist Work (Generate real Excel workbook + SVG preview)
-        const artifactDir = path.join(
-          os.homedir(),
-          ".openclaw-zink",
-          "artifacts",
-          taskId,
-        );
-        mkdirSync(artifactDir, { recursive: true, mode: 0o700 });
-        const excelPath = path.join(artifactDir, "bao_cao_doanh_thu_kpi.xlsx");
-
-        // 3. Multi-tier Validation via handleExecutionFinished
-        const finishRes = handleExecutionFinished({
-          taskId,
-          agentId: task.primary_coordinator || "o1",
-          leaseId,
-          attempt,
-          artifactPath: excelPath,
-          technicalConfig: {
-            expectedType: "excel",
-            expectedFields: [
-              "Ngày",
-              "Doanh Thu (VND)",
-              "Chi Phí (VND)",
-              "Lợi Nhuận (VND)",
-            ],
-            sandboxDir: artifactDir,
-          },
-          businessData: task.payload?.businessData || {},
-          businessConfig: task.payload?.businessConfig || {},
-          paths,
-          queueManager: defaultQueueManager,
+        await sendNativePayload({
+          api,
+          to: target,
+          ...(originThreadId ? { threadId: originThreadId } : {}),
+          accountId: dispatch.coordinator,
+          payload: { text: noticeText },
         });
-
-        if (finishRes.status !== "READY_FOR_REVIEW") {
-          api.logger?.error?.(
-            `[zink-governance] Execution validation failed: ${finishRes.error || finishRes.status}`,
-          );
-          if (originThreadId) {
-            sendNativePayload({
-              api,
-              to: originThreadId,
-              threadId: originThreadId,
-              accountId: "o1",
-              payload: {
-                text: `⚠️ **Kiểm định thất bại:** ${finishRes.error || "Không đạt chuẩn kiểm định 2 tầng"}`,
-              },
-            }).catch((deliveryErr) => {
-              api.logger?.warn?.(
-                `[zink-governance] discord delivery failed (validation-failure-notice): ${deliveryErr?.message}`,
-              );
-            });
-          }
-          return;
-        }
-
-        // 4. Publish Result Card to Discord #results forum
-        const resultsForumId = resolveDiscordDestination(
-          config,
-          "discordResultsForumId",
-          "resultsChannelId",
-        );
-        if (!resultsForumId) {
-          // Fail closed: with no configured destination the card is published
-          // nowhere, not into a hardcoded production forum.
-          api.logger?.error?.(
-            "[zink-governance] result card not published: no configured results forum",
-          );
-          return;
-        }
-        const resultId = finishRes.payloadDigest?.slice(0, 8) || "v1";
-
-        const components = [
-          {
-            type: 1, // ActionRow
-            components: [
-              {
-                type: 2, // Button
-                style: 3, // SUCCESS (Green)
-                label: "Accept",
-                custom_id: buildComponentCustomId(
-                  DISCORD_COMPONENT_ACTION_NAMESPACE.RESULT_ACCEPT,
-                  taskId,
-                  resultId,
-                ),
-                emoji: { name: "✅" },
-              },
-              {
-                type: 2, // Button
-                style: 4, // DANGER (Red)
-                label: "Reject",
-                custom_id: buildComponentCustomId(
-                  DISCORD_COMPONENT_ACTION_NAMESPACE.RESULT_REJECT,
-                  taskId,
-                  resultId,
-                ),
-                emoji: { name: "❌" },
-              },
-              {
-                type: 2, // Button
-                style: 2, // SECONDARY (Grey)
-                label: "Request Revision",
-                custom_id: buildComponentCustomId(
-                  DISCORD_COMPONENT_ACTION_NAMESPACE.RESULT_REVISION,
-                  taskId,
-                  resultId,
-                ),
-                emoji: { name: "📝" },
-              },
-            ],
-          },
-        ];
-
-        const previewPngPath = excelPath.replace(/\.xlsx$/i, "_preview.png");
-        const previewSvgPath = excelPath.replace(/\.xlsx$/i, "_preview.svg");
-        const hasPng = existsSync(previewPngPath);
-        const hasSvg = existsSync(previewSvgPath);
-
-        const embeds = hasPng
-          ? [
-              {
-                title: `📊 Xem trước Bảng tính: ${path.basename(excelPath)}`,
-                color: 0x107c41,
-                image: {
-                  url: `attachment://${path.basename(previewPngPath)}`,
-                },
-              },
-            ]
-          : [];
-
-        const formData = new globalThis.FormData();
-        formData.append(
-          "payload_json",
-          JSON.stringify({
-            name: `📋 [KẾT QUẢ] Nghiệm thu Báo cáo Doanh thu & KPI (${taskId.slice(0, 8)})`,
-            message: {
-              content: finishRes.resultCard.slice(0, 2000),
-              embeds,
-            },
-          }),
-        );
-
-        if (existsSync(excelPath)) {
-          formData.append(
-            "files[0]",
-            new globalThis.Blob([readFileSync(excelPath)]),
-            path.basename(excelPath),
-          );
-        }
-        if (hasPng) {
-          formData.append(
-            "files[1]",
-            new globalThis.Blob([readFileSync(previewPngPath)]),
-            path.basename(previewPngPath),
-          );
-        } else if (hasSvg) {
-          formData.append(
-            "files[1]",
-            new globalThis.Blob([readFileSync(previewSvgPath)]),
-            path.basename(previewSvgPath),
-          );
-        }
-
-        // Forum-thread creation (with file attachments) remains raw REST:
-        // exact 2026.6.34 exposes no native plugin-facing thread-create/file
-        // seam. o1Token is still required here as the transport credential.
-        const o1Token = resolveDiscordBotToken("o1");
-        const postRes = await fetch(
-          `https://discord.com/api/v10/channels/${resultsForumId}/threads`,
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Bot ${o1Token}`,
-            },
-            body: formData,
-          },
-        );
-
-        let resultThreadId = null;
-        if (postRes.ok) {
-          const postData = await postRes.json();
-          resultThreadId = postData.id;
-          // Native outbound for the component message; the multipart
-          // thread creation above (with file attachments) remains raw
-          // REST (no verified native forum/file seam in exact 2026.6.34).
-          try {
-            const receipt = await sendNativePayload({
-              api,
-              to: resultThreadId,
-              threadId: resultThreadId,
-              accountId: "o1",
-              payload: buildNativeComponentPayload({
-                text: finishRes.resultCard.slice(0, 2000),
-                buttons: components[0].components.map((button) => ({
-                  customId: button.custom_id,
-                  label: button.label,
-                  style: button.style,
-                  emoji: button.emoji,
-                })),
-              }),
-            });
-            api.logger?.info?.(
-              `[zink-governance] Result card and actions published successfully: thread ${resultThreadId}, messageId: ${receipt.messageId}`,
-            );
-          } catch (deliveryErr) {
-            api.logger?.error?.(
-              `[zink-governance] Discord result component delivery failed: ${deliveryErr?.message}`,
-            );
-          }
-        } else {
-          api.logger?.error?.(
-            `[zink-governance] Failed to publish result card: ${postRes.status} ${await postRes.text()}`,
-          );
-        }
-
-        // 5. Update Approval Thread
-        if (originThreadId) {
-          sendNativePayload({
-            api,
-            to: originThreadId,
-            threadId: originThreadId,
-            accountId: "o1",
-            payload: {
-              text: `📋 **Evidence đã được chuẩn bị cho nghiệm thu.**\n- **Kiểm định:** Theo kết quả validator thực tế\n- **Kênh nghiệm thu:** <#${resultsForumId}> ${resultThreadId ? `(Thread: <#${resultThreadId}>)` : ""}. Kính mời anh Zink kiểm tra và nghiệm thu nếu đủ evidence.`,
-            },
-          }).catch((deliveryErr) => {
-            api.logger?.warn?.(
-              `[zink-governance] discord delivery failed (evidence-ready-notice): ${deliveryErr?.message}`,
-            );
-          });
-        }
-
-        // 6. Main notifies #office
-        const officeChannelId = resolveDiscordDestination(
-          config,
-          "discordOfficeChannelId",
-          "officeChannelId",
-        );
-        if (officeChannelId) {
-          sendNativePayload({
-            api,
-            to: officeChannelId,
-            accountId: "main",
-            payload: {
-              text: `📋 **Thông báo từ Quản Lý:** Evidence của tác vụ \`${taskId.slice(0, 8)}\` đã được chuyển tới <#${resultsForumId}> để kiểm tra và nghiệm thu.`,
-            },
-          }).catch((deliveryErr) => {
-            api.logger?.warn?.(
-              `[zink-governance] discord delivery failed (office-evidence-notice): ${deliveryErr?.message}`,
-            );
-          });
-        }
-      } catch (execErr) {
+      } catch (deliveryErr) {
         api.logger?.error?.(
-          `[zink-governance] executeApprovedTask error: ${execErr?.message}`,
+          `[zink-governance] coordinator release failed: ${deliveryErr?.message}`,
         );
+        return {
+          status: "BLOCKED",
+          error: "COORDINATOR_RELEASE_FAILED",
+          taskId,
+          queue_status: queueStatus.status,
+        };
       }
+
+      api.logger?.info?.(
+        `[zink-governance] approved task released to coordinator ${dispatch.coordinator}: ${taskId}`,
+      );
+      return {
+        status: "RELEASED_TO_COORDINATOR",
+        taskId,
+        coordinator: dispatch.coordinator,
+        requiredCapabilities: dispatch.requiredCapabilities,
+        queue_status: queueStatus.status,
+      };
     }
 
     const unregister = registerNativeGuard(paths.root, {
@@ -4811,6 +4622,50 @@ export default {
                 };
               }
             }
+
+            // Dispatch through the ONE canonical governed seam. The guard
+            // issues the immutable AuthorizationDecisionContext and calls the
+            // real `invokeN8n`; this path adds no authorization of its own and
+            // never calls the adapter directly. The validated tool-result
+            // envelope it returns is the only truthful n8n outcome, so the
+            // model-visible tool reports exactly that instead of a fabricated
+            // ENGINE_NOT_IMPLEMENTED.
+            const canonicalN8nDecision = await guard.beforeToolCall(
+              {
+                toolName: "zink_n8n",
+                toolCallId: event.toolCallId,
+                turn:
+                  typeof event.turn === "number" && event.turn > 0
+                    ? event.turn
+                    : 1,
+                params: {
+                  call_id: event.params?.call_id ?? null,
+                  specialist: context.agentId,
+                  tool_id: "zink_n8n",
+                  input: liveInput,
+                },
+                batchToolNames: ["zink_n8n"],
+                assistantText: "",
+              },
+              context,
+              signal,
+            );
+            if (canonicalN8nDecision?.allow) {
+              return canonicalN8nDecision;
+            }
+            if (canonicalN8nDecision && canonicalN8nDecision.status) {
+              // The guard already produced a normalized tool-result envelope
+              // (success, error, or timeout). It is a real outcome and must be
+              // surfaced verbatim rather than replaced with a stub status.
+              return canonicalN8nDecision;
+            }
+            return (
+              canonicalN8nDecision ?? {
+                allow: false,
+                block: true,
+                reason: "SPAWN_RESERVATION_FAILED",
+              }
+            );
           } else if (event.toolName === "zink_python") {
             if (event.params?.entrypoint) {
               const pathCheck = await validateLiveArtifactPath(

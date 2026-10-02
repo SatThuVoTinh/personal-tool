@@ -268,14 +268,19 @@ describe("Governed DuckDB Windows Bridge (M7/T4 G4 & G5)", () => {
   });
 
   test(
-    "Gate RC09.1: known SELECT fixture returns exact real rows and REAL_EXECUTED",
+    "Gate RC09.1: known SELECT fixture returns exact rows labelled as a contract fixture",
     { skip: duckDbSkip() },
     async () => {
       const res = await executeGovernedDuckDbQuery(validContext, {
         query: "SELECT id, name FROM knowledge WHERE id = 1",
         target_database: validDatabase,
       });
-      assert.equal(res.execution_state, "REAL_EXECUTED");
+      // The engine really executed, but the datasource is a hardcoded contract
+      // fixture, so the state must not claim a real datasource. Reporting
+      // REAL_EXECUTED here attested to the subprocess while presenting canned
+      // rows as live analytics data.
+      assert.equal(res.execution_state, "FIXTURE_CONTRACT_EXECUTED");
+      assert.equal(res.data_source, "contract_fixture");
       assert.equal(res.row_count, 1);
       assert.deepEqual(res.columns, ["id", "name"]);
       assert.deepEqual(res.rows, [[1, "artifact-alpha"]]);
@@ -329,7 +334,8 @@ describe("Governed DuckDB Windows Bridge (M7/T4 G4 & G5)", () => {
 
     if (duckDbEngineAvailable()) {
       const res = await call();
-      assert.equal(res.execution_state, "REAL_EXECUTED");
+      assert.equal(res.execution_state, "FIXTURE_CONTRACT_EXECUTED");
+      assert.equal(res.data_source, "contract_fixture");
       assert.ok(res.row_count >= 0);
       return;
     }

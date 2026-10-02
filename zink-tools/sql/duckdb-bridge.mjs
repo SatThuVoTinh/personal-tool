@@ -227,6 +227,7 @@ export async function executeGovernedDuckDbQuery(context, input, options = {}) {
 
     return Object.freeze({
       execution_state: "TEST_SIMULATION",
+      data_source: "in_process_simulation",
       row_count: mockRows.length,
       columns: Object.freeze(mockColumns),
       rows: Object.freeze(mockRows),
@@ -236,7 +237,18 @@ export async function executeGovernedDuckDbQuery(context, input, options = {}) {
     });
   }
 
-  // 7. Real DuckDB execution with schema fixtures for allowlisted databases
+  // 7. Contract-fixture DuckDB execution.
+  //
+  // The engine here IS a real DuckDB process: the SQL is really parsed, bound
+  // and executed, and a real error really fails. What is NOT real is the
+  // datasource. The rows below are a hardcoded contract fixture created inside
+  // an ephemeral in-memory database that is destroyed when the process exits.
+  // No business or analytics datasource is wired to this boundary yet, so the
+  // result is reported as a contract-fixture execution. Reporting it as
+  // "REAL_EXECUTED" would attest to the engine subprocess while presenting two
+  // canned rows as live analytics data, which is exactly the false-success
+  // claim this seam must not make. A governed consumer that needs business data
+  // must see FIXTURE_CONTRACT_EXECUTED and refuse to treat it as live.
   const initSql = [
     "CREATE TABLE IF NOT EXISTS knowledge (id INTEGER, name VARCHAR, category VARCHAR, value DOUBLE, created_at VARCHAR);",
     "INSERT INTO knowledge VALUES (1, 'artifact-alpha', 'silver', 100.5, '2026-09-14T00:00:00Z'), (2, 'artifact-beta', 'silver', 250.0, '2026-09-14T01:00:00Z');",
@@ -281,6 +293,7 @@ export async function executeGovernedDuckDbQuery(context, input, options = {}) {
   if (!Array.isArray(parsedRows) || parsedRows.length === 0) {
     return Object.freeze({
       execution_state: "EMPTY_RESULT",
+      data_source: "contract_fixture",
       row_count: 0,
       columns: Object.freeze([]),
       rows: Object.freeze([]),
@@ -295,7 +308,8 @@ export async function executeGovernedDuckDbQuery(context, input, options = {}) {
   const rows = sliced.map((item) => Object.values(item));
 
   return Object.freeze({
-    execution_state: "REAL_EXECUTED",
+    execution_state: "FIXTURE_CONTRACT_EXECUTED",
+    data_source: "contract_fixture",
     row_count: rows.length,
     columns: Object.freeze(columns),
     rows: Object.freeze(rows),

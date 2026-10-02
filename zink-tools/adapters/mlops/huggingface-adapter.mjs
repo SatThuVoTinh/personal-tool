@@ -9,6 +9,14 @@ export class HuggingFaceAdapterError extends Error {
 }
 
 /**
+ * SIMULATION_CONTRACT: this adapter is a contract test double, NOT a live
+ * Hugging Face integration. It opens no network connection, reads no credential, and
+ * returns canned in-memory values. Any credential-shaped option it accepts is
+ * stored and never used, which is not integration. A governed path must treat
+ * its output as simulation and must never present it as provider execution.
+ * Wiring a real provider requires a separately approved backend.
+ */
+/**
  * Governed Hugging Face Adapter
  * Evaluates external candidate models/datasets as untrusted inputs without automatic promotion.
  */

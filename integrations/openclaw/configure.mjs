@@ -736,6 +736,14 @@ async function main() {
       // deployment is reachable. The new digest is deliberately NOT listed:
       // it is the current build and is accepted by content comparison.
       "2271b56bc7f0ed3a3446e4474c411c1a6132a4e3c1a2edfedb5e6907d8340b5d",
+      // Functional-truth remediation: the outgoing M8/T3 entrypoint, byte-proven
+      // as the packaged build before the approved-task path stopped executing a
+      // hardcoded revenue/KPI demo, before zink_n8n was routed to the real
+      // governed adapter, and before the Power BI / Python capabilities were made
+      // explicitly fail-closed. Admitted here so the next authorized deployment
+      // is reachable. The new digest is deliberately NOT listed: it is the current
+      // build and is accepted by content comparison.
+      "a3dbf945deae82c1c07b419d6f1af1724f70a336c88331d4a772dfc93420ab92",
     ],
   );
   assertRegularOrMissing(output.identityKeyPath);

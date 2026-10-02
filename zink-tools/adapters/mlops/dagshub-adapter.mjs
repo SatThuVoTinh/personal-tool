@@ -7,6 +7,14 @@ export class DagsHubAdapterError extends Error {
 }
 
 /**
+ * SIMULATION_CONTRACT: this adapter is a contract test double, NOT a live
+ * DagsHub integration. It opens no network connection, reads no credential, and
+ * returns canned in-memory values. Any credential-shaped option it accepts is
+ * stored and never used, which is not integration. A governed path must treat
+ * its output as simulation and must never present it as provider execution.
+ * Wiring a real provider requires a separately approved backend.
+ */
+/**
  * Governed DagsHub Adapter
  * Governs remote tracking sync for explicitly selected MLflow runs.
  */

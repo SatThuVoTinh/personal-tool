@@ -1,5 +1,16 @@
 import crypto from "node:crypto";
 
+/**
+ * The two governed storage zones. A bucket outside this set is a contract
+ * violation, not something to coerce: silently treating an unknown bucket as
+ * `landing` would hand a caller the immutable raw zone while they believed they
+ * had asked for something else.
+ */
+export const R2_ALLOWED_BUCKETS = Object.freeze(["landing", "silver"]);
+
+/** Contract ceiling for a Silver revision, so a runaway loop cannot mint history. */
+export const R2_MAX_SILVER_VERSION = 100_000;
+
 export class R2AdapterError extends Error {
   /**
    * @param {string} code
@@ -15,6 +26,12 @@ export class R2AdapterError extends Error {
 /**
  * Cloudflare R2 Storage Adapter
  * Governs Landing (immutable by default) and Silver (versioned/immutable) artifact storage.
+ *
+ * NOT A PROVIDER INTEGRATION. This class performs no network call and holds no
+ * credential; `endpoint` is accepted and never used, and `storage` is an
+ * in-process Map that is empty on every restart. It is a contract test double
+ * for the storage zone semantics (immutability, versioning, checksum) and must
+ * not be described or reported as live R2.
  */
 export class R2StorageAdapter {
   constructor(options = {}) {
@@ -106,6 +123,23 @@ export class R2StorageAdapter {
         "Missing required parameters: task_id, run_id, artifact_id, version, data",
       );
     }
+    // The version is interpolated straight into the storage key and into the
+    // provider run id below, so an unvalidated value is not merely untidy: a
+    // value like "../../landing/orders" injects path syntax into the namespace,
+    // and a non-positive or fractional version would create a Silver revision
+    // that no monotonic promotion could ever have produced. Validate before use.
+    if (typeof version !== "number" || !Number.isSafeInteger(version) || version < 1) {
+      throw new R2AdapterError(
+        "R2_INVALID_SILVER_VERSION",
+        "Silver version must be a positive safe integer.",
+      );
+    }
+    if (version > R2_MAX_SILVER_VERSION) {
+      throw new R2AdapterError(
+        "R2_INVALID_SILVER_VERSION",
+        `Silver version exceeds the contract ceiling of ${R2_MAX_SILVER_VERSION}.`,
+      );
+    }
 
     const key = `silver/${artifact_id}/v${version}`;
     if (this.storage.has(key)) {
@@ -150,15 +184,43 @@ export class R2StorageAdapter {
 
   /**
    * Retrieves an artifact from storage.
+   *
+   * The bucket is validated against the governed zone set. The previous
+   * implementation treated every value that was not exactly "silver" as
+   * `landing`, so a typo, a wrong case, an empty string or null silently
+   * returned the immutable raw zone — or produced a not-found error that was
+   * indistinguishable from a genuine miss. An unknown bucket now fails closed.
+   *
    * @param {string} bucket - "landing" or "silver"
    * @param {string} artifact_id
    * @param {number} [version] - required for silver
    * @returns {Promise<object>}
    */
   async getArtifact(bucket, artifact_id, version) {
-    const key = bucket === "silver"
-      ? `silver/${artifact_id}/v${version}`
-      : `landing/${artifact_id}`;
+    if (!R2_ALLOWED_BUCKETS.includes(bucket)) {
+      throw new R2AdapterError(
+        "R2_INVALID_BUCKET",
+        `Unknown storage bucket '${String(bucket)}'. Allowed buckets: ${R2_ALLOWED_BUCKETS.join(", ")}.`,
+      );
+    }
+    if (bucket === "silver") {
+      if (
+        typeof version !== "number" ||
+        !Number.isSafeInteger(version) ||
+        version < 1 ||
+        version > R2_MAX_SILVER_VERSION
+      ) {
+        throw new R2AdapterError(
+          "R2_INVALID_SILVER_VERSION",
+          "Silver version must be a positive safe integer within the contract ceiling.",
+        );
+      }
+    }
+
+    const key =
+      bucket === "silver"
+        ? `silver/${artifact_id}/v${version}`
+        : `landing/${artifact_id}`;
 
     const record = this.storage.get(key);
     if (!record) {

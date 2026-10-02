@@ -1,5 +1,31 @@
 # Hướng dẫn Sử dụng Bộ điều hợp Hạ tầng Ngoại vi (Zink Adapters)
 
+> ## ⚠️ Trạng thái thật của toàn bộ adapter trong thư mục này
+>
+> **Tất cả 9 adapter hạ tầng ngoại vi dưới đây là CONTRACT TEST DOUBLE (giả lập), KHÔNG phải tích hợp nhà cung cấp thật.**
+>
+> | Vấn đề                | Thực tế                                                                                                                                                                                          |
+> | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+> | Gọi mạng tới provider | **Không có.** Không adapter nào mở socket hay import HTTP client.                                                                                                                                |
+> | Dùng credential       | **Không.** `token`, `apiToken`, `key`, `username`, `endpoint` được nhận vào rồi **không bao giờ đọc lại**. Token không được dùng không phải là tích hợp.                                         |
+> | Lưu trữ bền vững      | **Không.** `storage` là `Map` trong bộ nhớ, mất sạch khi tiến trình kết thúc. Một `Map` không phải R2 hay MLflow.                                                                                |
+> | Có thể fail-closed    | **Phần lớn không.** Nhiều adapter trả `SUCCESS` vô điều kiện; chỉ có cờ `simulateTimeout` / `simulateAuthFailure` (chỉ dùng cho test) là đường thất bại.                                         |
+> | Kết quả trả về        | **Dữ liệu cứng trong mã.** `run_id` sinh bằng `randomBytes` không phải run của Databricks; metric cố định không phải đánh giá Hugging Face; chuỗi URL không phải thao tác publish của Streamlit. |
+>
+> **Vì vậy:**
+>
+> - Được phép dùng để kiểm thử **hợp đồng** (bất biến landing, đánh phiên bản, checksum, xác thực người gọi).
+> - **Tuyệt đối không** được dùng để tạo bằng chứng, kết quả nghiệm thu, hay tuyên bố rằng đã thực thi với provider thật.
+> - Nối backend thật là **một task riêng cần owner phê duyệt**, không phải việc làm thêm cho xong trong task này.
+>
+> Hai adapter **KHÔNG** nằm trong danh sách giả lập và là đường thực thi thật:
+> `adapters/knowledge/knowledge-adapter.mjs` (HTTP client thật tới Knowledgebase) và
+> `adapters/skill-store/skill-adapter.mjs` (băm SHA-256 thật trên nội dung đã lưu).
+>
+> Ngoài ra `zink-tools/n8n/trigger.mjs` là adapter **thật**: nó gọi webhook n8n qua loopback
+> và thực thi kiểm tra registry, timeout, chặn redirect, giới hạn kích thước và chuẩn hóa lỗi.
+> Nó được nối qua `CALLABLE_DISPATCH_REGISTRY` với mục `zink_n8n -> "adapter"`.
+
 Tài liệu này hướng dẫn chi tiết cách thức sử dụng 9 bộ điều hợp hạ tầng ngoại vi (Infrastructure Adapters) tại thư mục `zink-tools/adapters/` bằng tiếng Việt, tuần tự theo đúng logic mã nguồn thực tế.
 
 ---
@@ -16,6 +42,8 @@ Các bộ điều hợp tại `zink-tools/adapters/` là các **backend thực t
 ## 2. Danh mục 9 Bộ điều hợp và Cách Sử dụng
 
 ### 2.1. Cloudflare R2 (`storage/r2-adapter.mjs`)
+
+> **Trạng thái: SIMULATION / contract test double.** Không gọi Cloudflare R2, không dùng credential, lưu trữ trong Map của bộ nhớ.
 
 Quản lý lưu trữ đối tượng với hai phân vùng logic:
 
@@ -49,6 +77,8 @@ const silver = await r2.promoteToSilver({
 
 ### 2.2. MotherDuck (`analytics/motherduck-adapter.mjs`)
 
+> **Trạng thái: SIMULATION / contract test double.** Không gọi MotherDuck; trả 2 dòng Gold cứng.
+
 Hỗ trợ thực thi truy vấn SQL phân tích từ xa đằng sau năng lực `zink_sql`.
 
 ```javascript
@@ -69,6 +99,8 @@ console.table(result.rows);
 
 ### 2.3. Google BigQuery (`analytics/bigquery-adapter.mjs`)
 
+> **Trạng thái: SIMULATION / contract test double.** Không gọi BigQuery, không có token, không có SDK; trả 1 dòng cứng.
+
 Hỗ trợ truy vấn phân tích trên Cloud Data Warehouse BigQuery.
 
 ```javascript
@@ -86,6 +118,8 @@ const result = await bq.executeQuery(context, {
 ---
 
 ### 2.4. Kaggle Compute (`compute/kaggle-adapter.mjs`)
+
+> **Trạng thái: SIMULATION / contract test double.** run_id được sinh ngẫu nhiên, không phải run thật của Kaggle.
 
 Kích hoạt các tác vụ tính toán nặng (huấn luyện batch, chạy notebook trên GPU) ngoại vi. Bắt buộc có ngữ cảnh `task_id`.
 
@@ -106,6 +140,8 @@ console.log(`Job ID: ${job.job_id}, Trạng thái: ${job.status}`);
 
 ### 2.5. Databricks Compute (`compute/databricks-adapter.mjs`)
 
+> **Trạng thái: SIMULATION / contract test double.** run_id ngẫu nhiên và state SUCCESS cố định, không phải job Databricks thật.
+
 Điều phối và kích hoạt job xử lý phân tán trên nền tảng Databricks.
 
 ```javascript
@@ -124,6 +160,8 @@ console.log(`Run ID: ${job.run_id}, Trạng thái: ${job.status}`);
 ---
 
 ### 2.6. MLflow Local (`mlops/mlflow-adapter.mjs`)
+
+> **Trạng thái: SIMULATION / contract test double.** trackingUri được nhận vào rồi không dùng; mọi run nằm trong Map và mất khi tiến trình kết thúc.
 
 Ghi nhận tham số, độ đo và artifact của các thí nghiệm định lượng cục bộ vào cơ sở dữ liệu SQLite hoặc tệp lưu trữ.
 
@@ -150,6 +188,8 @@ await mlflow.endRun(run.run_id, "FINISHED");
 
 ### 2.7. DagsHub (`mlops/dagshub-adapter.mjs`)
 
+> **Trạng thái: SIMULATION / contract test double.** token không bao giờ được đọc; kết quả SYNC_COMPLETED trả vô điều kiện.
+
 Đồng bộ các thí nghiệm đã chọn lọc rõ ràng từ MLflow Local lên kho lưu trữ DagsHub từ xa. **Cấm đồng bộ tự động hàng loạt (blind sync).**
 
 ```javascript
@@ -168,6 +208,8 @@ console.log(`Đã đồng bộ ${syncResult.synced_runs_count} lượt chạy.`)
 ---
 
 ### 2.8. Hugging Face (`mlops/huggingface-adapter.mjs`)
+
+> **Trạng thái: SIMULATION / contract test double.** apiToken không bao giờ được đọc; metric là hằng số viết cứng, không phải kết quả đánh giá.
 
 Đánh giá mô hình ngoại vi từ Hugging Face Hub.
 
@@ -191,6 +233,8 @@ console.log(
 ---
 
 ### 2.9. Streamlit (`app/streamlit-adapter.mjs`)
+
+> **Trạng thái: SIMULATION / contract test double.** Chỉ ghép một chuỗi URL, không phát hành gì; không có tác vụ nền nào chạy.
 
 Xuất bản khung nhìn dữ liệu tầng Gold phục vụ giao diện trực quan hóa Streamlit tại `http://127.0.0.1:8501`.
 

@@ -29,11 +29,14 @@ Quy định cấu trúc mà OpenClaw phải cung cấp khi gọi bất kỳ côn
 
 Quy định cấu trúc mà công cụ Zink phải trả lời về cho OpenClaw:
 
-- `status`: `"SUCCESS"` hoặc `"ERROR"`.
+- `status`: `"success"`, `"error"`, `"timeout"` hoặc `"cancelled"` (viết thường, đúng như `tool-result.schema.json` định nghĩa bằng `const`; KHÔNG viết hoa).
 - `tool_id`: Khớp chính xác với công cụ được gọi.
 - `task_id`: Khớp chính xác với task_id yêu cầu.
-- `data`: Kết quả đầu ra (chỉ có khi `status: "SUCCESS"`).
-- `error`: Thông tin lỗi chuẩn hóa gồm `code` và `message` (chỉ có khi `status: "ERROR"`).
+- `output`: Kết quả đầu ra (chỉ có khi `status: "success"`).
+- `artifacts`: Danh sách tham chiếu artifact (chỉ khi `status: "success"`).
+- `error`: Thông tin lỗi chuẩn hóa gồm `code` và `message` (chỉ có khi `status: "error"`).
+
+> **Lưu ý về lịch sử tài liệu:** Bản tài liệu cũ mô tả `status` là `"SUCCESS"`/`"ERROR"` viết hoa và dùng `data` thay cho `output`. Đó là **sai lệch tài liệu so với hợp đồng thật**. Schema là nguồn sự thật và vốn đã dùng chữ thường; vì vậy tài liệu này được sửa cho khớp schema, và schema **không** bị đổi để chiều theo tài liệu cũ.
 
 ---
 
