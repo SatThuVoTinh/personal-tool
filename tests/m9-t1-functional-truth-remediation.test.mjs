@@ -6,6 +6,7 @@ import {
   registerTools,
   resolveCoordinatorHandoffOutcome,
   buildCoordinatorNotificationText,
+  runDuplicateApprovalHandoff,
 } from "../integrations/openclaw/plugins/zink-governance/index.mjs";
 import { createGovernanceGuard } from "../integrations/openclaw/topology/lib/guard.mjs";
 import {
@@ -1219,4 +1220,315 @@ test("I5: recording a notification never advances the authoritative task state",
   // It annotates only the queue projection, and persists it.
   assert.ok(body.includes("coordinatorNotification"));
   assert.ok(body.includes("defaultQueueManager.save()"));
+});
+
+// ===========================================================================
+// Domain J: duplicate approval performs no redundant side effect
+// ===========================================================================
+//
+// These exercise runDuplicateApprovalHandoff, which is the branch the shipped
+// post-approval path actually calls. The earlier defect was exactly here: the
+// transport was invoked before the outcome was resolved, so a duplicate sent a
+// second Discord message even though it reported ALREADY_NOTIFIED. Asserting
+// only on resolveCoordinatorHandoffOutcome would not have caught that, so every
+// case below spies on the transport.
+
+function spyTransport(result = { delivered: true }) {
+  const calls = [];
+  const notify = async () => {
+    calls.push({ at: calls.length });
+    if (result instanceof Error) throw result;
+    return result;
+  };
+  notify.calls = calls;
+  return notify;
+}
+
+function spyPersist() {
+  const writes = [];
+  const persist = (value) => {
+    writes.push(value);
+    return { ok: true };
+  };
+  persist.writes = writes;
+  return persist;
+}
+
+test("J1: a duplicate after a delivered notification emits ZERO messages", async () => {
+  const notify = spyTransport();
+  const persist = spyPersist();
+  const preExisting = Object.freeze({
+    status: "QUEUED",
+    coordinatorNotification: { delivered: true },
+  });
+
+  const outcome = await runDuplicateApprovalHandoff({
+    preExisting,
+    notify,
+    persist,
+  });
+
+  assert.equal(
+    notify.calls.length,
+    0,
+    "a delivered notification must not be sent again",
+  );
+  assert.equal(persist.writes.length, 0, "the record must not be rewritten");
+  assert.equal(outcome.handoff, "ALREADY_NOTIFIED");
+  assert.equal(outcome.status, "QUEUED");
+  assert.notEqual(outcome.status, "RELEASED_TO_COORDINATOR");
+  assert.notEqual(outcome.handoff, "EXECUTING");
+  assert.equal(outcome.notified, false);
+  // The frozen record is untouched.
+  assert.deepEqual(preExisting.coordinatorNotification, { delivered: true });
+});
+
+test("J2: a duplicate with delivered:false retries the transport exactly once", async () => {
+  const notify = spyTransport({ delivered: true });
+  const persist = spyPersist();
+  const outcome = await runDuplicateApprovalHandoff({
+    preExisting: {
+      status: "QUEUED",
+      coordinatorNotification: { delivered: false },
+    },
+    notify,
+    persist,
+  });
+
+  assert.equal(
+    notify.calls.length,
+    1,
+    "an undelivered record must be retried once",
+  );
+  assert.equal(persist.writes.length, 1, "the retry outcome must be persisted");
+  assert.deepEqual(persist.writes[0], { delivered: true, error: undefined });
+  assert.equal(outcome.handoff, "NOTIFIED");
+  assert.equal(outcome.notified, true);
+});
+
+test("J3: a failed retry stays retryable and never claims success", async () => {
+  const notify = spyTransport({
+    delivered: false,
+    error: "COORDINATOR_NOTIFICATION_FAILED: boom",
+  });
+  const persist = spyPersist();
+  const outcome = await runDuplicateApprovalHandoff({
+    preExisting: {
+      status: "QUEUED",
+      coordinatorNotification: { delivered: false },
+    },
+    notify,
+    persist,
+  });
+
+  assert.equal(notify.calls.length, 1);
+  assert.equal(outcome.handoff, "NOTIFICATION_FAILED");
+  assert.equal(outcome.status, "QUEUED");
+  assert.match(outcome.error, /COORDINATOR_NOTIFICATION_FAILED/);
+});
+
+test("J4: an existing item with no notification record is retried once", async () => {
+  const notify = spyTransport({ delivered: true });
+  const persist = spyPersist();
+  const outcome = await runDuplicateApprovalHandoff({
+    preExisting: { status: "QUEUED" },
+    notify,
+    persist,
+  });
+
+  assert.equal(notify.calls.length, 1, "a missing record must be retried once");
+  assert.equal(persist.writes.length, 1);
+  assert.equal(outcome.handoff, "NOTIFIED");
+});
+
+test("J5: repeated duplicates converge to exactly one notification", async () => {
+  // Sequence: the FIRST approval delivers (one transport call), then three
+  // duplicate approvals arrive. Total transport calls must be exactly one.
+  const notify = spyTransport({ delivered: true });
+  const persist = spyPersist();
+
+  // First approval delivery.
+  const first = await notify();
+  persist({ delivered: first.delivered, error: first.error });
+  assert.equal(notify.calls.length, 1);
+
+  let record = {
+    status: "QUEUED",
+    coordinatorNotification: { delivered: true },
+  };
+  const handoffs = [];
+  for (let i = 0; i < 3; i += 1) {
+    const outcome = await runDuplicateApprovalHandoff({
+      preExisting: record,
+      notify,
+      persist,
+    });
+    handoffs.push(outcome.handoff);
+    // Model the real persistence: a delivered notification stays delivered, and
+    // an untouched record is left exactly as it was. A duplicate that is not
+    // notified must NOT downgrade the stored record to "not delivered".
+    if (outcome.notified) {
+      record = {
+        ...record,
+        coordinatorNotification: { delivered: outcome.handoff === "NOTIFIED" },
+      };
+    }
+  }
+
+  assert.equal(
+    notify.calls.length,
+    1,
+    "three duplicates must not add a single transport call",
+  );
+  assert.equal(persist.writes.length, 1);
+  assert.deepEqual(handoffs, [
+    "ALREADY_NOTIFIED",
+    "ALREADY_NOTIFIED",
+    "ALREADY_NOTIFIED",
+  ]);
+});
+
+test("J6: an EXECUTING item is left completely alone", async () => {
+  const notify = spyTransport();
+  const persist = spyPersist();
+  const preExisting = {
+    status: "EXECUTING",
+    claimedBy: "o1",
+    leaseId: "lease-abc",
+    coordinatorNotification: { delivered: true },
+  };
+
+  const outcome = await runDuplicateApprovalHandoff({
+    preExisting,
+    notify,
+    persist,
+  });
+
+  assert.equal(notify.calls.length, 0, "EXECUTING must not be notified");
+  assert.equal(persist.writes.length, 0, "EXECUTING must not be rewritten");
+  // The authoritative state is preserved verbatim, never restated as QUEUED.
+  assert.equal(outcome.status, "EXECUTING");
+  assert.equal(outcome.queue_status, "EXECUTING");
+  assert.equal(outcome.handoff, "ALREADY_PROCESSED");
+  assert.notEqual(outcome.status, "QUEUED");
+  // The record is untouched, so a claim and lease cannot be disturbed.
+  assert.deepEqual(preExisting, {
+    status: "EXECUTING",
+    claimedBy: "o1",
+    leaseId: "lease-abc",
+    coordinatorNotification: { delivered: true },
+  });
+});
+
+test("J7: terminal queue states are left alone and keep their own status", async () => {
+  for (const status of [
+    "COMPLETE",
+    "PARTIAL",
+    "FAILED",
+    "CANCELLED",
+    "REJECTED",
+  ]) {
+    const notify = spyTransport();
+    const persist = spyPersist();
+    const outcome = await runDuplicateApprovalHandoff({
+      preExisting: { status },
+      notify,
+      persist,
+    });
+    assert.equal(notify.calls.length, 0, `${status} must not be notified`);
+    assert.equal(persist.writes.length, 0, `${status} must not be rewritten`);
+    assert.equal(outcome.status, status, `${status} must be preserved`);
+    assert.equal(outcome.handoff, "ALREADY_PROCESSED");
+  }
+});
+
+test("J8: no duplicate outcome is ever RELEASED_TO_COORDINATOR", async () => {
+  const states = [
+    { status: "QUEUED", coordinatorNotification: { delivered: true } },
+    { status: "QUEUED", coordinatorNotification: { delivered: false } },
+    { status: "QUEUED" },
+    { status: "EXECUTING" },
+    { status: "COMPLETE" },
+  ];
+  for (const delivered of [true, false]) {
+    for (const preExisting of states) {
+      const outcome = await runDuplicateApprovalHandoff({
+        preExisting,
+        notify: spyTransport({ delivered }),
+        persist: spyPersist(),
+      });
+      assert.notEqual(
+        outcome.status,
+        "RELEASED_TO_COORDINATOR",
+        `${preExisting.status} must never report a released handoff`,
+      );
+    }
+  }
+});
+
+test("J9: the shipped path calls the tested branch and cannot notify twice", () => {
+  // Structural proof that the branch under test IS the one that runs, and that
+  // no unconditional notification call remains in the duplicate arm.
+  const source = fs.readFileSync(
+    new URL(
+      "../integrations/openclaw/plugins/zink-governance/index.mjs",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const start = source.indexOf("async function executeApprovedTask(");
+  const end = source.indexOf("const unregister = registerNativeGuard", start);
+  const body = source.slice(start, end);
+
+  assert.ok(
+    body.includes("runDuplicateApprovalHandoff("),
+    "the execution path must delegate to the tested duplicate branch",
+  );
+
+  const dupStart = body.indexOf(
+    "const preExisting = defaultQueueManager.getTask(",
+  );
+  const dupEnd = body.indexOf("let queueStatus;");
+  assert.ok(dupStart >= 0 && dupEnd > dupStart, "the duplicate arm must exist");
+  const duplicateArm = body.slice(dupStart, dupEnd);
+
+  // The transport may only appear as the INJECTED notify callback, never as a
+  // direct call in the duplicate arm. That indirection is what makes the
+  // already-delivered short circuit possible.
+  assert.equal(
+    (duplicateArm.match(/deliverCoordinatorNotification[(]/g) ?? []).length,
+    1,
+    "the duplicate arm must reference the transport exactly once, as an injection",
+  );
+  assert.ok(
+    /notify:\s*\(\)\s*=>\s*deliverCoordinatorNotification[(]/.test(
+      duplicateArm,
+    ),
+    "the transport must be passed as the injected notify callback",
+  );
+  // The queue write may likewise only appear as the injected persist callback.
+  assert.equal(
+    (duplicateArm.match(/recordCoordinatorNotification[(]/g) ?? []).length,
+    1,
+    "the duplicate arm must reference the queue write exactly once, as an injection",
+  );
+  assert.ok(
+    /persist:\s*\(\{[\s\S]{0,80}?\}\)\s*=>\s*recordCoordinatorNotification[(]/.test(
+      duplicateArm,
+    ),
+    "the queue write must be passed as the injected persist callback",
+  );
+  // And it must not claim, execute or enqueue.
+  for (const forbidden of [
+    "claimTaskById",
+    "claimTask(",
+    "enqueueTask(",
+    "sessions_spawn",
+  ]) {
+    assert.equal(
+      duplicateArm.includes(forbidden),
+      false,
+      `the duplicate arm must not ${forbidden}`,
+    );
+  }
 });

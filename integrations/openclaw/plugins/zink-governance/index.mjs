@@ -2026,6 +2026,79 @@ export function resolveCoordinatorHandoffOutcome({ preExisting, delivered }) {
 }
 
 /**
+ * The duplicate-approval branch of the post-approval path.
+ *
+ * This is extracted so the branch that actually runs is directly testable with
+ * an injected transport, rather than only through the pure outcome policy. The
+ * previous version reported ALREADY_NOTIFIED correctly but still invoked the
+ * transport first, so a duplicate approval after a successful notification sent
+ * a second Discord message. Reporting the right thing while performing the wrong
+ * side effect is still wrong, because the message is the user-visible artefact.
+ *
+ * Invariants:
+ *  - A record whose notification already landed is never re-notified, and its
+ *    record is left untouched.
+ *  - A record that is no longer an `QUEUED` handoff (EXECUTING, or any terminal
+ *    queue state) is left completely alone: no transport, no queue rewrite, no
+ *    workflow event. Its authoritative state is preserved verbatim.
+ *  - Everything else retries the notification exactly once.
+ *
+ * `RELEASED_TO_COORDINATOR` is not representable here either: the highest claim
+ * is a delivered notification still awaiting a coordinator pickup.
+ */
+export async function runDuplicateApprovalHandoff({
+  preExisting,
+  notify,
+  persist,
+}) {
+  // Status guard first. An item that has moved past the queued-handoff stage is
+  // not an approval replay, so it must not be notified, rewritten, or re-stated
+  // as a fresh QUEUED outcome.
+  if (!preExisting || preExisting.status !== "QUEUED") {
+    return {
+      ...resolveCoordinatorHandoffOutcome({
+        preExisting: null,
+        delivered: true,
+      }),
+      status: preExisting?.status ?? "QUEUED",
+      queue_status: preExisting?.status ?? "QUEUED",
+      handoff: "ALREADY_PROCESSED",
+      // Explicitly no transport call and no record mutation for this branch.
+      notified: false,
+      persisted: false,
+    };
+  }
+
+  // A notification that already landed must not be repeated.
+  if (preExisting.coordinatorNotification?.delivered === true) {
+    return {
+      ...resolveCoordinatorHandoffOutcome({
+        preExisting,
+        delivered: true,
+      }),
+      notified: false,
+      persisted: false,
+    };
+  }
+
+  const retry = await notify();
+  const record = persist?.({
+    delivered: retry?.delivered,
+    error: retry?.error,
+  });
+  const outcome = resolveCoordinatorHandoffOutcome({
+    preExisting,
+    delivered: Boolean(retry?.delivered),
+  });
+  return {
+    ...outcome,
+    notified: true,
+    persisted: Boolean(record),
+    ...(retry?.delivered ? {} : { error: retry?.error }),
+  };
+}
+
+/**
  * Build the coordinator notification text.
  *
  * This text is explicitly NON-AUTHORITATIVE. It is a human-readable notice
@@ -4382,28 +4455,19 @@ export default {
 
       const preExisting = defaultQueueManager.getTask(taskId);
       if (preExisting) {
-        const retry = await deliverCoordinatorNotification({
-          api,
-          destination,
-          taskId,
-          dispatch,
+        const duplicate = await runDuplicateApprovalHandoff({
+          preExisting,
+          notify: () =>
+            deliverCoordinatorNotification({
+              api,
+              destination,
+              taskId,
+              dispatch,
+            }),
+          persist: ({ delivered, error }) =>
+            recordCoordinatorNotification({ taskId, delivered, error }),
         });
-        recordCoordinatorNotification({
-          taskId,
-          delivered: retry.delivered,
-          error: retry.error,
-        });
-        // The same pure policy the first approval used decides this, so a
-        // duplicate can never re-execute and can only retry an undelivered
-        // notification.
-        return {
-          ...resolveCoordinatorHandoffOutcome({
-            preExisting,
-            delivered: retry.delivered,
-          }),
-          taskId,
-          ...(retry.delivered ? {} : { error: retry.error }),
-        };
+        return { ...duplicate, taskId };
       }
 
       let queueStatus;

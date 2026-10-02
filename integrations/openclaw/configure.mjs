@@ -753,6 +753,14 @@ async function main() {
       // The new digest is deliberately NOT listed: it is the current build and
       // is accepted by content comparison.
       "118db9a746a0757dbea2d15c5d8d9585a298a1ca0d235a6b13a3a8513fb2bcac",
+      // Duplicate-notification side-effect fix: the outgoing handoff-semantics
+      // entrypoint, byte-proven as the packaged build before a duplicate approval
+      // stopped re-sending a coordinator notification that had already landed,
+      // and before the duplicate arm gained a status guard for non-QUEUED
+      // records. Admitted here so the next authorized deployment is reachable.
+      // The new digest is deliberately NOT listed: it is the current build and
+      // is accepted by content comparison.
+      "4bb0c1e12b4116340fb80f9cc136082200c7506fa691623bc922414f0bd92845",
     ],
   );
   assertRegularOrMissing(output.identityKeyPath);

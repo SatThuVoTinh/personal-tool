@@ -79,6 +79,13 @@ const R10_NATIVE_BOUNDARY_SHA256 =
  * NOT listed.
  */
 const R10_ENTRYPOINT_SHA256 =
+  "36ed858c74dd09423d0afc74ff2fc8eb589843f163fb8ffccf8bcc912f097ce9";
+
+/**
+ * The outgoing handoff-semantics entrypoint (before the duplicate-notification
+ * side-effect fix), admitted so the next authorized deployment is reachable.
+ */
+const DUPLICATE_NOTIFY_FIX_OUTGOING_ENTRYPOINT_SHA256 =
   "4bb0c1e12b4116340fb80f9cc136082200c7506fa691623bc922414f0bd92845";
 
 /**
@@ -435,6 +442,17 @@ test("R13 2b: the outgoing handoff-semantics entrypoint is admitted as a predece
   assert.notEqual(
     R10_ENTRYPOINT_SHA256,
     HANDOFF_SEMANTICS_OUTGOING_ENTRYPOINT_SHA256,
+  );
+});
+
+test("R13 2c: the outgoing duplicate-notification-fix entrypoint is admitted", () => {
+  assert.ok(
+    CONFIGURE_SOURCE.includes(DUPLICATE_NOTIFY_FIX_OUTGOING_ENTRYPOINT_SHA256),
+    `${DUPLICATE_NOTIFY_FIX_OUTGOING_ENTRYPOINT_SHA256.slice(0, 16)} must be preserved`,
+  );
+  assert.notEqual(
+    R10_ENTRYPOINT_SHA256,
+    DUPLICATE_NOTIFY_FIX_OUTGOING_ENTRYPOINT_SHA256,
   );
 });
 
