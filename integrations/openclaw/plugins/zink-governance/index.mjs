@@ -2026,6 +2026,121 @@ export function resolveCoordinatorHandoffOutcome({ preExisting, delivered }) {
 }
 
 /**
+ * Reservation window for an in-flight coordinator notification.
+ *
+ * A Discord POST is an external, potentially slow side effect, so the shared
+ * cross-process file lock is deliberately NOT held across it: that lock has no
+ * stale reclaim, so a crash mid-send would wedge the queue permanently. Instead
+ * the attempt is claimed in-process for a bounded window, which is where the
+ * real concurrency lives: the plugin is a single OpenClaw gateway process, and
+ * two Discord APPROVE actions arrive as two overlapping handler invocations in
+ * that one process.
+ */
+export const NOTIFICATION_ATTEMPT_TTL_MS = 60_000;
+
+const notificationAttempts = new Map();
+
+/**
+ * Claim the single in-flight notification attempt for a task.
+ *
+ * Returns a release function on success, or `null` when another attempt already
+ * holds the reservation. The reservation is released in a `finally` by the
+ * caller, so a thrown transport never leaks it. The TTL bounds the damage if a
+ * process dies mid-send: the window closes and the task becomes retryable again.
+ *
+ * LIMITATION, stated rather than hidden: this is an in-process guard, so it does
+ * NOT provide cross-process exactly-once delivery. Two separate plugin processes
+ * sharing one queue could still both notify. The repository has no cross-process
+ * idempotency key that the Discord transport would honour, and inventing one
+ * would be a new mechanism, so the honest claim is: at most one notification
+ * attempt per task per process per TTL window.
+ */
+export function reserveCoordinatorNotificationAttempt(
+  taskId,
+  {
+    now = Date.now(),
+    ttlMs = NOTIFICATION_ATTEMPT_TTL_MS,
+    registry = notificationAttempts,
+  } = {},
+) {
+  if (typeof taskId !== "string" || taskId.length === 0) {
+    return null;
+  }
+  for (const [key, entry] of registry) {
+    if (now - entry.startedAt > ttlMs) registry.delete(key);
+  }
+  if (registry.has(taskId)) {
+    return null;
+  }
+  const entry = { startedAt: now };
+  registry.set(taskId, entry);
+  return () => {
+    if (registry.get(taskId) === entry) {
+      registry.delete(taskId);
+    }
+  };
+}
+
+export function isCoordinatorNotificationAttemptInFlight(
+  taskId,
+  {
+    now = Date.now(),
+    ttlMs = NOTIFICATION_ATTEMPT_TTL_MS,
+    registry = notificationAttempts,
+  } = {},
+) {
+  const entry = registry.get(taskId);
+  return Boolean(entry) && now - entry.startedAt <= ttlMs;
+}
+
+/**
+ * Classify the outcome of one notification attempt.
+ *
+ * The three cases are materially different and are never collapsed:
+ *  - not delivered: the record stays retryable.
+ *  - delivered and persisted: future duplicates short-circuit, because durable
+ *    state now knows the message exists.
+ *  - delivered but NOT persisted: the Discord message exists, but durable local
+ *    knowledge of that does not. Reporting NOTIFIED here would claim an
+ *    idempotency the repository does not have and would let a later duplicate
+ *    send a second message while claiming the first was known. The honest answer
+ *    is that the state is uncertain, and the delivery evidence is carried through
+ *    so an operator can reconcile it.
+ */
+function classifyNotificationAttempt({
+  delivered,
+  persisted,
+  error,
+  evidence,
+}) {
+  if (!delivered) {
+    return {
+      status: "QUEUED",
+      queue_status: "QUEUED",
+      handoff: "NOTIFICATION_FAILED",
+      ...(error ? { error } : {}),
+    };
+  }
+  if (!persisted) {
+    return {
+      status: "QUEUED",
+      queue_status: "QUEUED",
+      handoff: "NOTIFICATION_STATE_UNCERTAIN",
+      error:
+        error ??
+        "COORDINATOR_NOTIFICATION_PERSIST_FAILED: the notification was accepted by the transport but the durable record was not written",
+      ...(evidence ? { delivery_evidence: evidence } : {}),
+    };
+  }
+  return {
+    status: "QUEUED",
+    queue_status: "QUEUED",
+    handoff: "NOTIFIED",
+    ...(evidence ? { delivery_evidence: evidence } : {}),
+  };
+}
+
+/**
  * The duplicate-approval branch of the post-approval path.
  *
  * This is extracted so the branch that actually runs is directly testable with
@@ -2041,15 +2156,20 @@ export function resolveCoordinatorHandoffOutcome({ preExisting, delivered }) {
  *  - A record that is no longer an `QUEUED` handoff (EXECUTING, or any terminal
  *    queue state) is left completely alone: no transport, no queue rewrite, no
  *    workflow event. Its authoritative state is preserved verbatim.
- *  - Everything else retries the notification exactly once.
+ *  - At most one notification attempt is in flight per task at a time, so two
+ *    overlapping duplicate approvals cannot both transition undelivered -> send.
+ *  - Everything else retries the notification exactly once, and the reported
+ *    outcome distinguishes failed, persisted, and uncertain.
  *
  * `RELEASED_TO_COORDINATOR` is not representable here either: the highest claim
  * is a delivered notification still awaiting a coordinator pickup.
  */
 export async function runDuplicateApprovalHandoff({
+  taskId,
   preExisting,
   notify,
   persist,
+  reserve,
 }) {
   // Status guard first. An item that has moved past the queued-handoff stage is
   // not an approval replay, so it must not be notified, rewritten, or re-stated
@@ -2081,21 +2201,52 @@ export async function runDuplicateApprovalHandoff({
     };
   }
 
-  const retry = await notify();
-  const record = persist?.({
-    delivered: retry?.delivered,
-    error: retry?.error,
-  });
-  const outcome = resolveCoordinatorHandoffOutcome({
-    preExisting,
-    delivered: Boolean(retry?.delivered),
-  });
-  return {
-    ...outcome,
-    notified: true,
-    persisted: Boolean(record),
-    ...(retry?.delivered ? {} : { error: retry?.error }),
-  };
+  // Claim the attempt BEFORE the send, so an overlapping duplicate that would
+  // otherwise observe the same undelivered record cannot also send.
+  const release = reserve ? reserve(taskId) : null;
+  if (reserve && !release) {
+    // Another attempt holds the reservation. Say so plainly: no send, no
+    // persist, and no claim that a notification exists.
+    return {
+      status: "QUEUED",
+      queue_status: "QUEUED",
+      handoff: "NOTIFICATION_IN_PROGRESS",
+      notified: false,
+      persisted: false,
+    };
+  }
+
+  try {
+    const retry = await notify();
+    const delivered = Boolean(retry?.delivered);
+    // `{ ok: false }` is a truthy object, so the persistence result must be read
+    // by its own field. Coercing the object previously reported a failed write
+    // as a successful one, which is exactly the claim that must not be made.
+    const record = persist?.({
+      delivered,
+      error: retry?.error,
+      evidence: retry?.evidence ?? null,
+    });
+    const persisted = record?.ok === true;
+    return {
+      ...classifyNotificationAttempt({
+        delivered,
+        persisted,
+        error: retry?.error,
+        evidence: retry?.evidence ?? null,
+      }),
+      notified: true,
+      // `persisted` means a delivered notification is now durably recorded, which
+      // is what lets a future duplicate short-circuit. A failed send may well
+      // have written a failure record, but that records the absence of a
+      // delivery, so it must not be reported as a persisted delivery.
+      persisted: delivered && persisted,
+    };
+  } finally {
+    // Released on every path, including a throwing transport, so a failed send
+    // cannot leave the task permanently un-notifiable.
+    release?.();
+  }
 }
 
 /**
@@ -4318,7 +4469,11 @@ export default {
       dispatch,
     }) {
       try {
-        await sendNativePayload({
+        // The native transport returns the accepted message identity. It is
+        // kept as delivery evidence so an operator can reconcile a notification
+        // whose durable record failed to persist. It is never used to infer
+        // delivery from the message text, and the text is never authority.
+        const receipt = await sendNativePayload({
           api,
           to: destination.target,
           ...(destination.isThread ? { threadId: destination.target } : {}),
@@ -4327,7 +4482,13 @@ export default {
             text: buildCoordinatorNotificationText({ taskId, dispatch }),
           },
         });
-        return { delivered: true };
+        return {
+          delivered: true,
+          evidence: {
+            message_id: receipt?.messageId ?? null,
+            channel_id: receipt?.channelId ?? null,
+          },
+        };
       } catch (deliveryErr) {
         api.logger?.error?.(
           `[zink-governance] coordinator notification failed: ${deliveryErr?.message}`,
@@ -4374,22 +4535,42 @@ export default {
      * `QUEUED` and nothing here may advance it. Persisting the flag is what
      * makes an incomplete handoff observable and safely retryable instead of a
      * silent stuck state.
+     *
+     * The write is transactional in the same shape `enqueueTask` uses: the
+     * in-memory projection is only advanced once the durable save succeeds, and
+     * is rolled back if it does not. Without that, a failed save would leave
+     * memory claiming the notification landed while the file did not, and the
+     * caller could not tell which was true.
+     *
+     * The accepted message identity is stored alongside the flag as delivery
+     * evidence. It is reconciliation material for an operator, not authority:
+     * nothing in the governed path reads it to make a decision.
      */
-    function recordCoordinatorNotification({ taskId, delivered, error }) {
+    function recordCoordinatorNotification({
+      taskId,
+      delivered,
+      error,
+      evidence,
+    }) {
+      const item = defaultQueueManager.getTask(taskId);
+      if (!item) {
+        return { ok: false, error: "QUEUE_ITEM_NOT_FOUND" };
+      }
+      const next = {
+        ...item,
+        coordinatorNotification: {
+          delivered: Boolean(delivered),
+          ...(delivered
+            ? { evidence: evidence ?? null }
+            : { error: String(error ?? "UNKNOWN") }),
+        },
+      };
+      defaultQueueManager.queue.set(taskId, next);
       try {
-        const item = defaultQueueManager.getTask(taskId);
-        if (!item) return { ok: false };
-        const next = {
-          ...item,
-          coordinatorNotification: {
-            delivered: Boolean(delivered),
-            ...(delivered ? {} : { error: String(error ?? "UNKNOWN") }),
-          },
-        };
-        defaultQueueManager.queue.set(taskId, next);
         defaultQueueManager.save();
         return { ok: true };
       } catch (persistErr) {
+        defaultQueueManager.queue.set(taskId, item);
         return { ok: false, error: persistErr?.message };
       }
     }
@@ -4456,6 +4637,7 @@ export default {
       const preExisting = defaultQueueManager.getTask(taskId);
       if (preExisting) {
         const duplicate = await runDuplicateApprovalHandoff({
+          taskId,
           preExisting,
           notify: () =>
             deliverCoordinatorNotification({
@@ -4464,8 +4646,14 @@ export default {
               taskId,
               dispatch,
             }),
-          persist: ({ delivered, error }) =>
-            recordCoordinatorNotification({ taskId, delivered, error }),
+          persist: ({ delivered, error, evidence }) =>
+            recordCoordinatorNotification({
+              taskId,
+              delivered,
+              error,
+              evidence,
+            }),
+          reserve: reserveCoordinatorNotificationAttempt,
         });
         return { ...duplicate, taskId };
       }

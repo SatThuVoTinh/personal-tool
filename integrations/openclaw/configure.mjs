@@ -761,6 +761,14 @@ async function main() {
       // The new digest is deliberately NOT listed: it is the current build and
       // is accepted by content comparison.
       "4bb0c1e12b4116340fb80f9cc136082200c7506fa691623bc922414f0bd92845",
+      // Notification persistence truth and concurrency guard: the outgoing
+      // entrypoint, byte-proven as the packaged build before a failed durable
+      // record write could be reported as a persisted success, and before the
+      // in-flight notification reservation closed the undelivered -> send race.
+      // Admitted here so the next authorized deployment is reachable. The new
+      // digest is deliberately NOT listed: it is the current build and is
+      // accepted by content comparison.
+      "36ed858c74dd09423d0afc74ff2fc8eb589843f163fb8ffccf8bcc912f097ce9",
     ],
   );
   assertRegularOrMissing(output.identityKeyPath);

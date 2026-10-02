@@ -7,6 +7,9 @@ import {
   resolveCoordinatorHandoffOutcome,
   buildCoordinatorNotificationText,
   runDuplicateApprovalHandoff,
+  reserveCoordinatorNotificationAttempt,
+  isCoordinatorNotificationAttemptInFlight,
+  NOTIFICATION_ATTEMPT_TTL_MS,
 } from "../integrations/openclaw/plugins/zink-governance/index.mjs";
 import { createGovernanceGuard } from "../integrations/openclaw/topology/lib/guard.mjs";
 import {
@@ -1254,6 +1257,17 @@ function spyPersist() {
   return persist;
 }
 
+/** A persistence spy that returns a caller-chosen result, for failure paths. */
+function spyPersistReturning(result) {
+  const writes = [];
+  const persist = (value) => {
+    writes.push(value);
+    return result;
+  };
+  persist.writes = writes;
+  return persist;
+}
+
 test("J1: a duplicate after a delivered notification emits ZERO messages", async () => {
   const notify = spyTransport();
   const persist = spyPersist();
@@ -1301,9 +1315,14 @@ test("J2: a duplicate with delivered:false retries the transport exactly once", 
     "an undelivered record must be retried once",
   );
   assert.equal(persist.writes.length, 1, "the retry outcome must be persisted");
-  assert.deepEqual(persist.writes[0], { delivered: true, error: undefined });
+  assert.deepEqual(
+    persist.writes[0],
+    { delivered: true, error: undefined, evidence: null },
+    "the durable record must carry the delivery-evidence slot",
+  );
   assert.equal(outcome.handoff, "NOTIFIED");
   assert.equal(outcome.notified, true);
+  assert.equal(outcome.persisted, true);
 });
 
 test("J3: a failed retry stays retryable and never claims success", async () => {
@@ -1531,4 +1550,442 @@ test("J9: the shipped path calls the tested branch and cannot notify twice", () 
       `the duplicate arm must not ${forbidden}`,
     );
   }
+});
+
+// ===========================================================================
+// Domain K: notification persistence truth and concurrency
+// ===========================================================================
+//
+// J1..J9 fixed the delivered-duplicate side effect. Two boundaries remained:
+// a persistence failure after a successful send could be reported as a durable
+// success, and nothing stopped two overlapping duplicates from both sending.
+// The tests below drive the shipped branch for both.
+
+const TASK = "e".repeat(64);
+
+function makeRegistry() {
+  return new Map();
+}
+
+test("K1/J10: a successful send whose record fails to persist is NOT reported as durable", async () => {
+  const notify = spyTransport({
+    delivered: true,
+    evidence: { message_id: "1234567890", channel_id: "9876543210" },
+  });
+  const persist = spyPersistReturning({
+    ok: false,
+    error: "QUEUE_STORAGE_WRITE_FAILED",
+  });
+
+  const outcome = await runDuplicateApprovalHandoff({
+    taskId: TASK,
+    preExisting: {
+      status: "QUEUED",
+      coordinatorNotification: { delivered: false },
+    },
+    notify,
+    persist,
+  });
+
+  assert.equal(notify.calls.length, 1, "the transport ran exactly once");
+  assert.equal(
+    persist.writes.length,
+    1,
+    "persistence was attempted exactly once",
+  );
+
+  // It must NOT claim the durable record was written.
+  assert.notEqual(
+    outcome.persisted,
+    true,
+    "a failed write must never be reported as persisted",
+  );
+  assert.equal(outcome.persisted, false);
+
+  // It must NOT claim NOTIFIED, because NOTIFIED implies future duplicates
+  // short-circuit, which requires the durable record to exist.
+  assert.notEqual(
+    outcome.handoff,
+    "NOTIFIED",
+    "NOTIFIED would claim an idempotency the repository does not have",
+  );
+  assert.equal(outcome.handoff, "NOTIFICATION_STATE_UNCERTAIN");
+  assert.match(outcome.error, /QUEUE_STORAGE_WRITE_FAILED|PERSIST_FAILED/);
+
+  // The transport evidence must survive so an operator can reconcile it, because
+  // the message genuinely exists.
+  assert.deepEqual(outcome.delivery_evidence, {
+    message_id: "1234567890",
+    channel_id: "9876543210",
+  });
+  // And it must not mean "nothing was sent".
+  assert.equal(outcome.notified, true);
+  assert.notEqual(outcome.status, "RELEASED_TO_COORDINATOR");
+});
+
+test("K2/J11: { ok: false } is never coerced into persisted:true", async () => {
+  // The original bug was Boolean(record), and { ok: false } is a truthy object.
+  // Exercise several shapes a persistence implementation might return.
+  for (const returned of [
+    { ok: false },
+    { ok: false, error: "QUEUE_STORAGE_WRITE_FAILED" },
+    undefined,
+    null,
+    {},
+  ]) {
+    const persist = spyPersistReturning(returned);
+    const outcome = await runDuplicateApprovalHandoff({
+      taskId: TASK,
+      preExisting: {
+        status: "QUEUED",
+        coordinatorNotification: { delivered: false },
+      },
+      notify: spyTransport({ delivered: true }),
+      persist,
+    });
+    assert.equal(
+      outcome.persisted,
+      false,
+      `${JSON.stringify(returned)} must not yield persisted:true`,
+    );
+    assert.equal(
+      outcome.handoff,
+      "NOTIFICATION_STATE_UNCERTAIN",
+      "an unwritten record must be reported as uncertain, not notified",
+    );
+  }
+});
+
+test("K3/J12: a delivered duplicate still emits nothing at all", async () => {
+  const notify = spyTransport();
+  const persist = spyPersist();
+  const preExisting = Object.freeze({
+    status: "QUEUED",
+    coordinatorNotification: { delivered: true },
+  });
+
+  const outcome = await runDuplicateApprovalHandoff({
+    taskId: TASK,
+    preExisting,
+    notify,
+    persist,
+  });
+
+  assert.equal(notify.calls.length, 0, "no transport call");
+  assert.equal(persist.writes.length, 0, "no persistence write");
+  assert.equal(outcome.handoff, "ALREADY_NOTIFIED");
+  assert.equal(outcome.persisted, false);
+  assert.deepEqual(preExisting.coordinatorNotification, { delivered: true });
+});
+
+test("K4/J13: overlapping duplicate approvals produce at most one send", async () => {
+  // The two invocations are deliberately synchronised so they BOTH reach the
+  // reservation step before either sends. Without the reservation, the second
+  // observes the same undelivered record and sends as well.
+  const registry = makeRegistry();
+  let arrive;
+  const bothArrived = new Promise((resolve) => {
+    arrive = resolve;
+  });
+  let arrivals = 0;
+
+  const notify = async () => {
+    arrivals += 1;
+    if (arrivals === 2) arrive();
+    // Hold the first send open until the second invocation has had its chance to
+    // observe the record, which is the race the reservation must close.
+    await Promise.race([
+      bothArrived,
+      new Promise((resolve) => setTimeout(resolve, 200)),
+    ]);
+    return {
+      delivered: true,
+      evidence: { message_id: "m-1", channel_id: "c-1" },
+    };
+  };
+  let calls = 0;
+  const counted = () => {
+    calls += 1;
+    return notify();
+  };
+
+  const preExisting = {
+    status: "QUEUED",
+    coordinatorNotification: { delivered: false },
+  };
+  const results = await Promise.all([
+    runDuplicateApprovalHandoff({
+      taskId: TASK,
+      preExisting,
+      notify: counted,
+      persist: spyPersistReturning({ ok: true }),
+      reserve: (id) => reserveCoordinatorNotificationAttempt(id, { registry }),
+    }),
+    runDuplicateApprovalHandoff({
+      taskId: TASK,
+      preExisting,
+      notify: counted,
+      persist: spyPersistReturning({ ok: true }),
+      reserve: (id) => reserveCoordinatorNotificationAttempt(id, { registry }),
+    }),
+  ]);
+
+  assert.equal(
+    calls,
+    1,
+    "two overlapping duplicates must produce at most one notification attempt",
+  );
+  const handoffs = results.map((r) => r.handoff).sort();
+  assert.deepEqual(handoffs, ["NOTIFICATION_IN_PROGRESS", "NOTIFIED"]);
+  // The loser must not claim a send or a durable record.
+  const loser = results.find((r) => r.handoff === "NOTIFICATION_IN_PROGRESS");
+  assert.equal(loser.notified, false);
+  assert.equal(loser.persisted, false);
+  assert.notEqual(loser.status, "RELEASED_TO_COORDINATOR");
+});
+
+test("K5: five overlapping duplicates still yield a single send", async () => {
+  const registry = makeRegistry();
+  let calls = 0;
+  const preExisting = {
+    status: "QUEUED",
+    coordinatorNotification: { delivered: false },
+  };
+  const run = () =>
+    runDuplicateApprovalHandoff({
+      taskId: TASK,
+      preExisting,
+      notify: async () => {
+        calls += 1;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        return {
+          delivered: true,
+          evidence: { message_id: "m", channel_id: "c" },
+        };
+      },
+      persist: spyPersistReturning({ ok: true }),
+      reserve: (id) => reserveCoordinatorNotificationAttempt(id, { registry }),
+    });
+  const results = await Promise.all([run(), run(), run(), run(), run()]);
+  assert.equal(calls, 1, "at most one notification for one logical attempt");
+  assert.equal(
+    results.filter((r) => r.handoff === "NOTIFIED").length,
+    1,
+    "exactly one caller may report a successful notification",
+  );
+  assert.equal(
+    results.filter((r) => r.handoff === "NOTIFICATION_IN_PROGRESS").length,
+    4,
+  );
+});
+
+test("K6/J14: a concurrent failed notification stays retryable and claims nothing", async () => {
+  const registry = makeRegistry();
+  let calls = 0;
+  const preExisting = {
+    status: "QUEUED",
+    coordinatorNotification: { delivered: false },
+  };
+  const run = () =>
+    runDuplicateApprovalHandoff({
+      taskId: TASK,
+      preExisting,
+      notify: async () => {
+        calls += 1;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        return {
+          delivered: false,
+          error: "COORDINATOR_NOTIFICATION_FAILED: down",
+        };
+      },
+      persist: spyPersistReturning({ ok: true }),
+      reserve: (id) => reserveCoordinatorNotificationAttempt(id, { registry }),
+    });
+  const results = await Promise.all([run(), run()]);
+
+  assert.equal(calls, 1, "only one attempt is made while one is in flight");
+  for (const result of results) {
+    assert.notEqual(
+      result.handoff,
+      "NOTIFIED",
+      "a failure must never be reported as notified",
+    );
+    assert.notEqual(result.handoff, "AWAITING_COORDINATOR_PICKUP");
+    assert.equal(
+      result.persisted,
+      false,
+      "a failed send with a written failure record is not a persisted success",
+    );
+    assert.notEqual(result.status, "RELEASED_TO_COORDINATOR");
+  }
+  // The loser is told an attempt is in flight, and the winner reports failure.
+  const handoffs = results.map((r) => r.handoff).sort();
+  assert.deepEqual(handoffs, [
+    "NOTIFICATION_FAILED",
+    "NOTIFICATION_IN_PROGRESS",
+  ]);
+
+  // The durable failure record leaves the task retryable: a later, separate
+  // invocation (after the reservation is released) can still notify.
+  const retry = await runDuplicateApprovalHandoff({
+    taskId: TASK,
+    preExisting: {
+      status: "QUEUED",
+      coordinatorNotification: { delivered: false },
+    },
+    notify: spyTransport({ delivered: true }),
+    persist: spyPersistReturning({ ok: true }),
+    reserve: (id) => reserveCoordinatorNotificationAttempt(id, { registry }),
+  });
+  assert.equal(
+    retry.handoff,
+    "NOTIFIED",
+    "a failed attempt must remain retryable",
+  );
+});
+
+test("K7/J15: a released reservation does not make a failed persistence look safe", async () => {
+  // The uncertain case must NOT short-circuit a future duplicate, because the
+  // durable record does not know the message exists.
+  const notify = spyTransport({
+    delivered: true,
+    evidence: { message_id: "m-9", channel_id: "c-9" },
+  });
+  const persist = spyPersistReturning({
+    ok: false,
+    error: "QUEUE_STORAGE_WRITE_FAILED",
+  });
+  const registry = makeRegistry();
+
+  const first = await runDuplicateApprovalHandoff({
+    taskId: TASK,
+    preExisting: {
+      status: "QUEUED",
+      coordinatorNotification: { delivered: false },
+    },
+    notify,
+    persist,
+    reserve: (id) => reserveCoordinatorNotificationAttempt(id, { registry }),
+  });
+  assert.equal(first.handoff, "NOTIFICATION_STATE_UNCERTAIN");
+
+  // The reservation was released, so a later duplicate is allowed to try again.
+  assert.equal(
+    isCoordinatorNotificationAttemptInFlight(TASK, { registry }),
+    false,
+    "the reservation must be released on every path",
+  );
+
+  // Because the record was not written, the duplicate still sees an undelivered
+  // state. That is the honest, documented consequence: at-least-once across an
+  // external transport with a failed durable write, never a false success.
+  const second = await runDuplicateApprovalHandoff({
+    taskId: TASK,
+    preExisting: {
+      status: "QUEUED",
+      coordinatorNotification: { delivered: false },
+    },
+    notify,
+    persist: spyPersistReturning({ ok: true }),
+    reserve: (id) => reserveCoordinatorNotificationAttempt(id, { registry }),
+  });
+  assert.equal(second.handoff, "NOTIFIED");
+  assert.equal(notify.calls.length, 2);
+  // The uncertainty was visible, not silent.
+  assert.match(first.error, /QUEUE_STORAGE_WRITE_FAILED|PERSIST_FAILED/);
+  assert.ok(first.delivery_evidence.message_id);
+});
+
+test("K8: the reservation expires after its TTL so a crashed send cannot wedge the task", () => {
+  const registry = makeRegistry();
+  const t0 = 1_000_000;
+  const release = reserveCoordinatorNotificationAttempt(TASK, {
+    now: t0,
+    registry,
+  });
+  assert.ok(release, "the first attempt claims the reservation");
+  assert.equal(
+    reserveCoordinatorNotificationAttempt(TASK, { now: t0, registry }),
+    null,
+    "a second attempt inside the window is refused",
+  );
+  assert.equal(
+    isCoordinatorNotificationAttemptInFlight(TASK, { now: t0, registry }),
+    true,
+  );
+  // Inside the window but not expired.
+  assert.equal(
+    reserveCoordinatorNotificationAttempt(TASK, {
+      now: t0 + NOTIFICATION_ATTEMPT_TTL_MS,
+      registry,
+    }),
+    null,
+  );
+  // Past the window the reservation is reclaimable, which is what makes a crashed
+  // or wedged send recoverable rather than permanently stuck.
+  const after = reserveCoordinatorNotificationAttempt(TASK, {
+    now: t0 + NOTIFICATION_ATTEMPT_TTL_MS + 1,
+    registry,
+  });
+  assert.ok(after, "an expired reservation must be reclaimable");
+  release();
+});
+
+test("K9: a throwing transport still releases the reservation", async () => {
+  const registry = makeRegistry();
+  await assert.rejects(
+    () =>
+      runDuplicateApprovalHandoff({
+        taskId: TASK,
+        preExisting: {
+          status: "QUEUED",
+          coordinatorNotification: { delivered: false },
+        },
+        notify: async () => {
+          throw new Error("transport exploded");
+        },
+        persist: spyPersist(),
+        reserve: (id) =>
+          reserveCoordinatorNotificationAttempt(id, { registry }),
+      }),
+    /transport exploded/,
+  );
+  assert.equal(
+    isCoordinatorNotificationAttemptInFlight(TASK, { registry }),
+    false,
+    "a throwing transport must not leak the reservation",
+  );
+});
+
+test("K10: the shipped path supplies a reservation and the real primitive", () => {
+  const source = fs.readFileSync(
+    new URL(
+      "../integrations/openclaw/plugins/zink-governance/index.mjs",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const start = source.indexOf("async function executeApprovedTask(");
+  const end = source.indexOf("const unregister = registerNativeGuard", start);
+  const body = source.slice(start, end);
+  assert.ok(
+    body.includes("reserve: reserveCoordinatorNotificationAttempt"),
+    "the shipped duplicate path must install the reservation primitive",
+  );
+  // The limitation must be documented rather than implied. Compare against
+  // whitespace-normalised source with comment markers stripped, so a comment
+  // re-wrap cannot silently satisfy or break the assertion.
+  const flattened = source.replace(/^\s*\*(?!\/)/gm, " ").replace(/\s+/g, " ");
+  assert.ok(
+    flattened.includes(
+      "it does NOT provide cross-process exactly-once delivery",
+    ),
+    "the cross-process limitation must be stated in the code",
+  );
+  assert.ok(
+    flattened.includes("at most one notification attempt per task per process"),
+    "the actual guarantee must be stated, not just the limitation",
+  );
+  // Persistence evidence must be threaded to the durable record.
+  assert.ok(body.includes("evidence"));
 });

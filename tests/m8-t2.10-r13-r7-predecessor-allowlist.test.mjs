@@ -79,6 +79,14 @@ const R10_NATIVE_BOUNDARY_SHA256 =
  * NOT listed.
  */
 const R10_ENTRYPOINT_SHA256 =
+  "0940eb77d5796f29d819331e92a7c00c4f9230eb1185dce3de7b524a37e2f7c2";
+
+/**
+ * The outgoing entrypoint before the notification persistence-truth and
+ * concurrency-guard fix, admitted so the next authorized deployment is
+ * reachable.
+ */
+const PERSISTENCE_TRUTH_OUTGOING_ENTRYPOINT_SHA256 =
   "36ed858c74dd09423d0afc74ff2fc8eb589843f163fb8ffccf8bcc912f097ce9";
 
 /**
@@ -453,6 +461,17 @@ test("R13 2c: the outgoing duplicate-notification-fix entrypoint is admitted", (
   assert.notEqual(
     R10_ENTRYPOINT_SHA256,
     DUPLICATE_NOTIFY_FIX_OUTGOING_ENTRYPOINT_SHA256,
+  );
+});
+
+test("R13 2d: the outgoing persistence-truth entrypoint is admitted", () => {
+  assert.ok(
+    CONFIGURE_SOURCE.includes(PERSISTENCE_TRUTH_OUTGOING_ENTRYPOINT_SHA256),
+    `${PERSISTENCE_TRUTH_OUTGOING_ENTRYPOINT_SHA256.slice(0, 16)} must be preserved`,
+  );
+  assert.notEqual(
+    R10_ENTRYPOINT_SHA256,
+    PERSISTENCE_TRUTH_OUTGOING_ENTRYPOINT_SHA256,
   );
 });
 
