@@ -744,6 +744,15 @@ async function main() {
       // is reachable. The new digest is deliberately NOT listed: it is the current
       // build and is accepted by content comparison.
       "a3dbf945deae82c1c07b419d6f1af1724f70a336c88331d4a772dfc93420ab92",
+      // Handoff-semantics remediation: the outgoing functional-truth entrypoint,
+      // byte-proven as the packaged build before RELEASED_TO_COORDINATOR was
+      // withdrawn (a Discord POST is not an accepted handoff), before the
+      // release precondition moved ahead of the durable queue write, and before
+      // the coordinator handoff was required to satisfy canonical spawn
+      // topology. Admitted here so the next authorized deployment is reachable.
+      // The new digest is deliberately NOT listed: it is the current build and
+      // is accepted by content comparison.
+      "118db9a746a0757dbea2d15c5d8d9585a298a1ca0d235a6b13a3a8513fb2bcac",
     ],
   );
   assertRegularOrMissing(output.identityKeyPath);

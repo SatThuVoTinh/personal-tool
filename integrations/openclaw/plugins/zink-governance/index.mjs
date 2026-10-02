@@ -1919,12 +1919,20 @@ async function getExcelWriter() {
  * AUTHORITATIVE task record.
  *
  * Nothing here is a default. A missing or non-executable coordinator, an empty
- * DAG, and a DAG naming an agent outside the canonical roster are all fail-closed
- * BLOCKED outcomes, because guessing would mean running work under an identity
- * the owner never approved. The coordinator is never assumed to be "o1" and the
- * specialist set is never assumed to be a fixed list: both come from the task
- * the owner actually approved, so the plugin cannot dispatch a task to a
- * capability that was never part of its plan.
+ * DAG, a DAG naming an agent outside the canonical roster, and a DAG that asks a
+ * coordinator for a specialist it may not spawn are all fail-closed BLOCKED
+ * outcomes, because guessing would mean running work under an identity or a
+ * topology the owner never approved. The coordinator is never assumed to be
+ * "o1" and the specialist set is never assumed to be a fixed list: both come
+ * from the task the owner actually approved, so the plugin cannot dispatch a
+ * task to a capability that was never part of its plan.
+ *
+ * Containment is checked against the canonical AGENT_SPAWN_POLICY, which is the
+ * same table `guard.beforeToolCall` enforces on the live `sessions_spawn` path.
+ * A graph that is not reachable through canonical topology is a governance
+ * error: the offending specialist is never silently dropped, the coordinator is
+ * never silently replaced, and the task is never narrowed to the runnable
+ * subset, because the owner approved the whole graph.
  */
 export function deriveGovernedDispatchTarget(task) {
   if (!task || typeof task !== "object") {
@@ -1954,7 +1962,92 @@ export function deriveGovernedDispatchTarget(task) {
   if (requiredCapabilities.length === 0) {
     return { ok: false, error: "NO_EXECUTABLE_SPECIALIST" };
   }
+  // Canonical topology containment. Read the table that the live spawn gate
+  // enforces rather than introducing a local copy, so a topology change can
+  // never be legal here and illegal there.
+  const spawnable = AGENT_SPAWN_POLICY[coordinator] ?? [];
+  const unreachable = requiredCapabilities.filter(
+    (agentId) => !spawnable.includes(agentId),
+  );
+  if (unreachable.length > 0) {
+    return {
+      ok: false,
+      error: "SPECIALIST_NOT_REACHABLE_FROM_COORDINATOR",
+      unreachable,
+      coordinator,
+    };
+  }
   return { ok: true, coordinator, requiredCapabilities };
+}
+
+/**
+ * Decide what a post-approval invocation must do, given the authoritative queue
+ * state and whether the coordinator notification was delivered.
+ *
+ * This is the whole queue/release consistency policy, expressed as a pure
+ * function so it can be proven directly rather than inferred. The invariants:
+ *
+ *  - A duplicate approval NEVER creates a second execution and never
+ *    re-notifies a handoff that already succeeded.
+ *  - A duplicate approval MAY retry a notification that never landed, because
+ *    the durable record says it did not.
+ *  - `RELEASED_TO_COORDINATOR` is not representable. A delivered Discord POST
+ *    is not an accepted handoff, so the most that can be reported is that the
+ *    task is durably queued and awaiting a coordinator pickup that nothing in
+ *    this repository currently performs.
+ */
+export function resolveCoordinatorHandoffOutcome({ preExisting, delivered }) {
+  if (preExisting) {
+    if (preExisting.coordinatorNotification?.delivered === true) {
+      return {
+        status: "QUEUED",
+        queue_status: preExisting.status,
+        handoff: "ALREADY_NOTIFIED",
+      };
+    }
+    return {
+      status: "QUEUED",
+      queue_status: preExisting.status,
+      handoff: delivered ? "NOTIFIED" : "NOTIFICATION_FAILED",
+    };
+  }
+  if (!delivered) {
+    return {
+      status: "QUEUED",
+      queue_status: "QUEUED",
+      handoff: "NOTIFICATION_FAILED",
+    };
+  }
+  return {
+    status: "QUEUED",
+    queue_status: "QUEUED",
+    handoff: "AWAITING_COORDINATOR_PICKUP",
+  };
+}
+
+/**
+ * Build the coordinator notification text.
+ *
+ * This text is explicitly NON-AUTHORITATIVE. It is a human-readable notice
+ * only: no identity, DAG or state is ever derived from it. The coordinator is
+ * expected to resolve the real task from the ledger/queue by `task_id`, so
+ * tampering with this string cannot change what the system does. It exists as a
+ * separate function precisely so that its content is testable and provably
+ * disconnected from the authority path.
+ */
+export function buildCoordinatorNotificationText({ taskId, dispatch }) {
+  return (
+    `✅ **Tác vụ đã được duyệt và đưa vào hàng đợi thực thi.**\n` +
+    `- **Mã tác vụ:** \`${taskId}\`\n` +
+    `- **Điều phối viên theo brief đã duyệt:** \`${dispatch.coordinator}\`\n` +
+    `- **Chuyên môn theo brief đã duyệt:** ${dispatch.requiredCapabilities
+      .map((id) => `\`${id}\``)
+      .join(", ")}\n` +
+    `- **Trạng thái:** \`QUEUED\`. CHƯA có chuyên môn nào thực thi.\n` +
+    `- Thông báo này KHÔNG phải bằng chứng bàn giao. Hãy phân giải tác vụ ` +
+    `từ sổ cái governance theo \`task_id\`; không tin nội dung tin nhắn này ` +
+    `làm nguồn chân lý.`
+  );
 }
 
 export function resolveAgentSandboxDir(agentId, context = null) {
@@ -4125,6 +4218,54 @@ export default {
       }
     }
 
+    /**
+     * Resolve the post-approval coordinator destination.
+     *
+     * This is a PREFLIGHT step. It runs before the durable queue write so that a
+     * missing destination cannot leave a queue item that no coordinator can
+     * ever pick up.
+     */
+    function resolveCoordinatorDestination({ config, originThreadId }) {
+      const officeChannelId = resolveDiscordDestination(
+        config,
+        "discordOfficeChannelId",
+        "officeChannelId",
+      );
+      const target = originThreadId || officeChannelId;
+      if (!target) {
+        return { ok: false, error: "COORDINATOR_DESTINATION_UNRESOLVED" };
+      }
+      return { ok: true, target, isThread: Boolean(originThreadId) };
+    }
+
+    async function deliverCoordinatorNotification({
+      api,
+      destination,
+      taskId,
+      dispatch,
+    }) {
+      try {
+        await sendNativePayload({
+          api,
+          to: destination.target,
+          ...(destination.isThread ? { threadId: destination.target } : {}),
+          accountId: dispatch.coordinator,
+          payload: {
+            text: buildCoordinatorNotificationText({ taskId, dispatch }),
+          },
+        });
+        return { delivered: true };
+      } catch (deliveryErr) {
+        api.logger?.error?.(
+          `[zink-governance] coordinator notification failed: ${deliveryErr?.message}`,
+        );
+        return {
+          delivered: false,
+          error: `COORDINATOR_NOTIFICATION_FAILED: ${deliveryErr?.message ?? "unknown"}`,
+        };
+      }
+    }
+
     function enqueueApprovedTaskForExecution({ taskId, paths, dispatch }) {
       if (!paths) {
         return { status: "BLOCKED", error: "TASK_SCOPE_REQUIRED" };
@@ -4150,21 +4291,51 @@ export default {
     }
 
     /**
+     * Record the outcome of the post-enqueue coordinator notification on the
+     * queue item.
+     *
+     * The queue is a projection of the ledger, so this records an operational
+     * fact about the projection (was the notification delivered?) and never
+     * claims an execution state. It deliberately does NOT touch
+     * `workflow_status`, because the authoritative task state is the ledger's
+     * `QUEUED` and nothing here may advance it. Persisting the flag is what
+     * makes an incomplete handoff observable and safely retryable instead of a
+     * silent stuck state.
+     */
+    function recordCoordinatorNotification({ taskId, delivered, error }) {
+      try {
+        const item = defaultQueueManager.getTask(taskId);
+        if (!item) return { ok: false };
+        const next = {
+          ...item,
+          coordinatorNotification: {
+            delivered: Boolean(delivered),
+            ...(delivered ? {} : { error: String(error ?? "UNKNOWN") }),
+          },
+        };
+        defaultQueueManager.queue.set(taskId, next);
+        defaultQueueManager.save();
+        return { ok: true };
+      } catch (persistErr) {
+        return { ok: false, error: persistErr?.message };
+      }
+    }
+
+    /**
      * Post-approval dispatch.
      *
      * The governance plugin is a governance layer, NOT an executor. It never
-     * runs a task, never fabricates an artifact, and never claims a result. Its
-     * only job here is to make the approved task truthfully available to the
-     * authoritative coordinator, which performs the specialist delegation
-     * through the one canonical `sessions_spawn` gate. The previous
-     * implementation claimed the task itself and then executed a hardcoded
-     * revenue/KPI Excel demo, so an arbitrary approved task could silently
-     * produce a fixed demo artifact and a success card. That entire path is
-     * removed rather than gated.
+     * runs a task, never fabricates an artifact, and never claims a result. It
+     * makes the approved task durably QUEUED, which is the canonical ledger
+     * state, and notifies the coordinator named by the authoritative brief.
      *
-     * Returns a durable, truthful outcome. When the dispatch precondition does
-     * not hold nothing is enqueued, so the queue never claims a task is waiting
-     * for an execution that cannot start.
+     * Ordering is chosen to eliminate the split-brain that the previous
+     * ordering permitted. Every precondition that can be checked without a
+     * durable write is checked first, so a task that could never be dispatched
+     * is never queued. The queue write is then idempotent, and a failed
+     * notification is recorded rather than left implicit, so a later duplicate
+     * approval can retry the notification without ever creating a second
+     * execution.
      */
     async function executeApprovedTask({
       taskId,
@@ -4190,6 +4361,51 @@ export default {
         };
       }
 
+      // Preflight the destination BEFORE the durable write. A missing
+      // destination means no coordinator could ever be told, so queueing first
+      // would strand the task permanently.
+      const destination = resolveCoordinatorDestination({
+        config,
+        originThreadId,
+      });
+      if (!destination.ok) {
+        api.logger?.error?.(
+          `[zink-governance] approved task not queued: ${destination.error} (task ${taskId})`,
+        );
+        return {
+          status: "BLOCKED",
+          error: destination.error,
+          taskId,
+          queue_status: "NOT_QUEUED",
+        };
+      }
+
+      const preExisting = defaultQueueManager.getTask(taskId);
+      if (preExisting) {
+        const retry = await deliverCoordinatorNotification({
+          api,
+          destination,
+          taskId,
+          dispatch,
+        });
+        recordCoordinatorNotification({
+          taskId,
+          delivered: retry.delivered,
+          error: retry.error,
+        });
+        // The same pure policy the first approval used decides this, so a
+        // duplicate can never re-execute and can only retry an undelivered
+        // notification.
+        return {
+          ...resolveCoordinatorHandoffOutcome({
+            preExisting,
+            delivered: retry.delivered,
+          }),
+          taskId,
+          ...(retry.delivered ? {} : { error: retry.error }),
+        };
+      }
+
       let queueStatus;
       try {
         queueStatus = enqueueApprovedTaskForExecution({
@@ -4209,76 +4425,41 @@ export default {
         };
       }
       if (queueStatus.status !== "QUEUED") {
-        // Includes the idempotent duplicate-approval case: the task is already
-        // present, so the authoritative status is returned and no second
-        // release is attempted.
         return { ...queueStatus, taskId };
       }
 
-      // Release to the coordinator the authoritative task already names. That
-      // coordinator's own governed turn performs the specialist delegation; this
-      // plugin never selects a specialist and never spawns one.
-      const noticeText =
-        `✅ **Tác vụ đã được duyệt và đưa vào hàng đợi thực thi.**\n` +
-        `- **Mã tác vụ:** \`${taskId}\`\n` +
-        `- **Điều phối viên:** \`${dispatch.coordinator}\`\n` +
-        `- **Chuyên môn được yêu cầu:** ${dispatch.requiredCapabilities
-          .map((id) => `\`${id}\``)
-          .join(", ")}\n` +
-        `- **Trạng thái:** \`QUEUED\`. Chưa có chuyên môn nào thực thi. ` +
-        `Điều phối viên sẽ ủy thác qua cổng \`sessions_spawn\` có kiểm soát; ` +
-        `chỉ khi chuyên môn trả evidence thật, kết quả mới được đăng lên #results để nghiệm thu.`;
+      const delivered = await deliverCoordinatorNotification({
+        api,
+        destination,
+        taskId,
+        dispatch,
+      });
+      recordCoordinatorNotification({
+        taskId,
+        delivered: delivered.delivered,
+        error: delivered.error,
+      });
 
-      const officeChannelId = resolveDiscordDestination(
-        config,
-        "discordOfficeChannelId",
-        "officeChannelId",
-      );
-      const target = originThreadId || officeChannelId;
-      if (!target) {
-        // The task is truthfully QUEUED, but releasing it to the coordinator is
-        // what turns QUEUED into real execution, so an undeliverable release is
-        // reported rather than treated as dispatched.
-        api.logger?.error?.(
-          `[zink-governance] approved task queued but not released: no coordinator destination (task ${taskId})`,
-        );
-        return {
-          status: "BLOCKED",
-          error: "COORDINATOR_DESTINATION_UNRESOLVED",
-          taskId,
-          queue_status: queueStatus.status,
-        };
-      }
+      const outcome = resolveCoordinatorHandoffOutcome({
+        preExisting: null,
+        delivered: delivered.delivered,
+      });
 
-      try {
-        await sendNativePayload({
-          api,
-          to: target,
-          ...(originThreadId ? { threadId: originThreadId } : {}),
-          accountId: dispatch.coordinator,
-          payload: { text: noticeText },
-        });
-      } catch (deliveryErr) {
-        api.logger?.error?.(
-          `[zink-governance] coordinator release failed: ${deliveryErr?.message}`,
-        );
-        return {
-          status: "BLOCKED",
-          error: "COORDINATOR_RELEASE_FAILED",
-          taskId,
-          queue_status: queueStatus.status,
-        };
+      if (outcome.handoff === "NOTIFICATION_FAILED") {
+        // The queue item is truthfully QUEUED and the durable record says the
+        // notification did not land, so this is a recoverable state rather
+        // than a silent one. A duplicate approval retries the notification.
+        return { ...outcome, taskId, error: delivered.error };
       }
 
       api.logger?.info?.(
-        `[zink-governance] approved task released to coordinator ${dispatch.coordinator}: ${taskId}`,
+        `[zink-governance] approved task queued and coordinator ${dispatch.coordinator} notified: ${taskId}`,
       );
       return {
-        status: "RELEASED_TO_COORDINATOR",
+        ...outcome,
         taskId,
         coordinator: dispatch.coordinator,
         requiredCapabilities: dispatch.requiredCapabilities,
-        queue_status: queueStatus.status,
       };
     }
 

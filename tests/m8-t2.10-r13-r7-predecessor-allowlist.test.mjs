@@ -79,6 +79,13 @@ const R10_NATIVE_BOUNDARY_SHA256 =
  * NOT listed.
  */
 const R10_ENTRYPOINT_SHA256 =
+  "4bb0c1e12b4116340fb80f9cc136082200c7506fa691623bc922414f0bd92845";
+
+/**
+ * The outgoing functional-truth remediation entrypoint, admitted so the next
+ * authorized deployment of the handoff-semantics build is reachable.
+ */
+const HANDOFF_SEMANTICS_OUTGOING_ENTRYPOINT_SHA256 =
   "118db9a746a0757dbea2d15c5d8d9585a298a1ca0d235a6b13a3a8513fb2bcac";
 
 /**
@@ -418,6 +425,17 @@ test("R13 2a: the outgoing M8/T3 entrypoint is admitted as a predecessor", () =>
   );
   // The remediation pin must not accidentally equal the digest it replaced.
   assert.notEqual(R10_ENTRYPOINT_SHA256, M8T3_OUTGOING_ENTRYPOINT_SHA256);
+});
+
+test("R13 2b: the outgoing handoff-semantics entrypoint is admitted as a predecessor", () => {
+  assert.ok(
+    CONFIGURE_SOURCE.includes(HANDOFF_SEMANTICS_OUTGOING_ENTRYPOINT_SHA256),
+    `${HANDOFF_SEMANTICS_OUTGOING_ENTRYPOINT_SHA256.slice(0, 16)} must be preserved`,
+  );
+  assert.notEqual(
+    R10_ENTRYPOINT_SHA256,
+    HANDOFF_SEMANTICS_OUTGOING_ENTRYPOINT_SHA256,
+  );
 });
 
 test("R13 3: the R5 predecessors R8 added are preserved", () => {

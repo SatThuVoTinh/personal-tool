@@ -4,9 +4,14 @@ import { test } from "node:test";
 import {
   deriveGovernedDispatchTarget,
   registerTools,
+  resolveCoordinatorHandoffOutcome,
+  buildCoordinatorNotificationText,
 } from "../integrations/openclaw/plugins/zink-governance/index.mjs";
 import { createGovernanceGuard } from "../integrations/openclaw/topology/lib/guard.mjs";
-import { TOOL_POLICY } from "../integrations/openclaw/lib/policy.mjs";
+import {
+  TOOL_POLICY,
+  AGENT_SPAWN_POLICY,
+} from "../integrations/openclaw/lib/policy.mjs";
 
 import {
   R2StorageAdapter,
@@ -45,7 +50,13 @@ test("A1: a valid approved task resolves its authoritative coordinator and speci
 
 test("A2: the coordinator is never defaulted to o1 when the task names o2", () => {
   const dispatch = deriveGovernedDispatchTarget(
-    makeTask({ primary_coordinator: "o2" }),
+    makeTask({
+      primary_coordinator: "o2",
+      nodes: [
+        { node_id: "n1", agent_id: "power-bi" },
+        { node_id: "n2", agent_id: "python" },
+      ],
+    }),
   );
   assert.equal(dispatch.ok, true);
   assert.equal(dispatch.coordinator, "o2");
@@ -98,6 +109,292 @@ test("A6: a missing task is reported, never coerced into a dispatch", () => {
       error: "TASK_NOT_FOUND",
     });
   }
+});
+
+// ===========================================================================
+// Domain A2: canonical topology containment
+// ===========================================================================
+
+test("A7: o1 may reach its canonical specialists", () => {
+  const dispatch = deriveGovernedDispatchTarget(
+    makeTask({
+      primary_coordinator: "o1",
+      nodes: [
+        { node_id: "n1", agent_id: "excel" },
+        { node_id: "n2", agent_id: "sql" },
+        { node_id: "n3", agent_id: "python" },
+      ],
+    }),
+  );
+  assert.equal(dispatch.ok, true);
+  assert.deepEqual(dispatch.requiredCapabilities, ["excel", "sql", "python"]);
+});
+
+test("A8: o2 may reach its canonical specialists", () => {
+  const dispatch = deriveGovernedDispatchTarget(
+    makeTask({
+      primary_coordinator: "o2",
+      nodes: [
+        { node_id: "n1", agent_id: "power-bi" },
+        { node_id: "n2", agent_id: "python" },
+      ],
+    }),
+  );
+  assert.equal(dispatch.ok, true);
+  assert.deepEqual(dispatch.requiredCapabilities, ["power-bi", "python"]);
+});
+
+test("A9: o1 may not reach power-bi, and the graph is not narrowed to hide it", () => {
+  const dispatch = deriveGovernedDispatchTarget(
+    makeTask({
+      primary_coordinator: "o1",
+      nodes: [
+        { node_id: "n1", agent_id: "excel" },
+        { node_id: "n2", agent_id: "power-bi" },
+      ],
+    }),
+  );
+  assert.equal(dispatch.ok, false);
+  assert.equal(dispatch.error, "SPECIALIST_NOT_REACHABLE_FROM_COORDINATOR");
+  // The unreachable specialist is reported, never silently dropped, and the
+  // coordinator is never replaced with one that could reach it.
+  assert.deepEqual(dispatch.unreachable, ["power-bi"]);
+  assert.equal(dispatch.coordinator, "o1");
+  assert.equal(dispatch.requiredCapabilities, undefined);
+});
+
+test("A10: o2 may not reach sql, and is not swapped for o1", () => {
+  const dispatch = deriveGovernedDispatchTarget(
+    makeTask({
+      primary_coordinator: "o2",
+      nodes: [
+        { node_id: "n1", agent_id: "power-bi" },
+        { node_id: "n2", agent_id: "sql" },
+      ],
+    }),
+  );
+  assert.equal(dispatch.ok, false);
+  assert.equal(dispatch.error, "SPECIALIST_NOT_REACHABLE_FROM_COORDINATOR");
+  assert.deepEqual(dispatch.unreachable, ["sql"]);
+  assert.equal(dispatch.coordinator, "o2");
+});
+
+test("A11: containment uses the canonical topology table, not a local copy", () => {
+  // Every reachable pair in the canonical table must dispatch, and every
+  // forbidden pair must block. If the implementation held its own map, changing
+  // the canonical table would leave these results stale.
+  const forbidden = new Set();
+  for (const [coordinator, allowed] of Object.entries(AGENT_SPAWN_POLICY)) {
+    if (coordinator !== "o1" && coordinator !== "o2") continue;
+    for (const agentId of ["excel", "sql", "python", "power-bi"]) {
+      const dispatch = deriveGovernedDispatchTarget(
+        makeTask({
+          primary_coordinator: coordinator,
+          nodes: [{ node_id: "n", agent_id: agentId }],
+        }),
+      );
+      assert.equal(
+        dispatch.ok,
+        allowed.includes(agentId),
+        `${coordinator} -> ${agentId} must follow AGENT_SPAWN_POLICY`,
+      );
+      if (!allowed.includes(agentId))
+        forbidden.add(`${coordinator}->${agentId}`);
+    }
+  }
+  // Sanity: the table really does forbid something, so the loop is meaningful.
+  assert.ok(forbidden.size > 0, "canonical topology must forbid some pairs");
+});
+
+test("A12: main is never an executable coordinator even with a reachable DAG", () => {
+  const dispatch = deriveGovernedDispatchTarget(
+    makeTask({
+      primary_coordinator: "main",
+      nodes: [{ node_id: "n1", agent_id: "o1" }],
+    }),
+  );
+  assert.deepEqual(dispatch, {
+    ok: false,
+    error: "COORDINATOR_NOT_EXECUTABLE",
+  });
+});
+
+// ===========================================================================
+// Domain B2: handoff semantics — a Discord POST is not a handoff
+// ===========================================================================
+
+test("B3: no status claims a handoff was released", () => {
+  for (const delivered of [true, false]) {
+    for (const preExisting of [
+      null,
+      { status: "QUEUED" },
+      { status: "QUEUED", coordinatorNotification: { delivered: true } },
+      { status: "QUEUED", coordinatorNotification: { delivered: false } },
+    ]) {
+      const outcome = resolveCoordinatorHandoffOutcome({
+        preExisting,
+        delivered,
+      });
+      assert.notEqual(
+        outcome.status,
+        "RELEASED_TO_COORDINATOR",
+        "a Discord POST must never be reported as a released handoff",
+      );
+      assert.equal(outcome.status, "QUEUED");
+      assert.notEqual(outcome.handoff, "EXECUTING");
+    }
+  }
+});
+
+test("B4: a first approval that delivers reports AWAITING_COORDINATOR_PICKUP", () => {
+  assert.deepEqual(
+    resolveCoordinatorHandoffOutcome({ preExisting: null, delivered: true }),
+    {
+      status: "QUEUED",
+      queue_status: "QUEUED",
+      handoff: "AWAITING_COORDINATOR_PICKUP",
+    },
+  );
+});
+
+test("B5: a first approval whose delivery fails records the failure explicitly", () => {
+  assert.deepEqual(
+    resolveCoordinatorHandoffOutcome({ preExisting: null, delivered: false }),
+    {
+      status: "QUEUED",
+      queue_status: "QUEUED",
+      handoff: "NOTIFICATION_FAILED",
+    },
+  );
+});
+
+test("B6: a duplicate approval after a successful notification never re-notifies", () => {
+  const already = {
+    status: "QUEUED",
+    coordinatorNotification: { delivered: true },
+  };
+  assert.deepEqual(
+    resolveCoordinatorHandoffOutcome({ preExisting: already, delivered: true }),
+    {
+      status: "QUEUED",
+      queue_status: "QUEUED",
+      handoff: "ALREADY_NOTIFIED",
+    },
+  );
+});
+
+test("B7: a duplicate approval retries an undelivered notification", () => {
+  const failed = {
+    status: "QUEUED",
+    coordinatorNotification: { delivered: false },
+  };
+  assert.equal(
+    resolveCoordinatorHandoffOutcome({ preExisting: failed, delivered: true })
+      .handoff,
+    "NOTIFIED",
+    "a retry that lands must be reported as notified",
+  );
+  assert.equal(
+    resolveCoordinatorHandoffOutcome({ preExisting: failed, delivered: false })
+      .handoff,
+    "NOTIFICATION_FAILED",
+    "a retry that fails again must stay retryable, never become a success",
+  );
+  // A record with no notification field at all (an older or partially written
+  // item) is treated as not yet delivered, so it is still retryable.
+  assert.equal(
+    resolveCoordinatorHandoffOutcome({
+      preExisting: { status: "QUEUED" },
+      delivered: true,
+    }).handoff,
+    "NOTIFIED",
+  );
+});
+
+test("B8: repeated duplicates converge without ever claiming execution", () => {
+  let record = { status: "QUEUED" };
+  const seen = [];
+  for (let i = 0; i < 5; i += 1) {
+    const outcome = resolveCoordinatorHandoffOutcome({
+      preExisting: record,
+      delivered: true,
+    });
+    seen.push(outcome.handoff);
+    record = {
+      ...record,
+      coordinatorNotification: { delivered: true },
+    };
+  }
+  // The first duplicate retries, every later one is idempotent.
+  assert.deepEqual(seen, [
+    "NOTIFIED",
+    "ALREADY_NOTIFIED",
+    "ALREADY_NOTIFIED",
+    "ALREADY_NOTIFIED",
+    "ALREADY_NOTIFIED",
+  ]);
+});
+
+// ===========================================================================
+// Domain B3: the notification text is non-authoritative
+// ===========================================================================
+
+test("B9: tampering with the message text cannot change the dispatch decision", () => {
+  const task = makeTask();
+  const authoritative = deriveGovernedDispatchTarget(task);
+  assert.equal(authoritative.ok, true);
+
+  // Forge a notification claiming a different coordinator and specialists. The
+  // dispatch decision must be unchanged, because it is derived only from the
+  // task record.
+  const forged = buildCoordinatorNotificationText({
+    taskId: TASK_ID,
+    dispatch: { coordinator: "o2", requiredCapabilities: ["power-bi"] },
+  });
+  assert.ok(forged.includes("o2"));
+  assert.ok(forged.includes("power-bi"));
+  assert.deepEqual(
+    deriveGovernedDispatchTarget(task),
+    authoritative,
+    "authority must not depend on any message",
+  );
+});
+
+test("B10: the notification text tells the reader it is not authority", () => {
+  const text = buildCoordinatorNotificationText({
+    taskId: TASK_ID,
+    dispatch: { coordinator: "o1", requiredCapabilities: ["excel"] },
+  });
+  assert.ok(text.includes(TASK_ID));
+  // It must not read as a completed handoff or a started execution.
+  assert.ok(/CHƯA có chuyên môn nào thực thi/.test(text));
+  assert.ok(/KHÔNG phải bằng chứng bàn giao/.test(text));
+  assert.equal(/RELEASED_TO_COORDINATOR/.test(text), false);
+  assert.equal(/đã thực thi|đã hoàn tất/i.test(text), false);
+});
+
+test("B11: the plugin source cannot derive identity from Discord text", () => {
+  const source = fs.readFileSync(
+    new URL(
+      "../integrations/openclaw/plugins/zink-governance/index.mjs",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const start = source.indexOf("async function executeApprovedTask(");
+  const end = source.indexOf("const unregister = registerNativeGuard", start);
+  const body = source.slice(start, end);
+  // No parsing of a message payload to recover a coordinator or a DAG.
+  assert.equal(
+    /JSON\.parse\([^)]*text/.test(body),
+    false,
+    "execution must not parse message text to recover authority",
+  );
+  // The coordinator always comes from the derived dispatch, never from config.
+  assert.equal(
+    /coordinator\s*[:=]\s*(config|originThreadId)/.test(body),
+    false,
+  );
 });
 
 // ===========================================================================
@@ -779,4 +1076,147 @@ test("H3: the contracts README field list uses the real lowercase envelope statu
     ["cancelled", "error", "success", "timeout"],
     "the schema statuses are the contract truth",
   );
+});
+
+// ===========================================================================
+// Domain I: queue/release consistency in the shipped execution path
+// ===========================================================================
+
+function readExecutionPath() {
+  return fs.readFileSync(
+    new URL(
+      "../integrations/openclaw/plugins/zink-governance/index.mjs",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+}
+
+function sliceExecuteApprovedTask() {
+  const source = readExecutionPath();
+  const start = source.indexOf("async function executeApprovedTask(");
+  const end = source.indexOf("const unregister = registerNativeGuard", start);
+  assert.ok(start > 0 && end > start, "executeApprovedTask must exist");
+  return { source, body: source.slice(start, end) };
+}
+
+test("I1: the destination is preflighted BEFORE the durable queue write", () => {
+  const { body } = sliceExecuteApprovedTask();
+  const preflight = body.indexOf(
+    "const destination = resolveCoordinatorDestination(",
+  );
+  const enqueue = body.indexOf(
+    "queueStatus = enqueueApprovedTaskForExecution(",
+  );
+  assert.ok(preflight > 0, "destination preflight must exist");
+  assert.ok(enqueue > 0, "enqueue must exist");
+  assert.ok(
+    preflight < enqueue,
+    "an unresolvable destination must be refused before anything is queued, " +
+      "otherwise a task can be stranded in QUEUED with no way to notify anyone",
+  );
+  // The preflight failure path must report NOT_QUEUED so no caller can read the
+  // refusal as a queued task. The NOT_QUEUED marker must sit BEFORE the enqueue
+  // call, which is what proves the refusal is genuinely a pre-write refusal.
+  const notQueued = body.indexOf('queue_status: "NOT_QUEUED"');
+  assert.ok(notQueued > 0, "the preflight refusals must report NOT_QUEUED");
+  assert.ok(
+    notQueued < enqueue,
+    "NOT_QUEUED must be reported before any durable queue write",
+  );
+  // The destination error is surfaced verbatim from the resolver.
+  assert.ok(
+    body.includes("error: destination.error"),
+    "the unresolved destination must be surfaced, not swallowed",
+  );
+});
+
+test("I2: no durable queue write happens before the dispatch target is valid", () => {
+  const { body } = sliceExecuteApprovedTask();
+  const derived = body.indexOf("deriveGovernedDispatchTarget(task)");
+  const enqueue = body.indexOf(
+    "queueStatus = enqueueApprovedTaskForExecution(",
+  );
+  assert.ok(derived >= 0);
+  assert.ok(derived < enqueue, "the dispatch target must be derived first");
+  // The invalid-target refusal must precede the write too, and it must surface
+  // the precise reason (including topology containment) rather than a generic
+  // message.
+  const notQueued = body.indexOf('queue_status: "NOT_QUEUED"');
+  assert.ok(
+    notQueued < enqueue,
+    "an invalid dispatch target must not be queued",
+  );
+  assert.ok(
+    body.includes("error: dispatch.error"),
+    "the precise dispatch error must be surfaced",
+  );
+  assert.ok(
+    body.includes("[zink-governance] approved task not dispatched"),
+    "an undispatchable task must be logged as such",
+  );
+});
+
+test("I3: the plugin never claims the queue or starts execution", () => {
+  const { body } = sliceExecuteApprovedTask();
+  for (const forbidden of [
+    "claimTaskById",
+    "claimTask(",
+    "sessions_spawn",
+    "handleExecutionFinished(",
+    "READY_FOR_REVIEW",
+  ]) {
+    assert.equal(
+      body.includes(forbidden),
+      false,
+      `the post-approval path must not use ${forbidden}`,
+    );
+  }
+});
+
+test("I4: the delivered-notification outcome comes from the shared pure policy", () => {
+  const { body } = sliceExecuteApprovedTask();
+  // The first-approval path must consult the same pure policy the duplicate
+  // path uses, so the two cannot drift into disagreeing semantics.
+  assert.ok(
+    body.includes("resolveCoordinatorHandoffOutcome("),
+    "the execution path must use the shared handoff policy",
+  );
+  // And a notification outcome is durably recorded so a failed handoff is
+  // observable and retryable instead of implicit.
+  assert.ok(
+    body.includes("recordCoordinatorNotification("),
+    "the notification outcome must be recorded durably",
+  );
+});
+
+test("I5: recording a notification never advances the authoritative task state", () => {
+  const source = readExecutionPath();
+  const start = source.indexOf("function recordCoordinatorNotification(");
+  const end = source.indexOf("async function executeApprovedTask(", start);
+  // Strip comments first: the function documents that it does NOT touch
+  // workflow_status, and asserting on prose would prove nothing.
+  const body = source
+    .slice(start, end)
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
+  // It may annotate the queue projection, but it must not touch the ledger.
+  assert.equal(
+    /recordWorkflowEvent/.test(body),
+    false,
+    "the notification record must not write a workflow event",
+  );
+  assert.equal(
+    /workflow_status/.test(body),
+    false,
+    "the notification record must not change the authoritative workflow state",
+  );
+  assert.equal(
+    /EXECUTING|claim/.test(body),
+    false,
+    "the notification record must not claim or begin an execution",
+  );
+  // It annotates only the queue projection, and persists it.
+  assert.ok(body.includes("coordinatorNotification"));
+  assert.ok(body.includes("defaultQueueManager.save()"));
 });
