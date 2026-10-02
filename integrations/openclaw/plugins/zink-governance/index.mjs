@@ -2141,6 +2141,140 @@ function classifyNotificationAttempt({
 }
 
 /**
+ * Perform at most one coordinator notification attempt for a task.
+ *
+ * This is the SINGLE owner of the notification side effect. Both the first
+ * approval and a duplicate approval route through it, so they share one guard
+ * and the reservation is acquired exactly once, by whichever caller owns the
+ * actual send. Nesting the reservation inside a second helper would make the
+ * first path reserve and then immediately lose to itself, which is exactly the
+ * double-reserve bug this shape avoids.
+ *
+ * The reservation is claimed BEFORE the await, so a concurrent caller that
+ * arrives while the transport is in flight sees the held reservation and does
+ * not send. The `finally` surrounds the actual send plus the persistence
+ * outcome, so a throwing transport, a failed send and a failed durable write all
+ * release it, and a later approval can still retry.
+ */
+export async function runNotificationAttempt({
+  taskId,
+  notify,
+  persist,
+  reserve,
+}) {
+  const release = reserve ? reserve(taskId) : null;
+  if (reserve && !release) {
+    // Another attempt owns the send right now. Say so plainly: no transport, no
+    // persist, and no claim that a notification exists or that work started.
+    return {
+      status: "QUEUED",
+      queue_status: "QUEUED",
+      handoff: "NOTIFICATION_IN_PROGRESS",
+      notified: false,
+      persisted: false,
+    };
+  }
+
+  try {
+    const retry = await notify();
+    const delivered = Boolean(retry?.delivered);
+    // `{ ok: false }` is a truthy object, so the persistence result must be read
+    // by its own field. Coercing the object previously reported a failed write
+    // as a successful one, which is exactly the claim that must not be made.
+    const record = persist?.({
+      delivered,
+      error: retry?.error,
+      evidence: retry?.evidence ?? null,
+    });
+    const persisted = record?.ok === true;
+    return {
+      ...classifyNotificationAttempt({
+        delivered,
+        persisted,
+        // The persistence error is the diagnostic that matters here, so it is
+        // preferred over the transport error when the write itself failed. It
+        // must stay inspectable instead of being replaced by a generic message.
+        error: !delivered ? retry?.error : (record?.error ?? retry?.error),
+        evidence: retry?.evidence ?? null,
+      }),
+      notified: true,
+      // `persisted` means a delivered notification is now durably recorded, which
+      // is what lets a future duplicate short-circuit. A failed send may well
+      // have written a failure record, but that records the absence of a
+      // delivery, so it must not be reported as a persisted delivery.
+      persisted: delivered && persisted,
+    };
+  } finally {
+    // Released on every path, including a throwing transport, so a failed send
+    // cannot leave the task permanently un-notifiable.
+    release?.();
+  }
+}
+
+/**
+ * The FIRST-approval notification segment, after the durable queue write.
+ *
+ * Extracted so the shipped first-approval send is directly testable, for the
+ * same reason the duplicate branch is. The defect this closes was invisible to
+ * tests that exercised the shared helper directly: an inline first-path send
+ * would still reserve inside the helper, so only a test that drives THIS
+ * function — the one `executeApprovedTask` actually calls — can detect the
+ * missing reservation, and only a test that overlaps the await can detect the
+ * resulting duplicate.
+ *
+ * Status mapping for a first approval:
+ *  - delivered and durably recorded: QUEUED + AWAITING_COORDINATOR_PICKUP.
+ *  - delivered but the record failed: NOTIFICATION_STATE_UNCERTAIN, with the
+ *    transport evidence, because the message exists.
+ *  - delivery failed: NOTIFICATION_FAILED, retryable.
+ *  - another attempt already owns the send: NOTIFICATION_IN_PROGRESS, and no
+ *    claim that a notification exists.
+ */
+export async function runFirstApprovalNotification({
+  taskId,
+  coordinator,
+  requiredCapabilities,
+  notify,
+  persist,
+  reserve,
+}) {
+  const attempt = await runNotificationAttempt({
+    taskId,
+    notify,
+    persist,
+    reserve,
+  });
+
+  if (
+    attempt.handoff === "NOTIFICATION_IN_PROGRESS" ||
+    attempt.handoff === "NOTIFICATION_FAILED" ||
+    attempt.handoff === "NOTIFICATION_STATE_UNCERTAIN"
+  ) {
+    // Reported verbatim. The queue write above is truthful in every case, so the
+    // caller learns exactly what did and did not happen.
+    return { ...attempt, taskId };
+  }
+
+  return {
+    // A delivered, durably recorded notification on the first approval means the
+    // task is queued and awaiting a coordinator pickup, which is the strongest
+    // claim this path can make. It is NOT a released handoff and NOT a start of
+    // execution.
+    status: "QUEUED",
+    queue_status: "QUEUED",
+    handoff: "AWAITING_COORDINATOR_PICKUP",
+    taskId,
+    notified: attempt.notified,
+    persisted: attempt.persisted,
+    ...(attempt.delivery_evidence
+      ? { delivery_evidence: attempt.delivery_evidence }
+      : {}),
+    coordinator,
+    requiredCapabilities,
+  };
+}
+
+/**
  * The duplicate-approval branch of the post-approval path.
  *
  * This is extracted so the branch that actually runs is directly testable with
@@ -2156,10 +2290,8 @@ function classifyNotificationAttempt({
  *  - A record that is no longer an `QUEUED` handoff (EXECUTING, or any terminal
  *    queue state) is left completely alone: no transport, no queue rewrite, no
  *    workflow event. Its authoritative state is preserved verbatim.
- *  - At most one notification attempt is in flight per task at a time, so two
- *    overlapping duplicate approvals cannot both transition undelivered -> send.
- *  - Everything else retries the notification exactly once, and the reported
- *    outcome distinguishes failed, persisted, and uncertain.
+ *  - Everything else delegates to the single shared attempt, so this path and
+ *    the first-approval path cannot both send for the same task.
  *
  * `RELEASED_TO_COORDINATOR` is not representable here either: the highest claim
  * is a delivered notification still awaiting a coordinator pickup.
@@ -2201,52 +2333,8 @@ export async function runDuplicateApprovalHandoff({
     };
   }
 
-  // Claim the attempt BEFORE the send, so an overlapping duplicate that would
-  // otherwise observe the same undelivered record cannot also send.
-  const release = reserve ? reserve(taskId) : null;
-  if (reserve && !release) {
-    // Another attempt holds the reservation. Say so plainly: no send, no
-    // persist, and no claim that a notification exists.
-    return {
-      status: "QUEUED",
-      queue_status: "QUEUED",
-      handoff: "NOTIFICATION_IN_PROGRESS",
-      notified: false,
-      persisted: false,
-    };
-  }
-
-  try {
-    const retry = await notify();
-    const delivered = Boolean(retry?.delivered);
-    // `{ ok: false }` is a truthy object, so the persistence result must be read
-    // by its own field. Coercing the object previously reported a failed write
-    // as a successful one, which is exactly the claim that must not be made.
-    const record = persist?.({
-      delivered,
-      error: retry?.error,
-      evidence: retry?.evidence ?? null,
-    });
-    const persisted = record?.ok === true;
-    return {
-      ...classifyNotificationAttempt({
-        delivered,
-        persisted,
-        error: retry?.error,
-        evidence: retry?.evidence ?? null,
-      }),
-      notified: true,
-      // `persisted` means a delivered notification is now durably recorded, which
-      // is what lets a future duplicate short-circuit. A failed send may well
-      // have written a failure record, but that records the absence of a
-      // delivery, so it must not be reported as a persisted delivery.
-      persisted: delivered && persisted,
-    };
-  } finally {
-    // Released on every path, including a throwing transport, so a failed send
-    // cannot leave the task permanently un-notifiable.
-    release?.();
-  }
+  // One shared attempt owner: the reservation is acquired exactly once here.
+  return runNotificationAttempt({ taskId, notify, persist, reserve });
 }
 
 /**
@@ -4680,39 +4768,38 @@ export default {
         return { ...queueStatus, taskId };
       }
 
-      const delivered = await deliverCoordinatorNotification({
-        api,
-        destination,
-        taskId,
-        dispatch,
-      });
-      recordCoordinatorNotification({
-        taskId,
-        delivered: delivered.delivered,
-        error: delivered.error,
-      });
-
-      const outcome = resolveCoordinatorHandoffOutcome({
-        preExisting: null,
-        delivered: delivered.delivered,
-      });
-
-      if (outcome.handoff === "NOTIFICATION_FAILED") {
-        // The queue item is truthfully QUEUED and the durable record says the
-        // notification did not land, so this is a recoverable state rather
-        // than a silent one. A duplicate approval retries the notification.
-        return { ...outcome, taskId, error: delivered.error };
-      }
-
-      api.logger?.info?.(
-        `[zink-governance] approved task queued and coordinator ${dispatch.coordinator} notified: ${taskId}`,
-      );
-      return {
-        ...outcome,
+      // The first approval owns the send through the SAME shared attempt as a
+      // duplicate. Previously it sent inline with no reservation, so a duplicate
+      // arriving while the transport was awaiting could claim the reservation
+      // and send a second message. One guard now covers both callers, and the
+      // reservation is acquired exactly once, here.
+      const attempt = await runFirstApprovalNotification({
         taskId,
         coordinator: dispatch.coordinator,
         requiredCapabilities: dispatch.requiredCapabilities,
-      };
+        notify: () =>
+          deliverCoordinatorNotification({
+            api,
+            destination,
+            taskId,
+            dispatch,
+          }),
+        persist: ({ delivered, error, evidence }) =>
+          recordCoordinatorNotification({
+            taskId,
+            delivered,
+            error,
+            evidence,
+          }),
+        reserve: reserveCoordinatorNotificationAttempt,
+      });
+
+      if (attempt.handoff === "AWAITING_COORDINATOR_PICKUP") {
+        api.logger?.info?.(
+          `[zink-governance] approved task queued and coordinator ${dispatch.coordinator} notified: ${taskId}`,
+        );
+      }
+      return attempt;
     }
 
     const unregister = registerNativeGuard(paths.root, {

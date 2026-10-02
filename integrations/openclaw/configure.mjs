@@ -769,6 +769,14 @@ async function main() {
       // digest is deliberately NOT listed: it is the current build and is
       // accepted by content comparison.
       "36ed858c74dd09423d0afc74ff2fc8eb589843f163fb8ffccf8bcc912f097ce9",
+      // Unified notification guard: the outgoing entrypoint, byte-proven as the
+      // packaged build before the first approval was moved onto the same
+      // reservation as a duplicate, closing the window where a duplicate could
+      // claim the guard and send a second message while the first transport
+      // call was still in flight. Admitted here so the next authorized
+      // deployment is reachable. The new digest is deliberately NOT listed: it
+      // is the current build and is accepted by content comparison.
+      "0940eb77d5796f29d819331e92a7c00c4f9230eb1185dce3de7b524a37e2f7c2",
     ],
   );
   assertRegularOrMissing(output.identityKeyPath);

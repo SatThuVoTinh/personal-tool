@@ -7,6 +7,7 @@ import {
   resolveCoordinatorHandoffOutcome,
   buildCoordinatorNotificationText,
   runDuplicateApprovalHandoff,
+  runFirstApprovalNotification,
   reserveCoordinatorNotificationAttempt,
   isCoordinatorNotificationAttemptInFlight,
   NOTIFICATION_ATTEMPT_TTL_MS,
@@ -1183,8 +1184,8 @@ test("I4: the delivered-notification outcome comes from the shared pure policy",
   // The first-approval path must consult the same pure policy the duplicate
   // path uses, so the two cannot drift into disagreeing semantics.
   assert.ok(
-    body.includes("resolveCoordinatorHandoffOutcome("),
-    "the execution path must use the shared handoff policy",
+    body.includes("runFirstApprovalNotification("),
+    "the execution path must use the shared notification attempt owner",
   );
   // And a notification outcome is durably recorded so a failed handoff is
   // observable and retryable instead of implicit.
@@ -1988,4 +1989,350 @@ test("K10: the shipped path supplies a reservation and the real primitive", () =
   );
   // Persistence evidence must be threaded to the durable record.
   assert.ok(body.includes("evidence"));
+});
+
+// ===========================================================================
+// Domain L: first approval and duplicate share ONE notification guard
+// ===========================================================================
+//
+// The reservation previously protected duplicate-vs-duplicate only. The first
+// approval sent inline with no reservation, so a duplicate arriving while the
+// transport was still awaiting could claim the reservation and send a second
+// message.
+//
+// These drive runFirstApprovalNotification, which is what executeApprovedTask
+// actually calls for a first approval, overlapped against the real duplicate
+// branch across the async network boundary with a genuine barrier. An earlier
+// draft called runNotificationAttempt directly and therefore still reserved
+// inside the helper, so it passed even with the first-path defect present; these
+// assertions are written against the shipped first-approval function precisely so
+// that defect cannot hide.
+
+const L_TASK = "f".repeat(64);
+
+/** A transport that blocks until open() is called, or timeoutMs elapses. */
+function blockingTransport({ result, timeoutMs = 500 } = {}) {
+  let open;
+  const opened = new Promise((resolve) => {
+    open = resolve;
+  });
+  const calls = [];
+  const notify = async () => {
+    calls.push({ at: calls.length });
+    await Promise.race([
+      opened,
+      new Promise((resolve) => setTimeout(resolve, timeoutMs)),
+    ]);
+    return (
+      result ?? {
+        delivered: true,
+        evidence: { message_id: "m-1", channel_id: "c-1" },
+      }
+    );
+  };
+  notify.calls = calls;
+  notify.open = open;
+  return notify;
+}
+
+const firstApprovalCall = ({ notify, persist, reserve }) =>
+  runFirstApprovalNotification({
+    taskId: L_TASK,
+    coordinator: "o1",
+    requiredCapabilities: ["excel"],
+    notify,
+    persist,
+    reserve,
+  });
+
+test("L1/K11: a duplicate arriving while the FIRST send is in flight does not send", async () => {
+  const registry = makeRegistry();
+  const notify = blockingTransport();
+  const persist = spyPersistReturning({ ok: true });
+  const reserve = (id) =>
+    reserveCoordinatorNotificationAttempt(id, { registry });
+
+  // First approval: the queue write has happened, so the shipped first-approval
+  // segment starts and its transport blocks across the await.
+  const firstPromise = firstApprovalCall({ notify, persist, reserve });
+
+  // Let the first attempt claim the reservation and enter the send.
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(
+    isCoordinatorNotificationAttemptInFlight(L_TASK, { registry }),
+    true,
+    "the first attempt must hold the reservation while its transport is in flight",
+  );
+
+  // Second approval arrives while the first is blocked. It observes the existing
+  // QUEUED item and enters the duplicate branch.
+  const second = await runDuplicateApprovalHandoff({
+    taskId: L_TASK,
+    preExisting: {
+      status: "QUEUED",
+      coordinatorNotification: { delivered: false },
+    },
+    notify,
+    persist,
+    reserve,
+  });
+
+  assert.equal(
+    second.handoff,
+    "NOTIFICATION_IN_PROGRESS",
+    "the duplicate must not send while the first attempt is in flight",
+  );
+  assert.equal(second.notified, false);
+  assert.equal(second.persisted, false);
+  assert.notEqual(second.status, "RELEASED_TO_COORDINATOR");
+
+  // Let the first send finish.
+  notify.open();
+  const first = await firstPromise;
+  assert.equal(first.handoff, "AWAITING_COORDINATOR_PICKUP");
+
+  assert.equal(
+    notify.calls.length,
+    1,
+    "only the first approval may emit a notification for this task",
+  );
+});
+
+test("L2/K12: one first approval plus four overlapping duplicates yields one send", async () => {
+  const registry = makeRegistry();
+  const notify = blockingTransport();
+  const persist = spyPersistReturning({ ok: true });
+  const reserve = (id) =>
+    reserveCoordinatorNotificationAttempt(id, { registry });
+
+  const firstPromise = firstApprovalCall({ notify, persist, reserve });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const existing = {
+    status: "QUEUED",
+    coordinatorNotification: { delivered: false },
+  };
+  const duplicates = await Promise.all(
+    [0, 1, 2, 3].map(() =>
+      runDuplicateApprovalHandoff({
+        taskId: L_TASK,
+        preExisting: existing,
+        notify,
+        persist,
+        reserve,
+      }),
+    ),
+  );
+
+  for (const duplicate of duplicates) {
+    assert.equal(
+      duplicate.handoff,
+      "NOTIFICATION_IN_PROGRESS",
+      "no duplicate may send while the first attempt holds the reservation",
+    );
+    assert.equal(duplicate.notified, false);
+    assert.notEqual(duplicate.status, "RELEASED_TO_COORDINATOR");
+  }
+
+  notify.open();
+  const first = await firstPromise;
+
+  assert.equal(first.handoff, "AWAITING_COORDINATOR_PICKUP");
+  assert.equal(
+    notify.calls.length,
+    1,
+    "exactly one caller may own the notification attempt",
+  );
+  assert.equal(
+    duplicates.filter((d) => d.handoff === "NOTIFICATION_IN_PROGRESS").length,
+    4,
+  );
+});
+
+test("L3/K13: a failed first notification releases the reservation for a later retry", async () => {
+  const registry = makeRegistry();
+  const persist = spyPersistReturning({ ok: true });
+  const reserve = (id) =>
+    reserveCoordinatorNotificationAttempt(id, { registry });
+
+  const first = await firstApprovalCall({
+    notify: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return {
+        delivered: false,
+        error: "COORDINATOR_NOTIFICATION_FAILED: down",
+      };
+    },
+    persist,
+    reserve,
+  });
+
+  assert.equal(first.handoff, "NOTIFICATION_FAILED");
+  assert.equal(
+    isCoordinatorNotificationAttemptInFlight(L_TASK, { registry }),
+    false,
+    "a failed first notification must not leak the reservation",
+  );
+
+  // A later duplicate must be allowed to retry.
+  let retried = 0;
+  const retry = await runDuplicateApprovalHandoff({
+    taskId: L_TASK,
+    preExisting: {
+      status: "QUEUED",
+      coordinatorNotification: { delivered: false },
+    },
+    notify: async () => {
+      retried += 1;
+      return {
+        delivered: true,
+        evidence: { message_id: "m-2", channel_id: "c-2" },
+      };
+    },
+    persist,
+    reserve,
+  });
+
+  assert.equal(retried, 1, "the later duplicate must be able to retry");
+  assert.equal(retry.handoff, "NOTIFIED");
+  assert.equal(retry.persisted, true);
+});
+
+test("L4/K14: a first notification whose record fails to persist releases the reservation", async () => {
+  const registry = makeRegistry();
+  const reserve = (id) =>
+    reserveCoordinatorNotificationAttempt(id, { registry });
+
+  const first = await firstApprovalCall({
+    notify: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return {
+        delivered: true,
+        evidence: { message_id: "m-uncertain", channel_id: "c" },
+      };
+    },
+    persist: spyPersistReturning({
+      ok: false,
+      error: "QUEUE_STORAGE_WRITE_FAILED",
+    }),
+    reserve,
+  });
+
+  // The message exists; the durable record does not. Reported as uncertainty,
+  // never as a safe success and never as "nothing was sent".
+  assert.equal(first.handoff, "NOTIFICATION_STATE_UNCERTAIN");
+  assert.equal(first.persisted, false);
+  assert.equal(first.notified, true);
+  assert.deepEqual(first.delivery_evidence, {
+    message_id: "m-uncertain",
+    channel_id: "c",
+  });
+  assert.equal(
+    isCoordinatorNotificationAttemptInFlight(L_TASK, { registry }),
+    false,
+    "a failed persistence must still release the reservation",
+  );
+  // The persistence diagnostic must survive to the caller rather than being
+  // replaced by a generic message.
+  assert.match(first.error, /QUEUE_STORAGE_WRITE_FAILED/);
+
+  // A later duplicate is allowed to retry, because the record never landed.
+  let retried = 0;
+  const retry = await runDuplicateApprovalHandoff({
+    taskId: L_TASK,
+    preExisting: {
+      status: "QUEUED",
+      coordinatorNotification: { delivered: false },
+    },
+    notify: async () => {
+      retried += 1;
+      return {
+        delivered: true,
+        evidence: { message_id: "m-3", channel_id: "c-3" },
+      };
+    },
+    persist: spyPersistReturning({ ok: true }),
+    reserve,
+  });
+  assert.equal(retried, 1, "the later duplicate must be allowed to retry");
+  assert.equal(retry.handoff, "NOTIFIED");
+});
+
+test("L5: neither path double-reserves the same attempt", async () => {
+  const registry = makeRegistry();
+  let reserveCalls = 0;
+  const reserve = (id) => {
+    reserveCalls += 1;
+    return reserveCoordinatorNotificationAttempt(id, { registry });
+  };
+  const notify = spyTransport({
+    delivered: true,
+    evidence: { message_id: "m", channel_id: "c" },
+  });
+
+  await firstApprovalCall({
+    notify,
+    persist: spyPersistReturning({ ok: true }),
+    reserve,
+  });
+  assert.equal(reserveCalls, 1, "one reservation per first-approval attempt");
+
+  reserveCalls = 0;
+  await runDuplicateApprovalHandoff({
+    taskId: L_TASK,
+    preExisting: {
+      status: "QUEUED",
+      coordinatorNotification: { delivered: false },
+    },
+    notify,
+    persist: spyPersistReturning({ ok: true }),
+    reserve,
+  });
+  assert.equal(reserveCalls, 1, "one reservation per duplicate attempt");
+});
+
+test("L6: the shipped execution path routes both callers through the shared owner", () => {
+  const source = fs.readFileSync(
+    new URL(
+      "../integrations/openclaw/plugins/zink-governance/index.mjs",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const start = source.indexOf("async function executeApprovedTask(");
+  const end = source.indexOf("const unregister = registerNativeGuard", start);
+  const body = source.slice(start, end);
+  const flattened = body.replace(/\s+/g, " ");
+
+  assert.ok(
+    body.includes("runFirstApprovalNotification("),
+    "the first approval must use the shipped first-approval segment",
+  );
+  assert.ok(
+    body.includes("runDuplicateApprovalHandoff("),
+    "the duplicate must use the duplicate branch",
+  );
+  assert.ok(
+    body.includes("reserve: reserveCoordinatorNotificationAttempt"),
+    "both must install the reservation primitive",
+  );
+  assert.equal(
+    (body.match(/reserve: reserveCoordinatorNotificationAttempt/g) ?? [])
+      .length,
+    2,
+    "both callers must install the reservation",
+  );
+  // Neither caller may send inline: the transport only appears as an injected
+  // callback to the shared owner.
+  assert.equal(
+    (body.match(/deliverCoordinatorNotification[(]/g) ?? []).length,
+    2,
+    "the transport must only appear inside the two injected notify callbacks",
+  );
+  assert.equal(
+    (flattened.match(/await deliverCoordinatorNotification[(]/g) ?? []).length,
+    0,
+    "neither caller may await the transport directly",
+  );
+  assert.ok(flattened.includes("AWAITING_COORDINATOR_PICKUP"));
 });

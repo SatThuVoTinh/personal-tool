@@ -79,6 +79,13 @@ const R10_NATIVE_BOUNDARY_SHA256 =
  * NOT listed.
  */
 const R10_ENTRYPOINT_SHA256 =
+  "4a957b246533ab8e55f88172daa3667ae06cda10dc1d1e8c0858a18e31895663";
+
+/**
+ * The outgoing entrypoint before the first-approval/duplicate notification
+ * guard was unified, admitted so the next authorized deployment is reachable.
+ */
+const FIRST_APPROVAL_GUARD_OUTGOING_ENTRYPOINT_SHA256 =
   "0940eb77d5796f29d819331e92a7c00c4f9230eb1185dce3de7b524a37e2f7c2";
 
 /**
@@ -472,6 +479,17 @@ test("R13 2d: the outgoing persistence-truth entrypoint is admitted", () => {
   assert.notEqual(
     R10_ENTRYPOINT_SHA256,
     PERSISTENCE_TRUTH_OUTGOING_ENTRYPOINT_SHA256,
+  );
+});
+
+test("R13 2e: the outgoing first-approval-guard entrypoint is admitted", () => {
+  assert.ok(
+    CONFIGURE_SOURCE.includes(FIRST_APPROVAL_GUARD_OUTGOING_ENTRYPOINT_SHA256),
+    `${FIRST_APPROVAL_GUARD_OUTGOING_ENTRYPOINT_SHA256.slice(0, 16)} must be preserved`,
+  );
+  assert.notEqual(
+    R10_ENTRYPOINT_SHA256,
+    FIRST_APPROVAL_GUARD_OUTGOING_ENTRYPOINT_SHA256,
   );
 });
 
