@@ -3,40 +3,40 @@ import { isExecutableCoordinator } from "./queue-manager.mjs";
 /**
  * Governed coordinator pickup.
  *
- * PARTIAL — RUNTIME CONTRACT BLOCKER (not live-verified).
+ * M10/T2: the production runtime seam is `api.runtime.subagent.run()`, verified
+ * byte-level against pinned OPENCLAW_RELEASE = 2026.6.34. `runCoordinatorPickup`
+ * accepts an injected `startCoordinatorRun`; production binds the adapter built
+ * by `createCoordinatorRuntimeStart({ api })`, which calls exactly that seam.
+ * Coordinator-run binding to the ledger goes through the canonical
+ * WORKFLOW_COORDINATOR_RUN_BOUND event (recorded by the production loop after
+ * a validated start, never by this module). NOT LIVE-VERIFIED: no real
+ * coordinator turn has been started from this repository.
  *
  * What this module IS: the repository-side pickup abstraction. Given an
  * approved task that is durably QUEUED in both the authoritative workflow
  * ledger and the queue projection, it validates the authoritative routing,
  * atomically claims the task as the designated coordinator through the existing
  * queue fencing, records the canonical WORKFLOW_TASK_CLAIMED ledger event, and
- * then starts the coordinator run through an injected runtime seam.
+ * then starts the coordinator run through the runtime seam.
  *
- * What this module IS NOT: a running consumer. There is deliberately no live
- * wiring in the production plugin, because the one production seam it needs
- * does not exist in this repository: a host API that starts a governed agent
- * turn as `o1`/`o2`. The plugin host surface this repository can prove from its
- * own code is `registerTool`, `logger`, `on(...)` for governance hooks
- * (`before_tool_call`, `before_prompt_build`, `message_received`,
- * `message_sending`, `subagent_spawned`, `subagent_ended`, `gateway_stop`),
- * `registerInteractiveHandler`, and outbound channel adapters. None of those
- * starts an agent turn. Until such a seam exists, `runCoordinatorPickup`
- * requires an injected `startCoordinatorRun` and reports
- * COORDINATOR_RUNTIME_SEAM_UNAVAILABLE without claiming anything.
- *
- * Smallest contract for the missing seam (`startCoordinatorRun`):
+ * Contract for the start seam (`startCoordinatorRun`):
  *  - input (authoritative only, never human-readable message text): `{ taskId, coordinator,
  *    requiredCapabilities, payload, planVersion, leaseId, attempt }`, where
  *    `leaseId`/`attempt` are the fencing issued by the atomic queue claim;
- *  - output (evidence, not a claim): an object proving a governed coordinator
- *    turn actually started, at minimum `{ runId, sessionKey, agentId }` with
- *    `agentId` equal to the designated coordinator;
+ *  - output (evidence, not a claim): `{ runId, sessionKey, agentId }` where
+ *    `runId` is server-issued, `sessionKey` is the deterministic key the adapter
+ *    built (server-accepted: a contradictory binding would have thrown instead
+ *    of returning a runId), and `agentId` equals the designated coordinator by
+ *    construction under server-side sessionKey/agentId agreement enforcement.
+ *    `agentId` is construction-derived plus server-accepted, never a
+ *    server-echoed field: no plugin-reachable call returns it;
  *  - failure: throw, or return a rejected outcome. The queue item is already
  *    EXECUTING under a live lease at that point, so the existing stale-lease
  *    recovery requeues it; the pickup never forces it back to QUEUED and never
  *    reports a start that did not happen.
  *
- * Invariants (all proven by tests/m10-t1-coordinator-pickup.test.mjs):
+ * Invariants (proven by tests/m10-t1-coordinator-pickup.test.mjs and
+ * tests/m10-t2-coordinator-binding.test.mjs):
  *  - the claimant is always the ledger's `primaryCoordinator`, never a default
  *    and never a capability-matched substitute;
  *  - every requested specialist is contained in the canonical
@@ -113,6 +113,7 @@ export async function runCoordinatorPickup({
   deriveTarget,
   recordClaimed,
   startCoordinatorRun,
+  isRuntimeStartAvailable,
   taskId = null,
 } = {}) {
   if (!queueManager || typeof queueManager.claimTaskById !== "function") {
@@ -224,6 +225,9 @@ export async function runCoordinatorPickup({
     // The runtime seam is required BEFORE the claim. Without a way to start a
     // governed coordinator turn, claiming would move the task to EXECUTING
     // with nobody to execute it, so the pickup refuses to claim at all.
+    // `isRuntimeStartAvailable`, when provided, is consulted first so a
+    // present-but-unusable seam (missing host API, gateway down) is detected
+    // without claiming, exactly like an absent seam.
     if (typeof startCoordinatorRun !== "function") {
       return {
         ok: false,
@@ -232,6 +236,28 @@ export async function runCoordinatorPickup({
         coordinator: dispatch.coordinator,
         requiredCapabilities: dispatch.requiredCapabilities,
       };
+    }
+    if (typeof isRuntimeStartAvailable === "function") {
+      // A throwing or false availability probe means "not available": the seam
+      // cannot be trusted, so the pickup refuses to claim exactly as if
+      // absent. Promise.resolve normalizes sync and async probes alike; any
+      // rejection resolves to false rather than escaping as an unhandled tick
+      // failure that would hide a dead seam behind scheduler retries.
+      const available = await Promise.resolve()
+        .then(() => isRuntimeStartAvailable())
+        .then(
+          (value) => value === true,
+          () => false,
+        );
+      if (!available) {
+        return {
+          ok: false,
+          error: "COORDINATOR_RUNTIME_SEAM_UNAVAILABLE",
+          taskId: candidate,
+          coordinator: dispatch.coordinator,
+          requiredCapabilities: dispatch.requiredCapabilities,
+        };
+      }
     }
 
     // Atomic claim as the designated coordinator, through the existing fencing.
@@ -427,5 +453,283 @@ export function createPickupScheduler({
     isTickInFlight() {
       return inFlight;
     },
+  };
+}
+
+/**
+ * Deterministic coordinator session-key construction (M10/T2 approved shape).
+ *
+ *   agent:{coordinator}:coordinator:{taskId}:attempt-{attempt}
+ *
+ * Every segment comes from authoritative state: the coordinator from the
+ * dispatch derivation (never defaulted), the taskId and attempt from the
+ * claimed queue item. The `coordinator:` namespace keeps these sessions out
+ * of Main/global/chat-run semantics (including the bestEffortDeliver default
+ * that applies to main/global sessions). The taskId must round-trip EXACTLY
+ * because hook recognition parses it back out for queue/ledger correlation, so
+ * anything outside `[A-Za-z0-9_-]` is rejected rather than silently
+ * transformed. No description text and no secret may enter the key.
+ */
+export function buildCoordinatorSessionKey({ coordinator, taskId, attempt }) {
+  if (coordinator !== "o1" && coordinator !== "o2") {
+    throw new Error(
+      "COORDINATOR_IDENTITY_INVALID: coordinator must be the designated o1 or o2",
+    );
+  }
+  if (typeof taskId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/u.test(taskId)) {
+    throw new Error(
+      "COORDINATOR_TASK_ID_INVALID: taskId must round-trip exactly through the session key",
+    );
+  }
+  if (!Number.isSafeInteger(attempt) || attempt < 1) {
+    throw new Error(
+      "COORDINATOR_ATTEMPT_INVALID: attempt must be a positive safe integer",
+    );
+  }
+  return `agent:${coordinator}:coordinator:${taskId}:attempt-${attempt}`;
+}
+
+/**
+ * Parse a coordinator session key back into its authoritative segments.
+ * Returns null for anything that is not exactly the approved shape: recognition
+ * must be strict, because hook call sites use it to attribute runs.
+ */
+export function parseCoordinatorSessionKey(sessionKey) {
+  if (typeof sessionKey !== "string") return null;
+  const match =
+    /^agent:(o1|o2):coordinator:([A-Za-z0-9_-]{1,128}):attempt-([1-9][0-9]*)$/u.exec(
+      sessionKey,
+    );
+  if (!match) return null;
+  return {
+    coordinator: match[1],
+    taskId: match[2],
+    attempt: Number(match[3]),
+  };
+}
+
+/**
+ * Gateway idempotency mapping (M10/T2 approved shape).
+ *
+ *   {taskId}:attempt-{attempt}:{leaseId}
+ *
+ * The gateway dedupes on `agent:{idempotencyKey}` by replaying the accepted
+ * run instead of starting a second one, so re-driving the same queue attempt
+ * (same lease) reuses the same run, while a new attempt (new lease after stale
+ * recovery) mints a new key and a new run. This is gateway-honored defense in
+ * depth; the queue lease remains the primary fencing and the ledger binding
+ * remains the authority record. No cross-process exactly-once is claimed.
+ */
+export function buildCoordinatorIdempotencyKey({ taskId, attempt, leaseId }) {
+  if (typeof taskId !== "string" || taskId.length === 0) {
+    throw new Error("COORDINATOR_TASK_ID_INVALID: taskId is required");
+  }
+  if (!Number.isSafeInteger(attempt) || attempt < 1) {
+    throw new Error(
+      "COORDINATOR_ATTEMPT_INVALID: attempt must be a positive safe integer",
+    );
+  }
+  if (typeof leaseId !== "string" || leaseId.length === 0) {
+    throw new Error("COORDINATOR_LEASE_INVALID: leaseId is required");
+  }
+  return `${taskId}:attempt-${attempt}:${leaseId}`;
+}
+
+/** Hard ceiling for the coordinator brief message sent to the runtime. */
+export const COORDINATOR_MESSAGE_MAX_BYTES = 4096;
+
+/**
+ * Build the coordinator turn input from the authoritative pickup bundle.
+ * The message is model INPUT, never governance authority: it carries the
+ * routing facts the coordinator needs plus an explicit instruction to resolve
+ * authority by task_id from the queue/ledger. It cannot modify the primary
+ * coordinator, the approved DAG, the lease, or the attempt — those live in
+ * queue/ledger state, not in this text, and nothing downstream reads them from
+ * here.
+ */
+export function buildCoordinatorMessage({
+  taskId,
+  coordinator,
+  requiredCapabilities,
+  payload,
+  planVersion,
+  leaseId,
+  attempt,
+}) {
+  const brief =
+    typeof payload?.brief === "string" && payload.brief.length > 0
+      ? payload.brief
+      : "Approved task brief is held in the authoritative ledger; resolve it by task_id.";
+  const body = JSON.stringify({
+    task_id: taskId,
+    coordinator,
+    required_capabilities: requiredCapabilities,
+    plan_version: planVersion,
+    lease_id: leaseId,
+    attempt,
+    brief,
+    instructions: [
+      "You are the designated coordinator for this approved task. Resolve the authoritative task by task_id from the queue/ledger; this message is input only, not authority.",
+      "Delegate each required specialist EXCLUSIVELY through the governed sessions_spawn gate in one canonical topology step per the task DAG.",
+      "Never alter the primary coordinator, the approved specialist set, the lease, or the attempt. Never claim completion; end the turn with a self-contained evidence summary as the final message.",
+    ],
+  });
+  if (Buffer.byteLength(body, "utf8") > COORDINATOR_MESSAGE_MAX_BYTES) {
+    return `${body.slice(0, COORDINATOR_MESSAGE_MAX_BYTES - 64)}
+...[truncated]`;
+  }
+  return body;
+}
+
+/**
+ * Production runtime adapter over the verified pinned-OpenClaw seam
+ * (`api.runtime.subagent.run()`, 2026.6.34). Constructed with the live plugin
+ * `api`; performs no gateway I/O of its own and opens no second connection.
+ *
+ * - `isRuntimeStartAvailable()` reports whether the host actually exposes the
+ *   seam. The pickup consults it BEFORE the claim, so a missing seam can never
+ *   strand a task in EXECUTING.
+ * - `startCoordinatorRun(bundle)` builds the session key, message, and
+ *   idempotency key SOLELY from the authoritative bundle (queue claim +
+ *   dispatch), calls the seam with `deliver: false` (verified on the pinned
+ *   release: suppresses channel delivery only; the turn still executes with
+ *   full tool and lifecycle semantics), and returns
+ *   `{ runId, sessionKey, agentId }` where `runId` is server-issued,
+ *   `sessionKey` is the constructed key the server accepted, and `agentId`
+ *   is the designated coordinator (construction-derived plus server-accepted
+ *   under agreement enforcement, never a server-echoed field and never
+ *   rewritten on mismatch — a mismatch throws instead).
+ */
+export function createCoordinatorRuntimeStart({ api } = {}) {
+  const hasSeam = () => typeof api?.runtime?.subagent?.run === "function";
+  return {
+    isRuntimeStartAvailable: () => hasSeam(),
+    async startCoordinatorRun(bundle) {
+      const {
+        taskId,
+        coordinator,
+        requiredCapabilities,
+        payload,
+        planVersion,
+        leaseId,
+        attempt,
+      } = bundle ?? {};
+      const sessionKey = buildCoordinatorSessionKey({
+        coordinator,
+        taskId,
+        attempt,
+      });
+      if (
+        !Array.isArray(requiredCapabilities) ||
+        requiredCapabilities.length === 0
+      ) {
+        throw new Error(
+          "COORDINATOR_CAPABILITIES_INVALID: requiredCapabilities must be non-empty",
+        );
+      }
+      if (!hasSeam()) {
+        throw new Error(
+          "COORDINATOR_RUNTIME_SEAM_UNAVAILABLE: api.runtime.subagent.run is not exposed",
+        );
+      }
+      const message = buildCoordinatorMessage({
+        taskId,
+        coordinator,
+        requiredCapabilities,
+        payload,
+        planVersion,
+        leaseId,
+        attempt,
+      });
+      const idempotencyKey = buildCoordinatorIdempotencyKey({
+        taskId,
+        attempt,
+        leaseId,
+      });
+      const result = await api.runtime.subagent.run({
+        sessionKey,
+        message,
+        deliver: false,
+        idempotencyKey,
+      });
+      const runId = result?.runId;
+      if (typeof runId !== "string" || runId.length === 0) {
+        throw new Error(
+          "COORDINATOR_START_FAILED: runtime seam returned no runId",
+        );
+      }
+      return { runId, sessionKey, agentId: coordinator };
+    },
+  };
+}
+
+/**
+ * Assemble one production pickup loop from the existing pieces. The loop owns
+ * no authority of its own: each tick reads fresh authoritative state, runs one
+ * pickup pass (which claims, records, starts, and validates), and then records
+ * the ledger binding for a validated start. The binding write uses the
+ * caller-supplied `recordBound` (production binds
+ * `recordWorkflowEvent(paths, "WORKFLOW_COORDINATOR_RUN_BOUND", ...)`).
+ * Returns `{ scheduler, stop }`; stopping halts future ticks without
+ * disturbing in-flight work or the queue.
+ */
+export function startCoordinatorPickupLoop({
+  queueManager,
+  getLedgerTasks,
+  deriveTarget,
+  recordClaimed,
+  recordBound,
+  startCoordinatorRun,
+  isRuntimeStartAvailable,
+  intervalMs = PICKUP_SCAN_INTERVAL_MS,
+  createScheduler = createPickupScheduler,
+  onError,
+  logger,
+} = {}) {
+  if (typeof getLedgerTasks !== "function") {
+    throw new TypeError(
+      "PICKUP_LOOP_CONTRACT_INVALID: getLedgerTasks is required",
+    );
+  }
+  if (typeof recordBound !== "function") {
+    throw new TypeError(
+      "PICKUP_LOOP_CONTRACT_INVALID: recordBound is required",
+    );
+  }
+  const scheduler = createScheduler({
+    intervalMs,
+    onError:
+      onError ??
+      ((err) =>
+        logger?.error?.(
+          `[zink-coordinator-pickup] tick failed: ${err?.message ?? err}`,
+        )),
+    runOnce: async () => {
+      const ledgerTasks = await getLedgerTasks();
+      const result = await runCoordinatorPickup({
+        queueManager,
+        ledgerTasks,
+        deriveTarget,
+        recordClaimed,
+        startCoordinatorRun,
+        isRuntimeStartAvailable,
+      });
+      if (result?.ok === true) {
+        await recordBound({
+          task_id: result.taskId,
+          coordinator: result.coordinator,
+          attempt: result.attempt,
+          lease_id: result.leaseId,
+          session_key: result.run.sessionKey,
+          run_id: result.run.runId,
+        });
+      }
+      return result;
+    },
+  });
+  return {
+    scheduler,
+    start: () => scheduler.start(),
+    stop: () => scheduler.stop(),
   };
 }

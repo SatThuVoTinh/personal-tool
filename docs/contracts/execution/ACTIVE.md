@@ -1,3 +1,62 @@
+ACTIVE.md -- M10/T2-R1 Coordinator Session Binding (STATUS NOTE -- NOT THE CONTRACT)
+
+> Implementation of M10/T2-R1 is owner-authorized with the execution contract
+> at docs/contracts/coordinator-session-binding.md (see PLAN.md). This file
+> remains non-authoritative: PLAN.md does not point at it for M10/T2, so by
+> the execution-contract protocol it grants nothing. The RED design revision
+> below is retained as the reviewed package. The M8/T2.2-R19 record further
+> below is retained unchanged as history.
+
+Task ID: M10/T2
+Plan Revision: M10/T2-R1
+Planning Readiness: APPROVED (see PLAN.md; contract is the design document)
+Execution Authorization: YES (see PLAN.md; implementation only, not live execution)
+Owner Approval: EXPLICIT -- owner approved M10/T2-R1 implementation per the
+  frozen RED design contract, scope items 1-10 with listed exclusions
+Execution Contract: docs/contracts/coordinator-session-binding.md (NOT this file)
+Design Contract: docs/contracts/coordinator-session-binding.md
+PLAN Pointer: PLAN.md §3 (M10 row, NOT STARTED) and §8 M10/T2 entry (DRAFT/NO)
+
+## Objective
+
+Prepare owner review of the smallest safe design binding a gateway-started
+coordinator run (`api.runtime.subagent.run()`, verified byte-level on pinned
+OPENCLAW_RELEASE = 2026.6.34) to an already-claimed queue task attempt,
+without fabricating delegation lineage and without weakening any governed seam.
+
+## RED decision (verbatim from the design contract)
+
+RED DECISION: The existing event model has no safe event that can bind a
+gateway-started coordinator run to an already claimed queue task attempt. A new
+additive event WORKFLOW_COORDINATOR_RUN_BOUND is therefore required.
+Implementing it changes shared session identity authority because findSession()
+and its consumers must distinguish bound coordinator identity from Main/root
+identity. This change requires explicit owner authorization under AGENTS.md §7
+and the repository's governance/architecture authority rules. No implementation
+is authorized by this design package itself.
+
+## Allowed scope (this package only)
+
+RED analysis, contract text, PLAN.md lifecycle entries, this revision block.
+Explicitly: no production code, no tests, no wiring, no scheduler, no gateway
+interaction, no deployment, no pin change.
+
+## Excluded scope (requires separate future authorization)
+
+Implementation of WORKFLOW_COORDINATOR_RUN_BOUND, reducer/findSession/consumer
+changes, spawn-gate and run-end consumer updates, production runtime wiring,
+result ingestion, fabricated lineage of any kind, new agents/queues/services,
+topology changes, OpenClaw pin upgrade.
+
+## Handoff
+
+Owner reviews docs/contracts/coordinator-session-binding.md. If the owner
+authorizes implementation, a new Plan Revision is assigned, this file is
+replaced under the execution-contract protocol, and PLAN.md moves to
+APPROVED/YES only then. Silence is not approval.
+
+---
+
 ACTIVE.md -- M8/T2.2-R19 Prompt-Build Liveness Exemption (final revision)
 
 Task ID: M8/T2.2

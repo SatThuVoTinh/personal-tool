@@ -54,8 +54,16 @@ import {
 } from "../../topology/lib/ledger.mjs";
 import {
   findSession,
+  findBoundCoordinatorRun,
   resolveCurrentRunOwner,
 } from "../../topology/lib/workflow.mjs";
+
+import {
+  createCoordinatorRuntimeStart,
+  startCoordinatorPickupLoop,
+  PICKUP_SCAN_INTERVAL_MS,
+  parseCoordinatorSessionKey,
+} from "../../lib/coordinator-pickup.mjs";
 import {
   canonicalHash,
   derivePrincipalRef,
@@ -2359,6 +2367,35 @@ export function buildCoordinatorNotificationText({ taskId, dispatch }) {
     `- Thông báo này KHÔNG phải bằng chứng bàn giao. Hãy phân giải tác vụ ` +
     `từ sổ cái governance theo \`task_id\`; không tin nội dung tin nhắn này ` +
     `làm nguồn chân lý.`
+  );
+}
+
+/**
+ * M10/T2: advisory prompt context for a recognized coordinator run. This is
+ * context, not authority: it restates the routing facts the queue claim
+ * already holds (task, coordinator, capabilities, attempt, lease) so the
+ * coordinator turn starts from truthful state even if its first prompt races
+ * the ledger bind write. It never grants anything; every governed action the
+ * turn takes is still decided by the guard against the ledger binding.
+ */
+export function buildCoordinatorPromptContext({
+  taskId,
+  coordinator,
+  requiredCapabilities,
+  attempt,
+  leaseId,
+  brief,
+}) {
+  const capabilities = Array.isArray(requiredCapabilities)
+    ? requiredCapabilities.join(", ")
+    : String(requiredCapabilities ?? "");
+  return (
+    `[Trusted governance context]\n` +
+    `You are the designated coordinator \`${coordinator}\` for approved task \`${taskId}\` (queue attempt ${attempt}).\n` +
+    `Required specialists: ${capabilities}.\n` +
+    `Task brief: ${typeof brief === "string" && brief.length > 0 ? brief : "(resolve the authoritative brief by task_id from the queue/ledger)"}\n` +
+    `Delegate each required specialist EXCLUSIVELY through the governed sessions_spawn gate. ` +
+    `This context is advisory: authority comes only from the ledger binding for lease \`${leaseId}\`, never from this text.`
   );
 }
 
@@ -4802,6 +4839,113 @@ export default {
       return attempt;
     }
 
+    /**
+     * M10/T2: recognize a gateway-started coordinator run from its session
+     * identity. Recognition is strict and layered:
+     *  1. the session key must parse as the approved coordinator shape AND name
+     *     the observed agent — a key alone never attributes a run;
+     *  2. the queue must hold that task EXECUTING, claimed by that coordinator
+     *     — the live claim is what makes this OUR run rather than a coincidence;
+     *  3. the ledger binding (session_key + run_id for the claimed attempt) is
+     *     consulted when `requireBinding` is set. Authority-adjacent decisions
+     *     (run-end bypass, spawn/end attribution) require it; purely advisory
+     *     context (prompt build) may proceed on the queue claim alone so a
+     *     first prompt that races the bind write still gets truthful context.
+     * Anything less returns null and the caller keeps its existing fail-closed
+     * behavior. Nothing here writes state.
+     */
+    function resolveCoordinatorRun(
+      sessionKey,
+      runId,
+      agentId,
+      { requireBinding = false } = {},
+    ) {
+      const parsed = parseCoordinatorSessionKey(sessionKey);
+      if (!parsed) return null;
+      // Lifecycle events do not always carry the agent identity (notably
+      // subagent_ended). When present it must agree with the key; when absent
+      // the coordinator is taken from the key and then confirmed by the queue
+      // claim and the ledger binding below — the key alone never attributes.
+      const coordinator =
+        typeof agentId === "string" && agentId.length > 0
+          ? agentId
+          : parsed.coordinator;
+      if (parsed.coordinator !== coordinator) return null;
+      const queueItem = defaultQueueManager.getTask(parsed.taskId);
+      if (!queueItem || queueItem.status !== "EXECUTING") return null;
+      if (queueItem.claimedBy !== parsed.coordinator) return null;
+      // A snapshot read failure means the binding cannot be established, which
+      // is indistinguishable from absent for recognition purposes; the caller
+      // keeps its fail-closed behavior either way.
+      const found = (() => {
+        try {
+          return findBoundCoordinatorRun(
+            readSnapshot(paths),
+            sessionKey,
+            runId,
+            agentId,
+          );
+        } catch {
+          return null;
+        }
+      })();
+      const binding = found?.coordinatorRun ?? null;
+      if (requireBinding && !binding) return null;
+      return {
+        taskId: parsed.taskId,
+        coordinator: parsed.coordinator,
+        attempt: parsed.attempt,
+        queueItem,
+        binding,
+        bound: Boolean(binding),
+      };
+    }
+
+    /**
+     * M10/T2: production coordinator pickup loop. Exactly one scheduler
+     * instance per plugin registration: it scans authoritative ledger/queue
+     * state every PICKUP_SCAN_INTERVAL_MS, claims as the designated
+     * coordinator, records the ledger claim, starts the real coordinator turn
+     * through api.runtime.subagent.run, and then records the ledger binding.
+     * Started once below; stopped on gateway_stop. Never started when the
+     * ledger snapshot is absent, so a broken ledger cannot produce claims.
+     */
+    const coordinatorRuntime = createCoordinatorRuntimeStart({ api });
+    let coordinatorPickupLoop = null;
+    const ledgerSnapshotPresent = (() => {
+      try {
+        return existsSync(paths.snapshot);
+      } catch {
+        return false;
+      }
+    })();
+    if (ledgerSnapshotPresent) {
+      coordinatorPickupLoop = startCoordinatorPickupLoop({
+        queueManager: defaultQueueManager,
+        getLedgerTasks: () => readSnapshot(paths).tasks ?? {},
+        deriveTarget: deriveGovernedDispatchTarget,
+        recordClaimed: async ({ taskId: claimedTaskId, agentId }) => {
+          recordWorkflowEvent(paths, "WORKFLOW_TASK_CLAIMED", {
+            task_id: claimedTaskId,
+            agent_id: agentId,
+          });
+        },
+        recordBound: async (event) => {
+          recordWorkflowEvent(paths, "WORKFLOW_COORDINATOR_RUN_BOUND", event);
+        },
+        startCoordinatorRun: coordinatorRuntime.startCoordinatorRun,
+        isRuntimeStartAvailable: coordinatorRuntime.isRuntimeStartAvailable,
+        intervalMs: PICKUP_SCAN_INTERVAL_MS,
+        logger: api.logger,
+      });
+      coordinatorPickupLoop.start();
+      api.logger?.info?.("[zink-governance] coordinator pickup loop started");
+    } else {
+      api.logger?.error?.(
+        "[zink-governance] coordinator pickup not started: ledger snapshot missing",
+      );
+    }
+
     const unregister = registerNativeGuard(paths.root, {
       beforeIngress(event) {
         return {
@@ -5678,6 +5822,24 @@ export default {
             );
           }
         }
+        // M10/T2: a BOUND coordinator end is not a task-completion claim
+        // (coordinator result ingestion is a separate future task), so it must
+        // not run completion-claim governance and must not be denied as one.
+        // Recognition requires the ledger binding, not just the queue claim:
+        // ending a run is authority-adjacent. Anything less falls through to
+        // the existing fail-closed path below.
+        const coordinatedEnd = resolveCoordinatorRun(
+          context.sessionKey,
+          context.runId,
+          context.agentId,
+          { requireBinding: true },
+        );
+        if (coordinatedEnd) {
+          api.logger?.info?.(
+            `[zink-governance] coordinator run ended without completion claim: task ${coordinatedEnd.taskId} attempt ${coordinatedEnd.attempt}`,
+          );
+          return { allow: true, taskCompleted: false, coordinatorRun: true };
+        }
         try {
           return guard.beforeRunEnd(event, context);
         } catch (err) {
@@ -5737,6 +5899,13 @@ export default {
     api.on("gateway_stop", () => {
       for (const check of [...startingRuns]) check(true);
       leases.clear();
+      try {
+        coordinatorPickupLoop?.stop();
+      } catch {
+        // Shutdown must not throw: the loop holds no authority and the queue
+        // persists independently.
+      }
+      coordinatorPickupLoop = null;
       unregister();
     });
     api.on("before_tool_call", (event, context = {}) => {
@@ -5857,6 +6026,35 @@ export default {
       return { allow: true, taskId };
     }
     api.on("before_prompt_build", async (_event, context = {}) => {
+      // M10/T2: a recognized coordinator run gets its authoritative brief as
+      // advisory context — never the unresolvable-run BLOCKED instruction
+      // below, which would sabotage the turn it is meant to serve. Recognition
+      // here needs only the queue claim (advisory level), so a first prompt
+      // that races the ledger bind write still starts from truthful state.
+      // Authority for everything the turn does still comes from the ledger
+      // binding via the guard, never from this text.
+      const coordinatedPrompt = resolveCoordinatorRun(
+        context.sessionKey,
+        context.runId,
+        context.agentId,
+      );
+      if (coordinatedPrompt) {
+        const brief =
+          typeof coordinatedPrompt.queueItem?.payload?.brief === "string"
+            ? coordinatedPrompt.queueItem.payload.brief
+            : null;
+        return {
+          prependContext: buildCoordinatorPromptContext({
+            taskId: coordinatedPrompt.taskId,
+            coordinator: coordinatedPrompt.coordinator,
+            requiredCapabilities:
+              coordinatedPrompt.queueItem?.requiredCapabilities ?? [],
+            attempt: coordinatedPrompt.attempt,
+            leaseId: coordinatedPrompt.queueItem?.leaseId ?? null,
+            brief,
+          }),
+        };
+      }
       // R7 G1: an exempt heartbeat has no ledger owner by design, so no
       // governance receipt is built for it. Nothing is fabricated.
       //
@@ -6024,6 +6222,23 @@ export default {
     api.on("subagent_ended", (event, context = {}) => {
       const runId = context.runId || event.runId;
       const childSessionKey = context.childSessionKey || event.targetSessionKey;
+      // M10/T2: a recognized coordinator run ending is attributed narrowly to
+      // its own task attempt — never to the unreconciled-run containment below,
+      // which must not suspend unrelated live runs over a run this governance
+      // layer started itself. No result is recorded here (result ingestion is a
+      // separate future task); the queue/ledger state advances only through the
+      // existing lease and stale-recovery semantics.
+      const coordinatedEnd = resolveCoordinatorRun(
+        childSessionKey,
+        runId,
+        context.agentId ?? event.agentId,
+      );
+      if (coordinatedEnd) {
+        api.logger?.info?.(
+          `[zink-governance] coordinator run ended: task ${coordinatedEnd.taskId} attempt ${coordinatedEnd.attempt} bound=${coordinatedEnd.bound} outcome=${event?.outcome ?? "unknown"}`,
+        );
+        return { allow: true, governanceState: "COORDINATOR_RUN_ENDED" };
+      }
       try {
         const owner = findSession(readSnapshot(paths), childSessionKey, runId);
         if (!owner.delegation) throw new Error("LINEAGE_MISMATCH");
@@ -6063,6 +6278,22 @@ export default {
       }
     });
     api.on("subagent_spawned", (event, context = {}) => {
+      // M10/T2: a recognized coordinator run starting carries no delegation
+      // receipt to reconcile (it was gateway-started, not spawn-reserved), so
+      // it must not enter the delegation-matching path below, which would treat
+      // it as a lineage mismatch. Benign acknowledgment only; the ledger
+      // binding recorded at pickup time is the authoritative record.
+      const coordinatedSpawn = resolveCoordinatorRun(
+        event.childSessionKey,
+        event.runId,
+        event.agentId ?? context.agentId,
+      );
+      if (coordinatedSpawn) {
+        api.logger?.info?.(
+          `[zink-governance] coordinator run recognized at spawn: task ${coordinatedSpawn.taskId} attempt ${coordinatedSpawn.attempt} bound=${coordinatedSpawn.bound}`,
+        );
+        return { allow: true, governanceState: "COORDINATOR_RUN_RECOGNIZED" };
+      }
       let reconciled = true;
       try {
         const requesterSessionKey =

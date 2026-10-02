@@ -1095,6 +1095,11 @@ export function governancePluginFiles() {
     "excel-writer.mjs",
     "authority.mjs",
     "queue-manager.mjs",
+    // M10/T2: the production plugin imports the coordinator pickup engine
+    // (claim validation, runtime adapter, loop assembly). It travels with the
+    // deployed tree like every other lib/ module; its only relative import is
+    // ./queue-manager.mjs, which resolves unchanged beside it.
+    "coordinator-pickup.mjs",
     "artifact-validator.mjs",
     "decision-ledger.mjs",
     "file-lock.mjs",

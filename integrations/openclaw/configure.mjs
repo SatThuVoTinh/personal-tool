@@ -777,6 +777,13 @@ async function main() {
       // deployment is reachable. The new digest is deliberately NOT listed: it
       // is the current build and is accepted by content comparison.
       "0940eb77d5796f29d819331e92a7c00c4f9230eb1185dce3de7b524a37e2f7c2",
+      // Coordinator session binding (M10/T2): the outgoing entrypoint,
+      // byte-proven as the packaged build before WORKFLOW_COORDINATOR_RUN_BOUND,
+      // the findSession binding arm, the bound-coordinator spawn rule, and the
+      // production pickup loop were added. Admitted here so the next authorized
+      // deployment is reachable. The new digest is deliberately NOT listed: it
+      // is the current build and is accepted by content comparison.
+      "4a957b246533ab8e55f88172daa3667ae06cda10dc1d1e8c0858a18e31895663",
     ],
   );
   assertRegularOrMissing(output.identityKeyPath);

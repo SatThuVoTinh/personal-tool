@@ -36,6 +36,7 @@ Evidence Level: NONE | LOCAL-VERIFIED | REMOTE-BACKED
 | M6 — Zink Skill Store                                                      | `COMPLETE`    | `REMOTE-BACKED`  | M6/T1-R4 task commit is remotely verified; governance closeout is recorded separately.                                                                                      |
 | M7 — Zink Tools + OpenClaw integration + V1 hardening                      | `COMPLETE`    | `REMOTE-BACKED`  | M7/T1-R19, M7/T2-R12, M7/T3-R16, M7/T4-R10, and M7/T5-R13 complete; runtime governance remediation, Discord 7-bot integration, and Zink tools specialist policies verified. |
 | M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Integration | `IN PROGRESS` | `LOCAL-VERIFIED` | M8/T1 is complete; M8/T2.2 R4/R5/R6 are implemented; M8/T2.2-R7 (heartbeat admission, boundary diagnosability, apply safety) is in progress. Deployment is not authorized.  |
+| M10 - Governed coordinator runtime binding | `IN PROGRESS` | `LOCAL-VERIFIED` | M10/T2-R1 implementation explicitly owner-authorized; execution contract is `docs/contracts/coordinator-session-binding.md`. |
 
 The former self-built L&SC Data Plant is replaced by a **logical external
 infrastructure flow**, not another repository module. Forecasting, optimization,
@@ -1367,6 +1368,35 @@ Not live-verified: no live OpenClaw runtime, no live Discord card delivery, no
 deployment, and no real pgvector/Ollama end-to-end run. Those were not attempted
 from this environment and are not claimed.
 
+### M10/T2 - Coordinator session binding (owner-authorized implementation)
+
+Status: `IN PROGRESS`
+Task: `M10/T2 - bind a gateway-started coordinator run to its claimed queue attempt`
+Plan Revision: `M10/T2-R1`
+Planning Readiness: `APPROVED`
+Execution Authorization: `YES`
+Execution Contract: `docs/contracts/coordinator-session-binding.md`
+Evidence: `LOCAL-VERIFIED`
+Owner Approval: EXPLICIT - Owner approved implementation of M10/T2-R1 exactly
+per the frozen RED design contract, scope items 1-10 only, with the listed
+exclusions (no new agents/queue/broker/service/memory, no pin upgrade, no
+result-ingestion redesign, no fabricated lineage, no topology change).
+Approval covers implementation only, not live execution.
+
+M10/T2 does not reopen any closed task. The RED analysis established
+`SESSION_BINDING_STATUS = ADDITIVE_EVENT_REQUIRED`: no existing workflow event
+can safely bind a gateway-started coordinator run (`api.runtime.subagent.run()`,
+verified byte-level on pinned `OPENCLAW_RELEASE = 2026.6.34`) to an
+already-claimed queue attempt, because `findSession()` resolves only root
+sessions and spawn-bound delegations. The implemented event is
+`WORKFLOW_COORDINATOR_RUN_BOUND`; result ingestion stays a separate future
+task. Coordinator result ingestion and live execution remain not verified: no
+real coordinator turn has been started from this repository.
+
+Implementation evidence: `npm run verify` green (JS 1058 tests / 1016 pass /
+0 fail / 42 skipped; Python 131 passed; lint/format/repo-check clean);
+focused M10 suites pass. See CHANGELOG.md Unreleased entry.
+
 ## 9. Deferred beyond V1
 
 Unless separately approved:
@@ -1389,5 +1419,6 @@ Unless separately approved:
 | Five Stack             | Functional processing layers; agents may serve more than one stack.                                                 |
 | L&SC Data Plant        | Logical external-infrastructure/data-compute flow only; no platform runtime.                                        |
 | Model artifacts        | Heavy artifacts stay external; repository keeps only lightweight metadata/config/evaluation references when needed. |
+| Coordinator binding    | M10/T2-R1 implementation owner-authorized (`docs/contracts/coordinator-session-binding.md`); additive event required and implemented; live execution and result ingestion remain future work. |
 | OpenClaw               | External runtime/orchestrator and task-mode classifier.                                                             |
 | n8n                    | Deterministic workflow/trigger/schedule plumbing.                                                                   |

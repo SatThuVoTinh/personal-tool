@@ -79,6 +79,13 @@ const R10_NATIVE_BOUNDARY_SHA256 =
  * NOT listed.
  */
 const R10_ENTRYPOINT_SHA256 =
+  "fa243547f04675685d06bfadd64fa11602fe071fe764a84d328414e7b53dfe89";
+
+/**
+ * The outgoing entrypoint before coordinator session binding (M10/T2),
+ * admitted so the next authorized deployment is reachable.
+ */
+const SESSION_BINDING_OUTGOING_ENTRYPOINT_SHA256 =
   "4a957b246533ab8e55f88172daa3667ae06cda10dc1d1e8c0858a18e31895663";
 
 /**
@@ -468,6 +475,17 @@ test("R13 2c: the outgoing duplicate-notification-fix entrypoint is admitted", (
   assert.notEqual(
     R10_ENTRYPOINT_SHA256,
     DUPLICATE_NOTIFY_FIX_OUTGOING_ENTRYPOINT_SHA256,
+  );
+});
+
+test("R13 2f: the outgoing session-binding entrypoint is admitted", () => {
+  assert.ok(
+    CONFIGURE_SOURCE.includes(SESSION_BINDING_OUTGOING_ENTRYPOINT_SHA256),
+    `${SESSION_BINDING_OUTGOING_ENTRYPOINT_SHA256.slice(0, 16)} must be preserved`,
+  );
+  assert.notEqual(
+    R10_ENTRYPOINT_SHA256,
+    SESSION_BINDING_OUTGOING_ENTRYPOINT_SHA256,
   );
 });
 

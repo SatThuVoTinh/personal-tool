@@ -14,7 +14,11 @@ import {
   SCHEMA_VERSION,
 } from "./canonical.mjs";
 import { readSnapshot, recordWorkflowEvent, BUDGETS } from "./ledger.mjs";
-import { findSession, ownerRunIds } from "./workflow.mjs";
+import {
+  findSession,
+  findBoundCoordinatorRun,
+  ownerRunIds,
+} from "./workflow.mjs";
 import {
   validateContract,
   validateContractSchema,
@@ -681,7 +685,9 @@ export function createGovernanceGuard({
     requireQuotaDep();
     const owner = findSession(getSnapshot(), sessionKey, runId);
     assert(
-      (owner.delegation?.agent_id ?? owner.task.root_agent_id) === agentId,
+      (owner.delegation?.agent_id ??
+        owner.coordinatorRun?.coordinator ??
+        owner.task.root_agent_id) === agentId,
       "LINEAGE_MISMATCH",
     );
     return quotaTelemetry.resolveRuntimeModel({ store: quota, agentId, now });
@@ -827,6 +833,13 @@ export function createGovernanceGuard({
         context.sessionKey,
         context.runId,
       );
+      // M10/T2: a bound coordinator end that reaches the guard directly (past
+      // the plugin's recognition path) is denied explicitly. Coordinator ends
+      // are never task-completion claims here — completion ingestion is a
+      // separate future task — so there is no valid branch for them in this
+      // function, only a clear denial instead of a misleading comparison
+      // against Main/root.
+      if (owner.coordinatorRun) fail("LINEAGE_MISMATCH");
       assert(
         (owner.delegation?.agent_id ?? owner.task.root_agent_id) ===
           context.agentId,
@@ -969,53 +982,73 @@ export function createGovernanceGuard({
       let owner;
       try {
         owner = findSession(snapshot, context.sessionKey, context.runId);
-      } catch {
-        const candidates = Object.entries(snapshot.tasks).filter(([, task]) => {
-          const entry = task.continuations?.[context.runId];
-          return (
-            entry && !entry.started && entry.session_key === context.sessionKey
+      } catch (findErr) {
+        // M10/T2: a gateway-started coordinator run owns no root or delegation
+        // session, so findSession cannot resolve it. The ledger binding recorded
+        // at pickup time is the only legitimate alternative identity: it must
+        // match session, run AND agent exactly, otherwise the original failure
+        // stands and admission stays refused.
+        const bound = findBoundCoordinatorRun(
+          snapshot,
+          context.sessionKey,
+          context.runId,
+          context.agentId,
+        );
+        if (bound) {
+          owner = bound;
+        } else {
+          void findErr;
+          const candidates = Object.entries(snapshot.tasks).filter(
+            ([, task]) => {
+              const entry = task.continuations?.[context.runId];
+              return (
+                entry &&
+                !entry.started &&
+                entry.session_key === context.sessionKey
+              );
+            },
           );
-        });
-        assert(candidates.length === 1, "EXECUTION_STATE_UNKNOWN");
-        const [task_id, task] = candidates[0];
-        const entry = task.continuations?.[context.runId];
-        assert(
-          entry &&
-            context.inputProvenance?.kind === "inter_session" &&
-            context.inputProvenance.sourceTool === "subagent_announce" &&
-            context.inputProvenance.sourceSessionKey ===
-              entry.source_session_key,
-          "LINEAGE_MISMATCH",
-        );
-        // E13: Cryptographically bind inter-session trust to the trigger sender event & accepted payload digest
-        const trigger = Object.values(task.delegations || {}).find(
-          (run) => run.native_run_id === entry.trigger_run_id,
-        );
-        if (entry.trigger_run_id !== entry.previous_run_id) {
+          assert(candidates.length === 1, "EXECUTION_STATE_UNKNOWN");
+          const [task_id, task] = candidates[0];
+          const entry = task.continuations?.[context.runId];
           assert(
-            trigger && trigger.accepted_payload_digest,
+            entry &&
+              context.inputProvenance?.kind === "inter_session" &&
+              context.inputProvenance.sourceTool === "subagent_announce" &&
+              context.inputProvenance.sourceSessionKey ===
+                entry.source_session_key,
             "LINEAGE_MISMATCH",
           );
-          if (context.inputProvenance.senderDigest) {
+          // E13: Cryptographically bind inter-session trust to the trigger sender event & accepted payload digest
+          const trigger = Object.values(task.delegations || {}).find(
+            (run) => run.native_run_id === entry.trigger_run_id,
+          );
+          if (entry.trigger_run_id !== entry.previous_run_id) {
             assert(
-              context.inputProvenance.senderDigest ===
-                trigger.accepted_payload_digest,
+              trigger && trigger.accepted_payload_digest,
               "LINEAGE_MISMATCH",
             );
+            if (context.inputProvenance.senderDigest) {
+              assert(
+                context.inputProvenance.senderDigest ===
+                  trigger.accepted_payload_digest,
+                "LINEAGE_MISMATCH",
+              );
+            }
           }
+          const next = recordWorkflowEvent(
+            paths,
+            "WORKFLOW_CONTINUATION_STARTED",
+            {
+              task_id,
+              next_run_id: context.runId,
+              session_key: context.sessionKey,
+              source_session_key: context.inputProvenance.sourceSessionKey,
+              agent_id: context.agentId,
+            },
+          );
+          owner = findSession(next, context.sessionKey, context.runId);
         }
-        const next = recordWorkflowEvent(
-          paths,
-          "WORKFLOW_CONTINUATION_STARTED",
-          {
-            task_id,
-            next_run_id: context.runId,
-            session_key: context.sessionKey,
-            source_session_key: context.inputProvenance.sourceSessionKey,
-            agent_id: context.agentId,
-          },
-        );
-        owner = findSession(next, context.sessionKey, context.runId);
       }
       // M7-020: this is RUN ADMISSION, not work authorization. A native run may
       // enter a task whether or not the work has been approved; the approval
@@ -1027,9 +1060,13 @@ export function createGovernanceGuard({
         ) && owner.task.brief_state === "ACTIVE",
         "INVALID_STATE_TRANSITION",
       );
+      // M10/T2: a bound coordinator resolves to its bound coordinator identity,
+      // never to Main/root. The fallback order is load-bearing: delegation first,
+      // then binding, then root.
       assert(
-        (owner.delegation?.agent_id ?? owner.task.root_agent_id) ===
-          context.agentId,
+        (owner.delegation?.agent_id ??
+          owner.coordinatorRun?.coordinator ??
+          owner.task.root_agent_id) === context.agentId,
         "INVALID_STATE_TRANSITION",
       );
       assert(
@@ -1110,9 +1147,13 @@ export function createGovernanceGuard({
           owner = findSession(snapshot, context.sessionKey, context.runId);
         }
         const task = owner.task;
+        // M10/T2: same load-bearing fallback order as admission: a bound
+        // coordinator resolves to its bound coordinator identity, never to
+        // Main/root.
         assert(
-          (owner.delegation?.agent_id ?? task.root_agent_id) ===
-            context.agentId,
+          (owner.delegation?.agent_id ??
+            owner.coordinatorRun?.coordinator ??
+            task.root_agent_id) === context.agentId,
           "LINEAGE_MISMATCH",
         );
         // M7-020: a spawn reservation is a POST-approval event, matching the
@@ -1239,6 +1280,11 @@ export function createGovernanceGuard({
             node.stack_id === owner.delegation.stack_id,
             "UNAUTHORIZED_TARGET",
           );
+        // M10/T2: a bound coordinator is root-like (top of its subtree, no
+        // parent delegation), so like a root spawn it carries no parent-stack
+        // constraint. Target containment stays enforced by the canonical
+        // AGENT_SPAWN_POLICY allowlist above, which is the same table the
+        // dispatch derivation already enforced before the claim.
         const handoff = {
           ...proposal,
           task_id: owner.task_id,

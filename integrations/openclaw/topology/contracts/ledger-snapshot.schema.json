@@ -349,6 +349,54 @@
                   },
                   "maxProperties": 72
                 },
+                "coordinator_runs": {
+                  "description": "M10/T2: gateway-started coordinator run bindings, keyed by queue attempt. OPTIONAL and never required, so every pre-binding snapshot still validates under additionalProperties:false. Each entry binds exactly one attempt to the runtime identity the gateway issued for it; attempt isolation is enforced by the reducer, not by this vocabulary.",
+                  "type": "object",
+                  "additionalProperties": false,
+                  "patternProperties": {
+                    "^[1-9][0-9]*$": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "task_id",
+                        "coordinator",
+                        "attempt",
+                        "lease_id",
+                        "session_key",
+                        "run_id"
+                      ],
+                      "properties": {
+                        "task_id": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        },
+                        "coordinator": {
+                          "type": "string",
+                          "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                        },
+                        "attempt": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "lease_id": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 256
+                        },
+                        "session_key": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 256
+                        },
+                        "run_id": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 256
+                        }
+                      }
+                    }
+                  }
+                },
                 "continuations": {
                   "type": "object",
                   "additionalProperties": false,

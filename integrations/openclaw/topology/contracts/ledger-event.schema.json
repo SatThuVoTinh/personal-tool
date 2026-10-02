@@ -48,6 +48,7 @@
         "WORKFLOW_USER_APPROVAL_DECIDED",
         "WORKFLOW_APPROVAL_REQUESTED",
         "WORKFLOW_TASK_CLAIMED",
+        "WORKFLOW_COORDINATOR_RUN_BOUND",
         "WORKFLOW_USER_QUESTION_RECORDED",
         "WORKFLOW_USER_ANSWER_RECORDED",
         "WORKFLOW_CANCELLED",
@@ -985,6 +986,61 @@
                 "description": "Open-world agent identity. The ledger records what executed, including ad-hoc identities outside the governed spawn topology; execution authority is enforced by the guard and reducer, not by this vocabulary. A closed enum here makes legitimate history unreadable without preventing anything.",
                 "type": "string",
                 "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "WORKFLOW_COORDINATOR_RUN_BOUND"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "task_id",
+              "coordinator",
+              "attempt",
+              "lease_id",
+              "session_key",
+              "run_id"
+            ],
+            "properties": {
+              "task_id": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "coordinator": {
+                "description": "Designated coordinator. Only o1/o2 may coordinate executable work; the reducer enforces this independently of the schema vocabulary.",
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+              },
+              "attempt": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "lease_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "session_key": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "run_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
               }
             }
           }

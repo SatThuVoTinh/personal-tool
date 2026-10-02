@@ -8,6 +8,23 @@ All notable, validated changes to Personal Tool are documented here.
 
 ### Added
 
+- Implemented owner-authorized M10/T2 coordinator session binding and real
+  coordinator runtime pickup: approved tasks now move from durable `QUEUED`
+  through atomic coordinator claim, a real governed `o1`/`o2` turn started via
+  the verified pinned-OpenClaw seam (`api.runtime.subagent.run()` with
+  `deliver: false`), and an attempt-scoped ledger binding
+  (`WORKFLOW_COORDINATOR_RUN_BOUND`), without fabricating delegation lineage.
+  Bound coordinators resolve distinctly from Main/root everywhere (admission,
+  spawn gate with canonical `AGENT_SPAWN_POLICY` containment, run-model
+  resolution, reservation parentage), receive advisory brief context instead
+  of the unresolvable-run BLOCKED instruction, end without false completion
+  claims, and are recognized (never contained) by the subagent lifecycle
+  hooks. The production pickup loop runs single-flight on the existing plugin
+  lifecycle with clean gateway-stop shutdown. Coordinator result ingestion
+  remains a separate future task; a completed coordinator run leaves the task
+  to existing lease/stale-recovery semantics rather than recording an
+  unvalidated result. Not live-verified: no real coordinator turn has been
+  started from this repository.
 - Completed locally verified M8/T3 Governed Long-Term Memory Learning Loop:
   made the Zink user-teaching lifecycle work end-to-end without changing the
   three-module architecture, seven-agent topology, governance model, security

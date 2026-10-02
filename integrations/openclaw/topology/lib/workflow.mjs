@@ -107,15 +107,69 @@ export function findSession(
             (delegation.previous_native_run_ids ?? []).includes(runId)))
       )
         matches.push({ task_id, task, delegation });
+    // M10/T2: bound coordinator runs resolve as a THIRD owner shape carrying
+    // coordinatorRun and deliberately NO delegation object. Consumers must
+    // handle this shape explicitly: falling back to
+    // `owner.delegation?.X ?? task.root_Y` would silently authorize a bound
+    // coordinator as Main/root, which is never correct.
+    for (const coordinatorRun of Object.values(task.coordinator_runs ?? {}))
+      if (
+        coordinatorRun.session_key === sessionKey &&
+        coordinatorRun.run_id === runId
+      )
+        matches.push({ task_id, task, coordinatorRun });
   }
   requireCondition(matches.length === 1, "EXECUTION_STATE_UNKNOWN");
   return matches[0];
 }
 
+/**
+ * M10/T2: resolve a gateway-started coordinator run to its ledger binding
+ * without requiring delegation lineage. Returns `{ task_id, task,
+ * coordinatorRun }` when exactly one binding matches the session/run pair and
+ * the bound coordinator equals the observed agent; otherwise null. Unlike
+ * findSession, this never throws: hook call sites use it as a recognition
+ * probe before deciding between the bound-run path and the existing
+ * fail-closed behavior. The agent check is part of recognition (not left to
+ * callers) so a session key alone can never attribute one coordinator's run
+ * to another agent.
+ */
+export function findBoundCoordinatorRun(snapshot, sessionKey, runId, agentId) {
+  if (
+    typeof sessionKey !== "string" ||
+    typeof runId !== "string" ||
+    typeof agentId !== "string"
+  ) {
+    return null;
+  }
+  let matched = null;
+  for (const [task_id, task] of Object.entries(snapshot?.tasks ?? {})) {
+    for (const coordinatorRun of Object.values(task.coordinator_runs ?? {})) {
+      if (
+        coordinatorRun.session_key === sessionKey &&
+        coordinatorRun.run_id === runId &&
+        coordinatorRun.coordinator === agentId
+      ) {
+        if (matched) return null;
+        matched = { task_id, task, coordinatorRun };
+      }
+    }
+  }
+  return matched;
+}
+
 // D07: ownerRunIds returns only the current run ID by default to prevent
 // generation-skip lineage matching. Pass includePrevious=true only when
 // explicit continuation history traversal is authorized (findSession does so).
+//
+// M10/T2: a bound coordinator run is identified by its own gateway-issued
+// run_id. It has no previous run identities: attempt isolation means a stale
+// run's identity must never satisfy a newer attempt, so there is deliberately
+// no previous_native_run_ids list for bindings.
 export function ownerRunIds(owner, includePrevious = true) {
+  if (!owner.delegation && owner.coordinatorRun) {
+    return [owner.coordinatorRun.run_id];
+  }
   if (owner.delegation) {
     return includePrevious
       ? [
@@ -706,6 +760,76 @@ export function applyWorkflowEvent(
     task.workflow_status = "EXECUTING";
     task.claimed_by = payload.agent_id;
     task.claimed_at = eventTime;
+    return next;
+  }
+  if (type === "WORKFLOW_COORDINATOR_RUN_BOUND") {
+    // M10/T2: binds a gateway-started coordinator run to an already-claimed
+    // queue task attempt. This is NOT a spawn event, NOT a delegation event,
+    // and NOT parent-child lineage: a coordinator run has no live parent
+    // session, so no parent fields exist on this payload by design. The queue
+    // owns lease liveness; this event only records the association the pickup
+    // path asserted at bind time (attempt + lease presented by the claim
+    // owner), and it never mints, renews, or verifies a lease.
+    exactKeys(payload, [
+      "task_id",
+      "coordinator",
+      "attempt",
+      "lease_id",
+      "session_key",
+      "run_id",
+    ]);
+    // M7-073: only o1/o2 coordinate executable work. main and specialists can
+    // never be bound as coordinators. Stated explicitly rather than derived so
+    // a topology change cannot silently widen this gate.
+    requireCondition(
+      payload.coordinator === "o1" || payload.coordinator === "o2",
+      "POLICY_DENIED",
+    );
+    requireCondition(
+      Number.isSafeInteger(payload.attempt) && payload.attempt >= 1,
+      "SCHEMA_INVALID",
+    );
+    identifier(payload.lease_id);
+    identifier(payload.session_key);
+    identifier(payload.run_id);
+    requireCondition(
+      task.workflow_status === "EXECUTING",
+      "INVALID_STATE_TRANSITION",
+    );
+    requireCondition(task.claimed_by === payload.coordinator, "POLICY_DENIED");
+    task.coordinator_runs ??= {};
+    const existing = task.coordinator_runs[payload.attempt];
+    if (existing) {
+      // Identical replay is a no-op (the writer's no-change-no-append rule
+      // turns it into a non-append). Any conflicting re-bind for one attempt
+      // is a lineage conflict, never a silent overwrite.
+      requireCondition(
+        existing.task_id === payload.task_id &&
+          existing.coordinator === payload.coordinator &&
+          existing.attempt === payload.attempt &&
+          existing.lease_id === payload.lease_id &&
+          existing.session_key === payload.session_key &&
+          existing.run_id === payload.run_id,
+        "LINEAGE_MISMATCH",
+      );
+      return next;
+    }
+    // A superseded attempt never rebinds: once a higher attempt holds a
+    // binding, the older generation is audit history only.
+    for (const boundAttempt of Object.keys(task.coordinator_runs)) {
+      requireCondition(
+        Number(boundAttempt) <= payload.attempt,
+        "LINEAGE_MISMATCH",
+      );
+    }
+    task.coordinator_runs[payload.attempt] = {
+      task_id: payload.task_id,
+      coordinator: payload.coordinator,
+      attempt: payload.attempt,
+      lease_id: payload.lease_id,
+      session_key: payload.session_key,
+      run_id: payload.run_id,
+    };
     return next;
   }
   if (type === "WORKFLOW_USER_QUESTION_RECORDED") {
@@ -1425,10 +1549,15 @@ function applySpawnReserved(next, task, payload, replayAnchored = false) {
     payload.parent_session_key,
     payload.parent_run_id,
   );
+  // M10/T2: same load-bearing fallback order as admission — a bound
+  // coordinator parent resolves to its bound coordinator identity, never to
+  // Main/root. The parent session/run themselves are real (the coordinator's
+  // live gateway run); only delegation lineage is absent, by design.
   requireCondition(
     parent.task_id === payload.task_id &&
-      (parent.delegation?.agent_id ?? task.root_agent_id) ===
-        payload.parent_agent_id,
+      (parent.delegation?.agent_id ??
+        parent.coordinatorRun?.coordinator ??
+        task.root_agent_id) === payload.parent_agent_id,
     "LINEAGE_MISMATCH",
   );
   if (parent.delegation)
@@ -1436,11 +1565,19 @@ function applySpawnReserved(next, task, payload, replayAnchored = false) {
       parent.delegation.run_state === "RUNNING" &&
         parent.delegation.brief_revision === task.brief_revision,
     );
+  // M10/T2: a bound coordinator parent has no delegation run_state to check.
+  // Parent liveness for coordinator runs is queue-lease liveness, enforced at
+  // claim time and by stale recovery — not re-checked here. A run that
+  // outlives its lease can still reserve until its turn ends; spawn budgets
+  // bound the blast radius. This residual is documented, not silent.
   const node = task.nodes.find((item) => item.node_id === payload.node_id);
   requireCondition(
     node && node.agent_id === payload.agent_id,
     "UNAUTHORIZED_TARGET",
   );
+  // M10/T2: same root-like treatment as the guard: a bound coordinator parent
+  // carries no parent-stack constraint. Target containment is enforced by the
+  // canonical spawn-policy allowlist, checked by the caller before reserving.
   if (parent.delegation)
     requireCondition(
       node.stack_id === parent.delegation.stack_id,
