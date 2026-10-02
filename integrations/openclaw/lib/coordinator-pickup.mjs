@@ -70,6 +70,36 @@ function isRecord(value) {
 }
 
 /**
+ * Validate coordinator-start evidence.
+ *
+ * Mirrors the repository's canonical identifier rule (a non-empty string of at
+ * most 256 characters, as enforced by the workflow reducer's `identifier`
+ * check) rather than inventing a weaker predicate. That helper lives inside
+ * the reducer and throws instead of answering, so it cannot be reused here
+ * without importing the whole reducer; the rule itself is restated exactly.
+ *
+ * Returns `{ ok: true, run }` with the evidence preserved verbatim, or
+ * `{ ok: false, reason }` naming the defect class. A wrong agentId is never
+ * rewritten to the designated coordinator: identity comes from the evidence or
+ * not at all.
+ */
+export function validateCoordinatorRunEvidence(run, coordinator) {
+  if (!isRecord(run)) {
+    return { ok: false, reason: "MISSING_RUN_RESULT" };
+  }
+  for (const field of ["runId", "sessionKey", "agentId"]) {
+    const value = run[field];
+    if (typeof value !== "string" || value.length === 0 || value.length > 256) {
+      return { ok: false, reason: `INVALID_${field.toUpperCase()}` };
+    }
+  }
+  if (run.agentId !== coordinator) {
+    return { ok: false, reason: "AGENT_IDENTITY_MISMATCH" };
+  }
+  return { ok: true, run };
+}
+
+/**
  * Run one coordinator pickup pass.
  *
  * Either picks up a single named task (`taskId`) or scans for the first
@@ -285,6 +315,23 @@ export async function runCoordinatorPickup({
       };
     }
 
+    // A seam that returns without evidence has not started anything, no matter
+    // what it claims. Malformed or contradictory evidence fails exactly like a
+    // throwing seam: the claim stands under its live lease and only the
+    // existing stale recovery may move the task again.
+    const evidence = validateCoordinatorRunEvidence(run, dispatch.coordinator);
+    if (!evidence.ok) {
+      return {
+        ok: false,
+        error: "COORDINATOR_START_FAILED",
+        taskId: candidate,
+        coordinator: dispatch.coordinator,
+        leaseId,
+        attempt,
+        cause: `COORDINATOR_RUN_EVIDENCE_INVALID: ${evidence.reason}`,
+      };
+    }
+
     return {
       ok: true,
       status: EXECUTING,
@@ -293,7 +340,7 @@ export async function runCoordinatorPickup({
       requiredCapabilities: dispatch.requiredCapabilities,
       leaseId,
       attempt,
-      run: run ?? null,
+      run: evidence.run,
     };
   }
 

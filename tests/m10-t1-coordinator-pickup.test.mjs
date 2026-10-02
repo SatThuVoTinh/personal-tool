@@ -8,6 +8,7 @@ import { QueueManager } from "../integrations/openclaw/lib/queue-manager.mjs";
 import {
   runCoordinatorPickup,
   createPickupScheduler,
+  validateCoordinatorRunEvidence,
   PICKUP_SCAN_INTERVAL_MS,
 } from "../integrations/openclaw/lib/coordinator-pickup.mjs";
 import { deriveGovernedDispatchTarget } from "../integrations/openclaw/plugins/zink-governance/index.mjs";
@@ -687,4 +688,207 @@ test("PARTIAL: without the runtime start seam, pickup reports the blocker", asyn
   } finally {
     cleanup();
   }
+});
+
+// ===========================================================================
+// P13 — a null start result fails closed without disturbing the live lease
+// ===========================================================================
+
+test("P13: a null start result is COORDINATOR_START_FAILED, never a start", async () => {
+  const { qm, cleanup } = freshQueue();
+  try {
+    const taskId = "p13-null-start";
+    enqueueO1(qm, taskId);
+    const deps = pickupDeps({
+      startCoordinatorRun: async () => null,
+    });
+    const result = await runCoordinatorPickup({
+      queueManager: qm,
+      ledgerTasks: { [taskId]: ledgerTask() },
+      deriveTarget: deriveGovernedDispatchTarget,
+      recordClaimed: deps.recordClaimed,
+      startCoordinatorRun: deps.startCoordinatorRun,
+      taskId,
+    });
+
+    assert.equal(result.ok, false);
+    assert.notEqual(result.status, "EXECUTING");
+    assert.equal(result.error, "COORDINATOR_START_FAILED");
+    assert.match(result.cause, /COORDINATOR_RUN_EVIDENCE_INVALID/);
+    assert.equal(result.run, undefined, "no fake run evidence may exist");
+
+    // The claim stands: EXECUTING under the live lease issued by the claim.
+    const item = qm.getTask(taskId);
+    assert.equal(item.status, "EXECUTING");
+    assert.equal(item.claimedBy, "o1");
+    assert.equal(item.leaseId, result.leaseId);
+  } finally {
+    cleanup();
+  }
+});
+
+// ===========================================================================
+// P14 — malformed start results fail closed
+// ===========================================================================
+
+test("P14: malformed start results fail closed", async () => {
+  const malformed = [
+    ["empty object", {}],
+    ["runId only", { runId: "r" }],
+    ["sessionKey only", { sessionKey: "s" }],
+    ["runId plus sessionKey", { runId: "r", sessionKey: "s" }],
+    ["empty runId", { runId: "", sessionKey: "s", agentId: "o1" }],
+    ["empty sessionKey", { runId: "r", sessionKey: "", agentId: "o1" }],
+    ["empty agentId", { runId: "r", sessionKey: "s", agentId: "" }],
+    ["non-string runId", { runId: 42, sessionKey: "s", agentId: "o1" }],
+    ["undefined result", undefined],
+    ["string result", "run-123"],
+  ];
+  for (const [label, returned] of malformed) {
+    const { qm, cleanup } = freshQueue();
+    try {
+      const taskId = "p14-malformed";
+      enqueueO1(qm, taskId);
+      const deps = pickupDeps({
+        startCoordinatorRun: async () => returned,
+      });
+      const result = await runCoordinatorPickup({
+        queueManager: qm,
+        ledgerTasks: { [taskId]: ledgerTask() },
+        deriveTarget: deriveGovernedDispatchTarget,
+        recordClaimed: deps.recordClaimed,
+        startCoordinatorRun: deps.startCoordinatorRun,
+        taskId,
+      });
+
+      assert.equal(result.ok, false, label);
+      assert.notEqual(result.status, "EXECUTING", label);
+      assert.equal(result.error, "COORDINATOR_START_FAILED", label);
+      assert.equal(qm.getTask(taskId).status, "EXECUTING", label);
+    } finally {
+      cleanup();
+    }
+  }
+});
+
+// ===========================================================================
+// P15 — a contradictory coordinator identity fails and is never rewritten
+// ===========================================================================
+
+test("P15: a run attributed to the wrong coordinator fails closed", async () => {
+  const { qm, cleanup } = freshQueue();
+  try {
+    const taskId = "p15-wrong-coordinator";
+    enqueueO1(qm, taskId);
+    const deps = pickupDeps({
+      startCoordinatorRun: async () => ({
+        runId: "r",
+        sessionKey: "s",
+        agentId: "o2",
+      }),
+    });
+    const result = await runCoordinatorPickup({
+      queueManager: qm,
+      ledgerTasks: { [taskId]: ledgerTask() },
+      deriveTarget: deriveGovernedDispatchTarget,
+      recordClaimed: deps.recordClaimed,
+      startCoordinatorRun: deps.startCoordinatorRun,
+      taskId,
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.error, "COORDINATOR_START_FAILED");
+    assert.match(result.cause, /AGENT_IDENTITY_MISMATCH/);
+    // The claim stands with the designated coordinator; the contradictory
+    // evidence was not rewritten into o1 and not accepted as o2.
+    const item = qm.getTask(taskId);
+    assert.equal(item.claimedBy, "o1");
+    assert.equal(item.status, "EXECUTING");
+  } finally {
+    cleanup();
+  }
+});
+
+// ===========================================================================
+// P16 — valid run evidence is preserved exactly
+// ===========================================================================
+
+test("P16: valid run evidence passes through verbatim", async () => {
+  const { qm, cleanup } = freshQueue();
+  try {
+    const taskId = "p16-valid-evidence";
+    enqueueO1(qm, taskId);
+    const evidence = {
+      runId: "run-123",
+      sessionKey: "agent:o1:task-123",
+      agentId: "o1",
+    };
+    const deps = pickupDeps({
+      startCoordinatorRun: async () => ({ ...evidence }),
+    });
+    const result = await runCoordinatorPickup({
+      queueManager: qm,
+      ledgerTasks: { [taskId]: ledgerTask() },
+      deriveTarget: deriveGovernedDispatchTarget,
+      recordClaimed: deps.recordClaimed,
+      startCoordinatorRun: deps.startCoordinatorRun,
+      taskId,
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "EXECUTING");
+    assert.deepEqual(result.run, evidence, "evidence is preserved exactly");
+    const item = qm.getTask(taskId);
+    assert.equal(item.leaseId, result.leaseId, "queue lease preserved");
+    assert.equal(item.attempt, result.attempt, "attempt preserved");
+  } finally {
+    cleanup();
+  }
+});
+
+// ===========================================================================
+// P17 — the validation runs inside the shipped pickup path
+// ===========================================================================
+
+test("P17: runCoordinatorPickup itself enforces the evidence contract", async () => {
+  // The validator is exported for unit coverage, but these tests drive
+  // runCoordinatorPickup end to end (P13-P16 above). This pins the wiring: the
+  // shipped path must reference the validator, so a future refactor cannot
+  // silently drop the check while keeping a tested-but-unused function.
+  const source = fs.readFileSync(
+    new URL(
+      "../integrations/openclaw/lib/coordinator-pickup.mjs",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.ok(
+    source.includes(
+      "validateCoordinatorRunEvidence(run, dispatch.coordinator)",
+    ),
+    "the pickup path must validate the start result itself",
+  );
+  // And the validator itself rejects every required defect class directly.
+  assert.deepEqual(validateCoordinatorRunEvidence(null, "o1"), {
+    ok: false,
+    reason: "MISSING_RUN_RESULT",
+  });
+  assert.deepEqual(
+    validateCoordinatorRunEvidence({ runId: "r", sessionKey: "s" }, "o1"),
+    { ok: false, reason: "INVALID_AGENTID" },
+  );
+  assert.deepEqual(
+    validateCoordinatorRunEvidence(
+      { runId: "r", sessionKey: "s", agentId: "o2" },
+      "o1",
+    ),
+    { ok: false, reason: "AGENT_IDENTITY_MISMATCH" },
+  );
+  assert.deepEqual(
+    validateCoordinatorRunEvidence(
+      { runId: "run-123", sessionKey: "agent:o1:task-123", agentId: "o1" },
+      "o1",
+    ).ok,
+    true,
+  );
 });
