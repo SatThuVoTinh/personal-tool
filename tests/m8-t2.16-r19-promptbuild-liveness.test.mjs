@@ -453,11 +453,11 @@ test("R19 I2: a context with no runId has no record", async () => {
 // ---------------------------------------------------------------------------
 
 test("R19 G: R18's boundary recovery is byte-for-byte unchanged", () => {
-  // M10/T2-R4 UPDATE (owner Option A): the boundary intentionally gains the
-  // deterministic threadId pass-through (typed null-or-snowflake, fail-closed
-  // on malformed). R18's recovery must be intact UNDER that extension, so this
-  // test pins both halves: every R18 recovery marker plus the R4 markers, and
-  // the file must equal the R4-authorized bytes (see digest below) so any
+  // M10/T2-R5 UPDATE (owner Option A): the boundary intentionally gains the
+  // deterministic preflight-registry read plus the structured frozen fields.
+  // R18's recovery must be intact UNDER that extension, so this test pins
+  // both halves: every R18 recovery marker plus the R5 markers, and the
+  // file must equal the R5-authorized bytes (see digest below) so any
   // further unreviewed boundary mutation still fails.
   const R18_COMMIT = "980b36e";
   const sha = (v) => createHash("sha256").update(v).digest("hex");
@@ -497,7 +497,7 @@ test("R19 G: R18's boundary recovery is byte-for-byte unchanged", () => {
   );
   assert.equal(
     sha(current),
-    "7b3ced37252720830230ed630981881f5bd7c2b68d21c158f6221297179eac50",
+    "bccfa8616dc89fbb3764d53ad6ea11f5cfbc445bc076e4270f2678c6c1e18c3a",
     "the boundary must equal the R4-authorized bytes exactly",
   );
 });

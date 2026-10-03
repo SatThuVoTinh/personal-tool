@@ -100,8 +100,11 @@ import {
   DISCORD_COMPONENT_ACTION_NAMESPACE,
   resolveIngressRouting,
   resolveMainConversationAdmission,
+  resolveMainReplyAdmission,
   MAIN_CONVERSATION_CONTINUATION,
+  MAIN_DIRECTED,
   MISSING_MENTION_REFUSAL,
+  DISCORD_BOT_IDS,
   AGENT_IDS,
 } from "../../lib/authority.mjs";
 
@@ -402,6 +405,12 @@ export function isIngressSenderAuthorized(context, ownerDiscordId) {
     return { ok: false, reason: "POLICY_DENIED" };
   }
   if (context.isBot === true || context.author?.bot === true) {
+    return { ok: false, reason: "BOT_INGRESS_DENIED" };
+  }
+  // M10/T2-R5: the structured author bot flag forwarded from the Discord
+  // inbound event. Previously this check was vacuous at the native seam
+  // (neither field was ever forwarded); now bot authorship denies.
+  if (context.authorIsBot === true) {
     return { ok: false, reason: "BOT_INGRESS_DENIED" };
   }
   // An absent owner identity is a DENY, never an implicit allow. The previous
@@ -3917,39 +3926,17 @@ function forgetAdmissionLiveness(runId) {
 }
 
 /**
- * M10/T2-R4: Main-owned thread attribution. Recorded ONLY from Main's own
- * awaited outbound posts (the `message_sending` hook carries threadId +
- * agentId), so a binding strictly postdates Main's post and predates any
- * later human reply in that thread — no event-ordering assumption, no
- * message_received cache, no polling. Consulted ONLY when routing refuses
- * solely for a missing mention, and ANDed with every existing authority
- * check (owner sender, channel, bot filter, Main agent identity).
- *
- * Memory-only, bounded with oldest-first eviction, exact-match lookup.
- * Eviction and restart both degrade to deny: an unknown thread is never
- * Main-owned. This is admission evidence, not a session store, not
- * long-term memory, and not skill/knowledge state.
+ * M10/T2-R5: shape structured inbound id lists into mention entries the
+ * existing mention resolver already understands (user objects by id, role
+ * ids as raw strings). Invalid entries never reach here — the boundary
+ * snowflake-validates every id — so this mapping is total and infallible.
+ * Replaces the R4 outbound-attribution cache: host-resolved ownership made
+ * the memory fragile and unnecessary, and a single ownership source keeps
+ * diagnostics unambiguous.
  */
-const MAIN_THREAD_BINDINGS = new Map();
-const MAIN_THREAD_BINDINGS_LIMIT = 256;
-
-const DISCORD_THREAD_ID_RE = /^[1-9][0-9]{16,19}$/u;
-
-function rememberMainThread(threadId) {
-  if (!DISCORD_THREAD_ID_RE.test(threadId ?? "")) return false;
-  if (MAIN_THREAD_BINDINGS.has(threadId)) {
-    MAIN_THREAD_BINDINGS.delete(threadId);
-  }
-  while (MAIN_THREAD_BINDINGS.size >= MAIN_THREAD_BINDINGS_LIMIT) {
-    MAIN_THREAD_BINDINGS.delete(MAIN_THREAD_BINDINGS.keys().next().value);
-  }
-  MAIN_THREAD_BINDINGS.set(threadId, true);
-  return true;
-}
-
-/** Exact-match lookup over the bindings recorded above. */
-function mainThreadBindings() {
-  return [...MAIN_THREAD_BINDINGS.keys()];
+function toStructuredMentionEntries(ids) {
+  if (!Array.isArray(ids)) return [];
+  return ids.map((id) => ({ id }));
 }
 
 /**
@@ -6075,6 +6062,11 @@ export default {
       if (context.isBot === true || context.author?.bot === true) {
         return { allow: false, reason: "BOT_INGRESS_DENIED" };
       }
+      // M10/T2-R5: structured author bot flag from the inbound event (see
+      // the sender-authorization gate above for the same rule).
+      if (context.authorIsBot === true) {
+        return { allow: false, reason: "BOT_INGRESS_DENIED" };
+      }
       // Direct intake at Discord ingress is strictly Main only (Decision 3 & RC-01).
       if (context.agentId !== "main") {
         return { allow: false, reason: "NON_MAIN_DIRECT_INGRESS" };
@@ -6087,7 +6079,15 @@ export default {
         message: context.message || {
           id: msgId,
           content: context.content,
-          mentions: context.mentions,
+          // M10/T2-R5: structured Discord inbound metadata forwarded from
+          // the preflight seam. Structured ids take precedence over the
+          // legacy unforwarded fields; both are validated snowflake shapes
+          // by the boundary before they reach this point.
+          mentions: [
+            ...(Array.isArray(context.mentions) ? context.mentions : []),
+            ...toStructuredMentionEntries(context.mentionedUserIds),
+            ...toStructuredMentionEntries(context.mentionedRoleIds),
+          ],
           mention_roles: context.mentionRoles,
           author: context.author,
         },
@@ -6095,28 +6095,44 @@ export default {
         identifiers: { discordGuildId: config.discordGuildId },
       });
       if (routing.needs_clarification || routing.target_agents[0] !== "main") {
-        // M10/T2-R4: Main-owned thread continuation. Bypassed ONLY when the
-        // routing layer refused solely for a missing mention AND the inbound
-        // thread is proven Main-owned. Every check above (channel, agent
-        // roster, sender authorization, bot filter, Main-only intake) already
-        // passed; the lineage, task-derivation and inner-governance checks
-        // below still run unchanged.
-        const continuation = resolveMainConversationAdmission({
+        // M10/T2-R5: deterministic conversational signals beyond the literal
+        // mention. Bypassed ONLY when the routing layer refused solely for a
+        // missing mention. Every check above (channel, agent roster, sender
+        // authorization, bot filter, Main-only intake) already passed; the
+        // lineage, task-derivation and inner-governance checks below still
+        // run unchanged. Order: reply first (strongest identity evidence),
+        // then thread ownership.
+        const missingMention =
+          routing.clarification_reason === MISSING_MENTION_REFUSAL;
+        const reply = resolveMainReplyAdmission({
           agentId: context.agentId,
-          threadId: context.threadId,
-          mainThreadIds: mainThreadBindings(),
-          missingMentionRefusal:
-            routing.clarification_reason === MISSING_MENTION_REFUSAL,
+          replyReferenceMessageId: context.replyReferenceMessageId,
+          replyReferenceAuthorId: context.replyReferenceAuthorId,
+          mainBotId: DISCORD_BOT_IDS.main,
+          missingMentionRefusal: missingMention,
         });
-        if (!continuation.admitted) {
-          return {
-            allow: false,
-            reason: routing.clarification_reason || "INGRESS_NOT_ADMITTED",
-          };
+        if (reply.admitted) {
+          api.logger?.info?.(
+            `[zink-governance] ${MAIN_DIRECTED}: agent=main via reply`,
+          );
+        } else {
+          const continuation = resolveMainConversationAdmission({
+            agentId: context.agentId,
+            threadId: context.threadId,
+            threadOwnerId: context.threadOwnerId,
+            mainBotId: DISCORD_BOT_IDS.main,
+            missingMentionRefusal: missingMention,
+          });
+          if (!continuation.admitted) {
+            return {
+              allow: false,
+              reason: routing.clarification_reason || "INGRESS_NOT_ADMITTED",
+            };
+          }
+          api.logger?.info?.(
+            `[zink-governance] ${MAIN_CONVERSATION_CONTINUATION}: agent=main`,
+          );
         }
-        api.logger?.info?.(
-          `[zink-governance] ${MAIN_CONVERSATION_CONTINUATION}: agent=main`,
-        );
       }
       const identityPath =
         paths.identityKey || path.resolve(paths.root, "../identity.key");
@@ -6598,13 +6614,6 @@ export default {
       }
 
       const agentName = AGENT_DISPLAY_NAMES[agentId] ?? agentId ?? "Zink Bot";
-      // M10/T2-R4: record Main-owned thread attribution for conversational
-      // ingress. Only Main posts bind, only exact thread ids, only on the
-      // allowed (non-blocked) path above. Specialist posts never bind, so a
-      // specialist-owned thread can never satisfy Main continuation.
-      if (agentId === "main") {
-        rememberMainThread(ctx.threadId ?? event.threadId);
-      }
       return {
         content: formatForDiscord(safeContent, { agentName }),
       };

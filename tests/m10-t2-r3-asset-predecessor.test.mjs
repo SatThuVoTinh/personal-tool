@@ -82,7 +82,7 @@ const HYGIENE_ASSET_PREDECESSORS = Object.freeze({
  * packaged entrypoint, and the outgoing R3 digest is now the admitted
  * predecessor (listed in configure.mjs). */
 const CURRENT_ENTRYPOINT_SHA256 =
-  "73ffc92a580134a63647aed174eb07de265d6a4e4478b968278486c7d7cca5d3";
+  "0fb628e891a93d570715937a95fc65b82acf14964f00d5de495eeead2138e946";
 
 const identifiers = Object.freeze({
   discordGuildId: "123456789012345678",

@@ -1,4 +1,69 @@
-ACTIVE.md -- M10/T2-R4 Main Conversational Ingress (CURRENT EXECUTION CONTRACT)
+ACTIVE.md -- M10/T2-R5 Host-Side Discord Inbound Metadata Exposure (CURRENT EXECUTION CONTRACT)
+
+Task ID: M10/T2
+Plan Revision: M10/T2-R5
+Parent Revision: M10/T2-R4 (implementation commit `78daa5b`)
+Planning Readiness: APPROVED
+Execution Authorization: YES (repository implementation only)
+Owner Approval: EXPLICIT -- owner authorized moving observation upstream to
+  the pinned host Discord event boundary after R4 proved mention and
+  reply-reference attribution unobservable at the native seam.
+Execution Contract: docs/contracts/execution/ACTIVE.md (this file)
+PLAN Pointer: PLAN.md §3 (M10 row) and §8 M10/T2 entry (M10/T2-R5 block)
+Evidence Level: LOCAL-VERIFIED
+Deployment Authorized: NO
+Deployment Status: NOT DEPLOYED
+Live Execution: NO
+Lifecycle: IN PROGRESS -- implementation authorized; R3 (`a09fc25`) remains
+  the deployed baseline
+
+## R5 1. Objective
+
+Expose structured Discord inbound metadata (mentioned user/role IDs,
+reply-reference message/author IDs, author bot flag) at the pinned host
+event boundary and forward it causally to native admission, so explicit
+@main mention and reply-to-Main become deterministically recognizable.
+Thread ownership additionally uses the host-resolved threadOwnerId;
+the R4 outbound-attribution cache is retired (single ownership source).
+
+## R5 2. Proven host facts (pinned 2026.6.34 dist, read-only)
+
+- discord.js-style Message: mentionedUsers/mentionedRoles/messageReference/
+  referencedMessage/thread/author getters over rawDataValue.
+- Preflight call site has raw `message`, `threadOwnerId`
+  (host-resolved), `author`, `botId` in scope; anchor unique.
+- Canonical mapper and run params provably lack mentions/references
+  (0 occurrences in the 644KB selection bundle).
+- message_received fires via fireAndForgetHook: no cache may depend on it.
+- Stash design: bounded globalThis Map keyed by Discord message id,
+  written synchronously on the inbound causal path, read by
+  currentMessageId in the selection patch. No side listener, no polling.
+
+## R5 3. Allowed scope
+
+- New pin + role for message-handler.preflight file (live = baseline, no
+  descriptor); selection descriptor R10→R5 (live is R10; R4 tree state
+  superseded-and-recorded, never deployed).
+- Selection patch: threadId (R4 retained) + stash read for the new fields.
+- Boundary: strict typing for the new fields, fail-closed.
+- Admission: structured mentions into existing routing; reply-author
+  branch; threadOwnerId replacing the R4 cache; existing authority intact.
+- Tests (TDD), lineage provenance, artifact rebuild, docs, R5 commit.
+- Excluded: deployment, live execution, outbound changes, LLM, text
+  mention heuristics, new services, timing-dependent mechanisms.
+
+## R5 4. Acceptance
+
+TESTs 1-3 ALLOW with structured evidence; TEST 4 NOT AVAILABLE unless a
+mechanism is found (documented either way); all §21 negatives DENY;
+R2/R3/R4 green (R4 cache tests reworked to host ownership with history
+comments); full matrix green; artifacts reproducible; tree clean.
+
+---
+
+# Historical: M10/T2-R4 Main Conversational Ingress (retained unchanged as evidence; superseded by M10/T2-R5 above)
+
+ACTIVE.md -- M10/T2-R4 Main Conversational Ingress (HISTORICAL EXECUTION CONTRACT -- superseded by M10/T2-R5 above; content retained unchanged)
 
 Task ID: M10/T2
 Plan Revision: M10/T2-R4

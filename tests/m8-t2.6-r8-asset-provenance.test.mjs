@@ -133,6 +133,17 @@ function takeRunLiveness(runId) {
 `,
     ``,
   ],
+  // M10/T2-R5: the registry read in enterNativeRun. ORDER MATTERS: this
+  // insertion sits between the R4 validation block and `const decision`,
+  // so it must be inverted BEFORE the R4 hunk below can match.
+  [
+    `    // M10/T2-R5: structured Discord inbound metadata, read by inbound
+    // message id from the preflight registry. Unknown/absent degrades to
+    // empty (deny preserved); malformed is normalized by the reader.
+    const ingress = readZinkIngressMetadata(context.currentMessageId);
+`,
+    ``,
+  ],
   // M10/T2-R4: explicit inbound thread identity typing. Inverted so the
   // derived R5 body reproduces the packaged R5 digest exactly.
   [
@@ -158,6 +169,82 @@ function takeRunLiveness(runId) {
 `,
     `        isBot: context.isBot,
 `,
+  ],
+  // M10/T2-R5: the preflight-registry reader block. Inverted so the
+  // derived R5 body reproduces the packaged R5 digest exactly.
+  [
+    `const INGRESS_METADATA_KEY = "__zink_ingress_metadata_r5";
+const DISCORD_SNOWFLAKE_RE = /^[1-9][0-9]{16,19}$/u;
+
+const emptyIngressMetadata = () =>
+  Object.freeze({
+    mentionedUserIds: Object.freeze([]),
+    mentionedRoleIds: Object.freeze([]),
+    replyReferenceMessageId: null,
+    replyReferenceAuthorId: null,
+    threadOwnerId: null,
+    authorIsBot: false,
+  });
+
+/**
+ * M10/T2-R5: read the deterministic Discord inbound metadata the preflight
+ * patch recorded for this inbound message id. The write sits on the same
+ * causal inbound path (a turn exists only after its message's preflight
+ * completes), so no ordering assumption is involved. Unknown, malformed or
+ * evicted records normalize to empty (deny preserved). Re-validated here
+ * even though the writer validates too: the registry crosses a bundle
+ * boundary, so neither side trusts the other's bytes.
+ */
+export function readZinkIngressMetadata(messageId) {
+  let record;
+  try {
+    const registry = globalThis[INGRESS_METADATA_KEY];
+    record =
+      typeof messageId === "string" && registry instanceof Map
+        ? registry.get(messageId)
+        : undefined;
+  } catch {
+    return emptyIngressMetadata();
+  }
+  if (!record || typeof record !== "object") return emptyIngressMetadata();
+  const snowflake = (value) =>
+    typeof value === "string" && DISCORD_SNOWFLAKE_RE.test(value)
+      ? value
+      : null;
+  const idList = (entries) => {
+    if (!Array.isArray(entries)) return [];
+    const ids = [];
+    for (const entry of entries) {
+      const id = snowflake(typeof entry === "string" ? entry : entry?.id);
+      if (id) ids.push(id);
+    }
+    return ids;
+  };
+  return Object.freeze({
+    mentionedUserIds: Object.freeze(idList(record.mentionedUserIds)),
+    mentionedRoleIds: Object.freeze(idList(record.mentionedRoleIds)),
+    replyReferenceMessageId: snowflake(record.replyReferenceMessageId),
+    replyReferenceAuthorId: snowflake(record.replyReferenceAuthorId),
+    threadOwnerId: snowflake(record.threadOwnerId),
+    authorIsBot: record.authorIsBot === true,
+  });
+}
+
+`,
+    ``,
+  ],
+  // M10/T2-R5: structured inbound metadata in the frozen admission context
+  // (read by message id from the preflight registry). Inverted so the
+  // derived R5 body reproduces the packaged R5 digest exactly.
+  [
+    `        mentionedUserIds: ingress.mentionedUserIds,
+        mentionedRoleIds: ingress.mentionedRoleIds,
+        replyReferenceMessageId: ingress.replyReferenceMessageId,
+        replyReferenceAuthorId: ingress.replyReferenceAuthorId,
+        threadOwnerId: ingress.threadOwnerId,
+        authorIsBot: context.isBot === true || ingress.authorIsBot,
+`,
+    ``,
   ],
 ];
 

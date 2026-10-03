@@ -1372,8 +1372,8 @@ from this environment and are not claimed.
 
 Status: `IN PROGRESS`
 Task: `M10/T2 - bind a gateway-started coordinator run to its claimed queue attempt, and fence that binding to current execution authority`
-Plan Revision: `M10/T2-R4`
-Parent Revision: `M10/T2-R3` (implementation commit `a09fc25`)
+Plan Revision: `M10/T2-R5`
+Parent Revision: `M10/T2-R4` (implementation commit `78daa5b`)
 Planning Readiness: `APPROVED`
 Execution Authorization: `YES` (repository implementation only)
 Execution Contract: `docs/contracts/execution/ACTIVE.md`
@@ -1617,6 +1617,59 @@ entry. Residual live risk recorded for verification: the office-channel
 check assumes the host keeps parent-channel (not thread-id) in
 messageChannel for thread replies; if live shows otherwise the path fails
 closed and reports, never mis-admits.
+
+### M10/T2-R5 - Host-side Discord inbound metadata exposure (owner-authorized implementation, Option A)
+
+Owner authorization: EXPLICIT - owner chose Option A after R4 proved
+mention/reply attribution unobservable at the native seam and
+message_received caching racy by host fire-and-forget construction.
+Operation `REPOSITORY_IMPLEMENTATION_ONLY`; deployment NOT AUTHORIZED;
+live execution NOT AUTHORIZED.
+
+Root cause (proven, pinned 2026.6.34 dist, read-only): the host drops
+structured Discord metadata during canonical mapping (canonical mapper and
+run params carry zero mention/reference fields), so the native seam could
+never observe them. The raw discord.js message (mentionedUsers/
+mentionedRoles/messageReference/referencedMessage/author) plus the
+host-resolved threadOwnerId exist one layer upstream at the Discord
+preflight call site (unique anchor, verified byte-exact).
+
+Implementation (minimal, causal, no side channel): preflight patch records
+structured ids into a bounded messageId-keyed registry on the inbound
+causal path (a turn exists only after its message's preflight completes);
+boundary reads it back by currentMessageId with strict re-validation;
+admission feeds structured mentions into the EXISTING mention resolver
+(no routing change), adds a reply-author branch and a host-owner thread
+branch (retiring R4's outbound-attribution cache - single ownership
+source), ANDed with all existing authority checks; authorIsBot restores
+the previously vacuous bot filter. No LLM, no text heuristics, no cache
+with timing, no new services. Selection patch UNCHANGED from R4.
+
+Lineage: new pin + role for message-handler.preflight file (live equals
+unpatched baseline dca5459d…, BASELINE→R5 direct, no descriptor);
+selection descriptor R10→R5 (live is R10 555f37da; R4 tree state 04e92061
+superseded-and-recorded, never deployed; R7 retired with history kept).
+R10 live bytes invert to baseline a5698c55 and yield R5 selection
+04e92061 (== R4 tree artifact, as designed). Outgoing R3 entrypoint
+d1ce6386 was already admitted in R4. R18-13/15, R19-G, R5-derivation
+hunks and R13/R3 current-pins updated to the authorized bytes.
+
+Regression: `tests/m10-t2-r5-host-inbound-metadata.test.mjs` (27 tests:
+pin/anchor/prohibition pins, REAL injection snippet executed in synthetic
+host scopes, reader normalization, pure reply classifier, end-to-end
+admission incl. mention/reply/owner ALLOW and all negatives, lineage
+slots). R4 suite reworked to host ownership (19 tests). N1/A1 watched
+FAIL pre-fix, 46/46 GREEN post-fix. Provisional cross-test stash pollution
+found and fixed by unique message ids (production-faithful).
+
+Status: IMPLEMENTED and locally verified; deployment NOT AUTHORIZED and
+NOT PERFORMED; live ledger untouched; gateway not restarted; no live
+execution; host lifecycle NOT PROVEN. A deployment of the new R5 commit
+requires a separate owner authorization. See ACTIVE.md R5 and CHANGELOG.md
+Unreleased entry. Residual live risks for verification: (1) office-channel
+check assumes parent-channel in messageChannel for thread replies
+(fail-closed either way); (2) referencedMessage present only when Discord
+supplies it, else null (deny preserved).
 
 ## 9. Deferred beyond V1
 

@@ -348,17 +348,26 @@ describe("Lane G — policy & lifecycle contract reconciliation", () => {
         assert.match(file, /^[A-Za-z0-9._-]+\.js$/u, `${version}: ${file}`);
         assert.match(entry.sha256, /^[a-f0-9]{64}$/u, `${version}: ${file}`);
         assert.ok(
-          entry.role === "selection" || entry.role === "announce",
+          entry.role === "selection" ||
+            entry.role === "announce" ||
+            entry.role === "discord-preflight",
           `${version}: ${file} must declare a known role`,
         );
-        // Both roles must be present in every release, or a release silently
-        // loses run admission or announce governance.
+        // Every release pins selection + announce, or it silently loses run
+        // admission or announce governance. M10/T2-R5 additionally pins the
+        // Discord preflight bundle on the deployed lineage (2026.6.34) so
+        // structured inbound metadata reaches admission; the separate
+        // Windows lineage keeps its two-file pin.
         roles.add(entry.role);
       }
+      const required =
+        version === "2026.6.34"
+          ? ["announce", "discord-preflight", "selection"]
+          : ["announce", "selection"];
       assert.deepEqual(
         [...roles].sort(),
-        ["announce", "selection"],
-        `${version} must pin a selection and an announce bundle`,
+        required,
+        `${version} must pin its required bundles`,
       );
     }
     const root = mkdtempSync(path.join(os.tmpdir(), "lane-pin-"));

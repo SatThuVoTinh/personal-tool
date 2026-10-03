@@ -21,6 +21,12 @@
 // carries threadId + agentId), so a bounded memory-only attribution map
 // recorded there strictly precedes any later human reply in that thread.
 // Eviction degrades to deny; restart loses bindings and degrades to deny.
+//
+// M10/T2-R5 UPDATE: the attribution map above is RETIRED, replaced by the
+// host-resolved threadOwnerId forwarded from the Discord preflight seam
+// (authoritative, no memory, no eviction semantics to defend). The verdict
+// contract is unchanged; only the ownership source moved. Tests below pass
+// threadOwnerId directly (see tests/m10-t2-r5-host-inbound-metadata).
 import assert from "node:assert/strict";
 import {
   mkdirSync,
@@ -47,7 +53,39 @@ import {
   resolveMainConversationAdmission,
   MAIN_CONVERSATION_CONTINUATION,
   MAIN_NOT_CONFIRMED,
+  DISCORD_BOT_IDS,
 } from "../integrations/openclaw/lib/authority.mjs";
+import { DISCORD_PREFLIGHT_INJECTION } from "../integrations/openclaw/topology/lib/native-patch.mjs";
+
+const MAIN_BOT = DISCORD_BOT_IDS.main;
+// Unique message ids per admission test: Discord ids are unique in
+// production, and the stash is messageId-keyed, so fixtures must not reuse
+// them across tests sharing one process.
+const MID_R4_A1 = "1545430000000000201";
+
+/** Seed inbound metadata through the REAL preflight injection snippet. */
+function seedIngress({ messageId, threadOwnerId } = {}) {
+  const factory = new Function(
+    "message",
+    "threadOwnerId",
+    "globalThis",
+    DISCORD_PREFLIGHT_INJECTION,
+  );
+  factory(
+    {
+      id: messageId,
+      content: "hello",
+      mentionedUsers: [],
+      mentionedRoles: [],
+      messageReference: null,
+      referencedMessage: null,
+      author: { id: OWNER, bot: false },
+      thread: null,
+    },
+    threadOwnerId ?? null,
+    globalThis,
+  );
+}
 
 const REPO = process.cwd();
 const PATCHER = path.join(
@@ -95,6 +133,8 @@ const productionContext = (overrides = {}) => {
     trigger: "user",
     transcriptPrompt: undefined,
     threadId: undefined,
+    // NOTE: threadOwnerId travels via the preflight stash + boundary, NOT
+    // the selection patch, so it is passed per-test through overrides only.
   };
   const context = {};
   for (const field of fields) context[field] = values[field];
@@ -157,21 +197,8 @@ async function withPlugin(body) {
   }
 }
 
-/** Seed a Main-owned thread binding through the REAL outbound hook. */
-async function seedMainThread(hooks, threadId) {
-  const send = hooks.get("message_sending");
-  assert.ok(typeof send === "function", "message_sending hook must exist");
-  const out = await send(
-    { content: "Main reply", to: `channel:${OFFICE}` },
-    {
-      channelId: "discord",
-      sessionKey: "agent:main:discord:channel:1",
-      agentId: "main",
-      threadId,
-    },
-  );
-  assert.ok(!out?.block, "Main outbound post must not be blocked");
-}
+/** The R4 outbound-attribution seeding helper is retired with the cache it
+ * fed (see header). Fixtures now carry the host-resolved owner directly. */
 
 // ---------------------------------------------------------------------------
 // NATIVE CONTRACT — the injection itself
@@ -208,7 +235,10 @@ test("R4 N2: the native patch still grows no unstructured Discord fields", () =>
   }
 });
 
-test("R4 N3: exactly one selection predecessor slot, R10 -> R4", async () => {
+test("R4 N3: exactly one selection predecessor slot, R10 -> R5", async () => {
+  // M10/T2-R5 UPDATE: the slot leads to R5 (the R4 tree state was never
+  // deployed, so the descriptor follows the deployed chain R10→R5; the R4
+  // selection bytes equal the R5 selection bytes and R4 history stays here).
   const mod = await import(pathToFileURL(PATCHER).href);
   const table = mod.NATIVE_PATCH_PREDECESSORS?.["2026.6.34"];
   assert.ok(table, "the 2026.6.34 lineage table must exist");
@@ -220,7 +250,7 @@ test("R4 N3: exactly one selection predecessor slot, R10 -> R4", async () => {
   );
   const descriptor = table["selection-DopzNY3I.js"];
   assert.equal(descriptor.revision, "R10");
-  assert.equal(descriptor.successorRevision, "R4");
+  assert.equal(descriptor.successorRevision, "R5");
   assert.equal(
     descriptor.sourceDigest,
     "555f37dae8eec1fbbd35e25ae28222dc5e8d6965e383500695a93900e9d8ddf5",
@@ -246,7 +276,8 @@ test("R4 C1: Main-owned thread with missing-mention refusal admits", () => {
   const verdict = resolveMainConversationAdmission({
     agentId: "main",
     threadId: THREAD_MAIN,
-    mainThreadIds: [THREAD_MAIN],
+    threadOwnerId: MAIN_BOT,
+    mainBotId: MAIN_BOT,
     missingMentionRefusal: true,
   });
   assert.equal(verdict.admitted, true);
@@ -258,7 +289,8 @@ test("R4 C2: a non-mention refusal reason is never bypassed", () => {
     const verdict = resolveMainConversationAdmission({
       agentId: "main",
       threadId: THREAD_MAIN,
-      mainThreadIds: [THREAD_MAIN],
+      threadOwnerId: MAIN_BOT,
+      mainBotId: MAIN_BOT,
       missingMentionRefusal: refusal,
     });
     assert.equal(verdict.admitted, false);
@@ -266,11 +298,12 @@ test("R4 C2: a non-mention refusal reason is never bypassed", () => {
   }
 });
 
-test("R4 C3: unowned thread denies", () => {
+test("R4 C3: thread owned by another bot denies", () => {
   const verdict = resolveMainConversationAdmission({
     agentId: "main",
-    threadId: THREAD_OTHER,
-    mainThreadIds: [THREAD_MAIN],
+    threadId: THREAD_MAIN,
+    threadOwnerId: "1545438637750227104",
+    mainBotId: MAIN_BOT,
     missingMentionRefusal: true,
   });
   assert.equal(verdict.admitted, false);
@@ -282,7 +315,8 @@ test("R4 C4: absent threadId never infers a conversation", () => {
     const verdict = resolveMainConversationAdmission({
       agentId: "main",
       threadId,
-      mainThreadIds: [THREAD_MAIN],
+      threadOwnerId: MAIN_BOT,
+      mainBotId: MAIN_BOT,
       missingMentionRefusal: true,
     });
     assert.equal(verdict.admitted, false, `threadId=${String(threadId)}`);
@@ -294,7 +328,8 @@ test("R4 C5: specialist with an owned thread still denies", () => {
     const verdict = resolveMainConversationAdmission({
       agentId,
       threadId: THREAD_MAIN,
-      mainThreadIds: [THREAD_MAIN],
+      threadOwnerId: MAIN_BOT,
+      mainBotId: MAIN_BOT,
       missingMentionRefusal: true,
     });
     assert.equal(verdict.admitted, false, agentId);
@@ -307,19 +342,21 @@ test("R4 C6: malformed thread identity denies", () => {
     const verdict = resolveMainConversationAdmission({
       agentId: "main",
       threadId,
-      mainThreadIds: [THREAD_MAIN, "123"],
+      threadOwnerId: MAIN_BOT,
+      mainBotId: MAIN_BOT,
       missingMentionRefusal: true,
     });
     assert.equal(verdict.admitted, false, `threadId=${String(threadId)}`);
   }
 });
 
-test("R4 C7: empty bindings deny", () => {
-  for (const mainThreadIds of [[], null, undefined]) {
+test("R4 C7: absent or foreign ownership denies", () => {
+  for (const threadOwnerId of [null, undefined, "", "123", THREAD_OTHER]) {
     const verdict = resolveMainConversationAdmission({
       agentId: "main",
       threadId: THREAD_MAIN,
-      mainThreadIds,
+      threadOwnerId,
+      mainBotId: MAIN_BOT,
       missingMentionRefusal: true,
     });
     assert.equal(verdict.admitted, false);
@@ -331,16 +368,30 @@ test("R4 C7: empty bindings deny", () => {
 // ---------------------------------------------------------------------------
 
 test("R4 A1: owner message in a Main-owned thread is admitted (TEST 3)", async () => {
-  await withPlugin(async ({ hooks, native, paths }) => {
-    await seedMainThread(hooks, THREAD_MAIN);
-    await enterNativeRun(native, productionContext({ threadId: THREAD_MAIN }));
+  await withPlugin(async ({ native, paths }) => {
+    // Ownership arrives via the preflight stash (production path), never as
+    // a direct context field.
+    seedIngress({ messageId: MID_R4_A1, threadOwnerId: MAIN_BOT });
+    await enterNativeRun(
+      native,
+      productionContext({
+        currentMessageId: MID_R4_A1,
+        threadId: THREAD_MAIN,
+      }),
+    );
     const snapshot = readSnapshot(paths);
     const tasks = Object.values(snapshot.tasks);
     assert.equal(tasks.length, 1, "admission opens exactly one task");
     assert.equal(tasks[0].root_agent_id, "main");
     // The admitted message is now a handled message: a replay denies.
     await assert.rejects(
-      enterNativeRun(native, productionContext({ threadId: THREAD_MAIN })),
+      enterNativeRun(
+        native,
+        productionContext({
+          currentMessageId: MID_R4_A1,
+          threadId: THREAD_MAIN,
+        }),
+      ),
       /GOVERNANCE_RUN_UNAVAILABLE/u,
     );
   });
@@ -356,23 +407,37 @@ test("R4 A2: owner message with no thread binding stays denied (TEST 5)", async 
   });
 });
 
-test("R4 A3: message in a thread Main never posted in stays denied (TEST 8)", async () => {
-  await withPlugin(async ({ hooks, native }) => {
-    await seedMainThread(hooks, THREAD_MAIN);
+test("R4 A3: message in a thread Main does not own stays denied (TEST 8)", async () => {
+  await withPlugin(async ({ native }) => {
+    // Ownership evidence present but foreign: must still deny.
+    seedIngress({
+      messageId: "1545430000000000203",
+      threadOwnerId: "1545438637750227104",
+    });
     await assert.rejects(
-      enterNativeRun(native, productionContext({ threadId: THREAD_OTHER })),
+      enterNativeRun(
+        native,
+        productionContext({
+          currentMessageId: "1545430000000000203",
+          threadId: THREAD_OTHER,
+        }),
+      ),
       /GOVERNANCE_RUN_UNAVAILABLE/u,
     );
   });
 });
 
 test("R4 A4: specialist in a Main-owned thread stays denied (TEST 9)", async () => {
-  await withPlugin(async ({ hooks, native }) => {
-    await seedMainThread(hooks, THREAD_MAIN);
+  await withPlugin(async ({ native }) => {
+    seedIngress({
+      messageId: "1545430000000000204",
+      threadOwnerId: MAIN_BOT,
+    });
     await assert.rejects(
       enterNativeRun(
         native,
         productionContext({
+          currentMessageId: "1545430000000000204",
           agentId: "excel",
           sessionKey: `agent:excel:discord:channel:${OFFICE}`,
           threadId: THREAD_MAIN,
@@ -384,12 +449,16 @@ test("R4 A4: specialist in a Main-owned thread stays denied (TEST 9)", async () 
 });
 
 test("R4 A5: non-owner sender in a Main-owned thread stays denied", async () => {
-  await withPlugin(async ({ hooks, native }) => {
-    await seedMainThread(hooks, THREAD_MAIN);
+  await withPlugin(async ({ native }) => {
+    seedIngress({
+      messageId: "1545430000000000205",
+      threadOwnerId: MAIN_BOT,
+    });
     await assert.rejects(
       enterNativeRun(
         native,
         productionContext({
+          currentMessageId: "1545430000000000205",
           senderId: "223456789012345678",
           threadId: THREAD_MAIN,
         }),
@@ -420,10 +489,12 @@ test("R4 A6: heartbeat exemption is intact with threadId present (TEST 10)", asy
 });
 
 test("R4 A7: malformed threadId fails closed", async () => {
-  await withPlugin(async ({ hooks, native }) => {
-    await seedMainThread(hooks, THREAD_MAIN);
+  await withPlugin(async ({ native }) => {
     await assert.rejects(
-      enterNativeRun(native, productionContext({ threadId: "office" })),
+      enterNativeRun(
+        native,
+        productionContext({ threadId: "office", threadOwnerId: MAIN_BOT }),
+      ),
       /GOVERNANCE_RUN_UNAVAILABLE/u,
     );
   });

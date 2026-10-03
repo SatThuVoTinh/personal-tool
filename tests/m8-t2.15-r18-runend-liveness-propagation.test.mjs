@@ -533,14 +533,13 @@ const DEPLOYED_SELECTION_SHA256 =
   "555f37dae8eec1fbbd35e25ae28222dc5e8d6965e383500695a93900e9d8ddf5";
 
 test("R18 13: R18 leaves the pinned native patch byte-identical", () => {
-  // M10/T2-R4 UPDATE (owner Option A): the patch is intentionally extended by
-  // exactly one deterministic field (`threadId: params.currentThreadId ??
-  // null` in the selection injection slot) plus the R10->R4 lineage
-  // descriptor. This pin now records the R4-authorized bytes so any further
-  // unreviewed native mutation still fails; see R4 N1-N3 for the contract.
+  // M10/T2-R5 UPDATE (owner Option A): the patch is intentionally extended
+  // by the Discord preflight role plus the R10->R5 lineage descriptor. This
+  // pin now records the R5-authorized bytes so any further unreviewed
+  // native mutation still fails; see R5 H1-H3 for the contract.
   assert.equal(
     sha256(readFileSync(NATIVE_PATCH_PATH, "utf8")),
-    "40b42b29ac493ba71c44f9bd79968dde8c360cd4e8c3eaa41237c83f756ab101",
+    "b1285f55bcf57448dd668967f7e61fdb9c62102ade20fdad8106349817dfbcfd",
     "native-patch.mjs must equal the R4-authorized bytes; any other drift fails",
   );
 });
@@ -569,22 +568,22 @@ test("R18 14: the generated run-end call site is still unthreaded by design", ()
 });
 
 test("R18 15: the deployed selection needs no predecessor descriptor", async () => {
-  // M10/T2-R4 UPDATE (owner Option A): the R10 selection (555f37da, live
-  // since the R16 deployment) is now the recognised predecessor of the R4
+  // M10/T2-R5 UPDATE (owner Option A): the R10 selection (555f37da, live
+  // since the R16 deployment) is now the recognised predecessor of the R5
   // selection, in the single active slot. The descriptor below asserts that
-  // exact lineage; R4 N3 pins the slot invariant.
+  // exact lineage; R5 L1 pins the slot invariant.
   const { NATIVE_RUNTIME_PINS, NATIVE_PATCH_PREDECESSORS } =
     await import("../integrations/openclaw/topology/lib/native-patch.mjs");
   const source = readFileSync(NATIVE_PATCH_PATH, "utf8");
   assert.equal(
     source.split(DEPLOYED_SELECTION_SHA256).length - 1,
     1,
-    "the deployed R10 selection is listed exactly once, as the R4 predecessor",
+    "the deployed R10 selection is listed exactly once, as the R5 predecessor",
   );
   const descriptor =
     NATIVE_PATCH_PREDECESSORS["2026.6.34"]["selection-DopzNY3I.js"];
   assert.equal(descriptor.revision, "R10");
-  assert.equal(descriptor.successorRevision, "R4");
+  assert.equal(descriptor.successorRevision, "R5");
   assert.equal(descriptor.sourceDigest, DEPLOYED_SELECTION_SHA256);
   // And the runtime pins the deployed selection derives from are untouched.
   assert.equal(

@@ -41,6 +41,11 @@ export const NATIVE_RUNTIME_PINS = Object.freeze({
         sha256:
           "a5698c5523e87ad454cf89e4a5c940689403f7b6eac6f3d14c7205f1e3071ed6",
       }),
+      "message-handler.preflight-C1XBiefW.js": Object.freeze({
+        role: "discord-preflight",
+        sha256:
+          "dca5459d27777d7884483d86432d82c0da88244338c3e6ec574a337ec687c0b0",
+      }),
       "subagent-announce-Bh1QyKiE.js": Object.freeze({
         role: "announce",
         sha256:
@@ -129,6 +134,73 @@ const finalPatch = `\t\tconst zinkCompletionGate = await gateNativeAnnounce(suba
 \t\t}
 ${finalAnchor}`;
 
+// M10/T2-R5 — host-side Discord inbound metadata exposure.
+//
+// The pinned host drops structured Discord metadata (mentions, reply
+// reference, authorship) during canonical mapping, before any plugin hook or
+// run param can observe it. This edit records the structured fields at the
+// Discord preflight seam, where the raw discord.js message is still in
+// scope, into a bounded messageId-keyed registry the boundary reads back by
+// currentMessageId. Write and read are on the SAME causal inbound path (a
+// turn for a message exists only after that message's preflight completes),
+// so there is no event-ordering assumption and no dependency on
+// message_received/fireAndForgetHook. Memory-only, exact-match, eviction
+// and restart both degrade to deny.
+//
+// Defined before the edit tables so EDITS_BY_ROLE can reference the
+// preflight pair without a temporal-dead-zone break.
+
+/** Registry key shared by the preflight writer and the boundary reader. */
+export const ZINK_INGRESS_METADATA_KEY = "__zink_ingress_metadata_r5";
+
+/** Maximum retained inbound metadata records; oldest-first eviction. */
+export const ZINK_INGRESS_METADATA_LIMIT = 256;
+
+/**
+ * Unique anchor in message-handler.preflight-C1XBiefW.js: the Discord
+ * mention-state call whose scope holds the raw `message`, the
+ * host-resolved `threadOwnerId`, and the author/bot bindings.
+ */
+export const DISCORD_PREFLIGHT_ANCHOR =
+  "\tconst { implicitMentionKinds, wasMentioned } = resolveDiscordMentionState({\n\t\tauthorIsBot: Boolean(author.bot),\n\t\tbotId,\n\t\thasAnyMention,\n\t\tisDirectMessage,\n\t\tisExplicitlyMentioned: explicitlyMentioned,\n\t\tmentionRegexes,\n\t\tmentionText,\n\t\tmentionedEveryone: message.mentionedEveryone,\n\t\treferencedAuthorId: message.referencedMessage?.author?.id,\n\t\tsenderIsPluralKit: sender.isPluralKit,\n\t\ttranscript: preflightTranscript\n\t});";
+
+/**
+ * Appended after the anchor. Reads ONLY structured discord.js fields;
+ * never message text, never heuristics. Every id is snowflake-validated
+ * with malformed entries dropped; a missing/invalid message writes
+ * nothing. The whole block is exception-safe: any unexpected host shape
+ * skips the write (downstream denies as today) instead of breaking
+ * preflight. Free variables, exactly: `message`, `threadOwnerId`.
+ */
+export const DISCORD_PREFLIGHT_INJECTION = `\t;{
+\t\t// M10/T2-R5: deterministic Discord inbound metadata (see native-patch).
+\t\ttry {
+\t\t\tconst zinkSnowflake = (value) => (typeof value === "string" && /^[1-9][0-9]{16,19}$/.test(value) ? value : null);
+\t\t\tconst zinkIds = (entries) => { const ids = []; if (Array.isArray(entries)) { for (const entry of entries) { const id = zinkSnowflake(typeof entry === "string" ? entry : entry?.id); if (id) ids.push(id); } } return ids; };
+\t\t\tconst zinkMessageId = zinkSnowflake(message?.id);
+\t\t\tif (zinkMessageId) {
+\t\t\t\tlet zinkRegistry = globalThis.${ZINK_INGRESS_METADATA_KEY};
+\t\t\t\tif (!(zinkRegistry instanceof Map)) { zinkRegistry = new Map(); globalThis.${ZINK_INGRESS_METADATA_KEY} = zinkRegistry; }
+\t\t\t\twhile (zinkRegistry.size >= ${ZINK_INGRESS_METADATA_LIMIT}) { zinkRegistry.delete(zinkRegistry.keys().next().value); }
+\t\t\t\tzinkRegistry.set(zinkMessageId, {
+\t\t\t\t\tmentionedUserIds: zinkIds(message.mentionedUsers),
+\t\t\t\t\tmentionedRoleIds: zinkIds(message.mentionedRoles),
+\t\t\t\t\treplyReferenceMessageId: zinkSnowflake(message.messageReference?.message_id),
+\t\t\t\t\treplyReferenceAuthorId: zinkSnowflake(message.referencedMessage?.author?.id),
+\t\t\t\t\tthreadOwnerId: zinkSnowflake(threadOwnerId),
+\t\t\t\t\tauthorIsBot: message.author?.bot === true,
+\t\t\t\t});
+\t\t\t}
+\t\t} catch { /* fail-closed: no record, downstream denies as today */ }
+\t}`;
+
+const DISCORD_PREFLIGHT_EDITS = [
+  [
+    DISCORD_PREFLIGHT_ANCHOR,
+    `${DISCORD_PREFLIGHT_ANCHOR}\n${DISCORD_PREFLIGHT_INJECTION}`,
+  ],
+];
+
 // The edit sets are defined ONCE, by the ROLE a bundle plays, and each release's
 // pin references a role. Duplicating the patch text per release would let two
 // releases drift apart in exactly the way the duplicated-policy findings
@@ -182,6 +254,7 @@ const ANNOUNCE_EDITS = [
 const EDITS_BY_ROLE = Object.freeze({
   selection: SELECTION_EDITS,
   announce: ANNOUNCE_EDITS,
+  "discord-preflight": DISCORD_PREFLIGHT_EDITS,
 });
 
 function replaceOnce(source, before, after) {
@@ -210,14 +283,14 @@ function replaceOnce(source, before, after) {
 // For R10 the only required predecessor is R7. R5 and R6 are deliberately NOT
 // listed: the actual deployment graph requires only R7, and an entry for a
 // revision nothing depends on would widen the recognized surface for nothing.
-// M10/T2-R4 — the R10 patch is now the recognised predecessor, superseded by
-// the R4 patch which forwards the deterministic inbound thread identity
-// (`threadId: params.currentThreadId ?? null`, absent as null) so Main-owned
-// thread continuation is decidable at admission. The R7 descriptor is retired:
-// no R7 runtime remains in the deployment graph (the live runtime has been
-// R10 since the R16 deployment), and the mechanism holds exactly one active
-// slot per artifact, so the slot follows the actual deployment chain R10→R4.
-// The R7 signature and its history stay recorded in tests/docs, not here.
+// M10/T2-R5 — the R10 patch is the recognised predecessor, superseded by the
+// R4/R5 patch (threadId forwarding; R5 adds no further selection change).
+// The R7 descriptor is retired: no R7 runtime remains in the deployment
+// graph (the live runtime has been R10 since the R16 deployment), and the
+// mechanism holds exactly one active slot per artifact, so the slot follows
+// the actual deployment chain R10→R5. The R4 tree state (selection 04e92061…,
+// never deployed) is superseded-and-recorded, not admitted: nothing can
+// carry it. R7/R4 history stays recorded in tests/docs, not here.
 const selectionPatchR10 = `${selectionAnchor}
 \t\t\tawait enterNativeRun(params.config, {
 \t\t\t\tagentId: sessionAgentId, sessionKey: params.sessionKey, runId: params.runId,
@@ -258,7 +331,7 @@ export const NATIVE_PATCH_PREDECESSORS = Object.freeze({
       supersedes: selectionPatch,
       sourceDigest:
         "555f37dae8eec1fbbd35e25ae28222dc5e8d6965e383500695a93900e9d8ddf5",
-      successorRevision: "R4",
+      successorRevision: "R5",
     }),
   }),
 });

@@ -946,19 +946,18 @@ export function isDiscordSnowflake(value) {
 }
 
 /**
- * Decide whether a routing refusal for a missing mention is repaired by a
- * proven Main-owned-thread binding. Returns a frozen verdict; admitted is
- * true only when EVERY condition holds:
- * - the message targets the Main agent identity (specialists never qualify);
- * - the routing layer refused solely for a missing mention;
- * - the inbound threadId is a well-formed Discord snowflake;
- * - that exact threadId is bound to Main-authored posts.
- * Anything else yields MAIN_NOT_CONFIRMED (deny preserved).
+ * M10/T2-R5: deterministic reply-to-Main signal. Answers ONLY whether the
+ * inbound message replies to a Main-authored message, using the structured
+ * reply-reference author id forwarded from the Discord event. Both ids must
+ * be well-formed; a missing or foreign author never admits.
  */
-export function resolveMainConversationAdmission({
+export const MAIN_DIRECTED = "MAIN_DIRECTED";
+
+export function resolveMainReplyAdmission({
   agentId,
-  threadId,
-  mainThreadIds,
+  replyReferenceMessageId,
+  replyReferenceAuthorId,
+  mainBotId,
   missingMentionRefusal = false,
 } = {}) {
   if (agentId !== "main") {
@@ -973,16 +972,69 @@ export function resolveMainConversationAdmission({
       classification: MAIN_NOT_CONFIRMED,
     });
   }
+  if (
+    !isDiscordSnowflake(replyReferenceMessageId) ||
+    !isDiscordSnowflake(replyReferenceAuthorId) ||
+    !isDiscordSnowflake(mainBotId)
+  ) {
+    return Object.freeze({
+      admitted: false,
+      classification: MAIN_NOT_CONFIRMED,
+    });
+  }
+  if (replyReferenceAuthorId !== mainBotId) {
+    return Object.freeze({
+      admitted: false,
+      classification: MAIN_NOT_CONFIRMED,
+    });
+  }
+  return Object.freeze({
+    admitted: true,
+    classification: MAIN_DIRECTED,
+  });
+}
+
+/**
+ * M10/T2-R4 established, M10/T2-R5 re-homed: deterministic Main-owned-thread
+ * continuation. R4 attributed threads from Main's own outbound posts (bounded
+ * memory-only map); R5 uses the host-resolved thread owner id forwarded from
+ * the Discord preflight seam instead — authoritative, no memory, no eviction
+ * semantics to defend. Same verdict contract.
+ */
+export function resolveMainConversationAdmission({
+  agentId,
+  threadId,
+  threadOwnerId,
+  mainBotId,
+  missingMentionRefusal = false,
+} = {}) {
+  if (agentId !== "main") {
+    return Object.freeze({
+      admitted: false,
+      classification: MAIN_NOT_CONFIRMED,
+    });
+  }
+  if (missingMentionRefusal !== true) {
+    return Object.freeze({
+      admitted: false,
+      classification: MAIN_NOT_CONFIRMED,
+    });
+  }
+  // A present owner with an absent or malformed thread is inconsistent input
+  // and fails closed rather than admitting on the owner alone.
   if (!isDiscordSnowflake(threadId)) {
     return Object.freeze({
       admitted: false,
       classification: MAIN_NOT_CONFIRMED,
     });
   }
-  const owned =
-    Array.isArray(mainThreadIds) &&
-    mainThreadIds.some((ownedId) => ownedId === threadId);
-  if (!owned) {
+  if (!isDiscordSnowflake(threadOwnerId) || !isDiscordSnowflake(mainBotId)) {
+    return Object.freeze({
+      admitted: false,
+      classification: MAIN_NOT_CONFIRMED,
+    });
+  }
+  if (threadOwnerId !== mainBotId) {
     return Object.freeze({
       admitted: false,
       classification: MAIN_NOT_CONFIRMED,

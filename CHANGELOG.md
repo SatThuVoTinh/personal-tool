@@ -8,6 +8,21 @@ All notable, validated changes to Personal Tool are documented here.
 
 ### Added
 
+- Implemented the owner-authorized M10/T2-R5 host-side Discord inbound
+  metadata exposure (explicit Option A): the pinned host drops structured
+  Discord metadata during canonical mapping, so the native seam could never
+  observe mentions/replies/authorship. A minimal preflight-seam patch now
+  records structured ids (mentioned users/roles, reply-reference
+  message/author, thread owner, author bot flag) into a bounded
+  messageId-keyed registry on the causal inbound path; the boundary reads it
+  back with strict re-validation and admission accepts @main mentions,
+  replies to Main, and Main-owned threads while everything else stays
+  denied. No LLM, no text heuristics, no timing-dependent cache, no new
+  services. Lineage: new preflight pin (live equals baseline, direct
+  upgrade); selection R10→R5 single slot yielding `04e92061…`. 27 new
+  regression tests; R4 suite re-homed to host ownership. Deployment
+  Authorized: NO. Not deployed; no live execution; host lifecycle NOT
+  PROVEN.
 - Implemented the owner-authorized M10/T2-R4 Main conversational ingress
   repair (explicit Option A): the native admission seam structurally lacked
   mention/reply/author metadata, so every free-text Discord ingress turn was
