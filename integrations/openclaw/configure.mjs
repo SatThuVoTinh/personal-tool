@@ -80,6 +80,12 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
   ]),
   "contracts/approval-request.schema.json": Object.freeze([
     "a4866a323a17e7e4e0243afb4f771e2d3db2116034a7bd6a615501b0ae3d2e54",
+    // M10/T2-R3: the outgoing hygiene-build asset (41c62e7), byte-proven as
+    // the packaged build at that commit (live tree 34/34 match). Admitted so
+    // the next authorized deployment is reachable from the live runtime. The
+    // new digest is deliberately NOT listed: it is the current build and is
+    // accepted by content comparison.
+    "29eb3ed9992171481d30d1bb9f64f97e06ceed53bcf185da77817886458ab007",
   ]),
   "contracts/delegation-envelope.schema.json": Object.freeze([
     "cc5023418300cd616b9ced2bff752c2903a07ef2a3e2e0e29c16968e7e90af97",
@@ -104,10 +110,16 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // The accepted V16 build (9713872), established by packaging that commit.
     // Listed only so the R6 WORKFLOW_APPROVAL_REQUESTED contract can replace it.
     "12ac1bbf2f034e2d3f9ba98d1916c69eddb0e0035b618f1293f2e61f85f0c228",
+    // M10/T2-R3: the outgoing hygiene-build asset (41c62e7), proven as in the
+    // R3 header above (live tree 34/34 match). Same admission semantics.
+    "6acc2539cf1ca1e8393f6950937bb6aafb6312c9d9262774d748b57fb58ff974",
   ]),
   "contracts/ledger-snapshot.schema.json": Object.freeze([
     "3cde5162ae845a9b7066a623a9c4c8896f1fc6b77f2b5983ad506a9dfcbc0151",
     "01138d85c148c06c4cfc7d6cdfd844db70a2c5b9990e21cf92810fd8ee2b50c5",
+    // M10/T2-R3: the outgoing hygiene-build asset (41c62e7), proven as in the
+    // R3 header above (live tree 34/34 match). Same admission semantics.
+    "a8c3d7aabeaae962a2ee7738d42739d0941104f61da572ef5cd5db54f6ccd5fb",
   ]),
   "contracts/result.schema.json": Object.freeze([
     "9440dfb87b3daf358b11dc7b59b62586c68786235d99d717daf9783b9a6e4540",
@@ -117,6 +129,9 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
   ]),
   "governance-manifests.json": Object.freeze([
     "5026959d41a76c531f37caa6297b3b0b010ee17cedd7bdd3806447600c98a18d",
+    // M10/T2-R3: the outgoing hygiene-build asset (41c62e7), proven as in the
+    // R3 header above (live tree 34/34 match). Same admission semantics.
+    "e27647b9742b56052188a8bbf746ab6c5eeaaeb67344216c11859167ee78946f",
   ]),
   "lib/artifact-validator.mjs": Object.freeze([
     "0b35496fdebe5e204bfc4395057e9a54e5635060a1af1fe47146dd391ebeac79",
@@ -131,12 +146,18 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // deliberately NOT listed: it is the current build and is already accepted
     // by content comparison.
     "50a0b47860cb4cce29fc4f4d40d7c57813035324bc2e490a6f184754212e3e82",
+    // M10/T2-R3: the outgoing hygiene-build asset (41c62e7), proven as in the
+    // R3 header above (live tree 34/34 match). Same admission semantics.
+    "bb2f53280712d94ee799f116d3c28a6d199e6648ad558ea0cce18bd6210eddd0",
   ]),
   "lib/canonical.mjs": Object.freeze([
     "c6c0515ab3b1ade07d94d8b5969cd425456db2b5fff56847ba7ef0030989b203",
   ]),
   "lib/decision-ledger.mjs": Object.freeze([
     "cec8776c771d4cf521a664fa7dd62aa5e14b54cc05389b30be51bc03b4c51a6e",
+    // M10/T2-R3: the outgoing hygiene-build asset (41c62e7), proven as in the
+    // R3 header above (live tree 34/34 match). Same admission semantics.
+    "9b5f2f94c33430a30ae5da96b118a558229503bf195e8168701cfb1d748b782e",
   ]),
   "lib/policy.mjs": Object.freeze([
     "0584ca5fd8698ef986a7a41f31d1b735997bc1f7fb879f91a1df90ad191603e5",
@@ -157,9 +178,15 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // digest is deliberately NOT listed: it is the current build and is already
     // accepted by content comparison.
     "5a1d991977b6b5bb3c510f9e193f21b8300766ef6271a6316acb9a77ed4b6776",
+    // M10/T2-R3: the outgoing hygiene-build asset (41c62e7), proven as in the
+    // R3 header above (live tree 34/34 match). Same admission semantics.
+    "e29812bcae3d791252ea6d567d77ceb4c7a1e43692fdf920317251369d2a2891",
   ]),
   "lib/queue-manager.mjs": Object.freeze([
     "a8021088a4e9373fcf74cf4dd31433c8606b9505eaf74c5fa922839ee716776a",
+    // M10/T2-R3: the outgoing hygiene-build asset (41c62e7), proven as in the
+    // R3 header above (live tree 34/34 match). Same admission semantics.
+    "97fa9907c5c37c7c4e0432d0ccd9d1d1786b153197913da6a888bfb0e81ce5f2",
   ]),
   "lib/schema.mjs": Object.freeze([
     "869a2254975f60432c596a115acee1fc0e03893224b925c5a54334dc532d1cee",
@@ -173,6 +200,9 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     "b230651ec4fa9b5a123c10e319438918c0763f99287f5223da1a71d1aebe213a",
     "efdcea2457db29f20603fa0cf948fd8e0261f78d3ec3f863637a56befdf8f784",
     "c66587e10db3f35c8c03ff430360e1abe4bc2268613ae78d1e2bd8837dca0173",
+    // M10/T2-R3: the outgoing hygiene-build asset (41c62e7), proven as in the
+    // R3 header above (live tree 34/34 match). Same admission semantics.
+    "9e7e284507e6d6f5e2213005d4ad89af60540ef0bb404eb0d4855bf8078cab78",
   ]),
   "lib/native-boundary.mjs": Object.freeze([
     "4b77356f2a843f26040a7cd3312c896469aff33cc472bc6c02fdd5c472bd1234",
@@ -225,6 +255,9 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     "ff2ca8d3abbef43081756d68b553e23f036bbed302f6ffdf0075c045f8f1f5e2",
     // The accepted V16 build (9713872), established by packaging that commit.
     "1a1913e3d3d0923dec0089812242ccd1f7221ea535ad4d85b554dce1587e9407",
+    // M10/T2-R3: the outgoing hygiene-build asset (41c62e7), proven as in the
+    // R3 header above (live tree 34/34 match). Same admission semantics.
+    "e78d81bf55d144e36edff7327c5a1d8ef0ed6b4f7a2dd2b1cc586ea1088389d8",
   ]),
   "policy/reason-code-matrix.json": Object.freeze([
     "982896fe4fcc856728f8348058f19b69d89eabd9974bdaf4311c4afa510fc200",

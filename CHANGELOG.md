@@ -8,6 +8,24 @@ All notable, validated changes to Personal Tool are documented here.
 
 ### Added
 
+- Implemented the owner-authorized M10/T2-R3 proven governance-asset
+  predecessor admission repair, closing the asset-level deployment deadlock
+  that kept the frozen M10/T2-R2 candidate undeployable: `configure.mjs
+--preflight` refused the live hygiene-build runtime with `Governance plugin
+asset drift detected` (`installed_mutation: false`) because ten live
+  governance-plugin assets differed from the R2 build and were not admitted
+  in `ALLOWED_GOVERNANCE_ASSET_SHA256`. All ten digests were proven before
+  admission — the live deployed tree (34 files) is byte-identical to the
+  packaged build at commit `41c62e7` through the repository's own
+  `governancePluginFiles()` (34/34 match) — and only the existing shared
+  allowlist was extended, each digest under its own path, with preflight and
+  apply consuming the same table so no per-mode asymmetry can re-open. Eleven
+  regression tests prove provenance re-derivation, 10/10 provenance parity,
+  current-build exclusion, per-predecessor preflight-PASS-then-apply-ACCEPT
+  with convergence, the exact production failure state as a fixture, and that
+  perturbed, unknown, and wrong-path digests still fail closed without
+  mutation. No R2 logic was touched. Deployment Authorized: NO. Not deployed;
+  no live execution; live ledger untouched; host lifecycle NOT PROVEN.
 - Implemented the owner-authorized M10/T2-R2 coordinator execution-authority
   remediation, closing the safety issue the M10/T2-R1 pre-live audit proved: a
   coordinator runtime could outlive its queue lease and, because every governed

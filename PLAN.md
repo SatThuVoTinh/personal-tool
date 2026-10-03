@@ -1372,8 +1372,8 @@ from this environment and are not claimed.
 
 Status: `IN PROGRESS`
 Task: `M10/T2 - bind a gateway-started coordinator run to its claimed queue attempt, and fence that binding to current execution authority`
-Plan Revision: `M10/T2-R2`
-Parent Revision: `M10/T2-R1` (implementation commit `64ded50`)
+Plan Revision: `M10/T2-R3`
+Parent Revision: `M10/T2-R2` (implementation commit `d254f56`)
 Planning Readiness: `APPROVED`
 Execution Authorization: `YES` (repository implementation only)
 Execution Contract: `docs/contracts/execution/ACTIVE.md`
@@ -1494,6 +1494,72 @@ lineage. The Windows npm install (`2026.7.1-2`, `selection-JInn13lc.js`) is a
 second, separately pinned lineage and is not the deployment target; an earlier
 report of it as a lineage discrepancy was a wrong-path observation and is
 withdrawn.
+
+### M10/T2-R3 - proven governance-asset predecessor admission (owner-authorized implementation)
+
+Owner authorization: EXPLICIT - the owner authorized exactly one narrowly
+scoped repository repair for the M10/T2-R2 deployment deadlock identified by
+read-only builder-preflight. Operation `REPOSITORY_IMPLEMENTATION_ONLY`;
+deployment NOT AUTHORIZED; live execution NOT AUTHORIZED.
+
+Problem: the R2 candidate (`d254f56`) is repository-complete and
+artifact-reproducible, but the single authorized deployment attempt never
+started: `configure.mjs --preflight` refused the live runtime with
+`Governance plugin asset drift detected` and `installed_mutation: false`. The
+live runtime carries the owner-identity hygiene build (extension `2271b56b`),
+whose ten governance-plugin assets differ from the R2 build and were not
+admitted in `ALLOWED_GOVERNANCE_ASSET_SHA256` - an asset-level
+predecessor-admission deadlock of the exact class R13 documents for the
+entrypoint. R2 closure had extended only the entrypoint lists.
+
+Provenance (10/10 PROVEN, 0 admitted on faith): the live deployed tree (34
+files, digests captured read-only via WSL `sha256sum`) is byte-identical to
+the packaged governance-plugin build produced by commit `41c62e7`
+("deployment path for the hygiene build + its proof") through the
+repository's own `governancePluginFiles()` - 34/34 files match, including the
+already-admitted entrypoint `2271b56b`. The parent `9b53f92` packages these
+files byte-identically. Each admitted digest was re-derived from that commit
+before admission; the current-build digests are deliberately NOT listed and
+remain accepted by content comparison.
+
+Change (minimal, one table): ten predecessor digests added to the existing
+shared `ALLOWED_GOVERNANCE_ASSET_SHA256` in `integrations/openclaw/
+configure.mjs`, each under its own asset path with a provenance comment:
+`lib/guard.mjs` `9e7e2845…`, `lib/workflow.mjs` `e78d81bf…`, `lib/policy.mjs`
+`e29812bc…`, `lib/authority.mjs` `bb2f5328…`, `lib/queue-manager.mjs`
+`97fa9907…`, `lib/decision-ledger.mjs` `9b5f2f94…`,
+`contracts/approval-request.schema.json` `29eb3ed9…`,
+`contracts/ledger-event.schema.json` `6acc2539…`,
+`contracts/ledger-snapshot.schema.json` `a8c3d7aa…`,
+`governance-manifests.json` `e27647b9…`. No R2 logic touched; the preflight
+and apply gates consume the same single table, so no per-mode asymmetry can
+re-open. Unknown digests still fail closed; path-scoping is preserved.
+
+Regression: `tests/m10-t2-r3-asset-predecessor.test.mjs`, 11 tests -
+provenance re-derivation (P1), optional live cross-check (P2, skips where the
+live dir is unreachable), 10/10 provenance parity (R3 0), current-build
+exclusion (R3 0b), single-table structural parity (R3 0c), per-predecessor
+preflight-PASS-then-apply-ACCEPT with convergence (R3 1), the exact
+production failure state as a full-hygiene-tree fixture (R3 2), one-byte
+perturbation refusal per digest (R3 3), unknown-digest refusal without
+mutation (R3 4), wrong-path refusal (R3 5), and full-table fail-closed
+sweep (R3 6). Acceptance tests were watched FAIL before the allowlist edit
+(reproducing the production deadlock in-fixture) and PASS after; negatives
+passed throughout.
+
+Self-correction recorded: a hand-transcribed digest table used during
+diagnosis briefly suggested an 11th differing asset
+(`policy/reason-code-matrix.json`); two programmatic probes and two fresh
+read-only live reads agree the live file equals the current build
+(`4cd65444…`, accepted by content comparison), so the transcription was
+wrong and no 11th admission exists. Scope stays exactly the ten proven
+assets.
+
+Status: IMPLEMENTED and locally verified; deployment NOT AUTHORIZED and NOT
+PERFORMED; live ledger untouched; gateway not restarted; no live execution;
+host lifecycle NOT PROVEN. A deployment of the new R3 commit requires a
+separate owner authorization for exactly one attempt. See ACTIVE.md R3 and
+CHANGELOG.md Unreleased entry.
 
 ## 9. Deferred beyond V1
 

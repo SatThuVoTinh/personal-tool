@@ -1,4 +1,121 @@
-ACTIVE.md -- M10/T2-R2 Coordinator Execution Authority (CURRENT EXECUTION CONTRACT)
+ACTIVE.md -- M10/T2-R3 Proven Governance-Asset Predecessor Admission (CURRENT EXECUTION CONTRACT)
+
+Task ID: M10/T2
+Plan Revision: M10/T2-R3
+Parent Revision: M10/T2-R2 (implementation commit `d254f56`)
+Planning Readiness: APPROVED
+Execution Authorization: YES (repository implementation only)
+Owner Approval: EXPLICIT -- owner authorized exactly one narrowly scoped
+  repository repair for the M10/T2-R2 deployment deadlock identified by
+  read-only builder-preflight. Operation REPOSITORY_IMPLEMENTATION_ONLY.
+Execution Contract: docs/contracts/execution/ACTIVE.md (this file)
+Design / Behavior Contract: docs/contracts/coordinator-session-binding.md
+  (§1-§13 the approved design package; §14 the R2 authority addendum)
+PLAN Pointer: PLAN.md §3 (M10 row) and §8 M10/T2 entry (M10/T2-R3 block)
+Evidence Level: LOCAL-VERIFIED
+Deployment Authorized: NO
+Deployment Status: NOT DEPLOYED
+Live Execution: NO
+Lifecycle: IN PROGRESS -- implemented and locally verified; deployment of the
+  R3 commit requires a separate owner authorization for exactly one attempt
+
+## R3 1. Objective
+
+Close ONLY the asset-level predecessor-admission deadlock that kept the
+frozen R2 candidate undeployable: `configure.mjs --preflight` refused the
+live hygiene-build runtime with `Governance plugin asset drift detected`
+(`installed_mutation: false`), because ten live governance-plugin assets
+differ from the R2 build and were not admitted in
+`ALLOWED_GOVERNANCE_ASSET_SHA256`. R2 closure extended only the entrypoint
+predecessor lists. No R2 fix is reopened, reinterpreted, refactored or
+modified; entrypoint provenance logic is untouched (the live entrypoint
+`2271b56b…` was already admitted).
+
+## R3 2. Allowed scope
+
+- Re-derive the ten observed live asset digests from their historical
+  committed source through `governancePluginFiles()` (10/10 PROVEN before
+  admission; unproven assets STOP the task).
+- Extend ONLY the existing shared `ALLOWED_GOVERNANCE_ASSET_SHA256` with the
+  proven digests, each under its own path. No second allowlist, no
+  preflight-only or apply-only bypass, no digest-check weakening.
+- One focused regression suite with provenance, acceptance, negative and
+  parity tests in isolated fixtures (never `--apply` against the live
+  runtime).
+- Governance synchronization: PLAN.md, ACTIVE.md (this file), CHANGELOG.md.
+- New R3 commit; the R2 commit `d254f56` is never amended.
+
+Excluded: deployment (`operator-apply.mjs` never invoked), gateway restart,
+live ledger mutation, live execution, `api.runtime.subagent.run`,
+`WORKFLOW_RESULT_RECORDED`, result lineage, host lifecycle, unrelated R2
+changes, OpenClaw lineage changes.
+
+## R3 3. Provenance record (10/10 PROVEN)
+
+Source commit `41c62e7` ("deployment path for the hygiene build + its
+proof"; parent `9b53f92` packages these files byte-identically). The live
+deployed tree (34 files, digests captured read-only) is byte-identical to
+the packaged build at that commit: 34/34 match, including the
+already-admitted entrypoint `2271b56b…`.
+
+| Asset path | Live SHA-256 (= historical @41c62e7) |
+| --- | --- |
+| `lib/guard.mjs` | `9e7e284507e6d6f5e2213005d4ad89af60540ef0bb404eb0d4855bf8078cab78` |
+| `lib/workflow.mjs` | `e78d81bf55d144e36edff7327c5a1d8ef0ed6b4f7a2dd2b1cc586ea1088389d8` |
+| `lib/policy.mjs` | `e29812bcae3d791252ea6d567d77ceb4c7a1e43692fdf920317251369d2a2891` |
+| `lib/authority.mjs` | `bb2f53280712d94ee799f116d3c28a6d199e6648ad558ea0cce18bd6210eddd0` |
+| `lib/queue-manager.mjs` | `97fa9907c5c37c7c4e0432d0ccd9d1d1786b153197913da6a888bfb0e81ce5f2` |
+| `lib/decision-ledger.mjs` | `9b5f2f94c33430a30ae5da96b118a558229503bf195e8168701cfb1d748b782e` |
+| `contracts/approval-request.schema.json` | `29eb3ed9992171481d30d1bb9f64f97e06ceed53bcf185da77817886458ab007` |
+| `contracts/ledger-event.schema.json` | `6acc2539cf1ca1e8393f6950937bb6aafb6312c9d9262774d748b57fb58ff974` |
+| `contracts/ledger-snapshot.schema.json` | `a8c3d7aabeaae962a2ee7738d42739d0941104f61da572ef5cd5db54f6ccd5fb` |
+| `governance-manifests.json` | `e27647b9742b56052188a8bbf746ab6c5eeaaeb67344216c11859167ee78946f` |
+
+`policy/reason-code-matrix.json` needs no admission: the live file equals
+the current build (`4cd65444…`, content comparison). An 11th differing asset
+briefly suspected during diagnosis was a hand-transcription error, refuted
+by two programmatic probes and two fresh live reads.
+
+## R3 4. The change
+
+`integrations/openclaw/configure.mjs` only (plus the new test, its
+`package.json` registration, and governance records): the ten digests above
+added to `ALLOWED_GOVERNANCE_ASSET_SHA256`, each under its own key with a
+provenance comment. The preflight gate and the apply gate consume this one
+shared table, so admission parity between modes is structural. Semantics:
+known candidate bytes OR known proven predecessor bytes → accepted; anything
+else → refused. The table stays explicit and finite.
+
+## R3 5. Tests
+
+`tests/m10-t2-r3-asset-predecessor.test.mjs`, 11 tests: P1 provenance
+re-derivation from `41c62e7`; P2 optional live cross-check (skips where the
+live dir is unreachable); R3 0 provenance parity (10 admitted == 10
+proven, path+digest identity, exactly-once occurrence); R3 0b
+current-build exclusion; R3 0c single-table structural parity; R3 1
+per-predecessor preflight PASS (with `installedMutation: false`) then apply
+ACCEPT with convergence onto candidate bytes; R3 2 the exact production
+failure state as a full-hygiene-tree fixture converging on apply; R3 3
+one-byte perturbation refused per digest (each admission load-bearing); R3 4
+unknown digest refused without mutation; R3 5 wrong-path refusal; R3 6
+full-table fail-closed sweep. TDD: R3 0/R3 1/R3 2 watched FAIL before the
+allowlist edit (reproducing the production deadlock in-fixture) and PASS
+after; all negatives passed throughout.
+
+## R3 6. Validation
+
+Focused R3 11/11; R13+R8+packaging 54/54; M10 suites (R2+R1+pickup) 82/82;
+full `npm test` / lint / format / repo-check / `git diff --check` per §14;
+artifact rebuild reproducibility per §13; Python knowledge suite NOT RUN if
+its tokenizer prerequisite remains unavailable (recorded, never fabricated).
+Deployment NOT PERFORMED; live ledger byte-identical; gateway untouched;
+host lifecycle NOT PROVEN.
+
+---
+
+# Historical: M10/T2-R2 Coordinator Execution Authority (retained unchanged as evidence; superseded by M10/T2-R3 above)
+
+ACTIVE.md -- M10/T2-R2 Coordinator Execution Authority (HISTORICAL EXECUTION CONTRACT -- superseded by M10/T2-R3 above; content retained unchanged)
 
 Task ID: M10/T2
 Plan Revision: M10/T2-R2
