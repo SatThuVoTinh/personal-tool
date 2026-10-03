@@ -1372,8 +1372,8 @@ from this environment and are not claimed.
 
 Status: `IN PROGRESS`
 Task: `M10/T2 - bind a gateway-started coordinator run to its claimed queue attempt, and fence that binding to current execution authority`
-Plan Revision: `M10/T2-R5`
-Parent Revision: `M10/T2-R4` (implementation commit `78daa5b`)
+Plan Revision: `M10/T2-R6`
+Parent Revision: `M10/T2-R5` (implementation commit `4d1e64e`)
 Planning Readiness: `APPROVED`
 Execution Authorization: `YES` (repository implementation only)
 Execution Contract: `docs/contracts/execution/ACTIVE.md`
@@ -1670,6 +1670,45 @@ Unreleased entry. Residual live risks for verification: (1) office-channel
 check assumes parent-channel in messageChannel for thread replies
 (fail-closed either way); (2) referencedMessage present only when Discord
 supplies it, else null (deny preserved).
+
+### M10/T2-R6 - Native boundary predecessor admission (owner-authorized implementation)
+
+Owner authorization: EXPLICIT - exactly one narrowly scoped repair for the
+R5 deployment preflight deadlock (live boundary d88bff80 unadmitted).
+Operation `REPOSITORY_IMPLEMENTATION_ONLY`; deployment NOT AUTHORIZED;
+live execution NOT AUTHORIZED.
+
+Root cause: every revision since R18 left `lib/native-boundary.mjs`
+untouched, so the live R3 runtime still carries the R18 build d88bff80
+while the R5 candidate rebuilds it as bccfa861 - and no allowlist entry
+covered the live digest. Same asset-admission deadlock class as R2/R3.
+
+Provenance (1/1 PROVEN, 0 admitted on faith): materialized commit 980b36e
+(R18 run-end liveness propagation) and packaged it through the
+repository's own `governancePluginFiles()` - byte-identical to the
+observed live file. (9b53f92/41c62e7 package identically; 980b36e is the
+origin commit and the recorded source.)
+
+Change (minimal, one entry): d88bff80 admitted under
+`lib/native-boundary.mjs` in the shared `ALLOWED_GOVERNANCE_ASSET_SHA256`
+with provenance comment. Candidate bccfa861 stays unlisted (content
+comparison). No native logic, ingress, R2-R5 code, or unrelated entry
+touched; preflight and apply consume the same table.
+
+Regression: `tests/m10-t2-r6-boundary-predecessor.test.mjs`, 8 tests
+(provenance re-derivation P1, 1/1 parity R6 0, candidate exclusion R6 0b,
+shared-table R6 0c, predecessor preflight-PASS-then-apply-ACCEPT with
+convergence R6 1, one-byte perturbation R6 2, unknown digest R6 3,
+wrong-path R6 4). R6 0/R6 1 watched FAIL pre-fix, 8/8 post-fix.
+
+Artifact: comment-only source change - the R6 package is expected
+byte-identical to R5 (verified by rebuild, like R2==R3).
+
+Status: IMPLEMENTED and locally verified; deployment NOT AUTHORIZED and
+NOT PERFORMED; live ledger untouched; gateway not restarted; no live
+execution; host lifecycle NOT PROVEN. A deployment requires a separate
+owner authorization (of the resulting R6 commit). See ACTIVE.md R6 and
+CHANGELOG.md Unreleased entry.
 
 ## 9. Deferred beyond V1
 

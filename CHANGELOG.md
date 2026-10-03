@@ -8,6 +8,20 @@ All notable, validated changes to Personal Tool are documented here.
 
 ### Added
 
+- Implemented the owner-authorized M10/T2-R6 native-boundary predecessor
+  admission repair, closing the asset-level deployment deadlock that kept
+  the frozen R5 candidate undeployable: `configure.mjs --preflight`
+  refused the live R3 runtime because live `lib/native-boundary.mjs`
+  (d88bff80, the R18 build, untouched by every later revision) was not
+  admitted while the candidate rebuilds it as bccfa861. The digest was
+  proven before admission by packaging commit 980b36e through the
+  repository's own `governancePluginFiles()` (byte-identical to live);
+  exactly one predecessor entry was added under its own path. Eight
+  regression tests prove provenance, 1/1 parity, preflight-PASS-then-
+  apply-ACCEPT with convergence, and that perturbed/unknown/wrong-path
+  digests still fail closed without mutation. No native logic touched.
+  Deployment Authorized: NO. Not deployed; no live execution; host
+  lifecycle NOT PROVEN.
 - Implemented the owner-authorized M10/T2-R5 host-side Discord inbound
   metadata exposure (explicit Option A): the pinned host drops structured
   Discord metadata during canonical mapping, so the native seam could never

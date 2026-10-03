@@ -241,6 +241,14 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // The R18 digest is deliberately NOT listed: it is the current build and is
     // already accepted by content comparison.
     "4567ce268064cb7729ace6ebc122dcaa2f1a938fa6b59143e3baeddd7c3a9a14",
+    // M10/T2-R6: the outgoing R18 build currently deployed (live R3 runtime),
+    // byte-proven as the packaged build at commit 980b36e through the
+    // repository's own governancePluginFiles() before admission (see R6 P1).
+    // Every revision since R18 left this file untouched, so without this
+    // entry --preflight refuses the deployed extension and the R5/R6
+    // deployment is unreachable. The new digest is deliberately NOT listed:
+    // it is the current build and is accepted by content comparison.
+    "d88bff80aeb3d7531e5a0dceba4e7ba856d085e64a87cbb414c9f295284d81e3",
   ]),
   "lib/runtime.mjs": Object.freeze([
     "6a522c73efacf8b593d63ee55e18b5d02c3675340e0593142a5c2fea8dc6e24a",

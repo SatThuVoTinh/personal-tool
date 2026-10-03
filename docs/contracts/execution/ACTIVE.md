@@ -1,4 +1,51 @@
-ACTIVE.md -- M10/T2-R5 Host-Side Discord Inbound Metadata Exposure (CURRENT EXECUTION CONTRACT)
+ACTIVE.md -- M10/T2-R6 Native Boundary Predecessor Admission (CURRENT EXECUTION CONTRACT)
+
+Task ID: M10/T2
+Plan Revision: M10/T2-R6
+Parent Revision: M10/T2-R5 (implementation commit `4d1e64e`)
+Planning Readiness: APPROVED
+Execution Authorization: YES (repository implementation only)
+Owner Approval: EXPLICIT -- owner authorized exactly one narrowly scoped
+  repair for the R5 deployment preflight deadlock (live boundary d88bff80
+  unadmitted). Operation REPOSITORY_IMPLEMENTATION_ONLY.
+Execution Contract: docs/contracts/execution/ACTIVE.md (this file)
+PLAN Pointer: PLAN.md §3 (M10 row) and §8 M10/T2 entry (M10/T2-R6 block)
+Evidence Level: LOCAL-VERIFIED
+Deployment Authorized: NO
+Deployment Status: NOT DEPLOYED
+Live Execution: NO
+Lifecycle: IN PROGRESS -- implementation authorized; R3 (`a09fc25`) remains
+  the deployed baseline
+
+## R6 1. Objective
+
+Admit exactly one proven predecessor -- live `lib/native-boundary.mjs`
+d88bff80 -- into the existing shared allowlist, after re-deriving it from
+its source commit through governancePluginFiles(). Nothing else changes:
+no native logic, no ingress policy, no R2-R5 reopening.
+
+## R6 2. Allowed scope
+
+- Provenance re-derivation (1/1 before admission; STOP if unproven).
+- One allowlist entry under its own path with provenance comment.
+- Focused regression (production deadlock fixture, unknown-digest
+  negative, provenance parity, preflight/apply parity).
+- PLAN/ACTIVE/CHANGELOG sync, R6 commit.
+- Excluded: deployment, live execution, native/policy changes, new
+  mechanisms, dependency/lockfile changes.
+
+## R6 3. Acceptance
+
+Provenance 1/1; preflight PASS + installed_mutation false on the
+predecessor fixture; isolated apply PASS converging onto bccfa861;
+unknown digest refused without mutation; parity green; R2-R5 green;
+full matrix green; artifact reproducible; tree clean.
+
+---
+
+# Historical: M10/T2-R5 Host-Side Discord Inbound Metadata Exposure (retained unchanged as evidence; superseded by M10/T2-R6 above)
+
+ACTIVE.md -- M10/T2-R5 Host-Side Discord Inbound Metadata Exposure (HISTORICAL EXECUTION CONTRACT -- superseded by M10/T2-R6 above; content retained unchanged)
 
 Task ID: M10/T2
 Plan Revision: M10/T2-R5
