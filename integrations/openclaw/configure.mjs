@@ -149,6 +149,14 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // M10/T2-R3: the outgoing hygiene-build asset (41c62e7), proven as in the
     // R3 header above (live tree 34/34 match). Same admission semantics.
     "bb2f53280712d94ee799f116d3c28a6d199e6648ad558ea0cce18bd6210eddd0",
+    // M10/T2-R7: the outgoing R2-tree asset (origin commit 2ef4bd6), proven
+    // by packaging that commit through governancePluginFiles() before
+    // admission (see R7 P1: byte-identical to the live R3 file). R4/R5
+    // changed this file (conversational classifiers) without admitting the
+    // outgoing digest, so without this entry --preflight refuses the
+    // deployed extension. The new digest is deliberately NOT listed: it is
+    // the current build and is already accepted by content comparison.
+    "aa12540f60da6bcdf809123f0d75c632c6b8a128a88e4395f38785b663f13e17",
   ]),
   "lib/canonical.mjs": Object.freeze([
     "c6c0515ab3b1ade07d94d8b5969cd425456db2b5fff56847ba7ef0030989b203",

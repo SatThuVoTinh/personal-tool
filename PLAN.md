@@ -1372,8 +1372,8 @@ from this environment and are not claimed.
 
 Status: `IN PROGRESS`
 Task: `M10/T2 - bind a gateway-started coordinator run to its claimed queue attempt, and fence that binding to current execution authority`
-Plan Revision: `M10/T2-R6`
-Parent Revision: `M10/T2-R5` (implementation commit `4d1e64e`)
+Plan Revision: `M10/T2-R7`
+Parent Revision: `M10/T2-R6` (implementation commit `71aa592`)
 Planning Readiness: `APPROVED`
 Execution Authorization: `YES` (repository implementation only)
 Execution Contract: `docs/contracts/execution/ACTIVE.md`
@@ -1708,6 +1708,50 @@ Status: IMPLEMENTED and locally verified; deployment NOT AUTHORIZED and
 NOT PERFORMED; live ledger untouched; gateway not restarted; no live
 execution; host lifecycle NOT PROVEN. A deployment requires a separate
 owner authorization (of the resulting R6 commit). See ACTIVE.md R6 and
+CHANGELOG.md Unreleased entry.
+
+### M10/T2-R7 - Authority predecessor admission (owner-authorized implementation)
+
+Owner authorization: EXPLICIT - exactly one narrowly scoped repair for the
+R6 deployment preflight deadlock (live authority aa12540f unadmitted).
+Operation `REPOSITORY_IMPLEMENTATION_ONLY`; deployment NOT AUTHORIZED;
+live execution NOT AUTHORIZED.
+
+Root cause: R3 deployed the R2-tree governance-plugin assets; R4/R5 then
+changed `lib/authority.mjs` (conversational classifiers) to candidate
+42b0cba8 without admitting the outgoing digest, and R6's authorized scope
+covered only the boundary file. Same asset-admission deadlock class as
+R2/R3/R6.
+
+Provenance (1/1 PROVEN, 0 admitted on faith): materialized commit 2ef4bd6
+(M8/T3 learning loop, the origin commit that introduced these exact bytes
+- its parent tree carries the hygiene-era bb2f5328) and packaged it
+through the repository's own `governancePluginFiles()` - byte-identical
+to the observed live file (aa12540f60da6bcdf809123f0d75c632c6b8a128a88e4395f38785b663f13e17).
+No rewrite rules touch this path at any commit, so packaged bytes equal
+source bytes. A mistranscribed digest from the earlier deployment
+diagnosis (...4e0432d0...) was caught and corrected by the P1
+re-derivation gate before any admission - evidence-first discipline held.
+
+Change (minimal, one entry): aa12540f admitted under
+`lib/authority.mjs` in the shared `ALLOWED_GOVERNANCE_ASSET_SHA256`
+with provenance comment. Candidate 42b0cba8 stays unlisted (content
+comparison). No native logic, ingress, classifier behavior, R2-R6 code,
+or unrelated entry touched; preflight and apply consume the same table.
+
+Regression: `tests/m10-t2-r7-authority-predecessor.test.mjs`, 8 tests
+(provenance re-derivation P1, 1/1 parity R7 0, candidate exclusion R7 0b,
+shared-table R7 0c, predecessor preflight-PASS-then-apply-ACCEPT with
+convergence R7 1, one-byte perturbation R7 2, unknown digest R7 3,
+wrong-path R7 4). R7 0/R7 1 watched FAIL pre-fix, 8/8 post-fix.
+
+Artifact: comment-only source change - the R7 package is expected
+byte-identical to R6 (to be verified by rebuild, like R2==R3 and R5==R6).
+
+Status: IMPLEMENTED and locally verified; deployment NOT AUTHORIZED and
+NOT PERFORMED; live ledger untouched; gateway not restarted; no live
+execution; host lifecycle NOT PROVEN. A deployment requires a separate
+owner authorization (of the resulting R7 commit). See ACTIVE.md R7 and
 CHANGELOG.md Unreleased entry.
 
 ## 9. Deferred beyond V1

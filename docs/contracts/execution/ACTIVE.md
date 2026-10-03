@@ -1,4 +1,53 @@
-ACTIVE.md -- M10/T2-R6 Native Boundary Predecessor Admission (CURRENT EXECUTION CONTRACT)
+ACTIVE.md -- M10/T2-R7 Authority Predecessor Admission (CURRENT EXECUTION CONTRACT)
+
+Task ID: M10/T2
+Plan Revision: M10/T2-R7
+Parent Revision: M10/T2-R6 (implementation commit `71aa592`)
+Planning Readiness: APPROVED
+Execution Authorization: YES (repository implementation only)
+Owner Approval: EXPLICIT -- owner authorized exactly one narrow repair for
+  the lib/authority.mjs predecessor gap exposed by the blocked R6
+  deployment. Operation REPOSITORY_IMPLEMENTATION_ONLY.
+Execution Contract: docs/contracts/execution/ACTIVE.md (this file)
+PLAN Pointer: PLAN.md §3 (M10 row) and §8 M10/T2 entry (M10/T2-R7 block)
+Evidence Level: LOCAL-VERIFIED
+Deployment Authorized: NO
+Deployment Status: NOT DEPLOYED
+Live Execution: NO
+Lifecycle: IN PROGRESS -- implementation authorized; R3 (`a09fc25`) remains
+  the deployed baseline
+
+## R7 1. Objective
+
+Admit exactly one proven predecessor -- live `lib/authority.mjs`
+aa12540f -- into the existing shared allowlist, after formal
+re-derivation from its origin commit through governancePluginFiles().
+Nothing else changes.
+
+## R7 2. Allowed scope
+
+- Provenance re-derivation (1/1, earliest supported source commit;
+  STOP if unproven).
+- One allowlist entry under its own path with provenance comment.
+- Focused regression (deadlock fixture, unknown-digest negative,
+  provenance parity, preflight/apply parity).
+- PLAN/ACTIVE/CHANGELOG sync, R7 commit.
+- Excluded: deployment, live execution, native/policy/ingress logic,
+  other assets, new mechanisms.
+
+## R7 3. Acceptance
+
+Provenance 1/1; preflight PASS + installed_mutation false; isolated
+apply PASS converging onto 42b0cba8; unknown refused without mutation;
+parity green; R2-R6 green; full matrix green; artifact reproducible;
+tree clean. If another gap surfaces after gates pass, document it as the
+next blocker -- do not pre-emptively admit it.
+
+---
+
+# Historical: M10/T2-R6 Native Boundary Predecessor Admission (retained unchanged as evidence; superseded by M10/T2-R7 above)
+
+ACTIVE.md -- M10/T2-R6 Native Boundary Predecessor Admission (HISTORICAL EXECUTION CONTRACT -- superseded by M10/T2-R7 above; content retained unchanged)
 
 Task ID: M10/T2
 Plan Revision: M10/T2-R6
