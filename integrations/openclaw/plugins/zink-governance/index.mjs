@@ -99,6 +99,9 @@ import {
   parseComponentCustomId,
   DISCORD_COMPONENT_ACTION_NAMESPACE,
   resolveIngressRouting,
+  resolveMainConversationAdmission,
+  MAIN_CONVERSATION_CONTINUATION,
+  MISSING_MENTION_REFUSAL,
   AGENT_IDS,
 } from "../../lib/authority.mjs";
 
@@ -3914,6 +3917,42 @@ function forgetAdmissionLiveness(runId) {
 }
 
 /**
+ * M10/T2-R4: Main-owned thread attribution. Recorded ONLY from Main's own
+ * awaited outbound posts (the `message_sending` hook carries threadId +
+ * agentId), so a binding strictly postdates Main's post and predates any
+ * later human reply in that thread — no event-ordering assumption, no
+ * message_received cache, no polling. Consulted ONLY when routing refuses
+ * solely for a missing mention, and ANDed with every existing authority
+ * check (owner sender, channel, bot filter, Main agent identity).
+ *
+ * Memory-only, bounded with oldest-first eviction, exact-match lookup.
+ * Eviction and restart both degrade to deny: an unknown thread is never
+ * Main-owned. This is admission evidence, not a session store, not
+ * long-term memory, and not skill/knowledge state.
+ */
+const MAIN_THREAD_BINDINGS = new Map();
+const MAIN_THREAD_BINDINGS_LIMIT = 256;
+
+const DISCORD_THREAD_ID_RE = /^[1-9][0-9]{16,19}$/u;
+
+function rememberMainThread(threadId) {
+  if (!DISCORD_THREAD_ID_RE.test(threadId ?? "")) return false;
+  if (MAIN_THREAD_BINDINGS.has(threadId)) {
+    MAIN_THREAD_BINDINGS.delete(threadId);
+  }
+  while (MAIN_THREAD_BINDINGS.size >= MAIN_THREAD_BINDINGS_LIMIT) {
+    MAIN_THREAD_BINDINGS.delete(MAIN_THREAD_BINDINGS.keys().next().value);
+  }
+  MAIN_THREAD_BINDINGS.set(threadId, true);
+  return true;
+}
+
+/** Exact-match lookup over the bindings recorded above. */
+function mainThreadBindings() {
+  return [...MAIN_THREAD_BINDINGS.keys()];
+}
+
+/**
  * The ONE heartbeat decision, applied identically at every seam.
  *
  * `context` is always the host's own run context for the seam in question. When
@@ -6056,10 +6095,28 @@ export default {
         identifiers: { discordGuildId: config.discordGuildId },
       });
       if (routing.needs_clarification || routing.target_agents[0] !== "main") {
-        return {
-          allow: false,
-          reason: routing.clarification_reason || "INGRESS_NOT_ADMITTED",
-        };
+        // M10/T2-R4: Main-owned thread continuation. Bypassed ONLY when the
+        // routing layer refused solely for a missing mention AND the inbound
+        // thread is proven Main-owned. Every check above (channel, agent
+        // roster, sender authorization, bot filter, Main-only intake) already
+        // passed; the lineage, task-derivation and inner-governance checks
+        // below still run unchanged.
+        const continuation = resolveMainConversationAdmission({
+          agentId: context.agentId,
+          threadId: context.threadId,
+          mainThreadIds: mainThreadBindings(),
+          missingMentionRefusal:
+            routing.clarification_reason === MISSING_MENTION_REFUSAL,
+        });
+        if (!continuation.admitted) {
+          return {
+            allow: false,
+            reason: routing.clarification_reason || "INGRESS_NOT_ADMITTED",
+          };
+        }
+        api.logger?.info?.(
+          `[zink-governance] ${MAIN_CONVERSATION_CONTINUATION}: agent=main`,
+        );
       }
       const identityPath =
         paths.identityKey || path.resolve(paths.root, "../identity.key");
@@ -6541,6 +6598,13 @@ export default {
       }
 
       const agentName = AGENT_DISPLAY_NAMES[agentId] ?? agentId ?? "Zink Bot";
+      // M10/T2-R4: record Main-owned thread attribution for conversational
+      // ingress. Only Main posts bind, only exact thread ids, only on the
+      // allowed (non-blocked) path above. Specialist posts never bind, so a
+      // specialist-owned thread can never satisfy Main continuation.
+      if (agentId === "main") {
+        rememberMainThread(ctx.threadId ?? event.threadId);
+      }
       return {
         content: formatForDiscord(safeContent, { agentName }),
       };

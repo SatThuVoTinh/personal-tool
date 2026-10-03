@@ -1372,8 +1372,8 @@ from this environment and are not claimed.
 
 Status: `IN PROGRESS`
 Task: `M10/T2 - bind a gateway-started coordinator run to its claimed queue attempt, and fence that binding to current execution authority`
-Plan Revision: `M10/T2-R3`
-Parent Revision: `M10/T2-R2` (implementation commit `d254f56`)
+Plan Revision: `M10/T2-R4`
+Parent Revision: `M10/T2-R3` (implementation commit `a09fc25`)
 Planning Readiness: `APPROVED`
 Execution Authorization: `YES` (repository implementation only)
 Execution Contract: `docs/contracts/execution/ACTIVE.md`
@@ -1560,6 +1560,63 @@ PERFORMED; live ledger untouched; gateway not restarted; no live execution;
 host lifecycle NOT PROVEN. A deployment of the new R3 commit requires a
 separate owner authorization for exactly one attempt. See ACTIVE.md R3 and
 CHANGELOG.md Unreleased entry.
+
+Deployment note (factual, recorded under R4): R3 `a09fc25` was subsequently
+deployed under a separate single-attempt owner authorization
+(`operator-apply.mjs` PASS at stage `applied`, transaction `txn-48fd57b7…`
+complete; live entrypoint `d1ce6386…`). Repository authorization records
+were intentionally left unchanged by that authorization's own prohibitions.
+
+### M10/T2-R4 - Main conversational ingress via native thread metadata (owner-authorized implementation, Option A)
+
+Owner authorization: EXPLICIT - owner chose Option A (deterministic native
+metadata forwarding) after the R4 scope investigation proved mention and
+reply-reference attribution unobservable at the admission seam without a
+patch change, and plugin-side message_received caching racy by host
+fire-and-forget construction. Operation `REPOSITORY_IMPLEMENTATION_ONLY`;
+deployment NOT AUTHORIZED; live execution NOT AUTHORIZED.
+
+Root cause (R3 forensic, treated as proven): free-text Discord ingress is
+denied at `authenticateIngress` with MISSING_MENTION because the native seam
+receives no mention/reply/author metadata. Host census on pinned 2026.6.34
+proved exactly one additional deterministic inbound field available in
+runEmbeddedAttempt params: `currentThreadId` (zero occurrences of mentions,
+reply references, or authors in the 644KB selection bundle).
+
+Implementation (minimal): native patch forwards
+`threadId: params.currentThreadId ?? null` in the established injection
+slot; boundary passes it through typed (null or Discord snowflake,
+malformed fails closed); plugin records Main-owned thread attribution from
+Main's own awaited `message_sending` posts (bounded memory-only map, exact
+match, eviction/restart degrade to deny); admission bypasses ONLY a
+missing-mention routing refusal when the inbound thread is proven
+Main-owned, ANDed with all existing authority checks; downstream governance
+unchanged. Mention/reply attribution and non-thread conversation
+continuation stay denied (documented, not heuristically approximated).
+
+Lineage (owner-authorized): single descriptor R7→R10 becomes R10→R4 for
+`selection-DopzNY3I.js` on 2026.6.34 (one active slot; R7 retired with
+history retained — no R7 runtime remains in the deployment graph). R10 live
+bytes (555f37da) invert to the pinned baseline a5698c55 and yield the R4
+selection 04e92061… (reproducible). Outgoing R3 entrypoint d1ce6386
+admitted in both per-mode predecessor lists. R18-13/15 and R19-G pins
+updated to the R4-authorized bytes with history comments (their purpose as
+change detectors preserved).
+
+Regression: `tests/m10-t2-r4-conversational-ingress.test.mjs`, 19 tests
+(native contract, pure classifier, end-to-end admission incl. duplicate
+replay denial, heartbeat intact, malformed fail-closed, mention-text
+insufficiency). N1/A1 watched FAIL pre-fix, 19/19 post-fix; R18/R19/hygiene
+suites green after pin updates; R2/R3 green.
+
+Status: IMPLEMENTED and locally verified; deployment NOT AUTHORIZED and NOT
+PERFORMED; live ledger untouched; gateway not restarted; no live execution;
+host lifecycle NOT PROVEN. A deployment of the new R4 commit requires a
+separate owner authorization. See ACTIVE.md R4 and CHANGELOG.md Unreleased
+entry. Residual live risk recorded for verification: the office-channel
+check assumes the host keeps parent-channel (not thread-id) in
+messageChannel for thread replies; if live shows otherwise the path fails
+closed and reports, never mis-admits.
 
 ## 9. Deferred beyond V1
 

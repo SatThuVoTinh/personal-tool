@@ -917,6 +917,83 @@ export function resolveMentionedAgents(
 }
 
 // A01, A06, Mandatory Semantic Contract (§8)
+/**
+ * The refusal resolveIngressRouting produces when no Main-directed mention
+ * evidence exists. Exported (same text as before) so the admission layer can
+ * recognise exactly this refusal without re-matching message text. Any other
+ * refusal (wrong guild, broadcast, non-Main target, …) must never be treated
+ * as a missing-mention case.
+ */
+export const MISSING_MENTION_REFUSAL =
+  "MISSING_MENTION: No @main mention. Discord ingress is not admitted.";
+
+/**
+ * M10/T2-R4: deterministic Main-owned-thread continuation signal.
+ *
+ * Answers ONLY "is this message in a thread Main posted in?" — never "is the
+ * sender authorized?" (existing sender/channel/bot checks answer that) and
+ * never "what did the message say?" (no content is read). All inputs are
+ * structured Discord identity metadata forwarded at the native seam; the
+ * thread bindings are recorded from Main's own awaited outbound posts.
+ */
+export const MAIN_CONVERSATION_CONTINUATION = "MAIN_CONVERSATION_CONTINUATION";
+export const MAIN_NOT_CONFIRMED = "MAIN_NOT_CONFIRMED";
+
+const DISCORD_SNOWFLAKE_RE = /^[1-9][0-9]{16,19}$/u;
+
+export function isDiscordSnowflake(value) {
+  return typeof value === "string" && DISCORD_SNOWFLAKE_RE.test(value);
+}
+
+/**
+ * Decide whether a routing refusal for a missing mention is repaired by a
+ * proven Main-owned-thread binding. Returns a frozen verdict; admitted is
+ * true only when EVERY condition holds:
+ * - the message targets the Main agent identity (specialists never qualify);
+ * - the routing layer refused solely for a missing mention;
+ * - the inbound threadId is a well-formed Discord snowflake;
+ * - that exact threadId is bound to Main-authored posts.
+ * Anything else yields MAIN_NOT_CONFIRMED (deny preserved).
+ */
+export function resolveMainConversationAdmission({
+  agentId,
+  threadId,
+  mainThreadIds,
+  missingMentionRefusal = false,
+} = {}) {
+  if (agentId !== "main") {
+    return Object.freeze({
+      admitted: false,
+      classification: MAIN_NOT_CONFIRMED,
+    });
+  }
+  if (missingMentionRefusal !== true) {
+    return Object.freeze({
+      admitted: false,
+      classification: MAIN_NOT_CONFIRMED,
+    });
+  }
+  if (!isDiscordSnowflake(threadId)) {
+    return Object.freeze({
+      admitted: false,
+      classification: MAIN_NOT_CONFIRMED,
+    });
+  }
+  const owned =
+    Array.isArray(mainThreadIds) &&
+    mainThreadIds.some((ownedId) => ownedId === threadId);
+  if (!owned) {
+    return Object.freeze({
+      admitted: false,
+      classification: MAIN_NOT_CONFIRMED,
+    });
+  }
+  return Object.freeze({
+    admitted: true,
+    classification: MAIN_CONVERSATION_CONTINUATION,
+  });
+}
+
 export function resolveIngressRouting({
   message,
   context = {},
@@ -979,8 +1056,7 @@ export function resolveIngressRouting({
     // R4: no mention means no model/session/spawn admission.
     isAmbiguous = true;
     needsClarification = true;
-    clarificationReason =
-      "MISSING_MENTION: No @main mention. Discord ingress is not admitted.";
+    clarificationReason = MISSING_MENTION_REFUSAL;
   }
 
   const primaryTarget = targetAgents[0] ?? null;

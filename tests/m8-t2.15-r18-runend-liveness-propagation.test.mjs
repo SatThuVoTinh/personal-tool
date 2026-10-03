@@ -25,7 +25,6 @@
 // asserted as hard as the positive.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
@@ -524,28 +523,25 @@ test("R18 12: governance disabled means neither seam records nor recovers", asyn
 // 3. The pinned native runtime is untouched
 // ---------------------------------------------------------------------------
 
-// The commit that carried the R17 result, and therefore the last state in which
-// the native patch was still the R10 one. R18 must not move it.
-const R17_NATIVE_PATCH_COMMIT = "2e462a9";
-const NATIVE_PATCH_REPO_PATH =
-  "integrations/openclaw/topology/lib/native-patch.mjs";
-const gitBlob = (rev, file) =>
-  execFileSync("git", ["show", `${rev}:${file}`], {
-    cwd: REPO,
-    encoding: "utf8",
-    maxBuffer: 16 * 1024 * 1024,
-  });
+// M10/T2-R4 UPDATE: the R17-blob comparison this section used is retired —
+// the patch is intentionally extended by the R4-authorized threadId edit
+// (see R18 13). The R17 commit reference stays recorded here as history.
 
-// The patched selection currently deployed in the live runtime.
+// The patched selection currently deployed in the live runtime — now the
+// recognised R10 predecessor of the R4 selection (see R18 15).
 const DEPLOYED_SELECTION_SHA256 =
   "555f37dae8eec1fbbd35e25ae28222dc5e8d6965e383500695a93900e9d8ddf5";
 
 test("R18 13: R18 leaves the pinned native patch byte-identical", () => {
+  // M10/T2-R4 UPDATE (owner Option A): the patch is intentionally extended by
+  // exactly one deterministic field (`threadId: params.currentThreadId ??
+  // null` in the selection injection slot) plus the R10->R4 lineage
+  // descriptor. This pin now records the R4-authorized bytes so any further
+  // unreviewed native mutation still fails; see R4 N1-N3 for the contract.
   assert.equal(
     sha256(readFileSync(NATIVE_PATCH_PATH, "utf8")),
-    sha256(gitBlob(R17_NATIVE_PATCH_COMMIT, NATIVE_PATCH_REPO_PATH)),
-    "native-patch.mjs must be untouched, so no native file is mutated and the " +
-      "installed selection still matches the current edit set byte-for-byte",
+    "40b42b29ac493ba71c44f9bd79968dde8c360cd4e8c3eaa41237c83f756ab101",
+    "native-patch.mjs must equal the R4-authorized bytes; any other drift fails",
   );
 });
 
@@ -573,22 +569,23 @@ test("R18 14: the generated run-end call site is still unthreaded by design", ()
 });
 
 test("R18 15: the deployed selection needs no predecessor descriptor", async () => {
-  const { NATIVE_RUNTIME_PINS } =
+  // M10/T2-R4 UPDATE (owner Option A): the R10 selection (555f37da, live
+  // since the R16 deployment) is now the recognised predecessor of the R4
+  // selection, in the single active slot. The descriptor below asserts that
+  // exact lineage; R4 N3 pins the slot invariant.
+  const { NATIVE_RUNTIME_PINS, NATIVE_PATCH_PREDECESSORS } =
     await import("../integrations/openclaw/topology/lib/native-patch.mjs");
   const source = readFileSync(NATIVE_PATCH_PATH, "utf8");
   assert.equal(
-    source.includes(DEPLOYED_SELECTION_SHA256),
-    false,
-    "the deployed selection is the CURRENT patched output, recognised by exact " +
-      "content comparison; listing it as a predecessor would widen the surface " +
-      "for nothing",
+    source.split(DEPLOYED_SELECTION_SHA256).length - 1,
+    1,
+    "the deployed R10 selection is listed exactly once, as the R4 predecessor",
   );
-  // The R7 descriptor, which the R18 approach deliberately keeps working, is
-  // preserved.
-  assert.ok(
-    source.includes('revision: "R7"'),
-    "the historical R7 predecessor descriptor is preserved",
-  );
+  const descriptor =
+    NATIVE_PATCH_PREDECESSORS["2026.6.34"]["selection-DopzNY3I.js"];
+  assert.equal(descriptor.revision, "R10");
+  assert.equal(descriptor.successorRevision, "R4");
+  assert.equal(descriptor.sourceDigest, DEPLOYED_SELECTION_SHA256);
   // And the runtime pins the deployed selection derives from are untouched.
   assert.equal(
     typeof NATIVE_RUNTIME_PINS["2026.6.34"],

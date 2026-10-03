@@ -96,7 +96,8 @@ const selectionPatch = `${selectionAnchor}
 \t\t\t\tinputProvenance: params.inputProvenance,
 \t\t\t\tchannelId: params.messageChannel ?? params.messageProvider,
 \t\t\t\tsenderId: params.senderId, currentMessageId: params.currentMessageId,
-\t\t\t\ttrigger: params.trigger, transcriptPrompt: params.transcriptPrompt
+\t\t\t\ttrigger: params.trigger, transcriptPrompt: params.transcriptPrompt,
+\t\t\t\tthreadId: params.currentThreadId ?? null
 \t\t\t}, params.abortSignal);
 \t\t\tinstallNativeToolGate(activeSession.agent, params.config, {
 \t\t\t\tagentId: sessionAgentId, sessionKey: params.sessionKey, runId: params.runId
@@ -209,12 +210,21 @@ function replaceOnce(source, before, after) {
 // For R10 the only required predecessor is R7. R5 and R6 are deliberately NOT
 // listed: the actual deployment graph requires only R7, and an entry for a
 // revision nothing depends on would widen the recognized surface for nothing.
-const selectionPatchR7 = `${selectionAnchor}
+// M10/T2-R4 — the R10 patch is now the recognised predecessor, superseded by
+// the R4 patch which forwards the deterministic inbound thread identity
+// (`threadId: params.currentThreadId ?? null`, absent as null) so Main-owned
+// thread continuation is decidable at admission. The R7 descriptor is retired:
+// no R7 runtime remains in the deployment graph (the live runtime has been
+// R10 since the R16 deployment), and the mechanism holds exactly one active
+// slot per artifact, so the slot follows the actual deployment chain R10→R4.
+// The R7 signature and its history stay recorded in tests/docs, not here.
+const selectionPatchR10 = `${selectionAnchor}
 \t\t\tawait enterNativeRun(params.config, {
 \t\t\t\tagentId: sessionAgentId, sessionKey: params.sessionKey, runId: params.runId,
 \t\t\t\tinputProvenance: params.inputProvenance,
 \t\t\t\tchannelId: params.messageChannel ?? params.messageProvider,
-\t\t\t\tsenderId: params.senderId, currentMessageId: params.currentMessageId
+\t\t\t\tsenderId: params.senderId, currentMessageId: params.currentMessageId,
+\t\t\t\ttrigger: params.trigger, transcriptPrompt: params.transcriptPrompt
 \t\t\t}, params.abortSignal);
 \t\t\tinstallNativeToolGate(activeSession.agent, params.config, {
 \t\t\t\tagentId: sessionAgentId, sessionKey: params.sessionKey, runId: params.runId
@@ -240,15 +250,15 @@ const selectionPatchR7 = `${selectionAnchor}
  * them would let the two revisions drift apart in exactly the way this mechanism
  * exists to prevent.
  */
-const NATIVE_PATCH_PREDECESSORS = Object.freeze({
+export const NATIVE_PATCH_PREDECESSORS = Object.freeze({
   "2026.6.34": Object.freeze({
     "selection-DopzNY3I.js": Object.freeze({
-      revision: "R7",
-      sourceSignature: selectionPatchR7,
+      revision: "R10",
+      sourceSignature: selectionPatchR10,
       supersedes: selectionPatch,
       sourceDigest:
-        "b431673602bf2f6eca55f8635f226dddbf06cf19e83c5488cc154d4db3d94512",
-      successorRevision: "R10",
+        "555f37dae8eec1fbbd35e25ae28222dc5e8d6965e383500695a93900e9d8ddf5",
+      successorRevision: "R4",
     }),
   }),
 });

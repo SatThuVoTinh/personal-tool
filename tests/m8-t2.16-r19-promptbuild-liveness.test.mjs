@@ -453,6 +453,12 @@ test("R19 I2: a context with no runId has no record", async () => {
 // ---------------------------------------------------------------------------
 
 test("R19 G: R18's boundary recovery is byte-for-byte unchanged", () => {
+  // M10/T2-R4 UPDATE (owner Option A): the boundary intentionally gains the
+  // deterministic threadId pass-through (typed null-or-snowflake, fail-closed
+  // on malformed). R18's recovery must be intact UNDER that extension, so this
+  // test pins both halves: every R18 recovery marker plus the R4 markers, and
+  // the file must equal the R4-authorized bytes (see digest below) so any
+  // further unreviewed boundary mutation still fails.
   const R18_COMMIT = "980b36e";
   const sha = (v) => createHash("sha256").update(v).digest("hex");
   const current = readFileSync(BOUNDARY_PATH, "utf8");
@@ -464,14 +470,35 @@ test("R19 G: R18's boundary recovery is byte-for-byte unchanged", () => {
     ],
     { cwd: REPO, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
   );
-  assert.equal(
+  assert.notEqual(
     sha(current),
     sha(atR18),
-    "R19 must not modify native-boundary.mjs; R18 stays intact",
+    "the boundary carries the R4-authorized threadId extension",
+  );
+  assert.ok(
+    current.includes("rememberRunLiveness("),
+    "R18's admission-time recording must still be present",
   );
   assert.ok(
     current.includes("context.trigger ?? liveness?.trigger"),
     "R18's run-end recovery must still be present",
+  );
+  assert.ok(
+    current.includes("threadId: params.currentThreadId") === false,
+    "the patch-side expression lives in the patcher, never duplicated here",
+  );
+  assert.ok(
+    current.includes("const threadId = context.threadId ?? null;"),
+    "R4's explicit absent behavior must be present",
+  );
+  assert.ok(
+    current.includes("GOVERNANCE_CONTEXT_MISSING"),
+    "R4's malformed-threadId fail-closed must be present",
+  );
+  assert.equal(
+    sha(current),
+    "7b3ced37252720830230ed630981881f5bd7c2b68d21c158f6221297179eac50",
+    "the boundary must equal the R4-authorized bytes exactly",
   );
 });
 

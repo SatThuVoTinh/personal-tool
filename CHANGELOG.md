@@ -8,6 +8,22 @@ All notable, validated changes to Personal Tool are documented here.
 
 ### Added
 
+- Implemented the owner-authorized M10/T2-R4 Main conversational ingress
+  repair (explicit Option A): the native admission seam structurally lacked
+  mention/reply/author metadata, so every free-text Discord ingress turn was
+  denied with MISSING_MENTION. A pinned-host census proved exactly one more
+  deterministic inbound field available (`currentThreadId`); the native patch
+  now forwards it, the boundary types it (null-or-snowflake, fail-closed),
+  and admission accepts an owner message in a proven Main-owned thread
+  (attribution recorded from Main's own awaited outbound posts, bounded,
+  memory-only, exact-match, degrading to deny) while every other authority
+  check still applies. Mention/reply attribution and non-thread continuation
+  stay denied by design. Lineage: single R10→R4 selection descriptor (R7
+  retired); R4 selection `04e92061…` reproducible from R10 `555f37da…`;
+  outgoing R3 entrypoint admitted in both per-mode lists. 19 regression
+  tests; R18/R19 pins updated to the authorized bytes. Deployment
+  Authorized: NO. Not deployed; no live execution; host lifecycle NOT
+  PROVEN.
 - Implemented the owner-authorized M10/T2-R3 proven governance-asset
   predecessor admission repair, closing the asset-level deployment deadlock
   that kept the frozen M10/T2-R2 candidate undeployable: `configure.mjs

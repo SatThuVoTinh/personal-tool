@@ -1,4 +1,69 @@
-ACTIVE.md -- M10/T2-R3 Proven Governance-Asset Predecessor Admission (CURRENT EXECUTION CONTRACT)
+ACTIVE.md -- M10/T2-R4 Main Conversational Ingress (CURRENT EXECUTION CONTRACT)
+
+Task ID: M10/T2
+Plan Revision: M10/T2-R4
+Parent Revision: M10/T2-R3 (implementation commit `a09fc25`)
+Planning Readiness: APPROVED
+Execution Authorization: YES (repository implementation only)
+Owner Approval: EXPLICIT -- owner chose Option A (deterministic native
+  metadata forwarding) after the R4 scope investigation proved mention and
+  reply-reference attribution unobservable at the admission seam without a
+  patch change, and plugin-side message_received caching racy by host
+  fire-and-forget construction.
+Execution Contract: docs/contracts/execution/ACTIVE.md (this file)
+Design / Behavior Contract: docs/contracts/coordinator-session-binding.md
+PLAN Pointer: PLAN.md §3 (M10 row) and §8 M10/T2 entry (M10/T2-R4 block)
+Evidence Level: LOCAL-VERIFIED
+Deployment Authorized: NO
+Deployment Status: NOT DEPLOYED
+Live Execution: NO
+Lifecycle: IN PROGRESS -- implementation authorized; R3 (`a09fc25`) remains
+  the deployed baseline (deployed under the separate single-attempt
+  authorization; repository records unchanged per that authorization)
+
+## R4 1. Objective (Option A, bounded by proven availability)
+
+Forward deterministic Discord conversation metadata at the native admission
+seam and admit high-confidence Main-directed messages without a literal
+@main mention -- using ONLY metadata proven available in
+runEmbeddedAttempt params at the pinned anchor. Host census (pinned
+2026.6.34 dist, read-only) proved forwardable: `currentThreadId`. Proven
+ABSENT (zero occurrences in the 644KB selection bundle): mentions,
+reply references, referenced authors. Therefore R4 implements
+Main-owned-thread continuation ONLY. Explicit-@main and reply-to-Main
+attribution stay denied (documented, deferred to a future host that
+exposes them); ordinary unresolved #office messages stay denied.
+
+## R4 2. Allowed scope
+
+- Native patch: add `threadId: params.currentThreadId ?? null` to the
+  selection injection slot. Nothing else.
+- Boundary: pass `threadId` through the frozen admission context with
+  explicit typing (null or Discord snowflake; malformed fails closed).
+- Plugin: bounded memory-only Main-thread attribution map recorded on the
+  awaited `message_sending` path; consulted only when routing refuses
+  SOLELY for MISSING_MENTION; ANDed with every existing authority check.
+- Policy lib: one new pure classifier (no state, fully unit-tested).
+- Lineage: single descriptor R7→R10 becomes R10→R4 (one active slot;
+  R7 superseded with history retained in comments/tests); outgoing R3
+  entrypoint admitted in both per-mode predecessor lists.
+- Tests, provenance/artifact rebuild, PLAN/ACTIVE/CHANGELOG sync, R4 commit.
+- Excluded: deployment, live execution, outbound changes, LLM at ingress,
+  caches with timing dependencies, new services, memory/ledger/result
+  changes, mention/reply heuristics, TTL guessing.
+
+## R4 3. Acceptance
+
+TEST 3 (Main-owned thread → ALLOW), TESTs 5-11 negatives (DENY
+preserved), heartbeat/duplicate/authority regressions green, R2/R3 green,
+full matrix green, artifact reproducible, tree clean. TESTs 1, 2, 4
+reported NOT AVAILABLE with proof (no mechanism fabricated).
+
+---
+
+# Historical: M10/T2-R3 Proven Governance-Asset Predecessor Admission (retained unchanged as evidence; superseded by M10/T2-R4 above)
+
+ACTIVE.md -- M10/T2-R3 Proven Governance-Asset Predecessor Admission (HISTORICAL EXECUTION CONTRACT -- superseded by M10/T2-R4 above; content retained unchanged)
 
 Task ID: M10/T2
 Plan Revision: M10/T2-R3

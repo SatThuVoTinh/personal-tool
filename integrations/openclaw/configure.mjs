@@ -835,6 +835,13 @@ async function main() {
       // NOT listed: it is the current build and is accepted by content
       // comparison.
       "a1c8957bbeb2845c61953cf12cf395deae4c9dbae536b486d6748c2944961460",
+      // M10/T2-R3 asset-predecessor repair: the outgoing R2 entrypoint
+      // currently deployed, byte-proven as the packaged build before the ten
+      // hygiene-build asset predecessors were admitted. Admitted here so the
+      // next authorized deployment is reachable. The new digest is deliberately
+      // NOT listed: it is the current build and is accepted by content
+      // comparison.
+      "d1ce63868680ea5f89721ae8b42f07f6f033a840606cdc3a7cd7b6556b3ab593",
     ],
   );
   assertRegularOrMissing(output.identityKeyPath);
@@ -985,6 +992,12 @@ async function main() {
       // as well as in the preflight gate above for the same per-mode-duplication
       // reason. Never deployed.
       "a1c8957bbeb2845c61953cf12cf395deae4c9dbae536b486d6748c2944961460",
+      // M10/T2-R3 asset-predecessor repair: the outgoing R2 entrypoint
+      // currently deployed, listed here as well as in the preflight gate
+      // above for the same per-mode-duplication reason. The new digest is
+      // deliberately NOT listed: it is the current build and is accepted by
+      // content comparison.
+      "d1ce63868680ea5f89721ae8b42f07f6f033a840606cdc3a7cd7b6556b3ab593",
       // M10/T2-R2 closure: the six entrypoint predecessors that the preflight
       // gate admits and this apply-mode list did not. Each is the packaged build
       // PRODUCED BY the commit named below, re-derived with the repository's own

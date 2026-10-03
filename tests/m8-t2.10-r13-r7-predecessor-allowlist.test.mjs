@@ -67,19 +67,19 @@ const R5_NATIVE_BOUNDARY_SHA256 =
 const R5_ENTRYPOINT_SHA256 =
   "e77689c94ba066bd854549750044f78dcf9d97cc3de73420893851c0a800b10a";
 
-/** The CURRENT build digests (owner-identity hygiene). NOT listed. */
+/** The CURRENT build digests (M10/T2-R4). NOT listed. */
 const R10_NATIVE_BOUNDARY_SHA256 =
-  "d88bff80aeb3d7531e5a0dceba4e7ba856d085e64a87cbb414c9f295284d81e3";
+  "7b3ced37252720830230ed630981881f5bd7c2b68d21c158f6221297179eac50";
 /**
- * The CURRENT packaged entrypoint, after the functional-truth remediation.
- * Updated from the M8/T3 digest a3dbf945… exactly as R13/R19 moved their pins
- * when the entrypoint changed: the packaged entrypoint is a provenance-pinned
- * governance asset, so any entrypoint change moves this pin and admits the
- * outgoing digest as a recognized predecessor (now listed in configure.mjs).
- * NOT listed.
+ * The CURRENT packaged entrypoint, after the M10/T2-R4 native threadId
+ * extension. Updated from the R3 digest d1ce6386… exactly as R13/R19 moved
+ * their pins when the entrypoint changed: the packaged entrypoint is a
+ * provenance-pinned governance asset, so any entrypoint change moves this
+ * pin and admits the outgoing digest as a recognized predecessor (now
+ * listed in configure.mjs). NOT listed.
  */
 const R10_ENTRYPOINT_SHA256 =
-  "d1ce63868680ea5f89721ae8b42f07f6f033a840606cdc3a7cd7b6556b3ab593";
+  "73ffc92a580134a63647aed174eb07de265d6a4e4478b968278486c7d7cca5d3";
 
 /**
  * The outgoing entrypoint before the coordinator execution-authority
@@ -902,6 +902,32 @@ function takeRunLiveness(runId) {
           context.transcriptPrompt ?? liveness?.transcriptPrompt,
 `,
       ``,
+    ],
+    // M10/T2-R4: explicit inbound thread identity typing. Inverted so the
+    // derived R5 body reproduces the packaged R5 digest exactly.
+    [
+      `  try {
+    // M10/T2-R4: the inbound thread identity is typed explicitly. null means
+    // "not a threaded message" (the patch forwards \`?? null\`); anything else
+    // must be a Discord snowflake, otherwise the context is malformed and the
+    // run fails closed before any guard sees it. The original message is
+    // preserved as the cause and logged, while the host-visible contract
+    // string stays GOVERNANCE_RUN_UNAVAILABLE.
+    const threadId = context.threadId ?? null;
+    if (threadId !== null && !/^[1-9][0-9]{16,19}$/u.test(threadId)) {
+      throw new Error("GOVERNANCE_CONTEXT_MISSING");
+    }
+    const decision = await callGuard(`,
+      `  try {
+    const decision = await callGuard(`,
+    ],
+    // M10/T2-R4: the frozen admission-context threadId field.
+    [
+      `        isBot: context.isBot,
+        threadId,
+`,
+      `        isBot: context.isBot,
+`,
     ],
   ];
   let derived = readFileSync(BOUNDARY, "utf8");

@@ -322,6 +322,16 @@ export async function enterNativeRun(config, context, signal) {
   const governance = resolveGovernance(config);
   if (!governance.enabled) return;
   try {
+    // M10/T2-R4: the inbound thread identity is typed explicitly. null means
+    // "not a threaded message" (the patch forwards `?? null`); anything else
+    // must be a Discord snowflake, otherwise the context is malformed and the
+    // run fails closed before any guard sees it. The original message is
+    // preserved as the cause and logged, while the host-visible contract
+    // string stays GOVERNANCE_RUN_UNAVAILABLE.
+    const threadId = context.threadId ?? null;
+    if (threadId !== null && !/^[1-9][0-9]{16,19}$/u.test(threadId)) {
+      throw new Error("GOVERNANCE_CONTEXT_MISSING");
+    }
     const decision = await callGuard(
       governance.guard?.beforeRun,
       {},
@@ -338,6 +348,7 @@ export async function enterNativeRun(config, context, signal) {
         mentionRoles: context.mentionRoles,
         author: context.author,
         isBot: context.isBot,
+        threadId,
         // R10: the host-assigned run discriminator and the canonical host
         // heartbeat representation. Both are plain strings the host already
         // holds at the injection anchor; neither is user content, a message

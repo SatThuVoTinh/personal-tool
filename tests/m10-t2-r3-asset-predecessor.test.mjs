@@ -76,9 +76,13 @@ const HYGIENE_ASSET_PREDECESSORS = Object.freeze({
     "e27647b9742b56052188a8bbf746ab6c5eeaaeb67344216c11859167ee78946f",
 });
 
-/** The CURRENT build asset digests (R2 HEAD). None may be allowlisted. */
+/** The CURRENT build entrypoint (M10/T2-R4). None may be allowlisted. Moved
+ * from the R3 digest d1ce6386… exactly as prior revisions moved their pins
+ * when the entrypoint changed: R4's native threadId extension changes the
+ * packaged entrypoint, and the outgoing R3 digest is now the admitted
+ * predecessor (listed in configure.mjs). */
 const CURRENT_ENTRYPOINT_SHA256 =
-  "d1ce63868680ea5f89721ae8b42f07f6f033a840606cdc3a7cd7b6556b3ab593";
+  "73ffc92a580134a63647aed174eb07de265d6a4e4478b968278486c7d7cca5d3";
 
 const identifiers = Object.freeze({
   discordGuildId: "123456789012345678",
