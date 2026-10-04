@@ -16,7 +16,17 @@ Execution Contract: docs/contracts/execution/ACTIVE.md (this file)
 PLAN Pointer: PLAN.md §3 (M10 row) and §8 M10/T2 entry (M10/T2-R8 block)
 Evidence Level: LOCAL-VERIFIED
 Deployment Authorized: YES (R8 - one observability attempt + one fix redeploy attempt)
-Deployment Status: PARTIAL - observability live (entrypoint 6a7968b7, txn-abcb31f2 complete); fix redeploy FAILED at runtime-verify (APPLY_NOT_VERIFIED, txn-cb59d6e7fae3b761cc91dcbc2a88e8e5c2e951f9375747d2ce31996c74df132f). PROVEN CAUSE: the transaction snapshot's runtime target list is a fixed three (selection, announce, bridge) and omits dist/message-handler.preflight-C1XBiefW.js, which the pinned patch now writes. runtime-verify therefore saw zero mutated components (`applied: !unchanged` = false) and the rollback restored 39 already-identical files, leaving the preflight file mutated: the reported rollbackSucceeded is not a true restore. Measured live: preflight d12961a2 with the R8 union code present, selection/bridge/entrypoint/authority unchanged, ledger unchanged at 103 events, service active with the plugin loaded. The H1 repair is live in fact and unverified by the deploy contract.
+Deployment Status: DEPLOYED AND VERIFIED - attempt
+  txn-eb5f0044990cc37661dbcd897c4f624a149460b4d6e01d25bcb5bf5154b17f57
+  returned PASS at stage `applied`, transactionStatus complete, no rollback.
+  Live after the apply: service active (MainPID 346609, NRestarts 0),
+  dist/message-handler.preflight-C1XBiefW.js d12961a2 (R8 union-sources
+  injection, contract-verified), dist/selection-DopzNY3I.js 04e92061,
+  dist/subagent-announce-Bh1QyKiE.js e3b110f7, boundary bccfa861, entrypoint
+  6a7968b7, authority 42b0cba8, ledger d794d99d unchanged at 103 events.
+  Earlier attempts: txn-abcb31f2 (observability, PASS) and txn-cb59d6e7
+  (1st fix attempt, FAIL at runtime-verify, rolled back with a proven
+  false-success that the Phase 1 repair removed).
 Live Execution: OBSERVE-ONLY (owner traffic only)
 Lifecycle: IN PROGRESS
 

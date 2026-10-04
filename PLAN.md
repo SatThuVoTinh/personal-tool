@@ -1387,8 +1387,8 @@ result-ingestion redesign, no fabricated lineage, no topology change), and
 authorized the M10/T2-R2 safety remediation derived from the M10/T2-R1 pre-live
 safety audit. Approval covers implementation only, not live execution and not
 deployment.
-Deployment Authorized: `YES (R8 - observability single deploy CONSUMED and PASS; evidence-bound fix single redeploy CONSUMED and FAILED at runtime-verify; any further deploy requires a NEW owner prompt)`
-Deployment Status: `PARTIAL (observability live: entrypoint 6a7968b7 byte-identical to packaged candidate, txn-abcb31f2 complete; fix redeploy NOT verified - transaction-snapshot coverage defect; the R8 union injection is measured live in dist/message-handler.preflight-C1XBiefW.js d12961a2; ledger untouched at 103 events)`
+Deployment Authorized: `YES (R8 end-to-end, owner-authorized: observability deploy PASS, 1st fix deploy FAILED and rolled back, deployment-safety fix + 2nd fix deploy PASS; no further deploy without a new prompt)`
+Deployment Status: `DEPLOYED AND VERIFIED (txn-eb5f0044… PASS at stage applied; preflight d12961a2, entrypoint 6a7968b7, selection 04e92061, boundary bccfa861, authority 42b0cba8, ledger d794d99d at 103 events, MainPID 346609)`
 Live Execution: `OBSERVE-ONLY (owner sends controlled TEST A/B; agent performs read-only log correlation, no synthetic events, no message sending)`
 Safety Audit: the R1 pre-live audit returned `PRE-LIVE SAFETY AUDIT FOUND SAFETY
 ISSUE - LIVE BLOCKED` (post-lease spawn authority, attempt isolation at the
@@ -1818,26 +1818,63 @@ file recognizable, fail-closed otherwise; inversion to the pinned
 baseline is proven byte-for-byte. Gates: 1167 tests / 1125 pass / 0
 fail / 42 skipped; lint, format, repo-check, diff-check green; commits
 650b9d7 (fix) and the R8 test suites.
-Phase 4 DEPLOY: FAILED at `runtime-verify` with `APPLY_NOT_VERIFIED`
+Phase 4 DEPLOY (1st): FAILED at `runtime-verify` with `APPLY_NOT_VERIFIED`
 (attempt txn-cb59d6e7fae3b761cc91dcbc2a88e8e5c2e951f9375747d2ce3199
-6c74df132f, record status complete, rollbackSucceeded self-reported
-true). NEW PROVEN DEFECT, not a fix failure: the transaction snapshot
-covers only 39 files and its runtime target list is a FIXED three
+6c74df132f). NEW PROVEN DEFECT, not a fix failure: the transaction snapshot
+covers only 39 files and its runtime target list was a FIXED three
 (`dist/selection-*`, `dist/subagent-announce-*`,
-`dist/zink-governance-boundary.mjs`) while the pinned native patch now
-writes FOUR runtime files. `dist/message-handler.preflight-*` is absent
-from the snapshot, so (a) runtime-verify's post-apply `applied:
-!unchanged` was false because the only mutated component was invisible
-to it, and (b) the rollback restored 39 already-identical files and
-LEFT the preflight file mutated. Measured live after the failed apply:
-preflight d12961a2 (R8 union code present, `grep -c zinkRaw` = 7),
-selection 04e92061, bridge bccfa861, entrypoint 6a7968b7, authority
-42b0cba8, ledger d794d99d unchanged at 103 events, service active PID
-345517 restarted 18:45:11 +07 with the plugin ACTIVE AND LOADED and
-`[gateway] ready`. The R8 union injection IS therefore live and
-verifiable, but the R8 fix redeploy authorization is CONSUMED and the
-transaction record reports rolled-back while the runtime is not rolled
-back.
+`dist/zink-governance-boundary.mjs`) while the pinned native patch writes
+FOUR runtime files. `dist/message-handler.preflight-*` was absent from the
+snapshot, so (a) runtime-verify's post-apply `applied: !unchanged` was false
+because the only mutated component was invisible to it, and (b) the rollback
+restored 39 already-identical files and LEFT the preflight file mutated.
+Phase 1 (deployment safety, owner-authorized): the runtime target list is now
+DERIVED from the native patch pins via `nativePatchedRuntimeRelatives()` and
+the tracked set can no longer miss a patched artifact; `verifyLiveRestore`
+post-apply is judged against an EXPECTED post-image derived from the patch
+contract (`nativeRuntimePostImage`) instead of "did anything change", and
+fails closed when no expectation is declared; `changed` always names every
+tracked component that differs from the preimage. Regression:
+tests/m10-t2-r8-deployment-snapshot-safety.test.mjs, 7 tests (derivation,
+preflight tracked, snapshot byte-exactness, 4th-file-only rollback,
+expected-image semantics, absent-expected fail-closed, post-image derivation
+fails closed on an unverified release). Four pre-existing orchestration
+fixtures (R7 DS, R11, R12, R15) were updated to DECLARE their expected
+post-image instead of returning a hardcoded `applied: true`, which is the
+stronger contract. Commit bbdb205. Gates: 1174 tests / 1130 pass / 0 fail /
+44 skipped; lint, format, repo-check, diff-check green.
+Phase 2 (runtime reconciliation): the `0fb628e8` -> `6a7968b7` entrypoint
+change is LEGITIMATE and not stale. `0fb628e8` was the live R5 entrypoint
+before the R8 observability deploy; attempt txn-abcb31f2 (PASS) replaced it
+with the R8 candidate `6a7968b7`, which is byte-identical to the repository
+packaged entrypoint. `0fb628e8` was admitted as a proven predecessor (commit
+50feb07, provenance re-derived from 4d1e64e) precisely to make that deploy
+reachable. All three pinned native sources report state=PATCHED with
+`after` equal to their own live digest, so the runtime already matches the
+patch contract. No rollback of the entrypoint is warranted or authorized.
+Phase 9 DEPLOY (2nd, repaired): preflight PASS (`installed_mutation:false`),
+then `operator-apply.mjs` returned PASS at stage `applied`,
+`transactionStatus: complete`, attempt
+txn-eb5f0044990cc37661dbcd897c4f624a149460b4d6e01d25bcb5bf5154b17f57,
+no rollback required. Post-deploy: service active (MainPID 346609, NRestarts
+0), preflight `d12961a2`, entrypoint `6a7968b7`, ledger `d794d99d` unchanged.
+The H1 repair is now both live AND verified by the deployment contract.
+Phase 5/7 (pre-admission thinking, evidence so far): the Discord lane
+contains NO status-reaction controller and NO reaction call (`addReaction`,
+`reactions.add`, `putReaction`, `shouldAckReaction` all zero occurrences in
+the Discord message handler and provider bundles), so the owner's `🧠` is NOT
+a reaction. The exact pre-admission conversational side effect is
+`startAcceptedTypingFeedback` in `message-handler-NsiHoCoL.js`, which runs
+inside `onFlush` AFTER host preflight returned a context but BEFORE
+`enterNativeRun` governance admission, gated by
+`resolveDiscordAcceptedTypingPrestart`. Consequence after the H1 repair:
+untagged messages are dropped at host preflight (requireMention) and
+therefore produce no typing at all; only a message that mentions exactly one
+NON-Main bot still reaches governance DENY after the typing prestart. The
+supported repo-side seam for that residual is the existing
+`session.typingMode` / `agents.defaults.typingMode` configuration knob
+(`configured-not-instant` suppresses the prestart), which is a user-visible
+behavior change and therefore an owner decision, not an agent decision.
 Phase 4/5 - fix at the proven boundary only (H1: preserve structured
 mention mapping; H2: canonical message-ID seam; no admission
 semantics change, no blind fallback lookup).
@@ -1851,12 +1888,10 @@ changed (ONE attempt). Phase 12 - live verify A/B/C/D per expected
 flows. Phase 13 - R8 PASS only on full evidence chain, else FAILED
 at the named boundary.
 
-Status: IN PROGRESS (Phase 1 COMPLETE and verified live; Phase 3 H1 PROVEN;
-Phase 4 fix implemented, tested and COMMITTED; Phase 4 redeploy FAILED at
-runtime-verify on a proven transaction-snapshot coverage defect, authorization
-CONSUMED; the R8 union injection is nevertheless measured live in the running
-preflight file. Owner re-test of TEST A is the only way to confirm the H1
-repair end-to-end; the snapshot coverage defect is a separate RED decision).
+Status: IN PROGRESS (Phase 1 deployment-safety fix COMPLETE and DEPLOYED;
+Phase 2 reconciled; Phase 3 H1 PROVEN and its repair is live AND
+contract-verified; BLOCKED on the owner live TEST A/B traffic, which only the
+owner can generate. Phases 4-8 depend on that traffic and are not attempted.)
 
 ## 9. Deferred beyond V1
 
