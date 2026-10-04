@@ -17,18 +17,20 @@ PLAN Pointer: PLAN.md §3 (M10 row) and §8 M10/T2 entry (M10/T2-R8 block)
 Evidence Level: LOCAL-VERIFIED
 Deployment Authorized: YES (R8 - one observability attempt + one fix redeploy attempt)
 Deployment Status: DEPLOYED AND VERIFIED - latest attempt
-  txn-60e490a599e5b226e1170ebdabe3f361527242cd9a198764143121fcc09273ed
+  txn-95389ebeabab42d4d5fbf02635bdbbe4a0b4da14e8ef85350b43b3eb07ed81b3
   returned PASS at stage `applied`, transactionStatus complete, no rollback.
-  Live after the apply: service active (MainPID 348723, NRestarts 0),
-  dist/message-handler.preflight-C1XBiefW.js 63aaf148 carrying the
+  Live after the apply: service active (MainPID 461403, NRestarts 0),
+  dist/message-handler.preflight-C1XBiefW.js f15e9078 carrying the hardened
   per-source `[zink-ingress-meta]` diagnostics, dist/selection-DopzNY3I.js
   04e92061, dist/subagent-announce-Bh1QyKiE.js e3b110f7, boundary bccfa861,
   entrypoint 6a7968b7, authority 42b0cba8, ledger d794d99d unchanged at 103
   events. Prior R8 attempts: txn-abcb31f2 (observability, PASS),
-  txn-cb59d6e7 (1st fix, FAIL + the false-success rollback that Phase 1
-  removed), txn-eb5f0044 (fix, PASS), txn-3970bedc (diagnostics, FAIL closed
-  at native-backup-prune with NATIVE_SOURCE_DRIFT, rollback verified
-  complete), txn-60e490a5 (diagnostics, PASS).
+  txn-cb59d6e7 (1st fix, FAIL + the false-success rollback Phase 1 removed),
+  txn-eb5f0044 (fix, PASS), txn-3970bedc and txn-7ddba217 (both FAIL closed
+  at native-backup-prune with NATIVE_SOURCE_DRIFT, both rollbacks verified
+  complete, each followed by a lineage slot advance),
+  txn-60e490a5 (diagnostics v1, PASS), txn-95389ebe (hardened diagnostics,
+  PASS).
 Live Execution: OBSERVE-ONLY (owner traffic only)
 Lifecycle: IN PROGRESS
 

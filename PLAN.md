@@ -1388,7 +1388,7 @@ authorized the M10/T2-R2 safety remediation derived from the M10/T2-R1 pre-live
 safety audit. Approval covers implementation only, not live execution and not
 deployment.
 Deployment Authorized: `YES (R8 end-to-end, owner-authorized: observability deploy PASS, 1st fix deploy FAILED and rolled back, deployment-safety fix + 2nd fix deploy PASS; no further deploy without a new prompt)`
-Deployment Status: `DEPLOYED AND VERIFIED (txn-eb5f0044… PASS; diagnostics txn-60e490a5… PASS; live preflight 63aaf148 carrying [zink-ingress-meta], entrypoint 6a7968b7, selection 04e92061, boundary bccfa861, authority 42b0cba8, ledger d794d99d at 103 events, MainPID 348723)`
+Deployment Status: `DEPLOYED AND VERIFIED (txn-95389eb… PASS; live preflight f15e9078 carrying the hardened [zink-ingress-meta] diagnostics, entrypoint 6a7968b7, selection 04e92061, boundary bccfa861, authority 42b0cba8, ledger d794d99d at 103 events, MainPID 461403)`
 Live Execution: `OBSERVE-ONLY (owner sends controlled TEST A/B; agent performs read-only log correlation, no synthetic events, no message sending)`
 Safety Audit: the R1 pre-live audit returned `PRE-LIVE SAFETY AUDIT FOUND SAFETY
 ISSUE - LIVE BLOCKED` (post-lease spawn authority, attempt isolation at the
@@ -1901,6 +1901,30 @@ PASS at stage `applied`, live preflight 63aaf148 carrying
 `[zink-ingress-meta]`, MainPID 348723, ledger d794d99d unchanged. Gates:
 1181 tests / 1139 pass / 0 fail / 42 skipped; lint, format, repo-check,
 diff-check green; commits 6277bfc, fe95c16.
+Phase 3 DIAGNOSTIC HARDENING: the first diagnostics build produced ZERO
+`[zink-ingress-meta]` lines on the live runtime while the owner's message
+demonstrably reached admission, even though the region was present in the
+loaded file and `logger` was in scope. Two candidate causes remained —
+the single `try` throwing before the log (which would also hide the registry
+write behind the same silent catch) and the single-argument log form being
+dropped. The hardened build closes both rather than guessing: the diagnostic
+is emitted FIRST via the two-argument form this codebase demonstrably emits,
+each structured source is read through a defensive probe that reports -1 when
+that source THREW, and the union reads each source through its own guard so a
+failing getter can no longer cost the other sources or the registry write.
+A separate boolean probe exists for the bot flag because reusing the
+array-count probe for a boolean silently cleared the bot filter — that defect
+was caught by the existing R5 A9 negative and is now pinned by R8 D8/D9. The
+hardened deploy first failed closed at `native-backup-prune` with
+NATIVE_SOURCE_DRIFT (the live file had become the deployed first diagnostics
+build), its rollback verified complete under the Phase 1 contract, the slot was
+advanced to R8-diagnostics -> R8-diagnostics-hardened with the deployed region
+retained verbatim, and the retry succeeded: attempt
+txn-95389ebeabab42d4d5fbf02635bdbbe4a0b4da14e8ef85350b43b3eb07ed81b3,
+PASS at stage `applied`, live preflight f15e9078 carrying `zinkProbe`,
+MainPID 461403, ledger d794d99d unchanged. Gates: 1184 tests / 1142 pass /
+0 fail / 42 skipped; lint, format, repo-check, diff-check green; commits
+4b22b64, 80ecd98.
 Phase 5/7 (pre-admission thinking, evidence so far): the Discord lane
 contains NO status-reaction controller and NO reaction call (`addReaction`,
 `reactions.add`, `putReaction`, `shouldAckReaction` all zero occurrences in
