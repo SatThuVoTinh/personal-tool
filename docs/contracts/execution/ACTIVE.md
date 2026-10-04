@@ -16,17 +16,19 @@ Execution Contract: docs/contracts/execution/ACTIVE.md (this file)
 PLAN Pointer: PLAN.md §3 (M10 row) and §8 M10/T2 entry (M10/T2-R8 block)
 Evidence Level: LOCAL-VERIFIED
 Deployment Authorized: YES (R8 - one observability attempt + one fix redeploy attempt)
-Deployment Status: DEPLOYED AND VERIFIED - attempt
-  txn-eb5f0044990cc37661dbcd897c4f624a149460b4d6e01d25bcb5bf5154b17f57
+Deployment Status: DEPLOYED AND VERIFIED - latest attempt
+  txn-60e490a599e5b226e1170ebdabe3f361527242cd9a198764143121fcc09273ed
   returned PASS at stage `applied`, transactionStatus complete, no rollback.
-  Live after the apply: service active (MainPID 346609, NRestarts 0),
-  dist/message-handler.preflight-C1XBiefW.js d12961a2 (R8 union-sources
-  injection, contract-verified), dist/selection-DopzNY3I.js 04e92061,
-  dist/subagent-announce-Bh1QyKiE.js e3b110f7, boundary bccfa861, entrypoint
-  6a7968b7, authority 42b0cba8, ledger d794d99d unchanged at 103 events.
-  Earlier attempts: txn-abcb31f2 (observability, PASS) and txn-cb59d6e7
-  (1st fix attempt, FAIL at runtime-verify, rolled back with a proven
-  false-success that the Phase 1 repair removed).
+  Live after the apply: service active (MainPID 348723, NRestarts 0),
+  dist/message-handler.preflight-C1XBiefW.js 63aaf148 carrying the
+  per-source `[zink-ingress-meta]` diagnostics, dist/selection-DopzNY3I.js
+  04e92061, dist/subagent-announce-Bh1QyKiE.js e3b110f7, boundary bccfa861,
+  entrypoint 6a7968b7, authority 42b0cba8, ledger d794d99d unchanged at 103
+  events. Prior R8 attempts: txn-abcb31f2 (observability, PASS),
+  txn-cb59d6e7 (1st fix, FAIL + the false-success rollback that Phase 1
+  removed), txn-eb5f0044 (fix, PASS), txn-3970bedc (diagnostics, FAIL closed
+  at native-backup-prune with NATIVE_SOURCE_DRIFT, rollback verified
+  complete), txn-60e490a5 (diagnostics, PASS).
 Live Execution: OBSERVE-ONLY (owner traffic only)
 Lifecycle: IN PROGRESS
 

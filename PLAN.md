@@ -1388,7 +1388,7 @@ authorized the M10/T2-R2 safety remediation derived from the M10/T2-R1 pre-live
 safety audit. Approval covers implementation only, not live execution and not
 deployment.
 Deployment Authorized: `YES (R8 end-to-end, owner-authorized: observability deploy PASS, 1st fix deploy FAILED and rolled back, deployment-safety fix + 2nd fix deploy PASS; no further deploy without a new prompt)`
-Deployment Status: `DEPLOYED AND VERIFIED (txn-eb5f0044… PASS at stage applied; preflight d12961a2, entrypoint 6a7968b7, selection 04e92061, boundary bccfa861, authority 42b0cba8, ledger d794d99d at 103 events, MainPID 346609)`
+Deployment Status: `DEPLOYED AND VERIFIED (txn-eb5f0044… PASS; diagnostics txn-60e490a5… PASS; live preflight 63aaf148 carrying [zink-ingress-meta], entrypoint 6a7968b7, selection 04e92061, boundary bccfa861, authority 42b0cba8, ledger d794d99d at 103 events, MainPID 348723)`
 Live Execution: `OBSERVE-ONLY (owner sends controlled TEST A/B; agent performs read-only log correlation, no synthetic events, no message sending)`
 Safety Audit: the R1 pre-live audit returned `PRE-LIVE SAFETY AUDIT FOUND SAFETY
 ISSUE - LIVE BLOCKED` (post-lease spawn authority, attempt isolation at the
@@ -1859,6 +1859,48 @@ txn-eb5f0044990cc37661dbcd897c4f624a149460b4d6e01d25bcb5bf5154b17f57,
 no rollback required. Post-deploy: service active (MainPID 346609, NRestarts
 0), preflight `d12961a2`, entrypoint `6a7968b7`, ledger `d794d99d` unchanged.
 The H1 repair is now both live AND verified by the deployment contract.
+Phase 3 RESULT (2nd live test, owner msg 1556288097241538573 at 19:53:24
++07): the union-sources repair did NOT recover the structured mention. All
+workers again reported `mentions=0 reply=false threadOwner=false` and Main was
+again DENY `MISSING_MENTION`. TEST B (untagged) produced NO bot behaviour at
+all, which is the correct outcome. From this evidence the host's own
+mention-admission path is DEDUCED rather than assumed: lane tasks exist, so
+host preflight did not drop the message, therefore `shouldSkip === false`,
+therefore `effectiveWasMentioned === true`; `shouldBypassMention` requires a
+control command (absent) and `implicitMention` requires a reply to this bot
+(absent), so `wasMentioned === true`; if `isExplicitlyMentioned` had been true
+then `message.mentionedUsers` would have contained the bot id and the union
+(which reads exactly that array) would have recorded it, so it was false.
+`wasMentioned` could therefore only have come from `mentionRegexes` matching
+the message TEXT. Conclusion: for that message Discord delivered NO structured
+mention at all, the host admitted the turn on a display-name text regex, and
+governance correctly refused because it admits only structured identity. What
+remains unknown is which source, if any, held the mention, which is why R8
+added seam diagnostics.
+Phase 3 DIAGNOSTICS: the preflight injection now emits one INFO line per
+inbound message with per-source structured counts only —
+`wu/wr` (discord.js wrapper), `ru/rr` (message rawDataValue), `du/dr` (raw
+dispatch), `mu/mr` (unioned) — never content, never sender identity, never a
+token. R5 H2's prohibition on reading message text in this path is preserved
+deliberately; a content-derived boolean would be the first content-derived
+value in the admission metadata path, and the counts answer the question that
+matters. `logger` is optional so a scope without one still writes the
+registry. Regression: tests/m10-t2-r8-ingress-source-diagnostics.test.mjs,
+6 tests (one line per message, per-source counts, no content read or logged,
+diagnostic emitted even when the registry write is skipped, missing-logger
+degradation, union unchanged). The diagnostics deploy FIRST failed closed at
+`native-backup-prune` with NATIVE_SOURCE_DRIFT because the live preflight file
+had become the deployed R8 union build; the lineage slot was advanced to
+R8 -> R8-diagnostics with the deployed union region retained verbatim as
+DISCORD_PREFLIGHT_INJECTION_R8_UNION, inversion to the pinned baseline proven
+byte-for-byte, and R5's region kept exported as history. That rollback was
+itself verified complete under the Phase 1 contract, and the retry then
+succeeded: attempt
+txn-60e490a599e5b226e1170ebdabe3f361527242cd9a198764143121fcc09273ed,
+PASS at stage `applied`, live preflight 63aaf148 carrying
+`[zink-ingress-meta]`, MainPID 348723, ledger d794d99d unchanged. Gates:
+1181 tests / 1139 pass / 0 fail / 42 skipped; lint, format, repo-check,
+diff-check green; commits 6277bfc, fe95c16.
 Phase 5/7 (pre-admission thinking, evidence so far): the Discord lane
 contains NO status-reaction controller and NO reaction call (`addReaction`,
 `reactions.add`, `putReaction`, `shouldAckReaction` all zero occurrences in
@@ -1888,10 +1930,11 @@ changed (ONE attempt). Phase 12 - live verify A/B/C/D per expected
 flows. Phase 13 - R8 PASS only on full evidence chain, else FAILED
 at the named boundary.
 
-Status: IN PROGRESS (Phase 1 deployment-safety fix COMPLETE and DEPLOYED;
-Phase 2 reconciled; Phase 3 H1 PROVEN and its repair is live AND
-contract-verified; BLOCKED on the owner live TEST A/B traffic, which only the
-owner can generate. Phases 4-8 depend on that traffic and are not attempted.)
+Status: IN PROGRESS (Phase 1 deployment-safety fix DEPLOYED and verified;
+Phase 2 reconciled; Phase 3 H1 PROVEN and the union repair deployed but
+INSUFFICIENT on the live test; per-source seam diagnostics DEPLOYED and
+verified; awaiting the owner live TEST A that yields those counts. Phases 4-8
+depend on that evidence and are not attempted.)
 
 ## 9. Deferred beyond V1
 
