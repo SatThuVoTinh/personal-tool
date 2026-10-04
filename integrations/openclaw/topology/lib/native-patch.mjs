@@ -201,6 +201,16 @@ export const DISCORD_PREFLIGHT_INJECTION_R5 = `\t;{
  * to the pinned baseline byte-for-byte. Drift fails that test instead of
  * silently widening recognition.
  */
+/**
+ * M10/T2-R8: the DEPLOYED first diagnostics injection, retained verbatim as the
+ * lineage predecessor of the hardened diagnostics build. Same rationale as the
+ * union constant: emitted as an escaped string literal so the bytes are exact,
+ * and proven by the R8 lineage test inverting the live file through it back to
+ * the pinned upstream baseline.
+ */
+export const DISCORD_PREFLIGHT_INJECTION_R8_DIAGNOSTICS =
+  '\t;{\n\t\t// M10/T2-R8: deterministic Discord inbound metadata (see native-patch).\n\t\ttry {\n\t\t\tconst zinkSnowflake = (value) => (typeof value === "string" && /^[1-9][0-9]{16,19}$/.test(value) ? value : null);\n\t\t\tconst zinkIds = (entries) => { const ids = []; if (Array.isArray(entries)) { for (const entry of entries) { const id = zinkSnowflake(typeof entry === "string" ? entry : entry?.id); if (id) ids.push(id); } } return ids; };\n\t\t\tconst zinkUniq = (ids) => [...new Set(ids)];\n\t\t\tconst zinkFirst = (...values) => { for (const value of values) { const id = zinkSnowflake(value); if (id) return id; } return null; };\n\t\t\tconst zinkCount = (entries) => (Array.isArray(entries) ? entries.length : 0);\n\t\t\tconst zinkRawData = (typeof params !== "undefined" && params) ? params.data : null;\n\t\t\tconst zinkRaw = (zinkRawData && typeof zinkRawData === "object") ? zinkRawData : null;\n\t\t\tconst zinkMessageRaw = (message && typeof message === "object") ? message.rawDataValue : null;\n\t\t\tconst zinkMessageRawObj = (zinkMessageRaw && typeof zinkMessageRaw === "object") ? zinkMessageRaw : null;\n\t\t\tconst zinkMessageId = zinkSnowflake(message?.id);\n\t\t\tconst zinkMentionUserIds = zinkUniq([...zinkIds(message.mentionedUsers), ...zinkIds(zinkMessageRawObj?.mentions), ...zinkIds(zinkRaw?.mentions)]);\n\t\t\tconst zinkMentionRoleIds = zinkUniq([...zinkIds(message.mentionedRoles), ...zinkIds(zinkMessageRawObj?.mention_roles), ...zinkIds(zinkRaw?.mention_roles)]);\n\t\t\tif (typeof logger !== "undefined" && logger && typeof logger.info === "function") {\n\t\t\t\tlogger.info("[zink-ingress-meta] msg=" + (zinkMessageId ?? "-")\n\t\t\t\t\t+ " wu=" + zinkCount(message?.mentionedUsers) + " wr=" + zinkCount(message?.mentionedRoles)\n\t\t\t\t\t+ " ru=" + zinkCount(zinkMessageRawObj?.mentions) + " rr=" + zinkCount(zinkMessageRawObj?.mention_roles)\n\t\t\t\t\t+ " du=" + zinkCount(zinkRaw?.mentions) + " dr=" + zinkCount(zinkRaw?.mention_roles)\n\t\t\t\t\t+ " mu=" + zinkMentionUserIds.length + " mr=" + zinkMentionRoleIds.length);\n\t\t\t}\n\t\t\tif (zinkMessageId) {\n\t\t\t\tlet zinkRegistry = globalThis.__zink_ingress_metadata_r5;\n\t\t\t\tif (!(zinkRegistry instanceof Map)) { zinkRegistry = new Map(); globalThis.__zink_ingress_metadata_r5 = zinkRegistry; }\n\t\t\t\twhile (zinkRegistry.size >= 256) { zinkRegistry.delete(zinkRegistry.keys().next().value); }\n\t\t\t\tzinkRegistry.set(zinkMessageId, {\n\t\t\t\t\tmentionedUserIds: zinkMentionUserIds,\n\t\t\t\t\tmentionedRoleIds: zinkMentionRoleIds,\n\t\t\t\t\treplyReferenceMessageId: zinkFirst(message.messageReference?.message_id, zinkMessageRawObj?.message_reference?.message_id, zinkRaw?.message_reference?.message_id),\n\t\t\t\t\treplyReferenceAuthorId: zinkFirst(message.referencedMessage?.author?.id, zinkMessageRawObj?.referenced_message?.author?.id, zinkRaw?.referenced_message?.author?.id),\n\t\t\t\t\tthreadOwnerId: zinkSnowflake(threadOwnerId),\n\t\t\t\t\tauthorIsBot: message.author?.bot === true || zinkMessageRawObj?.author?.bot === true || zinkRaw?.author?.bot === true,\n\t\t\t\t});\n\t\t\t}\n\t\t} catch { /* fail-closed: no record, downstream denies as today */ }\n\t}';
+
 export const DISCORD_PREFLIGHT_INJECTION_R8_UNION =
   '\t;{\n\t\t// M10/T2-R8: deterministic Discord inbound metadata (see native-patch).\n\t\ttry {\n\t\t\tconst zinkSnowflake = (value) => (typeof value === "string" && /^[1-9][0-9]{16,19}$/.test(value) ? value : null);\n\t\t\tconst zinkIds = (entries) => { const ids = []; if (Array.isArray(entries)) { for (const entry of entries) { const id = zinkSnowflake(typeof entry === "string" ? entry : entry?.id); if (id) ids.push(id); } } return ids; };\n\t\t\tconst zinkUniq = (ids) => [...new Set(ids)];\n\t\t\tconst zinkFirst = (...values) => { for (const value of values) { const id = zinkSnowflake(value); if (id) return id; } return null; };\n\t\t\tconst zinkRawData = (typeof params !== "undefined" && params) ? params.data : null;\n\t\t\tconst zinkRaw = (zinkRawData && typeof zinkRawData === "object") ? zinkRawData : null;\n\t\t\tconst zinkMessageRaw = (message && typeof message === "object") ? message.rawDataValue : null;\n\t\t\tconst zinkMessageRawObj = (zinkMessageRaw && typeof zinkMessageRaw === "object") ? zinkMessageRaw : null;\n\t\t\tconst zinkMessageId = zinkSnowflake(message?.id);\n\t\t\tif (zinkMessageId) {\n\t\t\t\tlet zinkRegistry = globalThis.__zink_ingress_metadata_r5;\n\t\t\t\tif (!(zinkRegistry instanceof Map)) { zinkRegistry = new Map(); globalThis.__zink_ingress_metadata_r5 = zinkRegistry; }\n\t\t\t\twhile (zinkRegistry.size >= 256) { zinkRegistry.delete(zinkRegistry.keys().next().value); }\n\t\t\t\tzinkRegistry.set(zinkMessageId, {\n\t\t\t\t\tmentionedUserIds: zinkUniq([...zinkIds(message.mentionedUsers), ...zinkIds(zinkMessageRawObj?.mentions), ...zinkIds(zinkRaw?.mentions)]),\n\t\t\t\t\tmentionedRoleIds: zinkUniq([...zinkIds(message.mentionedRoles), ...zinkIds(zinkMessageRawObj?.mention_roles), ...zinkIds(zinkRaw?.mention_roles)]),\n\t\t\t\t\treplyReferenceMessageId: zinkFirst(message.messageReference?.message_id, zinkMessageRawObj?.message_reference?.message_id, zinkRaw?.message_reference?.message_id),\n\t\t\t\t\treplyReferenceAuthorId: zinkFirst(message.referencedMessage?.author?.id, zinkMessageRawObj?.referenced_message?.author?.id, zinkRaw?.referenced_message?.author?.id),\n\t\t\t\t\tthreadOwnerId: zinkSnowflake(threadOwnerId),\n\t\t\t\t\tauthorIsBot: message.author?.bot === true || zinkMessageRawObj?.author?.bot === true || zinkRaw?.author?.bot === true,\n\t\t\t\t});\n\t\t\t}\n\t\t} catch { /* fail-closed: no record, downstream denies as today */ }\n\t}';
 
@@ -437,23 +447,20 @@ export const NATIVE_PATCH_PREDECESSORS = Object.freeze({
     // preflight baseline must all reproduce, otherwise the runtime fails
     // closed with NATIVE_SOURCE_DRIFT and no deployment proceeds.
     "message-handler.preflight-C1XBiefW.js": Object.freeze({
-      // M10/T2-R8: the live preflight file now carries the DEPLOYED R8
-      // union-sources injection, so the active slot follows the real deployment
-      // chain R8 -> R8-diagnostics. The R5 slot is retired for exactly the reason
-      // the R7 slot was retired earlier: the mechanism holds ONE active slot
-      // per artifact, and that slot must follow the chain the live runtime is
-      // actually on. R5 history stays exported as
-      // DISCORD_PREFLIGHT_INJECTION_R5 and is pinned by the R5 suite.
-      // Recognition is exact: the live digest, this verbatim region, and
-      // inversion to the pinned preflight baseline must all reproduce, else the
-      // runtime fails closed with NATIVE_SOURCE_DRIFT and no deploy proceeds.
-      revision: "R8",
+      // M10/T2-R8: the live preflight file carries the DEPLOYED first
+      // diagnostics build, so the active slot advances again along the real
+      // chain. Same one-active-slot rule as before: the slot follows the chain
+      // the live runtime is actually on, and every superseded region stays
+      // exported and pinned so history is never rewritten to match a deploy.
+      revision: "R8-diagnostics",
       sourceSignature:
-        DISCORD_PREFLIGHT_ANCHOR + "\n" + DISCORD_PREFLIGHT_INJECTION_R8_UNION,
+        DISCORD_PREFLIGHT_ANCHOR +
+        "\n" +
+        DISCORD_PREFLIGHT_INJECTION_R8_DIAGNOSTICS,
       supersedes: DISCORD_PREFLIGHT_ANCHOR + "\n" + DISCORD_PREFLIGHT_INJECTION,
       sourceDigest:
-        "d12961a2d0f83b23a91e9859343920d86522957eb4e79ea3ffc7733c0253d8c6",
-      successorRevision: "R8-diagnostics",
+        "63aaf148ad1a8b5caf177a70dbff4a1e7522c596fe409e54cdec8dcbd1566ce7",
+      successorRevision: "R8-diagnostics-hardened",
     }),
   }),
 });
