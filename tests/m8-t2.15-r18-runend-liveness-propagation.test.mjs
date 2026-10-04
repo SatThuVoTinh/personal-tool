@@ -557,10 +557,17 @@ test("R18 13: R18 leaves the pinned native patch byte-identical", () => {
   // to the R8 Phase-1-authorized bytes; its purpose as a change detector is
   // unchanged, and the derivation itself is pinned by
   // tests/m10-t2-r8-deployment-snapshot-safety.test.mjs.
+  // M10/T2-R8 UPDATE (ingress diagnostics): the injection additionally emits
+  // one INFO line per inbound message carrying per-source counts (wrapper,
+  // message rawDataValue, raw dispatch) plus a boolean for a mention token in
+  // the content — never content, sender identity or a token. The union-sources
+  // repair did not recover the mention, and without this measurement
+  // "Discord delivered nothing" and "we lost it here" are indistinguishable.
+  // Pinned by tests/m10-t2-r8-ingress-source-diagnostics.test.mjs.
   assert.equal(
     sha256(readFileSync(NATIVE_PATCH_PATH, "utf8")),
-    "da7495e770dcf93bacd835a386b6c58c3335da5bd5c3beb07f5aac0c62cdcac5",
-    "native-patch.mjs must equal the R8 Phase-1-authorized bytes; any other drift fails",
+    "7b001d0b55e0fc62c0219a4b82c9f78d728ea6535ba6bb7857c900cef26d6ce7",
+    "native-patch.mjs must equal the R8-diagnostics-authorized bytes; any other drift fails",
   );
 });
 

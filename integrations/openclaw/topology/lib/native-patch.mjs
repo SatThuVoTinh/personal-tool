@@ -212,6 +212,16 @@ export const DISCORD_PREFLIGHT_ANCHOR =
  * and hydration merges can all diverge from the wrapper). Union-only:
  * every source is still a structured snowflake id, exact-matched
  * downstream, so an id is admitted only when Discord really addressed it.
+ *
+ * M10/T2-R8 diagnostics: the union alone did not recover the mention, so the
+ * seam now REPORTS what each structured source actually held. One INFO line
+ * per inbound message carries per-source COUNTS only — never the content,
+ * never sender identity, never a token. R5 H2's prohibition on reading
+ * message text in this path is deliberately preserved: a boolean derived from
+ * content would be the first content-derived value in the admission metadata
+ * path, and the counts already answer the question that matters (did Discord
+ * deliver `mentions[]`, and if so which source carried it). `logger` is
+ * optional: a scope without one still writes the registry.
  */
 export const DISCORD_PREFLIGHT_INJECTION = `\t;{
 \t\t// M10/T2-R8: deterministic Discord inbound metadata (see native-patch).
@@ -220,18 +230,28 @@ export const DISCORD_PREFLIGHT_INJECTION = `\t;{
 \t\t\tconst zinkIds = (entries) => { const ids = []; if (Array.isArray(entries)) { for (const entry of entries) { const id = zinkSnowflake(typeof entry === "string" ? entry : entry?.id); if (id) ids.push(id); } } return ids; };
 \t\t\tconst zinkUniq = (ids) => [...new Set(ids)];
 \t\t\tconst zinkFirst = (...values) => { for (const value of values) { const id = zinkSnowflake(value); if (id) return id; } return null; };
+\t\t\tconst zinkCount = (entries) => (Array.isArray(entries) ? entries.length : 0);
 \t\t\tconst zinkRawData = (typeof params !== "undefined" && params) ? params.data : null;
 \t\t\tconst zinkRaw = (zinkRawData && typeof zinkRawData === "object") ? zinkRawData : null;
 \t\t\tconst zinkMessageRaw = (message && typeof message === "object") ? message.rawDataValue : null;
 \t\t\tconst zinkMessageRawObj = (zinkMessageRaw && typeof zinkMessageRaw === "object") ? zinkMessageRaw : null;
 \t\t\tconst zinkMessageId = zinkSnowflake(message?.id);
+\t\t\tconst zinkMentionUserIds = zinkUniq([...zinkIds(message.mentionedUsers), ...zinkIds(zinkMessageRawObj?.mentions), ...zinkIds(zinkRaw?.mentions)]);
+\t\t\tconst zinkMentionRoleIds = zinkUniq([...zinkIds(message.mentionedRoles), ...zinkIds(zinkMessageRawObj?.mention_roles), ...zinkIds(zinkRaw?.mention_roles)]);
+\t\t\tif (typeof logger !== "undefined" && logger && typeof logger.info === "function") {
+\t\t\t\tlogger.info("[zink-ingress-meta] msg=" + (zinkMessageId ?? "-")
+\t\t\t\t\t+ " wu=" + zinkCount(message?.mentionedUsers) + " wr=" + zinkCount(message?.mentionedRoles)
+\t\t\t\t\t+ " ru=" + zinkCount(zinkMessageRawObj?.mentions) + " rr=" + zinkCount(zinkMessageRawObj?.mention_roles)
+\t\t\t\t\t+ " du=" + zinkCount(zinkRaw?.mentions) + " dr=" + zinkCount(zinkRaw?.mention_roles)
+\t\t\t\t\t+ " mu=" + zinkMentionUserIds.length + " mr=" + zinkMentionRoleIds.length);
+\t\t\t}
 \t\t\tif (zinkMessageId) {
 \t\t\t\tlet zinkRegistry = globalThis.${ZINK_INGRESS_METADATA_KEY};
 \t\t\t\tif (!(zinkRegistry instanceof Map)) { zinkRegistry = new Map(); globalThis.${ZINK_INGRESS_METADATA_KEY} = zinkRegistry; }
 \t\t\t\twhile (zinkRegistry.size >= ${ZINK_INGRESS_METADATA_LIMIT}) { zinkRegistry.delete(zinkRegistry.keys().next().value); }
 \t\t\t\tzinkRegistry.set(zinkMessageId, {
-\t\t\t\t\tmentionedUserIds: zinkUniq([...zinkIds(message.mentionedUsers), ...zinkIds(zinkMessageRawObj?.mentions), ...zinkIds(zinkRaw?.mentions)]),
-\t\t\t\t\tmentionedRoleIds: zinkUniq([...zinkIds(message.mentionedRoles), ...zinkIds(zinkMessageRawObj?.mention_roles), ...zinkIds(zinkRaw?.mention_roles)]),
+\t\t\t\t\tmentionedUserIds: zinkMentionUserIds,
+\t\t\t\t\tmentionedRoleIds: zinkMentionRoleIds,
 \t\t\t\t\treplyReferenceMessageId: zinkFirst(message.messageReference?.message_id, zinkMessageRawObj?.message_reference?.message_id, zinkRaw?.message_reference?.message_id),
 \t\t\t\t\treplyReferenceAuthorId: zinkFirst(message.referencedMessage?.author?.id, zinkMessageRawObj?.referenced_message?.author?.id, zinkRaw?.referenced_message?.author?.id),
 \t\t\t\t\tthreadOwnerId: zinkSnowflake(threadOwnerId),
