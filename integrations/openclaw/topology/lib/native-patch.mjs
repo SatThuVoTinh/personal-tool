@@ -238,26 +238,43 @@ export const DISCORD_PREFLIGHT_ANCHOR =
  */
 export const DISCORD_PREFLIGHT_INJECTION = `\t;{
 \t\t// M10/T2-R8: deterministic Discord inbound metadata (see native-patch).
+\t\t// The diagnostic is emitted FIRST and each count is read defensively, so
+\t\t// a throwing discord.js getter can no longer hide both the report and the
+\t\t// registry write behind one silent catch. A count of -1 means that
+\t\t// specific source threw while being read, which is itself the finding.
+\t\tconst zinkProbe = (read) => { try { const value = read(); return Array.isArray(value) ? value.length : 0; } catch { return -1; } };
+\t\tconst zinkFlag = (read) => { try { return read() === true; } catch { return false; } };
 \t\ttry {
+\t\t\tconst zinkMessageId = typeof message?.id === "string" && /^[1-9][0-9]{16,19}$/.test(message.id) ? message.id : null;
+\t\t\tconst zinkData = (typeof params !== "undefined" && params && typeof params === "object") ? params.data : null;
+\t\t\tconst zinkRaw = (zinkData && typeof zinkData === "object") ? zinkData : null;
+\t\t\tconst zinkMessageRaw = (() => { try { return message && typeof message === "object" ? message.rawDataValue : null; } catch { return null; } })();
+\t\t\tconst zinkMessageRawObj = (zinkMessageRaw && typeof zinkMessageRaw === "object") ? zinkMessageRaw : null;
+\t\t\ttry {
+\t\t\t\tif (typeof logger !== "undefined" && logger && typeof logger.info === "function") {
+\t\t\t\t\tlogger.info({
+\t\t\t\t\t\tzinkIngress: {
+\t\t\t\t\t\t\tmsg: zinkMessageId ?? "-",
+\t\t\t\t\t\t\twu: zinkProbe(() => message?.mentionedUsers),
+\t\t\t\t\t\t\twr: zinkProbe(() => message?.mentionedRoles),
+\t\t\t\t\t\t\tru: zinkProbe(() => zinkMessageRawObj?.mentions),
+\t\t\t\t\t\t\trr: zinkProbe(() => zinkMessageRawObj?.mention_roles),
+\t\t\t\t\t\t\tdu: zinkProbe(() => zinkRaw?.mentions),
+\t\t\t\t\t\t\tdr: zinkProbe(() => zinkRaw?.mention_roles),
+\t\t\t\t\t\t\thasDispatch: zinkRaw ? 1 : 0,
+\t\t\t\t\t\t\thasRawData: zinkMessageRawObj ? 1 : 0,
+\t\t\t\t\t\t}
+\t\t\t\t\t}, "[zink-ingress-meta]");
+\t\t\t\t}
+\t\t\t} catch { /* a logger failure must never break preflight */ }
 \t\t\tconst zinkSnowflake = (value) => (typeof value === "string" && /^[1-9][0-9]{16,19}$/.test(value) ? value : null);
 \t\t\tconst zinkIds = (entries) => { const ids = []; if (Array.isArray(entries)) { for (const entry of entries) { const id = zinkSnowflake(typeof entry === "string" ? entry : entry?.id); if (id) ids.push(id); } } return ids; };
 \t\t\tconst zinkUniq = (ids) => [...new Set(ids)];
 \t\t\tconst zinkFirst = (...values) => { for (const value of values) { const id = zinkSnowflake(value); if (id) return id; } return null; };
-\t\t\tconst zinkCount = (entries) => (Array.isArray(entries) ? entries.length : 0);
-\t\t\tconst zinkRawData = (typeof params !== "undefined" && params) ? params.data : null;
-\t\t\tconst zinkRaw = (zinkRawData && typeof zinkRawData === "object") ? zinkRawData : null;
-\t\t\tconst zinkMessageRaw = (message && typeof message === "object") ? message.rawDataValue : null;
-\t\t\tconst zinkMessageRawObj = (zinkMessageRaw && typeof zinkMessageRaw === "object") ? zinkMessageRaw : null;
-\t\t\tconst zinkMessageId = zinkSnowflake(message?.id);
-\t\t\tconst zinkMentionUserIds = zinkUniq([...zinkIds(message.mentionedUsers), ...zinkIds(zinkMessageRawObj?.mentions), ...zinkIds(zinkRaw?.mentions)]);
-\t\t\tconst zinkMentionRoleIds = zinkUniq([...zinkIds(message.mentionedRoles), ...zinkIds(zinkMessageRawObj?.mention_roles), ...zinkIds(zinkRaw?.mention_roles)]);
-\t\t\tif (typeof logger !== "undefined" && logger && typeof logger.info === "function") {
-\t\t\t\tlogger.info("[zink-ingress-meta] msg=" + (zinkMessageId ?? "-")
-\t\t\t\t\t+ " wu=" + zinkCount(message?.mentionedUsers) + " wr=" + zinkCount(message?.mentionedRoles)
-\t\t\t\t\t+ " ru=" + zinkCount(zinkMessageRawObj?.mentions) + " rr=" + zinkCount(zinkMessageRawObj?.mention_roles)
-\t\t\t\t\t+ " du=" + zinkCount(zinkRaw?.mentions) + " dr=" + zinkCount(zinkRaw?.mention_roles)
-\t\t\t\t\t+ " mu=" + zinkMentionUserIds.length + " mr=" + zinkMentionRoleIds.length);
-\t\t\t}
+\t\t\tconst zinkSafeFirst = (read) => { try { return read(); } catch { return undefined; } };
+\t\t\tconst zinkSafeIds = (read) => { try { return zinkIds(read()); } catch { return []; } };
+\t\t\tconst zinkMentionUserIds = zinkUniq([...zinkSafeIds(() => message.mentionedUsers), ...zinkSafeIds(() => zinkMessageRawObj?.mentions), ...zinkSafeIds(() => zinkRaw?.mentions)]);
+\t\t\tconst zinkMentionRoleIds = zinkUniq([...zinkSafeIds(() => message.mentionedRoles), ...zinkSafeIds(() => zinkMessageRawObj?.mention_roles), ...zinkSafeIds(() => zinkRaw?.mention_roles)]);
 \t\t\tif (zinkMessageId) {
 \t\t\t\tlet zinkRegistry = globalThis.${ZINK_INGRESS_METADATA_KEY};
 \t\t\t\tif (!(zinkRegistry instanceof Map)) { zinkRegistry = new Map(); globalThis.${ZINK_INGRESS_METADATA_KEY} = zinkRegistry; }
@@ -265,10 +282,10 @@ export const DISCORD_PREFLIGHT_INJECTION = `\t;{
 \t\t\t\tzinkRegistry.set(zinkMessageId, {
 \t\t\t\t\tmentionedUserIds: zinkMentionUserIds,
 \t\t\t\t\tmentionedRoleIds: zinkMentionRoleIds,
-\t\t\t\t\treplyReferenceMessageId: zinkFirst(message.messageReference?.message_id, zinkMessageRawObj?.message_reference?.message_id, zinkRaw?.message_reference?.message_id),
-\t\t\t\t\treplyReferenceAuthorId: zinkFirst(message.referencedMessage?.author?.id, zinkMessageRawObj?.referenced_message?.author?.id, zinkRaw?.referenced_message?.author?.id),
+\t\t\t\t\treplyReferenceMessageId: zinkFirst(zinkSafeFirst(() => message.messageReference?.message_id), zinkSafeFirst(() => zinkMessageRawObj?.message_reference?.message_id), zinkSafeFirst(() => zinkRaw?.message_reference?.message_id)),
+\t\t\t\t\treplyReferenceAuthorId: zinkFirst(zinkSafeFirst(() => message.referencedMessage?.author?.id), zinkSafeFirst(() => zinkMessageRawObj?.referenced_message?.author?.id), zinkSafeFirst(() => zinkRaw?.referenced_message?.author?.id)),
 \t\t\t\t\tthreadOwnerId: zinkSnowflake(threadOwnerId),
-\t\t\t\t\tauthorIsBot: message.author?.bot === true || zinkMessageRawObj?.author?.bot === true || zinkRaw?.author?.bot === true,
+\t\t\t\t\tauthorIsBot: zinkFlag(() => message.author?.bot) || zinkFlag(() => zinkMessageRawObj?.author?.bot) || zinkFlag(() => zinkRaw?.author?.bot),
 \t\t\t\t});
 \t\t\t}
 \t\t} catch { /* fail-closed: no record, downstream denies as today */ }

@@ -1,16 +1,19 @@
-// M10/T2-R8 — ingress metadata source diagnostics.
+// M10/T2-R8 — ingress metadata source diagnostics, hardened.
 //
-// The union-sources repair did NOT recover the structured mention: after it,
-// a real owner message that Discord autocomplete-tagged Main still reached
-// admission as `mentions=0`. Every structured source the seam can see is
-// already read by the repair, so the remaining question is strictly
-// observational: did Discord deliver `mentions[]` at all, and if so which
-// source carried it and where it was lost.
+// The first diagnostics build produced ZERO lines in the live log while the
+// owner's message demonstrably reached admission. The code was in the right
+// function with `logger` in scope, which leaves exactly two explanations: the
+// `try` threw before reaching the log (hiding the registry write too, behind
+// one silent catch), or the single-argument log form was dropped. This suite
+// pins the hardened contract that closes both:
 //
-// This suite pins the instrumentation that answers it, and pins what it must
-// never do: emit message content, sender identity, or any secret. Only
-// per-source COUNTS and one boolean about whether the content carries a
-// mention token.
+//   * the diagnostic is emitted FIRST, before any optional source read;
+//   * each source count is read defensively and reports -1 when that source
+//     THREW, so a failing discord.js getter is visible instead of silent;
+//   * a throwing getter never prevents the registry write;
+//   * the two-argument log form is used, matching the pattern this codebase
+//     demonstrably emits;
+//   * content, sender identity and mention ids are never logged.
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DISCORD_BOT_IDS } from "../integrations/openclaw/lib/authority.mjs";
@@ -22,13 +25,16 @@ import {
 const MAIN_BOT = DISCORD_BOT_IDS.main;
 const MSG = "1545430000000000077";
 
-function runInjection({ message, threadOwnerId, params }) {
-  const lines = [];
-  const logger = {
-    info: (line) => lines.push(String(line)),
-    warn: () => {},
-    error: () => {},
-  };
+function runInjection({ message, threadOwnerId, params, loggerArg }) {
+  const calls = [];
+  const logger =
+    loggerArg === null
+      ? undefined
+      : (loggerArg ?? {
+          info: (...args) => calls.push(args),
+          warn: () => {},
+          error: () => {},
+        });
   const factory = new Function(
     "message",
     "threadOwnerId",
@@ -40,8 +46,11 @@ function runInjection({ message, threadOwnerId, params }) {
   factory(message, threadOwnerId, params, logger, globalThis);
   const registry = globalThis[ZINK_INGRESS_METADATA_KEY];
   return {
-    lines,
+    calls,
     record: registry instanceof Map ? registry.get(MSG) : undefined,
+    flat: calls
+      .flat()
+      .map((a) => (typeof a === "string" ? a : JSON.stringify(a))),
   };
 }
 
@@ -68,102 +77,172 @@ const dispatch = (over = {}) => ({
   ...over,
 });
 
-function field(line, key) {
-  const match = new RegExp(`\\b${key}=(\\S+)`).exec(line);
-  return match ? match[1] : null;
+function diag(calls) {
+  // calls is a list of info(...) argument lists; flatten before matching.
+  const flat = calls.flat();
+  const at = flat.indexOf("[zink-ingress-meta]");
+  assert.notEqual(at, -1, "the marker argument must be present");
+  const obj = flat[at - 1];
+  assert.ok(
+    obj && typeof obj === "object",
+    "a structured object must precede it",
+  );
+  return obj.zinkIngress;
 }
 
-test("R8 D1: one diagnostic line is emitted per inbound message", () => {
-  const { lines } = runInjection({
+test("R8 D1: the two-argument log form carries a structured diagnostic", () => {
+  const { calls } = runInjection({
     message: msg(),
     threadOwnerId: null,
     params: { data: dispatch() },
   });
-  const emitted = lines.filter((l) => l.includes("[zink-ingress-meta]"));
-  assert.equal(emitted.length, 1, "exactly one diagnostic per inbound message");
+  const d = diag(calls);
+  assert.equal(d.msg, MSG);
+  assert.equal(d.hasDispatch, 1);
+  assert.equal(d.hasRawData, 0);
 });
 
 test("R8 D2: per-source counts are reported for every structured source", () => {
-  const { lines } = runInjection({
+  const { calls } = runInjection({
     message: msg({
       rawDataValue: { mentions: [{ id: MAIN_BOT }], mention_roles: ["1"] },
     }),
     threadOwnerId: null,
     params: { data: dispatch({ mentions: [{ id: MAIN_BOT }] }) },
   });
-  const line = lines.find((l) => l.includes("[zink-ingress-meta]"));
-  assert.equal(field(line, "wu"), "0", "wrapper mentionedUsers");
-  assert.equal(field(line, "wr"), "0", "wrapper mentionedRoles");
-  assert.equal(field(line, "ru"), "1", "rawDataValue mentions");
-  assert.equal(field(line, "rr"), "1", "rawDataValue mention_roles");
-  assert.equal(field(line, "du"), "1", "dispatch mentions");
+  const d = diag(calls);
+  assert.deepEqual(
+    [d.wu, d.wr, d.ru, d.rr, d.du],
+    [0, 0, 1, 1, 1],
+    "every structured source must be counted",
+  );
 });
-test("R8 D3: the diagnostic never reads or logs message content", () => {
-  // R5 H2 forbids reading message text in this path and that prohibition is
-  // preserved: a content-derived value would be the first one in the admission
-  // metadata path. The per-source counts already answer the question that
-  // matters: did Discord deliver mentions[], and which source carried it.
+
+function hostileMessage(throwingKeys) {
+  // Defined, not spread: spreading would EVALUATE the getters during fixture
+  // construction, which tests the fixture instead of the injection.
+  const base = msg();
+  for (const key of throwingKeys) {
+    Object.defineProperty(base, key, {
+      get() {
+        throw new Error("getter exploded");
+      },
+      enumerable: true,
+      configurable: true,
+    });
+  }
+  return base;
+}
+
+test("R8 D3: a throwing getter is reported as -1 and does not stop the write", () => {
+  const { calls, record } = runInjection({
+    message: hostileMessage(["mentionedUsers"]),
+    threadOwnerId: null,
+    params: { data: dispatch({ mentions: [{ id: MAIN_BOT }] }) },
+  });
+  const d = diag(calls);
+  assert.equal(d.wu, -1, "a throwing source must be visible, not silent");
+  assert.ok(record, "the registry write must still happen");
+  assert.deepEqual(
+    [...record.mentionedUserIds],
+    [MAIN_BOT],
+    "a throwing wrapper must not lose the other sources",
+  );
+});
+
+test("R8 D4: the diagnostic is emitted before any source is read", () => {
+  // Every source getter throws: the diagnostic must still be produced.
+  const { calls } = runInjection({
+    message: hostileMessage(["mentionedUsers", "mentionedRoles"]),
+    threadOwnerId: null,
+    params: { data: dispatch() },
+  });
+  const d = diag(calls);
+  assert.equal(d.wu, -1);
+  assert.equal(d.wr, -1);
+});
+
+test("R8 D5: no content, sender identity or mention id is logged", () => {
   const body = "xin chao rat vui";
-  const { lines } = runInjection({
-    message: msg({ content: body }),
+  const { calls } = runInjection({
+    message: msg({ content: body, mentionedUsers: [{ id: MAIN_BOT }] }),
     threadOwnerId: null,
     params: { data: dispatch({ content: body }) },
   });
-  const line = lines.find((l) => l.includes("[zink-ingress-meta]"));
-  assert.ok(line, "a diagnostic must be emitted");
-  assert.equal(line.includes(body), false, "content must never be logged");
-  assert.equal(line.includes(MAIN_BOT), false, "no mention id may be logged");
+  const joined = calls
+    .flat()
+    .map((a) => (typeof a === "string" ? a : JSON.stringify(a)))
+    .join(" ");
+  assert.equal(joined.includes(body), false, "content must never be logged");
+  assert.equal(
+    joined.includes(MAIN_BOT),
+    false,
+    "mention ids must never be logged",
+  );
+  assert.equal(
+    joined.includes("223456789012345678"),
+    false,
+    "sender identity must never be logged",
+  );
   assert.equal(
     DISCORD_PREFLIGHT_INJECTION.includes("message.content"),
     false,
     "the injection must not read message content",
   );
-  assert.equal(
-    DISCORD_PREFLIGHT_INJECTION.includes("zinkRaw.content"),
-    false,
-    "the injection must not read the raw dispatch content",
-  );
-  assert.equal(
-    field(line, "mu"),
-    "0",
-    "the unioned user count is still reported",
-  );
 });
 
-test("R8 D4: diagnostics are emitted even when the registry write is skipped", () => {
-  // A malformed message id means no registry record is written; the seam still
-  // has to say what it saw, otherwise a miss is indistinguishable from silence.
-  const { lines } = runInjection({
+test("R8 D8: a bot-authored message stays denied", () => {
+  // The array-count probe must never be reused for a boolean: counting a
+  // boolean yields 0, which would silently clear the bot filter.
+  const { record } = runInjection({
+    message: msg({
+      mentionedUsers: [{ id: MAIN_BOT }],
+      author: { id: "223456789012345678", bot: true },
+    }),
+    threadOwnerId: null,
+    params: { data: dispatch() },
+  });
+  assert.equal(record.authorIsBot, true, "the bot flag must survive probing");
+});
+
+test("R8 D9: a human-authored message is not flagged as a bot", () => {
+  const { record } = runInjection({
+    message: msg({ author: { id: "223456789012345678", bot: false } }),
+    threadOwnerId: null,
+    params: {
+      data: dispatch({ author: { id: "223456789012345678", bot: false } }),
+    },
+  });
+  assert.equal(record.authorIsBot, false);
+});
+
+test("R8 D6: a missing or throwing logger never breaks preflight", () => {
+  for (const loggerArg of [
+    null,
+    {
+      info: () => {
+        throw new Error("logger down");
+      },
+    },
+  ]) {
+    const registry = globalThis[ZINK_INGRESS_METADATA_KEY];
+    if (registry instanceof Map) registry.clear();
+    const { record } = runInjection({
+      message: msg(),
+      threadOwnerId: null,
+      params: { data: dispatch() },
+      loggerArg,
+    });
+    assert.ok(record, "the registry write must survive any logger problem");
+  }
+});
+
+test("R8 D7: diagnostics are emitted even when the registry write is skipped", () => {
+  const { calls } = runInjection({
     message: msg({ id: "not-a-snowflake" }),
     threadOwnerId: null,
     params: { data: dispatch() },
   });
-  const emitted = lines.filter((l) => l.includes("[zink-ingress-meta]"));
-  assert.equal(emitted.length, 1, "a skipped write must still be observable");
-});
-
-test("R8 D5: a missing logger degrades without breaking preflight", () => {
-  const registry = globalThis[ZINK_INGRESS_METADATA_KEY];
-  if (registry instanceof Map) registry.clear();
-  assert.doesNotThrow(() => {
-    const factory = new Function(
-      "message",
-      "threadOwnerId",
-      "params",
-      "globalThis",
-      DISCORD_PREFLIGHT_INJECTION,
-    );
-    factory(msg(), null, { data: dispatch() }, globalThis);
-  });
-  const record = globalThis[ZINK_INGRESS_METADATA_KEY].get(MSG);
-  assert.ok(record, "the registry write must still happen without a logger");
-});
-
-test("R8 D6: the union behaviour itself is unchanged by the diagnostics", () => {
-  const { record } = runInjection({
-    message: msg(),
-    threadOwnerId: null,
-    params: { data: dispatch({ mentions: [{ id: MAIN_BOT }] }) },
-  });
-  assert.deepEqual([...record.mentionedUserIds], [MAIN_BOT]);
+  const d = diag(calls);
+  assert.equal(d.msg, "-", "an invalid id must still be reported");
 });
