@@ -537,10 +537,20 @@ test("R18 13: R18 leaves the pinned native patch byte-identical", () => {
   // by the Discord preflight role plus the R10->R5 lineage descriptor. This
   // pin now records the R5-authorized bytes so any further unreviewed
   // native mutation still fails; see R5 H1-H3 for the contract.
+  //
+  // M10/T2-R8 UPDATE (H1 repair): the patch is intentionally extended AGAIN,
+  // by (a) the R8 union-sources preflight injection that unions the
+  // discord.js wrapper with the message's own rawDataValue and the raw
+  // gateway dispatch, and (b) the R5->R8 preflight lineage descriptor that
+  // recognizes the live R5-injected preflight file. Both are reviewed, the
+  // preflight region text is pinned verbatim by the R5 suite, and the exact
+  // lineage recognition is pinned by tests/m10-t2-r8-preflight-lineage.test.mjs.
+  // The pin therefore moves to the R8-authorized bytes; its purpose as a
+  // change detector is unchanged, since the next unreviewed edit still fails.
   assert.equal(
     sha256(readFileSync(NATIVE_PATCH_PATH, "utf8")),
-    "b1285f55bcf57448dd668967f7e61fdb9c62102ade20fdad8106349817dfbcfd",
-    "native-patch.mjs must equal the R4-authorized bytes; any other drift fails",
+    "a28c1791fa6e311814657d4b1eafcb95055a0893b2b02d282b3cffafd6cdc91f",
+    "native-patch.mjs must equal the R8-authorized bytes; any other drift fails",
   );
 });
 

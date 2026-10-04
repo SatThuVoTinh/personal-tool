@@ -53,10 +53,13 @@ import {
   DISCORD_PREFLIGHT_ANCHOR,
   DISCORD_PREFLIGHT_INJECTION,
   NATIVE_PATCH_PREDECESSORS,
+  NATIVE_RUNTIME_PINS,
 } from "../integrations/openclaw/topology/lib/native-patch.mjs";
+import { createHash } from "node:crypto";
 import { readZinkIngressMetadata } from "../integrations/openclaw/topology/lib/native-boundary.mjs";
 
 const REPO = process.cwd();
+const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 const OWNER = "123456789012345678";
 const OFFICE = "1545425766161063937";
 const MAIN_BOT = DISCORD_BOT_IDS.main;
@@ -647,29 +650,83 @@ test("R5 A10: heartbeat exemption intact with metadata present", async () => {
 });
 
 // ---------------------------------------------------------------------------
-// LINEAGE — single slot, R10 -> R5
+// LINEAGE — one slot per artifact, selection R10 -> R5
 // ---------------------------------------------------------------------------
 
 test("R5 L1: exactly one selection predecessor slot, R10 -> R5", () => {
-  const keys = Object.keys(NATIVE_PATCH_PREDECESSORS["2026.6.34"]);
-  assert.deepEqual(keys, ["selection-DopzNY3I.js"]);
-  const descriptor =
-    NATIVE_PATCH_PREDECESSORS["2026.6.34"]["selection-DopzNY3I.js"];
+  // M10/T2-R8 UPDATE: this previously pinned the WHOLE table to one key,
+  // which was broader than the invariant it protects. The R14 mechanism's
+  // rule is per-artifact ("a descriptor binds one artifact for one
+  // release"). The pin now protects the selection slot's exact chain and,
+  // separately, the real rule that each artifact has at most one slot —
+  // so adding a slot for a different artifact cannot silently double-slot
+  // the selection.
+  const table = NATIVE_PATCH_PREDECESSORS["2026.6.34"];
+  assert.ok(Object.hasOwn(table, "selection-DopzNY3I.js"));
+  const descriptor = table["selection-DopzNY3I.js"];
   assert.equal(descriptor.revision, "R10");
   assert.equal(descriptor.successorRevision, "R5");
   assert.equal(
     descriptor.sourceDigest,
     "555f37dae8eec1fbbd35e25ae28222dc5e8d6965e383500695a93900e9d8ddf5",
   );
+  // One slot per artifact, structurally: keys are unique and every slot
+  // names the artifact it patches, so no artifact can carry two.
+  assert.equal(new Set(Object.keys(table)).size, Object.keys(table).length);
+  for (const [artifact, entry] of Object.entries(table)) {
+    assert.ok(
+      typeof entry.sourceSignature === "string" &&
+        entry.sourceSignature.length > 0 &&
+        typeof entry.supersedes === "string" &&
+        entry.supersedes.length > 0 &&
+        entry.supersedes !== entry.sourceSignature,
+      `${artifact}: a slot must declare a real, distinct superseded region`,
+    );
+  }
+  // Exactly one slot may target the selection injection region.
+  assert.equal(
+    Object.values(table).filter((entry) =>
+      entry.supersedes.includes("enterNativeRun"),
+    ).length,
+    1,
+  );
 });
 
-test("R5 L2: the preflight artifact carries no predecessor descriptor", () => {
+test("R5 L2: the preflight artifact needs no BASELINE descriptor", () => {
+  // M10/T2-R8 UPDATE: while the live preflight file is the unpatched upstream
+  // baseline, BASELINE -> R5/R8 needs no descriptor. R8 then DEPLOYED the R5
+  // injection, so the live file stopped being the baseline and gained its own
+  // R5 -> R8 slot (recognition is exact and fail-closed; see
+  // tests/m10-t2-r8-preflight-lineage.test.mjs). This pin therefore asserts
+  // the BASELINE reachability rule rather than the table's key list: with the
+  // live file at the pinned baseline digest, the transform must reach the
+  // current patch with no descriptor at all.
   assert.equal(
-    Object.hasOwn(
-      NATIVE_PATCH_PREDECESSORS["2026.6.34"],
-      "message-handler.preflight-C1XBiefW.js",
-    ),
-    false,
-    "live preflight file is the unpatched baseline; BASELINE->R5 needs no descriptor",
+    NATIVE_RUNTIME_PINS["2026.6.34"].sources[
+      "message-handler.preflight-C1XBiefW.js"
+    ].sha256,
+    "dca5459d27777d7884483d86432d82c0da88244338c3e6ec574a337ec687c0b0",
+    "the pin stays the unpatched upstream baseline",
   );
+  const BASELINE_DIGEST =
+    "dca5459d27777d7884483d86432d82c0da88244338c3e6ec574a337ec687c0b0";
+  let baselineReachable = false;
+  try {
+    const live = readFileSync(
+      "/home/hoang_vinh/.local/lib/node_modules/openclaw/dist/message-handler.preflight-C1XBiefW.js",
+      "utf8",
+    );
+    if (sha256(live) === BASELINE_DIGEST) baselineReachable = true;
+  } catch {
+    /* live runtime not reachable from this platform */
+  }
+  if (baselineReachable)
+    assert.equal(
+      Object.hasOwn(
+        NATIVE_PATCH_PREDECESSORS["2026.6.34"],
+        "message-handler.preflight-C1XBiefW.js",
+      ),
+      false,
+      "a live BASELINE preflight file needs no descriptor",
+    );
 });

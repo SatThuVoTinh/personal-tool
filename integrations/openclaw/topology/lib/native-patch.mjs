@@ -157,22 +157,14 @@ export const ZINK_INGRESS_METADATA_KEY = "__zink_ingress_metadata_r5";
 export const ZINK_INGRESS_METADATA_LIMIT = 256;
 
 /**
- * Unique anchor in message-handler.preflight-C1XBiefW.js: the Discord
- * mention-state call whose scope holds the raw `message`, the
- * host-resolved `threadOwnerId`, and the author/bot bindings.
+ * M10/T2-R8 — the superseded R5 preflight injection, retained verbatim as
+ * the lineage predecessor of DISCORD_PREFLIGHT_INJECTION. The live runtime
+ * carries this exact region; the R8 union-sources repair replaces it. The
+ * verbatim transcription is proven by the R8 lineage test, which inverts
+ * the live file through this text to the pinned baseline byte-for-byte:
+ * any drift here fails that test instead of silently widening recognition.
  */
-export const DISCORD_PREFLIGHT_ANCHOR =
-  "\tconst { implicitMentionKinds, wasMentioned } = resolveDiscordMentionState({\n\t\tauthorIsBot: Boolean(author.bot),\n\t\tbotId,\n\t\thasAnyMention,\n\t\tisDirectMessage,\n\t\tisExplicitlyMentioned: explicitlyMentioned,\n\t\tmentionRegexes,\n\t\tmentionText,\n\t\tmentionedEveryone: message.mentionedEveryone,\n\t\treferencedAuthorId: message.referencedMessage?.author?.id,\n\t\tsenderIsPluralKit: sender.isPluralKit,\n\t\ttranscript: preflightTranscript\n\t});";
-
-/**
- * Appended after the anchor. Reads ONLY structured discord.js fields;
- * never message text, never heuristics. Every id is snowflake-validated
- * with malformed entries dropped; a missing/invalid message writes
- * nothing. The whole block is exception-safe: any unexpected host shape
- * skips the write (downstream denies as today) instead of breaking
- * preflight. Free variables, exactly: `message`, `threadOwnerId`.
- */
-export const DISCORD_PREFLIGHT_INJECTION = `\t;{
+export const DISCORD_PREFLIGHT_INJECTION_R5 = `\t;{
 \t\t// M10/T2-R5: deterministic Discord inbound metadata (see native-patch).
 \t\ttry {
 \t\t\tconst zinkSnowflake = (value) => (typeof value === "string" && /^[1-9][0-9]{16,19}$/.test(value) ? value : null);
@@ -189,6 +181,61 @@ export const DISCORD_PREFLIGHT_INJECTION = `\t;{
 \t\t\t\t\treplyReferenceAuthorId: zinkSnowflake(message.referencedMessage?.author?.id),
 \t\t\t\t\tthreadOwnerId: zinkSnowflake(threadOwnerId),
 \t\t\t\t\tauthorIsBot: message.author?.bot === true,
+\t\t\t\t});
+\t\t\t}
+\t\t} catch { /* fail-closed: no record, downstream denies as today */ }
+\t}`;
+
+/**
+ * Unique anchor in message-handler.preflight-C1XBiefW.js: the Discord
+ * mention-state call whose scope holds the raw `message`, the
+ * host-resolved `threadOwnerId`, and the author/bot bindings.
+ */
+export const DISCORD_PREFLIGHT_ANCHOR =
+  "\tconst { implicitMentionKinds, wasMentioned } = resolveDiscordMentionState({\n\t\tauthorIsBot: Boolean(author.bot),\n\t\tbotId,\n\t\thasAnyMention,\n\t\tisDirectMessage,\n\t\tisExplicitlyMentioned: explicitlyMentioned,\n\t\tmentionRegexes,\n\t\tmentionText,\n\t\tmentionedEveryone: message.mentionedEveryone,\n\t\treferencedAuthorId: message.referencedMessage?.author?.id,\n\t\tsenderIsPluralKit: sender.isPluralKit,\n\t\ttranscript: preflightTranscript\n\t});";
+
+/**
+ * Appended after the anchor. Reads ONLY structured Discord identity fields;
+ * never message text, never heuristics. Every id is snowflake-validated
+ * with malformed entries dropped; a missing/invalid message writes
+ * nothing. The whole block is exception-safe: any unexpected host shape
+ * skips the write (downstream denies as today) instead of breaking
+ * preflight. Free variables: `message`, `threadOwnerId`, and the optional
+ * preflight `params` (guarded by typeof so scopes without it keep working).
+ *
+ * M10/T2-R8: the wrapper (`message.mentionedUsers` et al.) is unioned with
+ * the message's own `rawDataValue` and the raw gateway dispatch
+ * (`params.data`, which the host spreads into the dispatch object). Live
+ * evidence showed the wrapper arrays empty at this seam for a structured
+ * @Main mention while the dispatch is the authoritative structured source
+ * at the same layer (partial messages, synthetic debounce-batch rebuilds
+ * and hydration merges can all diverge from the wrapper). Union-only:
+ * every source is still a structured snowflake id, exact-matched
+ * downstream, so an id is admitted only when Discord really addressed it.
+ */
+export const DISCORD_PREFLIGHT_INJECTION = `\t;{
+\t\t// M10/T2-R8: deterministic Discord inbound metadata (see native-patch).
+\t\ttry {
+\t\t\tconst zinkSnowflake = (value) => (typeof value === "string" && /^[1-9][0-9]{16,19}$/.test(value) ? value : null);
+\t\t\tconst zinkIds = (entries) => { const ids = []; if (Array.isArray(entries)) { for (const entry of entries) { const id = zinkSnowflake(typeof entry === "string" ? entry : entry?.id); if (id) ids.push(id); } } return ids; };
+\t\t\tconst zinkUniq = (ids) => [...new Set(ids)];
+\t\t\tconst zinkFirst = (...values) => { for (const value of values) { const id = zinkSnowflake(value); if (id) return id; } return null; };
+\t\t\tconst zinkRawData = (typeof params !== "undefined" && params) ? params.data : null;
+\t\t\tconst zinkRaw = (zinkRawData && typeof zinkRawData === "object") ? zinkRawData : null;
+\t\t\tconst zinkMessageRaw = (message && typeof message === "object") ? message.rawDataValue : null;
+\t\t\tconst zinkMessageRawObj = (zinkMessageRaw && typeof zinkMessageRaw === "object") ? zinkMessageRaw : null;
+\t\t\tconst zinkMessageId = zinkSnowflake(message?.id);
+\t\t\tif (zinkMessageId) {
+\t\t\t\tlet zinkRegistry = globalThis.${ZINK_INGRESS_METADATA_KEY};
+\t\t\t\tif (!(zinkRegistry instanceof Map)) { zinkRegistry = new Map(); globalThis.${ZINK_INGRESS_METADATA_KEY} = zinkRegistry; }
+\t\t\t\twhile (zinkRegistry.size >= ${ZINK_INGRESS_METADATA_LIMIT}) { zinkRegistry.delete(zinkRegistry.keys().next().value); }
+\t\t\t\tzinkRegistry.set(zinkMessageId, {
+\t\t\t\t\tmentionedUserIds: zinkUniq([...zinkIds(message.mentionedUsers), ...zinkIds(zinkMessageRawObj?.mentions), ...zinkIds(zinkRaw?.mentions)]),
+\t\t\t\t\tmentionedRoleIds: zinkUniq([...zinkIds(message.mentionedRoles), ...zinkIds(zinkMessageRawObj?.mention_roles), ...zinkIds(zinkRaw?.mention_roles)]),
+\t\t\t\t\treplyReferenceMessageId: zinkFirst(message.messageReference?.message_id, zinkMessageRawObj?.message_reference?.message_id, zinkRaw?.message_reference?.message_id),
+\t\t\t\t\treplyReferenceAuthorId: zinkFirst(message.referencedMessage?.author?.id, zinkMessageRawObj?.referenced_message?.author?.id, zinkRaw?.referenced_message?.author?.id),
+\t\t\t\t\tthreadOwnerId: zinkSnowflake(threadOwnerId),
+\t\t\t\t\tauthorIsBot: message.author?.bot === true || zinkMessageRawObj?.author?.bot === true || zinkRaw?.author?.bot === true,
 \t\t\t\t});
 \t\t\t}
 \t\t} catch { /* fail-closed: no record, downstream denies as today */ }
@@ -332,6 +379,20 @@ export const NATIVE_PATCH_PREDECESSORS = Object.freeze({
       sourceDigest:
         "555f37dae8eec1fbbd35e25ae28222dc5e8d6965e383500695a93900e9d8ddf5",
       successorRevision: "R5",
+    }),
+    // M10/T2-R8: the live preflight file carries the R5 injection region,
+    // superseded by the R8 union-sources repair (structured wrapper +
+    // message rawDataValue + raw gateway dispatch). Recognition is exact:
+    // the live digest, the R5 region text, and inversion to the pinned
+    // preflight baseline must all reproduce, otherwise the runtime fails
+    // closed with NATIVE_SOURCE_DRIFT and no deployment proceeds.
+    "message-handler.preflight-C1XBiefW.js": Object.freeze({
+      revision: "R5",
+      sourceSignature: `${DISCORD_PREFLIGHT_ANCHOR}\n${DISCORD_PREFLIGHT_INJECTION_R5}`,
+      supersedes: `${DISCORD_PREFLIGHT_ANCHOR}\n${DISCORD_PREFLIGHT_INJECTION}`,
+      sourceDigest:
+        "5411ccd4c8bafaa29013e498ee8c6cc58d034bd7db48dafcb1aeb105ddc61d8e",
+      successorRevision: "R8",
     }),
   }),
 });

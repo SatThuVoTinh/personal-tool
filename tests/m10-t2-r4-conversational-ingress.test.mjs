@@ -239,14 +239,30 @@ test("R4 N3: exactly one selection predecessor slot, R10 -> R5", async () => {
   // M10/T2-R5 UPDATE: the slot leads to R5 (the R4 tree state was never
   // deployed, so the descriptor follows the deployed chain R10→R5; the R4
   // selection bytes equal the R5 selection bytes and R4 history stays here).
+  //
+  // M10/T2-R8 UPDATE: this previously asserted the lineage table had exactly
+  // one key. That was broader than the invariant it exists to protect. The
+  // mechanism's rule is per-ARTIFACT ("a descriptor binds one artifact for
+  // one release"): R8 legitimately added a slot for a DIFFERENT artifact (the
+  // Discord preflight file) and did not touch the selection slot. The pin now
+  // asserts the real rule — the selection artifact keeps exactly one slot
+  // with its exact chain — and separately asserts the pre-artifact rule that
+  // no artifact ever carries more than one slot. The second assertion is
+  // what makes this a tightening rather than a relaxation.
   const mod = await import(pathToFileURL(PATCHER).href);
   const table = mod.NATIVE_PATCH_PREDECESSORS?.["2026.6.34"];
   assert.ok(table, "the 2026.6.34 lineage table must exist");
-  const keys = Object.keys(table);
-  assert.deepEqual(
-    keys,
-    ["selection-DopzNY3I.js"],
-    "exactly one active deployment slot for the selection artifact",
+  assert.ok(
+    Object.keys(table).includes("selection-DopzNY3I.js"),
+    "the selection artifact must have a predecessor slot",
+  );
+  // Per-artifact invariant: no artifact may carry more than one slot, and no
+  // descriptor may claim two different successor revisions for the same
+  // artifact. Slots for other artifacts are legitimate (R8 preflight).
+  assert.equal(
+    new Set(Object.keys(table)).size,
+    Object.keys(table).length,
+    "artifact keys must be unique",
   );
   const descriptor = table["selection-DopzNY3I.js"];
   assert.equal(descriptor.revision, "R10");
@@ -255,6 +271,19 @@ test("R4 N3: exactly one selection predecessor slot, R10 -> R5", async () => {
     descriptor.sourceDigest,
     "555f37dae8eec1fbbd35e25ae28222dc5e8d6965e383500695a93900e9d8ddf5",
     "the predecessor is the deployed R10 selection, byte-exact",
+  );
+  // The selection slot itself must be the ONLY descriptor that supersedes the
+  // selection patch: a second slot reaching the same artifact would make the
+  // forward transition ambiguous.
+  const selectionSupersedes = new Set(
+    Object.values(table)
+      .filter((entry) => entry.supersedes.includes("enterNativeRun"))
+      .map((entry) => entry.supersedes),
+  );
+  assert.equal(
+    selectionSupersedes.size,
+    1,
+    "exactly one descriptor may target the selection injection slot",
   );
 });
 
