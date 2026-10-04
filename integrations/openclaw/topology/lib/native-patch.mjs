@@ -191,6 +191,19 @@ export const DISCORD_PREFLIGHT_INJECTION_R5 = `\t;{
  * mention-state call whose scope holds the raw `message`, the
  * host-resolved `threadOwnerId`, and the author/bot bindings.
  */
+/**
+ * M10/T2-R8: the DEPLOYED R8 union-sources injection, retained verbatim as
+ * the lineage predecessor of the diagnostics build. The live runtime carries
+ * this exact region; the diagnostics build replaces it. Emitted as an escaped
+ * string literal rather than a template literal precisely so the bytes are
+ * exact: a hand-transcribed 2.3KB template is a transcription risk, and the
+ * R8 lineage test PROVES this text by inverting the live file through it back
+ * to the pinned baseline byte-for-byte. Drift fails that test instead of
+ * silently widening recognition.
+ */
+export const DISCORD_PREFLIGHT_INJECTION_R8_UNION =
+  '\t;{\n\t\t// M10/T2-R8: deterministic Discord inbound metadata (see native-patch).\n\t\ttry {\n\t\t\tconst zinkSnowflake = (value) => (typeof value === "string" && /^[1-9][0-9]{16,19}$/.test(value) ? value : null);\n\t\t\tconst zinkIds = (entries) => { const ids = []; if (Array.isArray(entries)) { for (const entry of entries) { const id = zinkSnowflake(typeof entry === "string" ? entry : entry?.id); if (id) ids.push(id); } } return ids; };\n\t\t\tconst zinkUniq = (ids) => [...new Set(ids)];\n\t\t\tconst zinkFirst = (...values) => { for (const value of values) { const id = zinkSnowflake(value); if (id) return id; } return null; };\n\t\t\tconst zinkRawData = (typeof params !== "undefined" && params) ? params.data : null;\n\t\t\tconst zinkRaw = (zinkRawData && typeof zinkRawData === "object") ? zinkRawData : null;\n\t\t\tconst zinkMessageRaw = (message && typeof message === "object") ? message.rawDataValue : null;\n\t\t\tconst zinkMessageRawObj = (zinkMessageRaw && typeof zinkMessageRaw === "object") ? zinkMessageRaw : null;\n\t\t\tconst zinkMessageId = zinkSnowflake(message?.id);\n\t\t\tif (zinkMessageId) {\n\t\t\t\tlet zinkRegistry = globalThis.__zink_ingress_metadata_r5;\n\t\t\t\tif (!(zinkRegistry instanceof Map)) { zinkRegistry = new Map(); globalThis.__zink_ingress_metadata_r5 = zinkRegistry; }\n\t\t\t\twhile (zinkRegistry.size >= 256) { zinkRegistry.delete(zinkRegistry.keys().next().value); }\n\t\t\t\tzinkRegistry.set(zinkMessageId, {\n\t\t\t\t\tmentionedUserIds: zinkUniq([...zinkIds(message.mentionedUsers), ...zinkIds(zinkMessageRawObj?.mentions), ...zinkIds(zinkRaw?.mentions)]),\n\t\t\t\t\tmentionedRoleIds: zinkUniq([...zinkIds(message.mentionedRoles), ...zinkIds(zinkMessageRawObj?.mention_roles), ...zinkIds(zinkRaw?.mention_roles)]),\n\t\t\t\t\treplyReferenceMessageId: zinkFirst(message.messageReference?.message_id, zinkMessageRawObj?.message_reference?.message_id, zinkRaw?.message_reference?.message_id),\n\t\t\t\t\treplyReferenceAuthorId: zinkFirst(message.referencedMessage?.author?.id, zinkMessageRawObj?.referenced_message?.author?.id, zinkRaw?.referenced_message?.author?.id),\n\t\t\t\t\tthreadOwnerId: zinkSnowflake(threadOwnerId),\n\t\t\t\t\tauthorIsBot: message.author?.bot === true || zinkMessageRawObj?.author?.bot === true || zinkRaw?.author?.bot === true,\n\t\t\t\t});\n\t\t\t}\n\t\t} catch { /* fail-closed: no record, downstream denies as today */ }\n\t}';
+
 export const DISCORD_PREFLIGHT_ANCHOR =
   "\tconst { implicitMentionKinds, wasMentioned } = resolveDiscordMentionState({\n\t\tauthorIsBot: Boolean(author.bot),\n\t\tbotId,\n\t\thasAnyMention,\n\t\tisDirectMessage,\n\t\tisExplicitlyMentioned: explicitlyMentioned,\n\t\tmentionRegexes,\n\t\tmentionText,\n\t\tmentionedEveryone: message.mentionedEveryone,\n\t\treferencedAuthorId: message.referencedMessage?.author?.id,\n\t\tsenderIsPluralKit: sender.isPluralKit,\n\t\ttranscript: preflightTranscript\n\t});";
 
@@ -407,12 +420,23 @@ export const NATIVE_PATCH_PREDECESSORS = Object.freeze({
     // preflight baseline must all reproduce, otherwise the runtime fails
     // closed with NATIVE_SOURCE_DRIFT and no deployment proceeds.
     "message-handler.preflight-C1XBiefW.js": Object.freeze({
-      revision: "R5",
-      sourceSignature: `${DISCORD_PREFLIGHT_ANCHOR}\n${DISCORD_PREFLIGHT_INJECTION_R5}`,
-      supersedes: `${DISCORD_PREFLIGHT_ANCHOR}\n${DISCORD_PREFLIGHT_INJECTION}`,
+      // M10/T2-R8: the live preflight file now carries the DEPLOYED R8
+      // union-sources injection, so the active slot follows the real deployment
+      // chain R8 -> R8-diagnostics. The R5 slot is retired for exactly the reason
+      // the R7 slot was retired earlier: the mechanism holds ONE active slot
+      // per artifact, and that slot must follow the chain the live runtime is
+      // actually on. R5 history stays exported as
+      // DISCORD_PREFLIGHT_INJECTION_R5 and is pinned by the R5 suite.
+      // Recognition is exact: the live digest, this verbatim region, and
+      // inversion to the pinned preflight baseline must all reproduce, else the
+      // runtime fails closed with NATIVE_SOURCE_DRIFT and no deploy proceeds.
+      revision: "R8",
+      sourceSignature:
+        DISCORD_PREFLIGHT_ANCHOR + "\n" + DISCORD_PREFLIGHT_INJECTION_R8_UNION,
+      supersedes: DISCORD_PREFLIGHT_ANCHOR + "\n" + DISCORD_PREFLIGHT_INJECTION,
       sourceDigest:
-        "5411ccd4c8bafaa29013e498ee8c6cc58d034bd7db48dafcb1aeb105ddc61d8e",
-      successorRevision: "R8",
+        "d12961a2d0f83b23a91e9859343920d86522957eb4e79ea3ffc7733c0253d8c6",
+      successorRevision: "R8-diagnostics",
     }),
   }),
 });
