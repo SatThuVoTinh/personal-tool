@@ -1,4 +1,66 @@
-ACTIVE.md -- M10/T2-R7 Authority Predecessor Admission (CURRENT EXECUTION CONTRACT)
+ACTIVE.md -- M10/T2-R8 Discord Conversational Ingress End-to-End (CURRENT EXECUTION CONTRACT)
+
+Task ID: M10/T2
+Plan Revision: M10/T2-R8
+Parent Revision: M10/T2-R7 (implementation commit `97dfe54`; observability commit `ef9feb0`)
+Planning Readiness: APPROVED
+Execution Authorization: YES (R8 end-to-end per explicit owner prompt)
+Owner Approval: EXPLICIT -- owner authorized one end-to-end R8 handling:
+  OBSERVABILITY deploy, CONTROLLED LIVE TEST correlation, ROOT CAUSE,
+  FIX, TEST, DEPLOY, LIVE VERIFY, R8 CLOSE. Operation covers ONE
+  observability deploy attempt plus ONE evidence-bound fix redeploy
+  attempt, both via operator-apply.mjs; read-only live correlation of
+  owner-sent TEST A/B; no synthetic events, no verifier weakening, no
+  admission loosening, no governance change without evidence.
+Execution Contract: docs/contracts/execution/ACTIVE.md (this file)
+PLAN Pointer: PLAN.md §3 (M10 row) and §8 M10/T2 entry (M10/T2-R8 block)
+Evidence Level: LOCAL-VERIFIED
+Deployment Authorized: YES (R8 - one observability attempt + one fix redeploy attempt)
+Deployment Status: IN PROGRESS (Phase 1 starting)
+Live Execution: OBSERVE-ONLY (owner traffic only)
+Lifecycle: IN PROGRESS
+
+## R8 1. Objective
+
+Deploy the log-only ingress-verdict observability (`ef9feb0`), correlate
+the owner's controlled TEST A (structured @Main) + TEST B (untagged) by
+timestamp/ID, decide H1 (mentions lost pre-admission) vs H2 (stash
+message.id vs currentMessageId miss) by evidence, fix at the proven
+boundary only, regress with side-effect-ordering tests, redeploy once,
+live-verify isolation/execution/output, and close R8 with PASS or a
+named-boundary FAILED.
+
+## R8 2. Allowed scope
+
+- ONE operator-apply.mjs deploy attempt of `ef9feb0` with pre/post
+  identity capture; STOP on preflight FAIL (report, no retry).
+- Read-only live log correlation of owner-sent messages (no message
+  sending, no ledger/queue/approval mutation, no secret output).
+- Evidence-bound fix at the proven seam only (H1 mapping repair incl.
+  Main ID 1545436878835163156 by structured ID, or H2 canonical
+  message-ID seam; never text heuristics, never admission loosening).
+- Pre-admission side-effect + multi-bot isolation work per evidence;
+  host-binary limits recorded with exact seam, no blind host patching.
+- Regression tests incl. ordering + message.id == currentMessageId
+  invariant; full validation gates; ONE redeploy attempt if source
+  changed; live verify A/B/C/D; R8 closeout commit.
+- Excluded: synthetic events, fake traffic/approvals, verifier
+  weakening, new services/agents/roles, secret exposure, unrelated
+  refactoring.
+
+## R8 3. Acceptance
+
+Phase 1: pre/post identity captured, service active, ledger/queue
+unchanged except valid live-test mutations. Phase 3: H1/H2 verdict
+with named evidence. Phase 9: all listed regressions green with
+order assertions. Phase 10: full suite + lint + format + repo-check +
+diff-check green. Phase 12: Main ACCEPT->output + isolation per
+expected flows, or FAILED at a named boundary. Tree clean, no push
+without separate authorization.
+
+---
+
+# Historical: M10/T2-R7 Authority Predecessor Admission (retained unchanged as evidence; superseded by M10/T2-R8 above)
 
 Task ID: M10/T2
 Plan Revision: M10/T2-R7

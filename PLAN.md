@@ -36,7 +36,7 @@ Evidence Level: NONE | LOCAL-VERIFIED | REMOTE-BACKED
 | M6 — Zink Skill Store                                                      | `COMPLETE`    | `REMOTE-BACKED`  | M6/T1-R4 task commit is remotely verified; governance closeout is recorded separately.                                                                                      |
 | M7 — Zink Tools + OpenClaw integration + V1 hardening                      | `COMPLETE`    | `REMOTE-BACKED`  | M7/T1-R19, M7/T2-R12, M7/T3-R16, M7/T4-R10, and M7/T5-R13 complete; runtime governance remediation, Discord 7-bot integration, and Zink tools specialist policies verified. |
 | M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Integration | `IN PROGRESS` | `LOCAL-VERIFIED` | M8/T1 is complete; M8/T2.2 R4/R5/R6 are implemented; M8/T2.2-R7 (heartbeat admission, boundary diagnosability, apply safety) is in progress. Deployment is not authorized.  |
-| M10 - Governed coordinator runtime binding | `IN PROGRESS` | `LOCAL-VERIFIED` | M10/T2-R2 (coordinator execution authority) implemented and locally verified after the M10/T2-R1 pre-live safety audit; execution contract is `docs/contracts/execution/ACTIVE.md`, behavior contract is `docs/contracts/coordinator-session-binding.md`. Not deployed; no live execution. |
+| M10 - Governed coordinator runtime binding | `IN PROGRESS` | `LOCAL-VERIFIED` | M10/T2-R8 (Discord conversational ingress end-to-end: observability deploy, controlled live correlation, evidence-bound fix, redeploy, live verify) authorized end-to-end by explicit owner prompt; execution contract is `docs/contracts/execution/ACTIVE.md`, behavior contract is `docs/contracts/coordinator-session-binding.md`. |
 
 The former self-built L&SC Data Plant is replaced by a **logical external
 infrastructure flow**, not another repository module. Forecasting, optimization,
@@ -1372,10 +1372,10 @@ from this environment and are not claimed.
 
 Status: `IN PROGRESS`
 Task: `M10/T2 - bind a gateway-started coordinator run to its claimed queue attempt, and fence that binding to current execution authority`
-Plan Revision: `M10/T2-R7`
-Parent Revision: `M10/T2-R6` (implementation commit `71aa592`)
+Plan Revision: `M10/T2-R8`
+Parent Revision: `M10/T2-R7` (implementation commit `97dfe54`; observability commit `ef9feb0`)
 Planning Readiness: `APPROVED`
-Execution Authorization: `YES` (repository implementation only)
+Execution Authorization: `YES` (R8 end-to-end per explicit owner authorization: observability deploy, read-only live correlation of owner controlled test, evidence-bound fix, redeploy, live verify)
 Execution Contract: `docs/contracts/execution/ACTIVE.md`
 Behavior Contract: `docs/contracts/coordinator-session-binding.md` (§1-§13 the
 approved design package, §14 the R2 execution-authority addendum)
@@ -1387,9 +1387,9 @@ result-ingestion redesign, no fabricated lineage, no topology change), and
 authorized the M10/T2-R2 safety remediation derived from the M10/T2-R1 pre-live
 safety audit. Approval covers implementation only, not live execution and not
 deployment.
-Deployment Authorized: `NO`
-Deployment Status: `NOT DEPLOYED`
-Live Execution: `NO`
+Deployment Authorized: `YES (R8 - observability single deploy + evidence-bound fix single redeploy, granted by the owner as one end-to-end R8 handling; each deploy is ONE attempt via operator-apply.mjs, no retry without a new prompt)`
+Deployment Status: `IN PROGRESS (R8)`
+Live Execution: `OBSERVE-ONLY (owner sends controlled TEST A/B; agent performs read-only log correlation, no synthetic events, no message sending)`
 Safety Audit: the R1 pre-live audit returned `PRE-LIVE SAFETY AUDIT FOUND SAFETY
 ISSUE - LIVE BLOCKED` (post-lease spawn authority, attempt isolation at the
 mutation boundary, `QUEUED`-window containment fallthrough). R2 remediates all
@@ -1753,6 +1753,45 @@ NOT PERFORMED; live ledger untouched; gateway not restarted; no live
 execution; host lifecycle NOT PROVEN. A deployment requires a separate
 owner authorization (of the resulting R7 commit). See ACTIVE.md R7 and
 CHANGELOG.md Unreleased entry.
+
+### M10/T2-R8 - Discord conversational ingress end-to-end (owner-authorized single handling)
+
+Owner authorization: EXPLICIT - one end-to-end R8 handling covering
+OBSERVABILITY deploy, CONTROLLED LIVE TEST correlation, ROOT CAUSE,
+FIX, TEST, DEPLOY, LIVE VERIFY, R8 CLOSE. No re-authorization rounds
+for steps inside this prompt's scope. Global rules: no synthetic
+events, no fake messages/approvals, no verifier weakening, no
+admission loosening to force replies, no text-mention source of
+truth, no governance contract change without evidence, no
+ledger/queue/approval mutation for testing, no new
+services/agents/roles, no secret exposure. Fix only after evidence
+identifies the exact faulty boundary (H1 vs H2 decided by live
+timestamps/IDs, never by assumption).
+
+Phase 1 - observability deploy: single ONE-attempt deploy of
+`ef9feb0` (log-only ingress verdicts, zero behavior change) via
+`operator-apply.mjs`, with pre/post runtime identity capture
+(service, PID, version, HEAD, selection, entrypoint, boundary,
+authority, ledger hash/sequence, queue/approval state).
+Phase 2 - owner controlled live TEST A (structured @Main) + TEST B
+(untagged) with timestamps; agent correlates read-only.
+Phase 3 - trace per message (raw mentions, normalized mentions,
+stash write/read, message.id vs currentMessageId, admission, turn,
+thinking, execution, model, outbound); answer H1/H2 by evidence.
+Phase 4/5 - fix at the proven boundary only (H1: preserve structured
+mention mapping; H2: canonical message-ID seam; no admission
+semantics change, no blind fallback lookup).
+Phase 6/7 - pre-admission thinking/turn + multi-bot isolation per
+evidence; host-binary limits recorded honestly with exact seam.
+Phase 8 - no-output terminal failure traced only after Main ACCEPT.
+Phase 9 - regression tests for every proven defect incl. side-effect
+ordering + message.id == currentMessageId invariant.
+Phase 10 - full validation gates. Phase 11 - redeploy fix if source
+changed (ONE attempt). Phase 12 - live verify A/B/C/D per expected
+flows. Phase 13 - R8 PASS only on full evidence chain, else FAILED
+at the named boundary.
+
+Status: IN PROGRESS (Phase 1 starting).
 
 ## 9. Deferred beyond V1
 
