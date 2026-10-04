@@ -16,8 +16,8 @@ Execution Contract: docs/contracts/execution/ACTIVE.md (this file)
 PLAN Pointer: PLAN.md §3 (M10 row) and §8 M10/T2 entry (M10/T2-R8 block)
 Evidence Level: LOCAL-VERIFIED
 Deployment Authorized: YES (R8 - one observability attempt + one fix redeploy attempt)
-Deployment Status: DEPLOYED (observability live: entrypoint 6a7968b7 byte-identical to packaged candidate; attempt txn-abcb31f2 complete, no rollback; ledger untouched at 103 events)
-Live Execution: OBSERVE-ONLY (owner traffic only; awaiting owner TEST A/B with timestamps)
+Deployment Status: PARTIAL - observability live (entrypoint 6a7968b7, txn-abcb31f2 complete); fix redeploy FAILED at runtime-verify (APPLY_NOT_VERIFIED, txn-cb59d6e7fae3b761cc91dcbc2a88e8e5c2e951f9375747d2ce31996c74df132f). PROVEN CAUSE: the transaction snapshot's runtime target list is a fixed three (selection, announce, bridge) and omits dist/message-handler.preflight-C1XBiefW.js, which the pinned patch now writes. runtime-verify therefore saw zero mutated components (`applied: !unchanged` = false) and the rollback restored 39 already-identical files, leaving the preflight file mutated: the reported rollbackSucceeded is not a true restore. Measured live: preflight d12961a2 with the R8 union code present, selection/bridge/entrypoint/authority unchanged, ledger unchanged at 103 events, service active with the plugin loaded. The H1 repair is live in fact and unverified by the deploy contract.
+Live Execution: OBSERVE-ONLY (owner traffic only)
 Lifecycle: IN PROGRESS
 
 ## R8 1. Objective

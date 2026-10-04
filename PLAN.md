@@ -1387,8 +1387,8 @@ result-ingestion redesign, no fabricated lineage, no topology change), and
 authorized the M10/T2-R2 safety remediation derived from the M10/T2-R1 pre-live
 safety audit. Approval covers implementation only, not live execution and not
 deployment.
-Deployment Authorized: `YES (R8 - observability single deploy + evidence-bound fix single redeploy, granted by the owner as one end-to-end R8 handling; each deploy is ONE attempt via operator-apply.mjs, no retry without a new prompt)`
-Deployment Status: `IN PROGRESS (R8)`
+Deployment Authorized: `YES (R8 - observability single deploy CONSUMED and PASS; evidence-bound fix single redeploy CONSUMED and FAILED at runtime-verify; any further deploy requires a NEW owner prompt)`
+Deployment Status: `PARTIAL (observability live: entrypoint 6a7968b7 byte-identical to packaged candidate, txn-abcb31f2 complete; fix redeploy NOT verified - transaction-snapshot coverage defect; the R8 union injection is measured live in dist/message-handler.preflight-C1XBiefW.js d12961a2; ledger untouched at 103 events)`
 Live Execution: `OBSERVE-ONLY (owner sends controlled TEST A/B; agent performs read-only log correlation, no synthetic events, no message sending)`
 Safety Audit: the R1 pre-live audit returned `PRE-LIVE SAFETY AUDIT FOUND SAFETY
 ISSUE - LIVE BLOCKED` (post-lease spawn authority, attempt isolation at the
@@ -1789,6 +1789,55 @@ Phase 2 - owner controlled live TEST A (structured @Main) + TEST B
 Phase 3 - trace per message (raw mentions, normalized mentions,
 stash write/read, message.id vs currentMessageId, admission, turn,
 thinking, execution, model, outbound); answer H1/H2 by evidence.
+Phase 3 RESULT: owner TEST A (structured @Main via autocomplete, msg
+1556249093729427459, 17:18:28 +07) is PROVEN AUTOCOMPLETE-picked. Live
+verdicts: Main DENY `MISSING_MENTION mentions=0`, every specialist
+DENY `NON_MAIN_DIRECT_INGRESS mentions=0`, all on the SAME msg id.
+`msg=` present everywhere PROVES the seam receives currentMessageId
+=> H2 (stash key miss) is DISPROVEN. Live `botUserId` identity proven
+from the gateway probe log (main client initialized as
+1545436878835163156), so the wrapper's `explicitlyMentioned` should have
+matched. The only remaining boundary that can zero both mentions and
+threadOwner while keeping the id is the STRUCTURED FIELD SOURCE at the
+seam, i.e. H1. Root cause (code-level, read-only): the R5 injection
+read only the discord.js wrapper (`message.mentionedUsers`,
+`message.mentionedRoles`, `message.messageReference`,
+`message.referencedMessage`), which can diverge from the raw gateway
+dispatch at this seam (partial messages, synthetic debounce-batch
+rebuild, hydration merge); the raw dispatch (`params.data`, spread by
+createMessageDispatchData) and the message's own `rawDataValue` are the
+authoritative structured sources at the same layer.
+Phase 4 FIX (implemented, TDD): the preflight injection now UNIONS all
+three structured sources (wrapper + message rawDataValue + raw
+dispatch), snowflake-validated and deduped, with `params` guarded by
+typeof so scopes without it keep working. No text heuristic, no
+admission change, no new field semantics. Lineage: the R5 region text is
+pinned verbatim as DISCORD_PREFLIGHT_INJECTION_R5 and an exact
+R5->R8 preflight descriptor (live digest 5411ccd4) makes the live R5
+file recognizable, fail-closed otherwise; inversion to the pinned
+baseline is proven byte-for-byte. Gates: 1167 tests / 1125 pass / 0
+fail / 42 skipped; lint, format, repo-check, diff-check green; commits
+650b9d7 (fix) and the R8 test suites.
+Phase 4 DEPLOY: FAILED at `runtime-verify` with `APPLY_NOT_VERIFIED`
+(attempt txn-cb59d6e7fae3b761cc91dcbc2a88e8e5c2e951f9375747d2ce3199
+6c74df132f, record status complete, rollbackSucceeded self-reported
+true). NEW PROVEN DEFECT, not a fix failure: the transaction snapshot
+covers only 39 files and its runtime target list is a FIXED three
+(`dist/selection-*`, `dist/subagent-announce-*`,
+`dist/zink-governance-boundary.mjs`) while the pinned native patch now
+writes FOUR runtime files. `dist/message-handler.preflight-*` is absent
+from the snapshot, so (a) runtime-verify's post-apply `applied:
+!unchanged` was false because the only mutated component was invisible
+to it, and (b) the rollback restored 39 already-identical files and
+LEFT the preflight file mutated. Measured live after the failed apply:
+preflight d12961a2 (R8 union code present, `grep -c zinkRaw` = 7),
+selection 04e92061, bridge bccfa861, entrypoint 6a7968b7, authority
+42b0cba8, ledger d794d99d unchanged at 103 events, service active PID
+345517 restarted 18:45:11 +07 with the plugin ACTIVE AND LOADED and
+`[gateway] ready`. The R8 union injection IS therefore live and
+verifiable, but the R8 fix redeploy authorization is CONSUMED and the
+transaction record reports rolled-back while the runtime is not rolled
+back.
 Phase 4/5 - fix at the proven boundary only (H1: preserve structured
 mention mapping; H2: canonical message-ID seam; no admission
 semantics change, no blind fallback lookup).
@@ -1802,7 +1851,12 @@ changed (ONE attempt). Phase 12 - live verify A/B/C/D per expected
 flows. Phase 13 - R8 PASS only on full evidence chain, else FAILED
 at the named boundary.
 
-Status: IN PROGRESS (Phase 1 COMPLETE, awaiting owner TEST A/B).
+Status: IN PROGRESS (Phase 1 COMPLETE and verified live; Phase 3 H1 PROVEN;
+Phase 4 fix implemented, tested and COMMITTED; Phase 4 redeploy FAILED at
+runtime-verify on a proven transaction-snapshot coverage defect, authorization
+CONSUMED; the R8 union injection is nevertheless measured live in the running
+preflight file. Owner re-test of TEST A is the only way to confirm the H1
+repair end-to-end; the snapshot coverage defect is a separate RED decision).
 
 ## 9. Deferred beyond V1
 
