@@ -1774,6 +1774,16 @@ Phase 1 - observability deploy: single ONE-attempt deploy of
 `operator-apply.mjs`, with pre/post runtime identity capture
 (service, PID, version, HEAD, selection, entrypoint, boundary,
 authority, ledger hash/sequence, queue/approval state).
+Phase 1 RESULT (executed): preflight first FAILed on the unadmitted
+outgoing R5 entrypoint 0fb628e8 (provenance re-derived from 4d1e64e,
+admitted in BOTH per-mode lists per precedent, TDD fail 0!==2 then
+3/3 pass); preflight then PASS (installed_mutation false); full suite
+1157/1115/0/42 + lint/format/repo-check/diff-check green; committed
+50feb07; single apply PASS txn-abcb31f20ce634d2ef0fbc6bc262c08b
+5c6b681690f11e5931ef27263e104043 with no rollback; post-deploy
+entrypoint 6a7968b7 byte-identical to the packaged candidate
+(logging active), all other artifacts + ledger (103 events) unchanged,
+service active (new PID after restart).
 Phase 2 - owner controlled live TEST A (structured @Main) + TEST B
 (untagged) with timestamps; agent correlates read-only.
 Phase 3 - trace per message (raw mentions, normalized mentions,
@@ -1792,7 +1802,7 @@ changed (ONE attempt). Phase 12 - live verify A/B/C/D per expected
 flows. Phase 13 - R8 PASS only on full evidence chain, else FAILED
 at the named boundary.
 
-Status: IN PROGRESS (Phase 1 starting).
+Status: IN PROGRESS (Phase 1 COMPLETE, awaiting owner TEST A/B).
 
 ## 9. Deferred beyond V1
 

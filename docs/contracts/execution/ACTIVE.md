@@ -16,8 +16,8 @@ Execution Contract: docs/contracts/execution/ACTIVE.md (this file)
 PLAN Pointer: PLAN.md §3 (M10 row) and §8 M10/T2 entry (M10/T2-R8 block)
 Evidence Level: LOCAL-VERIFIED
 Deployment Authorized: YES (R8 - one observability attempt + one fix redeploy attempt)
-Deployment Status: IN PROGRESS (Phase 1 starting)
-Live Execution: OBSERVE-ONLY (owner traffic only)
+Deployment Status: DEPLOYED (observability live: entrypoint 6a7968b7 byte-identical to packaged candidate; attempt txn-abcb31f2 complete, no rollback; ledger untouched at 103 events)
+Live Execution: OBSERVE-ONLY (owner traffic only; awaiting owner TEST A/B with timestamps)
 Lifecycle: IN PROGRESS
 
 ## R8 1. Objective
