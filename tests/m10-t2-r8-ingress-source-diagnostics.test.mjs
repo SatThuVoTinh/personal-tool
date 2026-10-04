@@ -27,6 +27,7 @@ const MSG = "1545430000000000077";
 
 function runInjection({ message, threadOwnerId, params, loggerArg }) {
   const calls = [];
+  const stderrLines = [];
   const logger =
     loggerArg === null
       ? undefined
@@ -41,12 +42,16 @@ function runInjection({ message, threadOwnerId, params, loggerArg }) {
     "params",
     "logger",
     "globalThis",
+    "process",
     DISCORD_PREFLIGHT_INJECTION,
   );
-  factory(message, threadOwnerId, params, logger, globalThis);
+  factory(message, threadOwnerId, params, logger, globalThis, {
+    stderr: { write: (s) => stderrLines.push(s) },
+  });
   const registry = globalThis[ZINK_INGRESS_METADATA_KEY];
   return {
     calls,
+    stderr: stderrLines,
     record: registry instanceof Map ? registry.get(MSG) : undefined,
     flat: calls
       .flat()
@@ -245,4 +250,44 @@ test("R8 D7: diagnostics are emitted even when the registry write is skipped", (
   });
   const d = diag(calls);
   assert.equal(d.msg, "-", "an invalid id must still be reported");
+});
+
+test("R8 D10: the report reaches stderr unfiltered, before the logger call", () => {
+  const order = [];
+  const logger = {
+    info: () => {
+      order.push("logger");
+    },
+  };
+  const { stderr } = runInjection({
+    message: msg({
+      rawDataValue: { mentions: [{ id: MAIN_BOT }], mention_roles: [] },
+    }),
+    threadOwnerId: null,
+    params: { data: dispatch({ mentions: [{ id: MAIN_BOT }] }) },
+    loggerArg: logger,
+  });
+  assert.equal(stderr.length, 1, "exactly one stderr line per inbound message");
+  assert.match(stderr[0], /^\[zink-ingress-meta\] /);
+  assert.match(stderr[0], /"du":1/);
+  assert.match(stderr[0], /"ru":1/);
+  assert.equal(order.length, 1, "the child logger still receives the report");
+});
+
+test("R8 D11: a broken child logger is reported on stderr, never swallowed", () => {
+  const { stderr, record } = runInjection({
+    message: msg({ mentionedUsers: [{ id: MAIN_BOT }] }),
+    threadOwnerId: null,
+    params: { data: dispatch() },
+    loggerArg: {
+      info: () => {
+        throw new Error("logger down");
+      },
+    },
+  });
+  assert.ok(
+    stderr.some((line) => line.includes("child logger unavailable")),
+    "a silent catch here is what hid the last two builds",
+  );
+  assert.ok(record, "the registry write must already have happened");
 });

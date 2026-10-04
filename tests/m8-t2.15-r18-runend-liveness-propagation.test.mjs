@@ -563,11 +563,17 @@ test("R18 13: R18 leaves the pinned native patch byte-identical", () => {
   // the content — never content, sender identity or a token. The union-sources
   // repair did not recover the mention, and without this measurement
   // "Discord delivered nothing" and "we lost it here" are indistinguishable.
-  // Pinned by tests/m10-t2-r8-ingress-source-diagnostics.test.mjs.
+  // M10/T2-R8 UPDATE (stderr-grounded diagnostics): the hardened build still
+  // produced NO report live, because the report travelled only through the
+  // child logger and a silent catch around that call can hide the finding.
+  // The report now goes to stderr first — no transport, level or redaction
+  // filter in between — and the logger is called last and reports its own
+  // failure on stderr. The change-detector pin moves to these authorized
+  // bytes; Pinned by tests/m10-t2-r8-ingress-source-diagnostics.test.mjs.
   assert.equal(
     sha256(readFileSync(NATIVE_PATCH_PATH, "utf8")),
-    "4b725acd30ef75a9bdab9a6ed057e71738f1ad2fa09ef1ac0baf37575ad1b8be",
-    "native-patch.mjs must equal the R8-diagnostics-authorized bytes; any other drift fails",
+    "71301785d1d804ba60357a5627a1eda6fbdc7da348652fe8ccab2e4ddcb3f9fa",
+    "native-patch.mjs must equal the R8-stderr-grounded-authorized bytes; any other drift fails",
   );
 });
 
