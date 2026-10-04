@@ -858,6 +858,17 @@ async function main() {
       // NOT listed: it is the current build and is accepted by content
       // comparison.
       "d1ce63868680ea5f89721ae8b42f07f6f033a840606cdc3a7cd7b6556b3ab593",
+      // M10/T2-R8 observability: the outgoing R5 entrypoint currently
+      // deployed, byte-proven as the packaged build at commit 4d1e64e
+      // (M10/T2-R5 host-side Discord inbound metadata exposure) through
+      // governancePluginFiles() before admission (see R8 P1: byte-identical
+      // to the live file 0fb628e8…). R8 changes the entrypoint (ingress
+      // verdict observability logging) without admitting the outgoing
+      // digest, so without this entry --preflight refuses the deployed R5
+      // extension and the observability deployment is unreachable. The R8
+      // digest is deliberately NOT listed: it is the current build and is
+      // accepted by content comparison.
+      "0fb628e891a93d570715937a95fc65b82acf14964f00d5de495eeead2138e946",
     ],
   );
   assertRegularOrMissing(output.identityKeyPath);
@@ -1014,6 +1025,13 @@ async function main() {
       // deliberately NOT listed: it is the current build and is accepted by
       // content comparison.
       "d1ce63868680ea5f89721ae8b42f07f6f033a840606cdc3a7cd7b6556b3ab593",
+      // M10/T2-R8 observability: the outgoing R5 entrypoint, listed here as
+      // well as in the preflight gate above for the same per-mode-duplication
+      // reason: admitting the predecessor in one mode and not the other would
+      // let --preflight PASS and then --apply refuse. The R8 digest is
+      // deliberately NOT listed: it is the current build and is accepted by
+      // content comparison.
+      "0fb628e891a93d570715937a95fc65b82acf14964f00d5de495eeead2138e946",
       // M10/T2-R2 closure: the six entrypoint predecessors that the preflight
       // gate admits and this apply-mode list did not. Each is the packaged build
       // PRODUCED BY the commit named below, re-derived with the repository's own
