@@ -33,6 +33,7 @@ import process from "node:process";
 import {
   restoreNativePatch,
   inspectNativePatch,
+  NATIVE_DISCORD_CHANNEL_RELATIVE,
 } from "../../lib/native-patch.mjs";
 import { restoreT1RuntimeFiles } from "../../lib/runtime-backup.mjs";
 import {
@@ -47,6 +48,11 @@ import {
 
 const stateDir = "/home/hoang_vinh/.openclaw-zink";
 const runtimeRoot = "/home/hoang_vinh/.local/lib/node_modules/openclaw";
+// M10/T2-R8: restore must resolve the SAME governed roots that produced the
+// patch, including the installed Discord channel package, or the ingress repair
+// would survive a rollback as an untracked mutation.
+const discordChannelRoot = path.join(stateDir, NATIVE_DISCORD_CHANNEL_RELATIVE);
+const nativeRoots = { runtimeRoot, discordChannelRoot };
 const nativeBackup = path.join(stateDir, "operator", "m7-t2", "native-r12");
 const t1Config = path.join(
   stateDir,
@@ -108,7 +114,7 @@ try {
   process.stdout.write(`${JSON.stringify(verdict.disclosure)}\n`);
 
   const values = identifiers();
-  restoreNativePatch(runtimeRoot, nativeBackup);
+  restoreNativePatch(nativeRoots, nativeBackup);
   await restoreT1RuntimeFiles({ stateDir, identifiers: values });
   execFileSync(
     "systemctl",
@@ -119,7 +125,7 @@ try {
       maxBuffer: 65536,
     },
   );
-  const baseline = inspectNativePatch(runtimeRoot);
+  const baseline = inspectNativePatch(nativeRoots);
   if (!Object.values(baseline).every((entry) => entry.state === "BASELINE"))
     throw new Error("NATIVE_RESTORE_FAILED");
   process.stdout.write(

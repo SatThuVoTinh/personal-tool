@@ -563,16 +563,17 @@ test("R18 13: R18 leaves the pinned native patch byte-identical", () => {
   // the content — never content, sender identity or a token. The union-sources
   // repair did not recover the mention, and without this measurement
   // "Discord delivered nothing" and "we lost it here" are indistinguishable.
-  // M10/T2-R8 UPDATE (stderr-grounded diagnostics): the hardened build still
-  // produced NO report live, because the report travelled only through the
-  // child logger and a silent catch around that call can hide the finding.
-  // The report now goes to stderr first — no transport, level or redaction
-  // filter in between — and the logger is called last and reports its own
-  // failure on stderr. The change-detector pin moves to these authorized
-  // bytes; Pinned by tests/m10-t2-r8-ingress-source-diagnostics.test.mjs.
+  // M10/T2-R8 UPDATE (stderr-grounded diagnostics + channel retarget): the
+  // report goes to stderr first — no transport, level or redaction filter in
+  // between — and the logger is called last and reports its own failure on
+  // stderr. The pin then moved to the file the host actually executes: the
+  // installed `@openclaw/discord` package, not the unloadable copy inside the
+  // runtime bundle the whole chain had been patching. Pinned by
+  // tests/m10-t2-r8-ingress-source-diagnostics.test.mjs and
+  // tests/m10-t2-r8-preflight-lineage.test.mjs.
   assert.equal(
     sha256(readFileSync(NATIVE_PATCH_PATH, "utf8")),
-    "71301785d1d804ba60357a5627a1eda6fbdc7da348652fe8ccab2e4ddcb3f9fa",
+    "0d9621c59a101643590d63d75e8fbfb99c7c19f5d3d1e8894ae747a7579e6bb2",
     "native-patch.mjs must equal the R8-stderr-grounded-authorized bytes; any other drift fails",
   );
 });

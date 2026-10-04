@@ -16,7 +16,10 @@ import {
   SCHEMA_VERSION,
   GOVERNANCE_VERSION,
 } from "../../lib/canonical.mjs";
-import { checkNativePatch } from "../../lib/native-patch.mjs";
+import {
+  checkNativePatch,
+  NATIVE_DISCORD_CHANNEL_RELATIVE,
+} from "../../lib/native-patch.mjs";
 import { validateContract } from "../../lib/schema.mjs";
 
 const stateDir = "/home/hoang_vinh/.openclaw-zink";
@@ -36,7 +39,10 @@ const environment = {
 const paths = ledgerPaths(stateDir);
 let stage = "native-patch";
 try {
-  checkNativePatch(runtimeRoot);
+  checkNativePatch({
+    runtimeRoot,
+    discordChannelRoot: path.join(stateDir, NATIVE_DISCORD_CHANNEL_RELATIVE),
+  });
   stage = "gateway-auth";
   environment.OPENCLAW_GATEWAY_TOKEN = await resolveGatewayToken(
     path.join(stateDir, "bin/openclaw-pass-resolver"),

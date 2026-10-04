@@ -38,7 +38,9 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  NATIVE_DISCORD_CHANNEL_RELATIVE,
   NATIVE_RUNTIME_PINS,
+  nativePatchedDiscordChannelRelatives,
   nativePatchedRuntimeRelatives,
   nativeRuntimePostImage,
 } from "../integrations/openclaw/topology/lib/native-patch.mjs";
@@ -50,9 +52,12 @@ import {
 } from "../integrations/openclaw/topology/lib/transaction-snapshot.mjs";
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
-const PREFLIGHT = "dist/message-handler.preflight-C1XBiefW.js";
+// M10/T2-R8: the patched preflight is the file the host actually executes, in
+// the installed Discord channel package under the state directory.
+const CHANNEL_FILE = "message-handler.preflight-CbD0u7U7.js";
+const PREFLIGHT = `${NATIVE_DISCORD_CHANNEL_RELATIVE}/dist/${CHANNEL_FILE}`;
 
-/** A runtime whose four patched files plus the bridge all exist. */
+/** A runtime whose patched files, channel file and bridge all exist. */
 function buildRuntime() {
   const root = mkdtempSync(path.join(os.tmpdir(), "zink-r8-snap-"));
   const stateDir = path.join(root, "state");
@@ -72,6 +77,12 @@ function buildRuntime() {
   // Every runtime file the canonical derivation must cover.
   for (const relative of nativePatchedRuntimeRelatives())
     writeFileSync(path.join(runtimeRoot, relative), `// ${relative}\n`);
+  // …and the channel file, which lives inside the state directory.
+  for (const relative of nativePatchedDiscordChannelRelatives()) {
+    const target = path.join(stateDir, relative);
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, `// ${relative}\n`);
+  }
 
   return {
     root,
@@ -79,6 +90,7 @@ function buildRuntime() {
     runtimeRoot,
     dist,
     extension,
+    discordChannelRoot: path.join(stateDir, NATIVE_DISCORD_CHANNEL_RELATIVE),
     dispose: () => rmSync(root, { recursive: true, force: true }),
   };
 }
@@ -91,12 +103,14 @@ test("R8 S1: the runtime target list is derived from the native patch pins", () 
   const derived = nativePatchedRuntimeRelatives();
   const expected = new Set(["dist/zink-governance-boundary.mjs"]);
   for (const pin of Object.values(NATIVE_RUNTIME_PINS))
-    for (const file of Object.keys(pin.sources)) expected.add(`dist/${file}`);
+    for (const [file, entry] of Object.entries(pin.sources))
+      if ((entry.scope ?? "runtime") === "runtime")
+        expected.add(`dist/${file}`);
 
   assert.deepEqual(
     [...derived].sort(),
     [...expected].sort(),
-    "the runtime list must be exactly the pinned artifacts plus the bridge",
+    "the runtime list must be exactly the pinned runtime artifacts plus the bridge",
   );
   assert.equal(
     Object.isFrozen(derived),
@@ -106,17 +120,24 @@ test("R8 S1: the runtime target list is derived from the native patch pins", () 
 });
 
 test("R8 S2: the preflight artifact is a tracked snapshot target", () => {
+  // The preflight lives in the installed channel package, so it is tracked as a
+  // STATE-relative target. It is still tracked, which is the whole point: the
+  // earlier chain patched a runtime-root file nothing loads, so the one file the
+  // ingress repair rewrites was outside rollback.
   assert.ok(
-    SNAPSHOT_TARGETS.runtime.includes(PREFLIGHT),
-    "the fourth patched runtime file must be tracked, or its mutation escapes rollback",
+    SNAPSHOT_TARGETS.discordChannel.includes(PREFLIGHT),
+    "the patched preflight must be tracked, or its mutation escapes rollback",
   );
-  // The preflight file is pinned, so this is not a theoretical file.
   assert.ok(
     Object.values(NATIVE_RUNTIME_PINS).some((pin) =>
-      Object.keys(pin.sources).includes(
-        "message-handler.preflight-C1XBiefW.js",
-      ),
+      Object.keys(pin.sources).includes(CHANNEL_FILE),
     ),
+    "the executing preflight must be a pinned source",
+  );
+  assert.deepEqual(
+    nativePatchedDiscordChannelRelatives(),
+    [PREFLIGHT],
+    "the channel list is derived from the pins, not hand-maintained",
   );
 });
 
@@ -147,8 +168,8 @@ test("R8 S4: mutating ONLY the preflight file still rolls back completely", () =
   const rt = buildRuntime();
   try {
     const snapshot = createTransactionSnapshot(rt);
-    // The exact production shape: a single mutated component, the fourth file.
-    writeFileSync(path.join(rt.runtimeRoot, PREFLIGHT), "// R8 union\n");
+    // The exact production shape: a single mutated component, the preflight.
+    writeFileSync(path.join(rt.stateDir, PREFLIGHT), "// R8 union\n");
 
     // Before the repair the rollback would have "verified" here and left the
     // mutation in place; with the derived target list it is a real mismatch.
@@ -157,10 +178,10 @@ test("R8 S4: mutating ONLY the preflight file still rolls back completely", () =
 
     restoreTransactionSnapshot(snapshot);
     const verdict = verifyLiveRestore(rt, snapshot);
-    assert.equal(verdict.restored, true, "rollback must restore the 4th file");
+    assert.equal(verdict.restored, true, "rollback must restore the preflight");
     assert.deepEqual(verdict.mismatches, []);
     assert.equal(
-      sha256(readFileSync(path.join(rt.runtimeRoot, PREFLIGHT))),
+      sha256(readFileSync(path.join(rt.stateDir, PREFLIGHT))),
       snapshot.files[PREFLIGHT].sha256,
       "rollback verification is hash equality, not a self-report",
     );
@@ -173,7 +194,10 @@ test("R8 S5: post-apply verification judges the EXPECTED image, not 'anything ch
   const rt = buildRuntime();
   try {
     const snapshot = createTransactionSnapshot(rt);
-    const expected = nativePatchedRuntimeRelatives().map((relative) => ({
+    const expected = [
+      ...nativePatchedRuntimeRelatives(),
+      ...nativePatchedDiscordChannelRelatives(),
+    ].map((relative) => ({
       relative,
       sha256: sha256(`// ${relative}\n`),
     }));
@@ -204,7 +228,7 @@ test("R8 S5: post-apply verification judges the EXPECTED image, not 'anything ch
     );
 
     // An expected file that does NOT match its declared post-image fails.
-    writeFileSync(path.join(rt.runtimeRoot, PREFLIGHT), "// wrong\n");
+    writeFileSync(path.join(rt.stateDir, PREFLIGHT), "// wrong\n");
     const drifted = verifyLiveRestore(rt, snapshot, {
       postApply: true,
       expected,
@@ -223,7 +247,7 @@ test("R8 S6: an expected post-image entry that is absent fails closed", () => {
   const rt = buildRuntime();
   try {
     const snapshot = createTransactionSnapshot(rt);
-    rmSync(path.join(rt.runtimeRoot, PREFLIGHT));
+    rmSync(path.join(rt.stateDir, PREFLIGHT));
     const verdict = verifyLiveRestore(rt, snapshot, {
       postApply: true,
       expected: [{ relative: PREFLIGHT, sha256: "0".repeat(64) }],
@@ -244,10 +268,7 @@ test("R8 S7: the expected post-image is derived from the patch contract", () => 
       path.join(rt.runtimeRoot, "package.json"),
       JSON.stringify({ version: "1999.1.1" }),
     );
-    assert.throws(
-      () => nativeRuntimePostImage(rt.runtimeRoot),
-      /NATIVE_VERSION_MISMATCH/,
-    );
+    assert.throws(() => nativeRuntimePostImage(rt), /NATIVE_VERSION_MISMATCH/);
   } finally {
     rt.dispose();
   }

@@ -1,16 +1,19 @@
-// M10/T2-R8 — preflight lineage: the live DEPLOYED R8 diagnostics-hardened file
-// must be recognized as the approved predecessor of the stderr-grounded build.
+// M10/T2-R8 — Discord preflight lineage: proof that the executed preflight is
+// the file this patch writes, and that the retired lineage is retired rather
+// than rewritten to match a deploy.
 //
-// Without an advanced slot, every subsequent deploy fails closed at
-// `native-backup-prune` with NATIVE_SOURCE_DRIFT, because the live preflight
-// file no longer inverts through the current injection. The active slot
-// follows the real deployment chain, exactly as the R7 and R8-diagnostics slots
-// were retired earlier; every superseded region stays exported and pinned as
-// history, so history is never rewritten to match a deploy.
+// Live evidence that forced this: `openclaw plugins list` resolves the enabled
+// `discord` plugin to the separately installed `@openclaw/discord` package under
+// the profile's npm project store. The R5→R8 chain had been injected into the
+// runtime package's own copy of the same Discord bundle, which nothing loads, so
+// the executing preflight never carried any region, the ingress metadata
+// registry was never written, and every admissible message was denied for a
+// missing mention.
 //
-// This suite pins the exact recognition: the live digest, the verbatim
-// predecessor region, inversion to the pinned upstream baseline, and forward
-// convergence onto the stderr-grounded region.
+// There is therefore NO predecessor slot for the live channel file: it is still
+// at its upstream baseline. These tests pin that fact, pin that the executed file
+// really does carry the current injection, and pin that the retired regions stay
+// exported verbatim so the mistake remains auditable.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -22,139 +25,125 @@ import {
   DISCORD_PREFLIGHT_INJECTION_R8_DIAGNOSTICS,
   DISCORD_PREFLIGHT_INJECTION_R8_DIAGNOSTICS_HARDENED,
   DISCORD_PREFLIGHT_INJECTION_R8_UNION,
-  NATIVE_PATCH_PREDECESSORS,
+  NATIVE_DISCORD_CHANNEL_RELATIVE,
+  NATIVE_RUNTIME_PINS,
   transformNativeSource,
 } from "../integrations/openclaw/topology/lib/native-patch.mjs";
 
 const VERSION = "2026.6.34";
-const PREFLIGHT = "message-handler.preflight-C1XBiefW.js";
+const CHANNEL_FILE = "message-handler.preflight-CbD0u7U7.js";
+const DEAD_FILE = "message-handler.preflight-C1XBiefW.js";
 
-// The live runtime is WSL-side. Read it through a UNC path so the pins run on
-// Windows hosts that can reach the distro, and skip cleanly where they cannot —
-// never assert an unverified artifact identity.
-const LIVE_UNC =
+// The live channel package is WSL-side. Read it through a UNC path so the pins
+// run on Windows hosts that can reach the distro, and skip cleanly where they
+// cannot — never assert an unverified artifact identity.
+const LIVE_CHANNEL =
+  "//wsl$/Ubuntu/home/hoang_vinh/.openclaw-zink/npm/projects/openclaw-discord-c0892df945/node_modules/@openclaw/discord/dist/";
+const LIVE_WSL_CHANNEL =
+  "/home/hoang_vinh/.openclaw-zink/npm/projects/openclaw-discord-c0892df945/node_modules/@openclaw/discord/dist/";
+const LIVE_DEAD =
   "//wsl$/Ubuntu/home/hoang_vinh/.local/lib/node_modules/openclaw/dist/";
-const LIVE_WSL = "/home/hoang_vinh/.local/lib/node_modules/openclaw/dist/";
+const LIVE_WSL_DEAD = "/home/hoang_vinh/.local/lib/node_modules/openclaw/dist/";
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 
-/** The pinned upstream preflight baseline. */
-const PREFLIGHT_BASELINE_SHA256 =
-  "dca5459d27777d7884483d86432d82c0da88244338c3e6ec574a337ec687c0b0";
-
-/** The deployed R8 diagnostics-hardened preflight digest, read-only verified. */
-const LIVE_R8_HARDENED_SHA256 =
-  "f15e907849bf62a455538c901e8c39e05804edbaebf6485d95c182731154bb07";
-
-function livePreflight() {
-  try {
-    return readFileSync(LIVE_UNC + PREFLIGHT, "utf8");
-  } catch {
-    return readFileSync(LIVE_WSL + PREFLIGHT, "utf8");
+/** Read a live artifact through the UNC form, falling back to the WSL path. */
+function readLive(unc, wsl, file) {
+  for (const base of [unc, wsl]) {
+    try {
+      return readFileSync(base + file, "utf8");
+    } catch {
+      /* try the next path form */
+    }
   }
+  return null;
 }
 
+/** The pinned upstream channel baseline, verified by inspection. */
+const CHANNEL_BASELINE_SHA256 =
+  "386ba4b7c89a5aedaa29756e0ac320709b049c5abf4a4f77a918c309d2028edf";
+
 const reachable = (() => {
-  try {
-    return sha256(livePreflight()) === LIVE_R8_HARDENED_SHA256;
-  } catch {
-    return false;
-  }
+  const live = readLive(LIVE_CHANNEL, LIVE_WSL_CHANNEL, CHANNEL_FILE);
+  return live !== null && sha256(live) === CHANNEL_BASELINE_SHA256;
 })();
 
 const skip = (message) => (reachable ? false : message);
 
-test("R8 L0: the descriptor names the active preflight transition exactly", () => {
-  const entry = NATIVE_PATCH_PREDECESSORS[VERSION]?.[PREFLIGHT];
-  assert.ok(entry, "a preflight predecessor descriptor must exist");
-  assert.equal(entry.revision, "R8-diagnostics-hardened");
-  assert.equal(entry.successorRevision, "R8-stderr-grounded");
-  assert.equal(entry.sourceDigest, LIVE_R8_HARDENED_SHA256);
+test("R8 L0: the pin names the file the host actually executes", () => {
+  const entry = NATIVE_RUNTIME_PINS[VERSION].sources[CHANNEL_FILE];
+  assert.ok(entry, "the executing preflight must be pinned");
+  assert.equal(entry.role, "discord-preflight");
+  assert.equal(entry.scope, "discordChannel");
+  assert.equal(entry.sha256, CHANNEL_BASELINE_SHA256);
+  // The runtime package's own copy must NOT be pinned: it is dead code, and
+  // pinning it is what kept the repair invisible for the whole chain.
   assert.equal(
-    entry.sourceSignature,
-    `${DISCORD_PREFLIGHT_ANCHOR}\n${DISCORD_PREFLIGHT_INJECTION_R8_DIAGNOSTICS_HARDENED}`,
+    Object.keys(NATIVE_RUNTIME_PINS[VERSION].sources).includes(DEAD_FILE),
+    false,
+    "the unloadable runtime-root copy must never be pinned again",
   );
-  assert.equal(
-    entry.supersedes,
-    `${DISCORD_PREFLIGHT_ANCHOR}\n${DISCORD_PREFLIGHT_INJECTION}`,
+  assert.ok(
+    NATIVE_DISCORD_CHANNEL_RELATIVE.includes("@openclaw/discord"),
+    "the channel root must name the installed plugin package",
   );
-  assert.notEqual(entry.sourceSignature, entry.supersedes);
-});
-
-test("R8 L0b: the retired slots stay pinned as verbatim history", () => {
-  // Retiring a SLOT must never retire its text or reorder the chain. Each
-  // retired step keeps its own superseded region so no deploy can rewrite
-  // history to match itself.
-  const entry = NATIVE_PATCH_PREDECESSORS[VERSION]?.[PREFLIGHT];
-  const chain = entry.retiredPredecessors.map((step) => step.revision);
-  assert.deepEqual(chain, ["R8-diagnostics", "R5"]);
-  const [diagnostics, r5] = entry.retiredPredecessors;
-  assert.equal(
-    diagnostics.sourceSignature,
-    `${DISCORD_PREFLIGHT_ANCHOR}\n${DISCORD_PREFLIGHT_INJECTION_R8_DIAGNOSTICS}`,
-  );
-  assert.equal(
-    diagnostics.supersedes,
-    `${DISCORD_PREFLIGHT_ANCHOR}\n${DISCORD_PREFLIGHT_INJECTION_R8_UNION}`,
-  );
-  assert.equal(
-    r5.sourceSignature,
-    `${DISCORD_PREFLIGHT_ANCHOR}\n${DISCORD_PREFLIGHT_INJECTION_R5}`,
-  );
-  assert.equal(r5.supersedes, DISCORD_PREFLIGHT_ANCHOR);
 });
 
 test(
-  "R8 L1: the live hardened file is the approved predecessor",
+  "R8 L1: the live channel preflight is the baseline this patch transforms",
   { skip: skip("live runtime not reachable") },
   () => {
-    const live = livePreflight();
-    assert.equal(sha256(live), LIVE_R8_HARDENED_SHA256);
+    const live = readLive(LIVE_CHANNEL, LIVE_WSL_CHANNEL, CHANNEL_FILE);
+    assert.equal(sha256(live), CHANNEL_BASELINE_SHA256);
     assert.equal(
-      live.split(DISCORD_PREFLIGHT_INJECTION_R8_DIAGNOSTICS_HARDENED).length -
-        1,
+      live.split(DISCORD_PREFLIGHT_INJECTION).length - 1,
+      0,
+      "the live executing preflight has never carried the injection",
+    );
+    assert.equal(
+      live.split(DISCORD_PREFLIGHT_ANCHOR).length - 1,
       1,
-      "the live file carries exactly one deployed hardened region",
+      "the anchor must be present exactly once in the executed file",
     );
-    // The hardened build routed the report only through the child logger, which
-    // is why live evidence produced no report at all. The live file must lack
-    // the stderr ground truth.
-    assert.equal(
-      live.includes("zinkReport"),
-      false,
-      "the live file predates the stderr-grounded build",
+    const verdict = transformNativeSource(CHANNEL_FILE, live, VERSION);
+    assert.equal(verdict.state, "BASELINE");
+    assert.equal(verdict.beforeDigest, CHANNEL_BASELINE_SHA256);
+    assert.ok(
+      verdict.after.includes(DISCORD_PREFLIGHT_INJECTION),
+      "the transformed image must carry the current injection",
     );
-    assert.equal(live.includes("zinkProbe"), true);
   },
 );
 
 test(
-  "R8 L2: the predecessor inverts to the pinned baseline and converges",
+  "R8 L2: the dead runtime-root copy proves where the chain went",
   { skip: skip("live runtime not reachable") },
   () => {
-    const verdict = transformNativeSource(PREFLIGHT, livePreflight(), VERSION);
-    assert.equal(verdict.state, "PREDECESSOR");
-    assert.equal(verdict.predecessorRevision, "R8-diagnostics-hardened");
-    assert.equal(verdict.successorRevision, "R8-stderr-grounded");
+    const dead = readLive(LIVE_DEAD, LIVE_WSL_DEAD, DEAD_FILE);
+    if (!dead) return;
+    // The whole R5→R8 chain landed HERE: the region is present in the file
+    // nobody loads, which is the direct evidence that the repair never reached
+    // the executing preflight.
     assert.equal(
-      sha256(verdict.before),
-      PREFLIGHT_BASELINE_SHA256,
-      "inversion must reproduce the pinned upstream baseline byte-for-byte",
+      dead.split(DISCORD_PREFLIGHT_INJECTION).length - 1,
+      1,
+      "the retired chain is expected to be present in the dead copy",
     );
-    assert.ok(
-      verdict.after.includes("zinkReport"),
-      "forward convergence must carry the stderr-grounded region",
-    );
-    assert.ok(
-      verdict.after.includes(DISCORD_PREFLIGHT_ANCHOR),
-      "the anchor survives the transition",
+    assert.ok(dead.includes("zinkProbe"), "the dead copy carries the probes");
+    // …and the executing file carries none of it.
+    const live = readLive(LIVE_CHANNEL, LIVE_WSL_CHANNEL, CHANNEL_FILE);
+    assert.equal(
+      live.split(DISCORD_PREFLIGHT_INJECTION).length - 1,
+      0,
+      "the executing preflight never received the injection",
     );
   },
 );
 
 test("R8 L3: every superseded region stays exported verbatim as history", () => {
   // Retiring a SLOT must not retire its text. Each superseded region is still
-  // exported and pinned, so no deploy can rewrite history to match itself.
+  // exported and pinned, so the mistake stays auditable and no future deploy can
+  // rewrite history to match itself.
   for (const [label, region] of Object.entries({
     R5: DISCORD_PREFLIGHT_INJECTION_R5,
     R8: DISCORD_PREFLIGHT_INJECTION_R8_UNION,
@@ -173,7 +162,12 @@ test("R8 L3: every superseded region stays exported verbatim as history", () => 
 
 test("R8 L4: an unrecognized preflight file still fails closed", () => {
   assert.throws(
-    () => transformNativeSource(PREFLIGHT, "not a preflight file", VERSION),
-    /NATIVE_SOURCE_DRIFT/,
+    () => transformNativeSource(CHANNEL_FILE, "not a preflight file", VERSION),
+    /NATIVE_SOURCE_DRIFT|NATIVE_PATCH_TARGET_DENIED/,
+  );
+  assert.throws(
+    () => transformNativeSource(DEAD_FILE, "not a preflight file", VERSION),
+    /NATIVE_PATCH_TARGET_DENIED/,
+    "an unpinned bundle name must be refused outright",
   );
 });

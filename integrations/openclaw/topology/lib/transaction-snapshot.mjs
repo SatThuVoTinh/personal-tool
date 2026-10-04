@@ -43,7 +43,10 @@ import {
 } from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { nativePatchedRuntimeRelatives } from "./native-patch.mjs";
+import {
+  nativePatchedDiscordChannelRelatives,
+  nativePatchedRuntimeRelatives,
+} from "./native-patch.mjs";
 
 /**
  * Reported when the apply could not establish a rollback target. Distinct from
@@ -77,6 +80,13 @@ export const SNAPSHOT_TARGETS = Object.freeze({
     "extensions/zink-governance/governance-manifests.json",
   ]),
   runtime: nativePatchedRuntimeRelatives(),
+  // M10/T2-R8: the patched Discord preflight lives in the INSTALLED CHANNEL
+  // PLUGIN package, which is inside the state directory, so these are extra
+  // state-relative targets rather than a third governed root. Without them the
+  // only file the ingress repair actually rewrites was outside transaction
+  // tracking — the same "mutated but untracked" hole the derived runtime list
+  // was introduced to close, one tree over.
+  discordChannel: nativePatchedDiscordChannelRelatives(),
 });
 
 const digest = (body) => createHash("sha256").update(body).digest("hex");
@@ -120,7 +130,8 @@ function discoverExtensionAssets(extensionRoot) {
 /** Which root a recorded relative path belongs to. */
 function rootForRelative(relative) {
   return SNAPSHOT_TARGETS.state.includes(relative) ||
-    relative.startsWith("extensions/zink-governance/")
+    relative.startsWith("extensions/zink-governance/") ||
+    SNAPSHOT_TARGETS.discordChannel.includes(relative)
     ? "stateDir"
     : "runtimeRoot";
 }
@@ -156,6 +167,12 @@ export function createTransactionSnapshot(roots) {
 
   const fixed = [
     ...SNAPSHOT_TARGETS.state.map((relative) => ({ relative, root: stateDir })),
+    // M10/T2-R8: channel targets are state-relative, so they resolve inside the
+    // state root that is already validated and snapshotted.
+    ...SNAPSHOT_TARGETS.discordChannel.map((relative) => ({
+      relative,
+      root: stateDir,
+    })),
     ...SNAPSHOT_TARGETS.runtime.map((relative) => ({
       relative,
       root: runtimeRoot,

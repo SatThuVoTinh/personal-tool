@@ -114,13 +114,18 @@ test("R5 H1: the Discord preflight file is pinned with its own role", async () =
   );
   const entry =
     mod.NATIVE_RUNTIME_PINS["2026.6.34"].sources[
-      "message-handler.preflight-C1XBiefW.js"
+      "message-handler.preflight-CbD0u7U7.js"
     ];
   assert.ok(entry, "the preflight artifact must be pinned");
   assert.equal(entry.role, "discord-preflight");
   assert.equal(
+    entry.scope,
+    "discordChannel",
+    "the executed preflight lives in the installed channel package",
+  );
+  assert.equal(
     entry.sha256,
-    "dca5459d27777d7884483d86432d82c0da88244338c3e6ec574a337ec687c0b0",
+    "386ba4b7c89a5aedaa29756e0ac320709b049c5abf4a4f77a918c309d2028edf",
     "the pin is the unpatched upstream baseline",
   );
   assert.ok(
@@ -701,19 +706,24 @@ test("R5 L2: the preflight artifact needs no BASELINE descriptor", () => {
   // the BASELINE reachability rule rather than the table's key list: with the
   // live file at the pinned baseline digest, the transform must reach the
   // current patch with no descriptor at all.
+  //
+  // M10/T2-R8 RETARGET: the executed preflight is the installed channel
+  // package's file, which is still at its upstream baseline because the whole
+  // chain had been patching the unloadable runtime-root copy. The rule is
+  // unchanged and now asserted against the file the host actually runs.
+  const PINNED = "message-handler.preflight-CbD0u7U7.js";
   assert.equal(
-    NATIVE_RUNTIME_PINS["2026.6.34"].sources[
-      "message-handler.preflight-C1XBiefW.js"
-    ].sha256,
-    "dca5459d27777d7884483d86432d82c0da88244338c3e6ec574a337ec687c0b0",
+    NATIVE_RUNTIME_PINS["2026.6.34"].sources[PINNED].sha256,
+    "386ba4b7c89a5aedaa29756e0ac320709b049c5abf4a4f77a918c309d2028edf",
     "the pin stays the unpatched upstream baseline",
   );
   const BASELINE_DIGEST =
-    "dca5459d27777d7884483d86432d82c0da88244338c3e6ec574a337ec687c0b0";
+    "386ba4b7c89a5aedaa29756e0ac320709b049c5abf4a4f77a918c309d2028edf";
   let baselineReachable = false;
   try {
     const live = readFileSync(
-      "/home/hoang_vinh/.local/lib/node_modules/openclaw/dist/message-handler.preflight-C1XBiefW.js",
+      "//wsl$/Ubuntu/home/hoang_vinh/.openclaw-zink/npm/projects/openclaw-discord-c0892df945/node_modules/@openclaw/discord/dist/" +
+        PINNED,
       "utf8",
     );
     if (sha256(live) === BASELINE_DIGEST) baselineReachable = true;
@@ -722,10 +732,7 @@ test("R5 L2: the preflight artifact needs no BASELINE descriptor", () => {
   }
   if (baselineReachable)
     assert.equal(
-      Object.hasOwn(
-        NATIVE_PATCH_PREDECESSORS["2026.6.34"],
-        "message-handler.preflight-C1XBiefW.js",
-      ),
+      Object.hasOwn(NATIVE_PATCH_PREDECESSORS["2026.6.34"], PINNED),
       false,
       "a live BASELINE preflight file needs no descriptor",
     );

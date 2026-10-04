@@ -18,6 +18,7 @@ import {
   applyNativePatch,
   checkNativePatch,
   inspectNativePatch,
+  NATIVE_DISCORD_CHANNEL_RELATIVE,
   nativeRuntimePostImage,
 } from "../../lib/native-patch.mjs";
 import {
@@ -37,6 +38,12 @@ import { applyRuntime, classifyApplyReason } from "./apply-orchestration.mjs";
 
 const stateDir = "/home/hoang_vinh/.openclaw-zink";
 const runtimeRoot = "/home/hoang_vinh/.local/lib/node_modules/openclaw";
+// M10/T2-R8: the Discord channel is a separately installed plugin package, not
+// part of the runtime bundle, so the patch is given that root explicitly. It
+// lives inside the state directory, which is why the transaction snapshot needs
+// no third root to cover it.
+const discordChannelRoot = path.join(stateDir, NATIVE_DISCORD_CHANNEL_RELATIVE);
+const nativeRoots = { runtimeRoot, discordChannelRoot };
 const nativeBackup = path.join(stateDir, "operator", "m7-t2", "native-r12");
 const identifiersPath = path.join(
   stateDir,
@@ -115,15 +122,15 @@ const report = await applyRuntime({
   },
   pruneStaleNativeBackup() {
     if (!existsSync(nativeBackup)) return;
-    const inspection = inspectNativePatch(runtimeRoot);
+    const inspection = inspectNativePatch(nativeRoots);
     if (
       Object.values(inspection).every((entry) => entry.state === "BASELINE")
     ) {
       rmSync(nativeBackup, { recursive: true, force: true });
     }
   },
-  applyNativePatch: () => applyNativePatch(runtimeRoot, nativeBackup),
-  checkNativePatch: () => checkNativePatch(runtimeRoot),
+  applyNativePatch: () => applyNativePatch(nativeRoots, nativeBackup),
+  checkNativePatch: () => checkNativePatch(nativeRoots),
   // R11: the rollback target is the exact live state captured immediately before
   // this apply, not `backups/r12/t1-config.json` (captured 2026-09-11) and not
   // the `native-r12` clean preimages. `restoreNativePatch` and
@@ -163,7 +170,7 @@ const report = await applyRuntime({
   // is what makes `applied` mean "the runtime matches the patch" instead of
   // "something changed". An unverified release throws here, so the apply fails
   // closed at runtime-verify rather than verifying against a guess.
-  expectedNativePostImage: () => nativeRuntimePostImage(runtimeRoot),
+  expectedNativePostImage: () => nativeRuntimePostImage(nativeRoots),
   restartScopedGateway,
   // R16: there is deliberately NO external `openclaw config validate` step here.
   // It used to be wired as a dependency described as an "additional semantic

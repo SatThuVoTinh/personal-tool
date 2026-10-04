@@ -449,11 +449,21 @@ describe("Lane G — policy & lifecycle contract reconciliation", () => {
       1,
       "the backup manifest must be declared exactly once, in the shared builder",
     );
+    // The manifest is now built once by `ensureNativeBackup`, which the fresh,
+    // re-take and partly-patched converge paths all share. Three call sites, one
+    // declaration: a second literal is the regression this test exists to catch.
     assert.equal(
-      moduleSource.match(/const manifest = nativeBackupManifest\(root\);/gu)
+      moduleSource.match(
+        /ensureNativeBackup\(backupRoot, roots, inspection, version\)/gu,
+      ).length,
+      3,
+      "fresh patch, re-take and converge must all share the one backup builder",
+    );
+    assert.equal(
+      moduleSource.match(/const next = nativeBackupManifest\(roots\);/gu)
         .length,
-      2,
-      "both apply paths (fresh patch and re-take) must use the shared builder",
+      1,
+      "the shared builder must be the only place a manifest is constructed",
     );
     const root = mkdtempSync(path.join(os.tmpdir(), "zink-native-manifest-"));
     try {

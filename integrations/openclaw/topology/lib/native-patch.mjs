@@ -41,10 +41,20 @@ export const NATIVE_RUNTIME_PINS = Object.freeze({
         sha256:
           "a5698c5523e87ad454cf89e4a5c940689403f7b6eac6f3d14c7205f1e3071ed6",
       }),
-      "message-handler.preflight-C1XBiefW.js": Object.freeze({
+      // M10/T2-R8: the Discord channel is NOT loaded from the runtime root. It is
+      // an installed plugin package under the profile's npm project store, which
+      // is why `openclaw plugins list` resolves `discord` to
+      // `~/.openclaw-zink/npm/projects/openclaw-discord-*/node_modules/@openclaw/discord`.
+      // The runtime root also ships a copy of the same Discord bundles, but
+      // nothing loads it: patching that copy left the real preflight untouched,
+      // so the ingress metadata registry was never written and every admitted
+      // message was denied for a missing mention. The pin therefore names the
+      // file the host actually executes, under the channel scope.
+      "message-handler.preflight-CbD0u7U7.js": Object.freeze({
         role: "discord-preflight",
+        scope: "discordChannel",
         sha256:
-          "dca5459d27777d7884483d86432d82c0da88244338c3e6ec574a337ec687c0b0",
+          "386ba4b7c89a5aedaa29756e0ac320709b049c5abf4a4f77a918c309d2028edf",
       }),
       "subagent-announce-Bh1QyKiE.js": Object.freeze({
         role: "announce",
@@ -93,6 +103,71 @@ export const NATIVE_SOURCE_BASELINE =
   NATIVE_RUNTIME_PINS[NATIVE_PINNED_RUNTIME_VERSION].sources;
 export const sha256 = (value) =>
   createHash("sha256").update(value).digest("hex");
+
+/**
+ * M10/T2-R8: where the Discord channel plugin package lives, relative to the
+ * OpenClaw state directory.
+ *
+ * The Discord channel is an INSTALLED PLUGIN PACKAGE, not part of the runtime
+ * bundle: `openclaw plugins list` resolves `discord` to
+ * `<stateDir>/npm/projects/openclaw-discord-<hash>/node_modules/@openclaw/discord`.
+ * The runtime root ships a byte-similar copy of the same Discord bundles that
+ * nothing loads. Pinning, patching and snapshotting the runtime-root copy left
+ * the executing preflight untouched, which is why the ingress metadata registry
+ * was never written and every admissible message was denied for a missing
+ * mention. This constant is the single source of truth for the executing tree:
+ * the patch roots, the snapshot relatives and the operator fixtures all derive
+ * from it, so the target cannot drift between them again.
+ */
+export const NATIVE_DISCORD_CHANNEL_RELATIVE =
+  "npm/projects/openclaw-discord-c0892df945/node_modules/@openclaw/discord";
+
+/**
+ * Which governed root a pinned source resolves against. A source with no
+ * `scope` belongs to the runtime root, which is every source that predates the
+ * Discord channel being recognised as a separately installed plugin.
+ */
+export const NATIVE_SOURCE_ROOTS = Object.freeze({
+  runtime: "runtimeRoot",
+  discordChannel: "discordChannelRoot",
+});
+
+/**
+ * Accept either the historical single runtime root or the governed root set, so
+ * a caller that only patches core runtime artifacts keeps working unchanged and a
+ * caller that also patches the channel plugin states that root explicitly.
+ */
+export function nativeRoots(input) {
+  const value =
+    typeof input === "string" ? { runtimeRoot: input } : (input ?? {});
+  return {
+    runtimeRoot: value.runtimeRoot ?? null,
+    discordChannelRoot: value.discordChannelRoot ?? null,
+  };
+}
+
+/**
+ * Absolute path of a pinned source. The scope comes from the pin, never from the
+ * caller, and a source whose root was not supplied is a NAMED failure: silently
+ * skipping it would repeat exactly the bug this scope exists to close.
+ */
+function sourcePath(roots, file, version) {
+  const entry = NATIVE_RUNTIME_PINS[version]?.sources?.[file];
+  if (!entry) throw new Error("NATIVE_SOURCE_UNKNOWN");
+  const key = NATIVE_SOURCE_ROOTS[entry.scope ?? "runtime"];
+  if (!key) throw new Error("NATIVE_SOURCE_SCOPE_UNKNOWN");
+  const root = roots[key];
+  if (!root) {
+    const error = new Error(
+      `NATIVE_SOURCE_ROOT_MISSING: pinned artifact ${file} belongs to ${key}, which was not provided. A governed root is never skipped.`,
+    );
+    error.code = "NATIVE_SOURCE_ROOT_MISSING";
+    error.root = key;
+    error.artifact = file;
+    throw error;
+  }
+  return path.join(root, "dist", file);
+}
 
 const selectionAnchor = "\t\t\tconst activeSession = session;";
 const selectionPatch = `${selectionAnchor}
@@ -462,46 +537,24 @@ export const NATIVE_PATCH_PREDECESSORS = Object.freeze({
         "555f37dae8eec1fbbd35e25ae28222dc5e8d6965e383500695a93900e9d8ddf5",
       successorRevision: "R5",
     }),
-    // M10/T2-R8: the live preflight file carries the R8 diagnostics-hardened
-    // region, superseded by the stderr-grounded build. Recognition is exact:
-    // the live digest, the superseded region text, and inversion to the pinned
-    // preflight baseline must all reproduce, otherwise the runtime fails
-    // closed with NATIVE_SOURCE_DRIFT and no deployment proceeds.
+    // M10/T2-R8: the Discord preflight lineage is RETIRED, not rewritten.
     //
-    // RETIRED SLOT (kept verbatim so history is never rewritten to match a
-    // deploy): the diagnostics build replaced the R8 union-sources region.
-    "message-handler.preflight-C1XBiefW.js": Object.freeze({
-      revision: "R8-diagnostics-hardened",
-      sourceSignature:
-        DISCORD_PREFLIGHT_ANCHOR +
-        "\n" +
-        DISCORD_PREFLIGHT_INJECTION_R8_DIAGNOSTICS_HARDENED,
-      supersedes: DISCORD_PREFLIGHT_ANCHOR + "\n" + DISCORD_PREFLIGHT_INJECTION,
-      sourceDigest:
-        "f15e907849bf62a455538c901e8c39e05804edbaebf6485d95c182731154bb07",
-      successorRevision: "R8-stderr-grounded",
-      // Retired predecessor chain, retained verbatim: the diagnostics region
-      // this build replaced, and the region that build replaced.
-      retiredPredecessors: Object.freeze([
-        Object.freeze({
-          revision: "R8-diagnostics",
-          sourceSignature:
-            DISCORD_PREFLIGHT_ANCHOR +
-            "\n" +
-            DISCORD_PREFLIGHT_INJECTION_R8_DIAGNOSTICS,
-          supersedes:
-            DISCORD_PREFLIGHT_ANCHOR +
-            "\n" +
-            DISCORD_PREFLIGHT_INJECTION_R8_UNION,
-        }),
-        Object.freeze({
-          revision: "R5",
-          sourceSignature:
-            DISCORD_PREFLIGHT_ANCHOR + "\n" + DISCORD_PREFLIGHT_INJECTION_R5,
-          supersedes: DISCORD_PREFLIGHT_ANCHOR,
-        }),
-      ]),
-    }),
+    // The whole R5→R8 chain (anchor, union-sources, diagnostics, hardened
+    // diagnostics, stderr-grounded) was injected into
+    // `openclaw/dist/message-handler.preflight-C1XBiefW.js` — a copy of the
+    // Discord bundles that ships inside the runtime package and that NOTHING
+    // loads, because the enabled `discord` plugin resolves to the separately
+    // installed `@openclaw/discord` package under the profile's npm project
+    // store. The executing preflight never carried any of those regions, which
+    // is why the ingress metadata registry was never written and every
+    // admissible message was denied for a missing mention.
+    //
+    // There is deliberately NO descriptor for the live channel file: it is
+    // still at its upstream baseline, so nothing was ever written to it and
+    // there is no predecessor to recognise. Declaring one would fabricate
+    // history. The retired regions stay exported and pinned in this module so
+    // the mistake stays auditable, and the preimage of the dead file is the
+    // `preimage/` directory of the transaction that patched it.
   }),
 });
 
@@ -613,14 +666,22 @@ function resolveRuntimeVersion(root) {
   }
 }
 
-export function inspectNativePatch(root) {
-  if (!path.isAbsolute(root)) throw new Error("NATIVE_ROOT_MUST_BE_ABSOLUTE");
+export function inspectNativePatch(input) {
+  const roots = nativeRoots(input);
+  const root = roots.runtimeRoot;
+  if (!root || !path.isAbsolute(root))
+    throw new Error("NATIVE_ROOT_MUST_BE_ABSOLUTE");
   // Reject symlink ancestors before any source reads.
-  let cursor = path.resolve(root);
-  while (cursor !== path.dirname(cursor)) {
-    if (lstatSync(cursor).isSymbolicLink())
-      throw new Error("NATIVE_ROOT_SYMLINK");
-    cursor = path.dirname(cursor);
+  for (const governed of Object.values(roots)) {
+    if (!governed) continue;
+    if (!path.isAbsolute(governed))
+      throw new Error("NATIVE_ROOT_MUST_BE_ABSOLUTE");
+    let cursor = path.resolve(governed);
+    while (cursor !== path.dirname(cursor)) {
+      if (lstatSync(cursor).isSymbolicLink())
+        throw new Error("NATIVE_ROOT_SYMLINK");
+      cursor = path.dirname(cursor);
+    }
   }
   // The runtime version is read FIRST and resolves the pin. A host on a release
   // this patch has not been verified against is a NAMED condition, not a bare
@@ -641,12 +702,7 @@ export function inspectNativePatch(root) {
 
   // Fail closed with a governance code, never a raw filesystem error, when a
   // pinned prerequisite is absent.
-  for (const target of [
-    "package.json",
-    "dist",
-    pin.runIdSource,
-    ...Object.keys(pin.sources).map((file) => path.join("dist", file)),
-  ]) {
+  for (const target of ["package.json", "dist", pin.runIdSource]) {
     const full = path.join(root, target);
     let stats;
     try {
@@ -667,14 +723,29 @@ export function inspectNativePatch(root) {
   )
     throw new Error("NATIVE_RUN_ID_SOURCE_DRIFT");
   return Object.fromEntries(
-    Object.keys(pin.sources).map((file) => [
-      file,
-      transformNativeSource(
+    Object.keys(pin.sources).map((file) => {
+      const target = sourcePath(roots, file, installedVersion);
+      let stats;
+      try {
+        stats = lstatSync(target);
+      } catch {
+        const error = new Error(
+          `NATIVE_SOURCE_DRIFT: pinned artifact ${file} is absent from OpenClaw ${installedVersion}`,
+        );
+        error.code = "NATIVE_SOURCE_DRIFT";
+        error.artifact = file;
+        throw error;
+      }
+      if (stats.isSymbolicLink()) throw new Error("NATIVE_TARGET_SYMLINK");
+      return [
         file,
-        readFileSync(path.join(root, "dist", file), "utf8"),
-        installedVersion,
-      ),
-    ]),
+        transformNativeSource(
+          file,
+          readFileSync(target, "utf8"),
+          installedVersion,
+        ),
+      ];
+    }),
   );
 }
 
@@ -749,24 +820,53 @@ export const NATIVE_BRIDGE_RELATIVE = "dist/zink-governance-boundary.mjs";
 export function nativePatchedRuntimeRelatives() {
   const relatives = new Set([NATIVE_BRIDGE_RELATIVE]);
   for (const pin of Object.values(NATIVE_RUNTIME_PINS))
-    for (const file of Object.keys(pin.sources)) relatives.add(`dist/${file}`);
+    for (const [file, entry] of Object.entries(pin.sources))
+      if ((entry.scope ?? "runtime") === "runtime")
+        relatives.add(`dist/${file}`);
+  return Object.freeze([...relatives].sort());
+}
+
+/**
+ * M10/T2-R8: the runtime files that live in the installed Discord channel
+ * package instead of the runtime root, expressed RELATIVE TO THE STATE
+ * DIRECTORY.
+ *
+ * The channel package is installed under the profile's own state directory, so
+ * the transaction snapshot already covers it: adding it as a state-relative
+ * target keeps every backup, restore and drift check working without widening
+ * the snapshot schema or introducing a third governed root. Deriving it from the
+ * pins keeps "mutated but untracked" structurally impossible on the tree the
+ * host actually executes.
+ */
+export function nativePatchedDiscordChannelRelatives() {
+  const relatives = new Set();
+  for (const pin of Object.values(NATIVE_RUNTIME_PINS))
+    for (const [file, entry] of Object.entries(pin.sources))
+      if (entry.scope === "discordChannel")
+        relatives.add(`${NATIVE_DISCORD_CHANNEL_RELATIVE}/dist/${file}`);
   return Object.freeze([...relatives].sort());
 }
 
 /**
  * The expected post-image of every patched runtime file for the release
- * installed under `root`, read through the same inspection that verifies the
- * patch. This is the authoritative "what the runtime must look like after a
- * successful apply", derived from the patch contract and not from a diff of
- * what happened to change. An unverified release throws, so the caller fails
- * closed instead of verifying against a guess.
+ * installed under the governed roots, read through the same inspection that
+ * verifies the patch. This is the authoritative "what the runtime must look
+ * like after a successful apply", derived from the patch contract and not from a
+ * diff of what happened to change. An unverified release throws, so the caller
+ * fails closed instead of verifying against a guess.
  */
-export function nativeRuntimePostImage(root) {
-  const inspection = inspectNativePatch(root);
-  const entries = Object.entries(inspection).map(([file, entry]) => ({
-    relative: `dist/${file}`,
-    sha256: entry.afterDigest,
-  }));
+export function nativeRuntimePostImage(input) {
+  const roots = nativeRoots(input);
+  const inspection = inspectNativePatch(roots);
+  const entries = Object.entries(inspection).map(([file, entry]) => {
+    const relative =
+      NATIVE_RUNTIME_PINS[resolveRuntimeVersion(roots.runtimeRoot)].sources[
+        file
+      ].scope === "discordChannel"
+        ? `${NATIVE_DISCORD_CHANNEL_RELATIVE}/dist/${file}`
+        : `dist/${file}`;
+    return { relative, sha256: entry.afterDigest };
+  });
   entries.push({
     relative: NATIVE_BRIDGE_RELATIVE,
     sha256: sha256(bridgeContents()),
@@ -776,8 +876,10 @@ export function nativeRuntimePostImage(root) {
   );
 }
 
-export function checkNativePatch(root) {
-  const inspection = inspectNativePatch(root);
+export function checkNativePatch(input) {
+  const roots = nativeRoots(input);
+  const root = roots.runtimeRoot;
+  const inspection = inspectNativePatch(roots);
   assertNoLinks(bridgeFile(root));
   if (
     !Object.values(inspection).every((entry) => entry.state === "PATCHED") ||
@@ -793,22 +895,95 @@ export function checkNativePatch(root) {
 // re-take on an already-patched host) previously declared the manifest
 // separately, so the fresh-patch manifest omitted the field and every backup
 // taken while actually patching was unrestorable.
-export function nativeBackupManifest(root) {
+export function nativeBackupManifest(input) {
+  const roots = nativeRoots(input);
   return {
     version: "m7-t2-r12",
-    runtime_root: path.resolve(root),
+    runtime_root: path.resolve(roots.runtimeRoot),
+    // The Discord channel package root the backup was taken from, or null when
+    // the caller patched runtime artifacts only. A restore must resolve the SAME
+    // roots that produced the patch, so it is recorded rather than assumed.
+    discord_channel_root: roots.discordChannelRoot
+      ? path.resolve(roots.discordChannelRoot)
+      : null,
     // The OpenClaw release the backup was taken from. A restore has to
     // resolve the SAME pin that produced the patch, and the file names in
     // a backup are release-specific, so this is recorded explicitly rather
     // than assumed to be the currently-deployed one.
-    runtime_version: resolveRuntimeVersion(root),
+    runtime_version: resolveRuntimeVersion(roots.runtimeRoot),
     bridge_digest: sha256(bridgeContents()),
     files: {},
   };
 }
 
-export function applyNativePatch(root, backupRoot) {
-  const inspection = inspectNativePatch(root);
+/**
+ * Make `backupRoot` a complete, restorable preimage set for the CURRENT pin set.
+ *
+ * M10/T2-R8: a host can legitimately arrive with some pinned artifacts already
+ * patched and a newly pinned one still at its baseline — exactly what happens
+ * when the Discord preflight pin is corrected from the unloadable runtime-root
+ * copy to the installed channel package. That state used to be refused outright
+ * as `NATIVE_PATCH_PARTIAL_STATE`, which left the ingress repair undeployable.
+ *
+ * An existing backup is therefore EXTENDED rather than replaced, and only after
+ * every preimage it already holds is proven to equal the digest the current
+ * inspection derives. `BASELINE`, `PATCHED` and `PREDECESSOR` all invert to the
+ * same upstream preimage by construction, so agreement is the invariant to
+ * check; disagreement fails closed instead of overwriting a preimage that a
+ * pending rollback may still need.
+ */
+function ensureNativeBackup(backupRoot, roots, inspection, version) {
+  const manifestPath = path.join(backupRoot, "manifest.json");
+  const expected = {};
+  for (const [file, entry] of Object.entries(inspection))
+    expected[file] = {
+      before_digest: entry.beforeDigest,
+      after_digest: entry.afterDigest,
+      mode: lstatSync(sourcePath(roots, file, version)).mode & 0o777,
+    };
+
+  if (!existsSync(manifestPath)) {
+    assertNoLinks(backupRoot);
+    mkdirSync(backupRoot, { recursive: true, mode: 0o700 });
+  }
+  const manifest = existsSync(manifestPath)
+    ? JSON.parse(readFileSync(manifestPath, "utf8"))
+    : null;
+  if (
+    manifest &&
+    (manifest.version !== "m7-t2-r12" ||
+      manifest.runtime_root !== path.resolve(roots.runtimeRoot) ||
+      manifest.runtime_version !== version)
+  )
+    throw new Error("NATIVE_BACKUP_MANIFEST_INVALID");
+
+  for (const [file, entry] of Object.entries(inspection)) {
+    const backup = path.join(backupRoot, file);
+    if (existsSync(backup)) {
+      assertNoLinks(backup);
+      if (sha256(readFileSync(backup, "utf8")) !== entry.beforeDigest)
+        throw new Error("NATIVE_BACKUP_PREIMAGE_CONFLICT");
+      continue;
+    }
+    writeExclusive(backup, entry.before, 0o600);
+  }
+  const next = nativeBackupManifest(roots);
+  next.files = expected;
+  // The manifest is this module's own derived record, so it is REPLACED: an
+  // existing one may predate the current pin set (it did — it had no channel
+  // entry and a stale after-image). The preimages it points at are never
+  // overwritten; they were just proven to match the current `before` digests.
+  replaceAtomic(manifestPath, `${JSON.stringify(next, null, 2)}\n`, 0o600);
+  syncDirectory(backupRoot);
+  syncDirectory(path.dirname(backupRoot));
+  return next;
+}
+
+export function applyNativePatch(input, backupRoot) {
+  const roots = nativeRoots(input);
+  const root = roots.runtimeRoot;
+  const version = resolveRuntimeVersion(root);
+  const inspection = inspectNativePatch(roots);
   // R14: a host carrying an approved predecessor patch revision is upgraded by
   // writing the successor directly. The predecessor's baseline exists only in
   // memory, inside the transform, so the live runtime is never written back to
@@ -827,7 +1002,7 @@ export function applyNativePatch(root, backupRoot) {
       .map(([file, entry]) => ({
         file,
         after: entry.after,
-        mode: lstatSync(path.join(root, "dist", file)).mode & 0o777,
+        mode: lstatSync(sourcePath(roots, file, version)).mode & 0o777,
       }));
     assertNoLinks(bridgeFile(root));
     if (
@@ -836,11 +1011,11 @@ export function applyNativePatch(root, backupRoot) {
     )
       replaceAtomic(bridgeFile(root), bridgeContents(), 0o600);
     for (const { file, after, mode } of plan)
-      replaceAtomic(path.join(root, "dist", file), after, mode);
+      replaceAtomic(sourcePath(roots, file, version), after, mode);
     // `checkNativePatch` is the same verification the other paths end with: every
     // pinned source must now invert exactly to the baseline, and the bridge must
     // be the current repository boundary.
-    return checkNativePatch(root);
+    return checkNativePatch(roots);
   }
   if (Object.values(inspection).every((entry) => entry.state === "PATCHED")) {
     if (
@@ -850,80 +1025,64 @@ export function applyNativePatch(root, backupRoot) {
       assertNoLinks(bridgeFile(root));
       replaceAtomic(bridgeFile(root), bridgeContents(), 0o600);
     }
-    if (backupRoot) {
-      const manifestPath = path.join(backupRoot, "manifest.json");
-      if (!existsSync(manifestPath)) {
-        assertNoLinks(backupRoot);
-        mkdirSync(backupRoot, { recursive: true, mode: 0o700 });
-        const manifest = nativeBackupManifest(root);
-        for (const [file, entry] of Object.entries(inspection)) {
-          const mode = lstatSync(path.join(root, "dist", file)).mode & 0o777;
-          writeExclusive(path.join(backupRoot, file), entry.before, 0o600);
-          manifest.files[file] = {
-            before_digest: entry.beforeDigest,
-            after_digest: entry.afterDigest,
-            mode,
-          };
-        }
-        writeExclusive(
-          manifestPath,
-          `${JSON.stringify(manifest, null, 2)}\n`,
-          0o600,
-        );
-        syncDirectory(backupRoot);
-        syncDirectory(path.dirname(backupRoot));
+    if (backupRoot) ensureNativeBackup(backupRoot, roots, inspection, version);
+    return checkNativePatch(roots);
+  }
+  // M10/T2-R8: converge any host whose pinned artifacts are each either at
+  // their upstream baseline or already carrying the current patch. Refusing a
+  // mixed state is what made the ingress repair undeployable: correcting the
+  // Discord preflight pin produced exactly this shape, because the core
+  // artifacts were patched while the newly pinned channel artifact was still
+  // at baseline. Every preimage is recorded before the first write, so the
+  // native backup stays a complete restore target for the whole pin set.
+  if (
+    Object.values(inspection).every(
+      (entry) => entry.state === "BASELINE" || entry.state === "PATCHED",
+    )
+  ) {
+    const nothingPatchedYet = Object.values(inspection).every(
+      (entry) => entry.state === "BASELINE",
+    );
+    if (nothingPatchedYet) {
+      assertNoLinks(bridgeFile(root));
+      if (existsSync(bridgeFile(root)))
+        throw new Error("NATIVE_BRIDGE_ALREADY_EXISTS");
+      assertNoLinks(backupRoot);
+      const relativeBackup = path.relative(root, backupRoot);
+      if (!(
+        relativeBackup === ".." ||
+        relativeBackup.startsWith(`..${path.sep}`) ||
+        path.isAbsolute(relativeBackup)
+      ))
+        throw new Error("NATIVE_BACKUP_MUST_BE_EXTERNAL");
+    }
+    const manifest = backupRoot
+      ? ensureNativeBackup(backupRoot, roots, inspection, version)
+      : null;
+    try {
+      if (nothingPatchedYet) {
+        writeExclusive(bridgeFile(root), bridgeContents(), 0o600);
+        syncDirectory(path.join(root, "dist"));
       }
+      for (const [file, entry] of Object.entries(inspection)) {
+        if (entry.state === "PATCHED") continue;
+        const target = sourcePath(roots, file, version);
+        if (sha256(readFileSync(target)) !== entry.beforeDigest)
+          throw new Error("NATIVE_SOURCE_DRIFT");
+        replaceAtomic(target, entry.after, manifest.files[file].mode);
+      }
+      return checkNativePatch(roots);
+    } catch (cause) {
+      if (backupRoot) restoreNativePatch(roots, backupRoot);
+      throw new Error("NATIVE_APPLY_FAILED_RESTORED", { cause });
     }
-    return checkNativePatch(root);
   }
-  if (!Object.values(inspection).every((entry) => entry.state === "BASELINE"))
-    throw new Error("NATIVE_PATCH_PARTIAL_STATE");
-  assertNoLinks(bridgeFile(root));
-  if (existsSync(bridgeFile(root)))
-    throw new Error("NATIVE_BRIDGE_ALREADY_EXISTS");
-  assertNoLinks(backupRoot);
-  const relativeBackup = path.relative(root, backupRoot);
-  if (!(
-    relativeBackup === ".." ||
-    relativeBackup.startsWith(`..${path.sep}`) ||
-    path.isAbsolute(relativeBackup)
-  ))
-    throw new Error("NATIVE_BACKUP_MUST_BE_EXTERNAL");
-  mkdirSync(backupRoot, { mode: 0o700 }); // Never overwrite an earlier backup.
-  const manifest = nativeBackupManifest(root);
-  for (const [file, entry] of Object.entries(inspection)) {
-    const mode = lstatSync(path.join(root, "dist", file)).mode & 0o777;
-    writeExclusive(path.join(backupRoot, file), entry.before, 0o600);
-    manifest.files[file] = {
-      before_digest: entry.beforeDigest,
-      after_digest: entry.afterDigest,
-      mode,
-    };
-  }
-  writeExclusive(
-    path.join(backupRoot, "manifest.json"),
-    `${JSON.stringify(manifest, null, 2)}\n`,
-    0o600,
-  );
-  syncDirectory(backupRoot);
-  syncDirectory(path.dirname(backupRoot));
-  try {
-    writeExclusive(bridgeFile(root), bridgeContents(), 0o600);
-    syncDirectory(path.join(root, "dist"));
-    for (const [file, entry] of Object.entries(inspection)) {
-      const target = path.join(root, "dist", file);
-      if (sha256(readFileSync(target)) !== entry.beforeDigest)
-        throw new Error("NATIVE_SOURCE_DRIFT");
-      replaceAtomic(target, entry.after, manifest.files[file].mode);
-    }
-    return checkNativePatch(root);
-  } catch (cause) {
-    restoreNativePatch(root, backupRoot);
-    throw new Error("NATIVE_APPLY_FAILED_RESTORED", { cause });
-  }
+  throw new Error("NATIVE_PATCH_PARTIAL_STATE");
 }
 
-export function restoreNativePatch(root, backupRoot) {
+export function restoreNativePatch(input, backupRoot) {
+  const roots = nativeRoots(input);
+  const root = roots.runtimeRoot;
   assertNoLinks(root);
   assertNoLinks(backupRoot);
   assertNoLinks(path.join(backupRoot, "manifest.json"));
@@ -933,6 +1092,10 @@ export function restoreNativePatch(root, backupRoot) {
   if (
     manifest.version !== "m7-t2-r12" ||
     manifest.runtime_root !== path.resolve(root) ||
+    (manifest.discord_channel_root ?? null) !==
+      (roots.discordChannelRoot
+        ? path.resolve(roots.discordChannelRoot)
+        : null) ||
     !NATIVE_RUNTIME_PINS[manifest.runtime_version] ||
     Object.keys(manifest.files).sort().join() !==
       Object.keys(NATIVE_RUNTIME_PINS[manifest.runtime_version].sources)
@@ -944,7 +1107,7 @@ export function restoreNativePatch(root, backupRoot) {
   // Validate every preimage/current target before restoring any file.
   for (const [file, expected] of Object.entries(manifest.files)) {
     const backup = path.join(backupRoot, file);
-    const target = path.join(root, "dist", file);
+    const target = sourcePath(roots, file, manifest.runtime_version);
     assertNoLinks(backup);
     assertNoLinks(target);
     const contents = readFileSync(backup, "utf8");
@@ -978,13 +1141,13 @@ export function restoreNativePatch(root, backupRoot) {
     throw new Error("NATIVE_BRIDGE_RESTORE_CONFLICT");
   for (const [file, contents] of Object.entries(originals))
     replaceAtomic(
-      path.join(root, "dist", file),
+      sourcePath(roots, file, manifest.runtime_version),
       contents,
       manifest.files[file].mode,
     );
   if (existsSync(bridgeFile(root))) unlinkSync(bridgeFile(root));
   syncDirectory(path.join(root, "dist"));
-  const restored = inspectNativePatch(root);
+  const restored = inspectNativePatch(roots);
   if (!Object.values(restored).every((entry) => entry.state === "BASELINE"))
     throw new Error("NATIVE_RESTORE_FAILED");
   return { status: "RESTORED", files: Object.keys(restored) };
