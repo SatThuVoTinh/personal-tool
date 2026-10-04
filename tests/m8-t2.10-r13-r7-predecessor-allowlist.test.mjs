@@ -71,14 +71,13 @@ const R5_ENTRYPOINT_SHA256 =
 const R10_NATIVE_BOUNDARY_SHA256 =
   "bccfa8616dc89fbb3764d53ad6ea11f5cfbc445bc076e4270f2678c6c1e18c3a";
 /**
- * The CURRENT packaged entrypoint, after M10/T2-R5 (host threadOwnerId
- * replaces the R4 outbound-attribution cache; structured mentions and reply
- * attribution enter admission). Updated from the R4 digest 73ffc92a…
- * exactly as prior revisions moved their pins when the entrypoint changed.
- * NOT listed.
+ * The CURRENT packaged entrypoint, after ingress verdict observability
+ * (denial reasons + allow signals logged; verdicts unchanged). Updated
+ * from 0fb628e8… exactly as prior revisions moved their pins when the
+ * entrypoint changed. NOT listed.
  */
 const R10_ENTRYPOINT_SHA256 =
-  "0fb628e891a93d570715937a95fc65b82acf14964f00d5de495eeead2138e946";
+  "6a7968b7d456ff6d3f2c5b9d60c7b6046a702603b880093c33b717d9a37c13b1";
 
 /**
  * The outgoing entrypoint before the coordinator execution-authority

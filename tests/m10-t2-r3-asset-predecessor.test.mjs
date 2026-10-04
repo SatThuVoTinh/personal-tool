@@ -76,13 +76,13 @@ const HYGIENE_ASSET_PREDECESSORS = Object.freeze({
     "e27647b9742b56052188a8bbf746ab6c5eeaaeb67344216c11859167ee78946f",
 });
 
-/** The CURRENT build entrypoint (M10/T2-R4). None may be allowlisted. Moved
- * from the R3 digest d1ce6386… exactly as prior revisions moved their pins
- * when the entrypoint changed: R4's native threadId extension changes the
- * packaged entrypoint, and the outgoing R3 digest is now the admitted
- * predecessor (listed in configure.mjs). */
+/** The CURRENT build entrypoint (ingress verdict observability). None may
+ * be allowlisted. Moved from 0fb628e8… exactly as prior revisions moved
+ * their pins when the entrypoint changed: denial-reason + signal logging
+ * in authenticateIngress changes the packaged bytes; behavior is
+ * observation-only and every verdict is unchanged. */
 const CURRENT_ENTRYPOINT_SHA256 =
-  "0fb628e891a93d570715937a95fc65b82acf14964f00d5de495eeead2138e946";
+  "6a7968b7d456ff6d3f2c5b9d60c7b6046a702603b880093c33b717d9a37c13b1";
 
 const identifiers = Object.freeze({
   discordGuildId: "123456789012345678",

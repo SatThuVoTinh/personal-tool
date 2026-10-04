@@ -68,13 +68,18 @@ async function withPlugin(body) {
     writeFileSync(path.join(dir, "AGENTS.md"), agentInstructions(agentId));
   }
   writeFileSync(paths.identityKey, `${"1".repeat(64)}\n`);
+  const logged = [];
   const plugin = (
     await import(pathToFileURL(path.join(extension, "index.mjs")).href)
   ).default;
   const dispose = plugin.register({
     pluginConfig: { ledgerRoot: paths.root, ownerDiscordId: OWNER },
     on: () => {},
-    logger: { error() {}, warn() {}, info() {} },
+    logger: {
+      error: (m) => logged.push(`ERROR ${m}`),
+      warn: (m) => logged.push(`WARN ${m}`),
+      info: (m) => logged.push(`INFO ${m}`),
+    },
   });
   const native = {
     plugins: {
@@ -87,7 +92,7 @@ async function withPlugin(body) {
     },
   };
   try {
-    return await body({ paths, native });
+    return await body({ paths, native, logged });
   } finally {
     if (typeof dispose === "function") dispose();
     rmSync(root, { recursive: true, force: true });
@@ -219,9 +224,38 @@ const cases = [
   ],
 ];
 
+// Expected diagnostic log fragment per case (null = silence required).
+// Denials must name their reason; allows must name their signal; the
+// heartbeat exemption must stay silent at the ingress layer.
+const expectedLogs = {
+  "untagged-plain": "ingress denied: reason=MISSING_MENTION",
+  "mention-main": "MAIN_DIRECTED: agent=main via mention",
+  "mention-other-bot": "ingress denied: reason=NON_MAIN_DIRECT_INGRESS",
+  "mention-owner-user": "ingress denied: reason=MISSING_MENTION",
+  "reply-main": "MAIN_DIRECTED: agent=main via reply",
+  "reply-other-bot": "ingress denied: reason=MISSING_MENTION",
+  "reply-user": "ingress denied: reason=MISSING_MENTION",
+  "thread-owned": "MAIN_CONVERSATION_CONTINUATION",
+  "thread-foreign": "ingress denied: reason=MISSING_MENTION",
+  "specialist-plain": "ingress denied: reason=NON_MAIN_DIRECT_INGRESS",
+  "specialist-mention-main": "ingress denied: reason=NON_MAIN_DIRECT_INGRESS",
+  "o1-plain": "ingress denied: reason=NON_MAIN_DIRECT_INGRESS",
+  "nonowner-mention": "ingress denied: reason=POLICY_DENIED",
+  "bot-author": "ingress denied: reason=BOT_INGRESS_DENIED",
+  heartbeat: null,
+  "missing-msgid": "ingress denied: reason=LINEAGE_MISMATCH",
+  "bad-msgid": "ingress denied: reason=LINEAGE_MISMATCH",
+  "empty-session": "ingress denied: reason=MISSING_MENTION",
+  // Non-Discord surfaces never enter authenticateIngress: channel check
+  // fails first, so denial happens downstream (inner guard) and stays
+  // silent at the ingress layer. Verdict still DENY, proven above.
+  "webchat-operator": null,
+  "cli-operator": null,
+};
+
 test("R8 matrix: every ingress class reaches its specified verdict", async () => {
   for (const [name, shape, stash, expected] of cases) {
-    await withPlugin(async ({ paths, native }) => {
+    await withPlugin(async ({ paths, native, logged }) => {
       const ctx = base(shape);
       if (stash) {
         const KEY = "__zink_ingress_metadata_r5";
@@ -244,6 +278,23 @@ test("R8 matrix: every ingress class reaches its specified verdict", async () =>
         verdict = "DENY";
       }
       assert.equal(verdict, expected, `${name}: expected ${expected}`);
+      // Diagnostic observability: the verdict must be attributable in logs.
+      const wantLog = expectedLogs[name];
+      const joined = logged.join("\n");
+      if (wantLog === null) {
+        assert.equal(
+          joined.includes("ingress denied:") ||
+            joined.includes("MAIN_DIRECTED") ||
+            joined.includes("MAIN_CONVERSATION_CONTINUATION"),
+          false,
+          `${name}: exempt path must stay silent at ingress`,
+        );
+      } else {
+        assert.ok(
+          joined.includes(wantLog),
+          `${name}: expected log fragment ${JSON.stringify(wantLog)}`,
+        );
+      }
       const after = readSnapshot(paths);
       if (expected === "DENY") {
         // A denied message must not invoke the runtime: no task, no ledger

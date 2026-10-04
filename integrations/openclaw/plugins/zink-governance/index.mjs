@@ -6040,6 +6040,28 @@ export default {
       }
     });
     function authenticateIngress(context) {
+      // M10/T2-R8: ingress verdict observability. Every denial and every
+      // conversational allow is logged with the reason code plus metadata
+      // PRESENCE flags only (counts/booleans — never message content, sender
+      // identity, or secrets), so a future live message can be correlated
+      // end-to-end without guessing which boundary acted. Logging never
+      // alters the verdict: it observes, then the original return stands.
+      const ingressEvidence = () => ({
+        mentions:
+          (Array.isArray(context.mentionedUserIds)
+            ? context.mentionedUserIds.length
+            : 0) +
+          (Array.isArray(context.mentions) ? context.mentions.length : 0),
+        reply: Boolean(context.replyReferenceAuthorId),
+        threadOwner: Boolean(context.threadOwnerId),
+      });
+      const deny = (reason) => {
+        const evidence = ingressEvidence();
+        api.logger?.warn?.(
+          `[zink-governance] ingress denied: reason=${reason} agent=${context.agentId} mentions=${evidence.mentions} reply=${evidence.reply} threadOwner=${evidence.threadOwner} msg=${context.currentMessageId ?? context.messageId}`,
+        );
+        return { allow: false, reason };
+      };
       const isDiscordChannel =
         context.sessionKey?.includes(":discord:") ||
         context.channelId === "discord" ||
@@ -6052,28 +6074,28 @@ export default {
           context.channelId === config.discordOfficeChannelId);
 
       if (!isDiscordChannel || !ids.has(context.agentId))
-        return { allow: false, reason: "POLICY_DENIED" };
+        return deny("POLICY_DENIED");
       // M7-018: verified sender identity precedes owner authorization.
       const senderAuth = isIngressSenderAuthorized(
         context,
         config.ownerDiscordId,
       );
-      if (!senderAuth.ok) return { allow: false, reason: senderAuth.reason };
+      if (!senderAuth.ok) return deny(senderAuth.reason);
       if (context.isBot === true || context.author?.bot === true) {
-        return { allow: false, reason: "BOT_INGRESS_DENIED" };
+        return deny("BOT_INGRESS_DENIED");
       }
       // M10/T2-R5: structured author bot flag from the inbound event (see
       // the sender-authorization gate above for the same rule).
       if (context.authorIsBot === true) {
-        return { allow: false, reason: "BOT_INGRESS_DENIED" };
+        return deny("BOT_INGRESS_DENIED");
       }
       // Direct intake at Discord ingress is strictly Main only (Decision 3 & RC-01).
       if (context.agentId !== "main") {
-        return { allow: false, reason: "NON_MAIN_DIRECT_INGRESS" };
+        return deny("NON_MAIN_DIRECT_INGRESS");
       }
       const msgId = context.currentMessageId ?? context.messageId;
       if (typeof msgId !== "string" || !/^[1-9][0-9]{16,19}$/u.test(msgId)) {
-        return { allow: false, reason: "LINEAGE_MISMATCH" };
+        return deny("LINEAGE_MISMATCH");
       }
       const routing = resolveIngressRouting({
         message: context.message || {
@@ -6113,7 +6135,7 @@ export default {
         });
         if (reply.admitted) {
           api.logger?.info?.(
-            `[zink-governance] ${MAIN_DIRECTED}: agent=main via reply`,
+            `[zink-governance] ${MAIN_DIRECTED}: agent=main via reply msg=${msgId}`,
           );
         } else {
           const continuation = resolveMainConversationAdmission({
@@ -6124,15 +6146,19 @@ export default {
             missingMentionRefusal: missingMention,
           });
           if (!continuation.admitted) {
-            return {
-              allow: false,
-              reason: routing.clarification_reason || "INGRESS_NOT_ADMITTED",
-            };
+            return deny(routing.clarification_reason || "INGRESS_NOT_ADMITTED");
           }
           api.logger?.info?.(
-            `[zink-governance] ${MAIN_CONVERSATION_CONTINUATION}: agent=main`,
+            `[zink-governance] ${MAIN_CONVERSATION_CONTINUATION}: agent=main msg=${msgId}`,
           );
         }
+      } else {
+        // Routing targeted Main directly (structured mention path): record
+        // which signal admitted, so a future live message is attributable
+        // to its evidence rather than to an assumption.
+        api.logger?.info?.(
+          `[zink-governance] ${MAIN_DIRECTED}: agent=main via mention msg=${msgId}`,
+        );
       }
       const identityPath =
         paths.identityKey || path.resolve(paths.root, "../identity.key");
@@ -6162,6 +6188,9 @@ export default {
       // D06: Check snapshot; do not write duplicate WORKFLOW_OPENED event if task already opened
       const currentSnapshot = readSnapshot(paths);
       if (currentSnapshot?.tasks?.[taskId]) {
+        api.logger?.warn?.(
+          `[zink-governance] ingress denied: reason=DUPLICATE_DISCORD_EVENT agent=${context.agentId} msg=${msgId}`,
+        );
         return { allow: false, reason: "DUPLICATE_DISCORD_EVENT" };
       }
       recordWorkflowEvent(paths, "WORKFLOW_OPENED", {
