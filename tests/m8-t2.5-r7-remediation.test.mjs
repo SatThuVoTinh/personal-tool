@@ -554,6 +554,18 @@ test("E: a valid owner Discord ingress run is still admitted and creates its tas
  * invariant is unchanged and still asserted below — a preflight failure mutates
  * nothing and restores nothing.
  */
+/**
+ * M10/T2-R8: the declared post-image an apply must state to be verifiable. A
+ * representative pair, not a wildcard: the contract under test is that the
+ * expectation is DECLARED and compared, not which digests it carries.
+ */
+const EXPECTED_NATIVE_POST_IMAGE = Object.freeze([
+  Object.freeze({
+    relative: "dist/selection-DopzNY3I.js",
+    sha256: "0".repeat(64),
+  }),
+]);
+
 function applyDeps(failAt, overrides = {}) {
   const calls = [];
   const step = (stage, value) => {
@@ -601,10 +613,25 @@ function applyDeps(failAt, overrides = {}) {
     },
     verifyLiveRestore: (snapshot, options) => {
       assert.equal(snapshot, syntheticSnapshot);
-      if (options?.postApply)
-        return step("verifyLiveRestore", { applied: true, unrestored: [] });
+      if (options?.postApply) {
+        // M10/T2-R8: an apply is verified against the DECLARED expectation the
+        // orchestrator passes in, so this stub asserts that contract instead of
+        // hardcoding success: an apply that never declared what the runtime must
+        // look like cannot report PASS.
+        assert.deepEqual(
+          options.expected,
+          EXPECTED_NATIVE_POST_IMAGE,
+          "post-apply verification must be judged against a declared expectation",
+        );
+        return step("verifyLiveRestore", {
+          applied: true,
+          unrestored: [],
+          unverified: [],
+        });
+      }
       return step("verifyLiveRestore", { restored: true, mismatches: [] });
     },
+    expectedNativePostImage: () => EXPECTED_NATIVE_POST_IMAGE,
     restartScopedGateway: () => step("restartScopedGateway"),
     classifyReason: (error) => String(error?.message ?? error),
   };

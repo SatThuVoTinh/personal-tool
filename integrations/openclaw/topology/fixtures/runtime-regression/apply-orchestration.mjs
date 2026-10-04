@@ -197,7 +197,14 @@ export async function applyRuntime(deps) {
     // transaction complete — an unverified apply must not be able to close its
     // own transaction and erase the evidence that it was in flight.
     stage = "runtime-verify";
-    const finalVerdict = deps.verifyLiveRestore(snapshot, { postApply: true });
+    // M10/T2-R8: the expectation is what the runtime must look like AFTER this
+    // apply, not a diff of what happened to change. `verifyLiveRestore` now
+    // fails closed when no expectation is declared, so a self-reported apply
+    // can never license itself.
+    const finalVerdict = deps.verifyLiveRestore(snapshot, {
+      postApply: true,
+      expected: deps.expectedNativePostImage(),
+    });
     if (!finalVerdict?.applied) {
       // The apply returned success but the runtime does not reflect it. Treat
       // this as a failure at or after mutation: roll back and report honestly.

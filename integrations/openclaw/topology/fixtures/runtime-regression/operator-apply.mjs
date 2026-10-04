@@ -18,6 +18,7 @@ import {
   applyNativePatch,
   checkNativePatch,
   inspectNativePatch,
+  nativeRuntimePostImage,
 } from "../../lib/native-patch.mjs";
 import {
   assertNoSymlinkComponents,
@@ -147,8 +148,22 @@ const report = await applyRuntime({
   // R12: the same byte comparison serves both directions. After a rollback it
   // asks "was the preimage restored?"; after a successful apply it asks "did
   // the mutation actually land?". A self-reported apply is not evidence.
+  //
+  // M10/T2-R8: the post-apply direction is no longer satisfied by "some
+  // tracked component changed". It is verified against the expected post-image
+  // the patch contract itself produces for the installed release, so a drifted
+  // or absent patched runtime file fails closed and is named. The expectation
+  // is derived AFTER the patch is applied and before the gateway is restarted,
+  // from the same `inspectNativePatch` that `checkNativePatch` verifies, so it
+  // cannot disagree with the patch that was actually written.
   verifyLiveRestore: (snapshot, options) =>
     verifyLiveRestore({ stateDir, runtimeRoot }, snapshot, options),
+  // M10/T2-R8: the authoritative post-image of every patched runtime file for
+  // the installed release, derived from the patch contract itself. Declaring it
+  // is what makes `applied` mean "the runtime matches the patch" instead of
+  // "something changed". An unverified release throws here, so the apply fails
+  // closed at runtime-verify rather than verifying against a guess.
+  expectedNativePostImage: () => nativeRuntimePostImage(runtimeRoot),
   restartScopedGateway,
   // R16: there is deliberately NO external `openclaw config validate` step here.
   // It used to be wired as a dependency described as an "additional semantic

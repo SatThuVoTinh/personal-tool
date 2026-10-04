@@ -621,6 +621,53 @@ const bridgeContents = () =>
 const bridgeFile = (root) =>
   path.join(root, "dist", "zink-governance-boundary.mjs");
 
+/** The bridge, relative to the runtime root. Part of the patched contract. */
+export const NATIVE_BRIDGE_RELATIVE = "dist/zink-governance-boundary.mjs";
+
+/**
+ * M10/T2-R8: every live runtime file the native patch can rewrite, DERIVED
+ * from the pins themselves rather than maintained by hand.
+ *
+ * The hand-maintained list this replaces named three files while the patch
+ * actually writes four. A runtime file that the patch mutates but that is not
+ * on the list escapes the transaction snapshot entirely, which produced two
+ * false facts in one deployment: `runtime-verify` could not see the only
+ * mutated component and reported the apply unverified, and the rollback
+ * "verified" 39 already-identical files and reported success while the fourth
+ * file was still mutated. Deriving from the pins makes that class
+ * structurally impossible: a new pinned artifact is covered the moment it is
+ * pinned. Frozen so a caller cannot widen the tracked set in place.
+ */
+export function nativePatchedRuntimeRelatives() {
+  const relatives = new Set([NATIVE_BRIDGE_RELATIVE]);
+  for (const pin of Object.values(NATIVE_RUNTIME_PINS))
+    for (const file of Object.keys(pin.sources)) relatives.add(`dist/${file}`);
+  return Object.freeze([...relatives].sort());
+}
+
+/**
+ * The expected post-image of every patched runtime file for the release
+ * installed under `root`, read through the same inspection that verifies the
+ * patch. This is the authoritative "what the runtime must look like after a
+ * successful apply", derived from the patch contract and not from a diff of
+ * what happened to change. An unverified release throws, so the caller fails
+ * closed instead of verifying against a guess.
+ */
+export function nativeRuntimePostImage(root) {
+  const inspection = inspectNativePatch(root);
+  const entries = Object.entries(inspection).map(([file, entry]) => ({
+    relative: `dist/${file}`,
+    sha256: entry.afterDigest,
+  }));
+  entries.push({
+    relative: NATIVE_BRIDGE_RELATIVE,
+    sha256: sha256(bridgeContents()),
+  });
+  return Object.freeze(
+    entries.sort((a, b) => (a.relative < b.relative ? -1 : 1)),
+  );
+}
+
 export function checkNativePatch(root) {
   const inspection = inspectNativePatch(root);
   assertNoLinks(bridgeFile(root));

@@ -178,9 +178,30 @@ const recoveryAuthorization = (overrides = {}) => ({
  * orphan detection are wired to the REAL implementation against a real
  * filesystem, so persistence, integrity and recovery are genuinely exercised.
  */
+/**
+ * M10/T2-R8: the expected post-image for each declared outcome, stated from the
+ * known constants rather than read back from the live tree. `verifyLiveRestore`
+ * refuses to call an apply verified unless the caller declares what the runtime
+ * must look like, so these fixtures state it explicitly.
+ */
+const expectedRuntime = (selection, bridge) => [
+  { relative: "dist/selection-DopzNY3I.js", sha256: sha256(selection) },
+  {
+    relative: "dist/zink-governance-boundary.mjs",
+    sha256: sha256(bridge),
+  },
+];
+const EXPECTED_R10 = expectedRuntime(R10_SELECTION, R10_BRIDGE);
+const EXPECTED_R11 = expectedRuntime("// selection R11\n", "// bridge R11\n");
+
 function harness(
   rt,
-  { failAt = null, orphans = null, liveMutation = mutateToR10 } = {},
+  {
+    failAt = null,
+    orphans = null,
+    liveMutation = mutateToR10,
+    expected = liveMutation === mutateToR11 ? EXPECTED_R11 : EXPECTED_R10,
+  } = {},
 ) {
   const calls = [];
   let restarted = false;
@@ -188,6 +209,7 @@ function harness(
   return {
     calls,
     deps: {
+      expectedNativePostImage: () => expected,
       readIdentifiers: () => ({ guildId: "1" }),
       runBuilder: (mode) => {
         const stage = `builder-${mode.replace(/^--/u, "")}`;

@@ -114,12 +114,22 @@ const persist = (rt, snapshot, extra = {}) =>
 
 /** A harness wired to the real transaction implementation. */
 function harness(rt, { failAt = null, orphans = null } = {}) {
+  // M10/T2-R8: the expected post-image of the R10 outcome, declared from the
+  // known constant. Post-apply verification is judged against this, so a
+  // fixture that never landed the mutation can no longer report PASS.
+  const expected = [
+    {
+      relative: "dist/zink-governance-boundary.mjs",
+      sha256: sha256(R10_BRIDGE),
+    },
+  ];
   const calls = [];
   let restarted = false;
   const record = (name) => calls.push(name);
   return {
     calls,
     deps: {
+      expectedNativePostImage: () => expected,
       readIdentifiers: () => ({ guildId: "1" }),
       runBuilder: (mode) => {
         const stage = `builder-${mode.replace(/^--/u, "")}`;
@@ -175,9 +185,11 @@ function harness(rt, { failAt = null, orphans = null } = {}) {
         return restoreTransactionSnapshot(snapshot);
       },
       verifyLiveRestore: (snapshot, options) => {
+        // M10/T2-R8: post-apply verification is judged against the declared
+        // expectation the orchestrator passes in, never a bare "applied: true".
         if (options?.postApply) {
           record("verify:applied");
-          return { applied: true, unrestored: [] };
+          return verifyLiveRestore(rt, snapshot, options);
         }
         record("rollback:validate");
         return verifyLiveRestore(rt, snapshot, options);

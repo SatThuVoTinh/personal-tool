@@ -43,6 +43,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { nativePatchedRuntimeRelatives } from "./native-patch.mjs";
 
 /**
  * Reported when the apply could not establish a rollback target. Distinct from
@@ -58,6 +59,14 @@ export const RESTORE_UNVERIFIED = "TRANSACTION_RESTORE_UNVERIFIED";
  * Every live path the apply can mutate and rollback must restore, relative to
  * the state directory or the OpenClaw runtime root. Both roots are snapshotted
  * so a partial-root apply is still reversible.
+ *
+ * M10/T2-R8: the runtime list is DERIVED from the native patch pins (plus the
+ * bridge) instead of being a hand-maintained list. The hand-maintained list
+ * named three files while the patch writes four, so the Discord preflight
+ * file was mutated outside transaction tracking: runtime-verify could not see
+ * the only changed component and the rollback reported success with that
+ * component still mutated. Deriving from the pins makes "mutated but
+ * untracked" structurally impossible.
  */
 export const SNAPSHOT_TARGETS = Object.freeze({
   state: Object.freeze([
@@ -67,11 +76,7 @@ export const SNAPSHOT_TARGETS = Object.freeze({
     "extensions/zink-governance/openclaw.plugin.json",
     "extensions/zink-governance/governance-manifests.json",
   ]),
-  runtime: Object.freeze([
-    "dist/selection-DopzNY3I.js",
-    "dist/subagent-announce-Bh1QyKiE.js",
-    "dist/zink-governance-boundary.mjs",
-  ]),
+  runtime: nativePatchedRuntimeRelatives(),
 });
 
 const digest = (body) => createHash("sha256").update(body).digest("hex");
@@ -292,6 +297,23 @@ export function restoreTransactionSnapshot(snapshot) {
  * successful apply changed the runtime. Both are byte comparisons against the
  * same preimage, which is why one implementation can serve both.
  */
+/**
+ * Compare the live runtime against a snapshot.
+ *
+ * Rollback (no `postApply`): `restored` is true only when EVERY tracked
+ * component matches its recorded preimage. Because the tracked set now
+ * includes every file the native patch can rewrite, a leftover mutation is a
+ * named mismatch instead of an invisible success.
+ *
+ * Post-apply: the apply is verified against `options.expected` — the
+ * authoritative post-image derived from the patch contract — rather than
+ * against "did anything change", which reported both false negatives (an
+ * idempotent apply) and false confidence. When `expected` is supplied, every
+ * entry must match live: a drifted or absent component fails closed and is
+ * named in `unverified`. `changed` always names every tracked component that
+ * differs from the preimage, so a mutation verification was not told about is
+ * still surfaced rather than silently absorbed.
+ */
 export function verifyLiveRestore(roots, snapshot, options = {}) {
   void roots;
   verifyTransactionSnapshot(snapshot);
@@ -320,15 +342,37 @@ export function verifyLiveRestore(roots, snapshot, options = {}) {
     )
       mismatches.push(relative);
   }
+  if (options.postApply) {
+    const unverified = [];
+    for (const entry of options.expected ?? []) {
+      try {
+        const absolute = resolveRelative(snapshot, entry.relative);
+        noLinks(absolute);
+        const stat = lstatSync(absolute, { throwIfNoEntry: false });
+        if (!stat || !stat.isFile()) unverified.push(entry.relative);
+        else if (digest(readFileSync(absolute)) !== entry.sha256)
+          unverified.push(entry.relative);
+      } catch {
+        unverified.push(entry.relative);
+      }
+    }
+    // With no declared expectation the apply cannot claim to be verified, so
+    // the caller is forced to state what the runtime must look like.
+    const applied =
+      Array.isArray(options.expected) &&
+      options.expected.length > 0 &&
+      unverified.length === 0;
+    return {
+      applied,
+      unrestored: mismatches.sort(),
+      changed: mismatches.sort(),
+      unverified: unverified.sort(),
+      checked: Object.keys(snapshot.files).length,
+    };
+  }
   // A component whose bytes still equal the preimage was NOT changed by the
   // apply, so a self-reported success that left it untouched is unproven.
   const unchanged = mismatches.length === 0;
-  if (options.postApply)
-    return {
-      applied: !unchanged,
-      unrestored: mismatches.sort(),
-      checked: Object.keys(snapshot.files).length,
-    };
   return {
     restored: unchanged,
     mismatches: mismatches.sort(),

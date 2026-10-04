@@ -547,10 +547,20 @@ test("R18 13: R18 leaves the pinned native patch byte-identical", () => {
   // lineage recognition is pinned by tests/m10-t2-r8-preflight-lineage.test.mjs.
   // The pin therefore moves to the R8-authorized bytes; its purpose as a
   // change detector is unchanged, since the next unreviewed edit still fails.
+  // M10/T2-R8 UPDATE (deployment safety): the patch is intentionally extended
+  // once more, by the canonical derivation of the patched runtime target list
+  // (`nativePatchedRuntimeRelatives`) and the expected post-image
+  // (`nativeRuntimePostImage`). The transaction snapshot now derives its
+  // runtime targets from these pins instead of a hand-maintained list, so no
+  // patched artifact can escape transaction tracking — the proven cause of a
+  // false `APPLY_NOT_VERIFIED` and a false `rollbackSucceeded`. The pin moves
+  // to the R8 Phase-1-authorized bytes; its purpose as a change detector is
+  // unchanged, and the derivation itself is pinned by
+  // tests/m10-t2-r8-deployment-snapshot-safety.test.mjs.
   assert.equal(
     sha256(readFileSync(NATIVE_PATCH_PATH, "utf8")),
-    "a28c1791fa6e311814657d4b1eafcb95055a0893b2b02d282b3cffafd6cdc91f",
-    "native-patch.mjs must equal the R8-authorized bytes; any other drift fails",
+    "da7495e770dcf93bacd835a386b6c58c3335da5bd5c3beb07f5aac0c62cdcac5",
+    "native-patch.mjs must equal the R8 Phase-1-authorized bytes; any other drift fails",
   );
 });
 

@@ -163,17 +163,43 @@ function legacyRollback(rt) {
 }
 
 /**
+ * M10/T2-R8: the post-apply expectation, stated from the known R10 outcome
+ * rather than read back from whatever the live tree happens to contain.
+ * `verifyLiveRestore` now refuses to call an apply verified unless the caller
+ * declares what the runtime must look like, so a fixture that mutated nothing
+ * correctly stops reporting PASS. Declaring it here keeps this suite an honest
+ * test of the new contract instead of a test of the old proxy.
+ */
+function expectedR10Runtime() {
+  return [
+    { relative: "dist/selection-DopzNY3I.js", sha256: sha256(R10_SELECTION) },
+    {
+      relative: "dist/zink-governance-boundary.mjs",
+      sha256: sha256(R10_BRIDGE),
+    },
+  ];
+}
+
+/**
  * An orchestration harness. `failAt` names the stage that throws; `onApply` is
  * the live mutation. Every effect is injected, so no WSL and no live runtime is
  * involved.
  */
-function harness(rt, { failAt = null, liveMutation = mutateToR10 } = {}) {
+function harness(
+  rt,
+  {
+    failAt = null,
+    liveMutation = mutateToR10,
+    expected = expectedR10Runtime(),
+  } = {},
+) {
   const calls = [];
   let restarted = false;
   const record = (name) => calls.push(name);
   return {
     calls,
     deps: {
+      expectedNativePostImage: () => expected,
       readIdentifiers: () => ({ guildId: "1" }),
       runBuilder: (mode) => {
         // `configure.mjs` is invoked as `--preflight` / `--apply`.
@@ -239,9 +265,10 @@ function harness(rt, { failAt = null, liveMutation = mutateToR10 } = {}) {
       },
       verifyLiveRestore: (snapshot, options) => {
         if (options?.postApply) {
-          // The mutation really ran, so the post-apply check passes.
+          // M10/T2-R8: the apply is verified against a DECLARED expectation,
+          // not against "did anything change".
           record("verify:applied");
-          return { applied: true, unrestored: [] };
+          return verifyLiveRestore(rt, snapshot, options);
         }
         record("rollback:validate");
         return verifyLiveRestore(rt, snapshot);
