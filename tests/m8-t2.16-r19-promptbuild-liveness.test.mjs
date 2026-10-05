@@ -495,10 +495,14 @@ test("R19 G: R18's boundary recovery is byte-for-byte unchanged", () => {
     current.includes("GOVERNANCE_CONTEXT_MISSING"),
     "R4's malformed-threadId fail-closed must be present",
   );
+  // M10/T2-R8: R19's four recovery hunks are still required, and the boundary
+  // now carries exactly one further change on top of the R4-authorized bytes —
+  // the blocked-tool-call refusal. The pin moves to those authorized bytes; its
+  // purpose as a change detector is unchanged.
   assert.equal(
     sha(current),
-    "bccfa8616dc89fbb3764d53ad6ea11f5cfbc445bc076e4270f2678c6c1e18c3a",
-    "the boundary must equal the R4-authorized bytes exactly",
+    "cc5b823086c2c205cca9d01bb84b10c1c50710163e255d9962d594971e05b068",
+    "the boundary must equal the R8-authorized bytes exactly",
   );
 });
 

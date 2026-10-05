@@ -257,6 +257,15 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // deployment is unreachable. The new digest is deliberately NOT listed:
     // it is the current build and is accepted by content comparison.
     "d88bff80aeb3d7531e5a0dceba4e7ba856d085e64a87cbb414c9f295284d81e3",
+    // M10/T2-R8: the outgoing build currently deployed, byte-proven against the
+    // live runtime at BOTH governed paths (dist bridge and extension lib) and
+    // cross-checked against the native backup manifest on 2026-10-05. R8 changes
+    // only this file -- the blocked-tool-call reason is no longer handed to the
+    // host, because the host makes it model-visible -- so without this entry
+    // --preflight refuses the deployed extension and the R8 deployment is
+    // unreachable. The R8 digest is deliberately NOT listed: it is the current
+    // build and is accepted by content comparison.
+    "bccfa8616dc89fbb3764d53ad6ea11f5cfbc445bc076e4270f2678c6c1e18c3a",
   ]),
   "lib/runtime.mjs": Object.freeze([
     "6a522c73efacf8b593d63ee55e18b5d02c3675340e0593142a5c2fea8dc6e24a",

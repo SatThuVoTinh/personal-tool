@@ -5,6 +5,18 @@ const registryKey = Symbol.for("zink.governance.native.r12");
 const coordinatorIds = new Set(["main", "o1", "o2"]);
 const installedAgents = new WeakSet();
 
+/**
+ * M10/T2-R8 — the ONLY text a blocked tool call may hand back to the host.
+ *
+ * The host maps a block decision's `reason` to `blockReason` and writes that
+ * into the tool-result the model reads, so whatever sits here is model-visible
+ * and, through the model's own answer, owner-visible. It is therefore a plain
+ * refusal sentence and deliberately NOT a governance identifier: repeating it
+ * back to the owner is truthful and harmless. The canonical reason code stays in
+ * the diagnostic channel and in the ledger.
+ */
+export const POLICY_REFUSAL_TEXT = "Action not permitted by workspace policy.";
+
 function registry() {
   if (!globalThis[registryKey])
     Object.defineProperty(globalThis, registryKey, { value: new Map() });
@@ -102,6 +114,24 @@ async function callGuard(method, event, context, signal) {
 
 export function installNativeToolGate(agent, config, context) {
   if (!resolveGovernance(config).enabled) return;
+  const refuse = (canonical) => {
+    // R8: the host contract turns this return value into the BLOCKED TOOL
+    // RESULT the model reads — `decision.reason` becomes `blockReason`, which
+    // the host puts verbatim into the tool-result text. Proven live: a block
+    // reason reached the model, the model repeated it, and the owner's Discord
+    // reply carried the internal governance code.
+    //
+    // So the model-visible surface gets a deliberate, non-diagnostic refusal and
+    // never a governance identifier. The canonical code and its detail stay in
+    // the diagnostic channel and in the ledger, where a refusal must remain
+    // auditable. This is not a message filter: the code is never handed to the
+    // host in the first place, so it cannot be echoed by the model.
+    console.error(
+      "[zink-native-gate:error] beforeToolCall blocked:",
+      canonical,
+    );
+    return { block: true, reason: POLICY_REFUSAL_TEXT };
+  };
   if (!agent || installedAgents.has(agent))
     throw new Error("GOVERNANCE_GATE_INSTALL_INVALID");
   const trusted = Object.freeze({
@@ -158,7 +188,7 @@ export function installNativeToolGate(agent, config, context) {
         batch.names.includes("sessions_yield") &&
         (batch.names.length !== 1 || !coordinatorIds.has(trusted.agentId))
       )
-        return { block: true, reason: "YIELD_BATCH_DENIED" };
+        return refuse("YIELD_BATCH_DENIED");
       const nativeDecision = await previous?.(event, signal);
       if (nativeDecision?.block) return nativeDecision;
       const decision = await callGuard(
@@ -180,16 +210,16 @@ export function installNativeToolGate(agent, config, context) {
         signal,
       );
       if (decision?.allow !== true) {
-        // A blocked call keeps its canonical reason code when the guard
-        // supplied one. The code is a fixed governance identifier, never
-        // caller data, so surfacing it is safe and makes the refusal
-        // auditable instead of collapsing every denial into one opaque code.
-        const reason =
+        // The canonical reason code is a fixed governance identifier, never
+        // caller data — but it is NOT safe to surface here, because this return
+        // value is model-visible. See `refuse` above. A guard-supplied reason is
+        // recorded as the diagnostic code; the model only ever sees the refusal.
+        const canonical =
           typeof decision?.reason === "string" &&
           /^[A-Z][A-Z0-9_]{0,63}$/u.test(decision.reason)
             ? decision.reason
             : "GOVERNANCE_DENIED";
-        return { block: true, reason };
+        return refuse(canonical);
       }
       if (decision.spawnLabel !== undefined) {
         if (
@@ -217,12 +247,10 @@ export function installNativeToolGate(agent, config, context) {
       }
       return nativeDecision;
     } catch (err) {
-      console.error(
-        "[zink-native-gate:error] beforeToolCall blocked:",
-        err?.message || err,
-      );
-      // Never return exception text: a provider/plugin error may contain input.
-      return { block: true, reason: "GOVERNANCE_UNAVAILABLE" };
+      // Never return exception text: a provider/plugin error may contain input,
+      // and the reason is model-visible. The diagnostic keeps the detail; the
+      // model only ever sees the refusal.
+      return refuse(err?.message || String(err));
     }
   };
   installedAgents.add(agent);

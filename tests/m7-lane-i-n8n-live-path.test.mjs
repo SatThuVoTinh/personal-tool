@@ -4,7 +4,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import governancePlugin from "../integrations/openclaw/plugins/zink-governance/index.mjs";
-import { installNativeToolGate } from "../integrations/openclaw/topology/lib/native-boundary.mjs";
+import {
+  installNativeToolGate,
+  POLICY_REFUSAL_TEXT,
+} from "../integrations/openclaw/topology/lib/native-boundary.mjs";
 import {
   resolveN8nInvocation,
   bindInvocationApproval,
@@ -313,7 +316,7 @@ describe("M7-006 — the live n8n path enforces the canonical controls", () => {
       assert.equal(decision.block, true);
       assert.equal(
         decision.reason,
-        "RUNTIME_CAPABILITY_MISMATCH",
+        POLICY_REFUSAL_TEXT,
         "an unregistered workflow id must be a capability mismatch",
       );
     } finally {
@@ -331,7 +334,7 @@ describe("M7-006 — the live n8n path enforces the canonical controls", () => {
         assert.equal(decision.block, true, `${id} must be refused`);
         assert.equal(
           decision.reason,
-          "AUTH_APPROVAL_REQUIRED",
+          POLICY_REFUSAL_TEXT,
           `${id} must require a bound approval`,
         );
       }
@@ -355,7 +358,7 @@ describe("M7-006 — the live n8n path enforces the canonical controls", () => {
           SIGNAL,
         );
         assert.equal(decision.block, true, approvalId);
-        assert.equal(decision.reason, "AUTH_APPROVAL_INVALID", approvalId);
+        assert.equal(decision.reason, POLICY_REFUSAL_TEXT, approvalId);
       }
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -379,8 +382,12 @@ describe("M7-006 — the live n8n path enforces the canonical controls", () => {
         liveCall("data_plant_ingest"),
         SIGNAL,
       );
+      // The refusal is unchanged; the reason the host receives is NOT. M10/T2-R8:
+      // the host writes a block reason into the tool result the MODEL reads, so
+      // the model-visible reason is a plain refusal and the canonical
+      // AUTH_DELEGATION_NOT_FOUND code stays in the diagnostic channel.
       assert.equal(decision.block, true);
-      assert.equal(decision.reason, "AUTH_DELEGATION_NOT_FOUND");
+      assert.equal(decision.reason, POLICY_REFUSAL_TEXT);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -415,7 +422,7 @@ describe("M7-006 — the live n8n path enforces the canonical controls", () => {
           SIGNAL,
         );
         assert.equal(decision.block, true, `${sessionKey}/${runId}`);
-        assert.equal(decision.reason, "AUTH_DELEGATION_NOT_FOUND");
+        assert.equal(decision.reason, POLICY_REFUSAL_TEXT);
       }
     } finally {
       rmSync(root, { recursive: true, force: true });

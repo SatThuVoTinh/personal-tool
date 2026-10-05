@@ -36,6 +36,104 @@ const R5_NATIVE_BOUNDARY_SHA256 =
 // what proves the derivation is exact, so a missed hunk fails loudly rather than
 // silently weakening the allowlist test.
 const POST_R5_HUNKS = [
+  // M10/T2-R8: the model-visible block reason is a refusal sentence, never a
+  // governance identifier. Proven live: the host copies a block decision's
+  // `reason` into the tool result the MODEL reads, the model repeated it, and
+  // the owner's Discord reply carried the internal code. Reverting this hunk
+  // restores the R6 body that leaked.
+  [
+    `
+/**
+ * M10/T2-R8 — the ONLY text a blocked tool call may hand back to the host.
+ *
+ * The host maps a block decision's \`reason\` to \`blockReason\` and writes that
+ * into the tool-result the model reads, so whatever sits here is model-visible
+ * and, through the model's own answer, owner-visible. It is therefore a plain
+ * refusal sentence and deliberately NOT a governance identifier: repeating it
+ * back to the owner is truthful and harmless. The canonical reason code stays in
+ * the diagnostic channel and in the ledger.
+ */
+export const POLICY_REFUSAL_TEXT = "Action not permitted by workspace policy.";
+`,
+    ``,
+  ],
+  // M10/T2-R8: the single refusal helper, so every block site logs its canonical
+  // code and returns the same model-visible text.
+  [
+    `  const refuse = (canonical) => {
+    // R8: the host contract turns this return value into the BLOCKED TOOL
+    // RESULT the model reads — \`decision.reason\` becomes \`blockReason\`, which
+    // the host puts verbatim into the tool-result text. Proven live: a block
+    // reason reached the model, the model repeated it, and the owner's Discord
+    // reply carried the internal governance code.
+    //
+    // So the model-visible surface gets a deliberate, non-diagnostic refusal and
+    // never a governance identifier. The canonical code and its detail stay in
+    // the diagnostic channel and in the ledger, where a refusal must remain
+    // auditable. This is not a message filter: the code is never handed to the
+    // host in the first place, so it cannot be echoed by the model.
+    console.error(
+      "[zink-native-gate:error] beforeToolCall blocked:",
+      canonical,
+    );
+    return { block: true, reason: POLICY_REFUSAL_TEXT };
+  };
+`,
+    ``,
+  ],
+  // M10/T2-R8: the yield batch refusal keeps its canonical code in diagnostics.
+  [
+    `        return refuse("YIELD_BATCH_DENIED");`,
+    `        return { block: true, reason: "YIELD_BATCH_DENIED" };`,
+  ],
+  // M10/T2-R8: a guard denial records its canonical code instead of surfacing it.
+  [
+    `      if (decision?.allow !== true) {
+        // The canonical reason code is a fixed governance identifier, never
+        // caller data — but it is NOT safe to surface here, because this return
+        // value is model-visible. See \`refuse\` above. A guard-supplied reason is
+        // recorded as the diagnostic code; the model only ever sees the refusal.
+        const canonical =
+          typeof decision?.reason === "string" &&
+          /^[A-Z][A-Z0-9_]{0,63}$/u.test(decision.reason)
+            ? decision.reason
+            : "GOVERNANCE_DENIED";
+        return refuse(canonical);
+      }
+`,
+    `      if (decision?.allow !== true) {
+        // A blocked call keeps its canonical reason code when the guard
+        // supplied one. The code is a fixed governance identifier, never
+        // caller data, so surfacing it is safe and makes the refusal
+        // auditable instead of collapsing every denial into one opaque code.
+        const reason =
+          typeof decision?.reason === "string" &&
+          /^[A-Z][A-Z0-9_]{0,63}$/u.test(decision.reason)
+            ? decision.reason
+            : "GOVERNANCE_DENIED";
+        return { block: true, reason };
+      }
+`,
+  ],
+  // M10/T2-R8: the failure path keeps its detail in diagnostics only.
+  [
+    `    } catch (err) {
+      // Never return exception text: a provider/plugin error may contain input,
+      // and the reason is model-visible. The diagnostic keeps the detail; the
+      // model only ever sees the refusal.
+      return refuse(err?.message || String(err));
+    }
+`,
+    `    } catch (err) {
+      console.error(
+        "[zink-native-gate:error] beforeToolCall blocked:",
+        err?.message || err,
+      );
+      // Never return exception text: a provider/plugin error may contain input.
+      return { block: true, reason: "GOVERNANCE_UNAVAILABLE" };
+    }
+`,
+  ],
   // R7 G2: cause preservation + diagnostic logging.
   [
     `  } catch (error) {

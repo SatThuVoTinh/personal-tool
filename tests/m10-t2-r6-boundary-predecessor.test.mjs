@@ -33,9 +33,20 @@ const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 const HYGIENE_BOUNDARY_SHA256 =
   "d88bff80aeb3d7531e5a0dceba4e7ba856d085e64a87cbb414c9f295284d81e3";
 
-/** The R5/R6 candidate build. Deliberately NOT listed (content comparison). */
+/**
+ * M10/T2-R8: the outgoing build, live at BOTH governed paths before the R8
+ * deployment. Now listed so --preflight admits the deployed extension.
+ */
 const CANDIDATE_BOUNDARY_SHA256 =
+  "cc5b823086c2c205cca9d01bb84b10c1c50710163e255d9962d594971e05b068";
+
+/** The build R8 replaces; listed as an approved predecessor. */
+const R6_BOUNDARY_SHA256 =
   "bccfa8616dc89fbb3764d53ad6ea11f5cfbc445bc076e4270f2678c6c1e18c3a";
+assert.ok(
+  CONFIGURE_SOURCE.includes(R6_BOUNDARY_SHA256),
+  "the outgoing R6 build must remain an admitted predecessor",
+);
 
 /** The commit whose packaged boundary reproduces the live digest. */
 const HYGIENE_SOURCE_COMMIT = "980b36e";

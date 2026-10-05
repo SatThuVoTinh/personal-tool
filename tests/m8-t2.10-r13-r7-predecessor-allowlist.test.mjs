@@ -67,9 +67,19 @@ const R5_NATIVE_BOUNDARY_SHA256 =
 const R5_ENTRYPOINT_SHA256 =
   "e77689c94ba066bd854549750044f78dcf9d97cc3de73420893851c0a800b10a";
 
-/** The CURRENT build digests (M10/T2-R5). NOT listed. */
+/**
+ * The CURRENT build digests. M10/T2-R8: the blocked-tool-call reason is no
+ * longer handed to the host, so the model can never read a governance
+ * identifier. The outgoing R6 build is now listed as a recognized predecessor.
+ */
 const R10_NATIVE_BOUNDARY_SHA256 =
+  "cc5b823086c2c205cca9d01bb84b10c1c50710163e255d9962d594971e05b068";
+const R6_OUTGOING_NATIVE_BOUNDARY_SHA256 =
   "bccfa8616dc89fbb3764d53ad6ea11f5cfbc445bc076e4270f2678c6c1e18c3a";
+assert.ok(
+  CONFIGURE_SOURCE.includes(R6_OUTGOING_NATIVE_BOUNDARY_SHA256),
+  "the outgoing R6 boundary must remain an admitted predecessor",
+);
 /**
  * The CURRENT packaged entrypoint, after ingress verdict observability
  * (denial reasons + allow signals logged; verdicts unchanged). Updated
@@ -1013,6 +1023,98 @@ export function readZinkIngressMetadata(messageId) {
         authorIsBot: context.isBot === true || ingress.authorIsBot,
 `,
       ``,
+    ],
+    // M10/T2-R8: the model-visible block reason is a refusal sentence. Proven
+    // live: the host copies a block decision's `reason` into the tool result the
+    // MODEL reads, the model repeated it, and the owner's Discord reply carried
+    // the internal code. Reverting these reproduces the R5 body exactly.
+    [
+      `
+/**
+ * M10/T2-R8 — the ONLY text a blocked tool call may hand back to the host.
+ *
+ * The host maps a block decision's \`reason\` to \`blockReason\` and writes that
+ * into the tool-result the model reads, so whatever sits here is model-visible
+ * and, through the model's own answer, owner-visible. It is therefore a plain
+ * refusal sentence and deliberately NOT a governance identifier: repeating it
+ * back to the owner is truthful and harmless. The canonical reason code stays in
+ * the diagnostic channel and in the ledger.
+ */
+export const POLICY_REFUSAL_TEXT = "Action not permitted by workspace policy.";
+`,
+      ``,
+    ],
+    [
+      `  const refuse = (canonical) => {
+    // R8: the host contract turns this return value into the BLOCKED TOOL
+    // RESULT the model reads — \`decision.reason\` becomes \`blockReason\`, which
+    // the host puts verbatim into the tool-result text. Proven live: a block
+    // reason reached the model, the model repeated it, and the owner's Discord
+    // reply carried the internal governance code.
+    //
+    // So the model-visible surface gets a deliberate, non-diagnostic refusal and
+    // never a governance identifier. The canonical code and its detail stay in
+    // the diagnostic channel and in the ledger, where a refusal must remain
+    // auditable. This is not a message filter: the code is never handed to the
+    // host in the first place, so it cannot be echoed by the model.
+    console.error(
+      "[zink-native-gate:error] beforeToolCall blocked:",
+      canonical,
+    );
+    return { block: true, reason: POLICY_REFUSAL_TEXT };
+  };
+`,
+      ``,
+    ],
+    [
+      `        return refuse("YIELD_BATCH_DENIED");`,
+      `        return { block: true, reason: "YIELD_BATCH_DENIED" };`,
+    ],
+    [
+      `      if (decision?.allow !== true) {
+        // The canonical reason code is a fixed governance identifier, never
+        // caller data — but it is NOT safe to surface here, because this return
+        // value is model-visible. See \`refuse\` above. A guard-supplied reason is
+        // recorded as the diagnostic code; the model only ever sees the refusal.
+        const canonical =
+          typeof decision?.reason === "string" &&
+          /^[A-Z][A-Z0-9_]{0,63}$/u.test(decision.reason)
+            ? decision.reason
+            : "GOVERNANCE_DENIED";
+        return refuse(canonical);
+      }
+`,
+      `      if (decision?.allow !== true) {
+        // A blocked call keeps its canonical reason code when the guard
+        // supplied one. The code is a fixed governance identifier, never
+        // caller data, so surfacing it is safe and makes the refusal
+        // auditable instead of collapsing every denial into one opaque code.
+        const reason =
+          typeof decision?.reason === "string" &&
+          /^[A-Z][A-Z0-9_]{0,63}$/u.test(decision.reason)
+            ? decision.reason
+            : "GOVERNANCE_DENIED";
+        return { block: true, reason };
+      }
+`,
+    ],
+    [
+      `    } catch (err) {
+      // Never return exception text: a provider/plugin error may contain input,
+      // and the reason is model-visible. The diagnostic keeps the detail; the
+      // model only ever sees the refusal.
+      return refuse(err?.message || String(err));
+    }
+`,
+      `    } catch (err) {
+      console.error(
+        "[zink-native-gate:error] beforeToolCall blocked:",
+        err?.message || err,
+      );
+      // Never return exception text: a provider/plugin error may contain input.
+      return { block: true, reason: "GOVERNANCE_UNAVAILABLE" };
+    }
+`,
     ],
   ];
   let derived = readFileSync(BOUNDARY, "utf8");
