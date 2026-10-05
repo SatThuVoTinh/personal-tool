@@ -573,7 +573,7 @@ test("R18 13: R18 leaves the pinned native patch byte-identical", () => {
   // tests/m10-t2-r8-preflight-lineage.test.mjs.
   assert.equal(
     sha256(readFileSync(NATIVE_PATCH_PATH, "utf8")),
-    "0d9621c59a101643590d63d75e8fbfb99c7c19f5d3d1e8894ae747a7579e6bb2",
+    "b81b006a3832620a28d626f806d150dac837c99c7c117579bf3cb7da3d81e6c3",
     "native-patch.mjs must equal the R8-stderr-grounded-authorized bytes; any other drift fails",
   );
 });

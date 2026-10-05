@@ -115,10 +115,21 @@ test("R8 0: provenance parity — the R5 digest is admitted in BOTH per-mode ent
   );
 });
 
-test("R8 0b: the R8 candidate digest is NOT listed anywhere", () => {
-  assert.equal(
+test("R8 0b: the R8 candidate is now the OUTGOING build and IS listed", () => {
+  // M10/T2-R8: 6a7968b7 was the current build while R8 observability was being
+  // prepared, so it was deliberately absent. It has since been DEPLOYED, which
+  // makes it the outgoing predecessor: the next authorized deployment changes
+  // the entrypoint again, so --preflight must be able to admit it. Its presence
+  // in the list is now required, in BOTH per-mode lists.
+  assert.ok(
     CONFIGURE_SOURCE.includes(R8_CANDIDATE_ENTRYPOINT_SHA256),
-    false,
-    "6a7968b7 is the current build and must not be allowlisted",
+    "the deployed R8 entrypoint must remain an admitted predecessor",
+  );
+  const occurrences =
+    CONFIGURE_SOURCE.split(R8_CANDIDATE_ENTRYPOINT_SHA256).length - 1;
+  assert.equal(
+    occurrences,
+    2,
+    "both per-mode entrypoint lists must admit it, so the modes cannot diverge",
   );
 });

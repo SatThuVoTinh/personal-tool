@@ -38,7 +38,7 @@ const HYGIENE_BOUNDARY_SHA256 =
  * deployment. Now listed so --preflight admits the deployed extension.
  */
 const CANDIDATE_BOUNDARY_SHA256 =
-  "cc5b823086c2c205cca9d01bb84b10c1c50710163e255d9962d594971e05b068";
+  "9e73518583006c0b9c5f8cc058e3bbd10e4749c2004aa9a4204ef226452f842a";
 
 /** The build R8 replaces; listed as an approved predecessor. */
 const R6_BOUNDARY_SHA256 =

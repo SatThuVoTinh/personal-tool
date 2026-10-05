@@ -63,15 +63,25 @@ const MAIN_BOT = DISCORD_BOT_IDS.main;
 // them across tests sharing one process.
 const MID_R4_A1 = "1545430000000000201";
 
-/** Seed inbound metadata through the REAL preflight injection snippet. */
+/**
+ * Seed inbound metadata through the REAL preflight injection snippet.
+ *
+ * M10/T2-R8: the injection awaits the preflight intake gate and the host
+ * function it lives in is `async`, so the harness must be async too. The route
+ * is Main on purpose — these fixtures exercise ingress metadata and Main-owned
+ * conversation admission, so the gate admits and the injection runs fully.
+ */
 function seedIngress({ messageId, threadOwnerId } = {}) {
-  const factory = new Function(
+  const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
+  const factory = new AsyncFunction(
     "message",
     "threadOwnerId",
     "globalThis",
+    "effectiveRoute",
+    "resolvedAccountId",
     DISCORD_PREFLIGHT_INJECTION,
   );
-  factory(
+  return factory(
     {
       id: messageId,
       content: "hello",
@@ -84,6 +94,8 @@ function seedIngress({ messageId, threadOwnerId } = {}) {
     },
     threadOwnerId ?? null,
     globalThis,
+    { agentId: "main" },
+    "acct-main",
   );
 }
 
@@ -274,10 +286,14 @@ test("R4 N3: exactly one selection predecessor slot, R10 -> R5", async () => {
   );
   // The selection slot itself must be the ONLY descriptor that supersedes the
   // selection patch: a second slot reaching the same artifact would make the
-  // forward transition ambiguous.
+  // forward transition ambiguous. Matched on the region's own invocation, not
+  // the bare symbol name — M10/T2-R8 prose in the preflight seam also mentions
+  // `enterNativeRun`, and a prose mention is not a slot on the selection region.
   const selectionSupersedes = new Set(
     Object.values(table)
-      .filter((entry) => entry.supersedes.includes("enterNativeRun"))
+      .filter((entry) =>
+        entry.supersedes.includes("await enterNativeRun(params.config"),
+      )
       .map((entry) => entry.supersedes),
   );
   assert.equal(

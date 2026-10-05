@@ -266,6 +266,14 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // unreachable. The R8 digest is deliberately NOT listed: it is the current
     // build and is accepted by content comparison.
     "bccfa8616dc89fbb3764d53ad6ea11f5cfbc445bc076e4270f2678c6c1e18c3a",
+    // M10/T2-R8: the outgoing build currently deployed, byte-proven at BOTH
+    // governed paths (dist bridge and extension lib) and cross-checked against
+    // the native backup manifest before this deployment. R8 changes this file
+    // again -- it publishes the canonical preflight intake predicate and carries
+    // the blocked-tool-call refusal -- so without this entry --preflight refuses
+    // the deployed extension and the deployment is unreachable. The new digest
+    // is deliberately NOT listed: it is the current build.
+    "cc5b823086c2c205cca9d01bb84b10c1c50710163e255d9962d594971e05b068",
   ]),
   "lib/runtime.mjs": Object.freeze([
     "6a522c73efacf8b593d63ee55e18b5d02c3675340e0593142a5c2fea8dc6e24a",
@@ -802,6 +810,16 @@ async function main() {
       // is reachable. The new digest is deliberately NOT listed: it is the current
       // build and is accepted by content comparison.
       "a3dbf945deae82c1c07b419d6f1af1724f70a336c88331d4a772dfc93420ab92",
+      // M10/T2-R8: the outgoing entrypoint currently deployed (R8 ingress
+      // admission build), byte-proven against the live runtime at this exact
+      // path before the duplicate-ordering and preflight-seam deployment. This
+      // build changed the entrypoint — the duplicate check now precedes the
+      // admission signal, and the pure preflight intake predicate was added — so
+      // without this entry --preflight refuses the deployed extension and the
+      // deployment is unreachable. The new digest is deliberately NOT listed: it
+      // is the current build and is accepted by content comparison. Listed in
+      // BOTH per-mode lists so the two modes cannot diverge.
+      "6a7968b7d456ff6d3f2c5b9d60c7b6046a702603b880093c33b717d9a37c13b1",
       // Handoff-semantics remediation: the outgoing functional-truth entrypoint,
       // byte-proven as the packaged build before RELEASED_TO_COORDINATOR was
       // withdrawn (a Discord POST is not an accepted handoff), before the
@@ -1059,6 +1077,16 @@ async function main() {
       // current-build digest is deliberately NOT listed: it is accepted by
       // content comparison.
       "a3dbf945deae82c1c07b419d6f1af1724f70a336c88331d4a772dfc93420ab92",
+      // M10/T2-R8: the outgoing entrypoint currently deployed (R8 ingress
+      // admission build), byte-proven against the live runtime at this exact
+      // path before the duplicate-ordering and preflight-seam deployment. This
+      // build changed the entrypoint — the duplicate check now precedes the
+      // admission signal, and the pure preflight intake predicate was added — so
+      // without this entry --preflight refuses the deployed extension and the
+      // deployment is unreachable. The new digest is deliberately NOT listed: it
+      // is the current build and is accepted by content comparison. Listed in
+      // BOTH per-mode lists so the two modes cannot diverge.
+      "6a7968b7d456ff6d3f2c5b9d60c7b6046a702603b880093c33b717d9a37c13b1",
       "118db9a746a0757dbea2d15c5d8d9585a298a1ca0d235a6b13a3a8513fb2bcac",
       "4bb0c1e12b4116340fb80f9cc136082200c7506fa691623bc922414f0bd92845",
       "36ed858c74dd09423d0afc74ff2fc8eb589843f163fb8ffccf8bcc912f097ce9",

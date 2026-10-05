@@ -36,6 +36,66 @@ const R5_NATIVE_BOUNDARY_SHA256 =
 // what proves the derivation is exact, so a missed hunk fails loudly rather than
 // silently weakening the allowlist test.
 const POST_R5_HUNKS = [
+  // M10/T2-R8: the Discord preflight seam reaches the canonical intake
+  // predicate through one published global.
+  [
+    `const registryKey = Symbol.for("zink.governance.native.r12");
+// M10/T2-R8: the Discord preflight seam reaches the canonical intake predicate
+// through this global. Published only while a guard is registered.
+const preflightIngressKey = Symbol.for(
+  "zink.governance.native.preflightIngress",
+);`,
+    `const registryKey = Symbol.for("zink.governance.native.r12");`,
+  ],
+  // M10/T2-R8: the pure preflight intake predicate on the registry entry.
+  [
+    `    beforeToolCall: guard.beforeToolCall.bind(guard),
+    beforeAnnounce: guard.beforeAnnounce.bind(guard),
+    // M10/T2-R8: the PURE direct-intake predicate, evaluated at the Discord
+    // preflight seam so a direct specialist mention never creates a host run at
+    // all. Side-effect free: it decides, it never writes the ledger.
+    beforePreflightIngress:
+      typeof guard.beforePreflightIngress === "function"
+        ? guard.beforePreflightIngress.bind(guard)
+        : undefined,`,
+    `    beforeToolCall: guard.beforeToolCall.bind(guard),
+    beforeAnnounce: guard.beforeAnnounce.bind(guard),`,
+  ],
+  // M10/T2-R8: publishing the seam, and its deliberate "absent is not a deny".
+  [
+    `  registry().set(scope, entry);
+  publishPreflightIngress(entry);
+  return () => {
+    if (registry().get(scope) === entry) registry().delete(scope);
+  };
+}
+
+/**
+ * M10/T2-R8 — the global the Discord preflight injection calls.
+ *
+ * The preflight runs inside the host's channel bundle, which never imports this
+ * module, so the seam is reached through one published global instead of a
+ * duplicated import or a second copy of the policy. The caller passes the SAME
+ * scope string \`resolveGovernance\` derives from the host config, so there is one
+ * registry and one policy, not two.
+ *
+ * ABSENT PREDICATE IS NOT A DENY. If governance never registered — the plugin
+ * has not loaded, or a build predates this seam — the preflight must not invent
+ * an admission decision. It returns null and the late \`enterNativeRun\` gate
+ * still governs the run, so enforcement is unchanged and only the timing is lost.
+ */
+function publishPreflightIngress(entry) {
+  if (entry.beforePreflightIngress) {
+    globalThis[preflightIngressKey] = (input) =>
+      entry.beforePreflightIngress(input);
+  }
+}`,
+    `  registry().set(scope, entry);
+  return () => {
+    if (registry().get(scope) === entry) registry().delete(scope);
+  };
+}`,
+  ],
   // M10/T2-R8: the model-visible block reason is a refusal sentence, never a
   // governance identifier. Proven live: the host copies a block decision's
   // `reason` into the tool result the MODEL reads, the model repeated it, and

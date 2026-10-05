@@ -73,7 +73,7 @@ const R5_ENTRYPOINT_SHA256 =
  * identifier. The outgoing R6 build is now listed as a recognized predecessor.
  */
 const R10_NATIVE_BOUNDARY_SHA256 =
-  "cc5b823086c2c205cca9d01bb84b10c1c50710163e255d9962d594971e05b068";
+  "9e73518583006c0b9c5f8cc058e3bbd10e4749c2004aa9a4204ef226452f842a";
 const R6_OUTGOING_NATIVE_BOUNDARY_SHA256 =
   "bccfa8616dc89fbb3764d53ad6ea11f5cfbc445bc076e4270f2678c6c1e18c3a";
 assert.ok(
@@ -86,8 +86,19 @@ assert.ok(
  * from 0fb628e8… exactly as prior revisions moved their pins when the
  * entrypoint changed. NOT listed.
  */
+/**
+ * M10/T2-R8: the CURRENT entrypoint. Duplicate detection now precedes the
+ * admission signal, and the pure preflight intake predicate was added.
+ */
 const R10_ENTRYPOINT_SHA256 =
+  "f4ed9d9c54ccf486a30425b98a549cab5aebbbe8e9ee7f2d32bfc6795598c4a3";
+/** The outgoing entrypoint this deployment replaces; now listed. */
+const R8_OUTGOING_ENTRYPOINT_SHA256 =
   "6a7968b7d456ff6d3f2c5b9d60c7b6046a702603b880093c33b717d9a37c13b1";
+assert.ok(
+  CONFIGURE_SOURCE.includes(R8_OUTGOING_ENTRYPOINT_SHA256),
+  "the outgoing R8 entrypoint must remain an admitted predecessor in BOTH modes",
+);
 
 /**
  * The outgoing entrypoint before the coordinator execution-authority
@@ -1023,6 +1034,66 @@ export function readZinkIngressMetadata(messageId) {
         authorIsBot: context.isBot === true || ingress.authorIsBot,
 `,
       ``,
+    ],
+    // M10/T2-R8: the Discord preflight seam reaches the canonical intake
+    // predicate through one published global.
+    [
+      `const registryKey = Symbol.for("zink.governance.native.r12");
+// M10/T2-R8: the Discord preflight seam reaches the canonical intake predicate
+// through this global. Published only while a guard is registered.
+const preflightIngressKey = Symbol.for(
+  "zink.governance.native.preflightIngress",
+);`,
+      `const registryKey = Symbol.for("zink.governance.native.r12");`,
+    ],
+    // M10/T2-R8: the pure preflight intake predicate on the registry entry.
+    [
+      `    beforeToolCall: guard.beforeToolCall.bind(guard),
+    beforeAnnounce: guard.beforeAnnounce.bind(guard),
+    // M10/T2-R8: the PURE direct-intake predicate, evaluated at the Discord
+    // preflight seam so a direct specialist mention never creates a host run at
+    // all. Side-effect free: it decides, it never writes the ledger.
+    beforePreflightIngress:
+      typeof guard.beforePreflightIngress === "function"
+        ? guard.beforePreflightIngress.bind(guard)
+        : undefined,`,
+      `    beforeToolCall: guard.beforeToolCall.bind(guard),
+    beforeAnnounce: guard.beforeAnnounce.bind(guard),`,
+    ],
+    // M10/T2-R8: publishing the seam, and its deliberate "absent is not a deny".
+    [
+      `  registry().set(scope, entry);
+  publishPreflightIngress(entry);
+  return () => {
+    if (registry().get(scope) === entry) registry().delete(scope);
+  };
+}
+
+/**
+ * M10/T2-R8 — the global the Discord preflight injection calls.
+ *
+ * The preflight runs inside the host's channel bundle, which never imports this
+ * module, so the seam is reached through one published global instead of a
+ * duplicated import or a second copy of the policy. The caller passes the SAME
+ * scope string \`resolveGovernance\` derives from the host config, so there is one
+ * registry and one policy, not two.
+ *
+ * ABSENT PREDICATE IS NOT A DENY. If governance never registered — the plugin
+ * has not loaded, or a build predates this seam — the preflight must not invent
+ * an admission decision. It returns null and the late \`enterNativeRun\` gate
+ * still governs the run, so enforcement is unchanged and only the timing is lost.
+ */
+function publishPreflightIngress(entry) {
+  if (entry.beforePreflightIngress) {
+    globalThis[preflightIngressKey] = (input) =>
+      entry.beforePreflightIngress(input);
+  }
+}`,
+      `  registry().set(scope, entry);
+  return () => {
+    if (registry().get(scope) === entry) registry().delete(scope);
+  };
+}`,
     ],
     // M10/T2-R8: the model-visible block reason is a refusal sentence. Proven
     // live: the host copies a block decision's `reason` into the tool result the

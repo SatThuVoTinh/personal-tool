@@ -501,7 +501,7 @@ test("R19 G: R18's boundary recovery is byte-for-byte unchanged", () => {
   // purpose as a change detector is unchanged.
   assert.equal(
     sha(current),
-    "cc5b823086c2c205cca9d01bb84b10c1c50710163e255d9962d594971e05b068",
+    "9e73518583006c0b9c5f8cc058e3bbd10e4749c2004aa9a4204ef226452f842a",
     "the boundary must equal the R8-authorized bytes exactly",
   );
 });

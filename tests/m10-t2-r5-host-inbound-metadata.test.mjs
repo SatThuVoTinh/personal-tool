@@ -69,15 +69,34 @@ const THREAD_OTHER = "1545430000000000002";
 const MSG = "1545430000000000009";
 const MSG_OTHER = "1545430000000000019";
 
-/** Run the REAL preflight injection snippet in a synthetic host scope. */
-function runPreflightInjection({ message, threadOwnerId } = {}) {
-  const factory = new Function(
+/**
+ * Run the REAL preflight injection snippet in a synthetic host scope.
+ *
+ * M10/T2-R8: the injection awaits the preflight intake gate and the host
+ * function it lives in is `async`, so the harness must be async too.
+ */
+async function runPreflightInjection({
+  message,
+  threadOwnerId,
+  effectiveRoute,
+  resolvedAccountId,
+} = {}) {
+  const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
+  const factory = new AsyncFunction(
     "message",
     "threadOwnerId",
     "globalThis",
+    "effectiveRoute",
+    "resolvedAccountId",
     DISCORD_PREFLIGHT_INJECTION,
   );
-  factory(message, threadOwnerId, globalThis);
+  return await factory(
+    message,
+    threadOwnerId,
+    globalThis,
+    effectiveRoute,
+    resolvedAccountId,
+  );
 }
 
 /** discord.js-shaped message with structured metadata. Deny-by-default:
@@ -417,9 +436,15 @@ const admissionContext = (overrides = {}) => ({
 
 /** Seed inbound metadata through the REAL preflight injection. */
 function seedIngress({ messageId, message, threadOwnerId } = {}) {
-  runPreflightInjection({
+  // These fixtures exercise INGRESS METADATA, not the intake decision, so the
+  // route is Main: the gate must admit and the injection must run to completion.
+  // With no route at all the gate is skipped entirely, which would make every
+  // R5 assertion pass vacuously.
+  return runPreflightInjection({
     message: discordMessage({ id: messageId, ...message }),
     threadOwnerId: threadOwnerId ?? null,
+    effectiveRoute: { agentId: "main" },
+    resolvedAccountId: "acct-main",
   });
 }
 
@@ -688,10 +713,13 @@ test("R5 L1: exactly one selection predecessor slot, R10 -> R5", () => {
       `${artifact}: a slot must declare a real, distinct superseded region`,
     );
   }
-  // Exactly one slot may target the selection injection region.
+  // Exactly one slot may target the SELECTION injection region. Matched on the
+  // region's own invocation, not the bare symbol name: M10/T2-R8 prose in the
+  // preflight seam also mentions `enterNativeRun`, and a prose mention must not
+  // be mistaken for a second slot on the selection region.
   assert.equal(
     Object.values(table).filter((entry) =>
-      entry.supersedes.includes("enterNativeRun"),
+      entry.supersedes.includes("await enterNativeRun(params.config"),
     ).length,
     1,
   );

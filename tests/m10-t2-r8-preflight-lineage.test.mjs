@@ -26,6 +26,7 @@ import {
   DISCORD_PREFLIGHT_INJECTION_R8_DIAGNOSTICS_HARDENED,
   DISCORD_PREFLIGHT_INJECTION_R8_UNION,
   NATIVE_DISCORD_CHANNEL_RELATIVE,
+  NATIVE_PATCH_PREDECESSORS,
   NATIVE_RUNTIME_PINS,
   transformNativeSource,
 } from "../integrations/openclaw/topology/lib/native-patch.mjs";
@@ -33,6 +34,8 @@ import {
 const VERSION = "2026.6.34";
 const CHANNEL_FILE = "message-handler.preflight-CbD0u7U7.js";
 const DEAD_FILE = "message-handler.preflight-C1XBiefW.js";
+/** A string that exists ONLY inside the retired runtime-root chain's region. */
+const selectionOnlyMarker = "zink_ingress_metadata_r5";
 
 // The live channel package is WSL-side. Read it through a UNC path so the pins
 // run on Windows hosts that can reach the distro, and skip cleanly where they
@@ -89,6 +92,33 @@ test("R8 L0: the pin names the file the host actually executes", () => {
   );
 });
 
+test("R8 L0b: the live channel region is a recognised predecessor", () => {
+  // The channel file is now PATCHED, so the slot follows the real chain: the
+  // deployed stderr-grounded region is superseded by the intake-seam build.
+  // Recognition is exact and inversion to the pinned baseline still has to
+  // reproduce, which is what keeps this from becoming "rewrite history to match
+  // whatever is on disk".
+  const entry = NATIVE_PATCH_PREDECESSORS[VERSION]?.[CHANNEL_FILE];
+  assert.ok(entry, "the channel artifact needs an active predecessor slot");
+  assert.equal(entry.revision, "R8-stderr-grounded");
+  assert.equal(entry.successorRevision, "R8-preflight-intake");
+  assert.equal(
+    entry.sourceSignature,
+    `${DISCORD_PREFLIGHT_ANCHOR}\n${DISCORD_PREFLIGHT_INJECTION_R8_DIAGNOSTICS_HARDENED}`,
+  );
+  assert.equal(
+    entry.supersedes,
+    `${DISCORD_PREFLIGHT_ANCHOR}\n${DISCORD_PREFLIGHT_INJECTION}`,
+  );
+  assert.notEqual(entry.sourceSignature, entry.supersedes);
+  // The retired runtime-root file must have NO slot at all.
+  assert.equal(
+    Object.hasOwn(NATIVE_PATCH_PREDECESSORS[VERSION], DEAD_FILE),
+    false,
+    "a file nothing loads must never gain a predecessor slot",
+  );
+});
+
 test(
   "R8 L1: the live channel preflight is the baseline this patch transforms",
   { skip: skip("live runtime not reachable") },
@@ -130,12 +160,20 @@ test(
       "the retired chain is expected to be present in the dead copy",
     );
     assert.ok(dead.includes("zinkProbe"), "the dead copy carries the probes");
-    // …and the executing file carries none of it.
+    // The executing file is patched too — by the governed apply, not by the
+    // retired chain. Both trees now carry a region; only one of them is loaded.
     const live = readLive(LIVE_CHANNEL, LIVE_WSL_CHANNEL, CHANNEL_FILE);
+    assert.notEqual(live, null);
     assert.equal(
-      live.split(DISCORD_PREFLIGHT_INJECTION).length - 1,
-      0,
-      "the executing preflight never received the injection",
+      live.includes(DISCORD_PREFLIGHT_INJECTION_R8_DIAGNOSTICS_HARDENED) ||
+        live.includes(DISCORD_PREFLIGHT_INJECTION),
+      true,
+      "the executing preflight carries a governed region",
+    );
+    assert.equal(
+      live.includes(selectionOnlyMarker),
+      false,
+      "and never carried the retired runtime-root chain",
     );
   },
 );

@@ -26,16 +26,39 @@ import {
 const MAIN_BOT = DISCORD_BOT_IDS.main;
 const MSG = "1545430000000000042";
 
-/** Run the REAL preflight injection snippet in a synthetic host scope. */
-function runPreflightInjection({ message, threadOwnerId, params } = {}) {
-  const factory = new Function(
+/**
+ * Run the REAL preflight injection snippet in a synthetic host scope.
+ *
+ * M10/T2-R8: the injection is AWAITED — it calls the canonical preflight intake
+ * predicate — and the real host function it lives in is `async`. The harness
+ * therefore builds an async function, exactly like the host, so a `return null`
+ * from the gate is observable here the same way it is live.
+ */
+async function runPreflightInjection({
+  message,
+  threadOwnerId,
+  params,
+  effectiveRoute,
+  resolvedAccountId,
+} = {}) {
+  const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
+  const factory = new AsyncFunction(
     "message",
     "threadOwnerId",
     "params",
     "globalThis",
+    "effectiveRoute",
+    "resolvedAccountId",
     DISCORD_PREFLIGHT_INJECTION,
   );
-  factory(message, threadOwnerId, params, globalThis);
+  return await factory(
+    message,
+    threadOwnerId,
+    params,
+    globalThis,
+    effectiveRoute,
+    resolvedAccountId,
+  );
 }
 
 function readStash(msgId) {

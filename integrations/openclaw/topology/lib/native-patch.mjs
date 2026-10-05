@@ -298,7 +298,7 @@ export const DISCORD_PREFLIGHT_INJECTION_R8_UNION =
  * has to carry the finding too.
  */
 export const DISCORD_PREFLIGHT_INJECTION_R8_DIAGNOSTICS_HARDENED =
-  '\t;{\n\t\t// M10/T2-R8: deterministic Discord inbound metadata (see native-patch).\n\t\t// The diagnostic is emitted FIRST and each count is read defensively, so\n\t\t// a throwing discord.js getter can no longer hide both the report and the\n\t\t// registry write behind one silent catch. A count of -1 means that\n\t\t// specific source threw while being read, which is itself the finding.\n\t\tconst zinkProbe = (read) => { try { const value = read(); return Array.isArray(value) ? value.length : 0; } catch { return -1; } };\n\t\tconst zinkFlag = (read) => { try { return read() === true; } catch { return false; } };\n\t\ttry {\n\t\t\tconst zinkMessageId = typeof message?.id === "string" && /^[1-9][0-9]{16,19}$/.test(message.id) ? message.id : null;\n\t\t\tconst zinkData = (typeof params !== "undefined" && params && typeof params === "object") ? params.data : null;\n\t\t\tconst zinkRaw = (zinkData && typeof zinkData === "object") ? zinkData : null;\n\t\t\tconst zinkMessageRaw = (() => { try { return message && typeof message === "object" ? message.rawDataValue : null; } catch { return null; } })();\n\t\t\tconst zinkMessageRawObj = (zinkMessageRaw && typeof zinkMessageRaw === "object") ? zinkMessageRaw : null;\n\t\t\ttry {\n\t\t\t\tif (typeof logger !== "undefined" && logger && typeof logger.info === "function") {\n\t\t\t\t\tlogger.info({\n\t\t\t\t\t\tzinkIngress: {\n\t\t\t\t\t\t\tmsg: zinkMessageId ?? "-",\n\t\t\t\t\t\t\twu: zinkProbe(() => message?.mentionedUsers),\n\t\t\t\t\t\t\twr: zinkProbe(() => message?.mentionedRoles),\n\t\t\t\t\t\t\tru: zinkProbe(() => zinkMessageRawObj?.mentions),\n\t\t\t\t\t\t\trr: zinkProbe(() => zinkMessageRawObj?.mention_roles),\n\t\t\t\t\t\t\tdu: zinkProbe(() => zinkRaw?.mentions),\n\t\t\t\t\t\t\tdr: zinkProbe(() => zinkRaw?.mention_roles),\n\t\t\t\t\t\t\thasDispatch: zinkRaw ? 1 : 0,\n\t\t\t\t\t\t\thasRawData: zinkMessageRawObj ? 1 : 0,\n\t\t\t\t\t\t}\n\t\t\t\t\t}, "[zink-ingress-meta]");\n\t\t\t\t}\n\t\t\t} catch { /* a logger failure must never break preflight */ }\n\t\t\tconst zinkSnowflake = (value) => (typeof value === "string" && /^[1-9][0-9]{16,19}$/.test(value) ? value : null);\n\t\t\tconst zinkIds = (entries) => { const ids = []; if (Array.isArray(entries)) { for (const entry of entries) { const id = zinkSnowflake(typeof entry === "string" ? entry : entry?.id); if (id) ids.push(id); } } return ids; };\n\t\t\tconst zinkUniq = (ids) => [...new Set(ids)];\n\t\t\tconst zinkFirst = (...values) => { for (const value of values) { const id = zinkSnowflake(value); if (id) return id; } return null; };\n\t\t\tconst zinkSafeFirst = (read) => { try { return read(); } catch { return undefined; } };\n\t\t\tconst zinkSafeIds = (read) => { try { return zinkIds(read()); } catch { return []; } };\n\t\t\tconst zinkMentionUserIds = zinkUniq([...zinkSafeIds(() => message.mentionedUsers), ...zinkSafeIds(() => zinkMessageRawObj?.mentions), ...zinkSafeIds(() => zinkRaw?.mentions)]);\n\t\t\tconst zinkMentionRoleIds = zinkUniq([...zinkSafeIds(() => message.mentionedRoles), ...zinkSafeIds(() => zinkMessageRawObj?.mention_roles), ...zinkSafeIds(() => zinkRaw?.mention_roles)]);\n\t\t\tif (zinkMessageId) {\n\t\t\t\tlet zinkRegistry = globalThis.__zink_ingress_metadata_r5;\n\t\t\t\tif (!(zinkRegistry instanceof Map)) { zinkRegistry = new Map(); globalThis.__zink_ingress_metadata_r5 = zinkRegistry; }\n\t\t\t\twhile (zinkRegistry.size >= 256) { zinkRegistry.delete(zinkRegistry.keys().next().value); }\n\t\t\t\tzinkRegistry.set(zinkMessageId, {\n\t\t\t\t\tmentionedUserIds: zinkMentionUserIds,\n\t\t\t\t\tmentionedRoleIds: zinkMentionRoleIds,\n\t\t\t\t\treplyReferenceMessageId: zinkFirst(zinkSafeFirst(() => message.messageReference?.message_id), zinkSafeFirst(() => zinkMessageRawObj?.message_reference?.message_id), zinkSafeFirst(() => zinkRaw?.message_reference?.message_id)),\n\t\t\t\t\treplyReferenceAuthorId: zinkFirst(zinkSafeFirst(() => message.referencedMessage?.author?.id), zinkSafeFirst(() => zinkMessageRawObj?.referenced_message?.author?.id), zinkSafeFirst(() => zinkRaw?.referenced_message?.author?.id)),\n\t\t\t\t\tthreadOwnerId: zinkSnowflake(threadOwnerId),\n\t\t\t\t\tauthorIsBot: zinkFlag(() => message.author?.bot) || zinkFlag(() => zinkMessageRawObj?.author?.bot) || zinkFlag(() => zinkRaw?.author?.bot),\n\t\t\t\t});\n\t\t\t}\n\t\t} catch { /* fail-closed: no record, downstream denies as today */ }\n\t}';
+  '\t;{\n\t\t// M10/T2-R8: deterministic Discord inbound metadata (see native-patch).\n\t\t//\n\t\t// The report is emitted to stderr FIRST, because stderr reaches the\n\t\t// service journal with no transport, level or redaction filter in\n\t\t// between. Two earlier builds produced no diagnostic at all even though\n\t\t// the region was present, loaded and positioned inside\n\t\t// preflightDiscordMessage, so a silent catch around the child logger is\n\t\t// exactly the failure mode that must not be able to hide the finding\n\t\t// again: the logger is now called LAST and reports its own failure on\n\t\t// stderr. Each count is read through a defensive probe that reports -1\n\t\t// when that specific source THREW, which is itself the finding.\n\t\tconst zinkProbe = (read) => { try { const value = read(); return Array.isArray(value) ? value.length : 0; } catch { return -1; } };\n\t\tconst zinkFlag = (read) => { try { return read() === true; } catch { return false; } };\n\t\ttry {\n\t\t\tconst zinkMessageId = typeof message?.id === "string" && /^[1-9][0-9]{16,19}$/.test(message.id) ? message.id : null;\n\t\t\tconst zinkData = (typeof params !== "undefined" && params && typeof params === "object") ? params.data : null;\n\t\t\tconst zinkRaw = (zinkData && typeof zinkData === "object") ? zinkData : null;\n\t\t\tconst zinkMessageRaw = (() => { try { return message && typeof message === "object" ? message.rawDataValue : null; } catch { return null; } })();\n\t\t\tconst zinkMessageRawObj = (zinkMessageRaw && typeof zinkMessageRaw === "object") ? zinkMessageRaw : null;\n\t\t\tconst zinkDiag = {\n\t\t\t\tzinkIngress: {\n\t\t\t\t\tmsg: zinkMessageId ?? "-",\n\t\t\t\t\twu: zinkProbe(() => message?.mentionedUsers),\n\t\t\t\t\twr: zinkProbe(() => message?.mentionedRoles),\n\t\t\t\t\tru: zinkProbe(() => zinkMessageRawObj?.mentions),\n\t\t\t\t\trr: zinkProbe(() => zinkMessageRawObj?.mention_roles),\n\t\t\t\t\tdu: zinkProbe(() => zinkRaw?.mentions),\n\t\t\t\t\tdr: zinkProbe(() => zinkRaw?.mention_roles),\n\t\t\t\t\thasDispatch: zinkRaw ? 1 : 0,\n\t\t\t\t\thasRawData: zinkMessageRawObj ? 1 : 0,\n\t\t\t\t}\n\t\t\t};\n\t\t\tconst zinkReport = (line) => { try { process.stderr.write(line + "\\n"); } catch { /* stderr unavailable */ } };\n\t\t\tzinkReport("[zink-ingress-meta] " + JSON.stringify(zinkDiag.zinkIngress));\n\t\t\ttry {\n\t\t\t\tconst zinkSnowflake = (value) => (typeof value === "string" && /^[1-9][0-9]{16,19}$/.test(value) ? value : null);\n\t\t\t\tconst zinkIds = (entries) => { const ids = []; if (Array.isArray(entries)) { for (const entry of entries) { const id = zinkSnowflake(typeof entry === "string" ? entry : entry?.id); if (id) ids.push(id); } } return ids; };\n\t\t\t\tconst zinkUniq = (ids) => [...new Set(ids)];\n\t\t\t\tconst zinkFirst = (...values) => { for (const value of values) { const id = zinkSnowflake(value); if (id) return id; } return null; };\n\t\t\t\tconst zinkSafeFirst = (read) => { try { return read(); } catch { return undefined; } };\n\t\t\t\tconst zinkSafeIds = (read) => { try { return zinkIds(read()); } catch { return []; } };\n\t\t\t\tconst zinkMentionUserIds = zinkUniq([...zinkSafeIds(() => message.mentionedUsers), ...zinkSafeIds(() => zinkMessageRawObj?.mentions), ...zinkSafeIds(() => zinkRaw?.mentions)]);\n\t\t\t\tconst zinkMentionRoleIds = zinkUniq([...zinkSafeIds(() => message.mentionedRoles), ...zinkSafeIds(() => zinkMessageRawObj?.mention_roles), ...zinkSafeIds(() => zinkRaw?.mention_roles)]);\n\t\t\t\tif (zinkMessageId) {\n\t\t\t\t\tlet zinkRegistry = globalThis.__zink_ingress_metadata_r5;\n\t\t\t\t\tif (!(zinkRegistry instanceof Map)) { zinkRegistry = new Map(); globalThis.__zink_ingress_metadata_r5 = zinkRegistry; }\n\t\t\t\t\twhile (zinkRegistry.size >= 256) { zinkRegistry.delete(zinkRegistry.keys().next().value); }\n\t\t\t\t\tzinkRegistry.set(zinkMessageId, {\n\t\t\t\t\t\tmentionedUserIds: zinkMentionUserIds,\n\t\t\t\t\t\tmentionedRoleIds: zinkMentionRoleIds,\n\t\t\t\t\t\treplyReferenceMessageId: zinkFirst(zinkSafeFirst(() => message.messageReference?.message_id), zinkSafeFirst(() => zinkMessageRawObj?.message_reference?.message_id), zinkSafeFirst(() => zinkRaw?.message_reference?.message_id)),\n\t\t\t\t\t\treplyReferenceAuthorId: zinkFirst(zinkSafeFirst(() => message.referencedMessage?.author?.id), zinkSafeFirst(() => zinkMessageRawObj?.referenced_message?.author?.id), zinkSafeFirst(() => zinkRaw?.referenced_message?.author?.id)),\n\t\t\t\t\t\tthreadOwnerId: zinkSnowflake(threadOwnerId),\n\t\t\t\t\t\tauthorIsBot: zinkFlag(() => message.author?.bot) || zinkFlag(() => zinkMessageRawObj?.author?.bot) || zinkFlag(() => zinkRaw?.author?.bot),\n\t\t\t\t\t});\n\t\t\t\t}\n\t\t\t} catch { zinkReport("[zink-ingress-meta] registry write failed"); }\n\t\t\ttry {\n\t\t\t\tif (logger && typeof logger.info === "function") logger.info(zinkDiag, "[zink-ingress-meta]");\n\t\t\t} catch (zinkLoggerError) {\n\t\t\t\tzinkReport("[zink-ingress-meta] child logger unavailable");\n\t\t\t}\n\t\t} catch { /* fail-closed: no record, downstream denies as today */ }\n\t}';
 
 export const DISCORD_PREFLIGHT_ANCHOR =
   "\tconst { implicitMentionKinds, wasMentioned } = resolveDiscordMentionState({\n\t\tauthorIsBot: Boolean(author.bot),\n\t\tbotId,\n\t\thasAnyMention,\n\t\tisDirectMessage,\n\t\tisExplicitlyMentioned: explicitlyMentioned,\n\t\tmentionRegexes,\n\t\tmentionText,\n\t\tmentionedEveryone: message.mentionedEveryone,\n\t\treferencedAuthorId: message.referencedMessage?.author?.id,\n\t\tsenderIsPluralKit: sender.isPluralKit,\n\t\ttranscript: preflightTranscript\n\t});";
@@ -346,6 +346,11 @@ export const DISCORD_PREFLIGHT_INJECTION = `\t;{
 \t\t// when that specific source THREW, which is itself the finding.
 \t\tconst zinkProbe = (read) => { try { const value = read(); return Array.isArray(value) ? value.length : 0; } catch { return -1; } };
 \t\tconst zinkFlag = (read) => { try { return read() === true; } catch { return false; } };
+\t\t// Declared in the BLOCK scope, not inside a try: both the diagnostic below
+\t\t// and the preflight intake gate below report through it. A \`const\` inside a
+\t\t// try is scoped to that try, so the gate's reference threw a ReferenceError
+\t\t// that its own catch swallowed — the gate then silently never denied.
+\t\tconst zinkReport = (line) => { try { process.stderr.write(line + "\\n"); } catch { /* stderr unavailable */ } };
 \t\ttry {
 \t\t\tconst zinkMessageId = typeof message?.id === "string" && /^[1-9][0-9]{16,19}$/.test(message.id) ? message.id : null;
 \t\t\tconst zinkData = (typeof params !== "undefined" && params && typeof params === "object") ? params.data : null;
@@ -365,7 +370,6 @@ export const DISCORD_PREFLIGHT_INJECTION = `\t;{
 \t\t\t\t\thasRawData: zinkMessageRawObj ? 1 : 0,
 \t\t\t\t}
 \t\t\t};
-\t\t\tconst zinkReport = (line) => { try { process.stderr.write(line + "\\n"); } catch { /* stderr unavailable */ } };
 \t\t\tzinkReport("[zink-ingress-meta] " + JSON.stringify(zinkDiag.zinkIngress));
 \t\t\ttry {
 \t\t\t\tconst zinkSnowflake = (value) => (typeof value === "string" && /^[1-9][0-9]{16,19}$/.test(value) ? value : null);
@@ -396,6 +400,33 @@ export const DISCORD_PREFLIGHT_INJECTION = `\t;{
 \t\t\t\tzinkReport("[zink-ingress-meta] child logger unavailable");
 \t\t\t}
 \t\t} catch { /* fail-closed: no record, downstream denies as today */ }
+\t\t// M10/T2-R8: the NORMAL direct-intake decision, taken HERE rather than at
+\t\t// the native gate. The host only builds a run when this function returns a
+\t\t// context, and it starts typing and enqueues strictly after that
+\t\t// (\`message-handler-cizxbaDc.js\`: preflight -> \`if (!ctx) return\` ->
+\t\t// startAcceptedTypingFeedback -> messageRunQueue.enqueue). So returning
+\t\t// null here is what makes a direct specialist mention cost zero run, zero
+\t\t// typing, zero execution and zero outbound, instead of a created run that
+\t\t// fails later and surfaces a host error.
+\t\t//
+\t\t// The predicate is the plugin's own, reached through one published global;
+\t\t// there is no second copy of the policy here. When it is absent — plugin not
+\t\t// loaded, or a build without this seam — nothing is decided and the late
+\t\t// \`enterNativeRun\` gate still governs the run.
+\t\ttry {
+\t\t\tconst zinkGate = globalThis[Symbol.for("zink.governance.native.preflightIngress")];
+\t\t\tif (typeof zinkGate === "function" && effectiveRoute && typeof effectiveRoute.agentId === "string") {
+\t\t\t\tconst zinkDecision = await zinkGate({
+\t\t\t\t\tagentId: effectiveRoute.agentId,
+\t\t\t\t\taccountId: typeof resolvedAccountId === "string" ? resolvedAccountId : null,
+\t\t\t\t\tmessageId: typeof message?.id === "string" ? message.id : null,
+\t\t\t\t});
+\t\t\t\tif (zinkDecision && zinkDecision.allow === false) {
+\t\t\t\t\tzinkReport("[zink-ingress-denied] reason=" + String(zinkDecision.reason));
+\t\t\t\t\treturn null;
+\t\t\t\t}
+\t\t\t}
+\t\t} catch { /* the late gate still governs; never decide here */ }
 \t}`;
 
 const DISCORD_PREFLIGHT_EDITS = [
@@ -537,24 +568,41 @@ export const NATIVE_PATCH_PREDECESSORS = Object.freeze({
         "555f37dae8eec1fbbd35e25ae28222dc5e8d6965e383500695a93900e9d8ddf5",
       successorRevision: "R5",
     }),
-    // M10/T2-R8: the Discord preflight lineage is RETIRED, not rewritten.
+    // M10/T2-R8: the live channel preflight now carries the stderr-grounded
+    // region, superseded by the preflight intake seam. Recognition is exact:
+    // the live digest, the superseded region text, and inversion to the pinned
+    // channel baseline must all reproduce, otherwise the runtime fails closed
+    // with NATIVE_SOURCE_DRIFT and no deployment proceeds.
     //
-    // The whole R5→R8 chain (anchor, union-sources, diagnostics, hardened
-    // diagnostics, stderr-grounded) was injected into
+    // The RUNTIME-ROOT copy's lineage stays retired below: that chain was
+    // injected into a file NOTHING loads, so it has no predecessor and none is
+    // invented for it.
+    "message-handler.preflight-CbD0u7U7.js": Object.freeze({
+      revision: "R8-stderr-grounded",
+      sourceSignature:
+        DISCORD_PREFLIGHT_ANCHOR +
+        "\n" +
+        DISCORD_PREFLIGHT_INJECTION_R8_DIAGNOSTICS_HARDENED,
+      supersedes: DISCORD_PREFLIGHT_ANCHOR + "\n" + DISCORD_PREFLIGHT_INJECTION,
+      sourceDigest:
+        "bc1a53d01617195cf4c376eb45034ea4ff9eb6137bc2c750943cbc842f64f4fd",
+      successorRevision: "R8-preflight-intake",
+    }),
+    // M10/T2-R8 RETIRED SLOT, kept so the mistake stays auditable: the whole
+    // R5→R8 chain (anchor, union-sources, diagnostics, hardened diagnostics,
+    // stderr-grounded) was injected into
     // `openclaw/dist/message-handler.preflight-C1XBiefW.js` — a copy of the
     // Discord bundles that ships inside the runtime package and that NOTHING
     // loads, because the enabled `discord` plugin resolves to the separately
     // installed `@openclaw/discord` package under the profile's npm project
     // store. The executing preflight never carried any of those regions, which
     // is why the ingress metadata registry was never written and every
-    // admissible message was denied for a missing mention.
-    //
-    // There is deliberately NO descriptor for the live channel file: it is
-    // still at its upstream baseline, so nothing was ever written to it and
-    // there is no predecessor to recognise. Declaring one would fabricate
-    // history. The retired regions stay exported and pinned in this module so
-    // the mistake stays auditable, and the preimage of the dead file is the
-    // `preimage/` directory of the transaction that patched it.
+    // admissible message was denied for a missing mention. No descriptor is
+    // declared for that file: nothing was written through it by a governed
+    // apply this table recognises, and inventing one would fabricate history.
+    // The retired regions stay exported and pinned in this module, and the
+    // dead file's preimage is the `preimage/` directory of the transaction that
+    // patched it.
   }),
 });
 

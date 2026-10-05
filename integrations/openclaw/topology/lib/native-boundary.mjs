@@ -2,6 +2,11 @@
 // No model tool is registered. Only trusted in-process plugin code registers.
 import { Buffer } from "node:buffer";
 const registryKey = Symbol.for("zink.governance.native.r12");
+// M10/T2-R8: the Discord preflight seam reaches the canonical intake predicate
+// through this global. Published only while a guard is registered.
+const preflightIngressKey = Symbol.for(
+  "zink.governance.native.preflightIngress",
+);
 const coordinatorIds = new Set(["main", "o1", "o2"]);
 const installedAgents = new WeakSet();
 
@@ -52,6 +57,13 @@ export function registerNativeGuard(scope, guard) {
         : undefined,
     beforeToolCall: guard.beforeToolCall.bind(guard),
     beforeAnnounce: guard.beforeAnnounce.bind(guard),
+    // M10/T2-R8: the PURE direct-intake predicate, evaluated at the Discord
+    // preflight seam so a direct specialist mention never creates a host run at
+    // all. Side-effect free: it decides, it never writes the ledger.
+    beforePreflightIngress:
+      typeof guard.beforePreflightIngress === "function"
+        ? guard.beforePreflightIngress.bind(guard)
+        : undefined,
     // T2/T3: quota publication, self receipt and run-scoped model resolution
     // are required governance capabilities. Registration fails closed when the
     // guard cannot enforce them, so there is no "quota but no enforcement" mode.
@@ -60,9 +72,31 @@ export function registerNativeGuard(scope, guard) {
     resolveRunModel: guard.resolveRunModel.bind(guard),
   });
   registry().set(scope, entry);
+  publishPreflightIngress(entry);
   return () => {
     if (registry().get(scope) === entry) registry().delete(scope);
   };
+}
+
+/**
+ * M10/T2-R8 — the global the Discord preflight injection calls.
+ *
+ * The preflight runs inside the host's channel bundle, which never imports this
+ * module, so the seam is reached through one published global instead of a
+ * duplicated import or a second copy of the policy. The caller passes the SAME
+ * scope string `resolveGovernance` derives from the host config, so there is one
+ * registry and one policy, not two.
+ *
+ * ABSENT PREDICATE IS NOT A DENY. If governance never registered — the plugin
+ * has not loaded, or a build predates this seam — the preflight must not invent
+ * an admission decision. It returns null and the late `enterNativeRun` gate
+ * still governs the run, so enforcement is unchanged and only the timing is lost.
+ */
+function publishPreflightIngress(entry) {
+  if (entry.beforePreflightIngress) {
+    globalThis[preflightIngressKey] = (input) =>
+      entry.beforePreflightIngress(input);
+  }
 }
 
 function resolveGovernance(config) {

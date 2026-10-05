@@ -82,7 +82,7 @@ const HYGIENE_ASSET_PREDECESSORS = Object.freeze({
  * in authenticateIngress changes the packaged bytes; behavior is
  * observation-only and every verdict is unchanged. */
 const CURRENT_ENTRYPOINT_SHA256 =
-  "6a7968b7d456ff6d3f2c5b9d60c7b6046a702603b880093c33b717d9a37c13b1";
+  "f4ed9d9c54ccf486a30425b98a549cab5aebbbe8e9ee7f2d32bfc6795598c4a3";
 
 const identifiers = Object.freeze({
   discordGuildId: "123456789012345678",

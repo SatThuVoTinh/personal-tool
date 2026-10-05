@@ -5045,6 +5045,24 @@ export default {
     }
 
     const unregister = registerNativeGuard(paths.root, {
+      // M10/T2-R8: the PURE direct-intake predicate, evaluated at the Discord
+      // preflight seam so a direct specialist mention never creates a host run.
+      //
+      // It is the SAME rule `authenticateIngress` applies at the native gate —
+      // Discord intake is Main only (Decision 3 & RC-01) — with no ledger write,
+      // no task derivation and no identity key, so it is safe to run before the
+      // host has built a run. The native gate is unchanged and still governs
+      // every run; this only removes the run that would have been denied anyway.
+      //
+      // It is reached through the boundary's published global because the
+      // channel bundle cannot import this plugin.
+      beforePreflightIngress(event) {
+        const agentId = event?.agentId;
+        if (!ids.has(agentId)) return { allow: false, reason: "POLICY_DENIED" };
+        if (agentId !== "main")
+          return { allow: false, reason: "NON_MAIN_DIRECT_INGRESS" };
+        return { allow: true };
+      },
       beforeIngress(event) {
         return {
           prompt: sanitizeDelegationText(event.prompt)
@@ -6116,6 +6134,13 @@ export default {
         context,
         identifiers: { discordGuildId: config.discordGuildId },
       });
+      // M10/T2-R8: the admission SIGNAL is computed here but NOT logged here.
+      // Live evidence showed MAIN_DIRECTED emitted at 11:08:11.788 and the same
+      // event denied as DUPLICATE_DISCORD_EVENT at 11:08:11.875, so the audit
+      // recorded an admission that never happened. The signal is logged only
+      // after the duplicate check below has passed, which makes MAIN_DIRECTED
+      // mean "admission succeeded" instead of "routing reached this line".
+      let admissionSignal;
       if (routing.needs_clarification || routing.target_agents[0] !== "main") {
         // M10/T2-R5: deterministic conversational signals beyond the literal
         // mention. Bypassed ONLY when the routing layer refused solely for a
@@ -6134,9 +6159,7 @@ export default {
           missingMentionRefusal: missingMention,
         });
         if (reply.admitted) {
-          api.logger?.info?.(
-            `[zink-governance] ${MAIN_DIRECTED}: agent=main via reply msg=${msgId}`,
-          );
+          admissionSignal = `${MAIN_DIRECTED}: agent=main via reply msg=${msgId}`;
         } else {
           const continuation = resolveMainConversationAdmission({
             agentId: context.agentId,
@@ -6148,17 +6171,14 @@ export default {
           if (!continuation.admitted) {
             return deny(routing.clarification_reason || "INGRESS_NOT_ADMITTED");
           }
-          api.logger?.info?.(
-            `[zink-governance] ${MAIN_CONVERSATION_CONTINUATION}: agent=main msg=${msgId}`,
-          );
+          admissionSignal = `${MAIN_CONVERSATION_CONTINUATION}: agent=main msg=${msgId}`;
         }
       } else {
         // Routing targeted Main directly (structured mention path): record
         // which signal admitted, so a future live message is attributable
-        // to its evidence rather than to an assumption.
-        api.logger?.info?.(
-          `[zink-governance] ${MAIN_DIRECTED}: agent=main via mention msg=${msgId}`,
-        );
+        // to its evidence rather than to an assumption. Emitted after the
+        // duplicate check, so a duplicate never claims an admission.
+        admissionSignal = `${MAIN_DIRECTED}: agent=main via mention msg=${msgId}`;
       }
       const identityPath =
         paths.identityKey || path.resolve(paths.root, "../identity.key");
@@ -6185,7 +6205,9 @@ export default {
         ...origin,
         agent_id: context.agentId,
       });
-      // D06: Check snapshot; do not write duplicate WORKFLOW_OPENED event if task already opened
+      // D06: Check snapshot; do not write duplicate WORKFLOW_OPENED event if task already opened.
+      // M10/T2-R8: this check now runs BEFORE the admission signal is logged, so
+      // a duplicate event produces no MAIN_DIRECTED and no admission claim at all.
       const currentSnapshot = readSnapshot(paths);
       if (currentSnapshot?.tasks?.[taskId]) {
         api.logger?.warn?.(
@@ -6193,6 +6215,11 @@ export default {
         );
         return { allow: false, reason: "DUPLICATE_DISCORD_EVENT" };
       }
+      // Admission is proven here: routing admitted, identity resolved, task id
+      // derived, and the event is not a duplicate. Only now is the signal an
+      // auditable fact.
+      if (admissionSignal)
+        api.logger?.info?.(`[zink-governance] ${admissionSignal}`);
       recordWorkflowEvent(paths, "WORKFLOW_OPENED", {
         ...origin,
         task_id: taskId,

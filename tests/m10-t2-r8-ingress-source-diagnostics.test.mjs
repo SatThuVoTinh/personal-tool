@@ -25,7 +25,14 @@ import {
 const MAIN_BOT = DISCORD_BOT_IDS.main;
 const MSG = "1545430000000000077";
 
-function runInjection({ message, threadOwnerId, params, loggerArg }) {
+function runInjection({
+  message,
+  threadOwnerId,
+  params,
+  loggerArg,
+  effectiveRoute,
+  resolvedAccountId,
+}) {
   const calls = [];
   const stderrLines = [];
   const logger =
@@ -36,18 +43,31 @@ function runInjection({ message, threadOwnerId, params, loggerArg }) {
           warn: () => {},
           error: () => {},
         });
-  const factory = new Function(
+  // M10/T2-R8: the injection awaits the preflight intake gate, and the host
+  // function it lives in is `async`, so the harness builds an async function
+  // exactly like the host.
+  const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
+  const factory = new AsyncFunction(
     "message",
     "threadOwnerId",
     "params",
     "logger",
     "globalThis",
     "process",
+    "effectiveRoute",
+    "resolvedAccountId",
     DISCORD_PREFLIGHT_INJECTION,
   );
-  factory(message, threadOwnerId, params, logger, globalThis, {
-    stderr: { write: (s) => stderrLines.push(s) },
-  });
+  factory(
+    message,
+    threadOwnerId,
+    params,
+    logger,
+    globalThis,
+    { stderr: { write: (s) => stderrLines.push(s) } },
+    effectiveRoute,
+    resolvedAccountId,
+  );
   const registry = globalThis[ZINK_INGRESS_METADATA_KEY];
   return {
     calls,
