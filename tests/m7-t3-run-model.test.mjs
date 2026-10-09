@@ -136,6 +136,7 @@ describe("T3 — run-scoped model resolution (no session override)", () => {
         sessionKey,
         runId,
       });
+      // M10/T2-R12: failover restored — low quota moves to the fallback.
       assert.equal(after.model, MODEL_ALLOWLIST[1]);
       assert.equal(after.run_scoped, true);
       assert.equal(after.session_override, false);
@@ -168,6 +169,7 @@ describe("T3 — run-scoped model resolution (no session override)", () => {
         sessionKey,
         runId,
       });
+      // M10/T2-R12: failover restored — low quota moves to the fallback.
       assert.equal(result.model, MODEL_ALLOWLIST[1]);
 
       const ledgerAfter = ledgerBytes(paths);
@@ -224,6 +226,7 @@ describe("T3 — run-scoped model resolution (no session override)", () => {
         sessionKey,
         runId,
       });
+      // M10/T2-R12: failover restored — low quota moves to the fallback.
       assert.equal(firstRun.model, MODEL_ALLOWLIST[1]);
       const afterFirst = ledgerBytes(paths);
       unregister?.();
@@ -448,7 +451,7 @@ describe("T3 — run-scoped model resolution (no session override)", () => {
           (await resolveNativeRunModel(config, { agentId, sessionKey, runId }))
             .model,
           MODEL_ALLOWLIST[1],
-          `${agentId} low quota -> fallback`,
+          `${agentId} low quota -> fallback (R12 failover restoration)`,
         );
       } finally {
         unregister?.();

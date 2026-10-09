@@ -65,11 +65,13 @@ import {
   parseCoordinatorSessionKey,
 } from "../../lib/coordinator-pickup.mjs";
 import {
+  buildUniqueTaskCode,
   canonicalHash,
   derivePrincipalRef,
   deriveTaskId,
   GOVERNANCE_VERSION,
   SCHEMA_VERSION,
+  TASK_CODE_ALPHABET,
 } from "../../topology/lib/canonical.mjs";
 
 import {
@@ -1156,6 +1158,168 @@ export function buildSkillProposalCard(proposal) {
         label: "Reject",
         style: 4,
         emoji: { name: "❌" },
+      },
+    ],
+  };
+}
+
+/**
+ * M10/T2-R12: first-approval card content builder for a fresh Main
+ * `sessions_spawn`. Pure: no I/O, no network. The transporter posts what this
+ * returns; tests assert the contract here.
+ *
+ * Contract (must hold for the verdict paths to work):
+ * - the FULL task_id appears in the body (the text-approval path matches an
+ *   owner's APPROVE message to a task by substring);
+ * - the [PHÊ DUYỆT] marker keeps the card recognizable to card parsers;
+ * - REQUESTED state is explicit: the card asks, it never authorizes;
+ * - button custom_ids use the same builder+namespace as child-announce
+ *   cards so the button verdict path resolves the same taskId.
+ */
+export function buildFirstSpawnApprovalCard({
+  taskId,
+  taskCode,
+  runId,
+  requesterAgentId,
+  briefRevision,
+  targetAgentId,
+  spawnInputs,
+  spawnNodeId,
+}) {
+  if (typeof taskId !== "string" || taskId.length === 0) {
+    throw new Error("FIRST_APPROVAL_CARD_TASK_REQUIRED");
+  }
+  const title = `🔖 [PHÊ DUYỆT] Yêu cầu spawn ${targetAgentId}`;
+  // M10/T2-R12: when the task carries a short code the owner leads with IT, since
+  // that is what he reads and types. The canonical id is kept below it so the
+  // text-approval path still works for tasks admitted before codes existed.
+  const codeLine = taskCode
+    ? `- **Mã ngắn (để duyệt):** \`${taskCode}\` ← dùng mã này\n`
+    : "";
+  const approveWith = taskCode ? taskCode : taskId;
+  const bodyContent =
+    `### ${title}\n` +
+    codeLine +
+    `- **Mã tác vụ (Task):** \`${taskId}\`\n` +
+    `- **Run:** \`${runId}\`\n` +
+    `- **Người yêu cầu:** ${requesterAgentId === "main" ? "Main (@Quản Lý)" : requesterAgentId}\n` +
+    `- **Child:** ${targetAgentId}\n` +
+    `- **Hành động:** sessions_spawn\n` +
+    `- **Node:** \`${spawnNodeId}\` (brief revision ${briefRevision})\n` +
+    `- **Lý do:** ${spawnInputs}\n` +
+    `- **Trạng thái:** CHỜ DUYỆT (REQUESTED — chưa được phép thực thi)\n\n` +
+    `---\n**Thao tác dành cho User (Buttons & Actions):**\n` +
+    `- Bấm **Approve** hoặc phản hồi **APPROVE ${approveWith}** để phê duyệt đưa vào hàng đợi thực thi.\n` +
+    `- Bấm **Reject** hoặc phản hồi **REJECT ${approveWith}** để từ chối kế hoạch.\n` +
+    `- Phản hồi **REQUEST REVISION ${approveWith}** để yêu cầu sửa đổi kế hoạch.`;
+  return {
+    title,
+    bodyContent,
+    buttons: [
+      {
+        customId: buildComponentCustomId(
+          DISCORD_COMPONENT_ACTION_NAMESPACE.APPROVAL_APPROVE,
+          taskId,
+          String(briefRevision),
+        ),
+        label: "Approve",
+        style: 3,
+        emoji: { name: "✅" },
+      },
+      {
+        customId: buildComponentCustomId(
+          DISCORD_COMPONENT_ACTION_NAMESPACE.APPROVAL_REJECT,
+          taskId,
+          String(briefRevision),
+        ),
+        label: "Reject",
+        style: 4,
+        emoji: { name: "❌" },
+      },
+      {
+        customId: buildComponentCustomId(
+          DISCORD_COMPONENT_ACTION_NAMESPACE.APPROVAL_REVISION,
+          taskId,
+          String(briefRevision),
+        ),
+        label: "Request Revision",
+        style: 2,
+        emoji: undefined,
+      },
+    ],
+  };
+}
+
+/**
+ * M10/T2-R12: is this outbound text a governance MACHINE payload rather than a
+ * reply written for the owner?
+ *
+ * Proven live 2026-10-08 15:41: `Main` emitted its execution-brief envelope as
+ * its turn text, and the host delivered that raw JSON straight to #office. The
+ * owner saw a wall of JSON instead of an answer. The envelope is not waste: it is
+ * required, because `admitInitialBrief` ingests the brief from the assistant text
+ * AT THE `sessions_spawn` CALL (guard.mjs beforeToolCall). So the payload must be
+ * produced but must never be the user-visible reply.
+ *
+ * The predicate is deliberately narrow and requires BOTH contract markers
+ * (`schema_version` and `governance_version`) plus one payload-shape marker, so
+ * ordinary prose, ordinary JSON, and JSON the owner actually asked about are all
+ * untouched. Pure: no I/O, no network, no logging.
+ */
+export function isGovernanceMachinePayload(text) {
+  if (typeof text !== "string") return false;
+  let trimmed = text.trim();
+  if (trimmed.startsWith("```json")) trimmed = trimmed.slice(7);
+  else if (trimmed.startsWith("```")) trimmed = trimmed.slice(3);
+  if (trimmed.endsWith("```")) trimmed = trimmed.slice(0, -3);
+  trimmed = trimmed.trim();
+  // A reply that merely CONTAINS a payload (prose around it) is not the
+  // payload: only the bare envelope is suppressed, so context is never lost.
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return false;
+  let parsed;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return false;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return false;
+  }
+  if (typeof parsed.schema_version !== "string") return false;
+  if (typeof parsed.governance_version !== "string") return false;
+  const hasPayloadShape =
+    typeof parsed.outcome_claim === "string" ||
+    typeof parsed.brief_state === "string" ||
+    typeof parsed.brief_revision === "number";
+  return hasPayloadShape;
+}
+
+/**
+ * M10/T2-R12: raw-REST message body carrying the approval buttons.
+ * Pure: maps the adapter-shaped button specs (`customId`) to the Discord
+ * wire shape (`custom_id`). Tested directly.
+ *
+ * R4-EXCEPTION (owner decision 2026-10-07): this raw-REST /messages post is
+ * the SOLE permitted exception to the no-component-REST rule. The native
+ * adapter cannot deliver from the tool-call hook context (proven live:
+ * "Discord send requires a resolved runtime config"), while the thread
+ * creation the buttons belong to already travels by permitted raw REST.
+ * The m8-t2-native-outbound test enforces that any /messages REST site
+ * carries this marker; without it the suite fails.
+ */
+export function buildApprovalButtonsMessage(bodyContent, buttons) {
+  return {
+    content: bodyContent.slice(0, 2000),
+    components: [
+      {
+        type: 1,
+        components: (buttons ?? []).map((b) => ({
+          type: 2,
+          style: b.style,
+          label: b.label,
+          custom_id: b.customId,
+          ...(b.emoji ? { emoji: b.emoji } : {}),
+        })),
       },
     ],
   };
@@ -5117,9 +5281,11 @@ export default {
               context.channelId === config.officeChannelId) ||
             (Boolean(config.discordOfficeChannelId) &&
               context.channelId === config.discordOfficeChannelId));
+        let ingressReentry = false;
         if (isDiscordIngress) {
           const admission = authenticateIngress(context);
           if (admission?.allow !== true) return admission;
+          ingressReentry = admission.modelFallbackReentry === true;
         } else {
           await awaitSpawnReceipt(context, signal);
         }
@@ -5128,8 +5294,19 @@ export default {
         // only. No session state is written, no model override is created and
         // no model pin is persisted. Quota is advisory here; a real provider
         // failure still takes the native reactive failover path.
+        //
+        // M10/T2-R9-C: that sentence must hold on a same-run fallback re-entry.
+        // `resolveRuntimeModel` reads QUOTA, which a model failure never lowers,
+        // so on the retry it would resolve to the PRIMARY again — the very model
+        // just aborted at 372s — and pin the host's reactive failover candidate
+        // away. Proven live 2026-10-07: the host had already decided to fail over
+        // to `gemini/gemini-3.6-flash` (16:44:19.423 candidate_failed), so the
+        // proactive resolution must stand aside and let the host's reactive
+        // decision stand. Skipped ONLY for a recognized same-run re-entry; every
+        // other admission still resolves exactly as before.
         const decision = await guard.beforeRun(event, context, signal);
         if (decision?.allow !== true) return decision;
+        if (ingressReentry) return decision;
         const modelResolution = await resolveRunModelFor(config, context);
         return modelResolution ? { ...decision, modelResolution } : decision;
       },
@@ -5477,6 +5654,167 @@ export default {
           return { allow: true };
         }
 
+        // M10/T2-R12: first-approval bootstrap for sessions_spawn.
+        //
+        // Deadlock this closes: a fresh Main task cannot spawn (the guard
+        // requires an approved brief), but the only approval-request path
+        // needed a child announce, which needs a spawn. Main may now ASK:
+        // when an otherwise-valid spawn is denied ONLY for lack of approval,
+        // the denial ALSO records a first-class WORKFLOW_APPROVAL_REQUESTED
+        // and posts the card to #approvals. Creating the request never
+        // authorizes the spawn — the denial below is returned unchanged, and
+        // REQUESTED never satisfies the spawn gate. Only a valid Owner
+        // approval (APPROVE → QUEUED + approved_at) unblocks a later attempt
+        // under the SAME task/run.
+        //
+        // Precondition (R12 §6): this helper runs only after the plugin's own
+        // topology/session/proposal validation passed AND the guard denied
+        // with AUTH_APPROVAL_REQUIRED, which since the R12 guard reorder
+        // fires only after params/node/topology/budget/lineage validation.
+        // Anything else denied stays denied with no request and no card.
+        async function requestFirstSpawnApproval({
+          ownerTaskId,
+          briefRevision,
+          targetAgentId,
+          spawnInputs,
+          spawnNodeId,
+        }) {
+          const taskId = ownerTaskId;
+          try {
+            // Dedupe: an existing request means the card flow already ran for
+            // this task. Retries (same or different run) must not mint another
+            // approval or post another card. The ledger reducer additionally
+            // no-ops same-agent+run retries and rejects a second requester.
+            const snap = readSnapshot(paths);
+            const t = snap?.tasks?.[taskId];
+            if (!t) return;
+            if (t.approval_requested_at) {
+              api.logger?.info?.(
+                `[zink-governance] first-approval already requested for ${taskId}; no duplicate card`,
+              );
+              return;
+            }
+            if (t.approved_at) return;
+            recordWorkflowEvent(paths, "WORKFLOW_APPROVAL_REQUESTED", {
+              task_id: taskId,
+              agent_id: context.agentId,
+              session_key: context.sessionKey,
+              run_id: context.runId,
+              brief_revision: briefRevision,
+            });
+            // R6 read-back: the request must be visible before anything is
+            // surfaced. A failed write posts no card.
+            const confirmed = readSnapshot(paths);
+            if (!confirmed?.tasks?.[taskId]?.approval_requested_at) {
+              throw new Error("APPROVAL_REQUEST_NOT_DURABLE");
+            }
+          } catch (requestError) {
+            api.logger?.warn?.(
+              `[zink-governance] first-approval request NOT recorded; card suppressed: ${requestError?.message}`,
+            );
+            return;
+          }
+          try {
+            await postFirstSpawnApprovalCard({
+              taskId,
+              briefRevision,
+              targetAgentId,
+              spawnInputs,
+              spawnNodeId,
+            });
+          } catch (postError) {
+            // Fail-closed: the denial stands; the recorded request keeps the
+            // task approvable by text (taskId) on retry. Never throw: this
+            // helper must not change the spawn verdict.
+            api.logger?.warn?.(
+              `[zink-governance] first-approval card NOT posted: ${postError?.message}`,
+            );
+          }
+        }
+
+        // Card content comes from the exported module-level builder (tested
+        // directly); the poster below only transports it.
+
+        async function postFirstSpawnApprovalCard({
+          taskId,
+          briefRevision,
+          targetAgentId,
+          spawnInputs,
+          spawnNodeId,
+        }) {
+          const approvalsForumId = resolveDiscordDestination(
+            config,
+            "discordApprovalsForumId",
+            "approvalsChannelId",
+          );
+          if (!approvalsForumId) {
+            api.logger?.error?.(
+              "[zink-governance] first-approval card not posted: no configured approvals forum",
+            );
+            return;
+          }
+          const token = resolveDiscordBotToken("main");
+          const { title, bodyContent, buttons } = buildFirstSpawnApprovalCard({
+            taskId,
+            runId: context.runId,
+            requesterAgentId: context.agentId,
+            briefRevision,
+            targetAgentId,
+            spawnInputs,
+            spawnNodeId,
+          });
+          const res = await fetch(
+            `https://discord.com/api/v10/channels/${approvalsForumId}/threads`,
+            {
+              method: "POST",
+              headers: {
+                Authorization: `Bot ${token}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                name: title.slice(0, 100),
+                message: { content: bodyContent.slice(0, 2000) },
+                applied_tags: ["1545697161985921064"],
+              }),
+            },
+          );
+          if (!res.ok) {
+            throw new Error(`APPROVAL_CARD_POST_FAILED:${res.status}`);
+          }
+          const thread = await res.json();
+          // R4-EXCEPTION (owner decision 2026-10-07): buttons travel by raw
+          // REST in the SAME call flow as the permitted thread creation. The
+          // native adapter cannot deliver from this hook context (proven live
+          // twice); this /messages post is the sole permitted exception, marked
+          // and test-enforced. See buildApprovalButtonsMessage.
+          try {
+            const msgRes = await fetch(
+              `https://discord.com/api/v10/channels/${thread.id}/messages`,
+              {
+                method: "POST",
+                headers: {
+                  Authorization: `Bot ${token}`,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify(
+                  buildApprovalButtonsMessage(bodyContent, buttons),
+                ),
+              },
+            );
+            if (!msgRes.ok) {
+              throw new Error(`APPROVAL_BUTTONS_POST_FAILED:${msgRes.status}`);
+            }
+            const posted = await msgRes.json();
+            api.logger?.info?.(
+              `[zink-governance] first-approval card posted for task ${taskId} into #approvals (threadId: ${thread.id}, messageId: ${posted.id})`,
+            );
+          } catch (deliveryErr) {
+            api.logger?.error?.(
+              `[zink-governance] first-approval component delivery failed: ${deliveryErr?.message}`,
+            );
+          }
+        }
+
         if (event.toolName === "sessions_spawn") {
           let parsedProposal = null;
           try {
@@ -5593,6 +5931,24 @@ export default {
               : `node-${targetAgentId}`;
           let assignedNodeId = candidateNodeId;
 
+          // M10/T2-R12: the canonical proposal strings are derived ONCE here
+          // and used for BOTH the admitted nodes below and the canonical
+          // proposal further down, so the guard's digest check (handoff vs
+          // node digests) can succeed for a well-formed request. Previously
+          // the nodes carried hardcoded digests ("{}" / the schema filename)
+          // while the guard recomputed over the proposal's actual strings, so
+          // NO live spawn through this path could ever pass lineage — every
+          // approved spawn would still die at LINEAGE_MISMATCH. Same fallback
+          // logic the canonical proposal uses; no new semantics.
+          const canonicalConstraints =
+            typeof parsedProposal?.constraints === "string"
+              ? parsedProposal.constraints
+              : "{}";
+          const canonicalValidation =
+            typeof parsedProposal?.validation_criteria === "string"
+              ? parsedProposal.validation_criteria
+              : "agent-result-payload.schema.json";
+
           const CANONICAL_AGENT_PRIMARY_STACK = Object.freeze({
             main: "decision",
             o1: "data_plant",
@@ -5623,10 +5979,13 @@ export default {
                 dependencies: [],
                 required: false,
                 input_digest: canonicalHash("zink-input-v1", sanitizedTask),
-                constraints_digest: canonicalHash("zink-constraints-v1", "{}"),
+                constraints_digest: canonicalHash(
+                  "zink-constraints-v1",
+                  canonicalConstraints,
+                ),
                 validation_digest: canonicalHash(
                   "zink-validation-v1",
-                  "agent-result-payload.schema.json",
+                  canonicalValidation,
                 ),
               }));
 
@@ -5645,11 +6004,11 @@ export default {
                   input_digest: canonicalHash("zink-input-v1", sanitizedTask),
                   constraints_digest: canonicalHash(
                     "zink-constraints-v1",
-                    "{}",
+                    canonicalConstraints,
                   ),
                   validation_digest: canonicalHash(
                     "zink-validation-v1",
-                    "agent-result-payload.schema.json",
+                    canonicalValidation,
                   ),
                 });
               }
@@ -5707,6 +6066,9 @@ export default {
           // decision: topology, approval, lineage, attempt derivation and the
           // reservation write all happen in guard.beforeToolCall, which is the
           // same function the synthetic route uses.
+          // Single derivation point: the nodes above were digested over these
+          // exact strings, so the guard's recomputation matches by
+          // construction rather than by duplicated fallback logic.
           const canonicalProposal = {
             schema_version: SCHEMA_VERSION,
             governance_version:
@@ -5716,14 +6078,8 @@ export default {
             input_refs: Array.isArray(parsedProposal?.input_refs)
               ? parsedProposal.input_refs
               : [],
-            constraints:
-              typeof parsedProposal?.constraints === "string"
-                ? parsedProposal.constraints
-                : "{}",
-            validation_criteria:
-              typeof parsedProposal?.validation_criteria === "string"
-                ? parsedProposal.validation_criteria
-                : "agent-result-payload.schema.json",
+            constraints: canonicalConstraints,
+            validation_criteria: canonicalValidation,
           };
 
           const canonicalEvent = {
@@ -5745,11 +6101,30 @@ export default {
             assistantText: "",
           };
 
-          const canonicalDecision = await guard.beforeToolCall(
-            canonicalEvent,
-            context,
-            signal,
-          );
+          const canonicalDecision = await guard
+            .beforeToolCall(canonicalEvent, context, signal)
+            .catch(async (gateError) => {
+              // M10/T2-R12: the guard denies by THROWING, so the approval
+              // bootstrap must live in the catch path. The ONLY throw that
+              // creates an approval request is AUTH_APPROVAL_REQUIRED, which
+              // since the R12 guard reorder fires only after params/node/
+              // topology/budget/lineage validation — i.e. the request is
+              // otherwise valid but unapproved (§6). Every other throw
+              // propagates untouched: no request, no card. The original error
+              // is always re-thrown, so the denial is unchanged and REQUESTED
+              // never authorizes the spawn (§4, §12).
+              if (gateError?.message === "AUTH_APPROVAL_REQUIRED") {
+                await requestFirstSpawnApproval({
+                  ownerTaskId: owner.task_id,
+                  briefRevision: owner.task?.brief_revision ?? 1,
+                  targetAgentId,
+                  spawnInputs: sanitizedTask,
+                  spawnNodeId: assignedNodeId,
+                });
+              }
+              throw gateError;
+            });
+
           if (!canonicalDecision?.allow) {
             return (
               canonicalDecision ?? {
@@ -6209,9 +6584,46 @@ export default {
       // M10/T2-R8: this check now runs BEFORE the admission signal is logged, so
       // a duplicate event produces no MAIN_DIRECTED and no admission claim at all.
       const currentSnapshot = readSnapshot(paths);
-      if (currentSnapshot?.tasks?.[taskId]) {
+      const existingTask = currentSnapshot?.tasks?.[taskId];
+      if (existingTask) {
+        // M10/T2-R9-C: a model-fallback re-entry is NOT a replay. OpenClaw's
+        // fallback starts a new lane for the SAME already-authenticated run:
+        // proven live 2026-10-07 16:44:20, msg 1557326125670342669, runId
+        // 98aae218-ae57-447f-8a66-1150262e4f3b — the same runId that opened the
+        // task, 916ms after `model-fallback/decision candidate_failed`. Denying
+        // it here produced `Embedded agent failed before reply` and the owner
+        // received nothing, so a HUNG primary (372s, zero bytes) could never
+        // fail over. Same defect, first seen 2026-10-06 on msg 1556853993278541867.
+        //
+        // The discriminator is the task's own recorded root identity, not a
+        // timing heuristic: a retry re-enters under the SAME runId that opened
+        // the task, so it is a second model attempt of one admitted run. A
+        // genuine re-delivery arrives under a DIFFERENT runId and still denies.
+        // Replay protection is therefore unchanged for every other caller.
+        // Agent and session must also match, so a second agent or a second
+        // session can never ride the root identity through.
+        const isSameAdmittedRun =
+          typeof context.runId === "string" &&
+          existingTask.root_run_id === context.runId &&
+          existingTask.root_agent_id === context.agentId &&
+          existingTask.root_session_key === context.sessionKey;
+        if (isSameAdmittedRun) {
+          // Log-only attribution: admission is already durable, so no second
+          // WORKFLOW_OPENED is written and the signal is not re-emitted.
+          api.logger?.info?.(
+            `[zink-governance] ingress re-entry admitted as model-fallback retry: agent=${context.agentId} msg=${msgId} runId=${context.runId} task=${taskId}`,
+          );
+          return { allow: true, taskId, modelFallbackReentry: true };
+        }
+        // M10/T2-R9-A: log-only. The denying run's runId is recorded so a later
+        // change can tell "this same Discord event re-entered by OpenClaw's own
+        // model fallback" from "this same event re-delivered" using evidence.
+        // Live evidence for why this is needed: on 2026-10-06 the fallback
+        // re-entry of msg 1556853993278541867 was denied here 545ms after the
+        // fallback decision and made zero model calls, while the identical
+        // fallback event on a non-Discord session did call the model.
         api.logger?.warn?.(
-          `[zink-governance] ingress denied: reason=DUPLICATE_DISCORD_EVENT agent=${context.agentId} msg=${msgId}`,
+          `[zink-governance] ingress denied: reason=DUPLICATE_DISCORD_EVENT agent=${context.agentId} msg=${msgId} runId=${context.runId ?? "none"}`,
         );
         return { allow: false, reason: "DUPLICATE_DISCORD_EVENT" };
       }
@@ -6220,14 +6632,39 @@ export default {
       // auditable fact.
       if (admissionSignal)
         api.logger?.info?.(`[zink-governance] ${admissionSignal}`);
+      // M10/T2-R12: mint the owner-facing code here, at admission, and record it
+      // with the OPEN so replay is deterministic (the reducer reads the recorded
+      // value; it never regenerates). `now` and `random` are injectable so this
+      // seam is testable. If generation ever fails the admission still succeeds
+      // with no code — a task must never be refused because a DISPLAY alias
+      // could not be minted, since the canonical 64-hex id remains authoritative.
+      let taskCode;
+      try {
+        taskCode = buildUniqueTaskCode({
+          date: new Date(),
+          random: () => Math.floor(Math.random() * TASK_CODE_ALPHABET.length),
+          isTaken: (candidate) =>
+            Boolean(
+              readSnapshot(paths)?.tasks?.[taskId]?.task_code === candidate,
+            ) ||
+            Object.values(readSnapshot(paths)?.tasks ?? {}).some(
+              (task) => task.task_code === candidate,
+            ),
+        });
+      } catch (err) {
+        api.logger?.warn?.(
+          `[zink-governance] task code not minted for ${taskId}: ${err?.message}`,
+        );
+      }
       recordWorkflowEvent(paths, "WORKFLOW_OPENED", {
         ...origin,
         task_id: taskId,
+        ...(taskCode ? { task_code: taskCode } : {}),
         root_agent_id: context.agentId,
         root_session_key: context.sessionKey,
         root_run_id: context.runId,
       });
-      return { allow: true, taskId };
+      return { allow: true, taskId, ...(taskCode ? { taskCode } : {}) };
     }
     api.on("before_prompt_build", async (_event, context = {}) => {
       // M10/T2: a recognized coordinator run gets its authoritative brief as
@@ -6603,6 +7040,18 @@ export default {
       if (["excel", "power-bi", "sql", "python"].includes(agentId)) {
         api.logger?.warn?.(
           `[zink-governance] Suppressed specialist '${agentId}' direct broadcast to Discord`,
+        );
+        return { block: true, cancel: true };
+      }
+
+      // M10/T2-R12: a governance machine payload is not a reply. The brief
+      // envelope is consumed by the gate at the sessions_spawn call and must
+      // never reach #office as a user-visible message (live 2026-10-08 15:41).
+      // The approval card posted to #approvals is the human-facing artifact for
+      // that turn, so suppression loses nothing.
+      if (isGovernanceMachinePayload(event.content)) {
+        api.logger?.warn?.(
+          `[zink-governance] Suppressed governance machine payload from agent='${agentId}' direct reply (consumed by the spawn gate)`,
         );
         return { block: true, cancel: true };
       }
@@ -7000,7 +7449,17 @@ export default {
           ctx.taskId ||
           activeTasks
             .map((task) => task.task_id)
-            .find((taskId) => content.includes(taskId));
+            .find((taskId) => content.includes(taskId)) ||
+          // M10/T2-R12: the owner's short code. The canonical 64-hex id is tried
+          // FIRST because it is the more specific token, so an existing task that
+          // carries both still correlates on its id. Only tasks that actually
+          // have a code are candidates, and the reducer enforces global code
+          // uniqueness, so a substring hit resolves to exactly one task. A code
+          // that matches nothing falls through to the same EXACT_TASK_CORRELATION
+          // denial as today — correlation is never loosened, only widened.
+          activeTasks
+            .filter((task) => typeof task.task_code === "string")
+            .find((task) => content.includes(task.task_code))?.task_id;
         if (!requestedTaskId) {
           api.logger?.warn?.(
             "[zink-governance] text action blocked: EXACT_TASK_CORRELATION_REQUIRED",

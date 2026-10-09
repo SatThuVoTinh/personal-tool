@@ -6,6 +6,12 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { applyRouterTestEnv } from "./helpers/router-env.mjs";
+
+// M10/T2-R9: the governed model provider resolves its endpoint and
+// credential from the environment at build time; supply non-routable
+// placeholders so this suite can assert config SHAPE only.
+applyRouterTestEnv();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -409,11 +415,26 @@ describe("M8/T3 skill approval identity", () => {
     const customId = authority.buildComponentCustomId(
       "zink:skill:approve",
       "abc123",
-      "d".repeat(64),
+      // The real skill path passes a DIGEST PREFIX, not a full 64-hex digest.
+      // M10/T2-R12: with the host envelope prefixed, a full 64-char revision
+      // would reach 101 chars and exceed Discord's ceiling, which is exactly why
+      // the builder now fails closed instead of emitting an undeliverable id.
+      "d".repeat(authority.SKILL_BUTTON_DIGEST_PREFIX_LENGTH),
     );
+    assert.ok(customId.startsWith("occomp:cid=zink:skill:approve:"), customId);
+    assert.ok(customId.length <= 100, `too long: ${customId.length}`);
     const parsed = authority.parseComponentCustomId(customId);
     assert.equal(parsed.actionKey, "SKILL_APPROVE");
     assert.equal(parsed.taskId, "abc123");
+    assert.throws(
+      () =>
+        authority.buildComponentCustomId(
+          "zink:skill:approve",
+          "abc123",
+          "d".repeat(64),
+        ),
+      /CUSTOM_ID_TOO_LONG/,
+    );
   });
 
   test("T4b: execution-plan and skill-candidate approval subjects are discriminated", async () => {

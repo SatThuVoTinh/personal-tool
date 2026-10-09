@@ -75,6 +75,11 @@
                   "type": "string",
                   "pattern": "^[a-f0-9]{64}$"
                 },
+                "task_code": {
+                  "description": "M10/T2-R12: owner-facing 12-character code (8 date + 4 code characters). Optional so tasks admitted before it replay byte-identically. Display alias only — never an authority token.",
+                  "type": "string",
+                  "pattern": "^[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4}$"
+                },
                 "origin": {
                   "const": "discord"
                 },

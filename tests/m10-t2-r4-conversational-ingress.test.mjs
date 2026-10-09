@@ -429,12 +429,20 @@ test("R4 A1: owner message in a Main-owned thread is admitted (TEST 3)", async (
     assert.equal(tasks.length, 1, "admission opens exactly one task");
     assert.equal(tasks[0].root_agent_id, "main");
     // The admitted message is now a handled message: a replay denies.
+    //
+    // M10/T2-R9-C: the replay must come from a DIFFERENT run. Re-entering under
+    // the SAME runId is not a replay — it is OpenClaw's own model-fallback lane
+    // for the already-admitted run, which R9-C admits on purpose. This test used
+    // to reuse "r4-run-1" for both admissions, so it asserted the fallback shape
+    // denied; the replay shape is constructed here explicitly, and the no-second-
+    // task property is still asserted above.
     await assert.rejects(
       enterNativeRun(
         native,
         productionContext({
           currentMessageId: MID_R4_A1,
           threadId: THREAD_MAIN,
+          runId: "r4-run-1-replay",
         }),
       ),
       /GOVERNANCE_RUN_UNAVAILABLE/u,

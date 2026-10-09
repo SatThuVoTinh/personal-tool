@@ -200,19 +200,108 @@ describe("T2 — self-quota telemetry isolation", () => {
 });
 
 describe("T3 — proactive fallback resolution", () => {
+  it("R9/R12: the governed set is the owner's ordered five-model chain", () => {
+    // M10/T2-R12 (owner decision 2026-10-08): the governed set is the owner's
+    // explicit order, addressed directly. The `execute` combo leaves the
+    // governed set entirely. The order is priority order and is load bearing, so
+    // it is pinned entry by entry rather than as a set.
+    assert.deepEqual(MODEL_ALLOWLIST, [
+      "router/gemini/gemini-3.8-flash",
+      "router/gemini/gemini-3.7-flash",
+      "router/muse-spark-1.3-contributor-free",
+      "router/gemini/gemini-3.6-flash",
+      "router/gemini/gemini-3.5-flash-lite",
+    ]);
+    // `execute` must be gone: a combo resolves a different upstream per call,
+    // which is what the owner removed.
+    assert.equal(
+      MODEL_ALLOWLIST.some((m) => m.endsWith("/execute")),
+      false,
+      "the combo must not be governed",
+    );
+
+    for (const [pct, expectedReason] of [
+      [90, RESOLUTION_REASON.PRIMARY_OK],
+      [21, RESOLUTION_REASON.PRIMARY_OK],
+      [20, RESOLUTION_REASON.PROACTIVE_FALLBACK],
+      [19, RESOLUTION_REASON.PROACTIVE_FALLBACK],
+      [0, RESOLUTION_REASON.PROACTIVE_FALLBACK],
+    ]) {
+      const store = createQuotaTelemetryStore();
+      recordQuotaSnapshot(store, snapshot("o1", pct));
+      const result = resolveRuntimeModel({ store, agentId: "o1", now: T0 });
+      assert.equal(
+        result.model,
+        pct <= 20 ? MODEL_ALLOWLIST[1] : MODEL_ALLOWLIST[0],
+        `${pct}% must resolve ${expectedReason}`,
+      );
+      assert.equal(
+        result.reason,
+        expectedReason,
+        `${pct}% must report ${expectedReason}`,
+      );
+    }
+  });
+
+  it("R12: an injected single-entry allowlist still reports NO_FALLBACK", () => {
+    // The NO_FALLBACK_AVAILABLE branch survives as defensive logic: if a
+    // future configuration ever declares one model again, low quota must say
+    // so instead of silently staying primary. Driven via the optional
+    // allowlist parameter; production always carries two entries now.
+    const single = Object.freeze(["router/gemini/gemini-3.8-flash"]);
+    for (const pct of [20, 0]) {
+      const store = createQuotaTelemetryStore();
+      recordQuotaSnapshot(store, snapshot("o1", pct));
+      const result = resolveRuntimeModel({
+        store,
+        agentId: "o1",
+        now: T0,
+        allowlist: single,
+      });
+      assert.equal(result.model, "router/gemini/gemini-3.8-flash");
+      assert.equal(result.reason, RESOLUTION_REASON.NO_FALLBACK_AVAILABLE);
+      assert.equal(result.latch, "primary");
+    }
+  });
+
+  it("R9: a fresh quota reading still reports PRIMARY_OK, not NO_FALLBACK", () => {
+    // NO_FALLBACK_AVAILABLE must mean "quota is low AND there is nowhere to go".
+    // Reporting it for a healthy quota would misstate a working run.
+    const store = createQuotaTelemetryStore();
+    recordQuotaSnapshot(store, snapshot("o1", 90));
+    const result = resolveRuntimeModel({ store, agentId: "o1", now: T0 });
+    assert.equal(result.reason, RESOLUTION_REASON.PRIMARY_OK);
+  });
+
+  // M10/T2-R9 (owner decision): the governed set is the router's single
+  // `execute` combo entry, so production resolution has no fallback to move to.
+  // These cases therefore drive an EXPLICIT two-entry allowlist through the
+  // optional `allowlist` parameter. That keeps the fallback and hysteresis
+  // branches covered as live logic while production stays single-entry, and it
+  // makes the pair's behaviour checkable again the day a second model is added.
+  const TWO_ENTRY = Object.freeze([
+    "router/execute",
+    "router/gemini/gemini-3.6-flash",
+  ]);
+
   it("TEST B: threshold table", () => {
     const cases = [
-      [90, MODEL_ALLOWLIST[0], RESOLUTION_REASON.PRIMARY_OK],
-      [30, MODEL_ALLOWLIST[0], RESOLUTION_REASON.PRIMARY_OK],
-      [21, MODEL_ALLOWLIST[0], RESOLUTION_REASON.PRIMARY_OK],
-      [20, MODEL_ALLOWLIST[1], RESOLUTION_REASON.PROACTIVE_FALLBACK],
-      [19, MODEL_ALLOWLIST[1], RESOLUTION_REASON.PROACTIVE_FALLBACK],
-      [0, MODEL_ALLOWLIST[1], RESOLUTION_REASON.PROACTIVE_FALLBACK],
+      [90, TWO_ENTRY[0], RESOLUTION_REASON.PRIMARY_OK],
+      [30, TWO_ENTRY[0], RESOLUTION_REASON.PRIMARY_OK],
+      [21, TWO_ENTRY[0], RESOLUTION_REASON.PRIMARY_OK],
+      [20, TWO_ENTRY[1], RESOLUTION_REASON.PROACTIVE_FALLBACK],
+      [19, TWO_ENTRY[1], RESOLUTION_REASON.PROACTIVE_FALLBACK],
+      [0, TWO_ENTRY[1], RESOLUTION_REASON.PROACTIVE_FALLBACK],
     ];
     for (const [pct, expectedModel, expectedReason] of cases) {
       const store = createQuotaTelemetryStore();
       recordQuotaSnapshot(store, snapshot("o1", pct));
-      const result = resolveRuntimeModel({ store, agentId: "o1", now: T0 });
+      const result = resolveRuntimeModel({
+        store,
+        agentId: "o1",
+        now: T0,
+        allowlist: TWO_ENTRY,
+      });
       assert.equal(result.model, expectedModel, `${pct}% -> ${expectedModel}`);
       assert.equal(
         result.reason,
@@ -226,8 +315,13 @@ describe("T3 — proactive fallback resolution", () => {
     const store = createQuotaTelemetryStore();
     recordQuotaSnapshot(store, snapshot("python", 5));
     // Resolution alone decides; no failed request was ever simulated.
-    const result = resolveRuntimeModel({ store, agentId: "python", now: T0 });
-    assert.equal(result.model, MODEL_ALLOWLIST[1]);
+    const result = resolveRuntimeModel({
+      store,
+      agentId: "python",
+      now: T0,
+      allowlist: TWO_ENTRY,
+    });
+    assert.equal(result.model, TWO_ENTRY[1]);
     assert.equal(result.run_scoped, true);
     assert.equal(result.session_override, false);
   });
@@ -236,55 +330,87 @@ describe("T3 — proactive fallback resolution", () => {
     const store = createQuotaTelemetryStore();
     recordQuotaSnapshot(store, snapshot("o1", 19, T0));
     assert.equal(
-      resolveRuntimeModel({ store, agentId: "o1", now: T0 }).model,
-      MODEL_ALLOWLIST[1],
+      resolveRuntimeModel({
+        store,
+        agentId: "o1",
+        now: T0,
+        allowlist: TWO_ENTRY,
+      }).model,
+      TWO_ENTRY[1],
       "19% -> fallback",
     );
     // 21% must HOLD fallback (below the 30% recovery threshold).
     recordQuotaSnapshot(store, snapshot("o1", 21, T0 + 1000));
-    const held = resolveRuntimeModel({ store, agentId: "o1", now: T0 + 1000 });
-    assert.equal(held.model, MODEL_ALLOWLIST[1], "21% holds fallback");
+    const held = resolveRuntimeModel({
+      store,
+      agentId: "o1",
+      now: T0 + 1000,
+      allowlist: TWO_ENTRY,
+    });
+    assert.equal(held.model, TWO_ENTRY[1], "21% holds fallback");
     assert.equal(held.reason, RESOLUTION_REASON.HYSTERESIS_HOLD_FALLBACK);
     // 29% still holds.
     recordQuotaSnapshot(store, snapshot("o1", 29, T0 + 2000));
-    const held2 = resolveRuntimeModel({ store, agentId: "o1", now: T0 + 2000 });
-    assert.equal(held2.model, MODEL_ALLOWLIST[1], "29% holds fallback");
+    const held2 = resolveRuntimeModel({
+      store,
+      agentId: "o1",
+      now: T0 + 2000,
+      allowlist: TWO_ENTRY,
+    });
+    assert.equal(held2.model, TWO_ENTRY[1], "29% holds fallback");
     // Recovery boundary is inclusive at 30%.
     recordQuotaSnapshot(store, snapshot("o1", 29, T0 + 3000));
-    resolveRuntimeModel({ store, agentId: "o1", now: T0 + 3000 });
+    resolveRuntimeModel({
+      store,
+      agentId: "o1",
+      now: T0 + 3000,
+      allowlist: TWO_ENTRY,
+    });
     recordQuotaSnapshot(store, snapshot("o1", 30, T0 + 4000));
     const recovered = resolveRuntimeModel({
       store,
       agentId: "o1",
       now: T0 + 4000,
+      allowlist: TWO_ENTRY,
     });
-    assert.equal(
-      recovered.model,
-      MODEL_ALLOWLIST[0],
-      "30% -> primary (inclusive)",
-    );
+    assert.equal(recovered.model, TWO_ENTRY[0], "30% -> primary (inclusive)");
     assert.equal(recovered.reason, RESOLUTION_REASON.RECOVERED_PRIMARY);
     // 31% is unambiguously primary.
     recordQuotaSnapshot(store, snapshot("o1", 31, T0 + 5000));
     assert.equal(
-      resolveRuntimeModel({ store, agentId: "o1", now: T0 + 5000 }).model,
-      MODEL_ALLOWLIST[0],
+      resolveRuntimeModel({
+        store,
+        agentId: "o1",
+        now: T0 + 5000,
+        allowlist: TWO_ENTRY,
+      }).model,
+      TWO_ENTRY[0],
     );
     // A fresh drop back to 19% re-enters fallback.
     recordQuotaSnapshot(store, snapshot("o1", 19, T0 + 6000));
     assert.equal(
-      resolveRuntimeModel({ store, agentId: "o1", now: T0 + 6000 }).model,
-      MODEL_ALLOWLIST[1],
+      resolveRuntimeModel({
+        store,
+        agentId: "o1",
+        now: T0 + 6000,
+        allowlist: TWO_ENTRY,
+      }).model,
+      TWO_ENTRY[1],
     );
   });
 
   it("TEST D: stale and unknown both keep PRIMARY", () => {
-    // Fresh low quota -> fallback.
+    // Fresh low quota -> fallback (two-entry allowlist; see the note above).
     const fresh = createQuotaTelemetryStore();
     recordQuotaSnapshot(fresh, snapshot("o1", 10, T0));
     assert.equal(
-      resolveRuntimeModel({ store: fresh, agentId: "o1", now: T0 }).model,
-      MODEL_ALLOWLIST[1],
+      resolveRuntimeModel({
+        store: fresh,
+        agentId: "o1",
+        now: T0,
+        allowlist: TWO_ENTRY,
+      }).model,
+      TWO_ENTRY[1],
     );
     // Same value, stale telemetry -> primary.
     const stale = createQuotaTelemetryStore();
@@ -311,10 +437,15 @@ describe("T3 — proactive fallback resolution", () => {
   it("stale telemetry does not latch an agent into fallback", () => {
     const store = createQuotaTelemetryStore();
     recordQuotaSnapshot(store, snapshot("o1", 5, T0));
-    // Force fallback while fresh.
+    // Force fallback while fresh (two-entry allowlist; see the note above).
     assert.equal(
-      resolveRuntimeModel({ store, agentId: "o1", now: T0 }).model,
-      MODEL_ALLOWLIST[1],
+      resolveRuntimeModel({
+        store,
+        agentId: "o1",
+        now: T0,
+        allowlist: TWO_ENTRY,
+      }).model,
+      TWO_ENTRY[1],
     );
     // Now the snapshot goes stale. Stale means PRIMARY, not "hold fallback",
     // because holding a fallback on missing evidence is the degradation the
@@ -340,19 +471,46 @@ describe("T3 — proactive fallback resolution", () => {
     }
   });
 
+  it("TEST M2: a one-entry allowlist can only ever return that entry", async () => {
+    // The MODEL_ALLOWLIST_VIOLATION guard is unreachable by construction — the
+    // resolver only ever chooses primary or fallback, both drawn from the same
+    // allowlist. This asserts the reachable invariant instead: whatever
+    // allowlist is supplied, the result stays inside it, and a single entry
+    // yields that entry for every agent.
+    const single = Object.freeze(["router/execute"]);
+    for (const agentId of AGENTS) {
+      const store = createQuotaTelemetryStore();
+      recordQuotaSnapshot(store, snapshot(agentId, 1, T0));
+      const result = resolveRuntimeModel({
+        store,
+        agentId,
+        now: T0,
+        allowlist: single,
+      });
+      assert.equal(result.model, "router/execute");
+      assert.ok(single.includes(result.model));
+      assert.equal(result.latch, "primary");
+    }
+  });
+
   it("TEST K: concurrent resolution is deterministic and writes no session state", async () => {
     const store = createQuotaTelemetryStore();
     recordQuotaSnapshot(store, snapshot("o1", 10, T0));
     const results = await Promise.all(
       Array.from({ length: 32 }, async () =>
         Promise.resolve().then(() =>
-          resolveRuntimeModel({ store, agentId: "o1", now: T0 }),
+          resolveRuntimeModel({
+            store,
+            agentId: "o1",
+            now: T0,
+            allowlist: TWO_ENTRY,
+          }),
         ),
       ),
     );
     const models = new Set(results.map((r) => r.model));
     assert.equal(models.size, 1, "concurrent resolution must be deterministic");
-    assert.equal([...models][0], MODEL_ALLOWLIST[1]);
+    assert.equal([...models][0], TWO_ENTRY[1]);
     // The only mutated state is the in-process latch; nothing persisted.
     assert.deepEqual(
       [...store.snapshots.keys()],
@@ -384,14 +542,24 @@ describe("T3 — proactive fallback resolution", () => {
     recordQuotaSnapshot(store, snapshot("python", 95, T0));
     const [o1, py] = await Promise.all([
       Promise.resolve().then(() =>
-        resolveRuntimeModel({ store, agentId: "o1", now: T0 }),
+        resolveRuntimeModel({
+          store,
+          agentId: "o1",
+          now: T0,
+          allowlist: TWO_ENTRY,
+        }),
       ),
       Promise.resolve().then(() =>
-        resolveRuntimeModel({ store, agentId: "python", now: T0 }),
+        resolveRuntimeModel({
+          store,
+          agentId: "python",
+          now: T0,
+          allowlist: TWO_ENTRY,
+        }),
       ),
     ]);
-    assert.equal(o1.model, MODEL_ALLOWLIST[1]);
-    assert.equal(py.model, MODEL_ALLOWLIST[0]);
+    assert.equal(o1.model, TWO_ENTRY[1]);
+    assert.equal(py.model, TWO_ENTRY[0]);
   });
 
   it("TEST L: reactive fallback is a separate path and stays available", async () => {

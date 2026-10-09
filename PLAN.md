@@ -1372,10 +1372,10 @@ from this environment and are not claimed.
 
 Status: `IN PROGRESS`
 Task: `M10/T2 - bind a gateway-started coordinator run to its claimed queue attempt, and fence that binding to current execution authority`
-Plan Revision: `M10/T2-R8`
-Parent Revision: `M10/T2-R7` (implementation commit `97dfe54`; observability commit `ef9feb0`)
+Plan Revision: `M10/T2-R9`
+Parent Revision: `M10/T2-R8` (closed live: zero-outbound proven, see `### M10/T2-R8` tail); R7 commits `97dfe54`/`ef9feb0`
 Planning Readiness: `APPROVED`
-Execution Authorization: `YES` (R8 end-to-end per explicit owner authorization: observability deploy, read-only live correlation of owner controlled test, evidence-bound fix, redeploy, live verify)
+Execution Authorization: `YES` (R9 per explicit owner authorization 2026-10-06: replace the 21 Google AI Studio API-key pool with a single external router pool shared by all 7 agents, plus the duplicate-path runId observability line; chain authorized as fix -> test -> deploy -> live verify -> commit)
 Execution Contract: `docs/contracts/execution/ACTIVE.md`
 Behavior Contract: `docs/contracts/coordinator-session-binding.md` (§1-§13 the
 approved design package, §14 the R2 execution-authority addendum)
@@ -1754,6 +1754,565 @@ NOT PERFORMED; live ledger untouched; gateway not restarted; no live
 execution; host lifecycle NOT PROVEN. A deployment requires a separate
 owner authorization (of the resulting R7 commit). See ACTIVE.md R7 and
 CHANGELOG.md Unreleased entry.
+
+### M10/T2-R12 - Approval-bootstrap workflow (owner-authorized)
+
+Owner authorization: EXPLICIT 2026-10-07 - Owner selected Option 2: Main may
+create the first approval request for `sessions_spawn`, but `sessions_spawn`
+remains blocked until Owner approval. This task turns that decision into a
+concrete governed workflow. Approval-bootstrap design is IN scope; everything
+else listed under DO NOT CHANGE stays out.
+
+Task: `M10/T2-R12 - Introduce the smallest governed mechanism allowing a fresh
+Main task to create the first approval request for an otherwise valid
+sessions_spawn, without weakening the existing approval requirement.`
+
+R12 predecessor: HEAD `fea95e5`, R9+R10+R11 working tree uncommitted and
+preserved. R10 deployed and live (guard fix present, gateway active, ledger 110
+events at R12 start). R11 proved identity resolution correct; no identity fix
+was needed or applied.
+
+R12 failover restoration (owner decision 2026-10-07, during R12 live
+verification): measured `execute` single-shot reliability 4/10 (40%). The owner
+ruled one passing turn proves nothing and ordered failover ("model trên lỗi
+thì route xuống model dưới"). Primary `router/execute` plus fallback
+`router/gemini/gemini-3.6-flash` (12/12 measured stable), which fires ONLY on
+primary failure — never shadows the combo. Router-tier protection only, not
+Google-outage protection. Applied via transaction; live config confirms the
+pair; `config validate` passes; gateway active. Proof standard ordered by
+owner: 10 consecutive live turns must all produce output.
+
+R12 requestTimeoutMs lesson (2026-10-07, recorded so it is not retried): a
+per-attempt timeout CANNOT live on the provider models entry — the installed
+runtime validates that entry with a STRICT schema and the gateway refuses to
+start (`Unrecognized key: "requestTimeoutMs"`). The attempt that carried it
+deployed cleanly through preflight+apply and then killed the gateway; recovery
+was removal + re-apply. Code reading had shown `model.requestTimeoutMs` is
+read at transport time and the catalog merge spreads the raw entry, but schema
+validation rejects before the merge ever sees it. Hang protection therefore
+rests on the run-budget abort plus the fallback candidate, not on a per-model
+timeout. A provider-level timeout, if one exists, must be proven on a SCRATCH
+config via `openclaw config validate` BEFORE touching live.
+
+R12 communication section (owner decision 2026-10-07): the `## Communication`
+block (address owner as "anh"/self as "em", Vietnamese with full diacritics,
+agentId explicit on spawn) was added to Common Core in `policy.mjs`, applying
+to all 7 agents. Investigation proved no anh/em instruction existed anywhere
+(bundle/state/config/AGENTS.md) — prior polite address was model mirroring,
+not instruction-following, which is why weaker combo upstreams lost it. The
+change alters per-agent governance_hash, so manifests regenerated; deployed
+via transaction; live workspaces confirmed carrying the section for
+main/o1/excel (spot-checked).
+
+R12 truncated-digest lesson (2026-10-07): a hand-copied predecessor digest
+with 50 chars (copied from a width-truncated display) silently fails closed —
+preflight rejects with no hint which entry is short. Rule: every digest
+entered into `configure.mjs` must be captured programmatically (sha256sum or
+script output piped without truncation), never retyped from terminal display.
+
+R12 buttons status (2026-10-07): the approval THREAD posts via raw REST
+(allowed), but BUTTON delivery via the native outbound adapter fails in the
+tool-call hook context ("Discord send requires a resolved runtime config"),
+proven live twice — threads land in #approvals with no buttons. Owner decision
+2026-10-07: EXPLICIT R4 EXCEPTION granted — raw-REST /messages is permitted
+SOLELY for the approval-buttons post (same thread the rule already permits).
+The exception is marked in code and enforced by test: any /messages REST site
+must carry the R4-EXCEPTION marker with this decision reference. The rule stands
+for everything else.
+
+R12 task codes (owner requirement 2026-10-07, NOT YET IMPLEMENTED): 12-char
+ruled string (8 date + 4 random) as a human task alias alongside the canonical
+64-hex task_id. Requires ledger schema field + text-approval lookup + card
+changes. Scoped as the next task after R12 closes.
+
+R9-C (root cause of "bot không phản hồi", FIXED and deployed txn-deafcdcf):
+the model fallback could never fire for a HUNG primary. Proven live
+2026-10-07 16:38:06 -> 16:44:20 on msg 1557326125670342669, runId
+98aae218-ae57-447f-8a66-1150262e4f3b:
+
+  16:38:06.917 model-fetch start model=execute
+  16:44:18.929 stalled session activeWorkKind=model_call
+                  lastProgress=model_call:started lastProgressAge=372s (0 bytes)
+  16:44:18.964 model-fetch error model=execute elapsedMs=372045 AbortError
+  16:44:19.423 model-fallback/decision candidate_failed
+                  next=router/gemini/gemini-3.6-flash
+  16:44:20.389 ingress denied: reason=DUPLICATE_DISCORD_EVENT runId=98aae218
+  16:44:20.389 [zink-native-gate] enterNativeRun: GOVERNANCE_DENIED
+  16:44:20.449 Embedded agent failed before reply: GOVERNANCE_RUN_UNAVAILABLE
+
+The fallback lane re-enters under the SAME runId and the SAME inbound message
+id, because it is a second model attempt of one already-admitted run, not a
+replay. The duplicate-event guard denied it, so the owner received nothing. Two
+defects, both fixed together:
+
+1. `authenticateIngress` denied any second admission of an open task. It now
+   admits a re-entry whose task ROOT IDENTITY matches exactly (root_run_id +
+   root_agent_id + root_session_key equals the observing run) and logs it as
+   `ingress re-entry admitted as model-fallback retry`. A different runId, a
+   foreign session, a foreign agent, a bot author, a non-Main agent or an
+   unauthorized sender all still deny BEFORE this point. Replay protection is
+   unchanged for every other caller.
+2. `resolveRunModelFor` ran on the re-entry and, because it reads QUOTA (which a
+   model failure never lowers), resolved to the PRIMARY again, pinning the host's
+   reactive failover candidate back onto the model that just aborted at 372s,
+   contradicting its own documented contract ("a real provider failure still
+   takes the native reactive failover path"). The proactive resolution now stands
+   aside for a recognized re-entry only; every other admission is unchanged.
+
+The contrast that proved the diagnosis: turn 16:20 aborted at 120s and DID fail
+over, because that first attempt was classified an internal session and returned
+early before reaching either code path. Real Discord ingress reached both. Same
+defect as R9-A observed on 2026-10-06 (msg 1556853993278541867); R9-A's own
+comment said "Until R9-C this denial is unchanged".
+
+R9-C test corrections (not weakening): four existing tests asserted the WRONG
+shape. They re-entered an admitted message under the SAME runId and called it a
+"replay", so they actually pinned the fallback shape as denied
+(m10-t2-r4-conversational-ingress R4 A1, m8-t2.5-r7-remediation E,
+m8-t2.7-r10-heartbeat-trigger R10 F, m7-t2-openclaw materialized plugin). Each
+now constructs a genuine replay (a different runId) and keeps its original
+security assertion: exactly one task, no new ledger sequence, still denied.
+R9-A's own R9-A1/R9-A2 already used different runIds and still pass.
+
+R9-C entrypoint-digest lesson (2026-10-08, corrected the same day): the
+governance entrypoint allowlist in `configure.mjs` must carry the digest of the
+INSTALLED file. The builder output (`governancePluginFiles().entrypoint`) already
+uses the installed import form `./lib/x`, so `sha256(builder output)` IS the
+installed digest; only the REPO SOURCE differs (`../../lib/x`) and must never be
+hashed. An earlier note in this file claimed the builder digest differed from the
+installed one — that was wrong, and acting on it put a stale intermediate digest
+(`0a63363f…`) in the allowlist, so preflight failed closed with reason
+"Governance plugin entrypoint". Rule unchanged: capture every digest by
+`sha256sum` of the file actually on disk (or by hashing the builder output), and
+never retype a digest copied from an earlier terminal state.
+
+R9-C PROVEN LIVE (2026-10-08 15:11-15:27, msg 1557666673157349417): the
+owner-reported "bị kẹt thinking" turn exercised the exact case R9-C was built
+for, and the fix held:
+
+  15:17:36.251 [model-fallback/decision] candidate_failed
+                  next=router/gemini/gemini-3.6-flash
+  15:17:36.849 ingress re-entry admitted as model-fallback retry: agent=main
+                  msg=1557666673157349417 runId=68b7d19e-… task=ad70a7b89d0c…
+
+598ms after the fallback decision — the re-entry that was DUPLICATE_DISCORD_EVENT
+on 2026-10-06 and 2026-10-07 is now admitted. Ledger stayed correct: sequence
+120->121, exactly one new task, one WORKFLOW_OPENED. The same turn also proved the
+second half of the fix: no proactive modelResolution was emitted on the re-entry.
+
+"kẹt thinking" root cause, NOT governance (2026-10-08): the router was DOWN.
+Every candidate hung, so the failover path had nothing to land on. Measured, not
+inferred:
+
+  router probe, 8/8 fail, both `execute` and `gemini/gemini-3.6-flash`, every one
+    at ~135s with http=000 and zero response bytes
+  WSL -> 172.22.80.1:20128  TCP connect FAILED (6s cap)
+  ping 172.22.80.1  100% packet loss
+  Windows netstat  nothing LISTENING on :20128; no router process present
+  Windows 172.22.80.1 is still the correct WSL vEthernet address
+
+The uniform ~135s is the Linux default SYN timeout (~127s): the POST hung in TCP
+CONNECT and never sent a request, so the gateway's "ETIMEDOUT fetch failed" is a
+connection failure, not an upstream model error. Distinguishing this from an
+upstream outage is the whole point of the probe — the two look identical in
+gateway logs but need completely different responses.
+
+Consequence to remember: when every candidate fails, the governed turn produces
+NO outbound at all, by owner invariant (a zero-output turn must stay silent). So
+a router outage presents to the owner as an endlessly "thinking" bot, with no
+error surface. Diagnose by probing the router TCP port first, not by reading
+model-fetch errors.
+
+### M10/T2-R11 - Run-identity mismatch investigation + minimal fix (owner-authorized)
+
+Owner authorization: EXPLICIT 2026-10-07 - Owner selected option B: investigate
+the run-identity mismatch first. R11 may trace run/task identity end-to-end,
+prove or disprove the stale-task hypothesis, apply the minimal fix if proven,
+add regression tests, and live-verify. R11 is NOT authorization to redesign the
+approval system.
+
+Task: `M10/T2-R11 - Investigate and, if proven, minimally repair incorrect
+task/run identity resolution or propagation observed at the sessions_spawn
+governance gate. Approval-bootstrap design is explicitly out of scope.`
+
+R11 predecessor: HEAD `fea95e5`, R9+R10 working tree uncommitted and preserved.
+R10 deployed and live (guard `482b4938…` with fix, index `c2ef4363…`, gateway
+active, ledger 110 events at R11 start).
+
+R11 execution outcome (2026-10-07):
+
+- STEPs 0-1: baseline recorded, R11 task recorded here. No reset, no R10 change.
+- STEPs 2-3: identity pipeline mapped (Discord msgId → deriveTaskId → taskId;
+  host params.runId → root_run_id at admission AND trusted.runId at gate install,
+  same anchor). Identifiers distinguished; taskId ≠ runId preserved end-to-end.
+- STEPs 4-6: the stale-task hypothesis is REJECTED with direct evidence. The
+  earlier confusion came from reproducing against the WRONG task: yesterday's
+  b89a87cf (msg ...541867, 0 nodes) yields MISSING_PREREQUISITE, while the live
+  turn's own task c89af0308 (msg ...104048, 7 nodes via a plugin-admitted brief
+  at seq 110, 225ms before the block) yields AUTH_APPROVAL_REQUIRED when driven
+  with the live args — exactly matching live. There was never a duplicate
+  admission (seq 108 = yesterday's msg, seq 109 = tonight's msg) and never a
+  stale resolution.
+- STEPs 7-8: no identity bug exists; NO FIX applied (correctly — inventing one
+  would violate the failure rule). Identity propagation is correct as built.
+- STEP 9: `tests/m10-t2-r11-run-identity-resolution.test.mjs` locks in correct
+  resolution (two tasks, one session: approved run passes its gate, fresh run
+  hits AUTH_APPROVAL_REQUIRED, repeat consistent, bogus run denied). Registered
+  in `package.json`. Full suite: 1212 tests / 1168 pass / 0 fail / 44 skipped.
+- STEPs 10-12: AUTH_APPROVAL_REQUIRED on the correct current task is the right
+  verdict — R11 identity path = PASS, approval-bootstrap = OUT OF SCOPE (no
+  change). No new live turn was needed: the already-observed R10 turn IS the
+  live verification, retrospectively proven correct.
+- STEP 13: R11 touched only PLAN.md + one test file. No policy/manifest/
+  capability/tool/lineage/authorization change. R10 intact.
+
+### M10/T2-R10 - Production policy-loading path fix (owner-authorized)
+
+Owner authorization: EXPLICIT 2026-10-06 - Owner selected Option A: fix the
+proven production policy-loading path bug. This approval covers execution of
+this task only: fix -> test -> deploy -> live verify. No re-authorization rounds
+for steps inside this scope.
+
+Task: `M10/T2-R10 - R10 = production policy-loading path fix only`
+
+R10 root cause (proven by evidence, not inference):
+
+1. Live block, exactly once: `beforeToolCall blocked: RUNTIME_CAPABILITY_MISMATCH`
+   for `session_status` (2026-10-06 23:16:07, msg 1557063140968104048).
+2. Brute-force over every runId in the live snapshot × every params shape proves
+   the deployed guard plus live state CANNOT produce this verdict when policy is
+   loaded — only allow / POLICY_DENIED / EXECUTION_STATE_UNKNOWN / LINEAGE_MISMATCH.
+3. The only path to it is the empty-registry fallthrough (`guard.mjs` zink path):
+   `OPENCLAW_BUILT_IN_TOOL_IDS` empty, so a built-in tool is not recognised and
+   `ZINK_CAPABILITY_REGISTRY[tool]` is undefined.
+4. The registry is empty in production because `guard.mjs:116`
+   `path.resolve(pathToFileURL(_moduleDir), candidate)` throws `ERR_INVALID_ARG_TYPE`
+   (replicated directly: `path.resolve` rejects a URL object), the throw is
+   swallowed by the surrounding `try/catch`, and the cwd-relative fallback
+   `integrations/openclaw/lib/policy.mjs` misses because the gateway runs with
+   cwd `/home/hoang_vinh` (proven: file absent there).
+5. The earlier reproduction falsely passed because its shell cwd was the repo root,
+   where the fallback hits. Production never had that luck.
+
+Consequence: every built-in tool call (`session_status`, `sessions_spawn`,
+`sessions_yield`, `agents_list`) has always failed in production. Main could only
+reply conversationally and could never delegate, so the approval it promised for
+#approvals was never created and no result ever reached #results.
+
+R10 approved scope: the one-line path-resolution fix in `guard.mjs` ONLY, plus its
+predecessor digest, regression test, and the deploy/verify chain. No policy,
+manifest, capability, tool, lineage, authorization, approval, router, model, or
+quota change. R10 restores existing governance; it does not reinterpret policy.
+
+R10 excluded scope: everything listed under MUST NOT change in the owner approval.
+
+R10 execution outcome (2026-10-07):
+
+- STEP 0: root confirmed, HEAD `fea95e5`, R9 tree uncommitted, broken expression
+  at `guard.mjs:116`, guard sha `00f0e974`.
+- STEP 1: R10 recorded here. STEP 2: one-line fix applied (diff shown in report).
+- STEP 3: `tests/m10-t2-r10-production-policy-load.test.mjs` (5 tests) +
+  `tests/fixtures/r10-policy-load-probe.mjs`. The probe runs with cwd set to an
+  EMPTY directory. Negative control: with the fix stashed, 4/5 fail with exactly
+  `RUNTIME_CAPABILITY_MISMATCH` — the live incident signature reproduced.
+- STEP 4: probe run with cwd exactly `/home/hoang_vinh`: session_status allow,
+  agents_list allow, spawn AUTH_APPROVAL_REQUIRED, yield SPAWN_UNKNOWN,
+  bogus-run EXECUTION_STATE_UNKNOWN.
+- STEP 5: full suite 1211 tests / 1167 pass / 0 fail / 44 skipped; lint clean;
+  format clean; repo:check PASS. R10 test registered in `package.json`.
+- STEP 6: R10 changed only `guard.mjs` (one functional line + comment),
+  `configure.mjs` (guard predecessor digest), tests, `package.json`, PLAN.md.
+  No policy/manifest/capability/tool/lineage/authorization change.
+- STEP 7: apply `txn-061197d4…` PASS. Deployed guard carries the fix
+  (sha `482b4938…`). `config validate`: Config valid. Gateway active, 7/7
+  providers, 0 timeouts. Resolver hand-restored to 29-id (R9-D) after the apply
+  rewrote it to 8-id.
+- STEP 8: owner sent `@Quản Lý tạo giùm anh 1 file Excel` (msg 1557079622833668231,
+  00:18:36). MAIN_DIRECTED, model-fetch via router/execute status 200, then
+  `beforeToolCall blocked: AUTH_APPROVAL_REQUIRED` for sessions_spawn — the
+  NORMAL governed path, NOT the empty-registry failure. R10's fix is proven live.
+- STEP 9/10: NO approval appeared in #approvals; bot replied conversationally.
+  Per the FAILURE RULE, R10 = BLOCKED on criteria 14-15. The failure is OUTSIDE
+  R10 scope: the gate correctly denied an unapproved spawn, but nothing creates
+  the FIRST approval request (the only WORKFLOW_APPROVAL_REQUESTED path needs a
+  child announce, which needs a spawn, which needs approval), and evidence shows
+  the live spawn resolved a stale task (exact repro yields MISSING_PREREQUISITE
+  for tonight's task, live yielded AUTH_APPROVAL_REQUIRED which requires
+  nodes>0). Follow-ups needed: (a) approval-bootstrap design decision,
+  (b) run-identity investigation as a separate task.
+
+### M10/T2-R9 - External router pool + duplicate-path retry observability (owner-authorized)
+
+Owner authorization: EXPLICIT 2026-10-06 - replace the 21 Google AI Studio
+key pool with one external router pool shared by all 7 agents; add runId to
+the duplicate-denial log line so a later change can be evidence-bound. Chain
+authorized as fix -> test -> deploy -> live verify -> commit. Owner deferred
+the provider-id naming decision and declared the router's own combo sufficient,
+so model ids are a changeable detail, not an approval gate.
+
+Task: `M10/T2-R9 - make the governed model provider an external router pool,
+and make the duplicate-guard denial attributable`
+
+R9 evidence gathered read-only before planning (no assumption):
+
+1. Google AI Studio is unstable in exactly the two ways observed live:
+   `Google stream ended before a terminal finish reason` (2 occurrences: 2 on
+   2026-10-04, 2 on 2026-10-06) and `Google Generative AI API error (503):
+   ... high demand ... [code=UNAVAILABLE]` (2 on 2026-10-06). These produced
+   `GOVERNANCE_COMPLETION_UNAVAILABLE` and no Discord output.
+2. Router reachability is asymmetric: from WSL `localhost:20128` is `http=000`
+   (WSL is NAT, `/etc/wsl.conf` has no `networkingMode=mirrored`), while the
+   Windows host default gateway `172.22.80.1:20128` is `http=200`. The address
+   is the WSL default route and is NOT stable across WSL restarts, so the
+   endpoint must be resolved at service start, not hardcoded.
+3. Router model ids are NOT public Google names (`gemini/gemini-3.6-flash`,
+   `-3.5-flash-lite`, `-3.7-flash`, `-3.1-flash-lite-preview`,
+   `gemini/gemini-3-flash-preview`), so `MODEL_ALLOWLIST` values must change.
+   Verified `http=200` for all five gemini ids. The whole `kr/*` family returns
+   `http=503 ... The bearer token included in the request is invalid`.
+4. The provider swap is NOT a URL change: `PLUGIN_ALLOWLIST`,
+   `GOOGLE_PROFILE_IDS` (21), `SECRET_REFS.gemini` (21),
+   `PASS_ENTRY_IDS.gemini` (21), `MODEL_ALLOWLIST`,
+   `authProfileProvider`, `provider`, the `MODEL_ALLOWLIST_VIOLATION`
+   enforcement in `quota-telemetry.mjs`, and the live
+   `models auth order get --provider google` check in `verify.mjs` are all
+   pinned to `google`.
+5. Duplicate guard boundary proven by live trace, not inference. One fallback
+   event produced two different outcomes by session origin: an internal session
+   (`session:agent:main:main`) DID call `model-fetch start
+   gemini-flash-lite-latest`; the Discord-originated session
+   (`session:agent:main:discord:channel:1545425766161063937`) called no model
+   and was denied `DUPLICATE_DISCORD_EVENT` 545ms after the fallback decision,
+   because `taskId = deriveTaskId({origin_message_id, agent_id})` has no
+   attempt dimension. The ledger correctly holds exactly one
+   `WORKFLOW_OPENED` (sequence 107), so idempotency is correct; the guard also
+   kills the retry. `deriveTaskId` is the canonical audit key validated by
+   `workflow.mjs`, so attempt may NOT be folded into it.
+
+R9 approved scope:
+
+- R9-A observability: append `runId` to the `DUPLICATE_DISCORD_EVENT`
+  warning. Log-only, zero behavior change, no contract or control change.
+- R9-B router pool: introduce the router as the single governed model
+  provider for all 7 agents, retire the 21 google profiles and their 21
+  secret refs from the generated config and secret plan, and resolve the
+  endpoint at service start.
+- R9-C fallback discrimination: DEFERRED by owner decision. Blocked on R9-A
+  plus a reproduction, because the discriminating signal (whether the retry
+  carries a different `runId`) is not yet observable. R9-C MUST NOT be
+  implemented from inference.
+
+R9 excluded scope: no change to `deriveTaskId`; no weakening or removal of the
+duplicate guard; no change to `WORKFLOW_OPENED` idempotency; no second copy of
+the admission policy; no dependency or lockfile change; no touching the Discord
+native ingress seam, `ackReaction`, or `enterNativeRun`; no restoring or
+rewriting any closed task; no secret value written into any repository file.
+
+R9 deployment incident (2026-10-06, recorded verbatim; the apply was NOT yet
+transactionally completed at the time of writing):
+
+1. The first `operator-apply.mjs` run FAILED at stage `builder-apply` and rolled
+   back cleanly: `txn-cccbf758990142f0dd279173c6dc7ea401599f9a6cc73937df5150f7f6f4a824`,
+   `rollbackSucceeded: true`, ledger still 107 events / sha `3fc0f79c…`, live
+   entrypoint restored to `f4ed9d9c…`. Cause: `configure.mjs` carries TWO
+   allowlist gates (preflight mode and apply mode) with independently maintained
+   digest lists, and only the preflight-mode list had been updated.
+2. A diagnostic `configure.mjs --apply` was then run DIRECTLY, bypassing the
+   transaction wrapper, to surface the real error. This was a process violation
+   and it mutated live files. It exposed a second defect: `models.providers.*.models`
+   is validated by the installed runtime as an ARRAY of model descriptors, not as
+   a map. The object shape made openclaw refuse to start
+   (`Invalid input: expected array, received object`). Corrected to
+   `ROUTER_PROVIDER_MODEL_IDS.map((modelId) => ({ id: modelId, name: modelId }))`.
+3. That same diagnostic apply wrote an 8-id pass resolver while the running config
+   still referenced the previous ids, so every gateway start failed with
+   `SecretProviderResolutionError: Exec provider "pass_store" exited with code 1`.
+   Recovery was a revert of the resolver to its last committed content
+   (`git archive HEAD`, 29 ids, sha `46cf5df7…`), which is a committed artifact,
+   not a new change, plus `systemctl --user reset-failed` because the unit had
+   entered a start rate-limit.
+4. Consequence still open at the time of writing: the live state is the product of
+   a direct apply rather than a transaction. The router provider IS active
+   (`agent model: router/gemini/gemini-3.6-flash`, google plugin absent, 7/7
+   providers initialised, 0 READY timeouts), but the resolver allowlist still
+   carries the 21 GEMINI ids, so R9's "retire the 21-key pool" goal is not yet met
+   on disk, and no model call has yet been observed through the router.
+5. R9-C remains blocked on R9-A plus a reproduction.
+
+R9 third key location, found after the R9 apply (`txn-4e004486…`, status PASS):
+
+The 21 Google keys live in a THIRD place that R9's plan missed. Each agent has
+its own `auth_profile_store` row in
+`~/.openclaw-zink/agents/<id>/agent/openclaw-agent.sqlite`, holding three
+`google:zink-NN` profiles whose `keyRef` points at `pass_store`
+(main 01-03, o1 04-06, o2 07-09, excel 10-12, power-bi 13-15, sql 16-18,
+python 19-21). OpenClaw reads these at startup to build providers, INDEPENDENT of
+`openclaw.json`, so removing `auth.profiles` from the config did not remove them.
+The store is cumulative, not rebuilt from config: excel still held
+`google:zink-10..12` while the config no longer declared any profile.
+
+Consequence: with the resolver narrowed to 8 ids, every gateway start failed,
+because the runtime requested all 29 (`ids.some((id) => !ALLOWED_IDS.has(id))`
+sets `exitCode = 1`). Proven by a non-invasive stdin-logging shim that recorded
+50 identical requests, each listing the 8 needed ids plus
+`GEMINI_API_KEY_01..21`.
+
+Owner decision 2026-10-06: option (d). OpenClaw 2026.6.34 exposes no CLI that
+deletes an auth profile — verified exhaustively: `models auth list` is read-only,
+`models auth order set/clear` mutates ORDER STATE only (tested on excel: the
+store kept all three profiles), `paste-api-key`/`login`/`add` only add, and
+`agents delete` removes a whole agent. So the supported path does not exist and
+editing the auth store was NOT authorized.
+
+R9-D applied: the pass resolver was reinstalled at its last COMMITTED content
+(29 ids, sha `46cf5df7…`, rebuilt from `git archive HEAD`), which is a committed
+artifact rather than a new change. The gateway then started clean:
+`active/running`, PID 533347, `NRestarts=0`, 7/7 providers initialised, 0 READY
+timeouts, 0 ECONNRESET, 7 established connections, and
+`agent model: router/gemini/gemini-3.6-flash` with only
+`discord, zink-governance` loaded.
+
+R9 completion status, stated honestly:
+
+- DONE and verified: the governed model provider is the external router; the 21
+  profiles and 21 secret refs are gone from `openclaw.json`, from
+  `zink-auth-secret-plan.json` (0 targets), from `zink-auth-order-plan.json`
+  (0 agents) and from `plugins.allow`; `MODEL_ALLOWLIST` is enforced against the
+  router ids; `verify.mjs` gained a live router reachability probe.
+- NOT DONE: the 21 profiles still exist in the 7 agent auth stores, and the
+  resolver allowlist is deliberately back at 29 ids because the runtime still
+  requests them. They cannot authenticate — `google` is not an allowed plugin and
+  the config declares no profile — but "retire the 21-key pool" is NOT complete.
+- NOT YET OBSERVED: a single model call completed through the router.
+- The live resolver is intentionally not what the repository generator emits. The
+  next transaction apply will rewrite it to the 8-id build and will fail closed
+  again until the auth-store prune is authorized. R9-D is therefore a service
+  restoration, not the final state.
+
+Authorization still required before R9 can close: deleting the `google:zink-NN`
+profiles from the 7 `auth_profile_store` rows (a write outside any repository
+transaction).
+
+R9 model selection and upstream measurements (owner decision 2026-10-06):
+
+The owner directs the primary to `execute`, the router's combo entry, which the
+router advertises as `owned_by: "combo"`. Live probes of the whole 52-model
+catalog established what can actually serve a request:
+
+| group | count | result |
+| --- | --- | --- |
+| `gemini/*` | 7 | works |
+| `combo: execute` | 1 | works; resolves per request into `gemini-3.6/3.7/3.8-flash` and `gemini-3.5-flash-lite` |
+| `combo: max-code`, `anythingllm` | 2 | `400` provider error |
+| `kr/*` | 40 | `403 invalid bearer token` on every probe — router-side credential is broken |
+| `openrouter/*` | 2 | `404 unavailable` / `400` not a chat model |
+
+Stability, 12 identical calls each, same prompt and `max_tokens=2048`:
+
+    execute                       ok=8   fail=4   (33%)
+    gemini/gemini-3.6-flash       ok=12  fail=0
+    gemini/gemini-3.5-flash-lite  ok=12  fail=0
+
+`execute` failures carry NO upstream model id, so they occur at the router tier
+before any Gemini upstream is reached; the combo's rotation cannot help with
+those. It was 25/25 in a later window, so the rate is variable rather than fixed.
+It remains the primary because the owner wants the combo.
+
+The fallback is `gemini/gemini-3.6-flash`: a different concrete upstream from
+anything `execute` resolved to. This mitigates a single bad upstream but is
+NOT independent of Google, because Gemini is currently the only working family
+on this router. True independence requires repairing the router's `kr/*`
+credential, which is outside this repository.
+
+Token-budget finding, because it reproduces the exact failure that killed Main on
+2026-10-06 09:22 (`Google stream ended before a terminal finish reason`):
+
+    execute max_tokens=40    finish=length  content EMPTY  (all tokens -> reasoning)
+    execute max_tokens=100   content EMPTY
+    execute max_tokens=300+  finish=stop    content='PONG'
+
+`execute` carries `reasoning: true` with `thinkingCanDisable: false`, so a small
+output budget is spent entirely on reasoning and yields no content. Whether
+OpenClaw sends an explicit budget for the `openai-completions` adapter was NOT
+verified; if it does not, this is a live risk for `execute` specifically.
+
+R9 apply #3 (`txn-aaf446fe06e684852f5be12ca55505d1a28c8b79fc61b2e07027bb1ebd3b25bf`,
+status PASS) baked `router/execute` as primary and `router/gemini/gemini-3.6-flash`
+as fallback. The same apply correctly rewrote the pass resolver to the 8-id build,
+which made the gateway fail again for the already-documented reason (the 21
+auth-store profiles are still requested). R9-D was re-applied from the last
+committed resolver to restore service. Gateway state after restore: `active`,
+PID 535615, 7/7 providers initialised, 0 READY timeouts, 0 ECONNRESET,
+`agent model: router/execute`, plugins `discord, zink-governance`, ledger 107
+events / sha `3fc0f79c`.
+
+R9 maxTokens (owner decision A, 2026-10-06):
+
+`execute` has reasoning=true with thinkingCanDisable=false. Measured: a tight
+output budget spends everything on reasoning and returns EMPTY content with
+finish=length — the exact failure that killed Main on 2026-10-06 09:22. OpenClaw
+sends the request with NO max_tokens field when no budget is declared (proven in
+the installed bundle: `resolveOpenAICompletionsMaxTokens` reads `options?.maxTokens`,
+then `resolveMaxTokensParam(model.params)`, then `model.maxTokens` — all three
+absent for `{id, name}` — so `clampedMaxTokens` is undefined and neither
+`max_tokens` nor `max_completion_tokens` is set).
+
+The owner chose to declare 64000 (the router's own advertised
+max_completion_tokens, not an invented number) rather than leave the budget to a
+hidden router-side default. The provider entry is now
+`{id: "execute", name: "execute", params: {maxTokens: 64000}}`; the runtime reads
+it via `resolveMaxTokensParam(model.params)` and sends it unclamped
+(`clampToModelMaxTokens=false` for the params source).
+
+Evidence, not assumption: `models.providers.*.models` is an ARRAY (an object
+shape fails the installed validator outright), and openclaw's OWN
+`config validate` returns `Config valid` for the live config carrying the params
+entry — proven first on a scratch copy, then on the live file after deploy.
+At the same decision the governed set was reduced to the single `execute` entry:
+`ROUTER_PROVIDER_MODEL_IDS = ["execute"]`, `MODEL_ALLOWLIST = ["router/execute"]`,
+`fallbacks: MODEL_ALLOWLIST.slice(1)` (empty, never `[undefined]`), and the
+resolver reports `NO_FALLBACK_AVAILABLE` only when quota is actually low, never
+for a healthy reading.
+
+R9 apply #4 (`txn-cdfafd27ec20e4dceca47b1a78de37086e7c804b41cf98a6aa180351289a2288`,
+status PASS) deployed the maxTokens entry. R9-D was re-applied after it for the
+same documented reason. Gateway state: `active`, PID 539914, 7/7 providers, 0
+READY timeouts, `agent model: router/execute`, ledger 107 / sha `3fc0f79c`.
+
+What is PROVEN vs what is NOT for maxTokens: proven that the runtime schema
+accepts the entry and that the code path from `model.params.maxTokens` to the
+wire payload exists in the installed bundle. NOT proven by a live wire capture:
+no Discord turn has run since this deploy, so no `model-fetch` has been observed
+with the new primary. A real `@Quản Lý` turn that returns content (not empty) is
+the behavioral proof still missing.
+
+The recurring pattern is now explicit and is a consequence of one ungranted
+authorization: EVERY transaction apply writes the narrow 8-id resolver and the
+gateway fails until the resolver is hand-restored. The durable fix is the
+auth-store prune, not another apply.
+
+Operator router environment (R9, outside the repository):
+
+`~/.openclaw-zink/router.env`, mode 600, holds `ZINK_ROUTER_HOST` /
+`ZINK_ROUTER_PORT` / `ZINK_ROUTER_API_KEY`. It is consumed by the APPLY path
+only; the running gateway does not need it, because OpenClaw has no config
+templating and therefore reads literal strings from `openclaw.json`. Verified:
+`resolveRouterBaseUrl()` and `resolveRouterApiKey()` accept the file's values, and
+the credential does not appear anywhere in the repository.
+
+`ZINK_ROUTER_HOST` is the WSL default route (the Windows host). It is NOT stable
+across WSL restarts. After a WSL restart the operator must re-run
+`operator-apply.mjs` so the new address is baked in; `verify.mjs` reports
+`ROUTER_UNREACHABLE` / `ROUTER_HTTP_<status>` when the baked address has gone
+stale. This is a known open risk, accepted because OpenClaw offers no templating.
+
+R9 open risks recorded at planning: the WSL default-route address can change on
+WSL restart, which would silently break the endpoint; the router key was pasted
+into chat and must be rotated by the owner; `kr/*` router models are broken
+upstream; and the durable fix for the 2026-10-06 gateway wedge (a long-lived
+gateway process that could not re-establish any Discord gateway session after an
+unexplained transient network event, recovering only on restart) remains an
+unfixed open defect and is NOT part of R9.
 
 ### M10/T2-R8 - Discord conversational ingress end-to-end (owner-authorized single handling)
 

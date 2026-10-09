@@ -28,6 +28,12 @@ import {
   upgradeEmptyLegacyLedger,
 } from "../integrations/openclaw/topology/lib/ledger.mjs";
 import { createGovernanceGuard } from "../integrations/openclaw/topology/lib/guard.mjs";
+import { applyRouterTestEnv } from "./helpers/router-env.mjs";
+
+// M10/T2-R9: the governed model provider resolves its endpoint and
+// credential from the environment at build time; supply non-routable
+// placeholders so this suite can assert config SHAPE only.
+applyRouterTestEnv();
 import {
   AGENT_IDS,
   governancePluginFiles,
@@ -544,7 +550,7 @@ test("materialized plugin imports canonical assets and requires native invocatio
         content: "@main ordinary request",
         mentions: [{ username: "main" }],
         sessionKey: "main-session",
-        runId: "main-run",
+        runId: "main-run-replay",
       }),
       /GOVERNANCE_RUN_UNAVAILABLE/u,
     );

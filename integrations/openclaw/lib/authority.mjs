@@ -1364,6 +1364,20 @@ export const APPROVAL_SUBJECT_TYPES = Object.freeze({
 // A16/A17: Build a namespaced custom_id string bound to task + revision.
 // The revision argument is the approval plan_version or attempt number so that
 // replayed or stale buttons for a different revision can be detected.
+//
+// M10/T2-R12: the id is wrapped in the host's component wire envelope
+// `occomp:cid=<componentId>`. A bare `zink:...` id is REJECTED by the host on
+// the interaction: `parseDiscordComponentCustomId` requires the parsed key to be
+// `occomp`, so it returned null and the host answered every click with "This
+// component is no longer valid." — proven live 2026-10-08 15:45:08
+// (`discord component button: failed to parse component data`). `parseComponentCustomId`
+// below already unwraps this prefix, so both the wire format and the internal
+// format stay understood by one parser.
+export const DISCORD_COMPONENT_CUSTOM_ID_PREFIX = "occomp:cid=";
+
+/** Discord's hard ceiling on custom_id length. Exceeding it fails the POST. */
+const DISCORD_CUSTOM_ID_MAX_LENGTH = 100;
+
 export function buildComponentCustomId(actionType, taskId, revision) {
   if (!Object.values(DISCORD_COMPONENT_ACTION_NAMESPACE).includes(actionType))
     throw new Error(`Unknown action type: ${actionType}`);
@@ -1371,7 +1385,36 @@ export function buildComponentCustomId(actionType, taskId, revision) {
     throw new Error("taskId must be a non-empty string");
   if (typeof revision !== "string" || revision.length === 0)
     throw new Error("revision must be a non-empty string");
-  return `${actionType}:${taskId}:${revision}`;
+  const componentId = `${actionType}:${taskId}:${revision}`;
+  // `occomp:cid=` is the only envelope the host understands, so a component id
+  // that does not fit can never be delivered. Fail closed here instead of
+  // posting a button Discord silently refuses.
+  assertCustomIdFits(
+    `${DISCORD_COMPONENT_CUSTOM_ID_PREFIX}${componentId}`,
+    componentId,
+  );
+  return `${DISCORD_COMPONENT_CUSTOM_ID_PREFIX}${componentId}`;
+}
+
+/**
+ * Fail closed when a custom_id would exceed Discord's ceiling. The longest
+ * governed namespace (APPROVAL_REVISION) with a 64-hex task id lands at exactly
+ * 100 characters, so this is a live constraint, not a theoretical one.
+ */
+export function assertCustomIdFits(customId, componentId) {
+  if (typeof customId !== "string" || customId.length === 0)
+    throw new Error("CUSTOM_ID_REQUIRED");
+  if (customId.length > DISCORD_CUSTOM_ID_MAX_LENGTH) {
+    throw new Error(
+      `CUSTOM_ID_TOO_LONG: ${customId.length} > ${DISCORD_CUSTOM_ID_MAX_LENGTH}`,
+    );
+  }
+  // The envelope is only valid when the component id itself carries no `;` or
+  // `%`, which the host would otherwise require to be percent-encoded.
+  if (/[%;]/u.test(componentId)) {
+    throw new Error(`CUSTOM_ID_REQUIRES_ENCODING: ${componentId}`);
+  }
+  return customId;
 }
 
 // A16: Parse a custom_id back to its components. Returns null if malformed.
@@ -1430,7 +1473,14 @@ export function buildSkillComponentCustomId(
     !/^[a-f0-9]{64}$/u.test(contentSha256)
   )
     throw new Error("contentSha256 must be a 64-character hex digest");
-  return `${actionType}:${proposalId}:${contentSha256.slice(0, SKILL_BUTTON_DIGEST_PREFIX_LENGTH)}`;
+  // M10/T2-R12: same host wire envelope as buildComponentCustomId — see the note
+  // there. Without it every skill button click answers "This component is no
+  // longer valid."
+  const componentId = `${actionType}:${proposalId}:${contentSha256.slice(0, SKILL_BUTTON_DIGEST_PREFIX_LENGTH)}`;
+  return assertCustomIdFits(
+    `${DISCORD_COMPONENT_CUSTOM_ID_PREFIX}${componentId}`,
+    componentId,
+  );
 }
 
 // A19: Stale interaction rejection — returns true when the parsed custom_id's

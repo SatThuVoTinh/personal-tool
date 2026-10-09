@@ -2,6 +2,8 @@ import {
   buildSpawnProposal,
   canonicalHash,
   deriveTaskId,
+  TASK_CODE_LENGTH,
+  TASK_CODE_PATTERN,
 } from "./canonical.mjs";
 import { validateContract } from "./schema.mjs";
 import { outcomeReasonAllowed, workflowAggregate } from "./runtime.mjs";
@@ -265,15 +267,23 @@ export function applyWorkflowEvent(
   const next = globalThis.structuredClone(snapshot);
   const eventTime = eventTimestamp || new Date().toISOString();
   if (type === "WORKFLOW_OPENED") {
-    exactKeys(payload, [
-      "task_id",
-      "origin",
-      "origin_principal_ref",
-      "origin_message_id",
-      "root_agent_id",
-      "root_session_key",
-      "root_run_id",
-    ]);
+    exactKeys(
+      payload,
+      [
+        "task_id",
+        "origin",
+        "origin_principal_ref",
+        "origin_message_id",
+        "root_agent_id",
+        "root_session_key",
+        "root_run_id",
+      ],
+      // M10/T2-R12: the owner-facing task code, OPTIONAL on purpose — the 48 tasks
+      // already in the live ledger predate it, and replaying them must stay
+      // byte-identical, so a task without a code is valid and simply has none.
+      // Passing this as a REQUIRED key rejects every pre-existing event.
+      ["task_code"],
+    );
     requireCondition(payload.origin === "discord", "POLICY_DENIED");
     requireCondition(
       /^[1-9][0-9]{16,19}$/u.test(payload.origin_message_id) &&
@@ -292,6 +302,27 @@ export function applyWorkflowEvent(
       deriveTaskId(payload) === payload.task_id,
       "LINEAGE_MISMATCH",
     );
+    // M10/T2-R12: when a code IS supplied it must be exactly the ruled 12
+    // characters. Absent is allowed (legacy task); malformed is never allowed,
+    // because a code the owner is told to type must never be ambiguous.
+    if (payload.task_code !== undefined) {
+      requireCondition(
+        typeof payload.task_code === "string" &&
+          payload.task_code.length === TASK_CODE_LENGTH &&
+          new RegExp(TASK_CODE_PATTERN, "u").test(payload.task_code),
+        "SCHEMA_INVALID",
+      );
+      // Two live tasks must never share a code, or an owner approval could be
+      // attributed to the wrong task. Checked against every OTHER task.
+      requireCondition(
+        !Object.entries(next.tasks).some(
+          ([otherId, other]) =>
+            otherId !== payload.task_id &&
+            other.task_code === payload.task_code,
+        ),
+        "SCHEMA_INVALID",
+      );
+    }
     if (Object.hasOwn(next.tasks, payload.task_id)) {
       const existing = next.tasks[payload.task_id];
       const sameLineage =
@@ -302,6 +333,8 @@ export function applyWorkflowEvent(
         existing.root_session_key === payload.root_session_key &&
         existing.root_run_id === payload.root_run_id;
       requireCondition(sameLineage, "LINEAGE_MISMATCH");
+      // A re-delivered OPEN must not rewrite the code: the first writer owns it.
+      // Replaying the same lineage keeps the existing task byte-identical.
       return next;
     }
     next.tasks[payload.task_id] = {

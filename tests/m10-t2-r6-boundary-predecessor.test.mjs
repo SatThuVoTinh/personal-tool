@@ -22,6 +22,14 @@ import path from "node:path";
 import process from "node:process";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
+// M10/T2-R9: `configure.mjs` is spawned as a child process and now fails
+// closed without a router endpoint/credential, so supply non-routable
+// placeholders. Reachability is proven by verify.mjs, never by these.
+import {
+  ROUTER_TEST_API_KEY,
+  ROUTER_TEST_HOST,
+  ROUTER_TEST_PORT,
+} from "./helpers/router-env.mjs";
 
 const REPO = process.cwd();
 const CONFIGURE = path.join(REPO, "integrations", "openclaw", "configure.mjs");
@@ -34,11 +42,12 @@ const HYGIENE_BOUNDARY_SHA256 =
   "d88bff80aeb3d7531e5a0dceba4e7ba856d085e64a87cbb414c9f295284d81e3";
 
 /**
- * M10/T2-R8: the outgoing build, live at BOTH governed paths before the R8
- * deployment. Now listed so --preflight admits the deployed extension.
+ * M10/T2-R12: the outgoing R10 boundary build, byte-proven at BOTH governed
+ * paths. R12 exports resolveGovernance as a read-only test seam. The new
+ * build is accepted by content comparison and deliberately NOT listed.
  */
 const CANDIDATE_BOUNDARY_SHA256 =
-  "9e73518583006c0b9c5f8cc058e3bbd10e4749c2004aa9a4204ef226452f842a";
+  "97c7f3e15d2845474ded9bbe908893bbeca6c655a7cecf37b816490693e8d52c";
 
 /** The build R8 replaces; listed as an approved predecessor. */
 const R6_BOUNDARY_SHA256 =
@@ -78,7 +87,14 @@ function provisioned() {
   const root = mkdtempSync(path.join(tmpdir(), "zink-r6-"));
   const stateDir = path.join(root, ".openclaw-zink");
   const systemdUserDir = path.join(root, ".config", "systemd", "user");
-  const env = { ...process.env, HOME: root, USERPROFILE: root };
+  const env = {
+    ...process.env,
+    HOME: root,
+    USERPROFILE: root,
+    ZINK_ROUTER_HOST: ROUTER_TEST_HOST,
+    ZINK_ROUTER_PORT: ROUTER_TEST_PORT,
+    ZINK_ROUTER_API_KEY: ROUTER_TEST_API_KEY,
+  };
   const run = (mode) => () =>
     execFileSync(
       process.execPath,

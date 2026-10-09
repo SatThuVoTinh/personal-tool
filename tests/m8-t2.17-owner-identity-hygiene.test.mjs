@@ -27,6 +27,12 @@ import { fileURLToPath } from "node:url";
 import { handleOwnerSkillApproval } from "../integrations/openclaw/plugins/zink-governance/index.mjs";
 import { buildConfig } from "../integrations/openclaw/lib/policy.mjs";
 import { normalizeActor } from "../integrations/openclaw/lib/authority.mjs";
+import { applyRouterTestEnv } from "./helpers/router-env.mjs";
+
+// M10/T2-R9: the governed model provider resolves its endpoint and
+// credential from the environment at build time; supply non-routable
+// placeholders so this suite can assert config SHAPE only.
+applyRouterTestEnv();
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PLUGIN_SOURCE = path.join(

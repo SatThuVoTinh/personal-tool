@@ -37,6 +37,12 @@ import { validateSqlQuery } from "../zink-tools/sql/validator.mjs";
 import { validateArtifactLogicalPath } from "../zink-tools/common/path-safety.mjs";
 import { invokeN8n, N8nAdapterError } from "../zink-tools/n8n/trigger.mjs";
 import { registerTools } from "../integrations/openclaw/plugins/zink-governance/index.mjs";
+import { applyRouterTestEnv } from "./helpers/router-env.mjs";
+
+// M10/T2-R9: the governed model provider resolves its endpoint and
+// credential from the environment at build time; supply non-routable
+// placeholders so this suite can assert config SHAPE only.
+applyRouterTestEnv();
 
 // Helper to create an isolated mock ledger fixture
 function createMockLedger() {

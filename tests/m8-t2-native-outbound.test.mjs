@@ -76,7 +76,12 @@ describe("R4 Finding 1 — native Discord outbound POC (offline)", () => {
     assert.equal(rows[0].components.length, 3);
     for (const button of rows[0].components) {
       assert.equal(button.type, 2);
-      assert.match(button.custom_id, /^zink:/);
+      // M10/T2-R12: the wire envelope is the host's `occomp:cid=` form, NOT the
+      // bare `zink:` form. This assertion used to pin `/^zink:/`, which was the
+      // bug: the host's parseDiscordComponentCustomId requires the parsed key to
+      // be `occomp`, so every click answered "This component is no longer valid."
+      // Proven live 2026-10-08 15:45:08 on the #approvals card.
+      assert.match(button.custom_id, /^occomp:cid=zink:/);
       const parsed = parseComponentCustomId(button.custom_id);
       assert.ok(parsed);
       assert.equal(parsed.taskId, "task-01");
@@ -89,8 +94,16 @@ describe("R4 Finding 1 — native Discord outbound POC (offline)", () => {
       const id = buildComponentCustomId(action, "task-09", "1");
       const parsed = parseComponentCustomId(id);
       assert.equal(parsed.actionType, action);
-      // native 2026.6.34 routes by prefix before first ":" -> "zink"
-      assert.equal(id.split(":")[0], "zink");
+      // native 2026.6.34 routes the interaction by the FIRST prefix segment, and
+      // that segment must be "occomp". A bare "zink:..." id never reaches the
+      // handler at all (M10/T2-R12; live failure 2026-10-08 15:45:08). The zink
+      // action namespace lives INSIDE the envelope, after `cid=`.
+      assert.equal(id.split(":")[0], "occomp");
+      assert.ok(id.startsWith("occomp:cid=zink:"), id);
+      assert.ok(
+        id.length <= 100,
+        `custom_id exceeds Discord ceiling: ${id.length}`,
+      );
     }
   });
 
@@ -186,11 +199,33 @@ describe("R4 Finding 1 — native Discord outbound POC (offline)", () => {
     );
     assert.ok(restPosts, "expected documented thread-creation REST sites");
     for (const site of restPosts) {
+      if (/\/threads`/.test(site)) continue;
+      // R4-EXCEPTION (owner decision 2026-10-07): exactly one /messages REST
+      // site is permitted — the approval-buttons post, which the native
+      // adapter cannot deliver from the tool-call hook context (proven live).
+      // The exception is valid ONLY with its marker comment in source; any
+      // other /messages REST fails here.
       assert.match(
         site,
-        /\/threads`/,
-        "only forum-thread creation may remain raw REST: " + site,
+        /\/messages`/,
+        "unexpected REST site (only threads + the marked buttons exception): " +
+          site,
+      );
+      const at = source.indexOf(site);
+      const contextBefore = source.slice(Math.max(0, at - 1200), at);
+      assert.ok(
+        contextBefore.includes("R4-EXCEPTION"),
+        "a /messages REST site must carry the R4-EXCEPTION marker with the owner decision reference: " +
+          site,
       );
     }
+    // The exception must remain singular: more than one /messages site means
+    // the exception is spreading and the rule needs re-examination.
+    const messageSites = restPosts.filter((s) => /\/messages`/.test(s));
+    assert.equal(
+      messageSites.length,
+      1,
+      `exactly one R4-EXCEPTION /messages site allowed, found ${messageSites.length}`,
+    );
   });
 });

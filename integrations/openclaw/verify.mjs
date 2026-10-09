@@ -12,10 +12,10 @@ import {
 } from "./topology/lib/runtime-backup.mjs";
 
 import {
-  AGENT_GOOGLE_PROFILES,
   AGENT_IDS,
   DISCORD_SURFACE_IDENTIFIERS,
   PASS_PROVIDER_ID,
+  ROUTER_PROVIDER_MODEL_IDS,
   SECRET_REFS,
   assertDirectoryOrMissing,
   assertInsideHome,
@@ -34,6 +34,8 @@ import {
   parseIdentifiers,
   passResolverContents,
   renderSystemdDropIn,
+  resolveRouterApiKey,
+  resolveRouterBaseUrl,
   stableJson,
   validateConfig,
 } from "./lib/policy.mjs";
@@ -279,6 +281,59 @@ async function runLiveJsonCheckAsync(command, args, environment, isExpected) {
     return { command: displayCommand(command, args), status: "PASS" };
   } catch {
     return { command: displayCommand(command, args), status: "FAIL" };
+  }
+}
+
+// M10/T2-R9: live reachability probe for the baked router endpoint.
+//
+// This deliberately reports a FAIL, with a reason, instead of a bare failure,
+// because the failure mode it exists to catch (a stale WSL host address after a
+// WSL restart) otherwise looks identical to "the agent has no model". The probe
+// performs no model call and never prints the credential: it asserts reachability
+// and that every allowlisted wire model id is still served.
+async function runLiveRouterReachabilityAsync() {
+  const label = `router endpoint reachability (${ROUTER_PROVIDER_MODEL_IDS.length} model ids)`;
+  let baseUrl;
+  let apiKey;
+  try {
+    baseUrl = resolveRouterBaseUrl();
+    apiKey = resolveRouterApiKey();
+  } catch {
+    return {
+      command: label,
+      status: "FAIL",
+      detail: "ROUTER_CONFIG_UNAVAILABLE",
+    };
+  }
+  try {
+    const response = await fetch(`${baseUrl}/models`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) {
+      return {
+        command: label,
+        status: "FAIL",
+        detail: `ROUTER_HTTP_${response.status}`,
+      };
+    }
+    const payload = await response.json();
+    const served = new Set((payload?.data ?? []).map((model) => model?.id));
+    const missing = ROUTER_PROVIDER_MODEL_IDS.filter((id) => !served.has(id));
+    if (missing.length > 0) {
+      return {
+        command: label,
+        status: "FAIL",
+        detail: `ROUTER_MODEL_ID_MISSING:${missing.join(",")}`,
+      };
+    }
+    return { command: label, status: "PASS" };
+  } catch (error) {
+    return {
+      command: label,
+      status: "FAIL",
+      detail: `ROUTER_UNREACHABLE:${error?.name ?? "Error"}`,
+    };
   }
 }
 
@@ -567,30 +622,15 @@ async function main() {
           ),
       )),
     );
-    result.live.push(
-      ...(await runInBatches(AGENT_IDS, LIVE_PROBE_CONCURRENCY, (agentId) => {
-        const expectedOrder = AGENT_GOOGLE_PROFILES[agentId];
-        return runLiveJsonCheckAsync(
-          command,
-          [
-            "models",
-            "auth",
-            "order",
-            "get",
-            "--agent",
-            agentId,
-            "--provider",
-            "google",
-            "--json",
-          ],
-          environment,
-          (value) =>
-            value.agentId === agentId &&
-            value.provider === "google" &&
-            JSON.stringify(value.order) === JSON.stringify(expectedOrder),
-        );
-      })),
-    );
+    // M10/T2-R9: the per-agent `models auth order get --provider google` check
+    // is gone because auth profiles and auth order no longer exist. It is
+    // replaced by a check on the thing that can actually break: the baked
+    // router endpoint. OpenClaw has no config templating (proven against the
+    // installed runtime), so a stale WSL host address is undetectable from the
+    // config alone and would otherwise present as "the agent has no model".
+    // This probe fails loudly when the endpoint is unreachable or when the
+    // router stops serving an allowlisted model id.
+    result.live.push(await runLiveRouterReachabilityAsync());
     if (result.live.some((entry) => entry.status === "FAIL")) {
       process.exitCode = 1;
     }

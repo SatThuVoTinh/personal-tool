@@ -40,6 +40,14 @@ import path from "node:path";
 import process from "node:process";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
+// M10/T2-R9: `configure.mjs` is spawned as a child process and now fails
+// closed without a router endpoint/credential, so supply non-routable
+// placeholders. Reachability is proven by verify.mjs, never by these.
+import {
+  ROUTER_TEST_API_KEY,
+  ROUTER_TEST_HOST,
+  ROUTER_TEST_PORT,
+} from "./helpers/router-env.mjs";
 
 const REPO = process.cwd();
 const CONFIGURE = path.join(REPO, "integrations", "openclaw", "configure.mjs");
@@ -68,12 +76,18 @@ const R5_ENTRYPOINT_SHA256 =
   "e77689c94ba066bd854549750044f78dcf9d97cc3de73420893851c0a800b10a";
 
 /**
- * The CURRENT build digests. M10/T2-R8: the blocked-tool-call reason is no
- * longer handed to the host, so the model can never read a governance
- * identifier. The outgoing R6 build is now listed as a recognized predecessor.
+ * The CURRENT build digests. M10/T2-R12: resolveGovernance is exported as a
+ * read-only test seam (no behavior change). The outgoing R10 build
+ * (`9e735185…`) is now the listed predecessor in configure.mjs. The outgoing
+ * R6 build remains listed as a recognized predecessor.
  */
-const R10_NATIVE_BOUNDARY_SHA256 =
-  "9e73518583006c0b9c5f8cc058e3bbd10e4749c2004aa9a4204ef226452f842a";
+/**
+ * M10/T2-R12: the CURRENT boundary. Differs from the R10 build ONLY by
+ * exporting resolveGovernance as a read-only test seam (no behavior change).
+ * Accepted by content comparison and deliberately NOT listed.
+ */
+const R12_NATIVE_BOUNDARY_SHA256 =
+  "97c7f3e15d2845474ded9bbe908893bbeca6c655a7cecf37b816490693e8d52c";
 const R6_OUTGOING_NATIVE_BOUNDARY_SHA256 =
   "bccfa8616dc89fbb3764d53ad6ea11f5cfbc445bc076e4270f2678c6c1e18c3a";
 assert.ok(
@@ -87,11 +101,20 @@ assert.ok(
  * entrypoint changed. NOT listed.
  */
 /**
- * M10/T2-R8: the CURRENT entrypoint. Duplicate detection now precedes the
- * admission signal, and the pure preflight intake predicate was added.
+ * M10/T2-R8: the entrypoint that R9-A replaces. Duplicate detection precedes the
+ * admission signal, the pure preflight intake predicate is present, and the
+ * DUPLICATE_DISCORD_EVENT denial carries no runId.
  */
 const R10_ENTRYPOINT_SHA256 =
   "f4ed9d9c54ccf486a30425b98a549cab5aebbbe8e9ee7f2d32bfc6795598c4a3";
+/**
+ * M10/T2-R12: the CURRENT entrypoint. Differs from the R9-C build
+ * (`aea6bf95…`, now the outgoing predecessor) by suppressing governance machine
+ * payloads from the user-visible reply. Accepted by content comparison and
+ * deliberately NOT listed.
+ */
+const R12_ENTRYPOINT_SHA256 =
+  "61680010520bbe3ca57b289cf9af9fb6ea79c8f79e33e49e95d5dec6de60cef3";
 /** The outgoing entrypoint this deployment replaces; now listed. */
 const R8_OUTGOING_ENTRYPOINT_SHA256 =
   "6a7968b7d456ff6d3f2c5b9d60c7b6046a702603b880093c33b717d9a37c13b1";
@@ -243,7 +266,14 @@ function provisioned() {
   const root = mkdtempSync(path.join(tmpdir(), "zink-r13-"));
   const stateDir = path.join(root, ".openclaw-zink");
   const systemdUserDir = path.join(root, ".config", "systemd", "user");
-  const env = { ...process.env, HOME: root, USERPROFILE: root };
+  const env = {
+    ...process.env,
+    HOME: root,
+    USERPROFILE: root,
+    ZINK_ROUTER_HOST: ROUTER_TEST_HOST,
+    ZINK_ROUTER_PORT: ROUTER_TEST_PORT,
+    ZINK_ROUTER_API_KEY: ROUTER_TEST_API_KEY,
+  };
   const run = (mode) => () =>
     execFileSync(
       process.execPath,
@@ -469,7 +499,10 @@ test("R13 1: each R7 digest is listed exactly once, under its own path", () => {
 });
 
 test("R13 2: the current build digests are NOT listed anywhere", () => {
-  for (const digest of [R10_NATIVE_BOUNDARY_SHA256, R10_ENTRYPOINT_SHA256]) {
+  // M10/T2-R12: the entrypoint pin moved to R12_ENTRYPOINT_SHA256, so the R9-A
+  // digest is now the outgoing predecessor and IS listed on purpose. Only the
+  // digests of the CURRENT build must be absent from the source.
+  for (const digest of [R12_NATIVE_BOUNDARY_SHA256, R12_ENTRYPOINT_SHA256]) {
     assert.equal(
       CONFIGURE_SOURCE.includes(digest),
       false,
@@ -729,7 +762,7 @@ test("R13 C: BOTH R7 predecessors together are accepted — the real deployed co
   }
 });
 
-test("R13 C2: the R10 current-build versions remain accepted", async () => {
+test("R13 C2: the current-build versions remain accepted", async () => {
   const p = provisioned();
   try {
     // `provisioned()` already materialized the current build; it must be accepted
@@ -737,11 +770,11 @@ test("R13 C2: the R10 current-build versions remain accepted", async () => {
     assert.doesNotThrow(p.preflight);
     assert.equal(
       sha256(readFileSync(p.asset("lib/native-boundary.mjs"), "utf8")),
-      R10_NATIVE_BOUNDARY_SHA256,
+      R12_NATIVE_BOUNDARY_SHA256,
     );
     assert.equal(
       sha256(readFileSync(p.asset("index.mjs"), "utf8")),
-      R10_ENTRYPOINT_SHA256,
+      R12_ENTRYPOINT_SHA256,
     );
   } finally {
     rmSync(p.root, { recursive: true, force: true });
@@ -1186,6 +1219,14 @@ export const POLICY_REFUSAL_TEXT = "Action not permitted by workspace policy.";
       return { block: true, reason: "GOVERNANCE_UNAVAILABLE" };
     }
 `,
+    ],
+    // M10/T2-R12: resolveGovernance exported as a read-only test seam.
+    // Inverted so the derived R5 body reproduces the packaged R5 digest.
+    [
+      `// M10/T2-R12: exported as a test seam so suites can drive the registered
+// guard hooks exactly as production does. Read-only accessor; no behavior.
+export function resolveGovernance(config) {`,
+      `function resolveGovernance(config) {`,
     ],
   ];
   let derived = readFileSync(BOUNDARY, "utf8");

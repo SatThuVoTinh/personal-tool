@@ -18,6 +18,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
 import test from "node:test";
+// M10/T2-R9: `configure.mjs` is spawned as a child process and now fails
+// closed without a router endpoint/credential, so supply non-routable
+// placeholders. Reachability is proven by verify.mjs, never by these.
+import {
+  ROUTER_TEST_API_KEY,
+  ROUTER_TEST_HOST,
+  ROUTER_TEST_PORT,
+} from "./helpers/router-env.mjs";
 
 const REPO = process.cwd();
 const CONFIGURE = path.join(REPO, "integrations", "openclaw", "configure.mjs");
@@ -404,6 +412,14 @@ export function readZinkIngressMetadata(messageId) {
 `,
     ``,
   ],
+  // M10/T2-R12: resolveGovernance exported as a read-only test seam. Inverted
+  // so the derived R5 body reproduces the packaged R5 digest exactly.
+  [
+    `// M10/T2-R12: exported as a test seam so suites can drive the registered
+// guard hooks exactly as production does. Read-only accessor; no behavior.
+export function resolveGovernance(config) {`,
+    `function resolveGovernance(config) {`,
+  ],
 ];
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
@@ -464,7 +480,14 @@ function provisioned() {
   const root = mkdtempSync(path.join(tmpdir(), "zink-r8-"));
   const stateDir = path.join(root, ".openclaw-zink");
   const systemdUserDir = path.join(root, ".config", "systemd", "user");
-  const env = { ...process.env, HOME: root, USERPROFILE: root };
+  const env = {
+    ...process.env,
+    HOME: root,
+    USERPROFILE: root,
+    ZINK_ROUTER_HOST: ROUTER_TEST_HOST,
+    ZINK_ROUTER_PORT: ROUTER_TEST_PORT,
+    ZINK_ROUTER_API_KEY: ROUTER_TEST_API_KEY,
+  };
   const run = (mode) => () =>
     execFileSync(
       process.execPath,

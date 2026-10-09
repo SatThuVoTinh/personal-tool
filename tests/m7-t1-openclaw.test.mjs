@@ -17,11 +17,11 @@ import { runInNewContext } from "node:vm";
 
 import {
   AGENT_DEFINITIONS,
-  AGENT_GOOGLE_PROFILES,
+  ROUTER_PROVIDER_ID,
+  ROUTER_PROVIDER_MODEL_IDS,
   AGENT_IDS,
   AGENT_MENTION_PATTERNS,
   DISCORD_SURFACE_IDENTIFIERS,
-  GOOGLE_PROFILE_IDS,
   MODEL_ALLOWLIST,
   OPENCLAW_RELEASE,
   PASS_ENTRY_IDS,
@@ -48,6 +48,17 @@ import {
   revertContents,
 } from "../integrations/openclaw/templates/openclaw-gemini-stream-hotfix.mjs";
 import { isExpectedDiscordCapability } from "../integrations/openclaw/verify.mjs";
+import {
+  ROUTER_TEST_API_KEY,
+  ROUTER_TEST_HOST,
+  ROUTER_TEST_PORT,
+  applyRouterTestEnv,
+} from "./helpers/router-env.mjs";
+
+// M10/T2-R9: the governed model provider resolves its endpoint and
+// credential from the environment at build time; supply non-routable
+// placeholders so this suite can assert config SHAPE only.
+applyRouterTestEnv();
 
 const identifiers = Object.freeze({
   discordGuildId: "12345678901234567",
@@ -436,7 +447,9 @@ test("M7/T1 builds the exact minimal-tool, zero-command foundation", () => {
     load: { paths: [path.join(stateDir, "extensions", "zink-governance")] },
     slots: { memory: "none" },
     entries: {
-      google: { enabled: true },
+      // M10/T2-R9: `google` is no longer in PLUGIN_ALLOWLIST. It existed only
+      // to serve the retired provider, and keeping it enabled would keep a
+      // second, unused model provider reachable.
       discord: { enabled: true },
       "zink-governance": {
         enabled: true,
@@ -458,49 +471,68 @@ test("M7/T1 builds the exact minimal-tool, zero-command foundation", () => {
     },
     bundledDiscovery: "allowlist",
   });
-  assert.equal(Object.keys(config.auth.profiles).length, 21);
-  assert.deepEqual(Object.keys(config.auth.profiles), GOOGLE_PROFILE_IDS);
-  for (const profileId of GOOGLE_PROFILE_IDS) {
-    assert.deepEqual(config.auth.profiles[profileId], {
-      provider: "google",
-      mode: "api_key",
-    });
-  }
-  assert.deepEqual(config.auth.order.google, GOOGLE_PROFILE_IDS);
-  assert.deepEqual(config.auth.cooldowns, {
-    overloadedProfileRotations: 2,
-    rateLimitedProfileRotations: 2,
+  // M10/T2-R9: the 21 google auth profiles, the per-agent auth order and the
+  // profile cooldowns are retired. One router credential serves every agent and
+  // the router rotates upstream itself, so an OpenClaw-side profile order would
+  // be a second rotation policy that cannot take effect.
+  assert.equal(Object.hasOwn(config, "auth"), false);
+  const router = config.models.providers[ROUTER_PROVIDER_ID];
+  assert.deepEqual(router, {
+    baseUrl: `http://${ROUTER_TEST_HOST}:${ROUTER_TEST_PORT}/v1`,
+    api: "openai-completions",
+    auth: "api-key",
+    apiKey: ROUTER_TEST_API_KEY,
+    // OpenClaw requires an ARRAY here; an object shape is rejected by the
+    // installed runtime's validator, so this shape is load-bearing, not cosmetic.
+    //
+    // M10/T2-R12 (owner decision 2026-10-08): the governed entries are direct
+    // model ids, so NO entry carries an output budget. The old 64000 budget
+    // existed for `execute` alone (reasoning=true, empty content at
+    // finish=length) and `execute` is no longer governed. The four gemini ids
+    // the router lists advertise no reasoning and their own
+    // max_completion_tokens=65536.
+    // NOTE: do NOT add requestTimeoutMs here — the entry schema is STRICT and
+    // the gateway refuses to start (`Unrecognized key`, proven 2026-10-07).
+    models: ROUTER_PROVIDER_MODEL_IDS.map((modelId) => ({
+      id: modelId,
+      name: modelId,
+    })),
   });
-  const secretPlan = buildSecretsPlan();
+  // The chain is the owner's exact order, addressed directly, with no combo.
+  assert.deepEqual(ROUTER_PROVIDER_MODEL_IDS, [
+    "gemini/gemini-3.8-flash",
+    "gemini/gemini-3.7-flash",
+    "muse-spark-1.3-contributor-free",
+    "gemini/gemini-3.6-flash",
+    "gemini/gemini-3.5-flash-lite",
+  ]);
+  for (const entry of router.models) {
+    assert.equal(
+      entry.params,
+      undefined,
+      `no governed entry may declare a budget: ${entry.id}`,
+    );
+  }
+  assert.equal(
+    config.models.providers[ROUTER_PROVIDER_ID].models.some(
+      (m) => m.id === "execute",
+    ),
+    false,
+    "the combo must not be a governed provider entry",
+  );
+  // The router owns rotation, so OpenClaw must not also carry a rotation order.
   assert.deepEqual(buildAuthOrderPlan(), {
     version: 1,
-    provider: "google",
-    agents: Object.fromEntries(
-      AGENT_IDS.map((agentId) => [
-        agentId,
-        [...AGENT_GOOGLE_PROFILES[agentId]],
-      ]),
-    ),
+    provider: ROUTER_PROVIDER_ID,
+    agents: {},
   });
-  assert.equal(secretPlan.targets.length, 21);
-  assert.deepEqual(
-    secretPlan.targets.map((target) => target.ref),
-    SECRET_REFS.gemini,
-  );
-  assert.equal(
-    new Set(secretPlan.targets.map((target) => target.ref.id)).size,
-    21,
-  );
-  for (const agentId of AGENT_IDS) {
-    const targets = secretPlan.targets.filter(
-      (target) => target.agentId === agentId,
-    );
-    assert.equal(targets.length, 3);
-    assert.deepEqual(
-      targets.map((target) => target.pathSegments[1]),
-      AGENT_GOOGLE_PROFILES[agentId],
-    );
-  }
+  // No auth-profile key targets remain: the profiles are gone, so the secret
+  // plan is empty by design rather than by omission.
+  assert.deepEqual(buildSecretsPlan(), {
+    version: 1,
+    protocolVersion: 1,
+    targets: [],
+  });
   assert.deepEqual(config.secrets.providers[PASS_PROVIDER_ID], {
     source: "exec",
     command: path.join(stateDir, "bin", "openclaw-pass-resolver"),
@@ -508,10 +540,6 @@ test("M7/T1 builds the exact minimal-tool, zero-command foundation", () => {
     jsonOnly: true,
     trustedDirs: [path.join(stateDir, "bin")],
   });
-  assert.deepEqual(
-    SECRET_REFS.gemini.map((ref) => ref.id),
-    PASS_ENTRY_IDS.gemini,
-  );
   assert.equal(Object.hasOwn(config.channels.discord, "token"), false);
   assert.equal(config.channels.discord.defaultAccount, "main");
   assert.deepEqual(config.channels.discord.streaming, { mode: "off" });
@@ -619,17 +647,22 @@ test("M7/T1 rejects configuration drift on restricted surfaces", () => {
     () => validateConfig(runtimeMetadata, { stateDir, identifiers }),
     /OpenClaw runtime metadata drift/u,
   );
-  const authOrderDrift = buildConfig({ stateDir, identifiers });
-  authOrderDrift.auth.order.google = [...GOOGLE_PROFILE_IDS].reverse();
+  // M10/T2-R9: the auth-order and cooldown drift gates were repointed at the
+  // router provider, which is the governed model configuration now. The intent
+  // is unchanged — prove validateConfig rejects drift in a governed section.
+  const routerEndpointDrift = buildConfig({ stateDir, identifiers });
+  routerEndpointDrift.models.providers[ROUTER_PROVIDER_ID].baseUrl =
+    "http://router.invalid:1/v2";
   assert.throws(
-    () => validateConfig(authOrderDrift, { stateDir, identifiers }),
-    /Policy drift at auth/u,
+    () => validateConfig(routerEndpointDrift, { stateDir, identifiers }),
+    /Policy drift at models/u,
   );
-  const rotationDrift = buildConfig({ stateDir, identifiers });
-  rotationDrift.auth.cooldowns.rateLimitedProfileRotations = 20;
+  const routerAdapterDrift = buildConfig({ stateDir, identifiers });
+  routerAdapterDrift.models.providers[ROUTER_PROVIDER_ID].api =
+    "openai-responses";
   assert.throws(
-    () => validateConfig(rotationDrift, { stateDir, identifiers }),
-    /Policy drift at auth/u,
+    () => validateConfig(routerAdapterDrift, { stateDir, identifiers }),
+    /Policy drift at models/u,
   );
   const rosterDrift = buildConfig({ stateDir, identifiers });
   rosterDrift.agents.list.pop();
@@ -716,18 +749,20 @@ test("M7/T1 rejects configuration drift on restricted surfaces", () => {
   );
 });
 
-test("M7/T1 password-store resolver is a fail-closed 29-entry boundary", () => {
+test("M7/T1 password-store resolver is a fail-closed 8-entry boundary", () => {
   const root = temporaryDirectory();
   try {
     const resolver = path.join(root, "openclaw-pass-resolver");
     const resolverSource = passResolverContents();
+    // M10/T2-R9: the 21 GEMINI_API_KEY_NN ids are removed. The resolver is a
+    // strict allowlist, so leaving them would keep 21 now-unreferenced pass ids
+    // resolvable. What remains is 7 Discord bot tokens plus the gateway token.
     const allowedIds = [
-      ...PASS_ENTRY_IDS.gemini,
       ...Object.values(PASS_ENTRY_IDS.discord),
       PASS_ENTRY_IDS.gateway,
     ];
-    assert.equal(allowedIds.length, 29);
-    assert.equal(new Set(allowedIds).size, 29);
+    assert.equal(allowedIds.length, 8);
+    assert.equal(new Set(allowedIds).size, 8);
     assert.doesNotMatch(resolverSource, /__ZINK_ALLOWED_IDS__/u);
     assert.doesNotMatch(resolverSource, /spawnSync/u);
     assert.match(resolverSource, /Promise\.all/u);
@@ -752,14 +787,14 @@ test("M7/T1 password-store resolver is a fail-closed 29-entry boundary", () => {
       input: JSON.stringify({
         protocolVersion: 1,
         provider: PASS_PROVIDER_ID,
-        ids: [PASS_ENTRY_IDS.gemini[0]],
+        ids: [Object.values(PASS_ENTRY_IDS.discord)[0]],
       }),
     });
     assert.equal(boundedLookup.status, 0);
     const response = JSON.parse(boundedLookup.stdout);
     assert.deepEqual(Object.keys(response.values), []);
     assert.deepEqual(response.errors, {
-      [PASS_ENTRY_IDS.gemini[0]]: { code: "NOT_FOUND" },
+      [Object.values(PASS_ENTRY_IDS.discord)[0]]: { code: "NOT_FOUND" },
     });
 
     const mockPass = path.join(root, "mock-pass.mjs");
@@ -787,14 +822,14 @@ test("M7/T1 password-store resolver is a fail-closed 29-entry boundary", () => {
       input: JSON.stringify({
         protocolVersion: 1,
         provider: PASS_PROVIDER_ID,
-        ids: PASS_ENTRY_IDS.gemini,
+        ids: Object.values(PASS_ENTRY_IDS.discord),
       }),
       timeout: 10_000,
     });
     assert.equal(parallelLookup.status, 0);
     assert.equal(parallelLookup.signal, null);
     const parallelResponse = JSON.parse(parallelLookup.stdout);
-    assert.equal(Object.keys(parallelResponse.values).length, 21);
+    assert.equal(Object.keys(parallelResponse.values).length, 7);
     assert.deepEqual(parallelResponse.errors, {});
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -843,10 +878,15 @@ test("M7/T1 builder is dry-run safe and apply materializes no secrets", () => {
       "utf8",
     );
     assert.doesNotMatch(configText, /AIza|DISCORD_BOT_TOKEN=/u);
-    assert.deepEqual(
-      JSON.parse(authPlanText).targets.map((target) => target.ref),
-      SECRET_REFS.gemini,
-    );
+    // M10/T2-R9: the apply materializes no auth-profile secret targets, because
+    // the 21 google profiles are gone. The router credential is supplied through
+    // the environment at apply time and is never a pass_store target, so this
+    // assertion also pins that no profile key material reappears.
+    assert.deepEqual(JSON.parse(authPlanText), {
+      version: 1,
+      protocolVersion: 1,
+      targets: [],
+    });
     assert.deepEqual(JSON.parse(authOrderPlanText), buildAuthOrderPlan());
     const resolverPath = path.join(stateDir, "bin", "openclaw-pass-resolver");
     assert.equal(existsSync(resolverPath), true);

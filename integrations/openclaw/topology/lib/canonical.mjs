@@ -13,6 +13,97 @@ export const SCHEMA_VERSION = "1.0.0";
 
 const SET_KEYS = new Set(["allowed_tools", "allowAgents", "allowed_stacks"]);
 
+// M10/T2-R12: the human-facing task code (owner decision 2026-10-08).
+//
+// The owner reads and types this code to approve work by text, so the alphabet
+// deliberately omits every character that is confusable when transcribed or read
+// aloud: no `0`/`O`, no `1`/`I`/`L`, no `5`/`S`, no `2`/`Z`, no `8`/`B`, no
+// `6`/`G`, no `4`/`A`. That leaves 18 letters (C D E F H J K M N P Q R T U V W
+// X Y) and 3 digits (3 7 9) = 21 symbols.
+//
+// Format: 8 date characters (YYYYMMDD) + 4 random characters = 12.
+//
+// The code is a DISPLAY ALIAS, never an identity. The canonical 64-hex
+// `task_id` stays the ledger key and stays inside the button `custom_id`, because
+// a 4-character code over 21 symbols has far too little entropy to be an
+// authority token: 21^4 is under 195k, so it must never be trusted to prove
+// which task is being approved. That is why uniqueness is enforced at generation.
+export const TASK_CODE_ALPHABET = "CDEFHJKMNPQRTUVWXY379";
+export const TASK_CODE_LENGTH = 12;
+export const TASK_CODE_DATE_LENGTH = 8;
+export const TASK_CODE_SUFFIX_LENGTH = 4;
+export const TASK_CODE_PATTERN = "^[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4}$";
+
+/**
+ * Build one task code. `random` is an injected byte source so the generator is
+ * testable and never depends on ambient randomness in a governance path.
+ */
+export function buildTaskCode({ date, random }) {
+  const datePart = normalizeTaskCodeDate(date);
+  let suffix = "";
+  for (let index = 0; index < TASK_CODE_SUFFIX_LENGTH; index++) {
+    if (typeof random !== "function") {
+      throw new TypeError("TASK_CODE_RANDOM_REQUIRED");
+    }
+    const pick = random(index);
+    if (
+      typeof pick !== "number" ||
+      !Number.isInteger(pick) ||
+      pick < 0 ||
+      pick >= TASK_CODE_ALPHABET.length
+    ) {
+      throw new RangeError(`TASK_CODE_RANDOM_OUT_OF_RANGE:${pick}`);
+    }
+    suffix += TASK_CODE_ALPHABET[pick];
+  }
+  const code = datePart + suffix;
+  if (code.length !== TASK_CODE_LENGTH) {
+    throw new Error(`TASK_CODE_LENGTH:${code.length}`);
+  }
+  return code;
+}
+
+export function normalizeTaskCodeDate(date) {
+  if (date instanceof Date) {
+    if (Number.isNaN(date.getTime()))
+      throw new RangeError("TASK_CODE_DATE_INVALID");
+    const year = String(date.getUTCFullYear()).padStart(4, "0");
+    const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+    const day = String(date.getUTCDate()).padStart(2, "0");
+    return `${year}${month}${day}`;
+  }
+  if (typeof date === "string" && /^[0-9]{8}$/u.test(date)) return date;
+  throw new RangeError("TASK_CODE_DATE_INVALID");
+}
+
+/**
+ * Generate a code that is not already taken. `isTaken` is consulted for every
+ * candidate so a collision can never produce two tasks sharing one code, and the
+ * attempt count is bounded so a caller cannot spin forever on a hostile
+ * predicate.
+ */
+export function buildUniqueTaskCode({
+  date,
+  random,
+  isTaken,
+  maxAttempts = 32,
+}) {
+  if (typeof isTaken !== "function") {
+    throw new TypeError("TASK_CODE_IS_TAKEN_REQUIRED");
+  }
+  if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
+    throw new RangeError("TASK_CODE_MAX_ATTEMPTS_INVALID");
+  }
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const code = buildTaskCode({
+      date,
+      random: (index) => random(index, attempt),
+    });
+    if (!isTaken(code)) return code;
+  }
+  throw new Error("TASK_CODE_COLLISION_EXHAUSTED");
+}
+
 function normalize(value, key = "") {
   if (typeof value === "string") return value.normalize("NFC");
   if (typeof value === "number") {

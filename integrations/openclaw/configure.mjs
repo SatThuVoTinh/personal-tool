@@ -49,6 +49,28 @@ const REPOSITORY_ROOT = path.resolve(
 );
 const LEGACY_GEMINI_STREAM_HOTFIX_R18_SHA256 =
   "41bfeedf2835db4a50573a0f61325bc438ac805a90fef03ce3bc29b8c303f133";
+// M10/T2-R9: the outgoing generated plans and resolver, byte-proven against the
+// live state directory on 2026-10-06 immediately before the provider swap. The
+// plans enumerated the 21 google auth-profile key targets and the per-agent
+// google auth order, and the resolver allowlisted the 21 GEMINI_API_KEY_NN pass
+// ids. Each is admitted so the converge-on-apply path stays reachable; any
+// other previous content still fails closed.
+//
+// These digests are recorded from the live bytes, never hand-authored: a
+// hand-written plan would drift from the generator and be rejected here, which
+// is exactly the failure mode the content comparison exists to prevent.
+const PREVIOUS_AUTH_SECRET_PLAN_SHA256 =
+  "393b465d3bd2b8dd78d18662be7391e81d542e363c9be1c91580cd2913c8f2ea";
+const PREVIOUS_AUTH_ORDER_PLAN_SHA256 =
+  "bdee1964f39e8c703988b3fb3a9fd690ef70cb7f6657cfb0479f734af932f221";
+const PREVIOUS_PASS_RESOLVER_SHA256 =
+  "46cf5df77462a0e6b16a004278617115597801a7032aa186b8db54d2fef49e48";
+// A narrower 8-id resolver (`ddf1a079…`) was written to the live state by a
+// diagnostic `configure.mjs --apply` that bypassed the transaction wrapper, and
+// was then reverted to the 29-id build above. It is deliberately NOT listed: it
+// is no longer on disk, and admitting a resolver artifact that nothing needs
+// would widen the allowlist for no reachable transition. The incident is
+// recorded in PLAN.md.
 const LEGACY_GOVERNANCE_ENTRYPOINT_R11_SHA256 =
   "c71cf9d6fe9965eaa0ff789d611a55ee0ea2fc98d8023b3c7526495aaa60f559";
 const STARTING_GOVERNANCE_ENTRYPOINT_SHA256 =
@@ -113,6 +135,11 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // M10/T2-R3: the outgoing hygiene-build asset (41c62e7), proven as in the
     // R3 header above (live tree 34/34 match). Same admission semantics.
     "6acc2539cf1ca1e8393f6950937bb6aafb6312c9d9262774d748b57fb58ff974",
+    // M10/T2-R12: the outgoing build currently deployed, byte-verified at this
+    // exact path. This revision declares the OPTIONAL `task_code` on the
+    // WORKFLOW_OPENED payload, so without this entry --preflight refuses the
+    // deployed extension.
+    "818fd3afbb5638f6dd4cd30c4d33640f50b9c2b7b5e44b1a4212e4ae4e792005",
   ]),
   "contracts/ledger-snapshot.schema.json": Object.freeze([
     "3cde5162ae845a9b7066a623a9c4c8896f1fc6b77f2b5983ad506a9dfcbc0151",
@@ -120,6 +147,10 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // M10/T2-R3: the outgoing hygiene-build asset (41c62e7), proven as in the
     // R3 header above (live tree 34/34 match). Same admission semantics.
     "a8c3d7aabeaae962a2ee7738d42739d0941104f61da572ef5cd5db54f6ccd5fb",
+    // M10/T2-R12: the outgoing build currently deployed, byte-verified at this
+    // exact path. This revision declares the OPTIONAL `task_code` on the task
+    // object, so without this entry --preflight refuses the deployed extension.
+    "71fa5bcae3b50c1b6f00a97c46519b29e78c2c2fa21f16faf32607a6a6548b64",
   ]),
   "contracts/result.schema.json": Object.freeze([
     "9440dfb87b3daf358b11dc7b59b62586c68786235d99d717daf9783b9a6e4540",
@@ -132,6 +163,13 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // M10/T2-R3: the outgoing hygiene-build asset (41c62e7), proven as in the
     // R3 header above (live tree 34/34 match). Same admission semantics.
     "e27647b9742b56052188a8bbf746ab6c5eeaaeb67344216c11859167ee78946f",
+    // M10/T2-R12: the outgoing manifests currently deployed, byte-proven
+    // against the live runtime. This revision changes the per-agent
+    // governance_hash (owner-ordered communication section in Common Core),
+    // so without this entry --preflight refuses the deployed extension. The
+    // new digest is deliberately NOT listed: it is the current build,
+    // accepted by content comparison.
+    "ab1d2f8ecd91a3e72226d15495f641e701ef5c0a9e3b6d3a59db48b91256decd",
   ]),
   "lib/artifact-validator.mjs": Object.freeze([
     "0b35496fdebe5e204bfc4395057e9a54e5635060a1af1fe47146dd391ebeac79",
@@ -157,9 +195,22 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // deployed extension. The new digest is deliberately NOT listed: it is
     // the current build and is already accepted by content comparison.
     "aa12540f60da6bcdf809123f0d75c632c6b8a128a88e4395f38785b663f13e17",
+    // M10/T2-R12: the outgoing R9-C authority build currently deployed,
+    // byte-verified at this exact path. This revision changes this file so
+    // buildComponentCustomId emits the host `occomp:cid=` wire envelope; without
+    // this entry --preflight refuses the deployed extension. The new digest is
+    // deliberately NOT listed: it is the current build, accepted by content
+    // comparison.
+    "42b0cba8567c1e52376d41d9329394b70c94e45a503af37733dcf76721d536c6",
   ]),
   "lib/canonical.mjs": Object.freeze([
     "c6c0515ab3b1ade07d94d8b5969cd425456db2b5fff56847ba7ef0030989b203",
+    // M10/T2-R12: the outgoing build currently deployed, byte-verified at this
+    // exact path. This revision adds the owner-facing task-code generator, so
+    // without this entry --preflight refuses the deployed extension. The new
+    // digest is deliberately NOT listed: it is the current build, accepted by
+    // content comparison.
+    "868de6b9675d54920b93694ac1614d8fabfcb3868c86f755a74e53b2f14af777",
   ]),
   "lib/decision-ledger.mjs": Object.freeze([
     "cec8776c771d4cf521a664fa7dd62aa5e14b54cc05389b30be51bc03b4c51a6e",
@@ -169,6 +220,13 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
   ]),
   "lib/policy.mjs": Object.freeze([
     "0584ca5fd8698ef986a7a41f31d1b735997bc1f7fb879f91a1df90ad191603e5",
+    // M10/T2-R12: the outgoing governed-model build currently deployed,
+    // byte-verified at this exact path. This revision replaces the governed set
+    // with the owner's ordered five-model direct chain and drops the `execute`
+    // combo, so without this entry --preflight refuses the deployed extension.
+    // The new digest is deliberately NOT listed: it is the current build,
+    // accepted by content comparison.
+    "f542cb81d80a9e6082cf9fc42ecfa22834f0a1621bd98327fcbc731426c3f0ee",
     // The accepted R5 build (652ac0c), whose provenance IS established: this
     // digest was reproduced by packaging the same file at that commit. Listed
     // only so the V15 contracts-lookup fix can replace it. Contrast the
@@ -189,6 +247,64 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // M10/T2-R3: the outgoing hygiene-build asset (41c62e7), proven as in the
     // R3 header above (live tree 34/34 match). Same admission semantics.
     "e29812bcae3d791252ea6d567d77ceb4c7a1e43692fdf920317251369d2a2891",
+    // M10/T2-R9: the outgoing provider build currently deployed, byte-proven
+    // against the live runtime at this exact path on 2026-10-06. This revision
+    // changes this file (the 21 google auth profiles, the per-agent auth order,
+    // MODEL_ALLOWLIST, PLUGIN_ALLOWLIST and the secret refs are all replaced by
+    // the single router provider), so without this entry --preflight refuses the
+    // deployed extension and the deployment is unreachable. The new digest is
+    // deliberately NOT listed: it is the current build, accepted by content
+    // comparison. This entry permits OVERWRITING this file with the current
+    // build's bytes; it does not make the old content trusted.
+    "1b39cadd6b8ea5213e2f664ea8045089d7bd04e74876b8535d2b026aed39a39f",
+    // M10/T2-R9: an intermediate build this deployment wrote, recorded from the
+    // live bytes. It declared `models.providers.router.models` as an object; the
+    // installed runtime validates that field as an ARRAY and refused to start,
+    // so the gateway was down and the corrected build could not be reached
+    // without this admission. It is listed ONLY so the corrected array-shaped
+    // build can replace it. Its config shape is invalid and is not trusted: the
+    // runtime itself rejected it.
+    "7886a026fbcc2fa4dce376ad1ca798125d8ee3689f71590075f1c626f2131e8f",
+    // M10/T2-R9: the array-shaped `models` build, recorded from the live bytes.
+    // This is the build the gateway actually runs today; the next change swaps
+    // the primary model to the router's `execute` combo and therefore produces a
+    // different digest again. Listed ONLY so the successor build can replace it.
+    "8fc8dd8526406cb488ae83f7ae22cc3b6d46e4284703bba00d289e45df655ceb",
+    // M10/T2-R9: the `execute`-primary build, recorded from the live bytes
+    // (apply #3). Listed ONLY so the single-model successor can replace it.
+    "3331835d16a63b20100fc0296fc386a2a9e769b17a2bce2dcf4d84a66775105f",
+    // M10/T2-R9: the single-`execute` build with the array-shaped models block,
+    // recorded from the live bytes. Listed ONLY so the maxTokens successor can
+    // replace it.
+    "874c4490de94f04e93623f90b9b457135f7544d2144a783be081ed80c8f00919",
+    // M10/T2-R12: the maxTokens single-`execute` build, recorded from the live
+    // bytes. It was written by a diagnostic direct apply and never admitted;
+    // without this entry --preflight refuses the deployed extension. Listed
+    // ONLY so the failover successor can replace it.
+    "60ddd5dd7c7d2d8e2e78d94cd556d4524db06bbff7453d6619e696a2b68f2178",
+    // M10/T2-R12 failover restoration: the requestTimeoutMs build. It was
+    // deployed and then REJECTED by the installed runtime's strict entry
+    // schema (`Unrecognized key: "requestTimeoutMs"`, gateway refused to
+    // start, recovery by removal). Listed ONLY so the corrected successor can
+    // replace it; its config shape is invalid and is not trusted.
+    "d28a9bbc529e5c5186d998363024be999c7a62c6d250adcbce21c6cba67b2818",
+    // M10/T2-R12: the failover build (execute + 3.6-flash, no requestTimeoutMs)
+    // currently deployed, recorded from the live bytes. This revision adds the
+    // owner-ordered communication section (anh/em, diacritics, agentId
+    // emphasis for all agents), so without this entry --preflight refuses the
+    // deployed extension. Listed ONLY so the successor can replace it.
+    "b0290495e6fb7446f568a90df1c556d1e2b6318265b0b42377936bb1bdc08965",
+  ]),
+  "lib/quota-telemetry.mjs": Object.freeze([
+    // M10/T2-R9: the live asset before the single-model change, recorded from
+    // its bytes. This file had never changed, so it had no predecessor entry.
+    // R9 reduces the governed model set to one entry, which makes the resolver's
+    // fallback branches unreachable in production and adds
+    // NO_FALLBACK_AVAILABLE; without this entry --preflight would refuse the
+    // deployed extension and the apply would be unreachable. Listed ONLY so the
+    // successor can replace it; the current build is accepted by content
+    // comparison.
+    "6ece2af4b3469183f803a46c0551c90b1b44e27adfc3ef8d0c95af8df7eb6d16",
   ]),
   "lib/queue-manager.mjs": Object.freeze([
     "a8021088a4e9373fcf74cf4dd31433c8606b9505eaf74c5fa922839ee716776a",
@@ -211,6 +327,21 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // M10/T2-R3: the outgoing hygiene-build asset (41c62e7), proven as in the
     // R3 header above (live tree 34/34 match). Same admission semantics.
     "9e7e284507e6d6f5e2213005d4ad89af60540ef0bb404eb0d4855bf8078cab78",
+    // M10/T2-R10: the outgoing guard build currently deployed, byte-proven
+    // against the live runtime at this exact path. This revision changes this
+    // file by exactly one functional line (the policy-path resolution at
+    // ensureDependencies: `path.resolve(_moduleDir, candidate)` instead of
+    // wrapping `_moduleDir` in `pathToFileURL`), so without this entry
+    // --preflight refuses the deployed extension and the apply is unreachable.
+    // The new digest is deliberately NOT listed: it is the current build,
+    // accepted by content comparison. This entry permits OVERWRITING this file
+    // with the current build's bytes; it does not make the old content trusted.
+    "0de0d0f00542193157783d298e0c2b97a7808dcae573c27235d6d341421cede5",
+    // M10/T2-R12: the R10 guard build (policy-path fix), byte-proven against
+    // the live runtime. This revision moves the spawn approval check after
+    // params/node/topology/budget/lineage validation and fixes the legacy
+    // carve-out NaN. Listed ONLY so the successor can replace it.
+    "482b4938647eed44866ed494bf18f6e2417a3e41f31f3960b4629958815ff7a8",
   ]),
   "lib/native-boundary.mjs": Object.freeze([
     "4b77356f2a843f26040a7cd3312c896469aff33cc472bc6c02fdd5c472bd1234",
@@ -274,6 +405,13 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // the deployed extension and the deployment is unreachable. The new digest
     // is deliberately NOT listed: it is the current build.
     "cc5b823086c2c205cca9d01bb84b10c1c50710163e255d9962d594971e05b068",
+    // M10/T2-R12: the R10 boundary build currently deployed, byte-proven at
+    // BOTH governed paths. R12 changes this file by exporting
+    // resolveGovernance as a read-only test seam (no behavior change), so
+    // without this entry --preflight refuses the deployed extension. The new
+    // digest is deliberately NOT listed: it is the current build, accepted by
+    // content comparison.
+    "9e73518583006c0b9c5f8cc058e3bbd10e4749c2004aa9a4204ef226452f842a",
   ]),
   "lib/runtime.mjs": Object.freeze([
     "6a522c73efacf8b593d63ee55e18b5d02c3675340e0593142a5c2fea8dc6e24a",
@@ -284,6 +422,11 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
   ]),
   "lib/workflow.mjs": Object.freeze([
     "14bb6a5575b3f25e7d04aafb28eb1e95b0b5b2a21b15b6b5dec787aaaf94f907",
+    // M10/T2-R12: the outgoing build currently deployed, byte-verified at this
+    // exact path. This revision accepts an optional task_code on WORKFLOW_OPENED
+    // (a THIRD exactKeys argument — a required key would reject every existing
+    // event), so without this entry --preflight refuses the deployed extension.
+    "898e61920a37f2ce1fe7c937a94239df252f916d31135448bd279b1c4a7ff008",
     "19dc0eb40b216fbc898afd8dfc66f5c6aae4da15d1d2a6e5923753e13fcb09f0",
     "ff2ca8d3abbef43081756d68b553e23f036bbed302f6ffdf0075c045f8f1f5e2",
     // The accepted V16 build (9713872), established by packaging that commit.
@@ -464,6 +607,66 @@ function existingConfigMatches(configPath, context) {
           converged = true;
         }
       }
+    // M10/T2-R9: the governed model provider moved from the 21-profile Google
+    // pool to the single shared router endpoint, and the google plugin left the
+    // allowlist. A config written by the previous build therefore differs in
+    // exactly these fields: `auth` (profiles/order/cooldowns) is gone,
+    // `models.providers.router` is new, the agent model primary/fallbacks and
+    // the model map reference the router, and `plugins.allow`/`plugins.entries`
+    // no longer carry google.
+    //
+    // These are WHOLE-SUBTREE replacements driven by the canonical build, not
+    // per-field fills, because the old and new shapes have different key sets:
+    // a fill could not remove `auth.profiles` or add `models.providers`. As with
+    // every other convergence here, the RESULT is re-validated, so a config that
+    // differs in any other respect still fails closed and convergence can never
+    // launder unrelated drift into an accepted config.
+    //
+    // The endpoint and credential are taken from the canonical build, which
+    // resolves them from the environment. They are never copied from the
+    // drifted config, so a stale baked URL cannot survive the transition.
+    let modelProviderConverged = false;
+    if (Object.hasOwn(actual, "auth")) {
+      delete migrated.auth;
+      modelProviderConverged = true;
+    }
+    // `models` is ABSENT on the previous build, so it must be tested for absence
+    // rather than compared: canonicalJson rejects `undefined`, and a
+    // whole-config comparison here would throw instead of converging.
+    if (
+      migrated.models === undefined ||
+      canonicalJson(migrated.models) !== canonicalJson(expectedConfig.models)
+    ) {
+      migrated.models = JSON.parse(JSON.stringify(expectedConfig.models));
+      modelProviderConverged = true;
+    }
+    if (
+      canonicalJson(migrated.agents.defaults.model) !==
+        canonicalJson(expectedConfig.agents.defaults.model) ||
+      canonicalJson(migrated.agents.defaults.models) !==
+        canonicalJson(expectedConfig.agents.defaults.models)
+    ) {
+      migrated.agents.defaults.model = JSON.parse(
+        JSON.stringify(expectedConfig.agents.defaults.model),
+      );
+      migrated.agents.defaults.models = JSON.parse(
+        JSON.stringify(expectedConfig.agents.defaults.models),
+      );
+      modelProviderConverged = true;
+    }
+    if (
+      canonicalJson(migrated.plugins.allow) !==
+        canonicalJson(expectedConfig.plugins.allow) ||
+      canonicalJson(migrated.plugins.entries) !==
+        canonicalJson(expectedConfig.plugins.entries)
+    ) {
+      migrated.plugins.allow = [...expectedConfig.plugins.allow];
+      migrated.plugins.entries = JSON.parse(
+        JSON.stringify(expectedConfig.plugins.entries),
+      );
+      modelProviderConverged = true;
+    }
+    if (modelProviderConverged) converged = true;
     // Owner-identity hygiene follow-up: the built zink-governance plugin config
     // now carries the four validated Discord surface ids, so outbound routing
     // targets resolve from configuration instead of hardcoded production
@@ -713,10 +916,17 @@ async function main() {
   }
   assertDirectoryOrMissing(output.passStoreDirectory);
   assertDirectoryOrMissing(output.gpgHomeDirectory);
+  // M10/T2-R9: the previous auth-plan listed 21 auth-profile key targets. Those
+  // profiles are retired, so the new plan has no targets. The outgoing plan is
+  // admitted by content comparison so the converge-on-apply path stays reachable;
+  // an arbitrary hand-edited plan still fails closed.
   assertOwnedFileMatchesOrMissing(
     output.authPlanPath,
     stableJson(buildSecretsPlan()),
     "Auth SecretRef plan",
+    0o600,
+    [],
+    [PREVIOUS_AUTH_SECRET_PLAN_SHA256],
   );
   const pluginFiles = governancePluginFiles();
   for (const [relative, contents] of Object.entries(pluginFiles.assets)) {
@@ -820,6 +1030,43 @@ async function main() {
       // is the current build and is accepted by content comparison. Listed in
       // BOTH per-mode lists so the two modes cannot diverge.
       "6a7968b7d456ff6d3f2c5b9d60c7b6046a702603b880093c33b717d9a37c13b1",
+      // M10/T2-R9-A: the outgoing entrypoint currently deployed, byte-proven
+      // against the live runtime at this exact path on 2026-10-06. This build
+      // changes the entrypoint only by appending runId to the
+      // DUPLICATE_DISCORD_EVENT denial, so without this entry --preflight
+      // refuses the deployed extension and the deployment is unreachable. The
+      // new digest is deliberately NOT listed: it is the current build and is
+      // accepted by content comparison. Listed in BOTH per-mode lists so the two
+      // modes cannot diverge.
+      "f4ed9d9c54ccf486a30425b98a549cab5aebbbe8e9ee7f2d32bfc6795598c4a3",
+      // M10/T2-R12: the R9-A entrypoint currently deployed, byte-proven
+      // against the live runtime. R12 changes the entrypoint (first-approval
+      // bootstrap + canonical node digests), so without this entry --preflight
+      // refuses the deployed extension. The new digest is deliberately NOT
+      // listed: it is the current build, accepted by content comparison.
+      // Listed in BOTH per-mode lists so the two modes cannot diverge.
+      "c2ef436327242b4fb6f4f65409c80634c4096824a372db02ecc65860cc00cdd3",
+      // M10/T2-R12: the first-approval build currently deployed, byte-proven
+      // against the live runtime. This revision reverts the raw-REST buttons
+      // post to adapter delivery, so without this entry --preflight refuses
+      // the deployed extension. Listed in BOTH per-mode lists.
+      "af574dde8d4b9d2aa7dc217fd49f420bbe50bcae46ddd4d6f5e3662cd807137d",
+      // M10/T2-R9-C: the R4-EXCEPTION-buttons build currently deployed,
+      // byte-proven against the live runtime. This revision admits a same-run
+      // model-fallback re-entry (R9-C), so without this entry --preflight
+      // refuses the deployed extension. Listed in BOTH per-mode lists.
+      //
+      // This is the INSTALLED digest, captured by sha256sum of
+      // ~/.openclaw-zink/extensions/zink-governance/index.mjs. Note the
+      // builder output already uses the installed import form (`./lib/x`), so
+      // sha256(governancePluginFiles().entrypoint) equals this value; only the
+      // REPO SOURCE differs (`../../lib/x`) and must never be hashed here.
+      "aea6bf9545f6d365b40bba4d4e976a47211b49594a963e518a8d5e7e3baebc30",
+      // M10/T2-R12: the governed-model-chain build currently deployed,
+      // byte-verified at this exact path. This revision mints the owner-facing
+      // task code at admission, so without this entry --preflight refuses the
+      // deployed extension. Listed in BOTH per-mode lists.
+      "30078552487018479bf5f4c6a355d94646e45c9de6711804843d7648e06f9741",
       // Handoff-semantics remediation: the outgoing functional-truth entrypoint,
       // byte-proven as the packaged build before RELEASED_TO_COORDINATOR was
       // withdrawn (a Discord POST is not an accepted handoff), before the
@@ -908,12 +1155,17 @@ async function main() {
     output.authOrderPlanPath,
     stableJson(buildAuthOrderPlan()),
     "Auth order plan",
+    0o600,
+    [],
+    [PREVIOUS_AUTH_ORDER_PLAN_SHA256],
   );
   assertOwnedFileMatchesOrMissing(
     output.passResolverPath,
     passResolverContents(),
     "Password-store resolver",
     0o700,
+    [],
+    [PREVIOUS_PASS_RESOLVER_SHA256],
   );
   assertOwnedFileMatchesOrMissing(
     output.geminiStreamHotfixPath,
@@ -949,10 +1201,16 @@ async function main() {
   for (const agentDir of Object.values(output.agentDirs)) {
     ensurePrivateDirectory(agentDir);
   }
+  // Mirrors the preflight gate above: the outgoing plan must be admitted in
+  // apply mode too, otherwise the preflight passes and the apply then refuses
+  // the very same file. Same admission semantics, same recorded digest.
   materializeOwnedFile(
     output.authPlanPath,
     stableJson(buildSecretsPlan()),
     "Auth SecretRef plan",
+    0o600,
+    [],
+    [PREVIOUS_AUTH_SECRET_PLAN_SHA256],
   );
   ensurePrivateDirectory(output.governancePluginDirectory);
   for (const [relative, contents] of Object.entries(pluginFiles.assets)) {
@@ -1087,11 +1345,40 @@ async function main() {
       // is the current build and is accepted by content comparison. Listed in
       // BOTH per-mode lists so the two modes cannot diverge.
       "6a7968b7d456ff6d3f2c5b9d60c7b6046a702603b880093c33b717d9a37c13b1",
+      // M10/T2-R9-A: the outgoing entrypoint currently deployed, byte-proven
+      // against the live runtime at this exact path on 2026-10-06. This build
+      // changes the entrypoint only by appending runId to the
+      // DUPLICATE_DISCORD_EVENT denial, so without this entry --apply refuses
+      // the deployed extension and the deployment is unreachable. The new digest
+      // is deliberately NOT listed: it is the current build and is accepted by
+      // content comparison. Listed in BOTH per-mode lists so the two modes
+      // cannot diverge.
+      "f4ed9d9c54ccf486a30425b98a549cab5aebbbe8e9ee7f2d32bfc6795598c4a3",
       "118db9a746a0757dbea2d15c5d8d9585a298a1ca0d235a6b13a3a8513fb2bcac",
       "4bb0c1e12b4116340fb80f9cc136082200c7506fa691623bc922414f0bd92845",
       "36ed858c74dd09423d0afc74ff2fc8eb589843f163fb8ffccf8bcc912f097ce9",
       "0940eb77d5796f29d819331e92a7c00c4f9230eb1185dce3de7b524a37e2f7c2",
       "4a957b246533ab8e55f88172daa3667ae06cda10dc1d1e8c0858a18e31895663",
+      // M10/T2-R9-A: the outgoing entrypoint currently deployed, byte-proven
+      // against the live runtime at this exact path on 2026-10-06, listed here as
+      // well as in the preflight gate above for the same per-mode-duplication
+      // reason R13 documents: admitting the predecessor in one mode and not the
+      // other would let --preflight PASS and then --apply refuse.
+      "f4ed9d9c54ccf486a30425b98a549cab5aebbbe8e9ee7f2d32bfc6795598c4a3",
+      // M10/T2-R12: the R9-A entrypoint, mirrors the preflight-mode entry
+      // verbatim so the two modes cannot diverge.
+      "c2ef436327242b4fb6f4f65409c80634c4096824a372db02ecc65860cc00cdd3",
+      // M10/T2-R12: the first-approval build, mirrors the preflight-mode
+      // entry verbatim so the two modes cannot diverge.
+      "af574dde8d4b9d2aa7dc217fd49f420bbe50bcae46ddd4d6f5e3662cd807137d",
+      // M10/T2-R9-C: the R4-EXCEPTION-buttons build, mirrors the preflight-mode
+      // entry verbatim so the two modes cannot diverge.
+      "aea6bf9545f6d365b40bba4d4e976a47211b49594a963e518a8d5e7e3baebc30",
+      // M10/T2-R12: the governed-model-chain build currently deployed,
+      // byte-verified at this exact path. This revision mints the owner-facing
+      // task code at admission, so without this entry --preflight refuses the
+      // deployed extension. Listed in BOTH per-mode lists.
+      "30078552487018479bf5f4c6a355d94646e45c9de6711804843d7648e06f9741",
     ],
   );
   if (!existsSync(output.identityKeyPath))
@@ -1105,13 +1392,21 @@ async function main() {
     output.authOrderPlanPath,
     stableJson(buildAuthOrderPlan()),
     "Auth order plan",
+    0o600,
+    [],
+    [PREVIOUS_AUTH_ORDER_PLAN_SHA256],
   );
   ensurePrivateDirectory(path.dirname(output.passResolverPath));
+  // Mirrors the preflight gate above: the outgoing resolver still allowlists the
+  // 21 GEMINI_API_KEY_NN pass ids, so it must be admitted here too or the apply
+  // refuses the same file the preflight accepted.
   materializeOwnedFile(
     output.passResolverPath,
     passResolverContents(),
     "Password-store resolver",
     0o700,
+    [],
+    [PREVIOUS_PASS_RESOLVER_SHA256],
   );
   materializeOwnedFile(
     output.geminiStreamHotfixPath,

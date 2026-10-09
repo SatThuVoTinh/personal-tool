@@ -363,7 +363,12 @@ test("R10 F: replaying the same Discord message id creates no duplicate task", a
       runId: "discord-replay",
     };
     await enterNativeRun(native, governed);
-    await assert.rejects(enterNativeRun(native, governed));
+    // M10/T2-R9-C: a replay arrives under a DIFFERENT run. The same runId re-entering
+    // its own admitted message is the host's model-fallback lane, which R9-C admits
+    // so a hung primary can fail over; it still creates no second task either.
+    await assert.rejects(
+      enterNativeRun(native, { ...governed, runId: "discord-replay-2" }),
+    );
     assert.equal(Object.keys(readSnapshot(paths).tasks).length, 1);
   });
 });

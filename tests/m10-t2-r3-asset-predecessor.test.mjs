@@ -81,8 +81,12 @@ const HYGIENE_ASSET_PREDECESSORS = Object.freeze({
  * their pins when the entrypoint changed: denial-reason + signal logging
  * in authenticateIngress changes the packaged bytes; behavior is
  * observation-only and every verdict is unchanged. */
+// M10/T2-R12: this pin moves to the new build, which differs from the R9-C
+// build (`aea6bf95…`, now the outgoing predecessor) by suppressing governance
+// machine payloads from the user-visible reply. Accepted by content comparison
+// and deliberately NOT listed.
 const CURRENT_ENTRYPOINT_SHA256 =
-  "f4ed9d9c54ccf486a30425b98a549cab5aebbbe8e9ee7f2d32bfc6795598c4a3";
+  "61680010520bbe3ca57b289cf9af9fb6ea79c8f79e33e49e95d5dec6de60cef3";
 
 const identifiers = Object.freeze({
   discordGuildId: "123456789012345678",
@@ -92,6 +96,14 @@ const identifiers = Object.freeze({
   discordApprovalsForumId: "523456789012345678",
   discordIncidentsForumId: "62345678901234567",
 });
+// M10/T2-R9: configure.mjs runs as a child process, so the placeholders must be
+// supplied through its environment, not just this process's.
+import {
+  ROUTER_TEST_API_KEY,
+  ROUTER_TEST_HOST,
+  ROUTER_TEST_PORT,
+} from "./helpers/router-env.mjs";
+
 const identifierArgs = Object.freeze([
   "--discord-guild-id",
   identifiers.discordGuildId,
@@ -111,7 +123,18 @@ function provisioned() {
   const root = mkdtempSync(path.join(tmpdir(), "zink-r3-"));
   const stateDir = path.join(root, ".openclaw-zink");
   const systemdUserDir = path.join(root, ".config", "systemd", "user");
-  const env = { ...process.env, HOME: root, USERPROFILE: root };
+  // M10/T2-R9: `configure.mjs` is spawned as a CHILD process, so the in-process
+  // test env does not reach it. The placeholders are non-routable and are
+  // supplied only so the builder can render a config shape; reachability is
+  // proven by verify.mjs's live router probe, never by these values.
+  const env = {
+    ...process.env,
+    HOME: root,
+    USERPROFILE: root,
+    ZINK_ROUTER_HOST: ROUTER_TEST_HOST,
+    ZINK_ROUTER_PORT: ROUTER_TEST_PORT,
+    ZINK_ROUTER_API_KEY: ROUTER_TEST_API_KEY,
+  };
   const run = (mode) => () =>
     execFileSync(
       process.execPath,

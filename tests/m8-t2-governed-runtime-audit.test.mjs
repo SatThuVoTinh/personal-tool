@@ -2678,7 +2678,16 @@ describe("A-Series: Discord Component Callback Schema & Interaction Guards (A14-
       "task123",
       "3",
     );
-    assert.equal(customId, "zink:approval:approve:task123:3");
+    // M10/T2-R12: the host only routes interactions whose parsed key is `occomp`,
+    // so the wire id is the host envelope carrying the zink action namespace.
+    // The bare `zink:approval:approve:task123:3` this test used to assert was
+    // never deliverable — every click answered "This component is no longer
+    // valid." (live 2026-10-08 15:45:08).
+    assert.equal(customId, "occomp:cid=zink:approval:approve:task123:3");
+    assert.equal(
+      parseComponentCustomId(customId).actionKey,
+      "APPROVAL_APPROVE",
+    );
   });
 
   test("A16: buildComponentCustomId rejects unknown action type", () => {
@@ -2810,15 +2819,26 @@ describe("A-Series: Discord Component Callback Schema & Interaction Guards (A14-
   });
 
   test("A23: built custom_ids stay compatible with the native 2026.6.34 custom_id grammar", () => {
-    // openclaw@2026.6.34 native parseCustomId splits segments on ";" and
-    // parses name=value pairs; our ids must never contain those delimiters
-    // so the native parser yields key "zink" without misparsing.
+    // openclaw@2026.6.34 native parseCustomId splits segments on ";" and parses
+    // name=value pairs. M10/T2-R12: the built id MUST therefore carry the host
+    // envelope `occomp:cid=<componentId>` as its first segment — that is what
+    // makes the parsed key "occomp". The previous contract ("must never contain
+    // = so the parser yields key zink") described a bare id the host rejects
+    // outright; live failure 2026-10-08 15:45:08, "This component is no longer
+    // valid." A ";" is still forbidden: it would start a host key=value segment
+    // and truncate the envelope.
     for (const actionType of Object.values(
       DISCORD_COMPONENT_ACTION_NAMESPACE,
     )) {
       const customId = buildComponentCustomId(actionType, "task-01", "3");
+      assert.ok(
+        customId.startsWith("occomp:cid="),
+        `${actionType} must carry the host envelope: ${customId}`,
+      );
       assert.equal(customId.includes(";"), false);
-      assert.equal(customId.includes("="), false);
+      // First segment before any ";" must be the envelope, never the bare zink
+      // namespace, so the host's parsed key is exactly "occomp".
+      assert.equal(customId.split(";")[0].split(":")[0], "occomp");
       const parsed = parseComponentCustomId(customId);
       assert.equal(parsed.actionType, actionType);
       assert.equal(parsed.taskId, "task-01");
@@ -2826,13 +2846,40 @@ describe("A-Series: Discord Component Callback Schema & Interaction Guards (A14-
     }
   });
 
+  test("A23: every governed custom_id fits Discord's 100-char ceiling", () => {
+    // M10/T2-R12: a longer id is refused by Discord, so the builder fails closed
+    // instead. APPROVAL_REVISION with a 64-hex task id lands at exactly 100.
+    const taskId = "a".repeat(64);
+    for (const actionType of Object.values(
+      DISCORD_COMPONENT_ACTION_NAMESPACE,
+    )) {
+      const customId = buildComponentCustomId(actionType, taskId, "1");
+      assert.ok(
+        customId.length <= 100,
+        `${actionType} exceeds the ceiling: ${customId.length}`,
+      );
+    }
+    assert.throws(
+      () =>
+        buildComponentCustomId(
+          DISCORD_COMPONENT_ACTION_NAMESPACE.APPROVAL_REVISION,
+          taskId,
+          "12345",
+        ),
+      /CUSTOM_ID_TOO_LONG/u,
+    );
+  });
+
   test("A23: parseComponentCustomId accepts the native occomp:cid= envelope", () => {
-    const inner = buildComponentCustomId(
+    // The builder already emits the envelope, so the wire id IS what the host
+    // sends. The host may append its own key=value params after it.
+    const wire = buildComponentCustomId(
       DISCORD_COMPONENT_ACTION_NAMESPACE.RESULT_ACCEPT,
       "task-07",
       "1",
     );
-    const parsed = parseComponentCustomId(`occomp:cid=${inner};ttl=60000`);
+    assert.ok(wire.startsWith("occomp:cid="), wire);
+    const parsed = parseComponentCustomId(`${wire};ttl=60000`);
     assert.equal(parsed.actionKey, "RESULT_ACCEPT");
     assert.equal(parsed.taskId, "task-07");
     assert.equal(parsed.revision, "1");

@@ -99,7 +99,9 @@ function publishPreflightIngress(entry) {
   }
 }
 
-function resolveGovernance(config) {
+// M10/T2-R12: exported as a test seam so suites can drive the registered
+// guard hooks exactly as production does. Read-only accessor; no behavior.
+export function resolveGovernance(config) {
   const entry = config?.plugins?.entries?.["zink-governance"];
   if (entry?.enabled !== true) return { enabled: false };
   const scope = entry.config?.ledgerRoot;

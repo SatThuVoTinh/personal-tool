@@ -531,7 +531,14 @@ test("E: a valid owner Discord ingress run is still admitted and creates its tas
     const task_id = Object.keys(snapshot.tasks)[0];
     assert.ok(task_id, "a valid owner Discord ingress must create one task");
     // A replay of the identical message id must not create a second task.
-    await assert.rejects(enterNativeRun(native, context));
+    //
+    // M10/T2-R9-C: the replay is a DIFFERENT run. Re-using the same runId is
+    // OpenClaw's model-fallback lane re-entering its own admitted run, which R9-C
+    // admits by design so a hung primary can fail over. Re-delivery by another run
+    // still denies, and still creates no second task.
+    await assert.rejects(
+      enterNativeRun(native, { ...context, runId: "discord-valid-run-replay" }),
+    );
     assert.equal(Object.keys(readSnapshot(paths).tasks).length, 1);
   });
 });

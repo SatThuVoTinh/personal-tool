@@ -43,6 +43,10 @@ export const RESOLUTION_REASON = Object.freeze({
   UNKNOWN_KEEP_PRIMARY: "UNKNOWN_KEEP_PRIMARY",
   HYSTERESIS_HOLD_FALLBACK: "HYSTERESIS_HOLD_FALLBACK",
   RECOVERED_PRIMARY: "RECOVERED_PRIMARY",
+  // M10/T2-R9: the governed set holds one entry, so a low-quota reading cannot
+  // move the run to a second model. Reported instead of silently staying on the
+  // primary under PRIMARY_OK, which would misattribute a real quota signal.
+  NO_FALLBACK_AVAILABLE: "NO_FALLBACK_AVAILABLE",
 });
 
 const CANONICAL_AGENTS = new Set(AGENT_IDS);
@@ -192,13 +196,28 @@ export function buildSelfQuotaReceipt(store, agentId, now = Date.now()) {
  * session state, ledger, queue or configuration. The only state transition is
  * a process-local hysteresis latch, documented as ephemeral.
  */
-export function resolveRuntimeModel({ store, agentId, now = Date.now() }) {
+export function resolveRuntimeModel({
+  store,
+  agentId,
+  now = Date.now(),
+  // The governed set is a single entry under M10/T2-R9, so the fallback branches
+  // below are unreachable in production. `allowlist` exists so those branches
+  // stay covered by tests when a second model is declared later; production
+  // callers pass nothing and get MODEL_ALLOWLIST.
+  allowlist = MODEL_ALLOWLIST,
+}) {
   if (typeof agentId !== "string" || !CANONICAL_AGENTS.has(agentId)) {
     throw new Error("UNKNOWN_AGENT");
   }
-  const primary = MODEL_ALLOWLIST[0];
-  const fallback = MODEL_ALLOWLIST[1];
-  if (!primary || !fallback) throw new Error("MODEL_ALLOWLIST_UNAVAILABLE");
+  const primary = allowlist[0];
+  const fallback = allowlist[1];
+  // A primary is mandatory; a fallback is not. M10/T2-R9 (owner decision) reduced
+  // the governed model set to the router's single `execute` combo entry, so
+  // requiring a fallback here would make every resolution throw and take all
+  // seven agents down. With no fallback the resolver stays on the primary and
+  // reports NO_FALLBACK_AVAILABLE, which is the honest verdict: there is no
+  // second governed model to move to.
+  if (!primary) throw new Error("MODEL_ALLOWLIST_UNAVAILABLE");
 
   const latch = store.latches.get(agentId) ?? "primary";
   const telemetry = readSelfQuotaTelemetry(store, agentId, now);
@@ -214,7 +233,15 @@ export function resolveRuntimeModel({ store, agentId, now = Date.now() }) {
     reason = RESOLUTION_REASON.UNKNOWN_KEEP_PRIMARY;
   } else {
     const remaining = telemetry.quota.remaining_pct;
-    if (latch === "fallback") {
+    if (!fallback) {
+      // NO_FALLBACK_AVAILABLE must mean "quota is low AND there is nowhere to
+      // go". Reporting it for a healthy quota would misstate a working run, so a
+      // reading above the threshold stays PRIMARY_OK.
+      reason =
+        remaining <= QUOTA_FALLBACK_THRESHOLD_PCT
+          ? RESOLUTION_REASON.NO_FALLBACK_AVAILABLE
+          : RESOLUTION_REASON.PRIMARY_OK;
+    } else if (latch === "fallback") {
       if (remaining >= QUOTA_RECOVERY_THRESHOLD_PCT) {
         chosen = primary;
         reason = RESOLUTION_REASON.RECOVERED_PRIMARY;
@@ -228,11 +255,11 @@ export function resolveRuntimeModel({ store, agentId, now = Date.now() }) {
     }
   }
 
-  const nextLatch = chosen === fallback ? "fallback" : "primary";
+  const nextLatch = fallback && chosen === fallback ? "fallback" : "primary";
   store.latches.set(agentId, nextLatch);
 
   // Model selection can never escape the canonical allowlist.
-  if (!MODEL_ALLOWLIST.includes(chosen)) {
+  if (!allowlist.includes(chosen)) {
     throw new Error("MODEL_ALLOWLIST_VIOLATION");
   }
   return {

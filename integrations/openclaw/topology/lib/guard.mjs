@@ -113,8 +113,15 @@ async function ensureDependencies() {
       for (const candidate of policyCandidates) {
         try {
           const href = candidate.startsWith(".")
-            ? pathToFileURL(path.resolve(pathToFileURL(_moduleDir), candidate))
-                .href
+            ? // M10/T2-R10: `_moduleDir` is already a filesystem path
+              // (`path.dirname(fileURLToPath(import.meta.url))`). Wrapping it in
+              // `pathToFileURL` handed `path.resolve` a URL object, which throws
+              // `ERR_INVALID_ARG_TYPE`; the throw was swallowed here, the
+              // package-relative candidate always died, and production (gateway
+              // cwd `/home/hoang_vinh`) fell through to nothing — leaving every
+              // capability registry empty and every built-in tool call failing
+              // with RUNTIME_CAPABILITY_MISMATCH. Resolve the path directly.
+              pathToFileURL(path.resolve(_moduleDir, candidate)).href
             : pathToFileURL(candidate).href;
           const loaded = await import(href);
           if (loaded?.BUILT_IN_TOOL_POLICY) {
@@ -1201,19 +1208,8 @@ export function createGovernanceGuard({
           "LINEAGE_MISMATCH",
         );
         // M7-020: a spawn reservation is a POST-approval event, matching the
-        // reducer. The pre-flight check states the same condition the
-        // authoritative reservation will enforce, so the two cannot disagree
-        // about whether the work was approved. Read-only session inspection is
-        // not governed work and is unaffected.
-        if (event.toolName === "sessions_spawn") {
-          assert(
-            typeof task.approved_at === "string" &&
-              !Number.isNaN(Date.parse(task.approved_at)) &&
-              ["QUEUED", "EXECUTING"].includes(task.workflow_status) &&
-              task.brief_state === "ACTIVE",
-            "AUTH_APPROVAL_REQUIRED",
-          );
-        }
+        // reducer. Read-only session inspection is not governed work and is
+        // unaffected.
         if (owner.delegation)
           assert(
             owner.delegation.run_state === "RUNNING" &&
@@ -1360,9 +1356,14 @@ export function createGovernanceGuard({
                 : 0),
             delegated_runs:
               BUDGETS.maxTotalDelegatedRunsPerTask -
-              LEGACY_DELEGATED_RUN_CARVE_OUT[
+              // M10/T2-R12: versions without a legacy carve-out entry get zero,
+              // not NaN. Without `?? 0` any proposal whose governance_version
+              // is not in the map poisons the whole budget to NaN and every
+              // guard spawn dies here — previously masked because the approval
+              // check fired first.
+              (LEGACY_DELEGATED_RUN_CARVE_OUT[
                 proposal.governance_version ?? ""
-              ] -
+              ] ?? 0) -
               task.delegated_runs_used,
           },
           requested_output_schema: "agent-result-payload.schema.json",
@@ -1434,6 +1435,23 @@ export function createGovernanceGuard({
         // under current execution authority; every other parent keeps the
         // existing unfenced path, whose pre-approval, topology, budget and
         // lineage rules are unchanged.
+        //
+        // M10/T2-R12: the approval precondition is evaluated HERE, after all
+        // params/node/topology/budget/lineage validation, immediately before
+        // the commit. It states the same condition the reducer enforces for
+        // WORKFLOW_SPAWN_RESERVED, so the two cannot disagree — and a denial
+        // with AUTH_APPROVAL_REQUIRED now structurally implies an otherwise
+        // valid request. Previously this check fired before validation, which
+        // let malformed requests report "needs approval" for work that could
+        // never be approved. Same condition, later position; no valid request
+        // changes verdict, and REQUESTED still never satisfies this gate.
+        assert(
+          typeof task.approved_at === "string" &&
+            !Number.isNaN(Date.parse(task.approved_at)) &&
+            ["QUEUED", "EXECUTING"].includes(task.workflow_status) &&
+            task.brief_state === "ACTIVE",
+          "AUTH_APPROVAL_REQUIRED",
+        );
         const commitReservation = () =>
           recordWorkflowEvent(paths, "WORKFLOW_SPAWN_RESERVED", spec);
         if (owner.coordinatorRun) {

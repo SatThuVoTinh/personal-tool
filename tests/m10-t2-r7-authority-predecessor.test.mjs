@@ -26,6 +26,14 @@ import path from "node:path";
 import process from "node:process";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
+// M10/T2-R9: `configure.mjs` is spawned as a child process and now fails
+// closed without a router endpoint/credential, so supply non-routable
+// placeholders. Reachability is proven by verify.mjs, never by these.
+import {
+  ROUTER_TEST_API_KEY,
+  ROUTER_TEST_HOST,
+  ROUTER_TEST_PORT,
+} from "./helpers/router-env.mjs";
 
 const REPO = process.cwd();
 const CONFIGURE = path.join(REPO, "integrations", "openclaw", "configure.mjs");
@@ -37,8 +45,18 @@ const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 const HYGIENE_AUTHORITY_SHA256 =
   "aa12540f60da6bcdf809123f0d75c632c6b8a128a88e4395f38785b663f13e17";
 
-/** The R5/R6/R7 candidate build. Deliberately NOT listed (content comparison). */
+/**
+ * M10/T2-R12: the current candidate build. Moves from the R9-C build
+ * (`42b0cba8…`, now the outgoing predecessor) by emitting the host component
+ * wire envelope `occomp:cid=` in buildComponentCustomId /
+ * buildSkillComponentCustomId, with a closed length/encoding guard. Deliberately
+ * NOT listed (content comparison); the outgoing predecessor is admitted.
+ */
 const CANDIDATE_AUTHORITY_SHA256 =
+  "8243a0385a51fc0f63d918cbb5d2a4998af92fa0c409a890b96ba06fb7670f27";
+
+/** The outgoing candidate this deployment replaces; now listed. */
+const R9C_AUTHORITY_SHA256 =
   "42b0cba8567c1e52376d41d9329394b70c94e45a503af37733dcf76721d536c6";
 
 /** The origin commit whose packaged authority reproduces the live digest. */
@@ -71,7 +89,14 @@ function provisioned() {
   const root = mkdtempSync(path.join(tmpdir(), "zink-r7-"));
   const stateDir = path.join(root, ".openclaw-zink");
   const systemdUserDir = path.join(root, ".config", "systemd", "user");
-  const env = { ...process.env, HOME: root, USERPROFILE: root };
+  const env = {
+    ...process.env,
+    HOME: root,
+    USERPROFILE: root,
+    ZINK_ROUTER_HOST: ROUTER_TEST_HOST,
+    ZINK_ROUTER_PORT: ROUTER_TEST_PORT,
+    ZINK_ROUTER_API_KEY: ROUTER_TEST_API_KEY,
+  };
   const run = (mode) => () =>
     execFileSync(
       process.execPath,
@@ -213,6 +238,40 @@ test("R7 0b: the candidate build digest is NOT listed", async () => {
     false,
     "the candidate build must stay accepted by content comparison, not by entry",
   );
+  // M10/T2-R12: the outgoing R9-C authority build IS listed, because it is what
+  // the runtime has installed. Without this entry --preflight fails closed with
+  // "authority.mjs drift detected" and no deployment is reachable. Listed in the
+  // single shared allowlist, so both per-mode paths pick it up.
+  assert.ok(
+    CONFIGURE_SOURCE.includes(R9C_AUTHORITY_SHA256),
+    "the outgoing R9-C authority build must be an admitted predecessor",
+  );
+});
+
+test("R7 0d: every governed custom_id is deliverable, not merely parseable", async () => {
+  // M10/T2-R12: the bug this pins was invisible to every existing assertion.
+  // A bare `zink:...` custom_id parses correctly through our own
+  // parseComponentCustomId, round-trips in tests, and is still undeliverable —
+  // the host's parseDiscordComponentCustomId requires the `occomp` key and
+  // answers every click with "This component is no longer valid." (proven live
+  // 2026-10-08 15:45:08). So the assertion is on the WIRE prefix, not on our
+  // internal grammar.
+  const { buildComponentCustomId } =
+    await import("../integrations/openclaw/lib/authority.mjs");
+  const { DISCORD_COMPONENT_ACTION_NAMESPACE } =
+    await import("../integrations/openclaw/lib/authority.mjs");
+  const taskId = "f".repeat(64);
+  for (const actionType of Object.values(DISCORD_COMPONENT_ACTION_NAMESPACE)) {
+    const customId = buildComponentCustomId(actionType, taskId, "1");
+    assert.ok(
+      customId.startsWith("occomp:cid="),
+      `${actionType}: host cannot route a non-occomp custom_id: ${customId}`,
+    );
+    // The host splits on ";" before parsing name=value, so a ";" would split the
+    // envelope away and truncate the component id.
+    assert.equal(customId.includes(";"), false, customId);
+    assert.equal(customId.split(";")[0], customId, customId);
+  }
 });
 
 test("R7 0c: preflight and apply share the single asset allowlist", () => {

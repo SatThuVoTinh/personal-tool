@@ -23,7 +23,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
-
+// This suite reads only committed source and git history; it never spawns
+// `configure.mjs`, so it needs no router environment.
 const REPO = process.cwd();
 const CONFIGURE = path.join(REPO, "integrations", "openclaw", "configure.mjs");
 const CONFIGURE_SOURCE = readFileSync(CONFIGURE, "utf8");

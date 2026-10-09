@@ -172,11 +172,14 @@ describe("T2 — the host has a way to publish quota", () => {
       assert.equal(receipt?.status, "fresh");
       assert.equal(receipt?.quota?.remaining_pct, 18);
       // 18% remaining is below the 20% fallback threshold, so the run-scoped
-      // model fallback actually engages. T2 + T3 are live.
+      // model fallback engages (R12 failover restoration). The T2 seam is
+      // proven by the snapshot being VISIBLE and correctly valued to the
+      // resolver; the T3 half is preserved in
+      // tests/m7-t2-quota-telemetry.test.mjs.
       const resolved = await resolveNativeRunModel(hostConfig(root), context);
-      assert.notEqual(
+      assert.equal(
         resolved.model,
-        MODEL_ALLOWLIST[0],
+        MODEL_ALLOWLIST[1],
         "a published quota below the threshold must change the run model",
       );
       assert.equal(

@@ -28,6 +28,12 @@ import {
   recordWorkflowEvent,
 } from "../integrations/openclaw/topology/lib/ledger.mjs";
 import { deriveTaskId } from "../integrations/openclaw/topology/lib/canonical.mjs";
+import { applyRouterTestEnv } from "./helpers/router-env.mjs";
+
+// M10/T2-R9: the governed model provider resolves its endpoint and
+// credential from the environment at build time; supply non-routable
+// placeholders so this suite can assert config SHAPE only.
+applyRouterTestEnv();
 
 const AGENTS = ["main", "o1", "o2", "excel", "power-bi", "sql", "python"];
 const SPECIALISTS = ["o1", "o2", "excel", "power-bi", "sql", "python"];
