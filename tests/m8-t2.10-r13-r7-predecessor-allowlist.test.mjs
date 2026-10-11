@@ -60,6 +60,14 @@ const BOUNDARY = path.join(
   "lib",
   "native-boundary.mjs",
 );
+const PLUGIN_ENTRYPOINT_SOURCE = path.join(
+  REPO,
+  "integrations",
+  "openclaw",
+  "plugins",
+  "zink-governance",
+  "index.mjs",
+);
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 
@@ -108,15 +116,23 @@ assert.ok(
 const R10_ENTRYPOINT_SHA256 =
   "f4ed9d9c54ccf486a30425b98a549cab5aebbbe8e9ee7f2d32bfc6795598c4a3";
 /**
- * M10/T2-R14: the CURRENT entrypoint. The R14 review fixes changed packaged
- * bytes (text-approval dispatch ordering, queue-completion success reporting,
- * owner-gate guards, the internal-run classifier's real ledger-ownership flag,
- * byte-budgeted `safeReason`). The outgoing R12/R13 entrypoint
- * (`61680010…`) is now an admitted predecessor in BOTH per-mode lists.
+ * M10/T2-R14/R15: the entrypoint M11/T1-R1 Phase 2 replaces. The R14 review
+ * fixes changed packaged bytes (text-approval dispatch ordering,
+ * queue-completion success reporting, owner-gate guards, the internal-run
+ * classifier's real ledger-ownership flag, byte-budgeted `safeReason`) and R15
+ * dropped the duplicated `truncateUtf8`. It is now an admitted predecessor in
+ * BOTH per-mode lists, so the next authorized deployment stays reachable from it.
+ */
+const R14_OUTGOING_ENTRYPOINT_SHA256 =
+  "230f3c79d0a35c2261129ddc0048ad4f0ae4fc6d86a5c49e444594a446bd2982";
+/**
+ * M11/T1-R1 Phase 2: the CURRENT entrypoint. The owner approval path now
+ * requires an explicit `decisionRef` instead of defaulting one, promotes inside
+ * the canonical Skill Store writer lock, and requires `skillsRoot` to reject.
  * Accepted by content comparison and deliberately NOT listed.
  */
-const R14_ENTRYPOINT_SHA256 =
-  "230f3c79d0a35c2261129ddc0048ad4f0ae4fc6d86a5c49e444594a446bd2982";
+const M11_T1_R1_ENTRYPOINT_SHA256 =
+  "81b9a9c7db7567748723c3bfa64303a4ec624b5a80b769bf67f1478258971823";
 /** The outgoing entrypoint this deployment replaces; now listed. */
 const R8_OUTGOING_ENTRYPOINT_SHA256 =
   "6a7968b7d456ff6d3f2c5b9d60c7b6046a702603b880093c33b717d9a37c13b1";
@@ -219,6 +235,15 @@ const R19_SOURCE_COMMIT = "4b9eb0f";
 /** The commit carrying the R7-era plugin source: R10's immediate parent. */
 const R7_SOURCE_COMMIT = "4f5cc6d";
 
+/**
+ * M11/T1-R1 Phase 2: the commit whose packaged entrypoint is the outgoing
+ * build this deployment replaces (`230f3c79…`). Phase 2 changed only
+ * `plugins/zink-governance/index.mjs` inside the packaged tree, so building
+ * that commit's entrypoint source through the real generator reproduces the
+ * outgoing bytes exactly.
+ */
+const M11_T1_R1_SOURCE_COMMIT = "45e0ee7";
+
 const gitShow = (rev, file) =>
   execFileSync("git", ["show", `${rev}:${file}`], {
     cwd: REPO,
@@ -234,6 +259,13 @@ const R7_ENTRYPOINT_SOURCE = gitShow(
 const R7_BOUNDARY_BODY = gitShow(
   R7_SOURCE_COMMIT,
   "integrations/openclaw/topology/lib/native-boundary.mjs",
+);
+
+// M11/T1-R1 Phase 2: the plugin entrypoint source as committed by the build this
+// deployment replaces.
+const M11_T1_R1_ENTRYPOINT_SOURCE = gitShow(
+  M11_T1_R1_SOURCE_COMMIT,
+  "integrations/openclaw/plugins/zink-governance/index.mjs",
 );
 
 // ---------------------------------------------------------------------------
@@ -396,8 +428,36 @@ test("R13 P3: the R7 and current builds differ in exactly the two governed files
   );
 });
 
-/** Build the R7 extension through the real generator, in a scratch tree. */
-async function scratchGenerator() {
+test("R13 P4: the M11/T1-R1 Phase 2 outgoing entrypoint is proven from its commit", async () => {
+  // Provenance by construction, not transcription: the bytes the new
+  // allowlist entry admits are re-derived from the commit that carries them
+  // through the real generator, exactly as the R7 and R19 predecessors are.
+  const outgoing = await outgoingEntrypoint();
+  assert.equal(
+    sha256(outgoing),
+    R14_OUTGOING_ENTRYPOINT_SHA256,
+    "the committed Phase-1 source must reproduce the outgoing digest",
+  );
+  const current = await currentBuild();
+  assert.equal(
+    sha256(current.entrypoint),
+    M11_T1_R1_ENTRYPOINT_SHA256,
+    "the working tree must carry the Phase 2 build",
+  );
+  assert.notEqual(
+    M11_T1_R1_ENTRYPOINT_SOURCE,
+    readFileSync(PLUGIN_ENTRYPOINT_SOURCE, "utf8"),
+    "Phase 2 must really have moved the plugin entrypoint source",
+  );
+});
+
+/**
+ * Build a historical extension through the real generator, in a scratch tree.
+ * `overrides` are repository-relative paths under `integrations/openclaw` whose
+ * committed bodies replace the current ones; every other packaged asset is the
+ * current build, which is exactly what the provenance claims require.
+ */
+async function scratchGenerator(overrides) {
   const scratch = mkdtempSync(path.join(tmpdir(), "zink-r13-gen-"));
   try {
     const alt = path.join(scratch, "integrations", "openclaw");
@@ -406,14 +466,8 @@ async function scratchGenerator() {
       recursive: true,
     });
     // The R7 source for the entrypoint, and the R7 file for the boundary asset.
-    writeFileSync(
-      path.join(alt, "plugins", "zink-governance", "index.mjs"),
-      R7_ENTRYPOINT_SOURCE,
-    );
-    writeFileSync(
-      path.join(alt, "topology", "lib", "native-boundary.mjs"),
-      R7_BOUNDARY_BODY,
-    );
+    for (const [rel, body] of overrides)
+      writeFileSync(path.join(alt, rel), body, "utf8");
     const { governancePluginFiles } = await import(
       pathToFileURL(path.join(alt, "lib", "policy.mjs")).href
     );
@@ -423,13 +477,31 @@ async function scratchGenerator() {
   }
 }
 
+const r7Overrides = [
+  ["plugins/zink-governance/index.mjs", R7_ENTRYPOINT_SOURCE],
+  ["topology/lib/native-boundary.mjs", R7_BOUNDARY_BODY],
+];
+
 /**
  * The DEPLOYED R7 entrypoint bytes, generated once. This is NOT the plugin
  * source: `governancePluginFiles()` applies deterministic package rewrites, and
  * it is the rewritten form that was installed and hashed on the live runtime.
  */
 let r7Generated = null;
-const r7Extension = async () => (r7Generated ??= await scratchGenerator());
+const r7Extension = async () =>
+  (r7Generated ??= await scratchGenerator(r7Overrides));
+
+/**
+ * M11/T1-R1 Phase 2: the outgoing packaged entrypoint, re-derived from the
+ * commit that carries it rather than transcribed from a report.
+ */
+let outgoingGenerated = null;
+const outgoingEntrypoint = async () =>
+  (outgoingGenerated ??= (
+    await scratchGenerator([
+      ["plugins/zink-governance/index.mjs", M11_T1_R1_ENTRYPOINT_SOURCE],
+    ])
+  ).entrypoint);
 
 /** The bounds of the ALLOWED_GOVERNANCE_ASSET_SHA256 declaration. */
 function assetTable() {
@@ -501,10 +573,13 @@ test("R13 1: each R7 digest is listed exactly once, under its own path", () => {
 });
 
 test("R13 2: the current build digests are NOT listed anywhere", () => {
-  // M10/T2-R12: the entrypoint pin moved to R14_ENTRYPOINT_SHA256, so the R9-A
-  // digest is now the outgoing predecessor and IS listed on purpose. Only the
-  // digests of the CURRENT build must be absent from the source.
-  for (const digest of [R12_NATIVE_BOUNDARY_SHA256, R14_ENTRYPOINT_SHA256]) {
+  // M11/T1-R1 Phase 2: the entrypoint pin moved to M11_T1_R1_ENTRYPOINT_SHA256,
+  // so the R14/R15 digest is now the outgoing predecessor and IS listed on
+  // purpose. Only the digests of the CURRENT build must be absent from the source.
+  for (const digest of [
+    R12_NATIVE_BOUNDARY_SHA256,
+    M11_T1_R1_ENTRYPOINT_SHA256,
+  ]) {
     assert.equal(
       CONFIGURE_SOURCE.includes(digest),
       false,
@@ -693,6 +768,7 @@ test("R13 3b: each outgoing entrypoint is listed in BOTH modes", () => {
     [R17_OUTGOING_ENTRYPOINT_SHA256, "R17 outgoing"],
     [R19_OUTGOING_ENTRYPOINT_SHA256, "R19 outgoing"],
     [HYGIENE_OUTGOING_ENTRYPOINT_SHA256, "hygiene outgoing"],
+    [R14_OUTGOING_ENTRYPOINT_SHA256, "M11/T1-R1 Phase 2 outgoing"],
   ]) {
     assert.equal(
       CONFIGURE_SOURCE.split(digest).length - 1,
@@ -751,6 +827,26 @@ test("R13 B: the R7 index.mjs predecessor is accepted", async () => {
   }
 });
 
+test("R13 B2: the M11/T1-R1 Phase 2 outgoing entrypoint is accepted and converges", async () => {
+  // The state a real operator-apply starts from: the installed extension still
+  // carries the outgoing bytes. Preflight must admit them from BOTH gates and
+  // apply must upgrade them onto the Phase 2 build.
+  const outgoing = await outgoingEntrypoint();
+  const p = provisioned();
+  try {
+    writeFileSync(p.asset("index.mjs"), outgoing, "utf8");
+    assert.doesNotThrow(p.preflight);
+    assert.doesNotThrow(p.apply);
+    assert.equal(
+      sha256(readFileSync(p.asset("index.mjs"), "utf8")),
+      M11_T1_R1_ENTRYPOINT_SHA256,
+      "an accepted predecessor must be upgraded onto the current build",
+    );
+  } finally {
+    rmSync(p.root, { recursive: true, force: true });
+  }
+});
+
 test("R13 C: BOTH R7 predecessors together are accepted — the real deployed combination", async () => {
   const r7 = await r7Extension();
   const p = provisioned();
@@ -776,7 +872,7 @@ test("R13 C2: the current-build versions remain accepted", async () => {
     );
     assert.equal(
       sha256(readFileSync(p.asset("index.mjs"), "utf8")),
-      R14_ENTRYPOINT_SHA256,
+      M11_T1_R1_ENTRYPOINT_SHA256,
     );
   } finally {
     rmSync(p.root, { recursive: true, force: true });

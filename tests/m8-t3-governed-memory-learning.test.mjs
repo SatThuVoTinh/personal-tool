@@ -540,6 +540,7 @@ describe("M8/T3 governed skill approval", () => {
       const proposal = await makeProposal(dirs.proposalStorageDir);
       let syncCalled = 0;
       const approval = await handleOwnerSkillApproval({
+        decisionRef: "PLAN:M8/T3-R1",
         ownerDiscordId: OWNER,
         expectedOwnerId: OWNER,
         proposalId: proposal.proposal_id,
@@ -566,17 +567,24 @@ describe("M8/T3 governed skill approval", () => {
         dbExecutor: async (sql) => {
           assert.match(sql, /c\.status = 'ACTIVE'/);
           assert.match(sql, /c\.sync_status = 'READY'/);
-          return JSON.stringify({
-            skill_id: "row-1",
-            namespace: ["excel"],
-            capability: "filter-multi-criteria",
-            version: "1.0.0",
-            domain: "office",
-            primary_topic: "spreadsheet",
-            subtopic: null,
-            content: proposal.content,
-            score: 0.92,
-          });
+          // The search seam now fails closed unless the same invocation
+          // reports a fresh derived index (M11/T1-R1 2.2).
+          const freshnessLine =
+            "ZINK_FRESHNESS|" + new Date().toISOString() + "\n";
+          return (
+            freshnessLine +
+            JSON.stringify({
+              skill_id: "row-1",
+              namespace: ["excel"],
+              capability: "filter-multi-criteria",
+              version: "1.0.0",
+              domain: "office",
+              primary_topic: "spreadsheet",
+              subtopic: null,
+              content: proposal.content,
+              score: 0.92,
+            })
+          );
         },
       });
       const read = await fresh.querySkillStore({
@@ -606,6 +614,7 @@ describe("M8/T3 governed skill approval", () => {
       await assert.rejects(
         () =>
           handleOwnerSkillApproval({
+            decisionRef: "PLAN:M8/T3-R1",
             ownerDiscordId: OWNER,
             expectedOwnerId: OWNER,
             proposalId: "deadbeef".repeat(4).slice(0, 32),
@@ -627,6 +636,7 @@ describe("M8/T3 governed skill approval", () => {
       await assert.rejects(
         () =>
           handleOwnerSkillApproval({
+            decisionRef: "PLAN:M8/T3-R1",
             ownerDiscordId: OWNER,
             expectedOwnerId: OWNER,
             proposalId: proposal.proposal_id,
@@ -654,6 +664,7 @@ describe("M8/T3 governed skill approval", () => {
       await assert.rejects(
         () =>
           handleOwnerSkillApproval({
+            decisionRef: "PLAN:M8/T3-R1",
             ownerDiscordId: OWNER,
             expectedOwnerId: OWNER,
             proposalId: proposal.proposal_id,
@@ -670,6 +681,7 @@ describe("M8/T3 governed skill approval", () => {
       await assert.rejects(
         () =>
           handleOwnerSkillApproval({
+            decisionRef: "PLAN:M8/T3-R1",
             ownerDiscordId: OWNER,
             expectedOwnerId: OWNER,
             proposalId: proposal.proposal_id,
@@ -694,6 +706,7 @@ describe("M8/T3 governed skill approval", () => {
       await assert.rejects(
         () =>
           handleOwnerSkillApproval({
+            decisionRef: "PLAN:M8/T3-R1",
             ownerDiscordId: OWNER,
             expectedOwnerId: OWNER,
             proposalId: proposal.proposal_id,
@@ -718,6 +731,7 @@ describe("M8/T3 governed skill approval", () => {
     try {
       const proposal = await makeProposal(dirs.proposalStorageDir);
       const base = {
+        decisionRef: "PLAN:M8/T3-R1",
         ownerDiscordId: OWNER,
         expectedOwnerId: OWNER,
         proposalId: proposal.proposal_id,
@@ -753,6 +767,7 @@ describe("M8/T3 governed skill approval", () => {
       await assert.rejects(
         () =>
           handleOwnerSkillApproval({
+            decisionRef: "PLAN:M8/T3-R1",
             ownerDiscordId: "999999999999999999",
             expectedOwnerId: OWNER,
             proposalId: proposal.proposal_id,
@@ -768,6 +783,7 @@ describe("M8/T3 governed skill approval", () => {
       await assert.rejects(
         () =>
           handleOwnerSkillApproval({
+            decisionRef: "PLAN:M8/T3-R1",
             ownerDiscordId: OWNER,
             expectedOwnerId: OWNER,
             proposalId: proposal.proposal_id,
@@ -805,6 +821,7 @@ describe("M8/T3 governed skill approval", () => {
     try {
       const proposal = await makeProposal(dirs.proposalStorageDir);
       const approval = await handleOwnerSkillApproval({
+        decisionRef: "PLAN:M8/T3-R1",
         ownerDiscordId: OWNER,
         expectedOwnerId: OWNER,
         proposalId: proposal.proposal_id,
@@ -1202,6 +1219,7 @@ describe("M8/T3 teaching bridges", () => {
       assert.equal(proposed.status, "CANDIDATE_PROPOSED");
       // Owner approval publishes canonically.
       const approval = await handleOwnerSkillApproval({
+        decisionRef: "PLAN:M8/T3-R1",
         ownerDiscordId: OWNER,
         expectedOwnerId: OWNER,
         proposalId: proposed.proposal.proposal_id,
@@ -1342,6 +1360,7 @@ describe("M8/T3 teaching bridges", () => {
       );
       // The approve button drives the real approval to canonical ACTIVE.
       const result = await handleSkillDiscordAction({
+        decisionRef: "PLAN:M8/T3-R1",
         action: "approve",
         proposalId: parsedApprove.taskId,
         contentSha256: parsedApprove.revision,
@@ -1405,6 +1424,7 @@ describe("M8/T3 Discord separation and residual guarantees", () => {
       );
       const notices = [];
       const result = await handleSkillDiscordAction({
+        decisionRef: "PLAN:M8/T3-R1",
         action: "approve",
         proposalId: proposal.proposal_id,
         contentSha256: proposal.content_sha256,
@@ -1460,6 +1480,7 @@ describe("M8/T3 Discord separation and residual guarantees", () => {
       await assert.rejects(
         () =>
           handleOwnerSkillApproval({
+            decisionRef: "PLAN:M8/T3-R1",
             ownerDiscordId: OWNER,
             expectedOwnerId: OWNER,
             proposalId: proposal.proposal_id,
@@ -1558,6 +1579,7 @@ describe("M8/T3 Discord separation and residual guarantees", () => {
         "# Pivot Mastery\n\nReuse pivot technique.",
       );
       const base = {
+        decisionRef: "PLAN:M8/T3-R1",
         ownerDiscordId: OWNER,
         expectedOwnerId: OWNER,
         namespace: ["excel"],
@@ -1650,6 +1672,7 @@ describe("M8/T3 Discord separation and residual guarantees", () => {
       const key = Symbol.for("zink.governance.pending_skill_proposals");
       globalThis[key]?.clear?.();
       const approval = await handleOwnerSkillApproval({
+        decisionRef: "PLAN:M8/T3-R1",
         ownerDiscordId: OWNER,
         expectedOwnerId: OWNER,
         proposalId: proposal.proposal_id,
@@ -1745,6 +1768,7 @@ describe("M8/T3 Discord separation and residual guarantees", () => {
         "# Pivot Mastery\n\nReuse pivot technique.",
       );
       const base = {
+        decisionRef: "PLAN:M8/T3-R1",
         ownerDiscordId: OWNER,
         expectedOwnerId: OWNER,
         proposalId: proposal.proposal_id,
@@ -1809,7 +1833,13 @@ describe("M8/T3 Discord separation and residual guarantees", () => {
             content: "# Reuse Proof\n\nSegment excerpt.",
             score: 0.9,
           };
-          return JSON.stringify(row);
+          // Fresh derived index marker (M11/T1-R1 2.2).
+          return (
+            "ZINK_FRESHNESS|" +
+            new Date().toISOString() +
+            "\n" +
+            JSON.stringify(row)
+          );
         },
       });
       const search = await fresh.querySkillStore({
@@ -1864,6 +1894,7 @@ describe("M8/T3 Discord separation and residual guarantees", () => {
       };
       const first = await adapter.querySkillStore({ ...input });
       await handleOwnerSkillApproval({
+        decisionRef: "PLAN:M8/T3-R1",
         ownerDiscordId: OWNER,
         expectedOwnerId: OWNER,
         proposalId: first.proposal.proposal_id,

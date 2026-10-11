@@ -76,20 +76,24 @@ const HYGIENE_ASSET_PREDECESSORS = Object.freeze({
     "e27647b9742b56052188a8bbf746ab6c5eeaaeb67344216c11859167ee78946f",
 });
 
-/** The CURRENT build entrypoint (ingress verdict observability). None may
- * be allowlisted. Moved from 0fb628e8… exactly as prior revisions moved
- * their pins when the entrypoint changed: denial-reason + signal logging
- * in authenticateIngress changes the packaged bytes; behavior is
+/** The CURRENT build entrypoint (M11/T1-R1 Phase 2 approval-path
+ * remediation). None may be allowlisted. Moved from 0fb628e8… exactly as prior
+ * revisions moved their pins when the entrypoint changed: denial-reason +
+ * signal logging in authenticateIngress changes the packaged bytes; behavior is
  * observation-only and every verdict is unchanged. */
 // M10/T2-R15: this pin moves again. R14 fixed the text-approval dispatch
 // ordering, the queue-completion success reporting, both owner gates, the
 // internal-run classifier's ledger-ownership flag and `safeReason`; R15 removed
 // the duplicated `truncateUtf8` in favour of the shared one, so the entrypoint
-// no longer carries a second copy of the byte-budget rule. The outgoing build
-// (`61680010…`) is an admitted predecessor; the new digest is deliberately NOT
-// listed, because it is the current build and is accepted by content comparison.
+// no longer carries a second copy of the byte-budget rule.
+// M11/T1-R1 Phase 2: the pin moves once more. The owner approval path now
+// requires an explicit `decisionRef` instead of defaulting one, promotes inside
+// the canonical Skill Store writer lock, and requires `skillsRoot` to reject.
+// The outgoing build (`230f3c79…`) is an admitted predecessor in BOTH per-mode
+// lists; the new digest is deliberately NOT listed, because it is the current
+// build and is accepted by content comparison.
 const CURRENT_ENTRYPOINT_SHA256 =
-  "230f3c79d0a35c2261129ddc0048ad4f0ae4fc6d86a5c49e444594a446bd2982";
+  "81b9a9c7db7567748723c3bfa64303a4ec624b5a80b769bf67f1478258971823";
 
 const identifiers = Object.freeze({
   discordGuildId: "123456789012345678",

@@ -149,6 +149,7 @@ test("owner hygiene: a correctly bound pair still authorizes", async () => {
       ownerDiscordId: OWNER,
       proposalId: proposed.proposal.proposal_id,
       contentSha256: proposed.proposal.content_sha256,
+      decisionRef: "PLAN:M8/T2-R17",
       namespace: ["office"],
       capability: "hygiene-skill",
       version: "1.0.0",

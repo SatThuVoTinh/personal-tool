@@ -15,6 +15,7 @@ import {
   EXPECTED_MODEL_NAME,
   toPostgresArrayLiteral,
   escapeSqlLiteral,
+  checkIndexFreshness,
 } from "../../../zink-skill-store/src/vector-sync.mjs";
 import { scanCatalog } from "../../../zink-skill-store/src/catalog.mjs";
 
@@ -94,92 +95,79 @@ export function deriveProposalId({
     .slice(0, 32);
 }
 
-function findSkillRecordOnDisk(skillsDir, targetSkillId) {
-  if (!fs.existsSync(skillsDir)) return null;
-  const targetSlug = targetSkillId.split("/").pop();
+/**
+ * Read a record's bytes and PROVE they are the approved ones — through the
+ * canonical catalog, never a private disk walk.
+ *
+ * M11/T1-R1 2.1: the previous implementation re-read `SKILL.md` and
+ * `manifest.json` itself with lax `JSON.parse`, so a manifest that
+ * `scanCatalog` refuses (extra keys, bad lifecycle, oversized, symlinked)
+ * could still be served to an agent by `read`/`apply` while `discover`
+ * failed closed on the same bytes. Resolution now goes through the catalog
+ * validator, strict JSON parser, `lstat` non-link rules and per-file byte
+ * ceilings, and the content is the one the scanner decoded after digest
+ * verification. Any catalog error ⇒ fail closed, no fallback: a digest
+ * mismatch keeps the R25 `SKILL_SOURCE_DRIFT` taxonomy, everything else is
+ * reported as `SKILL_CATALOG_INVALID`.
+ *
+ * M11/T1-R1 2.5: a bare (unqualified) slug matching capabilities under more
+ * than one namespace is `SKILL_ID_AMBIGUOUS`, never an enumeration-order
+ * pick. Qualified ids are matched whole (R25 behavior preserved).
+ */
+async function loadVerifiedRecord(skillsDir, targetSkillId) {
+  const catalog = await scanCatalog(skillsDir);
+  if (catalog.errors.length > 0) {
+    if (catalog.errors.some((e) => e.code === "CONTENT_DIGEST_MISMATCH")) {
+      throw new SkillAdapterError(
+        `SOURCE_DRIFT_DETECTED: the catalog refused bytes that do not match their manifest digest (${targetSkillId})`,
+        "SKILL_SOURCE_DRIFT",
+      );
+    }
+    throw new SkillAdapterError(
+      `Skill catalog is invalid (${catalog.errors[0]?.code ?? "unknown"}); refusing to serve ${targetSkillId}`,
+      "SKILL_CATALOG_INVALID",
+    );
+  }
+
   // R25: a qualified id must be matched WHOLE. Matching on the bare last
   // segment let two namespaces that share a capability slug collide, and
   // `fullId.endsWith(targetSkillId)` matched any id by suffix.
-  //
-  // Proven by execution against the real adapter and a real catalog holding
-  // both automation/data-clean and research/data-clean: a read of
-  // `research/data-clean` returned AUTOMATION's SKILL.md
-  // ("rm -rf everything") while the response still echoed
-  // skill_id "research/data-clean" and governed_status SUCCESS.
   const qualified = targetSkillId.includes("/");
+  const targetSlug = targetSkillId.split("/").pop();
+  const resolved = [];
+  const identitiesSeen = new Set();
 
-  function walk(dir) {
-    // Sorted so a tree with any residual duplicate resolves deterministically
-    // rather than by filesystem enumeration order.
-    const entries = fs
-      .readdirSync(dir, { withFileTypes: true })
-      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-    for (const ent of entries) {
-      if (ent.isDirectory()) {
-        const full = path.join(dir, ent.name);
-        const manifestPath = path.join(full, "manifest.json");
-        const skillMdPath = path.join(full, "SKILL.md");
-        if (fs.existsSync(manifestPath) && fs.existsSync(skillMdPath)) {
-          try {
-            const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-            const idInfo = manifest.identity || {};
-            const cap = idInfo.capability || ent.name;
-            const ns = Array.isArray(idInfo.namespace)
-              ? idInfo.namespace.join("/")
-              : String(idInfo.namespace || "");
-            const fullId = `${ns}/${cap}`;
-            const matches = qualified
-              ? fullId === targetSkillId
-              : cap === targetSkillId || cap === targetSlug;
-            if (matches) {
-              return { dir: full, manifest, skillMdPath };
-            }
-          } catch {}
-        }
-        const sub = walk(full);
-        if (sub) return sub;
-      }
-    }
-    return null;
+  for (const rec of catalog.records) {
+    const idInfo = rec.manifest?.identity || {};
+    const cap = idInfo.capability;
+    const ns = Array.isArray(idInfo.namespace)
+      ? idInfo.namespace.join("/")
+      : String(idInfo.namespace || "");
+    const fullId = `${ns}/${cap}`;
+    const matches = qualified
+      ? fullId === targetSkillId
+      : cap === targetSkillId || cap === targetSlug;
+    if (!matches) continue;
+    resolved.push(rec);
+    identitiesSeen.add(fullId);
+    if (qualified) break;
   }
-  return walk(skillsDir);
-}
 
-/**
- * Read a record's bytes and PROVE they are the approved ones.
- *
- * R25: the digest check was gated on `action === "validate"`, so the two
- * actions that actually feed an agent - read and apply - skipped the only
- * integrity anchor the store has, and apply then stamped the drifted bytes
- * `verified-provenance`. Proven by execution: with an unambiguous id and an
- * in-place edit of SKILL.md, validate threw SKILL_SOURCE_DRIFT while read
- * and apply both returned SUCCESS serving the drifted content.
- *
- * The canonical manifest schema has no `verification` key (catalog.mjs
- * enforces exactKeys on content and provenance), so the old
- * `manifest.verification.*` reads were dead, and a missing `content.sha256`
- * means the record was never validated - which now fails closed rather than
- * being served unverified.
- */
-function loadVerifiedRecord(skillsDir, skillId) {
-  const record = findSkillRecordOnDisk(skillsDir, skillId);
-  if (!record) return null;
-  const content = fs.readFileSync(record.skillMdPath, "utf8");
+  if (resolved.length === 0) return null;
+  if (!qualified && identitiesSeen.size > 1) {
+    throw new SkillAdapterError(
+      `SKILL_ID_AMBIGUOUS: '${targetSkillId}' resolves under multiple namespaces: ${[...identitiesSeen].sort().join(", ")} — use a qualified id`,
+      "SKILL_ID_AMBIGUOUS",
+    );
+  }
+
+  // Catalog records are sorted by relative path, so the first match is the
+  // lowest version in the namespace — the same deterministic pick the old
+  // sorted walk made. The caller enforces the ACTIVE lifecycle gate.
+  const record = resolved[0];
+  const content = record.markdown;
   const digest = createHash("sha256").update(content, "utf8").digest("hex");
-  const recordedHash = record.manifest?.content?.sha256;
-  if (typeof recordedHash !== "string" || recordedHash.length === 0) {
-    throw new SkillAdapterError(
-      `Skill ${skillId} has no approved content digest in its manifest`,
-      "SKILL_PROVENANCE_UNVERIFIED",
-    );
-  }
-  if (digest !== recordedHash) {
-    throw new SkillAdapterError(
-      `SOURCE_DRIFT_DETECTED: content hash ${digest} does not match manifest ${recordedHash}`,
-      "SKILL_SOURCE_DRIFT",
-    );
-  }
-  return { record, content, digest };
+  return { record: { manifest: record.manifest }, content, digest };
 }
 /**
  * Atomically persists one JSON record: temp file, write, fsync, rename.
@@ -302,66 +290,13 @@ export class SkillAdapter {
                 capability: idInfo.capability,
                 version: idInfo.version,
                 lifecycle_state: "ACTIVE",
-                description:
-                  rec.manifest?.metadata?.description ||
-                  `Governed skill: ${idInfo.capability}`,
+                // M11/T1-R1 2.1: canonical manifests carry no `metadata` key
+                // (the catalog schema forbids it), so this description source
+                // is the capability name — the old `metadata?.description`
+                // read could only ever be undefined.
+                description: `Governed skill: ${idInfo.capability}`,
               });
             }
-          } else {
-            // Direct disk walk when scanCatalog has partial diagnostics or errors
-            function walkActive(dir) {
-              const entries = fs.readdirSync(dir, { withFileTypes: true });
-              for (const ent of entries) {
-                if (ent.isDirectory()) {
-                  const full = path.join(dir, ent.name);
-                  const manifestPath = path.join(full, "manifest.json");
-                  const skillMdPath = path.join(full, "SKILL.md");
-                  if (
-                    fs.existsSync(manifestPath) &&
-                    fs.existsSync(skillMdPath)
-                  ) {
-                    try {
-                      const manifest = JSON.parse(
-                        fs.readFileSync(manifestPath, "utf8"),
-                      );
-                      const lifecycle = manifest.lifecycle;
-                      const isActive =
-                        Array.isArray(lifecycle) &&
-                        lifecycle.at(-1)?.status === "ACTIVE";
-                      if (isActive) {
-                        const idInfo = manifest.identity || {};
-                        const nsArr = Array.isArray(idInfo.namespace)
-                          ? idInfo.namespace
-                          : [idInfo.namespace];
-                        const nsStr = nsArr.join("/");
-
-                        if (
-                          !namespace ||
-                          namespace === "all" ||
-                          nsStr === namespace ||
-                          nsArr.includes(namespace)
-                        ) {
-                          found.push({
-                            skill_id: `${nsStr}/${idInfo.capability}`,
-                            name: idInfo.capability,
-                            namespace: nsArr,
-                            capability: idInfo.capability,
-                            version: idInfo.version,
-                            lifecycle_state: "ACTIVE",
-                            description:
-                              manifest.metadata?.description ||
-                              `Governed skill: ${idInfo.capability}`,
-                          });
-                        }
-                      }
-                    } catch {}
-                  } else {
-                    walkActive(full);
-                  }
-                }
-              }
-            }
-            walkActive(skillsDir);
           }
         }
 
@@ -391,7 +326,8 @@ export class SkillAdapter {
 
         let storedSkill = null;
         // R25: digest verified for EVERY action, not just validate.
-        const verified = loadVerifiedRecord(this.skillsRoot, skill_id);
+        // M11/T1-R1: resolution/verification now runs through the catalog.
+        const verified = await loadVerifiedRecord(this.skillsRoot, skill_id);
 
         if (verified) {
           const { record, content, digest } = verified;
@@ -454,9 +390,9 @@ export class SkillAdapter {
         // R25: apply served unverified bytes and labelled them
         // "verified-provenance". It now goes through the same loader, so the
         // procedure handed to an agent is the one the owner approved. The
-        // loader resolves, reads and verifies in one pass; the separate
-        // findSkillRecordOnDisk call it replaces walked the whole catalog.
-        const verified = loadVerifiedRecord(this.skillsRoot, skill_id);
+        // loader resolves, reads and verifies in one pass through the catalog
+        // (M11/T1-R1); the separate disk walk it replaces never validated.
+        const verified = await loadVerifiedRecord(this.skillsRoot, skill_id);
 
         if (verified) {
           const { record: verifiedRecord, content, digest } = verified;
@@ -600,7 +536,17 @@ export class SkillAdapter {
         }
 
         // K08: Use json_build_object to prevent pipe-character splitting corruption
+        //
+        // M11/T1-R1 2.2 (H5): the same psql invocation also reads the newest
+        // READY sync timestamp. `to_char` renders a fixed, parseable UTC shape
+        // (Postgres' native timestamptz text carries a "+07"-style offset that
+        // JS Date cannot reliably parse), and the marker row is consumed by
+        // the freshness gate below before any row is served.
         const sql = `
+          SELECT 'ZINK_FRESHNESS|' || COALESCE(
+            to_char(max(synced_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+            ''
+          ) FROM skills.catalog_index WHERE status = 'ACTIVE' AND sync_status = 'READY';
           SELECT json_build_object(
             'skill_id', c.id::text,
             'namespace', array_to_json(c.namespace),
@@ -624,6 +570,7 @@ export class SkillAdapter {
 
         const queryResult = await executePostgresQuery(sql, this.options);
         const parsedRows = [];
+        let freshnessSyncedAt = null;
 
         if (
           queryResult &&
@@ -634,6 +581,12 @@ export class SkillAdapter {
           for (const line of lines) {
             const trimmed = line.trim();
             if (!trimmed) continue;
+
+            if (trimmed.startsWith("ZINK_FRESHNESS|")) {
+              const stamp = trimmed.slice("ZINK_FRESHNESS|".length).trim();
+              freshnessSyncedAt = stamp.length > 0 ? stamp : null;
+              continue;
+            }
 
             // Attempt JSON parsing (K08)
             if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
@@ -715,6 +668,20 @@ export class SkillAdapter {
               });
             }
           }
+        }
+
+        // M11/T1-R1 (2.2): freshness gate. The ZINK_FRESHNESS marker came from
+        // the SAME psql invocation as the rows, so it cannot describe a newer
+        // index than the one just read. An absent, empty, or stale stamp means
+        // the derived index is not provably current, and serving it would let
+        // an agent act on deleted or drifted skill content with no signal —
+        // so this fails closed instead of stale-serving.
+        const freshness = checkIndexFreshness(freshnessSyncedAt);
+        if (!freshness.fresh) {
+          throw new SkillAdapterError(
+            `SKILL_INDEX_STALE: derived skill index is not fresh (${freshness.reason}); refusing to serve possibly stale rows`,
+            "SKILL_INDEX_STALE",
+          );
         }
 
         // K06: Deduplicate multiple segments from the same skill

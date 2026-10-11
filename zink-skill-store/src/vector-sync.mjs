@@ -454,27 +454,6 @@ export function checkIndexFreshness(
 }
 
 /**
- * Reconciles canonical catalog against vector database index (L19).
- */
-export async function reconcileVectorSync(skillsRoot) {
-  const catalog = await scanCatalog(skillsRoot);
-  const activeKeys = new Set(
-    catalog.records
-      .filter((r) => r.manifest?.lifecycle?.at(-1)?.status === "ACTIVE")
-      .map((r) => {
-        const id = r.manifest.identity;
-        return `${id.namespace.join("/")}/${id.capability}@${id.version}`;
-      }),
-  );
-
-  return {
-    reconciled_at: new Date().toISOString(),
-    canonical_active_count: activeKeys.size,
-    catalog_errors: catalog.errors,
-  };
-}
-
-/**
  * Builds the single all-or-nothing transaction for one ACTIVE skill (M11/T1).
  * Every interpolated literal goes through escapeSqlLiteral over the
  * array-literal grammar; the READY marker is written only after every segment
@@ -673,9 +652,11 @@ export async function syncSkillsToVectorStore(options = {}) {
   let secondaryWriteFailed = false;
   for (const record of activeRecords) {
     const { namespace, capability, version } = record.manifest.identity;
-    const recordedHash =
-      record.manifest.content?.sha256 ||
-      record.manifest.verification?.content_sha256;
+    // M11/T1-R1 2.1: the canonical manifest schema has no `verification` key
+    // (catalog.mjs enforces exact keys on `content`), and a record only reaches
+    // sync through scanCatalog, which requires `content.sha256` to exist and
+    // match. The old fallback read a field that can never legally be there.
+    const recordedHash = record.manifest.content?.sha256;
 
     try {
       const skillPath = path.join(
@@ -696,15 +677,11 @@ export async function syncSkillsToVectorStore(options = {}) {
         );
       }
 
-      // Canonicalize secondary topics (L12)
-      const rawSecTopics = record.manifest.metadata?.tags || [];
-      const canonicalSecondaryTopics = Array.from(
-        new Set(
-          rawSecTopics
-            .map((t) => String(t).toLowerCase().trim())
-            .filter(Boolean),
-        ),
-      ).sort();
+      // M11/T1-R1 2.1: canonical manifests have no `metadata` key — the
+      // catalog schema (exactKeys) rejects it — so this previously-dead read
+      // is dropped and secondary topics are canonically empty until the
+      // schema itself is extended (an approved follow-up, not done here).
+      const canonicalSecondaryTopics = [];
 
       const semanticMeta = deriveSemanticMetadata({
         namespace,

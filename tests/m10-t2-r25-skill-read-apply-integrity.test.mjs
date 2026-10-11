@@ -239,13 +239,18 @@ test("R25-08: a record with no approved digest fails closed", async () => {
     );
 
     const adapter = adapterFor(skillsRoot);
+    // M11/T1-R1 (2.1): read/apply now resolve only through the catalog, so a
+    // manifest with no approved digest fails the schema check before the
+    // adapter ever sees the record. The mechanism moved; the invariant —
+    // a record with no approved digest is never served — is unchanged and
+    // now covers the whole store, not just the served skill.
     await assert.rejects(
       () =>
         adapter.querySkillStore({
           action: "read",
           skill_id: "research/hashless-skill",
         }),
-      (error) => error.code === "SKILL_PROVENANCE_UNVERIFIED",
+      (error) => error.code === "SKILL_CATALOG_INVALID",
     );
   } finally {
     await rm(skillsRoot, { recursive: true, force: true });

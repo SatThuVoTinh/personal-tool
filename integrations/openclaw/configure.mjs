@@ -1253,6 +1253,17 @@ async function main() {
       // `describeOwnerAction` and hardens the interactive ack/catch guards.
       // Without this entry --preflight refuses the deployed extension.
       "8e4b53847d84e6c9eb084ca98b72610ba71b6ddeb00fb01a1137d9366314a466",
+      // M11/T1-R1 Phase 2: the outgoing governance entrypoint — the packaged
+      // build the repository carried before this remediation, byte-proven by
+      // the deployment-snapshot suites (it is the digest both
+      // `R13 C2` and `R3 0b` pinned as the current build). Phase 2 moved the
+      // owner approval path: `decisionRef` is now required rather than
+      // defaulted, promote runs inside the canonical store writer lock, and
+      // rejection requires `skillsRoot`. Without this entry --preflight refuses
+      // that build, so the next authorized deployment from it would fail closed
+      // with asset drift. The new digest is deliberately NOT listed: it is the
+      // current build, accepted by content comparison.
+      "230f3c79d0a35c2261129ddc0048ad4f0ae4fc6d86a5c49e444594a446bd2982",
     ],
   );
   assertRegularOrMissing(output.identityKeyPath);
@@ -1497,6 +1508,9 @@ async function main() {
       // `describeOwnerAction` and hardens the interactive ack/catch guards.
       // Without this entry --preflight refuses the deployed extension.
       "8e4b53847d84e6c9eb084ca98b72610ba71b6ddeb00fb01a1137d9366314a466",
+      // M11/T1-R1 Phase 2: the outgoing governance entrypoint, mirrors the
+      // preflight-mode entry verbatim so the two modes cannot diverge.
+      "230f3c79d0a35c2261129ddc0048ad4f0ae4fc6d86a5c49e444594a446bd2982",
     ],
   );
   if (!existsSync(output.identityKeyPath))

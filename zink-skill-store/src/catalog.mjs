@@ -13,6 +13,20 @@ import {
 import path from "node:path";
 import { URL } from "node:url";
 import { TextDecoder } from "node:util";
+// M11/T1-R1 2.3: the store-wide writer lock reuses the exact acquisition,
+// owner-token and release protocol already adopted by the ledger, guard and
+// queue sites (`integrations/openclaw/lib/file-lock.mjs`). A second mkdir-lock
+// implementation here would be a parallel policy that can diverge from the
+// holder protocol (owner.json token) those sites release against. The async
+// seam (`withFileLock`) is used rather than `withFileLockSync` because the
+// promotion critical section is async: the sync seam runs a synchronous
+// callback, so wrapping an async body in it would release the lock while the
+// writes were still in flight. It keeps the same busy semantics with bounded
+// waiting (10 ms retry, 5 s default deadline, FILE_LOCK_TIMEOUT after that).
+import {
+  withFileLock,
+  lockDirFor,
+} from "../../integrations/openclaw/lib/file-lock.mjs";
 
 const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const VERSION = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
@@ -810,6 +824,37 @@ function stagingName(version) {
 }
 
 /**
+ * M11/T1-R1 2.3: the store-wide writer lock seam.
+ *
+ * The lock lives BESIDE `skillsRoot` (its parent directory), never inside it:
+ * `scanCatalog` requires every root entry to be a slug directory, so a
+ * `writer.lock` under the scanned root would poison the very catalog the lock
+ * protects. It is named after the root it guards (`<root>.writer.lock`) rather
+ * than the bare `writer.lock` convention: sibling catalogs — two mkdtemp test
+ * trees sharing a parent — would otherwise contend on one lock, and one
+ * stranded lock file from a crashed run would fail-close every unrelated
+ * catalog forever. (dirname, basename) identifies the guarded root exactly, so
+ * distinct roots can never collide on the same lock path.
+ */
+export function skillStoreWriterLockDir(skillsRoot) {
+  if (typeof skillsRoot !== "string" || skillsRoot.trim() === "") {
+    writerError(
+      "SKILLS_ROOT_REQUIRED",
+      "a canonical skillsRoot is required to address the store writer lock.",
+    );
+  }
+  const resolved = path.resolve(skillsRoot);
+  return lockDirFor(
+    path.dirname(resolved),
+    `${path.basename(resolved)}.writer.lock`,
+  );
+}
+
+export async function withSkillStoreWriterLock(skillsRoot, fn, options = {}) {
+  return withFileLock(skillStoreWriterLockDir(skillsRoot), fn, options);
+}
+
+/**
  * Validates one complete staged version directory before it may be
  * published. Returns the catalog diagnostics; only an empty error list
  * admits the pair to canonical state.
@@ -923,8 +968,22 @@ async function pruneEmptyParents(fromDir, stopDir) {
  *   same capability, is a fail-closed conflict;
  * - the written record is re-validated through scanCatalog and rolled
  *   back when invalid.
+ *
+ * M11/T1-R1 2.3: acquires the store-wide `writer.lock` around the whole
+ * heal → validate → clash-check → staging write → rename → re-verify
+ * section, so two concurrent promotions (same or different versions) can
+ * never interleave. Callers that must combine promotion with adjacent
+ * proposal-state writes in ONE critical section (the governed approval
+ * transaction) run them inside `withSkillStoreWriterLock` and call
+ * `promoteApprovedSkillUnlocked` — never both.
  */
-export async function promoteApprovedSkill({
+export async function promoteApprovedSkill(params) {
+  return withSkillStoreWriterLock(params.skillsRoot, () =>
+    promoteApprovedSkillUnlocked(params),
+  );
+}
+
+export async function promoteApprovedSkillUnlocked({
   skillsRoot,
   namespace,
   capability,
@@ -1010,6 +1069,12 @@ export async function promoteApprovedSkill({
 
   // Heal interrupted publications first, so residue from a killed publisher
   // can neither poison the health check below nor masquerade as canonical.
+  //
+  // M11/T1-R1 2.3: deleting another live writer's `*.pending-*` staging
+  // directory is safe precisely because this section runs under the store-wide
+  // writer lock — no other publisher can be staging while we hold it. That is
+  // why the heal needs no PID parsing: cross-process residue can only be
+  // orphaned, never in flight.
   await healWriterResidue(skillsRoot, parentDir, versionDir, version);
 
   let versionDirPresent = false;
@@ -1035,9 +1100,16 @@ export async function promoteApprovedSkill({
       readFile(manifestPath),
       readFile(markdownPath),
     ]);
-    const existingManifest = JSON.parse(
-      new TextDecoder("utf-8").decode(manifestBytes),
-    );
+    // M11/T1-R1 2.6: the replay probe must judge the existing manifest with
+    // the SAME strict parser the scanner uses. Lax `JSON.parse` silently kept
+    // the last value of a duplicate member, so a tampered manifest that
+    // scanCatalog rejects as MANIFEST_JSON_DUPLICATE_KEY could still answer
+    // ALREADY_ACTIVE here — the idempotency probe accepting a record the
+    // catalog refuses. A StrictJsonError (or non-UTF-8 bytes) falls into the
+    // catch below as an unreadable-version conflict: fail closed.
+    const existingManifest = new JsonParser(
+      textDecoder.decode(manifestBytes),
+    ).parse();
     const currentHash = createHash("sha256")
       .update(markdownBytes)
       .digest("hex");

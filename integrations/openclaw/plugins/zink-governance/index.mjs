@@ -602,7 +602,12 @@ export async function handleOwnerSkillApproval({
   // parameter is required so the exact-identity binding is always explicit, and
   // an omitted value fails the comparison below and denies the approval.
   expectedOwnerId,
-  decisionRef = "PLAN:M8/T3-R1",
+  // M11/T1-R1 (2.4): deliberately no default. A hardcoded default stamped a
+  // false plan reference into EVERY promoted skill's canonical lifecycle,
+  // and kept authorizing approvals whenever a caller forgot to bind the
+  // real decision. The ref is required and validated below; an omitted or
+  // blank value denies the approval before any durable read.
+  decisionRef,
   options = {},
 }) {
   // Distinct governance subject: a skill approval is never an execution-plan
@@ -626,6 +631,11 @@ export async function handleOwnerSkillApproval({
   if (!contentSha256 || !CONTENT_SHA_PATTERN.test(contentSha256)) {
     throw new Error(
       "APPROVAL_CONTENT_HASH_INVALID: Content hash must be 64-character SHA-256",
+    );
+  }
+  if (typeof decisionRef !== "string" || decisionRef.trim().length === 0) {
+    throw new Error(
+      "APPROVAL_DECISION_REF_REQUIRED: an explicit plan decision reference must bind the approval",
     );
   }
   const nsArray = Array.isArray(namespace)
@@ -770,54 +780,82 @@ export async function handleOwnerSkillApproval({
   // Canonical Skill Store write is the source-of-truth commit point.
   // Trusted internal promotion only: agents propose, governance promotes.
   const catalogMod = await loadRepoModule("zink-skill-store/src/catalog.mjs");
-  const promote = catalogMod?.promoteApprovedSkill;
-  if (typeof promote !== "function") {
+  const promoteUnlocked = catalogMod?.promoteApprovedSkillUnlocked;
+  const underWriterLock = catalogMod?.withSkillStoreWriterLock;
+  if (
+    typeof promoteUnlocked !== "function" ||
+    typeof underWriterLock !== "function"
+  ) {
     throw new Error(
       "APPROVAL_PROMOTE_UNAVAILABLE: canonical Skill Store writer is unavailable",
     );
   }
-  let canonical;
-  try {
-    canonical = await promote({
-      skillsRoot,
-      namespace: nsArray,
-      capability,
-      version,
-      content: stored.content,
-      requestingActor: stored.requesting_agent ?? "unknown",
-      ownerActor: "owner",
-      decisionRef,
-    });
-  } catch (error) {
-    if (
-      error?.code === "SKILL_ACTIVE_CONFLICT" ||
-      error?.code === "SKILL_VERSION_CONFLICT"
-    ) {
-      try {
-        writeJsonAtomicSync(skillProposalFilePath(storeDir, proposalId), {
-          ...stored,
-          status: "CONFLICTED",
-        });
-      } catch {
-        /* best effort */
-      }
-      throw new Error(
-        `APPROVAL_SKILL_CONFLICT: ${error?.message ?? "canonical conflict"}`,
-        {
-          cause: error,
-        },
-      );
+  // M11/T1-R1 (2.3): heal → validate → clash-check → staging write → rename →
+  // proposal-status write form ONE critical section under the store-wide
+  // writer lock, so two concurrent approvals (or an approval racing a
+  // rejection or a CLI promotion) cannot interleave clash-check and rename
+  // and fork the canonical tree. The lock is taken exactly here and the
+  // Unlocked variant is called inside it: `promoteApprovedSkill` acquires the
+  // same lock itself, so calling it from within this section would
+  // self-deadlock into FILE_LOCK_TIMEOUT. The async seam is used rather than
+  // the sync one because the guarded work is async — the sync seam would
+  // release while writes were still in flight.
+  const boundDecisionRef = decisionRef.trim();
+  const planProvenanceRef = boundDecisionRef.replace(/^PLAN:/u, "");
+  const canonical = await underWriterLock(skillsRoot, async () => {
+    // Re-read inside the critical section: a rejection committed by another
+    // process after the checks above must never be overwritten by this one.
+    const current = readDurableSkillProposal(storeDir, proposalId);
+    if (current?.status === "REJECTED") {
+      throw new Error("APPROVAL_PROPOSAL_REJECTED: candidate was rejected");
     }
-    throw error;
-  }
-  try {
-    writeJsonAtomicSync(skillProposalFilePath(storeDir, proposalId), {
-      ...stored,
-      status: "MATERIALIZED",
-    });
-  } catch {
-    /* best effort: canonical truth already holds */
-  }
+    let promoted;
+    try {
+      promoted = await promoteUnlocked({
+        skillsRoot,
+        namespace: nsArray,
+        capability,
+        version,
+        content: stored.content,
+        requestingActor: stored.requesting_agent ?? "unknown",
+        ownerActor: "owner",
+        decisionRef: boundDecisionRef,
+        // M11/T1-R1 (2.4): provenance is derived from the ref this approval
+        // actually carries — never a constant.
+        references: [{ type: "plan", ref: planProvenanceRef }],
+      });
+    } catch (error) {
+      if (
+        error?.code === "SKILL_ACTIVE_CONFLICT" ||
+        error?.code === "SKILL_VERSION_CONFLICT"
+      ) {
+        try {
+          writeJsonAtomicSync(skillProposalFilePath(storeDir, proposalId), {
+            ...stored,
+            status: "CONFLICTED",
+          });
+        } catch {
+          /* best effort */
+        }
+        throw new Error(
+          `APPROVAL_SKILL_CONFLICT: ${error?.message ?? "canonical conflict"}`,
+          {
+            cause: error,
+          },
+        );
+      }
+      throw error;
+    }
+    try {
+      writeJsonAtomicSync(skillProposalFilePath(storeDir, proposalId), {
+        ...stored,
+        status: "MATERIALIZED",
+      });
+    } catch {
+      /* best effort: canonical truth already holds */
+    }
+    return promoted;
+  });
 
   // pgvector is derived from canonical ACTIVE state, never the reverse. A
   // sync failure keeps the canonical record authoritative and is reported
@@ -1085,11 +1123,20 @@ export async function proposeSkillFromTeaching({
 /**
  * Skill rejection on the dedicated learning path. Owner-only, bound to the
  * exact durable proposal. A rejected candidate can never become ACTIVE.
+ *
+ * M11/T1-R1 (2.3): the read → CANDIDATE check → REJECTED write runs under
+ * the store-wide writer lock, the same critical section the approval
+ * transaction uses. Without it, a rejection racing an approval could be
+ * decided against a proposal state that the concurrent approval had already
+ * moved past CANDIDATE, and the loser's terminal write would silently
+ * overwrite the winner's. `skillsRoot` is required because the lock is
+ * addressed from it.
  */
 export async function handleOwnerSkillRejection({
   ownerDiscordId,
   expectedOwnerId,
   proposalId,
+  skillsRoot,
   proposalStorageDir,
   options = {},
 }) {
@@ -1098,28 +1145,42 @@ export async function handleOwnerSkillRejection({
       "APPROVAL_OWNER_MISMATCH: Unauthorized principal cannot reject skills",
     );
   }
+  if (!skillsRoot || typeof skillsRoot !== "string") {
+    throw new Error(
+      "SKILLS_ROOT_REQUIRED: canonical Skill Store root is required",
+    );
+  }
   const storeDir = proposalStorageDir ?? options.proposalStorageDir;
   if (!storeDir || typeof storeDir !== "string") {
     throw new Error(
       "PROPOSAL_STORE_UNAVAILABLE: durable proposal store is not configured",
     );
   }
-  const stored = readDurableSkillProposal(storeDir, proposalId);
-  if (!stored) {
+  const catalogMod = await loadRepoModule("zink-skill-store/src/catalog.mjs");
+  const underWriterLock = catalogMod?.withSkillStoreWriterLock;
+  if (typeof underWriterLock !== "function") {
     throw new Error(
-      "APPROVAL_UNKNOWN_PROPOSAL: no durable proposal for this rejection",
+      "APPROVAL_PROMOTE_UNAVAILABLE: canonical Skill Store writer is unavailable",
     );
   }
-  if (stored.status !== "CANDIDATE") {
-    throw new Error(
-      `APPROVAL_ALREADY_DECIDED: candidate is already ${stored.status}`,
-    );
-  }
-  writeJsonAtomicSync(skillProposalFilePath(storeDir, proposalId), {
-    ...stored,
-    status: "REJECTED",
+  return underWriterLock(skillsRoot, () => {
+    const stored = readDurableSkillProposal(storeDir, proposalId);
+    if (!stored) {
+      throw new Error(
+        "APPROVAL_UNKNOWN_PROPOSAL: no durable proposal for this rejection",
+      );
+    }
+    if (stored.status !== "CANDIDATE") {
+      throw new Error(
+        `APPROVAL_ALREADY_DECIDED: candidate is already ${stored.status}`,
+      );
+    }
+    writeJsonAtomicSync(skillProposalFilePath(storeDir, proposalId), {
+      ...stored,
+      status: "REJECTED",
+    });
+    return { proposal_id: proposalId, approval_status: "REJECTED" };
   });
-  return { proposal_id: proposalId, approval_status: "REJECTED" };
 }
 
 /**
@@ -1346,6 +1407,10 @@ export async function handleSkillDiscordAction({
   config,
   skillsRoot,
   proposalStorageDir,
+  // M11/T1-R1 (2.4): the plan decision reference the approval binds. There
+  // is no default: an approve action without a ref fails closed with
+  // APPROVAL_DECISION_REF_REQUIRED inside `handleOwnerSkillApproval`.
+  decisionRef,
   notify,
   options = {},
 }) {
@@ -1364,6 +1429,7 @@ export async function handleSkillDiscordAction({
         ownerDiscordId: senderId,
         expectedOwnerId: ownerId,
         proposalId,
+        skillsRoot,
         proposalStorageDir: storeDir,
         options,
       });
@@ -1401,6 +1467,7 @@ export async function handleSkillDiscordAction({
       capability: stored.capability,
       version: stored.version,
       skillsRoot,
+      decisionRef,
       proposalStorageDir: storeDir,
       options,
     });
@@ -7308,6 +7375,12 @@ export default {
                 contentSha256: parsed.revision,
                 senderId: skillSender,
                 config,
+                // M11/T1-R1 (2.4): the owner-approved plan reference is
+                // operator configuration, never a hardcoded constant. An
+                // unconfigured ref fails the approval closed
+                // (APPROVAL_DECISION_REF_REQUIRED) rather than stamping a
+                // false provenance into the canonical lifecycle.
+                decisionRef: config.skillApprovalDecisionRef,
                 skillsRoot: repoRoot
                   ? path.join(repoRoot, "zink-skill-store", "skills")
                   : undefined,

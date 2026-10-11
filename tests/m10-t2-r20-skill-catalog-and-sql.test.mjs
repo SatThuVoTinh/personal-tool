@@ -54,13 +54,13 @@ test("R20-01: discovery fails closed when the catalog is invalid", () => {
     /governed_status:\s*"FAILED"/u,
     "an invalid catalog must not report SUCCESS",
   );
-  // And the permissive walk must only remain reachable for a genuinely empty
-  // catalog, i.e. AFTER the error gate.
-  const errGate = code.indexOf("catalogErrors.length > 0");
-  const walkBranch = code.indexOf("function walkActive");
-  assert.ok(
-    errGate >= 0 && walkBranch > errGate,
-    "the walk must not be reachable before the catalog-error gate",
+  // M11/T1-R1 (2.1): the permissive disk walk is deleted outright, not just
+  // gated. Read/apply now resolve only through scanCatalog, so discovery has
+  // no second, unvalidated path to fall through to.
+  assert.equal(
+    code.includes("function walkActive"),
+    false,
+    "the permissive walk must no longer exist at all",
   );
 });
 
