@@ -81,12 +81,15 @@ const HYGIENE_ASSET_PREDECESSORS = Object.freeze({
  * their pins when the entrypoint changed: denial-reason + signal logging
  * in authenticateIngress changes the packaged bytes; behavior is
  * observation-only and every verdict is unchanged. */
-// M10/T2-R12: this pin moves to the new build, which differs from the R9-C
-// build (`aea6bf95…`, now the outgoing predecessor) by suppressing governance
-// machine payloads from the user-visible reply. Accepted by content comparison
-// and deliberately NOT listed.
+// M10/T2-R15: this pin moves again. R14 fixed the text-approval dispatch
+// ordering, the queue-completion success reporting, both owner gates, the
+// internal-run classifier's ledger-ownership flag and `safeReason`; R15 removed
+// the duplicated `truncateUtf8` in favour of the shared one, so the entrypoint
+// no longer carries a second copy of the byte-budget rule. The outgoing build
+// (`61680010…`) is an admitted predecessor; the new digest is deliberately NOT
+// listed, because it is the current build and is accepted by content comparison.
 const CURRENT_ENTRYPOINT_SHA256 =
-  "61680010520bbe3ca57b289cf9af9fb6ea79c8f79e33e49e95d5dec6de60cef3";
+  "230f3c79d0a35c2261129ddc0048ad4f0ae4fc6d86a5c49e444594a446bd2982";
 
 const identifiers = Object.freeze({
   discordGuildId: "123456789012345678",

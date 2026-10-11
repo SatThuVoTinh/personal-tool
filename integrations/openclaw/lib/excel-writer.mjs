@@ -91,6 +91,26 @@ function createZipArchive(files) {
   return Buffer.concat([...localHeaders, ...centralHeaders, eocd]);
 }
 
+/**
+ * Spreadsheet column reference for a zero-based index.
+ *
+ * M10/T2-R19: this was `String.fromCharCode(65 + (i % 26))`, which is a modulo,
+ * not a base conversion. At index 26 it wrapped back to "A", so a row with 27
+ * values emitted a SECOND `<c r="A1">` and every column past 27 was mislabelled
+ * in every row. The result is invalid SpreadsheetML: Excel refuses the workbook
+ * ("unreadable content"). Correct mapping is 0=A .. 25=Z, 26=AA .. 51=AZ,
+ * 52=BA .. 701=ZZ, 702=AAA.
+ */
+export function spreadsheetColumnLetter(index) {
+  let n = index;
+  let letter = "";
+  do {
+    letter = String.fromCharCode(65 + (n % 26)) + letter;
+    n = Math.floor(n / 26) - 1;
+  } while (n >= 0);
+  return letter;
+}
+
 export function buildWorkbookBuffer(rows = [], sheetName = "Sheet1") {
   let sheetRowsXml = "";
   for (let rIdx = 0; rIdx < rows.length; rIdx++) {
@@ -98,7 +118,7 @@ export function buildWorkbookBuffer(rows = [], sheetName = "Sheet1") {
     let cellsXml = "";
     const row = Array.isArray(rows[rIdx]) ? rows[rIdx] : [rows[rIdx]];
     for (let cIdx = 0; cIdx < row.length; cIdx++) {
-      const colLetter = String.fromCharCode(65 + (cIdx % 26));
+      const colLetter = spreadsheetColumnLetter(cIdx);
       const val = String(row[cIdx] ?? "");
       const escaped = val
         .replace(/&/g, "&amp;")
@@ -168,6 +188,26 @@ export function executeExcelOperation(params, baseDir = null) {
   const targetPath = path.isAbsolute(normalizedPath)
     ? normalizedPath
     : path.resolve(effectiveBase, normalizedPath);
+  // M10/T2-R19: containment. `path.resolve` silently normalises `..` away, so a
+  // `file_path` of "../outside/proof.xlsx" resolved OUT of the agent sandbox and
+  // three files (workbook, SVG preview, PNG preview) were written there while the
+  // tool reported `status: "success"` and returned only `path.basename`, which
+  // hides the escape from the model and from the operator. Proven by execution:
+  // the sandbox directory was never created and the files landed one level up.
+  //
+  // `file_path` is model-supplied (`string`, maxLength 512, no pattern), and the
+  // base is the agent sandbox, so the escape is fully reachable from a governed
+  // tool call. Absolute paths are permitted only when they stay inside the base
+  // too. `path.relative` also reports a different Windows drive as absolute,
+  // which is caught by the isAbsolute check.
+  if (effectiveBase) {
+    const rel = path.relative(path.resolve(effectiveBase), targetPath);
+    if (rel.startsWith("..") || path.isAbsolute(rel)) {
+      throw new Error(
+        `ARTIFACT_PATH_ESCAPE: file_path must stay inside the workspace`,
+      );
+    }
+  }
   const publicFileName = path.basename(targetPath);
 
   if (op === "load" || op === "read") {

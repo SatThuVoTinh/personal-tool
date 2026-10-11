@@ -249,6 +249,29 @@ export class DecisionLedger {
       closeSync(fd);
       fd = null;
       renameSync(tempPath, this.storagePath);
+      // M10/T2-R17: fsync the parent directory after the rename, so the rename
+      // ITSELF is durable. Without it the file's contents are fsynced but the
+      // name swap can still be lost on a crash, leaving the pre-rename file in
+      // place — which for this ledger means losing the owner's most recent
+      // CONFIRMED decision. This closes a gap against the standard the rest of
+      // the repo already declares: `topology/lib/ledger.mjs` and
+      // `lib/queue-manager.mjs` both do this (M7-066), and queue-manager's
+      // comment states the intent explicitly. win32-tolerant, same as those two.
+      try {
+        const directoryFd = openSync(dir, "r");
+        try {
+          fsyncSync(directoryFd);
+        } finally {
+          closeSync(directoryFd);
+        }
+      } catch (error) {
+        if (
+          process.platform !== "win32" ||
+          !/^(EPERM|EISDIR|EINVAL|ENOTSUP)$/u.test(error?.code ?? "")
+        ) {
+          throw error;
+        }
+      }
     } catch (err) {
       if (fd !== null) {
         try {

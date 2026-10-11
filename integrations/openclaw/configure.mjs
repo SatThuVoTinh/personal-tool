@@ -172,9 +172,27 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     "ab1d2f8ecd91a3e72226d15495f641e701ef5c0a9e3b6d3a59db48b91256decd",
   ]),
   "lib/artifact-validator.mjs": Object.freeze([
+    // M10/T2-R17: the outgoing build currently deployed, byte-proven by
+    // `sha256sum` of the installed file. This revision adds the parent-directory
+    // fsync after `renameSync`, closing a durability gap against the guarantee
+    // `ledger.mjs` and `queue-manager.mjs` already implement (M7-066): fsyncing
+    // the file does not make the rename itself durable, so a published artifact
+    // could revert on a crash. Without this entry --preflight refuses the
+    // deployed extension. The new digest is deliberately NOT listed: it is the
+    // current build, accepted by content comparison.
+    "86234954a8d7469a621f5a1dcc18ec2252520e907ae6766cfd84d6eb48bbb978",
     "0b35496fdebe5e204bfc4395057e9a54e5635060a1af1fe47146dd391ebeac79",
   ]),
   "lib/authority.mjs": Object.freeze([
+    // M10/T2-R14: the outgoing R12/R13 build currently deployed, byte-proven by
+    // `sha256sum` of the installed file. This revision drops the impossible
+    // `auth` requirement from the release-compatibility validator: R9 removed
+    // auth.profiles/order/cooldowns on purpose and `validateConfig` rejects
+    // unexpected top-level keys, so no config this repository produces could
+    // ever satisfy it. Without this entry --preflight refuses the deployed
+    // extension. The new digest is deliberately NOT listed: it is the current
+    // build, accepted by content comparison.
+    "8243a0385a51fc0f63d918cbb5d2a4998af92fa0c409a890b96ba06fb7670f27",
     "1e6eb2659f3d671ec62e6c57f28088bfcfffef3d637ec0f898d8ef18fc426b13",
     // Owner-identity hygiene follow-up: the outgoing R19 build currently
     // deployed, byte-verified against the live runtime at this exact path.
@@ -204,6 +222,12 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     "42b0cba8567c1e52376d41d9329394b70c94e45a503af37733dcf76721d536c6",
   ]),
   "lib/canonical.mjs": Object.freeze([
+    // M10/T2-R13: the outgoing build currently deployed, byte-verified at this
+    // exact path. This revision aligns TASK_CODE_PATTERN with the 21-symbol
+    // TASK_CODE_ALPHABET and both ledger schemas (review finding R12-REVIEW-01,
+    // committed in 7d92211 but not yet deployed). Without this entry
+    // --preflight refuses the deployed extension.
+    "f5bc7ffac03818f3864255896c9732a1111e8736735391fc7daf0e7985737912",
     "c6c0515ab3b1ade07d94d8b5969cd425456db2b5fff56847ba7ef0030989b203",
     // M10/T2-R12: the outgoing build currently deployed, byte-verified at this
     // exact path. This revision adds the owner-facing task-code generator, so
@@ -213,12 +237,35 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     "868de6b9675d54920b93694ac1614d8fabfcb3868c86f755a74e53b2f14af777",
   ]),
   "lib/decision-ledger.mjs": Object.freeze([
+    // M10/T2-R17: the outgoing build currently deployed, byte-proven by
+    // `sha256sum` of the installed file. This revision adds the parent-directory
+    // fsync after `renameSync` for the same reason as `artifact-validator.mjs`.
+    // It matters most here: this ledger sits on the "classification -> OWNER
+    // CONFIRMS -> DecisionLedger persists" path, so losing the rename could drop
+    // the owner's most recent confirmed decision. Without this entry
+    // --preflight refuses the deployed extension.
+    "60ff817f952f20927ab9ad5cd28d57946b27d2ca0ce8aed9bcf713d3d094b427",
     "cec8776c771d4cf521a664fa7dd62aa5e14b54cc05389b30be51bc03b4c51a6e",
     // M10/T2-R3: the outgoing hygiene-build asset (41c62e7), proven as in the
     // R3 header above (live tree 34/34 match). Same admission semantics.
     "9b5f2f94c33430a30ae5da96b118a558229503bf195e8168701cfb1d748b782e",
   ]),
   "lib/policy.mjs": Object.freeze([
+    // M10/T2-R14: the R13 build currently deployed (the one that carries the
+    // router `timeoutSeconds` ceiling), byte-proven by `sha256sum` of the
+    // installed file. This revision replaces the truthiness capability lookup
+    // with an own-property test, so inherited keys such as `constructor` and
+    // `toString` no longer authorize a capability. Without this entry
+    // --preflight refuses the deployed extension. The new digest is deliberately
+    // NOT listed: it is the current build, accepted by content comparison.
+    "7b38ee20178f9493e1d0761a5e678ec8da90ee45d4d74036b44400f99b13ed1c",
+    // M10/T2-R13 (owner decision 2026-10-09): the outgoing build currently
+    // deployed, byte-verified at this exact path before the attempt-ceiling
+    // change. This revision adds `timeoutSeconds` to the router provider, so
+    // without this entry --preflight refuses the deployed extension and the fix
+    // is unreachable. The new digest is deliberately NOT listed: it is the
+    // current build, accepted by content comparison.
+    "62bda451a299344f4df30e19ab6a47402e5c7d30d3d568eadf541b785dece2d0",
     "0584ca5fd8698ef986a7a41f31d1b735997bc1f7fb879f91a1df90ad191603e5",
     // M10/T2-R12: the outgoing governed-model build currently deployed,
     // byte-verified at this exact path. This revision replaces the governed set
@@ -315,7 +362,45 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
   "lib/schema.mjs": Object.freeze([
     "869a2254975f60432c596a115acee1fc0e03893224b925c5a54334dc532d1cee",
   ]),
+  "lib/excel-writer.mjs": Object.freeze([
+    // M10/T2-R19: the FIRST predecessor entry for this asset (it had none,
+    // because until now every revision was also the current build). This
+    // revision adds sandbox path containment — `../` in a model-supplied
+    // `file_path` previously resolved out of the agent sandbox and wrote three
+    // files there while the tool reported success — and fixes the spreadsheet
+    // column reference, which used a modulo instead of a base-26 conversion and
+    // therefore emitted a duplicate `A1` cell from column 27 onward.
+    "c3079ba3d29af1ba864b7a2561533b44d82f6afc247ec6e6caf663bab4db6551",
+  ]),
+  "lib/coordinator-pickup.mjs": Object.freeze([
+    // M10/T2-R19: the FIRST predecessor entry for this asset. This revision
+    // makes the coordinator message honour its own 4096-BYTE ceiling (it was
+    // truncating by characters, measured at 286% of the ceiling with a lone
+    // surrogate on emoji) and makes a failed post-start binding write
+    // attributable instead of aborting the pickup tick.
+    "c00bbb6b02087c7de5bcb74b76a54638817b7c08e509a8775e8c1512bc104637",
+  ]),
+  "lib/file-lock.mjs": Object.freeze([
+    // M10/T2-R18: the FIRST predecessor entry for this asset. It had none,
+    // because until now every revision of file-lock.mjs was also the current
+    // build and was therefore accepted by content comparison — so a change to it
+    // was undeployable until its outgoing digest was admitted. This revision
+    // stops a failing release from replacing the guarded call's outcome (which in
+    // the ledger reported an already-fsynced event as a rejected write), adds a
+    // bounded release retry, and stops non-contention filesystem errors from
+    // being relabelled FILE_LOCK_TIMEOUT without a `.code`.
+    "165243b2edb0ff5a406f146343220320947ac930a91779de42f8232c28b6d2d4",
+  ]),
   "lib/guard.mjs": Object.freeze([
+    // M10/T2-R14: the outgoing R12/R13 build currently deployed, byte-proven by
+    // `sha256sum` of the installed file. This revision asserts the canonical
+    // `AGENT_SPAWN_POLICY` allowlist BEFORE the irreversible
+    // WORKFLOW_BRIEF_ACTIVATED write, so a brief naming an agent the caller may
+    // not spawn is refused instead of committing a task that can never be
+    // dispatched. Without this entry --preflight refuses the deployed
+    // extension. The new digest is deliberately NOT listed: it is the current
+    // build, accepted by content comparison.
+    "edc0f1b48b0f2537823b62a9e0aeb27020d687e62acb8fb4ac12a36dbfba9f76",
     "3d017828de32ed2d9ecdfc7c78e1828f3b4f8a13f88a51aabdd8ddff81443029",
     "00cce929877bfab0864b16519dfa0276bb2955053d348b3e298c4121c3784100",
     "55b38c41d44dc5386f696af671ca8b4de3655e2e2f5b0a6c586560509336c0bc",
@@ -414,6 +499,13 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     "9e73518583006c0b9c5f8cc058e3bbd10e4749c2004aa9a4204ef226452f842a",
   ]),
   "lib/runtime.mjs": Object.freeze([
+    // M10/T2-R15: the outgoing build currently deployed, byte-proven by
+    // `sha256sum` of the installed file. This revision publishes the shared
+    // `truncateUtf8` byte-budgeted truncation so the guard stops emitting result
+    // payloads its own contract rejects. Without this entry --preflight refuses
+    // the deployed extension. The new digest is deliberately NOT listed: it is
+    // the current build, accepted by content comparison.
+    "744e5234465d9c860c4103ec5df60f1d2fa705c54a6ce1d3cba206eaf9d9bb35",
     "6a522c73efacf8b593d63ee55e18b5d02c3675340e0593142a5c2fea8dc6e24a",
   ]),
   "lib/ledger.mjs": Object.freeze([
@@ -1143,6 +1235,24 @@ async function main() {
       // digest is deliberately NOT listed: it is the current build and is
       // accepted by content comparison.
       "0fb628e891a93d570715937a95fc65b82acf14964f00d5de495eeead2138e946",
+      // M10/T2-R14: the outgoing R12/R13 entrypoint currently deployed,
+      // byte-proven by `sha256sum` of the installed file
+      // (~/.openclaw-zink/extensions/zink-governance/index.mjs). This revision
+      // fixes five defects in that entrypoint: the text-approval path no longer
+      // awaits a cosmetic Discord send before the governance dispatch (which
+      // could durably approve a task and never run it), a failed queue
+      // completion no longer publishes a public success notice, both owner gates
+      // guard an unresolved owner id, the internal-run classifier receives the
+      // real ledger-ownership flag, and `safeReason` is byte-budgeted. Without
+      // this entry --preflight refuses the deployed extension. The new digest is
+      // deliberately NOT listed: it is the current build, accepted by content
+      // comparison.
+      "61680010520bbe3ca57b289cf9af9fb6ea79c8f79e33e49e95d5dec6de60cef3",
+      // M10/T2-R17: the R16 entrypoint, deployed and byte-proven at this exact
+      // path. R17 collapses the duplicated owner-action label into one
+      // `describeOwnerAction` and hardens the interactive ack/catch guards.
+      // Without this entry --preflight refuses the deployed extension.
+      "8e4b53847d84e6c9eb084ca98b72610ba71b6ddeb00fb01a1137d9366314a466",
     ],
   );
   assertRegularOrMissing(output.identityKeyPath);
@@ -1379,6 +1489,14 @@ async function main() {
       // task code at admission, so without this entry --preflight refuses the
       // deployed extension. Listed in BOTH per-mode lists.
       "30078552487018479bf5f4c6a355d94646e45c9de6711804843d7648e06f9741",
+      // M10/T2-R14: the outgoing R12/R13 entrypoint, mirrors the preflight-mode
+      // entry verbatim so the two modes cannot diverge.
+      "61680010520bbe3ca57b289cf9af9fb6ea79c8f79e33e49e95d5dec6de60cef3",
+      // M10/T2-R17: the R16 entrypoint, deployed and byte-proven at this exact
+      // path. R17 collapses the duplicated owner-action label into one
+      // `describeOwnerAction` and hardens the interactive ack/catch guards.
+      // Without this entry --preflight refuses the deployed extension.
+      "8e4b53847d84e6c9eb084ca98b72610ba71b6ddeb00fb01a1137d9366314a466",
     ],
   );
   if (!existsSync(output.identityKeyPath))

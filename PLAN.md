@@ -2519,6 +2519,1084 @@ INSUFFICIENT on the live test; per-source seam diagnostics DEPLOYED and
 verified; awaiting the owner live TEST A that yields those counts. Phases 4-8
 depend on that evidence and are not attempted.)
 
+### M10/T2-R13 - Per-attempt model ceiling (owner-authorized 2026-10-09)
+
+Owner decision: set the router per-attempt ceiling to **100s**, after being shown
+that a single model request had waited 9,374,777 ms (2h36m).
+
+Owner authorization: explicit, in session, covering the code change, the
+preflight+apply, and the gateway restart.
+
+Root cause, proven by reading the installed runtime (not inferred):
+
+- `buildGuardedModelFetch(model)` is invoked at every transport call site
+  WITHOUT an explicit `timeoutMs`, so the only available deadline source is
+  `model.requestTimeoutMs`;
+- `applyConfiguredProviderOverrides` derives `model.requestTimeoutMs` from
+  `providerConfig.timeoutSeconds` via `resolveProviderRequestTimeoutMs`;
+- with no `timeoutSeconds`, `resolveModelRequestTimeoutMs` returns `undefined`
+  and `buildModelRequestSignal` returns the caller's signal unchanged, i.e. no
+  deadline at all. Every `model-fetch` log line recorded `timeoutMs=undefined`.
+
+Live evidence (the defect): a `3.8-flash` turn started 09:28:31 was still
+waiting at 12:04:46 (`elapsedMs=9374777`, `AbortError`) and only ended when the
+host's stuck-session sweeper intervened; the owner received nothing for the
+whole window. Failover then ran correctly (R9-C admitted the re-entry at
+12:04:49), but the reply could not be delivered because Discord was wedged in
+the same window.
+
+Correction to an earlier wrong report: `requestTimeoutMs` was previously named
+as the key to set. It is NOT in the model schema at all — it exists only in
+`McpServerSchema`. That is why the earlier attempt made the gateway refuse to
+start, and it was the wrong layer, not a bad key name.
+
+Schema proof BEFORE touching live (the rule recorded in `policy.mjs`), using
+`openclaw config validate` on scratch copies of the real config:
+
+| mutation                                              | result                       |
+| ----------------------------------------------------- | ---------------------------- |
+| `timeoutSeconds: 100` on the provider entry            | `{"valid":true}`, exit 0      |
+| `requestTimeoutMs` on the provider entry               | `{"valid":false}`, exit 1     |
+| `requestTimeoutMs` on a model array entry              | `{"valid":false}`, exit 1     |
+| an unknown key on the provider entry                   | `{"valid":false}`, exit 1     |
+
+The unknown-key control is what makes the positive result meaningful: the
+validator is genuinely strict, not permissive. Key name AND layer are both
+load-bearing.
+
+Change: `models.providers.router.timeoutSeconds = 100` in
+`integrations/openclaw/lib/policy.mjs`, plus the assertion in
+`tests/m7-t1-openclaw.test.mjs`. The stale comment claiming no timeout can
+exist was corrected rather than left to mislead the next reader.
+
+Deployment: `operator-preflight.mjs` PASS (`installed_mutation:false`), then
+`operator-apply.mjs` PASS. Preflight initially FAILED and correctly caught a
+second drifted asset — `lib/canonical.mjs`, carrying review finding
+R12-REVIEW-01, which was committed in `7d92211` but never deployed. Both
+predecessor digests were taken with `sha256sum` on the installed bytes (never
+transcribed by hand) and added to the allowlist with their reasons. After
+apply, all 33 deployed assets match the build byte-for-byte.
+
+Gates on the final state: `npm test` 1244 tests / 1200 pass / 0 fail / 44
+skipped; lint 0 issues; `format:check` clean; `repo:check` passed;
+`diff-check` clean.
+
+Known limitation, stated honestly: the ceiling is PROVEN in schema and code,
+but not yet proven on a live `model-fetch` line. That requires one real owner
+turn, which this agent must not fabricate.
+
+Residual risk, owner-acknowledged: a legitimate attempt slower than 100s is cut
+over to the next model. One observed `3.7-flash` attempt took 255s and would be
+cut. Slowest governed model observed otherwise: `3.8-flash` at 70.6s. Raising
+the number is a one-line change.
+
+### Unrelated incident observed the same day (not part of R13)
+
+Discord intermittently unreachable from this host: repeated websocket closes
+(1006/1005) with `ECONNRESET` and `EAI_AGAIN`, and
+`[fetch-timeout] fetch timeout after 2500ms url=https://discord.com/api/v10/users/@me`,
+with no `READY` in the affected windows. Independent probes recovered
+(`discord.com/api` HTTP 401 in ~0.7s, TCP 443 OK), so the cause is the host's
+network path to Discord, not the R13 config change. This is the same wedge
+recorded earlier on 2026-10-09 morning; it has no task and needs an
+owner-scoped durable fix. Two counting mistakes were made and corrected during
+this diagnosis: a `READY` grep that matched the control-plane `[ws]` channel
+rather than the Discord gateway, and a rolling `-3 min` window that made
+healthy client startups look like a decaying connection.
+
+### Secret-handling incident (self-reported)
+
+While searching for non-secret Discord identifiers, this agent dumped the
+contents of `~/.openclaw-zink/identity/` and printed
+`device-auth.json` → `tokens.operator.token` and `device.json` →
+`privateKeyPem` into the session log. That is a violation of the repository
+safety invariants (never expose secrets). No secret was written to the
+repository — a diff-wide scan for credential patterns returned zero hits — but
+both values are now present in a chat log and should be rotated by the owner.
+Root cause: reading a whole directory and printing it without masking.
+
+### M10/T2-R14 - Full-repo defect sweep (owner-authorized 2026-10-09)
+
+Owner instruction: sweep the whole repository for remaining defects and fix
+them.
+
+Method: two independent read-only review passes over the governance plugin and
+the authorization layer, then **every finding re-verified by this agent against
+the real code before any edit**. Several candidate findings were discarded
+because no concrete failing scenario could be constructed. Findings that were
+real but unreachable (prototype-key drift on a dead validator, dead enum
+divergences, mention-regex differences between a used and an unused path) were
+recorded and deliberately left alone.
+
+Eight defects fixed:
+
+1. **Text approval could approve a task and never dispatch it (high).**
+   `index.mjs`, text-approval path: `await sendNativePayload(...)` ran BEFORE
+   `executeApprovedTask`, while the button path fired the same send without
+   awaiting. `sendNativePayload` throws `NATIVE_OUTBOUND_UNAVAILABLE` when the
+   host runtime config is unresolved (already documented in that file), the
+   enclosing catch only warns, so dispatch never happened — and a retry could
+   not recover, because the task was already `QUEUED` and therefore no longer
+   matched the `ACTIVE || APPROVAL_PENDING` candidate filter. Net effect:
+   durable approval, no execution, no error surfaced. This is the exact class of
+   symptom reported as "the bot accepted my command and did nothing".
+   Fixed by making the two paths identical: dispatch first, confirmation
+   best-effort with a warn.
+
+2. **Capability authorization honoured inherited keys (high, security-shaped).**
+   `evaluateCapabilityAccess` used a truthiness lookup
+   (`MATRIX[agentId]?.[capability]`). Plain-object rows inherit
+   `Object.prototype`, so `constructor`, `toString`, `valueOf`,
+   `hasOwnProperty`, `isPrototypeOf`, `propertyIsEnumerable` and
+   `toLocaleString` all resolved to a truthy value and — matching none of
+   `"L0"`/`"delegate"`/`"L2"` — fell through to `return { allowed: true }`.
+   Proven by execution, not inference: `evaluateCapabilityAccess("main",
+   "constructor", null, "execute")` returned `{allowed: true, reason:
+   "AUTHORIZED"}` while a real unknown capability returned
+   `UNKNOWN_CAPABILITY`. `authority.mjs` already asks the same question with
+   `Object.hasOwn`, so this was one rule encoded twice with different logic.
+   Fixed with an own-property test.
+
+3. **An activated brief was committed before its spawn target was authorized
+   (medium).** `guard.mjs` `admitInitialBrief` journaled
+   `WORKFLOW_BRIEF_ACTIVATED` and only ~120 lines later did `beforeToolCall`
+   check `AGENT_SPAWN_POLICY`. The reducer pins `brief_revision` to 1 whenever
+   `task.nodes` is empty, so a brief naming an agent the caller may not spawn
+   (Main naming `excel`, while `AGENT_SPAWN_POLICY.main` is `["o1","o2"]`)
+   committed a task that could never be dispatched and had no revision path out:
+   every retry re-matched the same node and was denied `UNAUTHORIZED_TARGET`
+   again. Fixed by asserting the same canonical allowlist BEFORE the write, so
+   the verdict lands ahead of the irreversible effect. This grants nothing new;
+   it moves an existing check earlier.
+
+4. **A failed queue completion was published as a success (medium).** Both the
+   button and text accept paths reduced a `completeTask` failure to a `warn` and
+   then posted "Tác vụ đã hoàn tất xuất sắc" to the public office channel
+   unconditionally. Fixed: the failure is logged at error level and the public
+   notice is gated on the write having actually landed.
+
+5. **Owner gates compared two possibly-undefined values (low, security-shaped).**
+   Two of the five owner checks wrote `sender !== ownerId` while the other three
+   wrote `!ownerId || sender !== ownerId`. `undefined !== undefined` is false,
+   and `resolveOwnerDiscordId` returns `undefined` for any id that is not 17-19
+   digits while the config gate admits 20-digit ids, so that combination is
+   reachable and would have let an event with no sender field past the owner
+   check. Both sites now guard the unresolved owner explicitly.
+
+6. **`safeReason` was truncated by characters while its siblings were truncated
+   by bytes (low).** `ledger-event.schema.json` bounds `reason` with
+   `maxLength: 4096`, which `schema.mjs` measures in UTF-8 bytes. ~1400
+   multi-byte characters passed `.slice(0, 2000)` untouched and were then
+   rejected by the contract, failing the write. The three sibling fields were
+   already byte-budgeted; this one was not.
+
+7. **The internal-run classifier was told the session was never ledger-owned
+   (low).** `beforeRun` passed a hardcoded `ownedByLedger: false`, so the
+   ownership test the adjacent comment relies on was never evaluated and the
+   admission and end-of-run seams classified the same session differently by
+   construction. Now answered for real — and the snapshot is read only when the
+   cheap preconditions for the internal verdict already hold, so the ordinary
+   governed path pays no extra read.
+
+8. **The release-compatibility validator demanded a key that must not exist
+   (low).** `validateOpenClawReleaseCompatibility` required a top-level `auth`,
+   which R9 deliberately removed and `validateConfig` forbids adding, so it could
+   never pass on a config this repository produces. Its only test hand-built a
+   config containing `auth: {}`, hiding the contradiction. The impossible
+   requirement was removed; the check still rejects a genuinely missing key.
+
+Regression tests added: `tests/m10-t2-r14-review-defects.test.mjs`, three
+tests, each written to fail on the pre-fix code. Two existing digest pins were
+moved because packaged bytes legitimately changed; every new digest was computed
+with `sha256sum`/`governancePluginFiles()` by script, never transcribed, and each
+outgoing digest was admitted as a predecessor in BOTH per-mode allowlists so the
+two modes cannot diverge.
+
+Gates on the final state: `npm test` 1247 tests / 1203 pass / 0 fail / 44
+skipped; lint 0 issues; `format:check` clean; `repo:check` passed;
+`diff-check` clean; secret scan of the diff 0 hits; `operator-preflight.mjs`
+PASS with `installed_mutation: false`.
+
+Two process notes recorded honestly: the new test file was initially absent from
+the explicit `npm test` list, so the first "all green" run silently did not
+execute it — caught by noticing the total was unchanged at 1244; and two edits
+left a `try` without its `catch`, which the suite caught as a parse error
+immediately.
+
+### M10/T2-R15 - Second sweep: the critical-path and byte-budget defect families
+
+Owner instruction: still bugs remain; fix them thoroughly.
+
+This sweep worked by hunting **defect families already proven** rather than
+guessing. Two families were known from R13/R14: "a cosmetic await gates a
+governance effect" and "a character-count bound feeds a byte-measured
+contract". Three further real defects came out of them.
+
+1. **The result path rejected the agent's own output (high).**
+   `agent-result-payload.schema.json` bounds `output` at `maxLength: 16384` and
+   `agent_self_validation` at 4096, and `schema.mjs` measures `maxLength` with
+   `Buffer.byteLength`. `guard.mjs` truncated both by CHARACTERS. Measured on
+   the real validator, with a payload that passes at baseline:
+
+   | input                              | bytes  | verdict                        |
+   | ---------------------------------- | ------ | ------------------------------ |
+   | output = 16384 ASCII               | 16384  | accepted                       |
+   | output = 16384 Vietnamese          | 32768  | **rejected**                   |
+   | output = 16384 CJK                 | 49152  | **rejected**                   |
+   | output = 12000 Vietnamese          | 24000  | **rejected**                   |
+   | agent_self_validation = 4096 Viet. | 8192   | **rejected**                   |
+
+   So the guard's own truncation produced values its own contract refused, and
+   because the same slice runs on every retry there was no recovery. `assumptions`
+   and `limitations` were worse: never bounded at all, while the contract caps
+   each item at 4096 bytes, so one long assumption failed the entire result.
+
+   Root cause of the drift: `truncateUtf8` existed only as a private copy inside
+   the plugin entrypoint, so the guard could not use it and kept counting
+   characters. It now lives in `topology/lib/runtime.mjs` beside the validator
+   that defines the byte rule, exported once, and imported by both.
+
+2. **The button path could approve a task and never dispatch it (high) — R14 was
+   incomplete.** R14 fixed the text path but missed the
+   `await ctx.respond.followUp(...)` sitting directly above
+   `executeApprovedTask` in the button path. An expired Discord interaction token
+   — routine, since interactions have a ~15 minute lifetime — makes that reject,
+   the enclosing catch only warns, and the approval stays durably recorded while
+   the task never runs, with the same unrecoverable retry as finding 1 of R14.
+   This is the PRIMARY path: the owner clicking Approve. The acknowledgement is
+   now wrapped in its own try/catch; order is unchanged, so it still goes out
+   first whenever it can.
+
+3. **A failed error report could terminate the gateway (medium).** The
+   interactive handler's `catch` awaited a fallback reply with no guard. That
+   rejection escapes the handler with nothing left to catch it, and Node's
+   default unhandled-rejection behaviour terminates the process — so one
+   interaction whose primary failure AND whose error reply both fail would take
+   the runtime down. Now nested in its own try/catch.
+
+Because point 1 and 2 were the third and fourth instances of the same two
+shapes, they are now pinned by **structural invariants** rather than only by
+point assertions, in `tests/m10-t2-r15-critical-path-invariants.test.mjs`:
+every awaited send must be inside a try with a catch; no dispatch may be
+preceded by an unguarded interaction ack; the interactive catch must nest its
+own guard; and the public completion notice must be gated on the queue write.
+
+These invariants were **mutation-tested**, not merely written: deleting the ack
+guard makes R15-07 fail, and removing the completion gate makes R15-09 fail. A
+test that cannot fail is a hidden defect, so both were proven to bite.
+
+Candidates investigated and DISCARDED, recorded so they are not re-raised:
+`tasks[taskId]` lookups cannot be poisoned by a prototype key because
+`task_id` is pattern-constrained to `^[a-f0-9]{64}$`; the ledger snapshot writer
+already does validate → temp `wx` → write → fsync → chmod → rename → directory
+fsync; `queue-manager.save()` matches that guarantee and fails closed on an
+unreadable store; its `finally` preserves the original write failure.
+
+Gates on the final state: `npm test` 1256 tests / 1212 pass / 0 fail / 44
+skipped; lint 0 issues; `format:check` clean; `repo:check` passed;
+`diff-check` clean; secret scan of the diff 0 hits; `operator-preflight.mjs`
+PASS with `installed_mutation: false`.
+
+### M10/T2-R16 - Remove the duplication that caused the defects
+
+Owner instruction: fix until no defects remain, then apply and restart; the
+code had become too dirty.
+
+The dirty-code observation was correct and measurable, so it was treated as a
+finding rather than as a preference. Two measurements:
+
+- of the 344 lines added so far, 233 (68%) were comment and only 110 were code;
+- the owner post-decision logic existed as two near-identical copies
+  ("Post-action execution trigger" appeared twice, ~240 lines apart).
+
+That duplication was not merely untidy, it was the **cause** of two of the
+defects already fixed: R14 had to patch the text copy's awaited send, and R15
+then found the button copy's awaited ack. Both were the same divergence between
+two copies that had to stay in sync by hand with nothing enforcing it.
+
+Fix: one `applyOwnerDecisionEffect` helper now owns the dispatch and the
+acceptance effect, and both entry points pass only their identity inputs
+(`taskId`, `userPrincipalRef`, `userConfirmationRef`, `threadId`). The
+dispatch decision logic is now identical by construction rather than by
+discipline. Net effect on the entrypoint: **+199 / -149 = net +50 lines**, and
+the duplicated public completion notice dropped from two copies to one.
+
+Comments were also compressed. The evidence each fix rests on is kept, but
+paragraphs that restated a neighbouring comment were cut, which is most of why
+the earlier 68% comment ratio fell.
+
+ESLint caught a genuine leftover during this pass — a useless
+`queueCompletionRecorded = false` in the catch block, since the flag is already
+false — and it was removed rather than suppressed.
+
+Structural invariants added in `tests/m10-t2-r15-critical-path-invariants.test.mjs`
+now include R15-10, which pins the de-duplication itself: exactly one definition
+of the shared effect, exactly two call sites, and `executeApprovedTask` invoked
+only from the helper. If the duplication returns, the suite fails.
+
+Investigated and DISCARDED this pass, recorded so they are not re-raised:
+Discord's `custom_id` ceiling of 100 is a CHARACTER limit, so
+`customId.length > 100` in `discord-native-send.mjs` is correct and not an
+instance of the byte/character defect class; the coordinator pickup timer and
+the 10s outbound abort timer are both already covered by existing single-flight
+and error-routing tests.
+
+Gates on the final state: `npm test` 1257 tests / 1213 pass / 0 fail / 44
+skipped; lint 0 issues; `format:check` clean; `repo:check` passed;
+`diff-check` clean; secret scan of the diff 0 hits; `operator-preflight.mjs`
+PASS with `installed_mutation: false`.
+
+### M10/T2-R17 - Durability parity, and removing a silent-default trap
+
+Owner instruction: find more defects; the code is still too dirty.
+
+**1. Two durability writers did not fsync their parent directory (medium).**
+A scanner over every writer that publishes via `renameSync` showed the guarantee
+was declared in one place and implemented in others:
+
+| writer | dir fsync after rename |
+| --- | --- |
+| `topology/lib/ledger.mjs` | yes |
+| `lib/queue-manager.mjs` | yes (M7-066, comment states the intent) |
+| `lib/decision-ledger.mjs` | **no** |
+| `lib/artifact-validator.mjs` | **no** |
+
+fsyncing the FILE makes its bytes durable but does not make the rename durable;
+on a crash the pre-rename file can be restored. For `decision-ledger` that means
+losing the owner's most recent CONFIRMED decision (it sits on the
+"classification -> OWNER CONFIRMS -> DecisionLedger persists" path), and for
+`artifact-validator` a published artifact can disappear. Both now do the same
+win32-tolerant directory fsync the other two already do.
+
+`native-patch.mjs`, `runtime-backup.mjs` and the gemini hotfix template also lack
+it and were deliberately LEFT ALONE: they are deploy-time patchers, backups and
+templates, not governance durability stores, so the guarantee does not apply to
+them. That distinction is recorded rather than silently applied.
+
+**2. A silent-default trap in the owner-action label (low, latent).** The button
+and text approval paths each carried their own `actionLabel` and had drifted: the
+button copy enumerated five actions with a real `REJECT_RESULT` fallback, the
+text copy had four and let its DEFAULT mean ACCEPT.
+
+This was investigated and is explicitly **NOT a live defect**: the text path can
+only ever produce APPROVE / REJECT_APPROVAL / REQUEST_REVISION_APPROVAL /
+ACCEPT_RESULT, so its default branch is only ever reached for ACCEPT and the
+label is correct. Reporting it as a bug would have been wrong.
+
+It is still a trap, because any future text verb would be reported to the owner
+as "nghiệm thu (ACCEPT)". Both paths now call one `describeOwnerAction`, and an
+unrecognised action reports itself as unknown rather than as an acceptance.
+
+**Dirtiness.** A duplicate-block scan confirms R16 worked: 12-line duplicate
+blocks went from present to zero, and the remaining 8-line duplicate in the
+approval handlers was this label block, now gone (8-line duplicates 4 -> 3).
+The entrypoint still has two large functions — `authenticateIngress` at 234 lines
+and `maybePublishDiscordCard` at 225 — recorded here as the next decomposition
+candidates rather than split blindly, because neither has produced a defect and
+splitting them mid-session would add risk without evidence.
+
+New invariants R15-11 (durability parity across the four governance writers) and
+R15-12 (single label definition, explicit unknown-action fallback). R15-11 was
+mutation-tested: removing the directory fsync from `decision-ledger.mjs` makes it
+fail, and restoring it makes it pass again.
+
+Gates on the final state: `npm test` 1259 tests / 1215 pass / 0 fail / 44
+skipped; lint 0 issues; `format:check` clean; `repo:check` passed;
+`diff-check` clean; secret scan of the diff 0 hits; `operator-preflight.mjs`
+PASS with `installed_mutation: false`.
+
+### M10/T2-R18 - file-lock: a committed write could be reported as failed
+
+Owner instruction: keep hunting; still many defects.
+
+`integrations/openclaw/lib/file-lock.mjs` is the cross-process concurrency
+primitive behind the ledger, the queue manager and the decision ledger, so a
+defect here corrupts durable state. It had not been reviewed.
+
+**1. A failing release destroyed the guarded call's outcome (high).** Both seams
+were written as `try { return fn() } finally { release(dir) }`. In JavaScript a
+`finally` that throws **replaces** the pending return value, so when
+`rmdirSync` failed — routine on Windows, where a just-created directory can
+briefly refuse removal while a sync client or scanner holds a handle, and
+`rmdirSync` gets no retry budget — an event that had already been appended and
+fsynced was reported to the caller as a failure. The ledger, the queue and the
+decision ledger would then treat a durable commit as rejected, and the natural
+response to that is to repeat work that already landed.
+
+Worse, when `fn` itself threw a business error (`"Stale ledger snapshot"`), the
+release error replaced it, destroying the one diagnostic that says whether a
+commit partially applied.
+
+Fixed with explicit semantics: if `fn` threw, that error is re-thrown and the
+release error is attached as `cause`; if `fn` succeeded, its result is returned.
+A stranded lock is not silent — the next acquirer fails loudly with
+FILE_LOCK_BUSY, which is the documented operator-recovery path — whereas
+converting a committed write into a thrown error is strictly worse.
+
+**2. `release` had no retry (medium).** `rmdirSync` takes no retry budget of its
+own. Now bounded to 5 attempts and only for `EPERM`/`EACCES`/`EBUSY`, never for a
+genuine permission fault.
+
+**3. Non-contention failures were relabelled as contention (medium).**
+`acquire` caught every non-`EEXIST` errno, broke the retry loop and threw
+`FILE_LOCK_TIMEOUT` **with no `.code`**, while `withFileLockSync` correctly set
+`busy.code = "FILE_LOCK_BUSY"`. Every caller classifies on
+`err?.code === "FILE_LOCK_BUSY"`, so a permanent fault such as `ENOSPC` or
+`EACCES` was indistinguishable from transient contention. Non-`EEXIST` errors now
+propagate unchanged, and the timeout carries `code: "FILE_LOCK_TIMEOUT"`.
+
+ESLint removed a redundant `try/catch` that only rethrew, and an unused test
+import; both were fixed rather than suppressed.
+
+**A process hazard was found and NOT changed.** `release` deletes whatever
+directory sits at the lock path and has no owner token, so if an operator
+removes a lock held by a *live* process, that process's `finally` deletes the
+*next* holder's lock and two writers can enter the critical section, forking
+`events.jsonl` and making every later read fail the digest chain. This is
+reachable only through operator procedure, and preventing it means changing the
+lock format (an owner token inside the lock directory), which is a design change
+to a concurrency primitive. It is therefore surfaced for an OWNER DECISION
+rather than taken unilaterally; the correct procedure — only remove a lock whose
+holder is dead — remains the mitigation.
+
+Tests: `tests/m10-t2-r18-file-lock.test.mjs`, 5 tests. The first version of these
+tests **passed against the buggy code**, because a release failure was never
+actually forced — a vacuous test. They were rewritten so `fn` leaves a file
+inside the lock directory, making `rmdirSync` genuinely fail. R18-02 is now
+mutation-tested: flipping one line so the release error replaces `fn`'s error
+makes it fail, and restoring makes it pass.
+
+Gates on the final state: `npm test` 1264 tests / 1220 pass / 0 fail / 44
+skipped; lint 0 issues; `format:check` clean; `repo:check` passed;
+`diff-check` clean; secret scan of the diff 0 hits.
+
+### M10/T2-R19 - A governed tool could write outside the agent sandbox
+
+Owner instruction: keep hunting; still defects.
+
+**1. Sandbox escape in the Excel tool (high, security).** `executeExcelOperation`
+built its target with `path.resolve(effectiveBase, normalizedPath)` and never
+checked the result was inside `effectiveBase`. `path.resolve` silently
+normalises `..` away, and `file_path` is model-supplied (`string`, maxLength 512,
+no pattern) while the base is the agent sandbox.
+
+Proven by execution against the real module, with
+`file_path: "../outside/proof.xlsx"`:
+
+- the tool returned `status: "success"`;
+- the sandbox directory was **never created** — nothing stayed inside it;
+- the workbook, the SVG preview and the PNG preview were all written one level
+  above the sandbox;
+- the returned `file_path` was only `path.basename(targetPath)`, so the escape was
+  invisible to the model, to the operator and to the log.
+
+An absolute `file_path` was accepted outright with the same result. Both are now
+refused with `ARTIFACT_PATH_ESCAPE`; the check uses `path.relative`, which also
+catches a different Windows drive.
+
+**2. Spreadsheet column references were a modulo, not a base conversion
+(medium).** `String.fromCharCode(65 + (cIdx % 26))` wraps back to "A" at index
+26, so a 27-column row emitted a SECOND `<c r="A1">` and every column from 27 on
+was mislabelled in every row. That is invalid SpreadsheetML — Excel refuses the
+workbook. Replaced with a real base-26 conversion (0=A..25=Z, 26=AA..51=AZ,
+52=BA..701=ZZ, 702=AAA).
+
+**3. The coordinator message exceeded its own byte ceiling (medium).** This is
+the THIRD instance of the byte-vs-character class in this codebase. The ceiling
+`COORDINATOR_MESSAGE_MAX_BYTES = 4096` was checked with `Buffer.byteLength` but
+truncated with `body.slice(0, MAX - 64)`, which counts UTF-16 units. Measured on
+the real function: a 6000-character Vietnamese brief produced an **11721-byte**
+body — 286% of the declared ceiling — and emoji produced 7885 bytes **and a lone
+surrogate**, because slicing at an arbitrary index can split a pair in half. Now
+byte-budgeted, code-point by code-point; all three glyph classes land at
+<=4095 bytes with no lone surrogate.
+
+The shared `truncateUtf8` in `topology/lib/runtime.mjs` cannot be imported here:
+only `lib/` and `contracts/` are deployed into the installed extension, so a
+`../topology/...` import would fail at runtime. The rule is therefore duplicated
+deliberately and R19-07 pins every deployed module against reintroducing a
+character slice on a byte-budgeted bound.
+
+**4. A post-start binding failure was unattributable (low).** `recordBound` runs
+after the irreversible coordinator start and is the only durable link from
+`run_id`/`session_key` to that run. It is unrecoverable by the loop: once the
+queue item is EXECUTING, authority check 2 reports STALE_PROJECTION on every
+later tick. A throw there aborted the tick with a generic message, leaving a
+live run with no binding record and no clue which one. It is now caught and
+logged at error level with the task, run, session and coordinator. It is NOT
+retried on purpose: `recordBound` appends a ledger event, so a blind retry could
+duplicate the record when the first attempt actually landed.
+
+Investigated and DISCARDED: `quota-telemetry.mjs` (thresholds and freshness
+window match their documented contracts), `runtime-backup.mjs` (reads validated
+before mutation), `discord-formatter.mjs` (the two observations are
+transport-level, not this module's contract).
+
+Tests: `tests/m10-t2-r19-artifact-and-message-limits.test.mjs`, 7 tests, including
+an end-to-end check that reads the real `sheet1.xml` back out of the built `.xlsx`
+archive rather than re-implementing the emitter. The containment check was
+mutation-tested: removing it fails R19-01 and R19-02, and restoring it passes.
+
+Gate change worth recording: `excel-writer.mjs` and `coordinator-pickup.mjs` had
+NO predecessor entries, because until now every revision of each was also the
+current build and was accepted by content comparison — so any change to them was
+undeployable until its outgoing digest was admitted. Both now have their first
+entry.
+
+Gates on the final state: `npm test` 1271 tests / 1227 pass / 0 fail / 44
+skipped; lint 0 issues; `format:check` clean; `repo:check` passed;
+`diff-check` clean; `operator-preflight.mjs` PASS; all 33 deployed assets match
+the build byte-for-byte; gateway healthy after restart (7/7 Discord clients, 0
+websocket closes, 0 network errors, 0 ERROR lines).
+
+### M10/T2-R20 - A rejected skill catalog degraded to a permissive walk; the tombstone key was unstorable
+
+Owner instruction: keep hunting; still defects.
+
+**1. Discovery failed OPEN when the skill catalog was invalid (high).**
+`scanCatalog` returns `records: []` whenever `errors` is non-empty
+(`catalog.mjs:732`). The skill adapter tested
+`catalog.records.length > 0`, so ONE invalid skill made that false and the
+adapter fell through to a **direct disk walk** that re-read the very same files
+with no content-digest and no manifest validation, then answered
+`governed_status: "SUCCESS"` and listed the tampered skill as discoverable.
+Proven by execution: a skill whose `SKILL.md` no longer matched its manifest
+digest still came back discoverable, readable AND applicable, carrying the
+tampered content, while `validate` correctly raised `SKILL_SOURCE_DRIFT`.
+
+The same scan has three consumers and only this one degraded:
+
+| consumer | behaviour on `errors` |
+| --- | --- |
+| `catalog.mjs:738` `getActiveSkill` | fails closed |
+| `vector-sync.mjs:358` | fails closed |
+| `skill-adapter.mjs` discover | **failed open** |
+
+Discovery now fails closed with `governed_status: "FAILED"` and
+`error_code: "SKILL_CATALOG_INVALID"`, matching the other two. The comment in
+that file already stated "There is no fallback" — the code contradicted it.
+
+**2. The tombstone composite key was unstorable and incomparable (high).** Two
+defects compounded in one statement:
+
+- The key joined with `U+0000`. PostgreSQL `text` cannot store a NUL byte, so the
+  statement aborted; the catch turned every sync into
+  `VECTOR_TOMBSTONE_SYNC_FAILED` and **ingestion was never reached**. The skill
+  identity rules forbid control characters in a skill path anyway
+  (`path-safety.mjs` rejects `/[\0\x01-\x1F\x7F]/`).
+- The two sides of `NOT IN` were structurally incomparable even ignoring the NUL:
+  the left side was `namespace::text || capability || version`, where
+  `namespace::text` renders a `text[]` as `{a,b}` — braces and no separators —
+  concatenated with nothing between the parts. The predicate could never match,
+  so had the NUL not aborted it first, the statement would have **DEPRECATED
+  every ACTIVE row**, including live ones.
+
+Both sides now build the identical string: JS
+`namespace.join("/")||"|"| capability ||"|"|| version` against SQL
+`array_to_string(namespace,'/') || '|' || capability || '|' || version`. `|` is
+provably unambiguous because every component is a skill path segment restricted
+to `/^[a-zA-Z0-9_.-]+$/u` and cannot contain it. Verified that the two sides
+render `office/ops|s|1.0.0` identically.
+
+Investigated and DISCARDED: `reconcileVectorSync` also builds an `activeKeys`
+with `/` and `@` separators, but only `activeKeys.size` escapes that function, so
+its key format is never compared to anything — not a defect. Also discarded
+after checking the code: `path-safety.mjs` (traversal, absolute/UNC/drive forms,
+Windows reserved names, control characters), `validateSqlQuery`/`escapeSqlLiteral`
+/`toPostgresArrayLiteral` (mutation keywords, comments, semicolons, quoted
+identifiers, positional params all rejected before interpolation), and
+`generateSkillEmbeddings` (rejects non-1024-dim and non-finite elements).
+
+Tests: `tests/m10-t2-r20-skill-catalog-and-sql.test.mjs`, 6 tests. Building them
+surfaced three mistakes in my own test code that are worth recording: an anchor
+matched an error-message string instead of the section comment; a `[^)]*` regex
+body stopped inside `array_to_string(...)`; and counting `||` to verify the
+separator is meaningless because `||` is also SQL's concatenation operator. Each
+was fixed by narrowing to a literal, not by loosening the assertion.
+
+Gates on the final state: `npm test` 1277 tests / 1233 pass / 0 fail / 44
+skipped; lint 0 issues; `format:check` clean; `repo:check` passed;
+`diff-check` clean.
+
+### M10/T2-R21 - Skill Store, Zink Tools and Knowledgebase
+
+Owner instruction: continue fixing, specifically in Zink memory (Skill Store),
+Zink Tools and the Knowledgebase.
+
+**1. The skill chunker had no length bound, so a valid skill could never be
+indexed (medium).** `chunkSkillContent`'s own docstring claimed it split "by
+headings **or length bounds**" — it had no length branch at all, only heading
+matching. A catalog-valid single-section skill above the embedding ceiling
+produced one oversized segment, and `renderEmbeddingEnvelope` throws above its
+hard 32 KiB limit, so the skill was permanently un-indexable and every
+subsequent sync failed identically. Proven by execution: a 42,013-byte
+single-section skill produced 1 segment and raised
+`EMBEDDING_INPUT_TOO_LARGE`.
+
+Now split by a 16 KiB per-segment content budget, measured in BYTES, with a
+flush-BEFORE-push rule and a byte-budgeted splitter for a single line longer
+than the whole budget. 16 KiB is half the envelope ceiling because the envelope
+adds variable header lines (domain, topic, subtopic, concept, secondary topics)
+whose size is unknown at the chunker. Verified across ASCII, Vietnamese, CJK,
+emoji, a 250 KB single line, 200 sections and a normal small skill: no segment
+exceeds the ceiling, no content is lost, ordinals stay dense, and no lone
+surrogate is produced. The first version of the fix still failed two of those
+cases — it flushed AFTER each piece, letting two full pieces accumulate to
+exactly 32767 bytes — which the verification script caught.
+
+**2. The Knowledge result text ceiling was enforced in characters (medium).**
+`MAX_RESULT_TEXT_BYTES` is named and documented as a 64KB ceiling (M15) but was
+checked with `.length`, which counts UTF-16 units. Measured: a 65,536-character
+Vietnamese result is 196,608 UTF-8 bytes, so 3x the declared ceiling was
+forwarded untouched. This is the FOURTH defect of the byte-vs-character class
+in this codebase. Now byte-budgeted, code-point by code-point.
+
+**3. The Knowledge rerank pool was clamped to the page size (high).**
+`candidate_limit = min(MAX_RERANK_CANDIDATES, request.limit)` is ALWAYS
+`request.limit`, because `MAX_RERANK_CANDIDATES` is 20 and `limit` is capped at
+`le=20`. The constant was dead. Consequences: the reranker only ever scored the
+page it was about to return, making it a pure reorderer that can never improve
+recall; and the `min_score` filter ran AFTER the pool had been cut to the page
+size — filter-after-limit. A query with `min_score=0.8` whose top 10 all scored
+below 0.8 returned an empty page while ranks 11-20, never scored, could have
+satisfied it. Both branches now use `MAX_RERANK_CANDIDATES`.
+
+**4. `/readyz` was more permissive than the default search (medium).**
+`SearchRequest.rerank` defaults to `True` and a missing reranker makes every
+default search 503, but `require_reranker` defaulted to `False`. An image whose
+reranker failed provenance verification — leaving `app.state.reranker = None` —
+still answered `/readyz` with 200, so the orchestrator marked the replica
+healthy while 100% of default traffic failed. The probe now defaults to `True`,
+matching the request it stands for; callers that genuinely run without
+reranking can still pass `?require_reranker=false`.
+
+**5. Sidecar reads were unbounded before allocation (low).**
+`parse_pdf_sidecar` checked the 64 KiB cap AFTER `read_bytes()`, so the cap
+bounded nothing about memory, and `discover_pdf_sidecars` had no check at all —
+one large `.md` in the vault was read whole into the service process during an
+index run. Both now `stat()` first, mirroring the PDF path which already checks
+`before_pdf.size` before hashing. Discovery skips rather than raises, so one bad
+file cannot abort discovery of every other sidecar.
+
+Investigated and DISCARDED across the Knowledgebase after checking the code: SQL
+injection (all values are asyncpg `$N` parameters; the interpolated `common`
+fragment contains only placeholders), path injection (`canonical_vault_path` and
+`runner._safe_source_path` reject absolute/drive/`..`/empty parts and re-verify
+link-freeness plus `relative_to(root)`), the embedding handler (rejects empty,
+mismatched-count and non-finite vectors; dimensions are checked on the search
+path and constrained by a `CHECK` column), unbounded loops (every `while` has
+provable progress), and unit confusion (`MAX_CHARS` uses characters, `*_BYTES`
+use `st_size`, `*_TOKENS` use the tokenizer).
+
+Test note, recorded because it has now happened three times in this work: a
+source assertion tripped on the explanatory COMMENT quoting the old expression.
+`R21-05` and `R21-06` now assert against Python source with `#` comment lines
+removed.
+
+Deployment: none of these files are gateway assets — the plugin loads
+`vector-sync.mjs`, `knowledge-adapter.mjs` and `skill-adapter.mjs` by dynamic
+import from the repository root, not from the deployed extension. So no operator
+apply was needed; a gateway restart was, so the modules reload from the new
+source. `apps/knowledge` is a separate FastAPI service and needs its own restart,
+which is outside this repository's gateway flow and is left to the owner.
+
+Gates on the final state: `npm test` 1284 tests / 1240 pass / 0 fail / 44
+skipped; lint 0 issues; `format:check` clean; `repo:check` passed;
+`diff-check` clean; all 33 deployed gateway assets still match the build; after
+restart 7/7 Discord clients, 0 websocket closes, 0 network errors, 0 ERROR lines
+and no module import failures.
+
+### M10/T2-R22 - Publish durability, and two corrections recorded against myself
+
+**1. The skill publish path made the file bytes durable but not the directory
+entries (medium).** `writeFileAtomic` fsynced each file's BYTES and the publish
+path fsynced `parentDir` after the rename, which makes the RENAME durable. What
+neither did is persist the two directory entries inside the staging directory. So
+a crash after the rename could leave a canonical version directory that exists
+and is named correctly, yet is missing `SKILL.md` or `manifest.json` - a
+published skill the catalog rejects, and one whose incompleteness is silent
+because the directory itself is present. `fsyncDirectoryBestEffort(stagingDir)`
+is now called immediately before the rename. Both halves are required; neither
+alone is sufficient.
+
+**2. The backup subprocess was bounded in output but not in time (low).**
+`createRuntimeBackup` runs `git show` with `maxBuffer` but no `timeout`, on the
+synchronous `configure.mjs --apply` critical path. `maxBuffer` caps what git may
+RETURN; it does nothing about git never returning, so a `git show` blocked on a
+slow filesystem or a held index lock hangs the apply indefinitely with no error.
+Now bounded at 30s, matching the idiom already used by `operator-preflight.mjs`
+(30s), `operator-apply.mjs` (60s), `native-patch-probe.mjs` (10s) and the
+`verify.mjs` `execFileBounded` helper.
+
+**Correction 1, recorded because my first conclusion this round was wrong.** I
+opened by adding a second directory-fsync helper to `catalog.mjs` on the claim
+that the publish path lacked one. That claim was false. `git diff` showed
+`fsyncDirectoryBestEffort` was pre-existing and already called on the parent
+directory immediately after the rename; I had duplicated an existing mechanism,
+which the repository contract forbids. The helper and its `node:os` import were
+removed, and the change narrowed to the single call that was genuinely missing.
+
+**Correction 2, a subagent finding rejected with the evidence that rejected it.**
+A review reported the `PREDECESSOR` upgrade branch of `applyNativePatch` as a
+high-severity non-atomic apply: no `try/catch`, no `ensureNativeBackup`, so a
+mid-loop failure leaves a half-patched runtime with no restore target. The
+structural facts are real - that branch genuinely lacks the `try/catch` +
+`restoreNativePatch` the BASELINE/PATCHED branch has. The conclusion is not, on
+three counts:
+
+- `operator-apply.mjs` passes `nativeRoots` whose `runtimeRoot` is the same
+  variable it hands to `createTransactionSnapshot`, and
+  `nativePatchedRuntimeRelatives()` seeds its set with `NATIVE_BRIDGE_RELATIVE`
+  before deriving the rest from the pins. The transaction snapshot therefore
+  covers every byte that branch can write, including the bridge.
+- The apply orchestrator takes and persists that snapshot before mutating, and on
+  any failure restores it, licensing success only after `verifyLiveRestore`
+  confirms the live bytes match.
+- The proposed fix would have been actively harmful. For a `PREDECESSOR` entry,
+  `entry.before` is the baseline reconstructed in memory, NOT the live file
+  content. Writing it as a backup preimage would make `restoreNativePatch` revert
+  a predecessor host to the unpatched upstream baseline, which is exactly what
+  that branch's design comment exists to prevent.
+
+`R22-04` and `R22-05` now pin the invariant that produced that rejection: the
+tracked set must equal exactly the mutated set, the bridge included.
+
+**Knowledgebase internals reviewed clean.** `database.py`, `retrieval.py`,
+`markdown_adapter.py`, `reranker.py`, `model_probe.py`, `index_lifecycle.py`,
+`index_runner.py`, `pdf_pipeline.py`, `ocr.py` and `config.py` were reviewed
+against the seven failure classes and none survived. Every `except` either fails
+closed or is documented as outside the correctness lifecycle; every index status
+transition is enforced by DB CHECK constraints plus a raise on a lost-update
+race; every search filter is applied inside the `WHERE` before `LIMIT 40`, with
+`hnsw.iterative_scan = strict_order` preventing the ANN scan from truncating a
+selective filter; `SET LOCAL` scopes settings to the transaction rather than the
+pooled connection; the advisory lock makes check-and-act atomic on the owner
+connection; every subprocess and read is bounded; and non-finite or
+wrong-dimension embeddings are rejected at three independent layers.
+
+**Tests.** `tests/m10-t2-r22-publish-durability-and-bounded-backup.test.mjs` (5):
+durability ordering in both directions, a behavioural publish producing a
+complete version directory with byte-identical content and no staging residue,
+the subprocess time bound, and the two tracking invariants above. All five were
+mutation-tested: removing the staging fsync, removing the git timeout, and
+dropping the bridge from the tracked set each turn the suite red, and every
+mutation was reverted with the original bytes restored, `native-patch.mjs`
+confirmed untouched afterwards by `git diff --quiet`.
+
+**Deployment.** `catalog.mjs` is loaded by the plugin through `loadRepoModule`,
+i.e. dynamically from the repository root rather than from the deployed extension,
+so no operator apply was needed and the 33 deployed assets still match the build.
+A gateway restart was needed. `runtime-backup.mjs` is not a gateway asset at all:
+it is operator tooling that runs in a fresh process per invocation.
+
+Gates on the final state: `npm test` 1289 tests / 1245 pass / 0 fail / 44
+skipped; lint 0 issues; `format:check` clean; `repo:check` passed; after restart
+7/7 Discord clients, 0 websocket closes, 0 network errors, 0 ERROR lines and no
+module import failures.
+### M10/T2-R23 - Obsidian to embed ingestion seam
+
+Owner instruction: continue fixing, focused on memory and the embedding system
+from Obsidian. This round covers the vault ingestion seam - the path where a note
+becomes an indexable, embedded segment - plus the rest of the Knowledgebase
+internals and the remaining core modules.
+
+**1. An HTML comment opener inside an inline-code span erased the rest of the
+note (high).** `markdown_adapter._parse_blocks` stripped HTML comments BEFORE
+stripping inline code. A comment opener sitting inside backticks was therefore
+consumed as a real opener and opened a comment state that never closed, and that
+state persisted to end of file.
+
+Proven by execution on the production functions, not inferred. A note whose
+third line was `` Start `<!--` marker. `` rendered to `'Start '` and then
+destroyed every following line: body prose AND its `#supplychain` topic tag. The
+identical note without the backtick pair survived intact, so the pair alone is
+the cause. The downstream consequence is worse than one lost note: because the
+canonical topic tag is required, `_validate_source` raises
+`REQUIRED_TOPIC_TAG_MISSING`, and since `scan_vault` returns `ok=False` on any
+error, ONE such note takes down the entire index run. The fence check is
+correctly ordered ahead of both strippers, which shows the ordering was
+deliberate for fences and simply missed here.
+
+The same ordering defect existed in `pdf_foundation._visible_markdown`. There a
+sidecar rendered to an empty body, `_visible_pdf_embeds` returned `[]`, and the
+PDF was never indexed - and the failure presented as "no embed found", pointing
+at the sidecar rather than at the content that caused it.
+
+Both now strip inline code first. This cannot weaken real comment removal,
+because a genuine comment's opener is outside any code span; the tests assert
+both directions.
+
+**2. A markdown source was read with no bound at all (medium).**
+`MAX_CHARS` bounds a single SEGMENT, so it bounded nothing about the read.
+`candidate.read_bytes()` had no ceiling, and the file was materialised three
+times over (raw bytes, decoded str, splitlines) before any limit was evaluated.
+A pathological note - a pasted dataset, a base64 export, or a OneDrive
+placeholder that has not hydrated - could exhaust the service process. The
+MemoryError escaped `_validate_source` (no except) and `scan_vault` (no except)
+and landed in `index_lifecycle`'s blanket handler as
+`INDEXING_UNEXPECTED_FAILURE` with NO source path, so one file aborted the whole
+run and the operator could not tell which one. Now stat-ed before the read, with
+a dedicated `SOURCE_TOO_LARGE` that names the offending path.
+
+The ceiling is 16 MiB and is the one judgement call in this round. The vault is
+not reachable from this machine, so it could not be measured against real
+content; it is a single constant. It is deliberately far above any hand-written
+note - the sidecar ceiling is 64 KiB - while still being a real memory bound.
+The alternative, a tighter ceiling, risks failing the owner's real index run,
+which is why this is flagged rather than chosen silently.
+
+**Corrections recorded against myself.**
+
+- My first fix for defect 1 was itself broken. I bound `without_code` before the
+  comment strip and then pointed tag extraction at it, so the variable still
+  carried comment text. The existing `test_tag_lexer_rejects_false_positives`
+  caught it by going red with an unexpected
+  `REQUIRED_TOPIC_TAG_MISSING`. Tag extraction now reads `visible`, the fully
+  stripped line.
+- My first version of the sidecar comment test asserted only that discovery
+  succeeded. It stayed GREEN under a mutation that removed multi-line comment
+  handling entirely, because comment leakage does not change whether the embed
+  is found. The tests were rewritten to discriminate: each plants a decoy topic
+  tag inside the comment and asserts it never reaches `tags` or
+  `canonical_topics`. This is the second time in this work that a passing test
+  turned out to prove nothing; it is now the standing rule that a regression
+  test must be mutation-verified or it does not count.
+- One mutation was also mis-designed by me: removing inline-code stripping was
+  labelled as testing comment removal, which it does not. It was replaced with
+  one that genuinely weakens comment removal.
+
+**Tests.** `apps/knowledge/tests/test_r23_obsidian_ingestion.py` (13). All four
+mutations bite: restoring the original order in markdown_adapter, dropping the
+pre-read size bound, restoring the original order in pdf_foundation, and
+removing multi-line comment state. Every mutation was reverted and the original
+bytes restored. The size bound is exercised by lowering the constant rather
+than writing 16 MiB, which proves the ORDER and the attribution rather than just
+the comparison; a second test proves a file exactly at the ceiling is still read.
+
+**Environment note, because it changes what could be verified.** The Knowledge
+Python suite could not run in this environment at all: `tokenizers` was absent,
+then `asyncpg`. Both are declared project dependencies and were installed to
+make the suite runnable, and `KNOWLEDGE_TOKENIZER_PATH` now points at the
+existing `temp/knowledge-test/tokenizer.json` fixture. Before this the suite
+reported nothing; after it, the whole suite runs.
+
+**Reviewed clean, with the mechanisms named.** `markdown_adapter` segmentation
+and offsets, heading-path assignment, PDF table splitting, frontmatter handling,
+`ocr` pipe draining and reaping, path escape in `pdf_foundation` (absolute
+paths, drive letters, drive-relative `C:x`, UNC, `..`, symlinks, and the
+extension check all precede the read), and the unreachable `RuntimeError` at
+`markdown_adapter.py:787`, which needs a single token spanning more than 2000
+characters that the pinned SentencePiece cannot produce.
+
+**Gates.** Knowledge Python suite 144 passed / 4 skipped / 0 failed, 15
+subtests. `npm test` 1289 tests / 1245 pass / 0 fail / 44 skipped. lint 0
+issues; `format:check` clean; `repo:check` passed; `diff-check` clean; no secrets
+in the diff.
+
+**Deployment.** Every R23 change is a Python file under `apps/knowledge/`, which
+is the separate FastAPI service, not a gateway asset and not loaded by the
+plugin. No operator apply and no gateway restart were required. The service
+still needs its own restart to pick these up, which is outside this repository's
+gateway flow.
+### M10/T2-R24 - The PDF runtime trust boundary
+
+Owner instruction: keep fixing in knowledge; the 512 MB ceiling is the owner's
+setting and must not be changed; only restart knowledge once the errors are
+exhausted. No restart was performed this round.
+
+**Owner's setting confirmed untouched.** `MAX_PDF_BYTES = 512 * 1024 * 1024`
+in `pdf_pipeline.py`. `git diff --quiet` confirms this file was never modified by
+this work, and it remains so. The full inventory of every ceiling in
+`apps/knowledge` was recorded so the owner's value is explicit and auditable.
+
+**1. The response validator could raise something that was not a
+`PdfRuntimeError` (medium).** `_validate_response` performed its byte-exactness
+round trip OUTSIDE the try/except above it. `json.loads` accepts the
+non-standard `NaN` / `Infinity` / `-Infinity` literals and out-of-range exponents
+such as `1e400` as ordinary Python floats without raising, and a lone surrogate
+survives decoding. Those then reached `json.dumps(..., allow_nan=False)`, which
+raises `ValueError`, or `.encode("utf-8")`, which raises `UnicodeEncodeError`.
+`PdfRuntimeError` derives from `RuntimeError`, not `ValueError`, so neither was
+converted.
+
+Proven by execution: `{"x": NaN}`, `{"x": Infinity}`, `{"x": -Infinity}`,
+`{"x": 1e400}` and a lone surrogate each escaped the validator as `ValueError` or
+`UnicodeEncodeError`, while `issubclass(PdfRuntimeError, ValueError)` is `False`.
+
+The consequence differed by call site, which is what makes this more than
+cosmetic. `pdf_pipeline` catches only `PdfRuntimeError` in the preflight path,
+so the `ValueError` escaped `build()` entirely and surfaced upstream as an
+unattributed document-indexing failure. In the batch path a blanket `except
+Exception` did catch it, but reported a generic `PDF_RUNTIME_FAILED`, hiding the
+fact that the child had violated the protocol. A protocol violation was not
+being reported as one. The round trip is now inside a try that converts to the
+typed error, and the byte-exactness check itself is unchanged and still tested.
+
+**2. The stderr cap destroyed a healthy invocation (medium).** The cap existed
+to bound memory, but exceeding it raised `_OutputCapExceeded`, which terminated
+the child and reported `PDF_RUNTIME_OUTPUT_LIMIT` - even though the response
+cap had not been touched and the response was about to be valid. The stderr
+bytes were discarded at the call site anyway, so the parent destroyed a
+successful run on the strength of data it then threw away. Proven by execution
+against the real client: a child returning a valid probe was killed when ~1.8 MiB
+of per-page `UserWarning` text preceded it on stderr.
+
+Stderr is now drained to EOF while retaining only the first `MAX_STDERR_BYTES`,
+which keeps the memory bound AND keeps the pipe drained so a chatty child can
+never block on a full stderr buffer. The overall deadline still bounds a child
+that spews indefinitely, and the response cap is untouched and still fatal.
+
+**3. Every child-side catastrophe was unattributable (low).** Both the exit
+code and the stderr text were in hand and both discarded, and the module logs
+nothing, so an OOM kill (`exit -9`) and a missing model artifact (`exit 1`)
+produced byte-identical `PDF_RUNTIME_FAILED` with no diagnostic. `PdfRuntimeError`
+now carries an optional bounded, single-line `detail`. The stable `code` that
+every caller switches on is unchanged, so no call site changes behaviour.
+
+**Correction recorded.** My first version of the retaining reader stopped
+retaining as soon as a whole block pushed the total over the cap, which retained
+**nothing** whenever a single block was larger than the cap - making the
+retained excerpt useless on exactly the streams most likely to overflow. The
+test caught it. It now retains exactly the first `cap` bytes, slicing the
+straddling block.
+
+**Tests.** `apps/knowledge/tests/test_r24_pdf_runtime_boundary.py` (14).
+All five mutations bite and were reverted with the original bytes restored:
+restoring the pre-fix validation order, restoring the aborting stderr cap,
+stopping the retention, never aborting on overflow, and dropping the child
+detail again. The stderr test drives a real child process that floods stderr
+and then returns a valid probe; the oversized-response test drives a real child
+that emits 80 MiB and must still be rejected.
+
+**Escalated, NOT fixed - owner decision required (RED).** A review reported
+that an INCREMENTAL run mutates the live ACTIVE index through many independent
+per-source transactions, so a mid-run failure leaves the ACTIVE index holding
+new rows for the sources that succeeded, stale rows for the one that failed, and
+no deletion of removed sources, because the stale-path deletion is only reached
+on the all-succeeded branch. The structural facts check out.
+
+It is deliberately not fixed here. Deleting stale sources on a failed run would
+be WRONG, because a failed run's manifest is untrustworthy, so the current
+skip is the safer half. The genuine fix is to make incremental indexing atomic -
+stage into a shadow index and swap the ACTIVE pointer only on success - which
+changes index lifecycle semantics and the read path. That is an architectural
+change and needs its own task and its own approval. Raising it rather than
+silently re-planning it.
+
+**Gates.** Knowledge Python suite 158 passed / 4 skipped / 0 failed, 20
+subtests. `npm test` 1289 tests / 1245 pass / 0 fail / 44 skipped. lint 0
+issues; `format:check` clean; `repo:check` passed; `diff-check` clean; no secrets
+in the diff.
+
+**Deployment.** All R24 changes are Python files under `apps/knowledge/`, the
+separate FastAPI service. Not a gateway asset, not loaded by the plugin, so no
+operator apply and no gateway restart. The service restart the owner asked to
+defer is still deferred; this round makes no live change at all.
+### M10/T2-R25 - The skill read/apply boundary
+
+Owner instruction: scan knowledge and memory. Owner's 512 MB PDF ceiling
+re-confirmed untouched (`MAX_PDF_BYTES`, `git diff --quiet` clean). The knowledge
+service restart stays deferred at the owner's instruction.
+
+Knowledge side of this sweep came back clean: `index_runner.py` end to end and
+the `pdf_pipeline.py` build/batch region were both reviewed and neither yielded
+a defect, with the deadline computation (once per PDF, never per batch), the
+segment assembly, the fixed page-range batching and the per-call transaction
+scoping all named as the reasons.
+
+This round is the memory side. Three governance defects in the skill read and
+apply boundary, all proven by execution against the real `SkillAdapter` driving a
+real catalog before the fix.
+
+**1. A qualified skill id was resolved by its last path segment (high).** The
+matcher was a single disjunction mixing a whole-id comparison with a bare-slug
+comparison, so `ns/capability` was satisfied by either, and
+`fullId.endsWith(targetSkillId)` additionally matched any id by suffix. With a
+catalog holding both `automation/data-clean` and `research/data-clean`, a read of
+`research/data-clean` returned AUTOMATION's SKILL.md - the reproduction returned
+the literal body `rm -rf everything` - while the response still echoed
+`skill_id: "research/data-clean"` and `governed_status: "SUCCESS"`. Which skill
+won depended on filesystem enumeration order.
+
+A qualified id is now matched whole; only the deliberate bare-capability
+shorthand may fall back to the slug. Directory enumeration is also sorted, so a
+tree with any residual duplicate resolves deterministically rather than by
+filesystem order.
+
+**2. The two actions that feed an agent skipped the only integrity anchor
+(high).** The content digest check was gated on `action === "validate"`, so
+`read` and `apply` returned the bytes unchecked, and `apply` then stamped them
+`verified-provenance`. Proven by execution with an unambiguous id and an in-place
+edit of SKILL.md: `validate` threw `SKILL_SOURCE_DRIFT` while `read` and `apply`
+both returned `SUCCESS` serving the drifted content.
+
+Two compounding facts made this worse than a single missing check. Because
+`manifest.verification` is not part of the canonical schema (the catalog enforces
+exactKeys on `content` and `provenance`), the old
+`manifest.verification?.signature || "verified-provenance"` fallback emitted that
+constant for EVERY skill, verified or not - it asserted nothing at all. And the
+defect in finding 1 compounded it: the collision meant the drifted file was not
+even the file being read, so the drift check could not have caught it.
+
+Both actions now go through one `loadVerifiedRecord` helper that resolves, reads
+and verifies in a single pass - which also removed the duplicated read logic and
+the redundant catalog walk the apply path was doing. The digest comparison runs
+for every action. The signature is now `sha256:<digest of the bytes actually
+served>`, which is what was just proved equal to the approved content. A record
+with no `content.sha256` now fails closed with
+`SKILL_PROVENANCE_UNVERIFIED` rather than being served unverified.
+
+**3. The search row budget was in the wrong unit (medium).** The SQL `LIMIT` is a
+limit on segment rows, but the caller asks for skills and the loop deduplicates
+to skills. With `limit * 4`, three long skills at 16 segments each consumed the
+entire 40-row budget for a request of 10, and seven further qualifying skills
+never appeared at all - silently, with `governed_status: "SUCCESS"` and nothing
+signalling truncation.
+
+The multiplier is now derived rather than guessed:
+`MAX_SEGMENTS_PER_SKILL_VERSION = ceil(262_144 / (16 * 1024))`. The catalog
+refuses a SKILL.md above 262,144 bytes on both write and scan, and the chunker
+emits at most one segment per 16,384 bytes, so 16 is a hard maximum and a budget
+of `limit * 16` provably still yields `limit` distinct skills. The test
+recomputes both ceilings from source and asserts they still agree, so changing
+either ceiling without this one fails the suite.
+
+**4. The catalog size ceilings bounded nothing (low).** `readRegularFile` did
+`lstat` then `readFile` with no size bound, and the ceilings were only checked
+against `bytes.length` afterwards - so the whole file was buffered first. Since
+`scanCatalog` runs on every discover, `getActiveSkill` and
+`syncSkillsToVectorStore`, peak resident size scaled with whatever was on disk,
+and above Node's buffer limit the read threw and the catch relabelled it
+`MISSING_REQUIRED_FILE`, pointing the operator at a missing file rather than an
+oversized one. Both ceilings are now passed into the reader and enforced by
+stat before the read; the post-read length check is kept as a second line of
+defence, because the file can grow between the stat and the read.
+
+**Tests.** `tests/m10-t2-r25-skill-read-apply-integrity.test.mjs` (13). All five
+mutations bite and were reverted with the original bytes restored: restoring the
+bare-slug matcher, disabling the digest comparison, restoring the constant
+signature literal, restoring the segment-unit budget, and dropping the pre-read
+size bound.
+
+**Corrections recorded against myself.** My first mutation for the drift finding
+added a dead variable and disabled nothing, so the suite stayed green - the green
+was correct and the mutation was meaningless. Separately, my first version of
+`R25-04` asserted that `cap === targetSlug` must never appear, which would have
+forbidden the legitimate bare-capability shorthand; it was rewritten to check the
+structure instead. And the apply path initially kept its own `findSkillRecordOnDisk`
+call alongside the new loader, walking the whole catalog twice; that is now a
+single pass.
+
+**Gates.** `npm test` 1302 tests / 1258 pass / 0 fail / 44 skipped. Knowledge
+Python suite 158 passed / 4 skipped / 0 failed, 20 subtests. lint 0 issues;
+`format:check` clean; `repo:check` passed; `diff-check` clean.
+
+**Deployment - restart deliberately NOT performed.** `skill-adapter.mjs` and
+`catalog.mjs` are loaded by the plugin through `loadRepoModule`, dynamically from
+the repository root rather than from the deployed extension, so no operator apply
+is needed - but a gateway restart is required for the plugin to pick up R25. The
+owner deferred restarts until the sweep is exhausted, so none was performed and
+no live system changed this round.
 ## 9. Deferred beyond V1
 
 Unless separately approved:

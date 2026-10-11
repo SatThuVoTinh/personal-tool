@@ -23,6 +23,35 @@ const FORBIDDEN_ACTIONS = new Set([
 export const MAX_KNOWLEDGE_RESPONSE_BYTES = 50 * 1024 * 1024; // 50MB ceiling (M08)
 export const MAX_RESULT_TEXT_BYTES = 64 * 1024; // 64KB ceiling per result (M15)
 
+/**
+ * Truncate to at most `maxBytes` UTF-8 bytes without splitting a character.
+ *
+ * M10/T2-R21: a constant named and documented in BYTES must be enforced with a
+ * byte measure. `.length` counts UTF-16 units, so multi-byte content overran the
+ * ceiling by the UTF-8 expansion ratio.
+ *
+ * The same rule lives in `topology/lib/runtime.mjs` and
+ * `lib/coordinator-pickup.mjs`; this module cannot import either (the deployed
+ * extension ships only `lib/` and `contracts/`), so the rule is duplicated
+ * deliberately and pinned by
+ * `tests/m10-t2-r21-skill-chunking-and-text-budgets.test.mjs`.
+ */
+function truncateUtf8Bytes(value, maxBytes) {
+  const text = String(value);
+  if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
+  let bytes = 0;
+  let out = "";
+  // Iterating a string yields whole code points, so a surrogate pair is never
+  // split.
+  for (const character of text) {
+    const size = Buffer.byteLength(character, "utf8");
+    if (bytes + size > maxBytes) break;
+    bytes += size;
+    out += character;
+  }
+  return `${out}... [truncated]`;
+}
+
 // Search capacity in personal-tool-knowledge-1 is strictly capped at 2.
 // We maintain an in-process AsyncSemaphore across adapter instances to queue
 // concurrent searches and prevent HTTP 429 SEARCH_CAPACITY_EXCEEDED (M16).
@@ -317,10 +346,13 @@ export class KnowledgeAdapter {
               : 0;
 
             const rawText = String(r.text || "");
-            const boundedText =
-              rawText.length > MAX_RESULT_TEXT_BYTES
-                ? `${rawText.slice(0, MAX_RESULT_TEXT_BYTES)}... [truncated]`
-                : rawText;
+            // M10/T2-R21: byte-budgeted. `MAX_RESULT_TEXT_BYTES` is named and
+            // documented as a 64KB ceiling (M15), but `.length` counts UTF-16
+            // code units. Measured: a 65,536-character Vietnamese result is
+            // 196,608 UTF-8 bytes, so 3x the declared ceiling was forwarded to
+            // the caller untouched. This is the FOURTH defect of the
+            // byte-vs-character class in this codebase.
+            const boundedText = truncateUtf8Bytes(rawText, MAX_RESULT_TEXT_BYTES);
 
             const headingPath = Array.isArray(r.heading_path)
               ? r.heading_path.filter((h) => typeof h === "string")

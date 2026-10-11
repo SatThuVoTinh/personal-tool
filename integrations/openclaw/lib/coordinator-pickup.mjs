@@ -539,6 +539,39 @@ export function buildCoordinatorIdempotencyKey({ taskId, attempt, leaseId }) {
 export const COORDINATOR_MESSAGE_MAX_BYTES = 4096;
 
 /**
+ * M10/T2-R19: byte-budgeted truncation.
+ *
+ * The ceiling above is measured with `Buffer.byteLength`, but the truncation
+ * was `body.slice(0, MAX - 64)`, which counts UTF-16 code units. Measured on the
+ * real function: a 6000-character Vietnamese brief produced an 11721-byte body —
+ * 286% of the declared 4096 ceiling — and with emoji it produced 7885 bytes AND a
+ * LONE SURROGATE, because slicing at an arbitrary index can cut a surrogate pair
+ * in half. A byte budget cannot be enforced by slicing characters.
+ *
+ * The shared implementation lives in `topology/lib/runtime.mjs`, which this
+ * module cannot import: only `lib/` and `contracts/` are deployed into the
+ * installed extension, so a `../topology/...` import would fail at runtime. The
+ * rule is therefore duplicated here deliberately and pinned by
+ * `tests/m10-t2-r19-artifact-and-message-limits.test.mjs`, which asserts every
+ * budgeted bound in the deployed set is byte-budgeted.
+ */
+function truncateUtf8Bytes(value, maxBytes) {
+  const text = String(value);
+  if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
+  let bytes = 0;
+  let out = "";
+  // Iterating a string yields whole code points, so a surrogate pair is never
+  // split.
+  for (const character of text) {
+    const size = Buffer.byteLength(character, "utf8");
+    if (bytes + size > maxBytes) break;
+    bytes += size;
+    out += character;
+  }
+  return out;
+}
+
+/**
  * Build the coordinator turn input from the authoritative pickup bundle.
  * The message is model INPUT, never governance authority: it carries the
  * routing facts the coordinator needs plus an explicit instruction to resolve
@@ -575,8 +608,11 @@ export function buildCoordinatorMessage({
     ],
   });
   if (Buffer.byteLength(body, "utf8") > COORDINATOR_MESSAGE_MAX_BYTES) {
-    return `${body.slice(0, COORDINATOR_MESSAGE_MAX_BYTES - 64)}
-...[truncated]`;
+    const suffix = "\n...[truncated]";
+    return `${truncateUtf8Bytes(
+      body,
+      COORDINATOR_MESSAGE_MAX_BYTES - Buffer.byteLength(suffix, "utf8"),
+    )}${suffix}`;
   }
   return body;
 }
@@ -715,14 +751,32 @@ export function startCoordinatorPickupLoop({
         isRuntimeStartAvailable,
       });
       if (result?.ok === true) {
-        await recordBound({
-          task_id: result.taskId,
-          coordinator: result.coordinator,
-          attempt: result.attempt,
-          lease_id: result.leaseId,
-          session_key: result.run.sessionKey,
-          run_id: result.run.runId,
-        });
+        // M10/T2-R19: this write happens AFTER the irreversible run start, and
+        // the binding is the only durable link from run_id/session_key to that
+        // run. It is also unrecoverable by this loop: the queue item is now
+        // EXECUTING, so authority check 2 (line 168) reports STALE_PROJECTION on
+        // every later tick and never reaches this line again. Pre-fix a throw
+        // here aborted the tick with a generic "tick failed" message, leaving a
+        // live run with no binding record and no way to tell which one.
+        //
+        // It is caught rather than retried on purpose: `recordBound` appends a
+        // ledger event, so a blind retry could duplicate the record when the
+        // first attempt actually landed. Reporting the exact identities is the
+        // honest response; an operator can reconcile from the log.
+        try {
+          await recordBound({
+            task_id: result.taskId,
+            coordinator: result.coordinator,
+            attempt: result.attempt,
+            lease_id: result.leaseId,
+            session_key: result.run.sessionKey,
+            run_id: result.run.runId,
+          });
+        } catch (bindErr) {
+          logger?.error?.(
+            `[zink-coordinator-pickup] COORDINATOR_RUN_BOUND record FAILED for task=${result.taskId} run=${result.run.runId} session=${result.run.sessionKey} coordinator=${result.coordinator} — the run is live but unbound and this loop will not retry: ${bindErr?.message ?? bindErr}`,
+          );
+        }
       }
       return result;
     },

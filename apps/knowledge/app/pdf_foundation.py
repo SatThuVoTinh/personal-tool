@@ -162,6 +162,12 @@ def parse_pdf_sidecar(
     sidecar_relative = canonical_vault_path(vault_root, supplied_relative)
     if not sidecar_relative.startswith(("02. Books/", "03. Papers/")):
         raise PdfFoundationError("PDF_SIDECAR_OUTSIDE_DISCOVERY_ROOT")
+    # M10/T2-R21: stat BEFORE reading. The length check used to run after
+    # `read_bytes()` had already materialised the whole file, so the 64 KiB cap
+    # bounded nothing about memory: a large sidecar was fully resident first.
+    # This mirrors the PDF path, which checks `before_pdf.size` before hashing.
+    if sidecar_path.stat().st_size > MAX_SIDECAR_BYTES:
+        raise PdfFoundationError("PDF_SIDECAR_TOO_LARGE")
     raw = sidecar_path.read_bytes()
     if len(raw) > MAX_SIDECAR_BYTES:
         raise PdfFoundationError("PDF_SIDECAR_TOO_LARGE")
@@ -237,6 +243,13 @@ def discover_pdf_sidecars(vault_root: Path) -> tuple[PdfSidecar, ...]:
             continue
         _assert_no_link_or_reparse(resolved_vault, root)
         for sidecar in sorted(root.rglob("*.md")):
+            # M10/T2-R21: skip oversize sidecars by STAT, before any read. This
+            # sweep had no size check at all, so a single large `.md` dropped in
+            # the vault was read whole into the service process during an index
+            # run. Skipping (rather than raising) keeps one bad file from aborting
+            # discovery of every other sidecar.
+            if sidecar.stat().st_size > MAX_SIDECAR_BYTES:
+                continue
             raw = sidecar.read_bytes()
             recognition_text = raw.decode("utf-8", errors="ignore")
             try:
@@ -366,8 +379,14 @@ def _visible_markdown(text: str) -> str:
             fence_length = len(opening.group(1))
             visible.append(newline)
             continue
-        without_comments, in_comment = _strip_html_comments(line, in_comment)
-        visible.append(_strip_inline_code(without_comments) + newline)
+        # M10/T2-R23: same ordering defect as markdown_adapter. Inline code
+        # is stripped first, so an opener inside a backtick span cannot be
+        # mistaken for a real comment. Proven by execution: a sidecar with
+        # 'Start `<!--` marker.` yielded an empty body, so its
+        # `![[Book.pdf]]` embed was never seen and the PDF never indexed.
+        without_code = _strip_inline_code(line)
+        without_comments, in_comment = _strip_html_comments(without_code, in_comment)
+        visible.append(without_comments + newline)
     return "".join(visible)
 
 

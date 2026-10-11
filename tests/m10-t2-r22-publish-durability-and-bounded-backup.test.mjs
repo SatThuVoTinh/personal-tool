@@ -1,0 +1,202 @@
+// M10/T2-R22 - publish durability ordering, and a bounded backup subprocess.
+//
+// Every source assertion in this file runs against COMMENT-STRIPPED source. That
+// is deliberate: twice in this work an explanatory comment quoting the old
+// expression satisfied a source assertion meant to prove the opposite.
+import assert from "node:assert/strict";
+import test from "node:test";
+import { readFileSync } from "node:fs";
+
+const ROOT = "C:/Users/HOANG VINH/OneDrive/Documents/personal-tool";
+const url = (rel) => "file:///" + ROOT + "/" + rel;
+
+const { promoteApprovedSkill } = await import(
+  url("zink-skill-store/src/catalog.mjs")
+);
+const NATIVE = await import(
+  url("integrations/openclaw/topology/lib/native-patch.mjs")
+);
+const {
+  NATIVE_RUNTIME_PINS,
+  NATIVE_BRIDGE_RELATIVE,
+  nativePatchedRuntimeRelatives,
+  nativePatchedDiscordChannelRelatives,
+} = NATIVE;
+const { SNAPSHOT_TARGETS } = await import(
+  url("integrations/openclaw/topology/lib/transaction-snapshot.mjs")
+);
+
+const CATALOG_SRC = readFileSync(
+  ROOT + "/zink-skill-store/src/catalog.mjs",
+  "utf8",
+);
+const BACKUP_SRC = readFileSync(
+  ROOT + "/integrations/openclaw/topology/lib/runtime-backup.mjs",
+  "utf8",
+);
+
+/** Strip JS comments so an explanatory comment cannot satisfy a source assertion. */
+const code = (src) =>
+  src
+    .replace(/\/\*[\s\S]*?\*\//gu, "")
+    .split("\n")
+    .map((line) => line.replace(/(^|\s)\/\/.*$/u, "$1"))
+    .join("\n");
+
+test("R22-01: the staging directory is fsynced BEFORE it is renamed into place", () => {
+  // The gap: writeFileAtomic fsynced each file's BYTES and the publish path
+  // fsynced parentDir after the rename - but nothing persisted the two
+  // directory entries inside stagingDir. A crash after the rename could leave a
+  // canonical versionDir that exists yet is missing SKILL.md or manifest.json:
+  // a published skill the catalog rejects, and one whose incompleteness is
+  // silent because the directory name is present.
+  const src = code(CATALOG_SRC);
+  const sync = src.indexOf("fsyncDirectoryBestEffort(stagingDir)");
+  const rename = src.indexOf("rename(stagingDir, versionDir)");
+  assert.ok(sync > 0, "the staging directory must be fsynced");
+  assert.ok(
+    rename > 0,
+    "the staged directory must still be published by rename",
+  );
+  assert.ok(
+    sync < rename,
+    "the staging entries must be durable BEFORE the directory becomes visible",
+  );
+
+  // And the parent directory is still synced after the rename, so the name swap
+  // itself is durable. Both halves are required; neither alone is sufficient.
+  const parent = src.indexOf("fsyncDirectoryBestEffort(parentDir)");
+  assert.ok(
+    parent > rename,
+    "the rename must still be followed by a parent sync",
+  );
+});
+
+test("R22-02: publishing a skill produces a complete version directory", async () => {
+  // Behavioural check of the same invariant: whatever the ordering guarantees on
+  // disk, a published version must carry BOTH members of the pair, because the
+  // catalog recognises only complete validated pairs - and no staging residue
+  // may survive the publish.
+  const { mkdtemp, rm, readdir, readFile } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const path = (await import("node:path")).default;
+
+  const skillsRoot = await mkdtemp(path.join(tmpdir(), "r22-catalog-"));
+  const newline = String.fromCharCode(10);
+  const body = "# R22 proof" + newline + newline + "A short body." + newline;
+  try {
+    const result = await promoteApprovedSkill({
+      skillsRoot,
+      namespace: ["office"],
+      capability: "r22-proof",
+      version: "1.0.0",
+      content: body,
+      decisionRef: "PLAN:M10/T2-R22",
+    });
+
+    const versions = await readdir(
+      path.join(skillsRoot, "office", "r22-proof"),
+    );
+    const versionDir = versions.find((v) => !v.includes(".pending-"));
+    assert.ok(
+      versionDir,
+      "a version directory must be published, saw " + versions,
+    );
+    assert.ok(
+      !versions.some((v) => v.includes(".pending-")),
+      "no staging residue may survive the publish",
+    );
+
+    const members = await readdir(
+      path.join(skillsRoot, "office", "r22-proof", versionDir),
+    );
+    assert.ok(members.includes("SKILL.md"), "SKILL.md must be published");
+    assert.ok(
+      members.includes("manifest.json"),
+      "manifest.json must be published",
+    );
+
+    // The published content must be byte-identical to what was approved.
+    assert.equal(
+      await readFile(
+        path.join(skillsRoot, "office", "r22-proof", versionDir, "SKILL.md"),
+        "utf8",
+      ),
+      body,
+      "the published SKILL.md must be exactly the approved content",
+    );
+
+    // And the writer must report the record it actually made.
+    assert.equal(result.status, "ACTIVE");
+    assert.equal(result.version, "1.0.0");
+    assert.deepEqual(result.namespace, ["office"]);
+    assert.match(result.content_sha256, /^[a-f0-9]{64}$/u);
+  } finally {
+    await rm(skillsRoot, { recursive: true, force: true });
+  }
+});
+
+test("R22-03: the git read on the apply critical path is bounded in time", () => {
+  // maxBuffer caps what git may RETURN; it does nothing about git never
+  // returning. createRuntimeBackup runs inside the synchronous
+  // configure.mjs --apply path, so an unbounded git show can hang the apply with
+  // no error at all.
+  const src = code(BACKUP_SRC);
+  const call = src.slice(src.indexOf("execFileSync("));
+  const gitShow = call.slice(0, call.indexOf("));"));
+  assert.match(gitShow, /timeout:\s*\d/u, "git must be bounded by a timeout");
+  assert.match(gitShow, /maxBuffer:/u, "the output cap must be kept");
+});
+
+test("R22-04: every runtime file the native patch mutates is transaction-tracked", () => {
+  // This is the invariant that makes the PREDECESSOR upgrade branch safe even
+  // though it has no local try/catch of its own. nativePatchedRuntimeRelatives
+  // seeds the set with the bridge and derives the rest from the pins, so the
+  // apply orchestrator's snapshot covers every byte that branch can write. If the
+  // bridge were dropped from that set, a mid-loop failure would leave the bridge
+  // rewritten after rollback: mutated but untracked.
+  const tracked = nativePatchedRuntimeRelatives();
+  assert.ok(
+    tracked.includes(NATIVE_BRIDGE_RELATIVE),
+    "the bridge must be transaction-tracked",
+  );
+  const expected = new Set([NATIVE_BRIDGE_RELATIVE]);
+  for (const pin of Object.values(NATIVE_RUNTIME_PINS))
+    for (const [file, entry] of Object.entries(pin.sources))
+      if ((entry.scope ?? "runtime") === "runtime")
+        expected.add("dist/" + file);
+  for (const relative of expected)
+    assert.ok(
+      tracked.includes(relative),
+      relative + " is mutated by the native patch but not transaction-tracked",
+    );
+  assert.deepEqual(
+    [...tracked].sort(),
+    [...expected].sort(),
+    "the tracked set must be exactly the mutated set",
+  );
+  assert.deepEqual(
+    SNAPSHOT_TARGETS.runtime,
+    tracked,
+    "the snapshot must use the derived set, not a separately maintained list",
+  );
+});
+
+test("R22-05: channel-scope pins are tracked as state-relative targets", () => {
+  // A pinned artifact can live in the installed channel package instead of the
+  // runtime root. Those bytes are mutated by the same apply, so they must be
+  // tracked too - otherwise the same "mutated but untracked" hole reappears one
+  // tree over.
+  const channel = nativePatchedDiscordChannelRelatives();
+  assert.ok(Array.isArray(channel));
+  const scopes = new Set();
+  for (const pin of Object.values(NATIVE_RUNTIME_PINS))
+    for (const entry of Object.values(pin.sources))
+      scopes.add(entry.scope ?? "runtime");
+  if (scopes.has("discordChannel"))
+    for (const relative of channel)
+      assert.ok(
+        SNAPSHOT_TARGETS.discordChannel.includes(relative),
+        relative + " must be a state-relative snapshot target",
+      );
+});

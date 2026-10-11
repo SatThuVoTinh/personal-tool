@@ -221,7 +221,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"status": "ok"}
 
     @app.get("/readyz", response_model=None)
-    async def readyz(require_reranker: bool = False) -> JSONResponse | dict[str, object]:
+    async def readyz(require_reranker: bool = True) -> JSONResponse | dict[str, object]:
         if not database.available:
             return JSONResponse(status_code=503, content={"status": "not_ready", "code": database.startup_error_code or "DATABASE_UNAVAILABLE"})
         try:
@@ -234,6 +234,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if active_index is None:
             return JSONResponse(status_code=503, content={"status": "not_ready", "code": "NO_ACTIVE_INDEX"})
         if require_reranker and app.state.reranker is None:
+            # M10/T2-R21: `require_reranker` now defaults to True, matching
+            # `SearchRequest.rerank` (also True). It used to default to False, so
+            # an image whose reranker failed provenance verification — leaving
+            # `app.state.reranker = None` — still answered /readyz with 200 and
+            # the orchestrator marked the replica healthy, while EVERY default
+            # search returned 503 RERANKER_UNAVAILABLE. A readiness probe must be
+            # at least as strict as the default request it stands for; callers
+            # that genuinely run without reranking can still pass
+            # `?require_reranker=false`.
             return JSONResponse(status_code=503, content={"status": "not_ready", "code": "RERANKER_UNAVAILABLE"})
         try:
             actual_model = await model_probe.resolve(configured_settings.embedding_model)
@@ -338,7 +347,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         continue
                     raise HTTPException(status_code=503, detail={"code": "ACTIVE_INDEX_CHANGED"}) from None
                 if request.rerank and app.state.reranker is not None:
-                    candidate_limit = min(MAX_RERANK_CANDIDATES, request.limit)
+                    # M10/T2-R21: the pool is MAX_RERANK_CANDIDATES, not the
+                    # page size. `min(MAX_RERANK_CANDIDATES, request.limit)` was
+                    # always equal to `request.limit`, because MAX_RERANK_CANDIDATES
+                    # is 20 and `limit` is capped at le=20 — so the constant was
+                    # dead and the reranker only ever scored the very page it was
+                    # about to return. That makes it a pure reorderer: it can
+                    # never improve recall, and the `min_score` filter below ran
+                    # AFTER the pool had already been cut to the page size, i.e.
+                    # filter-after-limit. A query with min_score=0.8 whose top 10
+                    # all scored below 0.8 returned an empty page while ranks
+                    # 11-20, never scored, could have satisfied it.
+                    candidate_limit = MAX_RERANK_CANDIDATES
                     fused_candidates = fuse_candidates(dense, fts)[:candidate_limit]
                     pairs = [
                         (query, render_retrieval_text(item.candidate.heading_path, item.candidate.text))
@@ -352,7 +372,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         raise HTTPException(status_code=503, detail={"code": "RERANKER_UNAVAILABLE"}) from None
                     raw_scores = [stable_sigmoid(logit) for logit in logits]
                 else:
-                    candidate_limit = min(MAX_RERANK_CANDIDATES, request.limit)
+                    # M10/T2-R21: same correction as the reranked branch — the
+                    # candidate pool must be wider than the page so that
+                    # `min_score` filters a pool rather than the final page.
+                    candidate_limit = MAX_RERANK_CANDIDATES
                     fused_candidates = fuse_candidates(dense, fts)[:candidate_limit]
                     raw_scores = [item.rrf_score for item in fused_candidates]
 

@@ -39,6 +39,43 @@ export function payloadDigest(payload) {
   return canonicalHash("zink-result-payload-v1", payload);
 }
 
+/**
+ * Truncate to at most `maxBytes` UTF-8 bytes without splitting a character.
+ *
+ * This lives beside `validateAgentClaim` because it encodes the SAME rule the
+ * contract validator enforces: `maxLength` is measured in UTF-8 bytes
+ * (`schema.mjs` uses `Buffer.byteLength`), so every runtime bound that produces
+ * a value destined for a contract MUST be byte-budgeted.
+ *
+ * Proven defect (M10/T2-R15): the guard truncated `payload.output` at 16384
+ * CHARACTERS and `payload.agent_self_validation` at 4096 characters before
+ * calling `validateAgentClaim`. For Vietnamese output (2 bytes/char) the guard's
+ * own truncation produced a value its own contract then rejected — measured on
+ * the real validator:
+ *   output = 16384 "á" -> 32768 bytes -> SCHEMA_VALIDATION_FAILED
+ *   output = 12000 "á" -> 24000 bytes -> SCHEMA_VALIDATION_FAILED
+ *   agent_self_validation = 4096 "á" -> 8192 bytes -> SCHEMA_VALIDATION_FAILED
+ * while the byte-exact limits passed. A legitimate specialist report was
+ * therefore rejected with no recovery, because the same character slice runs on
+ * every retry. This function previously existed only as a private copy inside
+ * the plugin entrypoint; it is now the single shared definition so the rule
+ * cannot drift again.
+ */
+export function truncateUtf8(value, maxBytes) {
+  const text = String(value);
+  if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
+  // Walk code points so a surrogate pair is never cut in half.
+  let bytes = 0;
+  let result = "";
+  for (const character of text) {
+    const size = Buffer.byteLength(character, "utf8");
+    if (bytes + size > maxBytes) break;
+    bytes += size;
+    result += character;
+  }
+  return result;
+}
+
 export function validateAgentClaim(payload) {
   validateContract("agent-result-payload", payload);
   const inspectText = (value) => {

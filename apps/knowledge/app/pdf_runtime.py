@@ -22,6 +22,9 @@ CHILD_KILL_REAP_SECONDS = 5
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_RESPONSE_BYTES = 64 * 1024 * 1024
 MAX_STDERR_BYTES = 1024 * 1024
+# R24: how much child stderr is worth carrying into an operator-facing
+# message. Bounded so a chatty child cannot inflate a stored error record.
+_CHILD_DETAIL_LIMIT = 512
 SAFE_CHILD_ERROR_CODES = {
     "PDF_DOCUMENT_INVALID",
     "PDF_DOCUMENT_ENCRYPTED",
@@ -39,9 +42,14 @@ SAFE_CHILD_ERROR_CODES = {
 
 
 class PdfRuntimeError(RuntimeError):
-    def __init__(self, code: str) -> None:
-        super().__init__(code)
+    def __init__(self, code: str, detail: str | None = None) -> None:
+        # R24: `code` is the stable value every caller switches on and is
+        # unchanged. `detail` is operator-facing diagnosis only; it is bounded
+        # and sanitised so it can never carry an unbounded child string into a
+        # log line or a stored error record.
+        super().__init__(code if detail is None else f"{code}: {detail}")
         self.code = code
+        self.detail = detail
 
 
 def load_pdf_runtime_manifest(path: Path) -> Mapping[str, Any]:
@@ -124,6 +132,7 @@ def verify_runtime_probe(
 
 
 @dataclass(frozen=True)
+
 class PdfRuntimeSettings:
     python: Path
     module: str
@@ -249,7 +258,27 @@ class PdfRuntimeClient:
             await process.stdin.drain()
             process.stdin.close()
             stdout_task = asyncio.create_task(_read_capped(process.stdout, MAX_RESPONSE_BYTES))
-            stderr_task = asyncio.create_task(_read_capped(process.stderr, MAX_STDERR_BYTES))
+            # M10/T2-R24: stderr is drained, not capped-and-aborted.
+            #
+            # The cap existed only to bound memory, but exceeding it raised
+            # _OutputCapExceeded, which terminated the child and reported
+            # PDF_RUNTIME_OUTPUT_LIMIT -- even though the parent's own
+            # MAX_RESPONSE_BYTES had not been touched and the response was
+            # about to be perfectly valid. The stderr bytes were discarded at
+            # the call site anyway, so the parent destroyed a healthy
+            # invocation on the strength of data it then threw away.
+            #
+            # Proven by execution against the real client: a child that
+            # returned SUCCESS for 7 pages was killed when ~1.8 MiB of
+            # per-page torch/numpy UserWarning text preceded it on stderr.
+            #
+            # Reading to EOF while retaining only the first MAX_STDERR_BYTES
+            # keeps the memory bound AND keeps the pipe drained so the child
+            # can never block on a full stderr buffer. The overall deadline
+            # still bounds a child that spews indefinitely.
+            stderr_task = asyncio.create_task(
+                _read_capped(process.stderr, MAX_STDERR_BYTES, abort_on_overflow=False)
+            )
             try:
                 try:
                     stdout, _ = await asyncio.wait_for(
@@ -274,7 +303,16 @@ class PdfRuntimeClient:
                         task.cancel()
                 await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
             if process.returncode != 0:
-                raise PdfRuntimeError("PDF_RUNTIME_FAILED")
+                # R24: carry why the child died, not just that it did.
+                stderr_bytes = b""
+                if stderr_task.done() and not stderr_task.cancelled():
+                    carried = stderr_task.exception()
+                    if carried is None:
+                        stderr_bytes = stderr_task.result()
+                raise PdfRuntimeError(
+                    "PDF_RUNTIME_FAILED",
+                    _child_failure_detail(process.returncode, stderr_bytes),
+                )
             return _validate_response(stdout, request)
         finally:
             if process.returncode is None:
@@ -285,16 +323,56 @@ class _OutputCapExceeded(RuntimeError):
     pass
 
 
-async def _read_capped(reader: asyncio.StreamReader, cap: int) -> bytes:
+async def _read_capped(
+    reader: asyncio.StreamReader, cap: int, *, abort_on_overflow: bool = True
+) -> bytes:
+    """Read to EOF, retaining at most `cap` bytes.
+
+    With `abort_on_overflow` the overflow is fatal, which is correct for the
+    response stream: it is the payload, and exceeding its cap means the child
+    is not producing output this parent can use. Without it the reader keeps
+    draining but stops retaining, which is correct for a diagnostic stream
+    whose contents are discarded anyway.
+    """
     chunks: list[bytes] = []
     total = 0
+    retained = 0
     while block := await reader.read(65536):
         total += len(block)
-        if total > cap:
+        if abort_on_overflow and total > cap:
             raise _OutputCapExceeded
-        chunks.append(block)
+        # R24: retain exactly the first `cap` bytes, slicing the block that
+        # straddles the limit. Stopping only once a WHOLE block had pushed the
+        # total over the cap retained nothing at all whenever a single block was
+        # larger than the cap, which made the retained excerpt useless for
+        # diagnosis on exactly the streams most likely to overflow.
+        if retained < cap:
+            keep = block[: cap - retained]
+            chunks.append(keep)
+            retained += len(keep)
     return b"".join(chunks)
 
+
+def _child_failure_detail(returncode: int | None, stderr: bytes) -> str | None:
+    """A bounded, single-line summary of how a child died.
+
+    R24: the exit code and the stderr text were both in hand and both
+    discarded, so an OOM kill (exit -9) and a missing model artifact
+    (exit 1) produced byte-identical, unattributable `PDF_RUNTIME_FAILED`.
+    The module logs nothing at all, so this string was the only diagnostic
+    that could ever have reached the operator.
+    """
+    parts: list[str] = []
+    if returncode is not None:
+        parts.append(f"exit={returncode}")
+    tail = stderr.decode("utf-8", errors="replace").strip()
+    if tail:
+        if len(tail) > _CHILD_DETAIL_LIMIT:
+            tail = tail[-_CHILD_DETAIL_LIMIT:]
+        parts.append("stderr=" + " ".join(tail.split()))
+    if not parts:
+        return None
+    return "; ".join(parts)[:_CHILD_DETAIL_LIMIT]
 
 async def _terminate_child_group(process: asyncio.subprocess.Process) -> None:
     if process.returncode is None:
@@ -344,7 +422,32 @@ def _validate_response(raw: bytes, request: Mapping[str, Any]) -> Mapping[str, A
         response = json.loads(decoded)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise PdfRuntimeError("PDF_RUNTIME_OUTPUT_INVALID") from error
-    if _canonical_protocol_bytes(response) != raw:
+    # M10/T2-R24: this byte-exactness round trip was OUTSIDE the try above,
+    # so it could raise something that is not a PdfRuntimeError.
+    #
+    # json.loads accepts the non-standard NaN / Infinity / -Infinity literals
+    # and out-of-range exponents such as 1e400 as ordinary Python floats,
+    # without raising. Those then reach the re-encode below, whose
+    # allow_nan=False raises ValueError, and a lone surrogate raises
+    # UnicodeEncodeError from .encode("utf-8"). PdfRuntimeError derives from
+    # RuntimeError, not ValueError, so neither was converted.
+    #
+    # Proven by execution: a child emitting {"bbox": [NaN, ...]},
+    # {"bbox": [Infinity, ...]}, {"page_count": 1e400} or "\\ud800" each
+    # escaped _validate_response as ValueError / UnicodeEncodeError.
+    #
+    # The consequence differed by call site, which is why this matters: in
+    # the preflight path pdf_pipeline catches only PdfRuntimeError, so the
+    # ValueError escaped build() entirely and surfaced upstream as an
+    # unattributed DOCUMENT_INDEXING_FAILURE; in the batch path the blanket
+    # except did catch it but reported a generic PDF_RUNTIME_FAILED, hiding
+    # the fact that the child had violated the protocol. Either way a
+    # protocol violation was not reported as one.
+    try:
+        canonical = _canonical_protocol_bytes(response)
+    except (ValueError, TypeError, UnicodeEncodeError) as error:
+        raise PdfRuntimeError("PDF_RUNTIME_OUTPUT_INVALID") from error
+    if canonical != raw:
         raise PdfRuntimeError("PDF_RUNTIME_OUTPUT_INVALID")
     if not isinstance(response, dict) or response.get("protocol_version") != PROTOCOL_VERSION:
         raise PdfRuntimeError("PDF_RUNTIME_PROTOCOL_MISMATCH")

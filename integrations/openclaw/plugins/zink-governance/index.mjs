@@ -40,7 +40,10 @@ import {
   GOVERNED_SKILL_NAMESPACE_CATALOG,
   AGENT_SPAWN_POLICY,
 } from "../../lib/policy.mjs";
-import { sanitizeDelegationText } from "../../topology/lib/runtime.mjs";
+import {
+  sanitizeDelegationText,
+  truncateUtf8 as sharedTruncateUtf8,
+} from "../../topology/lib/runtime.mjs";
 import {
   registerNativeGuard,
   recordNativeQuota,
@@ -1554,8 +1557,13 @@ export function handleDiscordAction({
   }
 
   // 4. Sanitize inputs and enforce bounds on feedback/reason (G10)
+  // M10/T2-R14: byte-budgeted like its three siblings below. This field was
+  // still on a character slice, so ~1400 multi-byte characters (~4200 UTF-8
+  // bytes) passed `.slice(0, 2000)` untouched and were then rejected by
+  // `ledger-event.schema.json`'s `maxLength: 4096`, which schema.mjs measures in
+  // bytes — the write failed and the task could not be rejected at all.
   const safeReason = data.reason
-    ? String(data.reason).slice(0, 2000)
+    ? truncateUtf8(String(data.reason), 2000)
     : "USER_REJECTED";
   // Bounds are enforced in UTF-8 BYTES by the canonical contract validator
   // (schema.mjs uses Buffer.byteLength for maxLength), so a character-count
@@ -2837,20 +2845,15 @@ function normalizeSemanticContractStatus(value) {
  * runtime bound must be byte-budgeted: a character-count slice can emit a value
  * the contract then rejects, turning a legitimate user message into an
  * unwritable event.
+ *
+ * M10/T2-R15: the implementation now lives in `topology/lib/runtime.mjs` and is
+ * imported. A second, identical private copy here is exactly how the rule
+ * drifted in the first place — the guard kept character-counting `output`,
+ * `agent_self_validation`, `assumptions` and `limitations` while this file was
+ * byte-budgeting its own fields.
  */
 function truncateUtf8(value, maxBytes) {
-  const text = String(value);
-  if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
-  // Walk code points so a surrogate pair is never cut in half.
-  let bytes = 0;
-  let result = "";
-  for (const character of text) {
-    const size = Buffer.byteLength(character, "utf8");
-    if (bytes + size > maxBytes) break;
-    bytes += size;
-    result += character;
-  }
-  return result;
+  return sharedTruncateUtf8(value, maxBytes);
 }
 
 // O20: Schema-only capabilities taxonomy
@@ -4917,6 +4920,121 @@ export default {
      * approval can retry the notification without ever creating a second
      * execution.
      */
+    /**
+     * M10/T2-R17 — one owner-facing label per action.
+     *
+     * The button and text paths each carried their own copy and they had
+     * drifted: the button copy enumerated five actions with a real REJECT-RESULT
+     * fallback, while the text copy had four and let its DEFAULT mean ACCEPT.
+     * That default is currently safe — the text path can only ever produce
+     * APPROVE / REJECT_APPROVAL / REQUEST_REVISION_APPROVAL / ACCEPT_RESULT — but
+     * it is a trap: any future text verb would be silently reported to the owner
+     * as "nghiệm thu (ACCEPT)". One explicit mapping removes the ambiguity, and
+     * an unknown action is reported as unknown rather than as an approval.
+     */
+    function describeOwnerAction(normAction) {
+      switch (normAction) {
+        case ACTIONS.APPROVE:
+          return "phê duyệt (APPROVE)";
+        case ACTIONS.REJECT_APPROVAL:
+          return "từ chối (REJECT)";
+        case ACTIONS.REQUEST_REVISION_APPROVAL:
+          return "yêu cầu sửa đổi (REQUEST REVISION)";
+        case ACTIONS.ACCEPT_RESULT:
+          return "nghiệm thu (ACCEPT)";
+        case ACTIONS.REJECT_RESULT:
+          return "từ chối kết quả (REJECT)";
+        default:
+          return "hành động không xác định";
+      }
+    }
+
+    /**
+     * M10/T2-R16 — the ONE post-decision effect for an owner approval, shared by
+     * the button and text paths.
+     *
+     * It existed as two near-identical copies that had to stay in sync by hand,
+     * and they did not: the text copy awaited a cosmetic send before dispatching
+     * (R14) and the button copy awaited an unguarded ack (R15) — the same
+     * divergence, found twice. One copy removes the cause, so a future change
+     * cannot be applied to one path and forgotten in the other.
+     */
+    function applyOwnerDecisionEffect({
+      api,
+      config,
+      paths,
+      normAction,
+      taskId,
+      userPrincipalRef,
+      userConfirmationRef,
+      threadId,
+    }) {
+      if (normAction === ACTIONS.APPROVE) {
+        executeApprovedTask({
+          taskId,
+          paths,
+          config,
+          api,
+          originThreadId: threadId,
+        }).catch((err) => {
+          api.logger?.error?.(
+            `[zink-governance] executeApprovedTask async error: ${err?.message}`,
+          );
+        });
+        return;
+      }
+      if (normAction !== ACTIONS.ACCEPT_RESULT) return;
+
+      // M7-012: complete only from the verified owner principal, bound to the
+      // current authoritative result digest. The caller has already proven the
+      // sender is the owner.
+      let queueCompletionRecorded = false;
+      try {
+        defaultQueueManager.completeTask({
+          taskId,
+          userConfirmationRef,
+          userPrincipalRef,
+          resultDigest: defaultQueueManager.getTask(taskId)?.resultDigest,
+        });
+        queueCompletionRecorded = true;
+      } catch (qErr) {
+        // This queue write is the only thing that advances queue state, so its
+        // failure must not be followed by a public success notice. The flag is
+        // already false, so only the error is recorded here.
+        api.logger?.error?.(
+          `[zink-governance] completeTask FAILED (queue not advanced): ${qErr?.message}`,
+        );
+      }
+
+      const officeChannelId = resolveDiscordDestination(
+        config,
+        "discordOfficeChannelId",
+        "officeChannelId",
+      );
+      const resultsForumId = resolveDiscordDestination(
+        config,
+        "discordResultsForumId",
+        "resultsChannelId",
+      );
+      // Both destinations must be configured: the notice names the results
+      // forum, so posting with an unresolved forum renders a dangling mention
+      // into an undesignated channel.
+      if (officeChannelId && resultsForumId && queueCompletionRecorded) {
+        sendNativePayload({
+          api,
+          to: officeChannelId,
+          accountId: "main",
+          payload: {
+            text: `🎉 **Chúc mừng!** Anh Zink đã chính thức nghiệm thu kết quả tác vụ \`${taskId.slice(0, 8)}\` tại <#${resultsForumId}>. Tác vụ đã hoàn tất xuất sắc và được lưu trữ an toàn trong sổ cái governance. Quản Lý xin cảm ơn anh Zink!`,
+          },
+        }).catch((deliveryErr) => {
+          api.logger?.warn?.(
+            `[zink-governance] discord delivery failed (office-completion-notice): ${deliveryErr?.message}`,
+          );
+        });
+      }
+    }
+
     async function executeApprovedTask({
       taskId,
       paths,
@@ -5255,12 +5373,30 @@ export default {
         // must pass through full run-admission governance — the previous local
         // copy waved it through at admission while the end-of-run path
         // correctly classified it as governed.
+        //
+        // M10/T2-R14: `ownedByLedger` was hardcoded `false` here, so the ledger
+        // ownership test this comment relies on was never actually evaluated —
+        // the admission seam and the end-of-run seam classified the same session
+        // differently by construction. It now answers the real question, but the
+        // snapshot is read ONLY when the cheap preconditions for the internal
+        // verdict already hold, so the ordinary governed path pays nothing.
+        const cheapInternalShape =
+          !context.runId && !context.currentMessageId && !context.message;
+        const ownedByLedger = cheapInternalShape
+          ? Boolean(
+              findSession(
+                readSnapshot(paths),
+                context.sessionKey,
+                context.runId,
+              ),
+            )
+          : false;
         if (
           classifyInternalRunEnd({
             agentId: context.agentId,
             sessionKey: context.sessionKey,
             runId: context.runId,
-            ownedByLedger: false,
+            ownedByLedger,
             hasMessageIdentity:
               Boolean(context.currentMessageId) || Boolean(context.message),
           }).isInternal
@@ -7222,7 +7358,15 @@ export default {
               ctx.interaction?.senderId ||
               ctx.interaction?.user?.id ||
               ctx.interaction?.member?.user?.id;
-            if (senderSnowflake !== ownerId) {
+            // M10/T2-R14: guard the unresolved-owner case explicitly. Every other
+            // owner gate in this file already writes `!ownerId || ...`
+            // (908, 1350, 426-429); these two compared the bare values, and
+            // `undefined !== undefined` is false, so a malformed
+            // `ownerDiscordId` combined with an event carrying no sender field
+            // would have passed the owner check. `resolveOwnerDiscordId` returns
+            // undefined for any id that is not 17-19 digits, while the config
+            // gate admits 20-digit ids, so that combination is reachable.
+            if (!ownerId || senderSnowflake !== ownerId) {
               const unauthMsg =
                 "⛔ Bạn không có quyền phê duyệt kế hoạch này. Chỉ User/Owner mới có thẩm quyền.";
               if (typeof ctx.respond?.followUp === "function") {
@@ -7293,32 +7437,32 @@ export default {
             });
 
             if (res.allowed) {
-              const actionLabel =
-                normAction === ACTIONS.APPROVE
-                  ? "phê duyệt (APPROVE)"
-                  : normAction === ACTIONS.REJECT_APPROVAL
-                    ? "từ chối (REJECT)"
-                    : normAction === ACTIONS.REQUEST_REVISION_APPROVAL
-                      ? "yêu cầu sửa đổi (REQUEST REVISION)"
-                      : normAction === ACTIONS.ACCEPT_RESULT
-                        ? "nghiệm thu (ACCEPT)"
-                        : "từ chối kết quả (REJECT)";
+              const actionLabel = describeOwnerAction(normAction);
 
               const confirmText =
                 normAction === ACTIONS.ACCEPT_RESULT
                   ? `🎉 **Đã nghiệm thu kết quả thành công!**\n- **Mã tác vụ:** \`${parsed.taskId}\`\n- **Trạng thái:** \`${res.nextState}\` (Hoàn tất thành công và lưu trữ an toàn trong sổ cái governance)`
                   : `✅ **Đã ghi nhận ${actionLabel} từ anh Zink!**\n- **Mã tác vụ:** \`${parsed.taskId}\`\n- **Trạng thái:** \`${res.nextState}\` (Đã đưa vào hàng đợi thực thi)`;
 
-              if (typeof ctx.respond?.followUp === "function") {
-                await ctx.respond.followUp({
-                  text: confirmText,
-                  ephemeral: false,
-                });
-              } else if (typeof ctx.respond?.reply === "function") {
-                await ctx.respond.reply({
-                  text: confirmText,
-                  ephemeral: false,
-                });
+              // Cosmetic ack, guarded: an expired interaction token (~15 min lifetime) or a
+              // 429 makes `followUp`/`reply` reject, which used to skip the
+              // dispatch below and leave the task approved-but-never-run.
+              try {
+                if (typeof ctx.respond?.followUp === "function") {
+                  await ctx.respond.followUp({
+                    text: confirmText,
+                    ephemeral: false,
+                  });
+                } else if (typeof ctx.respond?.reply === "function") {
+                  await ctx.respond.reply({
+                    text: confirmText,
+                    ephemeral: false,
+                  });
+                }
+              } catch (respondErr) {
+                api.logger?.warn?.(
+                  `[zink-governance] discord interaction ack failed (non-fatal): ${respondErr?.message}`,
+                );
               }
 
               if (threadId) {
@@ -7335,65 +7479,18 @@ export default {
                 });
               }
 
-              // Post-action execution trigger
-              if (normAction === ACTIONS.APPROVE) {
-                executeApprovedTask({
-                  taskId: parsed.taskId,
-                  paths,
-                  config,
-                  api,
-                  originThreadId: threadId,
-                }).catch((err) => {
-                  api.logger?.error?.(
-                    `[zink-governance] executeApprovedTask async error: ${err?.message}`,
-                  );
-                });
-              } else if (normAction === ACTIONS.ACCEPT_RESULT) {
-                try {
-                  // M7-012: complete only from the verified owner principal
-                  // bound to the current authoritative result digest.
-                  // senderSnowflake was verified === ownerId above.
-                  defaultQueueManager.completeTask({
-                    taskId: parsed.taskId,
-                    userConfirmationRef: "user-button-accept",
-                    userPrincipalRef: senderSnowflake,
-                    resultDigest: defaultQueueManager.getTask(parsed.taskId)
-                      ?.resultDigest,
-                  });
-                } catch (qErr) {
-                  api.logger?.warn?.(
-                    `[zink-governance] completeTask warning: ${qErr?.message}`,
-                  );
-                }
-
-                const officeChannelId = resolveDiscordDestination(
-                  config,
-                  "discordOfficeChannelId",
-                  "officeChannelId",
-                );
-                const resultsForumId = resolveDiscordDestination(
-                  config,
-                  "discordResultsForumId",
-                  "resultsChannelId",
-                );
-                // Both destinations must be configured: the notice text names the
-                // results forum, so posting with an unresolved forum would render
-                // a dangling mention into an undesignated channel.
-                if (officeChannelId && resultsForumId) {
-                  sendNativePayload({
-                    api,
-                    to: officeChannelId,
-                    accountId: "main",
-                    payload: {
-                      text: `🎉 **Chúc mừng!** Anh Zink đã chính thức nghiệm thu kết quả tác vụ \`${parsed.taskId.slice(0, 8)}\` tại <#${resultsForumId}>. Tác vụ đã hoàn tất xuất sắc và được lưu trữ an toàn trong sổ cái governance. Quản Lý xin cảm ơn anh Zink!`,
-                    },
-                  }).catch((deliveryErr) => {
-                    api.logger?.warn?.(
-                      `[zink-governance] discord delivery failed (office-completion-notice-button): ${deliveryErr?.message}`,
-                    );
-                  });
-                }
-              }
+              // Post-action execution trigger (R16: shared with the text path, so the two
+              // can no longer drift apart).
+              applyOwnerDecisionEffect({
+                api,
+                config,
+                paths,
+                normAction,
+                taskId: parsed.taskId,
+                userPrincipalRef: senderSnowflake,
+                userConfirmationRef: "user-button-accept",
+                threadId,
+              });
             } else {
               const errMsg = `⚠️ Không thể thực hiện: ${res.reason || "Lỗi xử lý"}`;
               if (typeof ctx.respond?.followUp === "function") {
@@ -7407,10 +7504,19 @@ export default {
               `[zink-governance] interactive callback error: ${intErr?.message}`,
             );
             const errMsg = `⚠️ Đã xảy ra lỗi: ${intErr?.message}`;
-            if (typeof ctx.respond?.followUp === "function") {
-              await ctx.respond.followUp({ text: errMsg, ephemeral: true });
-            } else if (typeof ctx.respond?.reply === "function") {
-              await ctx.respond.reply({ text: errMsg, ephemeral: true });
+            // Guarded: a rejection here escapes the handler entirely, and under
+            // Node's default unhandled-rejection behaviour that terminates the
+            // gateway process.
+            try {
+              if (typeof ctx.respond?.followUp === "function") {
+                await ctx.respond.followUp({ text: errMsg, ephemeral: true });
+              } else if (typeof ctx.respond?.reply === "function") {
+                await ctx.respond.reply({ text: errMsg, ephemeral: true });
+              }
+            } catch (reportErr) {
+              api.logger?.error?.(
+                `[zink-governance] error report to owner also failed: ${reportErr?.message}`,
+              );
             }
           }
         },
@@ -7430,7 +7536,9 @@ export default {
         const actionWord = approveMatch[1].replace(/[ _-]/g, "_");
         const ownerId = resolveOwnerDiscordId(config);
         const senderId = event.senderId || ctx.senderId;
-        if (senderId !== ownerId) return;
+        // M10/T2-R14: `!ownerId ||` — an unresolved owner must never equal an
+        // absent sender. See the button path for the full reasoning.
+        if (!ownerId || senderId !== ownerId) return;
 
         const threadId = event.threadId || ctx.conversationId || ctx.channelId;
         const snapshot = readSnapshot(paths);
@@ -7505,14 +7613,7 @@ export default {
         });
 
         if (res.allowed) {
-          const actionLabel =
-            normAction === ACTIONS.APPROVE
-              ? "phê duyệt (APPROVE)"
-              : normAction === ACTIONS.REJECT_APPROVAL
-                ? "từ chối (REJECT)"
-                : normAction === ACTIONS.REQUEST_REVISION_APPROVAL
-                  ? "yêu cầu sửa đổi (REQUEST REVISION)"
-                  : "nghiệm thu (ACCEPT)";
+          const actionLabel = describeOwnerAction(normAction);
 
           const confirmText =
             normAction === ACTIONS.ACCEPT_RESULT
@@ -7520,73 +7621,35 @@ export default {
               : `✅ **Đã ghi nhận ${actionLabel} từ anh Zink!**\n- **Mã tác vụ:** \`${pendingTask.task_id}\`\n- **Trạng thái:** \`${res.nextState}\` (Đã đưa vào hàng đợi thực thi cho các Specialist)`;
 
           if (threadId) {
-            await sendNativePayload({
+            // The confirmation is cosmetic and must never gate the dispatch
+            // below. It used to be `await`ed here, so a delivery failure
+            // (NATIVE_OUTBOUND_UNAVAILABLE when the host runtime config is
+            // unresolved) skipped `executeApprovedTask` and left the task
+            // approved-but-never-dispatched, unrecoverably. See R15/R16.
+            sendNativePayload({
               api,
               to: threadId,
               threadId,
               accountId: "o1",
               payload: { text: confirmText },
-            });
-          }
-
-          // Post-action execution trigger
-          if (normAction === ACTIONS.APPROVE) {
-            executeApprovedTask({
-              taskId: pendingTask.task_id,
-              paths,
-              config,
-              api,
-              originThreadId: threadId,
-            }).catch((err) => {
-              api.logger?.error?.(
-                `[zink-governance] executeApprovedTask async error: ${err?.message}`,
-              );
-            });
-          } else if (normAction === ACTIONS.ACCEPT_RESULT) {
-            try {
-              // M7-012: senderId was verified === ownerId above; bind the
-              // current authoritative result digest.
-              defaultQueueManager.completeTask({
-                taskId: pendingTask.task_id,
-                userConfirmationRef: "user-text-accept",
-                userPrincipalRef: senderId,
-                resultDigest: defaultQueueManager.getTask(pendingTask.task_id)
-                  ?.resultDigest,
-              });
-            } catch (qErr) {
+            }).catch((deliveryErr) => {
               api.logger?.warn?.(
-                `[zink-governance] completeTask text warning: ${qErr?.message}`,
+                `[zink-governance] discord delivery failed (text-approval-confirm): ${deliveryErr?.message}`,
               );
-            }
-
-            const officeChannelId = resolveDiscordDestination(
-              config,
-              "discordOfficeChannelId",
-              "officeChannelId",
-            );
-            const resultsForumId = resolveDiscordDestination(
-              config,
-              "discordResultsForumId",
-              "resultsChannelId",
-            );
-            // Both destinations must be configured: the notice text names the
-            // results forum, so posting with an unresolved forum would render
-            // a dangling mention into an undesignated channel.
-            if (officeChannelId && resultsForumId) {
-              sendNativePayload({
-                api,
-                to: officeChannelId,
-                accountId: "main",
-                payload: {
-                  text: `🎉 **Chúc mừng!** Anh Zink đã chính thức nghiệm thu kết quả tác vụ \`${pendingTask.task_id.slice(0, 8)}\` tại <#${resultsForumId}>. Tác vụ đã hoàn tất xuất sắc và được lưu trữ an toàn trong sổ cái governance. Quản Lý xin cảm ơn anh Zink!`,
-                },
-              }).catch((deliveryErr) => {
-                api.logger?.warn?.(
-                  `[zink-governance] discord delivery failed (office-completion-notice-text): ${deliveryErr?.message}`,
-                );
-              });
-            }
+            });
           }
+
+          // Post-action execution trigger (R16: shared with the button path).
+          applyOwnerDecisionEffect({
+            api,
+            config,
+            paths,
+            normAction,
+            taskId: pendingTask.task_id,
+            userPrincipalRef: senderId,
+            userConfirmationRef: "user-text-accept",
+            threadId,
+          });
         }
       } catch (mErr) {
         api.logger?.warn?.(

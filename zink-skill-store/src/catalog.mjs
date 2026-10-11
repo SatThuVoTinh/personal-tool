@@ -418,7 +418,7 @@ function validateManifest(manifest, expected, relativePath, errors) {
     );
 }
 
-async function readRegularFile(filePath, relativePath, errors) {
+async function readRegularFile(filePath, relativePath, errors, limits = null) {
   try {
     const info = await lstat(filePath);
     if (!info.isFile() || info.isSymbolicLink()) {
@@ -429,6 +429,19 @@ async function readRegularFile(filePath, relativePath, errors) {
           relativePath,
         ),
       );
+      return null;
+    }
+    // R25: bound the read BEFORE it is allocated.
+    //
+    // The ceilings were only ever checked against `bytes.length` after
+    // readFile had already buffered the whole file, so they bounded nothing
+    // about memory: scanCatalog runs on every discover, getActiveSkill and
+    // syncSkillsToVectorStore, so peak resident size scaled with the size of
+    // whatever was on disk. Above Node's buffer limit the read throws and the
+    // catch relabels it MISSING_REQUIRED_FILE, which points the operator at a
+    // missing file rather than an oversized one.
+    if (limits && info.size > limits.maxBytes) {
+      errors.push(diagnostic(limits.code, limits.message, relativePath));
       return null;
     }
     return await readFile(filePath);
@@ -481,13 +494,26 @@ async function validateVersion(directory, parts, errors, records, count) {
     manifestPath,
     manifestRelative,
     errors,
+    {
+      maxBytes: 65_536,
+      code: "MANIFEST_SIZE_LIMIT_EXCEEDED",
+      message: "manifest.json exceeds 65,536 bytes.",
+    },
   );
   const markdownBytes = await readRegularFile(
     markdownPath,
     markdownRelative,
     errors,
+    {
+      maxBytes: 262_144,
+      code: "MARKDOWN_SIZE_LIMIT_EXCEEDED",
+      message: "SKILL.md exceeds 262,144 bytes.",
+    },
   );
   if (!manifestBytes || !markdownBytes) return;
+  // R25: the pre-read stat is the memory bound; this length check is kept as
+  // a second line of defence, because the file can grow between the stat and
+  // the read and only the bytes actually read can be judged.
   const manifestTooLarge = manifestBytes.length > 65_536;
   const markdownTooLarge = markdownBytes.length > 262_144;
   if (manifestTooLarge)
@@ -1124,6 +1150,19 @@ export async function promoteApprovedSkill({
         `staged record failed validation: ${staged.errors[0]?.code ?? "unknown"}.`,
       );
     }
+    // M10/T2-R22: make the staging directory's own entries durable BEFORE it is
+    // renamed into the canonical location.
+    //
+    // `writeFileAtomic` fsyncs each file's BYTES, and the `fsyncDirectoryBestEffort(parentDir)`
+    // below makes the RENAME itself durable — but neither persists the two
+    // directory entries inside `stagingDir`. So a crash after the rename could
+    // leave a canonical `versionDir` that exists yet is missing `SKILL.md` or
+    // `manifest.json`: a published skill the catalog rejects, and one whose
+    // disappearance is silent because the directory name is present. Reuses the
+    // existing helper; this path already established the parity pattern in
+    // `topology/lib/ledger.mjs`, `lib/queue-manager.mjs` (M7-066),
+    // `lib/decision-ledger.mjs` and `lib/artifact-validator.mjs`.
+    await fsyncDirectoryBestEffort(stagingDir);
     await rename(stagingDir, versionDir);
   } catch (error) {
     await rm(stagingDir, { recursive: true, force: true });

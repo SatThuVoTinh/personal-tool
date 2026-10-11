@@ -54,6 +54,22 @@ export const VETTED_ROOT_NAMESPACES = new Set([
   ...Object.keys(NAMESPACE_ALIAS_MAP),
 ]);
 
+// R25: how many SEGMENT rows one skill can contribute to a search.
+//
+// The search LIMIT is a limit on rows, but the caller asks for skills and the
+// loop deduplicates to skills. With the old `limit * 4`, three long skills at
+// 16 segments each consumed the entire 40-row budget for a request of 10, and
+// seven further qualifying skills never appeared at all - silently, with
+// governed_status SUCCESS and nothing signalling truncation.
+//
+// Derived rather than guessed: the catalog refuses a SKILL.md above 262_144
+// bytes (catalog.mjs, enforced on both write and scan) and the chunker emits
+// at most one segment per MAX_SEGMENT_CONTENT_BYTES = 16_384
+// (vector-sync.mjs). So 262144 / 16384 = 16 is the hard maximum, and a row
+// budget of limit * 16 provably still yields `limit` distinct skills.
+//
+// If either ceiling changes, this must change with it.
+const MAX_SEGMENTS_PER_SKILL_VERSION = Math.ceil(262_144 / (16 * 1024));
 export const MAX_PROPOSAL_CONTENT_BYTES = 128 * 1024; // 128KB
 export const MAX_PROPOSAL_REASON_BYTES = 4 * 1024; // 4KB
 
@@ -81,9 +97,23 @@ export function deriveProposalId({
 function findSkillRecordOnDisk(skillsDir, targetSkillId) {
   if (!fs.existsSync(skillsDir)) return null;
   const targetSlug = targetSkillId.split("/").pop();
+  // R25: a qualified id must be matched WHOLE. Matching on the bare last
+  // segment let two namespaces that share a capability slug collide, and
+  // `fullId.endsWith(targetSkillId)` matched any id by suffix.
+  //
+  // Proven by execution against the real adapter and a real catalog holding
+  // both automation/data-clean and research/data-clean: a read of
+  // `research/data-clean` returned AUTOMATION's SKILL.md
+  // ("rm -rf everything") while the response still echoed
+  // skill_id "research/data-clean" and governed_status SUCCESS.
+  const qualified = targetSkillId.includes("/");
 
   function walk(dir) {
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    // Sorted so a tree with any residual duplicate resolves deterministically
+    // rather than by filesystem enumeration order.
+    const entries = fs
+      .readdirSync(dir, { withFileTypes: true })
+      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     for (const ent of entries) {
       if (ent.isDirectory()) {
         const full = path.join(dir, ent.name);
@@ -98,12 +128,10 @@ function findSkillRecordOnDisk(skillsDir, targetSkillId) {
               ? idInfo.namespace.join("/")
               : String(idInfo.namespace || "");
             const fullId = `${ns}/${cap}`;
-            if (
-              fullId === targetSkillId ||
-              cap === targetSkillId ||
-              fullId.endsWith(targetSkillId) ||
-              cap === targetSlug
-            ) {
+            const matches = qualified
+              ? fullId === targetSkillId
+              : cap === targetSkillId || cap === targetSlug;
+            if (matches) {
               return { dir: full, manifest, skillMdPath };
             }
           } catch {}
@@ -117,6 +145,42 @@ function findSkillRecordOnDisk(skillsDir, targetSkillId) {
   return walk(skillsDir);
 }
 
+/**
+ * Read a record's bytes and PROVE they are the approved ones.
+ *
+ * R25: the digest check was gated on `action === "validate"`, so the two
+ * actions that actually feed an agent - read and apply - skipped the only
+ * integrity anchor the store has, and apply then stamped the drifted bytes
+ * `verified-provenance`. Proven by execution: with an unambiguous id and an
+ * in-place edit of SKILL.md, validate threw SKILL_SOURCE_DRIFT while read
+ * and apply both returned SUCCESS serving the drifted content.
+ *
+ * The canonical manifest schema has no `verification` key (catalog.mjs
+ * enforces exactKeys on content and provenance), so the old
+ * `manifest.verification.*` reads were dead, and a missing `content.sha256`
+ * means the record was never validated - which now fails closed rather than
+ * being served unverified.
+ */
+function loadVerifiedRecord(skillsDir, skillId) {
+  const record = findSkillRecordOnDisk(skillsDir, skillId);
+  if (!record) return null;
+  const content = fs.readFileSync(record.skillMdPath, "utf8");
+  const digest = createHash("sha256").update(content, "utf8").digest("hex");
+  const recordedHash = record.manifest?.content?.sha256;
+  if (typeof recordedHash !== "string" || recordedHash.length === 0) {
+    throw new SkillAdapterError(
+      `Skill ${skillId} has no approved content digest in its manifest`,
+      "SKILL_PROVENANCE_UNVERIFIED",
+    );
+  }
+  if (digest !== recordedHash) {
+    throw new SkillAdapterError(
+      `SOURCE_DRIFT_DETECTED: content hash ${digest} does not match manifest ${recordedHash}`,
+      "SKILL_SOURCE_DRIFT",
+    );
+  }
+  return { record, content, digest };
+}
 /**
  * Atomically persists one JSON record: temp file, write, fsync, rename.
  * A partially written file is never treated as a valid proposal.
@@ -180,7 +244,33 @@ export class SkillAdapter {
           let catalog = null;
           try {
             catalog = await scanCatalog(skillsDir);
-          } catch {}
+          } catch (err) {
+            catalog = { records: [], errors: [String(err?.message ?? err)] };
+          }
+
+          // M10/T2-R20: an INVALID catalog must never degrade to the permissive
+          // disk walk below. `scanCatalog` returns `records: []` whenever
+          // `errors` is non-empty (catalog.mjs:732), so ONE tampered skill made
+          // this branch fall through to a walk that re-reads the very same files
+          // with NO content-digest and NO manifest validation, then reported
+          // `governed_status: "SUCCESS"` and listed the tampered skill as
+          // discoverable. Proven by execution: a skill whose SKILL.md no longer
+          // matched its manifest digest still came back discoverable, readable
+          // and applicable, while `validate` correctly raised drift.
+          //
+          // The other two consumers of the same scan already fail closed —
+          // `getActiveSkill` (catalog.mjs:738) and `syncSkillsToVectorStore`
+          // (vector-sync.mjs:358). Discovery now matches them.
+          const catalogErrors = catalog?.errors ?? [];
+          if (catalogErrors.length > 0) {
+            return {
+              action: "discover",
+              namespace: namespace ?? "all",
+              skills: [],
+              governed_status: "FAILED",
+              error_code: "SKILL_CATALOG_INVALID",
+            };
+          }
 
           if (catalog && catalog.records && catalog.records.length > 0) {
             for (const rec of catalog.records) {
@@ -300,28 +390,11 @@ export class SkillAdapter {
         }
 
         let storedSkill = null;
-        const record = findSkillRecordOnDisk(this.skillsRoot, skill_id);
+        // R25: digest verified for EVERY action, not just validate.
+        const verified = loadVerifiedRecord(this.skillsRoot, skill_id);
 
-        if (record) {
-          const content = fs.readFileSync(record.skillMdPath, "utf8");
-          const currentHash = createHash("sha256")
-            .update(content, "utf8")
-            .digest("hex");
-          const recordedHash =
-            record.manifest?.content?.sha256 ||
-            record.manifest?.verification?.content_sha256;
-
-          if (
-            action === "validate" &&
-            recordedHash &&
-            currentHash !== recordedHash
-          ) {
-            throw new SkillAdapterError(
-              `SOURCE_DRIFT_DETECTED: content hash ${currentHash} does not match manifest ${recordedHash}`,
-              "SKILL_SOURCE_DRIFT",
-            );
-          }
-
+        if (verified) {
+          const { record, content, digest } = verified;
           const lifecycle = record.manifest?.lifecycle;
           const lifecycleState = Array.isArray(lifecycle)
             ? lifecycle.at(-1)?.status
@@ -331,8 +404,12 @@ export class SkillAdapter {
             skill_id,
             lifecycle_state: lifecycleState,
             content,
-            signature:
-              record.manifest?.verification?.signature || "verified-provenance",
+            // R25: the digest of the bytes actually served, which is what was
+            // just proved to equal the approved content. The old literal
+            // "verified-provenance" was a constant: manifest.verification
+            // does not exist in the canonical schema, so EVERY skill was
+            // stamped with it, verified or not.
+            signature: `sha256:${digest}`,
             namespace: record.manifest?.identity?.namespace,
             capability: record.manifest?.identity?.capability,
             version: record.manifest?.identity?.version,
@@ -374,10 +451,16 @@ export class SkillAdapter {
         }
 
         let storedSkill = null;
-        const record = findSkillRecordOnDisk(this.skillsRoot, skill_id);
+        // R25: apply served unverified bytes and labelled them
+        // "verified-provenance". It now goes through the same loader, so the
+        // procedure handed to an agent is the one the owner approved. The
+        // loader resolves, reads and verifies in one pass; the separate
+        // findSkillRecordOnDisk call it replaces walked the whole catalog.
+        const verified = loadVerifiedRecord(this.skillsRoot, skill_id);
 
-        if (record) {
-          const lifecycle = record.manifest?.lifecycle;
+        if (verified) {
+          const { record: verifiedRecord, content, digest } = verified;
+          const lifecycle = verifiedRecord.manifest?.lifecycle;
           const status = Array.isArray(lifecycle)
             ? lifecycle.at(-1)?.status
             : null;
@@ -387,14 +470,15 @@ export class SkillAdapter {
               "SKILL_NOT_ACTIVE",
             );
           }
-          const content = fs.readFileSync(record.skillMdPath, "utf8");
 
           storedSkill = {
             skill_id,
             lifecycle_state: "active",
             content,
-            signature:
-              record.manifest?.verification?.signature || "verified-provenance",
+            signature: `sha256:${digest}`,
+            namespace: verifiedRecord.manifest?.identity?.namespace,
+            capability: verifiedRecord.manifest?.identity?.capability,
+            version: verifiedRecord.manifest?.identity?.version,
           };
         }
 
@@ -497,7 +581,10 @@ export class SkillAdapter {
           JOIN skills.catalog_index c ON s.skill_id = c.id
           WHERE ${whereClauses.join(" AND ")}
           ORDER BY s.embedding <=> '${vectorStr}'::vector ASC, s.segment_ordinal ASC, c.capability ASC
-          LIMIT ${boundedLimit * 4};
+          -- R25: the budget is in SEGMENT rows, so it must be scaled by the
+          -- maximum number of segments one skill can contribute, or a few long
+          -- skills can consume the whole budget and starve every other skill.
+          LIMIT ${boundedLimit * MAX_SEGMENTS_PER_SKILL_VERSION};
         `;
 
         const queryResult = await executePostgresQuery(sql, this.options);
@@ -604,7 +691,13 @@ export class SkillAdapter {
           if (seenSkillIds.has(item.skill_id)) continue;
           seenSkillIds.add(item.skill_id);
 
-          // K05: Filter by minimum similarity threshold
+          // K05: Filter by minimum similarity threshold.
+          //
+          // R25: the dedup above is correct only because the rows arrive
+          // ordered by ascending vector distance, so the first row seen for a
+          // skill is that skill's BEST segment. If it were ordered any other
+          // way, claiming the skill id before the threshold test would discard
+          // a skill on the strength of a weaker segment. Pinned by test.
           if (item.score < minScore) continue;
 
           // K11: Include embedding model, version, and input hash provenance

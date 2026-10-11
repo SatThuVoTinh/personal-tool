@@ -77,6 +77,44 @@ export function escapeSqlLiteral(str) {
 }
 
 /**
+ * M10/T2-R21: per-segment content budget.
+ *
+ * `renderEmbeddingEnvelope` enforces a hard 32 KiB ceiling on the WHOLE
+ * envelope (headers + content), and it THROWS above it. This chunker's own
+ * documentation claimed it split "by headings or length bounds", but it had no
+ * length branch at all — it only split on headings. A catalog-valid skill whose
+ * section exceeded the embedding ceiling therefore produced one oversized
+ * segment that could never be embedded, and the next sync failed identically:
+ * proven by execution, a 42,013-byte single-section skill produced 1 segment
+ * and raised `EMBEDDING_INPUT_TOO_LARGE`.
+ *
+ * The budget is 16 KiB — half the ceiling — because the envelope adds variable
+ * header lines (domain, primary topic, subtopic, concept, secondary topics)
+ * whose size is not known here. Measured in BYTES, not characters, matching the
+ * ceiling it has to satisfy.
+ */
+const MAX_SEGMENT_CONTENT_BYTES = 16 * 1024;
+
+/** Split one over-long line into byte-budgeted pieces, never splitting a char. */
+function splitByBytes(line, maxBytes) {
+  const pieces = [];
+  let current = "";
+  let bytes = 0;
+  for (const character of line) {
+    const size = Buffer.byteLength(character, "utf8");
+    if (bytes + size > maxBytes && current.length > 0) {
+      pieces.push(current);
+      current = "";
+      bytes = 0;
+    }
+    current += character;
+    bytes += size;
+  }
+  if (current.length > 0) pieces.push(current);
+  return pieces;
+}
+
+/**
  * Splits skill markdown content into semantic segments by headings or length bounds (L11).
  */
 export function chunkSkillContent(rawContent) {
@@ -88,31 +126,62 @@ export function chunkSkillContent(rawContent) {
   const segments = [];
   let currentHeading = [];
   let currentLines = [];
+  let currentBytes = 0;
   let ordinal = 0;
 
-  for (const line of lines) {
-    const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
-    if (headingMatch) {
-      if (currentLines.length > 0) {
-        segments.push({
-          segment_ordinal: ordinal++,
-          heading_path: [...currentHeading],
-          content: currentLines.join("\n").trim(),
-        });
-        currentLines = [];
-      }
-      currentHeading = [headingMatch[2].trim()];
-    }
-    currentLines.push(line);
-  }
-
-  if (currentLines.length > 0) {
+  const flush = () => {
+    if (currentLines.length === 0) return;
     segments.push({
-      segment_ordinal: ordinal,
-      heading_path: currentHeading,
+      segment_ordinal: ordinal++,
+      heading_path: [...currentHeading],
       content: currentLines.join("\n").trim(),
     });
+    currentLines = [];
+    currentBytes = 0;
+  };
+
+  for (const line of lines) {
+    const lineBytes = Buffer.byteLength(line, "utf8") + 1; // +1 for the newline
+    // R21: a heading always starts a new segment, and a line that would push the
+    // current segment past the budget also ends it, so no single segment can ever
+    // exceed the embedding ceiling.
+    const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
+    if (headingMatch) {
+      flush();
+      currentHeading = [headingMatch[2].trim()];
+      currentLines = [line];
+      currentBytes = lineBytes;
+      continue;
+    }
+    if (
+      currentBytes + lineBytes > MAX_SEGMENT_CONTENT_BYTES &&
+      currentLines.length > 0
+    ) {
+      flush();
+    }
+    if (lineBytes > MAX_SEGMENT_CONTENT_BYTES) {
+      // A single line longer than the whole budget: split it by bytes, and apply
+      // the same flush-BEFORE-push rule as for an ordinary line. Flushing after
+      // each piece instead let two full pieces accumulate (measured 32767 bytes,
+      // exactly twice the budget, which the envelope then rejected).
+      for (const piece of splitByBytes(line, MAX_SEGMENT_CONTENT_BYTES)) {
+        const pieceBytes = Buffer.byteLength(piece, "utf8") + 1;
+        if (
+          currentBytes + pieceBytes > MAX_SEGMENT_CONTENT_BYTES &&
+          currentLines.length > 0
+        ) {
+          flush();
+        }
+        currentLines.push(piece);
+        currentBytes += pieceBytes;
+      }
+      continue;
+    }
+    currentLines.push(line);
+    currentBytes += lineBytes;
   }
+
+  flush();
 
   return segments.length > 0
     ? segments
@@ -385,7 +454,23 @@ export async function syncSkillsToVectorStore(options = {}) {
   // 3. Tombstone synchronization for removed or deprecated skills (K24)
   const activeKeys = activeRecords.map((r) => {
     const id = r.manifest.identity;
-    return `${id.namespace.join("/")}\u0000${id.capability}\u0000${id.version}`;
+    // M10/T2-R20: the composite key joined with U+0000. PostgreSQL `text` cannot
+    // store a NUL byte, so the tombstone statement aborted; and the skill
+    // identity rules forbid control characters in a skill path anyway
+    // (path-safety.mjs rejects /[\0\x01-\x1F\x7F]/). With any ACTIVE skill
+    // present every sync failed here with VECTOR_TOMBSTONE_SYNC_FAILED and
+    // ingestion was never reached.
+    //
+    // The SQL side was independently wrong too: it compared against
+    // `namespace::text || capability || version`, and `namespace::text`
+    // renders a text[] as `{a,b}` with braces and no separators, so the two
+    // sides could never be equal and the predicate would have DEPRECATED every
+    // ACTIVE row. It now uses `array_to_string(namespace,'/')`, which mirrors
+    // `namespace.join("/")`, with the same `|` separators.
+    //
+    // `|` is provably unambiguous: every component is a skill path segment
+    // restricted to /^[a-zA-Z0-9_.-]+$/u, so none of them can contain it.
+    return `${id.namespace.join("/")}|${id.capability}|${id.version}`;
   });
 
   try {
@@ -393,7 +478,7 @@ export async function syncSkillsToVectorStore(options = {}) {
       UPDATE skills.catalog_index
       SET status = 'DEPRECATED', sync_status = 'TOMBSTONED', synced_at = now()
       WHERE status = 'ACTIVE'
-      AND (namespace::text || capability || version) NOT IN (
+      AND (array_to_string(namespace, '/') || '|' || capability || '|' || version) NOT IN (
         SELECT (unnest(ARRAY[${toPostgresArrayLiteral(activeKeys)}]::text[]))
       );
     `;

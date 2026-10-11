@@ -33,6 +33,7 @@ import {
   sanitizeDelegationText,
   validateAgentClaim,
   normalizeAgentOutcome,
+  truncateUtf8,
 } from "./runtime.mjs";
 import { withFileLockSync, lockDirFor } from "../../lib/file-lock.mjs";
 // Spawn topology is a policy decision, so it is read from the one canonical
@@ -801,6 +802,26 @@ export function createGovernanceGuard({
         "UNAUTHORIZED_TARGET",
       );
     }
+    // M10/T2-R14: the spawn-target authorization is asserted HERE, before the
+    // irreversible ledger write below, not only ~120 lines later at the
+    // `AGENT_SPAWN_POLICY` check. The later check is real but too late:
+    // `WORKFLOW_BRIEF_ACTIVATED` had already committed the nodes, and the
+    // reducer pins `brief_revision` to 1 whenever `task.nodes` is empty, so a
+    // brief naming an agent the caller may not spawn (e.g. Main naming
+    // `excel`, while `AGENT_SPAWN_POLICY.main` is `["o1","o2"]`) produced a
+    // task that could never be dispatched and had no revision path out — every
+    // retry re-matched the same node at `node.agent_id === params.agentId` and
+    // was denied `UNAUTHORIZED_TARGET` again. Failing BEFORE the commit turns
+    // an unrecoverable wedge into a plain refusal the caller can correct.
+    //
+    // This is the SAME canonical table the later check uses, so it grants
+    // nothing new; it only moves the verdict ahead of the durable effect.
+    assert(
+      brief.nodes.every((node) =>
+        (AGENT_SPAWN_POLICY[context.agentId] ?? []).includes(node.agent_id),
+      ),
+      "UNAUTHORIZED_TARGET",
+    );
     const nodes = brief.nodes.map((node) => {
       for (const field of ["inputs", "constraints", "validation_criteria"])
         assert(
@@ -981,24 +1002,35 @@ export function createGovernanceGuard({
       if (typeof payload.output !== "string") {
         payload.output = String(payload.output ?? "");
       }
-      if (payload.output.length > 16384) {
-        payload.output = payload.output.slice(0, 16384);
-      }
+      // M10/T2-R15: byte-budgeted, because `agent-result-payload.schema.json` bounds
+      // `output` with `maxLength: 16384` and `schema.mjs` measures it with
+      // `Buffer.byteLength`. This slice counted CHARACTERS, so its own output
+      // failed the validator that runs two lines later — measured: 16384
+      // Vietnamese characters became 32768 bytes and were rejected as
+      // SCHEMA_VALIDATION_FAILED, with no recovery since the same slice repeats
+      // on every retry.
+      payload.output = truncateUtf8(payload.output, 16384);
       payload.output = sanitizeDelegationText(payload.output);
       payload.agent_self_validation = sanitizeDelegationText(
         payload.agent_self_validation,
       );
-      if (payload.agent_self_validation.length > 4096) {
-        payload.agent_self_validation = payload.agent_self_validation.slice(
-          0,
-          4096,
-        );
-      }
+      // M10/T2-R15: byte-budgeted for the same reason as `output` above — the contract
+      // bounds this field at `maxLength: 4096` BYTES. Measured: 4096 Vietnamese
+      // characters became 8192 bytes and were rejected.
+      payload.agent_self_validation = truncateUtf8(
+        payload.agent_self_validation,
+        4096,
+      );
+      // M10/T2-R15: these two were only sanitized and never bounded, while the
+      // contract limits every item to `maxLength: 4096` BYTES and the array to
+      // `maxItems: 16`. An over-long assumption therefore failed the whole
+      // result with no truncation and no recovery. Byte-budgeted here for the
+      // same reason as `output`.
       payload.assumptions = payload.assumptions.map((a) =>
-        sanitizeDelegationText(String(a)),
+        truncateUtf8(sanitizeDelegationText(String(a)), 4096),
       );
       payload.limitations = payload.limitations.map((l) =>
-        sanitizeDelegationText(String(l)),
+        truncateUtf8(sanitizeDelegationText(String(l)), 4096),
       );
 
       validateAgentClaim(payload);

@@ -46,14 +46,16 @@ const HYGIENE_AUTHORITY_SHA256 =
   "aa12540f60da6bcdf809123f0d75c632c6b8a128a88e4395f38785b663f13e17";
 
 /**
- * M10/T2-R12: the current candidate build. Moves from the R9-C build
- * (`42b0cba8…`, now the outgoing predecessor) by emitting the host component
- * wire envelope `occomp:cid=` in buildComponentCustomId /
- * buildSkillComponentCustomId, with a closed length/encoding guard. Deliberately
- * NOT listed (content comparison); the outgoing predecessor is admitted.
+ * M10/T2-R14: the current candidate build. Moves from the R12/R13 build
+ * (`8243a038…`, now an admitted predecessor) by dropping the impossible `auth`
+ * requirement from `validateOpenClawReleaseCompatibility`: R9 removed
+ * auth.profiles/order/cooldowns on purpose and `validateConfig` rejects
+ * unexpected top-level keys, so no config this repository produces could ever
+ * satisfy the old list. Deliberately NOT listed (content comparison); the
+ * outgoing predecessor is admitted.
  */
 const CANDIDATE_AUTHORITY_SHA256 =
-  "8243a0385a51fc0f63d918cbb5d2a4998af92fa0c409a890b96ba06fb7670f27";
+  "71eee819e9a9ce5d3cc927352ae392c9a57e625fa4618273c7cef9a04c383eb8";
 
 /** The outgoing candidate this deployment replaces; now listed. */
 const R9C_AUTHORITY_SHA256 =

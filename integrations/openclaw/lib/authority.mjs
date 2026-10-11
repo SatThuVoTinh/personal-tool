@@ -1300,13 +1300,23 @@ export function validateOpenClawReleaseCompatibility(
     "update",
     "gateway",
     "agents",
-    "auth",
     "tools",
     "commands",
     "secrets",
     "plugins",
     "bindings",
     "channels",
+    // M10/T2-R14: `auth` was listed here but is NOT a real requirement, and the
+    // canonical generator deliberately omits it — M10/T2-R9 removed
+    // auth.profiles/order/cooldowns because there is one router credential and
+    // the router performs its own upstream rotation, so an OpenClaw-side order
+    // would be a second rotation policy that cannot take effect. The validator
+    // therefore could never pass on a config this repository produces: its own
+    // generator omits `auth`, and `validateConfig` rejects unexpected top-level
+    // keys so `auth` could not be added to satisfy it. The only test that
+    // exercised it hand-built a config containing `auth: {}`, which is why the
+    // contradiction was invisible. Requiring a key that must NOT exist is a
+    // landmine for whoever wires this validator in later.
   ];
   for (const key of REQUIRED_TOP_LEVEL_KEYS) {
     if (!Object.hasOwn(config, key)) {

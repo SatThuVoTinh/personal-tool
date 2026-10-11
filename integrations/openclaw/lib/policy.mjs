@@ -391,7 +391,18 @@ export function evaluateCapabilityAccess(
     return { allowed: false, level: "L0", reason: "UNKNOWN_AGENT" };
   }
 
-  if (ZINK_TOOLS_ACCESS_MATRIX[agentId]?.[capability]) {
+  // M10/T2-R14: own-property test, not truthiness. `ZINK_TOOLS_ACCESS_MATRIX`
+  // rows are plain objects, so a truthiness lookup also resolves INHERITED keys:
+  // proven by calling this function, `evaluateCapabilityAccess("main",
+  // "constructor", null, "execute")` returned `{allowed:true, reason:
+  // "AUTHORIZED"}` — and the same for `toString`, `valueOf`, `hasOwnProperty`,
+  // `isPrototypeOf`, `propertyIsEnumerable`, `toLocaleString` — while a real
+  // unknown capability correctly returned `UNKNOWN_CAPABILITY`. Every inherited
+  // key then fell through to `return { allowed: true }` because none of them
+  // equals "L0", "delegate" or "L2". `authority.mjs` already asks the same
+  // membership question with `Object.hasOwn`, so this was the same rule encoded
+  // twice with different logic.
+  if (Object.hasOwn(ZINK_TOOLS_ACCESS_MATRIX[agentId] ?? {}, capability)) {
     const level = ZINK_TOOLS_ACCESS_MATRIX[agentId][capability];
     if (level === "L0") {
       return {
@@ -883,6 +894,29 @@ export function buildConfig({ stateDir, identifiers }) {
           api: "openai-completions",
           auth: "api-key",
           apiKey: resolveRouterApiKey(),
+          // M10/T2-R13 (owner decision 2026-10-09): per-attempt ceiling for one
+          // model request. Proven live 2026-10-09 12:04:46 — a `3.8-flash` turn
+          // started 09:28:31 was still waiting on the router 9,374,777 ms
+          // (2h36m) later and only ended when the host's stuck-session sweeper
+          // aborted it; the owner received nothing for the whole window. The
+          // fetch had NO deadline because every transport call site invokes
+          // `buildGuardedModelFetch(model)` without an explicit `timeoutMs`, so
+          // the only available source is `model.requestTimeoutMs`, which
+          // `applyConfiguredProviderOverrides` derives from THIS key
+          // (`resolveProviderRequestTimeoutMs(providerConfig.timeoutSeconds)`).
+          //
+          // Proven before touching live, per the rule recorded below: a scratch
+          // config carrying `timeoutSeconds: 100` validates `{"valid":true}`
+          // (exit 0) while the same config with `requestTimeoutMs` at provider
+          // level, at model-entry level, or with any unknown key validates
+          // `{"valid":false}` (exit 1). The layer and the key name are both
+          // load-bearing.
+          //
+          // 100s (owner): comfortably above the slowest governed model
+          // observed (3.8-flash max 70.6s) and below the wedged window by 93x,
+          // so a stalled attempt now fails over to the next model in the
+          // owner's chain instead of consuming the whole turn.
+          timeoutSeconds: 100,
           // OpenClaw validates this field as an ARRAY of model descriptors, not
           // as a map. Proven against the installed runtime: an object shape fails
           // with `models.providers.<id>.models: Invalid input: expected array,
@@ -900,12 +934,11 @@ export function buildConfig({ stateDir, identifiers }) {
           // max_completion_tokens=65536, so a declared budget would only invent a
           // number — read 2026-10-08 from /v1/models.
           //
-          // The per-attempt timeout still CANNOT live here: the installed
-          // runtime validates this entry with a STRICT schema
-          // (`Unrecognized key: "requestTimeoutMs"`, gateway refuses to start).
-          // Proven live 2026-10-07 — apply wrote it, gateway rejected the config,
-          // recovery required removing it. Any timeout must be proven on a
-          // scratch config via `openclaw config validate` BEFORE touching live.
+          // The per-attempt timeout is NOT declared per model entry: that entry
+          // schema is STRICT and the gateway refuses to start
+          // (`Unrecognized key`, proven 2026-10-07). The ceiling therefore lives
+          // one level up, on the provider entry, as `timeoutSeconds` — proven
+          // on a scratch config before touching live (see above).
           models: ROUTER_PROVIDER_MODEL_IDS.map((modelId) => ({
             id: modelId,
             name: modelId,

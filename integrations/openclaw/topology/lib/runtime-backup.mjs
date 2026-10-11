@@ -114,10 +114,26 @@ export async function createRuntimeBackup({ stateDir, identifiers }) {
       identifiers,
     });
   }
+  // M10/T2-R22: bound the subprocess in TIME as well as in output size.
+  //
+  // `maxBuffer` caps what git may RETURN; it does nothing about git never
+  // returning. This call sits on the synchronous `configure.mjs --apply` critical
+  // path (`createRuntimeBackup` is invoked from there), so a `git show` blocked on
+  // a slow filesystem or a held index lock would hang the apply indefinitely with
+  // no bound and no error. Every other subprocess on an operator path in this
+  // repository sets an explicit timeout — `operator-preflight.mjs` uses 30s,
+  // `operator-apply.mjs` 60s, `native-patch-probe.mjs` 10s — and `verify.mjs`
+  // enforces both a timeout and an output cap via `execFileBounded`. Reading a
+  // single blob is normally instant, so 30s is generous; exceeding it is a real
+  // fault worth surfacing rather than hanging on.
   const source = execFileSync(
     "git",
     ["show", `${T1_SHA}:integrations/openclaw/lib/policy.mjs`],
-    { maxBuffer: 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] },
+    {
+      maxBuffer: 1024 * 1024,
+      timeout: 30_000,
+      stdio: ["ignore", "pipe", "pipe"],
+    },
   );
   if (digest(source) !== T1_POLICY_SHA256)
     throw new Error("T1_BASELINE_SOURCE_MISMATCH");

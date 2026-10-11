@@ -15,6 +15,25 @@ from tokenizers import Encoding, Tokenizer
 
 TARGET_CHARS = 1500
 MAX_CHARS = 2000
+# M10/T2-R23: memory bound for ONE source read.
+
+# MAX_CHARS bounds a single SEGMENT, so it bounds nothing about how much is
+# read. Before this, candidate.read_bytes() had no bound at all, and the file
+# was materialised three times over (raw bytes, decoded str, splitlines)
+# before any limit was evaluated. A pathological note - a pasted dataset, a
+# base64 export, or a OneDrive placeholder that has not hydrated - could
+# exhaust the service process. The MemoryError escaped _validate_source
+# (no except) and scan_vault (no except) and landed in index_lifecycle's
+# blanket handler as INDEXING_UNEXPECTED_FAILURE with NO source path, so one
+# file aborted the whole run and the operator could not tell which one.
+
+# This is the markdown twin of the bound pdf_foundation already applies to
+# sidecars and pdf_pipeline already applies to PDFs. 16 MiB is deliberately far
+# above any hand-written note (the sidecar ceiling is 64 KiB) while still
+# being a real memory bound. The vault is not reachable from this machine, so
+# the ceiling could not be measured against real content; it is a single
+# constant and is the one judgement call in this change.
+MAX_MARKDOWN_SOURCE_BYTES = 16 * 1024 * 1024
 QUERY_MAX_TOKENS = 256
 PAIR_MAX_TOKENS = 1024
 PAIR_SPECIAL_TOKENS_EXPECTED = 4
@@ -71,6 +90,7 @@ ERROR_PRECEDENCE = {
             "SOURCE_PATH_OUTSIDE_VAULT",
             "SOURCE_LINK_NOT_ALLOWED",
             "SOURCE_READ_FAILED",
+            "SOURCE_TOO_LARGE",
             "UNSUPPORTED_TOPIC",
             "INVALID_UTF8",
             "MALFORMED_FRONTMATTER",
@@ -340,6 +360,19 @@ class MarkdownVaultScanner:
         except (OSError, RuntimeError, ValueError):
             return None, [self._error(source_path, "SOURCE_PATH_OUTSIDE_VAULT")]
 
+        if candidate.stat().st_size > MAX_MARKDOWN_SOURCE_BYTES:
+            return None, [self._error(source_path, "SOURCE_TOO_LARGE")]
+
+        # M10/T2-R23: bound the read BEFORE allocating, not after.
+
+        # A pre-read stat is the only bound that actually bounds memory. Checking
+        # len(raw_bytes) afterwards would repeat the defect this fixes, which is
+        # exactly what pdf_foundation documents: the length check used to run after
+        # read_bytes() had already materialised the whole file, so the cap bounded
+        # nothing. Reporting SOURCE_TOO_LARGE rather than letting a MemoryError escape
+        # also attributes the failure: scan_vault returns ok=False on any error, so
+        # the run still stops, but it now stops with the offending path named
+        # instead of an unattributed INDEXING_UNEXPECTED_FAILURE.
         try:
             raw_bytes = candidate.read_bytes()
         except OSError:
@@ -502,7 +535,21 @@ class MarkdownVaultScanner:
                 )
                 continue
 
-            visible, in_comment = self._strip_html_comments(line, in_comment)
+            # M10/T2-R23: inline code is stripped BEFORE HTML comments.
+            #
+            # The order was reversed, so an HTML comment opener sitting inside a backtick
+            # span was consumed as a REAL opener and opened a comment state that never
+            # closed. Proven by execution on the production functions: a note whose third
+            # line was "Start `<!--` marker." lost every remaining line -- body
+            # prose AND its `#supplychain` topic tag -- so the note never indexed, and
+            # because the topic tag is required, the validation error took the whole index
+            # run down with it.
+            #
+            # Fenced blocks are already handled above and `continue`, so this only ever
+            # sees ordinary lines. Stripping code first cannot break a real comment either:
+            # a genuine comment survives, because its opener is outside any code span.
+            without_code = self._strip_inline_code(line)
+            visible, in_comment = self._strip_html_comments(without_code, in_comment)
             atx = _ATX_HEADING.match(visible)
             if atx:
                 flush_paragraph()
@@ -529,8 +576,10 @@ class MarkdownVaultScanner:
                 index += 2
                 continue
 
-            without_code = self._strip_inline_code(visible)
-            tag_matches = self._extract_tags(without_code)
+            # R23: tag extraction reads `visible`, the fully stripped line.
+            # `without_code` is bound before the comment strip, so it still
+            # carries comment text and would re-admit it as tags.
+            tag_matches = self._extract_tags(visible)
             line_tags = [raw_tag for raw_tag, _, _ in tag_matches]
             for raw_tag in line_tags:
                 if raw_tag not in seen_raw_tags:
@@ -539,9 +588,9 @@ class MarkdownVaultScanner:
             tagless_parts: list[str] = []
             tag_cursor = 0
             for _, tag_start, tag_end in tag_matches:
-                tagless_parts.append(without_code[tag_cursor:tag_start])
+                tagless_parts.append(visible[tag_cursor:tag_start])
                 tag_cursor = tag_end
-            tagless_parts.append(without_code[tag_cursor:])
+            tagless_parts.append(visible[tag_cursor:])
             tagless = "".join(tagless_parts)
             if line_tags and not tagless.strip():
                 flush_paragraph()
@@ -859,6 +908,7 @@ class MarkdownVaultScanner:
             "SOURCE_PATH_OUTSIDE_VAULT": "The source path escapes the configured Vault root.",
             "SOURCE_LINK_NOT_ALLOWED": "Symbolic and link-like source paths are not allowed.",
             "SOURCE_READ_FAILED": "The source could not be read.",
+            "SOURCE_TOO_LARGE": "The source exceeds the maximum indexable size.",
             "UNSUPPORTED_TOPIC": "The source is not under a canonical topic folder.",
             "INVALID_UTF8": "The source is not valid UTF-8.",
             "MALFORMED_FRONTMATTER": "The source frontmatter is malformed.",

@@ -108,13 +108,15 @@ assert.ok(
 const R10_ENTRYPOINT_SHA256 =
   "f4ed9d9c54ccf486a30425b98a549cab5aebbbe8e9ee7f2d32bfc6795598c4a3";
 /**
- * M10/T2-R12: the CURRENT entrypoint. Differs from the R9-C build
- * (`aea6bf95…`, now the outgoing predecessor) by suppressing governance machine
- * payloads from the user-visible reply. Accepted by content comparison and
- * deliberately NOT listed.
+ * M10/T2-R14: the CURRENT entrypoint. The R14 review fixes changed packaged
+ * bytes (text-approval dispatch ordering, queue-completion success reporting,
+ * owner-gate guards, the internal-run classifier's real ledger-ownership flag,
+ * byte-budgeted `safeReason`). The outgoing R12/R13 entrypoint
+ * (`61680010…`) is now an admitted predecessor in BOTH per-mode lists.
+ * Accepted by content comparison and deliberately NOT listed.
  */
-const R12_ENTRYPOINT_SHA256 =
-  "61680010520bbe3ca57b289cf9af9fb6ea79c8f79e33e49e95d5dec6de60cef3";
+const R14_ENTRYPOINT_SHA256 =
+  "230f3c79d0a35c2261129ddc0048ad4f0ae4fc6d86a5c49e444594a446bd2982";
 /** The outgoing entrypoint this deployment replaces; now listed. */
 const R8_OUTGOING_ENTRYPOINT_SHA256 =
   "6a7968b7d456ff6d3f2c5b9d60c7b6046a702603b880093c33b717d9a37c13b1";
@@ -499,10 +501,10 @@ test("R13 1: each R7 digest is listed exactly once, under its own path", () => {
 });
 
 test("R13 2: the current build digests are NOT listed anywhere", () => {
-  // M10/T2-R12: the entrypoint pin moved to R12_ENTRYPOINT_SHA256, so the R9-A
+  // M10/T2-R12: the entrypoint pin moved to R14_ENTRYPOINT_SHA256, so the R9-A
   // digest is now the outgoing predecessor and IS listed on purpose. Only the
   // digests of the CURRENT build must be absent from the source.
-  for (const digest of [R12_NATIVE_BOUNDARY_SHA256, R12_ENTRYPOINT_SHA256]) {
+  for (const digest of [R12_NATIVE_BOUNDARY_SHA256, R14_ENTRYPOINT_SHA256]) {
     assert.equal(
       CONFIGURE_SOURCE.includes(digest),
       false,
@@ -774,7 +776,7 @@ test("R13 C2: the current-build versions remain accepted", async () => {
     );
     assert.equal(
       sha256(readFileSync(p.asset("index.mjs"), "utf8")),
-      R12_ENTRYPOINT_SHA256,
+      R14_ENTRYPOINT_SHA256,
     );
   } finally {
     rmSync(p.root, { recursive: true, force: true });

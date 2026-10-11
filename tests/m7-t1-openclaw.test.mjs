@@ -482,6 +482,12 @@ test("M7/T1 builds the exact minimal-tool, zero-command foundation", () => {
     api: "openai-completions",
     auth: "api-key",
     apiKey: ROUTER_TEST_API_KEY,
+    // M10/T2-R13 (owner decision 2026-10-09): the per-attempt ceiling. Proven
+    // live: without it one request waited 9,374,777 ms and the owner received
+    // nothing. `timeoutSeconds` on the PROVIDER is the only layer the installed
+    // schema admits — `requestTimeoutMs` fails validation at provider level and
+    // at model-entry level alike (both verified `valid:false`).
+    timeoutSeconds: 100,
     // OpenClaw requires an ARRAY here; an object shape is rejected by the
     // installed runtime's validator, so this shape is load-bearing, not cosmetic.
     //
@@ -493,11 +499,18 @@ test("M7/T1 builds the exact minimal-tool, zero-command foundation", () => {
     // max_completion_tokens=65536.
     // NOTE: do NOT add requestTimeoutMs here — the entry schema is STRICT and
     // the gateway refuses to start (`Unrecognized key`, proven 2026-10-07).
+    // The attempt ceiling lives on the PROVIDER entry as `timeoutSeconds`.
     models: ROUTER_PROVIDER_MODEL_IDS.map((modelId) => ({
       id: modelId,
       name: modelId,
     })),
   });
+  // M10/T2-R13: the provider carries a per-attempt deadline. Proven live
+  // 2026-10-09: without it one model request waited 9,374,777 ms (2h36m) and
+  // the owner got nothing. The schema admits `timeoutSeconds` on the provider
+  // and rejects `requestTimeoutMs` at BOTH the provider and entry level, so
+  // this key name and this layer are both load-bearing.
+  assert.equal(router.timeoutSeconds, 100);
   // The chain is the owner's exact order, addressed directly, with no combo.
   assert.deepEqual(ROUTER_PROVIDER_MODEL_IDS, [
     "gemini/gemini-3.8-flash",

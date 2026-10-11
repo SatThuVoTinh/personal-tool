@@ -1387,5 +1387,24 @@ export function publishArtifactAtomic({ sourcePath, targetPath }) {
     closeSync(fd);
   }
   renameSync(tempPath, targetPath);
+  // M10/T2-R17: fsync the parent directory after the rename so the rename
+  // itself is durable; otherwise the bytes are safe but the published name can
+  // revert on a crash, and a "published" artifact can disappear. Parity with
+  // `topology/lib/ledger.mjs` and `lib/queue-manager.mjs` (M7-066).
+  try {
+    const directoryFd = openSync(targetDir, "r");
+    try {
+      fsyncSync(directoryFd);
+    } finally {
+      closeSync(directoryFd);
+    }
+  } catch (error) {
+    if (
+      process.platform !== "win32" ||
+      !/^(EPERM|EISDIR|EINVAL|ENOTSUP)$/u.test(error?.code ?? "")
+    ) {
+      throw error;
+    }
+  }
   return { success: true, publishedPath: targetPath, sizeBytes: data.length };
 }
