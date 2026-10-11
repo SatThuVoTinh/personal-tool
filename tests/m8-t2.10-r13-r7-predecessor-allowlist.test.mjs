@@ -126,13 +126,19 @@ const R10_ENTRYPOINT_SHA256 =
 const R14_OUTGOING_ENTRYPOINT_SHA256 =
   "230f3c79d0a35c2261129ddc0048ad4f0ae4fc6d86a5c49e444594a446bd2982";
 /**
- * M11/T1-R1 Phase 2: the CURRENT entrypoint. The owner approval path now
- * requires an explicit `decisionRef` instead of defaulting one, promotes inside
- * the canonical Skill Store writer lock, and requires `skillsRoot` to reject.
- * Accepted by content comparison and deliberately NOT listed.
+ * M11/T1-R1: the CURRENT entrypoint. Phase 2 made the owner approval path
+ * require an explicit `decisionRef` instead of defaulting one, promote inside
+ * the canonical Skill Store writer lock, and require `skillsRoot` to reject;
+ * Phase 4 then confined outbound attachments, bounded the in-process caches and
+ * made containment reporting per target. Accepted by content comparison and
+ * deliberately NOT listed. Phase 2's build (`81b9a9c7…`) is NOT admitted as a
+ * predecessor either: `Deployment Authorized: NO` held for the whole task, so
+ * those bytes were never installed on any runtime — the live runtime still
+ * carries the admitted `230f3c79…` build, which R13 B2 proves upgrades onto this
+ * one.
  */
 const M11_T1_R1_ENTRYPOINT_SHA256 =
-  "81b9a9c7db7567748723c3bfa64303a4ec624b5a80b769bf67f1478258971823";
+  "e8f084ab5593a093a2075db8167ce6db4ea39e87141dc4a2ba4dee99fb4fccaa";
 /** The outgoing entrypoint this deployment replaces; now listed. */
 const R8_OUTGOING_ENTRYPOINT_SHA256 =
   "6a7968b7d456ff6d3f2c5b9d60c7b6046a702603b880093c33b717d9a37c13b1";
@@ -442,12 +448,12 @@ test("R13 P4: the M11/T1-R1 Phase 2 outgoing entrypoint is proven from its commi
   assert.equal(
     sha256(current.entrypoint),
     M11_T1_R1_ENTRYPOINT_SHA256,
-    "the working tree must carry the Phase 2 build",
+    "the working tree must carry the final M11/T1-R1 build",
   );
   assert.notEqual(
     M11_T1_R1_ENTRYPOINT_SOURCE,
     readFileSync(PLUGIN_ENTRYPOINT_SOURCE, "utf8"),
-    "Phase 2 must really have moved the plugin entrypoint source",
+    "M11/T1-R1 must really have moved the plugin entrypoint source",
   );
 });
 
@@ -573,7 +579,7 @@ test("R13 1: each R7 digest is listed exactly once, under its own path", () => {
 });
 
 test("R13 2: the current build digests are NOT listed anywhere", () => {
-  // M11/T1-R1 Phase 2: the entrypoint pin moved to M11_T1_R1_ENTRYPOINT_SHA256,
+  // M11/T1-R1: the entrypoint pin moved to M11_T1_R1_ENTRYPOINT_SHA256,
   // so the R14/R15 digest is now the outgoing predecessor and IS listed on
   // purpose. Only the digests of the CURRENT build must be absent from the source.
   for (const digest of [
@@ -830,7 +836,7 @@ test("R13 B: the R7 index.mjs predecessor is accepted", async () => {
 test("R13 B2: the M11/T1-R1 Phase 2 outgoing entrypoint is accepted and converges", async () => {
   // The state a real operator-apply starts from: the installed extension still
   // carries the outgoing bytes. Preflight must admit them from BOTH gates and
-  // apply must upgrade them onto the Phase 2 build.
+  // apply must upgrade them onto the current build.
   const outgoing = await outgoingEntrypoint();
   const p = provisioned();
   try {

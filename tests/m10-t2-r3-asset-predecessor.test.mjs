@@ -92,8 +92,14 @@ const HYGIENE_ASSET_PREDECESSORS = Object.freeze({
 // The outgoing build (`230f3c79…`) is an admitted predecessor in BOTH per-mode
 // lists; the new digest is deliberately NOT listed, because it is the current
 // build and is accepted by content comparison.
+// M11/T1-R1 Phase 4: the pin moves again — outbound attachment containment, the
+// bounded in-process caches, and per-target containment reporting all live in
+// this entrypoint. Phase 2's digest (`81b9a9c7…`) is NOT admitted either: the
+// whole task ran under `Deployment Authorized: NO`, so those bytes were never
+// installed on any runtime, and the runtime a future deployment starts from is
+// still the admitted `230f3c79…` build.
 const CURRENT_ENTRYPOINT_SHA256 =
-  "81b9a9c7db7567748723c3bfa64303a4ec624b5a80b769bf67f1478258971823";
+  "e8f084ab5593a093a2075db8167ce6db4ea39e87141dc4a2ba4dee99fb4fccaa";
 
 const identifiers = Object.freeze({
   discordGuildId: "123456789012345678",
