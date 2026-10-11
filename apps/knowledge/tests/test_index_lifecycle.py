@@ -126,13 +126,17 @@ class IndexLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_incremental_model_drift_after_embedding_stops_the_run(self) -> None:
         item = source("drift", "new")
         database = FakeDatabase()
-        probe = FakeProbe([MATCHING, DRIFTED])
+        # M11/T1-R1 3.4: the per-source identity probe is sampled once, after
+        # embedding and before publication, so the first script entry is the
+        # drift the run must catch.
+        probe = FakeProbe([DRIFTED])
 
         result = await lifecycle(database, probe, FakeScanner(item)).execute(
             AcceptedIndexRun("run-1", EXPECTED.id, "INCREMENTAL", "RUNNING")
         )
 
         self.assertEqual(result, [])
+        self.assertEqual(database.replaced, [])
         self.assertFalse(database.completed)
         self.assertEqual(database.failures[0][0][1], "EMBEDDING_MODEL_DRIFT")
         self.assertEqual(database.failures[0][0][5], 0)
@@ -198,7 +202,7 @@ class IndexLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_incremental_failure_fails_the_shadow_index(self) -> None:
         item = source("drift", "new")
         database = FakeDatabase()
-        probe = FakeProbe([MATCHING, DRIFTED])
+        probe = FakeProbe([DRIFTED])
 
         result = await lifecycle(database, probe, FakeScanner(item)).execute(
             AcceptedIndexRun("run-1", "shadow-index", "INCREMENTAL", "RUNNING")
@@ -252,10 +256,11 @@ class IndexLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_final_identity_drift_blocks_full_rebuild_publication(self) -> None:
         item = source("valid", "new")
         database = FakeDatabase()
+        probe = FakeProbe([MATCHING, DRIFTED])
 
         await lifecycle(
             database,
-            FakeProbe([MATCHING, MATCHING, DRIFTED]),
+            probe,
             FakeScanner(item),
         ).execute(AcceptedIndexRun("run-1", EXPECTED.id, "FULL_REBUILD", "RUNNING"))
 
@@ -263,6 +268,11 @@ class IndexLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(database.published)
         self.assertEqual(database.failures[0][0][1], "EMBEDDING_MODEL_DRIFT")
         self.assertTrue(database.failures[0][1]["fail_index"])
+        # M11/T1-R1 3.4: one sample brackets each document (post-embed, before
+        # publication) plus the run-level final gate. Two documents used to cost
+        # three probes here because a pre-embed sample duplicated the previous
+        # source's post-embed check.
+        self.assertEqual(probe.resolve_calls, 2)
 
     async def test_empty_full_rebuild_still_runs_final_identity_gate(self) -> None:
         database = FakeDatabase()

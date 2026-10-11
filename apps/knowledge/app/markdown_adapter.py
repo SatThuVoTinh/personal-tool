@@ -360,7 +360,18 @@ class MarkdownVaultScanner:
         except (OSError, RuntimeError, ValueError):
             return None, [self._error(source_path, "SOURCE_PATH_OUTSIDE_VAULT")]
 
-        if candidate.stat().st_size > MAX_MARKDOWN_SOURCE_BYTES:
+        # M11/T1-R1 3.8 (K-08): this stat is a second lookup of a file the scan
+        # already resolved, so it raises OSError when the source disappears in
+        # between. That escaped the per-source validator and surfaced as an
+        # unattributed INDEXING_UNEXPECTED_FAILURE for the whole run; it now
+        # shares the read arm's attribution. `resolved` is the path
+        # resolve(strict=True) above just proved exists.
+        try:
+            source_size = resolved.stat().st_size
+        except OSError:
+            return None, [self._error(source_path, "SOURCE_READ_FAILED")]
+
+        if source_size > MAX_MARKDOWN_SOURCE_BYTES:
             return None, [self._error(source_path, "SOURCE_TOO_LARGE")]
 
         # M10/T2-R23: bound the read BEFORE allocating, not after.

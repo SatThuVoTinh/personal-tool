@@ -8,6 +8,13 @@ from typing import Any, Iterable
 MAX_ERROR_ENTRIES = 50
 _SAFE_ERROR_CODE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 _MAX_SOURCE_PATH_LENGTH = 1024
+# M11/T1-R1 3.5 (M1): markdown sources live under "01. Knowledge", PDF sources
+# under the roots pdf_foundation admits. A PDF failure attributed to
+# "02. Books/…" used to be dropped by the sanitizer, so the operator saw an
+# unattributed run error.
+_SAFE_SOURCE_ROOTS = frozenset(
+    {"01. Knowledge", "02. Books", "03. Papers", "Archives"}
+)
 
 
 @dataclass(frozen=True)
@@ -111,4 +118,6 @@ def _is_safe_source_path(value: object) -> bool:
     if "\\" in value or value.startswith("/") or any(ord(char) < 32 for char in value):
         return False
     parts = value.split("/")
-    return parts[0] == "01. Knowledge" and all(part not in {"", ".", ".."} for part in parts)
+    return parts[0] in _SAFE_SOURCE_ROOTS and all(
+        part not in {"", ".", ".."} for part in parts
+    )

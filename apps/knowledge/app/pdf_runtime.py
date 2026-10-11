@@ -150,10 +150,16 @@ class PdfRuntimeClient:
         self._settings = settings
         self._invocation_lock = asyncio.Lock()
 
-    async def probe(self, expected_processing_identity_digest: str, deadline: float) -> Mapping[str, Any]:
+    async def probe(
+        self,
+        expected_processing_identity_digest: str,
+        deadline: float,
+        lock_timeout: float | None = None,
+    ) -> Mapping[str, Any]:
         response = await self._invoke(
             {"protocol_version": PROTOCOL_VERSION, "operation": "probe", "expected_processing_identity_digest": expected_processing_identity_digest},
             deadline,
+            lock_timeout=lock_timeout,
         )
         verify_runtime_probe(
             self._settings.manifest_path,
@@ -210,9 +216,29 @@ class PdfRuntimeClient:
             deadline,
         )
 
-    async def _invoke(self, request: Mapping[str, Any], deadline: float) -> Mapping[str, Any]:
-        async with self._invocation_lock:
+    async def _invoke(
+        self,
+        request: Mapping[str, Any],
+        deadline: float,
+        lock_timeout: float | None = None,
+    ) -> Mapping[str, Any]:
+        if lock_timeout is None:
+            async with self._invocation_lock:
+                return await self._invoke_locked(request, deadline)
+        # M11/T1-R1 3.7: a caller that cannot wait for an in-flight extraction
+        # bounds only the acquisition. `asyncio.Lock.acquire()` is not
+        # re-entrant, so the timeout branch releases explicitly.
+        try:
+            await asyncio.wait_for(self._invocation_lock.acquire(), lock_timeout)
+        except TimeoutError as timeout:
+            raise PdfRuntimeError(
+                "PDF_RUNTIME_BUSY",
+                f"invocation lock unavailable within {lock_timeout}s",
+            ) from timeout
+        try:
             return await self._invoke_locked(request, deadline)
+        finally:
+            self._invocation_lock.release()
 
     async def _invoke_locked(
         self, request: Mapping[str, Any], deadline: float

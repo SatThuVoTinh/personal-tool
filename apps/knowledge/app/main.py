@@ -83,9 +83,19 @@ DATABASE_ERRORS = (
     asyncpg.PostgresError,
     asyncpg.InterfaceError,
     ConnectionError,
+    # M11/T1-R1 3.3 (H7 mitigation): asyncpg's `command_timeout` raises
+    # `asyncio.TimeoutError`, and `asyncio.TimeoutError is TimeoutError` from
+    # Python 3.11 onward (this image pins >=3.13,<3.14). Listing the builtin
+    # therefore already routes every statement timeout — including a timeout on
+    # the incremental shadow clone — to the 503 arms below instead of a raw
+    # 500. `test_m11_index_hygiene` pins that alias identity so an interpreter
+    # or union change cannot silently reopen the path.
     TimeoutError,
 )
 DATABASE_RESERVATION_ERRORS = DATABASE_ERRORS + (RuntimeError,)
+# M11/T1-R1 3.7: how long /readyz will wait for the PDF invocation lock before
+# it reports busy rather than queueing behind an in-flight extraction.
+PDF_READY_LOCK_TIMEOUT_SECONDS = 2.0
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -220,6 +230,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         return {"status": "ok"}
 
+    # M11/T1-R1 3.7: the readiness probe is polled continuously and the PDF
+    # processing identity hashes the lock, runtime lock and manifest files on
+    # every call. The digest is a pure function of those config paths plus the
+    # embedding identity, so it is computed once and recomputed only if one of
+    # those inputs changes. A single slot keeps the cache bounded by design.
+    readyz_pdf_identity: tuple[tuple[object, ...], str] | None = None
+
     @app.get("/readyz", response_model=None)
     async def readyz(require_reranker: bool = True) -> JSONResponse | dict[str, object]:
         if not database.available:
@@ -260,29 +277,45 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 content={"status": "not_ready", "code": "EMBEDDING_MODEL_DRIFT"},
             )
         if configured_settings.pdf_runtime_enabled:
+            nonlocal readyz_pdf_identity
+            # The drift check above already proved active_index, the configured
+            # model and this probe agree, so the run-side identity helper can be
+            # reused verbatim.
+            cache_key = (
+                active_index.embedding_model_name,
+                active_index.embedding_model_digest,
+                active_index.embedding_dimensions,
+                str(configured_settings.pdf_runtime_lock_path),
+                str(configured_settings.pdf_runtime_manifest_path),
+                str(configured_settings.tokenizer_path),
+            )
             try:
-                processing_identity = processing_identity_for_runtime(
-                    Path(__file__).resolve().parents[1] / "uv.lock",
-                    configured_settings.pdf_runtime_lock_path,
-                    configured_settings.pdf_runtime_manifest_path,
-                    {
-                        "tokenizer_identity": sha256_file(configured_settings.tokenizer_path),
-                        "retrieval_token_budget_version": 1,
-                        "embedding_identity": {
-                            "name": actual_model.name,
-                            "digest": actual_model.digest,
-                            "dimensions": actual_model.dimensions,
-                        },
-                    },
-                )
+                if readyz_pdf_identity is None or readyz_pdf_identity[0] != cache_key:
+                    readyz_pdf_identity = (
+                        cache_key,
+                        await asyncio.to_thread(pdf_processing_identity, active_index),
+                    )
+                # M11/T1-R1 3.7: bound only the wait for the PDF invocation
+                # lock, never the job. An extraction holds that lock for up to
+                # its own deadline, and a readiness probe used to queue behind
+                # it, which made /readyz unusable and the replica look stuck.
                 await pdf_runtime.probe(
-                    processing_identity,
+                    readyz_pdf_identity[1],
                     asyncio.get_running_loop().time() + 15,
+                    lock_timeout=PDF_READY_LOCK_TIMEOUT_SECONDS,
                 )
             except PdfRuntimeError as error:
                 return JSONResponse(
                     status_code=503,
                     content={"status": "not_ready", "code": error.code},
+                )
+            except OSError:
+                # The identity hashes the parent lock, the runtime lock, the
+                # manifest and the tokenizer; a missing artifact is an
+                # unavailable PDF runtime, not a fault to hide behind a 500.
+                return JSONResponse(
+                    status_code=503,
+                    content={"status": "not_ready", "code": "PDF_RUNTIME_UNAVAILABLE"},
                 )
         return {"status": "ready", "active_index_id": active_index.id, "embedding_model": {"name": actual_model.name, "digest": actual_model.digest, "dimensions": actual_model.dimensions}}
 
@@ -346,7 +379,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     if attempt == 0:
                         continue
                     raise HTTPException(status_code=503, detail={"code": "ACTIVE_INDEX_CHANGED"}) from None
-                if request.rerank and app.state.reranker is not None:
+                reranked = request.rerank and app.state.reranker is not None
+                if reranked:
                     # M10/T2-R21: the pool is MAX_RERANK_CANDIDATES, not the
                     # page size. `min(MAX_RERANK_CANDIDATES, request.limit)` was
                     # always equal to `request.limit`, because MAX_RERANK_CANDIDATES
@@ -414,7 +448,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             },
                         }
                     )
-                if request.min_score is not None:
+                if reranked and request.min_score is not None:
+                    # M11/T1-R1 3.6 (M2): min_score is a reranker-score
+                    # threshold. On the RRF path `rerank_score` carries the fused
+                    # rank score (order 1e-2), so the same filter silently
+                    # emptied every page. The field stays reported unchanged.
                     results = [r for r in results if r.get("rerank_score", 0) >= request.min_score]
                 results.sort(key=lambda item: (-item["rerank_score"], -item["rrf_score"], item["segment_id"]))
                 bounded_results = results[:request.limit]
@@ -452,7 +490,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         accepted: AcceptedIndexRun | None = None
         try:
-            lifecycle.preflight_vault()
+            # M11/T1-R1 3.7: a vault preflight is synchronous directory I/O on
+            # a possibly networked mount; it must not block the loop.
+            await asyncio.to_thread(lifecycle.preflight_vault)
             active_index = await database.get_active_index()
             if request.kind == "INCREMENTAL":
                 if active_index is None:
@@ -470,7 +510,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     lambda: lifecycle.execute(accepted), lifecycle.cleanup
                 )
             except Exception as error:
-                await database.fail_run(accepted, "SCHEDULING_FAILED", [SafeRunError("SCHEDULING_FAILED")], 0, 0, 0, request.kind == "FULL_REBUILD")
+                # M11/T1-R1 3.2 (K-09): every kind now runs inside a shadow
+                # BUILDING index, so a run that never reached the scheduler has
+                # to fail its index too. FULL_REBUILD-only left an INCREMENTAL
+                # shadow index BUILDING with cloned content and no owner.
+                await database.fail_run(
+                    accepted,
+                    "SCHEDULING_FAILED",
+                    [SafeRunError("SCHEDULING_FAILED")],
+                    0,
+                    0,
+                    0,
+                    True,
+                )
                 raise HTTPException(status_code=503, detail={"code": "SCHEDULING_FAILED"}) from error
             return IndexRunAcceptedResponse(index_run_id=accepted.id, index_id=accepted.index_id, status="RUNNING")
         except LifecycleError as error:

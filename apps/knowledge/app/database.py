@@ -1169,42 +1169,51 @@ class KnowledgeDatabase:
                     list(source.tags),
                     UUID(run.id),
                 )
+                # M11/T1-R1 3.4: one prepared statement for the whole document
+                # instead of a round trip per segment. The column contract,
+                # including the search_vector expression, is unchanged.
+                segment_rows: list[tuple[Any, ...]] = []
                 for segment, embedding in zip(source.segments, embeddings, strict=True):
                     vector = "[" + ",".join(format(value, ".17g") for value in embedding) + "]"
-                    await connection.execute(
-                        """
-                        INSERT INTO knowledge.segments (
-                          id, index_id, source_id, segment_type, chunk_ordinal, source_path,
-                          title, primary_topic, canonical_topics, tags, heading_path,
-                          heading_text, text, line_start, line_end, embedding, search_vector,
-                          indexed_by_run_id
-                        ) VALUES (
-                          $1, $2, $3, 'MARKDOWN_PASSAGE', $4, $5, $6, $7, $8, $9,
-                          $10, $11, $12, $13, $14, $15::vector,
-                          setweight(to_tsvector('simple', $6), 'A') ||
-                          setweight(to_tsvector('simple', array_to_string($9::text[], ' ')), 'A') ||
-                          setweight(to_tsvector('simple', $11), 'B') ||
-                          setweight(to_tsvector('simple', $12), 'D'),
-                          $16
+                    segment_rows.append(
+                        (
+                            uuid4(),
+                            UUID(run.index_id),
+                            source_id,
+                            segment.chunk_ordinal,
+                            source.source_path,
+                            source.title,
+                            source.primary_topic,
+                            list(source.canonical_topics),
+                            list(source.tags),
+                            list(segment.heading_path),
+                            segment.heading_text,
+                            segment.text,
+                            segment.line_start,
+                            segment.line_end,
+                            vector,
+                            UUID(run.id),
                         )
-                        """,
-                        uuid4(),
-                        UUID(run.index_id),
-                        source_id,
-                        segment.chunk_ordinal,
-                        source.source_path,
-                        source.title,
-                        source.primary_topic,
-                        list(source.canonical_topics),
-                        list(source.tags),
-                        list(segment.heading_path),
-                        segment.heading_text,
-                        segment.text,
-                        segment.line_start,
-                        segment.line_end,
-                        vector,
-                        UUID(run.id),
                     )
+                await connection.executemany(
+                    """
+                    INSERT INTO knowledge.segments (
+                      id, index_id, source_id, segment_type, chunk_ordinal, source_path,
+                      title, primary_topic, canonical_topics, tags, heading_path,
+                      heading_text, text, line_start, line_end, embedding, search_vector,
+                      indexed_by_run_id
+                    ) VALUES (
+                      $1, $2, $3, 'MARKDOWN_PASSAGE', $4, $5, $6, $7, $8, $9,
+                      $10, $11, $12, $13, $14, $15::vector,
+                      setweight(to_tsvector('simple', $6), 'A') ||
+                      setweight(to_tsvector('simple', array_to_string($9::text[], ' ')), 'A') ||
+                      setweight(to_tsvector('simple', $11), 'B') ||
+                      setweight(to_tsvector('simple', $12), 'D'),
+                      $16
+                    )
+                    """,
+                    segment_rows,
+                )
 
     async def replace_pdf_source(
         self,
@@ -1456,6 +1465,11 @@ class KnowledgeDatabase:
                     )
                     if failed_index is None:
                         raise StateTransitionError("BUILDING index did not reach FAILED.")
+                    # M11/T1-R1 3.1 (H6): a FAILED index keeps its row for
+                    # forensics and loses its published content in this same
+                    # transaction. Without this the shadow's segments/sources
+                    # persisted forever and no later path could reclaim them.
+                    await self._purge_index_content(connection, [UUID(run.index_id)])
                 failed_run = await connection.fetchval(
                     """
                     UPDATE knowledge.index_runs
@@ -1476,20 +1490,30 @@ class KnowledgeDatabase:
                     raise StateTransitionError("Index run did not reach FAILED.")
 
     async def cleanup_superseded(self, index_ids: list[str]) -> None:
-        if not index_ids or self._pool is None:
+        if self._pool is None:
             return
         async with self._mutation_transaction() as connection:
-            await connection.execute(
-                """
-                DELETE FROM knowledge.sources
-                WHERE index_id = ANY($1::uuid[])
-                  AND EXISTS (
-                    SELECT 1 FROM knowledge.indexes
-                    WHERE knowledge.indexes.id = knowledge.sources.index_id
-                      AND knowledge.indexes.status = 'SUPERSEDED'
-                  )
-                """,
-                [UUID(index_id) for index_id in index_ids],
+            if index_ids:
+                await connection.execute(
+                    """
+                    DELETE FROM knowledge.sources
+                    WHERE index_id = ANY($1::uuid[])
+                      AND EXISTS (
+                        SELECT 1 FROM knowledge.indexes
+                        WHERE knowledge.indexes.id = knowledge.sources.index_id
+                          AND knowledge.indexes.status = 'SUPERSEDED'
+                      )
+                    """,
+                    [UUID(index_id) for index_id in index_ids],
+                )
+            # M11/T1-R1 3.1: sweep FAILED indexes that were published before
+            # this garbage collection existed, so a first post-upgrade startup
+            # leaves zero content rows behind for them.
+            stale_failed_ids = await connection.fetch(
+                "SELECT id FROM knowledge.indexes WHERE status = 'FAILED'"
+            )
+            await self._purge_index_content(
+                connection, [row["id"] for row in stale_failed_ids]
             )
 
     async def recover_interrupted_runs(self) -> int:
@@ -1528,6 +1552,15 @@ class KnowledgeDatabase:
                     WHERE status = 'BUILDING'
                     """,
                     serialize_errors([SafeRunError("ORPHANED_BUILDING_INDEX")]),
+                )
+                # M11/T1-R1 3.1: the interrupted runs above left their shadow
+                # indexes FAILED with published content and no owner. This
+                # startup sweep purges that content so it cannot accumulate.
+                failed_ids = await connection.fetch(
+                    "SELECT id FROM knowledge.indexes WHERE status = 'FAILED'"
+                )
+                await self._purge_index_content(
+                    connection, [row["id"] for row in failed_ids]
                 )
         return len(rows)
 
@@ -1589,6 +1622,28 @@ class KnowledgeDatabase:
             """,
             values,
         )
+
+    @staticmethod
+    async def _purge_index_content(
+        connection: asyncpg.Connection, index_ids: Sequence[UUID]
+    ) -> None:
+        """Delete the published content of the given indexes, keeping the
+        `indexes` rows and every `index_runs` FK intact.
+
+        `segments` and `pdf_source_details` also cascade from `sources`; they
+        are deleted explicitly so each relation's cleanup is separately
+        verifiable. Idempotent: an already-purged index matches zero rows.
+        """
+        if not index_ids:
+            return
+        ids = list(index_ids)
+        for statement in (
+            "DELETE FROM knowledge.segments WHERE index_id = ANY($1::uuid[])",
+            "DELETE FROM knowledge.pdf_source_details WHERE index_id = ANY($1::uuid[])",
+            # Removing the source rows also cascades `source_sidecars`.
+            "DELETE FROM knowledge.sources WHERE index_id = ANY($1::uuid[])",
+        ):
+            await connection.execute(statement, ids)
 
     @staticmethod
     def _validate_pdf_batch_topology(

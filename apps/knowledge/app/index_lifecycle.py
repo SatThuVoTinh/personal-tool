@@ -186,8 +186,12 @@ class IndexLifecycle:
                 if run.kind == "INCREMENTAL" and existing.get(source.source_path) == source.sha256:
                     continue
                 try:
-                    await self.require_identity(expected)
                     embeddings = await self._embed_source(expected, source)
+                    # M11/T1-R1 3.4: the second probe per document was the
+                    # pre-embed one. The post-embed check still brackets every
+                    # source and runs BEFORE replace_source, so a drifted model
+                    # can never publish embeddings; the run keeps its initial
+                    # check at the API boundary.
                     await self.require_identity(expected)
                     await self._database.replace_source(run, source, embeddings)
                     indexed += 1
@@ -245,7 +249,11 @@ class IndexLifecycle:
                     )
                     return []
                 try:
-                    pdf_processing_identity = self._pdf_processing_identity(expected)
+                    # M11/T1-R1 3.7: the identity hashes the lock/manifest files
+                    # synchronously; off the loop it would stall every run.
+                    pdf_processing_identity = await asyncio.to_thread(
+                        self._pdf_processing_identity, expected
+                    )
                 except Exception:
                     await self._fail(
                         run,
