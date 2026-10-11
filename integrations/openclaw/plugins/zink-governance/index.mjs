@@ -7,6 +7,7 @@ import {
   openSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   writeFileSync,
   mkdirSync,
@@ -176,6 +177,26 @@ if (!globalThis[COMPLETED_EXECUTIONS_KEY]) {
   globalThis[COMPLETED_EXECUTIONS_KEY] = new Set();
 }
 
+// M11/T1-R1 (4.2): both caches above live on `globalThis` for the whole process
+// lifetime, so they need explicit ceilings. The durable
+// `<ledgerRoot>/skill-proposals/` store is authoritative for proposals, so an
+// evicted entry costs only a re-read; the completed-execution Set is a replay
+// guard with a bounded idempotency window BY DESIGN — beyond the ceiling the
+// oldest keys stop being recognized as complete, which the ledger-based
+// terminal-state checks in `handleExecutionFinished` still refuse.
+export const PENDING_PROPOSALS_LIMIT = 256;
+export const COMPLETED_EXECUTIONS_LIMIT = 4096;
+
+/** Evict oldest insertions until the collection fits its ceiling. */
+function boundCache(collection, limit) {
+  const iterator = collection.keys();
+  while (collection.size > limit) {
+    const oldest = iterator.next();
+    if (oldest.done) break;
+    collection.delete(oldest.value);
+  }
+}
+
 export function registerPendingSkillProposal(approvalRecord) {
   const proposalId =
     approvalRecord.approval_id || approvalRecord.proposal?.proposal_id;
@@ -186,6 +207,19 @@ export function registerPendingSkillProposal(approvalRecord) {
     approvalRecord.proposal_id || approvalRecord.proposal?.proposal_id;
   if (directProposalId && directProposalId !== proposalId) {
     globalThis[PENDING_PROPOSALS_KEY].set(directProposalId, approvalRecord);
+  }
+  boundCache(globalThis[PENDING_PROPOSALS_KEY], PENDING_PROPOSALS_LIMIT);
+}
+
+/**
+ * Drop a decided proposal from the cache. A proposal that reached a terminal
+ * state (MATERIALIZED / READY / INDEX_FAILED / REJECTED) is decided by the
+ * durable record on disk; keeping the stale in-memory copy alive would let
+ * `getPendingSkillProposal` answer for a proposal that no longer has one.
+ */
+export function forgetPendingSkillProposal(...proposalIds) {
+  for (const proposalId of proposalIds) {
+    if (proposalId) globalThis[PENDING_PROPOSALS_KEY]?.delete(proposalId);
   }
 }
 
@@ -919,11 +953,12 @@ export async function handleOwnerSkillApproval({
   } catch {
     /* best effort: canonical truth already holds */
   }
-  globalThis[PENDING_PROPOSALS_KEY].set(proposalId, {
-    ...stored,
-    status: "READY",
-    approval_id: approvalTransactionId,
-  });
+  // M11/T1-R1 (4.2): the durable record just written (MATERIALIZED / READY /
+  // INDEX_FAILED) is terminal for this proposal, so it leaves the pending cache
+  // instead of being re-stamped as READY. Replaying the approval still fails
+  // closed on the disk state, and `getPendingSkillProposal` now answers only
+  // for proposals that are genuinely still pending.
+  forgetPendingSkillProposal(proposalId, stored.proposal_id);
   return record;
 }
 
@@ -1179,6 +1214,9 @@ export async function handleOwnerSkillRejection({
       ...stored,
       status: "REJECTED",
     });
+    // M11/T1-R1 (4.2): REJECTED is terminal — the durable record owns the
+    // decision, so the pending-cache entry goes with it.
+    forgetPendingSkillProposal(proposalId, stored.proposal_id);
     return { proposal_id: proposalId, approval_status: "REJECTED" };
   });
 }
@@ -2135,6 +2173,14 @@ export function handleExecutionFinished({
 
   if (idempotencyKey) {
     globalThis[COMPLETED_EXECUTIONS_KEY]?.add(idempotencyKey);
+    // M11/T1-R1 (4.2): the replay guard is bounded, so memory cannot grow with
+    // the number of completed executions. A key older than the ceiling simply
+    // stops being recognized here; the ledger's own terminal-state checks in
+    // this function remain the authoritative duplicate guard.
+    boundCache(
+      globalThis[COMPLETED_EXECUTIONS_KEY],
+      COMPLETED_EXECUTIONS_LIMIT,
+    );
   }
 
   return {
@@ -2684,6 +2730,51 @@ export function resolveAgentSandboxDir(agentId, context = null) {
   }
   // I03: Fails closed to null, NEVER falls back to process.cwd()
   return null;
+}
+
+/**
+ * M11/T1-R1 (4.1): decide whether an outbound attachment may leave the host.
+ *
+ * The internal tool path already confines every artifact to the agent sandbox
+ * (`resolveAgentSandboxDir` is the root the logical paths returned by
+ * `validateLiveArtifactPath` resolve under, and `lib/artifact-validator.mjs`
+ * enforces the same boundary for published artifacts). An outbound message
+ * used to check only `existsSync`, which follows `..` and symlinks, so any file
+ * on the host could be published to #office. This reuses that same root and the
+ * same relative-path containment idiom — no second path policy, no new
+ * dependency.
+ *
+ * Fails closed for: a missing file, an unresolvable sandbox root, an
+ * unresolvable real path, the root itself, or any component that escapes it.
+ */
+export function containOutboundAttachment(filePath, agentId, context = null) {
+  if (typeof filePath !== "string" || filePath.length === 0) {
+    return { contained: false, reason: "has no attachment path" };
+  }
+  const sandboxDir = resolveAgentSandboxDir(agentId, context);
+  if (!sandboxDir) {
+    return { contained: false, reason: "has no governed sandbox root" };
+  }
+  let realPath;
+  let realRoot;
+  try {
+    realPath = realpathSync(filePath);
+    realRoot = realpathSync(sandboxDir);
+  } catch {
+    return {
+      contained: false,
+      reason: "cannot be resolved inside the governed sandbox",
+    };
+  }
+  const relative = path.relative(realRoot, realPath);
+  if (
+    relative.length === 0 ||
+    relative.startsWith("..") ||
+    path.isAbsolute(relative)
+  ) {
+    return { contained: false, reason: "escapes the governed sandbox root" };
+  }
+  return { contained: true, realPath };
 }
 
 export function evaluateToolAccess(agentId, toolName, params = {}) {
@@ -6992,6 +7083,11 @@ export default {
      */
     const blockUnreconciledNativeRun = ({ reason, runId, childSessionKey }) => {
       const blocked = [];
+      // M11/T1-R1 (4.3): containment is per target, not per sweep. A single
+      // failed write leaves that task running with no ledger record of its
+      // suspension, so the whole decision must report UNKNOWN and name the
+      // tasks still uncontained instead of claiming the sweep finished.
+      const uncontainedTasks = [];
       let ledgerWritten = false;
       let ledgerError = null;
       let scope = "NONE";
@@ -7047,22 +7143,33 @@ export default {
             blocked.push({ task_id, alreadyTerminal: false });
           } catch (writeErr) {
             ledgerError = writeErr?.message ?? String(writeErr);
+            // The list names the tasks left uncontained, so a task with
+            // several failing delegations is reported once.
+            if (!uncontainedTasks.includes(task_id)) {
+              uncontainedTasks.push(task_id);
+            }
           }
         }
       } catch (readErr) {
         ledgerError = readErr?.message ?? String(readErr);
       }
+      // Containment holds only when at least one ledger write proved it AND no
+      // target failed to be recorded. `ledgerWriteFailed` keeps its original
+      // meaning (the authoritative ledger does not reflect this sweep), which
+      // the zero-target and unreadable-ledger cases already reported.
+      const contained = ledgerWritten && uncontainedTasks.length === 0;
       return {
         allow: false,
         blocked: true,
-        governanceState: ledgerWritten ? "BLOCKED" : "UNKNOWN",
+        governanceState: contained ? "BLOCKED" : "UNKNOWN",
         reason,
         scope,
         blockedTasks: blocked,
-        // When the authoritative ledger could not be written at all, the state
-        // is UNKNOWN rather than BLOCKED: nothing may assume the child is
-        // contained until the ledger says so.
-        ledgerWriteFailed: !ledgerWritten,
+        // When the authoritative ledger could not be written for every target,
+        // the state is UNKNOWN rather than BLOCKED: nothing may assume the
+        // child is contained until the ledger says so.
+        ledgerWriteFailed: !contained,
+        uncontainedTasks,
         ledgerError,
       };
     };
@@ -7301,7 +7408,11 @@ export default {
         safeContent = safeContent.replace(OUTBOUND_BROADCAST_RE, "@\u200b$1");
       }
 
-      // E20: Validate outbound attachments/files linkage if present
+      // E20: Validate outbound attachments/files linkage if present, and since
+      // M11/T1-R1 (4.1) confine them too. The existence check alone followed
+      // `..` and symlinked components, so any readable host file could be
+      // published to #office by naming it here. `http(s)` URLs keep their
+      // existing pass-through behavior.
       if (Array.isArray(event.attachments) && event.attachments.length > 0) {
         for (const att of event.attachments) {
           const filePath =
@@ -7313,7 +7424,18 @@ export default {
           ) {
             if (!existsSync(filePath)) {
               api.logger?.warn?.(
-                `[zink-governance] message_sending blocked: unlinked/missing attachment '${filePath}'`,
+                `[zink-governance] message_sending blocked: unlinked/missing attachment`,
+              );
+              return { block: true, cancel: true };
+            }
+            const containment = containOutboundAttachment(
+              filePath,
+              agentId,
+              ctx,
+            );
+            if (!containment.contained) {
+              api.logger?.warn?.(
+                `[zink-governance] message_sending blocked: attachment '${path.basename(filePath)}' ${containment.reason}`,
               );
               return { block: true, cancel: true };
             }
