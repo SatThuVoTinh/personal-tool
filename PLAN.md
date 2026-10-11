@@ -37,7 +37,7 @@ Evidence Level: NONE | LOCAL-VERIFIED | REMOTE-BACKED
 | M7 — Zink Tools + OpenClaw integration + V1 hardening                      | `COMPLETE`    | `REMOTE-BACKED`  | M7/T1-R19, M7/T2-R12, M7/T3-R16, M7/T4-R10, and M7/T5-R13 complete; runtime governance remediation, Discord 7-bot integration, and Zink tools specialist policies verified.                                                                                                                                                           |
 | M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Integration | `IN PROGRESS` | `LOCAL-VERIFIED` | M8/T1 is complete; M8/T2.2 R4/R5/R6 are implemented; M8/T2.2-R7 (heartbeat admission, boundary diagnosability, apply safety) is in progress. Deployment is not authorized.                                                                                                                                                            |
 | M10 - Governed coordinator runtime binding                                 | `COMPLETE` | `LOCAL-VERIFIED` | M10/T2 closed by explicit owner decision 2026-10-11 (R26 records the final remediation; R8 closed live with zero-outbound proven). Deferred follow-ups are NOT closed under M10 and require separate authorization: live gateway/knowledge restart or deployment, M10 ingress card/tag redesign (new Plan Revision), coordinator result ingestion, and the WSL/CI Python gate run. |
-| M11 - Cross-module audit remediation                                       | `IN PROGRESS` | `LOCAL-VERIFIED` | M11/T1 (4-phase remediation of the 2026-10-11 full-repo read-only audit: skill-store vector SQL correctness, skill-store governance, knowledgebase index hygiene/attribution, OpenClaw outbound containment + cache/ledger safety) owner-approved; execution contract is `docs/contracts/execution/ACTIVE.md`. Deployment is not authorized. |
+| M11 - Cross-module audit remediation                                       | `COMPLETE` | `LOCAL-VERIFIED` | M11/T1-R1 closed 2026-10-12: the four-phase audit remediation is committed (`45e0ee7`, `3810f67`, `01e5d07`, `6cba090`, `94e9444`) with every required host gate PASS and the deviations/limitations recorded in §8. NOT closed under M11: deployment or any live runtime mutation (owner-deferred, `Deployment Authorized: NO`), the WSL/CI run of the Knowledgebase Python gate, and the owner-excluded items (per-document quarantine, incremental-publish redesign, manifest schema extension, zink-tools drift cluster, zink-tools lint-glob gap). |
 
 The former self-built L&SC Data Plant is replaced by a **logical external
 infrastructure flow**, not another repository module. Forecasting, optimization,
@@ -48,20 +48,24 @@ operations research and simulation remain first-class capabilities.
 ```text
 Milestone: M11 — Cross-module audit remediation
 Task: M11/T1 — Skill-store SQL correctness, skill-store governance, knowledgebase index hygiene, OpenClaw outbound security
-Task Status: IN PROGRESS
+Task Status: COMPLETE (closed 2026-10-12)
 Planning Readiness: APPROVED
 Plan Revision: M11/T1-R1
-Execution Authorization: YES
+Execution Authorization: NO
 Authorized Task: M11/T1 — four-phase remediation of the 2026-10-11 read-only full-repo audit
-Execution Contract: docs/contracts/execution/ACTIVE.md
+Execution Contract: NONE (the ACTIVE.md was deleted at closeout; its frozen
+  details are superseded by the commits and the §8 record)
 Evidence Level: LOCAL-VERIFIED
 Task Branch: codex/m11-t1-audit-remediation
 Owner Approval: EXPLICIT — owner approved the presented plan on 2026-10-11 with
   scope "3 clusters + OpenClaw security", single Active Task with four ordered
   phases, close-and-replace of the stale M10/T2-R8 ACTIVE.md, and H7 as
-  mitigation-only (no incremental-publish redesign).
+  mitigation-only (no incremental-publish redesign). On 2026-10-12 the owner
+  additionally approved Option A, the bounded Phase 2 scope extension for the
+  deployment-snapshot digest pins.
 Deployment Authorized: NO — no operator-apply, no live runtime mutation, no
-  gateway/service restart under this contract.
+  gateway/service restart under this contract. That remains true at closeout:
+  every commit here is repository-only and nothing was installed.
 
 Prior focus: M8/T2.2 CLOSED (R19 live-verified) and M10/T2 CLOSED by owner
   decision 2026-10-11; their durable records live in §8 and the history below.
@@ -3666,17 +3670,80 @@ Task: `M11/T1 — Skill-store vector SQL correctness, skill-store governance,
 knowledgebase index hygiene/attribution, OpenClaw outbound containment and
 cache/ledger safety`
 Plan Revision: `M11/T1-R1` · Planning Readiness: `APPROVED` · Execution
-Authorization: `YES` · Execution Contract:
-`docs/contracts/execution/ACTIVE.md` · Evidence: `LOCAL-VERIFIED` ·
+Authorization: `NO` (consumed at closeout) · Execution Contract: `NONE` ·
+Evidence: `LOCAL-VERIFIED` ·
 Task Branch: `codex/m11-t1-audit-remediation`
 
 Origin: owner-requested read-only full-repo audit on 2026-10-11 (five parallel
 domain audits, spot-verified against source). The frozen implementation
-details, ordered steps, acceptance criteria and gates live only in the matching
-`ACTIVE.md`. Out-of-scope escalations recorded for future owner decisions:
+details, ordered steps, acceptance criteria and gates lived only in the
+matching `ACTIVE.md`, deleted at this closeout. Out-of-scope escalations
+recorded for future owner decisions:
 per-document ingestion quarantine, incremental-publish redesign (no full-corpus
 clone), manifest schema extension (`metadata`/`verification` fields), the
 zink-tools contract-drift cluster, and the zink-tools lint/format glob gap.
+
+Commits: `45e0ee7` Phase 1 (derived-index SQL), `3810f67` Phase 2 (governance),
+`01e5d07` Phase 3 (Knowledgebase hygiene and attribution), `6cba090` Phase 4
+(OpenClaw outbound containment, bounded caches, per-target containment),
+`94e9444` the current-build entrypoint re-pin Phase 4 required.
+
+**Gates, all run against the final state on 2026-10-12.** `npm test`: 1336 tests,
+1291 pass, 0 fail, 45 skipped — the 44 pre-existing skips plus the new Windows
+symlink-privilege skip, exactly the approved Definition of Done.
+`tests/m11-t1-postgres-sql-gate.test.mjs` M11-06 executed the generated
+statements against a real PostgreSQL container and PASSED (not skipped).
+`npm run lint` (eslint + markdownlint) 0 issues; `npm run format:check` clean;
+`npm run repo:check` "Repository policy check passed"; `git diff --check` clean.
+Knowledgebase Python suite (`npm run test:knowledge`) 184 passed / 4 skipped / 27
+subtests, with `KNOWLEDGE_TOKENIZER_PATH` pointed at the existing
+`temp/knowledge-test/tokenizer.json` fixture; all four skips are platform cases
+(three symlink-creation privilege skips, one Linux-only process-group test).
+
+**Reported as NOT RUN, not as a pass.** The authoritative secret scan is gitleaks
+in `.github/workflows/security.yml` over full history; gitleaks is not installed
+on this host, so that gate is `NOT RUN` here. Its local equivalent — a
+secret-pattern scan of the complete task diff — returned zero candidates. The
+WSL/CI run of the env-gated Python files is carried forward, as it was for M10.
+
+**Deviations and disclosures (bounded; no approved behavior weakened).**
+
+- Phase 1 (P1-06): schema 003's `CHECK` constraints made `DEPRECATED` and
+  `TOMBSTONED` vector rows unwritable, so the tombstone became a `DELETE` after
+  verifying that every consumer already filters
+  `status='ACTIVE' AND sync_status='READY'`.
+- Phase 2 (owner Option A, 2026-10-12): the authorized approval-path edits moved
+  the packaged entrypoint digest, so the deployment-snapshot pins were re-pinned
+  and the outgoing `230f3c79…` digest was admitted into both per-mode predecessor
+  lists of `configure.mjs`, with provenance re-derived from `45e0ee7` through the
+  repository's own generator. Phase 4 moved the entrypoint again, so the
+  current-build constant was re-pinned once more (`94e9444`); no additional
+  predecessor was admitted, because under `Deployment Authorized: NO` Phase 2's
+  build was never installed anywhere.
+- Phase 2: §2.3's `withFileLockSync` seam became the existing async
+  `withFileLock`, because a sync seam would release the lock while the async
+  promote is still in flight and the writer lock is not reentrant; the
+  writer-lock directory is `<parent>/<basename>.writer.lock` so sibling catalogs
+  cannot contend on one lock; `decisionRef` is threaded from operator
+  configuration rather than hard-coded.
+- Phase 3: §3.3 needed no new `DATABASE_ERRORS` member (`asyncio.TimeoutError is
+  TimeoutError` on the pinned interpreter), so it was implemented as the
+  diagnostic it is — an explicit pin plus a route test proving the 503 mapping;
+  §3.7's 2-second bound applies to the lock acquisition only, not the whole
+  readiness probe, because each probe cold-starts a subprocess and a call-level
+  bound would report `PDF_RUNTIME_BUSY` for a healthy-but-busy runtime; `/readyz`
+  reuses the run-side `pdf_processing_identity` helper instead of duplicating the
+  identity recipe; `test_m11_api_attribution.py` carries the tokenizer gate, so a
+  host without a tokenizer artifact has four env-gated files rather than three;
+  the `test_index_lifecycle.py` drift scenarios changed shape, not strength.
+- Phase 4: §4.1's "the governed artifact root used by the internal tool path"
+  resolves to `resolveAgentSandboxDir`'s per-agent sandbox, because
+  `validateLiveArtifactPath` validates a logical path and takes no filesystem
+  argument; containment reuses that root and the repository's existing
+  `path.relative` idiom, with no new dependency and no parallel path policy.
+  Windows refused symlink creation for this account, so the symlink-escape case
+  self-skips and that specific escape is proven by test only on platforms that
+  permit link creation.
 
 ## 9. Deferred beyond V1
 

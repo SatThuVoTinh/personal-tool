@@ -8,6 +8,47 @@ All notable, validated changes to Personal Tool are documented here.
 
 ### Added
 
+- Completed M11/T1-R1, the four-phase remediation of the 2026-10-11 read-only
+  full-repository audit, as `45e0ee7` (skill-store vector SQL), `3810f67`
+  (skill-store governance), `01e5d07` (Knowledgebase index hygiene and error
+  attribution), `6cba090` (OpenClaw outbound containment, bounded caches,
+  per-target containment) and `94e9444` (the current-build digest re-pin Phase 4
+  required). Derived skill-index SQL became executable against real PostgreSQL:
+  tombstones are `DELETE`s, literals are escaped, one transaction per skill
+  embeds then writes and only then marks `READY`, and a failure write that itself
+  fails escalates to `VECTOR_FAILURE_WRITE_FAILED`. Skill read/apply are
+  catalog-bound (an invalid catalog can no longer be served through a permissive
+  disk walk), ambiguous bare ids fail closed with `SKILL_ID_AMBIGUOUS`, the
+  freshness gate reports `SKILL_INDEX_STALE` instead of serving stale rows,
+  promotion runs inside the Skill Store writer lock, and approvals require an
+  explicit `decisionRef` instead of defaulting one. On the Knowledgebase, a
+  FAILED index is purged in the same transaction that marks it and both startup
+  sweeps prune pre-existing FAILED content; `executemany` replaced per-segment
+  round-trips; a statement timeout answers 503 `DATABASE_UNAVAILABLE` rather than
+  a raw 500; `/readyz` bounds only its lock wait and can answer 503
+  `PDF_RUNTIME_BUSY`; `min_score` thresholds reranker scores only; and a vanished
+  or unreadable source is attributed to that document instead of aborting the
+  scan unattributed. In the governance plugin, outbound attachments are now
+  resolved and confined to the agent's governed sandbox root (the existence check
+  alone followed `..` and symlinked components, so any readable host file could be
+  published to #office), the pending-proposal and completed-execution caches have
+  explicit ceilings with oldest-first eviction and terminal proposals leave the
+  cache, and an unreconciled-run containment sweep reports `UNKNOWN` plus the
+  names of every task whose ledger write failed instead of claiming `BLOCKED`.
+  Final gates on this host: `npm test` 1336 tests / 0 failures / 45 skips (44
+  pre-existing plus the new Windows symlink-privilege skip); the Phase 1
+  real-PostgreSQL statement gate ran and passed; `npm run lint`,
+  `npm run format:check`, `npm run repo:check` and `git diff --check` clean;
+  Knowledgebase Python suite 184 passed / 4 skipped / 27 subtests with
+  `KNOWLEDGE_TOKENIZER_PATH` pointed at the existing local tokenizer fixture (all
+  four skips are symlink-privilege or Linux-only platform cases). Carried forward,
+  unchanged: the CI-only gitleaks scan is `NOT RUN` locally (gitleaks is not
+  installed here; the local equivalent — a secret-pattern scan of the complete
+  diff — returned zero candidates), the Python gate still belongs in WSL/CI, and
+  symlink-escape refusals are proven by test only on platforms that permit link
+  creation. `Deployment Authorized: NO` held throughout: no `operator-apply`, no
+  live runtime mutation, no service restart, no production ledger write.
+
 - Closed the two owner-authorized M10/T2-R26 escalations and committed the
   pending R13-R25 sweep. `ea84a5a` admitted the 39-defect sweep after gates
   passed. `fd70bf6` made Knowledgebase incremental indexing atomic:
