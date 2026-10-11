@@ -48,7 +48,22 @@ export const LOCK_MODE = 0o700;
  * permission fault. See `release`.
  */
 export const RELEASE_RETRY_ATTEMPTS = 5;
-const RETRYABLE_RELEASE_ERRNOS = new Set(["EPERM", "EACCES", "EBUSY"]);
+// ENOTEMPTY belongs here: on Windows a directory whose just-deleted file still
+// has a pending handle reports the removal as "directory not empty".
+const RETRYABLE_RELEASE_ERRNOS = new Set([
+  "EPERM",
+  "EACCES",
+  "EBUSY",
+  "ENOTEMPTY",
+]);
+
+function busyWaitMs(ms) {
+  const until = Date.now() + ms;
+  while (Date.now() < until) {
+    // bounded spin — the total budget below is 15 ms, two orders of magnitude
+    // under the event-loop stall this module was introduced to remove
+  }
+}
 /**
  * M10/T2 owner-token decision (owner-authorized): every lock this protocol
  * acquires carries `owner.json` inside the lock directory, holding a random
@@ -75,7 +90,9 @@ function ownerFileFor(dir) {
 }
 
 function notOwnerError(dir, reason) {
-  const error = new Error(`FILE_LOCK_NOT_OWNER: refusing to release ${dir} (${reason})`);
+  const error = new Error(
+    `FILE_LOCK_NOT_OWNER: refusing to release ${dir} (${reason})`,
+  );
   error.code = "FILE_LOCK_NOT_OWNER";
   return error;
 }
@@ -95,9 +112,13 @@ export function tryAcquire(lockDir) {
   }
   const token = randomBytes(16).toString("hex");
   try {
-    writeFileSync(ownerFileFor(dir), JSON.stringify({ pid: process.pid, token }), {
-      mode: LOCK_MODE,
-    });
+    writeFileSync(
+      ownerFileFor(dir),
+      JSON.stringify({ pid: process.pid, token }),
+      {
+        mode: LOCK_MODE,
+      },
+    );
   } catch (err) {
     // The lock exists but is unverifiable; leaving it would strand every
     // future release behind FILE_LOCK_NOT_OWNER, so unwind and rethrow.
@@ -142,21 +163,25 @@ export function release(lockDir) {
   // M10/T2-R18: bounded retry. `rmdirSync` takes no retry budget of its own, and
   // on Windows a directory that was just created can transiently refuse removal
   // while a sync client or scanner holds a handle to it (EPERM/EACCES/
-  // EBUSY). A single transient refusal must not become a permanent lockout of
-  // the ledger, the queue and the decision ledger.
+  // EBUSY/ENOTEMPTY). A single transient refusal must not become a permanent
+  // lockout of the ledger, the queue and the decision ledger. unlink+rmdir are
+  // attempted as ONE unit per retry round with a small geometric backoff:
+  // removing owner.json leaves a pending-delete handle on Windows, so the very
+  // next `rmdirSync` transiently answers EPERM/ENOTEMPTY — without the backoff
+  // every second acquire at the same path then hit FILE_LOCK_BUSY on a stranded
+  // empty directory.
   let lastError = null;
   for (let attempt = 0; attempt < RELEASE_RETRY_ATTEMPTS; attempt++) {
     try {
       unlinkSync(ownerFileFor(dir));
-      break;
     } catch (err) {
-      if (err?.code !== "ENOENT") {
-        lastError = err;
-        if (!RETRYABLE_RELEASE_ERRNOS.has(err?.code ?? "")) throw err;
+      if (
+        err?.code !== "ENOENT" &&
+        !RETRYABLE_RELEASE_ERRNOS.has(err?.code ?? "")
+      ) {
+        throw err;
       }
     }
-  }
-  for (let attempt = 0; attempt < RELEASE_RETRY_ATTEMPTS; attempt++) {
     try {
       rmdirSync(dir);
       heldTokens.delete(dir);
@@ -168,9 +193,8 @@ export function release(lockDir) {
       }
       lastError = err;
       if (!RETRYABLE_RELEASE_ERRNOS.has(err?.code ?? "")) break;
-      // Synchronous sleep-free backoff: a tight loop is fine here because the
-      // window is a few milliseconds and the alternative is event-loop blocking.
     }
+    if (attempt + 1 < RELEASE_RETRY_ATTEMPTS) busyWaitMs(1 << attempt);
   }
   throw lastError ?? notOwnerError(dir, "lock directory could not be removed");
 }
@@ -261,17 +285,13 @@ export function lockDirFor(rootPath, name = "writer.lock") {
  */
 export function withFileLockSync(lockDir, fn) {
   const dir = normalizeLockDir(lockDir);
-  try {
-    mkdirSync(dir, { mode: LOCK_MODE });
-  } catch (err) {
-    if (err?.code === "EEXIST") {
-      const busy = new Error(`FILE_LOCK_BUSY: lock held at ${dir}`, {
-        cause: err,
-      });
-      busy.code = "FILE_LOCK_BUSY";
-      throw busy;
-    }
-    throw err;
+  // M10/T2 owner token: acquisition must go through `tryAcquire` so the lock
+  // is registered with its token; an inline `mkdirSync` here left the lock
+  // unverifiable and every subsequent release was refused as foreign.
+  if (!tryAcquire(dir)) {
+    const busy = new Error(`FILE_LOCK_BUSY: lock held at ${dir}`);
+    busy.code = "FILE_LOCK_BUSY";
+    throw busy;
   }
   // M10/T2-R18: `fn`'s outcome must survive a failing release.
   //

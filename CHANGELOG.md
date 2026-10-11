@@ -8,6 +8,23 @@ All notable, validated changes to Personal Tool are documented here.
 
 ### Added
 
+- Closed the two owner-authorized M10/T2-R26 escalations and committed the
+  pending R13-R25 sweep. `ea84a5a` admitted the 39-defect sweep after gates
+  passed. `fd70bf6` made Knowledgebase incremental indexing atomic:
+  `accept_incremental` stages a shadow BUILDING index cloned from ACTIVE
+  (no re-embedding) and `complete_incremental` prunes stale sources, swaps
+  the ACTIVE pointer, and supersedes the prior index in one transaction, so
+  a failed run never mutates the live index (closes the R24 RED data-
+  integrity escalation). `d773856` bound file-lock release to a per-
+  acquisition owner token (`owner.json` inside the lock directory), so a
+  stale holder can no longer delete the next holder's lock and fork
+  `events.jsonl` (closes the R18 hazard by owner decision); the R26 gate
+  run then caught and fixed the sync seam (`withFileLockSync` had to route
+  through `tryAcquire`) and added a bounded Windows pending-delete backoff.
+  Final gates: `npm test` 1305 / 0 fail / 44 pre-existing skips; lint,
+  format:check, repo:check pass; collectible Python suite 126 passed / 2
+  skipped with the env-gated files NOT RUN on the Windows host. Restarts and
+  deployment remain owner-deferred.
 - Implemented the owner-authorized M10/T2-R7 authority predecessor
   admission repair, closing the asset-level deployment deadlock that kept
   the frozen R6 candidate undeployable: `configure.mjs --preflight`

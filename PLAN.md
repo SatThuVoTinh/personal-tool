@@ -3597,6 +3597,69 @@ the repository root rather than from the deployed extension, so no operator appl
 is needed - but a gateway restart is required for the plugin to pick up R25. The
 owner deferred restarts until the sweep is exhausted, so none was performed and
 no live system changed this round.
+
+### M10/T2-R26 — owner-authorized remediation of the open escalations (2026-10-11)
+
+The owner authorized committing the R13-R25 sweep and fixing the escalated open
+items without creating new tasks ("fix what is fixable"). This round records
+that execution. Read-only gates were re-run against the working tree before
+each commit.
+
+1. **Sweep committed.** The complete uncommitted R13-R25 defect sweep (39 fixed
+   defects, 26 modified + 11 new test files) was committed as `ea84a5a` after
+   `npm test` 1302 / 0 fail / 44 pre-existing skips, lint 0 issues,
+   `format:check` clean, and `repo:check` passed. A diff-wide secret-pattern
+   scan returned zero hits. The working tree had been dirty since R25; the
+   handoff note claiming a clean tree was stale and is corrected.
+2. **R24 RED escalation CLOSED — incremental indexing is now atomic**
+   (`fd70bf6`). Acceptance (`accept_incremental`) stages a shadow BUILDING index
+   cloned from ACTIVE (sources, segments and PDF details copied verbatim, no
+   re-embedding; rows re-stamped to the shadow run because the
+   `indexed_by_run_id` foreign key is index-scoped). Success
+   (`complete_incremental`) prunes stale sources, swaps the ACTIVE pointer,
+   supersedes the prior index and completes the run in one transaction.
+   Failure marks only the shadow FAILED (`fail_index=True` for both run kinds);
+   the live ACTIVE index is never mutated mid-run, closing the partial-index
+   data-integrity defect. Orphaned shadows are reclaimed by the existing
+   `recover_interrupted_runs` BUILDING sweep. Tests:
+   `apps/knowledge/tests/test_r24_atomic_incremental_index.py` (4, fake-
+   connection SQL-contract level) plus two lifecycle tests; the Python gate
+   remains `NOT RUN` on the Windows host (env-gated collection) and must be run
+   in WSL/CI before closeout.
+3. **R18 owner decision taken — file-lock release is owner-token bound**
+   (`d773856`). Acquisitions write `owner.json` (random per-acquisition token +
+   pid) inside the lock directory; `release` refuses any lock whose on-disk
+   token is absent or foreign, so a stale holder can no longer delete the next
+   holder's lock after an operator removes a live lock — the exact sequence
+   that forked `events.jsonl` past digest-chain recovery. Operator recovery of
+   an orphaned lock is now explicit directory removal, not `release`
+   (test updated: `m8-t2-file-lock` crashed-holder case). New tests R18-06 to
+   R18-08 reproduce the hazard against a second module instance as holder B.
+   The deployed pre-R18 build digest was already allowlisted as a predecessor;
+   no `configure.mjs` change was needed.
+4. **Discord network wedge adjudicated host-scoped, not repo-fixable.** The
+   wedged fetch (`[fetch-timeout] ... users/@me`, 2500 ms) originates in the
+   host OpenClaw runtime; no repository module performs that call. Per the
+   owner's instruction the durable fix stays owner-scoped (host network path /
+   DNS); no repo change was made.
+5. **Live state unchanged.** The gateway and knowledge service still run the
+   pre-R19 builds; deployment/restart remains owner-authorized separately.
+   `docs/contracts/execution/ACTIVE.md` remains INVALID for new work (declares
+   R8 while PLAN is at R26); it must be replaced or deleted at the next
+   materialized plan revision.
+6. **R26 post-commit regression found and fixed by the full gate.** The first
+   full-suite run after `d773856` failed 247 tests: `withFileLockSync` acquired
+   with an inline `mkdirSync` instead of `tryAcquire`, so sync-seam locks carried
+   no owner token and every `release` was refused and silently stranded the lock
+   directory. The seam now routes through `tryAcquire`; release retries unlink +
+   rmdir as one unit with a bounded 15 ms geometric backoff, and `ENOTEMPTY`
+   joins the retryable set (Windows keeps a just-unlinked file's directory in
+   pending-delete). Final gates on the R26 tree: `npm test` 1305 tests / 1261
+   pass / 0 fail / 44 pre-existing skips; lint 0 issues; `format:check` clean;
+   `repo:check` passed; collectible Python suites 126 passed / 2 skipped
+   (`test:knowledge` env-gated files remain NOT RUN on the Windows host and must
+   run in WSL/CI at closeout).
+
 ## 9. Deferred beyond V1
 
 Unless separately approved:
