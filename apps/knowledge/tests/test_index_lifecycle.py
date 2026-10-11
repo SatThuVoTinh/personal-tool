@@ -93,9 +93,10 @@ class FakeDatabase:
             raise RuntimeError("database detail must not escape")
         self.replaced.append(item.source_path)
 
-    async def complete_incremental(self, *args: object) -> None:
+    async def complete_incremental(self, *args: object) -> list[str]:
         self.completed = True
         self.completed_args = args
+        return ["old-index"]
 
     async def publish_full_rebuild(self, *_: object) -> list[str]:
         self.published = True
@@ -180,6 +181,32 @@ class IndexLifecycleTests(unittest.IsolatedAsyncioTestCase):
             database.completed_args[-1],
             {"MARKDOWN": (1, 1, 0), "PDF": (0, 0, 0)},
         )
+
+    async def test_incremental_success_returns_superseded_ids_for_cleanup(self) -> None:
+        item = source("newdoc", "new")
+        database = FakeDatabase({"01. Knowledge/AI/removed.md": "old"})
+
+        result = await lifecycle(database, FakeProbe([MATCHING]), FakeScanner(item)).execute(
+            AcceptedIndexRun("run-1", "shadow-index", "INCREMENTAL", "RUNNING")
+        )
+
+        self.assertEqual(result, ["old-index"])
+        self.assertTrue(database.completed)
+        stale_paths = database.completed_args[3]
+        self.assertEqual(stale_paths, {"01. Knowledge/AI/removed.md"})
+
+    async def test_incremental_failure_fails_the_shadow_index(self) -> None:
+        item = source("drift", "new")
+        database = FakeDatabase()
+        probe = FakeProbe([MATCHING, DRIFTED])
+
+        result = await lifecycle(database, probe, FakeScanner(item)).execute(
+            AcceptedIndexRun("run-1", "shadow-index", "INCREMENTAL", "RUNNING")
+        )
+
+        self.assertEqual(result, [])
+        self.assertFalse(database.completed)
+        self.assertTrue(database.failures[0][1]["fail_index"])
 
     async def test_incremental_commits_valid_sources_but_defers_deletion_on_parse_error(self) -> None:
         healthy = source("healthy", "new")

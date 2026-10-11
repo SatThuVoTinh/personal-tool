@@ -870,7 +870,98 @@ class KnowledgeDatabase:
         return [dict(row) for row in rows]
 
     async def accept_incremental(self, active_index: ActiveIndex) -> AcceptedIndexRun:
-        return await self._accept_run("INCREMENTAL", active_index.id)
+        """Stage the run in a shadow BUILDING index cloned from ACTIVE.
+
+        Incremental runs never mutate the live ACTIVE index; unchanged rows are
+        copied verbatim (no re-embedding) and the ACTIVE pointer only swaps in
+        ``complete_incremental`` when the whole run succeeded. Cloned rows are
+        re-stamped to the shadow run because the ``indexed_by_run_id`` foreign
+        key is index-scoped.
+        """
+
+        if self._pool is None:
+            raise RuntimeError("Database pool is unavailable.")
+        index_id, run_id = uuid4(), uuid4()
+        active_id = UUID(active_index.id)
+        async with self._mutation_transaction() as connection:
+            current_active = await connection.fetchval(
+                "SELECT id::text FROM knowledge.indexes WHERE status = 'ACTIVE' FOR UPDATE"
+            )
+            if current_active != active_index.id:
+                raise StateTransitionError("Incremental target is no longer ACTIVE.")
+            await connection.execute(
+                """
+                INSERT INTO knowledge.indexes
+                  (id, status, embedding_model_name, embedding_model_digest, embedding_dimensions)
+                VALUES ($1, 'BUILDING', $2, $3, $4)
+                """,
+                index_id,
+                active_index.embedding_model_name,
+                active_index.embedding_model_digest,
+                active_index.embedding_dimensions,
+            )
+            await connection.execute(
+                """
+                INSERT INTO knowledge.index_runs (id, index_id, kind, status)
+                VALUES ($1, $2, 'INCREMENTAL', 'RUNNING')
+                """,
+                run_id,
+                index_id,
+            )
+            await connection.execute(
+                """
+                INSERT INTO knowledge.sources
+                  (id, index_id, source_type, source_path, sha256, mime_type, title,
+                   primary_topic, canonical_topics, tags, indexed_by_run_id)
+                SELECT gen_random_uuid(), $1, source_type, source_path, sha256,
+                       mime_type, title, primary_topic, canonical_topics, tags, $2
+                FROM knowledge.sources
+                WHERE index_id = $3
+                """,
+                index_id,
+                run_id,
+                active_id,
+            )
+            await connection.execute(
+                """
+                INSERT INTO knowledge.segments
+                  (id, index_id, source_id, segment_type, chunk_ordinal, source_path,
+                   title, primary_topic, canonical_topics, tags, heading_path,
+                   heading_text, text, line_start, line_end, page_start, page_end,
+                   bbox, time_start_ms, time_end_ms, embedding, search_vector,
+                   indexed_by_run_id)
+                SELECT gen_random_uuid(), $1, staged.id, live.segment_type,
+                       live.chunk_ordinal, live.source_path, live.title,
+                       live.primary_topic, live.canonical_topics, live.tags,
+                       live.heading_path, live.heading_text, live.text,
+                       live.line_start, live.line_end, live.page_start, live.page_end,
+                       live.bbox, live.time_start_ms, live.time_end_ms,
+                       live.embedding, live.search_vector, $2
+                FROM knowledge.segments live
+                JOIN knowledge.sources staged
+                  ON staged.index_id = $1 AND staged.source_path = live.source_path
+                WHERE live.index_id = $3
+                """,
+                index_id,
+                run_id,
+                active_id,
+            )
+            await connection.execute(
+                """
+                INSERT INTO knowledge.pdf_source_details (index_id, source_id, build_id)
+                SELECT $1, staged.id, live.build_id
+                FROM knowledge.pdf_source_details live
+                JOIN knowledge.sources original
+                  ON original.id = live.source_id AND original.index_id = live.index_id
+                JOIN knowledge.sources staged
+                  ON staged.index_id = $1 AND staged.source_path = original.source_path
+                WHERE live.index_id = $3
+                """,
+                index_id,
+                run_id,
+                active_id,
+            )
+        return AcceptedIndexRun(str(run_id), str(index_id), "INCREMENTAL", "RUNNING")
 
     async def accept_full_rebuild(
         self, model_name: str, model_digest: str, dimensions: int
@@ -899,29 +990,6 @@ class KnowledgeDatabase:
                     index_id,
                 )
         return AcceptedIndexRun(str(run_id), str(index_id), "FULL_REBUILD", "RUNNING")
-
-    async def _accept_run(self, kind: str, index_id: str) -> AcceptedIndexRun:
-        if self._pool is None:
-            raise RuntimeError("Database pool is unavailable.")
-        run_id = uuid4()
-        index_uuid = UUID(index_id)
-        async with self._mutation_transaction() as connection:
-                index_status = await connection.fetchval(
-                    "SELECT status::text FROM knowledge.indexes WHERE id = $1 FOR UPDATE",
-                    index_uuid,
-                )
-                if index_status != "ACTIVE":
-                    raise StateTransitionError("Incremental target is no longer ACTIVE.")
-                await connection.execute(
-                    """
-                    INSERT INTO knowledge.index_runs (id, index_id, kind, status)
-                    VALUES ($1, $2, $3::knowledge.index_run_kind, 'RUNNING')
-                    """,
-                    run_id,
-                    index_uuid,
-                    kind,
-                )
-        return AcceptedIndexRun(str(run_id), index_id, kind, "RUNNING")
 
     async def source_hashes(self, index_id: str) -> dict[str, str]:
         if self._pool is None:
@@ -1229,7 +1297,14 @@ class KnowledgeDatabase:
         indexed: int,
         stale_paths: set[str],
         source_counts: Mapping[str, tuple[int, int, int]] | None = None,
-    ) -> None:
+    ) -> list[str]:
+        """Atomically publish the shadow index.
+
+        Stale deletion, the ACTIVE-pointer swap, and run completion commit in
+        one transaction, so a failed incremental never touched the live index.
+        Returns the SUPERSEDED ids for owned cleanup.
+        """
+
         if self._pool is None:
             raise RuntimeError("Database pool is unavailable.")
         async with self._mutation_transaction() as connection:
@@ -1255,6 +1330,30 @@ class KnowledgeDatabase:
                 )
                 if updated_run is None:
                     raise StateTransitionError("Incremental run did not reach SUCCEEDED.")
+                await connection.fetch(
+                    "SELECT id FROM knowledge.indexes WHERE status = 'ACTIVE' FOR UPDATE"
+                )
+                await connection.execute(
+                    """
+                    UPDATE knowledge.indexes SET status = 'SUPERSEDED', superseded_at = now()
+                    WHERE status = 'ACTIVE'
+                    """
+                )
+                activated = await connection.fetchval(
+                    """
+                    UPDATE knowledge.indexes SET status = 'ACTIVE', activated_at = now()
+                    WHERE id = $1 AND status = 'BUILDING'
+                    RETURNING id
+                    """,
+                    UUID(run.index_id),
+                )
+                if activated is None:
+                    raise StateTransitionError("Incremental shadow index did not reach ACTIVE.")
+                cleanup_rows = await connection.fetch(
+                    "SELECT id FROM knowledge.indexes WHERE status = 'SUPERSEDED'"
+                )
+                cleanup_ids = [str(row["id"]) for row in cleanup_rows]
+        return cleanup_ids
 
     async def publish_full_rebuild(
         self,
@@ -1543,7 +1642,7 @@ class KnowledgeDatabase:
             raise StateTransitionError("Index run is no longer RUNNING.")
         if str(run_row["index_id"]) != run.index_id or run_row["kind"] != run.kind:
             raise StateTransitionError("Index run identity changed unexpectedly.")
-        expected_index_status = "ACTIVE" if run.kind == "INCREMENTAL" else "BUILDING"
+        expected_index_status = "BUILDING"
         index_status = await connection.fetchval(
             "SELECT status::text FROM knowledge.indexes WHERE id = $1 FOR UPDATE",
             UUID(run.index_id),

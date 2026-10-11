@@ -338,14 +338,13 @@ class IndexLifecycle:
                         failed,
                     )
                     return []
-                await self._database.complete_incremental(
+                return await self._database.complete_incremental(
                     run,
                     discovered,
                     indexed,
                     set(existing).difference(manifest),
                     self._source_counts(),
                 )
-                return []
 
             return await self._database.publish_full_rebuild(
                 run, discovered, indexed, self._source_counts()
@@ -410,7 +409,10 @@ class IndexLifecycle:
             discovered,
             indexed,
             failed,
-            fail_index=run.kind == "FULL_REBUILD",
+            # Both kinds now target a BUILDING index: incremental stages in a
+            # shadow index, so failure must mark that shadow FAILED and leave
+            # the live ACTIVE index untouched.
+            fail_index=True,
             source_counts=self._source_counts(),
         )
 
