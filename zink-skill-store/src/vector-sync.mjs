@@ -57,15 +57,52 @@ export function validateOllamaUrl(rawUrl, options = {}) {
 }
 
 /**
- * Centrally constructs safe PostgreSQL array literal (L16).
+ * Centrally constructs a PostgreSQL array literal (L16).
+ *
+ * M11/T1: inside a double-quoted array item the array-literal grammar escapes
+ * `"` and `\` with a BACKSLASH; the pre-fix implementation doubled the quote
+ * (`""`), which PostgreSQL reads as two literal quote characters. The result
+ * is only valid once embedded in a SQL string constant (callers wrap it with
+ * `escapeSqlLiteral`); a brace literal pasted unquoted into SQL is a syntax
+ * error, which is how every sync died once the statement reached real psql.
+ * Control characters are refused outright: they cannot appear in skill
+ * identity segments (path-safety rejects them) and text[] array items must be
+ * representable without ambiguity.
  */
 export function toPostgresArrayLiteral(arr) {
   if (!Array.isArray(arr) || arr.length === 0) return "{}";
   const elements = arr.map((item) => {
     const s = String(item ?? "");
-    return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '""')}"`;
+    if (
+      [...s].some((c) => {
+        const cp = c.codePointAt(0);
+        return cp < 0x20 || cp === 0x7f;
+      })
+    ) {
+      throw new Error(
+        `ARRAY_LITERAL_CONTROL_CHARACTER: element ${JSON.stringify(
+          s.slice(0, 32),
+        )} contains a control character`,
+      );
+    }
+    return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
   });
   return `{${elements.join(",")}}`;
+}
+
+/**
+ * Asserts a value is a lowercase sha256 hex digest before it is interpolated
+ * into a SQL literal (M11/T1). Digests must never ride the generic escape
+ * path: anything that is not hex here is a corrupt producer, not data.
+ */
+export function assertHexDigest(value, label) {
+  const s = String(value ?? "");
+  if (!/^[a-f0-9]{64}$/u.test(s)) {
+    throw new Error(
+      `VECTOR_LITERAL_UNTRUSTED_INPUT: ${label} is not a sha256 hex digest`,
+    );
+  }
+  return s;
 }
 
 /**
@@ -148,7 +185,10 @@ export function chunkSkillContent(rawContent) {
     const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
     if (headingMatch) {
       flush();
-      currentHeading = [headingMatch[2].trim()];
+      // M11/T1: heading_path lands in a text[] array literal, which cannot
+      // carry control characters; collapse all whitespace runs (a tab inside
+      // a heading must not fail the whole skill).
+      currentHeading = [headingMatch[2].replace(/\s+/g, " ").trim()];
       currentLines = [line];
       currentBytes = lineBytes;
       continue;
@@ -329,12 +369,38 @@ export async function generateSkillEmbeddings(texts, options = {}) {
       );
     }
 
-    const data = await res.json();
-
-    // Verify returned model identity against requested model (L03)
-    if (data.model && !data.model.startsWith("bge-m3")) {
+    // M11/T1: the declared header is only a fast pre-check. A chunked
+    // response carries no content-length, so the actual body bytes are
+    // counted before parsing.
+    const rawBody = await res.text();
+    const bodyBytes = Buffer.byteLength(rawBody, "utf8");
+    if (bodyBytes > MAX_EMBEDDING_PAYLOAD_BYTES) {
       throw new Error(
-        `EMBEDDING_MODEL_MISMATCH: expected bge-m3 family, got ${data.model}`,
+        `EMBEDDING_PAYLOAD_TOO_LARGE: ${bodyBytes} bytes exceeds limit`,
+      );
+    }
+
+    let data;
+    try {
+      data = JSON.parse(rawBody);
+    } catch {
+      throw new Error("EMBEDDING_INVALID_JSON_RESPONSE");
+    }
+
+    // Verify returned model identity (L03). M11/T1: exact equality — a
+    // startsWith check accepted any "bge-m3-*" alias swap.
+    if (data.model && data.model !== modelName) {
+      throw new Error(
+        `EMBEDDING_MODEL_MISMATCH: expected exactly ${modelName}, got ${data.model}`,
+      );
+    }
+    if (
+      data.model_version &&
+      EXPECTED_MODEL_DIGEST &&
+      data.model_version !== EXPECTED_MODEL_DIGEST
+    ) {
+      throw new Error(
+        `EMBEDDING_MODEL_DIGEST_MISMATCH: endpoint reported ${data.model_version}, pinned ${EXPECTED_MODEL_DIGEST}`,
       );
     }
 
@@ -409,6 +475,98 @@ export async function reconcileVectorSync(skillsRoot) {
 }
 
 /**
+ * Builds the single all-or-nothing transaction for one ACTIVE skill (M11/T1).
+ * Every interpolated literal goes through escapeSqlLiteral over the
+ * array-literal grammar; the READY marker is written only after every segment
+ * row landed, inside the same transaction, so no partial sync can ever be
+ * observable. Callers must pass digests already validated by assertHexDigest.
+ */
+function buildSkillSyncTransaction({
+  namespace,
+  capability,
+  version,
+  contentHash,
+  skillEmbeddingHash,
+  semanticMeta,
+  canonicalSecondaryTopics,
+  segmentRows,
+}) {
+  const nsLit = escapeSqlLiteral(toPostgresArrayLiteral(namespace));
+  const secLit = escapeSqlLiteral(
+    toPostgresArrayLiteral(canonicalSecondaryTopics),
+  );
+  const subtopicLit = semanticMeta.subtopic
+    ? escapeSqlLiteral(semanticMeta.subtopic)
+    : "NULL";
+
+  const valuesRows = segmentRows
+    .map(
+      (row) =>
+        `(${row.ordinal}, ` +
+        `${escapeSqlLiteral(
+          toPostgresArrayLiteral(row.headingPath),
+        )}::text[], ` +
+        `${escapeSqlLiteral(row.content)}, ` +
+        `${escapeSqlLiteral(row.vectorLiteral)}::vector(1024))`,
+    )
+    .join(",\n            ");
+
+  return `
+      BEGIN;
+      DO $$
+      DECLARE
+        v_skill_id uuid;
+      BEGIN
+        INSERT INTO skills.catalog_index (
+          namespace, capability, version, source_sha256, embedding_input_sha256,
+          domain, primary_topic, subtopic, secondary_topics, status, sync_status, synced_at, failure_reason
+        ) VALUES (
+          ${nsLit}::text[],
+          ${escapeSqlLiteral(capability)},
+          ${escapeSqlLiteral(version)},
+          '${contentHash}',
+          '${skillEmbeddingHash}',
+          ${escapeSqlLiteral(semanticMeta.domain)},
+          ${escapeSqlLiteral(semanticMeta.primary_topic)},
+          ${subtopicLit},
+          ${secLit}::text[],
+          'ACTIVE',
+          'PENDING',
+          now(),
+          NULL
+        )
+        ON CONFLICT (namespace, capability, version) DO UPDATE SET
+          source_sha256 = EXCLUDED.source_sha256,
+          embedding_input_sha256 = EXCLUDED.embedding_input_sha256,
+          domain = EXCLUDED.domain,
+          primary_topic = EXCLUDED.primary_topic,
+          subtopic = EXCLUDED.subtopic,
+          secondary_topics = EXCLUDED.secondary_topics,
+          status = 'ACTIVE',
+          sync_status = 'PENDING',
+          synced_at = now(),
+          failure_reason = NULL
+        RETURNING id INTO v_skill_id;
+
+        DELETE FROM skills.segments WHERE skill_id = v_skill_id;
+
+        INSERT INTO skills.segments (
+          skill_id, segment_ordinal, heading_path, content, embedding, created_at
+        )
+        SELECT v_skill_id, s.ordinal, s.heading_path, s.content, s.embedding, now()
+        FROM (VALUES
+            ${valuesRows}
+        ) AS s(ordinal, heading_path, content, embedding);
+
+        UPDATE skills.catalog_index
+        SET sync_status = 'READY', synced_at = now()
+        WHERE id = v_skill_id;
+      END $$;
+      COMMIT;
+    `;
+}
+
+/**
  * Synchronizes canonical Git-native ACTIVE skills into derived PostgreSQL vector tables.
  * Implements K24, K25, L10-L20.
  */
@@ -474,12 +632,24 @@ export async function syncSkillsToVectorStore(options = {}) {
   });
 
   try {
+    // M11/T1: two independent defects made this statement never reach a
+    // successful execution against real PostgreSQL. (1) `unnest(ARRAY[{...}]
+    // ::text[])` is a syntax error — a brace array literal is only legal as a
+    // quoted string constant, so the literal now goes through
+    // escapeSqlLiteral. (2) The pre-fix UPDATE wrote status='DEPRECATED' and
+    // sync_status='TOMBSTONED', which migration 003 CHECK constraints do not
+    // admit (status is ACTIVE-only; sync_status is PENDING/READY/FAILED).
+    // The tombstone now DELETES the derived row (segments cascade via FK):
+    // pgvector state is derived-only, canonical lifecycle truth stays in the
+    // catalog, and every consumer already filters status='ACTIVE' AND
+    // sync_status='READY', so removal is consumer-visible-identical.
     const tombstoneSql = `
-      UPDATE skills.catalog_index
-      SET status = 'DEPRECATED', sync_status = 'TOMBSTONED', synced_at = now()
+      DELETE FROM skills.catalog_index
       WHERE status = 'ACTIVE'
       AND (array_to_string(namespace, '/') || '|' || capability || '|' || version) NOT IN (
-        SELECT (unnest(ARRAY[${toPostgresArrayLiteral(activeKeys)}]::text[]))
+        SELECT unnest(${escapeSqlLiteral(
+          toPostgresArrayLiteral(activeKeys),
+        )}::text[])
       );
     `;
     await executePostgresQuery(tombstoneSql, options);
@@ -493,7 +663,14 @@ export async function syncSkillsToVectorStore(options = {}) {
     return syncReport;
   }
 
-  // 4. Ingest and vectorize active records
+  // 4. Ingest and vectorize active records.
+  // M11/T1: each skill is written as ONE transaction in ONE psql invocation.
+  // The pre-fix loop executed one DO $$ block per segment and the ordinal-0
+  // block already set sync_status='READY' before later segments were embedded
+  // or inserted, so a mid-skill failure left a READY row with missing
+  // segments (and the secondary failSql error was swallowed outright). All
+  // embeddings are computed first; if any fails, nothing is written.
+  let secondaryWriteFailed = false;
   for (const record of activeRecords) {
     const { namespace, capability, version } = record.manifest.identity;
     const recordedHash =
@@ -541,6 +718,8 @@ export async function syncSkillsToVectorStore(options = {}) {
       // Semantic chunk granularity (L11)
       const segments = chunkSkillContent(currentContent);
 
+      const segmentRows = [];
+      const envelopeHashes = [];
       for (const seg of segments) {
         const envelopeText = renderEmbeddingEnvelope({
           ...semanticMeta,
@@ -550,73 +729,39 @@ export async function syncSkillsToVectorStore(options = {}) {
 
         const [vector] = await generateSkillEmbeddings([envelopeText], options);
 
-        const nsPgArray = toPostgresArrayLiteral(namespace);
-        const secTopicsPgArray = toPostgresArrayLiteral(
-          canonicalSecondaryTopics,
-        );
-        const headingPgArray = toPostgresArrayLiteral(seg.heading_path);
-        const vectorStr = `[${vector.join(",")}]`;
-
-        const subtopicSql = semanticMeta.subtopic
-          ? escapeSqlLiteral(semanticMeta.subtopic)
-          : "NULL";
-        const escapedContent = escapeSqlLiteral(seg.content);
-
-        const upsertSql = `
-          DO $$
-          DECLARE
-            v_skill_id uuid;
-          BEGIN
-            INSERT INTO skills.catalog_index (
-              namespace, capability, version, source_sha256, embedding_input_sha256,
-              domain, primary_topic, subtopic, secondary_topics, status, sync_status, synced_at, failure_reason
-            ) VALUES (
-              '${nsPgArray}'::text[],
-              ${escapeSqlLiteral(capability)},
-              ${escapeSqlLiteral(version)},
-              '${currentHash}',
-              '${embeddingInputHash}',
-              ${escapeSqlLiteral(semanticMeta.domain)},
-              ${escapeSqlLiteral(semanticMeta.primary_topic)},
-              ${subtopicSql},
-              '${secTopicsPgArray}'::text[],
-              'ACTIVE',
-              'READY',
-              now(),
-              NULL
-            )
-            ON CONFLICT (namespace, capability, version) DO UPDATE SET
-              source_sha256 = EXCLUDED.source_sha256,
-              embedding_input_sha256 = EXCLUDED.embedding_input_sha256,
-              domain = EXCLUDED.domain,
-              primary_topic = EXCLUDED.primary_topic,
-              subtopic = EXCLUDED.subtopic,
-              secondary_topics = EXCLUDED.secondary_topics,
-              status = 'ACTIVE',
-              sync_status = 'READY',
-              synced_at = now(),
-              failure_reason = NULL
-            RETURNING id INTO v_skill_id;
-
-            IF ${seg.segment_ordinal} = 0 THEN
-              DELETE FROM skills.segments WHERE skill_id = v_skill_id;
-            END IF;
-
-            INSERT INTO skills.segments (
-              skill_id, segment_ordinal, heading_path, content, embedding, created_at
-            ) VALUES (
-              v_skill_id,
-              ${seg.segment_ordinal},
-              '${headingPgArray}'::text[],
-              ${escapedContent},
-              '${vectorStr}'::vector(1024),
-              now()
-            );
-          END $$;
-        `;
-
-        await executePostgresQuery(upsertSql, options);
+        envelopeHashes.push(embeddingInputHash);
+        segmentRows.push({
+          ordinal: seg.segment_ordinal,
+          headingPath: seg.heading_path,
+          content: seg.content,
+          vectorLiteral: `[${vector.join(",")}]`,
+        });
       }
+
+      // The row-level digest identifies the whole indexed representation:
+      // sha256 over the per-segment envelope hashes. (Pre-fix, each segment's
+      // ON CONFLICT UPDATE overwrote it, leaving the LAST segment's hash as
+      // the recorded digest of the skill.)
+      const skillEmbeddingHash = createHash("sha256")
+        .update(envelopeHashes.join("\n"))
+        .digest("hex");
+
+      await executePostgresQuery(
+        buildSkillSyncTransaction({
+          namespace,
+          capability,
+          version,
+          contentHash: assertHexDigest(currentHash, "source_sha256"),
+          skillEmbeddingHash: assertHexDigest(
+            skillEmbeddingHash,
+            "embedding_input_sha256",
+          ),
+          semanticMeta,
+          canonicalSecondaryTopics,
+          segmentRows,
+        }),
+        options,
+      );
 
       syncReport.synced_count += 1;
       syncReport.skills.push({
@@ -640,19 +785,25 @@ export async function syncSkillsToVectorStore(options = {}) {
         error: boundedReason,
       });
 
-      // Observable failure recording (BUG-08, L13)
+      // Observable failure recording (BUG-08, L13). M11/T1: a failure to
+      // persist the FAILED marker is itself escalated — the whole sync is
+      // reported FAILED with VECTOR_FAILURE_WRITE_FAILED instead of
+      // silently ignoring the secondary error.
       try {
-        const nsPgArray = toPostgresArrayLiteral(namespace);
+        const nsPgArray = escapeSqlLiteral(toPostgresArrayLiteral(namespace));
         const failSql = `
           INSERT INTO skills.catalog_index (
             namespace, capability, version, source_sha256, embedding_input_sha256,
             domain, primary_topic, subtopic, secondary_topics, status, sync_status, synced_at, failure_reason
           ) VALUES (
-            '${nsPgArray}'::text[],
+            ${nsPgArray}::text[],
             ${escapeSqlLiteral(capability)},
             ${escapeSqlLiteral(version)},
-            '${recordedHash || "0000000000000000000000000000000000000000000000000000000000000000"}',
-            '0000000000000000000000000000000000000000000000000000000000000000',
+            '${assertHexDigest(
+              recordedHash || "0".repeat(64),
+              "source_sha256",
+            )}',
+            '${"0".repeat(64)}',
             'general',
             'general',
             NULL,
@@ -669,7 +820,7 @@ export async function syncSkillsToVectorStore(options = {}) {
         `;
         await executePostgresQuery(failSql, options);
       } catch {
-        // Ignore secondary recording error
+        secondaryWriteFailed = true;
       }
     }
   }
@@ -683,6 +834,10 @@ export async function syncSkillsToVectorStore(options = {}) {
     }
   } else {
     syncReport.status = "READY";
+  }
+  if (secondaryWriteFailed) {
+    syncReport.status = "FAILED";
+    syncReport.error_code = "VECTOR_FAILURE_WRITE_FAILED";
   }
 
   return syncReport;

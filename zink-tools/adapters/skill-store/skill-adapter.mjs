@@ -547,12 +547,45 @@ export class SkillAdapter {
           );
         }
 
-        // K09: both namespace and secondary_topics applied in SQL
+        // K09: both namespace and secondary_topics applied in SQL.
+        // M11/T1: array-valued namespaces used to skip the B15 taxonomy
+        // validation (which only covers the string form) and the literal was
+        // interpolated unquoted — invalid SQL for any real psql, and a
+        // quote-breakout channel for tool-controlled strings. Elements are
+        // now validated through the shared semantic contract and the whole
+        // array literal passes through escapeSqlLiteral.
         const targetNs = metadataFilters.namespace || input.namespace;
         if (targetNs && targetNs !== "all") {
           const nsList = Array.isArray(targetNs) ? targetNs : [targetNs];
+          for (const ns of nsList) {
+            if (typeof ns !== "string" || !ns.trim()) {
+              throw new SkillAdapterError(
+                "namespace filter elements must be non-empty strings",
+                "SKILL_NAMESPACE_FILTER_INVALID",
+              );
+            }
+          }
+          const nsCheck = deriveSemanticMetadata({
+            namespace: nsList,
+            capability: "filter-validation",
+          });
+          if (
+            Array.isArray(nsCheck.unresolved_namespaces) &&
+            nsCheck.unresolved_namespaces.length > 0
+          ) {
+            throw new SkillAdapterError(
+              `UNKNOWN_NAMESPACE_FILTER: ${JSON.stringify(
+                nsCheck.unresolved_namespaces,
+              )} are not canonical namespaces or known aliases`,
+              "SKILL_NAMESPACE_FILTER_INVALID",
+            );
+          }
+          // Match the canonical form the writer stored, not the raw alias.
+          const canonicalNs = nsCheck.resolved_namespaces ?? nsList;
           whereClauses.push(
-            `c.namespace @> ${toPostgresArrayLiteral(nsList)}::text[]`,
+            `c.namespace @> ${escapeSqlLiteral(
+              toPostgresArrayLiteral(canonicalNs),
+            )}::text[]`,
           );
         }
 
@@ -560,7 +593,9 @@ export class SkillAdapter {
           metadataFilters.secondary_topics || input.secondary_topics;
         if (Array.isArray(targetSecTopics) && targetSecTopics.length > 0) {
           whereClauses.push(
-            `c.secondary_topics && ${toPostgresArrayLiteral(targetSecTopics)}::text[]`,
+            `c.secondary_topics && ${escapeSqlLiteral(
+              toPostgresArrayLiteral(targetSecTopics),
+            )}::text[]`,
           );
         }
 
