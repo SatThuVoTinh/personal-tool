@@ -36,7 +36,8 @@ Evidence Level: NONE | LOCAL-VERIFIED | REMOTE-BACKED
 | M6 — Zink Skill Store                                                      | `COMPLETE`    | `REMOTE-BACKED`  | M6/T1-R4 task commit is remotely verified; governance closeout is recorded separately.                                                                                                                                                                                                                                                |
 | M7 — Zink Tools + OpenClaw integration + V1 hardening                      | `COMPLETE`    | `REMOTE-BACKED`  | M7/T1-R19, M7/T2-R12, M7/T3-R16, M7/T4-R10, and M7/T5-R13 complete; runtime governance remediation, Discord 7-bot integration, and Zink tools specialist policies verified.                                                                                                                                                           |
 | M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Integration | `IN PROGRESS` | `LOCAL-VERIFIED` | M8/T1 is complete; M8/T2.2 R4/R5/R6 are implemented; M8/T2.2-R7 (heartbeat admission, boundary diagnosability, apply safety) is in progress. Deployment is not authorized.                                                                                                                                                            |
-| M10 - Governed coordinator runtime binding                                 | `IN PROGRESS` | `LOCAL-VERIFIED` | M10/T2-R8 (Discord conversational ingress end-to-end: observability deploy, controlled live correlation, evidence-bound fix, redeploy, live verify) authorized end-to-end by explicit owner prompt; execution contract is `docs/contracts/execution/ACTIVE.md`, behavior contract is `docs/contracts/coordinator-session-binding.md`. |
+| M10 - Governed coordinator runtime binding                                 | `COMPLETE` | `LOCAL-VERIFIED` | M10/T2 closed by explicit owner decision 2026-10-11 (R26 records the final remediation; R8 closed live with zero-outbound proven). Deferred follow-ups are NOT closed under M10 and require separate authorization: live gateway/knowledge restart or deployment, M10 ingress card/tag redesign (new Plan Revision), coordinator result ingestion, and the WSL/CI Python gate run. |
+| M11 - Cross-module audit remediation                                       | `IN PROGRESS` | `LOCAL-VERIFIED` | M11/T1 (4-phase remediation of the 2026-10-11 full-repo read-only audit: skill-store vector SQL correctness, skill-store governance, knowledgebase index hygiene/attribution, OpenClaw outbound containment + cache/ledger safety) owner-approved; execution contract is `docs/contracts/execution/ACTIVE.md`. Deployment is not authorized. |
 
 The former self-built L&SC Data Plant is replaced by a **logical external
 infrastructure flow**, not another repository module. Forecasting, optimization,
@@ -45,41 +46,25 @@ operations research and simulation remain first-class capabilities.
 ## 4. Current focus
 
 ```text
-Milestone: M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Integration
-Task: M8/T2.2 — Root-Cause Governed Runtime, Discord, Semantic & Artifact Integrity Hardening
-Task Status: CLOSED
+Milestone: M11 — Cross-module audit remediation
+Task: M11/T1 — Skill-store SQL correctness, skill-store governance, knowledgebase index hygiene, OpenClaw outbound security
+Task Status: IN PROGRESS
 Planning Readiness: APPROVED
-Plan Revision: M8/T2.2-R19
+Plan Revision: M11/T1-R1
 Execution Authorization: YES
-Authorized Task: M8/T2.2 — Root-Cause Governed Runtime, Discord, Semantic & Artifact Integrity Hardening
+Authorized Task: M11/T1 — four-phase remediation of the 2026-10-11 read-only full-repo audit
 Execution Contract: docs/contracts/execution/ACTIVE.md
 Evidence Level: LOCAL-VERIFIED
-Task Branch: codex/m8-t2-governed-runtime-hardening
-Owner Approval: EXPLICIT — Owner authorized R7 remediation, controlled live
-  deployment, one-time R5 baseline restoration, R8 provenance remediation, R9
-  (blocked, superseded), R10 G1 contract correction, R11 transactional live
-  rollback safety, R12 durable transaction recovery safety, R13 the narrow R7
-  predecessor provenance allowlist correction, an R10 live deployment attempt
-  (authorization `b8597fe`, ONE attempt, FAILED at `native-backup-prune` with
-  `NATIVE_SOURCE_DRIFT`; the R12 rollback restored the exact R7 preimage and
-  verified it, with the ledger untouched), R14 native patch lineage
-  compatibility, a second R10 live deployment attempt (authorization `7520f39`,
-  ONE attempt, ABORTED at the transaction-snapshot stage with
-  `ROLLBACK_SAFETY_UNAVAILABLE` and zero mutation, because the R12 transaction ID
-  is derived from the preimage and therefore collides with the retained record of
-  the previous attempt), and R15 attempt-scoped transaction identity. Owner
-  accepted the R14 implementation and its live preflight. Owner acknowledged
-  the duplicated entrypoint allowlist as protected technical debt, not a blocker,
-  and R16 full-apply rehearsal on an exact clone of the live R7 runtime.
-Deployment Authorized: YES
-Deployment Authorized: YES (R17 - consumed)
-Deployment Authorized: YES (R18 - single attempt, granted by the owner on
-  2026-10-01)
-Deployment Authorized: YES (R19 - single attempt, granted by the owner on
-  2026-10-01 as authorized completion of M8/T2.2)
-Deployment Authorized: YES (owner-identity hygiene - single attempt, granted by
-  the owner as part of the instruction to finish all PR #18 remediation
-  end-to-end; consumed by that one attempt; remediation deployment only)
+Task Branch: codex/m11-t1-audit-remediation
+Owner Approval: EXPLICIT — owner approved the presented plan on 2026-10-11 with
+  scope "3 clusters + OpenClaw security", single Active Task with four ordered
+  phases, close-and-replace of the stale M10/T2-R8 ACTIVE.md, and H7 as
+  mitigation-only (no incremental-publish redesign).
+Deployment Authorized: NO — no operator-apply, no live runtime mutation, no
+  gateway/service restart under this contract.
+
+Prior focus: M8/T2.2 CLOSED (R19 live-verified) and M10/T2 CLOSED by owner
+  decision 2026-10-11; their durable records live in §8 and the history below.
 ```
 
 `Deployment Status: DEPLOYED - R18 LIVE AND VERIFIED FOR ITS AUTHORIZED SEAM;
@@ -3659,6 +3644,39 @@ each commit.
    `repo:check` passed; collectible Python suites 126 passed / 2 skipped
    (`test:knowledge` env-gated files remain NOT RUN on the Windows host and must
    run in WSL/CI at closeout).
+
+### M10/T2 — Closeout (owner decision 2026-10-11)
+
+Task Status: `CLOSED`. Planning Readiness: `APPROVED`. Execution Authorization:
+`NO`. Execution Contract: `NONE` (the stale R8 `ACTIVE.md` was replaced by the
+M11/T1-R1 contract on 2026-10-11, as directed by R26 item 5). Evidence:
+`LOCAL-VERIFIED` for the committed remediation; the R8 live closure evidence
+(transaction ids, digests, counters, transcript) is recorded in the R8/R26
+entries above.
+
+Owner-closed with these items explicitly NOT closed under M10 (each requires
+separate future authorization): live gateway/knowledge service restart or
+deployment (pre-R19 builds still running; V13 deployed-asset-drift gate); M10
+ingress card/tag redesign (new Plan Revision); coordinator result ingestion;
+the WSL/CI run of the env-gated Python `test:knowledge` files.
+
+### M11/T1-R1 — Cross-module audit remediation (owner-approved 2026-10-11)
+
+Task: `M11/T1 — Skill-store vector SQL correctness, skill-store governance,
+knowledgebase index hygiene/attribution, OpenClaw outbound containment and
+cache/ledger safety`
+Plan Revision: `M11/T1-R1` · Planning Readiness: `APPROVED` · Execution
+Authorization: `YES` · Execution Contract:
+`docs/contracts/execution/ACTIVE.md` · Evidence: `LOCAL-VERIFIED` ·
+Task Branch: `codex/m11-t1-audit-remediation`
+
+Origin: owner-requested read-only full-repo audit on 2026-10-11 (five parallel
+domain audits, spot-verified against source). The frozen implementation
+details, ordered steps, acceptance criteria and gates live only in the matching
+`ACTIVE.md`. Out-of-scope escalations recorded for future owner decisions:
+per-document ingestion quarantine, incremental-publish redesign (no full-corpus
+clone), manifest schema extension (`metadata`/`verification` fields), the
+zink-tools contract-drift cluster, and the zink-tools lint/format glob gap.
 
 ## 9. Deferred beyond V1
 
