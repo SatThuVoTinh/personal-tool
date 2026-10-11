@@ -4,7 +4,14 @@
 // pre-fix code, not merely reasoned about.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -136,6 +143,65 @@ test("R18-05: release is idempotent and never throws for an absent lock", () => 
     assert.equal(tryAcquire(lockDir), true);
     release(lockDir);
     release(lockDir); // second release must be a no-op, not an error
+  } finally {
+    cleanup([base]);
+  }
+});
+
+test("R18-06: an acquired lock carries an owner token inside its directory", () => {
+  const base = root();
+  const lockDir = path.join(base, "writer.lock");
+  try {
+    assert.equal(tryAcquire(lockDir), true);
+    const owner = JSON.parse(
+      readFileSync(path.join(lockDir, mod.LOCK_OWNER_FILE), "utf8"),
+    );
+    assert.equal(owner.pid, process.pid);
+    assert.match(owner.token, /^[0-9a-f]{32}$/u);
+  } finally {
+    cleanup([base]);
+  }
+});
+
+test("R18-07: release refuses a foreign lock directory and leaves it intact", () => {
+  const base = root();
+  const lockDir = path.join(base, "writer.lock");
+  try {
+    mkdirSync(lockDir); // an external/live holder's lock — never touched by us
+    assert.throws(
+      () => release(lockDir),
+      (err) => err.code === "FILE_LOCK_NOT_OWNER",
+      "a lock this process never acquired must not be releasable",
+    );
+    assert.equal(existsSync(lockDir), true, "the foreign lock must survive");
+  } finally {
+    cleanup([base]);
+  }
+});
+
+test("R18-08: a stale holder cannot release the next holder's lock", async () => {
+  // Two independent module instances model two processes with distinct
+  // token maps. The operator removes holder A's live lock; holder B acquires
+  // a fresh lock at the same path; A's `finally` must NOT delete B's lock,
+  // because that is how two writers entered the critical section and forked
+  // events.jsonl beyond digest-chain recovery.
+  const holderB = await import(
+    "../integrations/openclaw/lib/file-lock.mjs?test-holder=b"
+  );
+  const base = root();
+  const lockDir = path.join(base, "writer.lock");
+  try {
+    assert.equal(tryAcquire(lockDir), true); // A holds the lock
+    rmSync(lockDir, { recursive: true, force: true }); // operator removes it
+    assert.equal(holderB.tryAcquire(lockDir), true); // B takes over
+    assert.throws(
+      () => release(lockDir),
+      (err) => err.code === "FILE_LOCK_NOT_OWNER",
+      "A's token no longer matches the on-disk owner record",
+    );
+    assert.equal(existsSync(lockDir), true, "B's lock must still guard the section");
+    holderB.release(lockDir); // B releases its own lock normally
+    assert.equal(existsSync(lockDir), false);
   } finally {
     cleanup([base]);
   }

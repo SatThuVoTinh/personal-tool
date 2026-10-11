@@ -1,7 +1,7 @@
 import test, { describe } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, existsSync } from "node:fs";
+import { mkdtempSync, existsSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -142,7 +142,12 @@ describe("R4 Finding 2 — shared async file lock", () => {
       /FILE_LOCK_TIMEOUT/,
       "orphaned lock must fail closed, never silently reclaimed",
     );
-    release(lockDir); // explicit operator-class recovery, not automatic
+    // M10/T2 owner-token design: an orphaned lock is recovered by the operator
+    // removing the directory itself — `release` now refuses a lock this process
+    // never acquired, which is exactly what stopped a stale holder from
+    // deleting the next holder's lock and forking events.jsonl.
+    rmSync(lockDir, { recursive: true, force: true });
+    assert.equal(existsSync(lockDir), false);
   });
 
   test("lock module works on the repository filesystem (Windows/OneDrive)", async () => {

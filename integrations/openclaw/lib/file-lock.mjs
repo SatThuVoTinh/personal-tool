@@ -27,8 +27,16 @@
  * half exists alongside the sync half.
  */
 
-import { mkdirSync, rmdirSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  rmdirSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
+import { randomBytes } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 
 export const DEFAULT_LOCK_TIMEOUT_MS = 5000;
@@ -41,12 +49,35 @@ export const LOCK_MODE = 0o700;
  */
 export const RELEASE_RETRY_ATTEMPTS = 5;
 const RETRYABLE_RELEASE_ERRNOS = new Set(["EPERM", "EACCES", "EBUSY"]);
+/**
+ * M10/T2 owner-token decision (owner-authorized): every lock this protocol
+ * acquires carries `owner.json` inside the lock directory, holding a random
+ * per-acquisition token registered in this process. `release` only removes a
+ * lock whose on-disk token matches the one this process recorded. Without
+ * this, an operator removing a live holder's lock let the holder's `finally`
+ * delete the NEXT holder's lock directory, putting two writers inside the
+ * critical section and forking `events.jsonl` beyond digest-chain recovery.
+ */
+export const LOCK_OWNER_FILE = "owner.json";
+
+/** lockDir -> token recorded by the acquisition this process performed. */
+const heldTokens = new Map();
 
 function normalizeLockDir(lockDir) {
   if (typeof lockDir !== "string" || lockDir.length === 0) {
     throw new Error("FILE_LOCK_PATH_REQUIRED");
   }
   return lockDir;
+}
+
+function ownerFileFor(dir) {
+  return path.join(dir, LOCK_OWNER_FILE);
+}
+
+function notOwnerError(dir, reason) {
+  const error = new Error(`FILE_LOCK_NOT_OWNER: refusing to release ${dir} (${reason})`);
+  error.code = "FILE_LOCK_NOT_OWNER";
+  return error;
 }
 
 /**
@@ -58,18 +89,56 @@ export function tryAcquire(lockDir) {
   const dir = normalizeLockDir(lockDir);
   try {
     mkdirSync(dir, { mode: LOCK_MODE });
-    return true;
   } catch (err) {
     if (err?.code === "EEXIST") return false;
     throw err;
   }
+  const token = randomBytes(16).toString("hex");
+  try {
+    writeFileSync(ownerFileFor(dir), JSON.stringify({ pid: process.pid, token }), {
+      mode: LOCK_MODE,
+    });
+  } catch (err) {
+    // The lock exists but is unverifiable; leaving it would strand every
+    // future release behind FILE_LOCK_NOT_OWNER, so unwind and rethrow.
+    try {
+      rmdirSync(dir);
+    } catch {
+      /* best-effort unwind */
+    }
+    throw err;
+  }
+  heldTokens.set(dir, token);
+  return true;
 }
 
 /**
  * Release a lock held by this process. Never throws for a missing lock.
+ * Throws FILE_LOCK_NOT_OWNER when the lock at `dir` was not acquired by this
+ * process under the owner-token protocol — including a lock whose directory
+ * was removed and re-created by another holder in the meantime.
  */
 export function release(lockDir) {
   const dir = normalizeLockDir(lockDir);
+  const expected = heldTokens.get(dir);
+  if (expected === undefined) {
+    if (!existsSync(dir)) {
+      return; // idempotent no-op for an absent lock
+    }
+    throw notOwnerError(dir, "this process never acquired it");
+  }
+  let recorded;
+  try {
+    recorded = JSON.parse(readFileSync(ownerFileFor(dir), "utf8"));
+  } catch (err) {
+    if (err?.code === "ENOENT") {
+      throw notOwnerError(dir, `no ${LOCK_OWNER_FILE} present`);
+    }
+    throw notOwnerError(dir, "owner record is unreadable");
+  }
+  if (recorded?.token !== expected) {
+    throw notOwnerError(dir, "a different holder owns it now");
+  }
   // M10/T2-R18: bounded retry. `rmdirSync` takes no retry budget of its own, and
   // on Windows a directory that was just created can transiently refuse removal
   // while a sync client or scanner holds a handle to it (EPERM/EACCES/
@@ -78,17 +147,32 @@ export function release(lockDir) {
   let lastError = null;
   for (let attempt = 0; attempt < RELEASE_RETRY_ATTEMPTS; attempt++) {
     try {
+      unlinkSync(ownerFileFor(dir));
+      break;
+    } catch (err) {
+      if (err?.code !== "ENOENT") {
+        lastError = err;
+        if (!RETRYABLE_RELEASE_ERRNOS.has(err?.code ?? "")) throw err;
+      }
+    }
+  }
+  for (let attempt = 0; attempt < RELEASE_RETRY_ATTEMPTS; attempt++) {
+    try {
       rmdirSync(dir);
+      heldTokens.delete(dir);
       return;
     } catch (err) {
-      if (err?.code === "ENOENT") return; // already released
+      if (err?.code === "ENOENT") {
+        heldTokens.delete(dir);
+        return; // already released
+      }
       lastError = err;
       if (!RETRYABLE_RELEASE_ERRNOS.has(err?.code ?? "")) break;
       // Synchronous sleep-free backoff: a tight loop is fine here because the
       // window is a few milliseconds and the alternative is event-loop blocking.
     }
   }
-  throw lastError;
+  throw lastError ?? notOwnerError(dir, "lock directory could not be removed");
 }
 
 /**
