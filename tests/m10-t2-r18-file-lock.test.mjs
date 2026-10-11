@@ -185,9 +185,8 @@ test("R18-08: a stale holder cannot release the next holder's lock", async () =>
   // a fresh lock at the same path; A's `finally` must NOT delete B's lock,
   // because that is how two writers entered the critical section and forked
   // events.jsonl beyond digest-chain recovery.
-  const holderB = await import(
-    "../integrations/openclaw/lib/file-lock.mjs?test-holder=b"
-  );
+  const holderB =
+    await import("../integrations/openclaw/lib/file-lock.mjs?test-holder=b");
   const base = root();
   const lockDir = path.join(base, "writer.lock");
   try {
@@ -199,7 +198,11 @@ test("R18-08: a stale holder cannot release the next holder's lock", async () =>
       (err) => err.code === "FILE_LOCK_NOT_OWNER",
       "A's token no longer matches the on-disk owner record",
     );
-    assert.equal(existsSync(lockDir), true, "B's lock must still guard the section");
+    assert.equal(
+      existsSync(lockDir),
+      true,
+      "B's lock must still guard the section",
+    );
     holderB.release(lockDir); // B releases its own lock normally
     assert.equal(existsSync(lockDir), false);
   } finally {
