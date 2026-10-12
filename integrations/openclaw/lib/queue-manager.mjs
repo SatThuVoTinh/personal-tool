@@ -15,6 +15,20 @@ import { TASK_STATES } from "./authority.mjs";
 import { withFileLockSync, lockDirFor } from "./file-lock.mjs";
 
 /**
+ * Errnos that mean the queue's own directory cannot be written at all. They can
+ * only come from lock acquisition, never from a mutation, and they are reported
+ * with the same code `save()` uses for a failed durable write.
+ */
+const ACQUISITION_STORAGE_ERRORS = new Set([
+  "ENOENT",
+  "ENOTDIR",
+  "EACCES",
+  "EPERM",
+  "EROFS",
+  "ENOSPC",
+]);
+
+/**
  * Persistent Observable Queue Manager
  * Implements ACTIVE.md Sections 13, 14, 33:
  * - Decouples 24/7 Always-On Control Plane from governed execution agents.
@@ -122,12 +136,17 @@ export class QueueManager {
     if (!this.storagePath) {
       return fn();
     }
-    const lockDir = lockDirFor(
-      path.dirname(this.storagePath),
-      `${path.basename(this.storagePath)}.lock`,
-    );
+    const dir = path.dirname(this.storagePath);
+    const lockDir = lockDirFor(dir, `${path.basename(this.storagePath)}.lock`);
+    // The lock lives beside the queue file, so the directory `save()` creates on
+    // its first write has to exist before acquisition.
+    let bodyReached = false;
     try {
+      if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true });
+      }
       return withFileLockSync(lockDir, () => {
+        bodyReached = true;
         this.load();
         return fn();
       });
@@ -137,6 +156,15 @@ export class QueueManager {
           "QUEUE_LOCK_TIMEOUT: Failed to acquire queue file lock",
           { cause: err },
         );
+      }
+      // M11/T3 A4: an unwritable queue directory fails here, before any
+      // mutation ran. It is the same durable-write failure `save()` reports, so
+      // it keeps that host-visible code instead of surfacing a raw errno that
+      // every caller would have to reclassify on its own.
+      if (!bodyReached && ACQUISITION_STORAGE_ERRORS.has(err?.code)) {
+        throw new Error(`QUEUE_STORAGE_WRITE_FAILED: ${err?.message}`, {
+          cause: err,
+        });
       }
       throw err;
     }
@@ -237,58 +265,63 @@ export class QueueManager {
     if (!primaryCoordinator || !["o1", "o2"].includes(primaryCoordinator)) {
       throw new Error("PRIMARY_COORDINATOR_REQUIRED: Must be o1 or o2");
     }
-
-    const existing = this.queue.get(taskId);
-    if (existing && existing.status === TASK_STATES.EXECUTING) {
-      throw new Error(
-        "TASK_ALREADY_EXECUTING: Cannot re-enqueue an active task",
-      );
-    }
-
-    const item = {
-      taskId,
-      planVersion,
-      primaryCoordinator,
-      requiredCapabilities,
-      payload,
-      ownerPrincipalRef:
-        typeof ownerPrincipalRef === "string" && ownerPrincipalRef
-          ? ownerPrincipalRef
-          : null,
-      status: TASK_STATES.QUEUED,
-      queueReason,
-      enqueuedAt: new Date().toISOString(),
-      // H05: fence fields â€” set on claim, validated on finish/heartbeat
-      claimedBy: null,
-      claimedAt: null,
-      leaseId: null, // H05: unique per claim/attempt
-      attempt: existing ? existing.attempt + 1 : 1,
-      lastHeartbeatAt: null,
-      leaseExpiresAt: null,
-      history: existing ? [...existing.history] : [],
-    };
-
-    item.history.push({
-      status: TASK_STATES.QUEUED,
-      at: item.enqueuedAt,
-      reason: queueReason,
-    });
-
-    const previousItem = existing;
-    this.queue.set(taskId, item);
-    try {
-      this.save();
-    } catch (err) {
-      // A failed durable write must not leave an in-memory task that was never
-      // committed to the authoritative queue projection.
-      if (previousItem) {
-        this.queue.set(taskId, previousItem);
-      } else {
-        this.queue.delete(taskId);
+    // M11/T3 A4: the queue is shared durable state and withLock reloads the
+    // projection before mutating. enqueueTask was the one mutator that wrote
+    // without it, so a concurrent claimTask lease could be clobbered by a stale
+    // in-memory projection.
+    return this.withLock(() => {
+      const existing = this.queue.get(taskId);
+      if (existing && existing.status === TASK_STATES.EXECUTING) {
+        throw new Error(
+          "TASK_ALREADY_EXECUTING: Cannot re-enqueue an active task",
+        );
       }
-      throw err;
-    }
-    return item;
+
+      const item = {
+        taskId,
+        planVersion,
+        primaryCoordinator,
+        requiredCapabilities,
+        payload,
+        ownerPrincipalRef:
+          typeof ownerPrincipalRef === "string" && ownerPrincipalRef
+            ? ownerPrincipalRef
+            : null,
+        status: TASK_STATES.QUEUED,
+        queueReason,
+        enqueuedAt: new Date().toISOString(),
+        // H05: fence fields â€” set on claim, validated on finish/heartbeat
+        claimedBy: null,
+        claimedAt: null,
+        leaseId: null, // H05: unique per claim/attempt
+        attempt: existing ? existing.attempt + 1 : 1,
+        lastHeartbeatAt: null,
+        leaseExpiresAt: null,
+        history: existing ? [...existing.history] : [],
+      };
+
+      item.history.push({
+        status: TASK_STATES.QUEUED,
+        at: item.enqueuedAt,
+        reason: queueReason,
+      });
+
+      const previousItem = existing;
+      this.queue.set(taskId, item);
+      try {
+        this.save();
+      } catch (err) {
+        // A failed durable write must not leave an in-memory task that was never
+        // committed to the authoritative queue projection.
+        if (previousItem) {
+          this.queue.set(taskId, previousItem);
+        } else {
+          this.queue.delete(taskId);
+        }
+        throw err;
+      }
+      return item;
+    });
   }
 
   /**
@@ -1035,8 +1068,12 @@ export class QueueManager {
   }
 
   clear() {
-    this.queue.clear();
-    this.save();
+    // M11/T3 A4: serialized like every other queue mutator, so a concurrent
+    // writer cannot have its durable projection erased from a stale copy.
+    this.withLock(() => {
+      this.queue.clear();
+      this.save();
+    });
   }
 }
 

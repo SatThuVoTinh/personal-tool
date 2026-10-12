@@ -226,18 +226,29 @@ test("R2 P1: the live runtime IS the ea84a5a packaged build and differs from the
     CURRENT_FILE_LOCK_SHA256,
     "the working tree must carry the final file-lock build",
   );
-  // The whole gap R2 closes, stated exactly: of 33 packaged files, the live
-  // runtime differs from the current build in the entrypoint (already admitted)
-  // and in lib/file-lock.mjs (admitted by R2). Anything else in this set would
-  // mean the 33-file scan that motivated R2 was wrong.
+  // The whole gap R2 closed, stated exactly: of the packaged files, the
+  // ea84a5a build differs from the working tree in the entrypoint (admitted),
+  // in lib/file-lock.mjs (admitted by R2), and in the two assets M11/T3 Phase 1
+  // necessarily moved — lib/native-boundary.mjs (A3) and lib/queue-manager.mjs
+  // (A4), both admitted as predecessors of the build the live runtime carries.
+  // Anything beyond this set would mean the 33-file scan that motivated R2 was
+  // wrong.
   const differing = Object.keys(current.assets).filter(
     (rel) => sha256(live.assets[rel]) !== sha256(current.assets[rel]),
   );
   assert.deepEqual(
     differing.sort(),
-    ["lib/file-lock.mjs"],
-    "file-lock must be the only diverging non-entrypoint asset",
+    ["lib/file-lock.mjs", "lib/native-boundary.mjs", "lib/queue-manager.mjs"],
+    "only file-lock and the M11/T3 assets may diverge from the proven live build",
   );
+  const table = assetTable();
+  for (const rel of differing) {
+    assert.equal(
+      listedDigests(keyBlock(table, rel)).includes(sha256(live.assets[rel])),
+      true,
+      `the ea84a5a ${rel} digest must be an admitted predecessor`,
+    );
+  }
 });
 
 test("R2 P2: the live runtime agrees with the proven digest where readable", async () => {

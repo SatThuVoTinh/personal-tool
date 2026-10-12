@@ -42,12 +42,15 @@ const HYGIENE_BOUNDARY_SHA256 =
   "d88bff80aeb3d7531e5a0dceba4e7ba856d085e64a87cbb414c9f295284d81e3";
 
 /**
- * M10/T2-R12: the outgoing R10 boundary build, byte-proven at BOTH governed
- * paths. R12 exports resolveGovernance as a read-only test seam. The new
- * build is accepted by content comparison and deliberately NOT listed.
+ * M11/T3 Phase 1: the CURRENT boundary. A3 gave `gateNativeAnnounce`,
+ * `finishNativeRun` and `sanitizeNativePrompt` cause-preserving, message-only
+ * diagnostics without changing any host-visible code or verdict. The build this
+ * replaces (`97c7f3e1…`) was installed on the live runtime, so it is admitted as
+ * a predecessor; the new build is accepted by content comparison and
+ * deliberately NOT listed.
  */
 const CANDIDATE_BOUNDARY_SHA256 =
-  "97c7f3e15d2845474ded9bbe908893bbeca6c655a7cecf37b816490693e8d52c";
+  "5966d446258259407ccd4a349b1d6df75dccc2a75c651a149caa92d4fa8393d0";
 
 /** The build R8 replaces; listed as an approved predecessor. */
 const R6_BOUNDARY_SHA256 =

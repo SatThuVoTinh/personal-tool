@@ -538,7 +538,13 @@ export async function gateNativeAnnounce(config, event, signal) {
     )
       throw new Error("GOVERNANCE_RECEIPT_INVALID");
     return { governed: true, action: "deliver", receipt: decision.receipt };
-  } catch {
+  } catch (error) {
+    // M11/T3 A3: the host-visible verdict is unchanged, but a block with no
+    // diagnostic was unattributable. Message only — never stack or content.
+    console.error(
+      "[zink-native-gate] gateNativeAnnounce:",
+      error?.message ?? error,
+    );
     return { governed: true, action: "block" };
   }
 }
@@ -564,8 +570,15 @@ export async function finishNativeRun(config, event, context) {
       }),
     );
     if (decision?.allow !== true) throw new Error("GOVERNANCE_DENIED");
-  } catch {
-    throw new Error("GOVERNANCE_COMPLETION_UNAVAILABLE");
+  } catch (error) {
+    // M11/T3 A3: same standard as `enterNativeRun` — the host-visible contract
+    // string is unchanged, but the guard fault is preserved as the cause so a
+    // policy denial, an unregistered guard and a disk fault stay separable.
+    console.error(
+      "[zink-native-gate] finishNativeRun:",
+      error?.message ?? error,
+    );
+    throw new Error("GOVERNANCE_COMPLETION_UNAVAILABLE", { cause: error });
   }
 }
 
@@ -586,7 +599,12 @@ export async function sanitizeNativePrompt(config, prompt) {
     )
       throw new Error("SCHEMA_INVALID");
     return decision.prompt;
-  } catch {
-    throw new Error("GOVERNANCE_INGRESS_UNAVAILABLE");
+  } catch (error) {
+    // M11/T3 A3: cause-preserving sibling of `enterNativeRun` at this seam.
+    console.error(
+      "[zink-native-gate] sanitizeNativePrompt:",
+      error?.message ?? error,
+    );
+    throw new Error("GOVERNANCE_INGRESS_UNAVAILABLE", { cause: error });
   }
 }

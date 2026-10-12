@@ -12,7 +12,7 @@ import {
   writeFileSync,
   mkdirSync,
 } from "node:fs";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import os from "node:os";
 import { URL, fileURLToPath, pathToFileURL } from "node:url";
@@ -186,6 +186,10 @@ if (!globalThis[COMPLETED_EXECUTIONS_KEY]) {
 // terminal-state checks in `handleExecutionFinished` still refuse.
 export const PENDING_PROPOSALS_LIMIT = 256;
 export const COMPLETED_EXECUTIONS_LIMIT = 4096;
+// M11/T3 A2: one deadline for every outbound Discord REST call. All three sites
+// awaited `fetch` with no signal, so a stalled socket pinned the gateway hook
+// indefinitely. 10s matches the existing probe deadline (verify.mjs:311).
+export const DISCORD_REST_DEADLINE_MS = 10_000;
 
 /** Evict oldest insertions until the collection fits its ceiling. */
 function boundCache(collection, limit) {
@@ -4653,7 +4657,12 @@ export default {
           "password-store",
         );
         const gpgHomeDirectory = path.join(stateDir, "secrets", "gnupg");
-        const resRaw = execSync(resolverPath, {
+        // M11/T3 A1: argv, never a shell. execSync interprets its first argument
+        // with /bin/sh -c, and this path is joined from a config-derived stateDir
+        // that legitimately contains spaces — so a shell here both breaks the call
+        // and turns a metacharacter in that value into command execution on the
+        // bot-token path.
+        const resRaw = execFileSync(resolverPath, [], {
           input: JSON.stringify({
             protocolVersion: 1,
             provider: "pass_store",
@@ -4884,6 +4893,7 @@ export default {
               // configured approvals forum, so it cannot redirect anything anywhere.
               applied_tags: ["1545697161985921064"], // STATUS: WAITING tag
             }),
+            signal: AbortSignal.timeout(DISCORD_REST_DEADLINE_MS),
           },
         );
 
@@ -6070,6 +6080,7 @@ export default {
                 message: { content: bodyContent.slice(0, 2000) },
                 applied_tags: ["1545697161985921064"],
               }),
+              signal: AbortSignal.timeout(DISCORD_REST_DEADLINE_MS),
             },
           );
           if (!res.ok) {
@@ -6093,6 +6104,7 @@ export default {
                 body: JSON.stringify(
                   buildApprovalButtonsMessage(bodyContent, buttons),
                 ),
+                signal: AbortSignal.timeout(DISCORD_REST_DEADLINE_MS),
               },
             );
             if (!msgRes.ok) {

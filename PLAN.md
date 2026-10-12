@@ -37,7 +37,7 @@ Evidence Level: NONE | LOCAL-VERIFIED | REMOTE-BACKED
 | M7 — Zink Tools + OpenClaw integration + V1 hardening                      | `COMPLETE`    | `REMOTE-BACKED`  | M7/T1-R19, M7/T2-R12, M7/T3-R16, M7/T4-R10, and M7/T5-R13 complete; runtime governance remediation, Discord 7-bot integration, and Zink tools specialist policies verified.                                                                                                                                                           |
 | M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Integration | `IN PROGRESS` | `LOCAL-VERIFIED` | M8/T1 is complete; M8/T2.2 R4/R5/R6 are implemented; M8/T2.2-R7 (heartbeat admission, boundary diagnosability, apply safety) is in progress. Deployment is not authorized.                                                                                                                                                            |
 | M10 - Governed coordinator runtime binding                                 | `COMPLETE` | `LOCAL-VERIFIED` | M10/T2 closed by explicit owner decision 2026-10-11 (R26 records the final remediation; R8 closed live with zero-outbound proven). Deferred follow-ups are NOT closed under M10 and require separate authorization: live gateway/knowledge restart or deployment, M10 ingress card/tag redesign (new Plan Revision), coordinator result ingestion, and the WSL/CI Python gate run. |
-| M11 - Cross-module audit remediation                                       | `COMPLETE` | `REMOTE-BACKED` | M11/T1 is CLOSED (R1 four phases + R2 live admission and deployment, 2026-10-12; build DEPLOYED AND VERIFIED on the live WSL gateway, evidence in §4/§8). M11/T2 is CLOSED the same day: R1 made four Skill Store suites portable, gave `python-quality` the Node toolchain (CI SUCCESS, `188 passed, 27 subtests`) and fingerprinted two gitleaks false positives; R2 gave the Knowledgebase Python suite exactly one executor per environment, which repaired `CI / quality-gate` (CI run `38202129189`: `quality-gate` and `python-quality` both SUCCESS). NOT closed under M11 and still requiring separate authorization: `verify.mjs` (`NOT RUN`, operator-side), the pre-existing model-router `GOVERNANCE_COMPLETION_UNAVAILABLE` failures, the pre-existing `duplicate plugin id` warning, the pre-existing 5-high `npm audit` failure, `M11-06`'s PostgreSQL statement gate in CI (no Postgres service there), and the owner-excluded items (per-document quarantine, incremental-publish redesign, manifest schema extension, zink-tools drift cluster, zink-tools lint-glob gap). |
+| M11 - Cross-module audit remediation                                       | `COMPLETE` | `REMOTE-BACKED` | M11/T1 is CLOSED (R1 four phases + R2 live admission and deployment, 2026-10-12; build DEPLOYED AND VERIFIED on the live WSL gateway, evidence in §4/§8). M11/T2 is CLOSED the same day: R1 made four Skill Store suites portable, gave `python-quality` the Node toolchain (CI SUCCESS, `188 passed, 27 subtests`) and fingerprinted two gitleaks false positives; R2 gave the Knowledgebase Python suite exactly one executor per environment, which repaired `CI / quality-gate` (CI run `38202129189`: `quality-gate` and `python-quality` both SUCCESS). NOT closed under M11 and still requiring separate authorization: `verify.mjs` (`NOT RUN`, operator-side), the pre-existing model-router `GOVERNANCE_COMPLETION_UNAVAILABLE` failures, the pre-existing `duplicate plugin id` warning, the pre-existing 5-high `npm audit` failure, `M11-06`'s PostgreSQL statement gate in CI (no Postgres service there), and the owner-excluded items (per-document quarantine, incremental-publish redesign, manifest schema extension, zink-tools drift cluster, zink-tools lint-glob gap). **M11/T3 is IN PROGRESS** (R1 owner-approved and materialized 2026-10-12): ten verified HIGH-severity items in two ordered phases — OpenClaw gateway runtime bounds and one shell-interpretation path, then durable-state integrity across the lock, ledger, queue, decision-ledger, approval and skill-proposal seams. The router model order/`timeoutSeconds=100` and stale-lock auto-reclaim are excluded because both are recorded owner decisions; live-state mutation and deployment remain unauthorized. |
 
 The former self-built L&SC Data Plant is replaced by a **logical external
 infrastructure flow**, not another repository module. Forecasting, optimization,
@@ -47,46 +47,44 @@ operations research and simulation remain first-class capabilities.
 
 ```text
 Milestone: M11 — Cross-module audit remediation
-Task: M11/T2 — make the repository gates runnable on any host (portable test roots, CI Python job toolchain, gitleaks fingerprints, one owner for the Python stage)
-Task Status: COMPLETE — M11/T2-R1 and M11/T2-R2 both CLOSED 2026-10-12
-  (M11/T1 CLOSED the same day; durable records in §8)
-Planning Readiness: APPROVED (historical — the approved R2 contract is executed and closed)
-Plan Revision: M11/T2-R2 (CLOSED)
-Execution Authorization: NO
-Authorized Task: NONE — M11/T2-R2 applied the owner's Option B for A-08:
-  `npm run test:knowledge` left the `verify` composition, `REQUIRED_VERIFY_STAGES`
-  became the four Node stages, `checkCiWorkflow` gained the rule that the Knowledgebase
-  Python suite is executed exactly once in CI and only by `python-quality`, the old
-  policy guard was re-expressed rather than deleted, and README +
-  `docs/development/conventions.md` record the host instruction. Implementation
-  `a8122f5`; CI run `38202129189` shows `quality-gate` SUCCESS and `python-quality`
-  SUCCESS, which closes A-08 and M11/T2-R1's criterion 5.
-  Earlier in this task: M11/T2-R1 — portable `REPO` roots in four Skill Store suites,
-  the `python-quality` Node toolchain, two `.gitleaksignore` fingerprints; commit
-  `2bc8ddf`, CI runs `38199387584` / `38199389639`.
-Execution Contract: NONE (the M11/T2-R2 ACTIVE.md was deleted at closeout)
-Evidence Level: REMOTE-BACKED (task branch pushed; CI run `38202129189` proves
-  `quality-gate` + `python-quality` both SUCCESS, CI run `38199387584` proves the R1
-  `python-quality` fix, Security run `38199389639` proves `secret-scan` SUCCESS)
+Task: M11/T3 — OpenClaw gateway runtime bounds + durable-state integrity remediation
+Task Status: IN PROGRESS — Phase 1 (verified cluster A), then Phase 2 (cluster B)
+Planning Readiness: APPROVED
+Plan Revision: M11/T3-R1
+Execution Authorization: YES
+Execution Contract: docs/contracts/execution/ACTIVE.md
+Authorized Task: M11/T3-R1 — the ten verified HIGH-severity items frozen in the
+  execution contract: Phase 1 = argv execution on the Discord bot-token path, a
+  deadline on the three unbounded Discord REST fetches, cause-preserving
+  diagnostics at the three native-boundary catch seams, and queue enqueueTask/clear
+  serialized through the existing withLock; Phase 2 = an async file-lock release
+  that no longer spins the event loop, ledger refusal of a half-missing
+  events/snapshot pair, replay diagnostics that keep their cause, a decision-ledger
+  save under the shared writer lock, approval reads under the guard writer lock, and
+  a REJECTED skill proposal made terminal and serialized. Implementation details are
+  owned by ACTIVE.md and are not duplicated here.
+Evidence Level: NONE — no gate has been run for this task yet
 Task Branch: codex/m11-t1-audit-remediation
-Owner Approval: EXPLICIT — owner approved the presented plan on 2026-10-11 with
-  scope "3 clusters + OpenClaw security", single Active Task with four ordered
-  phases, close-and-replace of the stale M10/T2-R8 ACTIVE.md, and H7 as
-  mitigation-only (no incremental-publish redesign). On 2026-10-12 the owner
-  additionally approved Option A, the bounded Phase 2 scope extension for the
-  deployment-snapshot digest pins. M11/T2-R1 was approved the same day as Option A
-  of the OWNER DECISION REQUIRED block issued from the Batch A CI/Security dispatch
-  evidence (three scope items: portable test roots, `python-quality` Node toolchain,
-  two gitleaks fingerprints; the 5-high `npm audit` finding was explicitly excluded).
-  On 2026-10-12, in answer to the OWNER DECISION REQUIRED block for the A-08
-  `quality-gate` defect that R1's fixes unmasked, the owner chose **Option B**
-  (make `python-quality` the single owner of the Knowledgebase Python stage and drop
-  that stage from `verify`), then approved the resulting M11/T2-R2 plan with Option A
-  of its own approval block the same day, so R2 was materialized and executed. Both
-  revisions are closed.
-Deployment Authorized: NO for M11/T2 (both revisions closed) — neither R1 nor R2
-  mutated a live runtime or authorized an operator command; the
-  grant recorded immediately below belongs to the closed M11/T1-R1/R2 round.
+Owner Approval: EXPLICIT — 2026-10-12. The owner chose clusters "A rồi B" from the
+  OWNER DECISION block issued after the second read-only sweep, then instructed that
+  the plan be materialized as docs/contracts/execution/ACTIVE.md and executed
+  against it ("lập plan A rồi B tại ACTIVE.md, rồi sau đó em chạy bám sát theo
+  ACTIVE.md"; "viết ACTIVE.md với kế hoạch trên"). The owner also directed Codex to
+  execute this contract directly for this task instead of handing it to dsh.
+  Deliberately EXCLUDED by that decision: the router model order and
+  timeoutSeconds=100 (the owner's own recorded decision at
+  integrations/openclaw/lib/policy.mjs:525-545), stale-lock auto-reclaim
+  (integrations/openclaw/lib/file-lock.mjs:14-16 records the owner's policy that
+  orphaned-lock recovery is an operator action), every live-state and deployment
+  action, and the deferred clusters (CI trigger scope, real-execution skip tier,
+  gitleaks tests/ allowlist, zink-tools lint/format glob gap, structural refactors,
+  cross-module drift, docs-only corrections).
+Prior task record — M11/T1 and M11/T2 both CLOSED 2026-10-12, durable records in §8,
+  Evidence Level REMOTE-BACKED (CI run 38202129189 proves quality-gate +
+  python-quality SUCCESS; Security run 38199389639 proves secret-scan SUCCESS).
+Deployment Authorized: NO for M11/T3 — execution authorization is not deployment
+  authorization; nothing in this task may touch the live runtime. The grant recorded
+  immediately below belongs to the closed M11/T1-R1/R2 round.
 Prior deployment record — Deployment Authorized: YES (M11/T1-R1 build — ONE attempt,
   owner grant 2026-10-12)
   — scoped exactly to: read-only `configure.mjs --preflight`, then one

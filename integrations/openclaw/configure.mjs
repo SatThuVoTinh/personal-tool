@@ -358,6 +358,14 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // M10/T2-R3: the outgoing hygiene-build asset (41c62e7), proven as in the
     // R3 header above (live tree 34/34 match). Same admission semantics.
     "97fa9907c5c37c7c4e0432d0ccd9d1d1786b153197913da6a888bfb0e81ce5f2",
+    // M11/T3 Phase 1: the outgoing queue build the live runtime carries
+    // (`f7995d51…`, verified read-only against the WSL deployment). A4 put the
+    // two unserialized mutators — `enqueueTask` and `clear` — behind the same
+    // `withLock` the other nine already use, so a concurrent enqueue can no
+    // longer clobber a leased claim. The queue file format is unchanged. Without
+    // this entry --preflight refuses the deployed extension. The new digest is
+    // deliberately NOT listed: it is the current build.
+    "f7995d51d2d8f5a73fb3f7a980292236ff76fcc445cf1d769a48d35c84a8f140",
   ]),
   "lib/schema.mjs": Object.freeze([
     "869a2254975f60432c596a115acee1fc0e03893224b925c5a54334dc532d1cee",
@@ -510,6 +518,14 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // digest is deliberately NOT listed: it is the current build, accepted by
     // content comparison.
     "9e73518583006c0b9c5f8cc058e3bbd10e4749c2004aa9a4204ef226452f842a",
+    // M11/T3 Phase 1: the outgoing boundary build the live runtime carries
+    // (PLAN.md records the live digest as `97c7f3e1…`). A3 bound the three
+    // silent governance seams — gateNativeAnnounce, finishNativeRun and
+    // sanitizeNativePrompt — with message-only diagnostics and a preserved
+    // cause, leaving every host-visible code and verdict byte-identical. Without
+    // this entry --preflight refuses the deployed extension. The new digest is
+    // deliberately NOT listed: it is the current build.
+    "97c7f3e15d2845474ded9bbe908893bbeca6c655a7cecf37b816490693e8d52c",
   ]),
   "lib/runtime.mjs": Object.freeze([
     // M10/T2-R15: the outgoing build currently deployed, byte-proven by
@@ -1277,6 +1293,15 @@ async function main() {
       // with asset drift. The new digest is deliberately NOT listed: it is the
       // current build, accepted by content comparison.
       "230f3c79d0a35c2261129ddc0048ad4f0ae4fc6d86a5c49e444594a446bd2982",
+      // M11/T3 Phase 1: the outgoing governance entrypoint — the packaged build
+      // the live WSL runtime actually carries, recorded in PLAN.md §3/§4 and
+      // CHANGELOG.md as `live index.mjs = e8f084ab…`. M11/T3 A1 replaced the
+      // shell-interpreted bot-token resolver call with argv execution, and A2
+      // bounded the three unbounded Discord REST calls. Without this entry
+      // --preflight refuses the deployed extension, which is exactly the
+      // M11/T1-R2 defect. The new digest is deliberately NOT listed: it is the
+      // current build, accepted by content comparison.
+      "e8f084ab5593a093a2075db8167ce6db4ea39e87141dc4a2ba4dee99fb4fccaa",
     ],
   );
   assertRegularOrMissing(output.identityKeyPath);
@@ -1524,6 +1549,9 @@ async function main() {
       // M11/T1-R1 Phase 2: the outgoing governance entrypoint, mirrors the
       // preflight-mode entry verbatim so the two modes cannot diverge.
       "230f3c79d0a35c2261129ddc0048ad4f0ae4fc6d86a5c49e444594a446bd2982",
+      // M11/T3 Phase 1: the outgoing governance entrypoint, mirrors the
+      // preflight-mode entry verbatim so the two modes cannot diverge.
+      "e8f084ab5593a093a2075db8167ce6db4ea39e87141dc4a2ba4dee99fb4fccaa",
     ],
   );
   if (!existsSync(output.identityKeyPath))

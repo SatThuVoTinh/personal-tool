@@ -98,8 +98,13 @@ const HYGIENE_ASSET_PREDECESSORS = Object.freeze({
 // whole task ran under `Deployment Authorized: NO`, so those bytes were never
 // installed on any runtime, and the runtime a future deployment starts from is
 // still the admitted `230f3c79…` build.
+// M11/T3 Phase 1: the pin moves again — A1 resolves the Discord bot-token
+// helper through argv instead of a shell and A2 bounds the three unbounded REST
+// calls, both inside this entrypoint. The build M11/T1-R1 left installed
+// (`e8f084ab…`) IS admitted this time: `--preflight` proved the live WSL runtime
+// carries it, so leaving it out would refuse the deployed extension.
 const CURRENT_ENTRYPOINT_SHA256 =
-  "e8f084ab5593a093a2075db8167ce6db4ea39e87141dc4a2ba4dee99fb4fccaa";
+  "61e344e6754c3c03b26463c2421ebf699d8ec14f9ab0b8fe87bec1265d99f3b6";
 
 const identifiers = Object.freeze({
   discordGuildId: "123456789012345678",

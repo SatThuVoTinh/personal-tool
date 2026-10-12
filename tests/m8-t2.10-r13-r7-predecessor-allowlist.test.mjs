@@ -90,12 +90,18 @@ const R5_ENTRYPOINT_SHA256 =
  * R6 build remains listed as a recognized predecessor.
  */
 /**
- * M10/T2-R12: the CURRENT boundary. Differs from the R10 build ONLY by
- * exporting resolveGovernance as a read-only test seam (no behavior change).
- * Accepted by content comparison and deliberately NOT listed.
+ * M10/T2-R12 .. M11/T1: the boundary build the LIVE runtime carries. M11/T3 A3
+ * gave the three silent governance seams cause-preserving diagnostics, so these
+ * bytes are no longer the current build and must be an admitted predecessor.
  */
-const R12_NATIVE_BOUNDARY_SHA256 =
+const R12_OUTGOING_NATIVE_BOUNDARY_SHA256 =
   "97c7f3e15d2845474ded9bbe908893bbeca6c655a7cecf37b816490693e8d52c";
+/**
+ * M11/T3 Phase 1: the CURRENT boundary. Accepted by content comparison and
+ * deliberately NOT listed.
+ */
+const M11_T3_NATIVE_BOUNDARY_SHA256 =
+  "5966d446258259407ccd4a349b1d6df75dccc2a75c651a149caa92d4fa8393d0";
 const R6_OUTGOING_NATIVE_BOUNDARY_SHA256 =
   "bccfa8616dc89fbb3764d53ad6ea11f5cfbc445bc076e4270f2678c6c1e18c3a";
 assert.ok(
@@ -126,19 +132,25 @@ const R10_ENTRYPOINT_SHA256 =
 const R14_OUTGOING_ENTRYPOINT_SHA256 =
   "230f3c79d0a35c2261129ddc0048ad4f0ae4fc6d86a5c49e444594a446bd2982";
 /**
- * M11/T1-R1: the CURRENT entrypoint. Phase 2 made the owner approval path
- * require an explicit `decisionRef` instead of defaulting one, promote inside
- * the canonical Skill Store writer lock, and require `skillsRoot` to reject;
- * Phase 4 then confined outbound attachments, bounded the in-process caches and
- * made containment reporting per target. Accepted by content comparison and
- * deliberately NOT listed. Phase 2's build (`81b9a9c7…`) is NOT admitted as a
- * predecessor either: `Deployment Authorized: NO` held for the whole task, so
- * those bytes were never installed on any runtime — the live runtime still
- * carries the admitted `230f3c79…` build, which R13 B2 proves upgrades onto this
- * one.
+ * M11/T1-R1: the entrypoint build the LIVE runtime carries (PLAN.md records the
+ * live digest as `e8f084ab…`). M11/T3 Phase 1 changed the packaged entrypoint —
+ * A1 resolved the bot-token helper through argv instead of a shell, A2 bounded
+ * the Discord REST calls — so these bytes became an admitted predecessor. They
+ * were installed, so unlike the never-deployed `81b9a9c7…` Phase-2 build they
+ * MUST be listed; without this entry --preflight refuses the deployed extension.
  */
-const M11_T1_R1_ENTRYPOINT_SHA256 =
+const M11_T1_R1_OUTGOING_ENTRYPOINT_SHA256 =
   "e8f084ab5593a093a2075db8167ce6db4ea39e87141dc4a2ba4dee99fb4fccaa";
+assert.ok(
+  CONFIGURE_SOURCE.includes(M11_T1_R1_OUTGOING_ENTRYPOINT_SHA256),
+  "the live M11/T1-R1 entrypoint must remain an admitted predecessor",
+);
+/**
+ * M11/T3 Phase 1: the CURRENT entrypoint. Accepted by content comparison and
+ * deliberately NOT listed.
+ */
+const M11_T3_ENTRYPOINT_SHA256 =
+  "61e344e6754c3c03b26463c2421ebf699d8ec14f9ab0b8fe87bec1265d99f3b6";
 /** The outgoing entrypoint this deployment replaces; now listed. */
 const R8_OUTGOING_ENTRYPOINT_SHA256 =
   "6a7968b7d456ff6d3f2c5b9d60c7b6046a702603b880093c33b717d9a37c13b1";
@@ -250,6 +262,14 @@ const R7_SOURCE_COMMIT = "4f5cc6d";
  */
 const M11_T1_R1_SOURCE_COMMIT = "45e0ee7";
 
+/**
+ * M11/T3 Phase 1: the commit whose packaged entrypoint is the build the LIVE
+ * runtime carries (`e8f084ab…`). M11/T3 changed only packaged sources, so
+ * re-packaging this commit's entrypoint source through the real generator
+ * reproduces the live bytes exactly.
+ */
+const M11_T3_SOURCE_COMMIT = "d7df6d9";
+
 const gitShow = (rev, file) =>
   execFileSync("git", ["show", `${rev}:${file}`], {
     cwd: REPO,
@@ -271,6 +291,13 @@ const R7_BOUNDARY_BODY = gitShow(
 // deployment replaces.
 const M11_T1_R1_ENTRYPOINT_SOURCE = gitShow(
   M11_T1_R1_SOURCE_COMMIT,
+  "integrations/openclaw/plugins/zink-governance/index.mjs",
+);
+
+// M11/T3 Phase 1: the plugin entrypoint source as committed by the build the
+// live runtime carries, which this task's deployment replaces.
+const M11_T1_R1_LIVE_ENTRYPOINT_SOURCE = gitShow(
+  M11_T3_SOURCE_COMMIT,
   "integrations/openclaw/plugins/zink-governance/index.mjs",
 );
 
@@ -447,14 +474,35 @@ test("R13 P4: the M11/T1-R1 Phase 2 outgoing entrypoint is proven from its commi
   const current = await currentBuild();
   assert.equal(
     sha256(current.entrypoint),
-    M11_T1_R1_ENTRYPOINT_SHA256,
-    "the working tree must carry the final M11/T1-R1 build",
+    M11_T3_ENTRYPOINT_SHA256,
+    "the working tree must carry the M11/T3 Phase-1 build",
   );
   assert.notEqual(
     M11_T1_R1_ENTRYPOINT_SOURCE,
     readFileSync(PLUGIN_ENTRYPOINT_SOURCE, "utf8"),
     "M11/T1-R1 must really have moved the plugin entrypoint source",
   );
+});
+
+test("R13 P5: the entrypoint the live runtime carries is proven from its commit", async () => {
+  // M11/T3 Phase 1 admits a NEW predecessor: the build actually installed on the
+  // WSL runtime. Admitting a digest nobody can reproduce is exactly how an
+  // allowlist silently rots, so the admitted bytes are re-derived from
+  // `M11_T3_SOURCE_COMMIT` through the real generator.
+  const live = await liveOutgoingEntrypoint();
+  assert.equal(
+    sha256(live),
+    M11_T1_R1_OUTGOING_ENTRYPOINT_SHA256,
+    "the committed source must reproduce the live outgoing digest",
+  );
+  assert.notEqual(
+    M11_T1_R1_LIVE_ENTRYPOINT_SOURCE,
+    readFileSync(PLUGIN_ENTRYPOINT_SOURCE, "utf8"),
+    "M11/T3 must really have moved the plugin entrypoint source",
+  );
+  // The three hunks A1/A2 touched are the only packaged difference.
+  const current = await currentBuild();
+  assert.equal(sha256(current.entrypoint), M11_T3_ENTRYPOINT_SHA256);
 });
 
 /**
@@ -506,6 +554,19 @@ const outgoingEntrypoint = async () =>
   (outgoingGenerated ??= (
     await scratchGenerator([
       ["plugins/zink-governance/index.mjs", M11_T1_R1_ENTRYPOINT_SOURCE],
+    ])
+  ).entrypoint);
+
+/**
+ * M11/T3 Phase 1: the packaged entrypoint the live runtime carries today
+ * (`e8f084ab…`), re-derived from the commit that carries it rather than
+ * transcribed from a report. This is the state a real operator-apply starts from.
+ */
+let liveOutgoingGenerated = null;
+const liveOutgoingEntrypoint = async () =>
+  (liveOutgoingGenerated ??= (
+    await scratchGenerator([
+      ["plugins/zink-governance/index.mjs", M11_T1_R1_LIVE_ENTRYPOINT_SOURCE],
     ])
   ).entrypoint);
 
@@ -579,12 +640,12 @@ test("R13 1: each R7 digest is listed exactly once, under its own path", () => {
 });
 
 test("R13 2: the current build digests are NOT listed anywhere", () => {
-  // M11/T1-R1: the entrypoint pin moved to M11_T1_R1_ENTRYPOINT_SHA256,
-  // so the R14/R15 digest is now the outgoing predecessor and IS listed on
-  // purpose. Only the digests of the CURRENT build must be absent from the source.
+  // M11/T3: both current-build pins moved (the entrypoint by A1/A2, the
+  // boundary by A3), so their live predecessors are now listed on purpose. Only
+  // the digests of the CURRENT build must be absent from the source.
   for (const digest of [
-    R12_NATIVE_BOUNDARY_SHA256,
-    M11_T1_R1_ENTRYPOINT_SHA256,
+    M11_T3_NATIVE_BOUNDARY_SHA256,
+    M11_T3_ENTRYPOINT_SHA256,
   ]) {
     assert.equal(
       CONFIGURE_SOURCE.includes(digest),
@@ -845,8 +906,53 @@ test("R13 B2: the M11/T1-R1 Phase 2 outgoing entrypoint is accepted and converge
     assert.doesNotThrow(p.apply);
     assert.equal(
       sha256(readFileSync(p.asset("index.mjs"), "utf8")),
-      M11_T1_R1_ENTRYPOINT_SHA256,
+      M11_T3_ENTRYPOINT_SHA256,
       "an accepted predecessor must be upgraded onto the current build",
+    );
+  } finally {
+    rmSync(p.root, { recursive: true, force: true });
+  }
+});
+
+test("R13 B3: the build the live runtime carries is accepted and converges", async () => {
+  // M11/T3 Phase 1 moved three packaged digests at once (A1/A2 the entrypoint,
+  // A3 the boundary, A4 the queue manager), and all three are installed on the
+  // WSL runtime. Admitting them one at a time would leave --preflight refusing
+  // the real deployed combination, which is the M11/T1-R2 defect. This test
+  // reproduces that combination exactly and proves the upgrade path is reachable.
+  const liveBoundary = gitShow(
+    M11_T3_SOURCE_COMMIT,
+    "integrations/openclaw/topology/lib/native-boundary.mjs",
+  );
+  const liveQueue = gitShow(
+    M11_T3_SOURCE_COMMIT,
+    "integrations/openclaw/lib/queue-manager.mjs",
+  );
+  assert.equal(sha256(liveBoundary), R12_OUTGOING_NATIVE_BOUNDARY_SHA256);
+  assert.equal(
+    sha256(liveQueue),
+    "f7995d51d2d8f5a73fb3f7a980292236ff76fcc445cf1d769a48d35c84a8f140",
+    "the committed queue source must reproduce the live digest",
+  );
+  const live = await liveOutgoingEntrypoint();
+  const p = provisioned();
+  try {
+    writeFileSync(p.asset("index.mjs"), live, "utf8");
+    writeFileSync(p.asset("lib/native-boundary.mjs"), liveBoundary, "utf8");
+    writeFileSync(p.asset("lib/queue-manager.mjs"), liveQueue, "utf8");
+    assert.doesNotThrow(p.preflight);
+    assert.doesNotThrow(p.apply);
+    assert.equal(
+      sha256(readFileSync(p.asset("index.mjs"), "utf8")),
+      M11_T3_ENTRYPOINT_SHA256,
+    );
+    assert.equal(
+      sha256(readFileSync(p.asset("lib/native-boundary.mjs"), "utf8")),
+      M11_T3_NATIVE_BOUNDARY_SHA256,
+    );
+    assert.equal(
+      sha256(readFileSync(p.asset("lib/queue-manager.mjs"), "utf8")),
+      "a5580bb67a7ace7edfdaf2595b7245a3be3a6959333ae6cbeaf76d080f49fb37",
     );
   } finally {
     rmSync(p.root, { recursive: true, force: true });
@@ -874,11 +980,11 @@ test("R13 C2: the current-build versions remain accepted", async () => {
     assert.doesNotThrow(p.preflight);
     assert.equal(
       sha256(readFileSync(p.asset("lib/native-boundary.mjs"), "utf8")),
-      R12_NATIVE_BOUNDARY_SHA256,
+      M11_T3_NATIVE_BOUNDARY_SHA256,
     );
     assert.equal(
       sha256(readFileSync(p.asset("index.mjs"), "utf8")),
-      M11_T1_R1_ENTRYPOINT_SHA256,
+      M11_T3_ENTRYPOINT_SHA256,
     );
   } finally {
     rmSync(p.root, { recursive: true, force: true });
@@ -1331,6 +1437,51 @@ export const POLICY_REFUSAL_TEXT = "Action not permitted by workspace policy.";
 // guard hooks exactly as production does. Read-only accessor; no behavior.
 export function resolveGovernance(config) {`,
       `function resolveGovernance(config) {`,
+    ],
+    // M11/T3 A3: the three seams gained cause-preserving message-only
+    // diagnostics. Host-visible codes and verdicts are unchanged, so inverting
+    // them keeps the derived R5 body equal to the packaged R5 digest exactly.
+    [
+      `  } catch (error) {
+    // M11/T3 A3: the host-visible verdict is unchanged, but a block with no
+    // diagnostic was unattributable. Message only — never stack or content.
+    console.error(
+      "[zink-native-gate] gateNativeAnnounce:",
+      error?.message ?? error,
+    );
+    return { governed: true, action: "block" };
+  }`,
+      `  } catch {
+    return { governed: true, action: "block" };
+  }`,
+    ],
+    [
+      `  } catch (error) {
+    // M11/T3 A3: same standard as \`enterNativeRun\` — the host-visible contract
+    // string is unchanged, but the guard fault is preserved as the cause so a
+    // policy denial, an unregistered guard and a disk fault stay separable.
+    console.error(
+      "[zink-native-gate] finishNativeRun:",
+      error?.message ?? error,
+    );
+    throw new Error("GOVERNANCE_COMPLETION_UNAVAILABLE", { cause: error });
+  }`,
+      `  } catch {
+    throw new Error("GOVERNANCE_COMPLETION_UNAVAILABLE");
+  }`,
+    ],
+    [
+      `  } catch (error) {
+    // M11/T3 A3: cause-preserving sibling of \`enterNativeRun\` at this seam.
+    console.error(
+      "[zink-native-gate] sanitizeNativePrompt:",
+      error?.message ?? error,
+    );
+    throw new Error("GOVERNANCE_INGRESS_UNAVAILABLE", { cause: error });
+  }`,
+      `  } catch {
+    throw new Error("GOVERNANCE_INGRESS_UNAVAILABLE");
+  }`,
     ],
   ];
   let derived = readFileSync(BOUNDARY, "utf8");

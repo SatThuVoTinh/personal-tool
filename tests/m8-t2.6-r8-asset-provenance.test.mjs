@@ -420,6 +420,51 @@ export function readZinkIngressMetadata(messageId) {
 export function resolveGovernance(config) {`,
     `function resolveGovernance(config) {`,
   ],
+  // M11/T3 A3: the three seams gained cause-preserving message-only diagnostics.
+  // The host-visible codes and verdicts are unchanged, so inverting them here
+  // keeps the derived R5 body equal to the packaged R5 digest exactly.
+  [
+    `  } catch (error) {
+    // M11/T3 A3: the host-visible verdict is unchanged, but a block with no
+    // diagnostic was unattributable. Message only — never stack or content.
+    console.error(
+      "[zink-native-gate] gateNativeAnnounce:",
+      error?.message ?? error,
+    );
+    return { governed: true, action: "block" };
+  }`,
+    `  } catch {
+    return { governed: true, action: "block" };
+  }`,
+  ],
+  [
+    `  } catch (error) {
+    // M11/T3 A3: same standard as \`enterNativeRun\` — the host-visible contract
+    // string is unchanged, but the guard fault is preserved as the cause so a
+    // policy denial, an unregistered guard and a disk fault stay separable.
+    console.error(
+      "[zink-native-gate] finishNativeRun:",
+      error?.message ?? error,
+    );
+    throw new Error("GOVERNANCE_COMPLETION_UNAVAILABLE", { cause: error });
+  }`,
+    `  } catch {
+    throw new Error("GOVERNANCE_COMPLETION_UNAVAILABLE");
+  }`,
+  ],
+  [
+    `  } catch (error) {
+    // M11/T3 A3: cause-preserving sibling of \`enterNativeRun\` at this seam.
+    console.error(
+      "[zink-native-gate] sanitizeNativePrompt:",
+      error?.message ?? error,
+    );
+    throw new Error("GOVERNANCE_INGRESS_UNAVAILABLE", { cause: error });
+  }`,
+    `  } catch {
+    throw new Error("GOVERNANCE_INGRESS_UNAVAILABLE");
+  }`,
+  ],
 ];
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");

@@ -499,10 +499,13 @@ test("R19 G: R18's boundary recovery is byte-for-byte unchanged", () => {
   // the R10 bytes — resolveGovernance exported as a read-only test seam, no
   // behavior change. The pin moves to those bytes; its purpose as a change
   // detector is unchanged.
+  // M11/T3 Phase 1: the boundary now carries A3's cause-preserving diagnostics on
+  // top of those bytes. The host-visible codes and verdicts are unchanged, so
+  // this pin still works purely as a change detector.
   assert.equal(
     sha(current),
-    "97c7f3e15d2845474ded9bbe908893bbeca6c655a7cecf37b816490693e8d52c",
-    "the boundary must equal the R8-authorized bytes exactly",
+    "5966d446258259407ccd4a349b1d6df75dccc2a75c651a149caa92d4fa8393d0",
+    "the boundary must equal the bytes the R19 suite was extended against, plus M11/T3 A3",
   );
 });
 
