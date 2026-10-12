@@ -364,6 +364,36 @@ asset drift detected` (`installed_mutation: false`) because ten live
 
 ### Fixed
 
+- Fixed `CI / quality-gate` being unrunnable in CI since 2026-10-02 (`a8122f5`,
+  M11/T2-R2, closed 2026-10-12). Commit `1a36c52` inserted the Knowledgebase Python
+  suite into the `verify` composition and pinned it in `REQUIRED_VERIFY_STAGES`, but
+  attached the Python toolchain (`actions/setup-python`, `uv`, the checksum-verified
+  tokenizer) only to `CI / python-quality`. `quality-gate` runs `npm run verify` in a
+  job that provisions Node alone, so every CI invocation of that gate passed `npm test`
+  and then died at `sh: 1: uv: not found` (exit 127) — including the merge-base state
+  that would have turned `main` red on merge. The suite now has exactly one executor
+  per environment: `CI / python-quality` in CI, `npm run test:knowledge` /
+  `make test-knowledge` on a host, and `verify` is the four Node stages
+  (`format:check`, `lint`, `test`, `repo:check`). Deleting the stage from `verify`
+  alone would have removed the only proof the Python gate runs at all, so
+  `checkCiWorkflow` gained `checkKnowledgebaseSuiteSingleOwner`, which fails unless
+  `npm run test:knowledge` appears exactly once across all jobs and belongs to
+  `python-quality`; the previous guard was re-expressed rather than deleted
+  (`rejects a verify gate that deviates from the documented Node stage order` covers an
+  omitted stage, a reordering and a re-added Python stage;
+  `requires exactly one CI executor for the Knowledgebase Python suite` covers a
+  duplicated and a misplaced executor). `README.md` and
+  `docs/development/conventions.md` record the host instruction. Evidence:
+  `node --test tests/repository-policy.test.mjs` 22/22 (one case added, none removed),
+  `npm run repo:check` passed, `npm run verify` **passes on this host with
+  `KNOWLEDGE_TOKENIZER_PATH` unset**, `npm run test:knowledge` unchanged at
+  `184 passed, 4 skipped, 27 subtests passed`, and CI run `38202129189` shows
+  `quality-gate` **SUCCESS** (`ℹ tests 1344 / ℹ fail 0`,
+  `Repository policy check passed.`) with `python-quality` **SUCCESS**
+  (`188 passed, 27 subtests passed in 11.45s`, tokenizer verified `OK`). `.github`
+  workflow files are byte-unchanged. Cost of this design, stated plainly: one host
+  command no longer covers the Python tier. `dependency-audit` remains red on the
+  pre-existing 5-high findings.
 - Fixed three gates that could not run outside one laptop (`2bc8ddf`, M11/T2-R1,
   closed 2026-10-12 with CI evidence). (1) Four Skill Store suites
   (`tests/m10-t2-r20-skill-catalog-and-sql`, `…r21-skill-chunking-and-text-budgets`,

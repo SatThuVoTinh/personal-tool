@@ -37,7 +37,7 @@ Evidence Level: NONE | LOCAL-VERIFIED | REMOTE-BACKED
 | M7 — Zink Tools + OpenClaw integration + V1 hardening                      | `COMPLETE`    | `REMOTE-BACKED`  | M7/T1-R19, M7/T2-R12, M7/T3-R16, M7/T4-R10, and M7/T5-R13 complete; runtime governance remediation, Discord 7-bot integration, and Zink tools specialist policies verified.                                                                                                                                                           |
 | M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Integration | `IN PROGRESS` | `LOCAL-VERIFIED` | M8/T1 is complete; M8/T2.2 R4/R5/R6 are implemented; M8/T2.2-R7 (heartbeat admission, boundary diagnosability, apply safety) is in progress. Deployment is not authorized.                                                                                                                                                            |
 | M10 - Governed coordinator runtime binding                                 | `COMPLETE` | `LOCAL-VERIFIED` | M10/T2 closed by explicit owner decision 2026-10-11 (R26 records the final remediation; R8 closed live with zero-outbound proven). Deferred follow-ups are NOT closed under M10 and require separate authorization: live gateway/knowledge restart or deployment, M10 ingress card/tag redesign (new Plan Revision), coordinator result ingestion, and the WSL/CI Python gate run. |
-| M11 - Cross-module audit remediation                                       | `IN PROGRESS` | `REMOTE-BACKED` | M11/T1 is CLOSED (R1 four phases + R2 live admission and deployment, 2026-10-12; build DEPLOYED AND VERIFIED on the live WSL gateway, evidence in §4/§8). M11/T2-R1 is CLOSED with CI evidence the same day: four Skill Store suites are portable, `python-quality` is SUCCESS (`188 passed, 27 subtests`) and `secret-scan` is SUCCESS — but its acceptance criterion 5 is only PARTIAL because those fixes unmasked A-08 (`CI / quality-gate` dies at `uv: not found`, root cause `1a36c52`). M11/T2-R2 (owner Option B: make `python-quality` the sole owner of the Python stage) is PROPOSED and NOT approved; `Execution Authorization: NO`. NOT closed under M11: `verify.mjs` (`NOT RUN`, operator-side), the pre-existing model-router `GOVERNANCE_COMPLETION_UNAVAILABLE` failures, the pre-existing `duplicate plugin id` warning, the pre-existing 5-high `npm audit` failure, `M11-06` in CI (no Postgres service), and the owner-excluded items (per-document quarantine, incremental-publish redesign, manifest schema extension, zink-tools drift cluster, zink-tools lint-glob gap). |
+| M11 - Cross-module audit remediation                                       | `COMPLETE` | `REMOTE-BACKED` | M11/T1 is CLOSED (R1 four phases + R2 live admission and deployment, 2026-10-12; build DEPLOYED AND VERIFIED on the live WSL gateway, evidence in §4/§8). M11/T2 is CLOSED the same day: R1 made four Skill Store suites portable, gave `python-quality` the Node toolchain (CI SUCCESS, `188 passed, 27 subtests`) and fingerprinted two gitleaks false positives; R2 gave the Knowledgebase Python suite exactly one executor per environment, which repaired `CI / quality-gate` (CI run `38202129189`: `quality-gate` and `python-quality` both SUCCESS). NOT closed under M11 and still requiring separate authorization: `verify.mjs` (`NOT RUN`, operator-side), the pre-existing model-router `GOVERNANCE_COMPLETION_UNAVAILABLE` failures, the pre-existing `duplicate plugin id` warning, the pre-existing 5-high `npm audit` failure, `M11-06`'s PostgreSQL statement gate in CI (no Postgres service there), and the owner-excluded items (per-document quarantine, incremental-publish redesign, manifest schema extension, zink-tools drift cluster, zink-tools lint-glob gap). |
 
 The former self-built L&SC Data Plant is replaced by a **logical external
 infrastructure flow**, not another repository module. Forecasting, optimization,
@@ -48,25 +48,26 @@ operations research and simulation remain first-class capabilities.
 ```text
 Milestone: M11 — Cross-module audit remediation
 Task: M11/T2 — make the repository gates runnable on any host (portable test roots, CI Python job toolchain, gitleaks fingerprints, one owner for the Python stage)
-Task Status: IN PROGRESS (M11/T1 CLOSED 2026-10-12; M11/T2-R1 CLOSED 2026-10-12 with
-  the A-08 gap disclosed; M11/T2-R2 executing)
-Planning Readiness: APPROVED
-Plan Revision: M11/T2-R2
-Execution Authorization: YES
-Authorized Task: M11/T2-R2 — apply the owner's Option B for A-08: take
-  `npm run test:knowledge` out of the `verify` composition, rewrite
-  `REQUIRED_VERIFY_STAGES` and its comment to the four Node stages, add a new
-  repository-policy rule that the Knowledgebase Python stage is executed exactly once
-  in CI and only by `python-quality`, re-express (not delete) the policy tests that
-  guarded the old contract, document the host instruction in README and
-  `docs/development/conventions.md`, then prove `CI / quality-gate` SUCCESS and
-  `python-quality` SUCCESS by `workflow_dispatch`.
-  (Closed in this task: M11/T2-R1 — portable `REPO` roots in four Skill Store suites,
-  the `python-quality` Node toolchain, and two `.gitleaksignore` fingerprints;
-  record in §8, commit `2bc8ddf`, CI runs `38199387584` / `38199389639`.)
-Execution Contract: docs/contracts/execution/ACTIVE.md
-Evidence Level: REMOTE-BACKED (task branch pushed; CI run `38199387584` and Security
-  run `38199389639` read from the remote, `python-quality` and `secret-scan` SUCCESS)
+Task Status: COMPLETE — M11/T2-R1 and M11/T2-R2 both CLOSED 2026-10-12
+  (M11/T1 CLOSED the same day; durable records in §8)
+Planning Readiness: APPROVED (historical — the approved R2 contract is executed and closed)
+Plan Revision: M11/T2-R2 (CLOSED)
+Execution Authorization: NO
+Authorized Task: NONE — M11/T2-R2 applied the owner's Option B for A-08:
+  `npm run test:knowledge` left the `verify` composition, `REQUIRED_VERIFY_STAGES`
+  became the four Node stages, `checkCiWorkflow` gained the rule that the Knowledgebase
+  Python suite is executed exactly once in CI and only by `python-quality`, the old
+  policy guard was re-expressed rather than deleted, and README +
+  `docs/development/conventions.md` record the host instruction. Implementation
+  `a8122f5`; CI run `38202129189` shows `quality-gate` SUCCESS and `python-quality`
+  SUCCESS, which closes A-08 and M11/T2-R1's criterion 5.
+  Earlier in this task: M11/T2-R1 — portable `REPO` roots in four Skill Store suites,
+  the `python-quality` Node toolchain, two `.gitleaksignore` fingerprints; commit
+  `2bc8ddf`, CI runs `38199387584` / `38199389639`.
+Execution Contract: NONE (the M11/T2-R2 ACTIVE.md was deleted at closeout)
+Evidence Level: REMOTE-BACKED (task branch pushed; CI run `38202129189` proves
+  `quality-gate` + `python-quality` both SUCCESS, CI run `38199387584` proves the R1
+  `python-quality` fix, Security run `38199389639` proves `secret-scan` SUCCESS)
 Task Branch: codex/m11-t1-audit-remediation
 Owner Approval: EXPLICIT — owner approved the presented plan on 2026-10-11 with
   scope "3 clusters + OpenClaw security", single Active Task with four ordered
@@ -80,10 +81,11 @@ Owner Approval: EXPLICIT — owner approved the presented plan on 2026-10-11 wit
   On 2026-10-12, in answer to the OWNER DECISION REQUIRED block for the A-08
   `quality-gate` defect that R1's fixes unmasked, the owner chose **Option B**
   (make `python-quality` the single owner of the Knowledgebase Python stage and drop
-  that stage from `verify`). That is a decision on the approach and on opening
-  M11/T2-R2; it is NOT yet approval of the R2 execution plan, which is presented in §8.
-Deployment Authorized: NO for M11/T2 (R1 closed, R2 proposed) — neither the closed R1
-  nor the proposed R2 mutates a live runtime or authorizes an operator command; the
+  that stage from `verify`), then approved the resulting M11/T2-R2 plan with Option A
+  of its own approval block the same day, so R2 was materialized and executed. Both
+  revisions are closed.
+Deployment Authorized: NO for M11/T2 (both revisions closed) — neither R1 nor R2
+  mutated a live runtime or authorized an operator command; the
   grant recorded immediately below belongs to the closed M11/T1-R1/R2 round.
 Prior deployment record — Deployment Authorized: YES (M11/T1-R1 build — ONE attempt,
   owner grant 2026-10-12)
@@ -3908,41 +3910,54 @@ closeout. Evidence level: `REMOTE-BACKED`.
   excluded the `quality-gate` job, `package.json` and the policy scripts), so R1
   stopped at that boundary and asked.
 
-### M11/T2-R2 — PROPOSED, NOT APPROVED — one owner for the Knowledgebase Python stage
+### M11/T2-R2 — one owner for the Knowledgebase Python stage (owner-approved 2026-10-12, CLOSED same day)
 
-Owner direction on 2026-10-12: **Option B**. The revised plan below has no authority
-until the owner approves it and a matching `ACTIVE.md` is materialized; `Execution
-Authorization` remains `NO`.
+Task: M11/T2-R2 · Plan Revision: `M11/T2-R2` · Owner approval: Option A of the R2
+approval block, applying the owner's earlier Option B answer to A-08. Implementation
+commit `a8122f5`; execution contract deleted at closeout. Evidence level:
+`REMOTE-BACKED`.
 
-- Objective: make `CI / quality-gate` pass again by removing the stage it cannot
-  execute, and let `python-quality` be the single CI owner of the Knowledgebase Python
-  suite — the topology `docs/development/conventions.md:83` already documents
-  ("`CI / python-quality` is a blocking job. It provisions … `uv sync --locked` … and
-  runs `npm run test:knowledge`").
-- Scope (to be frozen on approval): `package.json` `verify` →
+- Objective: repair `CI / quality-gate` (A-08) without duplicating the Python
+  toolchain, by giving the Knowledgebase Python suite exactly one executor per
+  environment instead of hiding it inside the Node aggregate.
+- Change: `package.json` `verify` is now
   `npm run format:check && npm run lint && npm test && npm run repo:check`;
-  `scripts/repository-policy.mjs` `REQUIRED_VERIFY_STAGES` + its ordering comment;
-  `tests/repository-policy.test.mjs` (the "rejects a verify gate that omits the
-  Knowledgebase Python stage" case must be re-expressed as the correct new rule:
-  `verify` must equal the four documented stages **and** `python-quality` must remain
-  the sole `npm run test:knowledge` executor — the guard is not to be deleted);
-  `README.md`, `docs/development/conventions.md`, `CHANGELOG.md` for the host
-  instruction to run `npm run test:knowledge` (or `make test-knowledge`) explicitly;
-  `PLAN.md` lifecycle/evidence.
-- Explicitly NOT in scope: `python-quality`'s steps, the `.github/workflows` Node
-  toolchain pins, any dependency or lockfile change, the 5-high `npm audit` findings,
-  `verify.mjs`, live runtime mutation or deployment.
-- Acceptance to be frozen: `npm run repo:check` and
-  `node --test tests/repository-policy.test.mjs` PASS on the new contract; full
-  `npm test` totals unchanged; a `workflow_dispatch` CI run shows `quality-gate`
-  **SUCCESS** and `python-quality` **SUCCESS**; `npm run verify` passes on this host
-  without the tokenizer env being required (the Python stage is separately proven by
-  `npm run test:knowledge`).
-- Trade-off to disclose to the owner in the approval ask: after B, the single command
-  `npm run verify` no longer covers the Knowledgebase Python tier on a host; that tier
-  is covered by `npm run test:knowledge` plus the blocking CI job. If the owner wants
-  one-command host coverage instead, Option A (duplicate the Python toolchain into
-  `quality-gate`) is the alternative and costs a second Python run per CI invocation.
+  `REQUIRED_VERIFY_STAGES` matches it and its comment states why the Python tier is
+  separate; `checkCiWorkflow` gained `checkKnowledgebaseSuiteSingleOwner`, which fails
+  unless `npm run test:knowledge` appears exactly once across all jobs and that
+  occurrence belongs to `python-quality`; the host instruction moved to
+  `npm run test:knowledge` / `make test-knowledge` in `README.md` and
+  `docs/development/conventions.md`.
+- Why the guard survived rather than shrank: deleting the Python entry from
+  `REQUIRED_VERIFY_STAGES` would also have deleted the only proof that the suite runs
+  in CI. The `:368` policy case was re-expressed ("rejects a verify gate that deviates
+  from the documented Node stage order": a missing stage, a reordering, and a re-added
+  Python stage each fail) and a new case ("requires exactly one CI executor for the
+  Knowledgebase Python suite") rejects both a duplicated executor and one moved out of
+  `python-quality`. `node --test tests/repository-policy.test.mjs` 22/22 (was 21/21 —
+  one case added, none removed).
+- Gates against the final state: `npm run repo:check` passed; `npm test`
+  1344 tests / 1299 pass / 0 fail / 45 skipped locally (1344 / 1293 / 0 on Linux CI,
+  the delta being platform skips); `npm run verify` **PASS with
+  `KNOWLEDGE_TOKENIZER_PATH` unset**, which is the proof the aggregate no longer
+  depends on the Python toolchain; `npm run test:knowledge` with the env unchanged at
+  `184 passed, 4 skipped, 27 subtests passed in 40.05s`; `npm run lint` 0 issues;
+  `npm run format:check` clean; `git diff --check` clean.
+- CI evidence: run `38202129189` @ `a8122f5` — `quality-gate` **SUCCESS**
+  (`ℹ tests 1344 / ℹ fail 0`, `Repository policy check passed.`) and `python-quality`
+  **SUCCESS** (`188 passed, 27 subtests passed in 11.45s`, pinned tokenizer
+  `…/knowledge-artifacts/tokenizer.json: OK`). This closes A-08 and the one criterion
+  M11/T2-R1 had to leave PARTIAL.
+- Disclosed deviations/limits: `npm run verify` is no longer a one-command guarantee
+  for the Python tier on a host — that is the owner-accepted cost of Option B, now
+  documented in README and `conventions.md`. Python-tier coverage in CI rests on the
+  new single-owner rule instead of the `verify` string. `.github/workflows/ci.yml` is
+  byte-unchanged by this revision. `dependency-audit` (5 high), `M11-06`'s PostgreSQL
+  gate in CI, `verify.mjs`, the router `GOVERNANCE_COMPLETION_UNAVAILABLE` failures and
+  the `duplicate plugin id` warning are untouched and stay as recorded
+  baselines/`NOT RUN`. Merging to `main` is not authorized by this task; before this
+  revision such a merge would have turned `main`'s `quality-gate` red, and it no longer
+  would.
 
 ## 9. Deferred beyond V1
 
