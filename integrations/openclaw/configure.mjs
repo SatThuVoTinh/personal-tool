@@ -390,6 +390,19 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // bounded release retry, and stops non-contention filesystem errors from
     // being relabelled FILE_LOCK_TIMEOUT without a `.code`.
     "165243b2edb0ff5a406f146343220320947ac930a91779de42f8232c28b6d2d4",
+    // M11/T1-R2: the SECOND predecessor entry, and the one the LIVE runtime
+    // actually carries. `--preflight` proved it read-only as
+    // `Governance plugin asset drift detected: …/lib/file-lock.mjs`, and the
+    // whole 33-asset scan found this to be the only gap: every other asset is
+    // byte-equal to the current build and the live `index.mjs`
+    // (`230f3c79…`) is already admitted. Provenance is `ea84a5a`
+    // ("fix(m10/t2-r13-r25): sweep 39 defects…") re-packaged through the
+    // repository's own `governancePluginFiles()` in
+    // `tests/m11-t1-r2-file-lock-asset-predecessor.test.mjs`, not transcribed.
+    // The intermediate `d773856` digest (`0e533f10…`) is deliberately NOT
+    // listed: that build was never installed on any runtime, so admitting it
+    // would widen the control for no deployment path.
+    "1975c821f94afe25147debe5ca538f83c3c0e2e3be10bfcacca80c3e9bfbf37e",
   ]),
   "lib/guard.mjs": Object.freeze([
     // M10/T2-R14: the outgoing R12/R13 build currently deployed, byte-proven by

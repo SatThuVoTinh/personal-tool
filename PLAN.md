@@ -37,7 +37,7 @@ Evidence Level: NONE | LOCAL-VERIFIED | REMOTE-BACKED
 | M7 — Zink Tools + OpenClaw integration + V1 hardening                      | `COMPLETE`    | `REMOTE-BACKED`  | M7/T1-R19, M7/T2-R12, M7/T3-R16, M7/T4-R10, and M7/T5-R13 complete; runtime governance remediation, Discord 7-bot integration, and Zink tools specialist policies verified.                                                                                                                                                           |
 | M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Integration | `IN PROGRESS` | `LOCAL-VERIFIED` | M8/T1 is complete; M8/T2.2 R4/R5/R6 are implemented; M8/T2.2-R7 (heartbeat admission, boundary diagnosability, apply safety) is in progress. Deployment is not authorized.                                                                                                                                                            |
 | M10 - Governed coordinator runtime binding                                 | `COMPLETE` | `LOCAL-VERIFIED` | M10/T2 closed by explicit owner decision 2026-10-11 (R26 records the final remediation; R8 closed live with zero-outbound proven). Deferred follow-ups are NOT closed under M10 and require separate authorization: live gateway/knowledge restart or deployment, M10 ingress card/tag redesign (new Plan Revision), coordinator result ingestion, and the WSL/CI Python gate run. |
-| M11 - Cross-module audit remediation                                       | `COMPLETE` | `LOCAL-VERIFIED` | M11/T1-R1 closed 2026-10-12: the four-phase audit remediation is committed (`45e0ee7`, `3810f67`, `01e5d07`, `6cba090`, `94e9444`) with every required host gate PASS and the deviations/limitations recorded in §8. NOT closed under M11: deployment or any live runtime mutation (owner-deferred, `Deployment Authorized: NO`), the WSL/CI run of the Knowledgebase Python gate, and the owner-excluded items (per-document quarantine, incremental-publish redesign, manifest schema extension, zink-tools drift cluster, zink-tools lint-glob gap). |
+| M11 - Cross-module audit remediation                                       | `IN PROGRESS` | `LOCAL-VERIFIED` | M11/T1-R2 opened 2026-10-12 to admit the one proven live `lib/file-lock.mjs` asset predecessor that blocks `configure.mjs --preflight`, then deploy under the owner's `Deployment Authorized: YES` grant. M11/T1-R1 closed 2026-10-12: the four-phase audit remediation is committed (`45e0ee7`, `3810f67`, `01e5d07`, `6cba090`, `94e9444`) with every required host gate PASS and the deviations/limitations recorded in §8. NOT closed under M11: the live deployment evidence record (grant issued; the apply/restart execution is operator-side because this session may not load the router/Discord credentials), the WSL/CI run of the Knowledgebase Python gate, and the owner-excluded items (per-document quarantine, incremental-publish redesign, manifest schema extension, zink-tools drift cluster, zink-tools lint-glob gap). |
 
 The former self-built L&SC Data Plant is replaced by a **logical external
 infrastructure flow**, not another repository module. Forecasting, optimization,
@@ -48,13 +48,14 @@ operations research and simulation remain first-class capabilities.
 ```text
 Milestone: M11 — Cross-module audit remediation
 Task: M11/T1 — Skill-store SQL correctness, skill-store governance, knowledgebase index hygiene, OpenClaw outbound security
-Task Status: COMPLETE (closed 2026-10-12)
+Task Status: IN PROGRESS (M11/T1-R1 closed 2026-10-12; R2 re-opened same day)
 Planning Readiness: APPROVED
-Plan Revision: M11/T1-R1
-Execution Authorization: NO
-Authorized Task: M11/T1 — four-phase remediation of the 2026-10-11 read-only full-repo audit
-Execution Contract: NONE (the ACTIVE.md was deleted at closeout; its frozen
-  details are superseded by the commits and the §8 record)
+Plan Revision: M11/T1-R2
+Execution Authorization: YES
+Authorized Task: M11/T1-R2 — admit the one proven live `lib/file-lock.mjs` asset
+  predecessor that blocks `configure.mjs --preflight`, gate it, then deploy the
+  M11/T1-R1 build. R1's four phases remain closed and unchanged.
+Execution Contract: docs/contracts/execution/ACTIVE.md
 Evidence Level: LOCAL-VERIFIED
 Task Branch: codex/m11-t1-audit-remediation
 Owner Approval: EXPLICIT — owner approved the presented plan on 2026-10-11 with
@@ -63,9 +64,28 @@ Owner Approval: EXPLICIT — owner approved the presented plan on 2026-10-11 wit
   mitigation-only (no incremental-publish redesign). On 2026-10-12 the owner
   additionally approved Option A, the bounded Phase 2 scope extension for the
   deployment-snapshot digest pins.
-Deployment Authorized: NO — no operator-apply, no live runtime mutation, no
-  gateway/service restart under this contract. That remains true at closeout:
-  every commit here is repository-only and nothing was installed.
+Deployment Authorized: YES (M11/T1-R1 build — ONE attempt, owner grant 2026-10-12)
+  — scoped exactly to: read-only `configure.mjs --preflight`, then one
+  `configure.mjs --apply`, then `systemctl --user restart` of the single live unit
+  `openclaw-gateway-zink.service`, all executed inside WSL Ubuntu against the live
+  state directory `~/.openclaw-zink`. Nothing else: no `main` merge, no force-push,
+  no PR/release, no other service, no `--revert`/historical recovery (that needs its
+  own distinct authorization), no ledger mutation. The preceding `NO` gate is
+  consumed by this grant.
+Deployment Status: NOT DEPLOYED — the grant was recorded before any mutation, and
+  the read-only `--preflight` attempt then failed closed for two independently
+  proven reasons: (1) this Windows session cannot supply the operator credentials
+  the CLI requires (`discord-identifiers.json`, `router.env`, and the router API
+  key are credential-bearing files; the session permission classifier refused to
+  load them even with output masked, and no workaround was attempted), and (2) the
+  live runtime is not on this host. Live target, proven read-only inside WSL
+  Ubuntu: `openclaw-gateway-zink.service` `active`, entrypoint digest
+  `230f3c79…`, which IS an admitted predecessor in both `configure.mjs` per-mode
+  allowlists (`:1071` preflight, `:1388` apply), so the M11/T1-R1 build
+  (`e8f084ab…`, reproduced from `policy.mjs.governancePluginFiles()`) is admissible
+  from it. The Windows `~/.openclaw-zink` copy is a stale R5-era tree
+  (`e77689c9…`) and is NOT a deployment target. Operator execution of
+  preflight/apply/restart remains required to make this grant effective.
 
 Prior focus: M8/T2.2 CLOSED (R19 live-verified) and M10/T2 CLOSED by owner
   decision 2026-10-11; their durable records live in §8 and the history below.
