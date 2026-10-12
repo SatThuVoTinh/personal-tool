@@ -23,9 +23,12 @@ import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
-const ROOT = "C:/Users/HOANG VINH/OneDrive/Documents/personal-tool";
-const url = (rel) => "file:///" + ROOT + "/" + rel;
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+// The ESM loader needs a URL, not a bare filesystem path.
+const url = (rel) => pathToFileURL(path.join(REPO, rel)).href;
+const readSource = (rel) => readFileSync(path.join(REPO, rel), "utf8");
 
 const { promoteApprovedSkill, scanCatalog } = await import(
   url("zink-skill-store/src/catalog.mjs")
@@ -34,18 +37,11 @@ const { SkillAdapter } = await import(
   url("zink-tools/adapters/skill-store/skill-adapter.mjs")
 );
 
-const ADAPTER_SRC = readFileSync(
-  ROOT + "/zink-tools/adapters/skill-store/skill-adapter.mjs",
-  "utf8",
+const ADAPTER_SRC = readSource(
+  "zink-tools/adapters/skill-store/skill-adapter.mjs",
 );
-const CATALOG_SRC = readFileSync(
-  ROOT + "/zink-skill-store/src/catalog.mjs",
-  "utf8",
-);
-const VECTOR_SYNC_SRC = readFileSync(
-  ROOT + "/zink-skill-store/src/vector-sync.mjs",
-  "utf8",
-);
+const CATALOG_SRC = readSource("zink-skill-store/src/catalog.mjs");
+const VECTOR_SYNC_SRC = readSource("zink-skill-store/src/vector-sync.mjs");
 
 /** Strip JS comments so an explanatory comment cannot satisfy a source assertion. */
 const code = (src) =>

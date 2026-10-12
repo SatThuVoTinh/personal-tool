@@ -4,21 +4,21 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
-const ROOT = "C:/Users/HOANG VINH/OneDrive/Documents/personal-tool";
-// Windows absolute paths must be file:// URLs for the ESM loader.
-const { chunkSkillContent } = await import(
-  `file:///${ROOT}/zink-skill-store/src/vector-sync.mjs`
-);
-const { renderEmbeddingEnvelope } = await import(
-  `file:///${ROOT}/zink-tools/common/semantic-contract.mjs`
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+// The ESM loader needs a URL, not a bare filesystem path.
+const mod = (rel) => import(pathToFileURL(path.join(REPO, rel)).href);
+const readSource = (rel) => readFileSync(path.join(REPO, rel), "utf8");
+
+const { chunkSkillContent } = await mod("zink-skill-store/src/vector-sync.mjs");
+const { renderEmbeddingEnvelope } = await mod(
+  "zink-tools/common/semantic-contract.mjs",
 );
 
-const KB_MAIN = readFileSync(`${ROOT}/apps/knowledge/app/main.py`, "utf8");
-const KB_PDF = readFileSync(
-  `${ROOT}/apps/knowledge/app/pdf_foundation.py`,
-  "utf8",
-);
+const KB_MAIN = readSource("apps/knowledge/app/main.py");
+const KB_PDF = readSource("apps/knowledge/app/pdf_foundation.py");
 
 test("R21-01: no chunk ever exceeds the embedding envelope ceiling", () => {
   // Proven pre-fix: chunkSkillContent had NO length branch at all — its own

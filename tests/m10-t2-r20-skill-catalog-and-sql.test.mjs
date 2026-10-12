@@ -5,16 +5,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const ROOT = "C:/Users/HOANG VINH/OneDrive/Documents/personal-tool";
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const readSource = (rel) => readFileSync(path.join(REPO, rel), "utf8");
 
-const vectorSyncSrc = readFileSync(
-  `${ROOT}/zink-skill-store/src/vector-sync.mjs`,
-  "utf8",
-);
-const adapterSrc = readFileSync(
-  `${ROOT}/zink-tools/adapters/skill-store/skill-adapter.mjs`,
-  "utf8",
+const vectorSyncSrc = readSource("zink-skill-store/src/vector-sync.mjs");
+const adapterSrc = readSource(
+  "zink-tools/adapters/skill-store/skill-adapter.mjs",
 );
 
 const codeOf = (src) =>
@@ -137,10 +136,7 @@ test("R20-03: the JS key and the SQL predicate build the SAME string", () => {
 test("R20-04: the separator cannot occur in any identity component", () => {
   // The fix is only sound if `|` is unambiguous. Every component is a skill
   // path segment restricted to /^[a-zA-Z0-9_.-]+$/u, so it cannot contain `|`.
-  const safety = readFileSync(
-    `${ROOT}/zink-tools/common/path-safety.mjs`,
-    "utf8",
-  );
+  const safety = readSource("zink-tools/common/path-safety.mjs");
   assert.match(
     safety,
     /const SAFE_SEGMENT_PATTERN = \/\^\[a-zA-Z0-9_\.-\]\+\$\/u/u,
