@@ -24,17 +24,22 @@ const REQUIRED_SCRIPTS = [
   "verify",
 ];
 
-// `npm run verify` is the single fail-fast quality gate. The stage order is
-// part of the contract: fast static checks first, then the JavaScript suite,
-// then the Knowledgebase Python suite, then repository policy validation.
-// A missing stage must fail the policy check rather than silently shrink the
-// gate, which is why this is a fixed sequence instead of a loose membership
+// `npm run verify` is the fail-fast Node-tier quality gate: static checks first, then
+// the JavaScript suite, then repository policy validation. The stage order is part of
+// the contract and a missing stage must fail the policy check rather than silently
+// shrink the gate, which is why this is a fixed sequence instead of a loose membership
 // test.
+//
+// The Knowledgebase Python suite is deliberately NOT a `verify` stage. It is a separate
+// blocking gate with exactly one executor per environment: `CI / python-quality` in CI
+// (enforced below, by checkCiWorkflow), and `npm run test:knowledge` / `make
+// test-knowledge` on a host. Folding it into `verify` would make one command depend on
+// the Python toolchain in every job that runs `verify`, including the ones that
+// provision only Node.
 const REQUIRED_VERIFY_STAGES = [
   "npm run format:check",
   "npm run lint",
   "npm test",
-  "npm run test:knowledge",
   "npm run repo:check",
 ];
 
@@ -371,6 +376,32 @@ function checkCiWorkflow(workflowPath, workflow, failures) {
   );
 
   checkPythonQualityJob(workflowPath, workflow, failures);
+  checkKnowledgebaseSuiteSingleOwner(workflowPath, workflow, failures);
+}
+
+// The Knowledgebase Python suite is a blocking gate with exactly one CI executor. It
+// used to also be a `verify` stage, which made every job that runs `verify` depend on
+// the Python toolchain — `CI / quality-gate` proved that unrunnable (it provisions
+// Node only, so the stage died at `uv: not found`). Requiring one named executor keeps
+// the suite from silently disappearing while the aggregate stays Node-only, and
+// rejects both a duplicated suite and a workflow that dropped it entirely.
+function checkKnowledgebaseSuiteSingleOwner(workflowPath, workflow, failures) {
+  const jobs = isObject(workflow.jobs) ? workflow.jobs : {};
+  const executors = [];
+  for (const [jobName, job] of Object.entries(jobs)) {
+    const steps = isObject(job) && Array.isArray(job.steps) ? job.steps : [];
+    if (runStepIndex(steps, "npm run test:knowledge") >= 0) {
+      executors.push(jobName);
+    }
+  }
+  if (executors.length !== 1 || executors[0] !== PYTHON_QUALITY_JOB) {
+    failures.push(
+      formatWorkflowFailure(
+        workflowPath,
+        `command \`npm run test:knowledge\` must be executed exactly once, by job ${PYTHON_QUALITY_JOB}.`,
+      ),
+    );
+  }
 }
 
 const PYTHON_QUALITY_JOB = "python-quality";

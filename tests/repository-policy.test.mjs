@@ -365,7 +365,7 @@ test("rejects pulling the pdf-runtime closure into the Python CI job", () => {
   });
 });
 
-test("rejects a verify gate that omits the Knowledgebase Python stage", () => {
+test("rejects a verify gate that deviates from the documented Node stage order", () => {
   const validScripts = {
     format: "prettier --write README.md",
     "format:check": "prettier --check README.md",
@@ -375,46 +375,77 @@ test("rejects a verify gate that omits the Knowledgebase Python stage", () => {
       "uv run --directory apps/knowledge --locked python -m pytest tests -q",
     "repo:check": "node scripts/repository-check.mjs",
   };
+  const verifyFailures = (verify) =>
+    checkCommandDefinitions(
+      { scripts: { ...validScripts, verify } },
+      "install:\n\tnpm ci\n",
+    ).filter((failure) => failure.includes("verify must run the documented"));
 
-  const withoutPython = {
-    scripts: {
-      ...validScripts,
-      verify:
-        "npm run format:check && npm run lint && npm test && npm run repo:check",
-    },
-  };
-  assert.ok(
-    checkCommandDefinitions(withoutPython, "install:\n\tnpm ci\n").some(
-      (failure) => failure.includes("verify must run the documented"),
-    ),
-  );
-
-  const outOfOrder = {
-    scripts: {
-      ...validScripts,
-      verify:
-        "npm run format:check && npm run test:knowledge && npm run lint && npm test && npm run repo:check",
-    },
-  };
-  assert.ok(
-    checkCommandDefinitions(outOfOrder, "install:\n\tnpm ci\n").some(
-      (failure) => failure.includes("verify must run the documented"),
-    ),
-  );
-
-  const complete = {
-    scripts: {
-      ...validScripts,
-      verify:
-        "npm run format:check && npm run lint && npm test && npm run test:knowledge && npm run repo:check",
-    },
-  };
   assert.deepEqual(
-    checkCommandDefinitions(complete, "install:\n\tnpm ci\n").filter(
-      (failure) => failure.includes("verify must run the documented"),
+    verifyFailures(
+      "npm run format:check && npm run lint && npm test && npm run repo:check",
     ),
     [],
   );
+
+  for (const verify of [
+    // A missing stage silently shrinks the gate.
+    "npm run format:check && npm run lint && npm test",
+    "npm run lint && npm test && npm run repo:check",
+    // Reordering defeats the fail-fast ordering.
+    "npm run format:check && npm run repo:check && npm run lint && npm test",
+    // The Python tier has one named executor per environment; folding it back in
+    // would make every `verify` job depend on the Python toolchain.
+    "npm run format:check && npm run lint && npm test && npm run test:knowledge && npm run repo:check",
+  ]) {
+    assert.equal(verifyFailures(verify).length, 1, verify);
+  }
+});
+
+test("requires exactly one CI executor for the Knowledgebase Python suite", () => {
+  withTemporaryDirectory((repositoryRoot) => {
+    writeValidWorkflows(repositoryRoot);
+    assert.deepEqual(checkWorkflowDefinitions(repositoryRoot), []);
+  });
+
+  // Duplicating the suite (the shape that made `CI / quality-gate` unrunnable:
+  // `verify` reached `uv run` in a job that provisions only Node).
+  const duplicated = VALID_CI_WORKFLOW.replace(
+    "      - run: npm ci\n      - run: npm run verify",
+    "      - run: npm ci\n      - run: npm run test:knowledge\n      - run: npm run verify",
+  );
+  assert.notEqual(duplicated, VALID_CI_WORKFLOW);
+  withTemporaryDirectory((repositoryRoot) => {
+    writeValidWorkflows(repositoryRoot);
+    writeWorkflow(repositoryRoot, "ci.yml", duplicated);
+    assert.ok(
+      checkWorkflowDefinitions(repositoryRoot).some((failure) =>
+        failure.includes(
+          "must be executed exactly once, by job python-quality",
+        ),
+      ),
+    );
+  });
+
+  // Moving the suite to a job that is not the designated owner.
+  const misplaced = VALID_CI_WORKFLOW.replace(
+    "      - run: npm run test:knowledge\n",
+    "",
+  ).replace(
+    "      - run: npm run verify",
+    "      - run: npm run test:knowledge\n      - run: npm run verify",
+  );
+  withTemporaryDirectory((repositoryRoot) => {
+    writeValidWorkflows(repositoryRoot);
+    writeWorkflow(repositoryRoot, "ci.yml", misplaced);
+    assert.ok(
+      checkWorkflowDefinitions(repositoryRoot).some((failure) =>
+        failure.includes(
+          "must be executed exactly once, by job python-quality",
+        ),
+      ),
+    );
+  });
 });
 
 test("requires a Knowledgebase Python test script and Make target", () => {
@@ -427,7 +458,7 @@ test("requires a Knowledgebase Python test script and Make target", () => {
         test: "node --test tests",
         "repo:check": "node scripts/repository-check.mjs",
         verify:
-          "npm run format:check && npm run lint && npm test && npm run test:knowledge && npm run repo:check",
+          "npm run format:check && npm run lint && npm test && npm run repo:check",
       },
     },
     "install:\n\tnpm ci\n",

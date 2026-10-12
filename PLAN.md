@@ -47,24 +47,24 @@ operations research and simulation remain first-class capabilities.
 
 ```text
 Milestone: M11 — Cross-module audit remediation
-Task: M11/T2 — make the repository gates runnable on any host (portable test roots, CI Python job toolchain, gitleaks fingerprints)
-Task Status: IN PROGRESS — M11/T2-R1 CLOSED 2026-10-12 with one disclosed gap;
-  M11/T2-R2 is PROPOSED (owner chose Option B on 2026-10-12) and is NOT yet approved
-Planning Readiness: DRAFT (R2 proposed; R1's APPROVED state is historical)
-Plan Revision: M11/T2-R1 (closed) → proposed M11/T2-R2
-Execution Authorization: NO
-Authorized Task: M11/T2-R1 — replace the hardcoded machine `ROOT` in four Skill
-  Store suites with the repository's portable `REPO` idiom, give the `python-quality`
-  CI job the same Node toolchain steps `quality-gate` uses so
-  `npm run test:knowledge` can actually run, append two `.gitleaksignore`
-  fingerprints for the sha256 digest constants gitleaks reports as secrets, then
-  prove all three with real `workflow_dispatch` CI/Security runs.
-  The proposed M11/T2-R2 (owner Option B, 2026-10-12) is: remove
-  `npm run test:knowledge` from the `verify` composition and name `python-quality`
-  as the single CI owner of the Knowledgebase Python stage, then prove
-  `CI / quality-gate` SUCCESS by dispatch. It is recorded in §8 as a proposal and
-  carries no authority until the owner approves it and a new ACTIVE.md is materialized.
-Execution Contract: NONE (the M11/T2-R1 ACTIVE.md was deleted at closeout)
+Task: M11/T2 — make the repository gates runnable on any host (portable test roots, CI Python job toolchain, gitleaks fingerprints, one owner for the Python stage)
+Task Status: IN PROGRESS (M11/T1 CLOSED 2026-10-12; M11/T2-R1 CLOSED 2026-10-12 with
+  the A-08 gap disclosed; M11/T2-R2 executing)
+Planning Readiness: APPROVED
+Plan Revision: M11/T2-R2
+Execution Authorization: YES
+Authorized Task: M11/T2-R2 — apply the owner's Option B for A-08: take
+  `npm run test:knowledge` out of the `verify` composition, rewrite
+  `REQUIRED_VERIFY_STAGES` and its comment to the four Node stages, add a new
+  repository-policy rule that the Knowledgebase Python stage is executed exactly once
+  in CI and only by `python-quality`, re-express (not delete) the policy tests that
+  guarded the old contract, document the host instruction in README and
+  `docs/development/conventions.md`, then prove `CI / quality-gate` SUCCESS and
+  `python-quality` SUCCESS by `workflow_dispatch`.
+  (Closed in this task: M11/T2-R1 — portable `REPO` roots in four Skill Store suites,
+  the `python-quality` Node toolchain, and two `.gitleaksignore` fingerprints;
+  record in §8, commit `2bc8ddf`, CI runs `38199387584` / `38199389639`.)
+Execution Contract: docs/contracts/execution/ACTIVE.md
 Evidence Level: REMOTE-BACKED (task branch pushed; CI run `38199387584` and Security
   run `38199389639` read from the remote, `python-quality` and `secret-scan` SUCCESS)
 Task Branch: codex/m11-t1-audit-remediation

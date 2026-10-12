@@ -26,7 +26,7 @@
     "test:m8": "node --test tests/m8-*.test.mjs",
     "test:r16": "node integrations/openclaw/topology/fixtures/runtime-regression/r16-rehearsal.mjs",
     "repo:check": "node scripts/repository-check.mjs",
-    "verify": "npm run format:check && npm run lint && npm test && npm run test:knowledge && npm run repo:check"
+    "verify": "npm run format:check && npm run lint && npm test && npm run repo:check"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
