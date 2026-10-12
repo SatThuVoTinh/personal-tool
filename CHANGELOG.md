@@ -364,6 +364,34 @@ asset drift detected` (`installed_mutation: false`) because ten live
 
 ### Fixed
 
+- Fixed three gates that could not run outside one laptop (`2bc8ddf`, M11/T2-R1,
+  closed 2026-10-12 with CI evidence). (1) Four Skill Store suites
+  (`tests/m10-t2-r20-skill-catalog-and-sql`, `…r21-skill-chunking-and-text-budgets`,
+  `…r22-publish-durability-and-bounded-backup`, `…r25-skill-read-apply-integrity`)
+  read production sources through a hardcoded
+  `const ROOT = "C:/Users/HOANG VINH/…"` and `ENOENT`-ed on any other host; they now
+  derive the repo root with the repository's own portable idiom
+  (`path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")`) and load
+  modules through `pathToFileURL(…).href`. No assertion, expected value, test name,
+  subtest, fixture or skip condition changed, and `npm test` totals stayed exactly
+  1343 tests / 1298 pass / 0 fail / 45 skipped — that identity is the proof nothing
+  was weakened. (2) `CI / python-quality` installed Python and `uv` but no Node, so
+  `npm run test:knowledge` died in npm on the `devEngines.runtime` pin
+  (`EBADDEVENGINES … v22.23.3`) before pytest collected anything; the job now carries
+  the same SHA-pinned Node/npm toolchain steps `quality-gate` uses. (3) `secret-scan`
+  in full-history `workflow_dispatch` mode reported two sha256 **digest constants**
+  in `integrations/openclaw/configure.mjs` as `generic-api-key` leaks; they are
+  provenance pins, so they are fingerprinted in `.gitleaksignore` instead of touching
+  scanner rules. Evidence: CI run `38199387584` — `python-quality` SUCCESS with
+  `188 passed, 27 subtests passed in 10.50s` and the pinned tokenizer verified
+  `OK` (188 = the 184 that pass here plus the 4 this Windows account must skip for
+  symlink privilege, so those platform cases are now proven on Linux); Security run
+  `38199389639` — `secret-scan` SUCCESS. `CI / quality-gate` is **still failing**,
+  one stage later and for a different, pre-existing reason: `verify` contains the
+  Python stage while that job provisions Node only (`sh: 1: uv: not found`, root
+  cause `1a36c52`), which is recorded as open finding A-08 and drives the proposed
+  M11/T2-R2. `dependency-audit` remains red on the pre-existing 5-high findings and
+  `M11-06`'s PostgreSQL gate stays `NOT RUN` in CI.
 - Fixed a Zink Knowledgebase boot failure. `GET /healthz` in
   `apps/knowledge/app/main.py` declared the return annotation
   `JSONResponse | dict[str, str]` without `response_model=None`, so the pinned
