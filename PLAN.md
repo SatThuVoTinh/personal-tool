@@ -37,7 +37,7 @@ Evidence Level: NONE | LOCAL-VERIFIED | REMOTE-BACKED
 | M7 — Zink Tools + OpenClaw integration + V1 hardening                      | `COMPLETE`    | `REMOTE-BACKED`  | M7/T1-R19, M7/T2-R12, M7/T3-R16, M7/T4-R10, and M7/T5-R13 complete; runtime governance remediation, Discord 7-bot integration, and Zink tools specialist policies verified.                                                                                                                                                           |
 | M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Integration | `IN PROGRESS` | `LOCAL-VERIFIED` | M8/T1 is complete; M8/T2.2 R4/R5/R6 are implemented; M8/T2.2-R7 (heartbeat admission, boundary diagnosability, apply safety) is in progress. Deployment is not authorized.                                                                                                                                                            |
 | M10 - Governed coordinator runtime binding                                 | `COMPLETE` | `LOCAL-VERIFIED` | M10/T2 closed by explicit owner decision 2026-10-11 (R26 records the final remediation; R8 closed live with zero-outbound proven). Deferred follow-ups are NOT closed under M10 and require separate authorization: live gateway/knowledge restart or deployment, M10 ingress card/tag redesign (new Plan Revision), coordinator result ingestion, and the WSL/CI Python gate run. |
-| M11 - Cross-module audit remediation                                       | `IN PROGRESS` | `LOCAL-VERIFIED` | M11/T1-R2 opened 2026-10-12 to admit the one proven live `lib/file-lock.mjs` asset predecessor that blocks `configure.mjs --preflight`, then deploy under the owner's `Deployment Authorized: YES` grant. M11/T1-R1 closed 2026-10-12: the four-phase audit remediation is committed (`45e0ee7`, `3810f67`, `01e5d07`, `6cba090`, `94e9444`) with every required host gate PASS and the deviations/limitations recorded in §8. NOT closed under M11: the live deployment evidence record (grant issued; the apply/restart execution is operator-side because this session may not load the router/Discord credentials), the WSL/CI run of the Knowledgebase Python gate, and the owner-excluded items (per-document quarantine, incremental-publish redesign, manifest schema extension, zink-tools drift cluster, zink-tools lint-glob gap). |
+| M11 - Cross-module audit remediation                                       | `COMPLETE` | `REMOTE-BACKED` | M11/T1-R1 (four phases) and M11/T1-R2 (live `lib/file-lock.mjs` predecessor admission + deployment) both closed 2026-10-12. The M11/T1-R1 build is DEPLOYED AND VERIFIED on the live WSL gateway (`e8f084ab…` / `22d7411a…`, ledger untouched); gate evidence and limits in §4/§8. NOT closed under M11: `verify.mjs` (`NOT RUN`, operator-side), the WSL/CI run of the Knowledgebase Python gate, symlink-escape proof on a link-capable platform, the pre-existing model-router `GOVERNANCE_COMPLETION_UNAVAILABLE` failures, the pre-existing `duplicate plugin id` warning, and the owner-excluded items (per-document quarantine, incremental-publish redesign, manifest schema extension, zink-tools drift cluster, zink-tools lint-glob gap). |
 
 The former self-built L&SC Data Plant is replaced by a **logical external
 infrastructure flow**, not another repository module. Forecasting, optimization,
@@ -48,15 +48,17 @@ operations research and simulation remain first-class capabilities.
 ```text
 Milestone: M11 — Cross-module audit remediation
 Task: M11/T1 — Skill-store SQL correctness, skill-store governance, knowledgebase index hygiene, OpenClaw outbound security
-Task Status: IN PROGRESS (M11/T1-R1 closed 2026-10-12; R2 re-opened same day)
+Task Status: COMPLETE (R1 and R2 both closed 2026-10-12)
 Planning Readiness: APPROVED
 Plan Revision: M11/T1-R2
-Execution Authorization: YES
+Execution Authorization: NO
 Authorized Task: M11/T1-R2 — admit the one proven live `lib/file-lock.mjs` asset
   predecessor that blocks `configure.mjs --preflight`, gate it, then deploy the
   M11/T1-R1 build. R1's four phases remain closed and unchanged.
-Execution Contract: docs/contracts/execution/ACTIVE.md
-Evidence Level: LOCAL-VERIFIED
+Execution Contract: NONE (the ACTIVE.md was deleted at closeout; its frozen
+  details are superseded by `14c4b90` and the §8 record)
+Evidence Level: REMOTE-BACKED (task branch `codex/m11-t1-audit-remediation`
+  carries `14c4b90` and this closeout; no `main` merge and no PR is authorized)
 Task Branch: codex/m11-t1-audit-remediation
 Owner Approval: EXPLICIT — owner approved the presented plan on 2026-10-11 with
   scope "3 clusters + OpenClaw security", single Active Task with four ordered
@@ -71,21 +73,28 @@ Deployment Authorized: YES (M11/T1-R1 build — ONE attempt, owner grant 2026-10
   state directory `~/.openclaw-zink`. Nothing else: no `main` merge, no force-push,
   no PR/release, no other service, no `--revert`/historical recovery (that needs its
   own distinct authorization), no ledger mutation. The preceding `NO` gate is
-  consumed by this grant.
-Deployment Status: NOT DEPLOYED — the grant was recorded before any mutation, and
-  the read-only `--preflight` attempt then failed closed for two independently
-  proven reasons: (1) this Windows session cannot supply the operator credentials
-  the CLI requires (`discord-identifiers.json`, `router.env`, and the router API
-  key are credential-bearing files; the session permission classifier refused to
-  load them even with output masked, and no workaround was attempted), and (2) the
-  live runtime is not on this host. Live target, proven read-only inside WSL
-  Ubuntu: `openclaw-gateway-zink.service` `active`, entrypoint digest
-  `230f3c79…`, which IS an admitted predecessor in both `configure.mjs` per-mode
-  allowlists (`:1071` preflight, `:1388` apply), so the M11/T1-R1 build
-  (`e8f084ab…`, reproduced from `policy.mjs.governancePluginFiles()`) is admissible
-  from it. The Windows `~/.openclaw-zink` copy is a stale R5-era tree
-  (`e77689c9…`) and is NOT a deployment target. Operator execution of
-  preflight/apply/restart remains required to make this grant effective.
+  consumed by this grant, and the grant is consumed by the single apply recorded
+  below; no further deploy is authorized without a new owner decision.
+Deployment Status: DEPLOYED AND VERIFIED (2026-10-12, WSL Ubuntu, ONE `--apply`
+  attempt; grant consumed). Executed operator-side because the CLI requires the
+  live Discord identifiers and `ZINK_ROUTER_*` values, which this session's
+  permission classifier refuses to load (no workaround attempted). Evidence:
+  `--preflight` PASS with `installedMutation: false`; live digests after apply are
+  `index.mjs = e8f084ab…` and `lib/file-lock.mjs = 22d7411a…`, both equal to the
+  repository's packaged current build, written `2026-10-12T02:02:36Z`;
+  `openclaw.json` untouched (mtime `2026-10-09`, so no config rewrite was needed);
+  ledger untouched (mtime `2026-10-09`; 128 events == snapshot sequence 128,
+  51 tasks); unit `active`, `MainPID=17047`, `NRestarts=0`, zero error-class lines
+  from the new PID.
+  Explicitly NOT part of this evidence: `verify.mjs` (non-live and `--live`) was
+  not run — operator-side, `NOT RUN`; `configure.mjs --apply` creates no
+  `transactions/` record (that wrapper belongs to `operator-apply.mjs`), so the
+  newest transaction directory is still `2026-10-10`. Two pre-existing runtime
+  conditions were observed and are NOT closed here: on the PREVIOUS PID 16583 at
+  08:56–08:59 the model router aborted after ~100 s across the whole fallback
+  chain, surfacing as `GOVERNANCE_COMPLETION_UNAVAILABLE` (predates this
+  deployment, unrelated to it, needs its own diagnosis), and the long-standing
+  `duplicate plugin id` config warning (272 journal occurrences) remains open.
 
 Prior focus: M8/T2.2 CLOSED (R19 live-verified) and M10/T2 CLOSED by owner
   decision 2026-10-11; their durable records live in §8 and the history below.
@@ -3764,6 +3773,49 @@ WSL/CI run of the env-gated Python files is carried forward, as it was for M10.
   Windows refused symlink creation for this account, so the symlink-escape case
   self-skips and that specific escape is proven by test only on platforms that
   permit link creation.
+
+### M11/T1-R2 — live asset-predecessor admission and deployment (owner-approved 2026-10-12)
+
+Authorization: `YES` during the round, `NO (consumed at closeout)` now. Commits:
+`14c4b90` (admission + gate). Owner decisions this round: (1) `Deployment
+Authorized: YES (one real apply attempt; the earlier fail-closed preflight does not
+consume the grant)`, and (2) Option A — open a bounded R2 to admit the one proven
+live asset predecessor instead of leaving the runtime undeployable or hand-editing
+live state (Option C was refused on principle: it disables the integrity control).
+
+- Trigger: the granted `--preflight` failed closed with
+  `Governance plugin asset drift detected: …/lib/file-lock.mjs`. A read-only 33-file
+  scan of the live tree proved a single gap — 31 assets byte-equal to the current
+  build, `index.mjs` (`230f3c79…`) already admitted in both per-mode entrypoint
+  lists, and only `lib/file-lock.mjs` unadmitted.
+- Root cause: R1's Phase-2 scope extension re-pinned and admitted the **entrypoint**
+  digest only, while `d773856` and `8b5c9e0` also moved the packaged
+  `lib/file-lock.mjs` asset. `ALLOWED_GOVERNANCE_ASSET_SHA256` is one table consumed
+  by both modes (`configure.mjs:1033`, `:1346`), so the per-mode deadlock could not
+  re-open at the asset layer; the gap was simply never admitted.
+- Provenance: the live runtime **is** the `ea84a5a` packaged build — `R2 P1`
+  re-packages that commit through the repository's own `governancePluginFiles()` and
+  asserts the live entrypoint digest, the live asset digest, and that the two builds
+  differ in exactly `lib/file-lock.mjs` outside the entrypoint. Admission is bounded:
+  `d773856`'s intermediate (`0e533f10…`), which was never installed anywhere, is
+  deliberately unlisted and `R2 3` proves both modes still refuse it.
+- Gates against the final state: `node --test
+  tests/m11-t1-r2-file-lock-asset-predecessor.test.mjs` 7/7; the two existing
+  deployment-snapshot suites 42/42 (no admission regression); `npm test`
+  1343 tests / 1298 pass / 0 fail / 45 skipped; `npm run lint` 0 issues;
+  `npm run format:check` clean; `npm run repo:check` passed; `git diff --check`
+  clean.
+- Live result (operator-executed): preflight PASS, one apply, unit restarted;
+  live `index.mjs = e8f084ab…` and `lib/file-lock.mjs = 22d7411a…`, `openclaw.json`
+  and the ledger untouched, `MainPID=17047`, `NRestarts=0`, zero error-class lines
+  from the new PID. Details in §4.
+- Disclosed deviations/limits: `R2 P2`'s live cross-check is a silent skip on this
+  Windows host (the established R13 P1 / R3 P2 precedent) — the byte-exact proof is
+  `R2 P1` and the live values were confirmed separately over `wsl.exe`; `verify.mjs`
+  stays `NOT RUN`; `configure.mjs --apply` records no `transactions/` entry (that
+  wrapper belongs to `operator-apply.mjs`); the pre-existing router
+  `GOVERNANCE_COMPLETION_UNAVAILABLE` failures and the `duplicate plugin id` warning
+  are open items outside this round.
 
 ## 9. Deferred beyond V1
 

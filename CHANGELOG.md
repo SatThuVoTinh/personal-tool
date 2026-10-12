@@ -8,6 +8,25 @@ All notable, validated changes to Personal Tool are documented here.
 
 ### Added
 
+- Deployed the M11/T1-R1 build to the live WSL gateway and closed the one gap that
+  blocked it (`14c4b90`, M11/T1-R2). `configure.mjs --preflight` refused the running
+  runtime with `Governance plugin asset drift detected: …/lib/file-lock.mjs`: the
+  live tree is the `ea84a5a` packaged build, whose `lib/file-lock.mjs` digest was
+  never admitted, while every other asset is byte-equal to the current build and the
+  live entrypoint was already admitted. R2 admits exactly that one digest — proven by
+  re-packaging `ea84a5a` through the repository's own `governancePluginFiles()`, not
+  transcribed — and keeps the never-installed `d773856` intermediate refused, so the
+  control stays bounded to revisions that actually ran
+  (`tests/m11-t1-r2-file-lock-asset-predecessor.test.mjs`, 7/7; existing
+  deployment-snapshot suites 42/42; `npm test` 1343 / 1298 pass / 0 fail / 45
+  skipped; lint, format, repo-policy and `git diff --check` clean). Operator-side
+  result: preflight `PASS` with `installedMutation: false`, one `--apply`, unit
+  restarted, live `index.mjs = e8f084ab…` and `lib/file-lock.mjs = 22d7411a…`,
+  `openclaw.json` and the decision ledger untouched, `MainPID=17047`, `NRestarts=0`.
+  `verify.mjs` was not run, and two pre-existing runtime conditions (model-router
+  `GOVERNANCE_COMPLETION_UNAVAILABLE` aborts observed on the previous PID, and the
+  long-standing `duplicate plugin id` config warning) remain open.
+
 - Completed M11/T1-R1, the four-phase remediation of the 2026-10-11 read-only
   full-repository audit, as `45e0ee7` (skill-store vector SQL), `3810f67`
   (skill-store governance), `01e5d07` (Knowledgebase index hygiene and error
