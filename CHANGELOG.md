@@ -364,6 +364,51 @@ asset drift detected` (`installed_mutation: false`) because ten live
 
 ### Fixed
 
+- Fixed ten verified HIGH-severity defects in the OpenClaw runtime and its durable-state
+  seams (`3cb8274` + `6b0ea0a`, M11/T3-R1, closed 2026-10-13; **not deployed** — the live
+  gateway still runs the M11/T1-R2 build). Gateway hangs and silently lost state both
+  had concrete mechanisms: the Discord bot-token path ran a config-derived path through
+  `/bin/sh`, three Discord REST `fetch` calls had no deadline at all, three
+  native-boundary catch seams threw their fixed contract string and dropped the
+  original error, and the queue's `enqueueTask`/`clear` were the two mutators that wrote
+  without `withLock`, so a stale in-memory projection could clobber a concurrent
+  `claimTask` lease. Phase 1 replaced the shell with argv (`execFileSync`), bound every
+  fetch to one exported `DISCORD_REST_DEADLINE_MS = 10_000`, preserved each cause while
+  leaving every host-visible string byte-identical, and moved both queue mutators inside
+  the existing lock. Durable integrity had worse failure modes: an exhausted file-lock
+  release left its owner-token mapping behind so a process could believe it still held a
+  lock it had lost, and the async release path busy-waited the event loop; a
+  half-initialized governance ledger (one of events/snapshot present) was silently
+  "repaired" into an empty one, which for this repository means the owner's confirmed
+  decisions disappearing; `DecisionLedger.save()` and the approval-file reads did their
+  whole read-modify-write outside any lock while both sibling stores serialize; and a
+  `REJECTED` skill proposal was missing from the decided-state guard, so re-proposing
+  identical bytes overwrote the owner's rejection. Phase 2 gave both release halves one
+  shared errno/attempt policy (`ESTALE`/`EIO` retryable, token cleared on exhaustion, no
+  new stale-lock reclaim heuristic), made a half-missing ledger pair a refusal with the
+  existing `EXECUTION_STATE_UNKNOWN` code instead of a silent reset, serialized the
+  decision-ledger write plus rename and the approval reads through the shared
+  `withFileLockSync`/`lockDirFor` primitive and the catalog's own
+  `withSkillStoreWriterLock`, and made `REJECTED` terminal. Contention surfaces only
+  through codes these seams already emit — no new enum member was added to
+  `tool-result.schema.json` or `TOOL_RESULT_ERROR_CODES`, and no file format changed.
+  Evidence: two new suites written red-first
+  (`tests/m11-t3-openclaw-runtime-bounds.test.mjs` 8,
+  `tests/m11-t3-durable-state-integrity.test.mjs` 20) and wired into the hand-maintained
+  `npm test` list; `npm run verify` **PASS** on the Windows host (1374 tests / 1329 pass
+  / 0 fail / 45 skipped, `Repository policy check passed.`); the lock predecessors
+  `m10-t2-r18-file-lock` 8/8 and `m11-t1-r2` 7/7; both new suites and the predecessor
+  suite re-run green under WSL Ubuntu, where the four re-pinned packaged digests match
+  the Windows values exactly. 22 of 24 mutation runs killed their defect; the 2
+  survivors are at the pre-existing `enterNativeRun` seam this task did not change and
+  are recorded as a coverage gap. Four outgoing packaged digests were admitted so
+  `--preflight` keeps accepting the deployed extension. Reported and deliberately not
+  changed: two ledger roots are configured (live `openclaw.json` points at the Windows
+  operator root while every regression fixture hardcodes the WSL path), the router
+  fallback chain's 100 s × 5-candidate dead time is bounded by the owner's own recorded
+  model-order decision, and approval replay protection remains in-memory and
+  single-process. `npm audit` stays red on the pre-existing 5-high findings and
+  `gitleaks`/`verify.mjs`/the PostgreSQL statement gate stay `NOT RUN` on this host.
 - Fixed `CI / quality-gate` being unrunnable in CI since 2026-10-02 (`a8122f5`,
   M11/T2-R2, closed 2026-10-12). Commit `1a36c52` inserted the Knowledgebase Python
   suite into the `verify` composition and pinned it in `REQUIRED_VERIFY_STAGES`, but

@@ -37,7 +37,7 @@ Evidence Level: NONE | LOCAL-VERIFIED | REMOTE-BACKED
 | M7 — Zink Tools + OpenClaw integration + V1 hardening                      | `COMPLETE`    | `REMOTE-BACKED`  | M7/T1-R19, M7/T2-R12, M7/T3-R16, M7/T4-R10, and M7/T5-R13 complete; runtime governance remediation, Discord 7-bot integration, and Zink tools specialist policies verified.                                                                                                                                                           |
 | M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Integration | `IN PROGRESS` | `LOCAL-VERIFIED` | M8/T1 is complete; M8/T2.2 R4/R5/R6 are implemented; M8/T2.2-R7 (heartbeat admission, boundary diagnosability, apply safety) is in progress. Deployment is not authorized.                                                                                                                                                            |
 | M10 - Governed coordinator runtime binding                                 | `COMPLETE` | `LOCAL-VERIFIED` | M10/T2 closed by explicit owner decision 2026-10-11 (R26 records the final remediation; R8 closed live with zero-outbound proven). Deferred follow-ups are NOT closed under M10 and require separate authorization: live gateway/knowledge restart or deployment, M10 ingress card/tag redesign (new Plan Revision), coordinator result ingestion, and the WSL/CI Python gate run. |
-| M11 - Cross-module audit remediation                                       | `COMPLETE` | `REMOTE-BACKED` | M11/T1 is CLOSED (R1 four phases + R2 live admission and deployment, 2026-10-12; build DEPLOYED AND VERIFIED on the live WSL gateway, evidence in §4/§8). M11/T2 is CLOSED the same day: R1 made four Skill Store suites portable, gave `python-quality` the Node toolchain (CI SUCCESS, `188 passed, 27 subtests`) and fingerprinted two gitleaks false positives; R2 gave the Knowledgebase Python suite exactly one executor per environment, which repaired `CI / quality-gate` (CI run `38202129189`: `quality-gate` and `python-quality` both SUCCESS). NOT closed under M11 and still requiring separate authorization: `verify.mjs` (`NOT RUN`, operator-side), the pre-existing model-router `GOVERNANCE_COMPLETION_UNAVAILABLE` failures, the pre-existing `duplicate plugin id` warning, the pre-existing 5-high `npm audit` failure, `M11-06`'s PostgreSQL statement gate in CI (no Postgres service there), and the owner-excluded items (per-document quarantine, incremental-publish redesign, manifest schema extension, zink-tools drift cluster, zink-tools lint-glob gap). **M11/T3 is IN PROGRESS** (R1 owner-approved and materialized 2026-10-12): ten verified HIGH-severity items in two ordered phases — OpenClaw gateway runtime bounds and one shell-interpretation path, then durable-state integrity across the lock, ledger, queue, decision-ledger, approval and skill-proposal seams. The router model order/`timeoutSeconds=100` and stale-lock auto-reclaim are excluded because both are recorded owner decisions; live-state mutation and deployment remain unauthorized. |
+| M11 - Cross-module audit remediation                                       | `COMPLETE` | `REMOTE-BACKED` | M11/T1 is CLOSED (R1 four phases + R2 live admission and deployment, 2026-10-12; build DEPLOYED AND VERIFIED on the live WSL gateway, evidence in §4/§8). M11/T2 is CLOSED the same day: R1 made four Skill Store suites portable, gave `python-quality` the Node toolchain (CI SUCCESS, `188 passed, 27 subtests`) and fingerprinted two gitleaks false positives; R2 gave the Knowledgebase Python suite exactly one executor per environment, which repaired `CI / quality-gate` (CI run `38202129189`: `quality-gate` and `python-quality` both SUCCESS). NOT closed under M11 and still requiring separate authorization: `verify.mjs` (`NOT RUN`, operator-side), the pre-existing model-router `GOVERNANCE_COMPLETION_UNAVAILABLE` failures, the pre-existing `duplicate plugin id` warning, the pre-existing 5-high `npm audit` failure, `M11-06`'s PostgreSQL statement gate in CI (no Postgres service there), and the owner-excluded items (per-document quarantine, incremental-publish redesign, manifest schema extension, zink-tools drift cluster, zink-tools lint-glob gap). **M11/T3-R1 is CLOSED 2026-10-13** (`LOCAL-VERIFIED`, **NOT DEPLOYED**): the ten verified HIGH-severity items landed in two ordered phases — `3cb8274` (argv execution on the bot-token path, one deadline on the three Discord REST fetches, cause-preserving message-only diagnostics at the three native-boundary seams, queue `enqueueTask`/`clear` serialized) and `6b0ea0a` (non-spinning async lock release with the WSL drvfs errnos, refusal of a half-missing events/snapshot pair, replay diagnostics that keep their cause, decision-ledger save and approval reads under the shared writer lock, `REJECTED` skill proposals made terminal and serialized). `npm run verify` PASS on the Windows host (1374 tests / 1329 pass / 0 fail / 45 skipped); the two new suites plus both lock-predecessor suites are also green under WSL Linux, and the packaged digests agree across the two OSes. 22 of 24 mutation runs killed the defect (the 2 survivors are at the pre-existing `enterNativeRun` seam, outside this task's change sites — recorded in §8). The router model order/`timeoutSeconds=100` and stale-lock auto-reclaim stay excluded as recorded owner decisions. **This build is not installed**: the live gateway still runs the M11/T1-R2 build, and deploying M11/T3 requires its own owner grant. |
 
 The former self-built L&SC Data Plant is replaced by a **logical external
 infrastructure flow**, not another repository module. Forecasting, optimization,
@@ -48,22 +48,35 @@ operations research and simulation remain first-class capabilities.
 ```text
 Milestone: M11 — Cross-module audit remediation
 Task: M11/T3 — OpenClaw gateway runtime bounds + durable-state integrity remediation
-Task Status: IN PROGRESS — Phase 1 (verified cluster A), then Phase 2 (cluster B)
-Planning Readiness: APPROVED
-Plan Revision: M11/T3-R1
-Execution Authorization: YES
-Execution Contract: docs/contracts/execution/ACTIVE.md
-Authorized Task: M11/T3-R1 — the ten verified HIGH-severity items frozen in the
-  execution contract: Phase 1 = argv execution on the Discord bot-token path, a
-  deadline on the three unbounded Discord REST fetches, cause-preserving
-  diagnostics at the three native-boundary catch seams, and queue enqueueTask/clear
-  serialized through the existing withLock; Phase 2 = an async file-lock release
-  that no longer spins the event loop, ledger refusal of a half-missing
-  events/snapshot pair, replay diagnostics that keep their cause, a decision-ledger
-  save under the shared writer lock, approval reads under the guard writer lock, and
-  a REJECTED skill proposal made terminal and serialized. Implementation details are
-  owned by ACTIVE.md and are not duplicated here.
-Evidence Level: NONE — no gate has been run for this task yet
+Task Status: CLOSED — both phases implemented, verified and committed 2026-10-13
+Planning Readiness: APPROVED (historical — the approved R1 contract is executed and closed)
+Plan Revision: M11/T3-R1 (CLOSED)
+Execution Authorization: NO
+Execution Contract: NONE (the M11/T3-R1 ACTIVE.md was deleted at closeout)
+Authorized Task: NONE — M11/T3-R1 delivered the ten verified HIGH-severity items frozen
+  in its contract and nothing else. Phase 1 (`3cb8274`): argv execution on the
+  bot-token path, one exported deadline on the three unbounded Discord REST fetches,
+  cause-preserving message-only diagnostics at the three native-boundary catch seams,
+  and queue `enqueueTask`/`clear` serialized through the existing `withLock`. Phase 2
+  (`6b0ea0a`): an async file-lock release that no longer spins the event loop, ledger
+  refusal of a half-missing events/snapshot pair, replay diagnostics that keep their
+  cause, a decision-ledger `save()` under the shared writer lock, approval reads under
+  the guard writer lock, and a `REJECTED` skill proposal made terminal and serialized.
+Evidence Level: LOCAL-VERIFIED — `npm run verify` PASS on the Windows host
+  (`format:check` clean, `lint` 0 issues, `npm test` 1374 tests / 1329 pass / 0 fail /
+  45 skipped, `repo:check` "Repository policy check passed."); the new suites
+  `m11-t3-openclaw-runtime-bounds` (8/8) and `m11-t3-durable-state-integrity` (20/20)
+  and the lock predecessors `m10-t2-r18-file-lock` (8/8) and
+  `m11-t1-r2-file-lock-asset-predecessor` (7/7) also PASS under WSL Ubuntu (Node
+  v24.15.0), where the packaged digests are byte-identical to the Windows derivation.
+  22 of 24 mutation runs killed the defect; the 2 survivors are at the pre-existing
+  `enterNativeRun` seam, which this task did not change (§8 records it as a coverage
+  gap, not a regression). NOT RUN on this host: `gitleaks` (not installed — CI-only),
+  `verify.mjs` (operator-side), the PostgreSQL statement gate, `test:knowledge`
+  (`apps/knowledge` untouched). FAIL as recorded baseline, not converted: `npm audit`
+  5 high, and one pre-existing `no-unused-vars` error at
+  `zink-tools/adapters/skill-store/skill-adapter.mjs` that `npm run lint` never sees
+  because of the known `zink-tools` glob gap.
 Task Branch: codex/m11-t1-audit-remediation
 Owner Approval: EXPLICIT — 2026-10-12. The owner chose clusters "A rồi B" from the
   OWNER DECISION block issued after the second read-only sweep, then instructed that
@@ -83,8 +96,12 @@ Prior task record — M11/T1 and M11/T2 both CLOSED 2026-10-12, durable records 
   Evidence Level REMOTE-BACKED (CI run 38202129189 proves quality-gate +
   python-quality SUCCESS; Security run 38199389639 proves secret-scan SUCCESS).
 Deployment Authorized: NO for M11/T3 — execution authorization is not deployment
-  authorization; nothing in this task may touch the live runtime. The grant recorded
-  immediately below belongs to the closed M11/T1-R1/R2 round.
+  authorization; nothing in this task touched the live runtime. The M11/T3-R1 build
+  (`3cb8274` + `6b0ea0a`) is NOT installed; the live gateway still runs the M11/T1-R2
+  build, and the four outgoing digests admitted in Phase 2 are exactly what keeps
+  `--preflight` accepting it rather than refusing it. A new owner grant is required
+  before any `--apply`. The grant recorded immediately below belongs to the closed
+  M11/T1-R1/R2 round.
 Prior deployment record — Deployment Authorized: YES (M11/T1-R1 build — ONE attempt,
   owner grant 2026-10-12)
   — scoped exactly to: read-only `configure.mjs --preflight`, then one
@@ -3956,6 +3973,155 @@ commit `a8122f5`; execution contract deleted at closeout. Evidence level:
   baselines/`NOT RUN`. Merging to `main` is not authorized by this task; before this
   revision such a merge would have turned `main`'s `quality-gate` red, and it no longer
   would.
+
+### M11/T3-R1 — OpenClaw gateway runtime bounds + durable-state integrity (owner-approved 2026-10-12, CLOSED 2026-10-13)
+
+Task: M11/T3-R1 · Plan Revision: `M11/T3-R1` · Owner approval: clusters "A rồi B" of
+the `OWNER DECISION REQUIRED` block issued after the second read-only sweep, with
+Codex directed to execute the contract directly instead of handing it to dsh.
+Implementation commits `3cb8274` (Phase 1) and `6b0ea0a` (Phase 2); execution contract
+deleted at closeout. Evidence level: `LOCAL-VERIFIED` — **NOT DEPLOYED**.
+
+- Objective: close the ten verified HIGH-severity items the audit found in the OpenClaw
+  runtime and its durable-state seams, without touching the owner's recorded decisions
+  (router model order / `timeoutSeconds=100`, stale-lock auto-reclaim), live state, or
+  any excluded surface.
+- Phase 1 defects and mechanisms:
+  - A1 — `resolveDiscordBotToken` ran the resolver path through `execSync`, i.e.
+    `/bin/sh -c`, on a path joined from a config-derived `stateDir` that legitimately
+    contains spaces. A shell there is both broken (the call cannot succeed) and an
+    injection surface on the bot-token path. Fix: `execFileSync(resolverPath, [], …)`.
+  - A2 — three Discord REST `fetch` sites awaited with no deadline, so a stalled
+    socket hung the gateway turn indefinitely (the observed Discord failure mode).
+    Fix: one exported `DISCORD_REST_DEADLINE_MS = 10_000` bound to every site through
+    `signal: AbortSignal.timeout(...)`.
+  - A3 — three `native-boundary` catch seams discarded their error (`} catch {`), so a
+    governance verdict was indistinguishable from a disk fault and a blocked announce
+    produced no diagnostic at all. Fix: bind the error, preserve it as `cause`, keep the
+    host-visible contract strings byte-identical, and log one message-only line (never
+    stack, run context, or prompt content).
+  - A4 — `enqueueTask` and `clear` were the queue's two mutators writing without
+    `withLock`, so a stale in-memory projection could clobber a concurrent
+    `claimTask` lease. Fix: both run inside the existing `withLock`, which reloads the
+    projection before mutating.
+- Phase 2 defects and mechanisms:
+  - B1 — the sync `release()` retry policy was duplicated nowhere and the async
+    `withFileLock` release path spun `busyWaitMs` on the event loop; `ESTALE`/`EIO`
+    (the WSL drvfs/9p errnos that made a real removal look like failure) were not
+    retryable; and an exhausted release left its `heldTokens` entry behind, so a later
+    call in the same process believed it still held a lock it no longer owned. Fix: one
+    shared `removalRound()` errno/attempt policy used by both halves, `releaseAsync()`
+    awaiting `delay(1 << attempt)` instead of busy-waiting, `ESTALE`/`EIO` added to
+    `RETRYABLE_RELEASE_ERRNOS`, and `heldTokens.delete(dir)` on exhaustion before the
+    throw. No stale-lock reclaim heuristic was added — orphaned-lock recovery remains
+    the operator action the owner recorded.
+  - B2 — `ensureLedger` created a missing events file and a missing snapshot
+    independently, so a half-initialized pair (one file present, the other not) was
+    silently "repaired" into an empty ledger: the owner's confirmed decisions were
+    gone with no signal. Fix: check both presences first and refuse when exactly one
+    exists — `code: "EXECUTION_STATE_UNKNOWN"`, message `Ledger state incomplete` —
+    creating both or neither. Both-missing initialization and intact pairs behave
+    exactly as before.
+  - B3 — the replay fault threw a detail-free error and dropped the underlying cause,
+    so a corruption could not be attributed. Fix: bind the error, attach `cause`, and
+    emit one diagnostic line carrying the error name/code class only. The thrown code
+    and message are unchanged.
+  - B4 — `DecisionLedger.save()` rewrote the whole file (temp write, fsync, rename)
+    with no lock, while both sibling stores serialize theirs. A concurrent writer's
+    rename could land between this process's temp write and its own rename, silently
+    replacing one whole decision set with the other. Fix: the write and the rename are
+    one guarded unit under `withFileLockSync` at the sibling
+    `<basename>.lock` convention via `lockDirFor`. The durable format and the fsync
+    discipline (including the parent-directory fsync) are unchanged; contention
+    surfaces as the `LEDGER_WRITE_FAILED` this seam already emitted.
+  - B5 — `resolveAuthenticatedApproval` read the approval stores outside the writer
+    lock, so it could read a torn record, and a corrupt individual approval file fell
+    through a bare `JSON.parse` instead of failing closed. Fix: the file-backed reads
+    run under the same `writer.lock` the mutation path takes, contention degrades to a
+    `null` denial (no new host-visible code), and a corrupt individual record is an
+    explicit denial while a contract-invalid record still throws
+    `AUTH_APPROVAL_INVALID`. The single-process/in-memory replay limit is now named
+    where an operator would look for it, and is NOT fixed here — cross-process replay
+    protection needs its own design.
+  - B6 — the skill-proposal decided-state guard listed `APPROVED`, `MATERIALIZED`,
+    `READY`, `INDEX_FAILED` but omitted `REJECTED`, so re-proposing identical bytes
+    fell through to `writeJsonAtomicSync` and erased the owner's rejection; and the
+    read→decide→write block ran outside the Skill Store writer lock while promotion
+    and rejection were inside it. Fix: `REJECTED` joins the terminal list with the
+    same `governed_status: "SUCCESS"` early-return shape, and the block is serialized
+    through `withSkillStoreWriterLock` — the catalog's existing composition of
+    `withFileLock` + `skillStoreWriterLockDir`, reused rather than duplicated.
+- Deliberately NOT changed: the router model order and `timeoutSeconds=100`;
+  stale-lock auto-reclaim; the queue, ledger, snapshot and decision-ledger file
+  formats; every host-visible error string and the
+  `{ governed: true, action: "block" }` verdict shape (no new enum members were
+  added to `tool-result.schema.json` or `TOOL_RESULT_ERROR_CODES`); any live runtime
+  state, `--apply`, restart or deployment; any dependency, lockfile or CI change.
+- Digest re-pins (forced by the packaged bytes these fixes necessarily moved; derived
+  through `governancePluginFiles()`, never from raw file bytes, because `lib/guard.mjs`
+  and `lib/ledger.mjs` are import-rewritten during packaging). Outgoing digests
+  admitted so `--preflight` keeps accepting the deployed extension; the current build
+  stays accepted by content comparison and is deliberately not listed:
+  - `lib/decision-ledger.mjs` → admitted `5e97d9ca…` (current `1d9518ca…`)
+  - `lib/file-lock.mjs` → admitted `22d7411a…` (current `bcd65de8…`)
+  - `lib/guard.mjs` → admitted `7dd37ee9…` (current `263d72c4…`)
+  - `lib/ledger.mjs` → admitted `818d7cb0…` (current `c984cda8…`)
+  Phase 1 re-pinned its own three (`index.mjs`, `lib/native-boundary.mjs`,
+  `lib/queue-manager.mjs`) at `3cb8274`.
+- Tests: `tests/m11-t3-openclaw-runtime-bounds.test.mjs` (8) and
+  `tests/m11-t3-durable-state-integrity.test.mjs` (20), both added to the
+  hand-maintained `npm test` list (now 99 files — an unwired test file is an unrun
+  test). Each was written first and proven red against the unfixed code.
+  `tests/m11-t1-r2-file-lock-asset-predecessor.test.mjs` was updated for the widened
+  predecessor set (file-lock now lists exactly `165243b2…`, `1975c821…`, `22d7411a…`)
+  and for the divergence set Phase 2 necessarily moved.
+- Mutation ledger (ACTIVE.md §7 step iv — a test that cannot fail is not a test):
+  Phase 1 killed `A1-shell-return`, `A2-deadline-dropped`,
+  `A3-completion-cause-dropped`, `A3-ingress-cause-dropped`,
+  `A3-block-diagnostic-dropped`, `A4-lock-bypassed`. Phase 2 killed the five
+  file-lock mutations (async release reverted to the spinning sync policy, `delay`
+  dropped, token cleanup dropped, `ESTALE`/`EIO` dropped, async-half cleanup dropped)
+  and all eleven B2–B6 specs (`B2-throw-dropped`, `B2-message-changed`,
+  `B3-cause-dropped`, `B3-log-dropped`, `B4-lock-noop`, `B4-lock-name`,
+  `B4-rename-outside`, `B5-read-lock-noop`, `B5-corrupt-parse-raw`,
+  `B6-rejected-omitted`, `B6-propose-lock-noop`). Two further mutations SURVIVED at
+  `native-boundary.mjs:509-513` (`enterNativeRun` cause dropped, and its log flipped
+  from message-only to `error?.stack`): that seam is pre-existing code this task did
+  not change, so the survivors are recorded as a test-coverage gap for a future
+  revision, not as a gap in A3's three changed seams or a regression introduced here.
+- Gates against the final state (Windows host, Node v24.18.0): `npm run verify` PASS —
+  `format:check` clean, `lint` 0 issues, `npm test` 1374 tests / 1329 pass / 0 fail /
+  45 skipped, `repo:check` "Repository policy check passed.";
+  `m10-t2-r18-file-lock` 8/8 and `m11-t1-r2` 7/7 run explicitly because B1 touches a
+  primitive with a dedicated predecessor suite. Supplementary (because `lint` does not
+  cover `zink-tools`): `npx eslint
+  zink-tools/adapters/skill-store/skill-adapter.mjs` reports exactly one pre-existing
+  `no-unused-vars` error at `:210` that is byte-present at `HEAD` and outside this
+  task's diff — a baseline, not a regression. Cross-platform re-run (WSL Ubuntu, Node
+  v24.15.0): the two new suites 20/20 and 8/8, `m10-t2-r18-file-lock` 8/8, and the
+  packaged digests computed under Linux equal the Windows values for all four assets.
+  `git diff --check` clean; `git status` shows no file outside the repository and no
+  live-state path touched.
+- Reported and NOT fixed (escalations): (a) **two ledger roots are configured** — the
+  live `openclaw.json` points at the Windows `~/.openclaw-zink` operator root while
+  every `topology/fixtures/runtime-regression/*` hardcodes the WSL path, so the
+  regression fixtures and the deployed runtime do not read the same durable state;
+  resolving it changes live deployment and needs a separate owner grant. (b) the
+  **100 s × 5-candidate router fallback dead time**, bounded by the owner's own
+  recorded model-order decision, can only be changed by the owner. (c) B5's replay
+  protection remains in-memory and single-process; (d) the `enterNativeRun` coverage
+  gap above.
+- Disclosed deviation from the frozen contract text: B3's instruction said "one
+  message-only diagnostic line consistent with A3's discipline". The line emitted
+  carries the error `name`/`code` class instead of `error?.message`, because a replay
+  fault here can be a `JSON.parse` failure whose message quotes the offending ledger
+  bytes — which would put untrusted durable content into the log, against `AGENTS.md`
+  §10. The stricter invariant was kept and the literal wording relaxed; the thrown
+  code and message are exactly as specified.
+- Baselines kept honest: `npm audit` 5 high stays `FAIL` (pre-existing
+  markdownlint-cli2→globby chain); `verify.mjs` (non-live and `--live`), the `M11-06`
+  PostgreSQL statement gate and `gitleaks` on this host stay `NOT RUN`;
+  `test:knowledge` is `NOT RUN` for this task because `apps/knowledge` is untouched.
 
 ## 9. Deferred beyond V1
 

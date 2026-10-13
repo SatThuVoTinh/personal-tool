@@ -248,6 +248,7 @@ Hệ thống tuân thủ nguyên tắc **CHỈ BOT ĐƯỢC TAG MỚI ĐƯỢC P
 - Khi một agent chuyên môn (`excel`, `power-bi`, `sql`, `python`) hoàn thiện giải pháp phân tích tái sử dụng, agent gọi `zink_skill_propose` để khởi tạo bản ghi `CANDIDATE` được lưu bền vững (durable proposal). (Các agent điều phối `main`, `o1`, `o2` không có quyền đề xuất kỹ năng theo ma trận `SKILL_STORE_ACCESS_MATRIX`). Đề xuất đơn thuần không tạo skill chuẩn tắc.
 - Đề xuất được định danh bằng mã băm nội dung bất biến (raw SHA-256 của đúng các byte sẽ trở thành `SKILL.md`) và thông báo xác nhận học tập được gửi tới kênh `#office` (không dùng diễn đàn `#approvals` của phê duyệt thực thi).
 - **Phê duyệt:** Chủ sở hữu đọc nội dung đề xuất và bấm nút phê duyệt skill chuyên biệt (`zink:skill:approve`) gắn chặt proposal và mã băm nội dung. Phê duyệt skill và phê duyệt kế hoạch thực thi (`APPROVE`) là hai đường quản trị phân biệt, không bao giờ đi chung.
+- **Từ chối là chốt:** đề xuất lại đúng cùng byte nội dung sau khi chủ sở hữu đã `REJECTED` không tạo lại bản ghi `CANDIDATE`; hệ thống trả về chính hồ sơ đã từ chối, nên quyết định của chủ sở hữu không thể bị ghi đè im lặng.
 - **Xác thực tự động:** Hệ thống `handleOwnerSkillApproval` sẽ xác thực danh tính chủ sở hữu, tính toàn vẹn của mã băm nội dung và ràng buộc identity, sau đó tiến hành materialize skill chuẩn tắc (`SKILL.md` + `manifest.json`, trạng thái `ACTIVE`) bằng mã nội bộ tin cậy rồi mới đồng bộ dẫn xuất sang PostgreSQL vector index (pgvector). Đề xuất lạ/không tồn tại, hết hạn, bị từ chối hoặc xung đột đều bị từ chối fail-closed; lỗi đồng bộ vector không bao giờ rollback bản chuẩn tắc.
 
 #### 5. Thứ tự Ưu tiên Phân giải Ngữ nghĩa (Deterministic Semantic Resolver Precedence)
@@ -707,7 +708,7 @@ Quy trình nghiệm thu kết quả tuân thủ nghiêm ngặt 2 tầng kiểm t
 
 Nhằm tránh việc agent liên tục hỏi lại người dùng các câu hỏi đã được trả lời trong quá khứ:
 
-- **Sổ cái Quyết định (Decision Ledger):** Lưu trữ bền vững các câu trả lời và quyết định đã được con người xác nhận (`isHumanConfirmed: true`). Trước khi gửi câu hỏi làm rõ trên `#office`, agent phải tra cứu Decision Ledger. Nếu đã có tiền lệ được xác nhận, agent áp dụng ngay mà không làm phiền người dùng.
+- **Sổ cái Quyết định (Decision Ledger):** Lưu trữ bền vững các câu trả lời và quyết định đã được con người xác nhận (`isHumanConfirmed: true`). Trước khi gửi câu hỏi làm rõ trên `#office`, agent phải tra cứu Decision Ledger. Nếu đã có tiền lệ được xác nhận, agent áp dụng ngay mà không làm phiền người dùng. Nếu sổ cái chỉ còn một trong hai tệp trạng thái (`events` hoặc `snapshot`), hệ thống **từ chối khởi động** với `EXECUTION_STATE_UNKNOWN` thay vì âm thầm dựng lại một sổ cái trống; operator phải khôi phục tệp đang thiếu từ bản sao lưu gần nhất.
 - **Lọc Trùng Ngữ cảnh (Context Deduplication):** Thuật toán `deduplicateRetrievalContext` tự động loại bỏ các đoạn thông tin trùng lặp nội dung được lấy từ nhiều nguồn khác nhau, tối ưu dung lượng ngữ cảnh gửi tới mô hình.
 
 #### Ma trận Mã Tham chiếu Có Cấu trúc (Structured Reference ID Matrix)
