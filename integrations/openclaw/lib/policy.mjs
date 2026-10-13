@@ -1206,6 +1206,10 @@ export function governancePluginFiles() {
     // with the deployed tree like the other lib/ modules. Its only relative import
     // is ./excel-writer.mjs, which resolves unchanged beside it.
     "discord-result-preview.mjs",
+    // M12/T2-R1: the forum-tag resolver the plugin calls before opening any governed
+    // thread, so the tagging system that decides what the owner sees travels with the
+    // build that uses it. It imports nothing relative.
+    "discord-forum-tags.mjs",
     "excel-writer.mjs",
     "authority.mjs",
     "queue-manager.mjs",

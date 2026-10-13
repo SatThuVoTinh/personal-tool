@@ -389,10 +389,17 @@ test("R12 case 6: first-approval card content contract", () => {
     card.bodyContent.includes("[PHÊ DUYỆT]"),
     "card must carry the approval marker",
   );
+  // M12/T2-R1 (owner: "bỏ dòng trạng thái đi"): the state is the approvals forum's
+  // STATUS: WAITING tag, not a prose line on the card. The card must still not imply that
+  // it authorizes anything — that job now sits with the action footer.
   assert.ok(
-    card.bodyContent.includes("CHỜ DUYỆT") &&
-      card.bodyContent.includes("chưa được phép thực thi"),
-    "card must state REQUESTED, never imply authorization",
+    !card.bodyContent.includes("Trạng thái:") &&
+      !card.bodyContent.includes("CHỜ DUYỆT"),
+    "the card must no longer print a status line",
+  );
+  assert.ok(
+    card.bodyContent.includes("để phê duyệt đưa vào hàng đợi thực thi"),
+    "the card must still name Approve as what grants execution",
   );
   // M12/T1-R1 replaced "name the run and the child" with the owner's own shape: the
   // plan in `Lý do` (naming the software) and the expected result in `Kết quả`, and

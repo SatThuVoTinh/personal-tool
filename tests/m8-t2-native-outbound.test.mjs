@@ -227,5 +227,38 @@ describe("R4 Finding 1 — native Discord outbound POC (offline)", () => {
       1,
       `exactly one R4-EXCEPTION /messages site allowed, found ${messageSites.length}`,
     );
+    // M12/T2-R1: a governed thread is opened in exactly one place — the shared forum-tag
+    // module — so the plugin must no longer post threads itself, and the module must not
+    // gain a component-bearing message path that would spread the R4-EXCEPTION.
+    assert.equal(
+      restPosts.filter((site) => /\/threads`/.test(site)).length,
+      0,
+      "the plugin must not post forum threads directly any more",
+    );
+    const tagsSource = readFileSync(
+      path.join(
+        path.dirname(fileURLToPath(import.meta.url)),
+        "..",
+        "integrations",
+        "openclaw",
+        "lib",
+        "discord-forum-tags.mjs",
+      ),
+      "utf8",
+    );
+    assert.equal(
+      (
+        tagsSource.match(
+          /https:\/\/discord\.com\/api\/v10\/channels\/\$\{channelId\}\/[a-z_]+/gu,
+        ) ?? []
+      ).length,
+      3,
+      "one thread post, one tag read and one active-thread list, all bounded",
+    );
+    assert.equal(
+      tagsSource.includes("/messages"),
+      false,
+      "the shared publish path may not carry the /messages exception",
+    );
   });
 });

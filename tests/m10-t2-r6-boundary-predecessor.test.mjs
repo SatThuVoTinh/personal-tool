@@ -182,26 +182,21 @@ function keyBlock(table, key) {
 // PROVENANCE — 1/1 before admission
 // ---------------------------------------------------------------------------
 
-test("R6 P1: the live boundary digest is reproduced from its source commit", async () => {
+test("R6 P1: the R6-era boundary digest is reproduced from its source commit", async () => {
   const hygiene = await hygieneExtension();
   assert.equal(
     sha256(hygiene.assets["lib/native-boundary.mjs"]),
     HYGIENE_BOUNDARY_SHA256,
-    "the committed R18 source must reproduce the live digest",
+    "the committed R18 source must reproduce the digest R6 admitted",
   );
-  // Optional live cross-check: skip where the live dir is unreachable.
-  let liveDigest = null;
-  try {
-    liveDigest = sha256(
-      readFileSync(
-        "/home/hoang_vinh/.openclaw-zink/extensions/zink-governance/lib/native-boundary.mjs",
-        "utf8",
-      ),
-    );
-  } catch {
-    /* not reachable from this platform */
-  }
-  if (liveDigest !== null) assert.equal(liveDigest, HYGIENE_BOUNDARY_SHA256);
+  // M12/T2-R1: this case used to cross-check the LIVE installed file against
+  // HYGIENE_BOUNDARY_SHA256. That equality was a photograph of the day R6 was
+  // written: the live runtime has since moved to later builds, so the check went
+  // red on any host that can read the live tree while the admission R6 proves is
+  // still exactly right. The live invariant belongs to R13 P1, which reads this
+  // same installed path and requires it to be either the build the repository
+  // derives now or a digest admitted in configure.mjs. Repeating equality here
+  // would only re-create the drift defect R13 removes.
 });
 
 // ---------------------------------------------------------------------------

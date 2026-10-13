@@ -109,8 +109,15 @@ const HYGIENE_ASSET_PREDECESSORS = Object.freeze({
 // and presents the plan plus an expected-result image. The build the live runtime
 // carries (`61e344e6…`) is admitted in configure.mjs, and `--preflight` proved it
 // installed, so it stays reachable as a predecessor.
+// M12/T2-R1: and again — the entrypoint now opens every governed thread through one
+// forum-tag path (STATUS+RISK+STACK on #approvals, STATUS+TYPE+STACK on #results,
+// STATUS+SEVERITY+STACK on #incidents), records the thread it surfaced, re-drives a
+// request that never got a card, publishes the accepted result, and surfaces a
+// containment in #incidents. The live runtime still carries `61e344e6…` (M12/T1-R1 was
+// never deployed, so its `85fbee50…` stays unlisted by design), and the same 17
+// outgoing asset digests are still the admitted predecessors.
 const CURRENT_ENTRYPOINT_SHA256 =
-  "85fbee501c8f353cded73624ae3a814b5885c0a9e9483660df32e1cf1393fa8a";
+  "f9ef77dcf37cfa5a190535654c43b7b756bc49cc2ace0c1dc505aee9cd143cbc";
 
 const identifiers = Object.freeze({
   discordGuildId: "123456789012345678",

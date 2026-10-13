@@ -807,6 +807,50 @@ export function applyWorkflowEvent(
     task.approval_requested_run_id = payload.run_id;
     return next;
   }
+  if (type === "WORKFLOW_APPROVAL_SURFACED") {
+    // M12/T2-R1: a request the owner was never shown is not an approval he can
+    // act on, and a thread nobody recorded is a duplicate waiting to happen. This
+    // projects the surfaced thread into the approval_thread_id slot the snapshot
+    // schema has declared since M7 with no writer — so "requested but never
+    // surfaced" becomes a durable, re-drivable state instead of a lost log line.
+    exactKeys(payload, ["task_id", "channel", "thread_id"]);
+    requireCondition(payload.channel === "approvals", "CHANNEL_MISMATCH");
+    requireCondition(
+      typeof payload.thread_id === "string" && payload.thread_id.length > 0,
+      "SCHEMA_INVALID",
+    );
+    requireCondition(
+      Boolean(task.approval_requested_at),
+      "INVALID_STATE_TRANSITION",
+    );
+    if (task.approval_thread_id) {
+      // A different thread for one recorded request is exactly the duplicate the
+      // owner forbade; the first surface keeps the record.
+      if (task.approval_thread_id !== payload.thread_id)
+        fail("INVALID_STATE_TRANSITION");
+      return next;
+    }
+    task.approval_thread_id = payload.thread_id;
+    return next;
+  }
+  if (type === "WORKFLOW_RESULT_SURFACED") {
+    // M12/T2-R1: the results forum had no publish path before this task, so
+    // nothing could prove an owner was ever shown the work he is being asked to
+    // accept. Idempotent by thread id for the same reason as the approval above.
+    exactKeys(payload, ["task_id", "channel", "thread_id"], ["result_digest"]);
+    requireCondition(payload.channel === "results", "CHANNEL_MISMATCH");
+    requireCondition(
+      typeof payload.thread_id === "string" && payload.thread_id.length > 0,
+      "SCHEMA_INVALID",
+    );
+    if (task.results_thread_id) {
+      if (task.results_thread_id !== payload.thread_id)
+        fail("INVALID_STATE_TRANSITION");
+      return next;
+    }
+    task.results_thread_id = payload.thread_id;
+    return next;
+  }
   if (type === "WORKFLOW_TASK_CLAIMED") {
     // D01/D02: CLAIM is only valid from the approved QUEUED state.
     // ACTIVE is not a valid pre-claim state — allowing it bypasses the

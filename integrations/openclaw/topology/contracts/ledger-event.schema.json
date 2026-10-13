@@ -47,6 +47,8 @@
         "WORKFLOW_RESULT_REVISION_REQUESTED",
         "WORKFLOW_USER_APPROVAL_DECIDED",
         "WORKFLOW_APPROVAL_REQUESTED",
+        "WORKFLOW_APPROVAL_SURFACED",
+        "WORKFLOW_RESULT_SURFACED",
         "WORKFLOW_TASK_CLAIMED",
         "WORKFLOW_COORDINATOR_RUN_BOUND",
         "WORKFLOW_USER_QUESTION_RECORDED",
@@ -957,6 +959,77 @@
                 "description": "The brief revision this request refers to, when one is active. Purely audit context: the approval request and the execution brief are independent concepts and a request does NOT require a brief.",
                 "type": "integer",
                 "minimum": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "WORKFLOW_APPROVAL_SURFACED"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["task_id", "channel", "thread_id"],
+            "description": "M12/T2-R1: the approval request was actually surfaced to the owner, in the forum thread named here. This is the durable half of 'requested but never posted': without it a failed card post is invisible, a retry either loses the card or duplicates the thread, and a required-tag refusal cannot be re-driven. It is NOT a request (WORKFLOW_APPROVAL_REQUESTED) and NOT a decision (WORKFLOW_USER_APPROVAL_DECIDED).",
+            "properties": {
+              "task_id": {
+                "type": "string",
+                "pattern": "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$"
+              },
+              "channel": {
+                "const": "approvals"
+              },
+              "thread_id": {
+                "description": "Discord thread snowflake the card lives in. Held as opaque text because it is external surface identity, not a governance identifier.",
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "WORKFLOW_RESULT_SURFACED"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["task_id", "channel", "thread_id"],
+            "description": "M12/T2-R1: a governed result was surfaced in the #results forum as the thread named here. Before this event the results forum had no publish path at all, so nothing could prove a result was ever shown to the owner, and a retry had no way to avoid opening a second thread for the same result. NOT an owner verdict (WORKFLOW_USER_RESULT_*) and NOT a result record (WORKFLOW_ROOT_RESULT_RECORDED).",
+            "properties": {
+              "task_id": {
+                "type": "string",
+                "pattern": "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$"
+              },
+              "channel": {
+                "const": "results"
+              },
+              "thread_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "result_digest": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
               }
             }
           }

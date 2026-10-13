@@ -116,25 +116,53 @@ test("M11-T3 A1: the bot-token resolver runs by argv, never through a shell", ()
 
 // ---------------------------------------------------------------- A2
 
-test("M11-T3 A2: every outbound fetch declares one deadline constant", () => {
+test("M11-T3 A2: every outbound fetch declares one deadline constant, wherever it lives", () => {
   const source = pluginSource();
   assert.equal(
     source.includes("export const DISCORD_REST_DEADLINE_MS = 10_000;"),
     true,
     "DISCORD_REST_DEADLINE_MS is not defined as an exported constant",
   );
-  const sites = callArguments(source, "await fetch(");
-  assert.ok(
-    sites.length >= 3,
-    `expected at least the three known Discord REST sites, found ${sites.length}`,
+  // M12/T2-R1 moved governed forum-thread creation and the forum tag reads into
+  // lib/discord-forum-tags.mjs. The invariant is unchanged — no Discord call may wait
+  // forever — so the scan spans both files rather than relaxing to whichever one still
+  // happens to match.
+  const tagsSource = readFileSync(
+    path.resolve("integrations/openclaw/lib/discord-forum-tags.mjs"),
+    "utf8",
   );
-  for (const [index, args] of sites.entries()) {
+  const sites = [
+    ...callArguments(source, "await fetch(").map((args) => ({
+      where: "plugin",
+      args,
+      needle: "signal: AbortSignal.timeout(DISCORD_REST_DEADLINE_MS)",
+    })),
+    ...callArguments(tagsSource, "await fetchImpl(").map((args) => ({
+      where: "forum tags",
+      args,
+      needle: "signal: AbortSignal.timeout(deadlineMs)",
+    })),
+  ];
+  assert.ok(
+    sites.length >= 4,
+    `expected the remaining plugin site plus the tag readers, found ${sites.length}`,
+  );
+  for (const site of sites)
     assert.equal(
-      args.includes("signal: AbortSignal.timeout(DISCORD_REST_DEADLINE_MS)"),
+      site.args.includes(site.needle),
       true,
-      `fetch site ${index + 1} has no deadline bound`,
+      `${site.where} fetch site has no deadline bound`,
     );
-  }
+  // A caller that brings no deadline is refused instead of fetching unbounded.
+  assert.equal(
+    tagsSource.includes("FORUM_TAG_DEADLINE_REQUIRED"),
+    true,
+    "the tag readers must refuse a missing deadline",
+  );
+  assert.ok(
+    (source.match(/deadlineMs: DISCORD_REST_DEADLINE_MS/gu) || []).length >= 2,
+    "every tag read and thread post from the plugin carries the same deadline",
+  );
 });
 
 // ---------------------------------------------------------------- A3

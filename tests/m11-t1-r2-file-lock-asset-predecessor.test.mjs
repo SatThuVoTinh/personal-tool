@@ -269,6 +269,9 @@ test("R2 P1: the live runtime IS the ea84a5a packaged build and differs from the
       // workflow.mjs, edits the comment in authority.mjs, rewrites the approval
       // transport/formatter/excel-writer, adds the result-preview renderer, and
       // regenerates governance-manifests.json because its hash covers policy.mjs.
+      // M12/T2-R1 then widened the same set: the forum-tag module is new (no
+      // installed predecessor), the two ledger contracts gain the surfaced events,
+      // and the entrypoint/formatter/policy/canonical/workflow move with them.
       "contracts/approval-request.schema.json",
       "contracts/delegation-envelope.schema.json",
       "contracts/execution-brief.schema.json",
@@ -282,13 +285,14 @@ test("R2 P1: the live runtime IS the ea84a5a packaged build and differs from the
       "lib/authority.mjs",
       "lib/canonical.mjs",
       "lib/discord-formatter.mjs",
+      "lib/discord-forum-tags.mjs",
       "lib/discord-native-send.mjs",
       "lib/discord-result-preview.mjs",
       "lib/excel-writer.mjs",
       "lib/policy.mjs",
       "lib/workflow.mjs",
     ].sort(),
-    "only the M11/T3 and M12/T1 assets may diverge from the proven live build",
+    "only the M11/T3, M12/T1 and M12/T2 assets may diverge from the proven live build",
   );
   const table = assetTable();
   for (const rel of differing) {

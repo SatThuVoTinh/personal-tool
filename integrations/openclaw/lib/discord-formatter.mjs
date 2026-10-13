@@ -714,9 +714,10 @@ export function renderGovernedApprovalBody({
   const head = [
     `### ${title}`,
     `**Task ID:** \`${sanitizeDiscordIdentifier(taskId)}\``,
-    // The card asks; it never authorizes. This line is what keeps a redesign from
-    // turning a request into an implied go-ahead.
-    "**Trạng thái:** CHỜ DUYỆT (chưa được phép thực thi)",
+    // M12/T2-R1 (owner instruction "bỏ dòng trạng thái đi"): the card no longer states its
+    // own status in prose. The state is the forum's STATUS tag, which is what the owner
+    // filters on, and the thread is only ever opened with STATUS: WAITING — a card that
+    // asks is still not a card that authorizes, and the footer keeps saying so explicitly.
     "",
     "**Lý do (kế hoạch chi tiết):**",
     planSteps.length > 0
@@ -741,6 +742,41 @@ export function renderGovernedApprovalBody({
     DISCORD_BODY_LIMIT - footer.length - PLAN_TRUNCATION_MARK.length;
   const cut = head.lastIndexOf("\n", Math.max(0, budget));
   return `${head.slice(0, cut > 0 ? cut : budget).trimEnd()}\n${PLAN_TRUNCATION_MARK}${footer}`;
+}
+
+/**
+ * M12/T2-R1: the body of a #results thread. This is deliberately NOT
+ * `formatGovernedResultCard`, which asks the owner for ACCEPT / REJECT: a results thread is
+ * opened after he has already accepted, so asking again would advertise a verdict that has
+ * been made. It states what was delivered, in which software, under which digest.
+ */
+export function renderGovernedResultBody({
+  taskId,
+  software = "",
+  outcomeStatus = "",
+  resultDigest = null,
+  planSteps = [],
+}) {
+  const head = [
+    "### ✅ [KẾT QUẢ] Kết quả đã được nghiệm thu",
+    `**Task ID:** \`${sanitizeDiscordIdentifier(taskId)}\``,
+    `**Phần mềm:** ${clipField(sanitizeDiscordText(software || "(không xác định)", { preserveIdentifiers: true }), 80)}`,
+    `**Kết quả:** \`${sanitizeDiscordIdentifier(outcomeStatus || "COMPLETE")}\``,
+  ];
+  if (resultDigest)
+    head.push(
+      `**Mã băm kết quả:** \`${sanitizeDiscordIdentifier(resultDigest)}\``,
+    );
+  head.push(
+    "",
+    "**Các bước đã thực hiện:**",
+    planSteps.length > 0
+      ? planSteps.join("\n")
+      : "*(không có bước nào trong kế hoạch đã ghi)*",
+  );
+  const body = head.join("\n");
+  if (body.length <= DISCORD_BODY_LIMIT) return body;
+  return `${body.slice(0, DISCORD_BODY_LIMIT - PLAN_TRUNCATION_MARK.length).trimEnd()}\n${PLAN_TRUNCATION_MARK}`;
 }
 
 /**

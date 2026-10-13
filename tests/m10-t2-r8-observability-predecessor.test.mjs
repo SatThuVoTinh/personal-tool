@@ -75,27 +75,21 @@ async function r5Extension() {
 // PROVENANCE — 1/1 before admission
 // ---------------------------------------------------------------------------
 
-test("R8 P1: the live entrypoint digest is reproduced from its source commit", async () => {
+test("R8 P1: the R5 entrypoint digest is reproduced from its source commit", async () => {
   const r5 = await r5Extension();
   assert.equal(
     sha256(r5.entrypoint),
     R5_OBSERVABILITY_BASELINE_SHA256,
-    "the committed R5 source must reproduce the live digest",
+    "the committed R5 source must reproduce the digest R8 admits",
   );
-  // Optional live cross-check: skip where the live dir is unreachable.
-  let liveDigest = null;
-  try {
-    liveDigest = sha256(
-      readFileSync(
-        "/home/hoang_vinh/.openclaw-zink/extensions/zink-governance/index.mjs",
-        "utf8",
-      ),
-    );
-  } catch {
-    /* not reachable from this platform */
-  }
-  if (liveDigest !== null)
-    assert.equal(liveDigest, R5_OBSERVABILITY_BASELINE_SHA256);
+  // M12/T2-R1: the live cross-check below this assertion used to require the
+  // installed entrypoint to still BE R5's build. Deployments after R8 moved it
+  // forward, so the equality went red on any host that can read the live tree
+  // while R8's admission — 0fb628e8 in both per-mode lists, proven by R8 0 —
+  // remains correct. R13 P2 owns the live half: it reads the same installed
+  // entrypoint and requires it to be the build the repository derives now or a
+  // digest admitted in both mode gates, which is the check that keeps
+  // --preflight and --apply agreeing.
 });
 
 // ---------------------------------------------------------------------------

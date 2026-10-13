@@ -574,7 +574,7 @@ describe("R6 — historical compatibility", () => {
   const hasProduction =
     process.platform === "linux" && existsSync(PRODUCTION_LEDGER);
 
-  it("J, K, L, M. the real 103-event ledger replays unchanged", async (t) => {
+  it("J, K, L, M. the real production ledger replays unchanged", async (t) => {
     if (!hasProduction) return t.skip("production ledger not reachable");
     const root = mkdtempSync(path.join(os.tmpdir(), "r6-history-"));
     const copy = path.join(root, "operator", "m7-t2", "ledger");
@@ -592,10 +592,30 @@ describe("R6 — historical compatibility", () => {
         path.join(copy, "events.jsonl"),
         "utf8",
       );
+      // Read the installed anchor before replay: readSnapshot repairs the
+      // snapshot in place once a tail exists, so the pre-replay projection has
+      // to be captured here to stay a comparison rather than a consequence.
+      const installed = JSON.parse(
+        readFileSync(path.join(copy, "snapshot.json"), "utf8"),
+      );
       const paths = ledgerPaths(root);
       const snap = readSnapshot(paths);
-      assert.equal(snap.sequence, 103, "all 103 events must replay");
-      assert.equal(Object.keys(snap.tasks).length, 37, "37 tasks must survive");
+      // M12/T2-R1: this case originally pinned the literals `103` events and `37` tasks,
+      // which was a photograph of the production ledger on the day it was written. The
+      // running gateway keeps appending, so the case went red on any host that can read
+      // the live tree while nothing about the ledger's meaning changed. The invariant is
+      // the one that matters: every event in the real log replays, and the projected
+      // sequence equals the log length.
+      const replayedEvents = eventsBefore.trim().split("\n").length;
+      assert.equal(
+        snap.sequence,
+        replayedEvents,
+        "every event in the real production ledger must replay",
+      );
+      assert.ok(
+        Object.keys(snap.tasks).length >= 37,
+        "the historical tasks must survive the replay",
+      );
 
       // M: the brief-backed historical approval.
       const withBrief = byPrefix(snap.tasks, "21c7b6e5");
@@ -617,16 +637,30 @@ describe("R6 — historical compatibility", () => {
         );
       }
 
-      // No historical task may become newly approvable.
-      const approvable = Object.values(snap.tasks).filter(
-        (t) =>
-          t.workflow_status === "ACTIVE" &&
-          t.approval_requested_at &&
-          !t.approved_at,
-      );
-      assert.equal(
-        approvable.length,
-        0,
+      // No task may BECOME approvable through replay. This case originally
+      // asserted that zero approvable tasks exist in the production ledger,
+      // which was a photograph of a quiet day: the live gateway legitimately
+      // parks tasks in "requested, not yet decided", and those pending approvals
+      // are real state, not replay artifacts. The invariant under test is that
+      // reading history cannot invent an opportunity the deployed writer never
+      // recorded — so the projection is compared against its own anchor.
+      const approvableIds = (tasks) =>
+        new Set(
+          Object.values(tasks ?? {})
+            .filter(
+              (t) =>
+                t.workflow_status === "ACTIVE" &&
+                t.approval_requested_at &&
+                !t.approved_at,
+            )
+            .map((t) => t.task_id),
+        );
+      const before = approvableIds(installed.tasks);
+      const after = approvableIds(snap.tasks);
+      const invented = [...after].filter((id) => !before.has(id));
+      assert.deepEqual(
+        invented,
+        [],
         "replay must not create approval opportunities",
       );
 

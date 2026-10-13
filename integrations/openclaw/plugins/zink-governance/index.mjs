@@ -40,10 +40,12 @@ import {
   evaluateCapabilityAccess,
   GOVERNED_SKILL_NAMESPACE_CATALOG,
   AGENT_SPAWN_POLICY,
+  ZINK_CAPABILITY_REGISTRY,
 } from "../../lib/policy.mjs";
 import {
   sanitizeDelegationText,
   truncateUtf8 as sharedTruncateUtf8,
+  deriveIncidentId,
 } from "../../topology/lib/runtime.mjs";
 import {
   registerNativeGuard,
@@ -93,7 +95,9 @@ import {
   renderGovernedApprovalBody,
   renderGovernedExpectedResult,
   renderGovernedPlanSteps,
+  renderGovernedResultBody,
   specialistSoftwareLabel,
+  SPECIALIST_SOFTWARE_LABELS,
 } from "../../lib/discord-formatter.mjs";
 
 import {
@@ -132,6 +136,20 @@ import {
 } from "../../lib/discord-native-send.mjs";
 
 import { renderExpectedResultPreview } from "../../lib/discord-result-preview.mjs";
+// M12/T2-R1: one tagging system for all three governed forums.
+import {
+  approvalRiskTag,
+  approvalStatusTag,
+  buildSurfaceSelections,
+  createForumTagResolver,
+  incidentSeverityTag,
+  incidentStatusTag,
+  openGovernedForumThread,
+  readActiveForumThreads,
+  resultStatusTag,
+  resultTypeTag,
+  surfaceStackTag,
+} from "../../lib/discord-forum-tags.mjs";
 
 import {
   evaluateResultGate,
@@ -198,6 +216,148 @@ export const COMPLETED_EXECUTIONS_LIMIT = 4096;
 // awaited `fetch` with no signal, so a stalled socket pinned the gateway hook
 // indefinitely. 10s matches the existing probe deadline (verify.mjs:311).
 export const DISCORD_REST_DEADLINE_MS = 10_000;
+
+/**
+ * M12/T2-R1 (owner decision Q3 = A): the RISK a governed thread advertises is the highest
+ * `riskClass` among the tools the admitted plan can actually reach. A brief node names an
+ * agent, not a tool, so the reachable set is that agent's admitted capabilities plus one
+ * bounded level of the spawn policy — a coordinator admits no capability of its own, yet
+ * the plan it admits runs governed Excel, SQL and n8n tools. Descending further would
+ * describe the whole server rather than this request, and inventing a class for a built-in
+ * session tool would be a claim the policy tables never made.
+ *
+ * These live at module level because the owner's tag rule depends on the classification:
+ * the plugin and its tests must read one function, not two copies.
+ */
+export function riskClassesAdmittedBy(agentIds) {
+  const classes = new Set();
+  const addFor = (agentId) => {
+    for (const tool of TOOL_POLICY[agentId] ?? []) {
+      const risk = ZINK_CAPABILITY_REGISTRY[tool]?.riskClass;
+      if (risk) classes.add(risk);
+    }
+  };
+  for (const agentId of new Set(
+    (Array.isArray(agentIds) ? agentIds : []).filter(Boolean),
+  )) {
+    addFor(agentId);
+    for (const child of AGENT_SPAWN_POLICY[agentId] ?? []) addFor(child);
+  }
+  return [...classes];
+}
+
+export function governedTaskAgents(task, targetAgentId) {
+  const agents = [];
+  if (typeof targetAgentId === "string" && targetAgentId)
+    agents.push(targetAgentId);
+  for (const node of Array.isArray(task?.nodes) ? task.nodes : [])
+    if (typeof node?.agent_id === "string" && node.agent_id)
+      agents.push(node.agent_id);
+  return [...new Set(agents)];
+}
+
+/** The approvals trio: the state the card asks about, its risk, its stack. */
+export function approvalTagSelectionsFor(task, targetAgentId) {
+  return buildSurfaceSelections("approvals", {
+    status: approvalStatusTag(),
+    risk: approvalRiskTag(
+      riskClassesAdmittedBy(governedTaskAgents(task, targetAgentId)),
+    ),
+    stack: surfaceStackTag({
+      currentStack: task?.current_stack,
+      nodeStackIds: (Array.isArray(task?.nodes) ? task.nodes : []).map(
+        (node) => node?.stack_id,
+      ),
+    }),
+  });
+}
+
+/**
+ * The results trio. TYPE prefers durable artifact evidence and falls back to the software
+ * the admitted plan named, so a thread is never tagged by a guess about work the ledger
+ * cannot show. `BLOCKED` and `CANCELLED` deliberately have no results tag: they are not
+ * outcomes the owner accepted, and mapping them to FAILED would state a verdict he never
+ * made — the caller then posts nothing and logs the reason.
+ */
+export function resultTagSelectionsFor(task, artifactPaths = []) {
+  const nodeAgents = (Array.isArray(task?.nodes) ? task.nodes : [])
+    .map((node) => node?.agent_id)
+    .filter((agentId) => typeof agentId === "string" && agentId);
+  let type = null;
+  for (const target of [undefined, ...nodeAgents]) {
+    type = resultTypeTag({ artifactPaths, target });
+    if (type) break;
+  }
+  return buildSurfaceSelections("results", {
+    status: resultStatusTag({
+      decision: "ACCEPT",
+      outcomeStatus: task?.root_result?.outcome_status,
+    }),
+    type,
+    stack: surfaceStackTag({
+      currentStack: task?.current_stack,
+      nodeStackIds: (Array.isArray(task?.nodes) ? task.nodes : []).map(
+        (node) => node?.stack_id,
+      ),
+    }),
+  });
+}
+
+/** The software a delivered result belongs to, for the thread body. */
+export function resultSoftwareLabelFor(task) {
+  for (const node of Array.isArray(task?.nodes) ? task.nodes : []) {
+    const agentId = node?.agent_id;
+    if (agentId && agentId in SPECIALIST_SOFTWARE_LABELS && agentId !== "main")
+      return specialistSoftwareLabel(agentId);
+  }
+  return "";
+}
+
+/**
+ * The incidents trio. SEVERITY is what the containment decision actually was, and STACK is
+ * the affected tasks' own recorded stack; a containment that spans two stacks has no single
+ * honest tag, so it reports unresolved and the thread is not opened rather than picking one.
+ */
+export function incidentTagSelectionsFor(
+  tasks,
+  { reason, scope, ledgerError },
+) {
+  const list = Array.isArray(tasks) ? tasks : [];
+  return buildSurfaceSelections("incidents", {
+    status: incidentStatusTag(),
+    severity: incidentSeverityTag({ reason, scope, ledgerError }),
+    stack: surfaceStackTag({
+      currentStack: list.length === 1 ? list[0]?.current_stack : null,
+      nodeStackIds: list.flatMap((task) =>
+        (Array.isArray(task?.nodes) ? task.nodes : []).map(
+          (node) => node?.stack_id,
+        ),
+      ),
+    }),
+  });
+}
+
+/**
+ * A stable per-containment identity. #incidents has no incident record in the ledger and
+ * this task is not authorized to invent one, so the thread title carries this token and the
+ * forum's active-thread list is what makes a retry recognizable instead of duplicated.
+ */
+export function incidentIdentityFor({
+  reason,
+  runId = null,
+  childSessionKey = null,
+  scope = "NONE",
+  taskIds = [],
+}) {
+  const token = deriveIncidentId({
+    reason,
+    runId,
+    childSessionKey,
+    scope,
+    taskIds: [...taskIds].sort(),
+  }).slice(0, 8);
+  return { token, title: `🚨 [SỰ CỐ] ${reason} · ${token}` };
+}
 
 /** Evict oldest insertions until the collection fits its ceiling. */
 function boundCache(collection, limit) {
@@ -4745,6 +4905,239 @@ export default {
     });
 
     const cachedDiscordTokens = new Map();
+    // M12/T2-R1: one tag resolver and one publish path for all three governed forums. Tag
+    // ids are read from the forum a thread is about to open in, so a rename in Discord
+    // stays an operator action and no snowflake is duplicated in this repository
+    // (owner decision Q2 = A).
+    const forumTags = createForumTagResolver({ logger: api.logger });
+
+    /**
+     * Opens a governed forum thread carrying exactly one tag per required category of that
+     * forum, or posts nothing. An unresolved category is logged with the channel, the
+     * category and the tag being sought (requirement 4); a failure returns a result instead
+     * of throwing, so a broken #approvals surface cannot consume a #results or #incidents
+     * event (requirement 5).
+     */
+    async function postGovernedThread({
+      surface,
+      channelId,
+      token,
+      title,
+      bodyContent,
+      selections,
+    }) {
+      if (selections.absent.length > 0) {
+        for (const category of selections.absent)
+          api.logger?.warn?.(
+            `[zink-governance] DISCORD_TAG_UNRESOLVED channel=${surface} category=${category} wanted="(no evidence in the governed record)" reason=CLASSIFIER_EMPTY channelId=${channelId ?? "unconfigured"}`,
+          );
+        return { posted: false, code: "DISCORD_TAG_UNRESOLVED" };
+      }
+      return openGovernedForumThread({
+        surface,
+        channelId,
+        token,
+        title,
+        bodyContent,
+        selections: selections.selections,
+        resolver: forumTags,
+        fetchImpl: globalThis.fetch,
+        deadlineMs: DISCORD_REST_DEADLINE_MS,
+      });
+    }
+
+    /**
+     * M12/T2-R1: publish an accepted result as one tagged #results thread and return its id,
+     * or the id already recorded for this task. #results had no publish path at all before
+     * this task, so the delivered work existed only as a sentence in #office. Returns null
+     * when no thread could be opened and never throws: an owner verdict already durable in
+     * the queue and the ledger cannot be revoked by a surface failure (requirement 5), and
+     * the caller still posts its notice.
+     */
+    async function surfaceAcceptedResult({ taskId, resultsForumId }) {
+      let task;
+      try {
+        task = readSnapshot(paths)?.tasks?.[taskId] ?? null;
+      } catch {
+        api.logger?.warn?.(
+          `[zink-governance] result surface state unreadable for task ${taskId}; no #results thread opened`,
+        );
+        return null;
+      }
+      if (!task) return null;
+      if (task.results_thread_id) return task.results_thread_id;
+      let token;
+      try {
+        token = resolveDiscordBotToken("main");
+      } catch {
+        api.logger?.warn?.(
+          `[zink-governance] result thread not posted for task ${taskId}: CREDENTIAL_UNAVAILABLE`,
+        );
+        return null;
+      }
+      const queueItem = defaultQueueManager.getTask(taskId) ?? {};
+      const artifactPaths = [
+        ...(Array.isArray(queueItem.artifacts) ? queueItem.artifacts : []),
+        ...(Array.isArray(queueItem.resultArtifacts)
+          ? queueItem.resultArtifacts
+          : []),
+      ]
+        .map((artifact) =>
+          typeof artifact === "string"
+            ? artifact
+            : (artifact?.logical_path ?? ""),
+        )
+        .filter(Boolean);
+      const surfaced = await postGovernedThread({
+        surface: "results",
+        channelId: resultsForumId,
+        token,
+        title: `✅ [KẾT QUẢ] ${displayTaskToken(taskId)}`,
+        bodyContent: renderGovernedResultBody({
+          taskId,
+          software: resultSoftwareLabelFor(task),
+          outcomeStatus: task?.root_result?.outcome_status,
+          resultDigest: queueItem.resultDigest ?? null,
+          planSteps: renderGovernedPlanSteps(
+            Array.isArray(task?.nodes) ? task.nodes : [],
+          ),
+        }),
+        selections: resultTagSelectionsFor(task, artifactPaths),
+      });
+      if (!surfaced.posted) {
+        api.logger?.warn?.(
+          `[zink-governance] result thread not posted for task ${taskId}: ${surfaced.code}`,
+        );
+        return null;
+      }
+      const surfaceEvent = {
+        task_id: taskId,
+        channel: "results",
+        thread_id: surfaced.threadId,
+      };
+      if (/^[a-f0-9]{64}$/u.test(String(queueItem.resultDigest ?? "")))
+        surfaceEvent.result_digest = queueItem.resultDigest;
+      try {
+        recordWorkflowEvent(paths, "WORKFLOW_RESULT_SURFACED", surfaceEvent);
+      } catch (recordError) {
+        api.logger?.error?.(
+          `[zink-governance] RESULT_SURFACE_UNRECORDED task=${taskId} thread=${surfaced.threadId} cause=${recordError?.message}`,
+        );
+      }
+      return surfaced.threadId;
+    }
+
+    /**
+     * M12/T2-R1: surface a governance containment in #incidents as one tagged thread.
+     * Strictly additive: the containment and its ledger writes already happened when this
+     * runs, and a surface failure is logged rather than folded into the verdict — the block
+     * stands either way (requirement 5). If the forum's current threads cannot be read, no
+     * thread is opened, because a blind post is how a duplicate incident gets made.
+     */
+    async function surfaceGovernanceIncident({
+      reason,
+      runId,
+      childSessionKey,
+      scope,
+      taskIds,
+      ledgerError,
+    }) {
+      const incidentsForumId = resolveDiscordDestination(
+        config,
+        "discordIncidentsForumId",
+        "incidentsChannelId",
+      );
+      if (!incidentsForumId) {
+        api.logger?.warn?.(
+          `[zink-governance] DISCORD_TAG_UNRESOLVED channel=incidents category=(none) wanted="(configured incidents forum)" reason=DESTINATION_UNCONFIGURED channelId=unconfigured`,
+        );
+        return null;
+      }
+      let botToken;
+      try {
+        botToken = resolveDiscordBotToken("main");
+      } catch {
+        api.logger?.warn?.(
+          `[zink-governance] incident not surfaced: CREDENTIAL_UNAVAILABLE (reason=${reason})`,
+        );
+        return null;
+      }
+      const { token, title } = incidentIdentityFor({
+        reason,
+        runId,
+        childSessionKey,
+        scope,
+        taskIds,
+      });
+      let alreadySurfaced;
+      try {
+        const threads = await readActiveForumThreads({
+          channelId: incidentsForumId,
+          token: botToken,
+          fetchImpl: globalThis.fetch,
+          deadlineMs: DISCORD_REST_DEADLINE_MS,
+        });
+        alreadySurfaced = threads.some((thread) => thread.name.includes(token));
+      } catch (listError) {
+        api.logger?.warn?.(
+          `[zink-governance] INCIDENT_SURFACE_SKIPPED incident=${token} cause=THREAD_LIST_UNREADABLE ${listError?.message}`,
+        );
+        return null;
+      }
+      if (alreadySurfaced) {
+        api.logger?.info?.(
+          `[zink-governance] incident ${token} already surfaced in #incidents; no duplicate thread`,
+        );
+        return null;
+      }
+      let affected;
+      try {
+        const snapshot = readSnapshot(paths);
+        affected = taskIds
+          .map((taskId) => snapshot?.tasks?.[taskId] ?? null)
+          .filter(Boolean);
+      } catch {
+        affected = [];
+      }
+      const selections = incidentTagSelectionsFor(affected, {
+        reason,
+        scope,
+        ledgerError,
+      });
+      const severity =
+        selections.selections.find((entry) => entry.category === "SEVERITY")
+          ?.value ?? "";
+      const surfaced = await postGovernedThread({
+        surface: "incidents",
+        channelId: incidentsForumId,
+        token: botToken,
+        title,
+        bodyContent: formatIncidentCard({
+          incidentId: token,
+          taskId: taskIds[0] ?? null,
+          state: "OPEN",
+          severity: severity || "MEDIUM",
+          observed: `Một run không thể đối chiếu (${reason}, phạm vi ${scope}) đã bị tạm dừng: ${taskIds.join(", ") || "không xác định tác vụ"}.`,
+          expected:
+            "Mọi run kết thúc đều được ghi vào sổ cái governance trước khi hệ thống tiếp tục.",
+          action: ledgerError
+            ? `Sổ cái KHÔNG ghi được (${ledgerError}) — cần operator đối chiếu trước khi chạy lại.`
+            : "Run đã bị chặn cho tới khi operator đối chiếu; chưa có kết quả nào được ghi nhận.",
+        }),
+        selections,
+      });
+      if (!surfaced.posted) {
+        api.logger?.warn?.(
+          `[zink-governance] incident thread not posted for ${token}: ${surfaced.code}`,
+        );
+        return null;
+      }
+      api.logger?.info?.(
+        `[zink-governance] incident ${token} surfaced in #incidents (threadId: ${surfaced.threadId})`,
+      );
+      return surfaced.threadId;
+    }
+
     function credentialUnavailable(agentId) {
       const error = new Error("CREDENTIAL_UNAVAILABLE");
       error.code = "CREDENTIAL_UNAVAILABLE";
@@ -4960,6 +5353,10 @@ export default {
       // The task is resolved from the ledger via the owning run, never parsed out
       // of the model's own card text, which is untrusted evidence. An
       // unresolvable or ambiguous run therefore fails closed.
+      // M12/T2-R1: the durable record of the request AND of any thread that already
+      // surfaced it. A task whose card was never posted must be re-driven; a task whose
+      // thread is already recorded must not get a second card (owner requirement 5).
+      let requestTask;
       try {
         const owner = findSession(
           readSnapshot(paths),
@@ -4968,6 +5365,13 @@ export default {
           false,
         );
         const requestTaskId = owner.task_id;
+        const before = readSnapshot(paths)?.tasks?.[requestTaskId] ?? null;
+        if (before?.approval_thread_id) {
+          api.logger?.info?.(
+            `[zink-governance] approval already surfaced for task ${requestTaskId} in thread ${before.approval_thread_id}; no duplicate card`,
+          );
+          return;
+        }
         recordWorkflowEvent(paths, "WORKFLOW_APPROVAL_REQUESTED", {
           task_id: requestTaskId,
           agent_id: agentId,
@@ -4980,6 +5384,7 @@ export default {
         if (!confirmed?.tasks?.[requestTaskId]?.approval_requested_at) {
           throw new Error("APPROVAL_REQUEST_NOT_DURABLE");
         }
+        requestTask = confirmed?.tasks?.[requestTaskId] ?? null;
       } catch (requestError) {
         api.logger?.warn?.(
           `[zink-governance] approval request NOT recorded; card suppressed: ${requestError?.message}`,
@@ -4987,76 +5392,76 @@ export default {
         return;
       }
 
+      let surfaced;
       try {
-        const res = await fetch(
-          `https://discord.com/api/v10/channels/${approvalsForumId}/threads`,
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Bot ${token}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              name: (card.title || "🔖 [PHÊ DUYỆT] Kế hoạch Thực thi").slice(
-                0,
-                100,
-              ),
-              message: {
-                content: bodyContent.slice(0, 2000),
-              },
-              // The forum's STATUS:WAITING tag, a stable workflow-semantics constant of
-              // the approvals surface itself (not an identity and not authentication
-              // material). It is applied only to threads the plugin itself opens in the
-              // configured approvals forum, so it cannot redirect anything anywhere.
-              applied_tags: ["1545697161985921064"], // STATUS: WAITING tag
-            }),
-            signal: AbortSignal.timeout(DISCORD_REST_DEADLINE_MS),
-          },
-        );
-
-        if (res.ok) {
-          const thread = await res.json();
-          // Native outbound: components travel through the official
-          // OpenClaw 2026.6.34 Discord adapter. Only forum-thread
-          // creation above remains raw REST (no verified native seam).
-          try {
-            const buttonSpecs = components[0].components.map((button) => ({
-              customId: button.custom_id,
-              label: button.label,
-              style: button.style,
-              emoji: button.emoji,
-            }));
-            const receipt = await sendNativePayload({
-              api,
-              to: thread.id,
-              threadId: thread.id,
-              accountId: agentId,
-              // M12/T1-R1: `buttons` is what makes the send register the component
-              // ids with the host. Without it the adapter still delivers the card,
-              // but every click answers "This component has expired."
-              buttons: buttonSpecs,
-              payload: buildNativeComponentPayload({
-                text: bodyContent.slice(0, 2000),
-                buttons: buttonSpecs,
-              }),
-            });
-            api.logger?.info?.(
-              `[zink-governance] Discord approval card posted for ${agentId} into #approvals (threadId: ${thread.id}, messageId: ${receipt.messageId})`,
-            );
-          } catch (deliveryErr) {
-            api.logger?.error?.(
-              `[zink-governance] Discord approval component delivery failed: ${deliveryErr?.message}`,
-            );
-          }
-        } else {
-          const errText = await res.text();
-          api.logger?.warn?.(
-            `[zink-governance] Discord approval post failed: status=${res.status} body=${errText}`,
-          );
-        }
-      } catch (e) {
+        surfaced = await postGovernedThread({
+          surface: "approvals",
+          channelId: approvalsForumId,
+          token,
+          title: card.title || "🔖 [PHÊ DUYỆT] Kế hoạch Thực thi",
+          bodyContent,
+          selections: approvalTagSelectionsFor(requestTask, agentId),
+        });
+      } catch (postError) {
         api.logger?.warn?.(
-          `[zink-governance] Discord approval post exception: ${e?.message}`,
+          `[zink-governance] Discord approval post exception: ${postError?.message}`,
+        );
+        return;
+      }
+      if (!surfaced.posted) {
+        // Nothing was advertised and the recorded request stands untouched: the owner gets
+        // a loud line naming what could not be resolved instead of a thread whose tags do
+        // not describe it, and the next attempt can re-drive (requirements 4 and 5).
+        api.logger?.warn?.(
+          `[zink-governance] approval card not posted for task ${taskId}: ${surfaced.code}`,
+        );
+        return;
+      }
+      const thread = { id: surfaced.threadId };
+      // M12/T2-R1: the thread exists, so the ledger must know. Without this record a
+      // retry cannot tell "already surfaced" from "never surfaced", and would either lose
+      // the card or open a second one for the same request.
+      try {
+        recordWorkflowEvent(paths, "WORKFLOW_APPROVAL_SURFACED", {
+          task_id: taskId,
+          channel: "approvals",
+          thread_id: thread.id,
+        });
+      } catch (surfaceError) {
+        api.logger?.error?.(
+          `[zink-governance] APPROVAL_SURFACE_UNRECORDED task=${taskId} thread=${thread.id} cause=${surfaceError?.message}`,
+        );
+      }
+      // Native outbound: components travel through the official
+      // OpenClaw 2026.6.34 Discord adapter. Only forum-thread
+      // creation above remains raw REST (no verified native seam).
+      try {
+        const buttonSpecs = components[0].components.map((button) => ({
+          customId: button.custom_id,
+          label: button.label,
+          style: button.style,
+          emoji: button.emoji,
+        }));
+        const receipt = await sendNativePayload({
+          api,
+          to: thread.id,
+          threadId: thread.id,
+          accountId: agentId,
+          // M12/T1-R1: `buttons` is what makes the send register the component
+          // ids with the host. Without it the adapter still delivers the card,
+          // but every click answers "This component has expired."
+          buttons: buttonSpecs,
+          payload: buildNativeComponentPayload({
+            text: bodyContent.slice(0, 2000),
+            buttons: buttonSpecs,
+          }),
+        });
+        api.logger?.info?.(
+          `[zink-governance] Discord approval card posted for ${agentId} into #approvals (threadId: ${thread.id}, messageId: ${receipt.messageId})`,
+        );
+      } catch (deliveryErr) {
+        api.logger?.error?.(
+          `[zink-governance] Discord approval component delivery failed: ${deliveryErr?.message}`,
         );
       }
     }
@@ -5310,18 +5715,34 @@ export default {
       // forum, so posting with an unresolved forum renders a dangling mention
       // into an undesignated channel.
       if (officeChannelId && resultsForumId && queueCompletionRecorded) {
-        sendNativePayload({
-          api,
-          to: officeChannelId,
-          accountId: "main",
-          payload: {
-            text: `🎉 **Chúc mừng!** Anh Zink đã chính thức nghiệm thu kết quả tác vụ \`${displayTaskToken(taskId)}\` tại <#${resultsForumId}>. Tác vụ đã hoàn tất xuất sắc và được lưu trữ an toàn trong sổ cái governance. Quản Lý xin cảm ơn anh Zink!`,
-          },
-        }).catch((deliveryErr) => {
-          api.logger?.warn?.(
-            `[zink-governance] discord delivery failed (office-completion-notice): ${deliveryErr?.message}`,
+        // M12/T2-R1: the accepted result is published as one tagged #results thread first,
+        // and the #office notice then points at that thread rather than only naming the
+        // forum. The chain is deliberately fire-and-forget with both halves guarded: the
+        // verdict is already durable in the queue and the ledger, so a surface or delivery
+        // failure is recorded and never rewrites what the owner decided (requirement 5).
+        surfaceAcceptedResult({ taskId, resultsForumId })
+          .catch((surfaceErr) => {
+            api.logger?.warn?.(
+              `[zink-governance] result thread not posted for task ${taskId}: ${surfaceErr?.message}`,
+            );
+            return null;
+          })
+          .then((resultsThread) =>
+            sendNativePayload({
+              api,
+              to: officeChannelId,
+              accountId: "main",
+              payload: {
+                text: `🎉 **Chúc mừng!** Anh Zink đã chính thức nghiệm thu kết quả tác vụ \`${displayTaskToken(taskId)}\` tại ${
+                  resultsThread ? `<#${resultsThread}>` : `<#${resultsForumId}>`
+                }. Tác vụ đã hoàn tất xuất sắc và được lưu trữ an toàn trong sổ cái governance. Quản Lý xin cảm ơn anh Zink!`,
+              },
+            }).catch((deliveryErr) => {
+              api.logger?.warn?.(
+                `[zink-governance] discord delivery failed (office-completion-notice): ${deliveryErr?.message}`,
+              );
+            }),
           );
-        });
       }
     }
 
@@ -6111,29 +6532,42 @@ export default {
             // this task. Retries (same or different run) must not mint another
             // approval or post another card. The ledger reducer additionally
             // no-ops same-agent+run retries and rejects a second requester.
+            // M12/T2-R1: the dedupe key is the *surface*, not the request. A recorded
+            // request with no thread means the card was never shown (a failed post, or a
+            // required tag that could not be resolved), and the owner would otherwise wait
+            // for a card that is not coming. The reducer keeps the request itself
+            // idempotent, so re-driving posts the card without minting a second approval;
+            // a task with a thread already recorded can never get a second card.
             const snap = readSnapshot(paths);
             const t = snap?.tasks?.[taskId];
             if (!t) return;
-            if (t.approval_requested_at) {
+            if (t.approval_thread_id) {
               api.logger?.info?.(
-                `[zink-governance] first-approval already requested for ${taskId}; no duplicate card`,
+                `[zink-governance] first-approval already surfaced for ${taskId} in thread ${t.approval_thread_id}; no duplicate card`,
               );
               return;
             }
             if (t.approved_at) return;
-            recordWorkflowEvent(paths, "WORKFLOW_APPROVAL_REQUESTED", {
-              task_id: taskId,
-              agent_id: context.agentId,
-              session_key: context.sessionKey,
-              run_id: context.runId,
-              brief_revision: briefRevision,
-            });
+            const alreadyRequested = Boolean(t.approval_requested_at);
+            if (!alreadyRequested) {
+              recordWorkflowEvent(paths, "WORKFLOW_APPROVAL_REQUESTED", {
+                task_id: taskId,
+                agent_id: context.agentId,
+                session_key: context.sessionKey,
+                run_id: context.runId,
+                brief_revision: briefRevision,
+              });
+            }
             // R6 read-back: the request must be visible before anything is
             // surfaced. A failed write posts no card.
             const confirmed = readSnapshot(paths);
             if (!confirmed?.tasks?.[taskId]?.approval_requested_at) {
               throw new Error("APPROVAL_REQUEST_NOT_DURABLE");
             }
+            if (alreadyRequested)
+              api.logger?.info?.(
+                `[zink-governance] first-approval requested for ${taskId} but never surfaced; re-driving the card`,
+              );
           } catch (requestError) {
             api.logger?.warn?.(
               `[zink-governance] first-approval request NOT recorded; card suppressed: ${requestError?.message}`,
@@ -6230,26 +6664,35 @@ export default {
               : [],
             previewImage: previewPath ? path.basename(previewPath) : null,
           });
-          const res = await fetch(
-            `https://discord.com/api/v10/channels/${approvalsForumId}/threads`,
-            {
-              method: "POST",
-              headers: {
-                Authorization: `Bot ${token}`,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                name: title.slice(0, 100),
-                message: { content: bodyContent.slice(0, 2000) },
-                applied_tags: ["1545697161985921064"],
-              }),
-              signal: AbortSignal.timeout(DISCORD_REST_DEADLINE_MS),
-            },
-          );
-          if (!res.ok) {
-            throw new Error(`APPROVAL_CARD_POST_FAILED:${res.status}`);
+          // M12/T2-R1: the thread carries exactly one tag per category the approvals forum
+          // requires, resolved from that forum's own available_tags. When a required tag
+          // cannot be resolved nothing is posted and the recorded request stays durable,
+          // so the next attempt surfaces the card instead of the owner waiting for a
+          // thread that is not coming (requirements 4 and 5).
+          const surfaced = await postGovernedThread({
+            surface: "approvals",
+            channelId: approvalsForumId,
+            token,
+            title,
+            bodyContent,
+            selections: approvalTagSelectionsFor(governedTask, targetAgentId),
+          });
+          if (!surfaced.posted)
+            throw new Error(`APPROVAL_CARD_NOT_SURFACED:${surfaced.code}`);
+          const thread = { id: surfaced.threadId };
+          // M12/T2-R1: record the surface, not just the request, so a later retry of the
+          // same task can see that the owner was already shown this card.
+          try {
+            recordWorkflowEvent(paths, "WORKFLOW_APPROVAL_SURFACED", {
+              task_id: taskId,
+              channel: "approvals",
+              thread_id: thread.id,
+            });
+          } catch (surfaceError) {
+            api.logger?.error?.(
+              `[zink-governance] APPROVAL_SURFACE_UNRECORDED task=${taskId} thread=${thread.id} cause=${surfaceError?.message}`,
+            );
           }
-          const thread = await res.json();
           // R4-EXCEPTION (owner decision 2026-10-07): buttons travel by raw
           // REST in the SAME call flow as the permitted thread creation. The
           // native adapter cannot deliver from this hook context (proven live
@@ -7379,6 +7822,29 @@ export default {
       // meaning (the authoritative ledger does not reflect this sweep), which
       // the zero-target and unreadable-ledger cases already reported.
       const contained = ledgerWritten && uncontainedTasks.length === 0;
+      // M12/T2-R1: the containment above is already decided and, where it succeeded,
+      // durable. The incident surface therefore runs as its own guarded chain and cannot
+      // change this verdict, so a Discord failure never consumes the governance event
+      // (requirement 5).
+      const incidentTaskIds = [
+        ...new Set(
+          blocked.map((entry) => entry.task_id).concat(uncontainedTasks),
+        ),
+      ];
+      if (incidentTaskIds.length > 0 || ledgerError) {
+        surfaceGovernanceIncident({
+          reason,
+          runId,
+          childSessionKey,
+          scope,
+          taskIds: incidentTaskIds,
+          ledgerError,
+        }).catch((surfaceErr) => {
+          api.logger?.warn?.(
+            `[zink-governance] INCIDENT_SURFACE_FAILED reason=${reason} cause=${surfaceErr?.message}`,
+          );
+        });
+      }
       return {
         allow: false,
         blocked: true,

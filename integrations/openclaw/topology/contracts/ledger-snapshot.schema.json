@@ -580,6 +580,11 @@
                   "type": "string",
                   "pattern": "^[a-f0-9]{64}$"
                 },
+                "results_thread_id": {
+                  "description": "M12/T2-R1: the #results forum thread this task's governed result was surfaced in, projected from WORKFLOW_RESULT_SURFACED. Paired with the long-declared approval_thread_id slot so 'the owner has been shown this' is a durable fact rather than a log line, and a retry cannot open a second thread for the same work.",
+                  "type": "string",
+                  "maxLength": 256
+                },
                 "result_pending_at": {
                   "type": "string",
                   "format": "date-time"

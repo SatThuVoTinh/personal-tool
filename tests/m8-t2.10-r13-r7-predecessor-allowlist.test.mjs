@@ -146,13 +146,15 @@ assert.ok(
   "the live M11/T1-R1 entrypoint must remain an admitted predecessor",
 );
 /**
- * M12/T1-R1: the CURRENT entrypoint. Accepted by content comparison and
+ * M12/T2-R1: the CURRENT entrypoint. Accepted by content comparison and
  * deliberately NOT listed. The build M11/T3-R1 installed and this task replaces
  * (`61e344e6…`) IS listed as an admitted predecessor, which is what keeps a
- * --preflight against the live runtime from refusing the upgrade.
+ * --preflight against the live runtime from refusing the upgrade. M12/T1-R1's own
+ * candidate (`85fbee50…`) is NOT listed: it was never deployed, so no runtime can
+ * carry it.
  */
 const M11_T3_ENTRYPOINT_SHA256 =
-  "85fbee501c8f353cded73624ae3a814b5885c0a9e9483660df32e1cf1393fa8a";
+  "f9ef77dcf37cfa5a190535654c43b7b756bc49cc2ace0c1dc505aee9cd143cbc";
 /** The outgoing entrypoint this deployment replaces; now listed. */
 const R8_OUTGOING_ENTRYPOINT_SHA256 =
   "6a7968b7d456ff6d3f2c5b9d60c7b6046a702603b880093c33b717d9a37c13b1";
