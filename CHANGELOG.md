@@ -30,7 +30,10 @@ All notable, validated changes to Personal Tool are documented here.
   expiring a card needs a sweeper, and he asked for the approval case. Gates: `npm run verify`
   PASS (1457 tests / 1412 pass / 0 fail / 45 skipped) and **192/192 with ZERO skips** under WSL;
   three mutation probes each killed exactly one control (unresolved STATUS still PATCHing, foreign
-  ids dropped, call site detached) and were reverted.
+  ids dropped, call site detached) and were reverted. CI run `38405914399` @ `0479d02`:
+  `quality-gate` SUCCESS (`ℹ tests 1457 / ℹ pass 1406 / ℹ fail 0 / ℹ skipped 51`, policy passed)
+  and `python-quality` SUCCESS (`188 passed, 27 subtests`); Security run `38405920662` adds
+  `secret-scan` SUCCESS (zero leaks) with `dependency-audit` red on the unchanged 5-high baseline.
 - M12/T2-R1 (owner-approved 2026-10-13, A/A/A decisions, **not deployed**): every governed
   Discord thread now carries **exactly three forum tags**, one per category, and the two
   surfaces that had no publish path at all got one. `integrations/openclaw/lib/discord-forum-tags.mjs`
