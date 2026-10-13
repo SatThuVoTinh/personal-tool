@@ -232,7 +232,15 @@ node integrations/openclaw/topology/fixtures/runtime-regression/operator-apply.m
 # BƯỚC 3 — kiểm tra sau triển khai
 systemctl --user show openclaw-gateway-zink.service -p ActiveState -p MainPID -p NRestarts
 sha256sum ~/.openclaw-zink/extensions/zink-governance/index.mjs
+sha256sum ~/.openclaw-zink/extensions/zink-governance/lib/discord-forum-tags.mjs
 ```
+
+Giá trị kỳ vọng sau bản remediation STACK (M12/T2-R3): `index.mjs` vẫn là
+`513beb15c3d7624c0a928c4c1556dc44d4c4cff4f1e00980f24b298a25751c0d` (bản này không đổi entrypoint),
+còn `lib/discord-forum-tags.mjs` phải chuyển từ `e0a755bb9c6add431c9306fd8bc2895318a868c3c6b8e84326d94fb95526fff5`
+(sản phẩm đang chạy, là nguồn gây kẹt thẻ) sang
+`18fbb0774c18d013f599f562810932cfb80c4071c0614376d16f46c30fc256b3`. Nếu digest thứ hai vẫn là
+`e0a755bb…` thì bản sửa chưa vào, đừng báo thẻ đã hoạt động.
 
 Báo cáo in ra là JSON đã rút gọn (chỉ trạng thái, lý do, kích thước), không chứa danh tính kênh,
 token hay nội dung cấu hình. Nếu bước 1 báo `Governance plugin asset` hoặc
