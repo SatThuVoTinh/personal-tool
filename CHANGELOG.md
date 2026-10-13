@@ -8,6 +8,33 @@ All notable, validated changes to Personal Tool are documented here.
 
 ### Added
 
+- M12/T2-R1 (owner-approved 2026-10-13, A/A/A decisions, **not deployed**): every governed
+  Discord thread now carries **exactly three forum tags**, one per category, and the two
+  surfaces that had no publish path at all got one. `integrations/openclaw/lib/discord-forum-tags.mjs`
+  is the single tagging system: it reads each forum's own `available_tags` (falling back to
+  `/tags`) through the plugin's existing bot-token resolver, resolves the tag _names_ the
+  owner requires to their snowflakes at runtime, caches them for 10 minutes, and never stores
+  an id in the repository — the two hardcoded `applied_tags: ["1545697161985921064"]` literals
+  are gone. Categories are per-forum and are never assumed to be shared:
+  #approvals `STATUS`+`RISK`+`STACK`, #results `STATUS`+`TYPE`+`STACK`,
+  #incidents `STATUS`+`SEVERITY`+`STACK`. A required tag that cannot be resolved means **no
+  POST at all** plus `DISCORD_TAG_UNRESOLVED channel=… category=… wanted=… reason=…`, and the
+  underlying event stays durable for retry. Publication itself is now recorded:
+  `WORKFLOW_APPROVAL_SURFACED` / `WORKFLOW_RESULT_SURFACED` (both additive,
+  `required: ["task_id","channel","thread_id"]`) project into the schema slots that had been
+  declared since M7 with no writer, `approval_thread_id` and the new `results_thread_id`, so a
+  retry re-uses the same thread instead of opening a second one, and "requested but never
+  shown" is a re-drivable state rather than a lost card. #incidents stays idempotent without
+  inventing an incident store: deterministic title token plus an active-threads pre-check, and
+  containment behaviour is unchanged — publication is additive and its failure is logged.
+  Gates: `npm run verify` PASS (1446 tests / 1401 pass / 0 fail / 45 skipped,
+  `Repository policy check passed.`) and 181/181 with ZERO skips under WSL Ubuntu across the
+  two new suites (`m12-t2-forum-tags`, `m12-t2-governed-surface`) plus the M12/T1, R12,
+  six predecessor, native-outbound, runtime-bounds and approval-request suites. Three mutation
+  probes each killed exactly one control (unresolved tag ⇒ no POST; duplicate thread ⇒
+  suppressed; status line re-added ⇒ card gate fails). Per-surface live status: #approvals
+  `NOT TESTED` live, #results `NOT TESTED` live, #incidents `NOT TESTED` live — code
+  existence is not evidence of working Discord behaviour.
 - M12/T1-R1 (2026-10-13, `c1ad4b3`, **not deployed**): the approval card now carries an
   expected-result preview PNG rendered for the target screen — Excel, SQL, Python or
   Power BI — through the repository's existing dependency-free PNG encoder, written inside
@@ -380,6 +407,23 @@ asset drift detected` (`installed_mutation: false`) because ten live
 
 ### Changed
 
+- M12/T2-R1 (owner instruction 2026-10-13, "bỏ dòng trạng thái đi", **not deployed**): the
+  approval card no longer prints its own state in prose —
+  `**Trạng thái:** CHỜ DUYỆT (chưa được phép thực thi)` is removed from
+  `renderGovernedApprovalBody`, because the state the owner filters on is the forum's `STATUS`
+  tag and the thread is only ever opened as `STATUS: WAITING`. The action footer still states
+  explicitly that approving is what queues execution, so removing the line removes duplication,
+  not the warning. Two related shapes changed deliberately: the #results thread body is the new
+  `renderGovernedResultBody` rather than `formatGovernedResultCard`, because that card asks for
+  `ACCEPT`/`REJECT` and a results thread is opened only _after_ the owner has accepted — asking
+  again would advertise a verdict that has already been made; and the drafted contract's
+  "optional `thread_id` on `WORKFLOW_APPROVAL_REQUESTED`" became the separate
+  `WORKFLOW_APPROVAL_SURFACED` event, because the request event is appended _before_ the card
+  is posted, so no thread id exists yet, and writing one afterwards would mutate an
+  already-durable event.
+- M12/T2-R1: the acceptance notice in `#office` now points at the results **thread**
+  (`<#threadId>`) when that thread was surfaced, and keeps naming the forum when it was not,
+  so a suppressed publication never produces a link to something that does not exist.
 - M12/T1-R1 (owner instruction 2026-10-13, **not deployed**): the governed task
   **identity** is the 12-character code (`ddmmyyyy` + four characters of the task-code
   alphabet) rather than a 64-hex digest, so the number the owner reads on the card, the
@@ -392,10 +436,11 @@ asset drift detected` (`installed_mutation: false`) because ten live
   is checked against every live task id and code, and exhaustion fails closed).
 - M12/T1-R1: the approval card presents only the Task ID, the plan (`Lý do`, one numbered
   step per admitted brief node with the software named and its operations, constraints and
-  acceptance criterion) and the expected result (`Kết quả`), plus the explicit
-  CHỜ DUYỆT state. The run code, requester line, action line, `child:` line, node/brief
-  revision line, 64-hex id line and the separate "Mã ngắn" alias are gone; an over-long
-  plan is cut with a visible marker rather than silently.
+  acceptance criterion) and the expected result (`Kết quả`). The run code, requester line,
+  action line, `child:` line, node/brief revision line, 64-hex id line and the separate
+  "Mã ngắn" alias are gone; an over-long plan is cut with a visible marker rather than
+  silently. (The `CHỜ DUYỆT` state line that accompanied this presentation was removed by
+  M12/T2-R1 on 2026-10-13.)
 - Completed M5/T1-R2 architecture contraction: synchronized the three peer Zink modules and reserved OpenClaw boundary, rewrote the Vietnamese operator README, reduced Docker to PostgreSQL/Knowledge/Nginx/n8n/Dozzle profiles with a 6.5 GiB maximum ceiling, retained constrained Dozzle and reusable PostgreSQL/n8n backup logic, and retired unused ZAS/Data Plant runtime, AIStor, Redis, Prometheus/Grafana/exporter configuration. Implementation `4a331d7` and closeout `2ad4247` are remote-backed on `origin/codex/architecture-sync-m4`; repository, Knowledge and isolated runtime gates passed.
 - Recorded M3/T5 and M3 remote completion: accepted candidate `ff4a5fb` passed failure cleanup, Fixture, RealVault isolated, persistent live acceptance, and 60 repository/contract tests; PR `#15` merge `9cd34ce` preserved the accepted SHA and is backed by successful GitHub CI run `31894926039`, Security run `31894925985`, and the exact-main remote gate.
 - Recorded M3/T4 remote validation: PR `#12` merge `aa73b06` is backed by successful GitHub CI and Security runs after 53 Python tests, 55 repository/contract tests, builder/runtime acceptance, predecessor regressions, and cumulative M2 backup/restore regression.
@@ -416,6 +461,27 @@ asset drift detected` (`installed_mutation: false`) because ten live
 - Aligned the eight requested M2 service memory ceilings and raised the global WSL2 VM cap to 9.5 GiB, reserving 2 GiB above their combined 7.5 GiB ceiling.
 
 ### Fixed
+
+- M12/T2-R1 (2026-10-13): three gates were red **only on a host that can read the live WSL
+  tree** and none of the three was an M12 regression — each was a photograph of the day it was
+  written, overtaken by the runtime it observes. They are repaired as invariants, not relaxed
+  into passes:
+  (1) `tests/m8-t2.4-approval-request.test.mjs` pinned the production ledger at exactly `103`
+  events / `37` tasks and asserted that **zero** approvable tasks exist. The gateway keeps
+  appending (131 events) and legitimately parks tasks in "requested, not yet decided", so the
+  case now asserts the projected sequence equals the replayed log length, that the historical
+  tasks and their briefs survive, and that replay invents no approval opportunity by comparing
+  the projection against its own installed anchor — the fabrication rule itself stays enforced
+  behaviourally by the reducer. (2, 3) `tests/m10-t2-r6-boundary-predecessor.test.mjs` and
+  `tests/m10-t2-r8-observability-predecessor.test.mjs` each cross-checked the _live_ installed
+  file against their own historical baseline digest, which any later deployment invalidates.
+  Their provenance half (a historical commit re-packaged through `governancePluginFiles()`
+  reproduces the digest that task admitted) is untouched and still byte-exact; the redundant
+  live half now defers to `R13 P1`/`R13 P2`, which read those same two installed paths and
+  require the live digest to be either the build the repository derives now or a digest
+  admitted in `configure.mjs` — one live-reachability mechanism instead of three copies of a
+  stale equality. Evidence: 20/20 for those three predecessor suites and 181/181 across the
+  whole affected set under WSL with ZERO skips.
 
 - M12/T1-R1 (2026-10-13, **not deployed**): every Discord component this plugin posts is
   now built through the host's `buildDiscordComponentMessage` and registered with

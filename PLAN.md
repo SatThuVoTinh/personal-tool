@@ -37,7 +37,7 @@ Evidence Level: NONE | LOCAL-VERIFIED | REMOTE-BACKED
 | M7 — Zink Tools + OpenClaw integration + V1 hardening                      | `COMPLETE`    | `REMOTE-BACKED`  | M7/T1-R19, M7/T2-R12, M7/T3-R16, M7/T4-R10, and M7/T5-R13 complete; runtime governance remediation, Discord 7-bot integration, and Zink tools specialist policies verified.                                                                                                                                                           |
 | M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Integration | `IN PROGRESS` | `LOCAL-VERIFIED` | M8/T1 is complete; M8/T2.2 R4/R5/R6 are implemented; M8/T2.2-R7 (heartbeat admission, boundary diagnosability, apply safety) is in progress. Deployment is not authorized.                                                                                                                                                            |
 | M10 - Governed coordinator runtime binding                                 | `COMPLETE` | `LOCAL-VERIFIED` | M10/T2 closed by explicit owner decision 2026-10-11 (R26 records the final remediation; R8 closed live with zero-outbound proven). Deferred follow-ups are NOT closed under M10 and require separate authorization: live gateway/knowledge restart or deployment, M10 ingress card/tag redesign (new Plan Revision), coordinator result ingestion, and the WSL/CI Python gate run. |
-| M12 - Governed Discord interaction lifecycle and presentation | `COMPLETE` | `REMOTE-BACKED` | M12/T1-R1 CLOSED 2026-10-13, all four frozen items delivered in one pass: (1) every component this plugin posts is now built through the host's `buildDiscordComponentMessage` and registered with `registerBuiltDiscordComponentMessage` against the message id the adapter returns (24-hour ttl, `reusable`), which is why Approve / Request Revision / Reject no longer answer "This component has expired"; (2) a verdict with no caller-supplied reason is recorded with the reason that matches the decision instead of the literal `USER_REJECTED`; (3) the task **identity** is the 12-character `ddmmyyyy`+4 code, with readers accepting the legacy 64-hex shape so the 128 installed ledger events still replay and no live record was migrated; (4) the card presents only Task ID + a concrete `Lý do` plan (named software, its operations, constraints, acceptance) + a `Kết quả` expected-result preview PNG, and the governed result is reported by the executing specialist (owner decision **D**) behind a provenance gate. Implementation `c1ad4b3`, closeout `219ac1d`, both pushed on `codex/m11-t1-audit-remediation`. CI run `38365272022` @ `219ac1d`: `quality-gate` **SUCCESS** (`ℹ tests 1417 / ℹ fail 0 / ℹ skipped 51`, `Repository policy check passed.`) and `python-quality` **SUCCESS** (`188 passed, 27 subtests`); Security run `38365276313` adds `secret-scan` **SUCCESS** (gitleaks, zero leaks) while `dependency-audit` stays red on the unchanged 5-high baseline. Locally: `npm run verify` PASS on Windows (1417 tests / 0 fail) plus 112/112 with ZERO skips under WSL Ubuntu where the live tree is readable; one mutation probe killed the registration gate and two planned probes are `NOT RUN`. NOT closed under M12: **deployment** — the live gateway still runs the M11/T3-R1 build, so no live behaviour is verified (CI has no access to `/home/hoang_vinh/.openclaw-zink`); the preview is a schematic PNG, not a screenshot of Excel/SQL/Python/Power BI; and `verify.mjs` stays `NOT RUN`. Evidence in §4/§8. |
+| M12 - Governed Discord interaction lifecycle and presentation | `IN PROGRESS` | `LOCAL-VERIFIED` | | **M12/T2-R1 is CLOSED 2026-10-13** (`LOCAL-VERIFIED`, **not deployed**): governed forum tags on all three surfaces — #approvals `STATUS`+`RISK`+`STACK`, #results `STATUS`+`TYPE`+`STACK`, #incidents `STATUS`+`SEVERITY`+`STACK` — resolved from each forum's own `available_tags` at runtime through one new `lib/discord-forum-tags.mjs` (no snowflake anywhere in the repository; the two hardcoded `applied_tags` literals are gone), the card's status line removed, and durable publication state (`WORKFLOW_APPROVAL_SURFACED` / `WORKFLOW_RESULT_SURFACED` projecting into `approval_thread_id` / a new `results_thread_id`) so a retry cannot duplicate a thread and a card that was never shown stays re-drivable. #results and #incidents got their **first-ever publish paths** — the audit proved only #approvals published, `handleExecutionFinished`/`formatGovernedResultCard` were dead in production, and there was no incident producer at all. Gates: `npm run verify` PASS (1446 tests / 1401 pass / 0 fail / 45 skipped, policy passed) and **181/181 with ZERO skips under WSL Ubuntu**; three mutation probes each killed exactly one control. Per-surface live evidence is `NOT TESTED` for all three, and #incidents cannot post on the analytics stack until the owner renames the mislabelled `STATUS: ANALYTICS` tag in Discord. Implementation `c680a28`. **M12/T1-R1 is CLOSED 2026-10-13 (`REMOTE-BACKED` for the repository gates, NOT deployed)**, all four frozen items delivered in one pass: (1) every component this plugin posts is now built through the host's `buildDiscordComponentMessage` and registered with `registerBuiltDiscordComponentMessage` against the message id the adapter returns (24-hour ttl, `reusable`), which is why Approve / Request Revision / Reject no longer answer "This component has expired"; (2) a verdict with no caller-supplied reason is recorded with the reason that matches the decision instead of the literal `USER_REJECTED`; (3) the task **identity** is the 12-character `ddmmyyyy`+4 code, with readers accepting the legacy 64-hex shape so the 128 installed ledger events still replay and no live record was migrated; (4) the card presents only Task ID + a concrete `Lý do` plan (named software, its operations, constraints, acceptance) + a `Kết quả` expected-result preview PNG, and the governed result is reported by the executing specialist (owner decision **D**) behind a provenance gate. Implementation `c1ad4b3`, closeout `219ac1d`, both pushed on `codex/m11-t1-audit-remediation`. CI run `38365272022` @ `219ac1d`: `quality-gate` **SUCCESS** (`ℹ tests 1417 / ℹ fail 0 / ℹ skipped 51`, `Repository policy check passed.`) and `python-quality` **SUCCESS** (`188 passed, 27 subtests`); Security run `38365276313` adds `secret-scan` **SUCCESS** (gitleaks, zero leaks) while `dependency-audit` stays red on the unchanged 5-high baseline. Locally: `npm run verify` PASS on Windows (1417 tests / 0 fail) plus 112/112 with ZERO skips under WSL Ubuntu where the live tree is readable; one mutation probe killed the registration gate and two planned probes are `NOT RUN`. NOT closed under M12: **deployment** — the live gateway still runs the M11/T3-R1 build, so no live behaviour is verified (CI has no access to `/home/hoang_vinh/.openclaw-zink`); the preview is a schematic PNG, not a screenshot of Excel/SQL/Python/Power BI; and `verify.mjs` stays `NOT RUN`. Evidence in §4/§8. |
 | M11 - Cross-module audit remediation                                       | `COMPLETE` | `REMOTE-BACKED` | M11/T1 is CLOSED (R1 four phases + R2 live admission and deployment, 2026-10-12; build DEPLOYED AND VERIFIED on the live WSL gateway, evidence in §4/§8). M11/T2 is CLOSED the same day: R1 made four Skill Store suites portable, gave `python-quality` the Node toolchain (CI SUCCESS, `188 passed, 27 subtests`) and fingerprinted two gitleaks false positives; R2 gave the Knowledgebase Python suite exactly one executor per environment, which repaired `CI / quality-gate` (CI run `38202129189`: `quality-gate` and `python-quality` both SUCCESS). NOT closed under M11 and still requiring separate authorization: `verify.mjs` (`NOT RUN`, operator-side), the pre-existing model-router `GOVERNANCE_COMPLETION_UNAVAILABLE` failures, the pre-existing `duplicate plugin id` warning, the pre-existing 5-high `npm audit` failure, `M11-06`'s PostgreSQL statement gate in CI (no Postgres service there), and the owner-excluded items (per-document quarantine, incremental-publish redesign, manifest schema extension, zink-tools drift cluster, zink-tools lint-glob gap). **M11/T3-R1 is CLOSED 2026-10-13** (`REMOTE-BACKED`, **DEPLOYED AND VERIFIED** on the live WSL gateway): the ten verified HIGH-severity items landed in two ordered phases — `3cb8274` (argv execution on the bot-token path, one deadline on the three Discord REST fetches, cause-preserving message-only diagnostics at the three native-boundary seams, queue `enqueueTask`/`clear` serialized) and `6b0ea0a` (non-spinning async lock release with the WSL drvfs errnos, refusal of a half-missing events/snapshot pair, replay diagnostics that keep their cause, decision-ledger save and approval reads under the shared writer lock, `REJECTED` skill proposals made terminal and serialized). CI run `38336851433` @ `f55d292` on the task branch: `quality-gate` **SUCCESS** (`ℹ tests 1374 / ℹ fail 0`, `Repository policy check passed.`) and `python-quality` **SUCCESS** (`188 passed, 27 subtests`); Security run `38336854295` adds `secret-scan` **SUCCESS** (gitleaks, zero leaks) while its `dependency-audit` stays red on the unchanged 5-high baseline. Locally: `npm run verify` PASS on Windows and the two new suites plus both lock-predecessor suites re-run green under WSL Ubuntu, where the packaged digests are byte-identical. 22 of 24 mutation runs killed the defect (the 2 survivors are at the pre-existing `enterNativeRun` seam, outside this task's change sites — recorded in §8). The router model order/`timeoutSeconds=100` and stale-lock auto-reclaim stay excluded as recorded owner decisions. **This build is DEPLOYED AND VERIFIED** on the live WSL gateway (owner grant 2026-10-13, ONE `--apply` from `9164c50`; all seven live asset digests equal the packaged build, `openclaw.json` and the ledger untouched, unit `active`/`MainPID=28865`/`NRestarts=0`, zero `GOVERNANCE_COMPLETION_UNAVAILABLE` on the new PID — evidence in §4; `verify.mjs` stays `NOT RUN` and a multi-hour live soak is still open). |
 
 The former self-built L&SC Data Plant is replaced by a **logical external
@@ -47,6 +47,49 @@ operations research and simulation remain first-class capabilities.
 ## 4. Current focus
 
 ```text
+Milestone: M12 — Governed Discord interaction lifecycle and governed presentation
+Task: M12/T2 — Governed Discord forum tags on #approvals, #results and #incidents
+Task Status: CLOSED — all six contract phases implemented and validated 2026-10-13;
+  implementation `c680a28` on `codex/m11-t1-audit-remediation`, the execution contract deleted at
+  this closeout, working tree left clean. Nothing is deployed yet.
+Planning Readiness: APPROVED (historical — the approved M12/T2-R1 contract is executed and closed)
+Plan Revision: M12/T2-R1 (CLOSED)
+Execution Authorization: NO
+Execution Contract: NONE (the M12/T2-R1 ACTIVE.md was deleted at closeout)
+Evidence Level: LOCAL-VERIFIED — `npm run verify` **PASS** on the Windows host
+  (`format:check` clean, `lint` 0 issues, `npm test` 1446 tests / 1401 pass / **0 fail** /
+  45 skipped, `repo:check` "Repository policy check passed."), and the affected set re-ran under
+  WSL Ubuntu at **181/181 with ZERO skips** where `/home/hoang_vinh/.openclaw-zink` is reachable:
+  the two new suites (`m12-t2-forum-tags`, `m12-t2-governed-surface`), the four M12/T1 suites,
+  `m10-t2-r12`, the six predecessor suites, `m8-t2-native-outbound`,
+  `m11-t3-openclaw-runtime-bounds` and `m8-t2.4-approval-request`. Three mutation probes each
+  killed exactly one new control (unresolved tag ⇒ no POST at all; second thread for a task that
+  already has one ⇒ suppressed; card status line re-added ⇒ R12 content gate fails) and were
+  reverted. Candidate packaged entrypoint `f9ef77dc…`; the live `61e344e6…` needs no new
+  admission because it is already listed in both mode gates. Per-surface live status is
+  `NOT TESTED` for **#approvals**, **#results** and **#incidents** — this build is not installed,
+  no real forum thread was created, and CI cannot reach the live tree, so it adds no Discord
+  evidence. Durable record in §8.
+Task Branch: codex/m11-t1-audit-remediation (no new branch and no `main` merge authorized)
+Owner Approval: EXPLICIT — 2026-10-13. Answering the three-question OWNER DECISION block:
+  Q1 = A (scope covers #approvals, #results AND #incidents), Q2 = A (resolve tag name →
+  snowflake at runtime through the existing token resolver, cached, no hardcoded ids),
+  Q3 = A (derive RISK from the admitted brief's tool `riskClass`, highest class present).
+  He then set seven binding execution requirements (audit before editing and reuse existing
+  machinery; check each forum's own available_tags and required-tag set; regression tests for
+  #approvals plus separate tests for #results/#incidents covering thread creation, exactly
+  three tags, RISK classification and Discord error handling; an unresolvable required tag
+  logs DISCORD_TAG_UNRESOLVED with channel, category and wanted name and the event is
+  preserved for a proper retry instead of posting a short-tagged thread and calling it
+  success; no duplicate thread on retry and no channel's failure may consume another
+  channel's event; no claim that #results or #incidents work merely because code changed —
+  per-channel PASS / FAIL / NOT TESTED evidence; no scope or architecture creep, and report
+  files changed, reasons, test results and remaining limits). He also ordered the card's
+  status line removed ("bỏ dòng trạng thái đi") and supplied the live tag dump.
+  Deployment option A (--preflight read-only → ONE --apply → restart the live unit) is
+  authorized to run AFTER this task's gates pass.
+Prior task record — M12/T1-R1 CLOSED 2026-10-13, REMOTE-BACKED for the repository gates,
+  NOT DEPLOYED; durable record in §8 and in the fields below (retained, not rewritten).
 Milestone: M12 — Governed Discord interaction lifecycle and governed presentation
 Task: M12/T1 — Component registration, 12-character task identity, approval-card
   presentation, and specialist result ownership
@@ -4424,6 +4467,147 @@ specialist was admitted to execute is still blocked. `verify.mjs` (operator-side
 unreachable, registration degrades loudly (`COMPONENT_SDK_UNAVAILABLE` /
 `COMPONENT_REGISTRATION_FAILED`) and the card still posts, so approving from the thread
 text keeps working.
+
+### M12/T2-R1 — Governed Discord forum tags on all three surfaces (owner-approved 2026-10-13)
+
+Task: M12/T2-R1 · `CLOSED 2026-10-13` · implementation `c680a28`; the frozen implementation
+lived in `docs/contracts/execution/ACTIVE.md`, deleted at this closeout; this record keeps the
+durable facts and the owner's decisions so a later agent cannot re-litigate them.
+
+Executed shape (what the six phases became):
+
+- **One tagging system, not a second one.** `integrations/openclaw/lib/discord-forum-tags.mjs`
+  reads `GET /channels/{id}` with a `/tags` fallback, resolves the required tag *names* per
+  surface through the plugin's existing bot-token resolver, caches resolutions for 10 minutes,
+  and never caches a failure. `openGovernedForumThread` is the only publication seam and all
+  three surfaces go through it, so the two existing invariant gates were extended rather than
+  bypassed: the runtime-bounds gate now covers the new module's `fetchImpl` sites (each carries
+  `DISCORD_REST_DEADLINE_MS`) and the native-outbound gate now requires **zero** `/threads` REST
+  sites in the plugin while allowing exactly the three channel-read URLs in the lib. The
+  hardcoded `applied_tags: ["1545697161985921064"]` literals are gone; a source guard asserts no
+  snowflake-shaped `applied_tags` and no instance of that id survives anywhere.
+- **#approvals** (`index.mjs`, both card sites): trio `STATUS: WAITING` + RISK (highest
+  `riskClass` reachable among the tools admitted by the brief, through `TOOL_POLICY` plus one
+  level of `AGENT_SPAWN_POLICY`) + STACK (`current_stack`, else the single distinct node
+  `stack_id`). The card's `**Trạng thái:** CHỜ DUYỆT (chưa được phép thực thi)` line is removed.
+- **#results** (first publish path): one tagged thread at the acceptance flow with
+  `STATUS: SUCCESS|FAILED|PARTIAL` + `TYPE` + `STACK`, body `renderGovernedResultBody` (a
+  delivery record; `formatGovernedResultCard` asks for a verdict that has already been given),
+  and the `#office` celebration now points at `<#threadId>` when the thread was surfaced and at
+  the forum when it was not.
+- **#incidents** (first publish path): one tagged thread after containment is durable,
+  `STATUS: OPEN` + `SEVERITY` + `STACK`, identity through the previously uncalled
+  `deriveIncidentId`, dedupe through a deterministic title token plus
+  `GET /channels/{id}/threads/active`. Containment outcomes are unchanged and an unreadable
+  thread list is logged (`INCIDENT_SURFACE_SKIPPED … cause=THREAD_LIST_UNREADABLE`), never
+  guessed at.
+- **Durability**: `WORKFLOW_APPROVAL_SURFACED` / `WORKFLOW_RESULT_SURFACED` project the created
+  thread into `approval_thread_id` (declared since M7, never written) and the new
+  `results_thread_id`. Same thread id ⇒ the append is refused as a no-op; a different thread for
+  a task that already has one ⇒ `INVALID_STATE_TRANSITION`; the duplicate-card guard now reads
+  the durable thread id, and `approval_requested_at` without `approval_thread_id` is re-driven by
+  the existing stale-recovery loop instead of being refused forever. One channel's failure cannot
+  consume another's event because each surface is its own additive call with its own log line.
+
+Gates and evidence: `npm run verify` **PASS** on Windows (1446 tests / 1401 pass / **0 fail** /
+45 skipped, `Repository policy check passed.`); the affected set re-ran under WSL Ubuntu with
+**181/181 and ZERO skips** (`m12-t2-forum-tags`, `m12-t2-governed-surface`, the four M12/T1
+suites, `m10-t2-r12`, the six predecessor suites, `m8-t2-native-outbound`,
+`m11-t3-openclaw-runtime-bounds`, `m8-t2.4-approval-request`). Three mutation probes each killed
+exactly one control and were reverted: an unresolvable required tag ⇒ no `POST` call at all; a
+second thread for a task that already has one ⇒ suppressed; re-adding the card status line ⇒ the
+R12 card-content gate fails. Candidate packaged entrypoint `f9ef77dcf37cfa5a190535654c43b7b756bc49cc2ace0c1dc505aee9cd143cbc`;
+the live `61e344e6…` (the M11/T3-R1 build still installed) and all 16 other differing live asset
+digests are already admitted in `configure.mjs`, so **no admission list needed changing** and the
+new lib has no installed predecessor by construction.
+
+Three pre-existing WSL-only gate defects repaired as invariants (recorded so they are not
+mistaken for M12 regressions, and none was converted into a pass): the production-ledger case
+pinned `103` events / `37` tasks and asserted zero approvable tasks — the live journal is at 131
+and legitimately parks pending approvals, so it now asserts projected sequence == replayed log
+length, surviving history, and **no approval opportunity the installed anchor did not already
+record**; `m10-t2-r6` and `m10-t2-r8` P1 required the *installed* files to still equal their own
+historical baseline digests, which any later deployment invalidates — their provenance half stays
+byte-exact and the redundant live half defers to `R13 P1`/`R13 P2`, which read those same two
+paths and require live-reachability. `m10-t2-r7` was already green and is untouched.
+
+Per-surface live status (requirement 6, stated separately): **#approvals `NOT TESTED` live**,
+**#results `NOT TESTED` live**, **#incidents `NOT TESTED` live** — nothing in this task has been
+deployed, no thread has been created against the real forums, and code existence is not evidence
+of working Discord behaviour. Local (fixture-driven) status is `PASS` for all three surfaces
+including thread creation, exactly-three-tags, RISK classification and Discord error handling.
+Remaining limits: tag transitions after creation are unwired (no verified edit-thread-tags seam),
+`BLOCKED`/`CANCELLED` produce no results thread by decision, incident dedupe depends on the
+active-threads list so an archived or externally closed thread could be re-opened, the re-drive
+guard has no behavioural test of its own (asserted at the reducer level only), #incidents on the
+analytics stack cannot post until the owner renames the mislabelled `STATUS: ANALYTICS` tag in
+Discord, `verify.mjs` stays `NOT RUN`, and `npm audit` stays `FAIL` on the unchanged 5-high
+baseline.
+
+Owner decisions (2026-10-13, answering the three-question block issued after the audit):
+**Q1 = A** scope covers #approvals, #results and #incidents; **Q2 = A** tag *names* are
+resolved to Discord snowflakes at runtime through the token resolver the plugin already uses,
+cached in memory, with **no hardcoded ids anywhere in the repository** — the existing
+`applied_tags: ["1545697161985921064"]` literals are removed, not extended; **Q3 = A** the
+approval RISK tag is derived from the `riskClass` of the tools in the admitted brief, taking
+the highest class present, because no risk field exists on the brief or the task record.
+He additionally required: audit before editing and reuse existing machinery (no second
+tagging system); check each forum's own `available_tags` and required-tag set rather than
+assuming #approvals' tags exist elsewhere; regression tests for #approvals and separate tests
+for #results and #incidents covering thread creation, exactly three tags, RISK
+classification and Discord error handling; an unresolvable required tag logs
+`DISCORD_TAG_UNRESOLVED` with channel, category and wanted name and the underlying event is
+preserved for retry instead of posting a short-tagged thread and reporting success; no
+duplicate thread on retry and one channel's failure must not consume another channel's event;
+no claim of live success for #results or #incidents from code changes alone (per-channel
+PASS / FAIL / NOT TESTED); no scope or architecture creep, and a final report of files
+changed, reasons, test results and remaining limits. He also ordered the card's
+`**Trạng thái:**` line removed, and authorized deployment **A** to run after these gates.
+
+Verified state that shapes the design (read-only, this revision):
+
+- Publishing exists only for #approvals (`index.mjs:4992`, `:6234`), each with one hardcoded
+  `STATUS: WAITING` tag. **#results and #incidents have no publish path at all**:
+  `handleExecutionFinished` and `formatGovernedResultCard` are dead in production, and there
+  is no incident producer, no incident-shaped ledger event (23 event types, none incident),
+  and `deriveIncidentId` (`topology/lib/runtime.mjs:266`) has no callers. So requirement 1
+  ("all three surfaces") is first-time wiring onto cards and events that already exist, not a
+  tagging pass over working code.
+- Durable publication state is **declared but never written**:
+  `ledger-snapshot.schema.json:571-582` declares `approval_thread_id` /
+  `approval_message_id` and nothing projects into them, while
+  `WORKFLOW_APPROVAL_REQUESTED` (`ledger-event.schema.json:928+`) forbids a `thread_id`. Today
+  a failed card POST is warn-only (`:5051-5061`, `:6249-6251`), the card is lost, and the
+  `approval_requested_at` duplicate guard prevents any re-drive. Requirement 4 and 5 together
+  make two **additive** contract changes necessary — optional `thread_id` / `message_id` on
+  that event, and an optional `results_thread_id` beside the already-declared approval fields
+  — which is why this task changes contracts under explicit owner instruction rather than
+  inventing a parallel outbox or state store.
+- The live tag dump (owner-run, read-only) proves the three forums are **not** interchangeable:
+  #approvals `STATUS: WAITING|APPROVED|REJECTED|CHANGES|EXPIRED` +
+  `RISK: LOW|MEDIUM|RED` + `STACK: INFRA|SEMANTIC|ANALYTICS|DECISION|DATA`;
+  #results `STATUS: SUCCESS|FAILED|PARTIAL` +
+  `TYPE: ANALYSIS|DATA|REPORT|MODEL|RESEARCH|AUTOMATION` +
+  `STACK: INFRA|ANALYTICS|SEMANTIC|DECISION|DATA`;
+  #incidents `STATUS: OPEN|INVESTIGATE|MITIGATE|SOLVED` +
+  `SEVERITY: LOW|MEDIUM|HIGH|CRITICAL` + `STACK: INFRA|DATA|SEMANTIC|DECISION`.
+  The approvals STACK values match the durable `target_stack`/`stack_id` enum
+  (`infrastructure|data_plant|semantic|intelligence|decision`) one-to-one, so STACK is read
+  from the ledger, not guessed; RISK has no ledger field, hence Q3 = A.
+- **Server-side naming defect reported, not worked around**: #incidents contains a tag
+  literally named `STATUS: ANALYTICS`, which belongs to the STACK category. The matcher
+  refuses to alias it, so an analytics-stack incident surfaces as
+  `DISCORD_TAG_UNRESOLVED channel=incidents category=STACK wanted="STACK: ANALYTICS"` and no
+  thread is created until the owner renames that tag in Discord (operator data, one click,
+  not a repository change).
+- Out of scope by decision, recorded so it is not mistaken for an oversight: **tag
+  transitions after creation** (flipping `STATUS: WAITING` → `APPROVED`/`REJECTED`/`CHANGES`,
+  or `OPEN` → `INVESTIGATE`/`MITIGATE`/`SOLVED`) — `applied_tags` is carried by thread
+  creation and no verified edit-thread-tags seam exists in the pinned host; and result threads
+  for `BLOCKED`/`CANCELLED` outcomes, which are not owner-accepted results.
+
+Deployment A remains authorized only after this task's gates pass; it was **not** run before
+M12/T1-R1's CI evidence, and the live gateway still carries the M11/T3-R1 build.
 
 ## 9. Deferred beyond V1
 
