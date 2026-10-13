@@ -8,6 +8,16 @@ All notable, validated changes to Personal Tool are documented here.
 
 ### Added
 
+- M12/T1-R1 (2026-10-13, `c1ad4b3`, **not deployed**): the approval card now carries an
+  expected-result preview PNG rendered for the target screen — Excel, SQL, Python or
+  Power BI — through the repository's existing dependency-free PNG encoder, written inside
+  the governed sandbox root. A card and its preview are two messages of one thread,
+  because the host carries components on only the first media item.
+- M12/T1-R1 (owner decision D, 2026-10-13, **not deployed**): the governed result of an ETL
+  or dashboard task is reported by the specialist that executed it (`accountId` `o1` or
+  `o2`, with Excel/SQL/Python/Power BI) instead of only by Main. Suppression stays in force
+  as a provenance gate: a specialist broadcast is still blocked unless it is attributed to
+  a task that specialist was admitted to execute.
 - Deployed the M11/T3-R1 build to the live WSL gateway under a fresh, explicitly scoped
   owner grant (`9164c50`, 2026-10-13). Before consuming it, the seven deployed governance
   assets were measured read-only with `sha256sum` (`index.mjs = e8f084ab…`,
@@ -370,6 +380,22 @@ asset drift detected` (`installed_mutation: false`) because ten live
 
 ### Changed
 
+- M12/T1-R1 (owner instruction 2026-10-13, **not deployed**): the governed task
+  **identity** is the 12-character code (`ddmmyyyy` + four characters of the task-code
+  alphabet) rather than a 64-hex digest, so the number the owner reads on the card, the
+  number in the button `custom_id`, and the ledger key are one value. Readers accept both
+  shapes and no live record was migrated or rewritten, which is what keeps the 128
+  installed ledger events replaying. Two consequences are accepted and recorded as owner
+  decisions: the identity is no longer re-derivable from the origin message (so the
+  reducer verifies the recorded binding fields, and replay detection reads
+  `findTaskByOriginBinding`), and the code space is ~195k per day (so mint-time uniqueness
+  is checked against every live task id and code, and exhaustion fails closed).
+- M12/T1-R1: the approval card presents only the Task ID, the plan (`Lý do`, one numbered
+  step per admitted brief node with the software named and its operations, constraints and
+  acceptance criterion) and the expected result (`Kết quả`), plus the explicit
+  CHỜ DUYỆT state. The run code, requester line, action line, `child:` line, node/brief
+  revision line, 64-hex id line and the separate "Mã ngắn" alias are gone; an over-long
+  plan is cut with a visible marker rather than silently.
 - Completed M5/T1-R2 architecture contraction: synchronized the three peer Zink modules and reserved OpenClaw boundary, rewrote the Vietnamese operator README, reduced Docker to PostgreSQL/Knowledge/Nginx/n8n/Dozzle profiles with a 6.5 GiB maximum ceiling, retained constrained Dozzle and reusable PostgreSQL/n8n backup logic, and retired unused ZAS/Data Plant runtime, AIStor, Redis, Prometheus/Grafana/exporter configuration. Implementation `4a331d7` and closeout `2ad4247` are remote-backed on `origin/codex/architecture-sync-m4`; repository, Knowledge and isolated runtime gates passed.
 - Recorded M3/T5 and M3 remote completion: accepted candidate `ff4a5fb` passed failure cleanup, Fixture, RealVault isolated, persistent live acceptance, and 60 repository/contract tests; PR `#15` merge `9cd34ce` preserved the accepted SHA and is backed by successful GitHub CI run `31894926039`, Security run `31894925985`, and the exact-main remote gate.
 - Recorded M3/T4 remote validation: PR `#12` merge `aa73b06` is backed by successful GitHub CI and Security runs after 53 Python tests, 55 repository/contract tests, builder/runtime acceptance, predecessor regressions, and cumulative M2 backup/restore regression.
@@ -391,6 +417,29 @@ asset drift detected` (`installed_mutation: false`) because ten live
 
 ### Fixed
 
+- M12/T1-R1 (2026-10-13, **not deployed**): every Discord component this plugin posts is
+  now built through the host's `buildDiscordComponentMessage` and registered with
+  `registerBuiltDiscordComponentMessage` against the message id the adapter returns, with a
+  per-card 24-hour ttl and `reusable` blocks so a decision that fails inside the plugin
+  stays retryable. Approve / Request Revision / Reject therefore no longer answer "This
+  component has expired". Registration degrades loudly (`COMPONENT_SDK_UNAVAILABLE` /
+  `COMPONENT_REGISTRATION_FAILED`) and never blocks the card, so approving from the thread
+  text keeps working even where the host SDK is unreachable. Live behaviour is NOT
+  verified: the running gateway still carries the M11/T3-R1 build, and deploying this one
+  needs its own owner grant.
+- M12/T1-R1: the two live-runtime cross-checks in
+  `tests/m8-t2.10-r13-r7-predecessor-allowlist.test.mjs` (R13 P1/P2) failed on any host
+  that can read the deployed tree, because they still asserted the installed entrypoint
+  and `lib/native-boundary.mjs` equal the R7-era digests while the 2026-10-13 M11/T3-R1
+  deployment replaced them (`61e344e6…`, `5966d446…`). The committed-source R7 proofs are
+  untouched; the live half now checks the property that actually matters — the installed
+  digest is either the build the repository derives now or a predecessor
+  `configure.mjs` admits in both mode gates — so the suite is green on WSL and on Windows
+  without weakening anything.
+- M12/T1-R1: an approval decision with no caller-supplied reason is recorded with the
+  reason that matches the decision taken (`USER_APPROVED`, `USER_REQUESTED_REVISION`,
+  `USER_REJECTED`, `USER_ACCEPTED`) instead of the single literal `USER_REJECTED` that
+  every approval-channel verdict used before.
 - Fixed ten verified HIGH-severity defects in the OpenClaw runtime and its durable-state
   seams (`3cb8274` + `6b0ea0a`, M11/T3-R1, closed 2026-10-13; **deployed and verified on
   the live WSL gateway the same day** — see the deployment record under `Added`). Gateway
