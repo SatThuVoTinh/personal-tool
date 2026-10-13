@@ -30,7 +30,11 @@ All notable, validated changes to Personal Tool are documented here.
   Gates: `npm run verify` PASS (1446 tests / 1401 pass / 0 fail / 45 skipped,
   `Repository policy check passed.`) and 181/181 with ZERO skips under WSL Ubuntu across the
   two new suites (`m12-t2-forum-tags`, `m12-t2-governed-surface`) plus the M12/T1, R12,
-  six predecessor, native-outbound, runtime-bounds and approval-request suites. Three mutation
+  six predecessor, native-outbound, runtime-bounds and approval-request suites. CI run
+  `38394646861` @ `0502204`: `quality-gate` SUCCESS (`ℹ tests 1446 / ℹ pass 1395 / ℹ fail 0 /
+ℹ skipped 51`, `Repository policy check passed.`) and `python-quality` SUCCESS
+  (`188 passed, 27 subtests`); Security run `38394651339` adds `secret-scan` SUCCESS (zero
+  leaks) while `dependency-audit` stays red on the unchanged 5-high baseline. Three mutation
   probes each killed exactly one control (unresolved tag ⇒ no POST; duplicate thread ⇒
   suppressed; status line re-added ⇒ card gate fails). Per-surface live status: #approvals
   `NOT TESTED` live, #results `NOT TESTED` live, #incidents `NOT TESTED` live — code
