@@ -69,13 +69,14 @@ import {
   parseCoordinatorSessionKey,
 } from "../../lib/coordinator-pickup.mjs";
 import {
-  buildUniqueTaskCode,
   canonicalHash,
   derivePrincipalRef,
-  deriveTaskId,
   GOVERNANCE_VERSION,
+  isTaskCodeForm,
+  mintTaskId,
   SCHEMA_VERSION,
   TASK_CODE_ALPHABET,
+  TASK_ID_PATTERN,
 } from "../../topology/lib/canonical.mjs";
 
 import {
@@ -89,6 +90,10 @@ import {
   formatGovernedApprovalCard,
   formatGovernedResultCard,
   formatIncidentCard,
+  renderGovernedApprovalBody,
+  renderGovernedExpectedResult,
+  renderGovernedPlanSteps,
+  specialistSoftwareLabel,
 } from "../../lib/discord-formatter.mjs";
 
 import {
@@ -122,8 +127,11 @@ import {
 
 import {
   buildNativeComponentPayload,
+  registerPostedNativeComponents,
   sendNativePayload,
 } from "../../lib/discord-native-send.mjs";
+
+import { renderExpectedResultPreview } from "../../lib/discord-result-preview.mjs";
 
 import {
   evaluateResultGate,
@@ -469,6 +477,88 @@ export function isIngressSenderAuthorized(context, ownerDiscordId) {
     return { ok: false, reason: "POLICY_DENIED" };
   }
   return { ok: true };
+}
+
+// M12/T1-R1: replay detection after the identity stopped being a hash of the
+// origin message. A re-delivered Discord event used to be caught by recomputing
+// `deriveTaskId(origin)` and looking that up as the snapshot key; a minted
+// 12-character identity makes that impossible, so the same fact is now read from
+// the binding every WORKFLOW_OPENED already records.
+//
+// The match is deliberately the SAME set the old derivation consumed: origin,
+// principal ref, message id and agent. The session is NOT part of it, because the
+// old id did not include the session either, and that is what makes a second
+// session quoting the same message land on the existing task and be denied by the
+// duplicate guard instead of silently opening a second task.
+export function findTaskByOriginBinding(
+  snapshot,
+  { origin, origin_principal_ref, origin_message_id, root_agent_id } = {},
+) {
+  const tasks = snapshot?.tasks;
+  if (!tasks || typeof tasks !== "object") return null;
+  if (
+    typeof origin !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(String(origin_principal_ref ?? "")) ||
+    !/^[1-9][0-9]{16,19}$/u.test(String(origin_message_id ?? "")) ||
+    typeof root_agent_id !== "string"
+  ) {
+    return null;
+  }
+  for (const [taskId, task] of Object.entries(tasks)) {
+    if (!new RegExp(TASK_ID_PATTERN, "u").test(taskId)) continue;
+    if (
+      task?.origin === origin &&
+      task?.origin_principal_ref === origin_principal_ref &&
+      task?.origin_message_id === origin_message_id &&
+      task?.root_agent_id === root_agent_id
+    ) {
+      return taskId;
+    }
+  }
+  return null;
+}
+
+// M12/T1-R1: display token for an identity that may be either shape. The
+// 12-character code is short enough to show whole — and truncating it to its first
+// eight characters would leave only the date, so two same-day tasks would look
+// identical. A legacy 64-hex id keeps its 8-character prefix, which is what every
+// existing card and `res-<token>` id already carries.
+export function displayTaskToken(taskId) {
+  const value = String(taskId ?? "");
+  return isTaskCodeForm(value) ? value : value.slice(0, 8);
+}
+
+// M12/T1-R1 (owner option D): a specialist may report its OWN work to the owner.
+// Pure so the rule is testable without a live ledger: everything it reads is the
+// durable task record, never the message text, so a specialist cannot earn admission
+// by what it says.
+export function evaluateSpecialistProvenance({
+  agentId,
+  task = null,
+  delegationAgentId = null,
+} = {}) {
+  if (typeof agentId !== "string" || agentId.length === 0) {
+    return { allowed: false, reason: "NO_AGENT_IDENTITY" };
+  }
+  if (!task || typeof task !== "object") {
+    return { allowed: false, reason: "TASK_NOT_KNOWN" };
+  }
+  if (delegationAgentId && delegationAgentId !== agentId) {
+    return { allowed: false, reason: "TASK_NOT_OWNED_BY_THIS_AGENT" };
+  }
+  if (!task.approved_at) {
+    return { allowed: false, reason: "TASK_NOT_APPROVED" };
+  }
+  const executing =
+    ["EXECUTING", "RESULT_PENDING_REVIEW"].includes(task.workflow_status) ||
+    (task.workflow_status === "ACTIVE" && Boolean(task.claimed_at));
+  if (!executing) {
+    return {
+      allowed: false,
+      reason: `TASK_NOT_EXECUTING:${task.workflow_status ?? "unknown"}`,
+    };
+  }
+  return { allowed: true, taskId: task.task_id ?? null };
 }
 
 // M8-061: caller identity always derives from trusted runtime context.
@@ -1274,50 +1364,61 @@ export function buildSkillProposalCard(proposal) {
  * `sessions_spawn`. Pure: no I/O, no network. The transporter posts what this
  * returns; tests assert the contract here.
  *
- * Contract (must hold for the verdict paths to work):
- * - the FULL task_id appears in the body (the text-approval path matches an
- *   owner's APPROVE message to a task by substring);
- * - the [PHÊ DUYỆT] marker keeps the card recognizable to card parsers;
+ * M12/T1-R1 re-froze the presentation on the owner's instruction: the card shows
+ * the Task ID and nothing else that identifies plumbing (no run code, no
+ * requester line, no action line, no `child:` line), `Lý do` carries the durable
+ * plan step by step with the software named for each step, and `Kết quả` carries the
+ * expected result plus the preview image that travels with it.
+ *
+ * Contract that must still hold for the verdict paths to work:
+ * - the FULL task id appears in the body (the text-approval path matches an owner's
+ *   APPROVE message to a task by substring);
+ * - the `[PHÊ DUYỆT]` marker keeps the card recognizable to card parsers;
  * - REQUESTED state is explicit: the card asks, it never authorizes;
- * - button custom_ids use the same builder+namespace as child-announce
- *   cards so the button verdict path resolves the same taskId.
+ * - button custom_ids use the same builder+namespace as child-announce cards so the
+ *   button verdict path resolves the same taskId.
  */
 export function buildFirstSpawnApprovalCard({
   taskId,
   taskCode,
-  runId,
-  requesterAgentId,
   briefRevision,
   targetAgentId,
   spawnInputs,
   spawnNodeId,
+  planNodes = [],
+  previewImage = null,
 }) {
   if (typeof taskId !== "string" || taskId.length === 0) {
     throw new Error("FIRST_APPROVAL_CARD_TASK_REQUIRED");
   }
-  const title = `🔖 [PHÊ DUYỆT] Yêu cầu spawn ${targetAgentId}`;
-  // M10/T2-R12: when the task carries a short code the owner leads with IT, since
-  // that is what he reads and types. The canonical id is kept below it so the
-  // text-approval path still works for tasks admitted before codes existed.
-  const codeLine = taskCode
-    ? `- **Mã ngắn (để duyệt):** \`${taskCode}\` ← dùng mã này\n`
-    : "";
-  const approveWith = taskCode ? taskCode : taskId;
-  const bodyContent =
-    `### ${title}\n` +
-    codeLine +
-    `- **Mã tác vụ (Task):** \`${taskId}\`\n` +
-    `- **Run:** \`${runId}\`\n` +
-    `- **Người yêu cầu:** ${requesterAgentId === "main" ? "Main (@Quản Lý)" : requesterAgentId}\n` +
-    `- **Child:** ${targetAgentId}\n` +
-    `- **Hành động:** sessions_spawn\n` +
-    `- **Node:** \`${spawnNodeId}\` (brief revision ${briefRevision})\n` +
-    `- **Lý do:** ${spawnInputs}\n` +
-    `- **Trạng thái:** CHỜ DUYỆT (REQUESTED — chưa được phép thực thi)\n\n` +
-    `---\n**Thao tác dành cho User (Buttons & Actions):**\n` +
-    `- Bấm **Approve** hoặc phản hồi **APPROVE ${approveWith}** để phê duyệt đưa vào hàng đợi thực thi.\n` +
-    `- Bấm **Reject** hoặc phản hồi **REJECT ${approveWith}** để từ chối kế hoạch.\n` +
-    `- Phản hồi **REQUEST REVISION ${approveWith}** để yêu cầu sửa đổi kế hoạch.`;
+  const title = "🔖 [PHÊ DUYỆT] Kế hoạch Thực thi";
+  const steps = renderGovernedPlanSteps(planNodes, {
+    activeNodeId: spawnNodeId,
+  });
+  if (steps.length === 0) {
+    // A task admitted without a recorded node graph still has to say what will be
+    // done, so this spawn itself becomes the single rendered step rather than an
+    // empty plan.
+    steps.push(
+      [
+        `1. **${specialistSoftwareLabel(targetAgentId)}**`,
+        `   - Thao tác: ${String(spawnInputs ?? "").trim() || "(không mô tả)"}`,
+        "   - **Đang chờ anh duyệt ở bước này**",
+      ].join("\n"),
+    );
+  }
+  const commandToken = taskCode ?? taskId;
+  const bodyContent = renderGovernedApprovalBody({
+    title,
+    taskId,
+    planSteps: steps,
+    expectedResult: renderGovernedExpectedResult({
+      nodes: planNodes,
+      outcome: spawnInputs,
+      previewImage,
+    }),
+    commandToken,
+  });
   return {
     title,
     bodyContent,
@@ -1671,9 +1772,25 @@ export function handleDiscordAction({
   // bytes) passed `.slice(0, 2000)` untouched and were then rejected by
   // `ledger-event.schema.json`'s `maxLength: 4096`, which schema.mjs measures in
   // bytes — the write failed and the task could not be rejected at all.
-  const safeReason = data.reason
-    ? truncateUtf8(String(data.reason), 2000)
-    : "USER_REJECTED";
+  //
+  // M12/T1-R1: the fallback described the action actually taken. It used to be the
+  // literal "USER_REJECTED" for every approval-channel decision, so the live ledger
+  // recorded `decision: "APPROVE"` with `reason: "USER_REJECTED"` — a durable audit
+  // trail that said the opposite of what the owner did.
+  const DEFAULT_APPROVAL_REASON = Object.freeze({
+    [ACTIONS.APPROVE]: "USER_APPROVED",
+    [ACTIONS.REQUEST_REVISION_APPROVAL]: "USER_REQUESTED_REVISION",
+    [ACTIONS.REJECT_APPROVAL]: "USER_REJECTED",
+    [ACTIONS.ACCEPT_RESULT]: "USER_ACCEPTED",
+    [ACTIONS.REQUEST_REVISION_RESULT]: "USER_REQUESTED_REVISION",
+    [ACTIONS.REJECT_RESULT]: "USER_REJECTED",
+  });
+  const safeReason = truncateUtf8(
+    String(
+      data.reason || DEFAULT_APPROVAL_REASON[normAction] || "USER_DECISION",
+    ),
+    2000,
+  );
   // Bounds are enforced in UTF-8 BYTES by the canonical contract validator
   // (schema.mjs uses Buffer.byteLength for maxLength), so a character-count
   // slice can produce a value the contract rejects — which failed the write and
@@ -4903,19 +5020,24 @@ export default {
           // OpenClaw 2026.6.34 Discord adapter. Only forum-thread
           // creation above remains raw REST (no verified native seam).
           try {
+            const buttonSpecs = components[0].components.map((button) => ({
+              customId: button.custom_id,
+              label: button.label,
+              style: button.style,
+              emoji: button.emoji,
+            }));
             const receipt = await sendNativePayload({
               api,
               to: thread.id,
               threadId: thread.id,
               accountId: agentId,
+              // M12/T1-R1: `buttons` is what makes the send register the component
+              // ids with the host. Without it the adapter still delivers the card,
+              // but every click answers "This component has expired."
+              buttons: buttonSpecs,
               payload: buildNativeComponentPayload({
                 text: bodyContent.slice(0, 2000),
-                buttons: components[0].components.map((button) => ({
-                  customId: button.custom_id,
-                  label: button.label,
-                  style: button.style,
-                  emoji: button.emoji,
-                })),
+                buttons: buttonSpecs,
               }),
             });
             api.logger?.info?.(
@@ -5193,7 +5315,7 @@ export default {
           to: officeChannelId,
           accountId: "main",
           payload: {
-            text: `🎉 **Chúc mừng!** Anh Zink đã chính thức nghiệm thu kết quả tác vụ \`${taskId.slice(0, 8)}\` tại <#${resultsForumId}>. Tác vụ đã hoàn tất xuất sắc và được lưu trữ an toàn trong sổ cái governance. Quản Lý xin cảm ơn anh Zink!`,
+            text: `🎉 **Chúc mừng!** Anh Zink đã chính thức nghiệm thu kết quả tác vụ \`${displayTaskToken(taskId)}\` tại <#${resultsForumId}>. Tác vụ đã hoàn tất xuất sắc và được lưu trữ an toàn trong sổ cái governance. Quản Lý xin cảm ơn anh Zink!`,
           },
         }).catch((deliveryErr) => {
           api.logger?.warn?.(
@@ -6058,14 +6180,55 @@ export default {
             return;
           }
           const token = resolveDiscordBotToken("main");
+          // M12/T1-R1: the plan the owner reads comes from the durable brief
+          // record, not from the model's spawn payload, so the card cannot present a
+          // plan the ledger never admitted. An unreadable snapshot degrades to the
+          // spawn-only step rather than dropping the card.
+          let governedTask = null;
+          try {
+            governedTask = readSnapshot(paths)?.tasks?.[taskId] ?? null;
+          } catch {
+            api.logger?.warn?.(
+              "[zink-governance] approval plan read from the ledger failed; the card shows the spawn step only",
+            );
+          }
+          let previewPath = null;
+          const previewRoot = resolveAgentSandboxDir("main", context);
+          if (previewRoot) {
+            try {
+              previewPath = renderExpectedResultPreview({
+                target: targetAgentId,
+                title: `TASK ${displayTaskToken(taskId)}`,
+                notes: String(spawnInputs ?? "").slice(0, 120),
+                outputDirectory: previewRoot,
+              });
+            } catch (previewError) {
+              // The card is still worth approving without a picture; the reason is
+              // recorded so an owner asking "where is the image?" has an answer.
+              api.logger?.warn?.(
+                `[zink-governance] expected-result preview not rendered: ${previewError?.message}`,
+              );
+            }
+          } else {
+            api.logger?.warn?.(
+              "[zink-governance] expected-result preview skipped: no governed sandbox root",
+            );
+          }
           const { title, bodyContent, buttons } = buildFirstSpawnApprovalCard({
             taskId,
-            runId: context.runId,
-            requesterAgentId: context.agentId,
+            taskCode:
+              typeof governedTask?.task_code === "string" &&
+              governedTask.task_code.length > 0
+                ? governedTask.task_code
+                : null,
             briefRevision,
             targetAgentId,
             spawnInputs,
             spawnNodeId,
+            planNodes: Array.isArray(governedTask?.nodes)
+              ? governedTask.nodes
+              : [],
+            previewImage: previewPath ? path.basename(previewPath) : null,
           });
           const res = await fetch(
             `https://discord.com/api/v10/channels/${approvalsForumId}/threads`,
@@ -6111,6 +6274,50 @@ export default {
               throw new Error(`APPROVAL_BUTTONS_POST_FAILED:${msgRes.status}`);
             }
             const posted = await msgRes.json();
+            // M12/T1-R1: this site transports by raw REST under the R4-EXCEPTION,
+            // so the host's own component send never sees these buttons and would
+            // answer every click with "This component has expired." The ids must be
+            // registered against the message id that now carries them.
+            await registerPostedNativeComponents({
+              api,
+              buttons,
+              messageId: posted?.id ?? "",
+              accountId: "main",
+            });
+            // M12/T1-R1: the expected-result image is a second message of the same
+            // thread, because the host carries components on only the first media
+            // item. The attachment is confined by the same governed sandbox root the
+            // internal tool path already uses, so nothing outside it can be published.
+            if (previewPath) {
+              const containment = containOutboundAttachment(
+                previewPath,
+                "main",
+                context,
+              );
+              if (!containment.contained) {
+                api.logger?.warn?.(
+                  `[zink-governance] expected-result preview not sent: ${containment.reason}`,
+                );
+              } else {
+                try {
+                  await sendNativePayload({
+                    api,
+                    to: thread.id,
+                    threadId: thread.id,
+                    accountId: "main",
+                    payload: {
+                      text: `🖼️ Kết quả dự kiến của tác vụ \`${displayTaskToken(taskId)}\` — ${specialistSoftwareLabel(targetAgentId)}`,
+                    },
+                    mediaUrl: previewPath,
+                    mediaLocalRoots: [previewRoot],
+                  });
+                } catch (mediaErr) {
+                  api.logger?.warn?.(
+                    `[zink-governance] expected-result preview delivery failed: ${mediaErr?.message}`,
+                  );
+                }
+              }
+            }
             api.logger?.info?.(
               `[zink-governance] first-approval card posted for task ${taskId} into #approvals (threadId: ${thread.id}, messageId: ${posted.id})`,
             );
@@ -6882,14 +7089,29 @@ export default {
         ),
         origin_message_id: msgId,
       };
-      const taskId = deriveTaskId({
+      const currentSnapshot = readSnapshot(paths);
+      // M12/T1-R1: the identity is the owner-visible 12-character code, so it is
+      // minted rather than derived — and a re-delivered Discord message can no
+      // longer be recognized by recomputing an id. Replay protection therefore
+      // reads the origin binding the ledger already recorded for the task.
+      const replayedTaskId = findTaskByOriginBinding(currentSnapshot, {
         ...origin,
-        agent_id: context.agentId,
+        root_agent_id: context.agentId,
       });
+      const taskId =
+        replayedTaskId ??
+        mintTaskId({
+          date: new Date(),
+          random: () => Math.floor(Math.random() * TASK_CODE_ALPHABET.length),
+          isTaken: (candidate) =>
+            Object.hasOwn(currentSnapshot?.tasks ?? {}, candidate) ||
+            Object.values(currentSnapshot?.tasks ?? {}).some(
+              (task) => task.task_code === candidate,
+            ),
+        });
       // D06: Check snapshot; do not write duplicate WORKFLOW_OPENED event if task already opened.
       // M10/T2-R8: this check now runs BEFORE the admission signal is logged, so
       // a duplicate event produces no MAIN_DIRECTED and no admission claim at all.
-      const currentSnapshot = readSnapshot(paths);
       const existingTask = currentSnapshot?.tasks?.[taskId];
       if (existingTask) {
         // M10/T2-R9-C: a model-fallback re-entry is NOT a replay. OpenClaw's
@@ -6938,29 +7160,16 @@ export default {
       // auditable fact.
       if (admissionSignal)
         api.logger?.info?.(`[zink-governance] ${admissionSignal}`);
-      // M10/T2-R12: mint the owner-facing code here, at admission, and record it
-      // with the OPEN so replay is deterministic (the reducer reads the recorded
-      // value; it never regenerates). `now` and `random` are injectable so this
-      // seam is testable. If generation ever fails the admission still succeeds
-      // with no code — a task must never be refused because a DISPLAY alias
-      // could not be minted, since the canonical 64-hex id remains authoritative.
-      let taskCode;
-      try {
-        taskCode = buildUniqueTaskCode({
-          date: new Date(),
-          random: () => Math.floor(Math.random() * TASK_CODE_ALPHABET.length),
-          isTaken: (candidate) =>
-            Boolean(
-              readSnapshot(paths)?.tasks?.[taskId]?.task_code === candidate,
-            ) ||
-            Object.values(readSnapshot(paths)?.tasks ?? {}).some(
-              (task) => task.task_code === candidate,
-            ),
-        });
-      } catch (err) {
-        api.logger?.warn?.(
-          `[zink-governance] task code not minted for ${taskId}: ${err?.message}`,
-        );
+      // M12/T1-R1: no separate display alias is minted any more. For a task
+      // opened under the new rule the identity IS the owner-visible code, so the
+      // recorded `task_code` equals `task_id`; for a task admitted before the rule
+      // the ledger's own value is carried, and only when the replayed binding is
+      // somehow not in the snapshot does nothing get recorded.
+      let taskCode = isTaskCodeForm(taskId) ? taskId : null;
+      if (taskCode === null) {
+        const recorded = currentSnapshot?.tasks?.[taskId]?.task_code;
+        if (typeof recorded === "string" && recorded.length > 0)
+          taskCode = recorded;
       }
       recordWorkflowEvent(paths, "WORKFLOW_OPENED", {
         ...origin,
@@ -7342,6 +7551,51 @@ export default {
     // Outbound broadcast mention patterns (E19)
     const OUTBOUND_BROADCAST_RE = /@(everyone|here)/gu;
 
+    const SPECIALIST_AGENT_IDS = Object.freeze([
+      "excel",
+      "power-bi",
+      "sql",
+      "python",
+    ]);
+
+    /**
+     * M12/T1-R1: is this specialist allowed to speak to the owner right now?
+     *
+     * The answer comes from the durable ledger only. A specialist reports its own work
+     * when the session emitting the message owns a task the owner approved and that is
+     * executing or awaiting review; an unapproved, unknown, finished or rejected task
+     * keeps the previous suppression. Nothing here consults the message text, so a
+     * specialist cannot earn admission by what it says.
+     */
+    function specialistExecutionProvenance(agentId, ctx = {}) {
+      const sessionKey = ctx.sessionKey;
+      if (typeof sessionKey !== "string" || sessionKey.length === 0) {
+        return { allowed: false, reason: "NO_SESSION_IDENTITY" };
+      }
+      let task;
+      let delegationAgent;
+      try {
+        const owner = findSession(
+          readSnapshot(paths),
+          sessionKey,
+          ctx.runId,
+          true,
+        );
+        task = owner?.task ?? null;
+        delegationAgent = owner?.delegation?.agent_id ?? null;
+        if (!task && owner?.task_id) {
+          task = readSnapshot(paths)?.tasks?.[owner.task_id] ?? null;
+        }
+      } catch {
+        return { allowed: false, reason: "LEDGER_READ_FAILED" };
+      }
+      return evaluateSpecialistProvenance({
+        agentId,
+        task,
+        delegationAgentId: delegationAgent,
+      });
+    }
+
     api.on("message_sending", async (event, ctx = {}) => {
       if (ctx.channelId !== "discord") return;
       const agentIdMatch = (ctx.sessionKey || "").match(/^agent:([^:]+)/);
@@ -7358,12 +7612,28 @@ export default {
         return { block: true, cancel: true };
       }
 
-      // Suppress specialist messages: specialists are execution agents, never direct broadcasters to #office
-      if (["excel", "power-bi", "sql", "python"].includes(agentId)) {
-        api.logger?.warn?.(
-          `[zink-governance] Suppressed specialist '${agentId}' direct broadcast to Discord`,
+      // M12/T1-R1 (owner option D): a specialist is an execution agent, and the
+      // owner's instruction is that the bot which DID the work answers him — "sau khi
+      // accept thì chính bot O1 trả về kết quả chứ không phải main". A blanket
+      // suppression made that impossible, so the rule is now a provenance gate: a
+      // specialist message is admitted only when the emitting session owns a task the
+      // owner has approved and that is actually executing. Everything else — an
+      // unapproved task, a session the ledger does not recognize, a finished or
+      // rejected task, or any unsolicited broadcast — keeps being blocked exactly as
+      // before. The destination is still checked against the canonical governed
+      // surfaces by the gate below this one, so admitting the agent never admits an
+      // arbitrary channel.
+      if (SPECIALIST_AGENT_IDS.includes(agentId)) {
+        const provenance = specialistExecutionProvenance(agentId, ctx);
+        if (!provenance.allowed) {
+          api.logger?.warn?.(
+            `[zink-governance] Suppressed specialist '${agentId}' Discord message: ${provenance.reason}`,
+          );
+          return { block: true, cancel: true };
+        }
+        api.logger?.info?.(
+          `[zink-governance] specialist '${agentId}' reporting its own task ${provenance.taskId}`,
         );
-        return { block: true, cancel: true };
       }
 
       // M10/T2-R12: a governance machine payload is not a reply. The brief
@@ -7639,7 +7909,7 @@ export default {
                 messageId: ctx.interaction?.messageId,
                 threadId,
                 origin_message_id: ctx.interaction?.messageId,
-                resultId: parsed.revision || `res-${parsed.taskId.slice(0, 8)}`,
+                resultId: parsed.revision || `res-${parsed.taskId}`,
               },
             });
 
@@ -7765,13 +8035,14 @@ export default {
           activeTasks
             .map((task) => task.task_id)
             .find((taskId) => content.includes(taskId)) ||
-          // M10/T2-R12: the owner's short code. The canonical 64-hex id is tried
-          // FIRST because it is the more specific token, so an existing task that
-          // carries both still correlates on its id. Only tasks that actually
-          // have a code are candidates, and the reducer enforces global code
-          // uniqueness, so a substring hit resolves to exactly one task. A code
-          // that matches nothing falls through to the same EXACT_TASK_CORRELATION
-          // denial as today — correlation is never loosened, only widened.
+          // M10/T2-R12: the owner's short code. The full task id is tried FIRST
+          // because it is the more specific token. M12/T1-R1: for a task admitted
+          // under the new rule the id IS the code, so the two branches converge;
+          // the second branch still correlates a legacy 64-hex task the owner
+          // quotes by its code. The reducer enforces uniqueness of both, so a
+          // substring hit resolves to exactly one task, and a code that matches
+          // nothing falls through to the same EXACT_TASK_CORRELATION denial as
+          // before — correlation is never loosened, only widened.
           activeTasks
             .filter((task) => typeof task.task_code === "string")
             .find((task) => content.includes(task.task_code))?.task_id;
@@ -7815,7 +8086,7 @@ export default {
             resultId:
               pendingTask.accepted_payload_digest?.slice(0, 8) ||
               pendingTask.result_id ||
-              `res-${pendingTask.task_id.slice(0, 8)}`,
+              `res-${displayTaskToken(pendingTask.task_id)}`,
           },
         });
 

@@ -48,7 +48,7 @@
       "type": "object",
       "additionalProperties": false,
       "patternProperties": {
-        "^[a-f0-9]{64}$": {
+        "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$": {
           "oneOf": [
             {
               "type": "object",
@@ -73,7 +73,7 @@
               "properties": {
                 "task_id": {
                   "type": "string",
-                  "pattern": "^[a-f0-9]{64}$"
+                  "pattern": "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$"
                 },
                 "task_code": {
                   "description": "M10/T2-R12: owner-facing 12-character code (8 date + 4 code characters). Optional so tasks admitted before it replay byte-identically. Display alias only — never an authority token.",
@@ -185,7 +185,7 @@
                       "properties": {
                         "task_id": {
                           "type": "string",
-                          "pattern": "^[a-f0-9]{64}$"
+                          "pattern": "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$"
                         },
                         "brief_revision": {
                           "type": "integer",
@@ -373,7 +373,7 @@
                       "properties": {
                         "task_id": {
                           "type": "string",
-                          "pattern": "^[a-f0-9]{64}$"
+                          "pattern": "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$"
                         },
                         "coordinator": {
                           "type": "string",
@@ -422,7 +422,7 @@
                       "properties": {
                         "task_id": {
                           "type": "string",
-                          "pattern": "^[a-f0-9]{64}$"
+                          "pattern": "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$"
                         },
                         "brief_revision": {
                           "type": "integer",

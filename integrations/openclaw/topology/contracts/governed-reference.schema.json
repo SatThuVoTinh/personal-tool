@@ -29,7 +29,7 @@
     },
     "ref_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "ref_type": { "type": "string", "maxLength": 128 },
-    "producer_task_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "producer_task_id": { "type": "string", "pattern": "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$" },
     "producer_brief_revision": {
       "type": "integer",
       "minimum": 1,

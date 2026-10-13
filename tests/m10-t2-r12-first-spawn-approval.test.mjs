@@ -375,8 +375,6 @@ test("R12 case 6: first-approval card content contract", () => {
   const runId = "run-r12-card";
   const card = buildFirstSpawnApprovalCard({
     taskId,
-    runId,
-    requesterAgentId: "main",
     briefRevision: 1,
     targetAgentId: "o1",
     spawnInputs: "probe work",
@@ -396,10 +394,27 @@ test("R12 case 6: first-approval card content contract", () => {
       card.bodyContent.includes("chưa được phép thực thi"),
     "card must state REQUESTED, never imply authorization",
   );
+  // M12/T1-R1 replaced "name the run and the child" with the owner's own shape: the
+  // plan in `Lý do` (naming the software) and the expected result in `Kết quả`, and
+  // nothing that identifies plumbing.
   assert.ok(
-    card.bodyContent.includes(runId) && card.bodyContent.includes("o1"),
-    "card must name run and child",
+    card.bodyContent.includes("Kết quả") &&
+      card.bodyContent.includes("Lý do") &&
+      card.bodyContent.includes("Điều phối ETL (O1)"),
+    `card must present the plan and the expected result, got:\n${card.bodyContent}`,
   );
+  for (const forbidden of [
+    runId,
+    "**Child:**",
+    "**Hành động:**",
+    "**Run:**",
+    "Người yêu cầu",
+  ]) {
+    assert.ok(
+      !card.bodyContent.includes(forbidden),
+      `the card must no longer print "${forbidden}"`,
+    );
+  }
   assert.equal(card.buttons.length, 3, "Approve / Reject / Revision");
   for (const b of card.buttons) {
     assert.ok(
@@ -408,16 +423,14 @@ test("R12 case 6: first-approval card content contract", () => {
     );
   }
   assert.throws(
-    () => buildFirstSpawnApprovalCard({ taskId: "", runId }),
+    () => buildFirstSpawnApprovalCard({ taskId: "" }),
     /FIRST_APPROVAL_CARD_TASK_REQUIRED/,
   );
-  // NOTE: button wire delivery goes through the native outbound adapter (R4
-  // rule: only forum-thread creation may remain raw REST). The adapter was
-  // proven unable to deliver from the tool-call hook context (2026-10-07,
-  // "Discord send requires a resolved runtime config"), so cards currently
-  // land as button-less threads and the owner approves by text. The button
-  // specs themselves are pinned above (customId binds the task); the
-  // adapter-cfg gap is an open host-plumbing defect, not an R12 regression.
+  // NOTE superseded by M12/T1-R1: this comment used to record that cards "land as
+  // button-less threads" because the adapter could not deliver from the tool-call
+  // hook. The threads did carry buttons; the buttons were dead because their ids
+  // were never registered with the host component registry. The transport now
+  // registers them (see tests/m12-t1-discord-component-registry.test.mjs).
 });
 
 test("R12 buttons: R4-EXCEPTION wire message carries custom_id", () => {

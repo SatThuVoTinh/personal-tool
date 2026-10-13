@@ -55,6 +55,21 @@ const HYGIENE_AUTHORITY_SHA256 =
  * outgoing predecessor is admitted.
  */
 const CANDIDATE_AUTHORITY_SHA256 =
+  "c38e1a6b7934bd01afd262dca0402fbb6936086a03b10731b91952db4003f36b";
+
+/**
+ * M12/T1-R1: the authority asset the live WSL runtime actually carries, measured
+ * read-only (`sha256sum` of
+ * `/home/hoang_vinh/.openclaw-zink/extensions/zink-governance/lib/authority.mjs`)
+ * before this task edited that file's byte-budget comment. It is neither the M8/T3
+ * hygiene build nor the R9-C build: those were replaced by the M11/T1-R1 and
+ * M11/T3-R1 deployments, so this test's earlier live cross-check was only ever
+ * reachable on a host where the live directory could not be read — the Windows
+ * side skipped it, and it failed on WSL from `2ef4bd6` forward. The same value is
+ * admitted in configure.mjs as the outgoing predecessor, which is what keeps
+ * --preflight reachable from the installed runtime.
+ */
+const LIVE_AUTHORITY_SHA256 =
   "71eee819e9a9ce5d3cc927352ae392c9a57e625fa4618273c7cef9a04c383eb8";
 
 /** The outgoing candidate this deployment replaces; now listed. */
@@ -202,7 +217,18 @@ test("R7 P1: the live authority digest is reproduced from its source commit", as
   } catch {
     /* not reachable from this platform */
   }
-  if (liveDigest !== null) assert.equal(liveDigest, HYGIENE_AUTHORITY_SHA256);
+  if (liveDigest !== null) {
+    assert.equal(
+      liveDigest,
+      LIVE_AUTHORITY_SHA256,
+      "the reachable live runtime must carry the measured outgoing digest",
+    );
+    assert.equal(
+      CONFIGURE_SOURCE.includes(LIVE_AUTHORITY_SHA256),
+      true,
+      "and that digest must stay admitted, or --preflight refuses the upgrade",
+    );
+  }
 });
 
 // ---------------------------------------------------------------------------

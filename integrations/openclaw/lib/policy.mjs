@@ -1201,6 +1201,11 @@ export function governancePluginFiles() {
     "policy.mjs",
     "discord-formatter.mjs",
     "discord-native-send.mjs",
+    // M12/T1-R1: the expected-result preview renderer. The plugin loads it to draw
+    // the card image and the transport sends it as an attachment, so it must travel
+    // with the deployed tree like the other lib/ modules. Its only relative import
+    // is ./excel-writer.mjs, which resolves unchanged beside it.
+    "discord-result-preview.mjs",
     "excel-writer.mjs",
     "authority.mjs",
     "queue-manager.mjs",

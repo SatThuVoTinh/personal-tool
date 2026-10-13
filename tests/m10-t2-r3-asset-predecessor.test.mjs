@@ -103,8 +103,14 @@ const HYGIENE_ASSET_PREDECESSORS = Object.freeze({
 // calls, both inside this entrypoint. The build M11/T1-R1 left installed
 // (`e8f084ab…`) IS admitted this time: `--preflight` proved the live WSL runtime
 // carries it, so leaving it out would refuse the deployed extension.
+// M12/T1-R1: the pin moves again — the governance entrypoint now registers the
+// Discord components it posts with the host component registry, records an approval
+// decision with a reason that matches the decision, mints the 12-character identity,
+// and presents the plan plus an expected-result image. The build the live runtime
+// carries (`61e344e6…`) is admitted in configure.mjs, and `--preflight` proved it
+// installed, so it stays reachable as a predecessor.
 const CURRENT_ENTRYPOINT_SHA256 =
-  "61e344e6754c3c03b26463c2421ebf699d8ec14f9ab0b8fe87bec1265d99f3b6";
+  "85fbee501c8f353cded73624ae3a814b5885c0a9e9483660df32e1cf1393fa8a";
 
 const identifiers = Object.freeze({
   discordGuildId: "123456789012345678",

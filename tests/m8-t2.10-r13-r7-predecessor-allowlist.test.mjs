@@ -146,11 +146,13 @@ assert.ok(
   "the live M11/T1-R1 entrypoint must remain an admitted predecessor",
 );
 /**
- * M11/T3 Phase 1: the CURRENT entrypoint. Accepted by content comparison and
- * deliberately NOT listed.
+ * M12/T1-R1: the CURRENT entrypoint. Accepted by content comparison and
+ * deliberately NOT listed. The build M11/T3-R1 installed and this task replaces
+ * (`61e344e6…`) IS listed as an admitted predecessor, which is what keeps a
+ * --preflight against the live runtime from refusing the upgrade.
  */
 const M11_T3_ENTRYPOINT_SHA256 =
-  "61e344e6754c3c03b26463c2421ebf699d8ec14f9ab0b8fe87bec1265d99f3b6";
+  "85fbee501c8f353cded73624ae3a814b5885c0a9e9483660df32e1cf1393fa8a";
 /** The outgoing entrypoint this deployment replaces; now listed. */
 const R8_OUTGOING_ENTRYPOINT_SHA256 =
   "6a7968b7d456ff6d3f2c5b9d60c7b6046a702603b880093c33b717d9a37c13b1";
@@ -381,14 +383,17 @@ const currentBuild = async () =>
 // PROVENANCE
 // ---------------------------------------------------------------------------
 
-test("R13 P1: the R7 boundary digest is proven from BOTH the live runtime and the committed R7 source", async () => {
+test("R13 P1: the R7 boundary digest is proven from the committed R7 source and the live runtime stays reachable", async () => {
   // (1) The repository's R7-era file at the R7 commit.
   assert.equal(
     sha256(R7_BOUNDARY_BODY),
     R7_NATIVE_BOUNDARY_SHA256,
     "the committed R7-era native-boundary.mjs must hash to the approved digest",
   );
-  // (2) The live deployed R7 runtime, at its exact relative path.
+  // (2) The live runtime at its exact relative path. Since the 2026-10-13
+  // M11/T3-R1 deployment it no longer carries the R7 bytes, so this half checks
+  // reachability rather than R7 equality: the installed digest must still be the
+  // build the repository derives or an admitted predecessor.
   const live = "/home/hoang_vinh/.openclaw-zink/extensions/zink-governance";
   let liveDigest = null;
   try {
@@ -400,14 +405,14 @@ test("R13 P1: the R7 boundary digest is proven from BOTH the live runtime and th
     // still a byte-exact proof, so this is a skip, never a silent pass.
   }
   if (liveDigest !== null)
-    assert.equal(
+    await assertLiveReachable(
+      "lib/native-boundary.mjs",
       liveDigest,
-      R7_NATIVE_BOUNDARY_SHA256,
-      "the live R7 file must match",
+      listedAssetDigests("lib/native-boundary.mjs"),
     );
 });
 
-test("R13 P2: the R7 entrypoint digest is reproduced byte-exact from the committed R7 source", async () => {
+test("R13 P2: the R7 entrypoint digest is reproduced byte-exact from the committed R7 source and the live runtime stays reachable", async () => {
   // The entrypoint is the plugin source plus deterministic rewrites, so building
   // the R7-era source through the REAL generator must reproduce the deployed
   // entrypoint exactly. This is provenance by construction, not by transcription.
@@ -428,12 +433,23 @@ test("R13 P2: the R7 entrypoint digest is reproduced byte-exact from the committ
   } catch {
     /* not reachable from this platform */
   }
-  if (liveDigest !== null)
-    assert.equal(
+  if (liveDigest !== null) {
+    // The entrypoint has no asset-table key: its admissions are the literal
+    // lists inside the two mode gates. A digest admitted by only one gate is the
+    // exact failure R13 exists to remove (--preflight PASSES, --apply then
+    // refuses), so only the intersection counts.
+    const gates = entrypointGates();
+    assert.equal(gates.length, 2, "expected one entrypoint gate per mode");
+    const digests = (block) => [
+      ...new Set([...block.matchAll(/[0-9a-f]{64}/gu)].map((m) => m[0])),
+    ];
+    const [first, ...rest] = gates.map(digests);
+    await assertLiveReachable(
+      "index.mjs",
       liveDigest,
-      R7_ENTRYPOINT_SHA256,
-      "the live R7 entrypoint must match",
+      first.filter((digest) => rest.every((list) => list.includes(digest))),
     );
+  }
 });
 
 test("R13 P3: the R7 and current builds differ in exactly the two governed files", async () => {
@@ -579,6 +595,49 @@ function assetTable() {
   const end = CONFIGURE_SOURCE.indexOf("\n});", start);
   assert.notEqual(end, -1, "the allowlist table must be terminated");
   return CONFIGURE_SOURCE.slice(start, end);
+}
+
+/** The digests configure.mjs admits for one deployed asset path. */
+function listedAssetDigests(rel) {
+  const table = assetTable();
+  const key = table.indexOf(`"${rel}": Object.freeze([`);
+  if (key === -1) return [];
+  const block = table.slice(key, table.indexOf("]),", key));
+  return [...block.matchAll(/[0-9a-f]{64}/gu)].map((match) => match[0]);
+}
+
+/** The two entrypoint gates (preflight and apply), as source blocks. */
+function entrypointGates() {
+  return [
+    ...CONFIGURE_SOURCE.matchAll(
+      /output\.governancePluginEntrypointPath,\n\s*pluginFiles\.entrypoint,/gu,
+    ),
+  ].map((gate) =>
+    CONFIGURE_SOURCE.slice(
+      gate.index,
+      CONFIGURE_SOURCE.indexOf("  );", gate.index),
+    ),
+  );
+}
+
+/**
+ * What a live-runtime cross-check can honestly prove after a deployment: the
+ * installed bytes no longer have to be any particular historical build, but
+ * every authorized `--preflight` starts from them, so they must be reachable —
+ * either the build the repository derives now or a digest configure.mjs admits.
+ * A live digest that is neither is the M11/T1-R2 blocker recurring.
+ */
+async function assertLiveReachable(rel, liveDigest, admitted) {
+  const current = await currentBuild();
+  const packaged =
+    rel === "index.mjs"
+      ? sha256(current.entrypoint)
+      : sha256(current.assets[rel]);
+  if (liveDigest === packaged) return;
+  assert.ok(
+    admitted.includes(liveDigest),
+    `the live ${rel} digest ${liveDigest.slice(0, 8)}… is neither the current build nor an admitted predecessor`,
+  );
 }
 
 // ---------------------------------------------------------------------------

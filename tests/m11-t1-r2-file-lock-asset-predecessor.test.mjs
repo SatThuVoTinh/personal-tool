@@ -247,22 +247,55 @@ test("R2 P1: the live runtime IS the ea84a5a packaged build and differs from the
   // deployed build stays upgradable. Anything beyond this set would mean the
   // 33-file scan that motivated R2 was wrong.
   const differing = Object.keys(current.assets).filter(
-    (rel) => sha256(live.assets[rel]) !== sha256(current.assets[rel]),
+    // M12/T1-R1 packages a new asset that the installed tree does not carry yet; a
+    // file with no installed predecessor has no digest to admit, so it counts as a
+    // divergence rather than crashing the comparison.
+    (rel) =>
+      !(rel in live.assets) ||
+      sha256(live.assets[rel]) !== sha256(current.assets[rel]),
   );
   assert.deepEqual(
     differing.sort(),
     [
+      // M11/T3-R1 moved these five.
       "lib/decision-ledger.mjs",
       "lib/file-lock.mjs",
       "lib/guard.mjs",
       "lib/ledger.mjs",
       "lib/native-boundary.mjs",
       "lib/queue-manager.mjs",
+      // M12/T1-R1 moved the rest: the 12-character identity widens the task_id
+      // vocabulary in every contract that carries one, changes canonical.mjs and
+      // workflow.mjs, edits the comment in authority.mjs, rewrites the approval
+      // transport/formatter/excel-writer, adds the result-preview renderer, and
+      // regenerates governance-manifests.json because its hash covers policy.mjs.
+      "contracts/approval-request.schema.json",
+      "contracts/delegation-envelope.schema.json",
+      "contracts/execution-brief.schema.json",
+      "contracts/governed-reference.schema.json",
+      "contracts/incident.schema.json",
+      "contracts/ledger-event.schema.json",
+      "contracts/ledger-snapshot.schema.json",
+      "contracts/result.schema.json",
+      "contracts/trusted-result-envelope.schema.json",
+      "governance-manifests.json",
+      "lib/authority.mjs",
+      "lib/canonical.mjs",
+      "lib/discord-formatter.mjs",
+      "lib/discord-native-send.mjs",
+      "lib/discord-result-preview.mjs",
+      "lib/excel-writer.mjs",
+      "lib/policy.mjs",
+      "lib/workflow.mjs",
     ].sort(),
-    "only file-lock and the M11/T3 assets may diverge from the proven live build",
+    "only the M11/T3 and M12/T1 assets may diverge from the proven live build",
   );
   const table = assetTable();
   for (const rel of differing) {
+    // An asset this task introduces has no installed predecessor to admit; the
+    // packaging guard in configure.mjs accepts it because the installed path is
+    // missing rather than different.
+    if (!(rel in live.assets)) continue;
     assert.equal(
       listedDigests(keyBlock(table, rel)).includes(sha256(live.assets[rel])),
       true,

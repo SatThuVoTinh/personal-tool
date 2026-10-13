@@ -100,7 +100,7 @@
             "properties": {
               "task_id": {
                 "type": "string",
-                "pattern": "^[a-f0-9]{64}$"
+                "pattern": "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$"
               },
               "native_run_id": {
                 "type": "string",
@@ -163,7 +163,7 @@
             "properties": {
               "task_id": {
                 "type": "string",
-                "pattern": "^[a-f0-9]{64}$"
+                "pattern": "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$"
               },
               "brief_revision": {
                 "type": "integer",
@@ -226,7 +226,7 @@
             "properties": {
               "task_id": {
                 "type": "string",
-                "pattern": "^[a-f0-9]{64}$"
+                "pattern": "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$"
               },
               "delegation_id": {
                 "type": "string",
@@ -274,7 +274,7 @@
             "properties": {
               "task_id": {
                 "type": "string",
-                "pattern": "^[a-f0-9]{64}$"
+                "pattern": "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$"
               },
               "envelope": {
                 "type": "object"
@@ -362,7 +362,7 @@
             "properties": {
               "task_id": {
                 "type": "string",
-                "pattern": "^[a-f0-9]{64}$"
+                "pattern": "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$"
               },
               "agent_id": {
                 "description": "Open-world agent identity. The ledger records what executed, including ad-hoc identities outside the governed spawn topology; execution authority is enforced by the guard and reducer, not by this vocabulary. A closed enum here makes legitimate history unreadable without preventing anything.",
@@ -412,7 +412,7 @@
             "properties": {
               "task_id": {
                 "type": "string",
-                "pattern": "^[a-f0-9]{64}$"
+                "pattern": "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$"
               },
               "answer": {
                 "type": "string",
@@ -462,7 +462,7 @@
             "properties": {
               "task_id": {
                 "type": "string",
-                "pattern": "^[a-f0-9]{64}$"
+                "pattern": "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$"
               },
               "actor": {
                 "const": "main"
@@ -501,7 +501,7 @@
             "properties": {
               "task_id": {
                 "type": "string",
-                "pattern": "^[a-f0-9]{64}$"
+                "pattern": "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$"
               },
               "reason_code": {
                 "enum": ["OWNER_CANCELLED", "PARENT_CANCELLED"]
@@ -545,7 +545,7 @@
             "properties": {
               "task_id": {
                 "type": "string",
-                "pattern": "^[a-f0-9]{64}$"
+                "pattern": "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$"
               },
               "brief_revision": {
                 "type": "integer",
@@ -609,7 +609,7 @@
             "properties": {
               "task_id": {
                 "type": "string",
-                "pattern": "^[a-f0-9]{64}$"
+                "pattern": "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$"
               },
               "session_key": {
                 "type": "string",
@@ -653,7 +653,7 @@
             "properties": {
               "task_id": {
                 "type": "string",
-                "pattern": "^[a-f0-9]{64}$"
+                "pattern": "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$"
               },
               "kind": {
                 "enum": ["revisions", "transitions", "delegated_runs"]
@@ -687,7 +687,7 @@
             "properties": {
               "task_id": {
                 "type": "string",
-                "pattern": "^[a-f0-9]{64}$"
+                "pattern": "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$"
               }
             }
           }
@@ -711,7 +711,7 @@
             "properties": {
               "task_id": {
                 "type": "string",
-                "pattern": "^[a-f0-9]{64}$"
+                "pattern": "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$"
               }
             }
           }
@@ -735,7 +735,7 @@
             "properties": {
               "task_id": {
                 "type": "string",
-                "pattern": "^[a-f0-9]{64}$"
+                "pattern": "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$"
               },
               "actor": {
                 "const": "user"
@@ -784,7 +784,7 @@
             "properties": {
               "task_id": {
                 "type": "string",
-                "pattern": "^[a-f0-9]{64}$"
+                "pattern": "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$"
               },
               "actor": {
                 "const": "user"
@@ -836,7 +836,7 @@
             "properties": {
               "task_id": {
                 "type": "string",
-                "pattern": "^[a-f0-9]{64}$"
+                "pattern": "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$"
               },
               "actor": {
                 "const": "user"
@@ -895,7 +895,7 @@
             "properties": {
               "task_id": {
                 "type": "string",
-                "pattern": "^[a-f0-9]{64}$"
+                "pattern": "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$"
               },
               "actor": {
                 "const": "user"
@@ -938,7 +938,7 @@
             "properties": {
               "task_id": {
                 "type": "string",
-                "pattern": "^[a-f0-9]{64}$"
+                "pattern": "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$"
               },
               "agent_id": {
                 "type": "string",
@@ -980,7 +980,7 @@
             "properties": {
               "task_id": {
                 "type": "string",
-                "pattern": "^[a-f0-9]{64}$"
+                "pattern": "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$"
               },
               "agent_id": {
                 "description": "Open-world agent identity. The ledger records what executed, including ad-hoc identities outside the governed spawn topology; execution authority is enforced by the guard and reducer, not by this vocabulary. A closed enum here makes legitimate history unreadable without preventing anything.",
@@ -1016,7 +1016,7 @@
             "properties": {
               "task_id": {
                 "type": "string",
-                "pattern": "^[a-f0-9]{64}$"
+                "pattern": "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$"
               },
               "coordinator": {
                 "description": "Designated coordinator. Only o1/o2 may coordinate executable work; the reducer enforces this independently of the schema vocabulary.",
@@ -1064,7 +1064,7 @@
             "properties": {
               "task_id": {
                 "type": "string",
-                "pattern": "^[a-f0-9]{64}$"
+                "pattern": "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$"
               },
               "actor": {
                 "const": "user"
@@ -1076,6 +1076,7 @@
                 "enum": [
                   "APPROVE",
                   "REJECT",
+                  "REQUEST_REVISION",
                   "ACCEPT",
                   "REJECT_RESULT",
                   "REQUEST_REVISION_RESULT"
@@ -1207,7 +1208,7 @@
         },
         "task_id": {
           "type": "string",
-          "pattern": "^[a-f0-9]{64}$"
+          "pattern": "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$"
         },
         "origin": {
           "const": "discord"
@@ -1256,7 +1257,7 @@
       "properties": {
         "task_id": {
           "type": "string",
-          "pattern": "^[a-f0-9]{64}$"
+          "pattern": "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$"
         },
         "brief_revision": {
           "type": "integer",
@@ -1328,7 +1329,7 @@
       "properties": {
         "task_id": {
           "type": "string",
-          "pattern": "^[a-f0-9]{64}$"
+          "pattern": "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$"
         },
         "brief_revision": {
           "type": "integer",
@@ -1382,7 +1383,7 @@
       "properties": {
         "task_id": {
           "type": "string",
-          "pattern": "^[a-f0-9]{64}$"
+          "pattern": "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$"
         },
         "brief_revision": {
           "type": "integer",

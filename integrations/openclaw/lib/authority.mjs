@@ -1408,8 +1408,10 @@ export function buildComponentCustomId(actionType, taskId, revision) {
 
 /**
  * Fail closed when a custom_id would exceed Discord's ceiling. The longest
- * governed namespace (APPROVAL_REVISION) with a 64-hex task id lands at exactly
- * 100 characters, so this is a live constraint, not a theoretical one.
+ * governed namespace (APPROVAL_REVISION) with the legacy 64-hex task id measured
+ * 100 characters at a one-digit revision and 101 at a two-digit one, so that
+ * namespace was already refusing a card. M12/T1-R1: with the 12-character identity
+ * the same worst case measures 49 characters, which leaves the ceiling far behind.
  */
 export function assertCustomIdFits(customId, componentId) {
   if (typeof customId !== "string" || customId.length === 0)

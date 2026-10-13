@@ -68,8 +68,11 @@ Exact keys, no optional fields:
 }
 ```
 
-Field rules: `task_id` is the authoritative 64-hex task digest;
-`coordinator` is `o1` or `o2` taken from the ledger's `primary_coordinator`,
+Field rules: `task_id` is the governed task identity — since M12/T1-R1 that is the
+12-character code (`ddmmyyyy` + four characters from the task-code alphabet) minted at
+admission, and readers additionally accept the legacy 64-hex digest so every record
+written before that change still replays; `coordinator` is `o1` or `o2` taken from the
+ledger's `primary_coordinator`,
 never defaulted; `attempt` is a safe integer `>= 1` equal to the queue item's
 current attempt; `lease_id` is the live fencing lease issued by the atomic
 queue claim for that attempt; `session_key` is the deterministic coordinator

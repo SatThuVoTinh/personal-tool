@@ -598,6 +598,152 @@ export function formatOfficeFinalNotification({
 }
 
 /**
+ * M12/T1-R1 — the governed presentation primitives.
+ *
+ * Owner instruction 2026-10-13: an approval card carries ONLY the Task ID (no run
+ * code, no requester, no action line, no `child:` line); `Lý do` spells out the
+ * detailed plan — what will be done, which concrete operations, in which software;
+ * and `Kết quả` shows the expected result with an image that resembles the Excel /
+ * SQL / Python / Power BI screen, because that is what makes "Request Revision" a
+ * meaningful answer.
+ *
+ * The plan is rendered from the durable admitted brief nodes, never from the
+ * model's own card prose, so the owner reads the governed plan itself rather than a
+ * restatement of it.
+ */
+export const SPECIALIST_SOFTWARE_LABELS = Object.freeze({
+  main: "Quản Lý (Main)",
+  o1: "Điều phối ETL (O1)",
+  o2: "Điều phối Analytics (O2)",
+  excel: "Microsoft Excel",
+  sql: "SQL Server",
+  python: "Python",
+  "power-bi": "Power BI",
+});
+
+const PLAN_FIELD_LIMIT = 600;
+const DISCORD_BODY_LIMIT = 2000;
+const PLAN_TRUNCATION_MARK = "…(xem toàn bộ kế hoạch trong phiên)";
+
+function clipField(value, limit = PLAN_FIELD_LIMIT) {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (text.length <= limit) return text;
+  return `${text.slice(0, limit).trimEnd()}…`;
+}
+
+export function specialistSoftwareLabel(agentId) {
+  return (
+    SPECIALIST_SOFTWARE_LABELS[agentId] ??
+    clipField(String(agentId ?? ""), 80) ??
+    "không rõ"
+  );
+}
+
+/**
+ * One numbered step per planned node: the software that will be used, the concrete
+ * operations, the constraints it must respect, and the criterion its result is
+ * judged against.
+ */
+export function renderGovernedPlanSteps(nodes, { activeNodeId = null } = {}) {
+  if (!Array.isArray(nodes) || nodes.length === 0) return [];
+  return nodes.map((node, index) => {
+    const nodeId = clipField(node?.node_id, 80);
+    const label = specialistSoftwareLabel(node?.agent_id);
+    const lines = [
+      nodeId
+        ? `${index + 1}. **${label}** — \`${nodeId}\``
+        : `${index + 1}. **${label}**`,
+    ];
+    const operations = clipField(node?.inputs);
+    if (operations) lines.push(`   - Thao tác: ${operations}`);
+    const constraints = clipField(node?.constraints);
+    if (constraints) lines.push(`   - Ràng buộc: ${constraints}`);
+    const criteria = clipField(node?.validation_criteria);
+    if (criteria) lines.push(`   - Nghiệm thu: ${criteria}`);
+    if (node?.required === false) lines.push("   - Không bắt buộc");
+    if (activeNodeId && node?.node_id === activeNodeId) {
+      lines.push("   - **Đang chờ anh duyệt ở bước này**");
+    }
+    return lines.join("\n");
+  });
+}
+
+/**
+ * The `Kết quả` section: the expected outcome in words plus the preview image that
+ * travels with the card. The image is named, never inlined — Discord renders it
+ * from the attachment itself.
+ */
+export function renderGovernedExpectedResult({
+  nodes,
+  outcome = "",
+  previewImage = null,
+}) {
+  const lines = [];
+  const summary = clipField(outcome, PLAN_FIELD_LIMIT);
+  if (summary) lines.push(summary);
+  for (const node of Array.isArray(nodes) ? nodes : []) {
+    const criteria = clipField(node?.validation_criteria, 240);
+    if (criteria) {
+      lines.push(`• ${specialistSoftwareLabel(node?.agent_id)}: ${criteria}`);
+    }
+  }
+  if (lines.length === 0) {
+    lines.push("*(chưa có mô tả kết quả trong kế hoạch đã ghi)*");
+  }
+  if (typeof previewImage === "string" && previewImage.length > 0) {
+    lines.push(
+      `• Hình ảnh kết quả dự kiến: \`${sanitizeDiscordIdentifier(previewImage)}\``,
+    );
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Assemble the governed approval body. When the plan cannot fit Discord's 2000
+ * character ceiling the plan is cut with an explicit marker and the action footer
+ * is kept whole: a silently truncated plan is exactly how an owner ends up
+ * approving something he never saw.
+ */
+export function renderGovernedApprovalBody({
+  title,
+  taskId,
+  planSteps = [],
+  expectedResult = "",
+  commandToken,
+}) {
+  const head = [
+    `### ${title}`,
+    `**Task ID:** \`${sanitizeDiscordIdentifier(taskId)}\``,
+    // The card asks; it never authorizes. This line is what keeps a redesign from
+    // turning a request into an implied go-ahead.
+    "**Trạng thái:** CHỜ DUYỆT (chưa được phép thực thi)",
+    "",
+    "**Lý do (kế hoạch chi tiết):**",
+    planSteps.length > 0
+      ? planSteps.join("\n")
+      : "*(không có bước nào trong kế hoạch đã ghi)*",
+    "",
+    "**Kết quả dự kiến:**",
+    expectedResult,
+  ].join("\n");
+  const footer = [
+    "",
+    "---",
+    "**Thao tác dành cho User:**",
+    `- Bấm **Approve** hoặc phản hồi \`APPROVE ${commandToken}\` để phê duyệt đưa vào hàng đợi thực thi.`,
+    `- Bấm **Reject** hoặc phản hồi \`REJECT ${commandToken}\` để từ chối kế hoạch.`,
+    `- Bấm **Request Revision** hoặc phản hồi \`REQUEST REVISION ${commandToken}\` để yêu cầu sửa kế hoạch.`,
+  ].join("\n");
+  if (head.length + footer.length <= DISCORD_BODY_LIMIT) {
+    return `${head}${footer}`;
+  }
+  const budget =
+    DISCORD_BODY_LIMIT - footer.length - PLAN_TRUNCATION_MARK.length;
+  const cut = head.lastIndexOf("\n", Math.max(0, budget));
+  return `${head.slice(0, cut > 0 ? cut : budget).trimEnd()}\n${PLAN_TRUNCATION_MARK}${footer}`;
+}
+
+/**
  * Formats an Approval Card for #approvals with exact fields and buttons.
  * Implements ACTIVE.md Section 8, canonical action IDs, and verifiable digests (F17, F23).
  */

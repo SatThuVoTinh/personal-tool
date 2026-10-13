@@ -104,6 +104,65 @@ export function buildUniqueTaskCode({
   throw new Error("TASK_CODE_COLLISION_EXHAUSTED");
 }
 
+/**
+ * M12/T1-R1 — the owner's instruction made this 12-character form the task
+ * IDENTITY, not a display alias: "task ID anh muốn identity vẫn là 12 kí tự thay vì
+ * 64 hex, để vậy cho đồng bộ." Two consequences are pinned by tests rather than by
+ * comment: the identity is no longer a function of the origin message, so replay
+ * detection reads the recorded binding (`findTaskByOriginBinding`); and every
+ * pre-existing 64-hex record must keep loading, so readers accept both shapes
+ * through TASK_ID_PATTERN while only this shape is ever minted.
+ *
+ * The date part is ordered ddmmyyyy as the owner described. Codes minted before this
+ * task by the display-alias generator read yyyymmdd; both are eight digits, both are
+ * accepted on read, and neither is authority on its own — the snapshot key is.
+ */
+export const TASK_ID_PATTERN =
+  "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$";
+
+export function isTaskCodeForm(value) {
+  return (
+    typeof value === "string" &&
+    new RegExp(TASK_CODE_PATTERN, "u").test(value) === true
+  );
+}
+
+export function formatTaskIdentityDate(date) {
+  if (date instanceof Date) {
+    if (Number.isNaN(date.getTime()))
+      throw new RangeError("TASK_CODE_DATE_INVALID");
+    const year = String(date.getUTCFullYear()).padStart(4, "0");
+    const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+    const day = String(date.getUTCDate()).padStart(2, "0");
+    return `${day}${month}${year}`;
+  }
+  if (typeof date === "string" && /^[0-9]{8}$/u.test(date)) return date;
+  throw new RangeError("TASK_CODE_DATE_INVALID");
+}
+
+/**
+ * Mint a governed task identity. `isTaken` is mandatory: uniqueness is now a
+ * property of the identity itself, so it is checked against every live task id and
+ * every recorded code before the id leaves this function, and exhaustion fails
+ * closed instead of issuing a second task under a shared identity.
+ */
+export function mintTaskId({
+  date = new Date(),
+  random,
+  isTaken,
+  maxAttempts = 32,
+}) {
+  if (typeof isTaken !== "function") {
+    throw new TypeError("TASK_ID_IS_TAKEN_REQUIRED");
+  }
+  return buildUniqueTaskCode({
+    date: formatTaskIdentityDate(date),
+    random,
+    isTaken,
+    maxAttempts,
+  });
+}
+
 function normalize(value, key = "") {
   if (typeof value === "string") return value.normalize("NFC");
   if (typeof value === "number") {
@@ -164,6 +223,12 @@ export function canonicalHash(domain, value) {
     .digest("hex");
 }
 
+/**
+ * M12/T1-R1: this is no longer the identity mint. It stays exported and stays the
+ * authoritative derivation for the 64-hex ids already written into the live ledger
+ * (the reducer re-derives those to prove a legacy record was not tampered with), and
+ * it remains the origin-binding digest a new task can be traced back through.
+ */
 export function deriveTaskId({
   task_schema_version,
   origin,

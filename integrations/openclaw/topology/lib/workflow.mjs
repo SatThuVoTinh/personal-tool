@@ -2,8 +2,10 @@ import {
   buildSpawnProposal,
   canonicalHash,
   deriveTaskId,
+  isTaskCodeForm,
   TASK_CODE_LENGTH,
   TASK_CODE_PATTERN,
+  TASK_ID_PATTERN,
 } from "./canonical.mjs";
 import { validateContract } from "./schema.mjs";
 import { outcomeReasonAllowed, workflowAggregate } from "./runtime.mjs";
@@ -83,6 +85,15 @@ function identifier(value) {
 function digest(value) {
   requireCondition(
     typeof value === "string" && /^[a-f0-9]{64}$/u.test(value),
+    "SCHEMA_INVALID",
+  );
+}
+// M12/T1-R1: a task identity is either the 64-hex id the live ledger was built
+// with or the 12-character code the owner made authoritative. Readers must accept
+// both or the existing events stop replaying; only the new shape is ever minted.
+function taskIdentity(value) {
+  requireCondition(
+    typeof value === "string" && new RegExp(TASK_ID_PATTERN, "u").test(value),
     "SCHEMA_INVALID",
   );
 }
@@ -291,17 +302,24 @@ export function applyWorkflowEvent(
       "SCHEMA_INVALID",
     );
     digest(payload.origin_principal_ref);
-    digest(payload.task_id);
+    taskIdentity(payload.task_id);
     identifier(payload.root_run_id);
     identifier(payload.root_session_key);
     requireCondition(
       Object.hasOwn(roles, payload.root_agent_id),
       "UNAUTHORIZED_TARGET",
     );
-    requireCondition(
-      deriveTaskId(payload) === payload.task_id,
-      "LINEAGE_MISMATCH",
-    );
+    // M12/T1-R1: a legacy 64-hex identity is re-derivable from its origin binding,
+    // so re-deriving it here is what proves a pre-existing record was not tampered
+    // with. The 12-character identity is minted at admission and is deliberately
+    // NOT a function of the message, so for it the binding fields themselves are the
+    // integrity check — they are the values replay protection now reads.
+    if (/^[a-f0-9]{64}$/u.test(payload.task_id)) {
+      requireCondition(
+        deriveTaskId(payload) === payload.task_id,
+        "LINEAGE_MISMATCH",
+      );
+    }
     // M10/T2-R12: when a code IS supplied it must be exactly the ruled 12
     // characters. Absent is allowed (legacy task); malformed is never allowed,
     // because a code the owner is told to type must never be ambiguous.
@@ -320,6 +338,14 @@ export function applyWorkflowEvent(
             otherId !== payload.task_id &&
             other.task_code === payload.task_code,
         ),
+        "SCHEMA_INVALID",
+      );
+      // M12/T1-R1: once the code IS the identity, a task must not carry a second
+      // owner-visible token. Legacy 64-hex tasks keep an alias, because for them
+      // the code and the authority key are genuinely different values.
+      requireCondition(
+        !isTaskCodeForm(payload.task_id) ||
+          payload.task_code === payload.task_id,
         "SCHEMA_INVALID",
       );
     }
@@ -350,7 +376,7 @@ export function applyWorkflowEvent(
     };
     return next;
   }
-  digest(payload.task_id);
+  taskIdentity(payload.task_id);
   const task = next.tasks[payload.task_id];
   requireCondition(
     task?.workflow_status && task.brief_state,

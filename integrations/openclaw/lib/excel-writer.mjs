@@ -805,21 +805,54 @@ function createPngChunk(type, data) {
   return Buffer.concat([len, typeBuf, data, crcBuf]);
 }
 
-export function generatePureNodePng(rows, sheetName = "Sheet1") {
+// The brand strip is the only part of this renderer that says which screen the
+// preview imitates. It is a parameter now because M12/T1-R1 previews the expected
+// result of SQL, Python and Power BI work too; Excel keeps exactly the pixels it
+// produced before, because the defaults are the values that were hardcoded here.
+export const EXCEL_PREVIEW_BRAND = Object.freeze({
+  label: "MICROSOFT EXCEL PREVIEW",
+  rgb: Object.freeze([16, 124, 65]),
+});
+
+export function generatePureNodePng(
+  rows,
+  sheetName = "Sheet1",
+  brand = EXCEL_PREVIEW_BRAND,
+) {
   const width = 850;
   const height = 440;
   const rgba = Buffer.alloc(width * height * 4);
 
+  const brandRgb =
+    Array.isArray(brand?.rgb) && brand.rgb.length === 3
+      ? brand.rgb
+      : EXCEL_PREVIEW_BRAND.rgb;
+  const brandLabel =
+    typeof brand?.label === "string" && brand.label.trim().length > 0
+      ? brand.label.trim().toUpperCase()
+      : EXCEL_PREVIEW_BRAND.label;
+
   // Background #111827 (dark slate)
   fillRect(rgba, width, height, 0, 0, width, height, 17, 24, 39);
 
-  // Excel Brand Header #107c41
-  fillRect(rgba, width, height, 0, 0, width, 48, 16, 124, 65);
+  // Brand header strip
+  fillRect(
+    rgba,
+    width,
+    height,
+    0,
+    0,
+    width,
+    48,
+    brandRgb[0],
+    brandRgb[1],
+    brandRgb[2],
+  );
   drawText(
     rgba,
     width,
     height,
-    `MICROSOFT EXCEL PREVIEW - ${String(sheetName).toUpperCase()}`,
+    `${brandLabel} - ${String(sheetName).toUpperCase()}`,
     20,
     16,
     2,

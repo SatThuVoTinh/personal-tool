@@ -73,6 +73,14 @@ Hệ thống OpenClaw quản trị cụm 7 agent vai trò cố định. Các age
 
 - **Discord Handle:** `@Điều Phối 1 (O1)` (ID: `1545437953197744248`)
 - **Chức năng chính:** Giám sát thực thi toàn bộ các tác vụ trích xuất, chuyển đổi dữ liệu (ETL), truy vấn SQL và tạo lập bảng tính Excel.
+- **Cách trình bày thẻ phê duyệt (M12/T1-R1, chưa triển khai live):** thẻ chỉ gồm
+  `Task ID` (mã 12 ký tự `ddmmyyyy` + 4 ký tự ngẫu nhiên — cũng chính là khóa trong ledger
+  và trong `custom_id` của nút bấm), `Lý do` liệt kê từng bước của kế hoạch đã được ghi
+  (thao tác cụ thể, ràng buộc, tiêu chí nghiệm thu, phần mềm sẽ dùng: Microsoft Excel /
+  SQL Server / Python / Power BI) và `Kết quả` dự kiến kèm ảnh preview; các dòng mã run,
+  người yêu cầu, hành động, `child:` và `Node:` đã bỏ. Nút Approve / Reject / Request
+  Revision now được đăng ký với component registry của host nên hết trạng thái
+  "This component has expired", có hiệu lực 24 giờ mỗi thẻ.
 - **Quyền hạn & Công cụ:**
   - Lập kế hoạch thực thi chi tiết và phát hành thẻ phê duyệt kế hoạch (`### 🔖 [PHÊ DUYỆT THỰC THI]`) trên `#approvals`.
   - Quản lý và điều phối các chuyên viên cấp dưới: `excel`, `sql`, `python` (cho mục đích ETL) thông qua `sessions_spawn`.

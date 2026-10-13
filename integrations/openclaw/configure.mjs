@@ -97,6 +97,22 @@ const LEGACY_GOVERNANCE_MANIFEST_R11_SHA256 = Object.freeze([
 // build's own bytes. They do not make the old content trusted, and an
 // unrecognised digest still fails closed.
 const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
+  // M12/T1-R1: this asset had no predecessor entry before now, because every
+  // earlier revision was also the current build. M12/T1 changes it, so the digest
+  // the live WSL runtime carries is admitted (measured read-only) and the digest
+  // this build produces is deliberately NOT listed -- it is the current build and
+  // is accepted by content comparison.
+  "lib/discord-formatter.mjs": Object.freeze([
+    "3b39b1063e7842208a55151c776db2747cdc4a91bb2cf56b8d7102746f20479f",
+  ]),
+  // M12/T1-R1: this asset had no predecessor entry before now, because every
+  // earlier revision was also the current build. M12/T1 changes it, so the digest
+  // the live WSL runtime carries is admitted (measured read-only) and the digest
+  // this build produces is deliberately NOT listed -- it is the current build and
+  // is accepted by content comparison.
+  "lib/discord-native-send.mjs": Object.freeze([
+    "3a69f5d33b5d30087f8b7cb96738031988e68b24212e9d262491b2515e550e1d",
+  ]),
   "contracts/agent-result-payload.schema.json": Object.freeze([
     "48bcbf6b64daae63a3d7a917ac8f17790ba1468b4ed78182df5d1de59cd34717",
   ]),
@@ -108,24 +124,54 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // new digest is deliberately NOT listed: it is the current build and is
     // accepted by content comparison.
     "29eb3ed9992171481d30d1bb9f64f97e06ceed53bcf185da77817886458ab007",
+    // M12/T1-R1: the outgoing asset the live WSL runtime carries, measured
+    // read-only before this entry was added. Without it --preflight refuses the
+    // upgrade, which is exactly the M11/T1-R2 blocker. The digest this build
+    // produces is deliberately NOT listed: it is the current build and is
+    // accepted by content comparison.
+    "9523f8e9d4d7eadde744db355f1fb23bae9dfb6726936fd9533c80f0aed5f66b",
   ]),
   "contracts/delegation-envelope.schema.json": Object.freeze([
     "cc5023418300cd616b9ced2bff752c2903a07ef2a3e2e0e29c16968e7e90af97",
+    // M12/T1-R1: the outgoing asset the live WSL runtime carries, measured
+    // read-only before this entry was added. Without it --preflight refuses the
+    // upgrade, which is exactly the M11/T1-R2 blocker. The digest this build
+    // produces is deliberately NOT listed: it is the current build and is
+    // accepted by content comparison.
+    "cc5d1b11608e43a32db502c24b742563919bb81b9b0655f6e8b32e4dea8e0179",
   ]),
   "contracts/delegation-proposal.schema.json": Object.freeze([
     "efd4371cacf396dc618cc84c8663a114f06b034c13737937b48aa0b895b2d6e0",
   ]),
   "contracts/execution-brief.schema.json": Object.freeze([
     "514001e3edfd31a128b82f2c3944761214fd5d2ef7439d8033d914180410f5e4",
+    // M12/T1-R1: the outgoing asset the live WSL runtime carries, measured
+    // read-only before this entry was added. Without it --preflight refuses the
+    // upgrade, which is exactly the M11/T1-R2 blocker. The digest this build
+    // produces is deliberately NOT listed: it is the current build and is
+    // accepted by content comparison.
+    "2edaf5209a2462fa347309ad4cb9858af5b1ae4a286f6f002e2e71c7a1a3975e",
   ]),
   "contracts/governance-manifest.schema.json": Object.freeze([
     "f980bfd5474c8d057be92fee136779490ba93ed944295e4d173c54d7082e24c5",
   ]),
   "contracts/governed-reference.schema.json": Object.freeze([
     "e3eabb880bd46b4fccdb7b7b3767ad4be42a6d8ec4894c72959cfbf8a572c02e",
+    // M12/T1-R1: the outgoing asset the live WSL runtime carries, measured
+    // read-only before this entry was added. Without it --preflight refuses the
+    // upgrade, which is exactly the M11/T1-R2 blocker. The digest this build
+    // produces is deliberately NOT listed: it is the current build and is
+    // accepted by content comparison.
+    "4717f7e2edc5b7164513ae70a26c4c6cb04e6b010ead135a731d3bd36f197a0c",
   ]),
   "contracts/incident.schema.json": Object.freeze([
     "9d70678804bfc3059f3a2218babda4f4c1b55486bde5c6da5ef8c4f114fcc242",
+    // M12/T1-R1: the outgoing asset the live WSL runtime carries, measured
+    // read-only before this entry was added. Without it --preflight refuses the
+    // upgrade, which is exactly the M11/T1-R2 blocker. The digest this build
+    // produces is deliberately NOT listed: it is the current build and is
+    // accepted by content comparison.
+    "351ba083c5ed1ed102ba9ea2b47fa1a873c7e4ccc1e5e834ecc9d1e42b95cf4c",
   ]),
   "contracts/ledger-event.schema.json": Object.freeze([
     "e636b2452916ad8d1391a90844c0eaa3bc1c84e4aef8ede1361e3cee70143f15",
@@ -140,6 +186,12 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // WORKFLOW_OPENED payload, so without this entry --preflight refuses the
     // deployed extension.
     "818fd3afbb5638f6dd4cd30c4d33640f50b9c2b7b5e44b1a4212e4ae4e792005",
+    // M12/T1-R1: the outgoing asset the live WSL runtime carries, measured
+    // read-only before this entry was added. Without it --preflight refuses the
+    // upgrade, which is exactly the M11/T1-R2 blocker. The digest this build
+    // produces is deliberately NOT listed: it is the current build and is
+    // accepted by content comparison.
+    "9620e91773ef86c829fcff0dc264c38d7b2983f2456f62f8d6c787cb1ba5b13f",
   ]),
   "contracts/ledger-snapshot.schema.json": Object.freeze([
     "3cde5162ae845a9b7066a623a9c4c8896f1fc6b77f2b5983ad506a9dfcbc0151",
@@ -151,12 +203,30 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // exact path. This revision declares the OPTIONAL `task_code` on the task
     // object, so without this entry --preflight refuses the deployed extension.
     "71fa5bcae3b50c1b6f00a97c46519b29e78c2c2fa21f16faf32607a6a6548b64",
+    // M12/T1-R1: the outgoing asset the live WSL runtime carries, measured
+    // read-only before this entry was added. Without it --preflight refuses the
+    // upgrade, which is exactly the M11/T1-R2 blocker. The digest this build
+    // produces is deliberately NOT listed: it is the current build and is
+    // accepted by content comparison.
+    "1c0872bab446af4b31237eb8244f4b5bb6140b9828f261e66f3b38f37526299f",
   ]),
   "contracts/result.schema.json": Object.freeze([
     "9440dfb87b3daf358b11dc7b59b62586c68786235d99d717daf9783b9a6e4540",
+    // M12/T1-R1: the outgoing asset the live WSL runtime carries, measured
+    // read-only before this entry was added. Without it --preflight refuses the
+    // upgrade, which is exactly the M11/T1-R2 blocker. The digest this build
+    // produces is deliberately NOT listed: it is the current build and is
+    // accepted by content comparison.
+    "b1ebc7279504d42f262002aea10dc50f265510bbf2c90b21dcba26ea9d8f807a",
   ]),
   "contracts/trusted-result-envelope.schema.json": Object.freeze([
     "5d40c23152bba749826797eb0271c47a20f3aab910bcad2852428618ad9f0ec9",
+    // M12/T1-R1: the outgoing asset the live WSL runtime carries, measured
+    // read-only before this entry was added. Without it --preflight refuses the
+    // upgrade, which is exactly the M11/T1-R2 blocker. The digest this build
+    // produces is deliberately NOT listed: it is the current build and is
+    // accepted by content comparison.
+    "09cabcb1a1f7805eaea0bdf42a7fd0504c6efdd22b18e99959523e9e3cb17eb5",
   ]),
   "governance-manifests.json": Object.freeze([
     "5026959d41a76c531f37caa6297b3b0b010ee17cedd7bdd3806447600c98a18d",
@@ -170,6 +240,11 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // new digest is deliberately NOT listed: it is the current build,
     // accepted by content comparison.
     "ab1d2f8ecd91a3e72226d15495f641e701ef5c0a9e3b6d3a59db48b91256decd",
+    // M12/T1-R1: the asset the live WSL runtime carries (measured read-only).
+    // This task edits only a byte-budget comment in authority.mjs, and regenerates
+    // governance-manifests.json because its governance_hash covers policy.mjs. Both
+    // must stay admitted or --preflight refuses the upgrade.
+    "9c465c36afd4ea8a33dcb7d82fad486cb44e48af6791d75842cd8acdda7be6e7",
   ]),
   "lib/artifact-validator.mjs": Object.freeze([
     // M10/T2-R17: the outgoing build currently deployed, byte-proven by
@@ -220,6 +295,11 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // deliberately NOT listed: it is the current build, accepted by content
     // comparison.
     "42b0cba8567c1e52376d41d9329394b70c94e45a503af37733dcf76721d536c6",
+    // M12/T1-R1: the asset the live WSL runtime carries (measured read-only).
+    // This task edits only a byte-budget comment in authority.mjs, and regenerates
+    // governance-manifests.json because its governance_hash covers policy.mjs. Both
+    // must stay admitted or --preflight refuses the upgrade.
+    "71eee819e9a9ce5d3cc927352ae392c9a57e625fa4618273c7cef9a04c383eb8",
   ]),
   "lib/canonical.mjs": Object.freeze([
     // M10/T2-R13: the outgoing build currently deployed, byte-verified at this
@@ -235,6 +315,12 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // digest is deliberately NOT listed: it is the current build, accepted by
     // content comparison.
     "868de6b9675d54920b93694ac1614d8fabfcb3868c86f755a74e53b2f14af777",
+    // M12/T1-R1: the outgoing asset the live WSL runtime carries, measured
+    // read-only before this entry was added. Without it --preflight refuses the
+    // upgrade, which is exactly the M11/T1-R2 blocker. The digest this build
+    // produces is deliberately NOT listed: it is the current build and is
+    // accepted by content comparison.
+    "63adeee5c5ced229aa4a5c98df1c506987f5058fa538f9d27b105b11133d6f65",
   ]),
   "lib/decision-ledger.mjs": Object.freeze([
     // M10/T2-R17: the outgoing build currently deployed, byte-proven by
@@ -350,6 +436,12 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // emphasis for all agents), so without this entry --preflight refuses the
     // deployed extension. Listed ONLY so the successor can replace it.
     "b0290495e6fb7446f568a90df1c556d1e2b6318265b0b42377936bb1bdc08965",
+    // M12/T1-R1: the outgoing asset the live WSL runtime carries, measured
+    // read-only before this entry was added. Without it --preflight refuses the
+    // upgrade, which is exactly the M11/T1-R2 blocker. The digest this build
+    // produces is deliberately NOT listed: it is the current build and is
+    // accepted by content comparison.
+    "0a1b05edb81c64e3d79debef618185b3a2cfe0b0439fc8729ab927ce0e5fa9c0",
   ]),
   "lib/quota-telemetry.mjs": Object.freeze([
     // M10/T2-R9: the live asset before the single-model change, recorded from
@@ -388,6 +480,12 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // column reference, which used a modulo instead of a base-26 conversion and
     // therefore emitted a duplicate `A1` cell from column 27 onward.
     "c3079ba3d29af1ba864b7a2561533b44d82f6afc247ec6e6caf663bab4db6551",
+    // M12/T1-R1: the outgoing asset the live WSL runtime carries, measured
+    // read-only before this entry was added. Without it --preflight refuses the
+    // upgrade, which is exactly the M11/T1-R2 blocker. The digest this build
+    // produces is deliberately NOT listed: it is the current build and is
+    // accepted by content comparison.
+    "5681f6438b3a9adc50f4d6ffbb0ad405d1ff1c8d12463b6f28295ad2cf3bca53",
   ]),
   "lib/coordinator-pickup.mjs": Object.freeze([
     // M10/T2-R19: the FIRST predecessor entry for this asset. This revision
@@ -592,6 +690,12 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // M10/T2-R3: the outgoing hygiene-build asset (41c62e7), proven as in the
     // R3 header above (live tree 34/34 match). Same admission semantics.
     "e78d81bf55d144e36edff7327c5a1d8ef0ed6b4f7a2dd2b1cc586ea1088389d8",
+    // M12/T1-R1: the outgoing asset the live WSL runtime carries, measured
+    // read-only before this entry was added. Without it --preflight refuses the
+    // upgrade, which is exactly the M11/T1-R2 blocker. The digest this build
+    // produces is deliberately NOT listed: it is the current build and is
+    // accepted by content comparison.
+    "10254373efdfa9b90aa3ff5a80326d3c1a1751b8a80d7c909dca0b39e28aa6c6",
   ]),
   "policy/reason-code-matrix.json": Object.freeze([
     "982896fe4fcc856728f8348058f19b69d89eabd9974bdaf4311c4afa510fc200",
@@ -1339,6 +1443,15 @@ async function main() {
       // M11/T1-R2 defect. The new digest is deliberately NOT listed: it is the
       // current build, accepted by content comparison.
       "e8f084ab5593a093a2075db8167ce6db4ea39e87141dc4a2ba4dee99fb4fccaa",
+      // M12/T1-R1: the governance entrypoint the live WSL runtime carries
+      // (`61e344e6…`, measured read-only before this entry). M12/T1 registers the
+      // Discord components this plugin posts, fixes the approval-decision reason,
+      // makes the 12-character code the task identity, and presents the plan plus an
+      // expected-result image. Without this admission BOTH guards refuse the upgrade:
+      // this list appears at the --preflight and the --apply call sites, and they must
+      // stay identical. The new digest is deliberately NOT listed: it is the current
+      // build, accepted by content comparison.
+      "61e344e6754c3c03b26463c2421ebf699d8ec14f9ab0b8fe87bec1265d99f3b6",
     ],
   );
   assertRegularOrMissing(output.identityKeyPath);
@@ -1589,6 +1702,15 @@ async function main() {
       // M11/T3 Phase 1: the outgoing governance entrypoint, mirrors the
       // preflight-mode entry verbatim so the two modes cannot diverge.
       "e8f084ab5593a093a2075db8167ce6db4ea39e87141dc4a2ba4dee99fb4fccaa",
+      // M12/T1-R1: the governance entrypoint the live WSL runtime carries
+      // (`61e344e6…`, measured read-only before this entry). M12/T1 registers the
+      // Discord components this plugin posts, fixes the approval-decision reason,
+      // makes the 12-character code the task identity, and presents the plan plus an
+      // expected-result image. Without this admission BOTH guards refuse the upgrade:
+      // this list appears at the --preflight and the --apply call sites, and they must
+      // stay identical. The new digest is deliberately NOT listed: it is the current
+      // build, accepted by content comparison.
+      "61e344e6754c3c03b26463c2421ebf699d8ec14f9ab0b8fe87bec1265d99f3b6",
     ],
   );
   if (!existsSync(output.identityKeyPath))
