@@ -528,6 +528,46 @@ asset drift detected` (`installed_mutation: false`) because ten live
 
 ### Fixed
 
+- M12/T2-R3 (2026-10-13, found by the WSL re-run of this same remediation): `R7 P1` in
+  `tests/m10-t2-r7-authority-predecessor.test.mjs` asserted that the live
+  `lib/authority.mjs` equals one specific digest measured the day R7 was written. Deployment A
+  installed a later build, so that photograph went red on every host able to read the live tree
+  (Windows skipped it, WSL failed it) while the admission R7 exists to prove is still correct —
+  the same stale-pin class M11/T2 closed for the boundary and observability predecessors. Repaired
+  as an invariant, not relaxed: the live digest must now be **either** the build the repository
+  derives **or** a digest `configure.mjs` admits (anything else is the M11/T1-R2 blocker recurring,
+  because `--preflight` would refuse the upgrade), and the outgoing digest's admission was hoisted
+  out of the live-reachability branch so every host checks it. No assertion was deleted and no gate
+  weakened: the batch went from 143/0-fail-with-1-red to 143/0-fail, and the live halves still run
+  (that suite is precisely what caught this).
+- M12/T2-R3 (2026-10-13, live regression from deployment A): #office stopped producing approval
+  cards. The owner's report was "bot kẹt phản hồi ngay tại kênh office" and the journal named the
+  cause twice (`22:42` and `22:48`): `DISCORD_TAG_UNRESOLVED channel=approvals category=STACK
+wanted="(no evidence in the governed record)" reason=CLASSIFIER_EMPTY` followed by
+  `first-approval card NOT posted: APPROVAL_CARD_NOT_SURFACED:DISCORD_TAG_UNRESOLVED`. The
+  fail-closed behaviour was correct — the request stayed durable (`WORKFLOW_APPROVAL_REQUESTED`
+  appended, ledger 131 → 139 events, nothing mutated) — but the tag rule behind it was wrong:
+  `surfaceStackTag` required the plan's nodes to carry **exactly one distinct** `stack_id`, and
+  `current_stack` is bound only when execution starts (`workflow.mjs:1726`), so at approval time
+  it is absent. Seven live pending tasks have nodes reaching `data_plant` (excel/sql/python) plus
+  `intelligence` (power-bi), i.e. two stacks, i.e. no card, i.e. nothing for the owner to approve.
+  The rule now follows the owner's own definitions: STACK names the surface the plan's **output**
+  belongs to, so the deepest stack a plan reaches wins
+  (`decision` > `intelligence` > `data_plant` > `semantic` > `infrastructure`) and a bound
+  `current_stack` outranks the plan's reach because that is the stack actually executing. A plan
+  with no stack evidence at all, or only software names (`excel`, `power_bi` — which are agents,
+  not stacks), still resolves to nothing and still posts nothing. Two probes each killed one
+  control: restoring the single-distinct rule failed 6 tests including the new live-shape case, and
+  deleting the new asset admission failed both the textual guard and the real
+  `--preflight`/`--apply` rehearsal. Because this changes an asset that is **already installed**,
+  `configure.mjs` now admits the deployed digest `e0a755bb…` under
+  `lib/discord-forum-tags.mjs` (reproduced byte-for-byte by `git show b6d04e8:…`, 23,825 bytes;
+  packaging rewrites none of this module's imports) so the remediation build is reachable —
+  admission of the installed bytes only; the candidate digest `18fbb077…` is deliberately not
+  listed, and the entrypoint pin does not move because no packaged entrypoint byte changed.
+  **Not deployed**: the live runtime still carries the refusing build until the owner grants a
+  fresh preflight → apply.
+
 - M12/T2-R2 (2026-10-13): deployment A's first attempt failed closed and **mutated nothing**, and
   the reason was this repository's own blind spot, not the live tree. `configure.mjs` reads
   `ZINK_ROUTER_HOST/PORT/API_KEY` from the environment to build the config, so a shell that has not

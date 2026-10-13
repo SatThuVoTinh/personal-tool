@@ -198,12 +198,18 @@ function keyBlock(table, key) {
 // PROVENANCE — 1/1 before admission
 // ---------------------------------------------------------------------------
 
-test("R7 P1: the live authority digest is reproduced from its source commit", async () => {
+test("R7 P1: the R7-era authority digest is reproduced from its source commit", async () => {
   const hygiene = await hygieneExtension();
   assert.equal(
     sha256(hygiene.assets["lib/authority.mjs"]),
     HYGIENE_AUTHORITY_SHA256,
-    "the committed M8/T3 source must reproduce the live digest",
+    "the committed M8/T3 source must reproduce the digest R7 admitted",
+  );
+  // The outgoing runtime digest stays admitted on every host, reachable live or not:
+  // dropping it would make --preflight refuse an upgrade from that build.
+  assert.ok(
+    CONFIGURE_SOURCE.includes(LIVE_AUTHORITY_SHA256),
+    "the build R7 replaced must remain an admitted predecessor",
   );
   // Optional live cross-check: skip where the live dir is unreachable.
   let liveDigest = null;
@@ -218,16 +224,19 @@ test("R7 P1: the live authority digest is reproduced from its source commit", as
     /* not reachable from this platform */
   }
   if (liveDigest !== null) {
-    assert.equal(
-      liveDigest,
-      LIVE_AUTHORITY_SHA256,
-      "the reachable live runtime must carry the measured outgoing digest",
-    );
-    assert.equal(
-      CONFIGURE_SOURCE.includes(LIVE_AUTHORITY_SHA256),
-      true,
-      "and that digest must stay admitted, or --preflight refuses the upgrade",
-    );
+    // M12/T2-R3: this half required the live file to equal `71eee819…` exactly. That was
+    // a photograph of the day R7 was written — deployment A installed a later build, so
+    // the equality went red on every host that can read the live tree while the
+    // admission R7 proves is still exactly right. The honest live invariant is the one
+    // R13 states: whatever is installed must be either the build the repository derives
+    // now or a digest configure.mjs admits, because anything else is the M11/T1-R2
+    // blocker recurring — --preflight would refuse the upgrade.
+    const current = await currentBuild();
+    if (liveDigest !== sha256(current.assets["lib/authority.mjs"]))
+      assert.ok(
+        keyBlock(assetTable(), "lib/authority.mjs").includes(liveDigest),
+        `the live lib/authority.mjs digest ${liveDigest.slice(0, 8)}… is neither the current build nor an admitted predecessor`,
+      );
   }
 });
 

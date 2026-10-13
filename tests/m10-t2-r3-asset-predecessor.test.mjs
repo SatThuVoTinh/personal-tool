@@ -118,9 +118,15 @@ const HYGIENE_ASSET_PREDECESSORS = Object.freeze({
 // outgoing asset digests are still the admitted predecessors.
 // M12/T2-R2: and again — the entrypoint now also moves the approval thread's STATUS tag when
 // the owner decides (APPROVED / REJECTED / CHANGES), through the same lib seam that owns every
-// other tag rule. The live runtime still carries `61e344e6…`, R1's `f9ef77dc…` was never
-// deployed so it stays unlisted, and no asset admission changes: the installed files are
-// unchanged.
+// other tag rule. R1's `f9ef77dc…` was never deployed so it stays unlisted, and no asset
+// admission changes: the installed files are unchanged.
+// Deployment A (2026-10-13) installed this pin: the live runtime now carries `513beb15…`, which
+// IS the current build, so it is accepted by content comparison rather than admitted.
+// M12/T2-R3: the live runtime stopped producing approval cards because the forum-tag asset
+// refused every plan whose nodes reach more than one stack. That asset (`lib/discord-forum-tags.mjs`)
+// is now packaged from changed source, so its deployed digest `e0a755bb…` — what the operator
+// apply post-check measured and what `git show b6d04e8` reproduces — is admitted as a predecessor.
+// The entrypoint pin itself does NOT move: this revision changes no packaged entrypoint byte.
 const CURRENT_ENTRYPOINT_SHA256 =
   "513beb15c3d7624c0a928c4c1556dc44d4c4cff4f1e00980f24b298a25751c0d";
 
@@ -442,6 +448,55 @@ test("R3 1: each proven predecessor passes preflight and converges on apply", as
         `${rel}: apply must install the candidate bytes`,
       );
     }
+  } finally {
+    rmSync(p.root, { recursive: true, force: true });
+  }
+});
+
+test("M12/T2-R3: the deployed forum-tag asset is a reachable predecessor", async () => {
+  // The same acceptance the R3 series exists to prove, applied to the newest admission:
+  // Deployment A left `lib/discord-forum-tags.mjs` carrying `e0a755bb…` on the live host,
+  // this revision packages it from changed source, and M12/T2-R3 exists because the
+  // runtime stopped posting approval cards. `--preflight` must accept the installed bytes
+  // and `--apply` must converge them — a PASS followed by a REFUSE is the R13 deadlock,
+  // and here it would keep the outage in place.
+  const DEPLOYED_REL = "lib/discord-forum-tags.mjs";
+  const DEPLOYED_SHA256 =
+    "e0a755bb9c6add431c9306fd8bc2895318a868c3c6b8e84326d94fb95526fff5";
+  const predecessor = execFileSync(
+    "git",
+    ["show", `b6d04e8:integrations/openclaw/${DEPLOYED_REL}`],
+    { cwd: REPO, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
+  );
+  assert.equal(
+    sha256(predecessor),
+    DEPLOYED_SHA256,
+    "the admitted digest must reproduce from the commit Deployment A installed",
+  );
+  const current = await currentBuild();
+  assert.notEqual(
+    sha256(current.assets[DEPLOYED_REL]),
+    DEPLOYED_SHA256,
+    "this revision must actually change the asset, or the admission is dead weight",
+  );
+  const p = provisioned();
+  try {
+    const target = p.asset(DEPLOYED_REL);
+    writeFileSync(target, predecessor, "utf8");
+    const parsed = JSON.parse(p.preflight().toString("utf8"));
+    assert.equal(
+      parsed.preflight,
+      "PASS",
+      "preflight must accept the deployed forum-tag asset",
+    );
+    assert.equal(parsed.installedMutation, false);
+    assert.equal(sha256(readFileSync(target, "utf8")), DEPLOYED_SHA256);
+    p.apply();
+    assert.equal(
+      sha256(readFileSync(target, "utf8")),
+      sha256(current.assets[DEPLOYED_REL]),
+      "apply must install the remediation build",
+    );
   } finally {
     rmSync(p.root, { recursive: true, force: true });
   }

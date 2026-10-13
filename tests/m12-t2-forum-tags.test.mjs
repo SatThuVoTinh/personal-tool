@@ -8,6 +8,8 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  STACK_TAG_OF,
+  STACK_TAG_PRECEDENCE,
   SURFACE_TAG_CATEGORIES,
   approvalRiskTag,
   approvalStatusTag,
@@ -433,7 +435,14 @@ describe("M12/T2 P1 — classification follows the request, never a default", ()
     assert.equal(approvalRiskTag(["read_only", "mystery_class"]), null);
   });
 
-  it("maps the five durable stacks and refuses to choose when a task spans two", () => {
+  it("maps the five durable stacks and takes the deepest one a task reaches", () => {
+    // The order is the rule, so it is pinned as a set as well as through behaviour: a stack
+    // missing from it would make any plan that reaches only that stack untaggable again.
+    assert.deepEqual(
+      [...STACK_TAG_PRECEDENCE].sort(),
+      Object.keys(STACK_TAG_OF).sort(),
+      "the precedence must order exactly the stacks the ledger can hold",
+    );
     assert.deepEqual(surfaceStackTag({ currentStack: "infrastructure" }), {
       category: "STACK",
       value: "INFRA",
@@ -454,12 +463,43 @@ describe("M12/T2 P1 — classification follows the request, never a default", ()
       category: "STACK",
       value: "DECISION",
     });
-    assert.equal(
+    // The live defect this replaced: a real plan spans stacks (excel/sql = DATA plus
+    // power-bi = ANALYTICS), and the old "exactly one distinct stack, else nothing" rule refused
+    // the whole approval card. The tag now names the surface the plan's output belongs to.
+    assert.deepEqual(
+      surfaceStackTag({ nodeStackIds: ["data_plant", "intelligence"] }),
+      { category: "STACK", value: "ANALYTICS" },
+    );
+    assert.deepEqual(
       surfaceStackTag({ nodeStackIds: ["semantic", "decision"] }),
-      null,
+      { category: "STACK", value: "DECISION" },
+    );
+    assert.deepEqual(
+      surfaceStackTag({
+        nodeStackIds: ["data_plant", "semantic", "infrastructure"],
+      }),
+      { category: "STACK", value: "DATA" },
+      "meaning and machine work under an ETL deliverable stay DATA",
+    );
+    assert.deepEqual(
+      surfaceStackTag({ nodeStackIds: ["semantic", "infrastructure"] }),
+      { category: "STACK", value: "SEMANTIC" },
+    );
+    assert.deepEqual(
+      surfaceStackTag({
+        currentStack: "data_plant",
+        nodeStackIds: ["intelligence"],
+      }),
+      { category: "STACK", value: "DATA" },
+      "a stack the ledger has bound for execution outranks the plan's reach",
     );
     assert.equal(surfaceStackTag({}), null);
     assert.equal(surfaceStackTag({ currentStack: "excel" }), null);
+    assert.equal(
+      surfaceStackTag({ nodeStackIds: ["excel", "power_bi"] }),
+      null,
+      "software names are not stacks; nothing is invented",
+    );
   });
 
   it("maps only the verdicts that actually have a results tag", () => {

@@ -97,6 +97,18 @@ const LEGACY_GOVERNANCE_MANIFEST_R11_SHA256 = Object.freeze([
 // build's own bytes. They do not make the old content trusted, and an
 // unrecognised digest still fails closed.
 const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
+  // M12/T2-R3: Deployment A put this asset on the live WSL runtime, so the
+  // digest the host now carries is `e0a755bb...` -- measured by the operator
+  // apply post-check on 2026-10-13 and reproduced byte-for-byte by
+  // `git show b6d04e8:integrations/openclaw/lib/discord-forum-tags.mjs` (23,825
+  // bytes; packaging does not rewrite this module's imports). This revision
+  // changes the file, so without this entry --preflight refuses the deployed
+  // extension and --apply becomes unreachable. The digest this build produces is
+  // deliberately NOT listed: it is the current build and is accepted by content
+  // comparison.
+  "lib/discord-forum-tags.mjs": Object.freeze([
+    "e0a755bb9c6add431c9306fd8bc2895318a868c3c6b8e84326d94fb95526fff5",
+  ]),
   // M12/T1-R1: this asset had no predecessor entry before now, because every
   // earlier revision was also the current build. M12/T1 changes it, so the digest
   // the live WSL runtime carries is admitted (measured read-only) and the digest

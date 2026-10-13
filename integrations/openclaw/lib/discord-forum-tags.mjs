@@ -351,8 +351,16 @@ export function approvalRiskTag(riskClasses) {
 
 /**
  * STACK is read from the ledger, never inferred from a bot name: `infrastructure → INFRA`,
- * `data_plant → DATA`, `semantic → SEMANTIC`, `intelligence → ANALYTICS`,
- * `decision → DECISION`. A task that spans more than one stack has no single honest tag.
+ * `data_plant → DATA`, `semantic → SEMANTIC`, `intelligence → ANALYTICS`, `decision → DECISION`.
+ *
+ * The owner's own definitions decide the order: the tag names the surface the plan's OUTPUT
+ * belongs to, so a plan that reaches further downstream is tagged by that downstream surface
+ * (`decision` > `intelligence` > `data_plant` > `semantic` > `infrastructure`). A pure ETL plan
+ * is DATA, a plan that also builds charts is ANALYTICS, a plan that also answers a decision
+ * question is DECISION, and meaning work only carries SEMANTIC when nothing is delivered on top
+ * of it. `current_stack` wins when the ledger has bound one, because that is the stack actually
+ * executing. Nothing is invented when there is no stack evidence at all: the caller then reports
+ * an unresolved tag and posts nothing.
  */
 export const STACK_TAG_OF = Object.freeze({
   infrastructure: "INFRA",
@@ -362,14 +370,24 @@ export const STACK_TAG_OF = Object.freeze({
   decision: "DECISION",
 });
 
+export const STACK_TAG_PRECEDENCE = Object.freeze([
+  "decision",
+  "intelligence",
+  "data_plant",
+  "semantic",
+  "infrastructure",
+]);
+
 export function surfaceStackTag({ currentStack, nodeStackIds = [] } = {}) {
-  const candidates = [
-    currentStack,
-    ...(Array.isArray(nodeStackIds) ? nodeStackIds : []),
-  ].filter((value) => typeof value === "string" && value in STACK_TAG_OF);
-  const distinct = [...new Set(candidates)];
-  if (distinct.length !== 1) return null;
-  return { category: "STACK", value: STACK_TAG_OF[distinct[0]] };
+  if (typeof currentStack === "string" && currentStack in STACK_TAG_OF)
+    return { category: "STACK", value: STACK_TAG_OF[currentStack] };
+  const known = (Array.isArray(nodeStackIds) ? nodeStackIds : []).filter(
+    (value) => typeof value === "string" && value in STACK_TAG_OF,
+  );
+  for (const stack of STACK_TAG_PRECEDENCE)
+    if (known.includes(stack))
+      return { category: "STACK", value: STACK_TAG_OF[stack] };
+  return null;
 }
 
 /**

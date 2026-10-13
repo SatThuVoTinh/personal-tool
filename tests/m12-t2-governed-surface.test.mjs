@@ -5,6 +5,8 @@
 // drive the real reducer, the real publish helper and the real classification functions —
 // not a copy of them — with fake Discord reads and non-routable identifiers.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -21,6 +23,7 @@ import {
   openGovernedForumThread,
   createForumTagResolver,
 } from "../integrations/openclaw/lib/discord-forum-tags.mjs";
+import { governancePluginFiles } from "../integrations/openclaw/lib/policy.mjs";
 import {
   ledgerPaths,
   readSnapshot,
@@ -102,6 +105,13 @@ const NODE_SQL = {
   node_id: "n2",
   agent_id: "sql",
   stack_id: "semantic",
+};
+
+const NODE_POWERBI = {
+  ...NODE_EXCEL,
+  node_id: "n3",
+  agent_id: "power-bi",
+  stack_id: "intelligence",
 };
 
 function withLedger(body) {
@@ -375,10 +385,20 @@ test("M12/T2 P2: STACK comes from the recorded stack, never from a bot nickname"
     ).selections.find((entry) => entry.category === "STACK").value,
     "SEMANTIC",
   );
-  // Two stacks in one plan have no single honest tag.
+  // A plan whose nodes reach two stacks is tagged by the surface its output belongs to:
+  // ETL work plus meaning work is still DATA. This is the live defect the owner hit — the
+  // old "one distinct stack or nothing" rule refused the whole approval card.
   assert.deepEqual(
     approvalTagSelectionsFor(
       { nodes: [NODE_EXCEL, NODE_SQL], current_stack: null },
+      "excel",
+    ).selections.find((entry) => entry.category === "STACK").value,
+    "DATA",
+  );
+  // Only a plan with no stack evidence at all is refused.
+  assert.deepEqual(
+    approvalTagSelectionsFor(
+      { nodes: [{ ...NODE_SQL, stack_id: "excel" }], current_stack: null },
       "excel",
     ).absent,
     ["STACK"],
@@ -593,5 +613,96 @@ test("M12/T2-R2: one transition seam, fired after the verdict, never awaited by 
   assert.ok(
     pluginSource.includes("approvalStatusTag(decision)"),
     "the creation path and the verdict path share one STATUS mapping",
+  );
+});
+
+test("M12/T2-R3: a live multi-stack approval request resolves all three tags", () => {
+  // The outage the owner reported: #office stopped producing approval cards. Every pending
+  // task in the live ledger has no `current_stack` — the reducer binds it only when execution
+  // starts (workflow.mjs:1726) — and its nodes reach data_plant (excel/sql/python) plus
+  // intelligence (power-bi). The card must be posted, not refused for want of a tag.
+  const live = {
+    nodes: [NODE_EXCEL, { ...NODE_SQL, stack_id: "data_plant" }, NODE_POWERBI],
+    current_stack: undefined,
+  };
+  const { selections, absent } = approvalTagSelectionsFor(live, "excel");
+  assert.deepEqual(absent, [], "no required approvals tag may be unresolved");
+  assert.deepEqual(
+    selections.map((entry) => `${entry.category}:${entry.value}`),
+    ["STATUS:WAITING", "RISK:MEDIUM", "STACK:ANALYTICS"],
+    "the chart work the plan reaches is the surface its output belongs to",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// M12/T2-R3 — the asset Deployment A installed must stay reachable for the next --apply
+// ---------------------------------------------------------------------------
+
+const FORUM_TAGS_ASSET_REL = "lib/discord-forum-tags.mjs";
+
+/** The digest the live WSL runtime carries, measured by the operator apply post-check. */
+const DEPLOYED_FORUM_TAGS_SHA256 =
+  "e0a755bb9c6add431c9306fd8bc2895318a868c3c6b8e84326d94fb95526fff5";
+
+const sha256 = (value) => createHash("sha256").update(value).digest("hex");
+
+test("M12/T2-R3: the deployed forum-tag asset digest is admitted under its own path", () => {
+  // Provenance first: the admitted digest is not an operator-measured number taken on faith,
+  // it is what the repository's own committed source packages to.
+  const deployedSource = execFileSync(
+    "git",
+    ["show", "b6d04e8:integrations/openclaw/lib/discord-forum-tags.mjs"],
+    { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
+  );
+  assert.equal(
+    sha256(deployedSource),
+    DEPLOYED_FORUM_TAGS_SHA256,
+    "the admitted digest must reproduce from the commit Deployment A installed",
+  );
+  const packaged = governancePluginFiles().assets[FORUM_TAGS_ASSET_REL];
+  assert.equal(
+    packaged,
+    readFileSync("integrations/openclaw/lib/discord-forum-tags.mjs", "utf8"),
+    "packaging must not rewrite this asset's bytes",
+  );
+  assert.notEqual(
+    sha256(packaged),
+    DEPLOYED_FORUM_TAGS_SHA256,
+    "this revision changes the asset, which is why a predecessor entry is needed at all",
+  );
+  const configureSource = readFileSync(
+    "integrations/openclaw/configure.mjs",
+    "utf8",
+  );
+  const start = configureSource.indexOf(
+    "const ALLOWED_GOVERNANCE_ASSET_SHA256",
+  );
+  assert.notEqual(start, -1, "the asset allowlist must exist");
+  const table = configureSource.slice(
+    start,
+    configureSource.indexOf("\n});", start),
+  );
+  assert.notEqual(table, undefined, "the asset allowlist must be terminated");
+  const key = table.indexOf(`"${FORUM_TAGS_ASSET_REL}": Object.freeze([`);
+  assert.notEqual(
+    key,
+    -1,
+    "the asset must have its own key in the allowlist table",
+  );
+  const block = table.slice(key, table.indexOf("]),", key));
+  assert.ok(
+    block.includes(DEPLOYED_FORUM_TAGS_SHA256),
+    "the deployed digest must be listed under lib/discord-forum-tags.mjs",
+  );
+  assert.equal(
+    configureSource.split(DEPLOYED_FORUM_TAGS_SHA256).length - 1,
+    1,
+    "the deployed digest must appear exactly once in the file",
+  );
+  // The current build is accepted by content comparison, never by admission.
+  assert.equal(
+    configureSource.includes(sha256(packaged)),
+    false,
+    "the current build digest must not be allowlisted",
   );
 });
