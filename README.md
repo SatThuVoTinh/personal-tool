@@ -215,6 +215,11 @@ chỉ vì lý do đó. Không lệnh nào in token hay snowflake.
 ```bash
 cd "/mnt/c/Users/HOANG VINH/OneDrive/Documents/personal-tool"
 
+# BƯỚC 0 — nạp biến môi trường router. `configure.mjs` đọc `ZINK_ROUTER_HOST`,
+# `ZINK_ROUTER_PORT`, `ZINK_ROUTER_API_KEY` từ môi trường để dựng config; thiếu một trong ba
+# thì builder chết ngay với `ROUTER_..._UNAVAILABLE` và preflight báo FAIL mà không sửa gì.
+set -a; . "$HOME/.openclaw-zink/router.env"; set +a
+
 # BƯỚC 1 — chỉ đọc, không sửa gì. Dòng kỳ vọng:
 # {"identifiers":"VALID","builder_preflight":"PASS","installed_mutation":false}
 node integrations/openclaw/topology/fixtures/runtime-regression/operator-preflight.mjs

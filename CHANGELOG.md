@@ -507,6 +507,21 @@ asset drift detected` (`installed_mutation: false`) because ten live
 
 ### Fixed
 
+- M12/T2-R2 (2026-10-13): deployment A's first attempt failed closed and **mutated nothing**, and
+  the reason was this repository's own blind spot, not the live tree. `configure.mjs` reads
+  `ZINK_ROUTER_HOST/PORT/API_KEY` from the environment to build the config, so a shell that has not
+  sourced `~/.openclaw-zink/router.env` aborts with `ROUTER_…_UNAVAILABLE` before any state check —
+  and `operator-preflight.mjs` recognised only nine classes, so every such refusal collapsed into
+  `PREFLIGHT_REJECTED`. Two fixes: the classifier now names each known class (router env,
+  snowflake parsing, canonical-JSON config, instructions drift, file-mode drift, plugin
+  package/manifest, hotfix, resolver, systemd drop-in, ledger corruption, symlink) while still
+  emitting only a whitelisted literal and never a raw message, and the README deployment section
+  documents the env-sourcing step it omitted. Diagnosed by replication, not guesswork: every gate
+  that can be evaluated without operator credentials was checked read-only against the installed
+  tree and passed — all divergent assets admitted, entrypoint `61e344e6…` admitted, manifest and
+  package byte-equal, auth plans/resolver/hotfix byte-equal at their expected modes, systemd
+  drop-in equal to the current rendering, ledger `CURRENT`, workspace templates admissible, and the
+  generated config structurally identical to the installed one (318 key paths each).
 - M12/T2-R1 (2026-10-13): three gates were red **only on a host that can read the live WSL
   tree** and none of the three was an M12 regression — each was a photograph of the day it was
   written, overtaken by the runtime it observes. They are repaired as invariants, not relaxed

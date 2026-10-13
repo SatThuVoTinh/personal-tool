@@ -1031,3 +1031,52 @@ test(
     }
   },
 );
+
+test("R16-08: the operator preflight names every known refusal class and leaks no message", () => {
+  // Provenance of this guard: a real deployment refusal arrived as
+  // `PREFLIGHT_REJECTED` because the classifier knew only nine classes, so the
+  // operator could not tell a missing router env from asset drift without burning
+  // a round trip. Naming the class is the fix; quoting the message never is.
+  const source = readFileSync(
+    path.join(
+      REPO,
+      "integrations",
+      "openclaw",
+      "topology",
+      "fixtures",
+      "runtime-regression",
+      "operator-preflight.mjs",
+    ),
+    "utf8",
+  );
+  for (const className of [
+    "ROUTER_HOST_UNAVAILABLE",
+    "ROUTER_PORT_UNAVAILABLE",
+    "ROUTER_API_KEY_UNAVAILABLE",
+    "must be a numeric Discord snowflake",
+    "surface IDs must be distinct",
+    "Existing config must be canonical JSON",
+    "Agent governance instructions drift",
+    "mode drift",
+    "Governance plugin package",
+    "Gemini stream hotfix utility",
+    "Password-store resolver",
+    "Systemd drop-in",
+    "Ledger corruption",
+    "symlink",
+  ])
+    assert.ok(
+      source.includes(`"${className}"`),
+      `the preflight classifier must name ${className}`,
+    );
+  assert.match(
+    source.replace(/\s+/gu, " "),
+    /const reason = known\.find/u,
+    "the report may only ever carry a whitelisted class, never raw stderr",
+  );
+  assert.equal(
+    /reason:\s*(error|output)\./.test(source),
+    false,
+    "a raw error message could quote config content or identifiers",
+  );
+});

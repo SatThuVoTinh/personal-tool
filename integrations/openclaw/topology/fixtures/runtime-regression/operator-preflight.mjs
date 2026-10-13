@@ -50,11 +50,35 @@ try {
 } catch (error) {
   // Classify only known static diagnostics; unknown output stays undisclosed.
   const output = String(error.stderr ?? "");
+  // The list is ordered most-specific first because `find` wins the tie: a mode
+  // drift on the hotfix must be reported as the hotfix, not as a generic mode class.
+  // M12/T2 deployment attempt: a real refusal arrived as `PREFLIGHT_REJECTED` because
+  // none of these classes named it, and an undiagnosable fail-closed gate costs the
+  // operator a whole round trip. The classes below are static literals from
+  // `configure.mjs` / `policy.mjs` - never a message, which could quote config content.
   const known = [
     "governance instructions drift",
+    "Agent governance instructions drift",
     "Governance plugin asset",
     "Governance plugin entrypoint",
     "Governance plugin manifest",
+    "Governance plugin package",
+    "Gemini stream hotfix utility",
+    "Password-store resolver",
+    "Auth order plan",
+    "Auth SecretRef plan",
+    "Systemd drop-in",
+    "Governance identity key",
+    "T2 backup manifest",
+    "ROUTER_HOST_UNAVAILABLE",
+    "ROUTER_PORT_UNAVAILABLE",
+    "ROUTER_API_KEY_UNAVAILABLE",
+    "must be a numeric Discord snowflake",
+    "surface IDs must be distinct",
+    "Existing config must be canonical JSON",
+    "Ledger corruption",
+    "symlink",
+    "mode drift",
     "Policy drift",
     "EXECUTION_STATE_UNKNOWN",
     "permission",

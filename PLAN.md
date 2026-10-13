@@ -4718,6 +4718,22 @@ actually has, or reuse a script that already runs there.
 The live gateway still carries the M11/T3-R1 build (`61e344e6…`); neither M12/T1-R1 nor M12/T2 has
 been installed, so no live Discord behaviour on any surface is verified.
 
+Deployment A attempt 1 (2026-10-13, owner-run): `operator-preflight.mjs` returned
+`{"stage":"builder-preflight","status":"FAIL","reason":"PREFLIGHT_REJECTED"}` and **mutated
+nothing** — preflight is read-only. Root cause is the operator instructions this agent produced,
+not the live tree: `configure.mjs` requires `ZINK_ROUTER_HOST/PORT/API_KEY` from the environment
+(`policy.mjs:1290-1311`), and the block omitted the `set -a; . ~/.openclaw-zink/router.env; set +a`
+line, so the builder aborted on `ROUTER_PORT_UNAVAILABLE` before any state comparison; the
+classifier then could not name that class and collapsed it to `PREFLIGHT_REJECTED`. Everything
+evaluable without operator credentials was checked read-only and passed: every divergent asset
+admitted, entrypoint `61e344e6…` admitted, manifest `8be6690c…` and package `a30567b2…`
+byte-equal, auth plan/order-plan/pass-resolver/gemini-hotfix byte-equal at their expected modes
+(the hotfix is `0700` by design — an early scratch assumption of `0600` was the script's error, not
+the host's), systemd drop-in equal to the current rendering, `inspectLedgerUpgrade = CURRENT`,
+workspace templates admissible, and the generated config structurally identical to the installed
+one (318 key paths each). Repaired: the classifier names each known class without ever quoting a
+message, and the README deployment section includes the env-sourcing step.
+
 
 ## 9. Deferred beyond V1
 
