@@ -8,6 +8,33 @@ All notable, validated changes to Personal Tool are documented here.
 
 ### Added
 
+- Deployed the M11/T3-R1 build to the live WSL gateway under a fresh, explicitly scoped
+  owner grant (`9164c50`, 2026-10-13). Before consuming it, the seven deployed governance
+  assets were measured read-only with `sha256sum` (`index.mjs = e8f084ab…`,
+  `lib/queue-manager.mjs = f7995d51…`, `lib/native-boundary.mjs = 97c7f3e1…`,
+  `lib/file-lock.mjs = 22d7411a…`, `lib/decision-ledger.mjs = 5e97d9ca…`,
+  `lib/guard.mjs = 7dd37ee9…`, `lib/ledger.mjs = 818d7cb0…`), re-derived byte-for-byte
+  from the pre-Phase-1 commit through the repository's own `governancePluginFiles()`, and
+  confirmed present in `ALLOWED_GOVERNANCE_ASSET_SHA256` — so this upgrade did not repeat
+  the M11/T1-R2 blocker. The live ledger pair was also checked read-only first (128 events
+  == snapshot `sequence: 128`), which matters because this build newly refuses startup on
+  a half-missing events/snapshot pair. Operator-side result: `--preflight` `PASS` with
+  `installedMutation: false`, one `--apply`, and after the restart all seven live digests
+  equal the packaged build (`61e344e6…`, `a5580bb6…`, `5966d446…`, `bcd65de8…`,
+  `1d9518ca…`, `263d72c4…`, `c984cda8…`); `openclaw.json` (17128 bytes, mtime
+  `2026-10-09 12:24`) and both ledger files (mtime `2026-10-09 12:13`) untouched; unit
+  `active` with `MainPID=28865`, `NRestarts=0`, and a clean 594 ms shutdown of the old
+  process. In the first ~15 minutes the new PID logged **zero**
+  `GOVERNANCE_COMPLETION_UNAVAILABLE` and zero Discord-attributed errors, and the
+  governance-run refusals that do occur land in 1–2 s with a preserved cause chain instead
+  of the 100 s router abort that was still firing on the previous PID minutes before the
+  restart. Not claimed by this record: the startup `enterNativeRun` /
+  `EXECUTION_STATE_UNKNOWN` session-recovery cluster persists (the retained journal shows
+  the identical cluster on 2026-10-08 and 2026-10-10 under older builds, so it is
+  pre-existing, not a regression), the `duplicate plugin id` config warning is unchanged,
+  `verify.mjs` was not run (`NOT RUN`, operator-side), and no multi-hour live soak under
+  real traffic has been completed.
+
 - Deployed the M11/T1-R1 build to the live WSL gateway and closed the one gap that
   blocked it (`14c4b90`, M11/T1-R2). `configure.mjs --preflight` refused the running
   runtime with `Governance plugin asset drift detected: …/lib/file-lock.mjs`: the
@@ -365,8 +392,9 @@ asset drift detected` (`installed_mutation: false`) because ten live
 ### Fixed
 
 - Fixed ten verified HIGH-severity defects in the OpenClaw runtime and its durable-state
-  seams (`3cb8274` + `6b0ea0a`, M11/T3-R1, closed 2026-10-13; **not deployed** — the live
-  gateway still runs the M11/T1-R2 build). Gateway hangs and silently lost state both
+  seams (`3cb8274` + `6b0ea0a`, M11/T3-R1, closed 2026-10-13; **deployed and verified on
+  the live WSL gateway the same day** — see the deployment record under `Added`). Gateway
+  hangs and silently lost state both
   had concrete mechanisms: the Discord bot-token path ran a config-derived path through
   `/bin/sh`, three Discord REST `fetch` calls had no deadline at all, three
   native-boundary catch seams threw their fixed contract string and dropped the

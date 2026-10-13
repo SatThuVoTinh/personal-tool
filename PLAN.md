@@ -37,7 +37,7 @@ Evidence Level: NONE | LOCAL-VERIFIED | REMOTE-BACKED
 | M7 — Zink Tools + OpenClaw integration + V1 hardening                      | `COMPLETE`    | `REMOTE-BACKED`  | M7/T1-R19, M7/T2-R12, M7/T3-R16, M7/T4-R10, and M7/T5-R13 complete; runtime governance remediation, Discord 7-bot integration, and Zink tools specialist policies verified.                                                                                                                                                           |
 | M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Integration | `IN PROGRESS` | `LOCAL-VERIFIED` | M8/T1 is complete; M8/T2.2 R4/R5/R6 are implemented; M8/T2.2-R7 (heartbeat admission, boundary diagnosability, apply safety) is in progress. Deployment is not authorized.                                                                                                                                                            |
 | M10 - Governed coordinator runtime binding                                 | `COMPLETE` | `LOCAL-VERIFIED` | M10/T2 closed by explicit owner decision 2026-10-11 (R26 records the final remediation; R8 closed live with zero-outbound proven). Deferred follow-ups are NOT closed under M10 and require separate authorization: live gateway/knowledge restart or deployment, M10 ingress card/tag redesign (new Plan Revision), coordinator result ingestion, and the WSL/CI Python gate run. |
-| M11 - Cross-module audit remediation                                       | `COMPLETE` | `REMOTE-BACKED` | M11/T1 is CLOSED (R1 four phases + R2 live admission and deployment, 2026-10-12; build DEPLOYED AND VERIFIED on the live WSL gateway, evidence in §4/§8). M11/T2 is CLOSED the same day: R1 made four Skill Store suites portable, gave `python-quality` the Node toolchain (CI SUCCESS, `188 passed, 27 subtests`) and fingerprinted two gitleaks false positives; R2 gave the Knowledgebase Python suite exactly one executor per environment, which repaired `CI / quality-gate` (CI run `38202129189`: `quality-gate` and `python-quality` both SUCCESS). NOT closed under M11 and still requiring separate authorization: `verify.mjs` (`NOT RUN`, operator-side), the pre-existing model-router `GOVERNANCE_COMPLETION_UNAVAILABLE` failures, the pre-existing `duplicate plugin id` warning, the pre-existing 5-high `npm audit` failure, `M11-06`'s PostgreSQL statement gate in CI (no Postgres service there), and the owner-excluded items (per-document quarantine, incremental-publish redesign, manifest schema extension, zink-tools drift cluster, zink-tools lint-glob gap). **M11/T3-R1 is CLOSED 2026-10-13** (`REMOTE-BACKED`, **NOT DEPLOYED**): the ten verified HIGH-severity items landed in two ordered phases — `3cb8274` (argv execution on the bot-token path, one deadline on the three Discord REST fetches, cause-preserving message-only diagnostics at the three native-boundary seams, queue `enqueueTask`/`clear` serialized) and `6b0ea0a` (non-spinning async lock release with the WSL drvfs errnos, refusal of a half-missing events/snapshot pair, replay diagnostics that keep their cause, decision-ledger save and approval reads under the shared writer lock, `REJECTED` skill proposals made terminal and serialized). CI run `38336851433` @ `f55d292` on the task branch: `quality-gate` **SUCCESS** (`ℹ tests 1374 / ℹ fail 0`, `Repository policy check passed.`) and `python-quality` **SUCCESS** (`188 passed, 27 subtests`); Security run `38336854295` adds `secret-scan` **SUCCESS** (gitleaks, zero leaks) while its `dependency-audit` stays red on the unchanged 5-high baseline. Locally: `npm run verify` PASS on Windows and the two new suites plus both lock-predecessor suites re-run green under WSL Ubuntu, where the packaged digests are byte-identical. 22 of 24 mutation runs killed the defect (the 2 survivors are at the pre-existing `enterNativeRun` seam, outside this task's change sites — recorded in §8). The router model order/`timeoutSeconds=100` and stale-lock auto-reclaim stay excluded as recorded owner decisions. **This build is not yet installed**: the live gateway still runs the M11/T1-R2 build, and the owner's scoped deployment grant (2026-10-13, ONE `--apply`, §4) has been recorded but not consumed. |
+| M11 - Cross-module audit remediation                                       | `COMPLETE` | `REMOTE-BACKED` | M11/T1 is CLOSED (R1 four phases + R2 live admission and deployment, 2026-10-12; build DEPLOYED AND VERIFIED on the live WSL gateway, evidence in §4/§8). M11/T2 is CLOSED the same day: R1 made four Skill Store suites portable, gave `python-quality` the Node toolchain (CI SUCCESS, `188 passed, 27 subtests`) and fingerprinted two gitleaks false positives; R2 gave the Knowledgebase Python suite exactly one executor per environment, which repaired `CI / quality-gate` (CI run `38202129189`: `quality-gate` and `python-quality` both SUCCESS). NOT closed under M11 and still requiring separate authorization: `verify.mjs` (`NOT RUN`, operator-side), the pre-existing model-router `GOVERNANCE_COMPLETION_UNAVAILABLE` failures, the pre-existing `duplicate plugin id` warning, the pre-existing 5-high `npm audit` failure, `M11-06`'s PostgreSQL statement gate in CI (no Postgres service there), and the owner-excluded items (per-document quarantine, incremental-publish redesign, manifest schema extension, zink-tools drift cluster, zink-tools lint-glob gap). **M11/T3-R1 is CLOSED 2026-10-13** (`REMOTE-BACKED`, **DEPLOYED AND VERIFIED** on the live WSL gateway): the ten verified HIGH-severity items landed in two ordered phases — `3cb8274` (argv execution on the bot-token path, one deadline on the three Discord REST fetches, cause-preserving message-only diagnostics at the three native-boundary seams, queue `enqueueTask`/`clear` serialized) and `6b0ea0a` (non-spinning async lock release with the WSL drvfs errnos, refusal of a half-missing events/snapshot pair, replay diagnostics that keep their cause, decision-ledger save and approval reads under the shared writer lock, `REJECTED` skill proposals made terminal and serialized). CI run `38336851433` @ `f55d292` on the task branch: `quality-gate` **SUCCESS** (`ℹ tests 1374 / ℹ fail 0`, `Repository policy check passed.`) and `python-quality` **SUCCESS** (`188 passed, 27 subtests`); Security run `38336854295` adds `secret-scan` **SUCCESS** (gitleaks, zero leaks) while its `dependency-audit` stays red on the unchanged 5-high baseline. Locally: `npm run verify` PASS on Windows and the two new suites plus both lock-predecessor suites re-run green under WSL Ubuntu, where the packaged digests are byte-identical. 22 of 24 mutation runs killed the defect (the 2 survivors are at the pre-existing `enterNativeRun` seam, outside this task's change sites — recorded in §8). The router model order/`timeoutSeconds=100` and stale-lock auto-reclaim stay excluded as recorded owner decisions. **This build is DEPLOYED AND VERIFIED** on the live WSL gateway (owner grant 2026-10-13, ONE `--apply` from `9164c50`; all seven live asset digests equal the packaged build, `openclaw.json` and the ledger untouched, unit `active`/`MainPID=28865`/`NRestarts=0`, zero `GOVERNANCE_COMPLETION_UNAVAILABLE` on the new PID — evidence in §4; `verify.mjs` stays `NOT RUN` and a multi-hour live soak is still open). |
 
 The former self-built L&SC Data Plant is replaced by a **logical external
 infrastructure flow**, not another repository module. Forecasting, optimization,
@@ -111,10 +111,10 @@ Deployment Authorized: YES (M11/T3-R1 build — ONE `--apply` attempt, owner gra
   directory `~/.openclaw-zink`. Explicitly NOT authorized by this grant: any `main`
   merge, force-push, PR, release, other service or host, `--revert`/historical recovery
   (its own distinct authorization), ledger/task mutation, or config rewriting beyond
-  what `--apply` itself performs. Status at the time of writing: **grant issued, NOT
-  yet consumed** — the deploy has not run, so the live gateway still carries the
-  M11/T1-R2 build. Read-only pre-deploy proof (WSL Ubuntu, 2026-10-13, no credential
-  loaded, nothing mutated): the seven deployed assets measured with `sha256sum` are
+  what `--apply` itself performs. The grant is now **CONSUMED by the single successful
+  apply recorded below**. Read-only pre-deploy proof (WSL Ubuntu, 2026-10-13, no
+  credential loaded, nothing mutated): the seven deployed assets measured with
+  `sha256sum` were
   `index.mjs = e8f084ab…`, `lib/queue-manager.mjs = f7995d51…`,
   `lib/native-boundary.mjs = 97c7f3e1…`, `lib/file-lock.mjs = 22d7411a…`,
   `lib/decision-ledger.mjs = 5e97d9ca…`, `lib/guard.mjs = 7dd37ee9…`,
@@ -132,18 +132,44 @@ Deployment Authorized: YES (M11/T3-R1 build — ONE `--apply` attempt, owner gra
   pre-existing incomplete ledger; an older empty `governance/ledger` pair (0 events,
   mtime `2026-09-18`) exists but is not the configured root. Unit state before the
   deploy: `active`, `MainPID=17047`, `NRestarts=0`, started `2026-10-12 09:02:44 +07`.
-  The run must be executed operator-side: the CLI requires the live
-  Discord identifiers and `ZINK_ROUTER_*` values, which this session's permission
-  classifier refuses to load, and no workaround is attempted. Post-apply evidence to
-  capture before this record may say `DEPLOYED AND VERIFIED`: preflight `PASS` with
-  `installedMutation: false`; the seven live asset digests equal to the current packaged
-  build (`index.mjs = 61e344e6…`, `lib/queue-manager.mjs = a5580bb6…`,
+  Executed operator-side (the CLI requires the live Discord identifiers and
+  `ZINK_ROUTER_*` values, which this session's permission classifier refuses to load, and
+  no workaround was attempted) from `9164c50`.
+Deployment Status (M11/T3-R1): DEPLOYED AND VERIFIED (2026-10-13, WSL Ubuntu, ONE
+  `--apply` attempt; grant consumed, no retry needed). Evidence: `--preflight`
+  `PASS` with `installedMutation: false`; the one `--apply` wrote the current build and
+  all seven live assets then measure exactly the packaged values predicted before the
+  run (`index.mjs = 61e344e6…`, `lib/queue-manager.mjs = a5580bb6…`,
   `lib/native-boundary.mjs = 5966d446…`, `lib/file-lock.mjs = bcd65de8…`,
   `lib/decision-ledger.mjs = 1d9518ca…`, `lib/guard.mjs = 263d72c4…`,
-  `lib/ledger.mjs = c984cda8…`); `openclaw.json` mtime unchanged; the ledger pair's mtime
-  and 128-vs-128 sequence preserved; unit `active` with a new `MainPID` and
-  `NRestarts=0`; zero error-class lines from the new PID. A single `--apply` attempt that
-  fails closes the grant — the retry then needs a new owner decision.
+  `lib/ledger.mjs = c984cda8…`). `openclaw.json` untouched (size 17128, mtime still
+  `2026-10-09 12:24`); the ledger untouched (both files mtime still `2026-10-09 12:13`,
+  128 events == snapshot `sequence: 128`); the configured ledger root was confirmed from
+  the tool's own report as `~/.openclaw-zink/operator/m7-t2/ledger`, which is the pair
+  verified complete — so B2's new half-pair startup refusal did not fire, and the gateway
+  started on the first attempt. Unit after restart: `active`, `MainPID=28865`,
+  `NRestarts=0`, started `2026-10-13 09:57:12 +07`; the old process shut down cleanly
+  (`[shutdown] completed cleanly in 594ms`).
+  Post-deploy log audit of the new PID (111 lines, read-only, ~15 min): **zero**
+  `GOVERNANCE_COMPLETION_UNAVAILABLE` and zero Discord-attributed error lines (42
+  Discord-related lines). 16 lines match the error-class filter; all are attributable to
+  startup session-recovery, where `enterNativeRun` refuses the restored runs with
+  `EXECUTION_STATE_UNKNOWN` and the model fallback records `candidate_failed
+  detail=GOVERNANCE_RUN_UNAVAILABLE` — the same refusal, and the same clustered-within-
+  seconds shape, that the retained journal shows for older builds on 2026-10-08 (PID
+  556138) and 2026-10-10 (PID 3831), so it is recorded as pre-existing behavior and NOT
+  claimed as fixed here. What this build changes at that seam is the shape of the
+  failure: the refusals land in ~1-2 s with a preserved cause chain (`…
+  GOVERNANCE_RUN_UNAVAILABLE <- Error: EXECUTION_STATE_UNKNOWN`) instead of the old
+  100 s `elapsedMs=100409` router abort → `GOVERNANCE_COMPLETION_UNAVAILABLE` path that
+  was still firing on PID 17047 minutes before the restart. The long-standing
+  `duplicate plugin id` config warning is still emitted (recorded baseline, untouched).
+  `verify.mjs` (non-live and `--live`) was NOT run — operator-side, `NOT RUN`; no
+  `transactions/` record is created by `configure.mjs --apply`. The router model order and
+  its `timeoutSeconds=100` remain the owner's own recorded decision and are NOT changed by
+  this deployment, so the fallback dead time can still be reached whenever the router
+  itself is slow; a longer live soak (hours, real traffic) is still needed before claiming
+  the Discord hang class is gone.
 Prior deployment record — Deployment Authorized: YES (M11/T1-R1 build — ONE attempt,
   owner grant 2026-10-12)
   — scoped exactly to: read-only `configure.mjs --preflight`, then one
@@ -4023,7 +4049,7 @@ the `OWNER DECISION REQUIRED` block issued after the second read-only sweep, wit
 Codex directed to execute the contract directly instead of handing it to dsh.
 Implementation commits `3cb8274` (Phase 1) and `6b0ea0a` (Phase 2); execution contract
 deleted at closeout (`f55d292`). Evidence level: `REMOTE-BACKED` — CI run
-`38336851433` — **NOT DEPLOYED**.
+`38336851433`; **DEPLOYED AND VERIFIED** on the live WSL gateway 2026-10-13 (§4).
 
 - Objective: close the ten verified HIGH-severity items the audit found in the OpenClaw
   runtime and its durable-state seams, without touching the owner's recorded decisions
@@ -4183,8 +4209,16 @@ deleted at closeout (`f55d292`). Evidence level: `REMOTE-BACKED` — CI run
   cannot fire on pre-existing state; and the unit was `active` with `MainPID=17047`,
   `NRestarts=0`. The apply itself has not run — the CLI needs the live Discord
   identifiers and `ZINK_ROUTER_*` values, which this session's permission classifier
-  refuses to load, so the record stays `NOT DEPLOYED` until the operator-side evidence
-  returns.
+  refuses to load. **Result (consumed the same day):** the preflight passed with
+  `installedMutation: false`, one `--apply` installed the build, all seven live digests
+  came back equal to the packaged values, `openclaw.json` and the ledger were untouched,
+  the unit restarted clean (`MainPID=28865`, `NRestarts=0`), and the new PID logged zero
+  `GOVERNANCE_COMPLETION_UNAVAILABLE` — full evidence in §4. The one live observation
+  that did NOT disappear is the startup session-recovery cluster in which
+  `enterNativeRun` refuses restored runs with `EXECUTION_STATE_UNKNOWN`; the retained
+  journal shows the identical cluster on 2026-10-08 and 2026-10-10 under older builds, so
+  it is recorded as pre-existing rather than as a regression, and it is the seam whose
+  diagnostics the mutation run could not cover (§8 coverage gap (d)).
 - Baselines kept honest: `npm audit` 5 high stays `FAIL` (pre-existing
   markdownlint-cli2→globby chain) both locally and in Security run `38336854295`;
   `verify.mjs` (non-live and `--live`) and the `M11-06` PostgreSQL statement gate stay
