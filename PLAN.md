@@ -37,7 +37,7 @@ Evidence Level: NONE | LOCAL-VERIFIED | REMOTE-BACKED
 | M7 — Zink Tools + OpenClaw integration + V1 hardening                      | `COMPLETE`    | `REMOTE-BACKED`  | M7/T1-R19, M7/T2-R12, M7/T3-R16, M7/T4-R10, and M7/T5-R13 complete; runtime governance remediation, Discord 7-bot integration, and Zink tools specialist policies verified.                                                                                                                                                           |
 | M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Integration | `IN PROGRESS` | `LOCAL-VERIFIED` | M8/T1 is complete; M8/T2.2 R4/R5/R6 are implemented; M8/T2.2-R7 (heartbeat admission, boundary diagnosability, apply safety) is in progress. Deployment is not authorized.                                                                                                                                                            |
 | M10 - Governed coordinator runtime binding                                 | `COMPLETE` | `LOCAL-VERIFIED` | M10/T2 closed by explicit owner decision 2026-10-11 (R26 records the final remediation; R8 closed live with zero-outbound proven). Deferred follow-ups are NOT closed under M10 and require separate authorization: live gateway/knowledge restart or deployment, M10 ingress card/tag redesign (new Plan Revision), coordinator result ingestion, and the WSL/CI Python gate run. |
-| M11 - Cross-module audit remediation                                       | `COMPLETE` | `REMOTE-BACKED` | M11/T1 is CLOSED (R1 four phases + R2 live admission and deployment, 2026-10-12; build DEPLOYED AND VERIFIED on the live WSL gateway, evidence in §4/§8). M11/T2 is CLOSED the same day: R1 made four Skill Store suites portable, gave `python-quality` the Node toolchain (CI SUCCESS, `188 passed, 27 subtests`) and fingerprinted two gitleaks false positives; R2 gave the Knowledgebase Python suite exactly one executor per environment, which repaired `CI / quality-gate` (CI run `38202129189`: `quality-gate` and `python-quality` both SUCCESS). NOT closed under M11 and still requiring separate authorization: `verify.mjs` (`NOT RUN`, operator-side), the pre-existing model-router `GOVERNANCE_COMPLETION_UNAVAILABLE` failures, the pre-existing `duplicate plugin id` warning, the pre-existing 5-high `npm audit` failure, `M11-06`'s PostgreSQL statement gate in CI (no Postgres service there), and the owner-excluded items (per-document quarantine, incremental-publish redesign, manifest schema extension, zink-tools drift cluster, zink-tools lint-glob gap). **M11/T3-R1 is CLOSED 2026-10-13** (`LOCAL-VERIFIED`, **NOT DEPLOYED**): the ten verified HIGH-severity items landed in two ordered phases — `3cb8274` (argv execution on the bot-token path, one deadline on the three Discord REST fetches, cause-preserving message-only diagnostics at the three native-boundary seams, queue `enqueueTask`/`clear` serialized) and `6b0ea0a` (non-spinning async lock release with the WSL drvfs errnos, refusal of a half-missing events/snapshot pair, replay diagnostics that keep their cause, decision-ledger save and approval reads under the shared writer lock, `REJECTED` skill proposals made terminal and serialized). `npm run verify` PASS on the Windows host (1374 tests / 1329 pass / 0 fail / 45 skipped); the two new suites plus both lock-predecessor suites are also green under WSL Linux, and the packaged digests agree across the two OSes. 22 of 24 mutation runs killed the defect (the 2 survivors are at the pre-existing `enterNativeRun` seam, outside this task's change sites — recorded in §8). The router model order/`timeoutSeconds=100` and stale-lock auto-reclaim stay excluded as recorded owner decisions. **This build is not installed**: the live gateway still runs the M11/T1-R2 build, and deploying M11/T3 requires its own owner grant. |
+| M11 - Cross-module audit remediation                                       | `COMPLETE` | `REMOTE-BACKED` | M11/T1 is CLOSED (R1 four phases + R2 live admission and deployment, 2026-10-12; build DEPLOYED AND VERIFIED on the live WSL gateway, evidence in §4/§8). M11/T2 is CLOSED the same day: R1 made four Skill Store suites portable, gave `python-quality` the Node toolchain (CI SUCCESS, `188 passed, 27 subtests`) and fingerprinted two gitleaks false positives; R2 gave the Knowledgebase Python suite exactly one executor per environment, which repaired `CI / quality-gate` (CI run `38202129189`: `quality-gate` and `python-quality` both SUCCESS). NOT closed under M11 and still requiring separate authorization: `verify.mjs` (`NOT RUN`, operator-side), the pre-existing model-router `GOVERNANCE_COMPLETION_UNAVAILABLE` failures, the pre-existing `duplicate plugin id` warning, the pre-existing 5-high `npm audit` failure, `M11-06`'s PostgreSQL statement gate in CI (no Postgres service there), and the owner-excluded items (per-document quarantine, incremental-publish redesign, manifest schema extension, zink-tools drift cluster, zink-tools lint-glob gap). **M11/T3-R1 is CLOSED 2026-10-13** (`REMOTE-BACKED`, **NOT DEPLOYED**): the ten verified HIGH-severity items landed in two ordered phases — `3cb8274` (argv execution on the bot-token path, one deadline on the three Discord REST fetches, cause-preserving message-only diagnostics at the three native-boundary seams, queue `enqueueTask`/`clear` serialized) and `6b0ea0a` (non-spinning async lock release with the WSL drvfs errnos, refusal of a half-missing events/snapshot pair, replay diagnostics that keep their cause, decision-ledger save and approval reads under the shared writer lock, `REJECTED` skill proposals made terminal and serialized). CI run `38336851433` @ `f55d292` on the task branch: `quality-gate` **SUCCESS** (`ℹ tests 1374 / ℹ fail 0`, `Repository policy check passed.`) and `python-quality` **SUCCESS** (`188 passed, 27 subtests`); Security run `38336854295` adds `secret-scan` **SUCCESS** (gitleaks, zero leaks) while its `dependency-audit` stays red on the unchanged 5-high baseline. Locally: `npm run verify` PASS on Windows and the two new suites plus both lock-predecessor suites re-run green under WSL Ubuntu, where the packaged digests are byte-identical. 22 of 24 mutation runs killed the defect (the 2 survivors are at the pre-existing `enterNativeRun` seam, outside this task's change sites — recorded in §8). The router model order/`timeoutSeconds=100` and stale-lock auto-reclaim stay excluded as recorded owner decisions. **This build is not installed**: the live gateway still runs the M11/T1-R2 build, and deploying M11/T3 requires its own owner grant. |
 
 The former self-built L&SC Data Plant is replaced by a **logical external
 infrastructure flow**, not another repository module. Forecasting, optimization,
@@ -62,18 +62,25 @@ Authorized Task: NONE — M11/T3-R1 delivered the ten verified HIGH-severity ite
   refusal of a half-missing events/snapshot pair, replay diagnostics that keep their
   cause, a decision-ledger `save()` under the shared writer lock, approval reads under
   the guard writer lock, and a `REJECTED` skill proposal made terminal and serialized.
-Evidence Level: LOCAL-VERIFIED — `npm run verify` PASS on the Windows host
-  (`format:check` clean, `lint` 0 issues, `npm test` 1374 tests / 1329 pass / 0 fail /
-  45 skipped, `repo:check` "Repository policy check passed."); the new suites
+Evidence Level: REMOTE-BACKED — CI run `38336851433` @ `f55d292`
+  (`quality-gate` SUCCESS on ubuntu-24.04: Prettier clean, `ℹ tests 1374 / ℹ pass 1323 /
+  ℹ fail 0 / ℹ skipped 51`, `Repository policy check passed.`; `python-quality` SUCCESS:
+  `188 passed, 27 subtests passed in 12.20s`) and Security run `38336854295`
+  (`secret-scan` SUCCESS — gitleaks 8.24.3, zero leaks, which converts this task's local
+  `NOT RUN` into CI evidence; `dependency-audit` fails on the unchanged pre-existing
+  baseline `9 vulnerabilities (3 low, 1 moderate, 5 high)`). Locally: `npm run verify`
+  PASS on the Windows host (`format:check` clean, `lint` 0 issues, `npm test`
+  1374 tests / 1329 pass / 0 fail / 45 skipped, `repo:check` passed); the new suites
   `m11-t3-openclaw-runtime-bounds` (8/8) and `m11-t3-durable-state-integrity` (20/20)
   and the lock predecessors `m10-t2-r18-file-lock` (8/8) and
   `m11-t1-r2-file-lock-asset-predecessor` (7/7) also PASS under WSL Ubuntu (Node
   v24.15.0), where the packaged digests are byte-identical to the Windows derivation.
   22 of 24 mutation runs killed the defect; the 2 survivors are at the pre-existing
   `enterNativeRun` seam, which this task did not change (§8 records it as a coverage
-  gap, not a regression). NOT RUN on this host: `gitleaks` (not installed — CI-only),
-  `verify.mjs` (operator-side), the PostgreSQL statement gate, `test:knowledge`
-  (`apps/knowledge` untouched). FAIL as recorded baseline, not converted: `npm audit`
+  gap, not a regression). Still `NOT RUN`: `verify.mjs` (operator-side) and the
+  PostgreSQL statement gate. `test:knowledge` was not run locally (`apps/knowledge` is
+  untouched) but CI executed the same suite in `python-quality` and it passed.
+  `FAIL` as recorded baseline, not converted: `npm audit`
   5 high, and one pre-existing `no-unused-vars` error at
   `zink-tools/adapters/skill-store/skill-adapter.mjs` that `npm run lint` never sees
   because of the known `zink-tools` glob gap.
@@ -3980,7 +3987,8 @@ Task: M11/T3-R1 · Plan Revision: `M11/T3-R1` · Owner approval: clusters "A r�
 the `OWNER DECISION REQUIRED` block issued after the second read-only sweep, with
 Codex directed to execute the contract directly instead of handing it to dsh.
 Implementation commits `3cb8274` (Phase 1) and `6b0ea0a` (Phase 2); execution contract
-deleted at closeout. Evidence level: `LOCAL-VERIFIED` — **NOT DEPLOYED**.
+deleted at closeout (`f55d292`). Evidence level: `REMOTE-BACKED` — CI run
+`38336851433` — **NOT DEPLOYED**.
 
 - Objective: close the ten verified HIGH-severity items the audit found in the OpenClaw
   runtime and its durable-state seams, without touching the owner's recorded decisions
@@ -4102,6 +4110,17 @@ deleted at closeout. Evidence level: `LOCAL-VERIFIED` — **NOT DEPLOYED**.
   packaged digests computed under Linux equal the Windows values for all four assets.
   `git diff --check` clean; `git status` shows no file outside the repository and no
   live-state path touched.
+- Remote backing (owner instruction "vậy làm B rồi đến A", dispatched after the closeout
+  commit): CI run `38336851433` on `codex/m11-t1-audit-remediation` @ `f55d292` —
+  `quality-gate` **SUCCESS** on ubuntu-24.04 (`All matched files use Prettier code
+  style!`, `ℹ tests 1374 / ℹ suites 88 / ℹ pass 1323 / ℹ fail 0 / ℹ skipped 51`,
+  `Repository policy check passed.`) and `python-quality` **SUCCESS**
+  (`188 passed, 27 subtests passed in 12.20s`). Security run `38336854295` @ the same
+  commit — `secret-scan` **SUCCESS** (gitleaks 8.24.3, zero leaks found), which converts
+  this task's local `gitleaks NOT RUN` into remote evidence; the run's overall status is
+  `failure` only because `dependency-audit` fails on the unchanged pre-existing baseline
+  `9 vulnerabilities (3 low, 1 moderate, 5 high)`, which this task did not touch and did
+  not convert.
 - Reported and NOT fixed (escalations): (a) **two ledger roots are configured** — the
   live `openclaw.json` points at the Windows `~/.openclaw-zink` operator root while
   every `topology/fixtures/runtime-regression/*` hardcodes the WSL path, so the
@@ -4119,9 +4138,12 @@ deleted at closeout. Evidence level: `LOCAL-VERIFIED` — **NOT DEPLOYED**.
   §10. The stricter invariant was kept and the literal wording relaxed; the thrown
   code and message are exactly as specified.
 - Baselines kept honest: `npm audit` 5 high stays `FAIL` (pre-existing
-  markdownlint-cli2→globby chain); `verify.mjs` (non-live and `--live`), the `M11-06`
-  PostgreSQL statement gate and `gitleaks` on this host stay `NOT RUN`;
-  `test:knowledge` is `NOT RUN` for this task because `apps/knowledge` is untouched.
+  markdownlint-cli2→globby chain) both locally and in Security run `38336854295`;
+  `verify.mjs` (non-live and `--live`) and the `M11-06` PostgreSQL statement gate stay
+  `NOT RUN`. `test:knowledge` was not run locally because `apps/knowledge` is untouched
+  by this task; CI ran the same suite in `python-quality` and it passed (`188 passed`).
+  `gitleaks` is not installed on this host, so its local status stays `NOT RUN` and the
+  gate is satisfied by the CI `secret-scan` job instead.
 
 ## 9. Deferred beyond V1
 

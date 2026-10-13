@@ -399,7 +399,13 @@ asset drift detected` (`installed_mutation: false`) because ten live
   / 0 fail / 45 skipped, `Repository policy check passed.`); the lock predecessors
   `m10-t2-r18-file-lock` 8/8 and `m11-t1-r2` 7/7; both new suites and the predecessor
   suite re-run green under WSL Ubuntu, where the four re-pinned packaged digests match
-  the Windows values exactly. 22 of 24 mutation runs killed their defect; the 2
+  the Windows values exactly. Remote backing: CI run `38336851433` on the task branch at
+  the closeout commit — `quality-gate` **SUCCESS** on ubuntu-24.04 (`ℹ tests 1374 /
+ℹ pass 1323 / ℹ fail 0 / ℹ skipped 51`, `Repository policy check passed.`) and
+  `python-quality` **SUCCESS** (`188 passed, 27 subtests passed`) — plus Security run
+  `38336854295`, whose `secret-scan` is **SUCCESS** (gitleaks 8.24.3, zero leaks) while
+  the run overall stays red only on the pre-existing `dependency-audit` baseline.
+  22 of 24 mutation runs killed their defect; the 2
   survivors are at the pre-existing `enterNativeRun` seam this task did not change and
   are recorded as a coverage gap. Four outgoing packaged digests were admitted so
   `--preflight` keeps accepting the deployed extension. Reported and deliberately not
@@ -407,8 +413,8 @@ asset drift detected` (`installed_mutation: false`) because ten live
   operator root while every regression fixture hardcodes the WSL path), the router
   fallback chain's 100 s × 5-candidate dead time is bounded by the owner's own recorded
   model-order decision, and approval replay protection remains in-memory and
-  single-process. `npm audit` stays red on the pre-existing 5-high findings and
-  `gitleaks`/`verify.mjs`/the PostgreSQL statement gate stay `NOT RUN` on this host.
+  single-process. `npm audit` stays red on the pre-existing 5-high findings both locally
+  and in CI, and `verify.mjs`/the PostgreSQL statement gate stay `NOT RUN`.
 - Fixed `CI / quality-gate` being unrunnable in CI since 2026-10-02 (`a8122f5`,
   M11/T2-R2, closed 2026-10-12). Commit `1a36c52` inserted the Knowledgebase Python
   suite into the `verify` composition and pinned it in `REQUIRED_VERIFY_STAGES`, but
