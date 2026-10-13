@@ -37,7 +37,7 @@ Evidence Level: NONE | LOCAL-VERIFIED | REMOTE-BACKED
 | M7 — Zink Tools + OpenClaw integration + V1 hardening                      | `COMPLETE`    | `REMOTE-BACKED`  | M7/T1-R19, M7/T2-R12, M7/T3-R16, M7/T4-R10, and M7/T5-R13 complete; runtime governance remediation, Discord 7-bot integration, and Zink tools specialist policies verified.                                                                                                                                                           |
 | M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Integration | `IN PROGRESS` | `LOCAL-VERIFIED` | M8/T1 is complete; M8/T2.2 R4/R5/R6 are implemented; M8/T2.2-R7 (heartbeat admission, boundary diagnosability, apply safety) is in progress. Deployment is not authorized.                                                                                                                                                            |
 | M10 - Governed coordinator runtime binding                                 | `COMPLETE` | `LOCAL-VERIFIED` | M10/T2 closed by explicit owner decision 2026-10-11 (R26 records the final remediation; R8 closed live with zero-outbound proven). Deferred follow-ups are NOT closed under M10 and require separate authorization: live gateway/knowledge restart or deployment, M10 ingress card/tag redesign (new Plan Revision), coordinator result ingestion, and the WSL/CI Python gate run. |
-| M12 - Governed Discord interaction lifecycle and presentation | `COMPLETE` | `LOCAL-VERIFIED` | M12/T1-R1 CLOSED 2026-10-13, all four frozen items delivered in one pass: (1) every component this plugin posts is now built through the host's `buildDiscordComponentMessage` and registered with `registerBuiltDiscordComponentMessage` against the message id the adapter returns (24-hour ttl, `reusable`), which is why Approve / Request Revision / Reject no longer answer "This component has expired"; (2) a verdict with no caller-supplied reason is recorded with the reason that matches the decision instead of the literal `USER_REJECTED`; (3) the task **identity** is the 12-character `ddmmyyyy`+4 code, with readers accepting the legacy 64-hex shape so the 128 installed ledger events still replay and no live record was migrated; (4) the card presents only Task ID + a concrete `Lý do` plan (named software, its operations, constraints, acceptance) + a `Kết quả` expected-result preview PNG, and the governed result is reported by the executing specialist (owner decision **D**) behind a provenance gate. `npm run verify` PASS (1417 tests / 1372 pass / 0 fail / 45 skipped) plus 112/112 with ZERO skips under WSL Ubuntu where the live tree is readable; one mutation probe killed the registration gate and two planned probes are `NOT RUN`. NOT closed under M12: **deployment** — the live gateway still runs the M11/T3-R1 build, so no live behaviour is verified; the preview is a schematic PNG, not a screenshot of Excel/SQL/Python/Power BI; and `verify.mjs` stays `NOT RUN`. Evidence in §4/§8. |
+| M12 - Governed Discord interaction lifecycle and presentation | `COMPLETE` | `REMOTE-BACKED` | M12/T1-R1 CLOSED 2026-10-13, all four frozen items delivered in one pass: (1) every component this plugin posts is now built through the host's `buildDiscordComponentMessage` and registered with `registerBuiltDiscordComponentMessage` against the message id the adapter returns (24-hour ttl, `reusable`), which is why Approve / Request Revision / Reject no longer answer "This component has expired"; (2) a verdict with no caller-supplied reason is recorded with the reason that matches the decision instead of the literal `USER_REJECTED`; (3) the task **identity** is the 12-character `ddmmyyyy`+4 code, with readers accepting the legacy 64-hex shape so the 128 installed ledger events still replay and no live record was migrated; (4) the card presents only Task ID + a concrete `Lý do` plan (named software, its operations, constraints, acceptance) + a `Kết quả` expected-result preview PNG, and the governed result is reported by the executing specialist (owner decision **D**) behind a provenance gate. Implementation `c1ad4b3`, closeout `219ac1d`, both pushed on `codex/m11-t1-audit-remediation`. CI run `38365272022` @ `219ac1d`: `quality-gate` **SUCCESS** (`ℹ tests 1417 / ℹ fail 0 / ℹ skipped 51`, `Repository policy check passed.`) and `python-quality` **SUCCESS** (`188 passed, 27 subtests`); Security run `38365276313` adds `secret-scan` **SUCCESS** (gitleaks, zero leaks) while `dependency-audit` stays red on the unchanged 5-high baseline. Locally: `npm run verify` PASS on Windows (1417 tests / 0 fail) plus 112/112 with ZERO skips under WSL Ubuntu where the live tree is readable; one mutation probe killed the registration gate and two planned probes are `NOT RUN`. NOT closed under M12: **deployment** — the live gateway still runs the M11/T3-R1 build, so no live behaviour is verified (CI has no access to `/home/hoang_vinh/.openclaw-zink`); the preview is a schematic PNG, not a screenshot of Excel/SQL/Python/Power BI; and `verify.mjs` stays `NOT RUN`. Evidence in §4/§8. |
 | M11 - Cross-module audit remediation                                       | `COMPLETE` | `REMOTE-BACKED` | M11/T1 is CLOSED (R1 four phases + R2 live admission and deployment, 2026-10-12; build DEPLOYED AND VERIFIED on the live WSL gateway, evidence in §4/§8). M11/T2 is CLOSED the same day: R1 made four Skill Store suites portable, gave `python-quality` the Node toolchain (CI SUCCESS, `188 passed, 27 subtests`) and fingerprinted two gitleaks false positives; R2 gave the Knowledgebase Python suite exactly one executor per environment, which repaired `CI / quality-gate` (CI run `38202129189`: `quality-gate` and `python-quality` both SUCCESS). NOT closed under M11 and still requiring separate authorization: `verify.mjs` (`NOT RUN`, operator-side), the pre-existing model-router `GOVERNANCE_COMPLETION_UNAVAILABLE` failures, the pre-existing `duplicate plugin id` warning, the pre-existing 5-high `npm audit` failure, `M11-06`'s PostgreSQL statement gate in CI (no Postgres service there), and the owner-excluded items (per-document quarantine, incremental-publish redesign, manifest schema extension, zink-tools drift cluster, zink-tools lint-glob gap). **M11/T3-R1 is CLOSED 2026-10-13** (`REMOTE-BACKED`, **DEPLOYED AND VERIFIED** on the live WSL gateway): the ten verified HIGH-severity items landed in two ordered phases — `3cb8274` (argv execution on the bot-token path, one deadline on the three Discord REST fetches, cause-preserving message-only diagnostics at the three native-boundary seams, queue `enqueueTask`/`clear` serialized) and `6b0ea0a` (non-spinning async lock release with the WSL drvfs errnos, refusal of a half-missing events/snapshot pair, replay diagnostics that keep their cause, decision-ledger save and approval reads under the shared writer lock, `REJECTED` skill proposals made terminal and serialized). CI run `38336851433` @ `f55d292` on the task branch: `quality-gate` **SUCCESS** (`ℹ tests 1374 / ℹ fail 0`, `Repository policy check passed.`) and `python-quality` **SUCCESS** (`188 passed, 27 subtests`); Security run `38336854295` adds `secret-scan` **SUCCESS** (gitleaks, zero leaks) while its `dependency-audit` stays red on the unchanged 5-high baseline. Locally: `npm run verify` PASS on Windows and the two new suites plus both lock-predecessor suites re-run green under WSL Ubuntu, where the packaged digests are byte-identical. 22 of 24 mutation runs killed the defect (the 2 survivors are at the pre-existing `enterNativeRun` seam, outside this task's change sites — recorded in §8). The router model order/`timeoutSeconds=100` and stale-lock auto-reclaim stay excluded as recorded owner decisions. **This build is DEPLOYED AND VERIFIED** on the live WSL gateway (owner grant 2026-10-13, ONE `--apply` from `9164c50`; all seven live asset digests equal the packaged build, `openclaw.json` and the ledger untouched, unit `active`/`MainPID=28865`/`NRestarts=0`, zero `GOVERNANCE_COMPLETION_UNAVAILABLE` on the new PID — evidence in §4; `verify.mjs` stays `NOT RUN` and a multi-hour live soak is still open). |
 
 The former self-built L&SC Data Plant is replaced by a **logical external
@@ -57,7 +57,13 @@ Planning Readiness: APPROVED (historical — the approved M12/T1-R1 contract is 
 Plan Revision: M12/T1-R1 (CLOSED)
 Execution Authorization: NO
 Execution Contract: NONE (the M12/T1-R1 ACTIVE.md was deleted at closeout)
-Evidence Level: LOCAL-VERIFIED — `npm run verify` PASS on the Windows host
+Evidence Level: REMOTE-BACKED — CI run `38365272022` @ `219ac1d` on ubuntu-24.04:
+  `quality-gate` SUCCESS (Prettier clean, `ℹ tests 1417 / ℹ pass 1366 / ℹ fail 0 /
+  ℹ skipped 51`, `Repository policy check passed.`) and `python-quality` SUCCESS
+  (`188 passed, 27 subtests passed in 10.98s`); Security run `38365276313`: `secret-scan`
+  SUCCESS (gitleaks, zero leaks — which is what converts this task's local secret check
+  into CI evidence) while `dependency-audit` stays red on the unchanged pre-existing
+  5-high baseline. Locally: `npm run verify` PASS on the Windows host
   (`format:check` clean, `lint` 0 issues, `npm test` 1417 tests / 1372 pass / 0 fail /
   45 skipped, `repo:check` "Repository policy check passed."), and under WSL Ubuntu the
   four new M12 suites plus the five digest-pinning suites run 112/112 with ZERO
@@ -68,7 +74,9 @@ Evidence Level: LOCAL-VERIFIED — `npm run verify` PASS on the Windows host
   gateway still carries the M11/T3-R1 build, no card has been rendered or clicked on
   Discord, and deploying this build needs its own owner grant. `verify.mjs` stays
   `NOT RUN`; the candidate packaged entrypoint is `85fbee50…` and the live `61e344e6…`
-  is admitted at both guards. Durable record in §8.
+  is admitted at both guards. REMOTE-BACKED here covers the repository gates on
+  ubuntu-24.04 only — CI cannot reach `/home/hoang_vinh/.openclaw-zink`, so it adds no
+  live-runtime or Discord evidence. Durable record in §8.
 Task Branch: codex/m11-t1-audit-remediation (the owner has not authorized a new branch
   or a `main` merge; this task continues on the current task branch)
 Owner Approval: EXPLICIT — 2026-10-13. Answering the OWNER DECISION block issued after
@@ -4343,7 +4351,7 @@ Deployment: NOT authorized. The live gateway still runs the M11/T3-R1 build, so 
 this is observable by the owner until a separate grant for `--preflight` + `--apply` +
 restart, which will also require the outgoing-asset digest admission recorded below.
 
-#### M12/T1-R1 closeout evidence (2026-10-13, `LOCAL-VERIFIED`, not deployed)
+#### M12/T1-R1 closeout evidence (2026-10-13, `REMOTE-BACKED` for the repository gates, not deployed)
 
 All five contract phases are implemented and validated on the repository only. The
 execution contract is deleted at this closeout; the implementation commit is `c1ad4b3` on
@@ -4358,6 +4366,19 @@ is why the same set was re-run where it can actually execute: under **WSL Ubuntu
 (`m10-t2-r3`, `m10-t2-r7`, `m10-t2-r12`, `m11-t1-r2`, `m8-t2.10-r13`) run
 **112/112 pass, 0 skipped** — with `/home/hoang_vinh/.openclaw-zink` reachable, so the
 live asset digests were exercised rather than skipped.
+
+*CI backing.* The task branch only runs CI through `workflow_dispatch` (push/PR triggers
+are scoped to `main`, and widening that scope is a recorded deferred item, not this task),
+so both workflows were dispatched against `219ac1d`. Run `38365272022`: `quality-gate`
+**SUCCESS** on ubuntu-24.04 — Prettier clean, `ℹ tests 1417 / ℹ pass 1366 / ℹ fail 0 /
+ℹ skipped 51`, `Repository policy check passed.` — and `python-quality` **SUCCESS**
+(`188 passed, 27 subtests passed in 10.98s`). Security run `38365276313`: `secret-scan`
+**SUCCESS** (gitleaks full history, zero leaks), which converts this task's local
+secret check into CI evidence, while `dependency-audit` fails on the unchanged
+pre-existing `9 vulnerabilities (3 low, 1 moderate, 5 high)` baseline. CI's 51 skips are
+the host-conditional live-runtime checks: CI has no access to
+`/home/hoang_vinh/.openclaw-zink`, so CI adds repository-gate evidence and no
+live-runtime evidence whatsoever. The zero-skip WSL run above is what covers that lane.
 
 *Mutation.* One probe was executed: removing the component registration from
 `sendNativePayload` made exactly the two intended assertions fail

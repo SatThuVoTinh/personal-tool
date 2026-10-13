@@ -426,7 +426,11 @@ asset drift detected` (`installed_mutation: false`) because ten live
   `COMPONENT_REGISTRATION_FAILED`) and never blocks the card, so approving from the thread
   text keeps working even where the host SDK is unreachable. Live behaviour is NOT
   verified: the running gateway still carries the M11/T3-R1 build, and deploying this one
-  needs its own owner grant.
+  needs its own owner grant. Repository evidence: CI run `38365272022` @ `219ac1d` on
+  ubuntu-24.04 (`quality-gate` SUCCESS — 1417 tests, 0 fail, `Repository policy check
+passed.`; `python-quality` SUCCESS — 188 passed, 27 subtests) and Security run
+  `38365276313` (`secret-scan` SUCCESS, zero leaks; `dependency-audit` unchanged red on
+  the pre-existing 5-high baseline).
 - M12/T1-R1: the two live-runtime cross-checks in
   `tests/m8-t2.10-r13-r7-predecessor-allowlist.test.mjs` (R13 P1/P2) failed on any host
   that can read the deployed tree, because they still asserted the installed entrypoint
