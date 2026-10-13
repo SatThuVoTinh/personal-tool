@@ -17,7 +17,10 @@ import {
   escapeSqlLiteral,
   checkIndexFreshness,
 } from "../../../zink-skill-store/src/vector-sync.mjs";
-import { scanCatalog } from "../../../zink-skill-store/src/catalog.mjs";
+import {
+  scanCatalog,
+  withSkillStoreWriterLock,
+} from "../../../zink-skill-store/src/catalog.mjs";
 
 export class SkillAdapterError extends Error {
   constructor(message, code = "SKILL_ADAPTER_ERROR") {
@@ -897,40 +900,60 @@ export class SkillAdapter {
           );
         }
         try {
-          const proposalPath = path.join(proposalsDir, `${proposal_id}.json`);
-          const existing = readJsonIfExistsSync(proposalPath);
-          const sameBytes =
-            existing?.proposal_id === proposal_id &&
-            existing?.content_sha256 === content_sha256 &&
-            typeof existing?.content === "string";
-          if (
-            sameBytes &&
-            existing?.status === "CANDIDATE" &&
-            typeof existing?.expires_at === "string" &&
-            Date.parse(existing.expires_at) > Date.now()
-          ) {
-            return {
-              action: "propose",
-              proposal: existing,
-              governed_status: "SUCCESS",
-            };
-          }
-          if (
-            sameBytes &&
-            (existing?.status === "APPROVED" ||
-              existing?.status === "MATERIALIZED" ||
-              existing?.status === "READY" ||
-              existing?.status === "INDEX_FAILED")
-          ) {
-            // Already decided past candidacy: never regress the durable
-            // record back to CANDIDATE.
-            return {
-              action: "propose",
-              proposal: existing,
-              governed_status: "SUCCESS",
-            };
-          }
-          writeJsonAtomicSync(proposalPath, proposal);
+          // M11/T3 B6: the read, the decision and the write are one unit under
+          // the canonical Skill Store writer lock — the same lock promotion and
+          // rejection already take. Unguarded, a propose could read a still
+          // undecided record and then write over a rejection committing in
+          // another process, erasing the owner's decision.
+          const alreadyDecided = await withSkillStoreWriterLock(
+            this.skillsRoot,
+            () => {
+              const proposalPath = path.join(
+                proposalsDir,
+                `${proposal_id}.json`,
+              );
+              const existing = readJsonIfExistsSync(proposalPath);
+              const sameBytes =
+                existing?.proposal_id === proposal_id &&
+                existing?.content_sha256 === content_sha256 &&
+                typeof existing?.content === "string";
+              if (
+                sameBytes &&
+                existing?.status === "CANDIDATE" &&
+                typeof existing?.expires_at === "string" &&
+                Date.parse(existing.expires_at) > Date.now()
+              ) {
+                return {
+                  action: "propose",
+                  proposal: existing,
+                  governed_status: "SUCCESS",
+                };
+              }
+              if (
+                sameBytes &&
+                (existing?.status === "APPROVED" ||
+                  existing?.status === "MATERIALIZED" ||
+                  existing?.status === "READY" ||
+                  existing?.status === "INDEX_FAILED" ||
+                  // M11/T3 B6: a rejection is as terminal as an approval. It was
+                  // missing here, so re-proposing the identical bytes fell
+                  // through to the atomic write below and silently erased the
+                  // owner's rejection.
+                  existing?.status === "REJECTED")
+              ) {
+                // Already decided past candidacy: never regress the durable
+                // record back to CANDIDATE.
+                return {
+                  action: "propose",
+                  proposal: existing,
+                  governed_status: "SUCCESS",
+                };
+              }
+              writeJsonAtomicSync(proposalPath, proposal);
+              return null;
+            },
+          );
+          if (alreadyDecided) return alreadyDecided;
         } catch (error) {
           if (error instanceof SkillAdapterError) throw error;
           throw new SkillAdapterError(

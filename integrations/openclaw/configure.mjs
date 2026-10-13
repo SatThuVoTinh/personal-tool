@@ -249,6 +249,15 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // M10/T2-R3: the outgoing hygiene-build asset (41c62e7), proven as in the
     // R3 header above (live tree 34/34 match). Same admission semantics.
     "9b5f2f94c33430a30ae5da96b118a558229503bf195e8168701cfb1d748b782e",
+    // M11/T3 Phase 2: the build the live WSL runtime carries — byte-equal to
+    // `HEAD` at the start of this task and one of the 31 assets PLAN.md §3
+    // recorded as matching the current build. This revision takes `save()`'s
+    // whole-file read-modify-write under the shared `<basename>.lock`, so
+    // without this entry --preflight refuses the deployed extension and the
+    // next authorized deployment becomes unreachable (the M11/T1-R2 defect).
+    // The new digest is deliberately NOT listed: it is the current build,
+    // accepted by content comparison.
+    "5e97d9caf644768ce40d253324ff6ca8730cce230d2d82dcff6e47a085718642",
   ]),
   "lib/policy.mjs": Object.freeze([
     // M10/T2-R14: the R13 build currently deployed (the one that carries the
@@ -411,6 +420,14 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // listed: that build was never installed on any runtime, so admitting it
     // would widen the control for no deployment path.
     "1975c821f94afe25147debe5ca538f83c3c0e2e3be10bfcacca80c3e9bfbf37e",
+    // M11/T3 Phase 2: the build the live WSL runtime carries, recorded in
+    // PLAN.md §3/§4 and CHANGELOG.md as `lib/file-lock.mjs = 22d7411a…`. This
+    // revision makes the async release non-spinning (`releaseAsync`), adds the
+    // WSL drvfs/9p transient errnos, and clears the in-process owner token when
+    // the retry budget is exhausted. Without this entry --preflight refuses the
+    // deployed extension. The new digest is deliberately NOT listed: it is the
+    // current build, accepted by content comparison.
+    "22d7411a1a4613bc70379b405c922b560fd15cf41e81d0ff52db7231c409e6ff",
   ]),
   "lib/guard.mjs": Object.freeze([
     // M10/T2-R14: the outgoing R12/R13 build currently deployed, byte-proven by
@@ -448,6 +465,16 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // params/node/topology/budget/lineage validation and fixes the legacy
     // carve-out NaN. Listed ONLY so the successor can replace it.
     "482b4938647eed44866ed494bf18f6e2417a3e41f31f3960b4629958815ff7a8",
+    // M11/T3 Phase 2: the build the live WSL runtime carries. This revision
+    // reads `approvals.json` and the per-task approval file under the ledger's
+    // `writer.lock` — the lock `consumeApprovalAtomically` already takes — makes
+    // an unparseable individual record a governed denial instead of raw parser
+    // text, and documents the in-memory-only replay guard when no ledger root is
+    // present. Without this entry --preflight refuses the deployed extension.
+    // The new digest is deliberately NOT listed: it is the current build.
+    // ASSET digest, proven through `governancePluginFiles()` — the raw file
+    // hashes differently because packaging rewrites this module's imports.
+    "7dd37ee9ffea60de1f30869f03f73e4182f9b31b5c459302ba68ffb5093242fd",
   ]),
   "lib/native-boundary.mjs": Object.freeze([
     "4b77356f2a843f26040a7cd3312c896469aff33cc472bc6c02fdd5c472bd1234",
@@ -540,6 +567,16 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
   "lib/ledger.mjs": Object.freeze([
     "d7f406e9dfa8f45d117f555bed18d2bf4c63ed966c3dd0588d221a54b9e87255",
     "50efeec64203240014b93479900a51251efbf0f286cc170feb93facf5a954148",
+    // M11/T3 Phase 2: the build the live WSL runtime carries. This revision makes
+    // `ensureLedger` create `events.jsonl` and `snapshot.json` together or refuse
+    // with `EXECUTION_STATE_UNKNOWN` (a silently rebuilt half-pair resumed
+    // governance at sequence 0), and keeps the replay fault attached as `cause`
+    // plus one content-free diagnostic line. Without this entry --preflight
+    // refuses the deployed extension. The new digest is deliberately NOT listed:
+    // it is the current build, accepted by content comparison. ASSET digest,
+    // proven through `governancePluginFiles()` — the raw file hashes differently
+    // because packaging rewrites this module's imports.
+    "818d7cb0d61466bda1d81a451119a2e0099b730a2f8a74593d5dd3af92aa6c99",
   ]),
   "lib/workflow.mjs": Object.freeze([
     "14bb6a5575b3f25e7d04aafb28eb1e95b0b5b2a21b15b6b5dec787aaaf94f907",

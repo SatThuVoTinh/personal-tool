@@ -65,9 +65,20 @@ const R18_FILE_LOCK_SHA256 =
 const NEVER_INSTALLED_SHA256 =
   "0e533f101b699b8432a374e7db0758ac8610b462cbcb4255065fe2b49041dcd1";
 
+/**
+ * The asset digest the live WSL runtime carries after the M11/T1-R2
+ * deployment — recorded in PLAN.md §3/§4 and CHANGELOG.md as
+ * `lib/file-lock.mjs = 22d7411a…`. M11/T3 Phase 2 (B1: the non-spinning
+ * `releaseAsync`, the WSL drvfs/9p errnos, the owner-token cleanup on
+ * exhaustion) makes it the outgoing build, so it must be admitted or
+ * --preflight refuses the deployed extension.
+ */
+const M11_T3_OUTGOING_FILE_LOCK_SHA256 =
+  "22d7411a1a4613bc70379b405c922b560fd15cf41e81d0ff52db7231c409e6ff";
+
 /** The CURRENT build's file-lock asset — accepted by content, never listed. */
 const CURRENT_FILE_LOCK_SHA256 =
-  "22d7411a1a4613bc70379b405c922b560fd15cf41e81d0ff52db7231c409e6ff";
+  "bcd65de81c9f6df088dd9ec269cc4dd3969fd80657f9c582e34e06554e64cf7b";
 
 const identifiers = Object.freeze({
   discordGuildId: "123456789012345678",
@@ -228,17 +239,26 @@ test("R2 P1: the live runtime IS the ea84a5a packaged build and differs from the
   );
   // The whole gap R2 closed, stated exactly: of the packaged files, the
   // ea84a5a build differs from the working tree in the entrypoint (admitted),
-  // in lib/file-lock.mjs (admitted by R2), and in the two assets M11/T3 Phase 1
-  // necessarily moved — lib/native-boundary.mjs (A3) and lib/queue-manager.mjs
-  // (A4), both admitted as predecessors of the build the live runtime carries.
-  // Anything beyond this set would mean the 33-file scan that motivated R2 was
-  // wrong.
+  // in lib/file-lock.mjs (admitted by R2 and again by M11/T3), in the two
+  // assets M11/T3 Phase 1 necessarily moved — lib/native-boundary.mjs (A3) and
+  // lib/queue-manager.mjs (A4) — and in the four assets Phase 2 moved:
+  // lib/file-lock.mjs (B1), lib/ledger.mjs (B2/B3), lib/decision-ledger.mjs
+  // (B4) and lib/guard.mjs (B5). Each divergence is admitted below, so the
+  // deployed build stays upgradable. Anything beyond this set would mean the
+  // 33-file scan that motivated R2 was wrong.
   const differing = Object.keys(current.assets).filter(
     (rel) => sha256(live.assets[rel]) !== sha256(current.assets[rel]),
   );
   assert.deepEqual(
     differing.sort(),
-    ["lib/file-lock.mjs", "lib/native-boundary.mjs", "lib/queue-manager.mjs"],
+    [
+      "lib/decision-ledger.mjs",
+      "lib/file-lock.mjs",
+      "lib/guard.mjs",
+      "lib/ledger.mjs",
+      "lib/native-boundary.mjs",
+      "lib/queue-manager.mjs",
+    ].sort(),
     "only file-lock and the M11/T3 assets may diverge from the proven live build",
   );
   const table = assetTable();
@@ -278,14 +298,19 @@ test("R2 P2: the live runtime agrees with the proven digest where readable", asy
 // THE ALLOWLIST ITSELF — one addition, bounded
 // ---------------------------------------------------------------------------
 
-test("R2 0: the file-lock block holds exactly the two proven predecessors, each listed once", async () => {
+test("R2 0: the file-lock block holds exactly the three proven predecessors, each listed once", async () => {
   const block = keyBlock(assetTable(), "lib/file-lock.mjs");
+  const admitted = [
+    R18_FILE_LOCK_SHA256,
+    LIVE_FILE_LOCK_SHA256,
+    M11_T3_OUTGOING_FILE_LOCK_SHA256,
+  ];
   assert.deepEqual(
     listedDigests(block).sort(),
-    [R18_FILE_LOCK_SHA256, LIVE_FILE_LOCK_SHA256].sort(),
-    "the block must carry the R18 predecessor and the live predecessor, nothing else",
+    admitted.slice().sort(),
+    "the block must carry the R18 predecessor, the R2 live predecessor and the M11/T3 outgoing build, nothing else",
   );
-  for (const digest of [R18_FILE_LOCK_SHA256, LIVE_FILE_LOCK_SHA256]) {
+  for (const digest of admitted) {
     assert.equal(
       CONFIGURE_SOURCE.split(digest).length - 1,
       1,

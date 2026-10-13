@@ -50,11 +50,15 @@ export const LOCK_MODE = 0o700;
 export const RELEASE_RETRY_ATTEMPTS = 5;
 // ENOTEMPTY belongs here: on Windows a directory whose just-deleted file still
 // has a pending handle reports the removal as "directory not empty".
+// ESTALE and EIO belong here too: the live runtime is WSL, and drvfs/9p answer
+// a removal that is about to succeed with one of those two.
 const RETRYABLE_RELEASE_ERRNOS = new Set([
   "EPERM",
   "EACCES",
   "EBUSY",
   "ENOTEMPTY",
+  "ESTALE",
+  "EIO",
 ]);
 
 function busyWaitMs(ms) {
@@ -134,17 +138,15 @@ export function tryAcquire(lockDir) {
 }
 
 /**
- * Release a lock held by this process. Never throws for a missing lock.
- * Throws FILE_LOCK_NOT_OWNER when the lock at `dir` was not acquired by this
- * process under the owner-token protocol — including a lock whose directory
- * was removed and re-created by another holder in the meantime.
+ * The owner-token half of `release`, shared with `releaseAsync`: this process
+ * must have recorded the token and the on-disk record must still match it.
+ * @returns false when there is nothing to release (no lock present).
  */
-export function release(lockDir) {
-  const dir = normalizeLockDir(lockDir);
+function ownsRecordedLock(dir) {
   const expected = heldTokens.get(dir);
   if (expected === undefined) {
     if (!existsSync(dir)) {
-      return; // idempotent no-op for an absent lock
+      return false; // idempotent no-op for an absent lock
     }
     throw notOwnerError(dir, "this process never acquired it");
   }
@@ -160,42 +162,101 @@ export function release(lockDir) {
   if (recorded?.token !== expected) {
     throw notOwnerError(dir, "a different holder owns it now");
   }
-  // M10/T2-R18: bounded retry. `rmdirSync` takes no retry budget of its own, and
-  // on Windows a directory that was just created can transiently refuse removal
-  // while a sync client or scanner holds a handle to it (EPERM/EACCES/
-  // EBUSY/ENOTEMPTY). A single transient refusal must not become a permanent
-  // lockout of the ledger, the queue and the decision ledger. unlink+rmdir are
-  // attempted as ONE unit per retry round with a small geometric backoff:
-  // removing owner.json leaves a pending-delete handle on Windows, so the very
-  // next `rmdirSync` transiently answers EPERM/ENOTEMPTY — without the backoff
-  // every second acquire at the same path then hit FILE_LOCK_BUSY on a stranded
-  // empty directory.
+  return true;
+}
+
+/**
+ * One unlink+rmdir round, returned as a verdict so the synchronous and
+ * asynchronous releases apply exactly the same errno policy rather than each
+ * restating it.
+ */
+function removalRound(dir) {
+  try {
+    unlinkSync(ownerFileFor(dir));
+  } catch (err) {
+    if (
+      err?.code !== "ENOENT" &&
+      !RETRYABLE_RELEASE_ERRNOS.has(err?.code ?? "")
+    ) {
+      return { fatal: err };
+    }
+  }
+  try {
+    rmdirSync(dir);
+    return { released: true };
+  } catch (err) {
+    if (err?.code === "ENOENT") return { released: true }; // already released
+    if (!RETRYABLE_RELEASE_ERRNOS.has(err?.code ?? "")) {
+      return { fatal: err };
+    }
+    return { retry: err };
+  }
+}
+
+/**
+ * Release a lock held by this process. Never throws for a missing lock.
+ * Throws FILE_LOCK_NOT_OWNER when the lock at `dir` was not acquired by this
+ * process under the owner-token protocol — including a lock whose directory
+ * was removed and re-created by another holder in the meantime.
+ *
+ * M10/T2-R18: bounded retry. `rmdirSync` takes no retry budget of its own, and
+ * on Windows a directory that was just created can transiently refuse removal
+ * while a sync client or scanner holds a handle to it (EPERM/EACCES/
+ * EBUSY/ENOTEMPTY), while WSL drvfs/9p answers ESTALE or EIO. A single transient
+ * refusal must not become a permanent lockout of the ledger, the queue and the
+ * decision ledger. unlink+rmdir are attempted as ONE unit per retry round with a
+ * small geometric backoff: removing owner.json leaves a pending-delete handle on
+ * Windows, so the very next `rmdirSync` transiently answers EPERM/ENOTEMPTY —
+ * without the backoff every second acquire at the same path then hit
+ * FILE_LOCK_BUSY on a stranded empty directory.
+ *
+ * This half SPINS between rounds (`busyWaitMs`); it exists for the synchronous
+ * seams. `withFileLock` must use `releaseAsync` instead, so the async seam never
+ * blocks the event loop it promised not to block.
+ */
+export function release(lockDir) {
+  const dir = normalizeLockDir(lockDir);
+  if (!ownsRecordedLock(dir)) return;
   let lastError = null;
   for (let attempt = 0; attempt < RELEASE_RETRY_ATTEMPTS; attempt++) {
-    try {
-      unlinkSync(ownerFileFor(dir));
-    } catch (err) {
-      if (
-        err?.code !== "ENOENT" &&
-        !RETRYABLE_RELEASE_ERRNOS.has(err?.code ?? "")
-      ) {
-        throw err;
-      }
-    }
-    try {
-      rmdirSync(dir);
+    const round = removalRound(dir);
+    if (round.released) {
       heldTokens.delete(dir);
       return;
-    } catch (err) {
-      if (err?.code === "ENOENT") {
-        heldTokens.delete(dir);
-        return; // already released
-      }
-      lastError = err;
-      if (!RETRYABLE_RELEASE_ERRNOS.has(err?.code ?? "")) break;
     }
+    lastError = round.fatal ?? round.retry;
+    if (round.fatal) break;
     if (attempt + 1 < RELEASE_RETRY_ATTEMPTS) busyWaitMs(1 << attempt);
   }
+  // M11/T3 B1: an exhausted budget must not leave the token registered. A stale
+  // in-process token survives into the next acquisition of the same path, whose
+  // release then deletes whichever lock is present — two writers inside the
+  // critical section, which is exactly what the owner token exists to prevent.
+  heldTokens.delete(dir);
+  throw lastError ?? notOwnerError(dir, "lock directory could not be removed");
+}
+
+/**
+ * The asynchronous half of `release`: identical ownership validation, identical
+ * errno policy and attempt count, but the backoff between rounds is awaited
+ * instead of spun, so a contended release cannot stall the event loop the
+ * module header promises never to block.
+ */
+export async function releaseAsync(lockDir) {
+  const dir = normalizeLockDir(lockDir);
+  if (!ownsRecordedLock(dir)) return;
+  let lastError = null;
+  for (let attempt = 0; attempt < RELEASE_RETRY_ATTEMPTS; attempt++) {
+    const round = removalRound(dir);
+    if (round.released) {
+      heldTokens.delete(dir);
+      return;
+    }
+    lastError = round.fatal ?? round.retry;
+    if (round.fatal) break;
+    if (attempt + 1 < RELEASE_RETRY_ATTEMPTS) await delay(1 << attempt);
+  }
+  heldTokens.delete(dir);
   throw lastError ?? notOwnerError(dir, "lock directory could not be removed");
 }
 
@@ -247,6 +308,10 @@ export async function withFileLock(lockDir, fn, options = {}) {
   // M10/T2-R18: same semantics as the sync seam — a failing release must not
   // replace the guarded call's own outcome, and a committed result is never
   // converted into a thrown error.
+  //
+  // M11/T3 B1: the release must be the asynchronous half. The sync `release`
+  // spins in `busyWaitMs` between retry rounds, which contradicts this module's
+  // own header promise that waiting is fully asynchronous.
   let result;
   let failure = null;
   try {
@@ -255,7 +320,7 @@ export async function withFileLock(lockDir, fn, options = {}) {
     failure = err;
   } finally {
     try {
-      release(dir);
+      await releaseAsync(dir);
     } catch (releaseErr) {
       if (failure) releaseErr.cause = failure;
     }

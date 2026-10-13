@@ -124,6 +124,19 @@ export function ensureLedger(paths) {
   validateLedgerPaths(paths);
   privateDir(paths.root);
   privateDir(path.dirname(paths.root));
+  // M11/T3 B2: the pair is created together or not at all. Recreating a missing
+  // half silently resumed governance at `sequence: 0` with
+  // `last_event_digest: null`, and the reconciliation guard only fires when the
+  // snapshot is AHEAD of the event log, so the rebuilt pair passed every check
+  // and the loss looked like a fresh ledger. A half-present pair is now an
+  // explicit state this process cannot resolve; recovery is an operator action.
+  const eventsPresent = existsSync(paths.events);
+  const snapshotPresent = existsSync(paths.snapshot);
+  if (eventsPresent !== snapshotPresent) {
+    const incomplete = new Error("Ledger state incomplete");
+    incomplete.code = "EXECUTION_STATE_UNKNOWN";
+    throw incomplete;
+  }
   createIfMissing(paths.events, "");
   createIfMissing(
     paths.snapshot,
@@ -403,12 +416,26 @@ function readSnapshotLocked(paths, repairSnapshot = true) {
     }
     if (tail.length > 0 && repairSnapshot) writeSnapshotAtomic(paths, snapshot);
     return snapshot;
-  } catch {
-    // JSON parser errors may echo persisted content. Keep diagnostics content-free.
+  } catch (error) {
+    // M11/T3 B3: the fault class must survive. Relabelling every replay fault as
+    // corruption with no cause left the operator unable to separate a genuine
+    // corrupt record from `ENOSPC`, a budget exhaustion, or a snapshot write
+    // failure — and the host-visible code is unchanged, so the only diagnostic
+    // available was nothing.
+    //
+    // The logged field is the error CLASS, never its message: JSON parser errors
+    // quote a snippet of the parsed content, and ledger content is untrusted
+    // data that must not reach the log. The full original error stays attached as
+    // `cause` for in-process consumers.
+    console.error(
+      "[zink-ledger] replay fault:",
+      String(error?.name ?? error?.code ?? "unknown"),
+    );
     const failure = new Error(
       "Ledger corruption: trusted state cannot be verified",
     );
     failure.code = "EXECUTION_STATE_UNKNOWN";
+    failure.cause = error;
     throw failure;
   }
 }

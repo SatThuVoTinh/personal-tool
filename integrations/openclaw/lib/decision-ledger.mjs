@@ -11,6 +11,7 @@ import {
 import { createHash } from "node:crypto";
 import path from "node:path";
 import os from "node:os";
+import { lockDirFor, withFileLockSync } from "./file-lock.mjs";
 
 /**
  * Governed Decision Ledger
@@ -239,39 +240,59 @@ export class DecisionLedger {
     const tempPath = `${this.storagePath}.tmp-${process.pid}-${Date.now()}`;
     let fd = null;
     try {
+      // The lock lives beside the storage file, so the directory must exist
+      // before `mkdir`-based acquisition can succeed.
       if (!existsSync(dir)) {
         mkdirSync(dir, { recursive: true });
       }
-      const data = Array.from(this.decisions.values());
-      fd = openSync(tempPath, "w", 0o600);
-      writeFileSync(fd, JSON.stringify(data, null, 2) + "\n", "utf8");
-      fsyncSync(fd);
-      closeSync(fd);
-      fd = null;
-      renameSync(tempPath, this.storagePath);
-      // M10/T2-R17: fsync the parent directory after the rename, so the rename
-      // ITSELF is durable. Without it the file's contents are fsynced but the
-      // name swap can still be lost on a crash, leaving the pre-rename file in
-      // place — which for this ledger means losing the owner's most recent
-      // CONFIRMED decision. This closes a gap against the standard the rest of
-      // the repo already declares: `topology/lib/ledger.mjs` and
-      // `lib/queue-manager.mjs` both do this (M7-066), and queue-manager's
-      // comment states the intent explicitly. win32-tolerant, same as those two.
-      try {
-        const directoryFd = openSync(dir, "r");
-        try {
-          fsyncSync(directoryFd);
-        } finally {
-          closeSync(directoryFd);
-        }
-      } catch (error) {
-        if (
-          process.platform !== "win32" ||
-          !/^(EPERM|EISDIR|EINVAL|ENOTSUP)$/u.test(error?.code ?? "")
-        ) {
-          throw error;
-        }
-      }
+      // M11/T3 B4: this is a whole-file read-modify-write rewrite and both
+      // sibling stores (`topology/lib/ledger.mjs`, `lib/queue-manager.mjs`)
+      // already serialize theirs through `withFileLockSync` at the same
+      // `<basename>.lock` path convention. Unguarded, a concurrent writer's
+      // rename lands between this process's temp write and its own rename, so
+      // one whole decision set is silently replaced by the other's.
+      //
+      // Contention surfaces as `LEDGER_WRITE_FAILED` — the same code this seam
+      // already emits for a storage failure — because semantically it IS a
+      // refused durable write, and it keeps the host-visible error enum closed.
+      //
+      // The guarded region is the write AND the rename as ONE unit: locking only
+      // around the rename would leave the torn-window defect this closes.
+      withFileLockSync(
+        lockDirFor(dir, `${path.basename(this.storagePath)}.lock`),
+        () => {
+          const data = Array.from(this.decisions.values());
+          fd = openSync(tempPath, "w", 0o600);
+          writeFileSync(fd, JSON.stringify(data, null, 2) + "\n", "utf8");
+          fsyncSync(fd);
+          closeSync(fd);
+          fd = null;
+          renameSync(tempPath, this.storagePath);
+          // M10/T2-R17: fsync the parent directory after the rename, so the rename
+          // ITSELF is durable. Without it the file's contents are fsynced but the
+          // name swap can still be lost on a crash, leaving the pre-rename file in
+          // place — which for this ledger means losing the owner's most recent
+          // CONFIRMED decision. This closes a gap against the standard the rest of
+          // the repo already declares: `topology/lib/ledger.mjs` and
+          // `lib/queue-manager.mjs` both do this (M7-066), and queue-manager's
+          // comment states the intent explicitly. win32-tolerant, same as those two.
+          try {
+            const directoryFd = openSync(dir, "r");
+            try {
+              fsyncSync(directoryFd);
+            } finally {
+              closeSync(directoryFd);
+            }
+          } catch (error) {
+            if (
+              process.platform !== "win32" ||
+              !/^(EPERM|EISDIR|EINVAL|ENOTSUP)$/u.test(error?.code ?? "")
+            ) {
+              throw error;
+            }
+          }
+        },
+      );
     } catch (err) {
       if (fd !== null) {
         try {

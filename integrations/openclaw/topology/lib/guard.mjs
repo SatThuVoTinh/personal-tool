@@ -511,33 +511,8 @@ export function resolveAuthenticatedApproval(paths, approvalId) {
   // (A record that exists but fails the contract is a hard denial above, not a
   // fall-through to a later source.)
   if (paths && paths.root) {
-    const approvalsFile = path.join(paths.root, "approvals.json");
-    if (existsSync(approvalsFile)) {
-      let data;
-      try {
-        data = JSON.parse(readFileSync(approvalsFile, "utf8"));
-      } catch {
-        data = undefined;
-      }
-      if (data && data[approvalId]) {
-        // An approval record that EXISTS but does not satisfy the canonical
-        // contract is an explicit invalid-approval denial, not an absent one:
-        // silently degrading it to "not found" hides a tampered record behind a
-        // generic refusal.
-        validateApprovalRecord8Fields(data[approvalId]);
-        return data[approvalId];
-      }
-    }
-    const individualApprovalFile = path.join(
-      paths.root,
-      "approvals",
-      `${approvalId}.json`,
-    );
-    if (existsSync(individualApprovalFile)) {
-      const rec = JSON.parse(readFileSync(individualApprovalFile, "utf8"));
-      validateApprovalRecord8Fields(rec);
-      return rec;
-    }
+    const fromFiles = readApprovalRecordFromFiles(paths, approvalId);
+    if (fromFiles) return fromFiles;
     let snapshot;
     try {
       snapshot = readSnapshot(paths);
@@ -552,6 +527,75 @@ export function resolveAuthenticatedApproval(paths, approvalId) {
     }
   }
   return null;
+}
+
+/**
+ * Read one approval from the two file-based stores under the ledger's
+ * `writer.lock`.
+ *
+ * M11/T3 B5: `consumeApprovalAtomically` consumes under that same lock, so an
+ * unlocked read here could observe `approvals.json` mid-write and then consume
+ * a record whose durable form the consumer never saw. Contention is a DENIAL
+ * (`null`), never an error: this is a read, and a new host-visible failure code
+ * on the approval path would be a larger change than the defect.
+ *
+ * A record that exists but violates the contract still throws
+ * `AUTH_APPROVAL_INVALID` — `withFileLockSync` propagates the callback's own
+ * errors and translates only acquisition failures.
+ *
+ * Deliberately NOT inside this lock: the ledger-sourced read in the caller.
+ * `readSnapshot` takes `writer.lock` itself and this primitive is single-attempt
+ * and non-reentrant, so wrapping it would turn every ledger-sourced approval into
+ * a contention denial.
+ */
+function readApprovalRecordFromFiles(paths, approvalId) {
+  const lock = lockDirFor(paths.root, "writer.lock");
+  let found;
+  try {
+    withFileLockSync(lock, () => {
+      const approvalsFile = path.join(paths.root, "approvals.json");
+      if (existsSync(approvalsFile)) {
+        let data;
+        try {
+          data = JSON.parse(readFileSync(approvalsFile, "utf8"));
+        } catch {
+          data = undefined;
+        }
+        if (data && data[approvalId]) {
+          // An approval record that EXISTS but does not satisfy the canonical
+          // contract is an explicit invalid-approval denial, not an absent one:
+          // silently degrading it to "not found" hides a tampered record behind a
+          // generic refusal.
+          validateApprovalRecord8Fields(data[approvalId]);
+          found = data[approvalId];
+          return;
+        }
+      }
+      const individualApprovalFile = path.join(
+        paths.root,
+        "approvals",
+        `${approvalId}.json`,
+      );
+      if (existsSync(individualApprovalFile)) {
+        // M11/T3 B5: the sibling store above already fails closed on an
+        // unparseable record. Parser text is not a governed denial — and on
+        // Node 20+ a `SyntaxError` message quotes the offending input, so
+        // leaving it raw could echo persisted content to the caller.
+        let record;
+        try {
+          record = JSON.parse(readFileSync(individualApprovalFile, "utf8"));
+        } catch {
+          return;
+        }
+        validateApprovalRecord8Fields(record);
+        found = record;
+      }
+    });
+  } catch (err) {
+    if (err?.code === "FILE_LOCK_BUSY") return null;
+    throw err;
+  }
+  return found ?? null;
 }
 
 function validateApprovalRecord8Fields(record) {
@@ -591,6 +635,12 @@ export function consumeApprovalAtomically(paths, approvalId, claimScope) {
   }
   const memConsumed = globalThis[consumedKey];
 
+  // M11/T3 B5 — documented limitation, kept intentionally: with no ledger root
+  // there is no durable store to record consumption against, so replay
+  // protection here is in-memory and single-process only. A second process, a
+  // restart, or the gateway's worker pool can each re-consume the same approval.
+  // Fixing it requires a durable consumption store, which is out of this task's
+  // scope; the behavior is recorded here rather than left to be rediscovered.
   if (!paths || !paths.root) {
     if (memConsumed.has(approvalId)) {
       return false;
