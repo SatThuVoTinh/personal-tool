@@ -510,3 +510,88 @@ test("M12/T2 P2: every governed surface publishes through one path and records i
     "an unreadable thread list refuses a duplicate incident post",
   );
 });
+
+// ---------------------------------------------------------------------------
+// M12/T2-R2 — the owner's verdict moves the thread's STATUS tag
+// ---------------------------------------------------------------------------
+
+test("M12/T2-R2: the verdict changes only the STATUS of the trio", () => {
+  const excel = { nodes: [NODE_EXCEL], current_stack: "data_plant" };
+  assert.deepEqual(
+    approvalTagSelectionsFor(excel, "excel").selections.map(
+      (entry) => `${entry.category}:${entry.value}`,
+    ),
+    ["STATUS:WAITING", "RISK:MEDIUM", "STACK:DATA"],
+    "an opened card always asks",
+  );
+  assert.deepEqual(
+    approvalTagSelectionsFor(excel, "excel", "APPROVE").selections.map(
+      (entry) => `${entry.category}:${entry.value}`,
+    ),
+    ["STATUS:APPROVED", "RISK:MEDIUM", "STACK:DATA"],
+    "the risk and the stack the plan carried survive the verdict",
+  );
+  for (const [decision, value] of [
+    ["REJECT", "REJECTED"],
+    ["REQUEST_REVISION", "CHANGES"],
+  ]) {
+    assert.equal(
+      approvalTagSelectionsFor(excel, "excel", decision).selections.find(
+        (entry) => entry.category === "STATUS",
+      ).value,
+      value,
+    );
+  }
+  assert.deepEqual(
+    approvalTagSelectionsFor(excel, "excel", "ACCEPT_RESULT").absent,
+    ["STATUS"],
+    "a decision with no forum status value yields no tag instead of a guess",
+  );
+});
+
+test("M12/T2-R2: one transition seam, fired after the verdict, never awaited by it", () => {
+  assert.equal(
+    (pluginSource.match(/transitionGovernedForumStatus\(/g) || []).length,
+    1,
+    "the plugin must move tags through the shared lib, not its own REST call",
+  );
+  assert.equal(
+    (pluginSource.match(/transitionApprovalTag\(\{/g) || []).length,
+    2,
+    "one definition and one call site",
+  );
+  assert.equal(
+    pluginSource.includes("await transitionApprovalTag("),
+    false,
+    "no owner decision path may block on a Discord round-trip",
+  );
+  const effect = pluginSource.indexOf("function applyOwnerDecisionEffect({");
+  const call = pluginSource.indexOf("transitionApprovalTag({", effect);
+  const dispatch = pluginSource.indexOf("executeApprovedTask({", effect);
+  assert.ok(
+    effect > -1 && call > effect && call < dispatch,
+    "the transition lives in the one post-decision effect and runs before execution dispatch",
+  );
+  const wiring = pluginSource.slice(call, dispatch);
+  for (const literal of ['"APPROVE"', '"REJECT"', '"REQUEST_REVISION"'])
+    assert.ok(
+      wiring.includes(literal),
+      `the ${literal} verdict must be mapped onto a tag value`,
+    );
+  assert.ok(
+    wiring.includes("}).catch("),
+    "a surface failure is recorded, never thrown into the verdict",
+  );
+  assert.ok(
+    pluginSource.includes("NO_SURFACE_STATE"),
+    "a task whose card was never surfaced reports instead of inventing a thread",
+  );
+  assert.ok(
+    pluginSource.includes("DISCORD_TAG_TRANSITION_SKIPPED"),
+    "every refusal to transition is named",
+  );
+  assert.ok(
+    pluginSource.includes("approvalStatusTag(decision)"),
+    "the creation path and the verdict path share one STATUS mapping",
+  );
+});

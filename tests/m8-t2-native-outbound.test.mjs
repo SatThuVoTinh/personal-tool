@@ -255,6 +255,28 @@ describe("R4 Finding 1 — native Discord outbound POC (offline)", () => {
       3,
       "one thread post, one tag read and one active-thread list, all bounded",
     );
+    // M12/T2-R2: the post-verdict tag transition is the only other seam, and it is bounded to
+    // the thread itself: read what it carries now, then PATCH only its applied_tags. A thread
+    // is a channel, so this is the same endpoint family, not a new transport.
+    const threadSites =
+      tagsSource.match(
+        /https:\/\/discord\.com\/api\/v10\/channels\/\$\{threadId\}/gu,
+      ) ?? [];
+    assert.equal(
+      threadSites.length,
+      2,
+      "exactly the thread tag read and the thread tag transition are allowed",
+    );
+    assert.equal(
+      (tagsSource.match(/method: "PATCH"/gu) ?? []).length,
+      1,
+      "the transition is the only mutating call outside thread creation",
+    );
+    assert.equal(
+      /method: "PATCH"[\s\S]{0,400}applied_tags: tagIds/u.test(tagsSource),
+      true,
+      "the PATCH may carry applied_tags and nothing else",
+    );
     assert.equal(
       tagsSource.includes("/messages"),
       false,

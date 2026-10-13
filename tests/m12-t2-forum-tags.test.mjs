@@ -20,9 +20,11 @@ import {
   parseTagName,
   readActiveForumThreads,
   readForumTags,
+  readForumThreadTags,
   resultStatusTag,
   resultTypeTag,
   surfaceStackTag,
+  transitionGovernedForumStatus,
 } from "../integrations/openclaw/lib/discord-forum-tags.mjs";
 
 // Non-routable placeholders: value shape only, never the owner's live ids.
@@ -597,5 +599,265 @@ describe("M12/T2 P1 — the tag read is cached per channel", () => {
     await resolver.resolve(args);
     assert.equal(calls.length, 3);
     assert.equal(resolver.size(), 1);
+  });
+});
+
+// ---------------------------------------------------------------- M12/T2-R2
+
+const THREAD_ID = "9000000000000000001";
+
+/**
+ * Serves the forum tag list on the channel read and a thread's own tags on the thread read, and
+ * records the PATCH so a test can assert exactly what Discord was asked to change.
+ */
+function threadFetch({ threadTags = [], patchStatus = 200 } = {}) {
+  const calls = [];
+  const fetchImpl = async (url, init = {}) => {
+    calls.push({ url, init });
+    if (init.method === "PATCH")
+      return patchStatus === 200
+        ? { ok: true, status: 200, json: async () => ({}) }
+        : { ok: false, status: patchStatus, json: async () => ({}) };
+    const single = /\/channels\/([^/]+)$/.exec(url);
+    if (single) {
+      if (single[1] === THREAD_ID)
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ id: THREAD_ID, applied_tags: threadTags }),
+        };
+      const list = TAG_SETS[single[1]] ?? [];
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ available_tags: list.map((t) => ({ ...t })) }),
+      };
+    }
+    return { ok: false, status: 404, json: async () => ({}) };
+  };
+  return { fetchImpl, calls };
+}
+
+const transition = (over = {}) =>
+  transitionGovernedForumStatus({
+    surface: "approvals",
+    channelId: APPROVALS_CHANNEL,
+    threadId: THREAD_ID,
+    token: "t",
+    status: approvalStatusTag("APPROVE"),
+    resolver: createForumTagResolver({}),
+    fetchImpl: threadFetch().fetchImpl,
+    deadlineMs: 10_000,
+    ...over,
+  });
+
+describe("M12/T2-R2 — the verdict moves the thread STATUS tag", () => {
+  it("maps the owner decision onto the forum own STATUS values", () => {
+    assert.deepEqual(approvalStatusTag(), {
+      category: "STATUS",
+      value: "WAITING",
+    });
+    assert.deepEqual(approvalStatusTag("REQUEST"), {
+      category: "STATUS",
+      value: "WAITING",
+    });
+    assert.equal(approvalStatusTag("APPROVE").value, "APPROVED");
+    assert.equal(approvalStatusTag("REJECT").value, "REJECTED");
+    assert.equal(approvalStatusTag("REQUEST_REVISION").value, "CHANGES");
+    assert.equal(approvalStatusTag("EXPIRE"), null);
+    assert.equal(approvalStatusTag("ACCEPT_RESULT"), null);
+  });
+
+  it("reads a thread tag list and refuses an unbounded or unauthenticated read", async () => {
+    const { fetchImpl } = threadFetch({ threadTags: ["a0", "a6", "a8"] });
+    assert.deepEqual(
+      await readForumThreadTags({
+        threadId: THREAD_ID,
+        token: "t",
+        fetchImpl,
+        deadlineMs: 10_000,
+      }),
+      ["a0", "a6", "a8"],
+    );
+    await assert.rejects(
+      () =>
+        readForumThreadTags({
+          threadId: THREAD_ID,
+          token: "t",
+          fetchImpl,
+          deadlineMs: undefined,
+        }),
+      /FORUM_TAG_DEADLINE_REQUIRED/u,
+    );
+    await assert.rejects(
+      () =>
+        readForumThreadTags({
+          threadId: "",
+          token: "t",
+          fetchImpl,
+          deadlineMs: 10_000,
+        }),
+      /FORUM_TAG_THREAD_REQUIRED/u,
+    );
+    await assert.rejects(
+      () =>
+        readForumThreadTags({
+          threadId: THREAD_ID,
+          token: "",
+          fetchImpl,
+          deadlineMs: 10_000,
+        }),
+      /FORUM_TAG_TOKEN_REQUIRED/u,
+    );
+  });
+
+  it("replaces only the STATUS tag and keeps every id it did not put there", async () => {
+    const { fetchImpl, calls } = threadFetch({
+      threadTags: ["a0", "a6", "a8", "z99"],
+    });
+    const log = logger();
+    const result = await transition({
+      fetchImpl,
+      resolver: createForumTagResolver({ logger: log }),
+    });
+    assert.equal(result.applied, true);
+    const patch = calls.find((call) => call.init.method === "PATCH");
+    assert.equal(
+      patch.url,
+      `https://discord.com/api/v10/channels/${THREAD_ID}`,
+    );
+    assert.deepEqual(
+      [...JSON.parse(patch.init.body).applied_tags].sort(),
+      ["a1", "a6", "a8", "z99"].sort(),
+      "WAITING becomes APPROVED and nothing else is touched",
+    );
+    assert.equal(
+      JSON.parse(patch.init.body).applied_tags.includes("a0"),
+      false,
+      "a decided card may not keep asking",
+    );
+    assert.equal(patch.init.signal !== undefined, true);
+  });
+
+  it("never PATCHes when that forum has no such STATUS value, and names why", async () => {
+    const { fetchImpl, calls } = threadFetch({
+      threadTags: ["a0", "a6", "a8"],
+    });
+    const log = logger();
+    // The results forum carries STATUS: SUCCESS|FAILED|PARTIAL and no APPROVED at all, which is
+    // exactly the cross-forum assumption requirement 2 forbids.
+    const result = await transition({
+      channelId: RESULTS_CHANNEL,
+      fetchImpl,
+      logger: log,
+      resolver: createForumTagResolver({ logger: log }),
+    });
+    assert.equal(result.applied, false);
+    assert.equal(result.code, "DISCORD_TAG_UNRESOLVED");
+    assert.equal(
+      calls.some((call) => call.init.method === "PATCH"),
+      false,
+      "an unresolved status must not reach Discord",
+    );
+    assert.match(
+      log.lines.join("\n"),
+      /DISCORD_TAG_UNRESOLVED channel=approvals category=STATUS wanted="STATUS: APPROVED" reason=VALUE_ABSENT/u,
+    );
+  });
+
+  it("names CATEGORY_ABSENT when the forum has no STATUS category at all", async () => {
+    const log = logger();
+    const result = await transition({
+      resolver: createForumTagResolver({
+        readTags: async () => [],
+        logger: log,
+      }),
+      logger: log,
+      fetchImpl: threadFetch({ threadTags: ["a0"] }).fetchImpl,
+    });
+    assert.equal(result.code, "DISCORD_TAG_UNRESOLVED");
+    assert.match(log.lines.join("\n"), /reason=CATEGORY_ABSENT/u);
+  });
+
+  it("reports a rejected PATCH by status instead of throwing into the verdict path", async () => {
+    const log = logger();
+    const result = await transition({
+      fetchImpl: threadFetch({
+        threadTags: ["a0"],
+        patchStatus: 400,
+      }).fetchImpl,
+      resolver: createForumTagResolver({ logger: log }),
+      logger: log,
+    });
+    assert.equal(result.applied, false);
+    assert.equal(result.code, "DISCORD_TAG_TRANSITION_REJECTED_400");
+    assert.match(
+      log.lines.join("\n"),
+      /DISCORD_TAG_TRANSITION_REJECTED channel=approvals threadId=/u,
+    );
+  });
+
+  it("reports unreadable tags and sends nothing", async () => {
+    const calls = [];
+    const result = await transition({
+      fetchImpl: async (url, init) => {
+        if (init.method === "PATCH") calls.push({ url, init });
+        throw new Error("ETIMEDOUT");
+      },
+      resolver: createForumTagResolver({ logger: logger() }),
+    });
+    assert.equal(result.code, "DISCORD_TAGS_UNREADABLE");
+    assert.equal(calls.length, 0);
+  });
+
+  it("refuses an unknown surface, a missing thread and a missing status", async () => {
+    assert.equal(
+      (await transition({ surface: "office" })).code,
+      "FORUM_SURFACE_UNKNOWN",
+    );
+    assert.equal(
+      (await transition({ threadId: "" })).code,
+      "FORUM_TAG_THREAD_REQUIRED",
+    );
+    assert.equal(
+      (await transition({ channelId: "" })).code,
+      "FORUM_TAG_CHANNEL_REQUIRED",
+    );
+    assert.equal(
+      (await transition({ token: "" })).code,
+      "FORUM_TAG_TOKEN_REQUIRED",
+    );
+    assert.equal(
+      (await transition({ status: null })).code,
+      "FORUM_TAG_STATUS_MISSING",
+    );
+    await assert.rejects(
+      () => transition({ resolver: null }),
+      /FORUM_TAG_RESOLVER_REQUIRED/u,
+    );
+    await assert.rejects(
+      () => transition({ deadlineMs: 0 }),
+      /FORUM_TAG_DEADLINE_REQUIRED/u,
+    );
+  });
+
+  it("reuses the cached forum tags instead of re-reading the channel per transition", async () => {
+    const { fetchImpl, calls } = threadFetch({
+      threadTags: ["a0", "a6", "a8"],
+    });
+    const resolver = createForumTagResolver({});
+    for (const status of [
+      approvalStatusTag("APPROVE"),
+      approvalStatusTag("REJECT"),
+    ]) {
+      const applied = await transition({ fetchImpl, resolver, status });
+      assert.equal(applied.applied, true);
+    }
+    const reads = calls.filter(
+      (call) =>
+        call.url ===
+        `https://discord.com/api/v10/channels/${APPROVALS_CHANNEL}`,
+    ).length;
+    assert.equal(reads, 1, "the forum tag list is read once and cached");
   });
 });

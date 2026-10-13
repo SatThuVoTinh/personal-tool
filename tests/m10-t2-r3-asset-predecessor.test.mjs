@@ -116,8 +116,13 @@ const HYGIENE_ASSET_PREDECESSORS = Object.freeze({
 // containment in #incidents. The live runtime still carries `61e344e6…` (M12/T1-R1 was
 // never deployed, so its `85fbee50…` stays unlisted by design), and the same 17
 // outgoing asset digests are still the admitted predecessors.
+// M12/T2-R2: and again — the entrypoint now also moves the approval thread's STATUS tag when
+// the owner decides (APPROVED / REJECTED / CHANGES), through the same lib seam that owns every
+// other tag rule. The live runtime still carries `61e344e6…`, R1's `f9ef77dc…` was never
+// deployed so it stays unlisted, and no asset admission changes: the installed files are
+// unchanged.
 const CURRENT_ENTRYPOINT_SHA256 =
-  "f9ef77dcf37cfa5a190535654c43b7b756bc49cc2ace0c1dc505aee9cd143cbc";
+  "513beb15c3d7624c0a928c4c1556dc44d4c4cff4f1e00980f24b298a25751c0d";
 
 const identifiers = Object.freeze({
   discordGuildId: "123456789012345678",

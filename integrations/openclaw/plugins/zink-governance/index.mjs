@@ -149,6 +149,7 @@ import {
   resultStatusTag,
   resultTypeTag,
   surfaceStackTag,
+  transitionGovernedForumStatus,
 } from "../../lib/discord-forum-tags.mjs";
 
 import {
@@ -256,10 +257,14 @@ export function governedTaskAgents(task, targetAgentId) {
   return [...new Set(agents)];
 }
 
-/** The approvals trio: the state the card asks about, its risk, its stack. */
-export function approvalTagSelectionsFor(task, targetAgentId) {
+/**
+ * The approvals trio: the state the card asks about, its risk, its stack. `decision` is only
+ * supplied by the post-verdict tag transition (M12/T2-R2); every publish path leaves it out, so
+ * an opened thread is always `STATUS: WAITING`.
+ */
+export function approvalTagSelectionsFor(task, targetAgentId, decision = null) {
   return buildSurfaceSelections("approvals", {
-    status: approvalStatusTag(),
+    status: approvalStatusTag(decision),
     risk: approvalRiskTag(
       riskClassesAdmittedBy(governedTaskAgents(task, targetAgentId)),
     ),
@@ -4947,6 +4952,67 @@ export default {
     }
 
     /**
+     * M12/T2-R2: the owner's verdict must be visible where he looks — the forum's STATUS tag,
+     * which is what he filters on. The decision is already durable in `WORKFLOW_USER_APPROVAL_
+     * DECIDED` before this runs, so the tag is a projection of it and never the record itself:
+     * no outcome of this call can undo, delay or rewrite what he decided (requirement 5), which
+     * is why it is fire-and-forget at the call site and every refusal here is only a log line.
+     * The thread id comes from the durable surface state R1 introduced; a task whose card was
+     * never surfaced has nothing to re-tag, and that is reported rather than guessed at.
+     */
+    async function transitionApprovalTag({ taskId, decision }) {
+      const approvalsForumId = resolveDiscordDestination(
+        config,
+        "discordApprovalsForumId",
+        "approvalsChannelId",
+      );
+      let task;
+      try {
+        task = readSnapshot(paths)?.tasks?.[taskId] ?? null;
+      } catch {
+        api.logger?.warn?.(
+          `[zink-governance] DISCORD_TAG_TRANSITION_SKIPPED channel=approvals task=${taskId} reason=STATE_UNREADABLE`,
+        );
+        return { applied: false, code: "STATE_UNREADABLE" };
+      }
+      if (!task) return { applied: false, code: "TASK_NOT_FOUND" };
+      const threadId = task.approval_thread_id ?? null;
+      if (!threadId) {
+        api.logger?.warn?.(
+          `[zink-governance] DISCORD_TAG_TRANSITION_SKIPPED channel=approvals task=${taskId} reason=NO_SURFACE_STATE`,
+        );
+        return { applied: false, code: "NO_SURFACE_STATE" };
+      }
+      let token;
+      try {
+        token = resolveDiscordBotToken("main");
+      } catch {
+        api.logger?.warn?.(
+          `[zink-governance] DISCORD_TAG_TRANSITION_SKIPPED channel=approvals task=${taskId} reason=CREDENTIAL_UNAVAILABLE`,
+        );
+        return { applied: false, code: "CREDENTIAL_UNAVAILABLE" };
+      }
+      const status = approvalStatusTag(decision);
+      if (!status) {
+        api.logger?.warn?.(
+          `[zink-governance] DISCORD_TAG_TRANSITION_SKIPPED channel=approvals task=${taskId} reason=DECISION_UNKNOWN`,
+        );
+        return { applied: false, code: "DECISION_UNKNOWN" };
+      }
+      return transitionGovernedForumStatus({
+        surface: "approvals",
+        channelId: approvalsForumId,
+        threadId,
+        token,
+        status,
+        resolver: forumTags,
+        fetchImpl: globalThis.fetch,
+        deadlineMs: DISCORD_REST_DEADLINE_MS,
+        logger: api.logger,
+      });
+    }
+
+    /**
      * M12/T2-R1: publish an accepted result as one tagged #results thread and return its id,
      * or the id already recorded for this task. #results had no publish path at all before
      * this task, so the delivered work existed only as a sentence in #office. Returns null
@@ -5664,6 +5730,29 @@ export default {
       userConfirmationRef,
       threadId,
     }) {
+      // M12/T2-R2: the verdict has to appear on the surface the owner triages. It is already
+      // durable in WORKFLOW_USER_APPROVAL_DECIDED, so this is a projection and nothing else:
+      // fire-and-forget with its own catch, no decision path awaits a Discord round-trip, and no
+      // outcome here can undo, delay or rewrite what he decided (requirement 5).
+      if (
+        normAction === ACTIONS.APPROVE ||
+        normAction === ACTIONS.REJECT_APPROVAL ||
+        normAction === ACTIONS.REQUEST_REVISION_APPROVAL
+      ) {
+        transitionApprovalTag({
+          taskId,
+          decision:
+            normAction === ACTIONS.APPROVE
+              ? "APPROVE"
+              : normAction === ACTIONS.REJECT_APPROVAL
+                ? "REJECT"
+                : "REQUEST_REVISION",
+        }).catch((tagErr) => {
+          api.logger?.warn?.(
+            `[zink-governance] approval tag not transitioned for task ${taskId}: ${tagErr?.message}`,
+          );
+        });
+      }
       if (normAction === ACTIONS.APPROVE) {
         executeApprovedTask({
           taskId,
