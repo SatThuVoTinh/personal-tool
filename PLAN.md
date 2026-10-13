@@ -55,9 +55,12 @@ Active revision: M12/T2-R3 — BOUNDED REMEDIATION of the live #office approval-
   diagnosed from the live journal before any edit, and confined to the failing control
   (`surfaceStackTag`) plus the asset-predecessor admission it needs. No `ACTIVE.md` is materialized
   for a bounded fix, and the fix changes no scope, contract, schema, gate or resource ceiling.
-Task Status: M12/T2-R3 — implemented, locally validated, **NOT DEPLOYED**; the live runtime still
-  carries the refusing build, and the owner's deployment A grant covered exactly ONE apply, so
-  reaching the host requires a fresh preflight → apply authorization.
+Task Status: M12/T2-R3 — implemented, validated locally **and on CI** (`0b55dfa` + `c8bcc24`
+  pushed), **NOT DEPLOYED**; the live runtime still carries the refusing build, and the owner's
+  deployment A grant covered exactly ONE apply, so reaching the host requires a fresh
+  preflight → apply authorization. Two owner decisions are open on this revision: (A) confirm the
+  STACK precedence order, which is **the agent's** judgment call made to restore approvals and is
+  recorded as reversible, and (B) grant deployment B. See §8 M12/T2-R3.
   M12/T2-R2 CLOSED — implemented and validated 2026-10-13 in implementation commit `b6d04e8`;
   the execution contract was deleted at this closeout and the working tree left clean.
   **DEPLOYED AND VERIFIED the same day** under the owner's standing deployment A grant
@@ -4833,10 +4836,19 @@ operator measurement. The current candidate `18fbb0774c18d013f599f562810932cfb80
 is deliberately NOT listed. No entrypoint pin moved: this revision changes no packaged entrypoint
 byte, and the live `index.mjs` is already the current build `513beb15…`.
 
-Gates (local only — this record claims no live evidence):
+Implementation `0b55dfa`, operator-note `c8bcc24`, both pushed on
+`codex/m11-t1-audit-remediation` (no `main` merge, no force-push, no PR — none authorized).
+
+Gates (local + CI — this record claims no live evidence):
 
 - `npm run verify` **PASS** on Windows: `format:check` clean, `lint` 0 issues, `npm test`
   1461 tests / 1416 pass / **0 fail** / 45 skipped, `repo:check` "Repository policy check passed."
+- CI run `38435007142` @ `c8bcc24` on ubuntu-24.04: `quality-gate` **SUCCESS**
+  (`ℹ tests 1461 / ℹ pass 1410 / ℹ fail 0 / ℹ skipped 51`, `Repository policy check passed.`) and
+  `python-quality` **SUCCESS** (`188 passed, 27 subtests passed`). Security run `38435012291`:
+  `secret-scan` **SUCCESS** (zero leaks) while `dependency-audit` stays red on the unchanged
+  pre-existing 5-high baseline. CI cannot reach `/home/hoang_vinh/.openclaw-zink`, so it adds no
+  live-runtime or Discord evidence.
 - `tests/m10-t2-r3-asset-predecessor.test.mjs` 12/12 with ZERO skips, now including a real
   `--preflight` → `--apply` rehearsal against a scratch HOME seeded with the deployed asset bytes.
 - `tests/m12-t2-forum-tags.test.mjs` + `tests/m12-t2-governed-surface.test.mjs`: 42/42, 0 skipped.

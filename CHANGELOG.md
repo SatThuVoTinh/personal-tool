@@ -565,8 +565,16 @@ wanted="(no evidence in the governed record)" reason=CLASSIFIER_EMPTY` followed 
   packaging rewrites none of this module's imports) so the remediation build is reachable —
   admission of the installed bytes only; the candidate digest `18fbb077…` is deliberately not
   listed, and the entrypoint pin does not move because no packaged entrypoint byte changed.
+  Gates: `npm run verify` **PASS** on Windows (1461 tests / 1416 pass / **0 fail** / 45 skipped,
+  policy passed) and under WSL Ubuntu **143/0-fail** plus **96/0-fail** across the affected
+  live-reading sets; CI run `38435007142` @ `c8bcc24` `quality-gate` **SUCCESS** (1461 / 1410 pass /
+  0 fail / 51 skipped) with `python-quality` **SUCCESS** (`188 passed, 27 subtests`), Security run
+  `38435012291` `secret-scan` **SUCCESS** and `dependency-audit` red on the unchanged 5-high
+  baseline. Implementation `0b55dfa`, operator note `c8bcc24`, pushed on
+  `codex/m11-t1-audit-remediation`.
   **Not deployed**: the live runtime still carries the refusing build until the owner grants a
-  fresh preflight → apply.
+  fresh preflight → apply, and the precedence order itself is the agent's judgment call pending his
+  confirmation.
 
 - M12/T2-R2 (2026-10-13): deployment A's first attempt failed closed and **mutated nothing**, and
   the reason was this repository's own blind spot, not the live tree. `configure.mjs` reads
