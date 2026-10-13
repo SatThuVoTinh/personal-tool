@@ -8,7 +8,28 @@ All notable, validated changes to Personal Tool are documented here.
 
 ### Added
 
-- M12/T2-R2 (owner-required 2026-10-13, `b6d04e8`, **not deployed**): the approval thread's
+- Deployed the M12/T2-R2 governance build to the live WSL gateway under the owner's deployment A
+  grant (2026-10-13). Sequence and evidence, all operator-side: `operator-preflight.mjs` returned
+  `{"identifiers":"VALID","builder_preflight":"PASS","installed_mutation":false}`; ONE
+  `operator-apply.mjs` returned `{"status":"PASS","stage":"applied","mutationStarted":true,
+"rollbackRequired":false,"reason":null,"attemptId":"txn-8cb8adec7a1409e1…",
+"transactionStatus":"complete"}`, i.e. the pre-apply transaction snapshot was taken, verified and
+  completed with no rollback; after the restart the unit is `active` with `MainPID=54345`,
+  `NRestarts=0`, and **all 35 installed paths are byte-equal to the packaged build** re-derived
+  through `governancePluginFiles()` (`index.mjs = 513beb15…`, newly installed
+  `lib/discord-forum-tags.mjs = e0a755bb…`, `lib/discord-formatter.mjs = 26ecc883…`,
+  `lib/policy.mjs = d621c85f…`, `lib/workflow.mjs = 2009e9fe…`) with nothing missing and nothing
+  extra. The journal since the restart shows `ACTIVE AND LOADED` and `coordinator pickup loop
+started`, **zero** `MODULE_NOT_FOUND`, zero `UnhandledPromiseRejection`, zero `DISCORD_TAG_*`
+  refusal and zero crash — which is what proves the tagging module loads in the real runtime —
+  while the pre-existing `duplicate plugin id` warning is unchanged; 7 established `:443`
+  connections means all seven bots are online. The ledger was not touched (131 events) and records
+  no `WORKFLOW_APPROVAL_SURFACED` / `WORKFLOW_RESULT_SURFACED` yet. **Not claimed by this record:**
+  any live per-surface Discord behaviour — no governed thread has been created since the upgrade,
+  no tag name has been resolved against a real forum, and `PATCH /channels/{thread.id}` with
+  `applied_tags` has never been sent, so #approvals, #results and #incidents each remain
+  `NOT TESTED` live; `verify.mjs` stays `NOT RUN`; no multi-hour soak under real traffic.
+- M12/T2-R2 (owner-required 2026-10-13, `b6d04e8`, **deployed 2026-10-13**): the approval thread's
   `STATUS` tag now follows the real verdict — APPROVE → `STATUS: APPROVED`, REJECT →
   `STATUS: REJECTED`, REQUEST REVISION → `STATUS: CHANGES` — while every opened card still starts
   at `STATUS: WAITING`. `transitionGovernedForumStatus` reads the thread's own `applied_tags` and
