@@ -1777,6 +1777,13 @@ async function main() {
 try {
   await main();
 } catch (error) {
-  process.stderr.write(`${error.message}\n${usage()}\n`);
+  // M12/T2-R3: the machine code is the part an operator can act on. `--apply` runs as a
+  // child of `operator-apply.mjs`, whose reason classifier reads only this child's text,
+  // so a refusal whose message is prose ("Ledger writer unavailable") and whose code is
+  // the fixed literal `EXECUTION_STATE_UNKNOWN` collapsed into `APPLY_REJECTED` and named
+  // nothing. Codes here are repository constants — never a message body, path, config or
+  // identifier value — so naming one leaks nothing.
+  const code = typeof error?.code === "string" ? ` [${error.code}]` : "";
+  process.stderr.write(`${error.message}${code}\n${usage()}\n`);
   process.exitCode = 1;
 }

@@ -528,6 +528,40 @@ asset drift detected` (`installed_mutation: false`) because ten live
 
 ### Fixed
 
+- M12/T2-R3 (2026-10-14): the owner's deployment of the STACK remediation failed as
+  `{"status":"FAIL","stage":"builder-apply","reason":"APPLY_REJECTED","rollbackSucceeded":true}` and
+  the truth was that `configure.mjs --apply` had refused at its **last** step,
+  `Ledger writer unavailable [EXECUTION_STATE_UNKNOWN]`, because
+  `operator/m7-t2/ledger/writer.lock` was orphaned — its `owner.json` names pid `60201`, which is
+  dead (the gateway now runs as `60244`, restarted 00:05:29), and the running gateway has logged
+  **202** lock-contention failures since. Two separate defects are named here. (1) _Masking_:
+  `--apply` runs as a child of `operator-apply.mjs`, whose reason classifier reads only the child's
+  **text**, and `configure.mjs` printed prose without the machine code — so a refusal whose code is
+  the repository constant `EXECUTION_STATE_UNKNOWN` (already in `KNOWN_REASONS`) collapsed into the
+  meaningless `APPLY_REJECTED`. `configure.mjs` now appends `[code]` to its stderr; codes are fixed
+  literals, never a message body, path, config or identifier value, so naming one leaks nothing.
+  Proven by a new case in `tests/m10-t2-r3-asset-predecessor.test.mjs` that reproduces the exact
+  production state — a provisioned scratch runtime with a stranded writer lock — and asserts both
+  the child's stderr and what `classifyApplyReason` derives from it; removing the code emission
+  fails that one test. (2) _The blocker itself_: the lock primitive deliberately has **no**
+  age-based reclaim (reclaiming could let two processes into the critical section together) and
+  recovery of an orphan "is an explicit operator action, not an automatic heuristic" — but no
+  operator procedure for it existed anywhere, and the apply/rollback restart is what produced this
+  orphan. Recovery is therefore put to the owner as an explicit decision; nothing was deleted
+  without his authorization.
+  Diagnosis method: the real `configure.mjs --apply` was re-run against the live runtime inside a
+  private mount namespace (`unshare --map-root-user --mount`) with overlayfs upper layers, exactly
+  the isolation `r16-rehearsal.mjs` documents — every write landed in a throwaway layer. The live
+  tree was then fingerprinted and is **byte-identical** (`live_unchanged: true`, ledger still 139
+  events, extension still `513beb15…`, `lib/discord-forum-tags.mjs` still `e0a755bb…`), so this
+  consumed no mutation grant and changed nothing. Also recorded honestly: the R16 apply rehearsal,
+  which is the repository's own gate for exactly this scenario, **cannot run on WSL** — it still
+  calls `inspectNativePatch`/`applyNativePatch`/`checkNativePatch` with a lone `runtimeRoot`
+  although M10/T2-R8 made the Discord channel package a second governed root, and its expected
+  native states are pinned to the R7→R10 era. It is red on WSL both before and after the partial
+  wiring attempted here, so it was left unchanged rather than half-repaired, and the deployment
+  was diagnosed without it.
+
 - M12/T2-R3 (2026-10-13, found by the WSL re-run of this same remediation): `R7 P1` in
   `tests/m10-t2-r7-authority-predecessor.test.mjs` asserted that the live
   `lib/authority.mjs` equals one specific digest measured the day R7 was written. Deployment A

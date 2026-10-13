@@ -22,12 +22,22 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
+
+import { classifyApplyReason } from "../integrations/openclaw/topology/fixtures/runtime-regression/apply-orchestration.mjs";
+import { ledgerPaths } from "../integrations/openclaw/topology/lib/ledger.mjs";
+import { lockDirFor } from "../integrations/openclaw/lib/file-lock.mjs";
 
 const REPO = process.cwd();
 const CONFIGURE = path.join(REPO, "integrations", "openclaw", "configure.mjs");
@@ -496,6 +506,43 @@ test("M12/T2-R3: the deployed forum-tag asset is a reachable predecessor", async
       sha256(readFileSync(target, "utf8")),
       sha256(current.assets[DEPLOYED_REL]),
       "apply must install the remediation build",
+    );
+  } finally {
+    rmSync(p.root, { recursive: true, force: true });
+  }
+});
+
+test("M12/T2-R3: a stranded ledger writer lock names its code, not APPLY_REJECTED", () => {
+  // The production condition the owner hit: a gateway killed mid-append left
+  // `<ledger>/writer.lock` behind with a dead owner pid. The lock primitive
+  // deliberately never reclaims an orphan, so `--apply`'s last step
+  // (`upgradeEmptyLegacyLedger` -> `withWriterLock`) refused, and
+  // `operator-apply.mjs` reported the meaningless `APPLY_REJECTED`: the child
+  // printed only prose, and the classifier reads only the child's text. The code
+  // is a repository constant, so printing it names the fault and leaks nothing.
+  const p = provisioned();
+  try {
+    const lock = lockDirFor(ledgerPaths(p.stateDir).root, "writer.lock");
+    mkdirSync(lock, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      path.join(lock, "owner.json"),
+      JSON.stringify({ pid: 999999, token: "f".repeat(32) }),
+      { mode: 0o600 },
+    );
+    let childError = null;
+    try {
+      p.apply();
+    } catch (error) {
+      childError = error;
+    }
+    assert.ok(childError, "an orphaned writer lock must stop the apply");
+    const stderr = String(childError.stderr ?? "");
+    assert.match(stderr, /Ledger writer unavailable/u);
+    assert.match(stderr, /\[EXECUTION_STATE_UNKNOWN\]/u);
+    assert.equal(
+      classifyApplyReason(childError),
+      "EXECUTION_STATE_UNKNOWN",
+      "the operator report must name the refusal instead of collapsing it",
     );
   } finally {
     rmSync(p.root, { recursive: true, force: true });
