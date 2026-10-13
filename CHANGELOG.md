@@ -8,6 +8,29 @@ All notable, validated changes to Personal Tool are documented here.
 
 ### Added
 
+- M12/T2-R2 (owner-required 2026-10-13, `b6d04e8`, **not deployed**): the approval thread's
+  `STATUS` tag now follows the real verdict — APPROVE → `STATUS: APPROVED`, REJECT →
+  `STATUS: REJECTED`, REQUEST REVISION → `STATUS: CHANGES` — while every opened card still starts
+  at `STATUS: WAITING`. `transitionGovernedForumStatus` reads the thread's own `applied_tags` and
+  the forum's tag list through the cached resolver, replaces **only** the STATUS-category id and
+  keeps every other id, including ids absent from the forum list, because a tag the owner added by
+  hand is his data. It does not re-derive RISK/STACK at verdict time: that could rewrite tags that
+  were already correct. If the forum has no such STATUS value the `PATCH` is not sent and the
+  reason is named (`VALUE_ABSENT` / `CATEGORY_ABSENT`), the same rule that stops an under-tagged
+  thread from being called a success. Wiring sits in `applyOwnerDecisionEffect`, the one
+  post-decision effect the button and text paths already share, fire-and-forget with its own
+  `.catch`: the verdict is durable in `WORKFLOW_USER_APPROVAL_DECIDED` first, so no surface result
+  can undo, delay or rewrite the owner's decision, and no decision path awaits a Discord
+  round-trip. Honesty about the seam: `PATCH /channels/{thread.id}` with `applied_tags` is the only
+  mechanism available — the pinned host carries `applied_tags` solely on the send payload and
+  Discord's thread docs do not list it as editable, though the discord-api-docs duplicate-tag
+  report describes PATCHing a forum thread with it as working — so live acceptance is
+  **`NOT TESTED`** and a rejection logs `DISCORD_TAG_TRANSITION_REJECTED_<status>` instead of
+  claiming success. `STATUS: EXPIRED` and the #results/#incidents transitions stay unwired:
+  expiring a card needs a sweeper, and he asked for the approval case. Gates: `npm run verify`
+  PASS (1457 tests / 1412 pass / 0 fail / 45 skipped) and **192/192 with ZERO skips** under WSL;
+  three mutation probes each killed exactly one control (unresolved STATUS still PATCHing, foreign
+  ids dropped, call site detached) and were reverted.
 - M12/T2-R1 (owner-approved 2026-10-13, A/A/A decisions, **not deployed**): every governed
   Discord thread now carries **exactly three forum tags**, one per category, and the two
   surfaces that had no publish path at all got one. `integrations/openclaw/lib/discord-forum-tags.mjs`
@@ -411,6 +434,21 @@ asset drift detected` (`installed_mutation: false`) because ten live
 
 ### Changed
 
+- M12/T2-R2 (2026-10-13): the governed deployment path is documented for the operator as the two
+  trusted scripts already in the repository — `operator-preflight.mjs` then `operator-apply.mjs` —
+  which read the identifier file themselves, pass the flags to `configure.mjs`, snapshot and verify
+  byte-for-byte, roll back on mismatch, and print only non-secret derived fields
+  (README section "Triển Khai Bản Build Governance"). This replaces a hand-written copy-paste block
+  that could not run: **`jq` is not installed on the WSL host**, so its six `$(jq -r …)`
+  substitutions failed and `set -euo pipefail` aborted at once. The lesson recorded in `PLAN.md`
+  §8 is that a command block for an operator host must be checked against what that host actually
+  has, or reuse a script that already runs there.
+- M12/T2-R2: the owner's five `STACK` definitions are recorded verbatim as the meaning of the tag —
+  `INFRA` = Docker and the machine software that runs tasks (Excel, MySQL, DuckDB, …), `SEMANTIC` =
+  the layer used when a task needs meaning added because the bot does not yet understand the
+  problem, `DATA` = ETL, `ANALYTICS` = charts and dashboards, `DECISION` = the decision report the
+  bot analyses. These are the ledger's `target_stack` / `stack_id` enum, so the M12/T2-R1 derivation
+  is confirmed rather than changed and the R1 open question is closed.
 - M12/T2-R1 (owner instruction 2026-10-13, "bỏ dòng trạng thái đi", **not deployed**): the
   approval card no longer prints its own state in prose —
   `**Trạng thái:** CHỜ DUYỆT (chưa được phép thực thi)` is removed from

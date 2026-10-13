@@ -206,19 +206,47 @@ journalctl --user -u openclaw-gateway-zink.service -f
 ss -tnp | grep 443
 ```
 
+### 4. Triển Khai Bản Build Governance (Preflight → Apply → Restart)
+
+Hai lệnh dưới đây **tự đọc** `~/.openclaw-zink/operator/m7-t2/discord-identifiers.json` (quyền 0600) rồi tự truyền tham số cho `configure.mjs`, nên không cần `jq`, không cần mảng shell và không
+dùng `$(...)`. Máy WSL của hệ thống **không cài `jq`**; một khối lệnh gõ tay trước đây đã thất bại
+chỉ vì lý do đó. Không lệnh nào in token hay snowflake.
+
+```bash
+cd "/mnt/c/Users/HOANG VINH/OneDrive/Documents/personal-tool"
+
+# BƯỚC 1 — chỉ đọc, không sửa gì. Dòng kỳ vọng:
+# {"identifiers":"VALID","builder_preflight":"PASS","installed_mutation":false}
+node integrations/openclaw/topology/fixtures/runtime-regression/operator-preflight.mjs
+
+# BƯỚC 2 — CHỈ chạy khi bước 1 in ra PASS. Đây là lần apply duy nhất: script tự snapshot
+# trạng thái live trước khi sửa, apply, vá runtime, khởi động lại unit rồi đối chiếu từng byte;
+# nếu không khớp nó tự rollback và in báo cáo FAIL kèm lý do.
+node integrations/openclaw/topology/fixtures/runtime-regression/operator-apply.mjs
+
+# BƯỚC 3 — kiểm tra sau triển khai
+systemctl --user show openclaw-gateway-zink.service -p ActiveState -p MainPID -p NRestarts
+sha256sum ~/.openclaw-zink/extensions/zink-governance/index.mjs
+```
+
+Báo cáo in ra là JSON đã rút gọn (chỉ trạng thái, lý do, kích thước), không chứa danh tính kênh,
+token hay nội dung cấu hình. Nếu bước 1 báo `Governance plugin asset` hoặc
+`Governance plugin entrypoint`, nghĩa là digest đang cài thật chưa được admit trong
+`configure.mjs`: dừng ở đó và báo cáo, **không** tự nới cổng tiêu thụ để cho qua.
+
 ---
 
 ## 5. Quy chuẩn Kênh Giao tiếp và Hướng dẫn Tương tác Discord
 
 ### Danh mục Kênh Discord của Hệ thống
 
-| Kênh Discord            | Loại kênh                    | Snowflake ID          | Chức năng & Quy chuẩn                                                                                                                                                                                                                                                                                                              |
-| :---------------------- | :--------------------------- | :-------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **`#office`**           | Văn phòng chung (Text)       | `1545425766161063937` | Nơi tiếp nhận yêu cầu, giao việc và điều phối hoạt động chung. Hỗ trợ tag trực tiếp bot hoặc trao đổi với `@Quản Lý`. Bảo toàn mã `task_id` người dùng cung cấp.                                                                                                                                                                   |
-| **`#results`**          | Kết quả phân tích (Forum)    | `1545696269010477056` | Diễn đàn đăng tải báo cáo, artifact và kết quả nghiệm thu của các task. Mọi bài viết là một Thread riêng biệt (`inheritParent: false` để fail-closed). Mỗi thread do hệ thống đăng bắt buộc mang đủ ba tag `STATUS` (`SUCCESS`/`FAILED`/`PARTIAL`), `TYPE`, `STACK`, phân giải theo tag thật của kênh này tại thời điểm đăng.      |
-| **`#approvals`**        | Phê duyệt quyết định (Forum) | `1545696207316455527` | Nơi các agent gửi đề xuất giải quyết mâu thuẫn ngữ nghĩa (`BLOCKED_SEMANTIC_REVIEW`) và thẻ phê duyệt kế hoạch chờ chủ sở hữu quyết định. Mỗi thread mang đủ ba tag `STATUS` (`WAITING`), `RISK` (`LOW`/`MEDIUM`/`RED`), `STACK`; trạng thái không còn in trong nội dung thẻ.                                                      |
-| **`#incidents`**        | Báo cáo sự cố (Forum)        | `1545696360018481182` | Kênh thông báo cảnh báo lỗi, vi phạm hợp đồng dữ liệu hoặc sự cố ranh giới an toàn. Mỗi thread mang đủ ba tag `STATUS` (`OPEN`), `SEVERITY` (`LOW`…`CRITICAL`), `STACK`. Lưu ý: tag `STATUS: ANALYTICS` hiện đặt sai nhóm (đúng ra là `STACK: ANALYTICS`) — chủ sở hữu cần đổi tên trong Discord, hệ thống không tự alias tên tag. |
-| **Tin nhắn riêng (DM)** | Direct Message               | N/A                   | Vô hiệu hóa (`channels.discord.directMessages.enabled: false`). Toàn bộ tương tác bắt buộc diễn ra trên các kênh máy chủ để đảm bảo tính minh bạch và lưu vết kiểm toán bền vững vào Ledger.                                                                                                                                       |
+| Kênh Discord            | Loại kênh                    | Snowflake ID          | Chức năng & Quy chuẩn                                                                                                                                                                                                                                                                                                                                                                                                   |
+| :---------------------- | :--------------------------- | :-------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`#office`**           | Văn phòng chung (Text)       | `1545425766161063937` | Nơi tiếp nhận yêu cầu, giao việc và điều phối hoạt động chung. Hỗ trợ tag trực tiếp bot hoặc trao đổi với `@Quản Lý`. Bảo toàn mã `task_id` người dùng cung cấp.                                                                                                                                                                                                                                                        |
+| **`#results`**          | Kết quả phân tích (Forum)    | `1545696269010477056` | Diễn đàn đăng tải báo cáo, artifact và kết quả nghiệm thu của các task. Mọi bài viết là một Thread riêng biệt (`inheritParent: false` để fail-closed). Mỗi thread do hệ thống đăng bắt buộc mang đủ ba tag `STATUS` (`SUCCESS`/`FAILED`/`PARTIAL`), `TYPE`, `STACK`, phân giải theo tag thật của kênh này tại thời điểm đăng.                                                                                           |
+| **`#approvals`**        | Phê duyệt quyết định (Forum) | `1545696207316455527` | Nơi các agent gửi đề xuất giải quyết mâu thuẫn ngữ nghĩa (`BLOCKED_SEMANTIC_REVIEW`) và thẻ phê duyệt kế hoạch chờ chủ sở hữu quyết định. Mỗi thread mang đủ ba tag `STATUS` (`WAITING`), `RISK` (`LOW`/`MEDIUM`/`RED`), `STACK`; trạng thái không còn in trong nội dung thẻ. Khi anh quyết định thật sự, tag `STATUS` của thread chuyển theo: APPROVE → `APPROVED`, REJECT → `REJECTED`, REQUEST REVISION → `CHANGES`. |
+| **`#incidents`**        | Báo cáo sự cố (Forum)        | `1545696360018481182` | Kênh thông báo cảnh báo lỗi, vi phạm hợp đồng dữ liệu hoặc sự cố ranh giới an toàn. Mỗi thread mang đủ ba tag `STATUS` (`OPEN`), `SEVERITY` (`LOW`…`CRITICAL`), `STACK`. Lưu ý: tag `STATUS: ANALYTICS` hiện đặt sai nhóm (đúng ra là `STACK: ANALYTICS`) — chủ sở hữu cần đổi tên trong Discord, hệ thống không tự alias tên tag.                                                                                      |
+| **Tin nhắn riêng (DM)** | Direct Message               | N/A                   | Vô hiệu hóa (`channels.discord.directMessages.enabled: false`). Toàn bộ tương tác bắt buộc diễn ra trên các kênh máy chủ để đảm bảo tính minh bạch và lưu vết kiểm toán bền vững vào Ledger.                                                                                                                                                                                                                            |
 
 ---
 
