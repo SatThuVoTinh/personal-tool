@@ -543,7 +543,10 @@ asset drift detected` (`installed_mutation: false`) because ten live
   Proven by a new case in `tests/m10-t2-r3-asset-predecessor.test.mjs` that reproduces the exact
   production state — a provisioned scratch runtime with a stranded writer lock — and asserts both
   the child's stderr and what `classifyApplyReason` derives from it; removing the code emission
-  fails that one test. (2) _The blocker itself_: the lock primitive deliberately has **no**
+  fails that one test. Gates: `npm run verify` **PASS** (1462 tests / 1417 pass / **0 fail** /
+  45 skipped) and CI run `38443807440` @ `b40154f` `quality-gate` **SUCCESS** (1462 / 1411 pass /
+  0 fail / 51 skipped) with `python-quality` **SUCCESS**; Security run `38443813434` `secret-scan`
+  **SUCCESS**, `dependency-audit` red on the unchanged 5-high baseline. (2) _The blocker itself_: the lock primitive deliberately has **no**
   age-based reclaim (reclaiming could let two processes into the critical section together) and
   recovery of an orphan "is an explicit operator action, not an automatic heuristic" — but no
   operator procedure for it existed anywhere, and the apply/rollback restart is what produced this

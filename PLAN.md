@@ -4923,6 +4923,9 @@ new case in `tests/m10-t2-r3-asset-predecessor.test.mjs` reproduces the stranded
 provisioned scratch runtime and asserts both the stderr and the derived classification. Gates:
 `npm run verify` **PASS** (1462 tests / 1417 pass / **0 fail** / 45 skipped, policy passed); the r3
 suite 13/13 with zero skips; one mutation probe (code emission removed) killed exactly that test.
+CI run `38443807440` @ `b40154f`: `quality-gate` **SUCCESS** (`ℹ tests 1462 / ℹ pass 1411 /
+ℹ fail 0 / ℹ skipped 51`) and `python-quality` **SUCCESS**; Security run `38443813434`:
+`secret-scan` **SUCCESS**, `dependency-audit` red on the unchanged 5-high baseline.
 
 NOT repaired, recorded as a gate defect with owner decision pending: the **R16 apply rehearsal** —
 the repository's own instrument for exactly this scenario — cannot run on WSL. It still calls
