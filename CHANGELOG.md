@@ -8,6 +8,26 @@ All notable, validated changes to Personal Tool are documented here.
 
 ### Added
 
+- Deployed the STACK remediation (M12/T2-R3) to the live WSL gateway as **deployment B**
+  (2026-10-14, owner grant E), after clearing the orphaned ledger lock with the new C1 tool.
+  Sequence, all operator-side: recovery `REPORT` (`holder_alive:false`, `owner_pid:60201`,
+  token masked) → `--recover --confirm=ORPHAN_LOCK_RECOVERY` → `RECOVERED`; then
+  `operator-preflight.mjs` → `{"identifiers":"VALID","builder_preflight":"PASS",
+"installed_mutation":false}`; then one `operator-apply.mjs`, after which the unit is
+  `active` (`MainPID=68567`, `NRestarts=0`, ActiveEnterTimestamp 13:25:47). **The apply's own
+  report JSON was never seen** — the owner's paste reached the agent truncated at the preflight
+  line — so success is asserted only from independent read-only comparison, which is stronger than
+  a self-report: re-deriving the build through `governancePluginFiles()` gives
+  `{"packaged":37,"mismatched":[],"missing":[],"installed_but_not_packaged":[]}`, with
+  `lib/discord-forum-tags.mjs = 18fbb077…` (the remediation; a rollback would have left
+  `e0a755bb…`) and `index.mjs = 513beb15…` unchanged, exactly as this revision promised.
+  Journal since the restart: **0** `MODULE_NOT_FOUND`, 0 `UnhandledPromiseRejection`, 0
+  `DISCORD_TAG_*`, 0 `FILE_LOCK_BUSY`, 0 `APPROVAL_CARD_NOT_SURFACED`; 7 `:443` sockets (all seven
+  bots online); `events.jsonl` still 139, untouched. **Not claimed:** the per-surface live result.
+  The point of the build is a multi-stack approval card in #approvals with three tags, and no
+  governed approval has been requested since — #approvals, #results and #incidents each remain
+  `NOT TESTED` live until one real cross-stack task produces a visible thread.
+
 - M12/T2-R4 (owner decision C1, 2026-10-14): `operator-lock-recovery.mjs` is the operator action
   `file-lock.mjs` has always documented but the repository never had — "recovery of an orphaned
   lock is an explicit operator action, not an automatic heuristic". When the apply/rollback restart

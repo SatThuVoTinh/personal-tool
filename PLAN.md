@@ -52,11 +52,12 @@ Task: M12/T2 — Governed forum tags: the approval STATUS tag follows the real v
 Active revision: M12/T2-R4 — the operator orphan-lock recovery action (owner sequence **C1 → E →
   D1**, 2026-10-14). C1 is delivered: `operator-lock-recovery.mjs` is read-only by default, proves
   the recorded holder is gone with `process.kill(pid, 0)`, refuses anything it cannot validate, and
-  deletes only after `--recover --confirm=ORPHAN_LOCK_RECOVERY`. Evidence in §8. **The live orphan
-  is not yet cleared** — removal is the owner's own action. E (one fresh preflight → apply for the
-  STACK remediation) is handed to the owner as a single block and remains unexecuted. D1 (repair the
-  R16 apply rehearsal so it can run against the current live runtime) is recorded as a separate
-  planned task, not started here.
+  deletes only after `--recover --confirm=ORPHAN_LOCK_RECOVERY`. Evidence in §8. **EXECUTED on the
+  live host 2026-10-14:** the orphan was cleared through the tool (read-only `REPORT` with
+  `holder_alive:false`, then `RECOVERED`), and E ran — preflight PASS → one apply → installed
+  `lib/discord-forum-tags.mjs = 18fbb077…` with 37/37 packaged paths byte-equal, unit active
+  `MainPID=68567`, 0 error-class journal lines, 7 sockets. D1 (repair the R16 apply rehearsal so it
+  can run against the current live runtime) is recorded as a separate planned task, not started here.
   Prior revision: M12/T2-R3 — BOUNDED REMEDIATION of the live #office approval-card outage
   (owner-reported 2026-10-13: "bot kẹt phản hồi ngay tại kênh office em"). This is not a new plan:
   it is the AGENTS.md §3 bounded fix of a **verified** defect that the M12/T2-R2 build introduced,
@@ -64,11 +65,10 @@ Active revision: M12/T2-R4 — the operator orphan-lock recovery action (owner s
   (`surfaceStackTag`) plus the asset-predecessor admission it needs. No `ACTIVE.md` is materialized
   for a bounded fix, and the fix changes no scope, contract, schema, gate or resource ceiling.
 Task Status: M12/T2-R3 — implemented, validated locally **and on CI** (`0b55dfa` + `c8bcc24`
-  pushed), **NOT DEPLOYED**; the live runtime still carries the refusing build, and the owner's
-  deployment A grant covered exactly ONE apply, so reaching the host requires a fresh
-  preflight → apply authorization. Two owner decisions are open on this revision: (A) confirm the
-  STACK precedence order, which is **the agent's** judgment call made to restore approvals and is
-  recorded as reversible, and (B) grant deployment B. See §8 M12/T2-R3.
+  pushed), **DEPLOYED AND VERIFIED 2026-10-14** under grant E (Deployment B, §8); the STACK
+  precedence rule is now the build the live gateway runs. Both owner decisions on that revision were
+  answered on 2026-10-14: (A)=A1 keeps the STACK precedence order the agent chose, and (B)=B1
+  granted the apply — which first failed (see M12/T2-R3b) and then succeeded as Deployment B.
   M12/T2-R3b (2026-10-14) — grant (A)=A1 and (B)=B1 were given and the apply **failed**:
   `reason:"APPLY_REJECTED"`, rollback succeeded, the host still carries `e0a755bb…`. Verified cause
   is **not** the remediation: an orphaned `ledger/writer.lock` whose `owner.json` names dead pid
@@ -92,7 +92,8 @@ Task Status: M12/T2-R3 — implemented, validated locally **and on CI** (`0b55df
   the STACK rule. See §8 M12/T2-R3.
 Planning Readiness: APPROVED (historical — the approved M12/T2-R2 contract is executed and closed;
   R3 is a bounded fix inside the verified finding, not a re-plan)
-Plan Revision: M12/T2-R4 (C1 DELIVERED locally; the live orphan recovery and E remain owner actions)
+Plan Revision: M12/T2-R4 (C1 DELIVERED; E **EXECUTED AND VERIFIED** — Deployment B installed the
+STACK remediation on the live host 2026-10-14, evidence in §8)
 Execution Authorization: NO
 Execution Contract: NONE (the M12/T2-R2 ACTIVE.md was deleted at closeout)
 Evidence Level: REMOTE-BACKED for the repository gates **and DEPLOYED AND VERIFIED on the live
@@ -4987,6 +4988,38 @@ head (1470 / 1424 pass / 0 fail / 46 skipped, policy passed). Verified read-only
 reachable from WSL at the working tree the operator scripts run from (`TOOL_PRESENT`).
 **Nothing on the live host has been recovered yet** — the orphan is still in place because removal
 is the owner's action, and he runs it; the C→E block has been handed over.
+
+### Deployment B — EXECUTED AND VERIFIED 2026-10-14 (owner ran recovery, then preflight → apply)
+
+Sequence, all operator-side on the live WSL host:
+
+- Orphan-lock recovery with the new C1 tool. Read-only pass first:
+  `{"lock_present":true,"owner_entry":"OK","owner_pid":60201,"holder_alive":false,
+  "owner_token":"8566****************************","stray_entries":[],"action":"REPORT",
+  "mutated":false}` — then `--recover --confirm=ORPHAN_LOCK_RECOVERY` returned
+  `"action":"RECOVERED","mutated":true","recovered":true`. After it, `writer.lock` does not exist
+  and `journalctl --since -6 min | grep -c FILE_LOCK_BUSY` is **0** (it had been growing
+  continuously), while `events.jsonl` stayed at 139 events: the lock was removed, nothing else was.
+- `operator-preflight.mjs` → `{"identifiers":"VALID","builder_preflight":"PASS","installed_mutation":false}`.
+- `operator-apply.mjs` ran and the unit restarted at 13:25:47 (`MainPID=68567`, `NRestarts=0`,
+  `ActiveState=active`). **Honesty about what was observed:** the owner's paste reached the agent
+  truncated at the preflight line, so the apply report JSON itself was not seen. The apply's
+  success is instead proven independently and read-only, which is stronger than a self-report:
+  every installed path was re-derived through `governancePluginFiles()` and compared to the host —
+  `{"packaged":37,"mismatched":[],"missing":[],"installed_but_not_packaged":[]}`, with
+  `index.mjs = 513beb15…` (unchanged, as this revision moves no entrypoint byte) and
+  `lib/discord-forum-tags.mjs = 18fbb077…`, i.e. **the remediation build is the installed build**.
+  A transaction rollback would have restored `e0a755bb…`, and the digest is not `e0a755bb…`.
+- Post-restart journal since 13:25:47: `MODULE_NOT_FOUND`, `UnhandledPromiseRejection`,
+  `DISCORD_TAG_*` refusal, `FILE_LOCK_BUSY` and `APPROVAL_CARD_NOT_SURFACED` — **0** occurrences
+  combined; 7 established `:443` connections, so all seven bots are online.
+
+What this does NOT prove: the fix's actual purpose is a multi-stack approval card appearing in
+#approvals with its three tags, and no governed approval has been requested since the restart
+(`events.jsonl` still 139, no `WORKFLOW_APPROVAL_SURFACED`). **Per-surface live status remains
+`NOT TESTED`** for #approvals, #results and #incidents until a real request produces a thread the
+owner can see. The next evidence step is therefore behavioral, not installational: one task in
+#office that plans across `data_plant` + `intelligence`.
 
 ## 9. Deferred beyond V1
 
