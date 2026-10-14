@@ -26,7 +26,10 @@ All notable, validated changes to Personal Tool are documented here.
   bots online); `events.jsonl` still 139, untouched. **Not claimed:** the per-surface live result.
   The point of the build is a multi-stack approval card in #approvals with three tags, and no
   governed approval has been requested since — #approvals, #results and #incidents each remain
-  `NOT TESTED` live until one real cross-stack task produces a visible thread.
+  `NOT TESTED` live until one real cross-stack task produces a visible thread. CI for this record
+  head `a9a6c1c`: run `38523610190` `quality-gate` **SUCCESS** (1470 tests / 1419 pass / 0 fail /
+  51 skipped) + `python-quality` **SUCCESS**; Security `38523614667`: `secret-scan` **SUCCESS**,
+  `dependency-audit` red on the unchanged 5-high baseline.
 
 - M12/T2-R4 (owner decision C1, 2026-10-14): `operator-lock-recovery.mjs` is the operator action
   `file-lock.mjs` has always documented but the repository never had — "recovery of an orphaned

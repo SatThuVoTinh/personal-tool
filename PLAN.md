@@ -5021,6 +5021,11 @@ What this does NOT prove: the fix's actual purpose is a multi-stack approval car
 owner can see. The next evidence step is therefore behavioral, not installational: one task in
 #office that plans across `data_plant` + `intelligence`.
 
+CI for the pushed record head `a9a6c1c`: run `38523610190` `quality-gate` **SUCCESS**
+(`ℹ tests 1470 / ℹ pass 1419 / ℹ fail 0 / ℹ skipped 51`) and `python-quality` **SUCCESS**;
+Security run `38523614667` `secret-scan` **SUCCESS**, `dependency-audit` red on the unchanged
+5-high baseline. CI cannot reach the live host, so it adds no deployment or Discord evidence.
+
 ## 9. Deferred beyond V1
 
 Unless separately approved:
