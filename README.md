@@ -224,6 +224,20 @@ set -a; . "$HOME/.openclaw-zink/router.env"; set +a
 # {"identifiers":"VALID","builder_preflight":"PASS","installed_mutation":false}
 node integrations/openclaw/topology/fixtures/runtime-regression/operator-preflight.mjs
 
+# BƯỚC 1b — CHỈ khi apply báo `Ledger writer unavailable [EXECUTION_STATE_UNKNOWN]`.
+# Khoá ghi Ledger có thể bị bỏ lại ("mồ côi") khi gateway chết giữa lúc đang ghi; hệ thống
+# CỐ Ý không tự thu hồi, vì tự thu hồi có thể cho hai process cùng vào vùng trọng yếu.
+# Bước này là hành động của người vận hành, và nó là thao tác XOÁ.
+# 1) Đọc, chưa xoá gì — dòng kỳ vọng có "action":"REPORT" và "holder_alive":false:
+node integrations/openclaw/topology/fixtures/runtime-regression/operator-lock-recovery.mjs
+# 2) Chỉ khi lệnh trên in ra holder_alive=false, gõ tiếp xác nhận tường minh:
+node integrations/openclaw/topology/fixtures/runtime-regression/operator-lock-recovery.mjs --recover --confirm=ORPHAN_LOCK_RECOVERY
+# 3) Xác nhận Khoá không còn tồn tại:
+node integrations/openclaw/topology/fixtures/runtime-regression/operator-lock-recovery.mjs
+#   kỳ vọng {"lock_present":false,"action":"NONE","mutated":false}
+# Script từ chối xoá nếu process ghi trong owner.json vẫn còn sống, nếu thư mục khoá chứa
+# tệp lạ, hoặc nếu owner.json không đọc được; mặc định nó chỉ báo cáo, không sửa.
+
 # BƯỚC 2 — CHỈ chạy khi bước 1 in ra PASS. Đây là lần apply duy nhất: script tự snapshot
 # trạng thái live trước khi sửa, apply, vá runtime, khởi động lại unit rồi đối chiếu từng byte;
 # nếu không khớp nó tự rollback và in báo cáo FAIL kèm lý do.

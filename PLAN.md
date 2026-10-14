@@ -49,7 +49,15 @@ operations research and simulation remain first-class capabilities.
 ```text
 Milestone: M12 — Governed Discord interaction lifecycle and governed presentation
 Task: M12/T2 — Governed forum tags: the approval STATUS tag follows the real verdict
-Active revision: M12/T2-R3 — BOUNDED REMEDIATION of the live #office approval-card outage
+Active revision: M12/T2-R4 — the operator orphan-lock recovery action (owner sequence **C1 → E →
+  D1**, 2026-10-14). C1 is delivered: `operator-lock-recovery.mjs` is read-only by default, proves
+  the recorded holder is gone with `process.kill(pid, 0)`, refuses anything it cannot validate, and
+  deletes only after `--recover --confirm=ORPHAN_LOCK_RECOVERY`. Evidence in §8. **The live orphan
+  is not yet cleared** — removal is the owner's own action. E (one fresh preflight → apply for the
+  STACK remediation) is handed to the owner as a single block and remains unexecuted. D1 (repair the
+  R16 apply rehearsal so it can run against the current live runtime) is recorded as a separate
+  planned task, not started here.
+  Prior revision: M12/T2-R3 — BOUNDED REMEDIATION of the live #office approval-card outage
   (owner-reported 2026-10-13: "bot kẹt phản hồi ngay tại kênh office em"). This is not a new plan:
   it is the AGENTS.md §3 bounded fix of a **verified** defect that the M12/T2-R2 build introduced,
   diagnosed from the live journal before any edit, and confined to the failing control
@@ -84,7 +92,7 @@ Task Status: M12/T2-R3 — implemented, validated locally **and on CI** (`0b55df
   the STACK rule. See §8 M12/T2-R3.
 Planning Readiness: APPROVED (historical — the approved M12/T2-R2 contract is executed and closed;
   R3 is a bounded fix inside the verified finding, not a re-plan)
-Plan Revision: M12/T2-R3 (BOUNDED FIX — locally validated, not deployed)
+Plan Revision: M12/T2-R4 (C1 DELIVERED locally; the live orphan recovery and E remain owner actions)
 Execution Authorization: NO
 Execution Contract: NONE (the M12/T2-R2 ACTIVE.md was deleted at closeout)
 Evidence Level: REMOTE-BACKED for the repository gates **and DEPLOYED AND VERIFIED on the live
@@ -4942,6 +4950,37 @@ design ("recovery of an orphaned lock is an explicit operator action"), so it re
 authorization for the exact target. Nothing has been deleted.
 
 
+
+### M12/T2-R4 — the operator orphan-lock recovery action the lock design always assumed (owner decisions C1 → E → D1, 2026-10-14)
+
+Owner sequence: C1 (build the guarded recovery tool), then E (one fresh preflight → apply for the
+STACK remediation), then D1 (a separate task to make the R16 apply rehearsal runnable).
+
+Delivered under C1 — `integrations/openclaw/topology/fixtures/runtime-regression/operator-lock-recovery.mjs`:
+
+- `file-lock.mjs` forbids automatic reclaim ("reclaiming could let two processes enter the critical
+  section together") and names recovery an explicit operator action, yet the repository contained no
+  such action, so the only way to clear the orphan was a hand-typed `rm` beside the live ledger.
+- Read-only by default. Removal needs `--recover` **and** `--confirm=ORPHAN_LOCK_RECOVERY`.
+- Holder liveness is `process.kill(pid, 0)`: `ESRCH`/`EINVAL` dead, `EPERM` alive, anything else
+  **unknown**, and unknown is never treated as dead — the same reason the primitive refuses heuristics.
+- Refuses without touching anything on: live holder (`REFUSED_LIVE_HOLDER`), unreadable
+  `owner.json`, a record outside `{pid, 32-hex token}` shape, a symlink component on the path
+  (`REFUSED_SYMLINK`), a lock directory holding anything besides the owner record (`INSPECT`,
+  `STRAY_LOCK_ENTRY`), or a lock with no owner record at all (its staleness cannot be proven).
+- Removes exactly two objects (`owner.json`, then the lock directory via `rmdir`, which itself
+  refuses a non-empty directory) and verifies the lock is gone before reporting `RECOVERED`.
+- Report masks the holder nonce (first 4 + 28 stars). The nonce identifies a dead process's
+  acquisition, and echoing it would let anyone reading the terminal supply the confirmation the
+  operator is meant to type deliberately.
+
+Evidence: `tests/m12-t2-r4-orphan-lock-recovery.test.mjs` spawns the real script against a scratch
+state directory — 8 tests / **0 fail / 0 skipped** under WSL (the symlink refusal runs there) and
+7 pass / 1 platform-gated skip on Windows; the live-holder refusal is proven against **this test
+process** as the recorded owner, not a simulated pid. Two mutation probes each disabled one guard
+and killed exactly the matching cases. Registered in `npm test`. README §4 gains BƯỚC 1b with the
+exact expected report lines. **Nothing on the live host has been recovered yet** — the orphan is
+still in place because removal is the owner's action, and he runs it.
 
 ## 9. Deferred beyond V1
 

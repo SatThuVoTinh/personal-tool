@@ -8,6 +8,27 @@ All notable, validated changes to Personal Tool are documented here.
 
 ### Added
 
+- M12/T2-R4 (owner decision C1, 2026-10-14): `operator-lock-recovery.mjs` is the operator action
+  `file-lock.mjs` has always documented but the repository never had — "recovery of an orphaned
+  lock is an explicit operator action, not an automatic heuristic". When the apply/rollback restart
+  killed the gateway mid-append it left `ledger/writer.lock` behind, and that single orphan blocked
+  202 ledger appends **and** every later `--apply`. Default mode is read-only
+  (`"action":"REPORT"`); deletion requires `--recover --confirm=ORPHAN_LOCK_RECOVERY` and is
+  reached only after the tool proves the recorded holder is gone with `process.kill(pid, 0)`
+  (ESRCH/EINVAL dead, EPERM alive, anything else **unknown**, and unknown is never treated as dead,
+  because guessing is exactly the two-writers failure the no-reclaim design prevents). It refuses
+  to touch a lock it cannot validate: live holder, unreadable `owner.json`, a record outside its
+  `{pid, 32-hex token}` shape, a symlink anywhere on the path, or a lock directory holding anything
+  besides the owner record. It removes exactly two objects and verifies the directory is gone, and
+  its report masks the holder nonce (`d***…`) — that nonce is a dead process's acquisition token,
+  not a credential, and echoing it would hand anyone reading the terminal the confirmation value the
+  operator is meant to type on purpose. `tests/m12-t2-r4-orphan-lock-recovery.test.mjs` runs the
+  real script as a child against a scratch state directory: 8/8 with **zero skips** under WSL
+  (including the symlink refusal) and 7 pass / 1 platform skip on Windows; two mutation probes each
+  disabled one guard and killed exactly the matching cases (live-holder refusal; confirmation +
+  stray-entry refusal). The live holder case uses **this test process** as the owner, so the
+  refusal is proven against a running process rather than a simulated one.
+
 - Deployed the M12/T2-R2 governance build to the live WSL gateway under the owner's deployment A
   grant (2026-10-13). Sequence and evidence, all operator-side: `operator-preflight.mjs` returned
   `{"identifiers":"VALID","builder_preflight":"PASS","installed_mutation":false}`; ONE
