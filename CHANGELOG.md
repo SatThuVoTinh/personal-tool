@@ -27,7 +27,10 @@ All notable, validated changes to Personal Tool are documented here.
   (including the symlink refusal) and 7 pass / 1 platform skip on Windows; two mutation probes each
   disabled one guard and killed exactly the matching cases (live-holder refusal; confirmation +
   stray-entry refusal). The live holder case uses **this test process** as the owner, so the
-  refusal is proven against a running process rather than a simulated one.
+  refusal is proven against a running process rather than a simulated one. CI run `38500950386`
+  @ `4f1328a`: `quality-gate` **SUCCESS** (1470 tests / 1419 pass / **0 fail** / 51 skipped) with
+  `python-quality` **SUCCESS**; Security run `38500954316`: `secret-scan` **SUCCESS**,
+  `dependency-audit` red on the unchanged pre-existing 5-high baseline.
 
 - Deployed the M12/T2-R2 governance build to the live WSL gateway under the owner's deployment A
   grant (2026-10-13). Sequence and evidence, all operator-side: `operator-preflight.mjs` returned

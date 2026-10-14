@@ -4979,8 +4979,14 @@ state directory — 8 tests / **0 fail / 0 skipped** under WSL (the symlink refu
 7 pass / 1 platform-gated skip on Windows; the live-holder refusal is proven against **this test
 process** as the recorded owner, not a simulated pid. Two mutation probes each disabled one guard
 and killed exactly the matching cases. Registered in `npm test`. README §4 gains BƯỚC 1b with the
-exact expected report lines. **Nothing on the live host has been recovered yet** — the orphan is
-still in place because removal is the owner's action, and he runs it.
+exact expected report lines. CI for the pushed head `4f1328a`: run `38500950386` `quality-gate`
+**SUCCESS** (`ℹ tests 1470 / ℹ pass 1419 / ℹ fail 0 / ℹ skipped 51`) with `python-quality`
+**SUCCESS**, and Security run `38500954316` `secret-scan` **SUCCESS** while `dependency-audit`
+stays red on the unchanged pre-existing 5-high baseline. Locally `npm run verify` PASS at the same
+head (1470 / 1424 pass / 0 fail / 46 skipped, policy passed). Verified read-only that the script is
+reachable from WSL at the working tree the operator scripts run from (`TOOL_PRESENT`).
+**Nothing on the live host has been recovered yet** — the orphan is still in place because removal
+is the owner's action, and he runs it; the C→E block has been handed over.
 
 ## 9. Deferred beyond V1
 
