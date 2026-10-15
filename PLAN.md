@@ -144,8 +144,15 @@ Prior revision: M12/T2.1-R1 — the execution wave the owner authorized on 2026-
   absorbed; (c) `tests/m11-t1-postgres-sql-gate` and `m11-t1-skill-vector-sql` skip without a Docker
   container while `node --test` still exits 0 (`R5-E09-03`), so if the container is absent those two are
   `NOT RUN` and may not be folded into "fail 0".
-Task Status: IN PROGRESS — R3 materialized 2026-10-15 as the high-risk tier. R1 and R2 both existed with **zero
-  implementation landed under either**, and no prior task's evidence is altered by any of the three.
+Task Status: IN PROGRESS for the tier, with **one item BLOCKED-ON-OWNER-DECISION** — R3 materialized 2026-10-15 as
+  the high-risk tier. Seven of its eight items are implemented, locally validated and committed: T2.1-1 `96a6dd2`,
+  T2.1-2 `2e7da50`, T2.1-3 `c4833e6`, T2.1-4 `710f650`, T2.1-6 `b3affc2`, T2.1-7 `b7497ca`, T2.1-8 `ba5ff08`, plus
+  the two owner-authorized recorded-item commits `9c7af0f` (the `zink-tools` lint/format gate) and `cc6a0d9` (the
+  Python tokenizer NOT RUN). **T2.1-5 (`R5-E13-06`) was stopped at its own item boundary**, not worked around: its
+  fix collides with a pinned existing assertion, which the `Execution Authorization` below forbids re-valuing — the
+  same collision class that withdrew R2, caught here by the rule instead of by a later review. See the
+  `OWNER DECISION BLOCK — T2.1-5` in §8. R1 and R2 both existed with **zero implementation landed under either**,
+  and no prior task's evidence is altered by any of the three.
 Planning Readiness: APPROVED — the owner answered the I1–I7 block with `vậy A đi` and set the three-tier split by
   risk in the same message.
 Plan Revision: M12/T2.1-R3
@@ -171,7 +178,14 @@ Execution Authorization: YES — **bounded to `ACTIVE.md` §4's eight high-risk 
   R3 was then written **fresh** rather than patched, and this field restored to YES at the narrower bound. Full
   detail in `.agents/states/findings.md`, Vòng 6.
 Execution Contract: docs/contracts/execution/ACTIVE.md
-Evidence Level: NONE — nothing in this revision is verified yet.
+Evidence Level: LOCAL-VERIFIED **for the seven delivered items only** — `npm run verify` PASS on Windows at
+  `ba5ff08`: `format:check` clean, `lint` clean with `zink-tools` now inside it, `npm test`
+  **1482 tests / 106 suites / 1436 pass / 0 fail / 46 skipped**, `Repository policy check passed.`; the
+  Knowledgebase Python suite green locally (**140 passed / 7 skipped**, the 7 being explicit NOT RUN incl. the four
+  tokenizer-gated modules). One mutation probe per item, each killing exactly that item's control. `46 skipped`
+  **includes** `m8-t2.13-r16`'s namespace cases and the two Postgres/Docker suites, so it is not a pass and is not
+  counted as one. **`REMOTE-BACKED` is NOT claimed** — no CI run has been read for these seven commits — and the
+  WSL lane is `NOT RUN`. T2.1-5 carries no evidence because nothing under it was executed.
 Task Branch: codex/m11-t1-audit-remediation (no new branch and no `main` merge authorized)
 Owner Approval: EXPLICIT — 2026-10-14, seven-lettered-block answer quoted above, followed the same day by
   the sweep-and-record instruction that produced R2. Two sub-choices are
@@ -5173,6 +5187,87 @@ CI for the pushed record head `a9a6c1c`: run `38523610190` `quality-gate` **SUCC
 (`ℹ tests 1470 / ℹ pass 1419 / ℹ fail 0 / ℹ skipped 51`) and `python-quality` **SUCCESS**;
 Security run `38523614667` `secret-scan` **SUCCESS**, `dependency-audit` red on the unchanged
 5-high baseline. CI cannot reach the live host, so it adds no deployment or Discord evidence.
+
+### Record — `M12/T2.1-R3` execution wave: seven items landed, one stopped at a pinned gate (2026-10-15)
+
+Owner's instruction for this run, verbatim: **`sửa phần ghi nhận luôn đi em. Xong làm một mạch từ T 2.1-2 đến 8`**
+("also fix the parts you only recorded, then do T2.1-2 through 8 in one continuous run").
+
+**Two commits sit outside `ACTIVE.md` §3's file list on that instruction alone.** They are the items I had recorded
+but not fixed in earlier rounds, and I measured before changing anything because both touch a *required gate*:
+
+| Commit | What | Measured before | Result |
+| --- | --- | --- | --- |
+| `9c7af0f` | `zink-tools` added to `lint`/`format`/`format:check` | `eslint.config.mjs:13` already **declared** `zink-tools/**/*.mjs` while `npm run lint` never named the directory — the gate was declared-but-unwired. `npx eslint zink-tools` → **6 errors**; `prettier --check` → **14 unformatted files**. | All six fixed (unused `version`, unused `path`, two dead parser bindings whose calls still advance the cursor, `TextDecoder` missing from the globals list, and `no-control-regex` on a *deliberate* control-character blocklist). Gate lands green, not bulk-suppressed. **`R1-A10-07` closes on the coverage half only** — the lowercase `lifecycle_state` mismatch, the unreachable `Unsupported action` throw and the dead `void` all survive. |
+| `cc6a0d9` | four Knowledgebase Python modules skip explicitly when the pinned tokenizer is absent | `python -m pytest tests` → `142 collected, 4 errors` then **`Interrupted: 4 errors during collection`** — i.e. **zero** tests ran on any host without CI's `KNOWLEDGE_TOKENIZER_PATH` (`ci.yml:99`). | **140 passed / 7 skipped** locally with the reason printed. The guard fires only on an absent/unset path: pointed at an existing wrong file the modules still import and `markdown_adapter.py:167` raises `TOKENIZER_ARTIFACT_MISMATCH`, so a skip cannot hide a bad artifact. CI unchanged. Root cause recorded as **`R6-I01-01`** and **not fixed** (`app.main` builds a real `TokenBudget` at import). |
+
+**The seven delivered items.** Each was test-first, each red before the fix, each with one mutation probe that killed
+exactly its own control:
+
+| Item | Commit | Control the probe kills | Honest limit of the evidence |
+| --- | --- | --- | --- |
+| T2.1-1 unreadable proposal (`R5-E06-07`) | `96a6dd2` | a truncated proposal file blocks the overwrite; an absent one does not | the rename-safety `Unresolved` in V01 is closed: exactly one call site existed |
+| T2.1-2 rollback residue (`R5-E04-03`) | `2e7da50` | `describeVersionRollbackState` reporting a read failure as clean, and the verdict missing from the message | residue verdicts are driven directly (R22-09) because no host can make a live `rm` fail on purpose; the clean path runs through the real promotion via `MANIFEST_LIMIT_EXCEEDED` (R22-08) |
+| T2.1-3 upstream response bytes (`R5-E06-03`) | `c4833e6` | the marker scan (`psycopg`, `embedding_vector`, `/app/app/retrieval.py`, `Field required`, the request echo) and, separately, the field projection being dropped | driven against a **stub HTTP service**, not a mocked transport |
+| T2.1-4 child stderr (`R5-E06-04`) | `710f650` | engine prose (`invalid_column_xyz`, `Referenced column`) appearing in a thrown message | also settled the ETIMEDOUT question §4 called `Unresolved`: `execFileSync` does throw `code === "ETIMEDOUT"`, observed on Windows, still unproven on the WSL drvfs root |
+| T2.1-6 snapshot residue + errno-first (`R1-A14-01/02`) | `b3affc2` | `name ?? code` ordering; and — after my own first probe exposed the gap — the **call-site wiring** in the write window | the wiring is pinned by source shape (B7-3), which is this file's existing convention: no host can fail `writeFileSync` on an open descriptor, and a call site no test can reach is the pattern the audit has already learned to name |
+| T2.1-7 fabricated locator (`R5-E02-05`) | `b7497ca` | `(lines None-None)`, and separately `or`→`and` on the half-present pair | the fixture is a **PDF row with a NULL page pair**, per V01's binding correction; `render_pdf_citation` and the response schema untouched |
+| T2.1-8 destructive default (`R5-E08-02`) | `ba5ff08` | the gate disabled (REPORT and REFUSED both go red), and `isAbsolute` moved after `resolve` (`.`/`..` stop being refused) | `test:r16` was **renamed to `rehearse:r16`**, not deleted, so the rehearsal route survives; `§7`'s literal `npm run test:r16` is satisfied by the renamed entry point, and §4's "out of `test:*` naming" is why the old name is gone rather than aliased |
+
+**Two defects T2.1-8 surfaced and that I did not hide:**
+
+1. The driver could not load on Windows at all — `await import(path.join(...))` was rejected with
+   `ERR_UNSUPPORTED_ESM_URL_SCHEME … Received protocol 'c:'`, so the new guard would have been unreachable on the host
+   that runs the audits. Fixed inside the item's own file (`pathToFileURL`).
+2. `r16-rehearsal.mjs`'s pre-existing "R16 runs in WSL only" guard **does not fire on this host**: something created
+   `C:\home\hoang_vinh\.openclaw-zink\operator` on **2026-09-29**, so `existsSync("/home/hoang_vinh/.openclaw-zink")`
+   answers `true` on Windows. The mirror is empty (three directories, no files). I did not touch it — deleting it is a
+   destructive action on an unowned path and §10 forbids inferring that. **Recorded as a finding for Vòng 6 wave 2**:
+   a POSIX absolute path reaching Node's filesystem calls on Windows silently creates a parallel tree on `C:\`, and
+   every guard whose safety rests on "that path cannot exist here" is then resting on nothing.
+
+**Not claimed:** no CI run has been read for any of these seven commits (so the tier is `LOCAL-VERIFIED`, not
+`REMOTE-BACKED`); the WSL lane is `NOT RUN` for this wave; `verify.mjs` remains `NOT RUN`; the 46 skips include
+`m8-t2.13-r16`'s namespace cases and the two Postgres/Docker suites.
+
+#### OWNER DECISION BLOCK — T2.1-5 (`R5-E13-06`), the only item that did not execute
+
+`ACTIVE.md` §4 requires `operator-lock-recovery.mjs:145` to stop publishing
+`` `${owner.token.slice(0, 4)}${"*".repeat(28)}` `` — masking treated as redaction, where **omission** is the correct
+strategy. The gate refuses it: `tests/m12-t2-r4-orphan-lock-recovery.test.mjs:211` asserts
+
+```js
+assert.match(report.owner_token, /^e{4}\*{28}$/u);
+```
+
+against a fixture token of `"e".repeat(32)`. That regex **demands the token's first four characters**, so the existing
+assertion enshrines exactly the state the fix refuses: every non-leaking value fails it. The same test's own message
+says *"the lock token is a holder nonce, not an operator credential: it must not be echoed"* — and then pins that it
+is echoed. §2's `Execution Authorization` makes re-valuing a pinned existing assertion a stop-and-report condition
+(that rule is why R2 was withdrawn, and here it worked as designed), so I stopped at the item boundary, left
+`report.owner_token` byte-identical, and finished the rest of the tier.
+
+| Option | What | Cost | Recommendation |
+| --- | --- | --- | --- |
+| **A** | Grant the §3 exception, re-value `:211` to an omission assertion (`report.owner_token === null`, plus "no token substring anywhere in the report" which `:206` already proves), keep the finding in this tier | one pinned assertion changes, and it was written four days ago as part of the tool this item is auditing — it is not accepted milestone evidence | **A** — smallest sound change, and it removes the only field in an operator report that derives from a credential |
+| **B** | Accept the 4-hex-char mask as adequate and close `R5-E13-06` as won't-fix | 16 of 128 bits of a live holder nonce in every report that gets pasted into a terminal, log or card | only if he judges a holder nonce as non-credential — but then §4's premise is wrong and the item should be withdrawn, not quietly dropped |
+| **C** | Move it to `M12/T2.2` with the exception granted there | the tier rule says "fails undetectably ⇒ high"; this one is detectable, so C is defensible and keeps R3 green without an exception mid-flight | the fallback if he wants no exception inside an executing contract |
+
+A is recommended. Answering this block authorizes **nothing else**: it does not restore `Execution Authorization` to
+the other seven (they are done), it does not permit `--apply`, a restart, a lock deletion, or any deployment, and if
+the answer is A or C the change to `:211` still has to be written down in the contract before it is executed.
+
+#### Unreconciled acceptance line — recorded, not silently narrowed
+
+`R5-E06-03`'s own `Acceptance:` reads *"no adapter result field can contain bytes copied from an upstream response
+body"*, while `ACTIVE.md` §4 T2.1-3 admits *"a fixed reason code plus a bounded, field-whitelisted summary derived
+from the parsed body."* The two are not identical: `loc` path segments and `type` rule names come from the response.
+I implemented the **contract**, which is the executable authority (§2), and record the divergence rather than claim
+the register's stricter line. The projection is limited to fields that describe the **caller's own request**
+(no `msg`, no `input`, no free-text `detail`, nothing from an unparseable body), so the leak the finding named —
+internal paths, column names, the request echo — is closed even though the literal sentence is not fully satisfied.
+If he wants the literal acceptance, that is one more decision: drop the projection entirely and leave the status code
+alone.
 
 ### Record — `M12/T2.1-R2` was destroyed by an overwrite, and its full text is NOT recoverable faithfully (2026-10-15)
 
