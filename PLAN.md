@@ -5743,6 +5743,63 @@ Three observations from `A-2`, deliberately **not** changed:
   node. Same class as the "guessed stack" surfaces the audit already recorded, and it needs its own item rather than a
   silent extra edit here. Recorded as `R6-A02-01`.
 
+### Record — `A-3` STOPPED: its premise is refuted, and the real defect is a different one (2026-10-15)
+
+`ACTIVE.md` §8 orders: *"If execution reveals that an item's premise is wrong … **stop that item**, record the
+refutation, and escalate; do not silently re-scope it into a smaller claim."* `A-3`'s premise is wrong, so it stops
+here rather than landing a smaller change under its name.
+
+**What `A-3` claimed** (`R5-E16-01` / `R5-E16-02`): `queue-manager.mjs` and `decision-ledger.mjs` "each rewrite their
+whole JSON document **in place** under the cross-process writer lock", and the fix is to convert both to
+write-temp-then-rename reusing `ledger.mjs`'s `writeSnapshotAtomic`.
+
+**What the source does** (read this session, not inferred):
+
+- `queue-manager.mjs:200-247` `save()` already writes a temp file, `fsync`s, closes, `renameSync`s over the target,
+  then fsyncs the parent directory (`:210-232`, the M7-066 comment says so explicitly).
+- `decision-ledger.mjs:238-290` `save()` already does the same **and** wraps the write and the rename in
+  `withFileLockSync` **as one unit** (`:261-270`), with an M10/T2-R17 comment stating that locking only the rename
+  would leave the torn window this closes.
+- So there is no in-place rewrite to convert in either file. `A-3`'s prescribed fix has nothing to do.
+
+**The defect that is actually there, and it is not the one `A-3` describes.** The two modules differ in **who takes
+the lock**, and one shipped caller relies on the wrong one:
+
+- `decision-ledger.save()` locks itself, so any caller is safe.
+- `queue-manager.save()` does **not** lock. Safety comes from callers wrapping in `withLock` (`:135-152`), which
+  re-`load()`s inside the lock and then runs the body.
+- `plugins/zink-governance/index.mjs:5658-5663` mutates `defaultQueueManager.queue` and calls `save()` **directly,
+  outside `withLock`**. Two consequences, both the classic lost-update shape and both caused by this one call site
+  rather than by whole-file rewrites in general: the save projects whatever that map happened to hold — a snapshot
+  from construction or from the last `withLock` — over the file, so a concurrent locked writer's committed change is
+  **erased**; and its own mutation is made against a stale copy, so the projection it writes is already wrong. The
+  failure path "restores" only the in-memory map (`:5663`), never the disk, so a partial sequence leaves the file
+  holding the stale projection. This is the lost-update shape the register attributed to
+  whole-file rewrites; its real cause is an unserialised writer.
+- Both modules also open their temp file with mode `"w"`, not `"wx"`, and neither calls `assertNoLinks` — unlike
+  `ledger.mjs:551-552`, which does both. A predictable temp name (`<file>.tmp-<pid>[-<timestamp>]`) is therefore a
+  path a pre-existing link can occupy.
+- `queue-manager.save()` also leaves temp **residue** when the write fails: its `finally` (`:238-245`) closes the
+  descriptor but never unlinks, whereas `ledger.mjs:562-567` cleans residue after the close and before rethrowing.
+
+**Why I did not fix these under `A-3`.** The unlocked writer lives in `index.mjs`, which is not in `A-3`'s allowed
+file list (`ACTIVE.md` §3: `queue-manager.mjs`, `decision-ledger.mjs`, their tests), and the durable options each
+change something the owner has not been asked about: making `queue-manager.save()` self-locking changes lock
+behaviour for every caller; converting the caller to `withLock` means editing the plugin; `"w"` → `"wx"` plus
+`assertNoLinks` is a hardening change the contract never described. Any of those, done quietly, would be exactly the
+silent re-scope §8 forbids.
+
+**Recommendation, for the owner's decision, smallest first:** (1) `queue-manager.save()` self-locks, matching
+`decision-ledger` — one module, no caller edits, and the unlocked `index.mjs` path becomes safe without touching the
+plugin; (2) add `"wx"` + `assertNoLinks` + post-failure residue cleanup to both temp writers, reusing
+`ledger.mjs`'s existing helpers rather than writing new ones; (3) leave the `index.mjs:5658` direct mutation on a
+recorded list to be retired when its queue-projection ownership question is decided. Item (1) alone closes the
+reachable data-loss path.
+
+**This does not affect `A-1` or `A-2`**, and it does not block them: neither touched these files.
+
+Gate state for this record: `NOT RUN` — no repository source file changed, only `PLAN.md` and the register.
+
 ## 9. Deferred beyond V1
 
 Unless separately approved:
