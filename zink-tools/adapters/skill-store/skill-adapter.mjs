@@ -189,11 +189,27 @@ function writeJsonAtomicSync(filePath, value) {
   fs.renameSync(tmp, filePath);
 }
 
-function readJsonIfExistsSync(filePath) {
+function readProposalRecordSync(filePath) {
+  // Absent and unreadable are not the same answer. Returning null for both made
+  // the caller's sameBytes check false, so both terminal-status guards fell
+  // through and an owner's recorded decision was overwritten.
+  let raw;
   try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+    raw = fs.readFileSync(filePath, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw new SkillAdapterError(
+      `Skill proposal record exists but cannot be read (${error?.code ?? "unknown"}).`,
+      "SKILL_PROPOSAL_UNREADABLE",
+    );
+  }
+  try {
+    return JSON.parse(raw);
   } catch {
-    return null;
+    throw new SkillAdapterError(
+      "Skill proposal record exists but is not valid JSON.",
+      "SKILL_PROPOSAL_UNREADABLE",
+    );
   }
 }
 
@@ -912,7 +928,7 @@ export class SkillAdapter {
                 proposalsDir,
                 `${proposal_id}.json`,
               );
-              const existing = readJsonIfExistsSync(proposalPath);
+              const existing = readProposalRecordSync(proposalPath);
               const sameBytes =
                 existing?.proposal_id === proposal_id &&
                 existing?.content_sha256 === content_sha256 &&

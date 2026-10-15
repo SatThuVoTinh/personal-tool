@@ -721,3 +721,54 @@ test("B6-3: an uncontended propose keeps its existing behavior", async () => {
     rm(base);
   }
 });
+
+test("B6-4: a proposal record that cannot be parsed blocks the overwrite", async () => {
+  // readJsonIfExistsSync returned null for every failure, so a half-written or
+  // corrupt record looked identical to an absent one: sameBytes went false, both
+  // the candidacy and the terminal-status guard were skipped, and the atomic
+  // write replaced a durable owner decision.
+  const { base, skillsRoot, proposalStorageDir } = await proposalFixture();
+  try {
+    const adapter = new SkillAdapter(skillsRoot, {
+      skillsRoot,
+      proposalStorageDir,
+    });
+    const content = "# Unreadable\n\nGoverned bytes.";
+    const first = await adapter.querySkillStore(proposeInput(content));
+    assert.equal(first.governed_status, "SUCCESS");
+    const proposalPath = path.join(
+      proposalStorageDir,
+      `${first.proposal.proposal_id}.json`,
+    );
+    const decided = JSON.stringify(
+      { ...first.proposal, status: "APPROVED" },
+      null,
+      2,
+    );
+    // A truncated tail is the routinely-occurring corruption, not a permission
+    // error: a file unreadable is usually unwritable too.
+    const corrupt = decided.slice(0, decided.length - 20);
+    writeFileSync(proposalPath, corrupt, "utf8");
+
+    await assert.rejects(
+      () => adapter.querySkillStore(proposeInput(content)),
+      (error) =>
+        error.name === "SkillAdapterError" &&
+        error.code === "SKILL_PROPOSAL_UNREADABLE",
+      "an unreadable decision must never be overwritten as though absent",
+    );
+
+    assert.equal(
+      readFileSync(proposalPath, "utf8"),
+      corrupt,
+      "the refusal must leave the record byte-identical",
+    );
+    assert.equal(
+      existsSync(skillStoreWriterLockDir(skillsRoot)),
+      false,
+      "the refusal must not strand the store writer lock",
+    );
+  } finally {
+    rm(base);
+  }
+});
