@@ -15,13 +15,27 @@
 // No live apply, no gateway restart, no heartbeat, no Discord message and no
 // production ledger write happens here. `Deployment Authorized` stays NO.
 //
-// Usage: node integrations/openclaw/topology/fixtures/runtime-regression/r16-rehearsal.mjs
+// Usage:
+//   node integrations/openclaw/topology/fixtures/runtime-regression/r16-rehearsal.mjs
+//     — REPORT only. Resolves and validates the scratch root, states what a run
+//       would delete and which privileges it would take, and mutates nothing.
+//   node …/r16-rehearsal.mjs --rehearsal-root <absolute-path> --run --confirm=R16_REHEARSAL_RUN
+//     — the rehearsal itself. `--rehearsal-root` may instead come from
+//       R16_REHEARSAL_ROOT; either way it must be absolute and cannot be the
+//       filesystem root or the home directory, because the scratch tree is
+//       removed with `recursive: true, force: true`.
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const repository = fileURLToPath(new URL("../../../../../", import.meta.url));
 const suite = path.join(
@@ -30,11 +44,68 @@ const suite = path.join(
   "m8-t2.13-r16-apply-rehearsal.test.mjs",
 );
 const { fingerprint, fingerprintDiff, R16_ROOTS } = await import(
-  path.join(repository, "tests", "helpers", "r16-fingerprint.mjs")
+  // A bare absolute path is not a module specifier on Windows; the ESM loader
+  // rejects a `c:` scheme. The gate below has to run on every host, so the
+  // sibling helper is loaded the way the rest of the repository loads it.
+  pathToFileURL(
+    path.join(repository, "tests", "helpers", "r16-fingerprint.mjs"),
+  ).href
 );
 
-const rehearsalRoot =
-  process.env.R16_REHEARSAL_ROOT ?? path.join(os.homedir(), ".r16-rehearsal");
+const CONFIRM_VALUE = "R16_REHEARSAL_RUN";
+const DEFAULT_REHEARSAL_ROOT = path.join(os.homedir(), ".r16-rehearsal");
+
+function parseArguments(argv) {
+  const options = { rehearsalRoot: null, run: false, confirm: null };
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index];
+    if (argument === "--rehearsal-root") {
+      options.rehearsalRoot = argv[++index];
+    } else if (argument === "--run") {
+      options.run = true;
+    } else if (argument.startsWith("--confirm=")) {
+      options.confirm = argument.slice("--confirm=".length);
+    } else {
+      throw new Error(`Unknown argument ${argument}`);
+    }
+  }
+  return options;
+}
+
+/**
+ * The scratch root is deleted with `recursive: true, force: true`, so the shape of
+ * the value is the entire safety story. An unset value falls back to the documented
+ * tree; anything the operator supplies — flag or environment — must resolve to an
+ * absolute path that is neither the filesystem root nor the home directory. A
+ * relative value would have resolved against whatever working directory npm
+ * happened to use, which is how a scratch path becomes `..`.
+ */
+function resolveRehearsalRoot(options) {
+  const supplied = options.rehearsalRoot ?? process.env.R16_REHEARSAL_ROOT;
+  const root =
+    supplied === undefined || supplied === null
+      ? DEFAULT_REHEARSAL_ROOT
+      : supplied;
+  if (typeof root !== "string" || root.length === 0) {
+    throw new Error("R16 rehearsal root must be a non-empty path");
+  }
+  // Tested on the value as supplied: `.` and `..` both resolve to absolute paths,
+  // and against npm's working directory `..` is the parent of the repository.
+  if (!path.isAbsolute(root)) {
+    throw new Error(`R16 rehearsal root must be absolute, got ${root}`);
+  }
+  const resolved = path.resolve(root);
+  if (
+    resolved === path.parse(resolved).root ||
+    resolved === path.resolve(os.homedir())
+  ) {
+    throw new Error(`refusing to treat ${resolved} as a rehearsal root`);
+  }
+  return resolved;
+}
+
+const options = parseArguments(process.argv.slice(2));
+const rehearsalRoot = resolveRehearsalRoot(options);
 const fingerprintPath = path.join(rehearsalRoot, "live-fingerprint.json");
 
 const gateway = () => {
@@ -60,6 +131,48 @@ const gateway = () => {
 };
 
 const report = (line) => process.stdout.write(`${line}\n`);
+
+// The gate that belongs in front of a recursive delete. The namespace child is
+// exempt: this file re-launches itself as `unshare … node <this file>` with no
+// argv at all, so demanding a confirmation there would make the rehearsal
+// unrunnable rather than safer — its authority is the parent that confirmed.
+if (process.env.R16_INSIDE !== "1") {
+  const rootExists = existsSync(rehearsalRoot);
+  let rootEntries = null;
+  if (rootExists) {
+    try {
+      rootEntries = readdirSync(rehearsalRoot).length;
+    } catch {
+      // Unreadable stays unknown rather than being reported as empty.
+    }
+  }
+  if (!options.run) {
+    process.stdout.write(
+      `${JSON.stringify({
+        mode: "REPORT",
+        action: "NONE",
+        rehearsal_root: rehearsalRoot,
+        root_exists: rootExists,
+        root_entries: rootEntries,
+        live_runtime_present: existsSync(R16_ROOTS.stateDir),
+        deletes_on_run: rehearsalRoot,
+        requires: `--run --confirm=${CONFIRM_VALUE}`,
+      })}\n`,
+    );
+    process.exit(0);
+  }
+  if (options.confirm !== CONFIRM_VALUE) {
+    process.stdout.write(
+      `${JSON.stringify({
+        mode: "REFUSED",
+        action: "NONE",
+        reason: "CONFIRMATION_REQUIRED",
+        requires: `--confirm=${CONFIRM_VALUE}`,
+      })}\n`,
+    );
+    process.exit(1);
+  }
+}
 
 if (!existsSync(R16_ROOTS.stateDir)) {
   report("FATAL: the live runtime is not present. R16 runs in WSL only.");

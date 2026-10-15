@@ -27,7 +27,7 @@
 // These tests require WSL, where the live runtime exists. They skip rather than
 // pass vacuously elsewhere; `r16-rehearsal.mjs` is what runs them for real.
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -39,6 +39,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import test from "node:test";
@@ -1079,4 +1080,119 @@ test("R16-08: the operator preflight names every known refusal class and leaks n
     false,
     "a raw error message could quote config content or identifiers",
   );
+});
+
+// ---------------------------------------------------------------------------
+// The driver's own gate (M12/T2.1 T2.1-8, `R5-E08-02`).
+//
+// These run on every host because they assert the ABSENCE of an effect: no mount
+// namespace, no live runtime and no scratch tree is touched. The suite above is
+// the one that needs WSL.
+// ---------------------------------------------------------------------------
+
+const DRIVER = path.join(
+  import.meta.dirname,
+  "..",
+  "integrations",
+  "openclaw",
+  "topology",
+  "fixtures",
+  "runtime-regression",
+  "r16-rehearsal.mjs",
+);
+
+const runDriver = (args, env = {}) => {
+  const childEnv = { ...process.env, ...env };
+  // These cases must be seen by the driver as an operator invocation even when
+  // this suite itself is running inside the rehearsal namespace, where both
+  // variables are set: inherited `R16_INSIDE=1` would waive the gate and put a
+  // nested rehearsal in the child.
+  delete childEnv.R16_INSIDE;
+  delete childEnv.R16_REHEARSAL_ROOT;
+  return spawnSync(process.execPath, [DRIVER, ...args], {
+    encoding: "utf8",
+    env: childEnv,
+  });
+};
+
+test("R16-DRIVER-01: no `test:` script names the recursive-delete driver", () => {
+  const scripts = JSON.parse(
+    readFileSync(path.join(import.meta.dirname, "..", "package.json"), "utf8"),
+  ).scripts;
+  assert.deepEqual(
+    Object.entries(scripts).filter(
+      ([name, command]) =>
+        name.startsWith("test:") && command.includes("r16-rehearsal"),
+    ),
+    [],
+    "a destructive operator entry must not be reachable under a `test:` name",
+  );
+  assert.ok(
+    Object.values(scripts).some((command) =>
+      command.includes("r16-rehearsal.mjs"),
+    ),
+    "the rehearsal route must still exist: renaming is not deleting",
+  );
+});
+
+test("R16-DRIVER-02: the default mode reports and touches nothing", () => {
+  const root = path.join(os.tmpdir(), `r16-gate-report-${process.pid}`);
+  const result = runDriver(["--rehearsal-root", root]);
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout.trim());
+  assert.equal(report.mode, "REPORT");
+  assert.equal(report.action, "NONE");
+  assert.equal(report.deletes_on_run, root);
+  assert.match(report.requires, /--run --confirm=R16_REHEARSAL_RUN/u);
+  assert.equal(
+    existsSync(root),
+    false,
+    "a report may not create the tree it describes",
+  );
+});
+
+test("R16-DRIVER-03: --run without the token is refused and deletes nothing", () => {
+  const root = path.join(os.tmpdir(), `r16-gate-refuse-${process.pid}`);
+  const missing = runDriver(["--rehearsal-root", root, "--run"]);
+  assert.equal(missing.status, 1);
+  assert.equal(
+    JSON.parse(missing.stdout.trim()).reason,
+    "CONFIRMATION_REQUIRED",
+    "a missing confirmation must be named as such",
+  );
+  assert.equal(existsSync(root), false);
+
+  // A wrong token is not a missing one, and must not open the gate either.
+  const wrong = runDriver([
+    "--rehearsal-root",
+    root,
+    "--run",
+    "--confirm=R16_REHEARSAL",
+  ]);
+  assert.equal(wrong.status, 1);
+  assert.equal(existsSync(root), false);
+});
+
+test("R16-DRIVER-04: a root that can resolve upward is refused before it is read", () => {
+  // `force: true` makes a wrong root silent, so the value's shape is the guard.
+  // `.` and `..` matter most: both resolve to absolute paths, and `..` against
+  // npm's working directory is the parent of the repository.
+  for (const candidate of ["..", ".", "", os.homedir(), "C:\\", "/"]) {
+    const result = runDriver([
+      "--rehearsal-root",
+      candidate,
+      "--run",
+      "--confirm=R16_REHEARSAL_RUN",
+    ]);
+    assert.notEqual(
+      result.status,
+      0,
+      `the driver must refuse ${JSON.stringify(candidate)}`,
+    );
+    assert.match(
+      `${result.stderr}${result.stdout}`,
+      /absolute|refusing to treat|non-empty/u,
+      `the refusal must name why ${JSON.stringify(candidate)} is not a root`,
+    );
+  }
 });
