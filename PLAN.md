@@ -126,8 +126,9 @@ Prior revision: M12/T2.1-R1 — the execution wave the owner authorized on 2026-
   `403` on branch protection, H3 a skip floor, H4 the live 0644 config backup as a guarded operator
   command, H5 `skills.*` schema ownership, H6 the router key as a SecretRef, H7 ledger identity
   references, H8 a governed `DEPRECATED` transition, H9 PDF-content reclamation, H10 whether the findings
-  register becomes tracked). Answering H1–H10 does **not** authorize execution; each still needs its own
-  Plan Revision.
+  register becomes tracked; **H11 the O1/O2 working relationship, owner-proposed 2026-10-15 — see §11 for its three
+  shapes**). Answering H1–H11 does **not** authorize execution; each still needs its own Plan Revision. The ledger
+  lives in **§11 of this file**, not in an ignored state file (promoted 2026-10-15 under the owner's approval).
   Honesty obligations the owner should read before accepting anything: deployment is **not** authorized
   by this contract; live Discord behaviour stays `NOT TESTED`; `verify.mjs` stays `NOT RUN`; the R16
   rehearsal cannot run on WSL and is **NOT RUN**, so no rehearsal validates this against the live
@@ -181,7 +182,8 @@ Execution Authorization: YES — **bounded to `ACTIVE.md` §4's eight high-risk 
   no PR, no force-push, no workflow-file edit, no migration edit, no schema-file edit, no `.github/workflows/**`
   change, no re-valuing of any **pinned existing assertion** (gate 6 makes that a stop-and-report condition, which is
   the rule R2 broke via 4A.1 and `R6-V01-01` caught), no chmod or other change to anything under
-  `/home/hoang_vinh/.openclaw-zink`, and **no** implementation of any H1–H10 decision or of any `M12/T2.2`/`T2.3`
+  `/home/hoang_vinh/.openclaw-zink`, and **no** implementation of any H1–H11 decision (§11) or of any
+  `M12/T2.2`/`T2.3`
   item — those are tier assignments, not approvals.
   History of this field, recorded because the withdrawal is the evidence that the verification round worked: it was
   set YES for R2 on 2026-10-14, then **pulled to NO on 2026-10-15** when Vòng 6 lanes V01/V05/V06 found **eleven
@@ -5586,3 +5588,60 @@ Unless separately approved:
 | Coordinator binding    | M10/T2-R2 (parent R1) implemented and locally verified; binding = historical identity, attempt = execution generation, lease = current execution authority; live execution and result ingestion remain future work and are not authorized. |
 | OpenClaw               | External runtime/orchestrator and task-mode classifier.                                                                                                                                                                                    |
 | n8n                    | Deterministic workflow/trigger/schedule plumbing.                                                                                                                                                                                          |
+
+## 11. Ledger of open owner decisions — H1–H11 (TRACKED AUTHORITY)
+
+Promoted from `.agents/states/findings.md:4423-4462` on 2026-10-15 under the owner's "5. ok em". **This section is
+the authority for these questions**; the register copy is now a historical note. The reason it had to move is
+`AGENTS.md` §2/§6: the ledger previously lived only in a git-ignored state file, which grants no authority, and one
+contract revision (R2's own §9) was already destroyed by an overwrite precisely because it was ignored (`H10`).
+Every row below was **re-derived for Vòng 6 wave 2** — where the register's older evidence was refuted, the
+correction is stated rather than the old claim repeated. **None is answered, and none is authorized: a tier
+assignment in `ACTIVE.md` §5.3 is not an approval.**
+
+| # | Decision | What changed after wave 2 | Where |
+| --- | --- | --- | --- |
+| **H1** | Widen CI triggers so a push to the task branch is gated without a human re-dispatch | still true that every run is `workflow_dispatch` (26 runs / 14 SHAs), but "HEAD has zero runs" is now false only because a human dispatched `d8c221a`. The decision is "evidence exists **only when someone remembers**", not "no evidence exists" | `ci.yml:3-8`, `security.yml:3-10` (+ a weekly `schedule:` the register missed); `R5-E09-01/-08`, `R6-V08-01` |
+| **H2** | Branch protection cannot be enabled — choose an in-repo merge-blocker substitute, make the repo public, or accept advisory gates | re-confirmed: `gh api …/branches/main/protection` → `403 "Upgrade to GitHub Pro or make this repository public"` while the same token reads the branch, so it is plan-gated, not a scoping artefact. HEAD's Security run is red **right now** and nothing can block a merge | `R5-E09-02`, run `38715090086` |
+| **H3** | A skip policy for CI — floor the skip tier, or make the SQL gate executable there | **shape changed twice.** `m11-t1-skill-vector-sql` is NOT Docker-gated (grep 0; it passes in CI), so the Postgres-service option buys **one** test (`M11-06`), not a tier. And all 52 CI skips are individually named with reasons, so the gap is enforcement not visibility; the 52−46 delta is the 6-test duckdb family, verified (`which duckdb` present on this Windows host and in WSL, absent on the runner). A single global number would fire on 40 legitimate host-capability skips → **needs a per-family expectation** | `PLAN.md` §2 (Active Task, corrected), `R5-E09-03`, `R6-V08-01` |
+| **H4** | Operator chmod of the live 0644 config backup + extending the permission gate to the state root | **de-escalated.** `/home/hoang_vinh` and `/home/hoang_vinh/.openclaw-zink` are both `drwx------`, so "any uid can read the credential set" was false; the file is 1 of 15 copies. The live-data action is not needed. What IS verified and unguarded: `configure.mjs:986-988` returns immediately on win32, so the named-path mode check **has never run on the owner's host**, nothing enumerates the state root, and four subtrees inside it are group-writable (`R6-V09-03`) | `R5-E13-01`, `R6-V09-01` |
+| **H5** | Where `skills.*` schema lives: move the DDL + runner into `zink-skill-store/`, or record the present arrangement as an accepted §9 exception | **support removed.** "R5-E11-02 strengthens this" no longer holds: §9's only imperative about a peer's store is prefixed *cross-project*, and §9 defines the three modules as one repository, so a plugin calling the Skill Store's own exported writer under the Skill Store's own lock is calling the owner. H5 must be decided on **DDL placement alone**; what is actually contradicted is one sentence of `docs/contracts/skill-store/agent-skill-store.md` | `R5-E03-07`, `R5-E11-02` (re-framed), `R6-V10` |
+| **H6** | Route the router key through the SecretRef indirection | premise true, details corrected: `policy.mjs:892-898` bakes `apiKey: resolveRouterApiKey()` from `process.env.ZINK_ROUTER_API_KEY`, and `buildSecretsPlan()` returns **zero** targets, so "the indirection exists in this template and the key skips it" overstates it — bot/gateway tokens route through `secrets.providers`, the router key is baked and unrotatable without re-apply. "Duplicated in every copy" is inference: two `.bak.1/.bak.2` copies predate the router provider entirely | `R5-E13-02`, `R6-V09` |
+| **H7** | A referential scheme for Discord identities in durable events, plus the policy for **unknown** ids | **loses its live basis.** `governance/ledger/events.jsonl` is 0 bytes (mtime Sep 18) and a numbers-only snowflake count returns 0 — no third-party identity has ever been written. This is a forward-looking schema decision ("what may future events write"), and must not be put to the owner as remediating an existing exposure. `operator/m7-t2/ledger` was not swept, so that half stays `Unresolved` | `R5-E13-04`, `R6-V09` |
+| **H8** | A governed `DEPRECATED` retirement transition for the Skill Store | stands, better evidenced, with **one prerequisite and one correction**. Prerequisite: applied migrations are keyed on **filename only** (`database.py:1718-1733`, no digest column), so editing `003`'s `CHECK` in place is a silent no-op on an already-migrated database — the fix must be a forward migration (`R6-V10-01`). Correction: cite `R5-E04-05` only; `R5-E04-01/02` are staging-recovery findings, not lifecycle ones (`R6-V10-03`). `REJECTED` is equally writerless, so **two** of four states have no writer | `R5-E04-05`, `catalog.mjs:45, :419-424` |
+| **H9** | Whether unreclaimable PDF text copies get a reclamation path | unchanged; a retention decision that deletes derived content | `R5-E03-05` |
+| **H10** | Whether `.agents/states/findings.md` becomes tracked, and where an archived `ACTIVE.md` should live | **partly answered by this promotion** — the ledger is now tracked. Still open: the ~5,100-line register itself (a size policy is required) and the archive location, which carries the secret-scrub-first prerequisite (`R3-P04-03`) the contract imposes | this section's own history, `R5-E14-07` |
+| **H11** | **NEW, owner-proposed 2026-10-15: the O1/O2 working relationship.** His words: *"2 điều phối O1 và O2 nên chia đôi task, thảo luận với nhau trong sandbox để khi làm xong, các task mà O1 và O2 cho executor chuyên biệt làm xong, ghép lại phải đúng yêu cầu của anh"* | this is **not** option A or B of the routing question — it is a third answer, and it changes canonical architecture, so it is RED and recorded rather than built. What it contradicts today: `five-stack.md:15-17` ("Main is the only authority that changes execution between coordinators… **O1 and O2 return a transition request to Main instead of invoking one another**") and `:20-23` (missing prerequisites are BLOCKED "rather than a hidden A2A edge"); `policy.mjs:1166` Coordinator Core says the same; `AGENT_SPAWN_POLICY` gives `main → [o1, o2]` and **no** `o1 ↔ o2` edge, which the guard enforces. Sessions also run `context: isolated, sandbox: require, thread: false`, so "a sandbox they discuss in" is a **new shared durable surface**, and `R5-E16-01/02` already proves whole-file rewrites under one lock lose updates when several loops run concurrently. Three shapes are offered below; the recommended order exists because **the execution lane itself has never run end to end**, and `R1-A04-01` must be fixed first whichever shape he picks — otherwise the split he wants is refused mid-flight with `UNAUTHORIZED_TARGET` | `docs/architecture/five-stack.md`, `policy.mjs:555-563, 1166-1174`, `guard.mjs:842-853`, `R1-A04-01`, `R1-A04-05` |
+
+**H11, the three shapes (ranked; the owner picks one before any contract is written):**
+
+1. **Main-mediated split — smallest.** Main divides one request into an O1 half and an O2 half **inside a single
+   brief**, the DAG runs them in parallel with declared cross-node dependencies, and **Main performs the merge and the
+   acceptance check**. No coordinator-coordinator edge; no shared workspace; the "discussion" becomes a dependency
+   edge plus Main's synthesis. Work needed: fix `R1-A04-01` (the guard/policy swap) and `R1-A04-05`, then let a brief
+   contain both coordinators' nodes. Cost: no peer review between O1 and O2; disagreements escalate to Main as today.
+2. **Governed hand-off — middle.** O1 and O2 exchange **written, digest-pinned artifacts** through the existing
+   governed-reference mechanism (immutable refs + `MISSING_PREREQUISITE`/`BLOCKED`), one rebuttal round each, still
+   ordered by Main. Closer to "thảo luận" without a new spawn edge; needs a declared shared-artifact type and a round
+   limit so it cannot loop.
+3. **True coordinator-to-coordinator discussion — largest.** Adds an `o1 ↔ o2` delegation edge, a shared sandbox
+   workspace, a turn-limited negotiation protocol, a stall reaper, and new durable vocabulary for negotiation rounds.
+   This rewrites `five-stack.md`, the Coordinator Core prompt, the spawn policy, the budget model (each round is a
+   spawn), and the money/latency per task. It needs its own milestone, and building it on an execution lane that has
+   never produced a live result would put the negotiation protocol above an unproven floor.
+
+**One constraint the owner should know before choosing, because it decides how much of "thảo luận" is available at
+all.** Today **exactly one coordinator owns a task**: the brief binds `primary_coordinator`, the approval card names
+one "Điều phối chính (Primary)", `allowed_stacks` and the spawn targets derive from that single id, and `main` may
+spawn only `o1` **or** `o2` as the root of a run. So "O1 and O2 discuss as equals" has no host-side object to attach
+to — no shared run identity, no venue, no second party in the ledger. What is achievable inside the existing shape is
+**hand-off and review**: one coordinator owns the task, the other's half comes back as a digest-pinned governed
+reference the owner of the task must accept (shape 2), with Main as the only party allowed to move a half (shape 1).
+A genuine peer debate (shape 3) is new topology, not a configuration of the current one. And `primary_coordinator`
+currently has **no writer in non-test code** — only two reads, `plugins/zink-governance/index.mjs:1890` and `:2535` —
+which is the phantom field the audit already recorded, so whichever shape he picks must first give that field a real
+writer, or the merge has no owner to hold it.
+
+**No shape above is authorized.** Choosing one is a decision, not an execution grant; it needs its own Plan Revision,
+and `R1-A04-01` (the guard-vs-policy swap) must be fixed first in every case — a split the guard refuses mid-flight is
+exactly the failure the owner would experience as "the bots disagree and nothing runs".
