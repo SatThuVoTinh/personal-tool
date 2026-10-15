@@ -42,13 +42,15 @@ import { AGENT_SPAWN_POLICY, AGENT_STACK_POLICY } from "../../lib/policy.mjs";
 
 let policy;
 let AGENT_IDS = ["main", "o1", "o2", "excel", "power-bi", "sql", "python"];
-let STACK_IDS = [
-  "semantic",
-  "intelligence",
-  "decision",
-  "infrastructure",
-  "data_plant",
-];
+// A-2 / R1-A04-05: the stack protocol registry lives in policy.mjs ONLY, the
+// same single-authority rule already documented below for the built-in tool
+// projection. There is no module-level copy: the previous five-member local
+// list was overwritten by `policy.STACK_IDS` on every successful policy load
+// anyway, so it was dead code, and while it existed the two lists disagreed
+// about both membership and order. An empty list is the fail-closed state, not
+// a permissive one: with no loaded policy no stack is a member of the registry
+// and the delegation scope check denies.
+let STACK_IDS = [];
 // M8-067: the delegation-run ceiling is reduced by one for the legacy
 // m7-t2-r12 governance version. The CEILING itself is canonical (BUDGETS in
 // ledger.mjs); only this version-specific delta is declared here, so there is
@@ -1724,9 +1726,15 @@ export function createGovernanceGuard({
           ownerSession.task?.nodes?.find((n) => n.agent_id === del.agent_id)
             ?.stack_id ??
           "data_plant";
+        // A-2 / R1-A04-05: this assert answers "is this a stack the protocol
+        // knows?", which is a scope question, not an existence question. The
+        // delegations above it already established identity, so reporting a
+        // stack-scope refusal as AUTH_DELEGATION_NOT_FOUND told the operator a
+        // delegation could not be found when the guard had just read it. The
+        // code is the one this guard already uses for a scope mismatch.
         assert(
           typeof delStackId === "string" && STACK_IDS.includes(delStackId),
-          "AUTH_DELEGATION_NOT_FOUND",
+          "AUTH_SCOPE_MISMATCH",
         );
         assert(
           Array.isArray(del.allowed_tools) &&

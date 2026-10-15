@@ -5684,6 +5684,65 @@ only on `pull_request`/`push` to `main` or on `workflow_dispatch`; there is no o
 dispatch is the owner's call, not mine: this session's `gh` token authenticates as `SatThuVoTinh`, so a dispatch I
 make is recorded under his login and is indistinguishable from one he makes — see the corrected H1 row.
 
+### Record — `M12/T2.2-R1` `A-2` landed: one stack registry, and a denial that stops lying (2026-10-15)
+
+`A-2` (`R1-A04-05`, Medium) removed the second stack registry and re-coded one refusal. Three changes, no more:
+
+- `policy.mjs:1700-1717` — `STACK_IDS` was **four** members (`infrastructure` absent) while every topology contract
+  (`execution-brief`, `ledger-event`, `ledger-snapshot`, `trusted-result-envelope`, `delegation-envelope`) declares
+  **five**. It is now the five-member list in schema order.
+- `guard.mjs:45-51 → :44-53` — the guard held a module-level **five**-member copy in a different order which
+  `guard.mjs:139` overwrote with the four-member export on every successful policy load. So the guard's own correct
+  default was dead code and the effective runtime registry kept losing `infrastructure`. The copy is gone and the
+  pre-policy state is `let STACK_IDS = [];` — fail closed, the convention the same file already documents for the
+  built-in tool authority at `:58-61` and `:159-165`.
+- `guard.mjs:1729-1738` — the delegation stack-membership refusal reported `AUTH_DELEGATION_NOT_FOUND` for a
+  delegation the guard had just read, identified and validated. It now uses `AUTH_SCOPE_MISMATCH`, which is already
+  in this guard's vocabulary (`:1759`, `AGENTS.md` §8 reuse-before-inventing). **No new denial code exists**: the
+  denial vocabulary is durable ledger vocabulary, and a test pins the code set to exactly the ten codes that were
+  already there. Every other assert in that block still reports `AUTH_DELEGATION_NOT_FOUND`, and the test proves
+  that half did not move.
+
+Why this became live only now: `A-1` made an `infrastructure` node legal in a brief (`AGENT_STACK_POLICY` gives it to
+`main` and `o1`), so the split-half-of-the-org-chart the owner chose can name a stack the delegation authority check
+then refused with a false "not found". Enumerable is not executable, and two tests hold that line: admission still
+refuses `infrastructure` for every agent whose table omits it, and no agent that owns `infrastructure` has a directly
+executable callable tool in `ZINK_TOOLS_ACCESS_MATRIX` / `TOOL_POLICY` — which is what `five-stack.md:9` ("T2 grants
+no infrastructure execution capability") actually needs to stay true.
+
+Honest limit of the behavioural test, stated in the test file itself: the delegation record there is **hand-authored**
+at the check boundary, because the honest reducer derives `stack_id` from the node (`workflow.mjs:1808-1810`) and no
+infrastructure owner is also a callable-tool caller, so a fully reducer-produced `infrastructure` delegation cannot be
+built yet. The fixture therefore stands for the ledger shapes that check must classify, and the suite pins the reason.
+
+Gates, all re-run by the orchestrator, not inherited: `npm run verify` **1502 tests / 106 suites / 1456 pass / 0 fail /
+46 skipped** + `Repository policy check passed.` — baseline `1492` plus exactly the ten new tests. A-2 suite **10/10 on
+Windows and 10/10 under WSL**. The four affected suites (`m7-lane-i`, `m7-lane-g`, `m11-t1-openclaw-outbound-and-caches`,
+`repository-policy`) are **54 tests: 53 pass + 1 pre-existing Windows skip on Windows, 54/54 under WSL**. Mutation probe
+run by me: dropping `STACK_IDS` back to four members reddens exactly **4** tests (both registry pins, the
+infrastructure-delegation behaviour, the unregistered-stack behaviour) while the capability/no-widening tests stay
+green; `policy.mjs` restored byte-identically, `SHA256 a7a759607da3b069ebb85d678b072be98491a674db20c2a6a69b13e18fdc7a26`.
+
+One correction to the implementer's report, kept because the number was in the handoff: it described "4 affected
+suites = **63** tests / 1 skipped". Those four suites are **54**; 63 is 54 plus the `A-1` suite. My own per-file counts
+(`11 + 9 + 12 + 22`) settle it. The skip it reported is real.
+
+Three observations from `A-2`, deliberately **not** changed:
+
+- `plugins/zink-governance/index.mjs:4026-4030` and its primary source `zink-tools/contracts/tools/zink-python.schema.json:25-28`
+  both carry a **four**-member `stack` enum — a *tool-input* schema, not the protocol registry, and §3 of the contract
+  puts schema semantics outside `A-2`. Consequence the owner should know: a `zink_python` call can never legitimately
+  carry `input.stack: "infrastructure"`, and `guard.mjs:1789-1792` requires `input.stack === del.stack_id`, so the
+  registry fix does not by itself make an infrastructure delegation executable end to end. Reaching that is a
+  schema-semantics decision, not a registry one.
+- `policy.mjs:1725`, `:1747` and ten sibling `stacks: Object.freeze([...])` entries inside `ZINK_CAPABILITY_REGISTRY`
+  are per-capability "which stacks this interface is offered to" descriptors. No code reads `.stacks`, every member is
+  a subset of the registry, and none names `infrastructure`. **Not drift** — a different concept, checked so that the
+  claim "one registry" is accurate about the thing it describes.
+- `guard.mjs:1724-1728` still fabricates `"data_plant"` for a delegation that carries no `stack_id` and matches no
+  node. Same class as the "guessed stack" surfaces the audit already recorded, and it needs its own item rather than a
+  silent extra edit here. Recorded as `R6-A02-01`.
+
 ## 9. Deferred beyond V1
 
 Unless separately approved:

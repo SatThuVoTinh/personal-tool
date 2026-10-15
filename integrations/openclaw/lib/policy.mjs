@@ -1697,7 +1697,19 @@ export const OPERATION_POLICY = Object.freeze({
   }),
 });
 
+// The one stack protocol registry. It is the five members every topology
+// contract declares (`execution-brief`, `ledger-event`, `ledger-snapshot`,
+// `trusted-result-envelope`, `delegation-envelope`) in the order those schema
+// enums declare them, and the union of what `AGENT_STACK_POLICY` can grant.
+// `guard.mjs` reads it from here and holds no copy of its own: the previous
+// four-member export silently dropped `infrastructure` after a successful
+// policy load, which made the guard's delegation scope check report a present,
+// valid infrastructure delegation as `AUTH_DELEGATION_NOT_FOUND` (R1-A04-05).
+// Enumerating a protocol ID grants no capability: what an agent may be named
+// for is `AGENT_STACK_POLICY`, and what it may execute is
+// `ZINK_TOOLS_ACCESS_MATRIX` / `TOOL_POLICY`.
 export const STACK_IDS = Object.freeze([
+  "infrastructure",
   "data_plant",
   "semantic",
   "intelligence",
