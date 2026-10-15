@@ -1144,6 +1144,13 @@ test("R16-DRIVER-02: the default mode reports and touches nothing", () => {
   assert.equal(report.action, "NONE");
   assert.equal(report.deletes_on_run, root);
   assert.match(report.requires, /--run --confirm=R16_REHEARSAL_RUN/u);
+  if (process.platform !== "linux") {
+    assert.equal(
+      report.host_is_wsl,
+      false,
+      "a non-Linux host must be reported as not-WSL even where the POSIX runtime path exists",
+    );
+  }
   assert.equal(
     existsSync(root),
     false,
@@ -1171,6 +1178,39 @@ test("R16-DRIVER-03: --run without the token is refused and deletes nothing", ()
   ]);
   assert.equal(wrong.status, 1);
   assert.equal(existsSync(root), false);
+});
+
+test("R16-DRIVER-05: the host refusal comes from the platform, not from a path", () => {
+  // `R16_ROOTS.stateDir` is `/home/hoang_vinh/.openclaw-zink`. On Windows Node
+  // resolves that against the current drive, and a stray `C:\home\…` tree made the
+  // answer `true` here since 2026-09-29 (`R6-I01-03`), so the driver's only
+  // host-safety guard reported "this is the live runtime" while running on Windows.
+  // The refusal must name the platform even when that path exists.
+  const root = path.join(os.tmpdir(), `r16-hostgate-${process.pid}`);
+  const result = runDriver([
+    "--rehearsal-root",
+    root,
+    "--run",
+    "--confirm=R16_REHEARSAL_RUN",
+  ]);
+  assert.equal(result.status, 1);
+  if (process.platform !== "linux") {
+    assert.match(
+      result.stdout,
+      /FATAL: this host is not WSL/u,
+      "a non-WSL host must be refused for a platform reason",
+    );
+    assert.doesNotMatch(
+      result.stdout,
+      /live runtime is not present/u,
+      "the path must not be the thing that decides the host",
+    );
+  }
+  assert.equal(
+    existsSync(root),
+    false,
+    "a refused host must not create its scratch tree",
+  );
 });
 
 test("R16-DRIVER-04: a root that can resolve upward is refused before it is read", () => {

@@ -29,6 +29,7 @@ import {
   existsSync,
   mkdirSync,
   readdirSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -104,6 +105,24 @@ function resolveRehearsalRoot(options) {
   return resolved;
 }
 
+/**
+ * The rehearsal may only run inside WSL, and a path is not evidence about the host.
+ * A POSIX absolute path resolves against the current drive on Windows, and
+ * `C:\home\hoang_vinh\.openclaw-zink` exists there since 2026-09-29 (`R6-I01-03`), so
+ * the single `existsSync` refusal below answered "this is the live host" while running
+ * on Windows. Ask the kernel first, then the filesystem, and name which one refused.
+ */
+function hostIsWsl() {
+  if (process.platform !== "linux") return false;
+  let version;
+  try {
+    version = readFileSync("/proc/version", "utf8").toLowerCase();
+  } catch {
+    version = "";
+  }
+  return /microsoft|wsl/u.test(version) || Boolean(process.env.WSL_DISTRO_NAME);
+}
+
 const options = parseArguments(process.argv.slice(2));
 const rehearsalRoot = resolveRehearsalRoot(options);
 const fingerprintPath = path.join(rehearsalRoot, "live-fingerprint.json");
@@ -154,6 +173,7 @@ if (process.env.R16_INSIDE !== "1") {
         rehearsal_root: rehearsalRoot,
         root_exists: rootExists,
         root_entries: rootEntries,
+        host_is_wsl: hostIsWsl(),
         live_runtime_present: existsSync(R16_ROOTS.stateDir),
         deletes_on_run: rehearsalRoot,
         requires: `--run --confirm=${CONFIRM_VALUE}`,
@@ -174,8 +194,17 @@ if (process.env.R16_INSIDE !== "1") {
   }
 }
 
+if (!hostIsWsl()) {
+  report(
+    `FATAL: this host is not WSL (platform ${process.platform}). R16 runs in WSL only.`,
+  );
+  process.exit(1);
+}
+
 if (!existsSync(R16_ROOTS.stateDir)) {
-  report("FATAL: the live runtime is not present. R16 runs in WSL only.");
+  report(
+    `FATAL: the live runtime is not present at ${R16_ROOTS.stateDir} on this WSL host.`,
+  );
   process.exit(1);
 }
 
