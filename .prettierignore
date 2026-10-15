@@ -2,3 +2,10 @@
 # bytes are the evidence that it was preserved rather than discarded, so it must
 # not be reformatted.
 docs/contracts/m7-m8-red-team-backlog.md
+
+# Closed execution contracts, archived verbatim by the closeout rule in
+# docs/contracts/execution/archive/README.md. Same reason: the point of archiving is
+# that the bytes are what was authorized, so reformatting them would destroy the very
+# evidence the archive exists to keep. The pattern is anchored to the dated filename form
+# that rule mandates, so the directory's own README stays under the gate.
+docs/contracts/execution/archive/2[0-9][0-9][0-9]-*.md

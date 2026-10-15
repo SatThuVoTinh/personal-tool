@@ -85,7 +85,8 @@ After PASS:
 
 ```text
 local implementation commit
-→ update PLAN.md / required durable docs
+→ archive ACTIVE.md into docs/contracts/execution/archive/ and run its scrub rule
+→ update PLAN.md / required durable docs, citing the archived file name
 → Execution Authorization: NO
 → Execution Contract: NONE
 → delete ACTIVE.md
@@ -94,6 +95,9 @@ local implementation commit
 → push current non-main task branch when authorized by AGENTS.md
 ```
 
-`ACTIVE.md` is Git-ignored and must not survive task closeout. PR creation/merge,
+`ACTIVE.md` is Git-ignored and must not survive task closeout — but its text must: an
+archived contract is the only durable record of what was authorized, so closeout copies
+it first and deletes it second. An archive whose scrub rule fails is left undone, and the
+closeout records it as `NOT RUN` rather than deleting the evidence. PR creation/merge,
 direct `main` publication, force-push/history rewrite, release, and deployment are
 separate owner-controlled actions.
