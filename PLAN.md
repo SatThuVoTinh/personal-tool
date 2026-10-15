@@ -5821,8 +5821,8 @@ the edit.
   migration tree **read-only as digest source**. JSON rather than Markdown keeps it out of the prettier/markdownlint
   surface it does not need.
 
-Evidence taken by me, not accepted from the implementer (which died on an API error after writing the files, without
-reporting): the digest the manifest pins for `003` is identical across `node:fs`, `sha256sum`, `certutil` and
+Evidence taken by me as well: the implementer returned an API error mid-run and I reviewed and re-ran its work
+myself; its full report then arrived late and agreed with mine on every gate number. the digest the manifest pins for `003` is identical across `node:fs`, `sha256sum`, `certutil` and
 `git cat-file -p`, and identical again under WSL, so the guard cannot pass on one lane and fail on another — the
 `.gitattributes` rule `* text=auto eol=lf` makes all three checkouts byte-agree, which was the real risk in this
 design. Mutation probe run by me against a **real** file: appending bytes to `002` reddened exactly one test with the
@@ -5830,11 +5830,52 @@ message naming the forward-migration rule, and the file was restored to `3b48c4a
 afterwards. Full gate: `npm run verify` **1507 tests / 106 suites / 1461 pass / 0 fail / 46 skipped** + `Repository
 policy check passed.` (baseline 1502/1456 + exactly the five new tests), and the suite is **5/5 under WSL**.
 
-One honest correction to my own working: an intermediate reading of mine had `003` at `cbc1e2df…` and I nearly
-recorded a lane-divergence defect. Three independent tools plus WSL now agree on `8706a553…`, which is what the
-manifest pins and what the passing test asserts, so that reading was the outlier and is not recorded as a finding.
+One thing worth recording about the working method, because it looked like a defect and was not: an intermediate
+reading of mine had `003` at `cbc1e2df…` while the manifest pinned `8706a553…`, and I nearly wrote up a
+lane-divergence finding. The agent's report resolves it — that was its **own mutation probe in flight** (it appended
+a byte to `003` and restored it, reaching the same digest I later measured). Two lanes mutating tracked files in the
+same working tree is the real hazard here, and the fix is procedural: I ran my own probe on `002` afterwards, and the
+next item gets the tree to itself. No divergence exists; `.gitattributes` `* text=auto eol=lf` plus the agent's
+`git ls-files --eol` check (`i/lf w/lf` for all three) is what makes the digests agree on Windows, WSL and CI.
 
 `A-4` changes no SQL, no schema, and no adoption logic.
+
+### Record — `A-5` STOPPED: the guard it ordered is a regression, and I built it before finding out (2026-10-16)
+
+Second item this wave whose premise the code contradicts. `A-5` (`4A.1` / `R5-E05-03`, High) claimed the destructive
+`DELETE` runs unconditionally on an empty scan while the call reports `READY`, and ordered an empty-input guard plus
+the owner's granted re-value of `tests/m8-t1-skill-vector-memory.test.mjs:118`.
+
+I implemented it — guard in `vector-sync.mjs`, the assertion re-valued, two extra tests pinning that the tombstone
+still runs — and the **full gate caught the mistake**: `tests/m11-t1-postgres-sql-gate.test.mjs:198-213` went red.
+
+- The dangerous roots are already refused before any statement: `catalog.mjs:718-742` returns
+  `SKILLS_ROOT_MISSING` for a missing root and `UNSAFE_PATH` for a non-directory or symlink root, both flow into
+  `catalog.errors`, and `vector-sync.mjs:564-573` returns `CATALOG_INVALID` / `FAILED` without issuing anything. The
+  wipe-the-index-on-a-wrong-path scenario `A-5` was written against cannot happen.
+- The one route left to the `DELETE` with zero records is an existing, real, **empty** skills directory, and that is
+  the designed tombstone. The Postgres gate proves it: it removes every skill from canonical state, resyncs the now
+  empty catalog, and requires `status === "READY"` **and** `count(*) = 0` in `skills.catalog_index`. My guard made
+  that refusal happen instead, and retired rows would have stayed retrievable — the defect `A-5` was invented to
+  prevent is the one it would have caused.
+- §4's literal condition ("a scan finding no active skill") is worse still: it would also skip the case where
+  records exist and every one is deprecated. No narrower version of this item is safe.
+
+Everything was reverted with `git checkout HEAD -- zink-skill-store/src/vector-sync.mjs tests/m8-t1-skill-vector-memory.test.mjs`;
+both files are byte-identical to HEAD (`git status` shows only `PLAN.md`), and `m8-t1-skill-vector-memory` plus the
+Postgres gate are **14 tests / 14 pass / 0 fail / 0 skipped** afterwards. **The pinned-assertion grant for `:118` was
+never used** — there is nothing to re-value, and the standing grant in this contract is now spent with no effect.
+
+What is actually left, and it is not fixable inside this function: an operator who points `skillsRoot` at a
+*different but valid, empty* skill directory will tombstone the store they meant to leave alone. Nothing inside
+`syncSkillsToVectorStore` can distinguish that from a genuine emptying. The control belongs at the caller or config
+boundary (a store-identity or expected-namespace assertion), which is a design question for the next tier, recorded as
+`R6-A05-01`.
+
+For the owner's reading of the wave: `A-1` and `A-2` were real and are fixed; `A-3`, `A-5` and the withdrawn `4A.8`
+were not. That is a 2-of-5 hit rate on items this plan wrote from audit text, which is why every remaining item is
+now verified against source before it is executed, and why the two refutations were found by running the full gate
+rather than the item's own tests — the guard I wrote passed all ten of its own tests while breaking a shipped one.
 
 ## 9. Deferred beyond V1
 
