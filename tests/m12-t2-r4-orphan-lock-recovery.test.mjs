@@ -208,7 +208,22 @@ test("M12/T2-R4: the report carries no secret material", () => {
       false,
       "the lock token is a holder nonce, not an operator credential: it must not be echoed",
     );
-    assert.match(report.owner_token, /^e{4}\*{28}$/u);
+    // OWNER GRANT 2026-10-15 (option A) re-valued this line. It used to be
+    // `assert.match(report.owner_token, /^e{4}\*{28}$/u)`, which demanded the
+    // token's first four characters and so pinned the leak the fix removes. The
+    // property is what must hold: the field carries a presence constant, and no
+    // prefix of the nonce reaches the report.
+    assert.equal(
+      report.owner_token,
+      "PRESENT",
+      "the report must state presence, never a fragment",
+    );
+    for (const length of [4, 8, 16, 32]) {
+      assert.ok(
+        !JSON.stringify(report).includes(token.slice(0, length)),
+        `no ${length}-character prefix of the holder nonce may reach the report`,
+      );
+    }
   } finally {
     rmSync(s.root, { recursive: true, force: true });
   }

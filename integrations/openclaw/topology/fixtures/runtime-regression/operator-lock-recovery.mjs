@@ -12,9 +12,11 @@
 // remove anything, it removes nothing without a typed confirmation, and its default mode is
 // read-only.
 //
-// Output is one JSON line of derived facts. The holder nonce is masked: it identifies a dead
-// process's acquisition, not an operator credential, and echoing it would let anyone who reads
-// the terminal supply the confirmation value the operator is meant to type deliberately.
+// Output is one JSON line of derived facts. The holder nonce is **omitted**, not
+// masked: a four-character prefix of it is still a substring of a live credential, this
+// report is pasted into terminals, logs and cards, and the confirmation value that gates
+// the recovery is a fixed literal in this file rather than something derived from the
+// token — so the prefix bought nothing here and could only leak.
 //
 // Usage:
 //   node operator-lock-recovery.mjs [--state-dir <absolute-path>]
@@ -142,7 +144,7 @@ if (
   report.reason = "OWNER_RECORD_SHAPE";
   finish(1);
 }
-report.owner_token = `${owner.token.slice(0, 4)}${"*".repeat(28)}`;
+report.owner_token = "PRESENT";
 
 const holder = holderState(report.owner_pid);
 if (!holder.known) {
