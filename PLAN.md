@@ -144,15 +144,17 @@ Prior revision: M12/T2.1-R1 — the execution wave the owner authorized on 2026-
   absorbed; (c) `tests/m11-t1-postgres-sql-gate` and `m11-t1-skill-vector-sql` skip without a Docker
   container while `node --test` still exits 0 (`R5-E09-03`), so if the container is absent those two are
   `NOT RUN` and may not be folded into "fail 0".
-Task Status: IN PROGRESS for the tier, with **one item BLOCKED-ON-OWNER-DECISION** — R3 materialized 2026-10-15 as
-  the high-risk tier. Seven of its eight items are implemented, locally validated and committed: T2.1-1 `96a6dd2`,
-  T2.1-2 `2e7da50`, T2.1-3 `c4833e6`, T2.1-4 `710f650`, T2.1-6 `b3affc2`, T2.1-7 `b7497ca`, T2.1-8 `ba5ff08`, plus
-  the two owner-authorized recorded-item commits `9c7af0f` (the `zink-tools` lint/format gate) and `cc6a0d9` (the
-  Python tokenizer NOT RUN). **T2.1-5 (`R5-E13-06`) was stopped at its own item boundary**, not worked around: its
-  fix collides with a pinned existing assertion, which the `Execution Authorization` below forbids re-valuing — the
-  same collision class that withdrew R2, caught here by the rule instead of by a later review. See the
-  `OWNER DECISION BLOCK — T2.1-5` in §8. R1 and R2 both existed with **zero implementation landed under either**,
-  and no prior task's evidence is altered by any of the three.
+Task Status: IN PROGRESS — **all eight `R3` items are implemented and locally validated**; the tier is not closed
+  only because its closeout evidence is not on CI yet. R3 materialized 2026-10-15 as the high-risk tier. Delivered:
+  T2.1-1 `96a6dd2`, T2.1-2 `2e7da50`, T2.1-3 `c4833e6`, T2.1-4 `710f650`, **T2.1-5 `91d788d` (under the owner's
+  option-A grant, recorded in `ACTIVE.md` §4 before the pinned assertion was touched)**, T2.1-6 `b3affc2`,
+  T2.1-7 `b7497ca`, T2.1-8 `ba5ff08`, plus the two owner-authorized recorded-item commits `9c7af0f` (the
+  `zink-tools` lint/format gate) and `cc6a0d9` (the Python tokenizer NOT RUN), and two follow-on fixes from the same
+  instruction — `703fec4` (`R6-I01-03`, the R16 host refusal) and `ad4a8d6` (`R6-I01-01`, importing `app.main` no
+  longer needs the pinned artifact). T2.1-5 was first **stopped at its item boundary** because its fix collided with
+  a pinned existing assertion — the same class that withdrew R2, caught by §2's rule before execution rather than
+  after; the stop-and-report path worked exactly as designed. See `OWNER GRANT — T2.1-5 executed under option A` in §8.
+  R1 and R2 both existed with **zero implementation landed under either**, and no prior task's evidence is altered.
 Planning Readiness: APPROVED — the owner answered the I1–I7 block with `vậy A đi` and set the three-tier split by
   risk in the same message.
 Plan Revision: M12/T2.1-R3
@@ -178,14 +180,14 @@ Execution Authorization: YES — **bounded to `ACTIVE.md` §4's eight high-risk 
   R3 was then written **fresh** rather than patched, and this field restored to YES at the narrower bound. Full
   detail in `.agents/states/findings.md`, Vòng 6.
 Execution Contract: docs/contracts/execution/ACTIVE.md
-Evidence Level: LOCAL-VERIFIED **for the seven delivered items only** — `npm run verify` PASS on Windows at
-  `ba5ff08`: `format:check` clean, `lint` clean with `zink-tools` now inside it, `npm test`
-  **1482 tests / 106 suites / 1436 pass / 0 fail / 46 skipped**, `Repository policy check passed.`; the
-  Knowledgebase Python suite green locally (**140 passed / 7 skipped**, the 7 being explicit NOT RUN incl. the four
-  tokenizer-gated modules). One mutation probe per item, each killing exactly that item's control. `46 skipped`
-  **includes** `m8-t2.13-r16`'s namespace cases and the two Postgres/Docker suites, so it is not a pass and is not
-  counted as one. **`REMOTE-BACKED` is NOT claimed** — no CI run has been read for these seven commits — and the
-  WSL lane is `NOT RUN`. T2.1-5 carries no evidence because nothing under it was executed.
+Evidence Level: LOCAL-VERIFIED for **all eight items** — `npm run verify` PASS on Windows at `ad4a8d6`:
+  `format:check` clean, `lint` clean with `zink-tools` now inside it, `npm test`
+  **1483 tests / 106 suites / 1437 pass / 0 fail / 46 skipped**, `Repository policy check passed.`; the
+  Knowledgebase Python suite green locally (**142 passed / 6 skipped**, down from 7 once `R6-I01-01`'s skip went
+  away). One mutation probe per item, each killing exactly that item's control. `46 skipped` **includes**
+  `m8-t2.13-r16`'s namespace cases and the two Postgres/Docker suites, so it is not a pass and is not counted as one.
+  **`REMOTE-BACKED` is NOT claimed** — no CI run has been read for any of these commits — and the WSL lane is
+  `NOT RUN` for this wave, as is the success path of the lazily-resolved `app` (CI's `test_main_api.py` covers it).
 Task Branch: codex/m11-t1-audit-remediation (no new branch and no `main` merge authorized)
 Owner Approval: EXPLICIT — 2026-10-14, seven-lettered-block answer quoted above, followed the same day by
   the sweep-and-record instruction that produced R2. Two sub-choices are
@@ -5229,6 +5231,23 @@ exactly its own control:
 **Not claimed:** no CI run has been read for any of these seven commits (so the tier is `LOCAL-VERIFIED`, not
 `REMOTE-BACKED`); the WSL lane is `NOT RUN` for this wave; `verify.mjs` remains `NOT RUN`; the 46 skips include
 `m8-t2.13-r16`'s namespace cases and the two Postgres/Docker suites.
+
+#### OWNER GRANT — T2.1-5 executed under option A (answered 2026-10-15: `A. Những lỗi mới thấy được thì sửa tiếp`)
+
+The owner chose **A** and additionally instructed that the newly recorded defects be fixed in the same pass. T2.1-5
+landed as `91d788d`: the exception was written into `ACTIVE.md` §4 T2.1-5 *before* `:211` was touched, the
+re-valued assertion now demands a presence constant and checks four prefix lengths, the whole-token claim at
+`:206-210` is unchanged, and `holderState`/verdicts/exit codes are byte-identical (only assigned-and-printed, which
+is also why the file's old header comment was wrong twice — it claimed the mask protected "the confirmation value the
+operator is meant to type", but `--confirm` compares to a fixed literal in this file, never to the token).
+Fixes that instruction also opened, both outside §3's file list and recorded here as owner-granted scope:
+`703fec4` makes the R16 host refusal ask the kernel (`linux` + a WSL signature) before it asks the filesystem, and
+reports `host_is_wsl` — with the mutation that disables it, DRIVER-05 goes red; `ad4a8d6` resolves `app` through PEP
+562 instead of building it at import, so `uvicorn app.main:app` still fails fast at boot while importing the module
+for a constant works without the artifact, and `test_m11_index_hygiene.py`'s now-false skip was **removed** rather
+than left standing. The `C:\home\hoang_vinh\.openclaw-zink` tree was **not** deleted: no repository test or script
+feeds a literal `/home/hoang_vinh` path into a creating call, so its 2026-09-29 writer is un hunted and the tree is
+his to remove under a grant naming the exact target.
 
 #### OWNER DECISION BLOCK — T2.1-5 (`R5-E13-06`), the only item that did not execute
 
