@@ -154,6 +154,10 @@ Task Status: IN PROGRESS — **all eight `R3` items are implemented and locally 
   longer needs the pinned artifact). T2.1-5 was first **stopped at its item boundary** because its fix collided with
   a pinned existing assertion — the same class that withdrew R2, caught by §2's rule before execution rather than
   after; the stop-and-report path worked exactly as designed. See `OWNER GRANT — T2.1-5 executed under option A` in §8.
+  **Then, outside `R3`'s eight items and under the owner's later direct instruction (`Xóa và thay bằng mô hình 7 bot`,
+  2026-10-15), one naming remediation landed: `61638d8` retires the Data Plant coordinator titles on both surfaces.**
+  Read-only evidence showed his premise was wrong about the roster and right about the names — see
+  `Record — the 9Router "cấu hình cũ" report` in §8.
   R1 and R2 both existed with **zero implementation landed under either**, and no prior task's evidence is altered.
 Planning Readiness: APPROVED — the owner answered the I1–I7 block with `vậy A đi` and set the three-tier split by
   risk in the same message.
@@ -180,7 +184,8 @@ Execution Authorization: YES — **bounded to `ACTIVE.md` §4's eight high-risk 
   R3 was then written **fresh** rather than patched, and this field restored to YES at the narrower bound. Full
   detail in `.agents/states/findings.md`, Vòng 6.
 Execution Contract: docs/contracts/execution/ACTIVE.md
-Evidence Level: LOCAL-VERIFIED for **all eight items** — `npm run verify` PASS on Windows at `ad4a8d6`:
+Evidence Level: LOCAL-VERIFIED for **all eight items** — `npm run verify` PASS on Windows at `ad4a8d6`, and PASS
+  again at `61638d8` (the follow-on naming remediation, gate rerun in full before committing):
   `format:check` clean, `lint` clean with `zink-tools` now inside it, `npm test`
   **1483 tests / 106 suites / 1437 pass / 0 fail / 46 skipped**, `Repository policy check passed.`; the
   Knowledgebase Python suite green locally (**142 passed / 6 skipped**, down from 7 once `R6-I01-01`'s skip went
@@ -5344,6 +5349,85 @@ Gate and commit state for this event: `npm run verify` was **NOT RUN** (no basel
 test, config or migration file was changed, and the only tracked modification is `PLAN.md`, committed as
 `9b9a230 chore(plan): split the remediation into three risk tiers and open the high tier`. This record is appended to
 that same tracked file.
+
+### Record — the 9Router "cấu hình cũ" report: the roster was current, the coordinator names were not (2026-10-15)
+
+Owner instruction: *"làm cho xong hết đi em, và xem thử vì sao cái openclaw config trong 9Router, anh thấy vẫn còn cấu
+hình cũ?. Xóa và thay bằng mô hình 7 bot đi em"*. The first clause continued the `R3` wave; the second two are a new
+report, so they were **diagnosed read-only before anything was edited**, and the answer is not what he expected.
+
+**The premise is REFUTED for the roster and CONFIRMED for the names.** WSL's `~/.openclaw-zink/openclaw.json`
+already carries the *current* configuration: `models.providers.router` holds 5 model ids identical to the repo's
+`ROUTER_PROVIDER_MODEL_IDS`, and `agents.list` holds 7 entries whose ids are exactly `AGENT_IDS` /
+`DISCORD_BOT_IDS` — main, o1, o2, excel, power-bi, sql, python. There was nothing to "replace with the 7-bot model";
+the 7-bot model is what is installed. What still *looks* old is the two coordinator **display names**, and those are
+old in a way that matters beyond appearances.
+
+**Why the names were a defect, not a taste question.** `AGENT_DEFINITIONS` still read `o1 = "ETL Coordinator"` and
+`o2 = "Analytics Coordinator"`. First, `AGENTS.md` §9 restricts the L&SC Data Plant name to the *logical external
+data/compute flow* and says in as many words that it "is not a repository module, runtime, [or] integration
+subsystem" — using it as a runtime role name was the violation. Second, and worse, those titles **asserted a stack
+assignment the canonical document gives to the other coordinator** (see the RED block below). So the old names were
+not merely stale branding; they were an unresolved decision rendered as fact on a surface the owner reads.
+
+**Two independent surfaces, both corrected in `61638d8`.** The naming decision had been written down twice with no
+single source: `AGENT_DEFINITIONS` feeds `agents.list` (the config he looked at, via `policy.mjs`'s packaging), while
+`SPECIALIST_SOFTWARE_LABELS` feeds the approval **card** body in #approvals (what he reads when a plan waits for him).
+Renaming only the config would have reproduced the report on the next card. The replacement is **stack-neutral** —
+`"Coordinator O1"` / `"Coordinator O2"` in the config, `"Điều phối 1 (O1)"` / `"Điều phối 2 (O2)"` on the card —
+following the vocabulary the ingress aliases (`điều phối 1/2`, `dieu-phoi-1/2`) already use, so the fix retires the
+retired branding **without** silently ratifying either side of the open routing question.
+
+**Re-valued assertions, disclosed, neither a weakened gate.**
+`tests/m10-t2-r7-authority-predecessor.test.mjs:57` `CANDIDATE_AUTHORITY_SHA256` is a content-freshness pin of the
+authority asset's own bytes; the hashing method was validated first by reproducing the *outgoing* constant exactly
+from `git show HEAD:…authority.mjs` before the value was moved. `tests/m10-t2-r12-first-spawn-approval.test.mjs:410`
+pinned the literal `"Điều phối ETL (O1)"`; it now pins `"Điều phối 1 (O1)"`, and the claim it guards — the card shows
+a Vietnamese coordinator label and never a raw agent id — is unchanged, so deleting either label still reddens it.
+No digest of the *deployed predecessor* was touched: those are read from `git show` of a pinned commit and are
+structurally immune to working-tree edits.
+
+**Scope honesty.** This increment is **outside** `ACTIVE.md` §4's eight items and outside this field's previous
+"no re-valuing of any pinned existing assertion" bound. It ran under `AGENTS.md` §2's first authority — the owner's
+latest explicit instruction, which ordered exactly this replacement — and under his standing *"Những lỗi mới thấy
+được thì sửa tiếp"*. The `R3` bound itself is left as written; nothing in it was reinterpreted retroactively.
+
+**What was NOT done, and needs him.**
+1. **The live file was not hand-edited and is NOT deployed.** `openclaw.json` will keep showing the old names until a
+   future authorized preflight → apply carries them. If he re-checks today and still sees `ETL Coordinator`, that is
+   the expected state, not a regression. `--apply` remains unauthorized, so deployment evidence is `NOT RUN`.
+2. **RED — the coordinator↔stack assignment contradicts the canonical document, mirrored rather than drifted.**
+   `docs/architecture/five-stack.md:7-13` (2026-09-08, `2c376d1`) assigns Data Plant → **O2** and Semantic +
+   Intelligence → **O1**, Infrastructure + Decision → Main. `authority.mjs:573-587 AGENT_STACK_POLICY` (2026-09-26,
+   `01489aa`) says `o1: [infrastructure, data_plant]`, `o2: [semantic, intelligence, decision]`, and `policy.mjs`
+   role blocks (2026-09-19, `a1e6b5c`) order Main to route "ETL, Xử lý dữ liệu, Bảng tính, Excel, SQL, Python ETL" to
+   **O1** and "Phân tích, Trực quan hóa, Dashboard, Power BI, Python ML, Forecast, Optimization" to **O2**. The two
+   code surfaces agree with each other and are the exact opposite of the doc, so either the doc was superseded by a
+   later deliberate re-assignment and never rewritten, or the doc is the ratified decision and live routing has
+   contradicted it for a month. Evidence cannot distinguish; he can. Related: `policy.mjs:1700-1705 STACK_IDS`
+   enumerates **four** stacks and omits `infrastructure`, while the doc declares five protocol IDs and
+   `ledger-event` / `execution-brief` / `delegation-envelope` / `trusted-result-envelope` plus `guard.mjs:49` all
+   carry it — and `guard.mjs:847` hardcodes the same `["infrastructure", "data_plant"]` half. Options: **(A)** code is
+   right → rewrite and re-date the document, no runtime change; **(B)** document is right → `AGENT_STACK_POLICY`,
+   `guard.mjs:847`, the three role blocks and the forum-tag precedence move together, which is a live routing change
+   needing its own task, gates and deployment. `AGENT_STACK_POLICY` is exported through `policy.mjs` and consumed by
+   the guard, so this is topology (§7 RED) and was not folded into a naming commit.
+3. **Ingress was verified neutral and left alone.** `AGENT_ALIASES` resolves `o1`/`o2` only through the ids, the
+   `điều phối` forms and their snowflakes — it carries no stack title — and `AGENT_MENTION_PATTERNS` is derived from
+   it, so mention routing needed no change. The `etl`/`analytics` words survive only in the historical comment about
+   the *hand-transcribed* patterns that derivation replaced; that comment was corrected to say so.
+
+Gate and commit state: `npm run verify` **PASS** on Windows at `61638d8` — `format:check` clean, `lint` clean, `npm
+test` **1483 tests / 106 suites / 1437 pass / 0 fail / 46 skipped**, `Repository policy check passed.` (the same
+denominator was green once before the label change, so the two runs bracket the change rather than the second run
+covering it alone). Targeted suites for the touched surfaces: `m10-t2-r12` 9/9 and the presentation/manifest/
+asset-predecessor set 27/27, zero skips. Confirmed by search that **no** digest pin anywhere in `tests/` covers
+`lib/discord-formatter.mjs`, and that `governance-manifests.json` is generated at packaging time from the working
+tree, so a comment-only `policy.mjs` edit cannot stale-pin it. `REMOTE-BACKED` is **not** claimed here until a CI run
+is read for this head; the WSL lane is `NOT RUN` for this increment. Two scratch files created during the diagnosis
+(`temp/r16-live-config-probe.mjs` and an accidentally created empty `cd` at the repo root) were deleted; the probe
+redacted `apiKey`/`token`/`password`/`secret` and stripped URL userinfo, and no credential value was ever printed.
+Full finding text with verify-by commands is `.agents/states/findings.md`, `R6-CFG-01`…`R6-CFG-04`.
 
 ## 9. Deferred beyond V1
 
