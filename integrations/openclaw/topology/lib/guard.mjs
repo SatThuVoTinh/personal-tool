@@ -36,9 +36,9 @@ import {
   truncateUtf8,
 } from "./runtime.mjs";
 import { withFileLockSync, lockDirFor } from "../../lib/file-lock.mjs";
-// Spawn topology is a policy decision, so it is read from the one canonical
-// policy module. The deployed plugin flattens this to "./policy.mjs".
-import { AGENT_SPAWN_POLICY } from "../../lib/policy.mjs";
+// Spawn and stack topology are policy decisions, so both are read from the one
+// canonical policy module. The deployed plugin flattens this to "./policy.mjs".
+import { AGENT_SPAWN_POLICY, AGENT_STACK_POLICY } from "../../lib/policy.mjs";
 
 let policy;
 let AGENT_IDS = ["main", "o1", "o2", "excel", "power-bi", "sql", "python"];
@@ -839,19 +839,15 @@ export function createGovernanceGuard({
       sanitizeDelegationText(brief.inputs) === brief.inputs,
       "POLICY_DENIED",
     );
-    if (context.agentId !== "main") {
-      const permitted =
-        context.agentId === "o1"
-          ? ["semantic", "intelligence", "decision"]
-          : context.agentId === "o2"
-            ? ["infrastructure", "data_plant"]
-            : [];
-      assert(
-        new Set(brief.nodes.map((node) => node.stack_id)).size === 1 &&
-          brief.nodes.every((node) => permitted.includes(node.stack_id)),
-        "UNAUTHORIZED_TARGET",
-      );
-    }
+    // A non-main author's permitted stacks used to be copied here by hand, with a
+    // one-stack-per-brief test; the copy had drifted to the inverse of
+    // AGENT_STACK_POLICY for o1/o2, refusing nodes the reducer had just admitted.
+    assert(
+      brief.nodes.every((node) =>
+        (AGENT_STACK_POLICY[node.agent_id] ?? []).includes(node.stack_id),
+      ),
+      "UNAUTHORIZED_TARGET",
+    );
     // M10/T2-R14: the spawn-target authorization is asserted HERE, before the
     // irreversible ledger write below, not only ~120 lines later at the
     // `AGENT_SPAWN_POLICY` check. The later check is real but too late:

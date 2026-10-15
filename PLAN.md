@@ -5637,6 +5637,40 @@ Gate state: `npm run verify` **PASS** — `1483 tests / 106 suites / 1437 pass /
 `Repository policy check passed.` — and `markdownlint-cli2` reports **0 issues in 18 files** after the ignore scoping.
 Evidence Level for `M12/T2.2-R1` is **NONE**: no item has executed.
 
+### Record — `M12/T2.2-R1` `A-1` landed, and it refuted this contract's own prerequisite (2026-10-15)
+
+`A-1` (`R1-A04-01`, High) deletes the hand-copied coordinator→stack table at `guard.mjs:842-853` and validates
+**per node** against the canonical `AGENT_STACK_POLICY` (`authority.mjs:573-587`, re-exported at `policy.mjs:607`),
+imported the same way `workflow.mjs:12` imports it. The brief-wide "exactly one distinct stack" predicate and the
+`context.agentId !== "main"` exemption are both gone; the stack rule now binds every author, which is what the table
+says it means. The two rules `ACTIVE.md` §4 ordered kept are kept verbatim: the spawn-target assert
+(`guard.mjs:865-870`) and the `decision`-must-be-`main` ownership assert (`guard.mjs:877-878`).
+
+Grew from 4 failed tests to 9 green: `tests/m12-t2.2-a1-stack-authority.test.mjs` proves the o1/`data_plant` flip is
+admitted, the same o1 root still cannot author o2's stacks, a node whose agent does not own its stack is refused
+**before** any durable write (`activated: []`, zero brief-write events), the mixed `o1`+`o2` plan is admitted,
+o2/`infrastructure` is refused, all 30 table-illegal agent/stack pairs are refused, and two source-shape pins hold
+(the guard reads the table and keeps neither ownership rule). Adjacent suites re-run as a set — `m10-t2-r14-review-defects`,
+`m10-t2-coordinator-binding`, `m7-lane-g-policy`, `m11-t1-openclaw-outbound-and-caches` — **66 tests / 65 pass /
+0 fail / 1 skipped**. Mutation probe: restoring the inverted literal list reddens exactly the `A-1` flip test and the
+source-shape pin; the file was returned byte-identically afterwards.
+
+**The refutation, and it is this plan's error, not the codebase's.** §2 claimed a plan spanning both coordinators
+"with a Main merge node is therefore **legal today**". It is not, and `A-1`'s own test found it: `AGENT_SPAWN_POLICY`
+(`policy.mjs:556-562`) puts `main` in nobody's spawn list, while the kept ownership rule demands the `decision` node be
+`main`-owned — so **no `decision` node is admissible through `admitInitialBrief` for any author**, and the mixed plan
+only lands if its merge is dropped. Full derivation, the executed evidence, and the reducer half of the divergence
+(`workflow.mjs:1466-1470` validates against a table where `main` *does* own `decision`, so the reducer accepts what the
+guard then refuses) are recorded under the H11 disposition in §11. §2 and `ACTIVE.md`'s `A-1` live-effect paragraph
+were corrected in the same commit. `A-1`'s scope did not change and no item was re-cut smaller: the item was the
+de-duplication, and the de-duplication is what landed. What changed is what the owner can ask of Wave A — **the split
+is available now; the merge is a `M12/T3` prerequisite**, and adding the `main` spawn edge here would be a topology
+change, RED under `AGENTS.md` §7.
+
+`A-1` gate state: Windows local **PASS** (full `npm run verify`, `1492 tests / 106 suites / 1446 pass / 0 fail /
+46 skipped`, `Repository policy check passed.`). WSL read-only lane and CI at the `A-1` head are recorded below the
+commit, not asserted here.
+
 ## 9. Deferred beyond V1
 
 Unless separately approved:
@@ -5734,9 +5768,9 @@ Direction he chose, recorded while it is fresh (this is a **design decision**, n
    contradicts `five-stack.md` — which he has assigned to T3 to correct.
 2. **Mechanism: shape 1, Main-mediated.** One task, one plan, both halves inside it; **no coordinator↔coordinator
    edge**. (Design note from the same session: a mixed-stack plan is *already* legal — `execution-brief.schema.json`
-   carries per-node `agent_id` + `stack_id`, `guard.mjs:881-882` already requires a `decision` node to be Main-owned,
-   i.e. the merge has a home, and `guard.mjs:887-902` already wires cross-stack prerequisites. The single-stack rule
-   at `guard.mjs:849-853` does not bind a Main-authored plan.)
+   carries per-node `agent_id` + `stack_id`, and the cross-stack prerequisite rules already wire a data half to an
+   analysis half. The single-stack rule did not bind a Main-authored plan. See the correction below: the note also
+   claimed the merge had a home, and that half was wrong.)
 3. **Merge owner:** **Main merges and presents once.** O1 and O2 do not cross-review each other.
 4. **Gates stay two:** one merged **plan** card in #approvals, one merged **result** card in #results. No approval
    gate is removed.
@@ -5746,6 +5780,29 @@ Direction he chose, recorded while it is fresh (this is a **design decision**, n
    card in `BLOCKED`/`PARTIAL` naming what is missing, so he has exactly one place to decide (redo / accept partial /
    cancel). **Precondition he owns:** the mislabelled `STATUS: ANALYTICS` tag in Discord must be renamed or the
    analysis-side incident cannot be tagged and will never post (recorded, `NOT TESTED` live).
+
+**Correction to that design note, proved during `A-1` execution on 2026-10-15 — the merge node does NOT have a home
+today.** The note claimed `guard.mjs` "already requires a `decision` node to be Main-owned, i.e. the merge has a
+home". The ownership half of that sentence is true (`guard.mjs:877-878`, read this session: a node whose `stack_id` is
+`decision` must have `agent_id === "main"`), but it is contradicted by a rule the note did not read: the spawn-target
+assert immediately above (`guard.mjs:865-870`) requires **every** node's `agent_id` to appear in
+`AGENT_SPAWN_POLICY[context.agentId]`, applies to every author with no `main` exemption, and
+`AGENT_SPAWN_POLICY` (`policy.mjs:556-562`) lists `main → [o1, o2]`, `o1 → [excel, sql, python]`,
+`o2 → [power-bi, python]`, and `[]` for all four specialists — so **`main` is in nobody's spawn list**. The two kept
+rules together refuse a `decision` node no matter who authors the brief. Executed evidence, not reasoning:
+`tests/m12-t2.2-a1-stack-authority.test.mjs` plants a Main-authored mixed `o1`/`o2` plan **with** a `main`-owned
+`decision` node and asserts `UNAUTHORIZED_TARGET`, while the identical plan **without** that node is admitted.
+`admitInitialBrief` is the only producer of a brief (`guard.mjs:798`, called once at `:1274`; the reducer fills
+`task.nodes` only from that event), so no other lane delivers a merge node either. Note the shape of the defect:
+`workflow.mjs:1466-1470` validates per node against `AGENT_STACK_POLICY`, where `main` **does** own `decision`
+(`authority.mjs:574-580`), so the reducer accepts the node the guard then refuses — the same guard/policy drift as
+`R1-A04-01`, in the opposite direction.
+
+**Consequence for H11: this is a `M12/T3` prerequisite, not a Wave-A item.** The owner's choice (item 3) stands
+unchanged — Main merges and presents once. What changed is its cost: T3 cannot express Main's merge as a `decision`
+node in a brief until either `AGENT_SPAWN_POLICY` gains a `main` edge for that node class, or the ownership rule at
+`guard.mjs:877-878` is replaced by a merge mechanism that does not need a Main-owned node. Nothing in Wave A may add
+that edge: widening a spawn table is a topology change, which is RED under `AGENTS.md` §7 and outside `ACTIVE.md` §3.
 
 What is still open before T3 can be planned: `primary_coordinator` has **no writer in non-test code** (only reads at
 `index.mjs:1890` and `:2535`), so "who owns a two-half task" has no durable answer yet; and the execution lane has
