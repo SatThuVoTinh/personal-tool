@@ -14,7 +14,7 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const url = (rel) => pathToFileURL(path.join(REPO, rel)).href;
 const readSource = (rel) => readFileSync(path.join(REPO, rel), "utf8");
 
-const { promoteApprovedSkill } = await import(
+const { promoteApprovedSkill, describeVersionRollbackState } = await import(
   url("zink-skill-store/src/catalog.mjs")
 );
 const NATIVE = await import(
@@ -199,4 +199,140 @@ test("R22-05: channel-scope pins are tracked as state-relative targets", () => {
         SNAPSHOT_TARGETS.discordChannel.includes(relative),
         relative + " must be a state-relative snapshot target",
       );
+});
+
+// T2.1-2 (R5-E04-03): a rejected promotion rolls its version directory back, and
+// the caller must be told whether canonical state is actually clean afterwards.
+//
+// MANIFEST_LIMIT_EXCEEDED is the only rule able to fire AFTER the rename:
+// validateStagedVersion counts the one staged pair while scanCatalog counts the
+// whole tree, and the pre-promotion check refuses a tree that is already dirty.
+// So the fixture fills the tree to exactly 1,000 valid manifests and the 1,001st
+// is the promotion under test.
+test("R22-08: a rolled-back promotion states whether canonical state is clean", async () => {
+  // 1,000 pairs is a lot of small writes; the sync forms are measurably cheaper
+  // here and nothing in the fixture needs to be concurrent.
+  const { mkdirSync, writeFileSync } = await import("node:fs");
+  const { mkdtemp, rm, stat } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { createHash } = await import("node:crypto");
+  const path = (await import("node:path")).default;
+
+  const skillsRoot = await mkdtemp(path.join(tmpdir(), "r22-rollback-"));
+  const namespace = ["office"];
+  const capability = "r22-proof";
+  const markdown = "# R22 rollback proof" + String.fromCharCode(10);
+  const sha256 = createHash("sha256").update(markdown, "utf8").digest("hex");
+  try {
+    for (let index = 0; index < 1000; index += 1) {
+      const version = `1.0.${index}`;
+      const directory = path.join(
+        skillsRoot,
+        ...namespace,
+        capability,
+        version,
+      );
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(path.join(directory, "SKILL.md"), markdown);
+      writeFileSync(
+        path.join(directory, "manifest.json"),
+        JSON.stringify({
+          schema_version: 1,
+          identity: { namespace, capability, version },
+          content: { path: "SKILL.md", sha256 },
+          provenance: { source_type: "research", references: [] },
+          lifecycle: [
+            {
+              status: "CANDIDATE",
+              at: "2026-10-15T01:00:00Z",
+              actor: "owner",
+            },
+          ],
+        }),
+      );
+    }
+    // A dirty fixture would be refused as "catalog has pre-existing errors"
+    // instead, so asserting the limit code below also proves the tree was clean
+    // before the rename put the 1,001st manifest into it.
+    const failure = await promoteApprovedSkill({
+      skillsRoot,
+      namespace,
+      capability,
+      version: "1.0.1000",
+      content: markdown,
+      // The DECISION grammar has no slot for a dotted sub-task, so the tier is
+      // named at its parent (M12/T2) with this revision.
+      decisionRef: "PLAN:M12/T2-R3",
+    }).then(
+      () => null,
+      (error) => error,
+    );
+    assert.equal(failure?.code, "CATALOG_INVALID");
+    assert.match(failure.message, /MANIFEST_LIMIT_EXCEEDED/u);
+    assert.match(
+      failure.message,
+      /rollback: canonical state is clean \(the version directory is absent\)/u,
+      "the rejection must state the rollback outcome, not only the code",
+    );
+    assert.equal(
+      await stat(
+        path.join(skillsRoot, ...namespace, capability, "1.0.1000"),
+      ).then(
+        () => false,
+        (error) => error?.code === "ENOENT",
+      ),
+      true,
+      "the stated cleanliness must match the filesystem",
+    );
+  } finally {
+    await rm(skillsRoot, { recursive: true, force: true });
+  }
+});
+
+// The residue the writer may not be able to clear is the half of R5-E04-03 an
+// errno on a live drvfs root produces; it cannot be forced deterministically
+// against the real promotion, so the reporter is driven directly for every
+// state it has to distinguish.
+test("R22-09: the rollback reporter separates clean, residue and unreadable", async () => {
+  const { mkdtemp, mkdir, rm, writeFile } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const path = (await import("node:path")).default;
+
+  const root = await mkdtemp(path.join(tmpdir(), "r22-residue-"));
+  const busy = Object.assign(new Error("busy"), { code: "EBUSY" });
+  try {
+    const absent = path.join(root, "absent");
+    assert.match(
+      await describeVersionRollbackState(absent, null),
+      /^canonical state is clean \(the version directory is absent\)$/u,
+    );
+    // `force: true` makes `rm` swallow ENOENT, so a delete that reported an errno
+    // and still left nothing must not be folded into the clean case above.
+    assert.match(
+      await describeVersionRollbackState(absent, busy),
+      /^canonical state is clean \(removal failed with EBUSY; the version directory is absent\)$/u,
+    );
+
+    const residue = path.join(root, "residue");
+    await mkdir(residue, { recursive: true });
+    assert.match(
+      await describeVersionRollbackState(residue, null),
+      /^canonical state is NOT clean \(the version directory remains and is empty\)$/u,
+    );
+    await writeFile(path.join(residue, "SKILL.md"), "# Skill\n");
+    assert.match(
+      await describeVersionRollbackState(residue, busy),
+      /^canonical state is NOT clean \(removal failed with EBUSY; the version directory still holds 1 entry\)$/u,
+    );
+
+    // A path that cannot be listed is reported as unknown, never as clean.
+    const notADirectory = path.join(root, "a-file");
+    await writeFile(notADirectory, "x");
+    assert.match(
+      await describeVersionRollbackState(notADirectory, null),
+      /^canonical state is UNKNOWN \(the version directory could not be read with ENOTDIR\)$/u,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

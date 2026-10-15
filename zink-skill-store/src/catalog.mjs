@@ -875,8 +875,46 @@ async function fsyncDirectoryBestEffort(dir) {
       await handle.close();
     }
   } catch {
-    /* durability hint only; atomicity comes from the rename below */
+    /* durability hint only; the rename is what makes the entry atomic */
   }
+}
+
+/**
+ * States what a rejected version's rollback left behind, read from the path
+ * itself rather than from `rm`'s outcome.
+ *
+ * `rm(..., { force: true })` swallows ENOENT, so `rm` returning quietly cannot
+ * distinguish "removed" from "was never there", and a recursive delete that
+ * fails partway (EBUSY/EPERM/ESTALE on a drvfs root) can leave a version
+ * directory the next `scanCatalog` rejects again. Only three answers are
+ * honest there — clean, residue, and unknown — and `R5-E04-03` is the case
+ * where the store reported none of them.
+ */
+export async function describeVersionRollbackState(versionDir, removalError) {
+  const details = [];
+  if (removalError) {
+    details.push(`removal failed with ${removalError?.code ?? "unknown"}`);
+  }
+  let entries;
+  try {
+    entries = await readdir(versionDir);
+  } catch (error) {
+    const code = error?.code ?? "unknown";
+    if (code === "ENOENT") {
+      details.push("the version directory is absent");
+      return `canonical state is clean (${details.join("; ")})`;
+    }
+    details.push(`the version directory could not be read with ${code}`);
+    return `canonical state is UNKNOWN (${details.join("; ")})`;
+  }
+  details.push(
+    entries.length === 0
+      ? "the version directory remains and is empty"
+      : `the version directory still holds ${entries.length} entr${
+          entries.length === 1 ? "y" : "ies"
+        }`,
+  );
+  return `canonical state is NOT clean (${details.join("; ")})`;
 }
 
 /**
@@ -1249,10 +1287,21 @@ export async function promoteApprovedSkillUnlocked({
 
   const reverified = await scanCatalog(skillsRoot);
   if (reverified.errors.length > 0) {
-    await rm(versionDir, { recursive: true, force: true });
+    let removalError = null;
+    try {
+      await rm(versionDir, { recursive: true, force: true });
+    } catch (error) {
+      removalError = error;
+    }
+    const rollback = await describeVersionRollbackState(
+      versionDir,
+      removalError,
+    );
     writerError(
       "CATALOG_INVALID",
-      `promoted record failed re-validation: ${reverified.errors[0]?.code ?? "unknown"}.`,
+      `promoted record failed re-validation: ${
+        reverified.errors[0]?.code ?? "unknown"
+      }; rollback: ${rollback}.`,
     );
   }
 
