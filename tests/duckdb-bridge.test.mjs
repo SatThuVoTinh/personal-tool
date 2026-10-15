@@ -320,6 +320,62 @@ describe("Governed DuckDB Windows Bridge (M7/T4 G4 & G5)", () => {
     },
   );
 
+  // T2.1-4 (R5-E06-04): the execution-failure branch used to paste the child's
+  // whole stderr into the thrown message, and this seam's errors are read by the
+  // model and recorded in the ledger and the cards.
+  test(
+    "Gate RC09.4: an engine failure forwards no stderr and names only structured fields",
+    { skip: duckDbSkip() },
+    async () => {
+      const err = await executeGovernedDuckDbQuery(validContext, {
+        query: "SELECT invalid_column_xyz FROM knowledge",
+        target_database: validDatabase,
+      }).then(
+        () => null,
+        (error) => error,
+      );
+      assert.equal(err?.code, "DUCKDB_EXECUTION_ERROR");
+      for (const marker of [
+        "invalid_column_xyz",
+        "Referenced column",
+        "Binder Error",
+        "knowledge",
+      ]) {
+        assert.ok(
+          !err.message.includes(marker),
+          `the engine's own prose must stay host-side: ${marker}`,
+        );
+      }
+      // The operator still gets a cause, and it is bounded to structured fields.
+      assert.match(err.message, /engine status \d+/u);
+      assert.match(err.message, /stderr is not forwarded/u);
+
+      // A timeout is the same leak risk, so it must also be classifiable without
+      // the child's output. Whatever shape Node reports here, it may not be
+      // prose, and it may not silently become an execution error carrying bytes.
+      const timedOut = await executeGovernedDuckDbQuery(
+        validContext,
+        { query: validQuery, target_database: validDatabase },
+        { timeoutMs: 1 },
+      ).then(
+        () => null,
+        (error) => error,
+      );
+      if (timedOut) {
+        assert.ok(
+          ["DUCKDB_TIMEOUT", "DUCKDB_EXECUTION_ERROR"].includes(timedOut.code),
+          `a timed-out engine call must be classified, got ${timedOut.code}`,
+        );
+        for (const marker of ["Binder Error", "Referenced column"]) {
+          assert.ok(
+            !timedOut.message.includes(marker),
+            `a timeout must not forward engine prose: ${marker}`,
+          );
+        }
+      }
+    },
+  );
+
   // The one gate that is meaningful on every host, with or without the engine.
   // It asserts that an absent engine is reported as an explicit condition and
   // never degrades into rows, and — on a host that does have the engine — that

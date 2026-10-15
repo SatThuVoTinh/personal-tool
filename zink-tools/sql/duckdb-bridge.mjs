@@ -281,10 +281,24 @@ export async function executeGovernedDuckDbQuery(context, input, options = {}) {
         "DuckDB executable not found in PATH",
       );
     }
-    const stderr = err.stderr ? String(err.stderr) : err.message;
+    // The child's stderr is uncapped engine prose, and this seam's errors are
+    // read by the model and recorded in the ledger and the cards. Only
+    // structured fields cross the boundary; the engine's own output stays
+    // host-side (`R5-E06-04`).
+    const cause = [
+      Number.isInteger(err.status) ? `engine status ${err.status}` : null,
+      typeof err.code === "string" && /^[A-Z][A-Z0-9_]{0,31}$/u.test(err.code)
+        ? `spawn code ${err.code}`
+        : null,
+      typeof err.signal === "string" ? `signal ${err.signal}` : null,
+    ]
+      .filter(Boolean)
+      .join(", ");
     throw new DuckDbBridgeError(
       "DUCKDB_EXECUTION_ERROR",
-      `DuckDB engine execution failed: ${stderr.trim()}`,
+      `DuckDB engine execution failed${
+        cause ? ` (${cause})` : " (cause not classified)"
+      }; the engine's own stderr is not forwarded.`,
     );
   }
 
