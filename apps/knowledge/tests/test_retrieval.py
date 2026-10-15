@@ -100,6 +100,29 @@ class RetrievalTests(unittest.IsolatedAsyncioTestCase):
             "[A \\[title\\]](<02.%20Books/My%20%231%20%28%C4%91%29.pdf#page=3>) (pages 3-4)",
         )
 
+    def test_a_citation_never_states_a_location_the_row_does_not_have(self) -> None:
+        # The only reachable NULL line pair is a PDF row whose page pair is also
+        # NULL: markdown ingestion always writes integers
+        # (`markdown_adapter.py:505`/`:542`), `001_initial.sql:124-125` permits the
+        # NULL pair, and `main.py:443-447` falls through to `render_citation` when a
+        # PDF row arrives without pages. This is the row shape that used to render
+        # "(lines None-None)" -- a location in an owner-facing citation that no
+        # record holds.
+        self.assertEqual(
+            render_citation("My Book", "02. Books/My Book.pdf", None, None),
+            "[My Book](<02.%20Books/My%20Book.pdf>)",
+        )
+        # Half a pair is the same fabrication and must not print one number.
+        self.assertEqual(
+            render_citation("My Book", "02. Books/My Book.pdf", 4, None),
+            "[My Book](<02.%20Books/My%20Book.pdf>)",
+        )
+        # The present case keeps the pinned format.
+        self.assertEqual(
+            render_citation("My Book", "02. Books/My Book.pdf", 4, 7),
+            "[My Book](<02.%20Books/My%20Book.pdf>) (lines 4-7)",
+        )
+
     def test_sigmoid_is_finite_at_extremes(self) -> None:
         self.assertGreater(stable_sigmoid(1000), 0.999)
         self.assertLess(stable_sigmoid(-1000), 0.001)

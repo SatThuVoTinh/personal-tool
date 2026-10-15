@@ -158,9 +158,16 @@ def fuse_candidates(
     return fused[:MAX_FUSED_CANDIDATES]
 
 
-def render_citation(title: str, source_path: str, line_start: int, line_end: int) -> str:
+def render_citation(
+    title: str, source_path: str, line_start: int | None, line_end: int | None
+) -> str:
     escaped_title = title.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
     encoded_path = quote(source_path, safe="/")
+    # The pair is nullable in the schema, and a PDF row without pages reaches here
+    # with it NULL. Printing the values anyway stated a location no record holds,
+    # in the one field the owner uses to check an answer's provenance.
+    if line_start is None or line_end is None:
+        return f"[{escaped_title}](<{encoded_path}>)"
     return f"[{escaped_title}](<{encoded_path}>) (lines {line_start}-{line_end})"
 
 
