@@ -52,6 +52,49 @@ function truncateUtf8Bytes(value, maxBytes) {
   return `${out}... [truncated]`;
 }
 
+// The only projection of an upstream failure body that reaches a caller: which
+// field of the caller's OWN request was rejected, and by which schema rule.
+// `msg`, `input`, `url`, a `detail` that is free text, and any unparseable body
+// contribute nothing, because those carry upstream prose — internal module
+// paths, database column names, and the echo of what the adapter sent
+// (`R5-E06-03`).
+const KNOWLEDGE_FAILURE_FIELD = /^[A-Za-z0-9_.-]{1,64}$/u;
+const KNOWLEDGE_FAILURE_MAX_FIELDS = 3;
+const KNOWLEDGE_FAILURE_MAX_CHARS = 200;
+
+function summarizeKnowledgeFailure(data) {
+  let body;
+  try {
+    body = JSON.parse(data);
+  } catch {
+    return "";
+  }
+  if (!body || typeof body !== "object" || !Array.isArray(body.detail)) {
+    return "";
+  }
+  const parts = [];
+  for (const item of body.detail) {
+    if (parts.length >= KNOWLEDGE_FAILURE_MAX_FIELDS) break;
+    if (!item || typeof item !== "object") continue;
+    const { type, loc } = item;
+    if (typeof type !== "string" || !KNOWLEDGE_FAILURE_FIELD.test(type)) {
+      continue;
+    }
+    const path = (Array.isArray(loc) ? loc : [])
+      .filter(
+        (segment) =>
+          typeof segment === "string" && KNOWLEDGE_FAILURE_FIELD.test(segment),
+      )
+      .join(".");
+    if (!path) continue;
+    parts.push(`${path}: ${type}`);
+  }
+  // The ASCII-only field pattern is what makes a character cap safe here; a
+  // byte cap would be the wrong measure for a string that cannot hold
+  // multi-byte characters.
+  return parts.join("; ").slice(0, KNOWLEDGE_FAILURE_MAX_CHARS);
+}
+
 // Search capacity in personal-tool-knowledge-1 is strictly capped at 2.
 // We maintain an in-process AsyncSemaphore across adapter instances to queue
 // concurrent searches and prevent HTTP 429 SEARCH_CAPACITY_EXCEEDED (M16).
@@ -401,10 +444,9 @@ export class KnowledgeAdapter {
           };
         }
 
-        // M11: Sanitized HTTP error message (do not return raw upstream dump)
-        const sanitizedMessage =
-          (response.data || "").slice(0, 300) ||
-          `HTTP error ${response.status} from Knowledge service`;
+        // M11: the failure envelope carries a fixed code and a field
+        // projection, never upstream response bytes.
+        const summary = summarizeKnowledgeFailure(response.data);
 
         return {
           action,
@@ -413,7 +455,9 @@ export class KnowledgeAdapter {
           total_count: 0,
           governed_status: "CONTROLLED_FAILURE",
           error: `HTTP_${response.status}`,
-          message: sanitizedMessage,
+          message: summary
+            ? `Knowledge service rejected the request (HTTP ${response.status}). Rejected fields: ${summary}.`
+            : `Knowledge service failed the request (HTTP ${response.status}); its response body is not forwarded.`,
         };
       } finally {
         if (shouldAcquireSemaphore) {

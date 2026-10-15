@@ -1,5 +1,6 @@
 import test, { describe } from "node:test";
 import assert from "node:assert/strict";
+import http from "node:http";
 
 import {
   GOVERNANCE_VERSION,
@@ -498,6 +499,100 @@ describe("M7/T5 Runtime Governance Remediation Comprehensive Test Suite", () => 
       assert.equal(res.governed_status, "CONTROLLED_FAILURE");
       assert.equal(res.error, "KNOWLEDGE_SERVICE_UNAVAILABLE");
       assert.deepEqual(res.results, [], "Must not fabricate synthetic results");
+    });
+
+    // T2.1-3 (R5-E06-03): the non-2xx path used to copy the first 300 bytes of
+    // the upstream body into the model-visible `message`. Truncation is not
+    // sanitization, so a FastAPI 422 dump — the adapter's own request echo,
+    // upstream module paths, database column names — reached the ledger and the
+    // cards. Driven against a stub service so the body is real bytes.
+    test("BUG-07: a Knowledge service failure forwards no response bytes", async () => {
+      const validationDump = JSON.stringify({
+        detail: [
+          {
+            type: "missing",
+            loc: ["body", "query"],
+            msg: "Field required",
+            input: { query: "governance guidelines" },
+          },
+          {
+            type: "int_parsing",
+            loc: ["body", "limit"],
+            msg: "Input should be a valid integer, unable to parse string as an integer",
+            input: "many",
+          },
+        ],
+        internal:
+          "psycopg.errors.UndefinedColumn: column knowledge_chunks.embedding_vector does not exist",
+        traceback: 'File "/app/app/retrieval.py", line 161, in search',
+      });
+      const htmlDump =
+        "<html><head><title>502 Bad Gateway</title></head><body>" +
+        "nginx/1.27.0 upstream knowledge-api:8000</body></html>";
+      let served = 0;
+      const server = http.createServer((_req, res) => {
+        served += 1;
+        if (served === 1) {
+          res.writeHead(422, { "Content-Type": "application/json" });
+          res.end(validationDump);
+          return;
+        }
+        res.writeHead(500, { "Content-Type": "text/html" });
+        res.end(htmlDump);
+      });
+      await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const endpoint = `http://127.0.0.1:${server.address().port}`;
+      try {
+        const rejected = await executeGovernedKnowledgeQuery(
+          {
+            action: "search",
+            namespace: "core",
+            query: "governance guidelines",
+          },
+          {},
+          { endpoint },
+        );
+        assert.equal(rejected.governed_status, "CONTROLLED_FAILURE");
+        assert.equal(rejected.error, "HTTP_422");
+        const rendered = JSON.stringify(rejected);
+        for (const marker of [
+          "psycopg",
+          "embedding_vector",
+          "/app/app/retrieval.py",
+          "unable to parse",
+          "Field required",
+          "governance guidelines",
+        ]) {
+          assert.ok(
+            !rendered.includes(marker),
+            `the result must not carry upstream body content: ${marker}`,
+          );
+        }
+        // What the caller keeps is the projection of its OWN request: which
+        // field was rejected and by which schema rule.
+        assert.match(rejected.message, /HTTP 422/u);
+        assert.match(rejected.message, /body\.query: missing/u);
+        assert.match(rejected.message, /body\.limit: int_parsing/u);
+
+        const collapsed = await executeGovernedKnowledgeQuery(
+          {
+            action: "search",
+            namespace: "core",
+            query: "governance guidelines",
+          },
+          {},
+          { endpoint },
+        );
+        assert.equal(collapsed.error, "HTTP_500");
+        assert.ok(
+          !JSON.stringify(collapsed).includes("nginx"),
+          "a non-JSON upstream body must be dropped whole, not sliced",
+        );
+        assert.match(collapsed.message, /HTTP 500/u);
+      } finally {
+        server.closeAllConnections();
+        await new Promise((resolve) => server.close(resolve));
+      }
     });
 
     test("BUG-07: executeGovernedKnowledgeQuery forbids ingestion and mutation actions", async () => {
