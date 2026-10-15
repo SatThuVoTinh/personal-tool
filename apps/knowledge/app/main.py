@@ -574,4 +574,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     return app
 
 
-app = create_app()
+_module_app: FastAPI | None = None
+
+
+def __getattr__(name: str) -> FastAPI:
+    # PEP 562. `create_app()` hashes the pinned tokenizer off disk, so building the
+    # application at import turned that artifact into a dependency of *importing*
+    # this module: any test that imported it for a plain constant died at
+    # collection on every host CI does not provision (`R6-I01-01`).
+    #
+    # `uvicorn app.main:app` resolves this attribute at startup, so a missing or
+    # wrong artifact still fails the boot loudly instead of mid-request, and
+    # `from app.main import app` keeps working and keeps one shared instance.
+    if name != "app":
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    global _module_app
+    if _module_app is None:
+        _module_app = create_app()
+    return _module_app

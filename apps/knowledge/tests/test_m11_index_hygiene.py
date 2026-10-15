@@ -243,14 +243,33 @@ class TimeoutClassificationPinTests(unittest.TestCase):
         # turns back into a raw 500.
         self.assertIs(asyncio.TimeoutError, TimeoutError)
 
-    @unittest.skipUnless(
-        os.environ.get("KNOWLEDGE_TOKENIZER_PATH"),
-        "app.main builds a real TokenBudget at import; needs the tokenizer artifact",
-    )
     def test_timeout_is_a_database_error_for_the_api(self) -> None:
+        # This was skipped unless KNOWLEDGE_TOKENIZER_PATH was set, because
+        # `app.main` built a TokenBudget at import and so importing a plain
+        # constant needed the pinned artifact. Running here is the direct proof
+        # that `R6-I01-01` is closed.
         from app.main import DATABASE_ERRORS
 
         self.assertIn(asyncio.TimeoutError, DATABASE_ERRORS)
+
+    def test_the_module_app_resolves_lazily_and_only_for_app(self) -> None:
+        import app.main as main_module
+
+        with self.assertRaises(AttributeError):
+            main_module.no_such_module_attribute
+
+        # Without the artifact the construction call must still be *reached*: it
+        # fails as a tokenizer problem, never as a missing attribute. The success
+        # path is covered in CI, where `test_main_api.py` imports and drives the
+        # real `app`.
+        if not os.environ.get("KNOWLEDGE_TOKENIZER_PATH"):
+            with self.assertRaises(Exception) as caught:
+                main_module.app
+            self.assertNotIsInstance(
+                caught.exception,
+                AttributeError,
+                "`.app` must dispatch to create_app, not report a missing attribute",
+            )
 
 
 def markdown_source(name: str, segments: int) -> MarkdownSource:
