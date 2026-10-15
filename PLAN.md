@@ -5645,3 +5645,39 @@ writer, or the merge has no owner to hold it.
 **No shape above is authorized.** Choosing one is a decision, not an execution grant; it needs its own Plan Revision,
 and `R1-A04-01` (the guard-vs-policy swap) must be fixed first in every case — a split the guard refuses mid-flight is
 exactly the failure the owner would experience as "the bots disagree and nothing runs".
+
+### H11 disposition — owner answers recorded 2026-10-15, work scheduled to `M12/T3`
+
+The owner answered the brainstorming questions and then set the order explicitly:
+*"đầu tiên sửa hết lỗi đã audit trước, rồi mới tiến hành làm cái đó tại M12 T3, `five-stack.md` điều chỉnh trong phạm vi
+đó luôn"*. So **the audit remediation precedes H11**, and the five-stack rewrite belongs inside T3, not inside the
+remediation wave.
+
+Direction he chose, recorded while it is fresh (this is a **design decision**, not an authorization):
+
+1. **Org chart:** **O1 owns the data half** (`data_plant`: excel, sql, python) and **O2 owns the analysis half**
+   (`semantic`/`intelligence`: power-bi, python). This matches `AGENT_STACK_POLICY` and Main's current role block, and
+   contradicts `five-stack.md` — which he has assigned to T3 to correct.
+2. **Mechanism: shape 1, Main-mediated.** One task, one plan, both halves inside it; **no coordinator↔coordinator
+   edge**. (Design note from the same session: a mixed-stack plan is *already* legal — `execution-brief.schema.json`
+   carries per-node `agent_id` + `stack_id`, `guard.mjs:881-882` already requires a `decision` node to be Main-owned,
+   i.e. the merge has a home, and `guard.mjs:887-902` already wires cross-stack prerequisites. The single-stack rule
+   at `guard.mjs:849-853` does not bind a Main-authored plan.)
+3. **Merge owner:** **Main merges and presents once.** O1 and O2 do not cross-review each other.
+4. **Gates stay two:** one merged **plan** card in #approvals, one merged **result** card in #results. No approval
+   gate is removed.
+5. **Topology per task, chosen by Main:** parallel halves merged at the end, **or** chained (data → analysis) — both
+   expressible as dependency edges.
+6. **Failure surface:** a broken half posts an incident in **#incidents** *and* still produces the task's #results
+   card in `BLOCKED`/`PARTIAL` naming what is missing, so he has exactly one place to decide (redo / accept partial /
+   cancel). **Precondition he owns:** the mislabelled `STATUS: ANALYTICS` tag in Discord must be renamed or the
+   analysis-side incident cannot be tagged and will never post (recorded, `NOT TESTED` live).
+
+What is still open before T3 can be planned: `primary_coordinator` has **no writer in non-test code** (only reads at
+`index.mjs:1890` and `:2535`), so "who owns a two-half task" has no durable answer yet; and the execution lane has
+never run end to end, so T3 must inherit or precede that repair.
+
+**One consequence the owner should see now, not in T3:** because the five-stack rewrite was assigned to T3, fixing
+`R1-A04-01` in the remediation wave (guard reads `AGENT_STACK_POLICY`) leaves `docs/architecture/five-stack.md`
+describing the **opposite** org chart until T3 lands. That is a knowingly-accepted, time-boxed doc/code divergence,
+recorded here so no later reader mistakes the document for current truth.
