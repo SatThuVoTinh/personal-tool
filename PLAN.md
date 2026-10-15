@@ -48,10 +48,15 @@ operations research and simulation remain first-class capabilities.
 
 ```text
 Milestone: M12 — Governed Discord interaction lifecycle and governed presentation
-Task: M12/T2.1 — HIGH-RISK REMEDIATION TIER: irreversible loss, exposure, and failures nobody can detect
-  (the original R1 objective "attribution truth, honest degradation, and evidence that says what it is" survives in
-  item T2.1-6 and in the tier's honesty conditions; the rest of R1's ten items are re-filed into T2.2/T2.3)
-Active revision: M12/T2.1-R3 — **the high-risk tier only**, after the owner re-shaped the successor plan
+Task: M12/T2.2 — WAVE A: data-integrity and silent-failure defects (the medium-risk tier, first of three waves)
+  The predecessor tier `M12/T2.1` (HIGH-RISK: irreversible loss, exposure, failures nobody can detect) is **CLOSED
+  2026-10-15**: all eight items plus four owner-authorized follow-ons landed, its evidence is in §8, and its full
+  contract text is preserved verbatim at `docs/contracts/execution/archive/2026-10-15-M12-T2.1-R3.md` — that archive
+  is decision `H10` / `R3-P04-03`, executed first because §5.1 of the old contract made the scrub rule a prerequisite.
+Active revision: M12/T2.2-R1 — **Wave A only**, after the owner approved the three-wave split on 2026-10-15
+  (`đúng, chốt 3 wave`), chose the `4A.13` fork **a** (no re-embed skip until a stored model identity exists), and
+  granted the pinned-assertion exception (`có grant`) for exactly the assertions named in `ACTIVE.md` §4.
+  (history) Active revision was: M12/T2.1-R3 — **the high-risk tier only**, after the owner re-shaped the successor plan
   2026-10-15: `vậy A đi, tách 3 phần thành T2.1 (high risk), T2.2 (medium risk) và T2.3 (low risk)`. He accepted
   **I1-A** (4A.1 withdrawn — its fix must amend a pinned required gate), **I2-A** (4A.13 withdrawn — V06's
   `R6-V06-01` proved the fix self-blocking), **I3-A** (4A.16(i) withdrawn — the known-red promise unbacked),
@@ -172,19 +177,32 @@ Task Status: IN PROGRESS — **all eight `R3` items are implemented and locally 
   Read-only evidence showed his premise was wrong about the roster and right about the names — see
   `Record — the 9Router "cấu hình cũ" report` in §8.
   R1 and R2 both existed with **zero implementation landed under either**, and no prior task's evidence is altered.
-Planning Readiness: APPROVED — the owner answered the I1–I7 block with `vậy A đi` and set the three-tier split by
-  risk in the same message.
-Plan Revision: M12/T2.1-R3
-Execution Authorization: YES — **bounded to `ACTIVE.md` §4's eight high-risk items (T2.1-1 … T2.1-8), §3's
-  enumerated file list, and §5's dispositions.** On the `AGENTS.md` §12 terms only: local implementation, validation,
-  the task/closeout commits, and a push of this non-`main` task branch to its configured remote. It authorizes **no**
+  ── **`M12/T2.1` tier is CLOSED 2026-10-15.** The rest of this field describes the new task.**
+Task Status: IN PROGRESS — `M12/T2.2` **Wave A materialized, execution not yet started.** `A-1`…`A-8` are frozen in
+  `ACTIVE.md` §4; no item has landed, so nothing is claimed. Wave B and Wave C are separate future contracts and are
+  explicitly excluded (§5 of the contract), as is all `M12/T3` H11 work.
+Planning Readiness: APPROVED — the owner approved Wave A's scope, order, the `4A.13` fork, and the
+  pinned-assertion exception in three messages on 2026-10-15 (`đúng, chốt 3 wave` / `a, có grant` / `chọn 1 đi…`).
+  The prior line — *"the owner answered the I1–I7 block with `vậy A đi` and set the three-tier split by risk in the
+  same message"* — belongs to the closed `T2.1` tier.
+Plan Revision: M12/T2.2-R1
+Execution Authorization: YES — **bounded to `ACTIVE.md` §4's Wave A items (`A-1` … `A-8`), §3's enumerated file
+  list, and §5's exclusions.** On the `AGENTS.md` §12 terms only: local implementation, validation, the
+  task/closeout commits, and a push of this non-`main` task branch to its configured remote. It authorizes **no**
   `--apply`, no restart, no deployment, no lock deletion, no `events.jsonl` edit, no Discord request, no `main` merge,
-  no PR, no force-push, no workflow-file edit, no migration edit, no schema-file edit, no `.github/workflows/**`
-  change, no re-valuing of any **pinned existing assertion** (gate 6 makes that a stop-and-report condition, which is
-  the rule R2 broke via 4A.1 and `R6-V01-01` caught), no chmod or other change to anything under
-  `/home/hoang_vinh/.openclaw-zink`, and **no** implementation of any H1–H11 decision (§11) or of any
-  `M12/T2.2`/`T2.3`
-  item — those are tier assignments, not approvals.
+  no PR, no force-push, no workflow-file edit, no migration or schema **content** edit, no `.github/workflows/**`
+  change, no dependency change, no ceiling change, no chmod or other change under `/home/hoang_vinh/.openclaw-zink`,
+  and **no** deletion of the stray `C:\home\hoang_vinh` tree.
+  **Pinned-assertion exception, granted explicitly 2026-10-15 (`a, có grant`) and narrowed by this plan:** it covers
+  **only** the assertion named in the contract — `tests/m8-t1-skill-vector-memory.test.mjs:118`, re-valued by `A-5`.
+  Every other pinned assertion remains a stop-and-report condition (the rule R2 broke via 4A.1 and `R6-V01-01` caught;
+  the rule that stopped `T2.1-5` mid-flight). `A-1` and `A-2` were expected to need further re-values; if execution
+  finds one, stop and ask rather than assume the grant extends.
+  Also **no** implementation of any H1–H11 decision (§11) — including all `M12/T3` H11 work (no coordinator edge, no
+  shared sandbox, no `primary_coordinator` writer, no `five-stack.md` rewrite) — and no Wave B / Wave C item. Tier and
+  wave assignments are not approvals.
+  (history) This field's earlier text bounded execution to `ACTIVE.md` §4's eight high-risk items (T2.1-1 … T2.1-8) for
+  `M12/T2.1-R3`; that tier is closed and its contract is archived.
   History of this field, recorded because the withdrawal is the evidence that the verification round worked: it was
   set YES for R2 on 2026-10-14, then **pulled to NO on 2026-10-15** when Vòng 6 lanes V01/V05/V06 found **eleven
   defects in R2 itself** — three High (4A.1 vs a pinned gate assertion; 4A.13's fix self-blocking because the stored
@@ -198,7 +216,9 @@ Execution Authorization: YES — **bounded to `ACTIVE.md` §4's eight high-risk 
   R3 was then written **fresh** rather than patched, and this field restored to YES at the narrower bound. Full
   detail in `.agents/states/findings.md`, Vòng 6.
 Execution Contract: docs/contracts/execution/ACTIVE.md
-Evidence Level: **REMOTE-BACKED** for the repository gates — CI run `38715084889` @ `d8c221a` reports `quality-gate`
+Evidence Level: **NONE** — `M12/T2.2-R1` Wave A is materialized but **no item has executed**, so nothing is claimed.
+  (Evidence Level of the closed predecessor `M12/T2.1-R3`: **REMOTE-BACKED** for the repository gates — CI run
+  `38715084889` @ `d8c221a` reports `quality-gate`
   **SUCCESS** and `python-quality` **SUCCESS** (Security `38715090086` is red on the unchanged 5-high `npm audit`
   baseline only, `secret-scan` green) — on top of `npm run verify` PASS on Windows at `ad4a8d6`, and PASS again at
   `61638d8` (the follow-on naming remediation, gate rerun in full before committing):
@@ -216,9 +236,15 @@ Evidence Level: **REMOTE-BACKED** for the repository gates — CI run `387150848
   namespace`, `2 production ledger not reachable`, `2 live runtime not reachable`, `1 Postgres container`, `1 bare
   SKIP`, which is why decision H3 must be a per-family expectation rather than one threshold number.**
   The **WSL lane** is `NOT RUN` for this wave, as is the success path of the lazily-resolved `app` (CI's
-  `test_main_api.py` covers it), and CI does not read the live tree at all.
+  `test_main_api.py` covers it), and CI does not read the live tree at all.)
 Task Branch: codex/m11-t1-audit-remediation (no new branch and no `main` merge authorized)
-Owner Approval: EXPLICIT — 2026-10-14, seven-lettered-block answer quoted above, followed the same day by
+Owner Approval: EXPLICIT for `M12/T2.2-R1` — 2026-10-15, three messages: *"đúng, chốt 3 wave"* (scope + order),
+  *"a, có grant"* (the `4A.13` fork = no skip without a stored model identity; the pinned-assertion exception,
+  narrowed by this plan to the single assertion named in `ACTIVE.md` §4), and *"chọn 1 đi, có sẵn
+  docs/contracts/execution/archive/ thì tạo trong đó, chưa thì tạo đúng file đó"* (decision `H10` / `R3-P04-03` —
+  archive instead of delete, with the directory grant). He also set the sequence: audit fixes first, `M12/T3` for the
+  H11 coordinator work, `five-stack.md` corrected inside that scope.
+  (history) Earlier approval — 2026-10-14, seven-lettered-block answer quoted above, followed the same day by
   the sweep-and-record instruction that produced R2. Two sub-choices are
   **mine and reversible**, recorded here the way the STACK precedence rule was: (1) `R3-P04-06` makes
   `AGENTS.md`'s existing executor name canonical and lists the other as a retired alias, because
@@ -5562,6 +5588,54 @@ modification is `PLAN.md`. `npm run verify` was **NOT RUN** for this record (not
 and CI was re-read, not re-run: `38715084889` @ `d8c221a` = `quality-gate` **SUCCESS**, `python-quality` **SUCCESS**;
 `38715090086` = `dependency-audit` **FAILURE** (the unchanged 5-high baseline), `secret-scan` **SUCCESS**. The WSL
 lane and every live Discord surface remain `NOT RUN` / `NOT TESTED`.
+
+### Record — `M12/T2.1` closed, `H10` executed, and `M12/T2.2-R1` Wave A materialized (2026-10-15)
+
+Three things happened in sequence, and the order was not arbitrary: the archive rule had to exist **before** anything
+was archived, because §5.1 of the closing contract made the secret-scrub rule a prerequisite of archiving
+(`R3-P04-03`). So: rule → archive → new contract.
+
+**`H10` closed as "archive, don't delete."** `docs/contracts/execution/archive/README.md` now defines the naming form
+(`YYYY-MM-DD-<milestone>-<task>-R<revision>.md`), permanent retention, and a five-step scrub: credential-shaped
+assignments, opaque long runs, a bar on copying values from operator-owned files, snowflakes allowed only if already
+tracked in source, and no live state captures. Step 4 was written too strict on the first pass and corrected in the
+same commit: it demanded repo-relative paths only, which would have made every future archive unsatisfiable, because
+21 tracked files already name the live state root and a contract that cannot name the path it must not touch is not
+reviewable. The distinction is now explicit — naming a path is allowed, capturing its content is not.
+`docs/contracts/execution/README.md`'s closeout sequence was amended to copy-then-delete, and dated archive files are
+excluded from prettier and markdownlint for the same reason the existing `m7-m8-red-team-backlog.md` is: reformatted
+evidence is no longer evidence. The exclusion is anchored to the dated filename form, so the directory's own README
+stays under both gates.
+
+**The first archive is the closed tier itself.** `M12/T2.1-R3` was copied to
+`archive/2026-10-15-M12-T2.1-R3.md` and verified byte-identical (`cmp`) before the original was replaced. Its scrub
+ran with results recorded rather than asserted: the only credential-shaped hits are the literal words
+`Execution Authorization: YES/NO` and a code fragment the contract quotes *as the defect it is removing*; the opaque
+runs are file paths and digests already in tracked history; **zero** untracked snowflakes. Nothing was redacted, which
+is the honest outcome and is stated as such.
+
+**Why this mattered more than tidiness.** The protocol prescribed `delete ACTIVE.md` at closeout while `AGENTS.md` §11
+forbids claiming completion without checkable evidence — the governance docs destroyed their own audit trail by
+design, and it had already bitten once: R2's text was lost to an overwrite and recovered only from a session
+transcript. Replacing `ACTIVE.md` for Wave A is now a routine operation with a durable backstop, not a risk.
+
+**`M12/T2.2-R1` materialized.** Wave A of the medium-risk tier, eight frozen items, approved by the owner in three
+messages (`đúng, chốt 3 wave` / `a, có grant` / `chọn 1 đi…`). Three items exist only because Vòng 6 wave 2 refuted
+the earlier plan: `4A.8` is withdrawn as having no reachable defect, `4A.9`'s denominator moved 28 → 26, and `4A.13`
+is re-scoped under the owner's choice **(a)** — **no re-embed skip until a stored model identity exists**, because the
+skip would bypass the only model-identity checks that work today (`vector-sync.mjs:392-405`, `:419`), which live
+*inside* the HTTP call the skip is designed to avoid. The pinned-assertion exception he granted is narrowed in this
+plan to the one assertion the contract names (`m8-t1-skill-vector-memory.test.mjs:118`, item `A-5`); `A-1` and `A-2`
+were expected to need more, and execution must stop and ask instead of assuming the grant stretches.
+
+**Accepted for this interval, and it must be restated at closeout:** the owner assigned the `five-stack.md` correction
+to `M12/T3`, so once `A-1` lands the canonical architecture document will describe the **opposite** org chart from
+the enforced one. That is a knowingly time-boxed divergence, not an oversight, and any reader of the document before
+T3 lands should trust `AGENT_STACK_POLICY` plus the guard and this plan over the table.
+
+Gate state: `npm run verify` **PASS** — `1483 tests / 106 suites / 1437 pass / 0 fail / 46 skipped`,
+`Repository policy check passed.` — and `markdownlint-cli2` reports **0 issues in 18 files** after the ignore scoping.
+Evidence Level for `M12/T2.2-R1` is **NONE**: no item has executed.
 
 ## 9. Deferred beyond V1
 
