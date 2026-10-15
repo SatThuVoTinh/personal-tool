@@ -141,11 +141,23 @@ Prior revision: M12/T2.1-R1 — the execution wave the owner authorized on 2026-
   harness returned a daily usage limit on five consecutive dispatch attempts — so no claim of full-repo
   coverage may be made, and the orchestrator's own re-derivation of ten claims is a **weaker** substitute
   than the adversarial cross-check that was requested, disclosed in ACTIVE.md §0 rather than silently
-  absorbed; (c) `tests/m11-t1-postgres-sql-gate` and `m11-t1-skill-vector-sql` skip without a Docker
-  container while `node --test` still exits 0 (`R5-E09-03`), so if the container is absent those two are
-  `NOT RUN` and may not be folded into "fail 0".
-Task Status: IN PROGRESS — **all eight `R3` items are implemented and locally validated**; the tier is not closed
-  only because its closeout evidence is not on CI yet. R3 materialized 2026-10-15 as the high-risk tier. Delivered:
+  absorbed; (c) **one** Postgres-dependent test (`M11-06` in `tests/m11-t1-postgres-sql-gate.test.mjs`) skips without
+  a Docker container while `node --test` still exits 0 (`R5-E09-03`), so if the container is absent that test is
+  `NOT RUN` and may not be folded into "fail 0". **Corrected 2026-10-15 by V08: this row previously named
+  `m11-t1-skill-vector-sql` as a second Docker-gated suite. It is not — that file contains no docker, `CONTAINER`
+  or `t.skip` reference (grep count 0) and its `M11-01` case executes and passes in CI.**
+  **And (d), recorded here because a cold resume would otherwise re-derive a CI run for nothing: the CI lane is
+  WINDOWS-EQUIVALENT, NOT LIVE-TREE-EQUIVALENT.** Run `38711126758` @ `8d1b49f` and run `38715084889` @ `d8c221a`
+  both print the *identical* `1483 tests / 106 suites / 0 fail` denominator, 52 skips against this host's 46, and
+  zero `zink-skill-store` / `zink-tools` module-internal test file names in the log — because `npm test` runs an
+  explicit `tests/…` file list (`package.json:24`), not a discovery glob, so the two modules' own suites are never
+  collected by CI's `quality-gate`. (The `python-quality` job *does* run the `apps/knowledge` Python suite, so that
+  half is covered there.) CI green therefore proves **nothing** about the live tree or the module suites, and only the
+  WSL lane can read it (see *Gate lane coverage*, §8, and `R6-I01-03`).
+Task Status: IN PROGRESS — **all eight `R3` items are implemented and locally validated, and the tier's closeout
+  evidence is now on CI** (run `38715084889` @ `d8c221a`: `quality-gate` **SUCCESS** — `1483 tests / 1431 pass / 0
+  fail / 52 skipped` — and `python-quality` **SUCCESS**; Security run `38715090086` fails only on the standing
+  5-high `npm audit` baseline with `secret-scan` **SUCCESS**). R3 materialized 2026-10-15 as the high-risk tier. Delivered:
   T2.1-1 `96a6dd2`, T2.1-2 `2e7da50`, T2.1-3 `c4833e6`, T2.1-4 `710f650`, **T2.1-5 `91d788d` (under the owner's
   option-A grant, recorded in `ACTIVE.md` §4 before the pinned assertion was touched)**, T2.1-6 `b3affc2`,
   T2.1-7 `b7497ca`, T2.1-8 `ba5ff08`, plus the two owner-authorized recorded-item commits `9c7af0f` (the
@@ -184,15 +196,25 @@ Execution Authorization: YES — **bounded to `ACTIVE.md` §4's eight high-risk 
   R3 was then written **fresh** rather than patched, and this field restored to YES at the narrower bound. Full
   detail in `.agents/states/findings.md`, Vòng 6.
 Execution Contract: docs/contracts/execution/ACTIVE.md
-Evidence Level: LOCAL-VERIFIED for **all eight items** — `npm run verify` PASS on Windows at `ad4a8d6`, and PASS
-  again at `61638d8` (the follow-on naming remediation, gate rerun in full before committing):
+Evidence Level: **REMOTE-BACKED** for the repository gates — CI run `38715084889` @ `d8c221a` reports `quality-gate`
+  **SUCCESS** and `python-quality` **SUCCESS** (Security `38715090086` is red on the unchanged 5-high `npm audit`
+  baseline only, `secret-scan` green) — on top of `npm run verify` PASS on Windows at `ad4a8d6`, and PASS again at
+  `61638d8` (the follow-on naming remediation, gate rerun in full before committing):
   `format:check` clean, `lint` clean with `zink-tools` now inside it, `npm test`
   **1483 tests / 106 suites / 1437 pass / 0 fail / 46 skipped**, `Repository policy check passed.`; the
   Knowledgebase Python suite green locally (**142 passed / 6 skipped**, down from 7 once `R6-I01-01`'s skip went
   away). One mutation probe per item, each killing exactly that item's control. `46 skipped` **includes**
-  `m8-t2.13-r16`'s namespace cases and the two Postgres/Docker suites, so it is not a pass and is not counted as one.
-  **`REMOTE-BACKED` is NOT claimed** — no CI run has been read for any of these commits — and the WSL lane is
-  `NOT RUN` for this wave, as is the success path of the lazily-resolved `app` (CI's `test_main_api.py` covers it).
+  `m8-t2.13-r16`'s namespace cases and the single Postgres/Docker-gated test, so it is not a pass and is not counted
+  as one. **The CI-vs-Windows skip delta is now attributed, not assumed: CI 52 − Windows 46 = 6, and those 6 are the
+  `tests/helpers/duckdb-availability.mjs:45` family (`DuckDB engine not installed on this host (NOT RUN)`), consumed
+  by `tests/duckdb-bridge.test.mjs` and `tests/m7-t4-orchestration.test.mjs`. I verified the mechanism on this host:
+  `which duckdb` resolves to the WinGet CLI here and `wsl.exe … which duckdb` resolves to
+  `/home/hoang_vinh/.local/bin/duckdb` there, while the CI runner has neither — so the six run locally and skip on
+  the runner. Per-family, not global: the remaining 40 CI skips are `24 operator backup not reachable`, `16 R16 mount
+  namespace`, `2 production ledger not reachable`, `2 live runtime not reachable`, `1 Postgres container`, `1 bare
+  SKIP`, which is why decision H3 must be a per-family expectation rather than one threshold number.**
+  The **WSL lane** is `NOT RUN` for this wave, as is the success path of the lazily-resolved `app` (CI's
+  `test_main_api.py` covers it), and CI does not read the live tree at all.
 Task Branch: codex/m11-t1-audit-remediation (no new branch and no `main` merge authorized)
 Owner Approval: EXPLICIT — 2026-10-14, seven-lettered-block answer quoted above, followed the same day by
   the sweep-and-record instruction that produced R2. Two sub-choices are
@@ -5401,17 +5423,38 @@ latest explicit instruction, which ordered exactly this replacement — and unde
    Intelligence → **O1**, Infrastructure + Decision → Main. `authority.mjs:573-587 AGENT_STACK_POLICY` (2026-09-26,
    `01489aa`) says `o1: [infrastructure, data_plant]`, `o2: [semantic, intelligence, decision]`, and `policy.mjs`
    role blocks (2026-09-19, `a1e6b5c`) order Main to route "ETL, Xử lý dữ liệu, Bảng tính, Excel, SQL, Python ETL" to
-   **O1** and "Phân tích, Trực quan hóa, Dashboard, Power BI, Python ML, Forecast, Optimization" to **O2**. The two
-   code surfaces agree with each other and are the exact opposite of the doc, so either the doc was superseded by a
-   later deliberate re-assignment and never rewritten, or the doc is the ratified decision and live routing has
-   contradicted it for a month. Evidence cannot distinguish; he can. Related: `policy.mjs:1700-1705 STACK_IDS`
-   enumerates **four** stacks and omits `infrastructure`, while the doc declares five protocol IDs and
-   `ledger-event` / `execution-brief` / `delegation-envelope` / `trusted-result-envelope` plus `guard.mjs:49` all
-   carry it — and `guard.mjs:847` hardcodes the same `["infrastructure", "data_plant"]` half. Options: **(A)** code is
-   right → rewrite and re-date the document, no runtime change; **(B)** document is right → `AGENT_STACK_POLICY`,
-   `guard.mjs:847`, the three role blocks and the forum-tag precedence move together, which is a live routing change
-   needing its own task, gates and deployment. `AGENT_STACK_POLICY` is exported through `policy.mjs` and consumed by
-   the guard, so this is topology (§7 RED) and was not folded into a naming commit.
+   **O1** and "Phân tích, Trực quan hóa, Dashboard, Power BI, Python ML, Forecast, Optimization" to **O2**.
+   **CORRECTED 2026-10-15 after Vòng 6 wave 2, and I re-read the code myself before writing this: what I first
+   recorded here — "the two code surfaces agree with each other and are the exact opposite of the document" — is
+   FALSE, and the reality is worse.** `guard.mjs:844-847` is `o1 ? ["semantic","intelligence","decision"] : o2 ?
+   ["infrastructure","data_plant"]` — the exact swap of `AGENT_STACK_POLICY`, so **the enforcement chain disagrees
+   with itself**, and the *guard* is the surface that agrees with `five-stack.md`. `workflow.mjs:1466-1470` admits a
+   node when `AGENT_STACK_POLICY[node.agent_id].includes(node.stack_id)`, so a Main-authored **O1 `data_plant` brief
+   passes admission and then dies at `guard.mjs:849-853` with `UNAUTHORIZED_TARGET`** — and `guard.mjs:842` exempts
+   `main` from that check entirely. So "the code is right" is not a well-formed option, and this is not a
+   month-old documentation drift but a live control-flow contradiction between two runtime surfaces.
+   Related: `policy.mjs:1700-1705 STACK_IDS` enumerates **four** stacks and omits `infrastructure`, while the doc
+   declares five protocol IDs and `ledger-event` / `execution-brief` / `delegation-envelope` /
+   `trusted-result-envelope` plus `guard.mjs:49` all carry it.
+   Options, restated so he can answer them: **(A)** the guard + document are right → `AGENT_STACK_POLICY`, the three
+   `policy.mjs` role blocks and the forum-tag precedence must change; that is a live routing change needing its own
+   task, gates and deployment. **(B)** the policy table + role blocks are right → the guard's two literals change,
+   which loosens a control the tests currently pin, and the document is rewritten. Either way exactly **one** of the
+   two code surfaces moves, and `main`'s exemption should be decided in the same pass.
+   **These are not new defects and must not be tiered as one.** The naming half is `R5-E11-01` (High, doc-truth);
+   the guard-vs-authority swap is **`R1-A04-01`** (High, enforcement bug that kills a legal brief) and the
+   four-stack enumeration is **`R1-A04-05`** (Medium, the denial names the wrong subsystem, so an operator digs at
+   ledger correlation instead of stack policy). All three were recorded before this session, all three are still
+   `OPEN`, and **none of the three is scheduled by ID anywhere in `PLAN.md` or `ACTIVE.md`** — I grepped. If the next
+   contract inherits my framing, `R1-A04-01` and `R1-A04-05` would have been dropped by folding them into a T2.3
+   "documents" item. That mis-merging is `R6-V07-01`, and it is the second wave-2 refutation of my own records.
+   **This is not a new defect.** It is the existing `R5-E11-01` (High, Confirmed, OPEN, scheduled to the doc-truth
+   tier), extended here with the `AGENT_STACK_POLICY`/`guard.mjs`/`STACK_IDS` evidence that lane E11 did not read —
+   E11 saw only `AGENT_SPAWN_POLICY`, whose `:555-563` anchors are still exact while its `:570` display-name evidence
+   is now closed by `61638d8`. The dates support E11's own root cause ("the table was written from a retired roster
+   and never re-verified"): the document predates both code surfaces by 11 and 18 days. So the better-supported
+   answer is **(A)**, and it is presented that way rather than as an even split — but it is his call, because (A)
+   ratifies a routing decision that was changed in code without ever being written back.
 3. **Ingress was verified neutral and left alone.** `AGENT_ALIASES` resolves `o1`/`o2` only through the ids, the
    `điều phối` forms and their snowflakes — it carries no stack title — and `AGENT_MENTION_PATTERNS` is derived from
    it, so mention routing needed no change. The `etl`/`analytics` words survive only in the historical comment about
@@ -5428,6 +5471,95 @@ is read for this head; the WSL lane is `NOT RUN` for this increment. Two scratch
 (`temp/r16-live-config-probe.mjs` and an accidentally created empty `cd` at the repo root) were deleted; the probe
 redacted `apiKey`/`token`/`password`/`secret` and stripped URL userinfo, and no credential value was ever printed.
 Full finding text with verify-by commands is `.agents/states/findings.md`, `R6-CFG-01`…`R6-CFG-04`.
+
+### Record — Vòng 6 wave 2 RUN: the nine outstanding verification lanes returned and refuted the orchestrator twice (2026-10-15)
+
+`V02, V03, V04, V07, V08, V09, V10, V11, V12` were dispatched after `M12/T2.1-R3` executed, each re-pointed at the
+current `ACTIVE.md` §4/§5 and told which items had already landed (the lane spec was written against R2). **All nine
+returned, so Vòng 6 is now RUN, not `NOT RUN`** — the twelve lanes Round 5 could not dispatch are accounted for. Two
+of them refuted *my own* records, and I verified both refutations from source before accepting them; nothing here
+became code, because the tier is closed and this is input to `M12/T2.2`.
+
+**What was disproved about the audit itself.**
+- `R6-CFG-01/-02/-03` (`R6-V07-01`) — three of the four IDs I filed hours ago were re-numbers of `R5-E11-01`,
+  `R1-A04-01` and `R1-A04-05`, all recorded before this session. Root cause is mine: I wrote down what I had just
+  measured instead of grepping the register first, which is exactly what §4 requires. The cost was real: my framing
+  would have tiered one naming decision as three fixes and buried two live runtime defects inside a "documents" item.
+- The coordinator/stack contradiction is **not** doc-vs-code drift — the guard and the policy table are swapped
+  against each other (corrected in the record above, with the `UNAUTHORIZED_TARGET` mechanism).
+- `4A.8` has no defect to fix (`R6-V03-01`): `model_probe.py:128`'s `AssertionError` is unreachable and real outages
+  already return 503 at `main.py:364-365`. The proposed `AssertionError→503` mapping would *create* the bug, because
+  `knowledge-adapter.mjs:360-362` retries 503 — a deterministic internal fault would become "transient, back off".
+  The live version of the complaint is elsewhere: `create_index_run` and `get_index_run` have no terminal
+  `except Exception` mapper, so two of three routes return a 500 with **no code at all** (`R6-V03-02`).
+- `ACTIVE.md` §5.1's arithmetic is wrong again: **26** suppression sites, not 28 — `index_runner.py:43-45` and
+  `database.py:205-208` end in bare `raise`, so their tracebacks propagate — and five of the remaining seven already
+  persist a `SafeRunError` code. §5.1 also claims only `pdf_runtime.py` has a diagnostic channel; it does not know
+  about `apps/knowledge/app/run_errors.py:19-41`, which is the module's owned, bounded, persisted channel. A T2.2 fix
+  written against §5.1 would build a second mechanism next to an existing one (§8 of `AGENTS.md`).
+
+**What would have made the next fix wrong (all `M12/T2.2` inputs, none executed).**
+- `R6-V04-01` (High): 4A.13's own mitigation fails. The FAILED marker zeroes `embedding_input_sha256` only in the
+  no-conflict VALUES list (`vector-sync.mjs:783`); its `ON CONFLICT DO UPDATE` (`:793-796`) keeps the previous real
+  digest and, unlike the success path, omits the `DELETE FROM skills.segments`. So READY → one later failure → row
+  pinned FAILED with the digest intact → the skip matches forever, and since every consumer filters
+  `sync_status='READY'` a serving skill silently disappears from retrieval with no retry path.
+- `R6-V04-02` (High): the skip key is input-side only — no column anywhere carries embedding-model identity — so
+  after a model change every digest still matches and a skip converts today's wasteful-but-correct "always re-embed"
+  into "never re-embed" while reporting READY. Salting the digest would rewrite stored bytes for every row, which is
+  a data-semantics decision, not a performance detail.
+- `R6-V04-03`: there is **no read surface** — `:645-803` contains no `SELECT` and every non-docker seam returns `""`,
+  so an implementer can land a no-op skip and light the suite green; only the docker/psql gate can observe it, and
+  CI has no container.
+- `R6-V12-02`: item `4.2`'s "additive log lines are admissible" premise is false. `m10-t2-r6:225-237` pins
+  `CANDIDATE_BOUNDARY_SHA256` against the **working-tree** packaged bytes of `native-boundary.mjs`, which
+  `governancePluginFiles()` reads directly, so one added line flips it red on WSL. The sibling `HYGIENE` pin reads a
+  fixed commit and *is* immune — only the candidate pin defeats the premise.
+
+**What got calmer, not worse — three owner decisions change shape.**
+- **H4 de-escalates** (`R6-V09-01`). The 0644 `openclaw.json.bak-mobile-*` is real (1 of 15 copies; the other 14 are
+  0600), but I ran the metadata check myself: `/home/hoang_vinh` **and** `/home/hoang_vinh/.openclaw-zink` are both
+  `drwx------`, so the register's "any uid in the WSL VM can read the live credential set indefinitely" is simply
+  false. It is a hygiene + gate item, not an emergency chmod on live credential data. The gate half is *stronger* than
+  recorded: `configure.mjs:986-988` returns immediately on win32, so the mode check never runs on the host he
+  actually uses, and four subtrees inside that root are group-writable (`R6-V09-03`).
+- **H7 loses its live basis**: `governance/ledger/events.jsonl` is **0 bytes** (mtime Sep 18) and a numbers-only
+  snowflake grep returns 0 — no third-party identity has ever been written. It stays a forward-looking schema
+  question, and must not be put to him as "identities are already accumulating".
+- **H5 loses its support**: `R5-E11-02`'s §9 claim does not hold — §9's only imperative about another owner's store is
+  prefixed "Cross-project", and §9 defines the three modules as one repository, so the plugin calling the Skill
+  Store's own exported writer under the Skill Store's own lock is calling the owner. What is false is one sentence of
+  `docs/contracts/skill-store/agent-skill-store.md`. H5 must be decided on `skills.*` DDL placement alone.
+- **H3 shrinks**: `m11-t1-skill-vector-sql.test.mjs` is not Docker-gated (grep count 0; it passes in CI), so running
+  Postgres as a CI service buys **one** test, not a tier. And all 52 CI skips are individually named in the log, so
+  the real problem is enforcement, not visibility — a single threshold would fire on 40 legitimate host-capability
+  skips. See the attributed delta in the Evidence Level field above.
+- **H8 gains a prerequisite** (`R6-V10-01`): applied migrations are keyed on **filename only**
+  (`database.py:1718-1733`, no digest column), so editing `003`'s `status` CHECK in place — exactly what H8 invites —
+  is a silent no-op on an already-migrated database that no gate can detect.
+
+**Closed loose ends.** The gitleaks / `actions/checkout` / `actions/setup-node` SHA pins **are** the releases they
+claim, re-derived independently via read-only `gh api` (all three tag objects are plain commits, no annotated-tag
+indirection), so E15's "clean" stands. The double-nested `operator/m7-t2/ledger/operator/m7-t2/ledger/` artifact is
+now signature-matched (0 B journal + 196 B snapshot + **65 B `identity.key`**, and only `ledgerPaths()` builds that
+path), so an already-joined absolute ledger root was passed as the state dir; `configure.mjs:1073-1074` now makes the
+configure path unable to reproduce it, leaving two candidate sinks and a new finding that **nothing validates a
+state-root argument** (`R6-V11-01`). Whether Discord serves `threads/active` stays `Unresolved` — and the reason it
+stayed open was itself wrong: `discord-forum-tags.mjs:135-152` calls Discord over `globalThis.fetch` and never
+touches the pinned host surface, so the approval-card-buttons precedent never applied and the host log could never
+have settled it.
+
+**Governance defect this wave exposed about itself**: `ACTIVE.md` has **no §9 and no H1–H10 table** (`grep -c "^## 9"`
+→ 0). The owner-decision ledger exists only in `.agents/states/findings.md:4423-4452` — a git-ignored state file that
+§2/§6 declare non-authoritative. Every pointer I have been giving lanes and the owner to "contract §9" is stale, and
+H1–H10 currently have no contract standing at all. Promoting that table into a tracked, plan-pointed location is a
+governance action, not a code action, and it precedes asking him to answer any of them.
+
+Gate state for this record: no source, test, config or migration file was changed by the wave; the only tracked
+modification is `PLAN.md`. `npm run verify` was **NOT RUN** for this record (nothing to validate — no code changed),
+and CI was re-read, not re-run: `38715084889` @ `d8c221a` = `quality-gate` **SUCCESS**, `python-quality` **SUCCESS**;
+`38715090086` = `dependency-audit` **FAILURE** (the unchanged 5-high baseline), `secret-scan` **SUCCESS**. The WSL
+lane and every live Discord surface remain `NOT RUN` / `NOT TESTED`.
 
 ## 9. Deferred beyond V1
 
