@@ -9,6 +9,7 @@ import {
   openSync,
   readFileSync,
   renameSync,
+  unlinkSync,
   writeFileSync,
   lstatSync,
 } from "node:fs";
@@ -427,9 +428,13 @@ function readSnapshotLocked(paths, repairSnapshot = true) {
     // quote a snippet of the parsed content, and ledger content is untrusted
     // data that must not reach the log. The full original error stays attached as
     // `cause` for in-process consumers.
+    //
+    // `code` is read BEFORE `name` because `name` is truthy on every Error — an
+    // fs errno and a schema refusal both answered "Error", which is the one
+    // distinction this line exists to make (`R1-A14-02`).
     console.error(
       "[zink-ledger] replay fault:",
-      String(error?.name ?? error?.code ?? "unknown"),
+      String(error?.code ?? error?.name ?? "unknown"),
     );
     const failure = new Error(
       "Ledger corruption: trusted state cannot be verified",
@@ -522,16 +527,43 @@ function appendEventLocked(
   return next;
 }
 
+/**
+ * Remove this writer's own temp snapshot, best-effort.
+ *
+ * A half-written temp file is not canonical state, but the file was opened `"wx"`,
+ * so no later writer can replace it either: left in place it blocks every
+ * subsequent snapshot write. `EPERM` and `EISDIR` are what Windows and POSIX
+ * answer when something else owns the path, and `ENOENT` is the same verdict as a
+ * successful removal. Anything else is a real fault and propagates — a cleanup
+ * that swallows or invents a cause is the failure `R1-A14-02` is about.
+ */
+export function unlinkWriterResidue(tempPath) {
+  try {
+    unlinkSync(tempPath);
+  } catch (error) {
+    if (!["EPERM", "EISDIR", "ENOENT"].includes(error?.code)) throw error;
+  }
+}
+
 function writeSnapshotAtomic(paths, snapshot) {
   validateContract("ledger-snapshot", snapshot, Number.MAX_SAFE_INTEGER);
   const temp = `${paths.snapshot}.tmp-${process.pid}`;
   assertNoLinks(temp);
   const snapshotFd = openSync(temp, "wx", 0o600);
+  let writeFault = null;
   try {
     writeFileSync(snapshotFd, `${JSON.stringify(snapshot, null, 2)}\n`);
     fsyncSync(snapshotFd);
+  } catch (error) {
+    writeFault = error;
   } finally {
     closeSync(snapshotFd);
+  }
+  if (writeFault) {
+    // Cleaned only after the descriptor is closed, so the removal can succeed on
+    // Windows as well as POSIX, and the caller still receives the write fault.
+    unlinkWriterResidue(temp);
+    throw writeFault;
   }
   chmodSync(temp, 0o600);
   renameSync(temp, paths.snapshot);

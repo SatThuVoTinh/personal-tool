@@ -32,6 +32,7 @@ import {
   ledgerPaths,
   ensureLedger,
   readSnapshot,
+  unlinkWriterResidue,
 } from "../integrations/openclaw/topology/lib/ledger.mjs";
 import { DecisionLedger } from "../integrations/openclaw/lib/decision-ledger.mjs";
 import { resolveAuthenticatedApproval } from "../integrations/openclaw/topology/lib/guard.mjs";
@@ -44,6 +45,10 @@ const FILE_LOCK_SOURCE = readFileSync(
 );
 const GUARD_SOURCE = readFileSync(
   path.join("integrations", "openclaw", "topology", "lib", "guard.mjs"),
+  "utf8",
+);
+const LEDGER_SOURCE = readFileSync(
+  path.join("integrations", "openclaw", "topology", "lib", "ledger.mjs"),
   "utf8",
 );
 
@@ -771,4 +776,106 @@ test("B6-4: a proposal record that cannot be parsed blocks the overwrite", async
   } finally {
     rm(base);
   }
+});
+
+// ---------------------------------------------------------------------------
+// B7 — T2.1-6: snapshot residue and errno-first attribution (R1-A14-01/02)
+// ---------------------------------------------------------------------------
+
+test('B7-1: a replay fault that carries a code is logged as that code, not as "Error"', (t) => {
+  // `error.name` is truthy on every Error, so `name ?? code` discarded the one
+  // field that separates a disk fault from a schema fault from a torn record —
+  // and the caller already sees the single wrapped "Ledger corruption" message.
+  const errors = t.mock.method(console, "error", () => {});
+  const base = root();
+  try {
+    const paths = ledgerPaths(base);
+    ensureLedger(paths);
+    // Valid JSON that the snapshot contract refuses: the fault has a code and a
+    // name of plain "Error", which is exactly the pair the old order collapsed.
+    writeFileSync(paths.snapshot, "{}", "utf8");
+    assert.throws(
+      () => readSnapshot(paths),
+      (error) => {
+        assert.equal(
+          error.message,
+          "Ledger corruption: trusted state cannot be verified",
+        );
+        assert.equal(error.code, "EXECUTION_STATE_UNKNOWN");
+        assert.equal(
+          String(errors.mock.calls[0].arguments[1]),
+          error.cause.code,
+          "the logged class must be the fault's own code",
+        );
+        assert.notEqual(
+          String(errors.mock.calls[0].arguments[1]),
+          "Error",
+          "the class string must not be the generic Error name",
+        );
+        for (const arg of errors.mock.calls[0].arguments) {
+          assert.equal(typeof arg, "string");
+        }
+        return true;
+      },
+    );
+    assert.equal(errors.mock.callCount(), 1, "exactly one diagnostic line");
+  } finally {
+    rm(base);
+  }
+});
+
+test("B7-2: the snapshot temp cleanup removes residue and never invents a fault", () => {
+  const base = root();
+  try {
+    const temp = path.join(base, "snapshot.json.tmp-4242");
+    writeFileSync(temp, "half-written");
+    unlinkWriterResidue(temp);
+    assert.equal(existsSync(temp), false, "the temp file must be gone");
+
+    // Already absent is the same verdict as removed: the caller must still see
+    // the write fault it had, never a cleanup artifact.
+    unlinkWriterResidue(temp);
+
+    // A directory sitting on the temp path is Windows EPERM / POSIX EISDIR.
+    // Swallowed, and the directory itself is left where it was.
+    const occupied = path.join(base, "occupied");
+    mkdirSync(occupied);
+    unlinkWriterResidue(occupied);
+    assert.equal(existsSync(occupied), true);
+
+    // Anything else is a real fault and propagates: Node rejects an embedded
+    // NUL before touching the filesystem, on every platform.
+    assert.throws(
+      () => unlinkWriterResidue("snapshot\u0000tmp"),
+      (error) => {
+        assert.equal(error.code, "ERR_INVALID_ARG_VALUE");
+        return true;
+      },
+    );
+  } finally {
+    rm(base);
+  }
+});
+
+// B7-2 exercises the cleanup itself; nothing on any host can make `writeFileSync`
+// on an open descriptor fail on purpose, so the wiring into the write window is
+// pinned here rather than left to a test that cannot fail.
+test("B7-3: the snapshot write path cleans its own residue before rethrowing", () => {
+  const start = LEDGER_SOURCE.indexOf("function writeSnapshotAtomic");
+  assert.ok(start !== -1, "the snapshot write seam must exist");
+  const window = LEDGER_SOURCE.slice(
+    start,
+    LEDGER_SOURCE.indexOf("renameSync(temp, paths.snapshot)", start),
+  );
+  assert.match(
+    window,
+    /unlinkWriterResidue\(temp\);\s*\n\s*throw writeFault;/u,
+    "a failed snapshot write must remove its residue and still surface the original fault",
+  );
+  // The temp name is Lane H5's fault-injection hook and must not be changed.
+  assert.match(
+    window,
+    /\$\{paths\.snapshot\}\.tmp-\$\{process\.pid\}/u,
+    "the temp snapshot name must stay the one the persistence matrix injects against",
+  );
 });
