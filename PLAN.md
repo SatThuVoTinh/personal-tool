@@ -5174,6 +5174,63 @@ CI for the pushed record head `a9a6c1c`: run `38523610190` `quality-gate` **SUCC
 Security run `38523614667` `secret-scan` **SUCCESS**, `dependency-audit` red on the unchanged
 5-high baseline. CI cannot reach the live host, so it adds no deployment or Discord evidence.
 
+### Record — `M12/T2.1-R2` was destroyed by an overwrite, and its full text is NOT recoverable faithfully (2026-10-15)
+
+**What happened.** To create `M12/T2.1-R3` the agent replaced `docs/contracts/execution/ACTIVE.md` with a
+whole-file `Write` instead of making scoped `Edit`s. That file is git-ignored (`.gitignore` ignores it by name), and
+so is `.agents/states/*.md`, so **git held no copy of R2 and the overwrite removed its only on-disk instance.** The
+decision to rewrite was justified at planning time — R2's §7 had fallen out of agreement with its own §4A.15 and §5,
+and a fourth patch risked adding a twelfth defect — but the choice of mechanism was wrong, and it destroyed evidence
+about what the owner had been asked to approve.
+
+**The finding that predicted it, filed by an audit lane less than an hour earlier.** `R5-E14-07` states that because
+`ACTIVE.md` is ignored, "no diff and no CI can ever gate an edit to it", so "a silent rewrite of 'frozen'
+implementation details is undetectable". This event is that risk realized, caused by the actor who filed it, which is
+the strongest evidence available for owner decision **H10**.
+
+**Recovery was attempted twice and is NOT trustworthy.** The session transcript
+(`~/.qoder/projects/C--Users-HOANG-VINH-OneDrive-Documents-personal-tool/3e5839bd-6f7c-4e3f-b1f7-cf4e2f086a1f.jsonl`)
+contains the base `Read` plus every subsequent `Edit` call, so the agent replayed the edit chain programmatically. The
+transcript also contains **four** `ACTIVE.md` reads at partial offsets (`1615, 1694, 1716, 2099`) and **two** writes
+(`1223, 2388`), so no single read is a clean base: the first attempt (`542`-line base) reported 15 applied / 18
+unapplied edit steps and 88,781 bytes; selecting the last read before the last write yielded a 14-line fragment with 1
+applied / 3 unapplied. **Neither output is a byte-faithful R2.** A partially-reconstructed 88 KB contract was
+therefore **not** inserted into a tracked file, because a plausible-looking but unverified copy of an execution
+contract is more dangerous than the acknowledged gap it would fill.
+
+**What is durably preserved, and where.**
+- **The ten owner decisions (H1–H10) with their evidence columns** — rebuilt verbatim from the agent's own
+  working notes into `.agents/states/findings.md`, section *"Ledger of open owner decisions — H1–H10"*. This is now
+  their authoritative home, and `ACTIVE.md` §5.3 points there instead of claiming to hold them. Still **unanswered**.
+- **Every R2 item and its fate** — `ACTIVE.md` R3 §5.1 gives a disposition row for all twenty-six R2 items with the
+  tier it moved to and the reason; §5.2 does the same for the thirty new Vòng 5 findings.
+- **Every defect found in R2** — `.agents/states/findings.md`, Vòng 6 sections V01/V05/V06, including
+  `R6-V01-01`, `R6-V05-01/02/03/04`, `R6-V06-01` and the two arithmetic corrections the agent's own re-derivation
+  forced (`R5-E01-05` is 19 `from None` + 9 bare `except Exception:`, not 28 + 8; `R5-E12-01`'s replacement claim was
+  contradicted by `PLAN.md:223, :257, :270, :312, :369`).
+- **What the owner was actually asked and what he answered** — the A/B/C/D/E/F/G block and the `vậy A đi` + I1–I7-A
+  answers are quoted in §4 above and in the register.
+- **The non-authoritative recovery draft** lives outside the repository at
+  `%LOCALAPPDATA%\Temp\recovered-ACTIVE-R2.md`, labelled as unverified. It is not evidence and nothing may be
+  implemented from it.
+
+**What was lost and is genuinely gone:** R2's per-item prose for the eleven items that survived into no later tier
+unchanged — the byte-identical verdict-string pin lists for §4.2, the preserved-pin list for §4.4 (reconstructed
+shorter in R3 §4 T2.1-6), the reducer-precondition hard limits for §4.7, and the §4.9 document-item detail. When
+`M12/T2.2` is planned, those items must be **re-derived from source and re-verified**, not recalled from this record;
+that is the correct cost of the loss, not a regression.
+
+**Standing rule adopted from this event, so it does not recur:** before replacing an entire git-ignored file, either
+make scoped `Edit`s, or first copy the outgoing text somewhere durable and state in the record where it went. Put
+load-bearing content in a **tracked** file, because an ignored file is not a record. `docs/contracts/execution/archive/`
+was **not** created unilaterally — `M12/T2.1`'s §4.9 (P04-03) makes a written secret-scrub rule a prerequisite of any
+archive, and P04-03/H10 are owner decisions.
+
+Gate and commit state for this event: `npm run verify` was **NOT RUN** (no baseline taken, no edit made), no source,
+test, config or migration file was changed, and the only tracked modification is `PLAN.md`, committed as
+`9b9a230 chore(plan): split the remediation into three risk tiers and open the high tier`. This record is appended to
+that same tracked file.
+
 ## 9. Deferred beyond V1
 
 Unless separately approved:
