@@ -13,19 +13,43 @@
 
 /** Common standard-library and data-science imports to classify script purpose */
 const DATA_SCIENCE_MODULES = new Set([
-  "pandas", "numpy", "scipy", "sklearn", "matplotlib",
-  "seaborn", "plotly", "statsmodels", "xgboost", "lightgbm",
-  "tensorflow", "torch", "keras",
+  "pandas",
+  "numpy",
+  "scipy",
+  "sklearn",
+  "matplotlib",
+  "seaborn",
+  "plotly",
+  "statsmodels",
+  "xgboost",
+  "lightgbm",
+  "tensorflow",
+  "torch",
+  "keras",
 ]);
 
 const DB_MODULES = new Set([
-  "sqlalchemy", "psycopg2", "pymysql", "sqlite3", "duckdb",
-  "pyarrow", "fastparquet",
+  "sqlalchemy",
+  "psycopg2",
+  "pymysql",
+  "sqlite3",
+  "duckdb",
+  "pyarrow",
+  "fastparquet",
 ]);
 
 const FILE_IO_MODULES = new Set([
-  "csv", "json", "openpyxl", "xlrd", "xlwt", "xlsxwriter",
-  "pdfplumber", "pdfminer", "pypdf", "docx", "python-docx",
+  "csv",
+  "json",
+  "openpyxl",
+  "xlrd",
+  "xlwt",
+  "xlsxwriter",
+  "pdfplumber",
+  "pdfminer",
+  "pypdf",
+  "docx",
+  "python-docx",
 ]);
 
 // ---------------------------------------------------------------------------
@@ -60,7 +84,9 @@ export function validatePythonFileContent(content) {
 
   // Count definitions — functionCount includes all def declarations (sync + async)
   const functionCount = (content.match(/\bdef\s+[a-zA-Z_]/gm) || []).length;
-  const asyncFunctionCount = (content.match(/^\s*async\s+def\s+[a-zA-Z_]/gm) || []).length;
+  const asyncFunctionCount = (
+    content.match(/^\s*async\s+def\s+[a-zA-Z_]/gm) || []
+  ).length;
   const classCount = (content.match(/^\s*class\s+[a-zA-Z_]/gm) || []).length;
 
   // Collect import lines
@@ -130,8 +156,7 @@ export function formatPythonPreview(fileName, analysis) {
     `, ${analysis.classCount} class, ${analysis.importCount} import` +
     (tags.length > 0 ? `\n${tags.join(" · ")}` : "");
 
-  const codeBlock =
-    "```python\n" + analysis.firstLines.join("\n") + "\n```";
+  const codeBlock = "```python\n" + analysis.firstLines.join("\n") + "\n```";
 
   return `${header}\n${codeBlock}`;
 }

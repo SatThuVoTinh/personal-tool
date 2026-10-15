@@ -117,7 +117,13 @@ export class R2StorageAdapter {
    * @returns {Promise<object>}
    */
   async promoteToSilver({ task_id, run_id, artifact_id, version, data }) {
-    if (!task_id || !run_id || !artifact_id || version === undefined || data === undefined) {
+    if (
+      !task_id ||
+      !run_id ||
+      !artifact_id ||
+      version === undefined ||
+      data === undefined
+    ) {
       throw new R2AdapterError(
         "R2_INVALID_PARAMETERS",
         "Missing required parameters: task_id, run_id, artifact_id, version, data",
@@ -128,7 +134,11 @@ export class R2StorageAdapter {
     // value like "../../landing/orders" injects path syntax into the namespace,
     // and a non-positive or fractional version would create a Silver revision
     // that no monotonic promotion could ever have produced. Validate before use.
-    if (typeof version !== "number" || !Number.isSafeInteger(version) || version < 1) {
+    if (
+      typeof version !== "number" ||
+      !Number.isSafeInteger(version) ||
+      version < 1
+    ) {
       throw new R2AdapterError(
         "R2_INVALID_SILVER_VERSION",
         "Silver version must be a positive safe integer.",

@@ -1,4 +1,5 @@
-const WINDOWS_RESERVED_DEVICE_NAMES = /^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$/iu;
+const WINDOWS_RESERVED_DEVICE_NAMES =
+  /^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$/iu;
 const SAFE_SEGMENT_PATTERN = /^[a-zA-Z0-9_.-]+$/u;
 
 /**
@@ -19,6 +20,8 @@ export function validateArtifactLogicalPath(logicalPath) {
   }
 
   // 2. Reject NUL bytes and control characters
+  // The control range is the point of the pattern, not an accident of it.
+  // eslint-disable-next-line no-control-regex
   if (/[\0\x01-\x1F\x7F]/u.test(logicalPath)) {
     throw new Error("SCHEMA_VALIDATION_FAILED");
   }
@@ -41,11 +44,7 @@ export function validateArtifactLogicalPath(logicalPath) {
   }
 
   for (const segment of segments) {
-    if (
-      segment.length === 0 ||
-      segment === "." ||
-      segment === ".."
-    ) {
+    if (segment.length === 0 || segment === "." || segment === "..") {
       throw new Error("SCHEMA_VALIDATION_FAILED");
     }
 

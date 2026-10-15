@@ -223,7 +223,7 @@ export class SkillAdapter {
   }
 
   async querySkillStore(input = {}, context = {}) {
-    const { action, namespace, skill_id, version } = input;
+    const { action, namespace, skill_id } = input;
 
     if (!action || FORBIDDEN_ACTIONS.has(action)) {
       throw new SkillAdapterError(

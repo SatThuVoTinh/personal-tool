@@ -79,7 +79,10 @@ export class MotherDuckAdapter {
     }
 
     const executionMs = Date.now() - startTime;
-    const maxRows = Math.min(Number(input.max_rows) || 100, MOTHERDUCK_MAX_ROWS);
+    const maxRows = Math.min(
+      Number(input.max_rows) || 100,
+      MOTHERDUCK_MAX_ROWS,
+    );
 
     // Bounded mock Gold result
     const columns = ["metric_id", "metric_name", "gold_value", "updated_at"];

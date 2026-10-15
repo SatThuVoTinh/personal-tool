@@ -61,7 +61,10 @@ export class KaggleComputeAdapter {
     }
 
     const jobId = `kg-${crypto.randomBytes(6).toString("hex")}`;
-    const artifactDigest = crypto.createHash("sha256").update(jobId).digest("hex");
+    const artifactDigest = crypto
+      .createHash("sha256")
+      .update(jobId)
+      .digest("hex");
 
     return Object.freeze({
       provider: "kaggle",

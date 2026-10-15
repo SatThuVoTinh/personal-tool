@@ -259,7 +259,8 @@ export class KnowledgeAdapter {
 
           // M17: Task lineage headers
           if (context.taskId) reqHeaders["X-Task-Id"] = String(context.taskId);
-          if (context.agentId) reqHeaders["X-Agent-Id"] = String(context.agentId);
+          if (context.agentId)
+            reqHeaders["X-Agent-Id"] = String(context.agentId);
           if (context.attemptToken)
             reqHeaders["X-Attempt-Token"] = String(context.attemptToken);
 
@@ -298,7 +299,12 @@ export class KnowledgeAdapter {
             req.on("error", (err) => reject(err));
             req.on("timeout", () => {
               req.destroy();
-              reject(new KnowledgeAdapterError("Knowledge request timeout", "KNOWLEDGE_SERVICE_TIMEOUT"));
+              reject(
+                new KnowledgeAdapterError(
+                  "Knowledge request timeout",
+                  "KNOWLEDGE_SERVICE_TIMEOUT",
+                ),
+              );
             });
             if (isPost) {
               req.write(requestPayload);
@@ -352,7 +358,10 @@ export class KnowledgeAdapter {
             // 196,608 UTF-8 bytes, so 3x the declared ceiling was forwarded to
             // the caller untouched. This is the FOURTH defect of the
             // byte-vs-character class in this codebase.
-            const boundedText = truncateUtf8Bytes(rawText, MAX_RESULT_TEXT_BYTES);
+            const boundedText = truncateUtf8Bytes(
+              rawText,
+              MAX_RESULT_TEXT_BYTES,
+            );
 
             const headingPath = Array.isArray(r.heading_path)
               ? r.heading_path.filter((h) => typeof h === "string")
@@ -387,7 +396,8 @@ export class KnowledgeAdapter {
               parsed.semantic_contract_version || "zink-semantic-v2",
             results: formattedResults,
             total_count: formattedResults.length,
-            governed_status: formattedResults.length === 0 ? "NO_MATCH" : "SUCCESS",
+            governed_status:
+              formattedResults.length === 0 ? "NO_MATCH" : "SUCCESS",
           };
         }
 

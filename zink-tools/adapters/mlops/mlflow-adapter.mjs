@@ -63,7 +63,10 @@ export class MLflowLocalAdapter {
   async logParameters(runId, params) {
     const run = this.runs.get(runId);
     if (!run) {
-      throw new MLflowAdapterError("MLFLOW_RUN_NOT_FOUND", `Run '${runId}' not found.`);
+      throw new MLflowAdapterError(
+        "MLFLOW_RUN_NOT_FOUND",
+        `Run '${runId}' not found.`,
+      );
     }
     Object.assign(run.params, params);
     return Object.freeze({ run_id: runId, params: { ...run.params } });
@@ -75,7 +78,10 @@ export class MLflowLocalAdapter {
   async logMetrics(runId, metrics, step = 0) {
     const run = this.runs.get(runId);
     if (!run) {
-      throw new MLflowAdapterError("MLFLOW_RUN_NOT_FOUND", `Run '${runId}' not found.`);
+      throw new MLflowAdapterError(
+        "MLFLOW_RUN_NOT_FOUND",
+        `Run '${runId}' not found.`,
+      );
     }
     for (const [k, v] of Object.entries(metrics)) {
       if (!run.metrics[k]) run.metrics[k] = [];
@@ -90,7 +96,10 @@ export class MLflowLocalAdapter {
   async logArtifact(runId, { artifact_name, artifact_path, checksum }) {
     const run = this.runs.get(runId);
     if (!run) {
-      throw new MLflowAdapterError("MLFLOW_RUN_NOT_FOUND", `Run '${runId}' not found.`);
+      throw new MLflowAdapterError(
+        "MLFLOW_RUN_NOT_FOUND",
+        `Run '${runId}' not found.`,
+      );
     }
     const artifactRecord = {
       artifact_name,
@@ -108,7 +117,10 @@ export class MLflowLocalAdapter {
   async endRun(runId, status = "FINISHED") {
     const run = this.runs.get(runId);
     if (!run) {
-      throw new MLflowAdapterError("MLFLOW_RUN_NOT_FOUND", `Run '${runId}' not found.`);
+      throw new MLflowAdapterError(
+        "MLFLOW_RUN_NOT_FOUND",
+        `Run '${runId}' not found.`,
+      );
     }
     run.status = status;
     run.end_time = new Date().toISOString();
@@ -121,7 +133,10 @@ export class MLflowLocalAdapter {
   async getRun(runId) {
     const run = this.runs.get(runId);
     if (!run) {
-      throw new MLflowAdapterError("MLFLOW_RUN_NOT_FOUND", `Run '${runId}' not found.`);
+      throw new MLflowAdapterError(
+        "MLFLOW_RUN_NOT_FOUND",
+        `Run '${runId}' not found.`,
+      );
     }
     return Object.freeze(JSON.parse(JSON.stringify(run)));
   }

@@ -37,7 +37,10 @@ export class HuggingFaceAdapter {
    * @param {object} [options={}]
    * @returns {Promise<object>}
    */
-  async evaluateCandidateModel({ repo_id, revision = "main", evaluation_dataset }, options = {}) {
+  async evaluateCandidateModel(
+    { repo_id, revision = "main", evaluation_dataset },
+    options = {},
+  ) {
     if (!repo_id) {
       throw new HuggingFaceAdapterError(
         "HUGGINGFACE_INVALID_REPO",
@@ -58,7 +61,10 @@ export class HuggingFaceAdapter {
       );
     }
 
-    const checksum = crypto.createHash("sha256").update(`${repo_id}@${revision}`).digest("hex");
+    const checksum = crypto
+      .createHash("sha256")
+      .update(`${repo_id}@${revision}`)
+      .digest("hex");
 
     return Object.freeze({
       provider: "huggingface",

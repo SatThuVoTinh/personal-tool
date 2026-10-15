@@ -1,4 +1,3 @@
-import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { TOOL_POLICY } from "../../integrations/openclaw/lib/policy.mjs";
 import { validateSqlQuery } from "./validator.mjs";

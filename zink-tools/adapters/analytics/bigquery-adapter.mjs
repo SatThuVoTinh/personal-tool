@@ -59,9 +59,7 @@ export class BigQueryAdapter {
 
     // 2. Reject mutation keywords for read-only safety
     const upper = input.query.toUpperCase();
-    if (
-      /\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE)\b/.test(upper)
-    ) {
+    if (/\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE)\b/.test(upper)) {
       throw new BigQueryAdapterError(
         "BIGQUERY_MUTATION_NOT_PERMITTED",
         "Mutations are not permitted on BigQuery read interface.",
@@ -78,7 +76,12 @@ export class BigQueryAdapter {
     const executionMs = Date.now() - startTime;
     const maxRows = Math.min(Number(input.max_rows) || 100, BIGQUERY_MAX_ROWS);
 
-    const columns = ["dataset_name", "partition_date", "total_records", "processed_bytes"];
+    const columns = [
+      "dataset_name",
+      "partition_date",
+      "total_records",
+      "processed_bytes",
+    ];
     const rows = [
       ["cloud_analytics_lake", "2026-09-14", 1250000, 48920100],
     ].slice(0, maxRows);

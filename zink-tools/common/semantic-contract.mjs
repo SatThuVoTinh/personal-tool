@@ -11,10 +11,10 @@ export const CANONICAL_DOMAINS = Object.freeze([
   "data",
   "engineering",
   "governance",
-  "lscm",          // supply-chain / logistics / LSCM
-  "analytics",     // BI / reporting / KPI
-  "optimization",  // OR / forecasting / simulation
-  "research",      // KB ingestion / literature
+  "lscm", // supply-chain / logistics / LSCM
+  "analytics", // BI / reporting / KPI
+  "optimization", // OR / forecasting / simulation
+  "research", // KB ingestion / literature
   "general",
 ]);
 
@@ -26,30 +26,30 @@ export const NAMESPACE_ALIAS_MAP = Object.freeze({
   "supply-chain": "lscm",
   "sc/logistics": "lscm",
   "sc-logistics": "lscm",
-  "logistics": "lscm",
-  "lsc": "lscm",
-  "supply_chain": "lscm",
+  logistics: "lscm",
+  lsc: "lscm",
+  supply_chain: "lscm",
   // analytics / BI family
-  "bi": "power-bi",
-  "powerbi": "power-bi",
-  "power_bi": "power-bi",
+  bi: "power-bi",
+  powerbi: "power-bi",
+  power_bi: "power-bi",
   "business-intelligence": "power-bi",
   // OR / optimization family
-  "or": "optimization",
+  or: "optimization",
   "operations-research": "optimization",
-  "simulation": "optimization",
-  "forecasting": "optimization",
+  simulation: "optimization",
+  forecasting: "optimization",
   // python / scripting aliases
-  "scripting": "python",
+  scripting: "python",
   "data-engineering": "python",
   // research / KB aliases
-  "kb": "knowledge",
+  kb: "knowledge",
   "knowledge-base": "knowledge",
-  "research": "knowledge",
-  "literature": "knowledge",
+  research: "knowledge",
+  literature: "knowledge",
   // sql aliases
-  "database": "sql",
-  "relational": "sql",
+  database: "sql",
+  relational: "sql",
 });
 
 // ─── Taxonomy map (B02/B03/B21) ───────────────────────────────────────────────
@@ -171,7 +171,8 @@ function resolveNamespace(raw) {
   if (!ns) return { resolved: null, ambiguous: true };
   if (KNOWN_TAXONOMY_MAP[ns]) return { resolved: ns, ambiguous: false };
   const aliased = NAMESPACE_ALIAS_MAP[ns];
-  if (aliased && KNOWN_TAXONOMY_MAP[aliased]) return { resolved: aliased, ambiguous: false };
+  if (aliased && KNOWN_TAXONOMY_MAP[aliased])
+    return { resolved: aliased, ambiguous: false };
   if (CANONICAL_DOMAINS.includes(ns)) return { resolved: ns, ambiguous: false };
   return { resolved: null, ambiguous: true };
 }
@@ -232,7 +233,7 @@ export function deriveSemanticMetadata(input = {}) {
   const rawCapability = input.capability?.toLowerCase() ?? "";
   if (rawCapability && !validateCapabilitySlug(rawCapability)) {
     throw new Error(
-      `INVALID_CAPABILITY_SLUG: "${rawCapability}" must be kebab-case [a-z0-9-]`
+      `INVALID_CAPABILITY_SLUG: "${rawCapability}" must be kebab-case [a-z0-9-]`,
     );
   }
 
@@ -315,7 +316,7 @@ export function renderEmbeddingEnvelope(params = {}) {
   // B12: enforce max byte bound
   if (byteLength(rendered) > MAX_EMBEDDING_INPUT_BYTES) {
     throw new Error(
-      `EMBEDDING_INPUT_TOO_LARGE: rendered envelope exceeds ${MAX_EMBEDDING_INPUT_BYTES} bytes`
+      `EMBEDDING_INPUT_TOO_LARGE: rendered envelope exceeds ${MAX_EMBEDDING_INPUT_BYTES} bytes`,
     );
   }
 
@@ -364,7 +365,10 @@ export function prepareQueryEmbedding(params = {}) {
     metadataFilters.subtopic = params.subtopic.trim().toLowerCase();
   }
   // B14: forward secondary_topics filter (was accepted but not forwarded)
-  if (Array.isArray(params.secondary_topics) && params.secondary_topics.length > 0) {
+  if (
+    Array.isArray(params.secondary_topics) &&
+    params.secondary_topics.length > 0
+  ) {
     metadataFilters.secondary_topics = params.secondary_topics
       .filter((t) => typeof t === "string" && t.trim())
       .map((t) => t.trim().toLowerCase());
@@ -382,14 +386,16 @@ export function prepareQueryEmbedding(params = {}) {
     const { resolved, ambiguous } = resolveNamespace(rawNs);
     if (ambiguous || resolved === null) {
       throw new Error(
-        `UNKNOWN_NAMESPACE_FILTER: "${rawNs}" is not a canonical namespace or known alias`
+        `UNKNOWN_NAMESPACE_FILTER: "${rawNs}" is not a canonical namespace or known alias`,
       );
     }
     metadataFilters.namespace = resolved;
   }
   // B16: validate primary_topic against known taxonomy values (internal check only)
   if (metadataFilters.primary_topic) {
-    const knownTopics = Object.values(KNOWN_TAXONOMY_MAP).map((t) => t.primary_topic);
+    const knownTopics = Object.values(KNOWN_TAXONOMY_MAP).map(
+      (t) => t.primary_topic,
+    );
     // Non-fatal: validation noted but not exposed in public output
     void knownTopics.includes(metadataFilters.primary_topic);
   }
@@ -421,7 +427,7 @@ export const REFERENCE_TOPIC_CODES = Object.freeze({
   "01": Object.freeze({
     code: "01",
     name: "Supply Chain & Logistics",
-    domain: "lscm",   // B21 fix: was "office"
+    domain: "lscm", // B21 fix: was "office"
     key: "LSCM",
   }),
   "02": Object.freeze({
@@ -445,7 +451,7 @@ export const REFERENCE_TOPIC_CODES = Object.freeze({
   "05": Object.freeze({
     code: "05",
     name: "Business Intelligence & Reporting",
-    domain: "analytics",  // was "data"
+    domain: "analytics", // was "data"
     key: "POWER_BI",
   }),
   "06": Object.freeze({
@@ -474,7 +480,8 @@ export const REFERENCE_EXECUTION_CODES = Object.freeze({
     code: "01",
     type: "Automated Pipeline / ETL",
     isHuman: false,
-    description: "Dòng chảy xử lý dữ liệu và trích xuất tự động (O1: SQL/Python)",
+    description:
+      "Dòng chảy xử lý dữ liệu và trích xuất tự động (O1: SQL/Python)",
   }),
   "02": Object.freeze({
     code: "02",
@@ -486,7 +493,8 @@ export const REFERENCE_EXECUTION_CODES = Object.freeze({
     code: "03",
     type: "Tool Direct Execution / Artifact Generation",
     isHuman: false,
-    description: "Thực thi công cụ trực tiếp sinh artifact/báo cáo (Excel/Python)",
+    description:
+      "Thực thi công cụ trực tiếp sinh artifact/báo cáo (Excel/Python)",
   }),
   "04": Object.freeze({
     code: "04",
@@ -510,9 +518,9 @@ export const REFERENCE_EXECUTION_CODES = Object.freeze({
  * B20: reject taskNumber=0 (contract says 1-9999).
  */
 export function formatStructuredReferenceId({
-  topicCode,    // 0-99
+  topicCode, // 0-99
   executionCode, // 0-99 (00 = human-contributed)
-  taskNumber,    // 1-9999
+  taskNumber, // 1-9999
 }) {
   const t = String(topicCode).padStart(2, "0");
   const e = String(executionCode).padStart(2, "0");
@@ -520,22 +528,28 @@ export function formatStructuredReferenceId({
   // B20: taskNumber must be 1-9999
   const tn = Number(taskNumber);
   if (!Number.isInteger(tn) || tn < 1 || tn > 9999) {
-    throw new Error("INVALID_TASK_NUMBER: taskNumber must be an integer in 1-9999");
+    throw new Error(
+      "INVALID_TASK_NUMBER: taskNumber must be an integer in 1-9999",
+    );
   }
   const k = String(tn).padStart(4, "0");
 
   if (!/^\d{2}$/.test(t) || !/^\d{2}$/.test(e) || !/^\d{4}$/.test(k)) {
     throw new Error(
-      "INVALID_REFERENCE_ID_COMPONENTS: Expected 2-digit topic, 2-digit execution, 4-digit task"
+      "INVALID_REFERENCE_ID_COMPONENTS: Expected 2-digit topic, 2-digit execution, 4-digit task",
     );
   }
 
   // B17: validate codes are registered
   if (!REFERENCE_TOPIC_CODES[t]) {
-    throw new Error(`UNREGISTERED_TOPIC_CODE: "${t}" is not in REFERENCE_TOPIC_CODES`);
+    throw new Error(
+      `UNREGISTERED_TOPIC_CODE: "${t}" is not in REFERENCE_TOPIC_CODES`,
+    );
   }
   if (!REFERENCE_EXECUTION_CODES[e]) {
-    throw new Error(`UNREGISTERED_EXECUTION_CODE: "${e}" is not in REFERENCE_EXECUTION_CODES`);
+    throw new Error(
+      `UNREGISTERED_EXECUTION_CODE: "${e}" is not in REFERENCE_EXECUTION_CODES`,
+    );
   }
 
   return `${t}-${e}-${k}`;
@@ -584,13 +598,13 @@ export function resolveReferenceIdMeaning(id) {
   const topic = REFERENCE_TOPIC_CODES[parsed.topicCode];
   if (!topic) {
     throw new Error(
-      `INVALID_REFERENCE_ID: topic code "${parsed.topicCode}" is not registered`
+      `INVALID_REFERENCE_ID: topic code "${parsed.topicCode}" is not registered`,
     );
   }
   const execution = REFERENCE_EXECUTION_CODES[parsed.executionCode];
   if (!execution) {
     throw new Error(
-      `INVALID_REFERENCE_ID: execution code "${parsed.executionCode}" is not registered`
+      `INVALID_REFERENCE_ID: execution code "${parsed.executionCode}" is not registered`,
     );
   }
 
@@ -618,13 +632,22 @@ export function resolveReferenceIdMeaning(id) {
  */
 export function deduplicateRetrievalContext(items = []) {
   if (!Array.isArray(items)) {
-    return { canonicalFacts: [], procedures: [], toolReferences: [], totalCount: 0, provenance_conflicts: [] };
+    return {
+      canonicalFacts: [],
+      procedures: [],
+      toolReferences: [],
+      totalCount: 0,
+      provenance_conflicts: [],
+    };
   }
 
   // B27: classify FIRST, then dedup within type classes
   const classified = items
     .filter((item) => item && typeof item === "object")
-    .map((item) => ({ item, typeClass: item.type || item.source_type || "fact" }));
+    .map((item) => ({
+      item,
+      typeClass: item.type || item.source_type || "fact",
+    }));
 
   // B28: stable dedup key — content_hash > passage_id > full-text SHA-256
   const getKey = (item) => {
@@ -650,7 +673,12 @@ export function deduplicateRetrievalContext(items = []) {
       const first = seenKeys.get(key);
       const diffs = detectProvenanceConflict(first, item);
       if (diffs) {
-        provenance_conflicts.push({ key, first, duplicate: item, conflict: diffs });
+        provenance_conflicts.push({
+          key,
+          first,
+          duplicate: item,
+          conflict: diffs,
+        });
       }
       continue;
     }
@@ -678,14 +706,22 @@ export function deduplicateRetrievalContext(items = []) {
     canonicalFacts,
     procedures,
     toolReferences,
-    totalCount: canonicalFacts.length + procedures.length + toolReferences.length,
+    totalCount:
+      canonicalFacts.length + procedures.length + toolReferences.length,
     provenance_conflicts,
   };
 }
 
 // B30: internal provenance conflict detector
 function detectProvenanceConflict(a, b) {
-  const fields = ["namespace", "domain", "primary_topic", "source", "version", "updated_at"];
+  const fields = [
+    "namespace",
+    "domain",
+    "primary_topic",
+    "source",
+    "version",
+    "updated_at",
+  ];
   const diffs = [];
   for (const f of fields) {
     if ((a[f] !== undefined || b[f] !== undefined) && a[f] !== b[f]) {
@@ -708,6 +744,8 @@ export const RETRIEVAL_MIN_RELEVANCE = 0.3;
 export function filterByMinRelevance(items = []) {
   if (!Array.isArray(items)) return [];
   return items.filter(
-    (item) => (item?.score ?? item?.relevance ?? item?.confidence ?? 1) >= RETRIEVAL_MIN_RELEVANCE
+    (item) =>
+      (item?.score ?? item?.relevance ?? item?.confidence ?? 1) >=
+      RETRIEVAL_MIN_RELEVANCE,
   );
 }

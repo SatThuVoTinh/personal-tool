@@ -1,15 +1,51 @@
 const MUTATION_KEYWORDS = new Set([
-  "INSERT", "UPDATE", "DELETE", "MERGE", "DROP", "ALTER",
-  "CREATE", "TRUNCATE", "REPLACE", "GRANT", "REVOKE"
+  "INSERT",
+  "UPDATE",
+  "DELETE",
+  "MERGE",
+  "DROP",
+  "ALTER",
+  "CREATE",
+  "TRUNCATE",
+  "REPLACE",
+  "GRANT",
+  "REVOKE",
 ]);
 
 const FORBIDDEN_KEYWORDS = new Set([
-  "JOIN", "INNER", "OUTER", "LEFT", "RIGHT", "CROSS", "NATURAL",
-  "UNION", "INTERSECT", "EXCEPT", "CTE", "WITH",
-  "GROUP", "HAVING", "WINDOW", "OVER",
-  "EXPLAIN", "NOT", "IN", "BETWEEN", "LIKE", "ILIKE", "SIMILAR",
-  "CASE", "WHEN", "THEN", "ELSE", "END",
-  "INTO", "FOR", "LOCK", "SET", "VALUES"
+  "JOIN",
+  "INNER",
+  "OUTER",
+  "LEFT",
+  "RIGHT",
+  "CROSS",
+  "NATURAL",
+  "UNION",
+  "INTERSECT",
+  "EXCEPT",
+  "CTE",
+  "WITH",
+  "GROUP",
+  "HAVING",
+  "WINDOW",
+  "OVER",
+  "EXPLAIN",
+  "NOT",
+  "IN",
+  "BETWEEN",
+  "LIKE",
+  "ILIKE",
+  "SIMILAR",
+  "CASE",
+  "WHEN",
+  "THEN",
+  "ELSE",
+  "END",
+  "INTO",
+  "FOR",
+  "LOCK",
+  "SET",
+  "VALUES",
 ]);
 
 /**
@@ -148,7 +184,10 @@ function tokenizeSql(sql) {
         paramName += sql[i];
         i++;
       }
-      if (paramName.length === 0 || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(paramName)) {
+      if (
+        paramName.length === 0 ||
+        !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(paramName)
+      ) {
         throw new Error("SQL_UNSUPPORTED_SYNTAX");
       }
       tokens.push({ type: "PARAM", value: paramName });
@@ -191,11 +230,7 @@ function tokenizeSql(sql) {
     }
 
     // Signed or unsigned numeric literals
-    if (
-      ch === "+" ||
-      ch === "-" ||
-      /\d/u.test(ch)
-    ) {
+    if (ch === "+" || ch === "-" || /\d/u.test(ch)) {
       // Check if +/- is followed by a digit
       if ((ch === "+" || ch === "-") && !/\d/u.test(sql[i + 1] || "")) {
         throw new Error("SQL_UNSUPPORTED_SYNTAX");
@@ -239,8 +274,20 @@ function tokenizeSql(sql) {
         tokens.push({ type: "NULL", value: null });
       } else if (
         [
-          "SELECT", "FROM", "WHERE", "ORDER", "BY", "LIMIT", "OFFSET",
-          "ASC", "DESC", "AND", "OR", "IS", "NOT", "AS"
+          "SELECT",
+          "FROM",
+          "WHERE",
+          "ORDER",
+          "BY",
+          "LIMIT",
+          "OFFSET",
+          "ASC",
+          "DESC",
+          "AND",
+          "OR",
+          "IS",
+          "NOT",
+          "AS",
         ].includes(upper)
       ) {
         tokens.push({ type: "KEYWORD", value: upper, raw: word });
@@ -250,7 +297,10 @@ function tokenizeSql(sql) {
         // Valid identifier
         if (dotCount === 1) {
           const parts = word.split(".");
-          if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(parts[0]) || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(parts[1])) {
+          if (
+            !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(parts[0]) ||
+            !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(parts[1])
+          ) {
             throw new Error("SQL_UNSUPPORTED_SYNTAX");
           }
         } else {
@@ -301,7 +351,11 @@ function parseAndValidateSelect(tokens, parameters) {
       if (!tok) break;
       if (tok.type === "KEYWORD" && tok.value === "FROM") break;
 
-      if (tok.type === "FORBIDDEN_KEYWORD" || tok.type === "LPAREN" || tok.type === "RPAREN") {
+      if (
+        tok.type === "FORBIDDEN_KEYWORD" ||
+        tok.type === "LPAREN" ||
+        tok.type === "RPAREN"
+      ) {
         throw new Error("SQL_UNSUPPORTED_SYNTAX");
       }
 
@@ -372,7 +426,14 @@ function parseAndValidateSelect(tokens, parameters) {
   // 4. Optional WHERE clause
   if (peek()?.type === "KEYWORD" && peek()?.value === "WHERE") {
     next(); // consume WHERE
-    parseWhereClause(tokens, () => idx, (newIdx) => { idx = newIdx; }, placeholdersFound);
+    parseWhereClause(
+      tokens,
+      () => idx,
+      (newIdx) => {
+        idx = newIdx;
+      },
+      placeholdersFound,
+    );
   }
 
   // 5. Optional ORDER BY clause
@@ -382,7 +443,13 @@ function parseAndValidateSelect(tokens, parameters) {
     if (!byTok || byTok.type !== "KEYWORD" || byTok.value !== "BY") {
       throw new Error("SQL_UNSUPPORTED_SYNTAX");
     }
-    parseOrderByClause(tokens, () => idx, (newIdx) => { idx = newIdx; });
+    parseOrderByClause(
+      tokens,
+      () => idx,
+      (newIdx) => {
+        idx = newIdx;
+      },
+    );
   }
 
   // 6. Optional LIMIT clause
@@ -393,7 +460,10 @@ function parseAndValidateSelect(tokens, parameters) {
       throw new Error("SQL_UNSUPPORTED_SYNTAX");
     }
     if (lim.type === "PARAM") placeholdersFound.push(lim.value);
-    if (lim.type === "NUMBER" && (!/^\d+$/u.test(lim.value) || Number(lim.value) < 1)) {
+    if (
+      lim.type === "NUMBER" &&
+      (!/^\d+$/u.test(lim.value) || Number(lim.value) < 1)
+    ) {
       throw new Error("SQL_UNSUPPORTED_SYNTAX");
     }
   }
@@ -406,7 +476,10 @@ function parseAndValidateSelect(tokens, parameters) {
       throw new Error("SQL_UNSUPPORTED_SYNTAX");
     }
     if (off.type === "PARAM") placeholdersFound.push(off.value);
-    if (off.type === "NUMBER" && (!/^\d+$/u.test(off.value) || Number(off.value) < 0)) {
+    if (
+      off.type === "NUMBER" &&
+      (!/^\d+$/u.test(off.value) || Number(off.value) < 0)
+    ) {
       throw new Error("SQL_UNSUPPORTED_SYNTAX");
     }
   }
@@ -427,7 +500,11 @@ function parseWhereClause(tokens, getIdx, setIdx, placeholdersFound) {
     const tok = tokens[idx++];
     if (!tok) throw new Error("SQL_UNSUPPORTED_SYNTAX");
 
-    if (tok.type === "LPAREN" || tok.type === "RPAREN" || tok.type === "FORBIDDEN_KEYWORD") {
+    if (
+      tok.type === "LPAREN" ||
+      tok.type === "RPAREN" ||
+      tok.type === "FORBIDDEN_KEYWORD"
+    ) {
       throw new Error("SQL_UNSUPPORTED_SYNTAX");
     }
     if (
@@ -447,7 +524,9 @@ function parseWhereClause(tokens, getIdx, setIdx, placeholdersFound) {
   }
 
   function parseCondition() {
-    const left = parseExpressionItem();
+    // Each parse* call advances `idx` and throws on unsupported syntax; the
+    // returned node is not needed because this validator only rejects or accepts.
+    parseExpressionItem();
     const nextTok = tokens[idx];
     if (!nextTok) throw new Error("SQL_UNSUPPORTED_SYNTAX");
 
@@ -470,7 +549,7 @@ function parseWhereClause(tokens, getIdx, setIdx, placeholdersFound) {
 
     if (nextTok.type === "OP") {
       idx++; // consume operator
-      const right = parseExpressionItem();
+      parseExpressionItem();
       return;
     }
 
@@ -500,7 +579,10 @@ function parseOrderByClause(tokens, getIdx, setIdx) {
     if (!col || col.type !== "IDENTIFIER") {
       throw new Error("SQL_UNSUPPORTED_SYNTAX");
     }
-    if (tokens[idx]?.type === "KEYWORD" && (tokens[idx]?.value === "ASC" || tokens[idx]?.value === "DESC")) {
+    if (
+      tokens[idx]?.type === "KEYWORD" &&
+      (tokens[idx]?.value === "ASC" || tokens[idx]?.value === "DESC")
+    ) {
       idx++;
     }
     if (tokens[idx]?.type === "COMMA") {
@@ -544,8 +626,17 @@ function validateParameterBinding(placeholders, parameters) {
 // ---------------------------------------------------------------------------
 
 const FILE_MUTATION_KEYWORDS = new Set([
-  "INSERT", "UPDATE", "DELETE", "MERGE", "DROP", "ALTER",
-  "CREATE", "TRUNCATE", "REPLACE", "GRANT", "REVOKE",
+  "INSERT",
+  "UPDATE",
+  "DELETE",
+  "MERGE",
+  "DROP",
+  "ALTER",
+  "CREATE",
+  "TRUNCATE",
+  "REPLACE",
+  "GRANT",
+  "REVOKE",
 ]);
 
 /**

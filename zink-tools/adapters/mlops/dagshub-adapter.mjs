@@ -36,7 +36,10 @@ export class DagsHubAdapter {
    * @param {object} [options={}]
    * @returns {Promise<object>}
    */
-  async syncSelectedRuns({ repo_owner, repo_name, selected_run_ids }, options = {}) {
+  async syncSelectedRuns(
+    { repo_owner, repo_name, selected_run_ids },
+    options = {},
+  ) {
     if (!repo_owner || !repo_name) {
       throw new DagsHubAdapterError(
         "DAGSHUB_INVALID_REPOSITORY",

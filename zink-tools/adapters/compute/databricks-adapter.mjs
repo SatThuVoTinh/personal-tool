@@ -61,7 +61,10 @@ export class DatabricksComputeAdapter {
     }
 
     const runId = `dbr-run-${crypto.randomBytes(6).toString("hex")}`;
-    const artifactDigest = crypto.createHash("sha256").update(runId).digest("hex");
+    const artifactDigest = crypto
+      .createHash("sha256")
+      .update(runId)
+      .digest("hex");
 
     return Object.freeze({
       provider: "databricks",
