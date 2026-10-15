@@ -598,8 +598,15 @@ export const AGENT_IDS = Object.freeze([
 
 export const AGENT_DEFINITIONS = Object.freeze([
   Object.freeze({ id: "main", name: "Main" }),
-  Object.freeze({ id: "o1", name: "ETL Coordinator" }),
-  Object.freeze({ id: "o2", name: "Analytics Coordinator" }),
+  // Display names for the two coordinators. They used to be "ETL Coordinator"
+  // and "Analytics Coordinator" — retired L&SC Data Plant branding that
+  // `AGENTS.md` §9 forbids for a runtime role, and it also contradicted
+  // `docs/architecture/five-stack.md`, where O2 coordinates the data stack and
+  // O1 coordinates the semantic/intelligence stacks. The names are stack-neutral
+  // now so they cannot pre-judge that routing decision; the ingress aliases
+  // ("điều phối 1/2") already used this vocabulary.
+  Object.freeze({ id: "o1", name: "Coordinator O1" }),
+  Object.freeze({ id: "o2", name: "Coordinator O2" }),
   Object.freeze({ id: "excel", name: "Excel" }),
   Object.freeze({ id: "power-bi", name: "Power BI" }),
   Object.freeze({ id: "sql", name: "SQL" }),

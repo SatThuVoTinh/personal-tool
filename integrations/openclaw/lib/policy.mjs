@@ -566,9 +566,11 @@ export const AGENT_SPAWN_POLICY = Object.freeze({
 // deployed configuration. Each pattern matches an explicit mention trigger
 // (raw @handle, <@id> snowflake, or alias text) with the M8/T1 punctuation
 // lookahead. Two surgical updates vs the transcribed values (R4 PATCH-E):
-// o1 "knowledge" -> "etl" and o2 "orchestrator" -> "analytics", matching the
-// canonical AGENT_DEFINITIONS display names ("ETL Coordinator",
-// "Analytics Coordinator").
+// o1 "knowledge" -> "etl" and o2 "orchestrator" -> "analytics", which were the
+// retired Data Plant display names those aliases once matched. `AGENT_DEFINITIONS`
+// now carries stack-neutral coordinator names; these grammar patterns stay
+// unchanged because they are transcribed from the deployed mention grammar and
+// resolve through `AGENT_ALIASES`, not through the display names.
 //
 // The patterns are DERIVED from the canonical AGENT_ALIASES table in
 // authority.mjs, which is the ingress-resolution source of truth. They used to

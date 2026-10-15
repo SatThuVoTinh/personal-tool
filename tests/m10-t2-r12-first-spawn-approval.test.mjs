@@ -404,10 +404,14 @@ test("R12 case 6: first-approval card content contract", () => {
   // M12/T1-R1 replaced "name the run and the child" with the owner's own shape: the
   // plan in `Lý do` (naming the software) and the expected result in `Kết quả`, and
   // nothing that identifies plumbing.
+  // M12/T2.1 re-pin: the coordinator label is now the stack-neutral
+  // "Điều phối 1 (O1)"; the retired "Điều phối ETL" wording is recorded in
+  // `discord-formatter.mjs` itself. The claim this pins is unchanged — the card
+  // shows a Vietnamese coordinator label, not a raw agent id.
   assert.ok(
     card.bodyContent.includes("Kết quả") &&
       card.bodyContent.includes("Lý do") &&
-      card.bodyContent.includes("Điều phối ETL (O1)"),
+      card.bodyContent.includes("Điều phối 1 (O1)"),
     `card must present the plan and the expected result, got:\n${card.bodyContent}`,
   );
   for (const forbidden of [

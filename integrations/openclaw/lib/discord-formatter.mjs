@@ -613,8 +613,14 @@ export function formatOfficeFinalNotification({
  */
 export const SPECIALIST_SOFTWARE_LABELS = Object.freeze({
   main: "Quản Lý (Main)",
-  o1: "Điều phối ETL (O1)",
-  o2: "Điều phối Analytics (O2)",
+  // Stack-neutral: the old "Điều phối ETL"/"Điều phối Analytics" wording was
+  // retired L&SC Data Plant branding (`AGENTS.md` §9) and it pre-judged a
+  // coordinator/stack assignment that `docs/architecture/five-stack.md` and
+  // `AGENT_STACK_POLICY` still disagree about. These labels are the owner-facing
+  // half of the `AGENT_DEFINITIONS` rename, so they follow the same vocabulary
+  // the ingress aliases ("điều phối 1/2") already use.
+  o1: "Điều phối 1 (O1)",
+  o2: "Điều phối 2 (O2)",
   excel: "Microsoft Excel",
   sql: "SQL Server",
   python: "Python",
