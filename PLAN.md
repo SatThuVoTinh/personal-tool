@@ -5800,6 +5800,42 @@ reachable data-loss path.
 
 Gate state for this record: `NOT RUN` — no repository source file changed, only `PLAN.md` and the register.
 
+### Record — `M12/T2.2-R1` `A-4` landed: applied migrations are now digest-pinned (2026-10-15)
+
+`A-4` (`R6-V10-01`, Medium) closes the silent-no-op window: `database.py:1718-1733` records adoption by **filename
+only**, so editing an already-applied `00x.sql` changes nothing on any database that took it, and no gate could see
+the edit.
+
+- `docs/contracts/knowledgebase-migration-digests.json` — SHA-256 of each applied migration's bytes
+  (`001_initial.sql` `7d66ee6e…`, `002_pdf_ingestion_foundation.sql` `3b48c4a2…`, `003_skills_vector_schema.sql`
+  `8706a553…`), plus a purpose line that states the rule and, after my review, states the one thing it originally
+  omitted: an **unlisted** file is a forward migration and stays green on purpose, and when such a file is released
+  and starts being adopted it must be appended here, because from that moment editing it in place is the same silent
+  no-op.
+- `tests/m12-t2.2-a4-migration-digest.test.mjs` — five tests, listed in `package.json` so CI collects it (that
+  script is an exhaustive file list; an unlisted test would have silently never run). Two REAL-file tests (manifest
+  well-formedness; every listed digest matches the bytes on disk) and three FIXTURE tests proving the guard is not
+  vacuous: a mutated copy reddens with the forward-migration message, a deleted listed file reddens, and a brand-new
+  unlisted `004_*.sql` stays green.
+- Placement note: the manifest went under `docs/contracts/`, not `apps/knowledge/migrations/`, because §3 makes the
+  migration tree **read-only as digest source**. JSON rather than Markdown keeps it out of the prettier/markdownlint
+  surface it does not need.
+
+Evidence taken by me, not accepted from the implementer (which died on an API error after writing the files, without
+reporting): the digest the manifest pins for `003` is identical across `node:fs`, `sha256sum`, `certutil` and
+`git cat-file -p`, and identical again under WSL, so the guard cannot pass on one lane and fail on another — the
+`.gitattributes` rule `* text=auto eol=lf` makes all three checkouts byte-agree, which was the real risk in this
+design. Mutation probe run by me against a **real** file: appending bytes to `002` reddened exactly one test with the
+message naming the forward-migration rule, and the file was restored to `3b48c4a2…` with `apps/knowledge/` clean
+afterwards. Full gate: `npm run verify` **1507 tests / 106 suites / 1461 pass / 0 fail / 46 skipped** + `Repository
+policy check passed.` (baseline 1502/1456 + exactly the five new tests), and the suite is **5/5 under WSL**.
+
+One honest correction to my own working: an intermediate reading of mine had `003` at `cbc1e2df…` and I nearly
+recorded a lane-divergence defect. Three independent tools plus WSL now agree on `8706a553…`, which is what the
+manifest pins and what the passing test asserts, so that reading was the outlier and is not recorded as a finding.
+
+`A-4` changes no SQL, no schema, and no adoption logic.
+
 ## 9. Deferred beyond V1
 
 Unless separately approved:

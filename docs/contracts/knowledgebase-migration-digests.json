@@ -1,0 +1,18 @@
+{
+  "purpose": "Tracks the SHA-256 digest of every applied Knowledgebase migration in apps/knowledge/migrations/. Adoption is keyed on filename only (apps/knowledge/app/database.py records knowledge.schema_migrations.version = filename), so editing an already-applied .sql in place is a silent no-op on every database that adopted it; tests/m12-t2.2-a4-migration-digest.test.mjs reddens when a listed file's bytes change, and the correct action is to add a NEW forward migration, never to edit a listed one. A file NOT listed here is treated as a forward migration and stays green, which is deliberate: when a new migration is released and begins being adopted, append it with its digest, because from that moment editing it in place becomes the same silent no-op.",
+  "digestAlgorithm": "sha256",
+  "migrations": [
+    {
+      "file": "001_initial.sql",
+      "sha256": "7d66ee6e784c0472314ecfc76e4f353dfca10c6f7e749f12bc6fdc5b609d6af2"
+    },
+    {
+      "file": "002_pdf_ingestion_foundation.sql",
+      "sha256": "3b48c4a23bd8595dfb40f69fb1507fcfffc25295b4a5a497142f911bdbc20cf1"
+    },
+    {
+      "file": "003_skills_vector_schema.sql",
+      "sha256": "8706a55397e8040a28f78fe6dbefcbed8e53baefb344dd370b62d2cdeff25ffe"
+    }
+  ]
+}
