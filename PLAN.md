@@ -48,6 +48,154 @@ operations research and simulation remain first-class capabilities.
 
 ```text
 Milestone: M12 — Governed Discord interaction lifecycle and governed presentation
+Task: M12/T2.1 — HIGH-RISK REMEDIATION TIER: irreversible loss, exposure, and failures nobody can detect
+  (the original R1 objective "attribution truth, honest degradation, and evidence that says what it is" survives in
+  item T2.1-6 and in the tier's honesty conditions; the rest of R1's ten items are re-filed into T2.2/T2.3)
+Active revision: M12/T2.1-R3 — **the high-risk tier only**, after the owner re-shaped the successor plan
+  2026-10-15: `vậy A đi, tách 3 phần thành T2.1 (high risk), T2.2 (medium risk) và T2.3 (low risk)`. He accepted
+  **I1-A** (4A.1 withdrawn — its fix must amend a pinned required gate), **I2-A** (4A.13 withdrawn — V06's
+  `R6-V06-01` proved the fix self-blocking), **I3-A** (4A.16(i) withdrawn — the known-red promise unbacked),
+  **I4-A** (the `test:r16` recursive-delete guard approved and promoted into this tier as T2.1-8), **I5-A** (doc
+  truth first *within* the low tier), **I6-A** (a `M12/T2.7`-style gate-reach block, re-filed into T2.2 by the
+  tier rule), **I7-A** (commit `PLAN.md` now). R3 is **written fresh** rather than patched, because R2's §7 had
+  already fallen out of agreement with its own §4A.15/§5 — the tiering criterion is the risk **of the fix** (high =
+  destroys state / exposes material / fails undetectably), **not** defect severity, and it is stated in `ACTIVE.md`
+  §0 so it is auditable. R3 keeps **eight** items: the unreadable-proposal overwrite (`R5-E06-07`), rollback
+  residue reporting (`R5-E04-03`, re-scoped by V01 to detect by `stat` not by catching), upstream response bytes in
+  an adapter result (`R5-E06-03`), child stderr in a model-visible error (`R5-E06-04`), a credential substring in an
+  operator report (`R5-E13-06`), snapshot temp residue + errno-first ledger attribution (`R1-A14-01/02`), the
+  fabricated `(lines None-None)` citation (`R5-E02-05`, **whose only real trigger is a PDF row with a NULL page
+  pair**, not markdown), and the destructive default published as an npm test name (`R5-E08-02`).
+  Prior revision: M12/T2.1-R2 — superseded 2026-10-15 by its own verification round; see the `Execution
+  Authorization` block below and `.agents/states/findings.md` Vòng 6 for the eleven defects found in it.
+Prior revision: M12/T2.1-R1 — the execution wave the owner authorized on 2026-10-14 by answering the
+  four-round audit's decision block ("A: A1 + lên lịch A2 / B: B1 / C: C2 / D E F làm theo khuyến nghị
+  của em / G có / rồi tạo ACTIVE.md"). Ten frozen items, all inside the `integrations/openclaw` adapter
+  boundary plus the governance documents F approved: the component build that aborts delivery
+  (`R1-A05-01`), the guard reason discarded at the run-end seam (`K01`/`R1-A12-07`), the reason-code
+  matrix that is declared nowhere and the validator with zero call sites (`R1-A04-06`), snapshot temp
+  residue and errno-first ledger attribution (`R1-A14-01/02`), a self-generated manifest that certifies a
+  dropped contract member (`R4-V01-01`, owner "G có"), the unreachable-but-kept allowlist guard
+  (`R1-A12-06`), the five-class runbook plus a read-only open-task reconciliation report (owner C2), one
+  revisions ceiling (`R1-A08-08`), and the approved non-RED half of the document architecture
+  (`R3-P04-02/03/04/05/06`).
+  **What R2 adds (ACTIVE.md §4A):** sixteen items in four independently committable clusters, admitted
+  only if all four of a stated rule's clauses hold — orchestrator-re-derived from source this session or
+  two independent lanes reported it; it changes **no** schema, published contract, public API, migration,
+  durable-state semantics, module ownership or required gate; it cannot be satisfied by weakening a
+  control, deleting a check or raising a ceiling; and no Vòng 6 refutation is pending on it. **Cluster A
+  (data loss/integrity)** an empty Skill-Store scan that deletes the whole derived index while reporting
+  `READY` (`R5-E05-03`), an unreadable proposal record indistinguishable from an absent one so an owner's
+  recorded APPROVE/REJECT can be overwritten (`R5-E06-07`), a citation that prints `(lines None-None)`
+  (`R5-E02-05`), and a rollback that never checks whether canonical state is clean (`R5-E04-03`).
+  **Cluster B (untrusted output)** upstream HTTP response bytes returned verbatim as an adapter `message`
+  contrary to its own comment (`R5-E06-03`), uncapped subprocess stderr in a model-visible error
+  (`R5-E06-04`), and a four-character live token prefix in an operator report (`R5-E13-06`).
+  **Cluster C (silent wrong answer)** an exhausted embedding retry raising `AssertionError` so it maps to
+  500 instead of 503 and vanishes under `python -O` (`R5-E02-07`), **zero** logging anywhere in
+  `apps/knowledge/app/` with four `from None` sites discarding the cause (`R5-E01-05`), two inverted
+  relevance defaults (`?? 1` in the filter vs `?? 0` in the sort) (`R5-E07-02`), a reference-id predicate
+  that admits ids nothing can interpret (`R5-E07-03`), a semantic key hardcoding `:v1` while the contract
+  version is `zink-semantic-v2` (`R5-E05-06`), a full re-embedding of an unchanged catalog on every
+  promotion (`R5-E05-01`), and an unbounded `query` tokenized on the event loop (`R5-E01-03`).
+  **Cluster D (gate truthfulness)** a drifted live digest pin that SKIPs both tests and keeps the suite
+  green (`R5-E10-04`), a dead `assert.notEqual(…, undefined)` after a `slice()` (`R5-E10-03`), M7-063's
+  machine-path guard iterating two files while the only tracked `/mnt/c/…` literal sits in a third
+  (`R5-E13-05`, guard half only), the two §11-blocking verdicts that appear nowhere in the whole git
+  history (`R5-E12-01`), and no durable artifact that enumerates the gates so a `NOT RUN` claim has no
+  denominator (`R5-E12-04`). R2 also enumerates the allowed file set per cluster (§3), adds a Python lane
+  and a Skill Store / Zink Tools lane to the required gates with the Docker-dependent suites pinned as
+  `NOT RUN` when the container is absent, adds one mutation probe per admitted item, requires one commit
+  per cluster, and names a **known-red register** with exactly two expected entries.
+  Explicitly NOT in this task, recorded in ACTIVE.md §5 with the finding IDs each one covers and in §5.1
+  with the successor task each is scheduled into: **A2** the
+  packaged module graph (`R1-A02-01` is Critical and stays open — this task does not close it), **B1**
+  the injected state root (answered YES, scheduled as `M12/T2.2`, no further decision needed), **C1**
+  any new durable vocabulary (Round 4 proved `WORKFLOW_NATIVE_ENDED` cannot close a refused root run,
+  so this is a schema decision the owner has not made), **D** the `primary_coordinator` writer and the
+  `guard.mjs:869-882` decision-node contradiction, **E** the `$ref` identity/verdict package and the
+  three missing Knowledgebase routes, and every `R1-A08-*` item except `08`.
+  **Also excluded by R2, with successors named in ACTIVE.md §5.1:** every remaining Vòng 5 finding —
+  `M12/T2.3` for the Skill Store lifecycle (`R5-E04-01/02/04/05/06/07/08/09`, `R5-E05-04/05/07/08`,
+  `R5-E07-01/04/05/06/07`, `R5-E03-07`), `M12/T2.4` for A2 plus `R5-E13-02` and the removal half of
+  `R5-E13-05`, `M12/T2.5` for the Knowledgebase block (`R5-E01-02/04`, `R5-E02-01/02/03/04/06`,
+  `R5-E03-01…06, 08`), `M12/T2.6` for the remaining Zink Tools adapter surfaces (`R5-E06-01/02/05/06/
+  08/09`), `M12/T2.7` for gate truth (`R5-E09-01…08`, `R5-E10-01/02/05/06/07/08`, `R5-E13-03`), and
+  `M12/T3` for documentation and skills procedure (`R5-E12-02/03/05/06/07`, `R3-P04-01/07/08/09`). Ten
+  decisions are recorded as **pending and unauthorized** in ACTIVE.md §9 (H1 CI trigger widening, H2 the
+  `403` on branch protection, H3 a skip floor, H4 the live 0644 config backup as a guarded operator
+  command, H5 `skills.*` schema ownership, H6 the router key as a SecretRef, H7 ledger identity
+  references, H8 a governed `DEPRECATED` transition, H9 PDF-content reclamation, H10 whether the findings
+  register becomes tracked). Answering H1–H10 does **not** authorize execution; each still needs its own
+  Plan Revision.
+  Honesty obligations the owner should read before accepting anything: deployment is **not** authorized
+  by this contract; live Discord behaviour stays `NOT TESTED`; `verify.mjs` stays `NOT RUN`; the R16
+  rehearsal cannot run on WSL and is **NOT RUN**, so no rehearsal validates this against the live
+  runtime; `tests/m10-t2-r6-boundary-predecessor` goes red only under WSL, which is why the WSL lane is
+  mandatory; and item 4.5 may turn `npm run verify` red by exposing a genuinely incomplete contract set
+  — the owner accepted that outcome when he answered "G có". **R2 adds three more:** (a) item 4A.16(i) is
+  *designed* to make M7-063 red, because widening its file list brings `index.mjs:511`'s `/mnt/c/…`
+  literal into scope and removing that literal is `M12/T2.4` — that red is truth and must be recorded as
+  a known-red, never repaired by narrowing the guard; (b) **five of the sixteen Vòng 5 sweep lanes are
+  `NOT RUN`** (E08, E11, E14, E15, E16) and **all twelve Vòng 6 verification lanes are `NOT RUN`** — the
+  harness returned a daily usage limit on five consecutive dispatch attempts — so no claim of full-repo
+  coverage may be made, and the orchestrator's own re-derivation of ten claims is a **weaker** substitute
+  than the adversarial cross-check that was requested, disclosed in ACTIVE.md §0 rather than silently
+  absorbed; (c) `tests/m11-t1-postgres-sql-gate` and `m11-t1-skill-vector-sql` skip without a Docker
+  container while `node --test` still exits 0 (`R5-E09-03`), so if the container is absent those two are
+  `NOT RUN` and may not be folded into "fail 0".
+Task Status: IN PROGRESS — R3 materialized 2026-10-15 as the high-risk tier. R1 and R2 both existed with **zero
+  implementation landed under either**, and no prior task's evidence is altered by any of the three.
+Planning Readiness: APPROVED — the owner answered the I1–I7 block with `vậy A đi` and set the three-tier split by
+  risk in the same message.
+Plan Revision: M12/T2.1-R3
+Execution Authorization: YES — **bounded to `ACTIVE.md` §4's eight high-risk items (T2.1-1 … T2.1-8), §3's
+  enumerated file list, and §5's dispositions.** On the `AGENTS.md` §12 terms only: local implementation, validation,
+  the task/closeout commits, and a push of this non-`main` task branch to its configured remote. It authorizes **no**
+  `--apply`, no restart, no deployment, no lock deletion, no `events.jsonl` edit, no Discord request, no `main` merge,
+  no PR, no force-push, no workflow-file edit, no migration edit, no schema-file edit, no `.github/workflows/**`
+  change, no re-valuing of any **pinned existing assertion** (gate 6 makes that a stop-and-report condition, which is
+  the rule R2 broke via 4A.1 and `R6-V01-01` caught), no chmod or other change to anything under
+  `/home/hoang_vinh/.openclaw-zink`, and **no** implementation of any H1–H10 decision or of any `M12/T2.2`/`T2.3`
+  item — those are tier assignments, not approvals.
+  History of this field, recorded because the withdrawal is the evidence that the verification round worked: it was
+  set YES for R2 on 2026-10-14, then **pulled to NO on 2026-10-15** when Vòng 6 lanes V01/V05/V06 found **eleven
+  defects in R2 itself** — three High (4A.1 vs a pinned gate assertion; 4A.13's fix self-blocking because the stored
+  column is the row-level aggregate computable only after the HTTP loop; 4A.16(i)'s known-red promise unbacked because
+  `resolveContractFilePath` can return only `*.schema.json` paths and a naive widening instead matches the guard's own
+  string), plus §7 demanding the rejected "one shared parser" fix, a possible **third** unregistered known-red, "every
+  test SKIPs" really being "2 of 6", 4A.1's loss claim narrowing to "the destructive statement executes and reports
+  `READY`", 4A.3's trigger being a PDF row with a NULL page pair, the gate registry giving a list rather than a
+  denominator, and my own two over-counts (`R5-E01-05` at 19 `from None` + 9 bare `except Exception:`, and
+  `R5-E12-01`'s replacement claim contradicted by five `PLAN.md` rows that do record `quality-gate SUCCESS`).
+  R3 was then written **fresh** rather than patched, and this field restored to YES at the narrower bound. Full
+  detail in `.agents/states/findings.md`, Vòng 6.
+Execution Contract: docs/contracts/execution/ACTIVE.md
+Evidence Level: NONE — nothing in this revision is verified yet.
+Task Branch: codex/m11-t1-audit-remediation (no new branch and no `main` merge authorized)
+Owner Approval: EXPLICIT — 2026-10-14, seven-lettered-block answer quoted above, followed the same day by
+  the sweep-and-record instruction that produced R2. Two sub-choices are
+  **mine and reversible**, recorded here the way the STACK precedence rule was: (1) `R3-P04-06` makes
+  `AGENTS.md`'s existing executor name canonical and lists the other as a retired alias, because
+  `AGENTS.md` is the authority file while the skill files are procedures; (2) `R3-P04-05` defines
+  `NOT TESTED` as distinct from `NOT RUN` and **non-blocking** for closure, because making it blocking
+  would change the required gate and therefore need its own decision. **R2 adds a third reversible
+  sub-choice:** the sixteen-item admission rule in the ACTIVE.md header is **mine** — the owner said
+  "từ findings ghi vào ACTIVE.md" without bounding which findings, so severity was *not* treated as
+  authorization and every item that would touch a schema, a published contract, a migration, durable
+  state, module ownership, a gate, a ceiling or a control was excluded into §5 with its successor task
+  even where it is rated High or Critical. If the owner wants a wider wave, that is a new Plan Revision.
+  The findings register is
+  `.agents/states/findings.md` (Rounds 1–4 complete: 16/16, 8/8, 6/6, plus V01/V02; Vòng 5 **11/16** lanes
+  with E08/E11/E14/E15/E16 `NOT RUN`; Vòng 6 `NOT RUN`) and is a queue, not authority.
+```
+
+Prior focus — M12/T2 (R1–R4), retained below unchanged; its deployment records are durable in §8. Per
+`R3-P04-02` (one fact, one home) the §3 M12 cell is text that item 4.9 converts into a pointer to §8;
+nothing below is rewritten by this revision.
+
+```text
+Milestone: M12 — Governed Discord interaction lifecycle and governed presentation
 Task: M12/T2 — Governed forum tags: the approval STATUS tag follows the real verdict
 Active revision: M12/T2-R4 — the operator orphan-lock recovery action (owner sequence **C1 → E →
   D1**, 2026-10-14). C1 is delivered: `operator-lock-recovery.mjs` is read-only by default, proves
