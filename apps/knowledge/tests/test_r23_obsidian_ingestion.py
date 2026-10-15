@@ -28,6 +28,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import pytest
+
 from app.markdown_adapter import (
     MAX_MARKDOWN_SOURCE_BYTES,
     MarkdownVaultScanner,
@@ -35,7 +37,15 @@ from app.markdown_adapter import (
 )
 from app.pdf_foundation import _visible_markdown, discover_pdf_sidecars
 
-TOKENIZER_PATH = Path(os.environ["KNOWLEDGE_TOKENIZER_PATH"])
+_TOKENIZER = os.environ.get("KNOWLEDGE_TOKENIZER_PATH")
+if not _TOKENIZER or not Path(_TOKENIZER).is_file():
+    pytest.skip(
+        "the pinned tokenizer is not provisioned; CI fetches it "
+        "(.github/workflows/ci.yml), so this module is NOT RUN rather than passed",
+        allow_module_level=True,
+    )
+
+TOKENIZER_PATH = Path(_TOKENIZER)
 
 OPENER = "<!--"
 CLOSER = "-->"

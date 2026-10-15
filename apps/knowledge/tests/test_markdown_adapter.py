@@ -7,6 +7,8 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from app.markdown_adapter import (
     MAX_CHARS,
     MAX_RETRIEVAL_TOKENS,
@@ -20,7 +22,15 @@ from app.markdown_adapter import (
 )
 
 
-TOKENIZER_PATH = Path(os.environ["KNOWLEDGE_TOKENIZER_PATH"])
+_TOKENIZER = os.environ.get("KNOWLEDGE_TOKENIZER_PATH")
+if not _TOKENIZER or not Path(_TOKENIZER).is_file():
+    pytest.skip(
+        "the pinned tokenizer is not provisioned; CI fetches it "
+        "(.github/workflows/ci.yml), so this module is NOT RUN rather than passed",
+        allow_module_level=True,
+    )
+
+TOKENIZER_PATH = Path(_TOKENIZER)
 
 
 class MarkdownAdapterTests(unittest.TestCase):
