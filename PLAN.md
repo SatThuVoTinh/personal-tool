@@ -5646,14 +5646,18 @@ imported the same way `workflow.mjs:12` imports it. The brief-wide "exactly one 
 says it means. The two rules `ACTIVE.md` §4 ordered kept are kept verbatim: the spawn-target assert
 (`guard.mjs:865-870`) and the `decision`-must-be-`main` ownership assert (`guard.mjs:877-878`).
 
-Grew from 4 failed tests to 9 green: `tests/m12-t2.2-a1-stack-authority.test.mjs` proves the o1/`data_plant` flip is
-admitted, the same o1 root still cannot author o2's stacks, a node whose agent does not own its stack is refused
-**before** any durable write (`activated: []`, zero brief-write events), the mixed `o1`+`o2` plan is admitted,
-o2/`infrastructure` is refused, all 30 table-illegal agent/stack pairs are refused, and two source-shape pins hold
-(the guard reads the table and keeps neither ownership rule). Adjacent suites re-run as a set — `m10-t2-r14-review-defects`,
+Test-first evidence, re-run by the orchestrator rather than inherited from the implementer: with `HEAD~1`'s
+`guard.mjs` placed back in the working tree, the new suite is **4 fail / 5 pass**, and the four failures are exactly
+the ones that must fail — the o1 flip, refuse-before-durable-write, the exhaustive table, and the source-shape pin.
+The file was then restored **byte-identically** (`SHA256 849fecd7fb6820a40018d9389eb94d069fc70ce9fd737c8b02837f0e6eb770c5`,
+computed before and after, and `git status` clean) and the suite re-run to **9 tests / 9 pass / 0 fail / 0 skipped**.
+`tests/m12-t2.2-a1-stack-authority.test.mjs` proves the o1/`data_plant` flip is admitted, the same o1 root still
+cannot author o2's stacks, a node whose agent does not own its stack is refused **before** any durable write
+(`activated: []`, zero brief-write events), the mixed `o1`+`o2` plan is admitted, o2/`infrastructure` is refused, all
+30 table-illegal agent/stack pairs are refused, and two source-shape pins hold (the guard reads the table and keeps
+neither ownership rule). Adjacent suites re-run as a set — `m10-t2-r14-review-defects`,
 `m10-t2-coordinator-binding`, `m7-lane-g-policy`, `m11-t1-openclaw-outbound-and-caches` — **66 tests / 65 pass /
-0 fail / 1 skipped**. Mutation probe: restoring the inverted literal list reddens exactly the `A-1` flip test and the
-source-shape pin; the file was returned byte-identically afterwards.
+0 fail / 1 skipped**.
 
 **The refutation, and it is this plan's error, not the codebase's.** §2 claimed a plan spanning both coordinators
 "with a Main merge node is therefore **legal today**". It is not, and `A-1`'s own test found it: `AGENT_SPAWN_POLICY`
@@ -5662,14 +5666,23 @@ source-shape pin; the file was returned byte-identically afterwards.
 only lands if its merge is dropped. Full derivation, the executed evidence, and the reducer half of the divergence
 (`workflow.mjs:1466-1470` validates against a table where `main` *does* own `decision`, so the reducer accepts what the
 guard then refuses) are recorded under the H11 disposition in §11. §2 and `ACTIVE.md`'s `A-1` live-effect paragraph
-were corrected in the same commit. `A-1`'s scope did not change and no item was re-cut smaller: the item was the
+were corrected alongside this record. `A-1`'s scope did not change and no item was re-cut smaller: the item was the
 de-duplication, and the de-duplication is what landed. What changed is what the owner can ask of Wave A — **the split
 is available now; the merge is a `M12/T3` prerequisite**, and adding the `main` spawn edge here would be a topology
 change, RED under `AGENTS.md` §7.
 
-`A-1` gate state: Windows local **PASS** (full `npm run verify`, `1492 tests / 106 suites / 1446 pass / 0 fail /
-46 skipped`, `Repository policy check passed.`). WSL read-only lane and CI at the `A-1` head are recorded below the
-commit, not asserted here.
+`A-1` gate state. **Windows local: PASS** — full `npm run verify`, `1492 tests / 106 suites / 1446 pass / 0 fail /
+46 skipped`, `Repository policy check passed.` **WSL read-only lane: PASS, and it ran for the first time in this
+tier** — `node --test` under WSL's node `v24.15.0` against the same working tree the live plugin loads:
+`tests/m12-t2.2-a1-stack-authority.test.mjs` **9 tests / 9 pass / 0 fail**, and the four adjacent suites
+(`m10-t2-coordinator-binding`, `m10-t2-r14-review-defects`, `m7-lane-g-policy`,
+`m11-t1-openclaw-outbound-and-caches`) **66 tests / 66 pass / 0 fail / 0 skipped** — one test *more* than the Windows
+lane, which skips one of them. Nothing went red on the lane that actually hosts the runtime, so no silent WSL
+regression of the kind `R5-E09` recorded. **Remote-backed: NOT RUN.** `ccf2ad7` is pushed, and `ci.yml:3-8` triggers
+only on `pull_request`/`push` to `main` or on `workflow_dispatch`; there is no open PR from this branch
+(`gh pr list --state open` → empty), so the push triggered nothing and `commits/ccf2ad7/check-runs` is empty. A
+dispatch is the owner's call, not mine: this session's `gh` token authenticates as `SatThuVoTinh`, so a dispatch I
+make is recorded under his login and is indistinguishable from one he makes — see the corrected H1 row.
 
 ## 9. Deferred beyond V1
 
@@ -5709,7 +5722,7 @@ assignment in `ACTIVE.md` §5.3 is not an approval.**
 
 | # | Decision | What changed after wave 2 | Where |
 | --- | --- | --- | --- |
-| **H1** | Widen CI triggers so a push to the task branch is gated without a human re-dispatch | still true that every run is `workflow_dispatch` (26 runs / 14 SHAs), but "HEAD has zero runs" is now false only because a human dispatched `d8c221a`. The decision is "evidence exists **only when someone remembers**", not "no evidence exists" | `ci.yml:3-8`, `security.yml:3-10` (+ a weekly `schedule:` the register missed); `R5-E09-01/-08`, `R6-V08-01` |
+| **H1** | Widen CI triggers so a push to the task branch is gated without a human re-dispatch | still true that every run is `workflow_dispatch` (26 runs / 14 SHAs), but "HEAD has zero runs" is now false only because someone dispatched `7ed0b28` / `d8c221a`. **Attribution corrected 2026-10-15: this plan said "a human dispatched" and that is not supportable — `gh api user` returns `SatThuVoTinh`, i.e. the same login the runs list as `actor`, so an agent dispatch and an owner dispatch are indistinguishable in the API, and no agent may claim the owner clicked.** The decision is unchanged: "evidence exists **only when someone remembers**", not "no evidence exists" | `ci.yml:3-8`, `security.yml:3-10` (+ a weekly `schedule:` the register missed); `R5-E09-01/-08`, `R6-V08-01` |
 | **H2** | Branch protection cannot be enabled — choose an in-repo merge-blocker substitute, make the repo public, or accept advisory gates | re-confirmed: `gh api …/branches/main/protection` → `403 "Upgrade to GitHub Pro or make this repository public"` while the same token reads the branch, so it is plan-gated, not a scoping artefact. HEAD's Security run is red **right now** and nothing can block a merge | `R5-E09-02`, run `38715090086` |
 | **H3** | A skip policy for CI — floor the skip tier, or make the SQL gate executable there | **shape changed twice.** `m11-t1-skill-vector-sql` is NOT Docker-gated (grep 0; it passes in CI), so the Postgres-service option buys **one** test (`M11-06`), not a tier. And all 52 CI skips are individually named with reasons, so the gap is enforcement not visibility; the 52−46 delta is the 6-test duckdb family, verified (`which duckdb` present on this Windows host and in WSL, absent on the runner). A single global number would fire on 40 legitimate host-capability skips → **needs a per-family expectation** | `PLAN.md` §2 (Active Task, corrected), `R5-E09-03`, `R6-V08-01` |
 | **H4** | Operator chmod of the live 0644 config backup + extending the permission gate to the state root | **de-escalated.** `/home/hoang_vinh` and `/home/hoang_vinh/.openclaw-zink` are both `drwx------`, so "any uid can read the credential set" was false; the file is 1 of 15 copies. The live-data action is not needed. What IS verified and unguarded: `configure.mjs:986-988` returns immediately on win32, so the named-path mode check **has never run on the owner's host**, nothing enumerates the state root, and four subtrees inside it are group-writable (`R6-V09-03`) | `R5-E13-01`, `R6-V09-01` |
