@@ -21,7 +21,8 @@ JSON and binds that identity to the directory and to the SHA-256 of the exact
 raw Markdown bytes. The catalog is fail-closed: a malformed record prevents all
 normal retrieval, including retrieval of otherwise valid records.
 
-The public read-only interface is:
+The read-only interface is the **operator CLI** (`zink-skill-store/bin/skill-store.mjs`),
+not a model tool:
 
 ```text
 skill-store validate
@@ -54,9 +55,10 @@ OpenClaw reaches Skill Store only through the governed Zink Tools boundary.
 ```text
 zink_skill_search   # ACTIVE-only semantic retrieval (READY index rows only)
 zink_skill_propose  # CANDIDATE proposal only; never self-activates
-skill-store validate
-skill-store get --namespace <slash-separated namespace> --capability <slug>
 ```
+
+These are the only Skill Store tools the model can call. `skill-store validate`
+and `skill-store get` above are the operator CLI surface, not model tools.
 
 **Trusted internal interface** (never model-visible, owner approval required):
 
