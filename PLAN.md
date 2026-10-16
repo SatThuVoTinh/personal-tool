@@ -187,12 +187,18 @@ Task Status: IN PROGRESS — **all eight `R3` items are implemented and locally 
   `Record — the 9Router "cấu hình cũ" report` in §8.
   R1 and R2 both existed with **zero implementation landed under either**, and no prior task's evidence is altered.
   ── **`M12/T2.1` tier is CLOSED 2026-10-15.** The rest of this field describes the new task.**
-Task Status: IN PROGRESS — `M12/T2.2` **Wave A CLOSED 2026-10-16; Wave B (`R2`) materialized, execution not yet
-  started.** Wave A delivered six items (`A-1` `ccf2ad7`, `A-2` `09aa698`, `A-4` `bc33c7e`, `A-3` `d1378ba`, `A-6`
-  `bca4ad6`, `A-7` `fd302d4`), stopped two on refuted premises (`A-3` original `638a68e`, `A-5` `639fc47`), and
-  settled one as a record-only verdict pass (`A-8` `0afc61c`) — per-item evidence in §8. `B-1`…`B-15` are now frozen
-  in `ACTIVE.md` §4; none has landed, so nothing is claimed for them. Four further items are held there pending named
-  owner grants, and `M12/T2.3` (Wave C) plus all `M12/T3` H11 work stay excluded (§5).
+Task Status: IN PROGRESS — **`M12/T2.2` is CLOSED 2026-10-16 at the tier level: Wave A and Wave B both landed.**
+  Wave A delivered six items (`A-1` `ccf2ad7`, `A-2` `09aa698`, `A-4` `bc33c7e`, `A-3` `d1378ba`, `A-6` `bca4ad6`,
+  `A-7` `fd302d4`), stopped two on refuted premises (`A-3` original `638a68e`, `A-5` `639fc47`), and settled one as a
+  record-only verdict pass (`A-8` `0afc61c`). **Wave B delivered all twenty-one items** — `B-1` `a108cde`, `B-2`
+  `c449cd0`, `B-3` `d34c666`, `B-4` `33f0971`, `B-5` `b7d9d36`, `B-6` `3701804`, `B-7` `6f3c970`, `B-8` `a21c610`,
+  `B-9` `0d399d3`, `B-10` `46852f3`, `B-11` `937521c`, `B-12` `f93068e`, `B-13` `7bc3e5d`, `B-14` `f316c83`, `B-15`
+  `7aebc39`, `B-16` `5c156d4`, `B-17` `0dddea4`, `B-18` `3f3bb11`, `B-19` `9fa6505`, `B-20` `a473907`, `B-21`
+  `5d5f8f0` — plus four follow-on items that came out of executing them (`a62962b` J-1, `fabaf5b` K-1, `9891d83` L-1,
+  `07c31b5` M-1). Per-item evidence and every corrected premise: `Record — M12/T2.2-R2 Wave B closed` in §8.
+  **Still not done by this tier, and not claimed:** deployment (never authorized here), live Discord behaviour, Wave C
+  (`M12/T2.3` — no contract, no code), `M12/T2.2-R3` (the Skill Store lifecycle block, scheduled only), and all
+  `M12/T3` H11 work.
 Planning Readiness: APPROVED — the owner approved the three-wave split and its scope on 2026-10-15 (`đúng, chốt 3
   wave`), then the `4A.13` fork and the pinned-assertion exception (`a, có grant`), and on 2026-10-16 re-pointed `A-3`
   ("`A3: A`"), ordered the rest of the programme ("`Rồi chạy tiếp A6 A7 A8, rồi chạy B C luôn`"), and granted the
@@ -202,23 +208,29 @@ Planning Readiness: APPROVED — the owner approved the three-wave split and its
   M12/T2.2-R2 Wave B materialized` in §8. What that pass could not execute (it needed a new pinned constant, a live
   re-pin, or a decision about public behaviour) was escalated into `ACTIVE.md` §5 instead of smuggled in.
 Plan Revision: M12/T2.2-R2
-Execution Authorization: YES — **bounded to `ACTIVE.md` §4's Wave B items (`B-1` … `B-15`), §3's enumerated file
-  list, and §5's exclusions.** On the `AGENTS.md` §12 terms only: local implementation, validation, the
-  task/closeout commits, and a push of this non-`main` task branch to its configured remote. It authorizes **no**
-  `--apply`, no restart, no deployment, no lock deletion, no `events.jsonl` edit, no Discord request, no `main` merge,
-  no PR, no force-push, no workflow-file edit, no migration or schema **content** edit, no `.github/workflows/**`
-  change, no dependency change, no ceiling **value** change, no **deletion of any tracked file**, no chmod or other
-  change under `/home/hoang_vinh/.openclaw-zink`, and **no** deletion of the stray `C:\home\hoang_vinh` tree.
-  **Pinned-assertion exception: NONE in force for Wave B.** The `R1` grant covered exactly one line
-  (`tests/m8-t1-skill-vector-memory.test.mjs:118`) and `A-5` never touched it, because the guard that line protected
-  turned out to be a regression — so the grant ended **unused**, which is not precedent for the next one. Every
-  pinned assertion, digest constant and predecessor admission is a stop-and-report condition; the four items that
-  would need one are listed in `ACTIVE.md` §5 with the exact line each requires. If a `B-*` fix reddens a
-  current-build pin anyway, that item stops and reports — the `A-3` path, which worked.
-  Also **no** implementation of any H1–H11 decision (§11) — including all `M12/T3` H11 work (no coordinator edge, no
-  shared sandbox, no `primary_coordinator` writer, no `five-stack.md` rewrite) — and no Wave C item. §4's fifteen
-  `B-*` items are the whole of this authorization; tier and wave assignments are not approvals, and neither is an
-  item's presence in an archived tier table.
+Execution Authorization: NO — `M12/T2.2-R2` executed and closed on 2026-10-16, so this field returns to NO and the
+  contract is archived. **History of what was actually granted for this wave, recorded verbatim because a later agent
+  must not re-litigate it:** the item bound was `ACTIVE.md` §4's `B-1`…`B-21` (widened from the fifteen frozen at
+  materialization by the owner's own follow-on instructions), on the `AGENTS.md` §12 terms only — local implementation
+  commits, validation, the closeout commit, and a push of this non-`main` task branch. Owner answers, in order:
+  `A3: A` then `Rồi chạy tiếp A6 A7 A8, rồi chạy B C luôn` (2026-10-16), `A -> G chạy theo phương án tốt nhất`,
+  `a. Và sửa thêm các lỗi em phát hiện rồi tới wave c` (which granted the two extra digest pins and the
+  discovered-defect cluster `B-20`/`B-21`), and `j1 k1 l1`, then `m1`.
+  **Pinned-assertion grants issued and used during this wave** — each line named before it was touched, none inferred:
+  `tests/m8-t2.10-r13-r7-predecessor-allowlist.test.mjs:1028` (B-12), the `m11-t1-r2` divergence allowlist (B-8/B-9),
+  `tests/m10-t2-r6-boundary-predecessor.test.mjs:52` (B-16), `tests/m8-t2.10…:103` and
+  `tests/m8-t2.16-r19-promptbuild-liveness.test.mjs:507` (B-16 under `§0.5-I`), and
+  `tests/m12-t2-governed-surface.test.mjs:685` (B-17). `tests/m8-t1-skill-vector-memory.test.mjs:118` stayed **unused**
+  and is not precedent. Every other pinned assertion remained stop-and-report, which is what stopped B-16 for one round.
+  **Predecessor admissions granted:** `97c7f3e1…` and `5966d446…` for `lib/native-boundary.mjs` (`j1`), and the nine
+  live digests across eight governed paths admitted under `m1` (see `Record — … Wave B closed`, §8).
+  The standing prohibitions were never lifted by any of this: no `--apply`, no restart, no deployment, no lock
+  deletion, no `events.jsonl` edit, no Discord request, no `main` merge, no PR, no force-push, no workflow-file edit,
+  no migration or schema **content** edit, no dependency change, no ceiling **value** change, no **deletion of any
+  tracked file**, no chmod or other change under `/home/hoang_vinh/.openclaw-zink` beyond read-only inspection, no
+  deletion of the stray `C:\home\hoang_vinh` tree, and **no implementation of any H1–H11 decision** — including all
+  `M12/T3` H11 work — and no Wave C item. Tier and wave assignments are not approvals, and neither is an item's
+  presence in an archived tier table.
   (history) This field's earlier text bounded execution to `ACTIVE.md` §4's eight high-risk items (T2.1-1 … T2.1-8) for
   `M12/T2.1-R3`; that tier is closed and its contract is archived.
   History of this field, recorded because the withdrawal is the evidence that the verification round worked: it was
@@ -233,15 +245,24 @@ Execution Authorization: YES — **bounded to `ACTIVE.md` §4's Wave B items (`B
   `R5-E12-01`'s replacement claim contradicted by five `PLAN.md` rows that do record `quality-gate SUCCESS`).
   R3 was then written **fresh** rather than patched, and this field restored to YES at the narrower bound. Full
   detail in `.agents/states/findings.md`, Vòng 6.
-Execution Contract: docs/contracts/execution/ACTIVE.md
-Evidence Level: **LOCAL-VALIDATED for `M12/T2.2-R1` Wave A, `NOT RUN` for its CI; `NONE` for `M12/T2.2-R2` Wave B.**
+Execution Contract: NONE (the `M12/T2.2-R2` ACTIVE.md was archived at closeout to
+  `docs/contracts/execution/archive/2026-10-16-M12-T2.2-R2.md` and deleted from the working directory)
+Evidence Level: **LOCAL-VALIDATED for `M12/T2.2-R2` Wave B, `NOT RUN` for its CI at the time of writing.**
+  Wave B closed at `07c31b5`: Windows `npm run verify` **`verify_exit=0`** — `1590 tests / 1541 pass / 0 fail /
+  49 skipped`, `Repository policy check passed.` — where the 49th skip is `M1 4` declining honestly on a platform
+  that cannot mount the live tree. Python lane for the two Knowledgebase items: **204 passed / 4 skipped /
+  34 subtests**. WSL lane at the closed head: the eight `configure.mjs`-reading files **114/114**, the asset
+  predecessor cluster **90/90**, and the M-1 gate **13/13** with `R7 P1` green. Per-item red-before/green-after and
+  every mutation probe are in `Record — M12/T2.2-R2 Wave B closed`, §8. **CI is `NOT RUN` until this head is pushed
+  and read back**; a task branch on a non-`main` ref is a legitimate `NOT RUN`, not a pass.
   Wave A's items are validated on both hosts: Windows `npm run verify` exit 0 at `0afc61c` (**1516 tests / 106 suites
   / 1470 pass / 0 fail / 46 skipped**, `Repository policy check passed.`), WSL **1516 / 1471 pass / 2 fail /
-  43 skipped**, where both failures are pre-existing baseline rather than Wave A regressions — `R7 P1` is live drift
-  (`61638d8` moved `lib/authority.mjs` after Deployment B installed `c38e1a6b…`, and no redeploy is authorized) and
-  `R16-DRIVER-05` is the standing dead rehearsal. No CI run was observed at any Wave A head, so the tier's strongest
-  honest claim is LOCAL-VALIDATED and **not** REMOTE-BACKED. Wave B has executed nothing. Full detail, including the
-  piped-`tail` mistake that nearly made me report the WSL lane green, in §8.
+  43 skipped**, where both failures were recorded as pre-existing baseline rather than Wave A regressions — `R7 P1`
+  as live drift and `R16-DRIVER-05` as the standing dead rehearsal. **Corrected at Wave B closeout:** that
+  `R7 P1` row described only `lib/authority.mjs`. A full sweep later found **nine** governed paths in the same state,
+  not one, and admission — not another baseline record — is what fixed it (`07c31b5`). No CI run was observed at any
+  Wave A head, so the tier's strongest honest claim is LOCAL-VALIDATED and **not** REMOTE-BACKED. Full detail,
+  including the piped-`tail` mistake that nearly made me report the WSL lane green, in §8.
   (Evidence Level of the closed predecessor `M12/T2.1-R3`: **REMOTE-BACKED** for the repository gates — CI run
   `38715084889` @ `d8c221a` reports `quality-gate`
   **SUCCESS** and `python-quality` **SUCCESS** (Security `38715090086` is red on the unchanged 5-high `npm audit`
@@ -6296,3 +6317,59 @@ never run end to end, so T3 must inherit or precede that repair.
 `R1-A04-01` in the remediation wave (guard reads `AGENT_STACK_POLICY`) leaves `docs/architecture/five-stack.md`
 describing the **opposite** org chart until T3 lands. That is a knowingly-accepted, time-boxed doc/code divergence,
 recorded here so no later reader mistakes the document for current truth.
+
+### Record — `M12/T2.2-R2` Wave B closed: 21 items, 4 follow-ons, and three premises of mine that were wrong (2026-10-16)
+
+**What landed.** All twenty-one §4 items, one commit each, in the frozen §4 order, plus four items that only appeared
+because the wave was being executed: `a62962b` (J-1), `fabaf5b` (K-1), `9891d83` (L-1), `07c31b5` (M-1). Mapping is
+`B-1` `a108cde`, `B-2` `c449cd0`, `B-3` `d34c666`, `B-4` `33f0971`, `B-5` `b7d9d36`, `B-6` `3701804`, `B-7`
+`6f3c970`, `B-8` `a21c610`, `B-9` `0d399d3`, `B-10` `46852f3`, `B-11` `937521c`, `B-12` `f93068e`, `B-13` `7bc3e5d`,
+`B-14` `f316c83`, `B-15` `7aebc39`, `B-16` `5c156d4`, `B-17` `0dddea4`, `B-18` `3f3bb11`, `B-19` `9fa6505`,
+`B-20` `a473907`, `B-21` `5d5f8f0`.
+
+**Three of my own claims in this contract were false, and each is corrected here rather than quietly re-worded.**
+
+1. **`§0.5-H`/`§0.5-I`: "no `configure.mjs` admission is needed".** I read one grep as a proof. The live runtime
+   carried `5966d446…`, B-16 rolled the current build to `fceefc0d…`, and `R13 P1` went red **on WSL only** — the
+   Windows lane skips that assertion, so `npm run verify` stayed green over it. Fixed under grant `j1`; `R13 P6` now
+   re-derives the admitted digest from `3cb8274` through `governancePluginFiles()` instead of trusting a text search.
+2. **The `R7 P1` row in the Evidence Level field** described Wave A's WSL failure as a single live-drift item and
+   classed it as baseline. It was the visible tip: a read-only sweep of all 35 governed paths found **nine** in the
+   same state, i.e. `--preflight` refused the deployed extension outright, and `configure.mjs` has no drift override
+   (`--preflight`, `--apply`, `--dry-run` only). Cause is this programme's own earlier commits rolling packaged builds
+   without admitting the outgoing digest — `61638d8` for `lib/authority.mjs`, `09aa698` for `lib/guard.mjs`, and the
+   `6b0ea0a` / `c680a28` / `c1ad4b3` / `3cb8274` builds the live tree actually carries. Fixed under grant `m1`.
+   Attribution was measured, not argued: the same sweep against a scratch worktree at `fabaf5b^` returned the
+   identical nine, so J-1 and K-1 did not cause it. **Systemic finding: only 3 of 35 governed paths had any
+   live-reachability assertion before `M1 4`.** That gate is the reason this class was invisible.
+3. **The `l1` option name.** I offered the Skill Store lifecycle block as `M12/T2.4`; that identifier already names
+   the A2 block in the withdrawn R2 grouping, and `M12/T2.1-R3` §5.3 withdrew `T2.4`–`T2.7` altogether. His decision
+   is recorded with the intent intact and the identifier corrected to **`M12/T2.2-R3`**, scheduled and not authorized.
+
+**Item-level notes worth carrying forward.** B-16 stalled a full owner round because *one* production file is pinned
+by three assertions hashing three different inputs; `B-21` (`5d5f8f0`) turned that coincidence into an asserted fact
+(`R6 0d`: packaged bytes must equal working-tree bytes), so a future packaging rewrite fails a gate instead of
+splitting one fact in three. B-19's `heartbeats >= 5` measured the host's timer resolution, not liveness — the gate
+now asserts one tick for liveness and the timeout **by code** for the deadline. K-1 found that the middle disjunct of
+`guard.mjs:1977-1981` has **no producing event sequence** (`WORKFLOW_BRIEF_ACTIVATED` alone advances
+`task.brief_revision`, `workflow.mjs:1508`, and is gated on `workflow_status === "ACTIVE"` at `:1234`, which a task
+with a reserved delegation can never be); the test asserts that refusal instead of fabricating a fixture.
+`M 1`'s first sweep mis-reported `index.mjs` because it read only the asset table — the entrypoint is admitted by the
+two per-mode lists at `configure.mjs:1497`/`:1764` — and that false positive was corrected before anything was
+admitted.
+
+**Gate state at closeout.** Windows `npm run verify` **`verify_exit=0`**, `1590 tests / 1541 pass / 0 fail /
+49 skipped`, `Repository policy check passed.` The first M-1 run was **red** (`verify_exit=1`) on
+`execFileSync` unused in the new test, and because `lint` precedes `npm test` that run proved nothing about the
+suite — re-run after the fix. WSL: eight `configure.mjs`-reading files **114/114**, asset predecessor cluster **90/90**,
+M-1 gate **13/13** with `R13 P1` and `R7 P1` both green. Python lane **204 passed / 4 skipped / 34 subtests**.
+Known-red register for this tier now has **one** entry: `R16-DRIVER-05` (the standing dead rehearsal). CI at the
+closed head is `NOT RUN` until the branch is pushed and read back.
+
+**Not done, and not claimed.** No deployment (`--apply` was never authorized here; the nine-path refusal is now
+cleared, but installing anything is a separate grant). Live Discord behaviour remains `NOT TESTED`. Wave C
+(`M12/T2.3`) has **no contract and no code** — it needs its own Plan Revision and `Execution Authorization: YES`, and
+`4A.12` must be re-scoped there because `R6-V04-04` refuted its premise. `M12/T2.2-R3` is scheduled only. `K-2`
+(`get_index_run` answering `404` for a corrupt row) was **not granted** and stays in the contract's §5 exclusion list,
+now archived. `guard.mjs`'s two `REASON_UNDECLARED`-only discard paths were fixed by K-1; the run-row decode defect
+and the three H-decisions still open in §11 are not touched.
