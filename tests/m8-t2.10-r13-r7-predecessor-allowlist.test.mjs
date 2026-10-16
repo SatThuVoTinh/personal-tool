@@ -1023,9 +1023,19 @@ test("R13 B3: the build the live runtime carries is accepted and converges", asy
       sha256(readFileSync(p.asset("lib/native-boundary.mjs"), "utf8")),
       M11_T3_NATIVE_BOUNDARY_SHA256,
     );
+    // M12/T2.2-R2 B-12, re-valued under owner grant §0.5-A. The queue writer's temp is now
+    // created (`"wx"`) behind the shared symlink guard instead of truncating whatever already
+    // sat at its predictable `.tmp-<pid>-<ms>` name, and a failed write removes its own
+    // residue. Moved from `a5580bb67a7ace7edfdaf2595b7245a3be3a6959333ae6cbeaf76d080f49fb37`,
+    // which is proven to have been this file's own digest at HEAD immediately before the edit
+    // (`git show HEAD:integrations/openclaw/lib/queue-manager.mjs | sha256sum`), so the value
+    // replaced here is the one this test was actually pinning. No `configure.mjs` entry is
+    // added: this is the CURRENT build, which is accepted by content comparison and
+    // deliberately never allowlisted; the live `f7995d51…` stays admitted.
     assert.equal(
       sha256(readFileSync(p.asset("lib/queue-manager.mjs"), "utf8")),
-      "a5580bb67a7ace7edfdaf2595b7245a3be3a6959333ae6cbeaf76d080f49fb37",
+      "8cd9446a43b660560a89fd5febf7d52a820fbbeb6a109c7c07477de5d0ccc56c",
+      "an accepted predecessor must converge onto the current queue writer",
     );
   } finally {
     rmSync(p.root, { recursive: true, force: true });

@@ -7,12 +7,34 @@ import {
   closeSync,
   fsyncSync,
   renameSync,
+  unlinkSync,
 } from "node:fs";
 import { randomUUID, createHash } from "node:crypto";
 import path from "node:path";
 import os from "node:os";
 import { TASK_STATES } from "./authority.mjs";
 import { withFileLockSync, lockDirFor } from "./file-lock.mjs";
+import { assertNoSymlinkComponents } from "./policy.mjs";
+
+/**
+ * Remove a temp file this process created but could not rename. The codes are
+ * the verdicts `topology/lib/ledger.mjs` documents for the same job: `EPERM` and
+ * `EISDIR` mean something else owns the path, and `ENOENT` is the same outcome as
+ * a successful removal — including the ordinary case, a failure that happened
+ * before the temp existed. Anything else is a real fault and propagates.
+ *
+ * It lives here rather than being imported from the ledger because the deployed
+ * plugin flattens `topology/lib/*` into `lib/*` only for the targets named in
+ * `PACKAGE_REWRITES`, and neither writer is one of them; a `../topology/lib/...`
+ * import would be packaged verbatim and fail to resolve at load time.
+ */
+function removeWriterResidue(tempPath) {
+  try {
+    unlinkSync(tempPath);
+  } catch (error) {
+    if (!["EPERM", "EISDIR", "ENOENT"].includes(error?.code)) throw error;
+  }
+}
 
 /**
  * Errnos that mean the queue's own directory cannot be written at all. They can
@@ -199,16 +221,26 @@ export class QueueManager {
 
   save() {
     if (!this.storagePath) return;
+    // M12/T2.2-R2 B-12: `.tmp-<pid>-<ms>` is predictable, so the temp has to be
+    // created (`"wx"`) rather than adopted from whatever is already at that path,
+    // and a failed attempt has to remove what it made. `topology/lib/ledger.mjs`
+    // already wrote its snapshot this way; this is the same discipline, not a new
+    // atomic writer.
+    const tempPath = `${this.storagePath}.tmp-${process.pid}-${Date.now()}`;
     let fd = null;
+    let tempIsOurs = false;
     try {
       const dir = path.dirname(this.storagePath);
+      // Before anything is created: `mkdirSync(recursive)` would otherwise happily
+      // materialize the queue through a symlinked ancestor.
+      assertNoSymlinkComponents(tempPath);
       if (!existsSync(dir)) {
         mkdirSync(dir, { recursive: true });
       }
       const nextProjectionVersion = this._projectionVersion + 1;
       const data = Array.from(this.queue.values());
-      const tempPath = `${this.storagePath}.tmp-${process.pid}-${Date.now()}`;
-      fd = openSync(tempPath, "w", 0o600);
+      fd = openSync(tempPath, "wx", 0o600);
+      tempIsOurs = true;
       writeFileSync(fd, JSON.stringify(data, null, 2) + "\n", "utf8");
       fsyncSync(fd);
       closeSync(fd);
@@ -232,10 +264,6 @@ export class QueueManager {
       }
       this._projectionVersion = nextProjectionVersion;
     } catch (err) {
-      throw new Error(`QUEUE_STORAGE_WRITE_FAILED: ${err?.message}`, {
-        cause: err,
-      });
-    } finally {
       if (fd !== null) {
         try {
           closeSync(fd);
@@ -243,6 +271,13 @@ export class QueueManager {
           /* preserve the original write failure */
         }
       }
+      // Closed first, so the removal can succeed on Windows as well as POSIX.
+      // Only ever a temp this process created: an `EEXIST` refusal is someone
+      // else's file, and deleting it would turn a refusal into a side effect.
+      if (tempIsOurs) removeWriterResidue(tempPath);
+      throw new Error(`QUEUE_STORAGE_WRITE_FAILED: ${err?.message}`, {
+        cause: err,
+      });
     }
   }
 

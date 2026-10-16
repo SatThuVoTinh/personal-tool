@@ -28,6 +28,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { QueueManager } from "../integrations/openclaw/lib/queue-manager.mjs";
+import { DecisionLedger } from "../integrations/openclaw/lib/decision-ledger.mjs";
 
 const PLUGIN_SOURCE = fs.readFileSync(
   new URL(
@@ -38,6 +39,10 @@ const PLUGIN_SOURCE = fs.readFileSync(
 );
 const QUEUE_SOURCE = fs.readFileSync(
   new URL("../integrations/openclaw/lib/queue-manager.mjs", import.meta.url),
+  "utf8",
+);
+const DECISION_LEDGER_SOURCE = fs.readFileSync(
+  new URL("../integrations/openclaw/lib/decision-ledger.mjs", import.meta.url),
   "utf8",
 );
 
@@ -246,4 +251,202 @@ test("A-3 pin: QueueManager.save() must NOT acquire the queue lock itself — th
     /QUEUE_LOCK_TIMEOUT/u,
     "acquiring the queue lock twice in one process must fail, so save() can never lock itself",
   );
+});
+
+// ===========================================================================
+// B-12 — A-3's deferred half: the temp file must be CREATED, not reused
+//
+// Both writers name their temp `.tmp-<pid>-<ms>`, which anyone who can write
+// that directory can predict. Opened `"w"`, a file already sitting at the
+// predicted path is silently truncated and adopted, and a failed write leaves
+// the half-written temp on disk forever. `topology/lib/ledger.mjs` already does
+// both halves right (`"wx"`, then unlink after the descriptor is closed); these
+// two writers now have to as well.
+// ===========================================================================
+
+const INSTANT = 1700000000000;
+
+/** The exact temp path a writer will reach for at a frozen instant. */
+function tempNameFor(storagePath, instant) {
+  return `${storagePath}.tmp-${process.pid}-${instant}`;
+}
+
+/**
+ * Call `save()` with `Date.now` pinned so the temp name is predictable, and
+ * hand back whatever it produced. Freezing only the clock keeps the writers'
+ * own code paths untouched — the test predicts the name, it does not fake the
+ * write.
+ */
+function saveWithFrozenClock(writer, instant = INSTANT) {
+  const realNow = Date.now;
+  Date.now = () => instant;
+  try {
+    writer.save();
+    return null;
+  } catch (error) {
+    return error;
+  } finally {
+    Date.now = realNow;
+  }
+}
+
+function tempDir(label) {
+  return fs.mkdtempSync(path.join(os.tmpdir(), `b12-${label}-`));
+}
+
+function residueFiles(dir) {
+  return fs.readdirSync(dir).filter((name) => name.includes(".tmp-"));
+}
+
+test("B-12 queue: a temp file already at the predicted path is refused, not truncated", () => {
+  const storagePath = tempStorage("wx-queue");
+  seed(storagePath, "t-live");
+  const planted = tempNameFor(storagePath, INSTANT);
+  fs.writeFileSync(planted, "PLANTED-BEFORE-THE-WRITER\n", "utf8");
+
+  const error = saveWithFrozenClock(new QueueManager({ storagePath }));
+
+  assert.notEqual(error, null, '"wx" must refuse the path outright');
+  assert.match(error.message, /QUEUE_STORAGE_WRITE_FAILED/u);
+  assert.equal(
+    fs.readFileSync(planted, "utf8"),
+    "PLANTED-BEFORE-THE-WRITER\n",
+    "refusing a pre-existing temp means not writing a byte to it",
+  );
+  assert.notEqual(
+    new QueueManager({ storagePath }).getTask("t-live"),
+    null,
+    "the canonical queue file must be exactly what it was before the refusal",
+  );
+});
+
+test("B-12 ledger: the decision ledger refuses the same planted temp path", () => {
+  const dir = tempDir("wx-ledger");
+  const storagePath = path.join(dir, "ledger.json");
+  fs.writeFileSync(storagePath, "[]\n", "utf8");
+  const planted = tempNameFor(storagePath, INSTANT);
+  fs.writeFileSync(planted, "PLANTED-BEFORE-THE-WRITER\n", "utf8");
+
+  const error = saveWithFrozenClock(new DecisionLedger({ storagePath }));
+
+  assert.notEqual(error, null, '"wx" must refuse the path outright');
+  assert.match(error.message, /LEDGER_WRITE_FAILED/u);
+  assert.equal(
+    fs.readFileSync(planted, "utf8"),
+    "PLANTED-BEFORE-THE-WRITER\n",
+    "the planted file must survive the refusal untouched",
+  );
+  assert.equal(
+    fs.readFileSync(storagePath, "utf8"),
+    "[]\n",
+    "the canonical ledger must be exactly what it was before the refusal",
+  );
+});
+
+test("B-12 queue: a failed serialization leaves no temp residue behind", () => {
+  const storagePath = tempStorage("residue-queue");
+  seed(storagePath, "t-live");
+  const writer = new QueueManager({ storagePath });
+  // Circular, so `JSON.stringify` throws AFTER the temp has been opened — the
+  // one failure this seam cannot avoid producing a half-written file for.
+  const circular = { taskId: "t-loop" };
+  circular.self = circular;
+  writer.queue.set("t-loop", circular);
+
+  assert.throws(() => writer.save(), /QUEUE_STORAGE_WRITE_FAILED/u);
+
+  assert.deepEqual(
+    residueFiles(path.dirname(storagePath)),
+    [],
+    "the temp must be unlinked once the write failed",
+  );
+  assert.equal(
+    new QueueManager({ storagePath }).getTask("t-live").taskId,
+    "t-live",
+    "the canonical queue is untouched by the failed attempt",
+  );
+});
+
+test("B-12 ledger: a failed serialization leaves no temp residue behind", () => {
+  const dir = tempDir("residue-ledger");
+  const storagePath = path.join(dir, "ledger.json");
+  const ledger = new DecisionLedger({ storagePath });
+  const circular = { decisionId: "d-loop" };
+  circular.self = circular;
+  ledger.decisions.set("d-loop", circular);
+
+  assert.throws(() => ledger.save(), /LEDGER_WRITE_FAILED/u);
+
+  assert.deepEqual(
+    residueFiles(dir),
+    [],
+    "the temp must be unlinked once the write failed",
+  );
+});
+
+test("B-12: a symlinked path component is refused before either writer writes", (t) => {
+  // POSIX-only: creating a directory symlink on Windows needs privileges this
+  // suite cannot assume, and the guard's purpose is to protect the POSIX state
+  // directory the live runtime actually uses.
+  if (process.platform === "win32") {
+    t.skip(
+      "symlink creation is not dependable on win32; the WSL lane runs this",
+    );
+    return;
+  }
+  const root = tempDir("symlink");
+  const real = path.join(root, "real");
+  fs.mkdirSync(real);
+  const link = path.join(root, "link");
+  fs.symlinkSync(real, link, "dir");
+
+  const queueWriter = new QueueManager({
+    storagePath: path.join(link, "queue.json"),
+  });
+  assert.throws(
+    () => queueWriter.save(),
+    /QUEUE_STORAGE_WRITE_FAILED: Symlink path component is not allowed/u,
+    "the queue writer must refuse a link on the path, not write through it",
+  );
+
+  const ledgerWriter = new DecisionLedger({
+    storagePath: path.join(link, "ledger.json"),
+  });
+  assert.throws(
+    () => ledgerWriter.save(),
+    /LEDGER_WRITE_FAILED: Symlink path component is not allowed/u,
+    "the decision ledger must refuse the same way",
+  );
+
+  assert.deepEqual(
+    fs.readdirSync(real),
+    [],
+    "nothing may land in the linked-to directory, not even a temp file",
+  );
+});
+
+test("B-12 pin: both writers open their temp exclusively and clean up after themselves", () => {
+  for (const [label, source] of [
+    ["queue-manager", QUEUE_SOURCE],
+    ["decision-ledger", DECISION_LEDGER_SOURCE],
+  ]) {
+    const saveAt = source.search(/^ {2}save\(\) \{/mu);
+    assert.notEqual(saveAt, -1, `${label}: save() must still exist`);
+    const body = codeOnly(balancedBody(source, saveAt));
+    assert.match(
+      body,
+      /openSync\([^)]*"wx"/u,
+      `${label}: the temp must be opened exclusively so a planted path cannot be adopted`,
+    );
+    assert.doesNotMatch(
+      body,
+      /openSync\([^)]*"w"(?!x)/u,
+      `${label}: the truncating form must be gone`,
+    );
+    assert.match(
+      body,
+      /assertNoSymlinkComponents/u,
+      `${label}: the shared link guard must run before the temp is opened`,
+    );
+  }
 });

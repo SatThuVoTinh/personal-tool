@@ -7,11 +7,28 @@ import {
   closeSync,
   fsyncSync,
   renameSync,
+  unlinkSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import os from "node:os";
 import { lockDirFor, withFileLockSync } from "./file-lock.mjs";
+import { assertNoSymlinkComponents } from "./policy.mjs";
+
+/**
+ * Remove a temp this process created but could not rename; same tolerance set,
+ * same reason, and the same packaging constraint as `removeWriterResidue` in
+ * `lib/queue-manager.mjs` — the deployed tree flattens `topology/lib/*` only for
+ * the targets `PACKAGE_REWRITES` names, so the ledger's own copy cannot be
+ * imported from here.
+ */
+function removeWriterResidue(tempPath) {
+  try {
+    unlinkSync(tempPath);
+  } catch (error) {
+    if (!["EPERM", "EISDIR", "ENOENT"].includes(error?.code)) throw error;
+  }
+}
 
 /**
  * Governed Decision Ledger
@@ -239,7 +256,12 @@ export class DecisionLedger {
     const dir = path.dirname(this.storagePath);
     const tempPath = `${this.storagePath}.tmp-${process.pid}-${Date.now()}`;
     let fd = null;
+    let tempIsOurs = false;
     try {
+      // M12/T2.2-R2 B-12: refuse a link on the way, then create the temp rather
+      // than adopt whatever already sits at its predictable path. Same discipline
+      // as `topology/lib/ledger.mjs` and `lib/queue-manager.mjs`.
+      assertNoSymlinkComponents(tempPath);
       // The lock lives beside the storage file, so the directory must exist
       // before `mkdir`-based acquisition can succeed.
       if (!existsSync(dir)) {
@@ -262,7 +284,8 @@ export class DecisionLedger {
         lockDirFor(dir, `${path.basename(this.storagePath)}.lock`),
         () => {
           const data = Array.from(this.decisions.values());
-          fd = openSync(tempPath, "w", 0o600);
+          fd = openSync(tempPath, "wx", 0o600);
+          tempIsOurs = true;
           writeFileSync(fd, JSON.stringify(data, null, 2) + "\n", "utf8");
           fsyncSync(fd);
           closeSync(fd);
@@ -301,6 +324,10 @@ export class DecisionLedger {
           /* preserve original failure */
         }
       }
+      // Closed first, so the removal can succeed on Windows as well as POSIX.
+      // Only ever a temp this process created: an `EEXIST` refusal is someone
+      // else's file, and deleting it would turn a refusal into a side effect.
+      if (tempIsOurs) removeWriterResidue(tempPath);
       failLedger(`LEDGER_WRITE_FAILED: ${err?.message}`);
     }
   }
