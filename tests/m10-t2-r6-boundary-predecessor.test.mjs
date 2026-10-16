@@ -245,6 +245,44 @@ test("R6 0b: the candidate build digest is NOT listed", async () => {
   );
 });
 
+test("R6 0d: the boundary's packaged bytes ARE its source bytes, so three pins are one fact", async () => {
+  // B-21. The "current build" of this asset is pinned in three places that hash
+  // three DIFFERENT inputs: `:233` above hashes the packaged asset,
+  // `tests/m8-t2.16-r19-promptbuild-liveness.test.mjs:507` hashes the working-tree
+  // source, and
+  // `tests/m8-t2.10-r13-r7-predecessor-allowlist.test.mjs:103` hashes the file
+  // `configure.mjs --apply` installs. They are one fact only while packaging
+  // rewrites nothing inside this file — true today because its sole import is
+  // `node:buffer`, which `PACKAGE_REWRITES` does not touch. B-16 stalled for an
+  // owner round because that coincidence was load-bearing and unasserted: an edit
+  // rolled one pin and two stayed behind. Asserted here in the shape
+  // `tests/m12-t2-governed-surface.test.mjs:663-666` already uses for another
+  // asset, so a future rewrite of this asset fails a gate instead of splitting a
+  // fact in three.
+  const source = readFileSync(
+    path.join(
+      REPO,
+      "integrations",
+      "openclaw",
+      "topology",
+      "lib",
+      "native-boundary.mjs",
+    ),
+    "utf8",
+  );
+  const current = await currentBuild();
+  assert.equal(
+    current.assets["lib/native-boundary.mjs"],
+    source,
+    "packaging must not rewrite this asset's bytes, or its three current-build pins stop naming one build",
+  );
+  assert.equal(
+    sha256(source),
+    CANDIDATE_BOUNDARY_SHA256,
+    "the working-tree source must hash to the digest the packaged pin holds",
+  );
+});
+
 test("R6 0c: preflight and apply share the single asset allowlist", () => {
   const uses = [
     ...CONFIGURE_SOURCE.matchAll(
