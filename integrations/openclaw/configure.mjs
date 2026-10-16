@@ -668,6 +668,16 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // this entry --preflight refuses the deployed extension. The new digest is
     // deliberately NOT listed: it is the current build.
     "97c7f3e15d2845474ded9bbe908893bbeca6c655a7cecf37b816490693e8d52c",
+    // M12/T2.2-R2 B-16/J-1: the outgoing boundary build the live runtime carries,
+    // byte-proven by `sha256sum` of the installed asset at this exact path on the
+    // WSL host (5966d446258259407ccd4a349b1d6df75dccc2a75c651a149caa92d4fa8393d0)
+    // and re-derived in-test from commit 3cb8274, the revision that produced it.
+    // B-16 changes only this file -- it names the guard's reason in the diagnostic
+    // channel, leaving every host-visible code, verdict and return shape
+    // byte-identical -- so without this entry --preflight refuses the deployed
+    // extension and the B-16 build is unreachable. The B-16 digest is deliberately
+    // NOT listed: it is the current build and is accepted by content comparison.
+    "5966d446258259407ccd4a349b1d6df75dccc2a75c651a149caa92d4fa8393d0",
   ]),
   "lib/runtime.mjs": Object.freeze([
     // M10/T2-R15: the outgoing build currently deployed, byte-proven by

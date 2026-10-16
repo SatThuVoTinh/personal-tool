@@ -97,15 +97,25 @@ const R5_ENTRYPOINT_SHA256 =
 const R12_OUTGOING_NATIVE_BOUNDARY_SHA256 =
   "97c7f3e15d2845474ded9bbe908893bbeca6c655a7cecf37b816490693e8d52c";
 /**
- * M11/T3 Phase 1: the CURRENT boundary. Accepted by content comparison and
- * deliberately NOT listed.
- *
- * PROBE ONLY — B-16 would move this to `fceefc0d…` (the reason diagnostics).
- * This pinned assertion is NOT in the owner's grant; see
- * `.agents/states/wave-b-premises.md`.
+ * M12/T2.2 B-16 (owner grant §0.5-F extended by §0.5-I): the CURRENT boundary.
+ * Four seams also name the guard's reason in the diagnostic channel; every
+ * host-visible code, verdict and return shape is unchanged. Accepted by content
+ * comparison and deliberately NOT listed.
  */
 const M11_T3_NATIVE_BOUNDARY_SHA256 =
   "fceefc0df03228c91511779880c21a81d75579633e86ceae54d9696446d0081d";
+/**
+ * M12/T2.2-R2 J-1: the boundary build the LIVE runtime ACTUALLY carries,
+ * byte-proven by `sha256sum` of the installed asset on the WSL host. B-16 rolled
+ * the three current-build pins from `5966d446…` to `fceefc0d…` without admitting
+ * the outgoing value, which left the deployed extension reachable to neither
+ * `--preflight` nor `--apply` — the M11/T1-R2 blocker recurring, caught only by
+ * `R13 P1` on the WSL lane (Windows skips it: 48 skips, the live tree is not
+ * mountable there). Admitted here as the predecessor it is, and re-derived from
+ * its source commit in `R13 P6` rather than transcribed.
+ */
+const B16_OUTGOING_NATIVE_BOUNDARY_SHA256 =
+  "5966d446258259407ccd4a349b1d6df75dccc2a75c651a149caa92d4fa8393d0";
 const R6_OUTGOING_NATIVE_BOUNDARY_SHA256 =
   "bccfa8616dc89fbb3764d53ad6ea11f5cfbc445bc076e4270f2678c6c1e18c3a";
 assert.ok(
@@ -289,6 +299,13 @@ const M11_T1_R1_SOURCE_COMMIT = "45e0ee7";
  * reproduces the live bytes exactly.
  */
 const M11_T3_SOURCE_COMMIT = "d7df6d9";
+
+/**
+ * M12/T2.2-R2 J-1: the commit whose packaged boundary is the build the LIVE
+ * runtime carries (`5966d446…`). Phase 1's A3 is the revision that produced
+ * those bytes, so re-reading that commit reproduces them exactly.
+ */
+const A3_BOUNDARY_SOURCE_COMMIT = "3cb8274";
 
 const gitShow = (rev, file) =>
   execFileSync("git", ["show", `${rev}:${file}`], {
@@ -537,6 +554,34 @@ test("R13 P5: the entrypoint the live runtime carries is proven from its commit"
   // The three hunks A1/A2 touched are the only packaged difference.
   const current = await currentBuild();
   assert.equal(sha256(current.entrypoint), M11_T3_ENTRYPOINT_SHA256);
+});
+
+test("R13 P6: the boundary build the live runtime carries is admitted and proven from its commit", async () => {
+  // Same rule R13 P5 states for the entrypoint: an allowlist entry nobody can
+  // reproduce is how an allowlist rots. `B-16` rolled the three current-build
+  // content pins and stopped there, which left the deployed boundary reachable
+  // to neither `--preflight` nor `--apply`; this pins the missing half.
+  assert.equal(
+    sha256(
+      gitShow(
+        A3_BOUNDARY_SOURCE_COMMIT,
+        "integrations/openclaw/topology/lib/native-boundary.mjs",
+      ),
+    ),
+    B16_OUTGOING_NATIVE_BOUNDARY_SHA256,
+    "the committed A3 source must reproduce the digest the live runtime carries",
+  );
+  assert.notEqual(
+    B16_OUTGOING_NATIVE_BOUNDARY_SHA256,
+    M11_T3_NATIVE_BOUNDARY_SHA256,
+    "the admitted predecessor must not be the current build",
+  );
+  assert.ok(
+    listedAssetDigests("lib/native-boundary.mjs").includes(
+      B16_OUTGOING_NATIVE_BOUNDARY_SHA256,
+    ),
+    "configure.mjs must admit the outgoing boundary build the live runtime carries",
+  );
 });
 
 /**

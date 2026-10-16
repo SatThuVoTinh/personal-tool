@@ -49,14 +49,19 @@ const HYGIENE_BOUNDARY_SHA256 =
  * a predecessor; the new build is accepted by content comparison and
  * deliberately NOT listed.
  *
- * M12/T2.2 B-16 (re-valued under owner grant §0.5-F): the four seams now also
- * name the guard's reason in the diagnostic channel. The A3 diagnostics are
- * unchanged, and so is every host-visible code, verdict and return shape, so
- * the reasoning above still holds for `fceefc0d…`. The replaced value
- * (`5966d446…`) was this file's own packaged digest at HEAD immediately before
- * the edit, and it appears in no `configure.mjs` allowlist entry, so nothing is
- * admitted for it here; the live runtime's admitted predecessor stays
- * `97c7f3e1…`.
+ * M12/T2.2 B-16 (re-valued under owner grant §0.5-F, extended by §0.5-I): the
+ * four seams now also name the guard's reason in the diagnostic channel. The A3
+ * diagnostics are unchanged, and so is every host-visible code, verdict and
+ * return shape, so the reasoning above still holds for `fceefc0d…`.
+ *
+ * CORRECTED by §0.5-J. An earlier revision of this comment asserted the replaced
+ * value `5966d446…` "appears in no `configure.mjs` allowlist entry, so nothing is
+ * admitted for it here". That inference was wrong, and the WSL lane proved it:
+ * `5966d446…` is what the LIVE runtime carries, so rolling it out of the
+ * current-build pins without admitting it left the deployed extension reachable
+ * to neither `--preflight` nor `--apply`. The admission landed with J-1;
+ * `tests/m8-t2.10-r13-r7-predecessor-allowlist.test.mjs` `R13 P6` re-derives that
+ * entry's bytes from commit `3cb8274` instead of trusting a grep.
  */
 const CANDIDATE_BOUNDARY_SHA256 =
   "fceefc0df03228c91511779880c21a81d75579633e86ceae54d9696446d0081d";
