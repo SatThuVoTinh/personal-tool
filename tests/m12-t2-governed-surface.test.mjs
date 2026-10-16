@@ -678,18 +678,28 @@ test("M12/T2-R3: the deployed forum-tag asset digest is admitted under its own p
     "const ALLOWED_GOVERNANCE_ASSET_SHA256",
   );
   assert.notEqual(start, -1, "the asset allowlist must exist");
-  const table = configureSource.slice(
-    start,
-    configureSource.indexOf("\n});", start),
+  const tableEnd = configureSource.indexOf("\n});", start);
+  assert.notEqual(
+    tableEnd,
+    -1,
+    "the asset allowlist must be terminated, or the slice below silently " +
+      "reads past the table and drops the file's last character",
   );
-  assert.notEqual(table, undefined, "the asset allowlist must be terminated");
+  const table = configureSource.slice(start, tableEnd);
   const key = table.indexOf(`"${FORUM_TAGS_ASSET_REL}": Object.freeze([`);
   assert.notEqual(
     key,
     -1,
     "the asset must have its own key in the allowlist table",
   );
-  const block = table.slice(key, table.indexOf("]),", key));
+  const blockEnd = table.indexOf("]),", key);
+  assert.notEqual(
+    blockEnd,
+    -1,
+    "the asset entry must be closed, or the block below is truncated to " +
+      "whatever precedes the missing terminator",
+  );
+  const block = table.slice(key, blockEnd);
   assert.ok(
     block.includes(DEPLOYED_FORUM_TAGS_SHA256),
     "the deployed digest must be listed under lib/discord-forum-tags.mjs",
