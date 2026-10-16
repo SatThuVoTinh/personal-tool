@@ -5922,6 +5922,44 @@ Gate state. Windows full `npm run verify`: **1512 tests / 106 suites / 1466 pass
 **51 tests / 51 pass / 0 fail / 0 skipped**. Not deployed: no `--apply`, no `--preflight` run, no restart — the
 allowlist entry exists precisely so a future authorized deployment stays reachable from what is installed today.
 
+### Record — `M12/T2.2-R1` `A-6` landed: a state root that is already a ledger root is refused by name (2026-10-16)
+
+`A-6` (`R6-V11-01`, Medium). `ledgerPaths(stateDir)` appended `operator/m7-t2/ledger`
+unconditionally, so passing a root that had already been joined produced a **second, empty,
+permission-valid governance root nested inside the real one**. The live tree carries the evidence:
+`operator/m7-t2/ledger/operator/m7-t2/ledger/` with a 0-byte journal and its own 65-byte `identity.key`.
+
+`ledger.mjs:56-76` now resolves the argument, splits on `path.sep`, and refuses when the trailing
+segments are exactly `operator/m7-t2/ledger`, with `LEDGER_ROOT_ALREADY_JOINED` naming the mistake and
+stating what to pass instead (the directory that *contains* `operator/`). The suffix is a frozen
+constant so the check and the join cannot diverge later. Tests went into the existing
+`tests/m11-t3-durable-state-integrity.test.mjs` as `B8-1`/`B8-2` — Cluster B is already "durable state
+silently recreated", and adding a file there would have cost a `package.json` edit for no new coverage.
+Baseline: `B8-1` red, `B8-2` green (the ordinary join must not change); after the guard, 26/26.
+The refusal creates nothing on disk, which `B8-1` asserts, so rejecting a call cannot itself mint a
+scratch root.
+
+**One probe of my own that was initially fake, and what caught it.** My first mutation attempt
+substituted nothing (the pattern did not match) yet reported 26/26 — which I nearly logged as "the test
+is not sensitive". Grepping the file after the edit showed the source was untouched; re-applying the
+neuter with the change *verified in the file* reddened exactly `B8-1`. A probe you have not confirmed
+landed is not a probe.
+
+Behavior change the owner should know about, because it touches his tools: `operator-lock-recovery.mjs`
+and `live-governance-probe.mjs` call `ledgerPaths(options.stateDir)`. Every shipped call site passes a
+state root (audited: `configure.mjs:1139-1142, 1177, 1752`, `verify.mjs:408`, the two operator tools),
+so nothing in the repository breaks — but an operator invocation that passes
+`~/.openclaw-zink/operator/m7-t2/ledger` instead of `~/.openclaw-zink` now **fails loudly** where
+before it silently opened a phantom ledger root. The correct argument is the state root. This is the
+intended effect, and it is exactly the class of mistake that produced the nested artifact in the
+first place.
+
+Gate: Windows `npm run verify` **1514 tests / 1468 pass / 0 fail / 46 skipped** (baseline 1512/1466, plus
+exactly the two new tests) + `Repository policy check passed.`; the neutered source was restored
+byte-identically (`SHA256 d50541f1baeaec0fecbe92c7fde912572eceb0f209d2bce2f92a83b094071314`) and re-run to
+26/26. WSL lane: `B8` suite **26/26, 0 skipped**. No deletion or move of the existing nested tree — that still
+needs a separate grant naming the exact target, per §5.
+
 ## 9. Deferred beyond V1
 
 Unless separately approved:

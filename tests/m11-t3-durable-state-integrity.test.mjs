@@ -879,3 +879,78 @@ test("B7-3: the snapshot write path cleans its own residue before rethrowing", (
     "the temp snapshot name must stay the one the persistence matrix injects against",
   );
 });
+
+// ===========================================================================
+// Cluster B, A-6 / R6-V11-01 — a state root that is already a ledger root.
+//
+// `ledgerPaths(stateDir)` joined `operator/m7-t2/ledger` unconditionally, so a
+// caller that had already resolved a ledger root got a SECOND, empty,
+// permission-valid governance root nested inside the first. The live state tree
+// carries that artifact (`operator/m7-t2/ledger/operator/m7-t2/ledger/`, a 0-byte
+// journal and its own 65-byte `identity.key`) — proof it happened, and proof the
+// nested root was never caught by any caller-side check because there is nothing
+// to catch: the function answered for the wrong place and the guard machinery
+// dutifully created the right permissions on it.
+// ===========================================================================
+
+test("B8-1: ledgerPaths refuses a state dir that is already a ledger root", () => {
+  const base = mkdtempSync(path.join(tmpdir(), "zink-a6-nested-"));
+  try {
+    const joined = path.join(base, "operator", "m7-t2", "ledger");
+    assert.throws(
+      () => ledgerPaths(joined),
+      /LEDGER_ROOT_ALREADY_JOINED/u,
+      "the refusal must name the mistake, not just fail",
+    );
+    assert.throws(
+      () => ledgerPaths(`${joined}${path.sep}`),
+      /LEDGER_ROOT_ALREADY_JOINED/u,
+      "a trailing separator must not smuggle the same root past the check",
+    );
+    // The refusal is diagnostic, so it has to say what to pass instead.
+    try {
+      ledgerPaths(joined);
+    } catch (error) {
+      assert.match(
+        String(error.message),
+        /STATE root/iu,
+        `the message must tell the caller to pass the state root, got: ${error.message}`,
+      );
+    }
+    // No scratch governance tree may be minted by the rejected call.
+    assert.equal(
+      existsSync(path.join(joined, "operator")),
+      false,
+      "the double-nested root must not be created",
+    );
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("B8-2: a correct state root still resolves to the same ledger layout", () => {
+  const base = mkdtempSync(path.join(tmpdir(), "zink-a6-valid-"));
+  try {
+    const paths = ledgerPaths(base);
+    assert.equal(
+      paths.root,
+      path.join(base, "operator", "m7-t2", "ledger"),
+      "the ordinary join must be unchanged",
+    );
+    assert.equal(paths.events, path.join(paths.root, "events.jsonl"));
+    assert.equal(paths.snapshot, path.join(paths.root, "snapshot.json"));
+    assert.equal(
+      paths.identityKey,
+      path.join(base, "operator", "m7-t2", "identity.key"),
+      "the identity key stays a sibling of the ledger root, not inside it",
+    );
+    // A path that merely CONTAINS one of the suffix segments is not the suffix.
+    const lookalike = path.join(base, "ledger", "operator", "notes");
+    assert.equal(
+      ledgerPaths(lookalike).root,
+      path.join(lookalike, "operator", "m7-t2", "ledger"),
+    );
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});

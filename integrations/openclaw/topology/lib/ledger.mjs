@@ -53,7 +53,27 @@ export const RUN_STATES = Object.freeze([
   "UNKNOWN",
 ]);
 
+// A-6 / R6-V11-01: the segments `ledgerPaths` appends. A caller that passes an
+// already-joined root gets them appended a second time, which mints a new,
+// empty, permission-valid governance root nested inside the real one — the live
+// state tree still carries that artifact. Matched on resolved path segments so
+// a trailing separator or platform separator cannot smuggle it through.
+const LEDGER_ROOT_SUFFIX = Object.freeze(["operator", "m7-t2", "ledger"]);
+
 export function ledgerPaths(stateDir) {
+  const segments = path.resolve(stateDir).split(path.sep).filter(Boolean);
+  const tail = segments.slice(-LEDGER_ROOT_SUFFIX.length);
+  if (
+    segments.length >= LEDGER_ROOT_SUFFIX.length &&
+    LEDGER_ROOT_SUFFIX.every((part, index) => tail[index] === part)
+  ) {
+    throw new Error(
+      `LEDGER_ROOT_ALREADY_JOINED: ${stateDir} already ends with operator/m7-t2/ledger. ` +
+        "Pass the STATE root — the directory that CONTAINS operator/ — because this " +
+        "function appends the suffix and a second copy would create a separate, empty " +
+        "governance root beside the real ledger.",
+    );
+  }
   const root = path.join(stateDir, "operator", "m7-t2", "ledger");
   return Object.freeze({
     root,
