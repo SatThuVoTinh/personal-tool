@@ -5960,6 +5960,32 @@ byte-identically (`SHA256 d50541f1baeaec0fecbe92c7fde912572eceb0f209d2bce2f92a83
 26/26. WSL lane: `B8` suite **26/26, 0 skipped**. No deletion or move of the existing nested tree — that still
 needs a separate grant naming the exact target, per §5.
 
+### Record — `M12/T2.2-R1` `A-7` landed: the no-skip decision is now pinned where it would be broken (2026-10-16)
+
+`A-7` implements **no optimization**, per the owner's choice (a). It puts a comment at the call site
+(`vector-sync.mjs:707`) recording why — the model-identity checks live *inside* `generateSkillEmbeddings`,
+i.e. inside the HTTP call a skip would avoid, so a skip needs a stored model identity first, which is a
+migration and outside this tier — and two tests that make a later silent "optimization" fail the gate:
+
+- `A7-1` counts real work: two ACTIVE skills whose content chunks to more than two segments must produce
+  one embedding call per segment **and** one stored vector literal per embedding. Cross-checked against
+  `chunkSkillContent` for the same content rather than against a number I typed.
+- `A7-2` pins the shape: nothing branch-like sits between taking a segment and embedding it (comments
+  stripped first — my own WHY comment contains the word "skip" and initially read as control flow), and
+  `EMBEDDING_MODEL_MISMATCH` / `EMBEDDING_MODEL_DIGEST_MISMATCH` must still exist in the seam.
+
+Red-green, actually verified this time: injecting a real skip (rows written, embedding skipped) reddens
+**both** tests; removing it restores 7/7, and `vector-sync.mjs` was returned byte-identically
+(`SHA256 f079ec825fa7b06bb16b6dde2cfda217f94320a08d66731360cc21326219a93a`). Two of my own counting bugs
+were found and fixed before that claim: segment rows arrive as one `(VALUES …)` list per skill, so
+counting statements compared 2 against 4, and the first fixture chunked to a single segment, which made
+the equality hold trivially.
+
+Gate: `npm run verify` **1516 / 1470 pass / 0 fail / 46 skipped** + `Repository policy check passed.`;
+WSL **7/7**. Still recorded and deliberately **not** implemented: the `ON CONFLICT DO UPDATE` asymmetry at
+`:793-796`, and that 9Router's echo of `model` / `model_version` is unverified — if it does not echo them,
+today's identity protection is already conditional.
+
 ## 9. Deferred beyond V1
 
 Unless separately approved:

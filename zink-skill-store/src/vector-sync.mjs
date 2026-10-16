@@ -704,6 +704,14 @@ export async function syncSkillsToVectorStore(options = {}) {
         });
         const embeddingInputHash = computeEmbeddingInputHash(envelopeText);
 
+        // M12/T2.2-R1 A-7 (owner decision `a`, 2026-10-15): every segment of
+        // every active skill goes to the embedding endpoint, unconditionally.
+        // A skip-when-unchanged optimization was considered and refused, because
+        // the only model-identity checks in this path (`EMBEDDING_MODEL_MISMATCH`,
+        // `EMBEDDING_MODEL_DIGEST_MISMATCH`, the dimension check below) live
+        // INSIDE `generateSkillEmbeddings` — i.e. inside the HTTP call a skip
+        // would avoid. A future skip requires a STORED model identity per row,
+        // which is a schema migration and therefore outside this tier.
         const [vector] = await generateSkillEmbeddings([envelopeText], options);
 
         envelopeHashes.push(embeddingInputHash);

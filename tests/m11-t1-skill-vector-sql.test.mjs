@@ -11,11 +11,13 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import os from "node:os";
 
 import {
   syncSkillsToVectorStore,
   generateSkillEmbeddings,
+  chunkSkillContent,
   toPostgresArrayLiteral,
   escapeSqlLiteral,
   EXPECTED_DIMENSIONS,
@@ -252,5 +254,124 @@ test("M11-05: embedding identity is exact, and a chunked oversized body is still
     );
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+// ===========================================================================
+// M12/T2.2-R1 A-7 — the owner's choice (a) is that NO re-embed skip exists, and
+// the reason is structural: the only embedding model-identity checks in this
+// path (`EMBEDDING_MODEL_MISMATCH`, `EMBEDDING_MODEL_DIGEST_MISMATCH`, the
+// dimension check) live inside `generateSkillEmbeddings`, i.e. inside the HTTP
+// call a skip would avoid. These two tests keep that decision honest: one counts
+// real work, one pins the shape so a later "optimization" cannot land silently.
+// ===========================================================================
+
+const SYNC_SOURCE = readFileSync(
+  new URL("../zink-skill-store/src/vector-sync.mjs", import.meta.url),
+  "utf8",
+);
+
+test("A7-1: every stored segment is embedded — the sync issues no skip", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "m11-a7-skip-"));
+  try {
+    await makeActiveSkill(
+      root,
+      ["office"],
+      "alpha-skill",
+      "# Alpha\n\nFirst body.",
+    );
+    // Long enough to chunk into several segments: with one segment per skill the
+    // embed-per-write equality below would hold trivially and prove nothing.
+    await makeActiveSkill(
+      root,
+      ["data", "power-bi"],
+      "beta-skill",
+      `# Beta\n\n${"Second body, repeated so the chunker has to split it. ".repeat(400)}`,
+    );
+    const embedInputs = [];
+    const statements = [];
+    const report = await syncSkillsToVectorStore({
+      skillsRoot: root,
+      embedFn: async (texts) => {
+        for (const text of texts) embedInputs.push(text);
+        return texts.map(() => new Array(EXPECTED_DIMENSIONS).fill(0.01));
+      },
+      dbExecutor: async (sql) => {
+        statements.push(sql);
+        return "";
+      },
+    });
+    // M11/T1 writes one whole-skill transaction per skill, with all segments in
+    // a single `(VALUES …)` list, so counting statements compares 2 against 4.
+    // The authoritative segment count is the chunker's own answer for the same
+    // content, and every stored vector literal is cross-checked against it.
+    const expectedSegments =
+      chunkSkillContent("# Alpha\n\nFirst body.").length +
+      chunkSkillContent(
+        `# Beta\n\n${"Second body, repeated so the chunker has to split it. ".repeat(400)}`,
+      ).length;
+    const vectorLiterals = statements.join("").split("[0.01,0.01").length;
+    assert.equal(
+      report.status,
+      "READY",
+      `sync must complete: ${JSON.stringify(report)}`,
+    );
+    assert.equal(report.active_count, 2, "both fixtures are ACTIVE");
+    assert.ok(
+      expectedSegments > 2,
+      "the fixture must chunk into multiple segments",
+    );
+    // The load-bearing equality: one embedding call per stored segment. A
+    // skip-when-unchanged path would show up as fewer embeddings than rows,
+    // which is exactly what this asserts against.
+    assert.equal(
+      embedInputs.length,
+      expectedSegments,
+      `every segment must be embedded (${embedInputs.length} embeds vs ${expectedSegments} segments)`,
+    );
+    assert.equal(
+      vectorLiterals - 1,
+      expectedSegments,
+      `no segment row may be written without an embedding (${vectorLiterals - 1} rows vs ${expectedSegments} embeds)`,
+    );
+    assert.ok(
+      embedInputs.every((text) => typeof text === "string" && text.length > 0),
+      "each embedding input is real content, not a placeholder",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("A7-2 pin: the embedding call is unconditional and the identity checks stay on the path", () => {
+  const loopAt = SYNC_SOURCE.indexOf("for (const seg of segments) {");
+  const callAt = SYNC_SOURCE.indexOf(
+    "await generateSkillEmbeddings([envelopeText], options)",
+    loopAt,
+  );
+  assert.ok(
+    loopAt !== -1 && callAt !== -1,
+    "the segment loop and embed call must exist",
+  );
+  // Comments stripped first: the WHY comment at this call site discusses the
+  // refused skip, and prose must not read as control flow.
+  const between = SYNC_SOURCE.slice(loopAt, callAt).replace(
+    /^\s*(\/\/|\*|\/\*).*$/gmu,
+    "",
+  );
+  assert.doesNotMatch(
+    between,
+    /\bif\s*\(|\bcontinue\b|\breturn\b/u,
+    "no branch may sit between taking a segment and embedding it — that is where a re-embed skip would appear",
+  );
+  // The checks the skip would have bypassed must still be in the seam.
+  for (const token of [
+    "EMBEDDING_MODEL_MISMATCH",
+    "EMBEDDING_MODEL_DIGEST_MISMATCH",
+  ]) {
+    assert.ok(
+      SYNC_SOURCE.includes(token),
+      `${token} must stay in generateSkillEmbeddings; it is the only model-identity protection that exists today`,
+    );
   }
 });
