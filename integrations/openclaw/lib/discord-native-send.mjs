@@ -307,7 +307,8 @@ async function resolveComponentSdk({
 
 /**
  * Build the host component bundle (components + registry entries) for adapter-shaped
- * buttons. Returns null when the host SDK cannot be reached, having already said so.
+ * buttons. Returns null when the host SDK cannot be reached **or when the build throws**,
+ * having already said which.
  */
 export async function buildNativeComponentBundle({
   buttons,
@@ -326,13 +327,26 @@ export async function buildNativeComponentBundle({
     contextLabel,
   });
   if (!componentSdk) return null;
-  return {
-    sdk: componentSdk,
-    buildResult: componentSdk.buildDiscordComponentMessage({
-      spec: buildHostComponentSpec(buttons),
-      accountId: accountId ?? undefined,
-    }),
-  };
+  // A build throw used to escape as a generic delivery failure and take the whole card with
+  // it — text body and the `APPROVE <code>` reply path alike. Text-only delivery is exactly
+  // what this function already promises when the SDK cannot be reached, so the same shape
+  // applies here: name the degrade and return null.
+  try {
+    return {
+      sdk: componentSdk,
+      buildResult: componentSdk.buildDiscordComponentMessage({
+        spec: buildHostComponentSpec(buttons),
+        accountId: accountId ?? undefined,
+      }),
+    };
+  } catch (buildError) {
+    warn(
+      logger,
+      api,
+      `[zink-governance] COMPONENT_BUILD_FAILED${contextLabel}: the card is delivered as text only, so the APPROVE code path survives: ${buildError?.message}`,
+    );
+    return null;
+  }
 }
 
 /**

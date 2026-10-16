@@ -71,6 +71,7 @@ function buttonSpecs(taskId = TASK_ID, revision = "3") {
 function adapterHarness({
   messageId = "msg-live-1",
   failRegister = false,
+  failBuild = false,
 } = {}) {
   const calls = [];
   const api = {
@@ -93,6 +94,8 @@ function adapterHarness({
     sdk: {
       buildDiscordComponentMessage: (params) => {
         calls.push({ kind: "build", params });
+        if (failBuild)
+          throw new Error("host component builder rejected the spec");
         const rows = params.spec.blocks.map((block, rowIndex) => ({
           type: 1,
           components: block.buttons.map((button, index) => ({
@@ -244,6 +247,36 @@ describe("M12/T1 P1 — components are built and registered through the host", (
       logs.join("\n"),
       /COMPONENT_REGISTRATION_FAILED/u,
       "a registration miss must be logged, never swallowed",
+    );
+  });
+
+  it("delivers the card as text when the component build itself throws", async () => {
+    const h = adapterHarness({ failBuild: true });
+    const { logs, logger } = logHarness();
+    const buttons = buttonSpecs();
+    const receipt = await sendNativePayload({
+      api: h.api,
+      to: "1234567890123456789",
+      accountId: "o1",
+      payload: buildNativeComponentPayload({ text: "card body", buttons }),
+      buttons,
+      sdk: h.sdk,
+      logger,
+    });
+    assert.equal(
+      receipt.messageId,
+      "msg-live-1",
+      "a build failure must not lose the card — the APPROVE <code> reply path is the fallback",
+    );
+    assert.match(
+      logs.join("\n"),
+      /COMPONENT_BUILD_FAILED/u,
+      "the degrade must be named, not left as a generic delivery failure",
+    );
+    assert.equal(
+      h.calls.some((c) => c.kind === "register"),
+      false,
+      "nothing can be registered when the build produced no bundle",
     );
   });
 
