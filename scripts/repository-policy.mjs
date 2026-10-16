@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { parseDocument } from "yaml";
 
@@ -764,6 +764,47 @@ export function checkCommandDefinitions(packageJson, makefile) {
   return failures;
 }
 
+const TEST_FILE_ARGUMENT = /^tests\/[\w.+-]+\.test\.mjs$/u;
+
+/**
+ * `npm test` names its files instead of globbing them, which is what lets a
+ * missing file fail loudly rather than silently shortening the run. The other
+ * direction has no such backstop: a test file added to disk but never listed is
+ * collected by no host and no CI run, so the suite looks greener the more tests
+ * it stops running. Reconciling the two sets is the only thing that closes that.
+ */
+export function checkTestListReconciliation(packageJson, testFiles) {
+  const command = packageJson?.scripts?.test;
+  if (typeof command !== "string") {
+    return [
+      "npm script test must be a string so it can be reconciled with tests/.",
+    ];
+  }
+
+  const listed = new Set(
+    command.split(/\s+/u).filter((token) => TEST_FILE_ARGUMENT.test(token)),
+  );
+  const onDisk = new Set(testFiles);
+  const failures = [];
+
+  for (const file of [...onDisk].sort()) {
+    if (!listed.has(file)) {
+      failures.push(
+        `Test file exists on disk but is not enumerated in the npm test script: ${file}. Add it, or this gate never runs it.`,
+      );
+    }
+  }
+  for (const entry of [...listed].sort()) {
+    if (!onDisk.has(entry)) {
+      failures.push(
+        `The npm test script enumerates a test file that does not exist: ${entry}.`,
+      );
+    }
+  }
+
+  return failures;
+}
+
 function runGit(repositoryRoot, args) {
   const result = spawnSync(
     "git",
@@ -825,6 +866,14 @@ export function collectRepositoryFailures(repositoryRoot) {
     const packageJson = JSON.parse(readFileSync(packagePath, "utf8"));
     const makefile = readFileSync(makefilePath, "utf8");
     failures.push(...checkCommandDefinitions(packageJson, makefile));
+
+    const testsDirectory = path.join(repositoryRoot, "tests");
+    if (existsSync(testsDirectory)) {
+      const testFiles = readdirSync(testsDirectory)
+        .filter((name) => name.endsWith(".test.mjs"))
+        .map((name) => `tests/${name}`);
+      failures.push(...checkTestListReconciliation(packageJson, testFiles));
+    }
   }
 
   return failures;

@@ -1,19 +1,31 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   checkCommandDefinitions,
   checkGitWhitespace,
   checkRequiredFiles,
+  checkTestListReconciliation,
   checkTrackedFilePolicies,
   checkWorkflowDefinitions,
   checkWorkingTreeTextPolicy,
+  collectRepositoryFailures,
   listTrackedFiles,
 } from "../scripts/repository-policy.mjs";
+
+const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
 function withTemporaryRepository(callback) {
   const repositoryRoot = mkdtempSync(
@@ -617,6 +629,92 @@ test("rejects Gitleaks without full-history checkout or required flags", () => {
     );
     assert.ok(
       failures.some((failure) => failure.includes("permissions.pull-requests")),
+    );
+  });
+});
+
+test("accepts an npm test list that matches the test files on disk", () => {
+  assert.deepEqual(
+    checkTestListReconciliation(
+      { scripts: { test: "node --test tests/a.test.mjs tests/b.test.mjs" } },
+      ["tests/a.test.mjs", "tests/b.test.mjs"],
+    ),
+    [],
+  );
+});
+
+test("parses only test-file arguments out of the npm test command", () => {
+  assert.deepEqual(
+    checkTestListReconciliation(
+      {
+        scripts: {
+          test: "node --test --test-concurrency=1 tests/a.test.mjs",
+        },
+      },
+      ["tests/a.test.mjs"],
+    ),
+    [],
+  );
+});
+
+test("reports a test file that exists on disk but is not enumerated in npm test", () => {
+  const failures = checkTestListReconciliation(
+    { scripts: { test: "node --test tests/a.test.mjs" } },
+    ["tests/a.test.mjs", "tests/orphan.test.mjs"],
+  );
+  assert.equal(failures.length, 1, failures.join("; "));
+  assert.match(failures[0], /tests\/orphan\.test\.mjs/u);
+  assert.ok(!failures[0].includes("tests/a.test.mjs"));
+});
+
+test("reports an npm test entry that has no matching file on disk", () => {
+  const failures = checkTestListReconciliation(
+    { scripts: { test: "node --test tests/a.test.mjs tests/gone.test.mjs" } },
+    ["tests/a.test.mjs"],
+  );
+  assert.equal(failures.length, 1, failures.join("; "));
+  assert.match(failures[0], /tests\/gone\.test\.mjs/u);
+});
+
+test("the real npm test list matches the real tests directory", () => {
+  const packageJson = JSON.parse(
+    readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"),
+  );
+  const testFiles = readdirSync(path.join(REPO_ROOT, "tests"))
+    .filter((name) => name.endsWith(".test.mjs"))
+    .map((name) => `tests/${name}`);
+  assert.deepEqual(
+    checkTestListReconciliation(packageJson, testFiles),
+    [],
+    "every test file on disk must be enumerated in the npm test script, and every " +
+      "enumerated entry must exist on disk",
+  );
+});
+
+test("repo:check itself refuses a test file the npm test script never names", () => {
+  withTemporaryRepository((repositoryRoot) => {
+    writeTrackedFile(
+      repositoryRoot,
+      "package.json",
+      JSON.stringify({
+        scripts: { test: "node --test tests/listed.test.mjs" },
+      }),
+    );
+    writeTrackedFile(repositoryRoot, "Makefile", "# no targets under test\n");
+    writeTrackedFile(
+      repositoryRoot,
+      "tests/listed.test.mjs",
+      'import test from "node:test";\ntest("listed", () => {});\n',
+    );
+    writeTrackedFile(
+      repositoryRoot,
+      "tests/orphan.test.mjs",
+      'import test from "node:test";\ntest("orphan", () => {});\n',
+    );
+    const failures = collectRepositoryFailures(repositoryRoot);
+    assert.ok(
+      failures.some((failure) => failure.includes("tests/orphan.test.mjs")),
+      `repo:check must report the unlisted file; got: ${failures.join(" | ")}`,
     );
   });
 });
