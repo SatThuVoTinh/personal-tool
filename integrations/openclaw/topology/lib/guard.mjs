@@ -1974,12 +1974,12 @@ export function createGovernanceGuard({
         run && run.parent_session_key === event.requesterSessionKey,
         "LINEAGE_MISMATCH",
       );
-      if (
-        run.run_state === "CANCELLED" ||
-        run.brief_revision !== owner.task.brief_revision ||
-        owner.task.brief_state !== "ACTIVE"
-      )
-        return { action: "discard" };
+      if (run.run_state === "CANCELLED")
+        return { action: "discard", reason: "AUTH_DELEGATION_INACTIVE" };
+      if (run.brief_revision !== owner.task.brief_revision)
+        return { action: "discard", reason: "REVISION_SUPERSEDED" };
+      if (owner.task.brief_state !== "ACTIVE")
+        return { action: "discard", reason: "SUPERSEDED_REVISION" };
       if (event.phase === "descendant_wake") {
         const children = Object.values(owner.task.delegations).filter((item) =>
           ownerRunIds(owner).includes(item.parent_run_id),
@@ -2045,7 +2045,8 @@ export function createGovernanceGuard({
       validateAgentClaim(payload);
       const digest = payloadDigest(payload);
       const duplicate = run.accepted_payload_digest === digest;
-      if (duplicate && !event.nextRunId) return { action: "discard" };
+      if (duplicate && !event.nextRunId)
+        return { action: "discard", reason: "STALE_RESULT" };
       const governance = manifest(run.agent_id);
       assert(
         governance.expected_governance_hash === run.expected_governance_hash,
