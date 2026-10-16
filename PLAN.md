@@ -67,15 +67,23 @@ operations research and simulation remain first-class capabilities.
 
 ```text
 Milestone: M12 — Governed Discord interaction lifecycle and governed presentation
-Task: M12/T2.3 — WAVE C: document-truth and gate-registry defects (the low-risk tier, third of three waves) — **CLOSED
-  2026-10-17**; the three-wave remediation programme (`M12/T2.1` high, `M12/T2.2` medium, `M12/T2.3` low) is complete at
-  the tier level. What remains scheduled and unauthorized is `M12/T2.2-R3` (the Skill Store lifecycle block, 18
-  findings) and `M12/T3` (H11 documentation and skills procedure).
+Task: M12/T4 — Governance-record integrity: re-inventory the orphaned findings, re-file them under live identifiers,
+  and shrink the release-gate cell that duplicates §8.
+  (history) `M12/T2.3` Wave C — **CLOSED 2026-10-17**; the three-wave remediation programme (`M12/T2.1` high,
+  `M12/T2.2` medium, `M12/T2.3` low) is complete at the tier level, and the owner's standing order `anh muốn em sửa hết`
+  now runs the successor bands in this queue: `M12/T4` (record) → `M12/T2.2-R3` (Skill Store lifecycle, 18) →
+  `M12/T5` (A2 packaged module graph) → H5 answer → `M12/T6`/`T7`/`T8` (Knowledgebase / Zink Tools adapters / gate
+  truth) → `M12/T3` (H11 shape 1) last.
   The predecessor tier `M12/T2.1` (HIGH-RISK: irreversible loss, exposure, failures nobody can detect) is **CLOSED
   2026-10-15**: all eight items plus four owner-authorized follow-ons landed, its evidence is in §8, and its full
   contract text is preserved verbatim at `docs/contracts/execution/archive/2026-10-15-M12-T2.1-R3.md` — that archive
   is decision `H10` / `R3-P04-03`, executed first because §5.1 of the old contract made the scrub rule a prerequisite.
-Active revision: M12/T2.3-R1 — **Wave C only, CLOSED 2026-10-17** with the contract archived; the field below records
+Active revision: M12/T4-R1 — **Governance-record integrity**, materialized 2026-10-17 on the owner's `grant 1`, the
+  first contract in the queue he set with `anh muốn em sửa hết`. Five items (`T4-1` re-inventory of the 38 findings that
+  still carry the defunct `M12/T2.4`–`T2.7` identifiers, `T4-2` re-filing them as `M12/T5`–`T8`, `T4-3` register-status
+  refresh + the H10 authority rule, `T4-4` shrinking the 9 840-character M12 gate cell under a printed no-fact-loss
+  diff, `T4-5` the `Cursor`→`dsh` line in `conventions.md`). No source file, no schema, no gate, no history rewrite.
+  (history) Active revision was: M12/T2.3-R1 — **Wave C only, CLOSED 2026-10-17** with the contract archived; the field below records
   how it was approved. Materialized 2026-10-16 after the owner answered the whole escalated
   N-block in one line (`n1a n2a n3a n4a n5a`): five-stack gets a caveat only with the rewrite left in `M12/T3` (`n1a`),
   Gate G18 may be edited alongside `C-4` (`n2a`), the gate registry is built **and** enforced, which widens a required
@@ -216,7 +224,9 @@ Task Status: IN PROGRESS — **all eight `R3` items are implemented and locally 
   `Record — the 9Router "cấu hình cũ" report` in §8.
   R1 and R2 both existed with **zero implementation landed under either**, and no prior task's evidence is altered.
   ── **`M12/T2.1` tier is CLOSED 2026-10-15.** The rest of this field describes the new task.**
-Task Status: COMPLETE — **`M12/T2.3` Wave C is CLOSED 2026-10-17**: twelve items landed (`C-1`…`C-11`, `C-13`) plus the
+Task Status: IN PROGRESS — **`M12/T4` executing** (`T4-1`…`T4-5`, one commit each, under `M12/T4-R1`); per-item
+  evidence lands in §8 as each item validates, and nothing in this tier is claimed before it does.
+  (history) **`M12/T2.3` Wave C is CLOSED 2026-10-17**: twelve items landed (`C-1`…`C-11`, `C-13`) plus the
   `C-1a` caveat and one review-convergence fix, with `C-12` dropped on a refuted premise. Full per-item evidence, the
   two inherited claims that died, the claim of mine that died, and the grant my own contract forgot to schedule:
   `Record — M12/T2.3-R1 Wave C closed` in §8.
@@ -234,7 +244,14 @@ Task Status: COMPLETE — **`M12/T2.3` Wave C is CLOSED 2026-10-17**: twelve ite
   (`M12/T2.3` — no contract and no code at that closeout; it was materialized the same day as `M12/T2.3-R1` after the
   owner answered the N-block), `M12/T2.2-R3` (the Skill Store lifecycle block, scheduled only), and all
   `M12/T3` H11 work.
-Planning Readiness: APPROVED — the owner approved Wave C's twelve-item scope and answered all five escalated forks on
+Planning Readiness: APPROVED — the owner approved this contract's scope with `grant 1` on 2026-10-17, inside the
+  standing instruction `anh muốn em sửa hết` (fix everything remaining) and his ordering `1 → t2.2-r3 → a2 → h5 →
+  adapter/knowledgebase/gate-truth còn lại → t3 h11`. The scope he approved was the one proposed after the premises
+  were measured, not assumed: identifiers `M12/T4`–`T8` confirmed unused, the 38 orphan ids counted from the grouping
+  paragraph itself, the register's staleness counted (112 entries, 2 `CLOSED`), and the M12 cell measured (9 940-char
+  row, 9 840-char cell, 29 commit hashes, §8 holding 17 records). Where a fact could not be proven it is written as
+  unverified rather than promoted into the schedule — the rule that killed two claims in Wave C and eight premises in
+  Wave B. (history) The owner approved Wave C's twelve-item scope and answered all five escalated forks on
   2026-10-16 with `n1a n2a n3a n4a n5a`, each the recommended option. The escalated block was produced by verifying
   every inherited premise against source before proposing it, which is how `C-12` and the "35-vs-37 drift" were found
   to be false and why `C-4`'s count became 3 rather than 8; what that pass could not authorize (the `AGENTS.md` alias
@@ -247,9 +264,19 @@ Planning Readiness: APPROVED — the owner approved Wave C's twelve-item scope a
   inherited premises failed — see `Record — M12/T2.2-R1 Wave A closed, a WSL claim of mine withdrawn, and
   M12/T2.2-R2 Wave B materialized` in §8. What that pass could not execute (it needed a new pinned constant, a live
   re-pin, or a decision about public behaviour) was escalated into `ACTIVE.md` §5 instead of smuggled in.
-Plan Revision: M12/T2.3-R1
-Execution Authorization: NO — `M12/T2.3-R1` executed and closed on 2026-10-17, so this field returns to NO and the
-  contract is archived at `docs/contracts/execution/archive/2026-10-17-M12-T2.3-R1.md`. **What was actually granted for
+Plan Revision: M12/T4-R1
+Execution Authorization: YES — bounded to `ACTIVE.md` §3's items `T4-1`…`T4-5` and §4's three writable files
+  (`PLAN.md`; `.agents/states/findings.md`; `docs/development/conventions.md`, line 26 only), under the `AGENTS.md` §12
+  terms (local implementation commits, validation, the closeout commit, push of this non-`main` task branch). Standing
+  rulings that bind this contract: `AGENTS.md` is not editable for naming/vocabulary (owner, 2026-10-17); CHANGELOG
+  takes new validated entries but accepted history lines are not rewritten without a separate word; no
+  `.github/workflows/**`; no `--apply`/restart/deployment; no deletion of a tracked file; no dependency or lockfile
+  change; no new or widened required gate (the recurrence guard is escalated, not built); no execution of the
+  successor bands this contract only schedules. Discovered record/plan defects may be fixed inside the same file set as
+  their own commits, after each premise is re-read at the current head; discovered code/schema/gate defects go to
+  `ACTIVE.md` §5's escalation list instead.
+  (history) Execution Authorization was NO immediately before this revision: `M12/T2.3-R1` executed and closed on 2026-10-17, so this field returned to NO and the
+  contract was archived at `docs/contracts/execution/archive/2026-10-17-M12-T2.3-R1.md`. **What was actually granted for
   Wave C, recorded because a later agent must not re-litigate it:** the owner answered the whole escalated N-block in
   one line — `n1a n2a n3a n4a n5a` — which bound execution to `ACTIVE.md` §4's `C-1`…`C-11` and `C-13` on §3's
   enumerated file list, under the `AGENTS.md` §12 terms only (local implementation commits, validation, the closeout
@@ -295,20 +322,29 @@ Execution Authorization: NO — `M12/T2.3-R1` executed and closed on 2026-10-17,
   `R5-E12-01`'s replacement claim contradicted by five `PLAN.md` rows that do record `quality-gate SUCCESS`).
   R3 was then written **fresh** rather than patched, and this field restored to YES at the narrower bound. Full
   detail in `.agents/states/findings.md`, Vòng 6.
-Execution Contract: NONE (the `M12/T2.3-R1` ACTIVE.md was archived at closeout to
-  `docs/contracts/execution/archive/2026-10-17-M12-T2.3-R1.md` and deleted from the working directory)
-Review Convergence Gate: **PASS** — one review pass over the whole wave found a real hole in the control `C-4` had just
-  introduced (a provider row renamed away from its adapter slug would drop its own constraint and leave Gate G18
-  green), it was fixed at `cd1b541` with a mutation probe proving the new assertion fires, and the re-review found the
-  second finding worth recording: `n1a`'s caveat had been granted in §3 but never scheduled as a §4 item, which
-  `7d73e18` then executed. No further convergence issue is open at this head.
-Final Quality Gate: **PASS** — full gate run at every item commit and over the final tree
+Execution Contract: `docs/contracts/execution/ACTIVE.md` — **`M12/T4-R1`** (governance-record integrity;
+  granted by the owner's `grant 1` on 2026-10-17). It is transient and Git-ignored; at closeout it is archived
+  under `docs/contracts/execution/archive/` and this field returns to `NONE`.
+  (Predecessor `M12/T2.3-R1` archived at closeout to
+  `docs/contracts/execution/archive/2026-10-17-M12-T2.3-R1.md`.)
+Review Convergence Gate: **NOT RUN** for `M12/T4-R1` — no review pass has been performed on this contract's work.
+  (History, `M12/T2.3-R1` Wave C: **PASS** — one review pass over the whole wave found a real hole in the control
+  `C-4` had just introduced (a provider row renamed away from its adapter slug would drop its own constraint and
+  leave Gate G18 green), fixed at `cd1b541` with a mutation probe proving the new assertion fires; the re-review
+  found the second issue worth recording: `n1a`'s caveat had been granted in §3 but never scheduled as a §4 item,
+  which `7d73e18` then executed. Full detail in
+  `Record — M12/T2.3-R1 Wave C closed`, §8.)
+Final Quality Gate: **NOT RUN** for `M12/T4-R1` — no gate has been run against this contract's work yet; the
+  baseline `npm run verify` has not been executed at the materialization commit.
+  (History, `M12/T2.3-R1` Wave C: **PASS** — full gate run at every item commit and over the final tree
   (Windows `npm run verify` exit 0, **1595 tests / 1546 pass / 0 fail / 49 skipped**, `Repository policy check
   passed.`), the WSL lanes read as counts (12/12, 2/2, 35/35, zero skips), six mutation probes with each mutation
   confirmed in the file first, `§6.7`'s re-grep denominators recorded, and the Python lane `NOT RUN` with the reason
-  (zero `apps/knowledge/` files in the diff). §6.6's CI half is **now observed and cited by run id in Evidence Level
-  above** — `quality-gate` and `python-quality` SUCCESS and `secret-scan` SUCCESS at `71c2bff`.
-Evidence Level: **REMOTE-BACKED for `M12/T2.3-R1` Wave C's repository gates** — CI run **`38944576084`** @
+  (zero `apps/knowledge/` files in the diff).)
+Evidence Level: **NONE for `M12/T4-R1`** — nothing in this contract is validated yet; it moves to
+  `LOCAL-VERIFIED` only after the affected gates pass locally, and to `REMOTE-BACKED` only with a CI run id cited
+  from the run log.
+  (History, `M12/T2.3-R1` Wave C repository gates: **REMOTE-BACKED** — CI run **`38944576084`** @
   `71c2bff52a68972152816a95e31a7ff8d1203fc2` on `codex/m11-t1-audit-remediation`: `quality-gate` **SUCCESS** reading
   `ℹ tests 1595 / suites 106 / pass 1542 / fail 0 / cancelled 0 / skipped 53` and `Repository policy check passed.`, and
   `python-quality` **SUCCESS** (`208 passed, 34 subtests passed in 25.67s`). Both numbers were read out of the run log,
