@@ -3,10 +3,14 @@
 ## Purpose
 
 The Decision Ledger owns **explicit owner-confirmed decisions, preferences and
-rules** — the fourth logical module alongside Zink Knowledgebase (factual /
-reference knowledge), Zink Skill Store (reusable procedures) and Zink Tools
-(executable capabilities). It is the only long-term memory class whose content
-is a judgement rather than a document, so it has its own lifecycle.
+rules** alongside the repository's three logical modules — Zink Knowledgebase
+(factual / reference knowledge), Zink Skill Store (reusable procedures) and Zink
+Tools (executable capabilities) — without being a fourth one:
+`docs/architecture/system-overview.md` fixes the module count at exactly three,
+and the ledger is a governed record class owned inside those boundaries, like the
+trusted operator ledger it shares rules with. It is the only long-term memory
+class whose content is a judgement rather than a document, so it has its own
+lifecycle.
 
 It is not: a knowledge index, a procedure library, a task/execution state
 store, or an observation log. Current task/execution/governance state remains
