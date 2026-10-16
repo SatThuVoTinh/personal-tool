@@ -21,7 +21,26 @@ Planning Readiness: DRAFT | REVIEWED | APPROVED
 Execution Authorization: NO | YES
 Execution Contract: NONE | docs/contracts/execution/ACTIVE.md
 Evidence Level: NONE | LOCAL-VERIFIED | REMOTE-BACKED
+Review Convergence Gate: PASS | FAIL | NOT RUN
+Final Quality Gate: PASS | FAIL | NOT RUN
 ```
+
+The two gate fields carry only the validation statuses `AGENTS.md` §11 allows. A
+required gate that was unavailable stays `NOT RUN` and is never written as a pass.
+
+The evidence verdicts this file uses everywhere are these, and they are not
+interchangeable:
+
+```text
+NOT RUN      a gate that could have run in this environment and did not
+NOT TESTED   no live surface has exercised the behaviour, whatever the local gates say
+NOT DEPLOYED the build is not installed on the live host; nothing of it reached the runtime
+```
+
+`NOT TESTED` describes a different object from `NOT RUN`: the sentence "Windows
+`npm run verify` PASS; live Discord behaviour `NOT TESTED`" is coherent precisely
+because the gate ran and the live surface was never observed. Neither may be
+softened into the other to make a tier look finished.
 
 ## 3. Current release gate
 
