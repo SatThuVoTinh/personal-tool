@@ -396,7 +396,10 @@ export function prepareQueryEmbedding(params = {}) {
     const knownTopics = Object.values(KNOWN_TAXONOMY_MAP).map(
       (t) => t.primary_topic,
     );
-    // Non-fatal: validation noted but not exposed in public output
+    // Non-fatal: validation noted but not exposed in public output. In this shape it is
+    // not a check at all — the result is discarded, so an unknown `primary_topic` passes
+    // silently. Making it enforce anything would change what the governed search path
+    // accepts, which is outside 4A.11; recorded rather than half-fixed.
     void knownTopics.includes(metadataFilters.primary_topic);
   }
 
@@ -575,8 +578,10 @@ export function parseStructuredReferenceId(id) {
 }
 
 export function isValidStructuredReferenceId(id) {
+  // Resolvability, not just shape: the registries reject codes the format regex accepts,
+  // so a caller that checked this and then resolved used to still throw.
   try {
-    parseStructuredReferenceId(id);
+    resolveReferenceIdMeaning(id);
     return true;
   } catch {
     return false;
