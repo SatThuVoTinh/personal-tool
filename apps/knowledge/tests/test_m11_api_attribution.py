@@ -10,7 +10,9 @@ These are the route-level halves of the Phase 3 fixes; they need the real
   3.5 a PDF-rooted failure keeps its ``source_path`` through the index-run
       route;
   3.6 ``min_score`` thresholds reranker scores only, and reports without
-      filtering on the RRF path.
+      filtering on the RRF path;
+  B-13 (M12/T2.2-R2) the search request model bounds the query, so an oversized
+      body is refused before it can take a capacity slot or be tokenized.
 
 No database, Ollama, or PDF runtime is contacted: every external seam is
 patched on the app's own state objects.
@@ -45,7 +47,8 @@ from app.database import (
     IndexRunState,
     SearchCandidate,
 )
-from app.main import create_app
+from app.main import SEARCH_QUERY_MAX_CHARS, create_app
+from app.markdown_adapter import QUERY_BUDGET_FIXTURE, QUERY_MAX_TOKENS
 from app.model_probe import ResolvedEmbeddingModel
 from app.run_errors import SafeRunError, serialize_errors
 
@@ -216,6 +219,77 @@ class ApiAttributionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [item["segment_id"] for item in filtered.json()["results"]], ["b"]
         )
+
+    async def test_oversized_query_is_refused_before_a_slot_or_the_tokenizer(
+        self,
+    ) -> None:
+        """M12/T2.2-R2 B-13 (4A.14 / R5-E01-03).
+
+        ``/v1/search`` acquires a ``SearchCapacityLimiter`` slot as its first
+        act and only counts tokens afterwards, so the 256-token ceiling bounded
+        the OUTCOME of an arbitrarily large body while the event loop paid to
+        tokenize it. The request model now refuses the size outright.
+        """
+        self.stub_search_route()
+        counts: list[str] = []
+        budget = self.app.state.token_budget
+        original_count = budget.count
+        budget.count = lambda text: (counts.append(text), original_count(text))[1]
+        acquired: list[bool] = []
+        original_acquire = self.app.state.search_limiter.try_acquire
+
+        async def spy_acquire():
+            acquired.append(True)
+            return await original_acquire()
+
+        self.app.state.search_limiter.try_acquire = spy_acquire
+
+        response = await self.request(
+            "POST", "/v1/search", json={"query": "a" * (SEARCH_QUERY_MAX_CHARS + 1)}
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(
+            response.json(), {"detail": {"code": "INVALID_SEARCH_REQUEST"}}
+        )
+        self.assertEqual(
+            counts, [], "the tokenizer must never be handed a body validation refused"
+        )
+        self.assertEqual(
+            acquired,
+            [],
+            "a body rejected at validation must not consume one of two capacity slots",
+        )
+
+    async def test_queries_at_and_under_the_bound_still_reach_the_token_ceiling(
+        self,
+    ) -> None:
+        self.stub_search_route()
+
+        # The field bounds the WORK, not the semantic ceiling: the longest
+        # accepted body is the bound itself, and the 511-character fixture is
+        # exactly QUERY_MAX_TOKENS, so the existing check stays the authority.
+        for query in ("a" * SEARCH_QUERY_MAX_CHARS, QUERY_BUDGET_FIXTURE):
+            with self.subTest(length=len(query)):
+                response = await self.request(
+                    "POST", "/v1/search", json={"query": query, "rerank": False}
+                )
+                self.assertEqual(response.status_code, 200)
+
+        self.assertEqual(
+            self.app.state.token_budget.count(QUERY_BUDGET_FIXTURE),
+            QUERY_MAX_TOKENS,
+            "the ceiling this item must not move",
+        )
+
+    def stub_search_route(self) -> None:
+        database = self.app.state.database
+        database.get_active_index = AsyncMock(return_value=ACTIVE)
+        database.search_candidates = AsyncMock(return_value=([candidate("a")], []))
+        # A live reranker, so an oversized body would reach the tokenizer if the
+        # request model let it through. Without this the `counts` witness above
+        # would pass for the wrong reason: the route stops at RERANKER_UNAVAILABLE.
+        self.app.state.reranker = FakeReranker([5.0])
 
 
 if __name__ == "__main__":

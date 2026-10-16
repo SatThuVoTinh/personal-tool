@@ -62,10 +62,20 @@ class IndexRunAcceptedResponse(BaseModel):
     status: Literal["RUNNING"]
 
 
+# M12/T2.2-R2 B-13 (4A.14 / R5-E01-03): the token ceiling in `/v1/search` is the
+# semantic bound and stays the final authority, but it is applied INSIDE the
+# handler — after a `SearchCapacityLimiter` slot is taken and after the whole
+# body has been tokenized on the event loop. This bounds the work instead, with
+# margin: `QUERY_BUDGET_FIXTURE` proves 511 characters is exactly
+# `QUERY_MAX_TOKENS` tokens for the pinned tokenizer, so a compliant query cannot
+# reach this number.
+SEARCH_QUERY_MAX_CHARS = 1024
+
+
 class SearchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    query: str
+    query: str = Field(max_length=SEARCH_QUERY_MAX_CHARS)
     limit: int = Field(default=10, ge=1, le=20)
     primary_topic: str | None = None
     tags_all: list[str] | None = None
