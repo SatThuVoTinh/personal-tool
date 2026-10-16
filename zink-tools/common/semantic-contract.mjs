@@ -629,6 +629,16 @@ export function resolveReferenceIdMeaning(id) {
 }
 
 /**
+ * The single relevance rule. A score-less item is 0, i.e. not evidence — the
+ * conservative direction both live adapters already apply. The filter used to default
+ * such an item to full confidence instead, which is how one concept ended up with two
+ * opposite meanings depending on the call site.
+ */
+export function resolveRelevanceScore(item) {
+  return item?.score ?? item?.relevance ?? item?.confidence ?? 0;
+}
+
+/**
  * Retrieval Deduplication.
  * B27: classify type BEFORE deduplication to prevent losing procedure/tool items.
  * B28: dedup key uses content_hash/passage_id/full-text-SHA256 (not 100-char prefix).
@@ -698,10 +708,9 @@ export function deduplicateRetrievalContext(items = []) {
     }
   }
 
-  // B29: sort each bucket by relevance/score descending
+  // B29: sort each bucket by relevance descending, using the one shared rule
   const byRelevance = (a, b) =>
-    (b.score ?? b.relevance ?? b.confidence ?? 0) -
-    (a.score ?? a.relevance ?? a.confidence ?? 0);
+    resolveRelevanceScore(b) - resolveRelevanceScore(a);
 
   canonicalFacts.sort(byRelevance);
   procedures.sort(byRelevance);
@@ -749,8 +758,6 @@ export const RETRIEVAL_MIN_RELEVANCE = 0.3;
 export function filterByMinRelevance(items = []) {
   if (!Array.isArray(items)) return [];
   return items.filter(
-    (item) =>
-      (item?.score ?? item?.relevance ?? item?.confidence ?? 1) >=
-      RETRIEVAL_MIN_RELEVANCE,
+    (item) => resolveRelevanceScore(item) >= RETRIEVAL_MIN_RELEVANCE,
   );
 }

@@ -8,6 +8,7 @@ import {
   CANONICAL_DOMAINS,
   KNOWN_TAXONOMY_MAP,
   NAMESPACE_ALIAS_MAP,
+  RETRIEVAL_MIN_RELEVANCE,
 } from "../../common/semantic-contract.mjs";
 import {
   generateSkillEmbeddings,
@@ -470,7 +471,7 @@ export class SkillAdapter {
         const minScore =
           typeof input.min_score === "number"
             ? input.min_score
-            : (this.options.minScore ?? 0.3); // K05: minimum similarity threshold
+            : (this.options.minScore ?? RETRIEVAL_MIN_RELEVANCE); // K05: minimum similarity threshold
 
         // Separate query text from metadata filters (BUG-02)
         const { queryTextForEmbedding, metadataFilters } =
