@@ -116,6 +116,9 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
   // is accepted by content comparison.
   "lib/discord-formatter.mjs": Object.freeze([
     "3b39b1063e7842208a55151c776db2747cdc4a91bb2cf56b8d7102746f20479f",
+    // M12/T2.2-R2 M-1: the build the live runtime carries, reproduced by packaging
+    // commit c680a28. See the lib/guard.mjs entry for why nine paths drifted.
+    "26ecc883993485bc1e4b9fd5e3e16dc852d8f0858cbf0b5f37029515527e5d94",
   ]),
   // M12/T1-R1: this asset had no predecessor entry before now, because every
   // earlier revision was also the current build. M12/T1 changes it, so the digest
@@ -124,6 +127,9 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
   // is accepted by content comparison.
   "lib/discord-native-send.mjs": Object.freeze([
     "3a69f5d33b5d30087f8b7cb96738031988e68b24212e9d262491b2515e550e1d",
+    // M12/T2.2-R2 M-1: the build the live runtime carries, reproduced by packaging
+    // commit c1ad4b3. See the lib/guard.mjs entry for why nine paths drifted.
+    "4d36d8abd83084f83cf65c56da9a190bec3fde5d481ea939665a13a522e8f457",
   ]),
   "contracts/agent-result-payload.schema.json": Object.freeze([
     "48bcbf6b64daae63a3d7a917ac8f17790ba1468b4ed78182df5d1de59cd34717",
@@ -312,6 +318,11 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // governance-manifests.json because its governance_hash covers policy.mjs. Both
     // must stay admitted or --preflight refuses the upgrade.
     "71eee819e9a9ce5d3cc927352ae392c9a57e625fa4618273c7cef9a04c383eb8",
+    // M12/T2.2-R2 M-1: the build the live runtime ACTUALLY carries, reproduced by
+    // packaging commit c1ad4b3 (M1 1). 61638d8 replaced it with `25484e41…` and
+    // admitted nothing, which is what turned R7 P1 red on the WSL lane. The current
+    // build stays accepted by content comparison and is deliberately NOT listed.
+    "c38e1a6b7934bd01afd262dca0402fbb6936086a03b10731b91952db4003f36b",
   ]),
   "lib/canonical.mjs": Object.freeze([
     // M10/T2-R13: the outgoing build currently deployed, byte-verified at this
@@ -356,6 +367,9 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // The new digest is deliberately NOT listed: it is the current build,
     // accepted by content comparison.
     "5e97d9caf644768ce40d253324ff6ca8730cce230d2d82dcff6e47a085718642",
+    // M12/T2.2-R2 M-1: the build the live runtime carries, reproduced by packaging
+    // commit 6b0ea0a. See the lib/guard.mjs entry for why nine paths drifted.
+    "1d9518ca6150474e21510fae48c9a19d580b0a254304998982071da5b631f343",
   ]),
   "lib/policy.mjs": Object.freeze([
     // M10/T2-R14: the R13 build currently deployed (the one that carries the
@@ -454,6 +468,9 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // produces is deliberately NOT listed: it is the current build and is
     // accepted by content comparison.
     "0a1b05edb81c64e3d79debef618185b3a2cfe0b0439fc8729ab927ce0e5fa9c0",
+    // M12/T2.2-R2 M-1: the build the live runtime carries, reproduced by packaging
+    // commit c680a28. See the lib/guard.mjs entry for why nine paths drifted.
+    "d621c85f37bef11c0767843c4c1b25d38c9d55d66cee2be75d7630e4c604c8fb",
   ]),
   "lib/quota-telemetry.mjs": Object.freeze([
     // M10/T2-R9: the live asset before the single-model change, recorded from
@@ -479,6 +496,9 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // this entry --preflight refuses the deployed extension. The new digest is
     // deliberately NOT listed: it is the current build.
     "f7995d51d2d8f5a73fb3f7a980292236ff76fcc445cf1d769a48d35c84a8f140",
+    // M12/T2.2-R2 M-1: the build the live runtime carries, reproduced by packaging
+    // commit 3cb8274. See the lib/guard.mjs entry for why nine paths drifted.
+    "a5580bb67a7ace7edfdaf2595b7245a3be3a6959333ae6cbeaf76d080f49fb37",
   ]),
   "lib/schema.mjs": Object.freeze([
     "869a2254975f60432c596a115acee1fc0e03893224b925c5a54334dc532d1cee",
@@ -590,6 +610,12 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // ASSET digest, proven through `governancePluginFiles()` — the raw file
     // hashes differently because packaging rewrites this module's imports.
     "7dd37ee9ffea60de1f30869f03f73e4182f9b31b5c459302ba68ffb5093242fd",
+    // M12/T2.2-R2 M-1: the build the live runtime ACTUALLY carries, reproduced by
+    // packaging commit 6b0ea0a through governancePluginFiles() (M1 1). 09aa698 and
+    // 61638d8 both rolled this file without admitting their outgoing digest, so
+    // nine governed paths ended up neither current nor admitted and --preflight
+    // refused the deployed extension. The current build stays unlisted.
+    "263d72c426e4c29c13f1749e94ce6cadcf0340b59bcbf91bd982763c8c5d3a26",
   ]),
   "lib/native-boundary.mjs": Object.freeze([
     "4b77356f2a843f26040a7cd3312c896469aff33cc472bc6c02fdd5c472bd1234",
@@ -708,6 +734,9 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // proven through `governancePluginFiles()` — the raw file hashes differently
     // because packaging rewrites this module's imports.
     "818d7cb0d61466bda1d81a451119a2e0099b730a2f8a74593d5dd3af92aa6c99",
+    // M12/T2.2-R2 M-1: the build the live runtime carries, reproduced by packaging
+    // commit 6b0ea0a. See the lib/guard.mjs entry for why nine paths drifted.
+    "c984cda8e0ab40fbd2d130e035607ee49d848319afe77df3508bc08e307f1e18",
   ]),
   "lib/workflow.mjs": Object.freeze([
     "14bb6a5575b3f25e7d04aafb28eb1e95b0b5b2a21b15b6b5dec787aaaf94f907",
@@ -729,6 +758,9 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // produces is deliberately NOT listed: it is the current build and is
     // accepted by content comparison.
     "10254373efdfa9b90aa3ff5a80326d3c1a1751b8a80d7c909dca0b39e28aa6c6",
+    // M12/T2.2-R2 M-1: the build the live runtime carries, reproduced by packaging
+    // commit c680a28. See the lib/guard.mjs entry for why nine paths drifted.
+    "2009e9fe06b6cc01b95bcb1db3c8ff1b0a69e220123166f21a863178e0623695",
   ]),
   "policy/reason-code-matrix.json": Object.freeze([
     "982896fe4fcc856728f8348058f19b69d89eabd9974bdaf4311c4afa510fc200",
