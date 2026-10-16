@@ -1464,6 +1464,16 @@ async function main() {
       // stay identical. The new digest is deliberately NOT listed: it is the current
       // build, accepted by content comparison.
       "61e344e6754c3c03b26463c2421ebf699d8ec14f9ab0b8fe87bec1265d99f3b6",
+      // M12/T2.2-R1 A-3: the entrypoint the live WSL runtime carries. Re-measured
+      // read-only on 2026-10-16 (`sha256sum` of
+      // `/home/hoang_vinh/.openclaw-zink/extensions/zink-governance/index.mjs`),
+      // not transcribed from the plan. It became a predecessor because moving the
+      // coordinator-notification queue write inside the queue lock changes
+      // packaged entrypoint bytes. Without this admission BOTH guards refuse the
+      // upgrade: this list appears at the --preflight and the --apply call sites,
+      // and they must stay identical. The new digest is deliberately NOT listed:
+      // it is the current build, accepted by content comparison.
+      "513beb15c3d7624c0a928c4c1556dc44d4c4cff4f1e00980f24b298a25751c0d",
     ],
   );
   assertRegularOrMissing(output.identityKeyPath);
@@ -1723,6 +1733,14 @@ async function main() {
       // stay identical. The new digest is deliberately NOT listed: it is the current
       // build, accepted by content comparison.
       "61e344e6754c3c03b26463c2421ebf699d8ec14f9ab0b8fe87bec1265d99f3b6",
+      // M12/T2.2-R1 A-3: the entrypoint the live WSL runtime carries, listed here
+      // as well as in the preflight gate above for the same per-mode-duplication
+      // reason -- admitting the predecessor in one mode and not the other would
+      // let --preflight PASS and then --apply refuse. Digest re-measured
+      // read-only on 2026-10-16 against the deployed file, not transcribed. The
+      // new digest is deliberately NOT listed: it is the current build and is
+      // accepted by content comparison.
+      "513beb15c3d7624c0a928c4c1556dc44d4c4cff4f1e00980f24b298a25751c0d",
     ],
   );
   if (!existsSync(output.identityKeyPath))

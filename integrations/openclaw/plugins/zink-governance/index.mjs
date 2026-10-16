@@ -5642,26 +5642,43 @@ export default {
       error,
       evidence,
     }) {
-      const item = defaultQueueManager.getTask(taskId);
-      if (!item) {
-        return { ok: false, error: "QUEUE_ITEM_NOT_FOUND" };
-      }
-      const next = {
-        ...item,
-        coordinatorNotification: {
-          delivered: Boolean(delivered),
-          ...(delivered
-            ? { evidence: evidence ?? null }
-            : { error: String(error ?? "UNKNOWN") }),
-        },
-      };
-      defaultQueueManager.queue.set(taskId, next);
+      // A-3 / R6-A03-01: `QueueManager.save()` does not acquire the queue lock —
+      // serialization is the caller's job, and `withLock` is the class's own
+      // critical section. Before this, the item was read and written outside any
+      // lock, so the save projected a stale whole-document map over one the other
+      // pickup loops had already advanced, erasing their committed rows. The read
+      // has to move inside as well: `withLock` reloads from disk first, and an
+      // item captured before it is a copy that reload has already replaced.
+      //
+      // Contention stays a returned failure, not a throw: `withLock` converts
+      // FILE_LOCK_BUSY into QUEUE_LOCK_TIMEOUT, and `persist` callers treat this
+      // evidence as reconciliation material, not authority.
       try {
-        defaultQueueManager.save();
-        return { ok: true };
-      } catch (persistErr) {
-        defaultQueueManager.queue.set(taskId, item);
-        return { ok: false, error: persistErr?.message };
+        return defaultQueueManager.withLock(() => {
+          const item = defaultQueueManager.getTask(taskId);
+          if (!item) {
+            return { ok: false, error: "QUEUE_ITEM_NOT_FOUND" };
+          }
+          const next = {
+            ...item,
+            coordinatorNotification: {
+              delivered: Boolean(delivered),
+              ...(delivered
+                ? { evidence: evidence ?? null }
+                : { error: String(error ?? "UNKNOWN") }),
+            },
+          };
+          defaultQueueManager.queue.set(taskId, next);
+          try {
+            defaultQueueManager.save();
+            return { ok: true };
+          } catch (persistErr) {
+            defaultQueueManager.queue.set(taskId, item);
+            return { ok: false, error: persistErr?.message };
+          }
+        });
+      } catch (lockErr) {
+        return { ok: false, error: lockErr?.message };
       }
     }
 

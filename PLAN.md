@@ -5877,6 +5877,51 @@ were not. That is a 2-of-5 hit rate on items this plan wrote from audit text, wh
 now verified against source before it is executed, and why the two refutations were found by running the full gate
 rather than the item's own tests — the guard I wrote passed all ten of its own tests while breaking a shipped one.
 
+### Record — `M12/T2.2-R1` `A-3` re-pointed and landed, with the digest rollover the owner granted (2026-10-16)
+
+The owner chose **option A**: fix the unlocked call site, and grant `index.mjs` into the item's scope.
+
+**The fix.** `plugins/zink-governance/index.mjs:recordCoordinatorNotification` read `getTask(taskId)`, mutated
+`defaultQueueManager.queue` and called `save()` with no lock. It now runs **both the read and the write** inside
+`defaultQueueManager.withLock(...)`, which is the class's own critical section and reloads the projection from disk
+before its body. Contention (`withLock` converts `FILE_LOCK_BUSY` into a thrown `QUEUE_LOCK_TIMEOUT`,
+`queue-manager.mjs:153-159`) is caught and returned as `{ ok: false, error }`, because `persist` callers treat this
+evidence as reconciliation material, not authority — so the change adds no new way for the dispatch path to throw.
+
+**Option B was rejected on measured ground, not taste.** `tryAcquire()` is `mkdirSync` + `EEXIST` → false
+(`file-lock.mjs:112-115`): the lock is **not reentrant**, so a self-locking `save()` would deadlock all nine
+`withLock(() => … save())` paths. `tests/m12-t2.2-a3-queue-writer-lock.test.mjs` pins the trap shut on both halves —
+the source shape (`save()` acquires nothing) and the behaviour (`withLock` inside `withLock` must throw).
+
+**Test-first, with the fixture corrected twice before it earned its claim.** Baseline at HEAD: 3 pass / 2 fail — the
+two failing pins are the call-site shape and contention handling. Two of my own fixture errors had to be found
+first: `load()` keys the projection by `item.taskId` rather than by the map key, so a clone that kept the old id
+collapsed both rows and proved nothing; and `getTask` returns `null` for a missing row, not `undefined`. The defect
+itself reproduces on the real class and the real file: an unlocked `set` + `save` from a snapshot taken before
+another writer's commit **erases that writer's row**; the same mutation through `withLock` does not.
+Mutation probe by me: with the fix removed, exactly one test reddens. Stated honestly: the contention pin passes
+either way, because the old code already caught the save failure — so only one of the two call-site pins is
+sensitive, and I am not claiming otherwise.
+
+**The rollover, because `index.mjs` IS the packaged plugin entrypoint.** The build digest moved
+`513beb15c3d7624c0a928c4c1556dc44d4c4cff4f1e00980f24b298a25751c0d` →
+`2023e86715f9b105e2649388b4587ad635f89cc9db7a10e1a04c2247daa6818e`, which reddened six pre-existing pins (`R3 0b`,
+`R13 P4/P5/B2/B3/C2`). I stopped and asked rather than re-pinning, and the owner granted it. The rollover follows the
+mechanism the tests are built around: the current pins take the new digest (deliberately **not** listed — `R3 0b`
+fails if the current build is allowlisted), and the outgoing digest is admitted in **both** per-mode lists of
+`configure.mjs`, since listing one mode and not the other lets `--preflight` pass and then `--apply` refuse.
+
+**One fact I refused to take from this plan.** Two comments here claimed two different digests were "what the live
+runtime carries" (`61e344e6…` in `configure.mjs`, `513beb15…` in `PLAN.md`). Admitting a digest the runtime does not
+actually carry would be a false hygiene record, so I measured it read-only instead:
+`sha256sum /home/hoang_vinh/.openclaw-zink/extensions/zink-governance/index.mjs` = `513beb15…`. That is what made the
+admission necessary rather than optional.
+
+Gate state. Windows full `npm run verify`: **1512 tests / 106 suites / 1466 pass / 0 fail / 46 skipped** +
+`Repository policy check passed.` WSL lane (read-only, same tree the runtime loads): A-3 suite plus both pin suites
+**51 tests / 51 pass / 0 fail / 0 skipped**. Not deployed: no `--apply`, no `--preflight` run, no restart — the
+allowlist entry exists precisely so a future authorized deployment stays reachable from what is installed today.
+
 ## 9. Deferred beyond V1
 
 Unless separately approved:

@@ -136,9 +136,14 @@ const HYGIENE_ASSET_PREDECESSORS = Object.freeze({
 // refused every plan whose nodes reach more than one stack. That asset (`lib/discord-forum-tags.mjs`)
 // is now packaged from changed source, so its deployed digest `e0a755bb…` — what the operator
 // apply post-check measured and what `git show b6d04e8` reproduces — is admitted as a predecessor.
-// The entrypoint pin itself does NOT move: this revision changes no packaged entrypoint byte.
+// M12/T2.2-R1 A-3: this pin moves. Moving the coordinator-notification queue write
+// inside the queue lock changes packaged entrypoint bytes, so `513beb15…` — the build
+// Deployment A installed on 2026-10-13, re-measured read-only against the deployed WSL
+// file on 2026-10-16 — becomes an admitted predecessor in BOTH per-mode lists in
+// `configure.mjs`. The digest below is deliberately NOT listed there: it is the current
+// build, accepted by content comparison.
 const CURRENT_ENTRYPOINT_SHA256 =
-  "513beb15c3d7624c0a928c4c1556dc44d4c4cff4f1e00980f24b298a25751c0d";
+  "2023e86715f9b105e2649388b4587ad635f89cc9db7a10e1a04c2247daa6818e";
 
 const identifiers = Object.freeze({
   discordGuildId: "123456789012345678",

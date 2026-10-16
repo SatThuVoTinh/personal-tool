@@ -146,15 +146,27 @@ assert.ok(
   "the live M11/T1-R1 entrypoint must remain an admitted predecessor",
 );
 /**
- * M12/T2-R2: the CURRENT entrypoint. Accepted by content comparison and
- * deliberately NOT listed. The build M11/T3-R1 installed and this task replaces
- * (`61e344e6…`) IS listed as an admitted predecessor, which is what keeps a
- * --preflight against the live runtime from refusing the upgrade. M12/T1-R1's own
- * candidate (`85fbee50…`) and M12/T2-R1's (`f9ef77dc…`) are NOT listed: neither was
- * ever deployed, so no runtime can carry it.
+ * M12/T2.2-R1 A-3: the CURRENT entrypoint build. Accepted by content comparison
+ * and deliberately NOT listed. The constant name is a carrier for "the current
+ * packaged build", not a claim about which milestone produced it.
+ *
+ * The build this replaces (`513beb15…`) IS listed as an admitted predecessor,
+ * because the live WSL runtime carries it: re-measured read-only on 2026-10-16
+ * with `sha256sum` against
+ * `/home/hoang_vinh/.openclaw-zink/extensions/zink-governance/index.mjs`, not
+ * transcribed from the plan. Without that entry `--preflight` refuses the
+ * deployed extension. M12/T1-R1's own candidate (`85fbee50…`) and M12/T2-R1's
+ * (`f9ef77dc…`) are NOT listed: neither was ever deployed, so no runtime can
+ * carry it.
  */
 const M11_T3_ENTRYPOINT_SHA256 =
+  "2023e86715f9b105e2649388b4587ad635f89cc9db7a10e1a04c2247daa6818e";
+const M12_T2_2_OUTGOING_ENTRYPOINT_SHA256 =
   "513beb15c3d7624c0a928c4c1556dc44d4c4cff4f1e00980f24b298a25751c0d";
+assert.ok(
+  CONFIGURE_SOURCE.includes(M12_T2_2_OUTGOING_ENTRYPOINT_SHA256),
+  "the entrypoint the live runtime carries must remain an admitted predecessor",
+);
 /** The outgoing entrypoint this deployment replaces; now listed. */
 const R8_OUTGOING_ENTRYPOINT_SHA256 =
   "6a7968b7d456ff6d3f2c5b9d60c7b6046a702603b880093c33b717d9a37c13b1";
