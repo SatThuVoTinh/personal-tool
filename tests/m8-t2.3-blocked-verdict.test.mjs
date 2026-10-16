@@ -238,6 +238,18 @@ describe("Phase C — the owner verdict for BLOCKED", () => {
         { code: "RESULT_MISMATCH" },
         "a verdict naming a different result must be refused",
       );
+      // A reason outside the published vocabulary is refused instead of becoming durable
+      // task state that no attribution rule can explain.
+      assert.throws(
+        () =>
+          recordWorkflowEvent(
+            paths,
+            "WORKFLOW_USER_RESULT_BLOCKED",
+            BLOCK_VERDICT(taskId, "MATRIX_TERMINAL"),
+          ),
+        { code: "SCHEMA_INVALID" },
+        "an undeclared reason_code must be refused",
+      );
       // A task that has not reached review cannot be blocked by a verdict.
       const otherPaths = ledgerPaths(other);
       ensureLedger(otherPaths);

@@ -290,6 +290,11 @@ test("R2 P1: the live runtime IS the ea84a5a packaged build and differs from the
       "lib/discord-result-preview.mjs",
       "lib/excel-writer.mjs",
       "lib/policy.mjs",
+      // M12/T2.2-R2 B-8, admitted by owner decision §0.5-E: the reason-code matrix load is
+      // now named (`REASON_POLICY_UNREADABLE` / `_MALFORMED` / `_INCOMPLETE`) instead of
+      // crashing module evaluation with a raw fs/JSON error, and one workflow reason_code
+      // accept went through the published vocabulary.
+      "lib/runtime.mjs",
       "lib/workflow.mjs",
     ].sort(),
     "only the M11/T3, M12/T1 and M12/T2 assets may diverge from the proven live build",

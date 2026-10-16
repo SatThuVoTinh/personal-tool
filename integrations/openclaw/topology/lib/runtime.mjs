@@ -8,14 +8,71 @@ import { validateContract } from "./schema.mjs";
 import { readFileSync } from "node:fs";
 import { URL } from "node:url";
 
-const reasonPolicy = JSON.parse(
-  readFileSync(
-    new URL("../policy/reason-code-matrix.json", import.meta.url),
-    "utf8",
-  ),
+const REASON_POLICY_URL = new URL(
+  "../policy/reason-code-matrix.json",
+  import.meta.url,
 );
+const REASON_POLICY_REQUIRED = [
+  ["agent_claims", "array"],
+  ["runtime_reasons", "array"],
+  ["outcome_compatibility", "object"],
+];
+
+// This matrix is what every governed denial gets attributed to, so a load that dies as a raw
+// fs/JSON error — or that quietly returns a policy missing a key its readers use — leaves the
+// whole runtime unable to explain itself at import time. Name the condition instead.
+export function loadReasonPolicy(policyUrl = REASON_POLICY_URL) {
+  let raw;
+  try {
+    raw = readFileSync(policyUrl, "utf8");
+  } catch (error) {
+    throw new Error(`REASON_POLICY_UNREADABLE: ${error.message}`, {
+      cause: error,
+    });
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(
+      "REASON_POLICY_MALFORMED: reason-code-matrix.json is not valid JSON",
+      { cause: error },
+    );
+  }
+
+  for (const [key, kind] of REASON_POLICY_REQUIRED) {
+    const value = parsed?.[key];
+    const holds =
+      kind === "array"
+        ? Array.isArray(value)
+        : typeof value === "object" && value !== null && !Array.isArray(value);
+    if (!holds) {
+      throw new Error(
+        `REASON_POLICY_INCOMPLETE: ${key} must be ${kind}, got ${
+          value === null ? "null" : typeof value
+        }`,
+      );
+    }
+  }
+
+  return parsed;
+}
+
+const reasonPolicy = loadReasonPolicy();
 export const AGENT_REASON_CODES = Object.freeze(reasonPolicy.agent_claims);
 export const RUNTIME_REASON_CODES = Object.freeze(reasonPolicy.runtime_reasons);
+
+/**
+ * Membership in a vocabulary the policy file already publishes. Derived from the two
+ * declared sets rather than a third list, so nothing here widens the contract.
+ */
+export function isDeclaredReasonCode(code) {
+  return (
+    typeof code === "string" &&
+    (AGENT_REASON_CODES.includes(code) || RUNTIME_REASON_CODES.includes(code))
+  );
+}
 
 const SECRET_PATTERN =
   /(?:api[_-]?key|token|password|secret|private[_-]?key|authorization)["']?\s*[:=]\s*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\r\n,;}]+)/giu;

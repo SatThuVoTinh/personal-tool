@@ -8,7 +8,11 @@ import {
   TASK_ID_PATTERN,
 } from "./canonical.mjs";
 import { validateContract } from "./schema.mjs";
-import { outcomeReasonAllowed, workflowAggregate } from "./runtime.mjs";
+import {
+  isDeclaredReasonCode,
+  outcomeReasonAllowed,
+  workflowAggregate,
+} from "./runtime.mjs";
 import { AGENT_STACK_POLICY } from "../../lib/authority.mjs";
 // B-7: the ceilings are declared once, in the ledger's canonical `BUDGETS`. `ledger.mjs:18`
 // imports this module in turn, so the cycle is real and safe only because every read below
@@ -687,10 +691,11 @@ export function applyWorkflowEvent(
     task.user_blocked_at = eventTime;
     task.rejection_reason = payload.reason;
     if (payload.reason_code !== undefined) {
+      // Every other reason in this reducer goes through the published vocabulary; this one
+      // accepted any non-empty string up to 128 characters, so an undeclared code became
+      // durable task state that no attribution rule could explain.
       requireCondition(
-        typeof payload.reason_code === "string" &&
-          payload.reason_code.length > 0 &&
-          payload.reason_code.length <= 128,
+        isDeclaredReasonCode(payload.reason_code),
         "SCHEMA_INVALID",
       );
       task.reason_code = payload.reason_code;

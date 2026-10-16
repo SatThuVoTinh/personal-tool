@@ -673,6 +673,12 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // the current build, accepted by content comparison.
     "744e5234465d9c860c4103ec5df60f1d2fa705c54a6ce1d3cba206eaf9d9bb35",
     "6a522c73efacf8b593d63ee55e18b5d02c3675340e0593142a5c2fea8dc6e24a",
+    // M12/T2.2-R2 B-8 (owner admission §0.5-E): the build the live runtime carries, so the
+    // divergence B-8 introduces in the packaged `lib/runtime.mjs` stays upgradable. Re-derived
+    // from `ea84a5a` through this repository's own `governancePluginFiles()` — the same
+    // construction R2 P1 uses — not transcribed from a host file. The new digest is
+    // deliberately NOT listed: it is the current build, accepted by content comparison.
+    "aac887187f9f6074d340d6dd43868b082ff10b95a0bb126ce3331245c51c4915",
   ]),
   "lib/ledger.mjs": Object.freeze([
     "d7f406e9dfa8f45d117f555bed18d2bf4c63ed966c3dd0588d221a54b9e87255",
