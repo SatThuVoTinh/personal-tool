@@ -576,19 +576,19 @@ Người vận hành và các agent tuyệt đối tuân thủ các điều cấ
 
 Bảng phân định trạng thái thực tế của 11 nhà cung cấp trong phiên bản V1:
 
-| Nhà cung cấp      | Trạng thái (State)  | Hợp đồng (Contract) | Kiểm thử mô phỏng (Mock) | Kiểm thử trực tiếp (Live) | Ghi chú vận hành                                             |
-| ----------------- | ------------------- | ------------------- | ------------------------ | ------------------------- | ------------------------------------------------------------ |
-| **n8n**           | `PROVISIONED`       | PASS                | PASS                     | PASS                      | Docker container localhost:5678 sẵn sàng                     |
-| **Cloudflare R2** | `PROVISIONED`       | PASS                | PASS                     | PASS                      | Quản lý Landing & Silver hoạt động                           |
-| **DuckDB**        | `PROVISIONED`       | PASS                | PASS                     | PASS                      | Governed Windows Bridge; native CLI Windows đã được xác minh |
-| **MotherDuck**    | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Sẵn sàng, kết nối khi cấp token                              |
-| **BigQuery**      | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Sẵn sàng, kích hoạt khi có GCP ADC                           |
-| **Kaggle**        | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Bounded runner có kiểm soát                                  |
-| **Databricks**    | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Batch compute adapter sẵn sàng                               |
-| **MLflow Local**  | `PROVISIONED`       | PASS                | PASS                     | PASS                      | Ghi log thí nghiệm cục bộ hoạt động                          |
-| **DagsHub**       | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Đồng bộ có chọn lọc sẵn sàng                                 |
-| **Hugging Face**  | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Đánh giá mô hình an toàn                                     |
-| **Streamlit**     | `PROVISIONED`       | PASS                | PASS                     | PASS                      | Giao diện phân phối Gold localhost:8501                      |
+| Nhà cung cấp      | Trạng thái (State)  | Hợp đồng (Contract) | Kiểm thử mô phỏng (Mock) | Kiểm thử trực tiếp (Live) | Ghi chú vận hành                                                        |
+| ----------------- | ------------------- | ------------------- | ------------------------ | ------------------------- | ----------------------------------------------------------------------- |
+| **n8n**           | `PROVISIONED`       | PASS                | PASS                     | PASS                      | Docker container localhost:5678 sẵn sàng                                |
+| **Cloudflare R2** | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Adapter tự khai báo `NOT A PROVIDER INTEGRATION`; không có network call |
+| **DuckDB**        | `PROVISIONED`       | PASS                | PASS                     | PASS                      | Governed Windows Bridge; native CLI Windows đã được xác minh            |
+| **MotherDuck**    | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Sẵn sàng, kết nối khi cấp token                                         |
+| **BigQuery**      | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Sẵn sàng, kích hoạt khi có GCP ADC                                      |
+| **Kaggle**        | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Bounded runner có kiểm soát                                             |
+| **Databricks**    | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Batch compute adapter sẵn sàng                                          |
+| **MLflow Local**  | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Adapter tự khai báo `SIMULATION_CONTRACT`                               |
+| **DagsHub**       | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Đồng bộ có chọn lọc sẵn sàng                                            |
+| **Hugging Face**  | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Đánh giá mô hình an toàn                                                |
+| **Streamlit**     | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Adapter tự khai báo `SIMULATION_CONTRACT`                               |
 
 ---
 

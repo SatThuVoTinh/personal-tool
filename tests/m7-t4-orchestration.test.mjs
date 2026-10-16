@@ -328,106 +328,91 @@ describe("M7/T4 External Infrastructure & Governed Orchestration (G0 - G20)", ()
   });
 
   test("Gate G18: Provider Evidence Matrix Verification", () => {
-    const matrix = [
-      {
-        provider: "n8n",
-        state: "PROVISIONED",
-        contract: "PASS",
-        mock: "PASS",
-        live: "PASS",
-        blocker: "none",
-      },
-      {
-        provider: "r2",
-        state: "PROVISIONED",
-        contract: "PASS",
-        mock: "PASS",
-        live: "PASS",
-        blocker: "none",
-      },
-      {
-        provider: "duckdb",
-        state: "PROVISIONED",
-        contract: "PASS",
-        mock: "PASS",
-        live: "PASS",
-        blocker: "none",
-      },
-      {
-        provider: "motherduck",
-        state: "CONTRACT_VERIFIED",
-        contract: "PASS",
-        mock: "PASS",
-        live: "NOT_RUN",
-        blocker: "auth_token_optional",
-      },
-      {
-        provider: "bigquery",
-        state: "CONTRACT_VERIFIED",
-        contract: "PASS",
-        mock: "PASS",
-        live: "NOT_RUN",
-        blocker: "gcp_adc_optional",
-      },
-      {
-        provider: "kaggle",
-        state: "CONTRACT_VERIFIED",
-        contract: "PASS",
-        mock: "PASS",
-        live: "NOT_RUN",
-        blocker: "api_key_optional",
-      },
-      {
-        provider: "databricks",
-        state: "CONTRACT_VERIFIED",
-        contract: "PASS",
-        mock: "PASS",
-        live: "NOT_RUN",
-        blocker: "api_key_optional",
-      },
-      {
-        provider: "mlflow",
-        state: "PROVISIONED",
-        contract: "PASS",
-        mock: "PASS",
-        live: "PASS",
-        blocker: "none",
-      },
-      {
-        provider: "dagshub",
-        state: "CONTRACT_VERIFIED",
-        contract: "PASS",
-        mock: "PASS",
-        live: "NOT_RUN",
-        blocker: "api_key_optional",
-      },
-      {
-        provider: "huggingface",
-        state: "CONTRACT_VERIFIED",
-        contract: "PASS",
-        mock: "PASS",
-        live: "NOT_RUN",
-        blocker: "api_key_optional",
-      },
-      {
-        provider: "streamlit",
-        state: "PROVISIONED",
-        contract: "PASS",
-        mock: "PASS",
-        live: "PASS",
-        blocker: "none",
-      },
-    ];
+    // The published matrix and the adapters' own headers are the two sources of
+    // truth here. Restating either as a literal would assert a copy, which is how
+    // this gate shipped a live column nothing ever read.
+    const repoRoot = path.resolve(import.meta.dirname, "..");
+    const readmeLines = fs
+      .readFileSync(path.join(repoRoot, "README.md"), "utf8")
+      .split(/\r?\n/);
+    const header = readmeLines.findIndex((line) =>
+      /^\|\s*Nhà cung cấp\s*\|/.test(line),
+    );
+    assert.ok(
+      header >= 0,
+      "README.md must carry the provider evidence matrix this gate reads",
+    );
 
-    assert.equal(matrix.length, 11);
-    for (const row of matrix) {
+    const rows = [];
+    for (let i = header + 2; i < readmeLines.length; i += 1) {
+      const line = readmeLines[i];
+      if (!line.startsWith("|")) break;
+      const cells = line
+        .split("|")
+        .slice(1, -1)
+        .map((cell) => cell.replace(/\*\*/g, "").replace(/`/g, "").trim());
+      assert.equal(cells.length, 6, `matrix row is malformed: ${line}`);
+      rows.push({
+        provider: cells[0],
+        state: cells[1],
+        contract: cells[2],
+        mock: cells[3],
+        live: cells[4],
+      });
+    }
+
+    // Any adapter that declares itself a simulation is evidence that the published
+    // row for it may not claim live execution.
+    const simulated = new Set();
+    const collect = (dir) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const target = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          collect(target);
+        } else if (entry.name.endsWith("-adapter.mjs")) {
+          const source = fs.readFileSync(target, "utf8");
+          if (/SIMULATION_CONTRACT|NOT A PROVIDER INTEGRATION/.test(source)) {
+            simulated.add(
+              entry.name.replace(/-adapter\.mjs$/, "").toLowerCase(),
+            );
+          }
+        }
+      }
+    };
+    collect(path.join(repoRoot, "zink-tools", "adapters"));
+    assert.ok(simulated.size > 0, "no adapter declared a simulation contract");
+
+    const normalise = (value) => value.toLowerCase().replace(/[^a-z0-9]/g, "");
+    assert.equal(rows.length, 11);
+    for (const row of rows) {
       assert.ok(
         ["PROVISIONED", "CONTRACT_VERIFIED", "NOT_PROVISIONED"].includes(
           row.state,
         ),
+        `${row.provider}: state "${row.state}" is outside the vocabulary`,
       );
       assert.equal(row.contract, "PASS");
       assert.equal(row.mock, "PASS");
+      assert.ok(
+        ["PASS", "NOT_RUN"].includes(row.live),
+        `${row.provider}: live verdict "${row.live}" is outside the vocabulary`,
+      );
+
+      const marker = [...simulated].find((slug) =>
+        normalise(row.provider).includes(normalise(slug)),
+      );
+      if (marker) {
+        assert.notEqual(
+          row.state,
+          "PROVISIONED",
+          `${row.provider} is published as PROVISIONED while ${marker}-adapter.mjs declares a simulation contract`,
+        );
+        assert.notEqual(
+          row.live,
+          "PASS",
+          `${row.provider} is published as live PASS while ${marker}-adapter.mjs declares a simulation contract`,
+        );
+      }
     }
   });
 
