@@ -1670,7 +1670,8 @@ The repository retains three logical modules.
 Canonical new-work paths are:
 
 ```text
-platforms/knowledge-platform/   # accepted current Knowledgebase runtime
+apps/knowledge/                 # accepted current Knowledgebase runtime (AGENTS.md §9)
+platforms/knowledge-platform/   # canonical target-architecture spec, not a runtime
 zink-skill-store/               # peer Skill Store module
 zink-tools/                     # peer Tools module
 integrations/openclaw/          # external OpenClaw integration
@@ -1800,8 +1801,10 @@ Execution Authorization: `NO`
 
 Current scope:
 
-- keep the accepted Knowledgebase runtime under `apps/knowledge/` and
-  `platforms/knowledge-platform/` until a separately approved runtime migration;
+- keep the accepted Knowledgebase runtime at `apps/knowledge/` — the only runtime
+  path, since `platforms/knowledge-platform/` is its canonical target-architecture
+  spec and holds four `.gitkeep` placeholders and no code — until a separately
+  approved runtime migration;
 - make `zink-skill-store/` a peer module rather than a child of Knowledgebase;
 - make `zink-tools/` a peer module rather than an integration subsystem;
 - use `integrations/openclaw/` as the canonical OpenClaw integration path;
