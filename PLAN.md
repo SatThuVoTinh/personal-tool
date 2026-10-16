@@ -48,12 +48,18 @@ operations research and simulation remain first-class capabilities.
 
 ```text
 Milestone: M12 — Governed Discord interaction lifecycle and governed presentation
-Task: M12/T2.2 — WAVE A: data-integrity and silent-failure defects (the medium-risk tier, first of three waves)
+Task: M12/T2.3 — WAVE C: document-truth and gate-registry defects (the low-risk tier, third of three waves)
   The predecessor tier `M12/T2.1` (HIGH-RISK: irreversible loss, exposure, failures nobody can detect) is **CLOSED
   2026-10-15**: all eight items plus four owner-authorized follow-ons landed, its evidence is in §8, and its full
   contract text is preserved verbatim at `docs/contracts/execution/archive/2026-10-15-M12-T2.1-R3.md` — that archive
   is decision `H10` / `R3-P04-03`, executed first because §5.1 of the old contract made the scrub rule a prerequisite.
-Active revision: M12/T2.2-R1 — **Wave A only**, after the owner approved the three-wave split on 2026-10-15
+Active revision: M12/T2.3-R1 — **Wave C only**, materialized 2026-10-16 after the owner answered the whole escalated
+  N-block in one line (`n1a n2a n3a n4a n5a`): five-stack gets a caveat only with the rewrite left in `M12/T3` (`n1a`),
+  Gate G18 may be edited alongside `C-4` (`n2a`), the gate registry is built **and** enforced, which widens a required
+  gate (`n3a`), `P04-02`'s `AGENTS.md` column is deferred to its own grant (`n4a`), and `CHANGELOG.md` is left as
+  history while `README.md`/`PLAN.md` are corrected forward (`n5a`). Twelve executable items (`C-1`…`C-11`, `C-13`) —
+  two inherited claims died in verification and are recorded in `ACTIVE.md` §0 rather than executed.
+  (history) Active revision was: M12/T2.2-R1 — **Wave A only**, after the owner approved the three-wave split on 2026-10-15
   (`đúng, chốt 3 wave`), chose the `4A.13` fork **a** (no re-embed skip until a stored model identity exists), and
   granted the pinned-assertion exception (`có grant`) for exactly the assertions named in `ACTIVE.md` §4.
   (history) Active revision was: M12/T2.1-R3 — **the high-risk tier only**, after the owner re-shaped the successor plan
@@ -187,7 +193,9 @@ Task Status: IN PROGRESS — **all eight `R3` items are implemented and locally 
   `Record — the 9Router "cấu hình cũ" report` in §8.
   R1 and R2 both existed with **zero implementation landed under either**, and no prior task's evidence is altered.
   ── **`M12/T2.1` tier is CLOSED 2026-10-15.** The rest of this field describes the new task.**
-Task Status: IN PROGRESS — **`M12/T2.2` is CLOSED 2026-10-16 at the tier level: Wave A and Wave B both landed.**
+Task Status: IN PROGRESS — **`M12/T2.3` Wave C is executing** (`C-1`…`C-11`, `C-13`, one commit each, under
+  `M12/T2.3-R1`). Per-item evidence lands in §8 as each item validates; nothing in this tier is claimed until it does.
+  (history) **`M12/T2.2` is CLOSED 2026-10-16 at the tier level: Wave A and Wave B both landed.**
   Wave A delivered six items (`A-1` `ccf2ad7`, `A-2` `09aa698`, `A-4` `bc33c7e`, `A-3` `d1378ba`, `A-6` `bca4ad6`,
   `A-7` `fd302d4`), stopped two on refuted premises (`A-3` original `638a68e`, `A-5` `639fc47`), and settled one as a
   record-only verdict pass (`A-8` `0afc61c`). **Wave B delivered all twenty-one items** — `B-1` `a108cde`, `B-2`
@@ -196,10 +204,16 @@ Task Status: IN PROGRESS — **`M12/T2.2` is CLOSED 2026-10-16 at the tier level
   `7aebc39`, `B-16` `5c156d4`, `B-17` `0dddea4`, `B-18` `3f3bb11`, `B-19` `9fa6505`, `B-20` `a473907`, `B-21`
   `5d5f8f0` — plus four follow-on items that came out of executing them (`a62962b` J-1, `fabaf5b` K-1, `9891d83` L-1,
   `07c31b5` M-1). Per-item evidence and every corrected premise: `Record — M12/T2.2-R2 Wave B closed` in §8.
-  **Still not done by this tier, and not claimed:** deployment (never authorized here), live Discord behaviour, Wave C
-  (`M12/T2.3` — no contract, no code), `M12/T2.2-R3` (the Skill Store lifecycle block, scheduled only), and all
+  **Still not done by that tier, and not claimed:** deployment (never authorized here), live Discord behaviour, Wave C
+  (`M12/T2.3` — no contract and no code at that closeout; it was materialized the same day as `M12/T2.3-R1` after the
+  owner answered the N-block), `M12/T2.2-R3` (the Skill Store lifecycle block, scheduled only), and all
   `M12/T3` H11 work.
-Planning Readiness: APPROVED — the owner approved the three-wave split and its scope on 2026-10-15 (`đúng, chốt 3
+Planning Readiness: APPROVED — the owner approved Wave C's twelve-item scope and answered all five escalated forks on
+  2026-10-16 with `n1a n2a n3a n4a n5a`, each the recommended option. The escalated block was produced by verifying
+  every inherited premise against source before proposing it, which is how `C-12` and the "35-vs-37 drift" were found
+  to be false and why `C-4`'s count became 3 rather than 8; what that pass could not authorize (the `AGENTS.md` alias
+  line, `P04-02`, the five-stack rewrite, the CHANGELOG edit) went to the owner as decisions instead of being smuggled
+  into scope. (history) The owner approved the three-wave split and its scope on 2026-10-15 (`đúng, chốt 3
   wave`), then the `4A.13` fork and the pinned-assertion exception (`a, có grant`), and on 2026-10-16 re-pointed `A-3`
   ("`A3: A`"), ordered the rest of the programme ("`Rồi chạy tiếp A6 A7 A8, rồi chạy B C luôn`"), and granted the
   packaged-build digest rollover (`a`). **Wave B's item content is narrower than the tables he approved, not wider.**
@@ -207,12 +221,24 @@ Planning Readiness: APPROVED — the owner approved the three-wave split and its
   inherited premises failed — see `Record — M12/T2.2-R1 Wave A closed, a WSL claim of mine withdrawn, and
   M12/T2.2-R2 Wave B materialized` in §8. What that pass could not execute (it needed a new pinned constant, a live
   re-pin, or a decision about public behaviour) was escalated into `ACTIVE.md` §5 instead of smuggled in.
-Plan Revision: M12/T2.2-R2
-Execution Authorization: NO — `M12/T2.2-R2` executed and closed on 2026-10-16, so this field returns to NO and the
-  contract is archived. **History of what was actually granted for this wave, recorded verbatim because a later agent
-  must not re-litigate it:** the item bound was `ACTIVE.md` §4's `B-1`…`B-21` (widened from the fifteen frozen at
-  materialization by the owner's own follow-on instructions), on the `AGENTS.md` §12 terms only — local implementation
-  commits, validation, the closeout commit, and a push of this non-`main` task branch. Owner answers, in order:
+Plan Revision: M12/T2.3-R1
+Execution Authorization: YES — bounded to `ACTIVE.md` §4's items `C-1`…`C-11` and `C-13`, on §3's enumerated file
+  list, under the `AGENTS.md` §12 terms only (local implementation commits, validation, the closeout commit, push of
+  this non-`main` task branch). Grants in force and nothing beyond them: `n2a` for **Gate G18 only** — the G10 half of
+  that answer went unused because G10 carries no provider claim; `n3a` to widen a required gate by registry
+  membership, **not** to change what `npm run verify` or CI runs; `n4a` keeps `AGENTS.md` read-only for this wave;
+  `n5a` keeps `CHANGELOG.md` untouched. Standing prohibitions: no `--apply`, no restart, no deployment, no lock
+  deletion, no `events.jsonl` edit, no Discord request, no `main` merge, no PR, no force-push, no workflow-file edit,
+  no migration or schema **content** edit, no dependency or lockfile change, no ceiling **value** change, no deletion
+  of any tracked file, no change under `/home/hoang_vinh/.openclaw-zink` beyond read-only inspection, and no
+  implementation of any `H1`–`H11` decision, of `M12/T2.2-R3`, or of `M12/T3` work. Every pinned assertion other than
+  G18 remains stop-and-report.
+  (history) Authorization was NO immediately before this revision: `M12/T2.2-R2` executed and closed on 2026-10-16,
+  so the field returned to NO and that contract was archived. **History of what was actually granted for Wave B,
+  recorded verbatim because a later agent must not re-litigate it:** the item bound was `ACTIVE.md` §4's `B-1`…`B-21`
+  (widened from the fifteen frozen at materialization by the owner's own follow-on instructions), on the
+  `AGENTS.md` §12 terms only — local implementation commits, validation, the closeout commit, and a push of this
+  non-`main` task branch. Owner answers, in order:
   `A3: A` then `Rồi chạy tiếp A6 A7 A8, rồi chạy B C luôn` (2026-10-16), `A -> G chạy theo phương án tốt nhất`,
   `a. Và sửa thêm các lỗi em phát hiện rồi tới wave c` (which granted the two extra digest pins and the
   discovered-defect cluster `B-20`/`B-21`), and `j1 k1 l1`, then `m1`.
@@ -245,10 +271,14 @@ Execution Authorization: NO — `M12/T2.2-R2` executed and closed on 2026-10-16,
   `R5-E12-01`'s replacement claim contradicted by five `PLAN.md` rows that do record `quality-gate SUCCESS`).
   R3 was then written **fresh** rather than patched, and this field restored to YES at the narrower bound. Full
   detail in `.agents/states/findings.md`, Vòng 6.
-Execution Contract: NONE (the `M12/T2.2-R2` ACTIVE.md was archived at closeout to
+Execution Contract: docs/contracts/execution/ACTIVE.md — `M12/T2.3-R1`, task ID and Plan Revision matching this
+  file. (history) The `M12/T2.2-R2` ACTIVE.md was archived at closeout to
   `docs/contracts/execution/archive/2026-10-16-M12-T2.2-R2.md` and deleted from the working directory)
-Evidence Level: **REMOTE-BACKED for `M12/T2.2-R2` Wave B's repository gates; the live tree and Discord behaviour
-  remain `NOT TESTED`.** CI run **`38927821839`** @ `afa9721e8db81db095061f2a7fb5cba984b40aaa` on ref
+Evidence Level: **NONE for `M12/T2.3-R1` Wave C** — the contract was materialized on 2026-10-16 and no item has
+  executed, so no gate has been run for this tier yet and nothing about it may be claimed. Per-item evidence and the
+  tier-level verdict are recorded here as they are produced.
+  (Evidence Level of the closed predecessor `M12/T2.2-R2`: **REMOTE-BACKED for Wave B's repository gates; the live
+  tree and Discord behaviour remain `NOT TESTED`.** CI run **`38927821839`** @ `afa9721e8db81db095061f2a7fb5cba984b40aaa` on ref
   `codex/m11-t1-audit-remediation`: `quality-gate` **SUCCESS** — `ℹ tests 1590 / suites 106 / pass 1537 / fail 0 /
   cancelled 0 / skipped 53`, `Repository policy check passed.` — and `python-quality` **SUCCESS** (`208 passed,
   34 subtests`). Both numbers were read out of the run log, not inferred from the job colour. **This run had to be
