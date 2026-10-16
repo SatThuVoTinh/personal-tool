@@ -247,14 +247,23 @@ Execution Authorization: NO — `M12/T2.2-R2` executed and closed on 2026-10-16,
   detail in `.agents/states/findings.md`, Vòng 6.
 Execution Contract: NONE (the `M12/T2.2-R2` ACTIVE.md was archived at closeout to
   `docs/contracts/execution/archive/2026-10-16-M12-T2.2-R2.md` and deleted from the working directory)
-Evidence Level: **LOCAL-VALIDATED for `M12/T2.2-R2` Wave B, `NOT RUN` for its CI at the time of writing.**
-  Wave B closed at `07c31b5`: Windows `npm run verify` **`verify_exit=0`** — `1590 tests / 1541 pass / 0 fail /
+Evidence Level: **REMOTE-BACKED for `M12/T2.2-R2` Wave B's repository gates; the live tree and Discord behaviour
+  remain `NOT TESTED`.** CI run **`38927821839`** @ `afa9721e8db81db095061f2a7fb5cba984b40aaa` on ref
+  `codex/m11-t1-audit-remediation`: `quality-gate` **SUCCESS** — `ℹ tests 1590 / suites 106 / pass 1537 / fail 0 /
+  cancelled 0 / skipped 53`, `Repository policy check passed.` — and `python-quality` **SUCCESS** (`208 passed,
+  34 subtests`). Both numbers were read out of the run log, not inferred from the job colour. **This run had to be
+  dispatched by hand:** `ci.yml:6-7` triggers `push` and `pull_request` only on `main`, so pushing a task branch
+  starts nothing (that is open decision **H1**, and every prior run on this branch is `workflow_dispatch` too).
+  The `Security` workflow was **not** run at this head, so it is `NOT RUN` here — at `d8c221a` it was red on the
+  unchanged 5-high `npm audit` baseline with `secret-scan` green, and nothing in this tier touched a dependency.
+  The CI denominator matching the local one proves nothing about the live tree: CI is Linux-on-GitHub, and
+  `skipped 53` vs Windows `49` vs WSL's zero-skip reads is exactly the lane gap recorded in §8.
+  Locally at the closed head: Windows `npm run verify` **`verify_exit=0`** — `1590 tests / 1541 pass / 0 fail /
   49 skipped`, `Repository policy check passed.` — where the 49th skip is `M1 4` declining honestly on a platform
-  that cannot mount the live tree. Python lane for the two Knowledgebase items: **204 passed / 4 skipped /
-  34 subtests**. WSL lane at the closed head: the eight `configure.mjs`-reading files **114/114**, the asset
-  predecessor cluster **90/90**, and the M-1 gate **13/13** with `R7 P1` green. Per-item red-before/green-after and
-  every mutation probe are in `Record — M12/T2.2-R2 Wave B closed`, §8. **CI is `NOT RUN` until this head is pushed
-  and read back**; a task branch on a non-`main` ref is a legitimate `NOT RUN`, not a pass.
+  that cannot mount the live tree. Python lane **204 passed / 4 skipped / 34 subtests**. WSL lane: the eight
+  `configure.mjs`-reading files **114/114**, the asset predecessor cluster **90/90**, and the M-1 gate **13/13** with
+  `R7 P1` green. Per-item red-before/green-after and every mutation probe are in
+  `Record — M12/T2.2-R2 Wave B closed`, §8.
   Wave A's items are validated on both hosts: Windows `npm run verify` exit 0 at `0afc61c` (**1516 tests / 106 suites
   / 1470 pass / 0 fail / 46 skipped**, `Repository policy check passed.`), WSL **1516 / 1471 pass / 2 fail /
   43 skipped**, where both failures were recorded as pre-existing baseline rather than Wave A regressions — `R7 P1`
@@ -6364,7 +6373,11 @@ admitted.
 suite — re-run after the fix. WSL: eight `configure.mjs`-reading files **114/114**, asset predecessor cluster **90/90**,
 M-1 gate **13/13** with `R13 P1` and `R7 P1` both green. Python lane **204 passed / 4 skipped / 34 subtests**.
 Known-red register for this tier now has **one** entry: `R16-DRIVER-05` (the standing dead rehearsal). CI at the
-closed head is `NOT RUN` until the branch is pushed and read back.
+closed head is run **`38927821839`** @ `afa9721`: `quality-gate` **SUCCESS** (`1590 tests / 1537 pass / 0 fail /
+53 skipped`, `Repository policy check passed.`) and `python-quality` **SUCCESS** (`208 passed, 34 subtests`). It
+exists only because the run was dispatched by hand — `ci.yml:6-7` triggers on push to `main` alone, so a task-branch
+push starts nothing, which is open decision **H1**. The `Security` workflow was not run at this head and is
+recorded `NOT RUN`.
 
 **Not done, and not claimed.** No deployment (`--apply` was never authorized here; the nine-path refusal is now
 cleared, but installing anything is a separate grant). Live Discord behaviour remains `NOT TESTED`. Wave C
