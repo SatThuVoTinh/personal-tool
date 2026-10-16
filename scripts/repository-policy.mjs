@@ -766,6 +766,39 @@ export function checkCommandDefinitions(packageJson, makefile) {
 
 const TEST_FILE_ARGUMENT = /^tests\/[\w.+-]+\.test\.mjs$/u;
 
+// `format`/`format:check` hand prettier a list of glob patterns. Unquoted, the
+// *shell* expands them first — and `/bin/sh` has no `globstar`, so a `tests` +
+// double-star pattern degrades to one directory level and matches only helpers
+// and fixtures. CI runs that shell, which is how 110 test files ended up outside
+// their own format gate while four helper files stayed inside it. Quoting hands
+// the pattern to prettier, whose own matcher does understand the double star.
+//
+// Double quotes specifically: `cmd.exe` does not treat a single quote as a quote,
+// so a single-quoted pattern would reach prettier with the apostrophes intact and
+// match nothing. A single-quoted argument is therefore a failure here, not a
+// style choice.
+export function checkFormatGlobQuoting(packageJson) {
+  const failures = [];
+  for (const scriptName of ["format", "format:check"]) {
+    const command = packageJson?.scripts?.[scriptName];
+    if (typeof command !== "string") {
+      continue;
+    }
+    for (const token of command.split(/\s+/u)) {
+      if (!token.includes("*") && !token.includes("{")) {
+        continue;
+      }
+      if (token.startsWith('"') && token.endsWith('"')) {
+        continue;
+      }
+      failures.push(
+        `npm script ${scriptName} passes the glob ${token} unquoted or single-quoted, so the shell expands it before prettier sees it. Wrap it in double quotes.`,
+      );
+    }
+  }
+  return failures;
+}
+
 /**
  * `npm test` names its files instead of globbing them, which is what lets a
  * missing file fail loudly rather than silently shortening the run. The other
@@ -866,6 +899,7 @@ export function collectRepositoryFailures(repositoryRoot) {
     const packageJson = JSON.parse(readFileSync(packagePath, "utf8"));
     const makefile = readFileSync(makefilePath, "utf8");
     failures.push(...checkCommandDefinitions(packageJson, makefile));
+    failures.push(...checkFormatGlobQuoting(packageJson));
 
     const testsDirectory = path.join(repositoryRoot, "tests");
     if (existsSync(testsDirectory)) {

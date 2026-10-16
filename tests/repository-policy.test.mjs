@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   checkCommandDefinitions,
+  checkFormatGlobQuoting,
   checkGitWhitespace,
   checkRequiredFiles,
   checkTestListReconciliation,
@@ -717,4 +718,46 @@ test("repo:check itself refuses a test file the npm test script never names", ()
       `repo:check must report the unlisted file; got: ${failures.join(" | ")}`,
     );
   });
+});
+
+test("reports a prettier glob the shell would expand before prettier sees it", () => {
+  const failures = checkFormatGlobQuoting({
+    scripts: { "format:check": "prettier --check tests/**/*.mjs docs/*.md" },
+  });
+  assert.equal(failures.length, 2, failures.join(" | "));
+  assert.match(failures[0], /tests\/\*\*\/\*\.mjs/u);
+  assert.match(failures[1], /docs\/\*\.md/u);
+});
+
+test("reports a single-quoted glob, because cmd.exe does not honour single quotes", () => {
+  const failures = checkFormatGlobQuoting({
+    scripts: { format: "prettier --write 'tests/**/*.mjs'" },
+  });
+  assert.equal(failures.length, 1, failures.join(" | "));
+  assert.match(failures[0], /double quotes/u);
+});
+
+test("accepts double-quoted globs and brace expansions", () => {
+  assert.deepEqual(
+    checkFormatGlobQuoting({
+      scripts: {
+        "format:check":
+          'prettier --check README.md "docs/**/*.md" ".github/workflows/*.{yml,yaml}"',
+        format: 'prettier --write "tests/**/*.mjs"',
+      },
+    }),
+    [],
+  );
+});
+
+test("the real format scripts quote every glob so CI expands them the same way Windows does", () => {
+  const packageJson = JSON.parse(
+    readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"),
+  );
+  assert.deepEqual(
+    checkFormatGlobQuoting(packageJson),
+    [],
+    "an unquoted glob makes /bin/sh expand tests/**/*.mjs as tests/*/*.mjs, so the " +
+      "CI format gate checks one directory level and never sees the test files",
+  );
 });
