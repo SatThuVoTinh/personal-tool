@@ -134,6 +134,15 @@ Prior revision: M12/T2.1-R1 — the execution wave the owner authorized on 2026-
   register becomes tracked; **H11 the O1/O2 working relationship, owner-proposed 2026-10-15 — see §11 for its three
   shapes**). Answering H1–H11 does **not** authorize execution; each still needs its own Plan Revision. The ledger
   lives in **§11 of this file**, not in an ignored state file (promoted 2026-10-15 under the owner's approval).
+- **Corrected 2026-10-16 (owner answer `l1`).** The paragraph above is the withdrawn R2 grouping and must not be read
+  as the current schedule: `M12/T2.1-R3` §5.3 re-filed the **Skill Store lifecycle** block
+  (`R5-E04-01/02/04/05/06/07/08/09`, `R5-E05-04/05/07/08`, `R5-E07-01/04/05/06/07`, `R5-E03-07` — 18 findings) into
+  **T2.2**, not `M12/T2.3`, and `T2.4`–`T2.7` no longer exist as groupings. The block was nevertheless absent from
+  the admitted Wave B scope and from `ACTIVE.md` §5, so it belonged to no running tier. The owner assigned it **its
+  own contract after Wave B closes**, recorded here as `M12/T2.2-R3` (the option he chose was named `M12/T2.4`; that
+  ID already names A2 plus `R5-E13-02` in the text above, so the intent — separate contract, medium risk, not folded
+  into the document tier — is kept and only the identifier is corrected). It is **scheduled, not authorized**: no
+  code for it exists, and it needs its own Plan Revision and `Execution Authorization: YES`.
   Honesty obligations the owner should read before accepting anything: deployment is **not** authorized
   by this contract; live Discord behaviour stays `NOT TESTED`; `verify.mjs` stays `NOT RUN`; the R16
   rehearsal cannot run on WSL and is **NOT RUN**, so no rehearsal validates this against the live
