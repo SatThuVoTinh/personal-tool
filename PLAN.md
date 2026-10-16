@@ -178,29 +178,38 @@ Task Status: IN PROGRESS — **all eight `R3` items are implemented and locally 
   `Record — the 9Router "cấu hình cũ" report` in §8.
   R1 and R2 both existed with **zero implementation landed under either**, and no prior task's evidence is altered.
   ── **`M12/T2.1` tier is CLOSED 2026-10-15.** The rest of this field describes the new task.**
-Task Status: IN PROGRESS — `M12/T2.2` **Wave A materialized, execution not yet started.** `A-1`…`A-8` are frozen in
-  `ACTIVE.md` §4; no item has landed, so nothing is claimed. Wave B and Wave C are separate future contracts and are
-  explicitly excluded (§5 of the contract), as is all `M12/T3` H11 work.
-Planning Readiness: APPROVED — the owner approved Wave A's scope, order, the `4A.13` fork, and the
-  pinned-assertion exception in three messages on 2026-10-15 (`đúng, chốt 3 wave` / `a, có grant` / `chọn 1 đi…`).
-  The prior line — *"the owner answered the I1–I7 block with `vậy A đi` and set the three-tier split by risk in the
-  same message"* — belongs to the closed `T2.1` tier.
-Plan Revision: M12/T2.2-R1
-Execution Authorization: YES — **bounded to `ACTIVE.md` §4's Wave A items (`A-1` … `A-8`), §3's enumerated file
+Task Status: IN PROGRESS — `M12/T2.2` **Wave A CLOSED 2026-10-16; Wave B (`R2`) materialized, execution not yet
+  started.** Wave A delivered six items (`A-1` `ccf2ad7`, `A-2` `09aa698`, `A-4` `bc33c7e`, `A-3` `d1378ba`, `A-6`
+  `bca4ad6`, `A-7` `fd302d4`), stopped two on refuted premises (`A-3` original `638a68e`, `A-5` `639fc47`), and
+  settled one as a record-only verdict pass (`A-8` `0afc61c`) — per-item evidence in §8. `B-1`…`B-15` are now frozen
+  in `ACTIVE.md` §4; none has landed, so nothing is claimed for them. Four further items are held there pending named
+  owner grants, and `M12/T2.3` (Wave C) plus all `M12/T3` H11 work stay excluded (§5).
+Planning Readiness: APPROVED — the owner approved the three-wave split and its scope on 2026-10-15 (`đúng, chốt 3
+  wave`), then the `4A.13` fork and the pinned-assertion exception (`a, có grant`), and on 2026-10-16 re-pointed `A-3`
+  ("`A3: A`"), ordered the rest of the programme ("`Rồi chạy tiếp A6 A7 A8, rồi chạy B C luôn`"), and granted the
+  packaged-build digest rollover (`a`). **Wave B's item content is narrower than the tables he approved, not wider.**
+  Seven read-only lanes verified every candidate premise against source before the contract was frozen, and eight
+  inherited premises failed — see `Record — M12/T2.2-R1 Wave A closed, a WSL claim of mine withdrawn, and
+  M12/T2.2-R2 Wave B materialized` in §8. What that pass could not execute (it needed a new pinned constant, a live
+  re-pin, or a decision about public behaviour) was escalated into `ACTIVE.md` §5 instead of smuggled in.
+Plan Revision: M12/T2.2-R2
+Execution Authorization: YES — **bounded to `ACTIVE.md` §4's Wave B items (`B-1` … `B-15`), §3's enumerated file
   list, and §5's exclusions.** On the `AGENTS.md` §12 terms only: local implementation, validation, the
   task/closeout commits, and a push of this non-`main` task branch to its configured remote. It authorizes **no**
   `--apply`, no restart, no deployment, no lock deletion, no `events.jsonl` edit, no Discord request, no `main` merge,
   no PR, no force-push, no workflow-file edit, no migration or schema **content** edit, no `.github/workflows/**`
-  change, no dependency change, no ceiling change, no chmod or other change under `/home/hoang_vinh/.openclaw-zink`,
-  and **no** deletion of the stray `C:\home\hoang_vinh` tree.
-  **Pinned-assertion exception, granted explicitly 2026-10-15 (`a, có grant`) and narrowed by this plan:** it covers
-  **only** the assertion named in the contract — `tests/m8-t1-skill-vector-memory.test.mjs:118`, re-valued by `A-5`.
-  Every other pinned assertion remains a stop-and-report condition (the rule R2 broke via 4A.1 and `R6-V01-01` caught;
-  the rule that stopped `T2.1-5` mid-flight). `A-1` and `A-2` were expected to need further re-values; if execution
-  finds one, stop and ask rather than assume the grant extends.
+  change, no dependency change, no ceiling **value** change, no **deletion of any tracked file**, no chmod or other
+  change under `/home/hoang_vinh/.openclaw-zink`, and **no** deletion of the stray `C:\home\hoang_vinh` tree.
+  **Pinned-assertion exception: NONE in force for Wave B.** The `R1` grant covered exactly one line
+  (`tests/m8-t1-skill-vector-memory.test.mjs:118`) and `A-5` never touched it, because the guard that line protected
+  turned out to be a regression — so the grant ended **unused**, which is not precedent for the next one. Every
+  pinned assertion, digest constant and predecessor admission is a stop-and-report condition; the four items that
+  would need one are listed in `ACTIVE.md` §5 with the exact line each requires. If a `B-*` fix reddens a
+  current-build pin anyway, that item stops and reports — the `A-3` path, which worked.
   Also **no** implementation of any H1–H11 decision (§11) — including all `M12/T3` H11 work (no coordinator edge, no
-  shared sandbox, no `primary_coordinator` writer, no `five-stack.md` rewrite) — and no Wave B / Wave C item. Tier and
-  wave assignments are not approvals.
+  shared sandbox, no `primary_coordinator` writer, no `five-stack.md` rewrite) — and no Wave C item. §4's fifteen
+  `B-*` items are the whole of this authorization; tier and wave assignments are not approvals, and neither is an
+  item's presence in an archived tier table.
   (history) This field's earlier text bounded execution to `ACTIVE.md` §4's eight high-risk items (T2.1-1 … T2.1-8) for
   `M12/T2.1-R3`; that tier is closed and its contract is archived.
   History of this field, recorded because the withdrawal is the evidence that the verification round worked: it was
@@ -216,7 +225,14 @@ Execution Authorization: YES — **bounded to `ACTIVE.md` §4's Wave A items (`A
   R3 was then written **fresh** rather than patched, and this field restored to YES at the narrower bound. Full
   detail in `.agents/states/findings.md`, Vòng 6.
 Execution Contract: docs/contracts/execution/ACTIVE.md
-Evidence Level: **NONE** — `M12/T2.2-R1` Wave A is materialized but **no item has executed**, so nothing is claimed.
+Evidence Level: **LOCAL-VALIDATED for `M12/T2.2-R1` Wave A, `NOT RUN` for its CI; `NONE` for `M12/T2.2-R2` Wave B.**
+  Wave A's items are validated on both hosts: Windows `npm run verify` exit 0 at `0afc61c` (**1516 tests / 106 suites
+  / 1470 pass / 0 fail / 46 skipped**, `Repository policy check passed.`), WSL **1516 / 1471 pass / 2 fail /
+  43 skipped**, where both failures are pre-existing baseline rather than Wave A regressions — `R7 P1` is live drift
+  (`61638d8` moved `lib/authority.mjs` after Deployment B installed `c38e1a6b…`, and no redeploy is authorized) and
+  `R16-DRIVER-05` is the standing dead rehearsal. No CI run was observed at any Wave A head, so the tier's strongest
+  honest claim is LOCAL-VALIDATED and **not** REMOTE-BACKED. Wave B has executed nothing. Full detail, including the
+  piped-`tail` mistake that nearly made me report the WSL lane green, in §8.
   (Evidence Level of the closed predecessor `M12/T2.1-R3`: **REMOTE-BACKED** for the repository gates — CI run
   `38715084889` @ `d8c221a` reports `quality-gate`
   **SUCCESS** and `python-quality` **SUCCESS** (Security `38715090086` is red on the unchanged 5-high `npm audit`
@@ -5677,8 +5693,11 @@ tier** — `node --test` under WSL's node `v24.15.0` against the same working tr
 `tests/m12-t2.2-a1-stack-authority.test.mjs` **9 tests / 9 pass / 0 fail**, and the four adjacent suites
 (`m10-t2-coordinator-binding`, `m10-t2-r14-review-defects`, `m7-lane-g-policy`,
 `m11-t1-openclaw-outbound-and-caches`) **66 tests / 66 pass / 0 fail / 0 skipped** — one test *more* than the Windows
-lane, which skips one of them. Nothing went red on the lane that actually hosts the runtime, so no silent WSL
-regression of the kind `R5-E09` recorded. **Remote-backed: NOT RUN.** `ccf2ad7` is pushed, and `ci.yml:3-8` triggers
+lane, which skips one of them. Nothing went red **in those five suites** on the lane that actually hosts the runtime.
+**This claim is narrower than it read**, and is corrected here: it covered the suites `A-1` touched, not the WSL tree.
+A full `npm test` under WSL at the wave's final head returns **2 fail / 1471 pass / 43 skipped**, both pre-existing
+and outside `A-1`'s suites (`R7 P1` live-drift on `lib/authority.mjs`, and `R16-DRIVER-05`) — see the Wave A closure
+record at the end of §8. **Remote-backed: NOT RUN.** `ccf2ad7` is pushed, and `ci.yml:3-8` triggers
 only on `pull_request`/`push` to `main` or on `workflow_dispatch`; there is no open PR from this branch
 (`gh pr list --state open` → empty), so the push triggered nothing and `commits/ccf2ad7/check-runs` is empty. A
 dispatch is the owner's call, not mine: this session's `gh` token authenticates as `SatThuVoTinh`, so a dispatch I
@@ -6033,6 +6052,99 @@ scoped items rather than riding in on this one.
 Gate state for this record: `NOT RUN` for `npm run verify` — no repository source file changed, only `PLAN.md`, the
 register, and a `git status` that stayed clean for source. The probes ran in `os.tmpdir()` scratch scripts against the
 real modules and were deleted.
+
+### Record — `M12/T2.2-R1` Wave A closed, a WSL claim of mine withdrawn, and `M12/T2.2-R2` Wave B materialized (2026-10-16)
+
+**Wave A ledger.** Landed: `A-1` `ccf2ad7` (one coordinator→stack source, and it refuted this task's own
+prerequisite), `A-2` `09aa698` (one stack registry; a stack refusal stopped being reported as
+`AUTH_DELEGATION_NOT_FOUND`), `A-4` `bc33c7e` (applied migrations digest-pinned), `A-3` `d1378ba` (the unlocked
+queue writer serialized, plus the digest rollover the owner granted), `A-6` `bca4ad6` (a state root that is already a
+ledger root refused by name), `A-7` `fd302d4` (the owner's no-skip decision pinned where a future skip would break
+it). Stopped as premise refutations: `A-3`'s original form `638a68e` and `A-5` `639fc47`. Record-only: `A-8`
+`0afc61c`. The Wave A contract is archived verbatim at
+`docs/contracts/execution/archive/2026-10-16-M12-T2.2-R1.md` (`609a532`); its scrub sweep matched only the words
+`Execution Authorization:` and a list of file paths, so **nothing was redacted**, and no snowflake, long hex, or live
+state capture was present.
+
+**Gate evidence, with one of my own claims corrected.** Windows at this head: `npm run verify` exit 0 —
+`format:check` clean, `lint` clean, `npm test` **1516 tests / 106 suites / 1470 pass / 0 fail / 46 skipped**,
+`Repository policy check passed.` CI: **`NOT RUN`** — a push to this non-`main` branch triggers no workflow
+(`ci.yml`/`security.yml` fire on `pull_request`/`push` to `main`, `workflow_dispatch`, and a weekly schedule), and the
+token in this session authenticates as the owner's own login, so an agent dispatch would be indistinguishable from
+his. `REMOTE-BACKED` is therefore withheld for every Wave A head.
+
+**The correction:** I nearly recorded the WSL lane as green. The command I ran ended in `| tail -30`, so the exit
+status I saw was `tail`'s, not the runner's. Re-run with the output captured to a file, WSL at this head is
+**1516 tests / 1471 pass / 2 fail / 43 skipped** — WSL runs three tests Windows skips, and two of them are red:
+
+- `tests/m10-t2-r7-authority-predecessor.test.mjs:201` (`R7 P1`) — *"the live `lib/authority.mjs` digest `c38e1a6b…`
+  is neither the current build nor an admitted predecessor"*. This is the invariant that `M12/T2-R3` deliberately
+  installed (§8, `PLAN.md:5102-5107`): the installed runtime must match the current build or an admitted predecessor.
+  It is red because Deployment B installed `c38e1a6b…` on 2026-10-14 and `61638d8` changed `authority.mjs` on
+  2026-10-15 without a redeploy — provable from history, since `61638d8` **predates Wave A's first commit**, so no
+  Wave A item caused it. Clearing it needs `operator-preflight` → one `operator-apply`, which is not authorized here.
+- `tests/m8-t2.13-r16-apply-rehearsal.test.mjs:1183` (`R16-DRIVER-05`) — `0 !== 1` at `:1196`. This is the standing
+  dead rehearsal whose re-basing is already an open owner decision.
+
+Both are **baseline failures, not regressions**, and Wave B's §6 gate now records the WSL baseline explicitly so no
+later item can be credited or blamed against a number nobody captured.
+
+**Wave B was not written from the inherited tables.** Seven read-only lanes re-verified every candidate premise
+against source first (the method Wave A forced: three of five Wave A premises were wrong). Eight inherited premises
+failed, and they changed the wave:
+
+1. `4.6` / `R1-A12-06` — **cannot be executed.** `chosen` is drawn from the same allowlist it is then checked against
+   (`quota-telemetry.mjs:212-213` → `:262`), so the throw at `:263` is structurally unreachable, and reaching it
+   would mean changing model-resolution semantics — a RED decision, not a test fix. Dismissed with evidence.
+2. `4.3` / `R1-A04-06` — the reason-code matrix **already exists**
+   (`integrations/openclaw/topology/policy/reason-code-matrix.json`, loaded `runtime.mjs:11-16`, already wired via
+   `validateAgentClaim:93` and `outcomeReasonAllowed:202`). Building a second one violates `AGENTS.md` §8. What is
+   real: the load is unguarded, and `reasonEmitterAllowed` (`:259-264`) has zero production callers. The emitter half
+   is dropped, because enforcing it today requires widening a published matrix (`guard.mjs:807/:842/:991` emits
+   `POLICY_DENIED`/`SCHEMA_INVALID` as `agent_claims`, and no `GOVERNANCE_*` code is in it) — escalated instead.
+3. `4A.9` — "no diagnostic channel" is **false**. `apps/knowledge/app/run_errors.py` is the owned structured channel
+   (`SafeRunError:21`, `MAX_ERROR_ENTRIES = 50:8`, read at `main.py:568`), so the fix reuses it rather than adding
+   Python `logging` to an app that deliberately has none. "Zero logging" itself survives (wide grep = 0 hits).
+   The two documented denominators reconcile: 28 grep sites, **26** discarding cause
+   (`database.py:205`, `index_runner.py:43` end in a bare `raise`).
+4. `4A.10` — the duplication is not in the Python app at all but in `zink-tools/common/semantic-contract.mjs`
+   (filter `:748` `?? 1` vs sort `:698-699` `?? 0`), and the single-rule helper that supposedly needed extracting
+   (`filterByMinRelevance:744`) has **zero production callers**. Unifying cannot be behaviour-preserving, so the
+   wave adopts the conservative polarity the two live adapters already use (`?? 0`) and says so.
+5. `R5-E08-03` — no drift exists: argv = disk = 110 exactly (set-diff 0/0). The item becomes a reconciliation
+   *guard*, which is precisely why it lands first: every later item adds a test file.
+6. `R5-E08-01` — worse and cheaper at once. Worse: the four files the unquoted globs reach under `dash` are
+   helpers/fixtures, so **0 of 110 test files are format-checked**, in CI, where the shell is dash. Cheaper: measured
+   with prettier's own expansion, `All matched files use Prettier code style!` — quoting absorbs **no** reformatting
+   diff, so the inherited fear of a green→red flip is unfounded.
+7. `R5-E16-04` — **dismissed.** `_acceptance_backup_barrier` runs only from `start()` (`database.py:202`) →
+   `lifespan` (`main.py:168`) behind `KNOWLEDGE_ACCEPTANCE_BACKUP_BARRIER_DIR` (`config.py:96-100`), so "withholds
+   the two search slots" describes a startup harness, not a live stall. `R5-E16-05` and `R5-E15-05` are scheduled,
+   not admitted: both real in shape, both graded on a frequency or impact the source disproves.
+8. `R5-E14-05` — the register names `compose.m4-t4.acceptance.yml`, **which does not exist**; the byte-identical pair
+   is m3-t3/m3-t4 (`e61ad1c2…`).
+
+Two new defects surfaced and are **recorded, not fixed**, because nobody authorized fixing them: `R6-V03-02`
+(`create_index_run`/`get_index_run` have no terminal exception mapper, so 2 of 3 routes return codeless 500s while
+`/v1/search` returns `INTERNAL_ERROR` at `main.py:473-474`) and the matrix-widening consequence of `4.3`.
+
+**Four items are held for named grants, and one of them is not admissible at all.** `4.2` needs the grant to re-value
+`CANDIDATE_BOUNDARY_SHA256` at `tests/m10-t2-r6-boundary-predecessor.test.mjs:52` — that test hashes the
+**working-tree** build (`:226-236`) and separately demands the candidate stay *absent* from `configure.mjs`, which is
+what makes "just add a log line" impossible. `4A.15(ii)` needs one line: `tests/m12-t2-governed-surface.test.mjs:685`,
+where `assert.notEqual(table, undefined, …)` can never fail because `:681-684` always yields a String. `4A.16(i)`
+needs `tests/m7-lane-g-policy.test.mjs:726-733` **plus** acceptance of a known-red that is red today for the right
+reason (`index.mjs:511`, `README.md:216`, `PLAN.md:108`, `:143`). `4A.15(i)` cannot be bought with a grant: its L1
+(`:127`, `:129`) and L2 (`:167-172`) demand mutually exclusive things of the live file, `reachable` is false today
+(live `b2e3d0c7…` vs baseline `386ba4b7…` at `:66-67`, which is also the two-copy defect), and converting the two
+skips (`:124`, `:150`) lands two unregistered reds. Its premises must be re-based first. Recorded with them: there is
+**no machine-readable known-red register** in this repository — `scripts/verification/` and `scripts/maintenance/` are
+empty directories and `preflight-lineage` appears nowhere outside the test file itself.
+
+`M12/T2.2-R2` is now materialized as fifteen items (`B-1`…`B-15`) in
+`docs/contracts/execution/ACTIVE.md`, ordered so the gate-truthfulness items land before the behaviour items, with one
+file-ownership collision handled by sequence ( `B-7` before `B-8` in `workflow.mjs`, `B-11` before `B-12` in
+`ledger.mjs`, `B-13` before `B-14` in `main.py`) and no item authorized to delete a tracked file.
 
 ## 9. Deferred beyond V1
 
