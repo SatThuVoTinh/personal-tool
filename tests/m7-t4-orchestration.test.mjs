@@ -383,6 +383,7 @@ describe("M7/T4 External Infrastructure & Governed Orchestration (G0 - G20)", ()
     assert.ok(simulated.size > 0, "no adapter declared a simulation contract");
 
     const normalise = (value) => value.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const covered = new Set();
     assert.equal(rows.length, 11);
     for (const row of rows) {
       assert.ok(
@@ -402,6 +403,7 @@ describe("M7/T4 External Infrastructure & Governed Orchestration (G0 - G20)", ()
         normalise(row.provider).includes(normalise(slug)),
       );
       if (marker) {
+        covered.add(marker);
         assert.notEqual(
           row.state,
           "PROVISIONED",
@@ -413,6 +415,16 @@ describe("M7/T4 External Infrastructure & Governed Orchestration (G0 - G20)", ()
           `${row.provider} is published as live PASS while ${marker}-adapter.mjs declares a simulation contract`,
         );
       }
+    }
+
+    // A row renamed away from its adapter's slug would silently drop its own
+    // constraint and leave the gate green, so every declared simulation must
+    // still be covered by a published row.
+    for (const marker of [...simulated].sort()) {
+      assert.ok(
+        covered.has(marker),
+        `no published provider row covers ${marker}-adapter.mjs, so its simulation-contract claim is unchecked`,
+      );
     }
   });
 
