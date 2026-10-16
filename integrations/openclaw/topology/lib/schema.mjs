@@ -370,7 +370,11 @@ export function generateSchemaManifest() {
   };
   for (const name of CANONICAL_CONTRACTS) {
     const filePath = resolveContractFilePath(name);
-    if (!filePath || !existsSync(filePath)) continue;
+    if (!filePath || !existsSync(filePath)) {
+      throw new Error(
+        `SCHEMA_MANIFEST_INCOMPLETE: contract ${name} is canonical but no schema file resolves`,
+      );
+    }
     const raw = readFileSync(filePath, "utf8");
     const hash = createHash("sha256").update(raw).digest("hex");
     const parsed = JSON.parse(raw);
@@ -383,7 +387,11 @@ export function generateSchemaManifest() {
   }
   for (const name of CANONICAL_TOOL_CONTRACTS) {
     const filePath = resolveContractFilePath(name);
-    if (!filePath || !existsSync(filePath)) continue;
+    if (!filePath || !existsSync(filePath)) {
+      throw new Error(
+        `SCHEMA_MANIFEST_INCOMPLETE: tool contract ${name} is canonical but no schema file resolves`,
+      );
+    }
     const raw = readFileSync(filePath, "utf8");
     const hash = createHash("sha256").update(raw).digest("hex");
     const parsed = JSON.parse(raw);
@@ -406,6 +414,19 @@ export function generateSchemaManifest() {
 
 export function verifySchemaManifestChecksums(manifest = null) {
   const target = manifest || generateSchemaManifest();
+  // Iterating only whatever the manifest happens to contain cannot notice a member that
+  // was dropped on the way in, so completeness is checked against the canonical lists.
+  const incomplete = [
+    ...CANONICAL_CONTRACTS.filter(
+      (name) => !(name in (target.contracts ?? {})),
+    ),
+    ...CANONICAL_TOOL_CONTRACTS.filter(
+      (name) => !(name in (target.tools ?? {})),
+    ),
+  ];
+  if (incomplete.length > 0) {
+    return { valid: false, incomplete };
+  }
   for (const [name, info] of Object.entries(target.contracts || {})) {
     const filePath = resolveContractFilePath(info.file || name);
     if (!filePath || !existsSync(filePath))

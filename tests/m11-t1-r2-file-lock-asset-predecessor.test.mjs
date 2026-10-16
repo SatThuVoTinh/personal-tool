@@ -289,6 +289,10 @@ test("R2 P1: the live runtime IS the ea84a5a packaged build and differs from the
       "lib/discord-native-send.mjs",
       "lib/discord-result-preview.mjs",
       "lib/excel-writer.mjs",
+      // M12/T2.2-R2 B-9, admitted by owner decision §0.5-E: a manifest that lost a canonical
+      // member used to verify as `valid: true` because the generator skipped what it could not
+      // resolve and the verifier iterated only what survived. Both ends now assert coverage.
+      "lib/schema.mjs",
       "lib/policy.mjs",
       // M12/T2.2-R2 B-8, admitted by owner decision §0.5-E: the reason-code matrix load is
       // now named (`REASON_POLICY_UNREADABLE` / `_MALFORMED` / `_INCOMPLETE`) instead of

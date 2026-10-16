@@ -482,6 +482,11 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
   ]),
   "lib/schema.mjs": Object.freeze([
     "869a2254975f60432c596a115acee1fc0e03893224b925c5a54334dc532d1cee",
+    // M12/T2.2-R2 B-9 (owner admission §0.5-E): the build the live runtime carries, so the
+    // divergence B-9 introduces in the packaged `lib/schema.mjs` stays upgradable. Re-derived
+    // from `ea84a5a` through `governancePluginFiles()` — the construction R2 P1 uses — not
+    // transcribed. The new digest is the current build and is deliberately not listed.
+    "b3222229b760c0456b0c9a8f947971450d065c22f33af59c62a443f0e2d409b4",
   ]),
   "lib/excel-writer.mjs": Object.freeze([
     // M10/T2-R19: the FIRST predecessor entry for this asset (it had none,
