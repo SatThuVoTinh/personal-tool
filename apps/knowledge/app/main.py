@@ -545,6 +545,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(
                 status_code=503, detail={"code": "DATABASE_UNAVAILABLE"}
             ) from error
+        except HTTPException:
+            # The body below raises HTTPException itself (NO_ACTIVE_INDEX, and
+            # the scheduler's SCHEDULING_FAILED). Without this passthrough a
+            # terminal mapper would rewrite a documented 409/503 as a 500.
+            raise
+        except Exception as error:
+            # M12/T2.2-R2 B-18 (`R6-V03-02`): `/v1/search` already answers an
+            # unmapped fault this way. Left unmapped here, FastAPI's default 500
+            # reached the adapter with an empty body and the code flattened to
+            # HTTP_500, so the outage was unattributable.
+            raise HTTPException(status_code=500, detail={"code": "INTERNAL_ERROR"}) from error
         finally:
             await coordinator.release_reservation()
 
@@ -564,6 +575,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(
                 status_code=503, detail={"code": "DATABASE_UNAVAILABLE"}
             ) from error
+        except Exception as error:
+            # B-18: the sibling mapper above. A run whose lookup faulted must not
+            # be a codeless 500.
+            raise HTTPException(status_code=500, detail={"code": "INTERNAL_ERROR"}) from error
         if run is None:
             raise HTTPException(status_code=404, detail={"code": "INDEX_RUN_NOT_FOUND"})
         return {
