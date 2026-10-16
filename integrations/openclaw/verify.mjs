@@ -272,7 +272,7 @@ export function execFileBounded(command, args, options = {}) {
   });
 }
 
-async function runLiveAsync(command, args, environment) {
+export async function runLiveAsync(command, args, environment) {
   try {
     await execFileBounded(command, args, { env: environment });
     return { command: displayCommand(command, args), status: "PASS" };
@@ -349,7 +349,11 @@ async function runLiveRouterReachabilityAsync() {
   }
 }
 
-async function runInBatches(items, batchSize, operation) {
+// Exported for `tests/m12-t2.2-b4-live-probe-invariants.test.mjs`. Printing
+// `{"static":"PASS","live":[]}` under `--live` has to be impossible, and that is a property of
+// this batching rule plus the verdict rule in `runLiveAsync` — not of a guard `main()` could
+// ever reach, which is why there is no guard there.
+export async function runInBatches(items, batchSize, operation) {
   const results = [];
   for (let index = 0; index < items.length; index += batchSize) {
     results.push(
