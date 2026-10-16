@@ -130,7 +130,19 @@ function mode(filePath) {
   return statSync(filePath).mode & 0o777;
 }
 
-function requireMode(filePath, expected) {
+// NTFS reports 0o666 for files and 0o777 for directories whatever was requested, so a
+// 0o600/0o700 assertion can never be true on that host. configure.mjs already skips its
+// mode checks the same way (configure.mjs `requireFileMode`); before that skip existed
+// here, this gate could not produce evidence on the host the evidence was being produced
+// on, which is the mechanism behind the standing `NOT RUN`.
+export function hostEnforcesPosixModes(platform) {
+  return platform !== "win32";
+}
+
+export function requireMode(filePath, expected) {
+  if (!hostEnforcesPosixModes(process.platform)) {
+    return;
+  }
   if (mode(filePath) !== expected) {
     throw new Error(
       `Unexpected mode for ${filePath}: expected ${expected.toString(8)}`,
