@@ -4,6 +4,14 @@ The five stacks are functional processing layers, not repository modules or
 permanent agent processes. Stable protocol IDs are `infrastructure`,
 `data_plant`, `semantic`, `intelligence`, and `decision`.
 
+> **Caveat — this table is not the runtime.** `integrations/openclaw/lib/authority.mjs:581-582`
+> binds `o1` to `infrastructure` + `data_plant` and `o2` to `semantic` +
+> `intelligence` + `decision`, so the Coordinator column is inverted for the Data
+> Plant, Semantic and Intelligence rows. Rewriting this table is owned by
+> `M12/T3` (the owner assigned the file there); the line above exists only so a
+> reader does not take the table for the enforced topology while that task is
+> pending.
+
 | Stack          | Coordinator | Executor / support                                         | Responsibility                                                                                                |
 | -------------- | ----------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
 | Infrastructure | Main        | O2 designated support/future executor                      | External runtime, storage, compute, network and monitoring; T2 grants no infrastructure execution capability. |
