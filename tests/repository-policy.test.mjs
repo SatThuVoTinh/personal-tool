@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import {
   checkCommandDefinitions,
   checkFormatGlobQuoting,
+  checkGateRegistry,
   checkGitWhitespace,
   checkRequiredFiles,
   checkTestListReconciliation,
@@ -271,6 +272,73 @@ test("rejects placeholder-like npm scripts and Make targets", () => {
     failures.some((failure) =>
       failure.includes("Make target install must run npm ci."),
     ),
+  );
+});
+
+const gateRegistryTable = (names) =>
+  [
+    "| Script | What it checks | Where it runs | NOT RUN condition |",
+    "| --- | --- | --- | --- |",
+    ...names.map((name) => `| \`${name}\` | d | w | n |`),
+  ].join("\n");
+
+test("the gate registry and the npm scripts must be the same set", () => {
+  const scripts = { format: "prettier --write x", test: "node --test" };
+  const packageJson = { scripts };
+
+  assert.deepEqual(
+    checkGateRegistry(packageJson, gateRegistryTable(["format", "test"])),
+    [],
+  );
+
+  const missingRow = checkGateRegistry(
+    packageJson,
+    gateRegistryTable(["test"]),
+  );
+  assert.equal(missingRow.length, 1);
+  assert.match(missingRow[0], /format/);
+
+  const inventedRow = checkGateRegistry(
+    packageJson,
+    gateRegistryTable(["format", "test", "release"]),
+  );
+  assert.equal(inventedRow.length, 1);
+  assert.match(inventedRow[0], /release/);
+});
+
+test("the shipped gate registry enumerates every shipped npm script", () => {
+  const registry = readFileSync(
+    path.join(REPO_ROOT, "docs", "development", "conventions.md"),
+    "utf8",
+  );
+  const packageJson = JSON.parse(
+    readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"),
+  );
+  assert.deepEqual(checkGateRegistry(packageJson, registry), []);
+});
+
+test("test:m8 and rehearse:r16 are required scripts, not undocumented ones", () => {
+  const failures = checkCommandDefinitions(
+    {
+      scripts: {
+        format: "prettier --write README.md",
+        "format:check": "prettier --check README.md",
+        lint: "eslint . && markdownlint-cli2",
+        test: "node --test tests/a.test.mjs",
+        "test:knowledge": "uv run pytest",
+        "repo:check": "node scripts/repository-check.mjs",
+        verify: "npm run format:check && npm run lint && npm test",
+      },
+    },
+    "install:\n\tnpm ci\n",
+  );
+  assert.ok(
+    failures.some((failure) => failure.includes("test:m8")),
+    `expected a required-script failure for test:m8, got: ${failures.join(" | ")}`,
+  );
+  assert.ok(
+    failures.some((failure) => failure.includes("rehearse:r16")),
+    `expected a required-script failure for rehearse:r16, got: ${failures.join(" | ")}`,
   );
 });
 

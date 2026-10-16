@@ -20,6 +20,8 @@ const REQUIRED_SCRIPTS = [
   "lint",
   "test",
   "test:knowledge",
+  "test:m8",
+  "rehearse:r16",
   "repo:check",
   "verify",
 ];
@@ -838,6 +840,52 @@ export function checkTestListReconciliation(packageJson, testFiles) {
   return failures;
 }
 
+const GATE_REGISTRY_HEADER =
+  /^\|\s*Script\s*\|\s*What it checks\s*\|\s*Where it runs\s*\|\s*NOT RUN condition\s*\|/u;
+
+/**
+ * `docs/development/conventions.md` holds the one durable enumeration of the npm
+ * gates, which is what gives a `NOT RUN` claim a denominator. A registry that can
+ * drift from `package.json.scripts` is worse than none — it reads like an answer
+ * while the scripts quietly change — so both directions fail, and a missing table
+ * fails too rather than passing vacuously. This compares membership only: it never
+ * adds a script to `verify`'s run order or to any CI job.
+ */
+export function checkGateRegistry(packageJson, registryMarkdown) {
+  const scripts = Object.keys(packageJson?.scripts ?? {});
+  const lines = String(registryMarkdown ?? "").split(/\r?\n/u);
+  const header = lines.findIndex((line) => GATE_REGISTRY_HEADER.test(line));
+  if (header < 0) {
+    return [
+      "Gate registry table is missing from docs/development/conventions.md, so the npm gates are enumerated nowhere.",
+    ];
+  }
+
+  const listed = new Set();
+  for (let index = header + 2; index < lines.length; index += 1) {
+    const match = /^\|\s*`([^`]+)`\s*\|/u.exec(lines[index]);
+    if (!match) break;
+    listed.add(match[1]);
+  }
+
+  const failures = [];
+  for (const scriptName of [...scripts].sort()) {
+    if (!listed.has(scriptName)) {
+      failures.push(
+        `The gate registry does not enumerate the npm script: ${scriptName}.`,
+      );
+    }
+  }
+  for (const entry of [...listed].sort()) {
+    if (!scripts.includes(entry)) {
+      failures.push(
+        `The gate registry enumerates an npm script that does not exist: ${entry}.`,
+      );
+    }
+  }
+  return failures;
+}
+
 function runGit(repositoryRoot, args) {
   const result = spawnSync(
     "git",
@@ -900,6 +948,19 @@ export function collectRepositoryFailures(repositoryRoot) {
     const makefile = readFileSync(makefilePath, "utf8");
     failures.push(...checkCommandDefinitions(packageJson, makefile));
     failures.push(...checkFormatGlobQuoting(packageJson));
+
+    const registryPath = path.join(
+      repositoryRoot,
+      "docs",
+      "development",
+      "conventions.md",
+    );
+    failures.push(
+      ...checkGateRegistry(
+        packageJson,
+        existsSync(registryPath) ? readFileSync(registryPath, "utf8") : "",
+      ),
+    );
 
     const testsDirectory = path.join(repositoryRoot, "tests");
     if (existsSync(testsDirectory)) {
