@@ -10,6 +10,10 @@ import {
 import { validateContract } from "./schema.mjs";
 import { outcomeReasonAllowed, workflowAggregate } from "./runtime.mjs";
 import { AGENT_STACK_POLICY } from "../../lib/authority.mjs";
+// B-7: the ceilings are declared once, in the ledger's canonical `BUDGETS`. `ledger.mjs:18`
+// imports this module in turn, so the cycle is real and safe only because every read below
+// happens inside a function body, after both modules have finished evaluating.
+import { BUDGETS } from "./ledger.mjs";
 
 // D11-D13: roles must match canonical AGENT_SPAWN_POLICY in policy.mjs.
 // main coordinates only through o1/o2; specialists have no spawn targets.
@@ -1488,7 +1492,10 @@ export function applyWorkflowEvent(
     if (task.nodes.length === 0) requireCondition(payload.brief_revision === 1);
     else {
       requireCondition(payload.brief_revision === task.brief_revision + 1);
-      requireCondition(task.revisions_used < 16, "WORKFLOW_BUDGET_EXHAUSTED");
+      requireCondition(
+        task.revisions_used < BUDGETS.maxBriefRevisionsPerTask,
+        "WORKFLOW_BUDGET_EXHAUSTED",
+      );
       task.revisions_used++;
       for (const run of Object.values(task.delegations))
         if (activeRun.has(run.run_state)) run.run_state = "CANCELLED";
@@ -1718,7 +1725,10 @@ function applySpawnReserved(next, task, payload, replayAnchored = false) {
     );
   if (payload.parent_agent_id === "main") {
     if (task.current_stack && task.current_stack !== node.stack_id) {
-      requireCondition(task.transitions_used < 10, "WORKFLOW_BUDGET_EXHAUSTED");
+      requireCondition(
+        task.transitions_used < BUDGETS.maxStackTransitionsPerTask,
+        "WORKFLOW_BUDGET_EXHAUSTED",
+      );
       task.transitions_used++;
     }
     // This authorization is journaled with the reservation, before native
@@ -1795,7 +1805,10 @@ function applySpawnReserved(next, task, payload, replayAnchored = false) {
     ),
     "SPAWN_UNKNOWN",
   );
-  requireCondition(task.delegated_runs_used < 72, "WORKFLOW_BUDGET_EXHAUSTED");
+  requireCondition(
+    task.delegated_runs_used < BUDGETS.maxTotalDelegatedRunsPerTask,
+    "WORKFLOW_BUDGET_EXHAUSTED",
+  );
   requireCondition(
     runs.filter(
       (run) =>
