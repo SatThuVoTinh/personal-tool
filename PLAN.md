@@ -5986,6 +5986,54 @@ WSL **7/7**. Still recorded and deliberately **not** implemented: the `ON CONFLI
 `:793-796`, and that 9Router's echo of `model` / `model_version` is unverified — if it does not echo them,
 today's identity protection is already conditional.
 
+### Record — `M12/T2.2-R1` `A-8` settled: three of four candidates are not reachable, and Wave A admits no new fix from them (2026-10-16)
+
+`A-8` changes no code file. Each candidate's own audit lane had left a `Verify-by` undone; those verifications were
+**executed**, and I re-ran the load-bearing ones myself rather than accepting the report.
+
+- **`R5-E15-01` — dismissed as a traversal hole, kept as a doc-precision defect.** Probed through the real guard:
+  `excel.file_path` and `python.entrypoint` with `../` are refused (`SCHEMA_VALIDATION_FAILED`); `excel.template_path`
+  with `../` is **not** caught by the tool-keyed step-6 check. But `template_path` is never consumed —
+  `excel-writer.mjs:169` reads `params.file_path` only and re-contains it at `:204` (`ARTIFACT_PATH_ESCAPE`) — and the
+  other path-shaped fields in `zink-tools/contracts/tools/*.schema.json` are logical identifiers or allow-listed
+  enums. The second named site, `guard.mjs:1946-1955`, validates result `logical_path` generically for all tools. So
+  every field that actually reaches disk is validated; `zink-tools/excel/README.md:33` ("every file path passes that
+  validator") overstates by one dead field. Cost of the cosmetic fix: ~a dozen lines keying step 6 by field shape.
+  Not admitted.
+- **`R5-E15-02` — dismissed for this tier.** `putLandingArtifact({ artifact_id: "../silver/x" })` is accepted today
+  (confirmed by run: key `landing/../silver/x`), but `r2.storage` is an in-process `Map` — a documented contract test
+  double, empty on restart — and `orchestration/patterns` is imported only by
+  `tests/m7-t4-orchestration.test.mjs` (verified by grep). No governed caller can pass a model-influenced
+  `artifact_id`. Kept as a prerequisite pin for the real R2/S3 wiring, where the same value becomes an object-key
+  prefix escape and `version` is already range-checked while `artifact_id` is not.
+- **`R5-E15-03` — premise partly refuted; the High grading was wrong.** `validator.mjs` `validateSqlQuery` is an
+  independent allow-list parser (tokenizer rejects `;`, comments, quotes, bare parens; grammar admits only
+  `SELECT … FROM <plain identifier> [WHERE/ORDER/LIMIT/OFFSET]`), and it is called at `duckdb-bridge.mjs:191`,
+  **before** `execFileSync` at `:262`. I re-ran it myself: `SELECT * FROM read_text('C:/Windows/win.ini')` and
+  `SELECT * FROM glob('C:/*')` → `SQL_UNSUPPORTED_SYNTAX`, while a plain select is accepted. So the deny-list's
+  missing `glob`/`read_text`/`read_blob`/`SET`/`CREATE SECRET` is **defence-in-depth**, not a live host-read path.
+  Model-authored SQL does reach the seam (`index.mjs:4140` passes `params.query`), but the validator gates it.
+- **`R5-E15-04` — partially reachable, and the reachable half is operator-only.** The argv claim is real: with bogus
+  names, `docker exec -i --privileged psql …` resolves to `No such container: psql` and `-i -v psql` fails with
+  `unknown shorthand flag: 'v'`, so a leading-`-` value does change the parsed invocation. But who can supply it:
+  `syncSkillsToVectorStore` is reached only from the skill-approval action, whose handler signature ends at
+  `…{ notify, options = {} }` and whose first gate is `if (!ownerId || senderId !== ownerId)` — I read that gate
+  myself at `index.mjs:1726`. The container name therefore resolves from operator env
+  (`POSTGRES_CONTAINER`) or the repo default, never from a model-influenced value. Split cost: charset/`--` separator
+  is ~3 lines in `vector-sync.mjs` with no contract change; genuine cancellation is materially larger, because a
+  client-side `child.kill()` cannot stop a server-side query and would need a second control connection issuing
+  `pg_cancel_backend`. The `DB_TIMEOUT` bound is therefore honest about the client and untrue about the server, and
+  that is recorded rather than half-fixed here.
+
+Consequence for Wave A: **`A-8` admits no code fix**, which is the item's purpose — the tier's remaining security
+candidates are doc precision, a wiring prerequisite, defence-in-depth, and an operator-only hardening, not four open
+exploits. Both halves of `R5-E15-04` and the `R5-E15-01` field-shape fix go to the next tier as cheap, explicitly
+scoped items rather than riding in on this one.
+
+Gate state for this record: `NOT RUN` for `npm run verify` — no repository source file changed, only `PLAN.md`, the
+register, and a `git status` that stayed clean for source. The probes ran in `os.tmpdir()` scratch scripts against the
+real modules and were deleted.
+
 ## 9. Deferred beyond V1
 
 Unless separately approved:
