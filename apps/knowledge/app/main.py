@@ -275,6 +275,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             actual_model = await model_probe.resolve(configured_settings.embedding_model)
         except (httpx.HTTPError, ModelProbeError):
             return JSONResponse(status_code=503, content={"status": "not_ready", "code": "EMBEDDING_MODEL_UNAVAILABLE"})
+        except Exception:
+            # M12/T2.2-R2 B-20 (found while landing B-18): `resolve` parses a JSON body, and a
+            # decode or shape fault is neither of the two types above, so it escaped as the
+            # default 500 with a plain-text body on the route the orchestrator uses to decide
+            # replica health. Status cannot change; the answer is this route's own coded shape.
+            return JSONResponse(
+                status_code=500,
+                content={"status": "not_ready", "code": "INTERNAL_ERROR"},
+            )
         if (
             active_index.embedding_model_name != configured_settings.embedding_model
             or actual_model.name != active_index.embedding_model_name
@@ -326,6 +335,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 return JSONResponse(
                     status_code=503,
                     content={"status": "not_ready", "code": "PDF_RUNTIME_UNAVAILABLE"},
+                )
+            except Exception:
+                # B-20's second half: the same route, the other call site. A fault
+                # that is neither a runtime error nor a missing artifact must not
+                # leave the probe with a codeless 500 either.
+                return JSONResponse(
+                    status_code=500,
+                    content={"status": "not_ready", "code": "INTERNAL_ERROR"},
                 )
         return {"status": "ready", "active_index_id": active_index.id, "embedding_model": {"name": actual_model.name, "digest": actual_model.digest, "dimensions": actual_model.dimensions}}
 
