@@ -439,6 +439,21 @@ export function readZinkIngressMetadata(messageId) {
   });
 }
 
+// B-16: a guard verdict that denies carries a canonical reason code, and this
+// boundary used to drop it, so every policy denial reached the operator as the
+// bare class name. The reason is written to the diagnostic channel only when it
+// matches the closed governance-code grammar the tool-gate seam already applies
+// to the same field, which keeps message text, paths and credentials out of the
+// log. Nothing here moves a host-visible code, verdict, or return shape.
+function logDecisionReason(seam, verdict, decision) {
+  const reason =
+    typeof decision?.reason === "string" &&
+    /^[A-Z][A-Z0-9_]{0,63}$/u.test(decision.reason)
+      ? decision.reason
+      : "REASON_UNDECLARED";
+  console.error(`[zink-native-gate] ${seam} ${verdict}: reason=${reason}`);
+}
+
 export async function enterNativeRun(config, context, signal) {
   const governance = resolveGovernance(config);
   if (!governance.enabled) return;
@@ -492,7 +507,10 @@ export async function enterNativeRun(config, context, signal) {
       }),
       signal,
     );
-    if (decision?.allow !== true) throw new Error("GOVERNANCE_DENIED");
+    if (decision?.allow !== true) {
+      logDecisionReason("enterNativeRun", "denied", decision);
+      throw new Error("GOVERNANCE_DENIED");
+    }
     // R18: record the discriminator only for a run admission ACCEPTED, so the
     // record means precisely "admission recognised this run". A denied or failed
     // admission leaves no record and its run-end therefore keeps full governance.
@@ -528,15 +546,19 @@ export async function gateNativeAnnounce(config, event, signal) {
       }),
       signal,
     );
-    if (decision?.action === "discard")
+    if (decision?.action === "discard") {
+      logDecisionReason("gateNativeAnnounce", "discarded", decision);
       return { governed: true, action: "discard" };
+    }
     if (
       decision?.action !== "deliver" ||
       typeof decision.receipt !== "string" ||
       !decision.receipt ||
       Buffer.byteLength(decision.receipt, "utf8") > 65536
-    )
+    ) {
+      logDecisionReason("gateNativeAnnounce", "refused", decision);
       throw new Error("GOVERNANCE_RECEIPT_INVALID");
+    }
     return { governed: true, action: "deliver", receipt: decision.receipt };
   } catch (error) {
     // M11/T3 A3: the host-visible verdict is unchanged, but a block with no
@@ -569,7 +591,10 @@ export async function finishNativeRun(config, event, context) {
           context.transcriptPrompt ?? liveness?.transcriptPrompt,
       }),
     );
-    if (decision?.allow !== true) throw new Error("GOVERNANCE_DENIED");
+    if (decision?.allow !== true) {
+      logDecisionReason("finishNativeRun", "denied", decision);
+      throw new Error("GOVERNANCE_DENIED");
+    }
   } catch (error) {
     // M11/T3 A3: same standard as `enterNativeRun` — the host-visible contract
     // string is unchanged, but the guard fault is preserved as the cause so a
@@ -596,8 +621,10 @@ export async function sanitizeNativePrompt(config, prompt) {
     if (
       typeof decision?.prompt !== "string" ||
       Buffer.byteLength(decision.prompt, "utf8") > 32768
-    )
+    ) {
+      logDecisionReason("sanitizeNativePrompt", "refused", decision);
       throw new Error("SCHEMA_INVALID");
+    }
     return decision.prompt;
   } catch (error) {
     // M11/T3 A3: cause-preserving sibling of `enterNativeRun` at this seam.

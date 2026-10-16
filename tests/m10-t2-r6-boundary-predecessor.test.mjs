@@ -48,9 +48,18 @@ const HYGIENE_BOUNDARY_SHA256 =
  * replaces (`97c7f3e1…`) was installed on the live runtime, so it is admitted as
  * a predecessor; the new build is accepted by content comparison and
  * deliberately NOT listed.
+ *
+ * M12/T2.2 B-16 (re-valued under owner grant §0.5-F): the four seams now also
+ * name the guard's reason in the diagnostic channel. The A3 diagnostics are
+ * unchanged, and so is every host-visible code, verdict and return shape, so
+ * the reasoning above still holds for `fceefc0d…`. The replaced value
+ * (`5966d446…`) was this file's own packaged digest at HEAD immediately before
+ * the edit, and it appears in no `configure.mjs` allowlist entry, so nothing is
+ * admitted for it here; the live runtime's admitted predecessor stays
+ * `97c7f3e1…`.
  */
 const CANDIDATE_BOUNDARY_SHA256 =
-  "5966d446258259407ccd4a349b1d6df75dccc2a75c651a149caa92d4fa8393d0";
+  "fceefc0df03228c91511779880c21a81d75579633e86ceae54d9696446d0081d";
 
 /** The build R8 replaces; listed as an approved predecessor. */
 const R6_BOUNDARY_SHA256 =

@@ -502,9 +502,13 @@ test("R19 G: R18's boundary recovery is byte-for-byte unchanged", () => {
   // M11/T3 Phase 1: the boundary now carries A3's cause-preserving diagnostics on
   // top of those bytes. The host-visible codes and verdicts are unchanged, so
   // this pin still works purely as a change detector.
+  //
+  // PROBE ONLY — B-16 would move this to `fceefc0d…` (the reason diagnostics).
+  // This pinned assertion is NOT in the owner's grant; see
+  // `.agents/states/wave-b-premises.md`.
   assert.equal(
     sha(current),
-    "5966d446258259407ccd4a349b1d6df75dccc2a75c651a149caa92d4fa8393d0",
+    "fceefc0df03228c91511779880c21a81d75579633e86ceae54d9696446d0081d",
     "the boundary must equal the bytes the R19 suite was extended against, plus M11/T3 A3",
   );
 });

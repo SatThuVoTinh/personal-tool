@@ -465,6 +465,68 @@ export function resolveGovernance(config) {`,
     throw new Error("GOVERNANCE_INGRESS_UNAVAILABLE");
   }`,
   ],
+  // M12/T2.2 B-16: the four seams now name the guard's reason in the diagnostic
+  // channel. Every host-visible code, verdict and return shape is unchanged, so
+  // inverting these reproduces the R5 body exactly. The reason is only echoed
+  // when it matches the closed governance-code grammar, so no caller text can
+  // reach the log.
+  [
+    `// B-16: a guard verdict that denies carries a canonical reason code, and this
+// boundary used to drop it, so every policy denial reached the operator as the
+// bare class name. The reason is written to the diagnostic channel only when it
+// matches the closed governance-code grammar the tool-gate seam already applies
+// to the same field, which keeps message text, paths and credentials out of the
+// log. Nothing here moves a host-visible code, verdict, or return shape.
+function logDecisionReason(seam, verdict, decision) {
+  const reason =
+    typeof decision?.reason === "string" &&
+    /^[A-Z][A-Z0-9_]{0,63}$/u.test(decision.reason)
+      ? decision.reason
+      : "REASON_UNDECLARED";
+  console.error(\`[zink-native-gate] \${seam} \${verdict}: reason=\${reason}\`);
+}
+
+`,
+    ``,
+  ],
+  [
+    `    if (decision?.allow !== true) {
+      logDecisionReason("enterNativeRun", "denied", decision);
+      throw new Error("GOVERNANCE_DENIED");
+    }`,
+    `    if (decision?.allow !== true) throw new Error("GOVERNANCE_DENIED");`,
+  ],
+  [
+    `    if (decision?.action === "discard") {
+      logDecisionReason("gateNativeAnnounce", "discarded", decision);
+      return { governed: true, action: "discard" };
+    }`,
+    `    if (decision?.action === "discard")
+      return { governed: true, action: "discard" };`,
+  ],
+  [
+    `    ) {
+      logDecisionReason("gateNativeAnnounce", "refused", decision);
+      throw new Error("GOVERNANCE_RECEIPT_INVALID");
+    }`,
+    `    )
+      throw new Error("GOVERNANCE_RECEIPT_INVALID");`,
+  ],
+  [
+    `    if (decision?.allow !== true) {
+      logDecisionReason("finishNativeRun", "denied", decision);
+      throw new Error("GOVERNANCE_DENIED");
+    }`,
+    `    if (decision?.allow !== true) throw new Error("GOVERNANCE_DENIED");`,
+  ],
+  [
+    `    ) {
+      logDecisionReason("sanitizeNativePrompt", "refused", decision);
+      throw new Error("SCHEMA_INVALID");
+    }`,
+    `    )
+      throw new Error("SCHEMA_INVALID");`,
+  ],
 ];
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
