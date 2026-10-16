@@ -34,6 +34,7 @@ class OllamaModelProbe:
 
     async def resolve(self, model_name: str) -> ResolvedEmbeddingModel:
         timeout = httpx.Timeout(10.0, connect=3.0)
+        last_error: BaseException | None = None
         for attempt in range(2):
             failure_code: str | None = None
             try:
@@ -41,13 +42,16 @@ class OllamaModelProbe:
                     f"{self._base_url}/api/tags", timeout=timeout
                 )
                 tags_response.raise_for_status()
-            except httpx.TimeoutException:
+            except httpx.TimeoutException as error:
+                last_error = error
                 failure_code = "EMBEDDING_TIMEOUT"
             except httpx.HTTPStatusError as error:
                 if error.response.status_code not in _TRANSIENT_EMBED_HTTP_STATUSES:
-                    raise ModelProbeError("EMBEDDING_PERMANENT_HTTP") from None
+                    raise ModelProbeError("EMBEDDING_PERMANENT_HTTP") from error
+                last_error = error
                 failure_code = "EMBEDDING_TRANSIENT_HTTP"
-            except httpx.TransportError:
+            except httpx.TransportError as error:
+                last_error = error
                 failure_code = "EMBEDDING_TRANSPORT"
 
             if failure_code is None:
@@ -55,7 +59,9 @@ class OllamaModelProbe:
             if attempt == 0:
                 await asyncio.sleep(_EMBED_RETRY_DELAY_SECONDS)
                 continue
-            raise ModelProbeError(failure_code) from None
+            # The code is what the caller branches on; the chain is what an operator can
+            # read to tell a timeout from a refusal from a dropped socket.
+            raise ModelProbeError(failure_code) from last_error
 
         try:
             tags_payload = tags_response.json()
@@ -101,6 +107,7 @@ class OllamaModelProbe:
     async def _embed_batch(
         self, model_name: str, texts: list[str]
     ) -> list[list[float]]:
+        last_error: BaseException | None = None
         for attempt in range(2):
             failure_code: str | None = None
             try:
@@ -109,13 +116,16 @@ class OllamaModelProbe:
                     json={"model": model_name, "input": texts},
                 )
                 response.raise_for_status()
-            except httpx.TimeoutException:
+            except httpx.TimeoutException as error:
+                last_error = error
                 failure_code = "EMBEDDING_TIMEOUT"
             except httpx.HTTPStatusError as error:
                 if error.response.status_code not in _TRANSIENT_EMBED_HTTP_STATUSES:
-                    raise ModelProbeError("EMBEDDING_PERMANENT_HTTP") from None
+                    raise ModelProbeError("EMBEDDING_PERMANENT_HTTP") from error
+                last_error = error
                 failure_code = "EMBEDDING_TRANSIENT_HTTP"
-            except httpx.TransportError:
+            except httpx.TransportError as error:
+                last_error = error
                 failure_code = "EMBEDDING_TRANSPORT"
 
             if failure_code is None:
@@ -123,7 +133,7 @@ class OllamaModelProbe:
             if attempt == 0:
                 await asyncio.sleep(_EMBED_RETRY_DELAY_SECONDS)
                 continue
-            raise ModelProbeError(failure_code) from None
+            raise ModelProbeError(failure_code) from last_error
 
         raise AssertionError("Embedding retry loop exhausted without a result.")
 

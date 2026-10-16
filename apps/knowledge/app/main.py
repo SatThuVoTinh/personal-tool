@@ -370,9 +370,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     await lifecycle.require_identity(active_index)
                 except LifecycleError as error:
                     code = error.code if error.code == "EMBEDDING_MODEL_DRIFT" else "EMBEDDING_MODEL_UNAVAILABLE"
-                    raise HTTPException(status_code=503, detail={"code": code}) from None
-                except (httpx.HTTPError, ModelProbeError):
-                    raise HTTPException(status_code=503, detail={"code": "EMBEDDING_MODEL_UNAVAILABLE"}) from None
+                    raise HTTPException(status_code=503, detail={"code": code}) from error
+                except (httpx.HTTPError, ModelProbeError) as error:
+                    raise HTTPException(status_code=503, detail={"code": "EMBEDDING_MODEL_UNAVAILABLE"}) from error
                 if len(query_embedding) != 1 or len(query_embedding[0]) != active_index.embedding_dimensions:
                     raise HTTPException(status_code=503, detail={"code": "EMBEDDING_MODEL_UNAVAILABLE"})
                 try:
@@ -385,10 +385,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         filters.path_prefix,
                         segment_types,
                     )
-                except ActiveIndexChangedError:
+                except ActiveIndexChangedError as error:
                     if attempt == 0:
                         continue
-                    raise HTTPException(status_code=503, detail={"code": "ACTIVE_INDEX_CHANGED"}) from None
+                    raise HTTPException(status_code=503, detail={"code": "ACTIVE_INDEX_CHANGED"}) from error
                 reranked = request.rerank and app.state.reranker is not None
                 if reranked:
                     # M10/T2-R21: the pool is MAX_RERANK_CANDIDATES, not the
@@ -410,10 +410,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     ]
                     try:
                         logits = await app.state.reranker.predict(pairs)
-                    except PairTokenBudgetError:
-                        raise HTTPException(status_code=422, detail={"code": "PAIR_TOKEN_BUDGET_EXCEEDED"}) from None
-                    except RerankerUnavailableError:
-                        raise HTTPException(status_code=503, detail={"code": "RERANKER_UNAVAILABLE"}) from None
+                    except PairTokenBudgetError as error:
+                        raise HTTPException(status_code=422, detail={"code": "PAIR_TOKEN_BUDGET_EXCEEDED"}) from error
+                    except RerankerUnavailableError as error:
+                        raise HTTPException(status_code=503, detail={"code": "RERANKER_UNAVAILABLE"}) from error
                     raw_scores = [stable_sigmoid(logit) for logit in logits]
                 else:
                     # M10/T2-R21: same correction as the reranked branch — the
@@ -475,13 +475,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 }
             raise HTTPException(status_code=503, detail={"code": "ACTIVE_INDEX_CHANGED"})
         except SearchValidationError as error:
-            raise HTTPException(status_code=422, detail={"code": error.code}) from None
+            raise HTTPException(status_code=422, detail={"code": error.code}) from error
         except HTTPException:
             raise
-        except DATABASE_ERRORS:
-            raise HTTPException(status_code=503, detail={"code": "DATABASE_UNAVAILABLE"}) from None
-        except Exception:
-            raise HTTPException(status_code=500, detail={"code": "INTERNAL_ERROR"}) from None
+        except DATABASE_ERRORS as error:
+            raise HTTPException(status_code=503, detail={"code": "DATABASE_UNAVAILABLE"}) from error
+        except Exception as error:
+            raise HTTPException(status_code=500, detail={"code": "INTERNAL_ERROR"}) from error
         finally:
             await lease.release()
 
@@ -491,12 +491,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=503, detail={"code": database.startup_error_code or "DATABASE_UNAVAILABLE"})
         try:
             await coordinator.reserve()
-        except IndexRunAlreadyActiveError:
-            raise HTTPException(status_code=409, detail={"code": "INDEX_RUN_ALREADY_ACTIVE"}) from None
-        except DATABASE_RESERVATION_ERRORS:
+        except IndexRunAlreadyActiveError as error:
+            raise HTTPException(status_code=409, detail={"code": "INDEX_RUN_ALREADY_ACTIVE"}) from error
+        except DATABASE_RESERVATION_ERRORS as error:
             raise HTTPException(
                 status_code=503, detail={"code": "DATABASE_UNAVAILABLE"}
-            ) from None
+            ) from error
 
         accepted: AcceptedIndexRun | None = None
         try:
@@ -510,7 +510,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 try:
                     await lifecycle.require_identity(active_index)
                 except LifecycleError as error:
-                    raise HTTPException(status_code=409 if error.code == "EMBEDDING_MODEL_DRIFT" else 503, detail={"code": error.code}) from None
+                    raise HTTPException(status_code=409 if error.code == "EMBEDDING_MODEL_DRIFT" else 503, detail={"code": error.code}) from error
                 accepted = await database.accept_incremental(active_index)
             else:
                 identity = await lifecycle.resolve_configured_model()
@@ -536,15 +536,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise HTTPException(status_code=503, detail={"code": "SCHEDULING_FAILED"}) from error
             return IndexRunAcceptedResponse(index_run_id=accepted.id, index_id=accepted.index_id, status="RUNNING")
         except LifecycleError as error:
-            raise HTTPException(status_code=503, detail={"code": error.code}) from None
-        except StateTransitionError:
+            raise HTTPException(status_code=503, detail={"code": error.code}) from error
+        except StateTransitionError as error:
             raise HTTPException(
                 status_code=409, detail={"code": "INDEX_STATE_TRANSITION_FAILED"}
-            ) from None
-        except DATABASE_ERRORS:
+            ) from error
+        except DATABASE_ERRORS as error:
             raise HTTPException(
                 status_code=503, detail={"code": "DATABASE_UNAVAILABLE"}
-            ) from None
+            ) from error
         finally:
             await coordinator.release_reservation()
 
@@ -560,10 +560,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             source_counts = [] if run is None else await database.get_run_source_counts(run.id)
         except ValueError:
             run = None
-        except DATABASE_ERRORS:
+        except DATABASE_ERRORS as error:
             raise HTTPException(
                 status_code=503, detail={"code": "DATABASE_UNAVAILABLE"}
-            ) from None
+            ) from error
         if run is None:
             raise HTTPException(status_code=404, detail={"code": "INDEX_RUN_NOT_FOUND"})
         return {
