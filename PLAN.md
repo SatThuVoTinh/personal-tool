@@ -274,9 +274,15 @@ Execution Authorization: YES — bounded to `ACTIVE.md` §4's items `C-1`…`C-1
 Execution Contract: docs/contracts/execution/ACTIVE.md — `M12/T2.3-R1`, task ID and Plan Revision matching this
   file. (history) The `M12/T2.2-R2` ACTIVE.md was archived at closeout to
   `docs/contracts/execution/archive/2026-10-16-M12-T2.2-R2.md` and deleted from the working directory)
-Evidence Level: **NONE for `M12/T2.3-R1` Wave C** — the contract was materialized on 2026-10-16 and no item has
-  executed, so no gate has been run for this tier yet and nothing about it may be claimed. Per-item evidence and the
-  tier-level verdict are recorded here as they are produced.
+Review Convergence Gate: NOT RUN — `M12/T2.3-R1` is mid-execution. This is the field `AGENTS.md` §11 requires before
+  any implementation commit; the review/fix/re-review loop runs after the last item lands and its verdict is recorded
+  here, not inferred from a passing test.
+Final Quality Gate: NOT RUN — recorded at this tier's closeout together with the `ACTIVE.md` §6 gate evidence.
+  (Both fields are added by item `C-10`; before it the header had no place to put either verdict, while
+  `AGENTS.md:298` made both a precondition for committing.)
+Evidence Level: **LOCAL-VERIFIED per item, NONE at tier level, for `M12/T2.3-R1` Wave C** — `C-1`…`C-9` landed as
+  individual commits, each with Windows `npm run verify` exit 0 and the WSL lane where §6.2 required it; `C-10`…`C-13`
+  are pending and no tier verdict, CI run or deployment is claimed yet.
   (Evidence Level of the closed predecessor `M12/T2.2-R2`: **REMOTE-BACKED for Wave B's repository gates; the live
   tree and Discord behaviour remain `NOT TESTED`.** CI run **`38927821839`** @ `afa9721e8db81db095061f2a7fb5cba984b40aaa` on ref
   `codex/m11-t1-audit-remediation`: `quality-gate` **SUCCESS** — `ℹ tests 1590 / suites 106 / pass 1537 / fail 0 /
