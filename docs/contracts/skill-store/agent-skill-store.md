@@ -3,8 +3,12 @@
 ## Purpose
 
 Zink Skill Store owns governed reusable skills and owner-built template assets.
-It is logically isolated from Zink Knowledgebase indexes. OpenClaw reaches it
-only through the governed Zink Tools boundary described below.
+It is logically isolated from Zink Knowledgebase indexes. Two paths reach it, and
+only the first is model-visible: retrieval goes through the governed Zink Tools
+boundary described below, while owner-approved canonical promotion is a trusted
+internal write through Skill Store's own API under its store-wide writer lock
+(`zink-skill-store/src/catalog.mjs` — `withSkillStoreWriterLock` and
+`promoteApprovedSkillUnlocked`).
 
 ## Git-native governed skills
 
@@ -48,7 +52,13 @@ Excel and Power BI templates use a Git + external-storage hybrid:
 
 ## Boundaries
 
-OpenClaw reaches Skill Store only through the governed Zink Tools boundary.
+Model-visible retrieval reaches Skill Store through the governed Zink Tools
+boundary. The owner-approved promotion path is not a Zink Tools call: the
+governance plugin loads `zink-skill-store/src/catalog.mjs` and promotes under the
+store-wide writer lock itself, bound to the exact approved bytes
+(`APPROVAL_PROPOSAL_MISMATCH`) and refusing when the writer is unavailable
+(`APPROVAL_PROMOTE_UNAVAILABLE`). The promotion entry point is not callable by a
+model: agents propose, and only an owner-confirmed governance action promotes.
 
 **Model-visible interface** (callable tools, untrusted proposal content):
 
