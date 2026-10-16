@@ -6286,6 +6286,7 @@ Unless separately approved:
 | Coordinator binding    | M10/T2-R2 (parent R1) implemented and locally verified; binding = historical identity, attempt = execution generation, lease = current execution authority; live execution and result ingestion remain future work and are not authorized. |
 | OpenClaw               | External runtime/orchestrator and task-mode classifier.                                                                                                                                                                                    |
 | n8n                    | Deterministic workflow/trigger/schedule plumbing.                                                                                                                                                                                          |
+| Changelog              | Validated fixes belong in `CHANGELOG.md` `### Fixed` at task DoD (owner ruling 2026-10-17: "changelog.md vẫn thay đổi chứ, cập nhật fix bug"). This supersedes only the **additive** half of `n5a`: `M12/T2.1`/`T2.2`/`T2.3` are now recorded. Rewriting an already-accepted historical line (e.g. `CHANGELOG.md:430`/`:861`, which still promise `REAL_EXECUTED`) remains a separate explicit grant, because that is mutating accepted evidence. |
 
 ## 11. Ledger of open owner decisions — H1–H11 (TRACKED AUTHORITY)
 
