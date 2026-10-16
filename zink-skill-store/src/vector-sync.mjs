@@ -8,6 +8,7 @@ import {
   deriveSemanticMetadata,
   renderEmbeddingEnvelope,
   computeEmbeddingInputHash,
+  SEMANTIC_CONTRACT_VERSION,
 } from "../../zink-tools/common/semantic-contract.mjs";
 
 export const EXPECTED_MODEL_NAME = "bge-m3:latest";
@@ -754,6 +755,7 @@ export async function syncSkillsToVectorStore(options = {}) {
         capability,
         version,
         semantic_record_key: semanticRecordKey,
+        semantic_contract_version: SEMANTIC_CONTRACT_VERSION,
         sync_status: "READY",
       });
     } catch (err) {
