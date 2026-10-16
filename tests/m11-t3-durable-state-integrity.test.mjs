@@ -15,6 +15,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -29,6 +30,7 @@ import {
   withFileLock,
 } from "../integrations/openclaw/lib/file-lock.mjs";
 import {
+  assertNoLinks,
   ledgerPaths,
   ensureLedger,
   readSnapshot,
@@ -953,4 +955,79 @@ test("B8-2: a correct state root still resolves to the same ledger layout", () =
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
+});
+
+// R5-E16-03: one ensureLedger walked to the filesystem root six times — four from
+// validateLedgerPaths, then two more from privateDir, over chains it had just proven
+// link-free. The dedup is scoped to a single call on purpose: a process-level cache would
+// stop re-checking links planted later, which is weakening the control rather than
+// speeding it up.
+test("B11-1: ancestors proven in this call are not re-walked for a sibling path", () => {
+  const base = mkdtempSync(path.join(tmpdir(), "m12-t2.2-b11-"));
+  try {
+    const visited = new Set();
+    const first = assertNoLinks(
+      path.join(base, "operator", "m7-t2", "ledger"),
+      visited,
+    );
+    assert.ok(first > 1, "the first walk must inspect the whole chain");
+    const second = assertNoLinks(
+      path.join(base, "operator", "m7-t2", "ledger", "events.jsonl"),
+      visited,
+    );
+    assert.equal(
+      second,
+      1,
+      `only the new leaf may be inspected; it inspected ${second}`,
+    );
+    // Without a memo the same call re-walks everything, which is the cost being removed.
+    assert.ok(
+      assertNoLinks(
+        path.join(base, "operator", "m7-t2", "ledger", "events.jsonl"),
+        null,
+      ) > 1,
+      "an unmemoized call must still walk the chain, so the count is not an artifact",
+    );
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("B11-2: a memo of the parent chain cannot mask a symlinked leaf", (t) => {
+  if (process.platform === "win32") {
+    t.skip("creating a symlink needs privileges this host does not grant");
+    return;
+  }
+  const base = mkdtempSync(path.join(tmpdir(), "m12-t2.2-b11-link-"));
+  try {
+    const real = path.join(base, "real");
+    mkdirSync(real, { recursive: true });
+    const link = path.join(base, "ledger");
+    symlinkSync(real, link);
+    const visited = new Set([base]);
+    assert.throws(
+      () => assertNoLinks(link, visited),
+      /LEDGER_SYMLINK_DENIED/u,
+      "the leaf is not in the memo, so it must still be checked",
+    );
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("B11-3: ensureLedger threads one memo, and every other entry point gets a fresh one", () => {
+  const source = readFileSync(
+    new URL(
+      "../integrations/openclaw/topology/lib/ledger.mjs",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const start = source.indexOf("export function ensureLedger");
+  const body = source.slice(start, source.indexOf("\n}", start));
+  assert.ok(start > -1, "ensureLedger must still exist");
+  assert.match(body, /const visited = new Set\(\)/u);
+  assert.match(body, /validateLedgerPaths\(paths, visited\)/u);
+  assert.match(body, /privateDir\(paths\.root, visited\)/u);
+  assert.match(body, /privateDir\(path\.dirname\(paths\.root\), visited\)/u);
 });

@@ -83,19 +83,30 @@ export function ledgerPaths(stateDir) {
   });
 }
 
-function privateDir(dir) {
-  assertNoLinks(dir);
+function privateDir(dir, visited = null) {
+  assertNoLinks(dir, visited);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   chmodSync(dir, 0o700);
 }
 
-function assertNoLinks(target) {
+/**
+ * Refuses any symlink on the path to `target`, all the way up, and returns how many paths
+ * it actually inspected. `visited` is a per-call memo of ancestors already proven link-free
+ * — scoped to one operation on purpose, because caching it across calls would stop
+ * re-checking a link planted later. The count is returned so the dedup is observable: a
+ * test that only looks at the memo cannot tell a skipped path from a re-walked one.
+ */
+export function assertNoLinks(target, visited = null) {
   if (!path.isAbsolute(target)) throw new Error("EXECUTION_STATE_UNKNOWN");
+  let checked = 0;
   for (
     let cursor = path.resolve(target);
     cursor !== path.dirname(cursor);
     cursor = path.dirname(cursor)
   ) {
+    if (visited?.has(cursor)) continue;
+    visited?.add(cursor);
+    checked += 1;
     try {
       if (lstatSync(cursor).isSymbolicLink())
         throw new Error("LEDGER_SYMLINK_DENIED");
@@ -103,9 +114,10 @@ function assertNoLinks(target) {
       if (error.code !== "ENOENT") throw error;
     }
   }
+  return checked;
 }
 
-function validateLedgerPaths(paths) {
+function validateLedgerPaths(paths, visited = null) {
   if (
     paths.events !== path.join(paths.root, "events.jsonl") ||
     paths.snapshot !== path.join(paths.root, "snapshot.json")
@@ -117,7 +129,7 @@ function validateLedgerPaths(paths) {
     paths.snapshot,
     path.join(paths.root, "writer.lock"),
   ])
-    assertNoLinks(target);
+    assertNoLinks(target, visited);
 }
 
 function createIfMissing(target, contents) {
@@ -142,9 +154,10 @@ export function emptySnapshot() {
 }
 
 export function ensureLedger(paths) {
-  validateLedgerPaths(paths);
-  privateDir(paths.root);
-  privateDir(path.dirname(paths.root));
+  const visited = new Set();
+  validateLedgerPaths(paths, visited);
+  privateDir(paths.root, visited);
+  privateDir(path.dirname(paths.root), visited);
   // M11/T3 B2: the pair is created together or not at all. Recreating a missing
   // half silently resumed governance at `sequence: 0` with
   // `last_event_digest: null`, and the reconciliation guard only fires when the
