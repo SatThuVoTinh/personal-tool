@@ -20,6 +20,31 @@ n8n ───────►     │
                  └─ Simulation
 ```
 
+That diagram is a list of **capability families**, not of what the package
+exports, so the two are separated here.
+
+Callable tools — the surface OpenClaw may invoke
+(`CALLABLE_TOOL_REGISTRY` in `integrations/openclaw/lib/policy.mjs`):
+
+```text
+zink_excel  zink_power_bi  zink_sql  zink_python  zink_n8n
+```
+
+Adapters actually exported by `zink-tools/adapters/index.mjs` (each with its
+`*AdapterError` sibling; `Knowledge` and `Skill` also export their governed-query
+helpers):
+
+```text
+R2  MotherDuck  BigQuery  Kaggle  Databricks  MLflow  DagsHub
+HuggingFace  Streamlit  Knowledge  Skill
+```
+
+Forecast, Optimization, Operations Research and Simulation are first-class
+capabilities (`AGENTS.md` §9) with no callable tool and no module today:
+`zink-tools/<capability>/` holds a README and a `model-metadata/` directory, and
+nothing imports them. They are exercised through `zink_python` and the external
+compute adapters until a real provider difference requires a module of their own.
+
 ## Tool ownership
 
 ### Excel
