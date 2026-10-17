@@ -56,7 +56,7 @@ softened into the other to make a tier look finished.
 | M7 — Zink Tools + OpenClaw integration + V1 hardening                      | `COMPLETE`    | `REMOTE-BACKED`  | M7/T1-R19, M7/T2-R12, M7/T3-R16, M7/T4-R10, and M7/T5-R13 complete; runtime governance remediation, Discord 7-bot integration, and Zink tools specialist policies verified.                                                                                                                                                           |
 | M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Integration | `IN PROGRESS` | `LOCAL-VERIFIED` | M8/T1 is complete; M8/T2.2 R4/R5/R6 are implemented; M8/T2.2-R7 (heartbeat admission, boundary diagnosability, apply safety) is in progress. Deployment is not authorized.                                                                                                                                                            |
 | M10 - Governed coordinator runtime binding                                 | `COMPLETE` | `LOCAL-VERIFIED` | M10/T2 closed by explicit owner decision 2026-10-11 (R26 records the final remediation; R8 closed live with zero-outbound proven). Deferred follow-ups are NOT closed under M10 and require separate authorization: live gateway/knowledge restart or deployment, M10 ingress card/tag redesign (new Plan Revision), coordinator result ingestion, and the WSL/CI Python gate run. |
-| M12 - Governed Discord interaction lifecycle and presentation | `IN PROGRESS` | `REMOTE-BACKED` | **M12 is IN PROGRESS. Current claim: the three-wave audit remediation is closed for the repository gates — `M12/T2.1` high, `M12/T2.2` medium, `M12/T2.3` low, CI `38944576084` and Security `38944579971` @ `71c2bff` — and none of it is deployed; the governance-record tier `M12/T4-R1` is closed 2026-10-17 and `REMOTE-BACKED` for the same gates at its own head; `M12/T2.2-R3` (Skill Store lifecycle) and `M12/T3` (H11, which the owner ordered last) are scheduled and unauthorized, and §4.17 is the schedule for the 38 findings that had no live owner task.** Deployed-and-verified is a separate claim, and only two builds earned it: Deployment A (2026-10-13) and Deployment B (2026-10-14) — each exactly one `--apply`, both spent, evidence in their own §8 records — and no remediation commit after them is on the host. **What this milestone does not close, stated here so a reader of §3 never has to hunt for it:** per-surface Discord behaviour on #approvals, #results and #incidents is `NOT TESTED` live, and the newest §8 reading of the ledger (Deployment B) still shows no `WORKFLOW_APPROVAL_SURFACED` or `WORKFLOW_RESULT_SURFACED` event; the post-verdict `PATCH /channels/{thread.id}` `applied_tags` seam has never been exercised on this server; #incidents on the analytics stack waits on the mislabelled `STATUS: ANALYTICS` tag rename, which §8 records as a precondition the owner owns and this contract did not re-read live; `verify.mjs` and the R16 apply rehearsal are `NOT RUN`; the Knowledgebase Python lane is `NOT RUN` on any diff that touches no `apps/knowledge/` file; and CI is Linux-on-GitHub, so a matching test denominator proves nothing about the live tree. **Per-task evidence lives in the §8 records, named:** `M12/T1-R1`, `M12/T2-R1`, `M12/T2-R2`, `M12/T2-R3`/`R3b`, `Deployment A`, `Deployment B`, `Record — M12/T2.1-R3 execution wave`, `Record — M12/T2.2-R1 Wave A closed`, `Record — M12/T2.2-R2 Wave B closed`, `Record — M12/T2.3-R1 Wave C closed`. |
+| M12 - Governed Discord interaction lifecycle and presentation | `IN PROGRESS` | `REMOTE-BACKED` | **M12 is IN PROGRESS. Current claim: the three-wave audit remediation is closed for the repository gates — `M12/T2.1` high, `M12/T2.2` medium, `M12/T2.3` low, CI `38944576084` and Security `38944579971` @ `71c2bff` — and none of it is deployed; the governance-record tier `M12/T4-R1` is closed 2026-10-17 and `REMOTE-BACKED` for the same gates at its own head; `M12/T2.2-R3` (Skill Store lifecycle) is **authorized and executing** 2026-10-17 under `p1 q1 r2 s1 t1`, with nothing yet validated at the time of writing, and `M12/T3` (H11, which the owner ordered last) remains scheduled and unauthorized; §4.17 is the schedule for the 38 findings that had no live owner task.** Deployed-and-verified is a separate claim, and only two builds earned it: Deployment A (2026-10-13) and Deployment B (2026-10-14) — each exactly one `--apply`, both spent, evidence in their own §8 records — and no remediation commit after them is on the host. **What this milestone does not close, stated here so a reader of §3 never has to hunt for it:** per-surface Discord behaviour on #approvals, #results and #incidents is `NOT TESTED` live, and the newest §8 reading of the ledger (Deployment B) still shows no `WORKFLOW_APPROVAL_SURFACED` or `WORKFLOW_RESULT_SURFACED` event; the post-verdict `PATCH /channels/{thread.id}` `applied_tags` seam has never been exercised on this server; #incidents on the analytics stack waits on the mislabelled `STATUS: ANALYTICS` tag rename, which §8 records as a precondition the owner owns and this contract did not re-read live; `verify.mjs` and the R16 apply rehearsal are `NOT RUN`; the Knowledgebase Python lane is `NOT RUN` on any diff that touches no `apps/knowledge/` file; and CI is Linux-on-GitHub, so a matching test denominator proves nothing about the live tree. **Per-task evidence lives in the §8 records, named:** `M12/T1-R1`, `M12/T2-R1`, `M12/T2-R2`, `M12/T2-R3`/`R3b`, `Deployment A`, `Deployment B`, `Record — M12/T2.1-R3 execution wave`, `Record — M12/T2.2-R1 Wave A closed`, `Record — M12/T2.2-R2 Wave B closed`, `Record — M12/T2.3-R1 Wave C closed`. |
 | M11 - Cross-module audit remediation                                       | `COMPLETE` | `REMOTE-BACKED` | M11/T1 is CLOSED (R1 four phases + R2 live admission and deployment, 2026-10-12; build DEPLOYED AND VERIFIED on the live WSL gateway, evidence in §4/§8). M11/T2 is CLOSED the same day: R1 made four Skill Store suites portable, gave `python-quality` the Node toolchain (CI SUCCESS, `188 passed, 27 subtests`) and fingerprinted two gitleaks false positives; R2 gave the Knowledgebase Python suite exactly one executor per environment, which repaired `CI / quality-gate` (CI run `38202129189`: `quality-gate` and `python-quality` both SUCCESS). NOT closed under M11 and still requiring separate authorization: `verify.mjs` (`NOT RUN`, operator-side), the pre-existing model-router `GOVERNANCE_COMPLETION_UNAVAILABLE` failures, the pre-existing `duplicate plugin id` warning, the pre-existing 5-high `npm audit` failure, `M11-06`'s PostgreSQL statement gate in CI (no Postgres service there), and the owner-excluded items (per-document quarantine, incremental-publish redesign, manifest schema extension, zink-tools drift cluster, zink-tools lint-glob gap). **M11/T3-R1 is CLOSED 2026-10-13** (`REMOTE-BACKED`, **DEPLOYED AND VERIFIED** on the live WSL gateway): the ten verified HIGH-severity items landed in two ordered phases — `3cb8274` (argv execution on the bot-token path, one deadline on the three Discord REST fetches, cause-preserving message-only diagnostics at the three native-boundary seams, queue `enqueueTask`/`clear` serialized) and `6b0ea0a` (non-spinning async lock release with the WSL drvfs errnos, refusal of a half-missing events/snapshot pair, replay diagnostics that keep their cause, decision-ledger save and approval reads under the shared writer lock, `REJECTED` skill proposals made terminal and serialized). CI run `38336851433` @ `f55d292` on the task branch: `quality-gate` **SUCCESS** (`ℹ tests 1374 / ℹ fail 0`, `Repository policy check passed.`) and `python-quality` **SUCCESS** (`188 passed, 27 subtests`); Security run `38336854295` adds `secret-scan` **SUCCESS** (gitleaks, zero leaks) while its `dependency-audit` stays red on the unchanged 5-high baseline. Locally: `npm run verify` PASS on Windows and the two new suites plus both lock-predecessor suites re-run green under WSL Ubuntu, where the packaged digests are byte-identical. 22 of 24 mutation runs killed the defect (the 2 survivors are at the pre-existing `enterNativeRun` seam, outside this task's change sites — recorded in §8). The router model order/`timeoutSeconds=100` and stale-lock auto-reclaim stay excluded as recorded owner decisions. **This build is DEPLOYED AND VERIFIED** on the live WSL gateway (owner grant 2026-10-13, ONE `--apply` from `9164c50`; all seven live asset digests equal the packaged build, `openclaw.json` and the ledger untouched, unit `active`/`MainPID=28865`/`NRestarts=0`, zero `GOVERNANCE_COMPLETION_UNAVAILABLE` on the new PID — evidence in §4; `verify.mjs` stays `NOT RUN` and a multi-hour live soak is still open). |
 
 The former self-built L&SC Data Plant is replaced by a **logical external
@@ -78,8 +78,15 @@ Task: M12/T4 — Governance-record integrity: re-inventory the orphaned findings
   2026-10-15**: all eight items plus four owner-authorized follow-ons landed, its evidence is in §8, and its full
   contract text is preserved verbatim at `docs/contracts/execution/archive/2026-10-15-M12-T2.1-R3.md` — that archive
   is decision `H10` / `R3-P04-03`, executed first because §5.1 of the old contract made the scrub rule a prerequisite.
-Active revision: M12/T4-R1 — **Governance-record integrity**, **CLOSED 2026-10-17** with the contract archived at
-  `docs/contracts/execution/archive/2026-10-17-M12-T4-R1.md`; no revision is active. It was materialized 2026-10-17 on
+Active revision: M12/T2.2-R3 — **Skill Store lifecycle**, materialized 2026-10-17 after the owner granted the band
+  with `grant` and answered the escalated fork block with **`p1 q1 r2 s1 t1`**. Twelve items (`R3-0` a single read-only
+  probe of the embedding endpoint's identity fields, `R3-1`…`R3-6` in `zink-skill-store/src/catalog.mjs`, `R3-7` in
+  `zink-skill-store/src/vector-sync.mjs`, `R3-8`/`R3-9` in `zink-tools/common/semantic-contract.mjs`, `R3-10` in
+  `zink-tools/common/path-safety.mjs` plus its README, `R3-11` the record sync). Four of the band's 18 findings died as
+  premises in the read, and the packaged-entrypoint, retirement and schema-ownership work is excluded by his own
+  answers. No schema, no packaged asset, no digest, no new gate.
+  (history) Active revision was: M12/T4-R1 — **Governance-record integrity**, **CLOSED 2026-10-17** with the contract archived at
+  `docs/contracts/execution/archive/2026-10-17-M12-T4-R1.md`. It was materialized 2026-10-17 on
   the owner's `grant 1`, the first contract in the queue he set with `anh muốn em sửa hết`. Five items (`T4-1` re-inventory of the 38 findings that
   still carried the withdrawn `T2.4`–`T2.7` identifiers, `T4-2` re-filing them as `M12/T5`–`T8`, `T4-3` register-status
   refresh + the H10 authority rule, `T4-4` shrinking the 9 858-character M12 gate cell under a printed no-fact-loss
@@ -166,8 +173,12 @@ Prior revision: M12/T2.1-R1 — the execution wave the owner authorized on 2026-
   `M12/T6` for the Knowledgebase block (`R5-E01-02/04`, `R5-E02-01/02/03/04/06`, `R5-E03-01…06, 08` — 14), `M12/T7` for
   the remaining Zink Tools adapter surfaces (`R5-E06-01/02/05/06/08/09` — 6), `M12/T8` for gate truth
   (`R5-E09-01…08`, `R5-E10-01/02/05/06/07/08`, `R5-E13-03` — 15), and `M12/T3` for documentation and skills procedure
-  (`R5-E12-02/03/05/06/07`, `R3-P04-01/07/08/09`). **None of them is authorized;** each needs its own Plan Revision and
-  its own `Execution Authorization: YES`. Eleven
+  (`R5-E12-02/03/05/06/07`, `R3-P04-01/07/08/09`). Each needs its own Plan Revision and its own
+  `Execution Authorization: YES`. **Corrected 2026-10-17: this sentence is no longer true of the first band** —
+  `M12/T2.2-R3` now has both, granted by the owner's `grant` plus his `p1 q1 r2 s1 t1` answers, and its authorization
+  is bounded to that contract's `R3-0`…`R3-11` items and §4-of-ACTIVE.md file list (see `Active revision` above and
+  the §4.17.1 band row). `M12/T5`…`T8` and `M12/T3` remain unauthorized, and inside `M12/T2.2-R3` the `p1`/`r2`/`s1`
+  exclusions are not authorized either. Eleven
   decisions are recorded as **pending and unauthorized** in §11 of this file (H1 CI trigger widening, H2 the
   `403` on branch protection, H3 a skip floor, H4 the live 0644 config backup as a guarded operator
   command, H5 `skills.*` schema ownership, H6 the router key as a SecretRef, H7 ledger identity
@@ -232,7 +243,12 @@ Task Status: IN PROGRESS — **all eight `R3` items are implemented and locally 
   `Record — the 9Router "cấu hình cũ" report` in §8.
   R1 and R2 both existed with **zero implementation landed under either**, and no prior task's evidence is altered.
   ── **`M12/T2.1` tier is CLOSED 2026-10-15.** The rest of this field describes the new task.**
-Task Status: COMPLETE — **`M12/T4` is CLOSED 2026-10-17**: `T4-1`…`T4-5` landed (plus one discovered record defect),
+Task Status: IN PROGRESS — **`M12/T2.2-R3` is executing** (`R3-0`…`R3-11`, one commit each where a commit is possible).
+  Four read-only verification lanes ran before this contract was frozen and killed four premises inside the band, so
+  this field starts from what the source said at `7996a16` rather than from the 2026-10-14 register text; the killed
+  premises are recorded in `ACTIVE.md` §0 and are not shipped as fixes. Nothing is claimed here before its gate has
+  been run.
+  (history) **`M12/T4` is CLOSED 2026-10-17**: `T4-1`…`T4-5` landed (plus one discovered record defect),
   §4.17 is now the disposition authority for the 38 re-filed findings, and the M12 release-gate cell no longer
   duplicates §8. Per-item commits, the five premises this contract corrected in the read (plus one deviation it
   disclosed and one gate it reported unsatisfiable), the no-fact-loss diff and
@@ -258,17 +274,21 @@ Task Status: COMPLETE — **`M12/T4` is CLOSED 2026-10-17**: `T4-1`…`T4-5` lan
   (`M12/T2.3` — no contract and no code at that closeout; it was materialized the same day as `M12/T2.3-R1` after the
   owner answered the N-block), `M12/T2.2-R3` (the Skill Store lifecycle block, scheduled only), and all
   `M12/T3` H11 work.
-Planning Readiness: APPROVED — the owner approved this contract's scope with `grant 1` on 2026-10-17, inside the
-  standing instruction `anh muốn em sửa hết` (fix everything remaining) and his ordering `1 → t2.2-r3 → a2 → h5 →
-  adapter/knowledgebase/gate-truth còn lại → t3 h11`. The scope he approved was the one proposed after the premises
-  were measured, not assumed: identifiers `M12/T4`–`T8` confirmed unused, the 38 orphan ids counted from the grouping
-  paragraph itself, the register's staleness counted (112 entries, 2 `CLOSED`), and the M12 cell measured (9 940-char
-  row, 9 840-char cell, 29 commit hashes, §8 holding 17 records). **(Corrected at closeout — the second half of that
-  sentence was wrong: the register held 123 structured `id:` entries with exactly 1 reading `CLOSED` (124 now, after
-  `T4-3` added `R5-E09-08`); the cell is 9 858 characters on the one slicing convention both scripts used, and its
-  machine-token population is 36 unique references of which 18 are seven-hex commit short-shashes, not 29 hashes; and
-  §8 held 15 records with 2 stranded under §11 until `07cca47` moved them. See `Record — M12/T4-R1 closed`, premises
-  3 and 4 and the no-fact-loss proof.)** Where a fact could not be proven it is written as
+Planning Readiness: APPROVED — the owner approved `M12/T2.2-R3` in two moves on 2026-10-17: `grant` for the band, then
+  **`p1 q1 r2 s1 t1`** on the fork block this contract was built from. The scope he approved is the post-verification
+  scope, not the register's: four lanes re-read all 18 findings against `7996a16` and four premises died (`R5-E07-05`,
+  `R5-E04-09`, and the crowding-out and `recordedHash` clauses of `R5-E05-04`), while `p1` kept the packaged governance
+  entrypoint out of bounds, `r2` left H8's retirement capability undecided, `s1` left H5's `skills.*` DDL ownership
+  undecided, `t1` granted exactly one read-only probe of the embedding endpoint, and `q1` granted a pinned-assertion
+  exception for **two named hunks and nothing else**. Packaging was measured, not assumed: the four source files this
+  band edits are absent from `governancePluginFiles()` (`integrations/openclaw/lib/policy.mjs:1184-1279`) and their
+  sha256 values (`7285f979…`, `a5e1747d…`, `5193cde5…`, `9342d016…`, each hashed at `7996a16`) in no tracked file —
+  `git grep -q` for all four prefixes exits 1 — so these edits force zero digest rolls and zero admissions.
+  (history) `M12/T4-R1` was approved the same day with `grant 1` on the scope proposed after its premises were measured
+  — and the numbers it carried into that measurement were themselves wrong; see the correction below and
+  `Record — M12/T4-R1 closed`, premises 3 and 4 and the no-fact-loss proof, in §8. What it got right: identifiers
+  `M12/T4`–`T8` were confirmed unused, the 38 orphan ids were counted from the grouping paragraph itself, and where a
+  fact could not be proven it was written as
   unverified rather than promoted into the schedule — the rule that killed two claims in Wave C and eight premises in
   Wave B. (history) The owner approved Wave C's twelve-item scope and answered all five escalated forks on
   2026-10-16 with `n1a n2a n3a n4a n5a`, each the recommended option. The escalated block was produced by verifying
@@ -283,11 +303,24 @@ Planning Readiness: APPROVED — the owner approved this contract's scope with `
   inherited premises failed — see `Record — M12/T2.2-R1 Wave A closed, a WSL claim of mine withdrawn, and
   M12/T2.2-R2 Wave B materialized` in §8. What that pass could not execute (it needed a new pinned constant, a live
   re-pin, or a decision about public behaviour) was escalated into `ACTIVE.md` §5 instead of smuggled in.
-Plan Revision: M12/T4-R1
-Execution Authorization: NO — `M12/T4-R1` executed and closed on 2026-10-17, so this field returns to NO and its
-  contract is archived at `docs/contracts/execution/archive/2026-10-17-M12-T4-R1.md`. Nothing else is authorized: the
-  bands this contract only scheduled (`M12/T2.2-R3`, `M12/T5`…`T8`, `M12/T3`) each still need their own Plan Revision
-  and their own YES, and answering H1–H11 is not a YES either.
+Plan Revision: M12/T2.2-R3
+Execution Authorization: YES — bounded to `ACTIVE.md` §3's items `R3-0`…`R3-11` and §4's enumerated file set, under the
+  `AGENTS.md` §12 terms only (local implementation commits, validation, the closeout commit, push of this non-`main`
+  task branch). The owner's grants, in his own words: `grant` for the band, then `p1 q1 r2 s1 t1` — `p1` **excludes
+  `integrations/openclaw/plugins/zink-governance/index.mjs`** (packaged entrypoint; an edit would admit an outgoing
+  deployed digest into `configure.mjs:1497`/`:1764` and so widen what `--apply` accepts on his host), `q1` grants a
+  pinned-assertion exception for **exactly** `tests/m8-t1-skill-vector-memory.test.mjs:395` and
+  `tests/m10-t2-r21-skill-chunking-and-text-budgets.test.mjs:46-50`, named at the moment of touching and not precedent,
+  `r2` leaves H8 unanswered so no retirement capability is written, `s1` leaves H5 unanswered so no schema, migration or
+  module-ownership change is made, and `t1` grants one read-only probe of the embedding endpoint's response shape and
+  nothing beyond it. Standing rulings that bind this contract: `AGENTS.md` is not editable for naming/vocabulary (owner,
+  2026-10-17); CHANGELOG takes new validated entries but accepted history lines are not rewritten without a separate
+  word; no `.github/workflows/**`; no `--apply`/restart/deployment/live Discord request; no deletion of a tracked file;
+  no dependency or lockfile change; no new or widened required gate. Discovered record/plan defects may be fixed inside
+  §4's file set as their own commits, after each premise is re-read at the current head; discovered source/schema/gate
+  defects go to `ACTIVE.md` §5's escalation list instead.
+  (history) Execution Authorization was **NO** immediately before this revision — `M12/T4-R1` had executed and closed on
+  2026-10-17 with its contract archived at `docs/contracts/execution/archive/2026-10-17-M12-T4-R1.md`.
   (history) Execution Authorization was **YES** for `M12/T4-R1`, bounded to `ACTIVE.md` §3's items `T4-1`…`T4-5` and
   §4's three writable files
   (`PLAN.md`; `.agents/states/findings.md`; `docs/development/conventions.md`, line 26 only), under the `AGENTS.md` §12
@@ -346,16 +379,17 @@ Execution Authorization: NO — `M12/T4-R1` executed and closed on 2026-10-17, s
   `R5-E12-01`'s replacement claim contradicted by five `PLAN.md` rows that do record `quality-gate SUCCESS`).
   R3 was then written **fresh** rather than patched, and this field restored to YES at the narrower bound. Full
   detail in `.agents/states/findings.md`, Vòng 6.
-Execution Contract: NONE — `docs/contracts/execution/ACTIVE.md` is deleted at this closeout; the contract it carried
-  (`M12/T4-R1`, governance-record integrity, granted by the owner's `grant 1` on 2026-10-17) is archived verbatim at
-  `docs/contracts/execution/archive/2026-10-17-M12-T4-R1.md`, and its §8 closeout record is
-  `Record — M12/T4-R1 closed` in this file. The pointer returns to `NONE` because no contract is in force; the next
-  band needs its own revision and its own file.
-  (history) The field read `docs/contracts/execution/ACTIVE.md` while `M12/T4-R1` was executing. It is transient and
-  Git-ignored; at closeout it is archived under `docs/contracts/execution/archive/` and this field returns to `NONE`.
-  (Predecessor `M12/T2.3-R1` archived at closeout to
+Execution Contract: `docs/contracts/execution/ACTIVE.md` — **`M12/T2.2-R3`** (Skill Store lifecycle; granted by the
+  owner's `grant` and his `p1 q1 r2 s1 t1` answers on 2026-10-17). It is transient and Git-ignored; at closeout it is
+  archived under `docs/contracts/execution/archive/` and this field returns to `NONE`.
+  (history) `M12/T4-R1` closed earlier the same day: its contract is archived verbatim at
+  `docs/contracts/execution/archive/2026-10-17-M12-T4-R1.md` and its closeout record is
+  `Record — M12/T4-R1 closed` in §8. (Predecessor `M12/T2.3-R1` archived at closeout to
   `docs/contracts/execution/archive/2026-10-17-M12-T2.3-R1.md`.)
-Review Convergence Gate: **PASS** for `M12/T4-R1` — two read-only review passes over the contract's commits. The first
+Review Convergence Gate: **NOT RUN** for `M12/T2.2-R3` — no review pass has been performed on this contract's items
+  yet. What preceded execution was not a review but a four-lane premise verification of the band, and it is recorded in
+  `ACTIVE.md` §0 because it killed four of the 18 findings before any code was written.
+  (History, `M12/T4-R1`: **PASS** — two read-only review passes over the contract's commits. The first
   found seven real defects in what this contract had just written (the `R5-E13-05` row contradicted itself about which
   half of that finding is open; the `P5` provenance key claimed a `git log` state that had already changed; §2's
   approval field still carried the refuted 112/2/9 840/17 premises; the §8 record miscounted its own premises; the
@@ -371,7 +405,10 @@ Review Convergence Gate: **PASS** for `M12/T4-R1` — two read-only review passe
   found the second issue worth recording: `n1a`'s caveat had been granted in §3 but never scheduled as a §4 item,
   which `7d73e18` then executed. Full detail in
   `Record — M12/T2.3-R1 Wave C closed`, §8.)
-Final Quality Gate: **PASS** for `M12/T4-R1` — `npm run verify` (its own exit status, never a piped tail) run at the
+Final Quality Gate: **NOT RUN** for `M12/T2.2-R3` — no gate has been run against this contract's items yet; the
+  baseline `npm run verify` at the materialization commit has not been executed, and §6's WSL lane and per-item mutation
+  probes are likewise outstanding.
+  (History, `M12/T4-R1`: **PASS** — `npm run verify` (its own exit status, never a piped tail) run at the
   materialization commit `f9b356c` and after each of `ca8e2ff`, `71003fd`, `07cca47`, `4f4536f`, `21f349a`, then again
   over the final closeout tree: **1595 tests / 106 suites / 1546 pass / 0 fail / 49 skipped**, `Repository policy
   check passed.` every time, with `npm run repo:check` PASS at each item because `docs/development/conventions.md` is
@@ -385,7 +422,12 @@ Final Quality Gate: **PASS** for `M12/T4-R1` — `npm run verify` (its own exit 
   passed.`), the WSL lanes read as counts (12/12, 2/2, 35/35, zero skips), six mutation probes with each mutation
   confirmed in the file first, `§6.7`'s re-grep denominators recorded, and the Python lane `NOT RUN` with the reason
   (zero `apps/knowledge/` files in the diff).)
-Evidence Level: **REMOTE-BACKED for `M12/T4-R1`'s repository gates** — `LOCAL-VERIFIED` at every item commit and over
+Evidence Level: **NONE for `M12/T2.2-R3`** — nothing in this contract is validated yet. It moves to `LOCAL-VERIFIED`
+  only when §6's gates have actually been run at each item and over the final tree, and to `REMOTE-BACKED` only with a
+  run id read out of that run's own log; the task-branch push starts no run by itself (`ci.yml:6-7` is `main`-only —
+  open decision **H1**). Deployment is not authorized by anything in this revision (`NOT DEPLOYED`), and live Discord
+  behaviour stays `NOT TESTED`.
+  (History, `M12/T4-R1`: **REMOTE-BACKED for its repository gates** — `LOCAL-VERIFIED` at every item commit and over
   the final tree on this host (1595 / 1546 pass / 0 fail / 49 skipped, policy passed), then read back from the remote
   runs at the closed head `9a0e398`: CI **`38992022348`** `quality-gate` **SUCCESS** (`1595 / 106 suites / 1542 pass /
   0 fail / 53 skipped`, `Repository policy check passed.`) and `python-quality` **SUCCESS** (`208 passed, 34 subtests`),
@@ -1838,7 +1880,7 @@ code change.
 
 | Band | Subject | Ids | Fix-risk tier | Prerequisite owner decision | Authorization |
 | --- | --- | --- | --- | --- | --- |
-| `M12/T2.2-R3` | Skill Store lifecycle | 18 | medium (the `l1` correction above) | **H5** (`R5-E03-07`) and **H8** (`R5-E04-05`, per the P3 paragraph) | scheduled, not authorized |
+| `M12/T2.2-R3` | Skill Store lifecycle | 18 | medium (the `l1` correction above) | **H5** (`R5-E03-07`) and **H8** (`R5-E04-05`, per the P3 paragraph) — both still pending, and the owner's `r2`/`s1` keep them out of this contract | **authorized 2026-10-17** for `ACTIVE.md`'s `R3-0`…`R3-11` only: 10 findings survive as items, 4 died as premises (`R5-E07-05`, `R5-E04-09`, and two clauses of `R5-E05-04`), and `R5-E04-07`/`R5-E05-08`/the caller half of `R5-E04-08` are excluded by `p1`, `R5-E04-05` by `r2`, `R5-E03-07` by `s1`, `R5-E05-05` pending `t1` |
 | `M12/T5` | A2 packaged module graph | 3 | **not assigned by §5.3** — A2 changes how the live plugin resolves source, so it ends at a deployment boundary; this contract proposes "high" and does not promote it to fact | **H6** (`R5-E13-02`); `R1-A02-01` has no §11 tie, and no `--apply`/restart is authorized anywhere in this plan | scheduled, not authorized |
 | `M12/T6` | Knowledgebase block | 14 | medium (`T2.1-R3:291`) | **H9** (`R5-E03-05`). The owner's queue places the H5 answer before this band (§2's queue line), but §11 ties H5 to `R5-E03-07`/`R5-E11-02`, not to any id here | scheduled, not authorized |
 | `M12/T7` | Zink Tools adapter surfaces | 6 | medium (`T2.1-R3:291`) | none recorded in §11 | scheduled, not authorized |
