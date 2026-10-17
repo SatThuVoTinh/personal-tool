@@ -778,32 +778,57 @@ export async function syncSkillsToVectorStore(options = {}) {
       // silently ignoring the secondary error.
       try {
         const nsPgArray = escapeSqlLiteral(toPostgresArrayLiteral(namespace));
+        // M12/T2.2-R3 R3-7: the failure row must describe the failure it
+        // records, and it must leave nothing retrievable behind. As upserted
+        // per statement, the pre-fix form (1) refreshed only sync_status /
+        // failure_reason / synced_at on conflict, so a row could report FAILED
+        // while still carrying the PREVIOUS successful sync's digests, and
+        // (2) touched only `catalog_index`, so every segment vector of that
+        // previous sync stayed selectable under a row that had just disowned
+        // them. It is now one DO block, mirroring the READY path: upsert with
+        // both digests, take the id, delete the segments.
+        // `source_sha256` is the manifest's digest — the failure path may have
+        // died before the file was ever read, and `recordedHash` is the only
+        // digest that is always a governed value here (the catalog enforces it
+        // and the old `"0".repeat(64)` stand-in could not be reached).
+        const failureSemantic = deriveSemanticMetadata({
+          namespace,
+          capability,
+          tags: [],
+        });
         const failSql = `
-          INSERT INTO skills.catalog_index (
-            namespace, capability, version, source_sha256, embedding_input_sha256,
-            domain, primary_topic, subtopic, secondary_topics, status, sync_status, synced_at, failure_reason
-          ) VALUES (
-            ${nsPgArray}::text[],
-            ${escapeSqlLiteral(capability)},
-            ${escapeSqlLiteral(version)},
-            '${assertHexDigest(
-              recordedHash || "0".repeat(64),
-              "source_sha256",
-            )}',
-            '${"0".repeat(64)}',
-            'general',
-            'general',
-            NULL,
-            '{}'::text[],
-            'ACTIVE',
-            'FAILED',
-            now(),
-            ${escapeSqlLiteral(boundedReason)}
-          )
-          ON CONFLICT (namespace, capability, version) DO UPDATE SET
-            sync_status = 'FAILED',
-            failure_reason = ${escapeSqlLiteral(boundedReason)},
-            synced_at = now();
+          DO $$
+          DECLARE
+            v_skill_id uuid;
+          BEGIN
+            INSERT INTO skills.catalog_index (
+              namespace, capability, version, source_sha256, embedding_input_sha256,
+              domain, primary_topic, subtopic, secondary_topics, status, sync_status, synced_at, failure_reason
+            ) VALUES (
+              ${nsPgArray}::text[],
+              ${escapeSqlLiteral(capability)},
+              ${escapeSqlLiteral(version)},
+              '${assertHexDigest(recordedHash, "source_sha256")}',
+              '${"0".repeat(64)}',
+              ${escapeSqlLiteral(failureSemantic.domain)},
+              ${escapeSqlLiteral(failureSemantic.primary_topic)},
+              NULL,
+              '{}'::text[],
+              'ACTIVE',
+              'FAILED',
+              now(),
+              ${escapeSqlLiteral(boundedReason)}
+            )
+            ON CONFLICT (namespace, capability, version) DO UPDATE SET
+              source_sha256 = EXCLUDED.source_sha256,
+              embedding_input_sha256 = EXCLUDED.embedding_input_sha256,
+              sync_status = 'FAILED',
+              failure_reason = ${escapeSqlLiteral(boundedReason)},
+              synced_at = now()
+            RETURNING id INTO v_skill_id;
+
+            DELETE FROM skills.segments WHERE skill_id = v_skill_id;
+          END $$;
         `;
         await executePostgresQuery(failSql, options);
       } catch {

@@ -375,3 +375,92 @@ test("A7-2 pin: the embedding call is unconditional and the identity checks stay
     );
   }
 });
+
+// ===========================================================================
+// M12/T2.2-R3 `R3-7` — the failure row must describe the failure it records.
+//
+// M11/T1 made the SUCCESS path one atomic DO block; the failure path stayed a
+// bare upsert that refreshed only sync_status / failure_reason / synced_at and
+// never touched skills.segments. A skill whose sync had just failed therefore
+// kept (1) the PREVIOUS successful sync's two digests on a row that said
+// FAILED, and (2) every vector of that previous sync selectable under it. These
+// assertions pin the new statement shape. The real-PostgreSQL parse and the
+// segment cleanup itself are reported separately: no tracked lane executes
+// failSql against a database (the scratch-DB gate's M11-06 covers only the
+// READY path and the tombstone).
+// ===========================================================================
+
+test("R3-7: the failure statement refreshes both digests and clears the segments", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "m11-r37-"));
+  try {
+    const sha = await makeActiveSkill(
+      root,
+      ["office"],
+      "capture-skill",
+      "# Failing\n\nBody that never reaches a vector.",
+    );
+    const statements = [];
+    const report = await syncSkillsToVectorStore({
+      skillsRoot: root,
+      embedFn: async () => {
+        throw new Error("EMBEDDING_ENDPOINT_DOWN_SIMULATION");
+      },
+      dbExecutor: async (sql) => {
+        statements.push(sql);
+        return "";
+      },
+    });
+    assert.equal(report.failed_count, 1);
+    const failSql = statements.find((s) =>
+      s.includes("sync_status = 'FAILED'"),
+    );
+    assert.ok(failSql, "the sync must still record the observable failure");
+
+    // One atomic block, the shape the READY path already uses: the id comes
+    // back from the upsert and the segment delete runs against that id, so a
+    // crash cannot leave a FAILED row with its vectors behind.
+    assert.ok(failSql.includes("DO $$") && failSql.includes("END $$;"));
+    assert.match(failSql, /RETURNING id INTO v_skill_id;/u);
+    const deleteAt = failSql.indexOf(
+      "DELETE FROM skills.segments WHERE skill_id = v_skill_id;",
+    );
+    assert.ok(
+      deleteAt > failSql.indexOf("RETURNING id INTO v_skill_id;"),
+      `the segment delete must follow the id it scopes to: ${failSql}`,
+    );
+
+    // The digests a FAILED row advertises must be the ones it failed on.
+    assert.ok(
+      failSql.includes("source_sha256 = EXCLUDED.source_sha256"),
+      "a conflict must stop advertising the previous sync's source digest",
+    );
+    assert.ok(
+      failSql.includes(
+        "embedding_input_sha256 = EXCLUDED.embedding_input_sha256",
+      ),
+      "a conflict must stop advertising the previous sync's embedding digest",
+    );
+    assert.ok(
+      failSql.includes(`'${sha}'`),
+      "the carried digest is the manifest's, which the catalog enforces",
+    );
+    assert.equal(
+      (failSql.match(/0{64}/gu) ?? []).length,
+      1,
+      'only embedding_input_sha256 may be the schema-forced zero digest; the old `|| "0".repeat(64)` source stand-in is gone',
+    );
+
+    // Semantics come from the contract, not from a hardcoded fallback domain
+    // that would let a FAILED row claim a taxonomy it never derived.
+    assert.ok(
+      failSql.includes("'office'"),
+      "domain/primary_topic must be the derived taxonomy for the record",
+    );
+    assert.ok(
+      !failSql.includes("'general'"),
+      "the failure row must not fabricate the default domain",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

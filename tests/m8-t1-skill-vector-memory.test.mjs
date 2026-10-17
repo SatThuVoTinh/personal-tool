@@ -392,7 +392,11 @@ describe("M8/T1 Governed Skill Vector Store & Semantic Vector RAG", () => {
         skillsRoot: tempDir,
         embedFn: async () => [new Array(1024).fill(0.01)],
         dbExecutor: async (sql) => {
-          if (sql.includes("skills.segments")) dbInserted = true;
+          // M12/T2.2-R3 R3-7 (owner grant `q1`, 2026-10-17): this probe reads
+          // "no segment row was WRITTEN". The failure statement now deletes
+          // segments, so a bare substring match on the table name would count
+          // the cleanup as an insert and pass the very regression it guards.
+          if (/INSERT INTO skills\.segments/u.test(sql)) dbInserted = true;
           return "";
         },
       });
