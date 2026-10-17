@@ -56,7 +56,7 @@ softened into the other to make a tier look finished.
 | M7 — Zink Tools + OpenClaw integration + V1 hardening                      | `COMPLETE`    | `REMOTE-BACKED`  | M7/T1-R19, M7/T2-R12, M7/T3-R16, M7/T4-R10, and M7/T5-R13 complete; runtime governance remediation, Discord 7-bot integration, and Zink tools specialist policies verified.                                                                                                                                                           |
 | M8 — Zink Skill Store 2-Way Governed Vector RAG & Agent Memory Integration | `IN PROGRESS` | `LOCAL-VERIFIED` | M8/T1 is complete; M8/T2.2 R4/R5/R6 are implemented; M8/T2.2-R7 (heartbeat admission, boundary diagnosability, apply safety) is in progress. Deployment is not authorized.                                                                                                                                                            |
 | M10 - Governed coordinator runtime binding                                 | `COMPLETE` | `LOCAL-VERIFIED` | M10/T2 closed by explicit owner decision 2026-10-11 (R26 records the final remediation; R8 closed live with zero-outbound proven). Deferred follow-ups are NOT closed under M10 and require separate authorization: live gateway/knowledge restart or deployment, M10 ingress card/tag redesign (new Plan Revision), coordinator result ingestion, and the WSL/CI Python gate run. |
-| M12 - Governed Discord interaction lifecycle and presentation | `IN PROGRESS` | `REMOTE-BACKED` | **M12 is IN PROGRESS. Current claim: the three-wave audit remediation is closed for the repository gates — `M12/T2.1` high, `M12/T2.2` medium, `M12/T2.3` low, CI `38944576084` and Security `38944579971` @ `71c2bff` — and none of it is deployed; the governance-record tier `M12/T4-R1` is closed 2026-10-17 and `REMOTE-BACKED` for the same gates at its own head; `M12/T2.2-R3` (Skill Store lifecycle) is **authorized and executing** 2026-10-17 under `p1 q1 r2 s1 t1`, with nothing yet validated at the time of writing, and `M12/T3` (H11, which the owner ordered last) remains scheduled and unauthorized; §4.17 is the schedule for the 38 findings that had no live owner task.** Deployed-and-verified is a separate claim, and only two builds earned it: Deployment A (2026-10-13) and Deployment B (2026-10-14) — each exactly one `--apply`, both spent, evidence in their own §8 records — and no remediation commit after them is on the host. **What this milestone does not close, stated here so a reader of §3 never has to hunt for it:** per-surface Discord behaviour on #approvals, #results and #incidents is `NOT TESTED` live, and the newest §8 reading of the ledger (Deployment B) still shows no `WORKFLOW_APPROVAL_SURFACED` or `WORKFLOW_RESULT_SURFACED` event; the post-verdict `PATCH /channels/{thread.id}` `applied_tags` seam has never been exercised on this server; #incidents on the analytics stack waits on the mislabelled `STATUS: ANALYTICS` tag rename, which §8 records as a precondition the owner owns and this contract did not re-read live; `verify.mjs` and the R16 apply rehearsal are `NOT RUN`; the Knowledgebase Python lane is `NOT RUN` on any diff that touches no `apps/knowledge/` file; and CI is Linux-on-GitHub, so a matching test denominator proves nothing about the live tree. **Per-task evidence lives in the §8 records, named:** `M12/T1-R1`, `M12/T2-R1`, `M12/T2-R2`, `M12/T2-R3`/`R3b`, `Deployment A`, `Deployment B`, `Record — M12/T2.1-R3 execution wave`, `Record — M12/T2.2-R1 Wave A closed`, `Record — M12/T2.2-R2 Wave B closed`, `Record — M12/T2.3-R1 Wave C closed`. |
+| M12 - Governed Discord interaction lifecycle and presentation | `IN PROGRESS` | `REMOTE-BACKED` | **M12 is IN PROGRESS. Current claim: the three-wave audit remediation is closed for the repository gates — `M12/T2.1` high, `M12/T2.2` medium, `M12/T2.3` low, CI `38944576084` and Security `38944579971` @ `71c2bff` — and none of it is deployed; the governance-record tier `M12/T4-R1` is closed 2026-10-17 and `REMOTE-BACKED` for the same gates at its own head; `M12/T2.2-R3` (Skill Store lifecycle) is **CLOSED 2026-10-17**, `LOCAL-VERIFIED` for the repository gates at its own head `04cdbd6` (eleven of twelve items shipped; `R3-0` `NOT RUN`), `M12/T5`–`M12/T8` remain scheduled and unauthorized, and `M12/T3` (H11, which the owner ordered last) remains scheduled and unauthorized; §4.17 is the schedule for the 38 findings that had no live owner task.** Deployed-and-verified is a separate claim, and only two builds earned it: Deployment A (2026-10-13) and Deployment B (2026-10-14) — each exactly one `--apply`, both spent, evidence in their own §8 records — and no remediation commit after them is on the host. **What this milestone does not close, stated here so a reader of §3 never has to hunt for it:** per-surface Discord behaviour on #approvals, #results and #incidents is `NOT TESTED` live, and the newest §8 reading of the ledger (Deployment B) still shows no `WORKFLOW_APPROVAL_SURFACED` or `WORKFLOW_RESULT_SURFACED` event; the post-verdict `PATCH /channels/{thread.id}` `applied_tags` seam has never been exercised on this server; #incidents on the analytics stack waits on the mislabelled `STATUS: ANALYTICS` tag rename, which §8 records as a precondition the owner owns and this contract did not re-read live; `verify.mjs` and the R16 apply rehearsal are `NOT RUN`; the Knowledgebase Python lane is `NOT RUN` on any diff that touches no `apps/knowledge/` file; and CI is Linux-on-GitHub, so a matching test denominator proves nothing about the live tree. **Per-task evidence lives in the §8 records, named:** `M12/T1-R1`, `M12/T2-R1`, `M12/T2-R2`, `M12/T2-R3`/`R3b`, `Deployment A`, `Deployment B`, `Record — M12/T2.1-R3 execution wave`, `Record — M12/T2.2-R1 Wave A closed`, `Record — M12/T2.2-R2 Wave B closed`, `Record — M12/T2.3-R1 Wave C closed`, `Record — M12/T2.2-R3 closed`. |
 | M11 - Cross-module audit remediation                                       | `COMPLETE` | `REMOTE-BACKED` | M11/T1 is CLOSED (R1 four phases + R2 live admission and deployment, 2026-10-12; build DEPLOYED AND VERIFIED on the live WSL gateway, evidence in §4/§8). M11/T2 is CLOSED the same day: R1 made four Skill Store suites portable, gave `python-quality` the Node toolchain (CI SUCCESS, `188 passed, 27 subtests`) and fingerprinted two gitleaks false positives; R2 gave the Knowledgebase Python suite exactly one executor per environment, which repaired `CI / quality-gate` (CI run `38202129189`: `quality-gate` and `python-quality` both SUCCESS). NOT closed under M11 and still requiring separate authorization: `verify.mjs` (`NOT RUN`, operator-side), the pre-existing model-router `GOVERNANCE_COMPLETION_UNAVAILABLE` failures, the pre-existing `duplicate plugin id` warning, the pre-existing 5-high `npm audit` failure, `M11-06`'s PostgreSQL statement gate in CI (no Postgres service there), and the owner-excluded items (per-document quarantine, incremental-publish redesign, manifest schema extension, zink-tools drift cluster, zink-tools lint-glob gap). **M11/T3-R1 is CLOSED 2026-10-13** (`REMOTE-BACKED`, **DEPLOYED AND VERIFIED** on the live WSL gateway): the ten verified HIGH-severity items landed in two ordered phases — `3cb8274` (argv execution on the bot-token path, one deadline on the three Discord REST fetches, cause-preserving message-only diagnostics at the three native-boundary seams, queue `enqueueTask`/`clear` serialized) and `6b0ea0a` (non-spinning async lock release with the WSL drvfs errnos, refusal of a half-missing events/snapshot pair, replay diagnostics that keep their cause, decision-ledger save and approval reads under the shared writer lock, `REJECTED` skill proposals made terminal and serialized). CI run `38336851433` @ `f55d292` on the task branch: `quality-gate` **SUCCESS** (`ℹ tests 1374 / ℹ fail 0`, `Repository policy check passed.`) and `python-quality` **SUCCESS** (`188 passed, 27 subtests`); Security run `38336854295` adds `secret-scan` **SUCCESS** (gitleaks, zero leaks) while its `dependency-audit` stays red on the unchanged 5-high baseline. Locally: `npm run verify` PASS on Windows and the two new suites plus both lock-predecessor suites re-run green under WSL Ubuntu, where the packaged digests are byte-identical. 22 of 24 mutation runs killed the defect (the 2 survivors are at the pre-existing `enterNativeRun` seam, outside this task's change sites — recorded in §8). The router model order/`timeoutSeconds=100` and stale-lock auto-reclaim stay excluded as recorded owner decisions. **This build is DEPLOYED AND VERIFIED** on the live WSL gateway (owner grant 2026-10-13, ONE `--apply` from `9164c50`; all seven live asset digests equal the packaged build, `openclaw.json` and the ledger untouched, unit `active`/`MainPID=28865`/`NRestarts=0`, zero `GOVERNANCE_COMPLETION_UNAVAILABLE` on the new PID — evidence in §4; `verify.mjs` stays `NOT RUN` and a multi-hour live soak is still open). |
 
 The former self-built L&SC Data Plant is replaced by a **logical external
@@ -195,8 +195,11 @@ Prior revision: M12/T2.1-R1 — the execution wave the owner authorized on 2026-
   it **its own contract after Wave B closes**, recorded here as `M12/T2.2-R3` (the option he chose was named `T2.4`;
   that label already named A2 plus `R5-E13-02` in the text above, and A2 now sits in `M12/T5`, so the intent —
   separate contract, medium risk, not folded into the document tier — is kept and only the identifier is corrected).
-  It is **scheduled, not authorized**: no
-  code for it exists, and it needs its own Plan Revision and `Execution Authorization: YES`.
+  It **was** scheduled, not authorized, with no code for it; the owner then granted the band on 2026-10-17 (`grant`,
+  scope answers `p1 q1 r2 s1 t1`, mid-band letters `A`, `n1`, `n2`), it executed under `ACTIVE.md`, and it is
+  **CLOSED** with its record in §8. The successor band in his queue is now `M12/T5` (A2 packaged module graph), for
+  which he granted **planning only** (`n2`) — no `M12/T5` code exists and none may be written before he approves that
+  plan and a matching contract is materialized.
   Honesty obligations the owner should read before accepting anything: deployment is **not** authorized
   by this contract; live Discord behaviour stays `NOT TESTED`; `verify.mjs` stays `NOT RUN`; the R16
   rehearsal cannot run on WSL and is **NOT RUN**, so no rehearsal validates this against the live
@@ -243,7 +246,25 @@ Task Status: IN PROGRESS — **all eight `R3` items are implemented and locally 
   `Record — the 9Router "cấu hình cũ" report` in §8.
   R1 and R2 both existed with **zero implementation landed under either**, and no prior task's evidence is altered.
   ── **`M12/T2.1` tier is CLOSED 2026-10-15.** The rest of this field describes the new task.**
-Task Status: IN PROGRESS — **`M12/T2.2-R3` is executing** (`R3-0`…`R3-11`, one commit each where a commit is possible).
+Task Status: **`M12/T2.2-R3` is CLOSED 2026-10-17.** Eleven of the twelve items shipped, one could not: `R3-0` stays
+  `NOT RUN` because the embedding-endpoint probe needs an environment carrying `OLLAMA_URL`, which this machine does
+  not have. The probe script is **not** in the tree — `temp/` is Git-ignored (`.gitignore:20`, `/temp/*`), so
+  `temp/r3-0-probe.mjs` is a local working artifact only, and no closeout claim rests on it. Per-item commits:
+  `8390a68` `R3-1`, `812b8ec` `R3-2`, `b604618` `R3-3`, `04d6679` `R3-4`, `74c42df` `R3-5`, `1bab75d` `R3-7`,
+  `223470f` `R3-6`, `5257ca4` `R3-8`, `04e128f` `R3-9`, `e7aee21` `R3-10`, `04cdbd6` `R3-12`. Two things this field has
+  to say plainly: **`R3-6`'s frozen prescription was refuted during execution** (it reused an identity-segment
+  predicate over the whole skill body, which refuses `\n`; measured 35/87 Skill Store tests red), it was escalated, and
+  the owner answered **`A`**; and **one judgment call of mine rode along with it** — refusing a body for its content
+  became reachable for the first time, and the refusal left an empty capability directory that failed the whole store
+  closed, so the writer's rollback now prunes it (`catalog.mjs:1403`, reversible at his word). Four of the band's 18
+  findings died as premises in the pre-freeze read, and the packaged-entrypoint, retirement and schema-ownership work
+  stays excluded by his own letters (`p1`, `r2`, `s1`). Gates: `npm run verify` **PASS** at every item and over the
+  closed tree (`1606 tests / 1557 pass / 0 fail / 49 skipped`, judged by its own recorded exit status), `repo:check`
+  **PASS**, the WSL lane on the DB-visible sets **26 pass / 0 fail / 0 skipped** with both real-PostgreSQL gates
+  executing there, one mutation probe per item each killing exactly one control, Python lane **NOT RUN** (no
+  `apps/knowledge/` file is in the diff). Full evidence: `Record — M12/T2.2-R3 closed` in §8.
+  (history) Task Status was: IN PROGRESS — **`M12/T2.2-R3` is executing** (`R3-0`…`R3-11`, one commit each where a
+  commit is possible).
   Four read-only verification lanes ran before this contract was frozen and killed four premises inside the band, so
   this field starts from what the source said at `7996a16` rather than from the 2026-10-14 register text; the killed
   premises are recorded in `ACTIVE.md` §0 and are not shipped as fixes. Nothing is claimed here before its gate has
@@ -284,6 +305,10 @@ Planning Readiness: APPROVED — the owner approved `M12/T2.2-R3` in two moves o
   band edits are absent from `governancePluginFiles()` (`integrations/openclaw/lib/policy.mjs:1184-1279`) and their
   sha256 values (`7285f979…`, `a5e1747d…`, `5193cde5…`, `9342d016…`, each hashed at `7996a16`) in no tracked file —
   `git grep -q` for all four prefixes exits 1 — so these edits force zero digest rolls and zero admissions.
+  **Three more letters arrived while the band was executing, and each is recorded in §10 with the trade-off it took:**
+  `A` re-cut `R3-6`'s byte set after the frozen predicate was measured refusing every real skill body; `n1` admitted
+  `tests/m11-t1-postgres-sql-gate.test.mjs` so `failSql` finally had a tracked real-PostgreSQL lane (executed as
+  `R3-12`); and `n2` authorized **planning** `M12/T5` after this band closes, which is not an execution grant.
   (history) `M12/T4-R1` was approved the same day with `grant 1` on the scope proposed after its premises were measured
   — and the numbers it carried into that measurement were themselves wrong; see the correction below and
   `Record — M12/T4-R1 closed`, premises 3 and 4 and the no-fact-loss proof, in §8. What it got right: identifiers
@@ -304,7 +329,13 @@ Planning Readiness: APPROVED — the owner approved `M12/T2.2-R3` in two moves o
   M12/T2.2-R2 Wave B materialized` in §8. What that pass could not execute (it needed a new pinned constant, a live
   re-pin, or a decision about public behaviour) was escalated into `ACTIVE.md` §5 instead of smuggled in.
 Plan Revision: M12/T2.2-R3
-Execution Authorization: YES — bounded to `ACTIVE.md` §3's items `R3-0`…`R3-11` and §4's enumerated file set, under the
+Execution Authorization: **NO** — `M12/T2.2-R3` executed and closed on 2026-10-17, so this field returns to `NO` under
+  §2: it may be set back to `YES` only by a new owner approval materialized into a new `ACTIVE.md`. The next band in
+  the owner's queue is `M12/T5` (A2 packaged module graph, 3 findings), for which he granted **planning only** (`n2`);
+  no `M12/T5` code exists and none may be written until he approves that plan and this pointer names a matching
+  contract. `H5` and `H6` are still unanswered, and `H5` sits in the queue immediately before `M12/T6`–`T8`.
+  (history) Execution Authorization was YES for `M12/T2.2-R3`, bounded to `ACTIVE.md` §3's items `R3-0`…`R3-11` and §4's
+  enumerated file set, under the
   `AGENTS.md` §12 terms only (local implementation commits, validation, the closeout commit, push of this non-`main`
   task branch). The owner's grants, in his own words: `grant` for the band, then `p1 q1 r2 s1 t1` — `p1` **excludes
   `integrations/openclaw/plugins/zink-governance/index.mjs`** (packaged entrypoint; an edit would admit an outgoing
@@ -379,16 +410,34 @@ Execution Authorization: YES — bounded to `ACTIVE.md` §3's items `R3-0`…`R3
   `R5-E12-01`'s replacement claim contradicted by five `PLAN.md` rows that do record `quality-gate SUCCESS`).
   R3 was then written **fresh** rather than patched, and this field restored to YES at the narrower bound. Full
   detail in `.agents/states/findings.md`, Vòng 6.
-Execution Contract: `docs/contracts/execution/ACTIVE.md` — **`M12/T2.2-R3`** (Skill Store lifecycle; granted by the
-  owner's `grant` and his `p1 q1 r2 s1 t1` answers on 2026-10-17). It is transient and Git-ignored; at closeout it is
-  archived under `docs/contracts/execution/archive/` and this field returns to `NONE`.
+Execution Contract: **NONE** — `M12/T2.2-R3` closed on 2026-10-17, so no contract authorizes execution in this
+  repository right now. Its approved contract is archived verbatim at
+  `docs/contracts/execution/archive/2026-10-17-M12-T2.2-R3.md` (308 lines; the `archive/README.md` sweep was re-run on
+  the copy at closeout and removed nothing — step 1's credential-pattern scan returns **1** hit, `Execution
+  Authorization: YES` at `:7`, which is a lifecycle field name and not a value, and its base64-class scan returns
+  **3**, all of them ordinary file paths; step 3 finds **0** snowflake-class digit runs; step 4 finds **0** long-hex
+  blobs, **0** environment/config-body lines and **0** live host paths), and its closeout record is
+  `Record — M12/T2.2-R3 closed` in §8. **That archived
+  file is where every `ACTIVE.md` §N citation in this band's PLAN.md fields and §8 records resolves now**, since the
+  live `docs/contracts/execution/ACTIVE.md` has been deleted; archived contracts are immutable, so those citations are
+  pointers, not authority. A new `ACTIVE.md` may be created only by a fresh owner approval materialized into a new Plan
+  Revision.
   (history) `M12/T4-R1` closed earlier the same day: its contract is archived verbatim at
   `docs/contracts/execution/archive/2026-10-17-M12-T4-R1.md` and its closeout record is
   `Record — M12/T4-R1 closed` in §8. (Predecessor `M12/T2.3-R1` archived at closeout to
   `docs/contracts/execution/archive/2026-10-17-M12-T2.3-R1.md`.)
-Review Convergence Gate: **NOT RUN** for `M12/T2.2-R3` — no review pass has been performed on this contract's items
-  yet. What preceded execution was not a review but a four-lane premise verification of the band, and it is recorded in
-  `ACTIVE.md` §0 because it killed four of the 18 findings before any code was written.
+Review Convergence Gate: **PASS** for `M12/T2.2-R3` — one read-only review pass over the band's own diff and its
+  record, run before the closeout commit. It found five defects in the **record** and none in the shipped behaviour;
+  four were fixed in the closeout commit (§3's milestone cell still calling the band "authorized and executing … with
+  nothing yet validated"; the `R3-0` probe claimed as **committed** under a Git-ignored `temp/` path, in three places;
+  the §4.17 refuted-premise dispositions missing from §8; and a correction paragraph that pointed at one stale
+  "scheduled, not authorized" line when four survive in three earlier records). The fifth is recorded and routed, not
+  rewritten, because it sits inside accepted historical records: the stale `file:line` citations in earlier §8 records
+  for the four files this band shifted. The pass also independently re-derived `R3-7`'s riskiest premise — that
+  `recordedHash` can never be absent on the failure path, which is what makes deleting the zero-digest stand-in safe —
+  from `catalog.mjs:326-329`, `:610-617` and `vector-sync.mjs:565-574`. Full list: `Record — M12/T2.2-R3 closed`, §8.
+  What preceded execution was not a review but a four-lane premise verification of the band, and it is recorded in
+  the archived contract's §0 because it killed four of the 18 findings before any code was written.
   (History, `M12/T4-R1`: **PASS** — two read-only review passes over the contract's commits. The first
   found seven real defects in what this contract had just written (the `R5-E13-05` row contradicted itself about which
   half of that finding is open; the `P5` provenance key claimed a `git log` state that had already changed; §2's
@@ -405,9 +454,23 @@ Review Convergence Gate: **NOT RUN** for `M12/T2.2-R3` — no review pass has be
   found the second issue worth recording: `n1a`'s caveat had been granted in §3 but never scheduled as a §4 item,
   which `7d73e18` then executed. Full detail in
   `Record — M12/T2.3-R1 Wave C closed`, §8.)
-Final Quality Gate: **NOT RUN** for `M12/T2.2-R3` — no gate has been run against this contract's items yet; the
-  baseline `npm run verify` at the materialization commit has not been executed, and §6's WSL lane and per-item mutation
-  probes are likewise outstanding.
+Final Quality Gate: **PASS** for `M12/T2.2-R3` — the full `npm run verify` chain (`format:check && lint && test &&
+  repo:check`) ran over the closed tree after the contract was archived and deleted and after the review pass's fixes,
+  judged by **its own status written into the log** (`NPM_VERIFY_EXIT=0` at the last line, never a piped tail's or a
+  background wrapper's), reading out **1606 tests / 106 suites / 1557 pass / 0 fail / 0 cancelled / 49 skipped** with
+  `Repository policy check passed.` immediately above the exit line. The §6.3 WSL lane was re-run over the same closed
+  tree and read as counts, not status: **26 / 26 pass / 0 fail / 0 skipped**, and the zero-skip reading was confirmed by
+  name — `M11-06: generated statements execute against real PostgreSQL` (5.87 s) **and** `R3-12: the failure statement
+  runs on real PostgreSQL and clears the segments` (4.40 s) both executed there, as did `M11-03` and `M11-04`.
+  `npx prettier --check CHANGELOG.md` exits 0; `repo:check` passes standing alone. Python lane **NOT RUN** (no
+  `apps/knowledge/` file in the diff). One sequencing caveat, stated because it is the only honest way to claim a
+  "final" gate: this field's own text and the rest of `R3-11`'s record lines land in `PLAN.md` **after** the run above,
+  and `PLAN.md` is read by some of the chain — so the post-edit tree was re-gated on exactly those consumers:
+  `npm run repo:check` exits **0** (`Repository policy check passed.`) and the two test files that read `PLAN.md`
+  (`tests/m11-t1-r2-file-lock-asset-predecessor.test.mjs`, `tests/m8-t2.10-r13-r7-predecessor-allowlist.test.mjs`) run
+  **41 / 41 pass / 0 fail / 0 skipped**, exit **0**. `format:check` and `lint` cannot be affected by a `PLAN.md` edit:
+  `package.json`'s prettier globs do not name it, and `.markdownlint-cli2.mjs` lists `PLAN.md` under `ignores` — both
+  read from the files, not assumed.
   (History, `M12/T4-R1`: **PASS** — `npm run verify` (its own exit status, never a piped tail) run at the
   materialization commit `f9b356c` and after each of `ca8e2ff`, `71003fd`, `07cca47`, `4f4536f`, `21f349a`, then again
   over the final closeout tree: **1595 tests / 106 suites / 1546 pass / 0 fail / 49 skipped**, `Repository policy
@@ -422,11 +485,18 @@ Final Quality Gate: **NOT RUN** for `M12/T2.2-R3` — no gate has been run again
   passed.`), the WSL lanes read as counts (12/12, 2/2, 35/35, zero skips), six mutation probes with each mutation
   confirmed in the file first, `§6.7`'s re-grep denominators recorded, and the Python lane `NOT RUN` with the reason
   (zero `apps/knowledge/` files in the diff).)
-Evidence Level: **NONE for `M12/T2.2-R3`** — nothing in this contract is validated yet. It moves to `LOCAL-VERIFIED`
-  only when §6's gates have actually been run at each item and over the final tree, and to `REMOTE-BACKED` only with a
-  run id read out of that run's own log; the task-branch push starts no run by itself (`ci.yml:6-7` is `main`-only —
-  open decision **H1**). Deployment is not authorized by anything in this revision (`NOT DEPLOYED`), and live Discord
-  behaviour stays `NOT TESTED`.
+Evidence Level: **LOCAL-VERIFIED for `M12/T2.2-R3`** — every §6 gate that could run on this host ran and was read from
+  its own output: `npm run verify` at each item and over the closed tree (`1606 / 1557 pass / 0 fail / 49 skipped`,
+  `NPM_VERIFY_EXIT=0` recorded inside the log rather than inferred from a pipe), `repo:check` **PASS**, the WSL lane on
+  the DB-visible sets **26 pass / 0 fail / 0 skipped** with the real-PostgreSQL gates executing in that lane too, one
+  mutation probe per item each killing exactly one control with the mutation re-read in the file and the revert verified
+  after. Two lanes stay open on their own terms: `R3-0` is **NOT RUN** (the probe needs `OLLAMA_URL`, which this machine
+  does not carry), and the Python lane is **NOT RUN** (no `apps/knowledge/` file is in the diff). `REMOTE-BACKED` is
+  withheld until a CI run for the closed head is dispatched and read from that run's own log — the task-branch push
+  starts no run by itself (`ci.yml:6-7` is `main`-only — open decision **H1**). Deployment is not authorized by anything
+  in this revision (`NOT DEPLOYED`), and live Discord behaviour stays `NOT TESTED`.
+  (history) Evidence Level was **NONE for `M12/T2.2-R3`** at materialization — nothing in that contract was validated
+  yet.
   (History, `M12/T4-R1`: **REMOTE-BACKED for its repository gates** — `LOCAL-VERIFIED` at every item commit and over
   the final tree on this host (1595 / 1546 pass / 0 fail / 49 skipped, policy passed), then read back from the remote
   runs at the closed head `9a0e398`: CI **`38992022348`** `quality-gate` **SUCCESS** (`1595 / 106 suites / 1542 pass /
@@ -1880,7 +1950,7 @@ code change.
 
 | Band | Subject | Ids | Fix-risk tier | Prerequisite owner decision | Authorization |
 | --- | --- | --- | --- | --- | --- |
-| `M12/T2.2-R3` | Skill Store lifecycle | 18 | medium (the `l1` correction above) | **H5** (`R5-E03-07`) and **H8** (`R5-E04-05`, per the P3 paragraph) — both still pending, and the owner's `r2`/`s1` keep them out of this contract | **authorized 2026-10-17** for `ACTIVE.md`'s `R3-0`…`R3-11` only: 10 findings survive as items, 4 died as premises (`R5-E07-05`, `R5-E04-09`, and two clauses of `R5-E05-04`), and `R5-E04-07`/`R5-E05-08`/the caller half of `R5-E04-08` are excluded by `p1`, `R5-E04-05` by `r2`, `R5-E03-07` by `s1`, `R5-E05-05` pending `t1` |
+| `M12/T2.2-R3` | Skill Store lifecycle | 18 | medium (the `l1` correction above) | **H5** (`R5-E03-07`) and **H8** (`R5-E04-05`, per the P3 paragraph) — both still pending, and the owner's `r2`/`s1` kept them out of this contract | **CLOSED 2026-10-17**, authorized the same day. Eleven items shipped and one lane was added under `n1` (`R3-12`); `R3-0` stays `NOT RUN` because its probe needs an environment carrying `OLLAMA_URL`. Ten findings survived the pre-freeze read as executable items, four premises died (`R5-E07-05`, `R5-E04-09`, and two clauses of `R5-E05-04`), and `R5-E04-07`/`R5-E05-08`/the caller half of `R5-E04-08` stay excluded by `p1`, `R5-E04-05` by `r2`, `R5-E03-07` by `s1`, `R5-E05-05` by `t1` having produced no evidence yet. One shipped item needed a letter mid-band: `R3-6`'s frozen byte predicate was **measured** refusing every real skill body (35/87 Skill Store tests red), escalated, and re-cut under **`A`**; that commit also carries one agent judgment call — a rollback prune, because a refusal for body content left an empty capability directory that failed the store closed — flagged reversible in §8. Evidence: `Record — M12/T2.2-R3 closed`. |
 | `M12/T5` | A2 packaged module graph | 3 | **not assigned by §5.3** — A2 changes how the live plugin resolves source, so it ends at a deployment boundary; this contract proposes "high" and does not promote it to fact | **H6** (`R5-E13-02`); `R1-A02-01` has no §11 tie, and no `--apply`/restart is authorized anywhere in this plan | scheduled, not authorized |
 | `M12/T6` | Knowledgebase block | 14 | medium (`T2.1-R3:291`) | **H9** (`R5-E03-05`). The owner's queue places the H5 answer before this band (§2's queue line), but §11 ties H5 to `R5-E03-07`/`R5-E11-02`, not to any id here | scheduled, not authorized |
 | `M12/T7` | Zink Tools adapter surfaces | 6 | medium (`T2.1-R3:291`) | none recorded in §11 | scheduled, not authorized |
@@ -6755,6 +6825,149 @@ it scheduled: `M12/T2.2-R3`, `M12/T5`, `M12/T6`, `M12/T7`, `M12/T8` and `M12/T3`
 authorized`, and §4.17 is where each finding's disposition and re-verification duty is recorded. Deployment stays
 unauthorized; live Discord behaviour stays `NOT TESTED`; `verify.mjs` and the R16 rehearsal stay `NOT RUN`.
 
+### Record — `M12/T2.2-R3` closed: eleven items, one `NOT RUN`, one frozen prescription refuted in execution (2026-10-17)
+
+**What ran.** The Skill Store lifecycle band, materialized from the owner's `grant` with his fork answers
+`p1 q1 r2 s1 t1`, executed from head `7996a16` and closed at `04cdbd6`.
+
+**Correction to four `M12/T2.2-R3` statements in three earlier §8 records.** The `M12/T2.2-R2` Wave B closeout says it
+"scheduled and not authorized" (in its `l1` identifier note) and "scheduled only" (in its "Not done, and not claimed"
+list); the `M12/T2.3-R1` Wave C closeout says it "remains scheduled, not authorized"; the `M12/T4-R1` closeout's "What
+this contract did NOT do" lists it among the unauthorized bands. Each was true when written and is left standing as
+history, because rewriting an accepted §8 line is a separate owner word. The band was authorized later on 2026-10-17
+and is now closed. `M12/T5` through `M12/T8` and `M12/T3` genuinely remain scheduled-but-unauthorized.
+
+**Per-item commits and what each actually proved.**
+
+| Item | Commit | What it changed | Evidence |
+| --- | --- | --- | --- |
+| `R3-0` | none possible | read-only probe of the embedding endpoint identity fields | **NOT RUN.** The probe prints key names only and sits in Git-ignored `temp/` (`/temp/*`), so it is a local working artifact, not tree evidence and not something the owner can recover from a clone; this host carries no `OLLAMA_URL`, so it reports absent. `R5-E05-05` therefore still has no evidence. |
+| `R3-1` | `8390a68` | staging residue is recognized by the grammar the writer produces, not by the promoting caller's version | `T2g` + mutation probe |
+| `R3-2` | `812b8ec` | a version directory missing **either** member is healed; a complete pair with different bytes is still a conflict | `T2h`, probe killed the missing-member count |
+| `R3-3` | `b604618` | `ALREADY_ACTIVE` binds the decision it claims to confirm (last `decision_ref` plus provenance) | `T2i`: a second decision ref now refuses `SKILL_VERSION_CONFLICT` |
+| `R3-4` | `04d6679` | the promotion refusal names the diagnostic it found | `T2j`: message matches `/DIRECTORY_GRAMMAR_INVALID/` |
+| `R3-5` | `74c42df` | `writerError` carries an additive `details` cause array at the 7 identity and 3 catalog sites | `T2k`; two probes (emptied identity token, emptied catalog array) each reddened it |
+| `R3-6` | `223470f` | `INVALID_SKILL_CONTENT` at scan time, byte set per owner `A` | `T2l` plus the sync-before-SQL test; three probes (guard, exemptions, prune) each reddened exactly one assertion |
+| `R3-7` | `1bab75d` | `failSql` is one `DO $$` block: both digests refreshed, segments deleted, taxonomy derived, zero-digest stand-in removed | `R3-7` shape test **and** a scratch-database real-PostgreSQL run: READY with 2 segments, then a failed sync giving `ACTIVE\|FAILED\|<manifest digest>\|office` with **0** segments; the probe with the delete removed returned 2 |
+| `R3-8` | `5257ca4` | an absent namespace is `AMBIGUOUS`, not `general` | new `R3-8` test over four absent-namespace shapes; `BUG-11` verdicts unchanged; restoring `&& nsList.length > 0` reddened it |
+| `R3-9` | `04e128f` | the envelope requires its taxonomy; non-string content is coerced | header bytes asserted in full against `SEMANTIC_CONTRACT_VERSION`; defaults restored gave "Missing expected exception", coercion removed gave `content.trim is not a function` |
+| `R3-10` | `e7aee21` | `validateArtifactLogicalPath` returns the normalized path; unreachable branch deleted | measured against the pre-change module over 36 inputs: **0 verdict differences**, 2 return-value differences (both backslash spellings), `isArtifactLogicalPathValid` full parity; reverting the return reddened `AC 36` |
+| `R3-11` | this record | record sync | §3 milestone cell, §4, §4.17.1, §8, §10, CHANGELOG, and the Git-ignored register (`.agents/states/findings.md`) — the tracked disposition source is §4.17, not the register |
+| `R3-12` | `04cdbd6` | real-PostgreSQL lane for `failSql`, granted by `n1` | `R3-12` executes in both lanes; removing the segment `DELETE` reddens its last assertion |
+
+**The refutation that happened during execution, not before it.** `R3-6` as frozen instructed me to reuse
+`vector-sync.mjs:77-88`'s `cp < 0x20 || cp === 0x7f` over the whole `SKILL.md` body. That predicate belongs to
+identity segments — its own comment says so — and `0x20` is the first printable byte, so it refuses `\t`, `\n` and
+`\r`. Measured before writing anything else: 6/6 tracked `SKILL.md` files contain `\n`; applying the frozen text
+reddened **35 of 87** tests across the four Skill Store suites (log kept locally in Git-ignored `temp/`, so the count is
+this session's measurement, not a tree artifact), and because
+`validateVersion` is also the staged-validation path, the writer would have refused every multi-line promotion. The
+item stopped, was recorded in the band notes, and went back as a four-option block; the owner answered **`A`** —
+same file, same position, same diagnostic code, same mutation probe, but only `0x09/0x0a/0x0d` exempt. The exemptions
+are pinned by a test because they are the entire difference between a guard and a store that cannot hold markdown.
+
+**The four that died in the pre-freeze read, so no later band re-admits them.** Four of this band's 18 findings were
+re-checked against `7996a16` before the contract was frozen and their premises did not survive; none shipped a fix,
+because each would have "fixed" a defect that does not exist. Full text in the archived contract's §0
+(`docs/contracts/execution/archive/2026-10-17-M12-T2.2-R3.md`).
+- **`R5-E07-05`** — the capability filter "can never match". `catalog.mjs:31`'s `SLUG` is enforced on
+  `identity.capability` and re-checked by the adapter, so both sides are kebab-lowercase and the `NO_MATCH` path is
+  unreachable. Residual is duplicate-grammar drift — a consistency note, not a defect, and `AGENTS.md` §8 forbids
+  buying it with a normalizing layer.
+- **`R5-E04-09`** — "lock hold time scales with count up to the ceiling". `DEFAULT_LOCK_TIMEOUT_MS` is an
+  *acquisition* timeout for contenders, not a hold limit, and the 1,000-manifest ceiling only appends an error; it
+  never truncates the walk. Wrong in both halves.
+- **`R5-E05-04`'s retrieval clause** — stale segments "crowding out" valid results. The adapter builds
+  `status='ACTIVE'` and `sync_status='READY'` into `WHERE` **before** `ORDER BY`/`LIMIT`, so they cannot crowd out
+  anything after the limit. Only the three real clauses of that finding shipped, as `R3-7`.
+- **`R5-E05-04`'s `recordedHash || "0".repeat(64)` fabrication clause** — dead code: `catalog.mjs:326-329` makes a
+  valid `content.sha256` mandatory and the sync aborts on any catalog error, so `source_sha256` was always the real
+  digest. The fallback was deleted as part of `R3-7`, not "fixed" — which is also why `R3-7`'s `assertHexDigest`
+  cannot throw on the failure path.
+
+**One judgment call of mine, flagged and reversible.** `A` made "refuse a body for its content" reachable for the
+first time, and the refusal left the capability directory **empty**. `walk` reports an empty capability directory as
+`DIRECTORY_GRAMMAR_INVALID`, so one bad body failed the store closed and denied every later promotion — measured as
+`SECOND_PROMOTION_REFUSED= CATALOG_INVALID ["PREEXISTING_CATALOG_ERRORS","DIRECTORY_GRAMMAR_INVALID"]`. The writer's
+rollback now calls the `R3-1` prune (`catalog.mjs:1403`). It is one line inside a file the item already touched, and
+removing it reddens `T2l`. No instruction asked for it, so it is the owner's to redirect.
+
+**Gates, read from their own output.** `npm run verify` ran after every item and over the closed tree, with the
+status written into the log by the same command (`NPM_VERIFY_EXIT=…`) instead of taken from a pipe. Final:
+**1606 tests / 1557 pass / 0 fail / 49 skipped**, exit **0** — and the closeout tree re-ran it after the archive, the
+deletion and the review fixes produced the identical counts (`1606 / 106 suites / 1557 / 0 / 0 / 49`, 241 s,
+`Repository policy check passed.` on the line above the recorded exit). `repo:check` **PASS** at each item. The WSL lane over the
+DB-visible sets (`m11-t1-skill-vector-sql`, `m11-t1-postgres-sql-gate`, `m8-t1-skill-vector-memory`) was read as
+counts: **26 pass / 0 fail / 0 skipped** — and the zero-skip reading matters, because both real-PostgreSQL gates
+executed there and not only on Windows. Python lane **NOT RUN**: no file under `apps/knowledge/` is in the diff, only
+two of them are read by gate tests. Two red lanes are attributed by measurement rather than explained away: the first
+`R3-7` verify failed two asset/preflight tests at a 30-minute child timeout (`R13 C2`, `R8`) and both pass standalone
+in about 2.2 seconds at the same tree; the first `R3-6` verify failed `tests/m8-t2-file-lock.test.mjs:64` with `EPERM`
+on the `mkdir` lock primitive and that file is 7/7 alone. Both were re-run clean.
+
+**Packaging, re-measured at the closed head.** The four source files this band edited are still absent from
+`governancePluginFiles()`, and their digests appear in no tracked file, so **zero digest rolls and zero admissions**
+were made. The packaged governance entrypoint was not touched (`p1`). No schema, no migration, no dependency, no
+lockfile, no `.github/workflows/**`, no new or widened required gate, no `--apply`, no restart, no Discord request, no
+tracked file deleted, and `AGENTS.md` was not edited.
+
+**Recorded, not fixed, with the reason.** `R5-E04-07`, `R5-E05-08` and the caller half of `R5-E04-08` (`p1`);
+`R5-E04-05` retirement (`r2`, H8); `R5-E03-07` schema ownership (`s1`, H5); `R5-E05-05` (awaits `R3-0` evidence). The
+`r2`/`s1` exclusions are not a restatement of the letters — the verified evidence behind each is §11's, and this band
+changed neither row: H8's prerequisite is that applied migrations are keyed on **filename only**, so editing `003`'s
+`CHECK` in place is a silent no-op on an already-migrated database, and H5 must be decided on **DDL placement alone**
+because §9's only imperative about a peer's store is prefixed *cross-project*.
+The dotted-task-id limitation is **two** regexes — `catalog.mjs:34` `DECISION` **and** `:36` `PLAN_REF`, both carrying
+`(?:T|S)[1-9][0-9]*-R…` — which corrects the single-regex claim in the escalation list. `isArtifactLogicalPathValid`
+is an export with zero consumers. `skill-adapter.mjs:837-841` defaults to `["specialist"]`, vetted at `:55` yet
+unresolvable in `KNOWN_TAXONOMY_MAP`, so a namespace-less proposal dies `SKILL_TAXONOMY_INVALID`; `R3-8` sharpens that
+observation and does not resolve it. `zink-excel.schema.json:15,24,35,48,61` gives `file_path` no pattern while
+`zink-python` has one. The withdrawn-task-id recurrence guard would widen `repo:check`. `H10`, `CHANGELOG.md:430` and
+`:861`, the `AGENTS.md:3` audience line, and `K-2`'s `404` for a corrupt run row all stay the owner's.
+**Two new entries from this band:** the real-DB gate applies **only** `003_skills_vector_schema.sql`
+(`tests/m11-t1-postgres-sql-gate.test.mjs:107-111`), so any future forward migration is invisible to it (→ `M12/T8`);
+and `boundedReason` now rides inside a `DO $$ … $$;` body, so an error message containing `$$` would truncate the
+block — it fails closed and the READY path has carried the same exposure already, so this joins an existing class
+rather than creating one, but it is still unguarded.
+
+**Locator drift this band caused, measured at the closed head.** `catalog.mjs` gained 151 lines and lost 22,
+`vector-sync.mjs` 50/25, `semantic-contract.mjs` 27/6, `path-safety.mjs` 7/6, so every `file:line` an **earlier** §8
+record cites for those four files is now further from the code — `getActiveSkill` moved `:776`→`:811` with this band,
+and the `M10/T2-R20` record's `catalog.mjs:738` was already ~38 lines off before it (`:738` is inside `walk` at this
+head). Those records are accepted history and were not rewritten; the tracked-locator sweep is a `M12/T5`–`T8` record
+task, not a fix to be smuggled into a closeout. Every locator in *this* record and in §4/§4.17.1/§10/§11 was re-read at
+`04cdbd6`, including §11's H8 row (`catalog.mjs:45` status enum, `:419-424` legal lifecycle sequence — both still
+true). The archived contract's own §0 drift list is pre-band vintage by construction: it was measured at `7996a16`.
+
+**Review convergence, and what it found.** One read-only pass over the band's own diff and record, before the closeout
+commit, found five defects in the record and none in the shipped behaviour. Four were fixed in the closeout commit:
+§3's M12 milestone cell still announced the band as "authorized and executing … with nothing yet validated"; the Task
+Status field claimed the `R3-0` probe was **committed** at a `temp/` path when `.gitignore:20` (`/temp/*`) keeps that
+whole directory out of the tree, and the same overstatement sat in the `R3-0` row and in the `R3-6` refutation's log
+citation; the §4.17 refuted-premise dispositions were not in §8 at all (the paragraph above now carries them); and the
+"scheduled, not authorized" claim survives in four statements across three earlier records, which the correction
+paragraph above now names individually instead of pointing at one. The fifth — the stale `file:line` citations inside
+accepted historical records, described in the drift paragraph — is not this band's to rewrite, so it is recorded and
+routed. The pass also re-tested the code half of the band's riskiest claim — `R3-7`'s removal of the
+`|| "0".repeat(64)` stand-in, which would have dropped the failure row entirely if `recordedHash` could ever be absent
+— and confirmed it from `catalog.mjs:326-329` (a valid `content.sha256` is mandatory), `:610-617` (it must match the
+bytes) and `vector-sync.mjs:565-574` (the sync returns `CATALOG_INVALID` before any record reaches the loop).
+
+**Four process faults of mine during the band, recorded because this band's subject was record honesty.** None of them
+reached a commit and none changed a shipped byte. (1) A `CHANGELOG.md` edit swallowed the opening of the neighbouring
+`M12/T4-R1` bullet and merged two entries into one; repaired in the working tree, and the file's net diff for this band
+re-reads as **1 insertion / 0 deletions** with both bullets present. (2) A `.agents/states/findings.md` edit deleted
+the `## R3-6 STOPPED` heading, which was re-added. (3) A shell heredoc used to append to `PLAN.md` failed on apostrophe
+quoting — the write never happened, and the file edits went through the editing tool instead, so nothing truncated
+landed. (4) An oversized single-line byte sweep was killed for length and rewritten as a script under Git-ignored
+`temp/`. The pattern in all four is one this band exists to guard against: an edit that reports success is not evidence
+that the file is what it claims, which is why every claim in this record was re-read from the tree before the closeout
+commit instead of trusted from my own tool output.
+
+**Evidence level.** `LOCAL-VERIFIED`. `REMOTE-BACKED` is withheld until a run for the closed head is dispatched by hand
+(`ci.yml:6-7` is `main`-only, decision `H1`) and read from that run's own log; any such dispatch appears under the
+owner's login and will be disclosed. Deployment is not authorized by anything in this record.
+
 ## 9. Deferred beyond V1
 
 Unless separately approved:
@@ -6781,6 +6994,9 @@ Unless separately approved:
 | OpenClaw               | External runtime/orchestrator and task-mode classifier.                                                                                                                                                                                    |
 | n8n                    | Deterministic workflow/trigger/schedule plumbing.                                                                                                                                                                                          |
 | Changelog              | Validated fixes belong in `CHANGELOG.md` `### Fixed` at task DoD (owner ruling 2026-10-17: "changelog.md vẫn thay đổi chứ, cập nhật fix bug"). This supersedes only the **additive** half of `n5a`: `M12/T2.1`/`T2.2`/`T2.3` are now recorded. Rewriting an already-accepted historical line (e.g. `CHANGELOG.md:430`/`:861`, which still promise `REAL_EXECUTED`) remains a separate explicit grant, because that is mutating accepted evidence. |
+| Refuted prescription | Owner answer `A` (2026-10-17, `M12/T2.2-R3` `R3-6`): when a frozen contract detail is **measured** wrong during execution, the item stops, the evidence is recorded, and the owner re-cuts it — the approved placement, diagnostic code and mutation probe stay, only the wrong part changes. He chose the option that keeps the guard stricter than the two fatal bytes (`0x01–0x08`, `0x0e–0x1f`, VT/FF, DEL all refused) and exempts exactly `0x09/0x0a/0x0d`, accepting that the exemption must be pinned by a test so no later band can widen or narrow it silently. Options B (NUL+ESC only), C (the frozen verbatim predicate, measured 35/87 red) and D (drop the item) were not taken. |
+| Grants are worth their named lines | Owner answers `n1 được` and `n2 ừ và làm cho hết findings` (2026-10-17). `n1` admitted **one** file, `tests/m11-t1-postgres-sql-gate.test.mjs`, executed as `R3-12`, and did not touch `M11-06`'s accepted assertions — the new lane duplicates the scratch-database prologue rather than refactoring it. `n2` authorized **planning** `M12/T5` only: no `M12/T5` code exists, and "làm cho hết findings" is read as the standing order to keep executing the reported set, not as a waiver of the per-band approval or a reversal of `p1`/`r2`/`s1`/`giữ nguyên AGENTS.md`. |
+| Agent judgment calls | A fix the owner did not order may ship inside an authorized item when the item's own change makes the defect reachable, and it must be named as the agent's, marked reversible, and put in the next report. Applied at `M12/T2.2-R3`: one rollback prune (`catalog.mjs:1403`) because a first-time-reachable content refusal would otherwise leave an empty capability directory that fails the whole store closed. |
 
 ## 11. Ledger of open owner decisions — H1–H11 (TRACKED AUTHORITY)
 
