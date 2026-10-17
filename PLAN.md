@@ -6424,6 +6424,136 @@ empty directories and `preflight-lineage` appears nowhere outside the test file 
 file-ownership collision handled by sequence ( `B-7` before `B-8` in `workflow.mjs`, `B-11` before `B-12` in
 `ledger.mjs`, `B-13` before `B-14` in `main.py`) and no item authorized to delete a tracked file.
 
+### Record — `M12/T2.2-R2` Wave B closed: 21 items, 4 follow-ons, and three premises of mine that were wrong (2026-10-16)
+
+**What landed.** All twenty-one §4 items, one commit each, in the frozen §4 order, plus four items that only appeared
+because the wave was being executed: `a62962b` (J-1), `fabaf5b` (K-1), `9891d83` (L-1), `07c31b5` (M-1). Mapping is
+`B-1` `a108cde`, `B-2` `c449cd0`, `B-3` `d34c666`, `B-4` `33f0971`, `B-5` `b7d9d36`, `B-6` `3701804`, `B-7`
+`6f3c970`, `B-8` `a21c610`, `B-9` `0d399d3`, `B-10` `46852f3`, `B-11` `937521c`, `B-12` `f93068e`, `B-13` `7bc3e5d`,
+`B-14` `f316c83`, `B-15` `7aebc39`, `B-16` `5c156d4`, `B-17` `0dddea4`, `B-18` `3f3bb11`, `B-19` `9fa6505`,
+`B-20` `a473907`, `B-21` `5d5f8f0`.
+
+**Three of my own claims in this contract were false, and each is corrected here rather than quietly re-worded.**
+
+1. **`§0.5-H`/`§0.5-I`: "no `configure.mjs` admission is needed".** I read one grep as a proof. The live runtime
+   carried `5966d446…`, B-16 rolled the current build to `fceefc0d…`, and `R13 P1` went red **on WSL only** — the
+   Windows lane skips that assertion, so `npm run verify` stayed green over it. Fixed under grant `j1`; `R13 P6` now
+   re-derives the admitted digest from `3cb8274` through `governancePluginFiles()` instead of trusting a text search.
+2. **The `R7 P1` row in the Evidence Level field** described Wave A's WSL failure as a single live-drift item and
+   classed it as baseline. It was the visible tip: a read-only sweep of all 35 governed paths found **nine** in the
+   same state, i.e. `--preflight` refused the deployed extension outright, and `configure.mjs` has no drift override
+   (`--preflight`, `--apply`, `--dry-run` only). Cause is this programme's own earlier commits rolling packaged builds
+   without admitting the outgoing digest — `61638d8` for `lib/authority.mjs`, `09aa698` for `lib/guard.mjs`, and the
+   `6b0ea0a` / `c680a28` / `c1ad4b3` / `3cb8274` builds the live tree actually carries. Fixed under grant `m1`.
+   Attribution was measured, not argued: the same sweep against a scratch worktree at `fabaf5b^` returned the
+   identical nine, so J-1 and K-1 did not cause it. **Systemic finding: only 3 of 35 governed paths had any
+   live-reachability assertion before `M1 4`.** That gate is the reason this class was invisible.
+3. **The `l1` option name.** I offered the Skill Store lifecycle block as `T2.4`; that label already named
+   the A2 block in the withdrawn R2 grouping, and `M12/T2.1-R3` §5.3 withdrew `T2.4`–`T2.7` altogether. His decision
+   is recorded with the intent intact and the identifier corrected to **`M12/T2.2-R3`**, scheduled and not authorized.
+   (The A2 block this note refers to is `M12/T5` as of `M12/T4-R1` `T4-2`; see §4.17.)
+
+**Item-level notes worth carrying forward.** B-16 stalled a full owner round because *one* production file is pinned
+by three assertions hashing three different inputs; `B-21` (`5d5f8f0`) turned that coincidence into an asserted fact
+(`R6 0d`: packaged bytes must equal working-tree bytes), so a future packaging rewrite fails a gate instead of
+splitting one fact in three. B-19's `heartbeats >= 5` measured the host's timer resolution, not liveness — the gate
+now asserts one tick for liveness and the timeout **by code** for the deadline. K-1 found that the middle disjunct of
+`guard.mjs:1977-1981` has **no producing event sequence** (`WORKFLOW_BRIEF_ACTIVATED` alone advances
+`task.brief_revision`, `workflow.mjs:1508`, and is gated on `workflow_status === "ACTIVE"` at `:1234`, which a task
+with a reserved delegation can never be); the test asserts that refusal instead of fabricating a fixture.
+`M 1`'s first sweep mis-reported `index.mjs` because it read only the asset table — the entrypoint is admitted by the
+two per-mode lists at `configure.mjs:1497`/`:1764` — and that false positive was corrected before anything was
+admitted.
+
+**Gate state at closeout.** Windows `npm run verify` **`verify_exit=0`**, `1590 tests / 1541 pass / 0 fail /
+49 skipped`, `Repository policy check passed.` The first M-1 run was **red** (`verify_exit=1`) on
+`execFileSync` unused in the new test, and because `lint` precedes `npm test` that run proved nothing about the
+suite — re-run after the fix. WSL: eight `configure.mjs`-reading files **114/114**, asset predecessor cluster **90/90**,
+M-1 gate **13/13** with `R13 P1` and `R7 P1` both green. Python lane **204 passed / 4 skipped / 34 subtests**.
+Known-red register for this tier now has **one** entry: `R16-DRIVER-05` (the standing dead rehearsal). CI at the
+closed head is run **`38927821839`** @ `afa9721`: `quality-gate` **SUCCESS** (`1590 tests / 1537 pass / 0 fail /
+53 skipped`, `Repository policy check passed.`) and `python-quality` **SUCCESS** (`208 passed, 34 subtests`). It
+exists only because the run was dispatched by hand — `ci.yml:6-7` triggers on push to `main` alone, so a task-branch
+push starts nothing, which is open decision **H1**. The `Security` workflow was not run at this head and is
+recorded `NOT RUN`.
+
+**Not done, and not claimed.** No deployment (`--apply` was never authorized here; the nine-path refusal is now
+cleared, but installing anything is a separate grant). Live Discord behaviour remains `NOT TESTED`. Wave C
+(`M12/T2.3`) has **no contract and no code** — it needs its own Plan Revision and `Execution Authorization: YES`, and
+`4A.12` must be re-scoped there because `R6-V04-04` refuted its premise. `M12/T2.2-R3` is scheduled only. `K-2`
+(`get_index_run` answering `404` for a corrupt row) was **not granted** and stays in the contract's §5 exclusion list,
+now archived. `guard.mjs`'s two `REASON_UNDECLARED`-only discard paths were fixed by K-1; the run-row decode defect
+and the three H-decisions still open in §11 are not touched.
+
+### Record — `M12/T2.3-R1` Wave C closed: 12 items landed, two claims died, and one grant I had forgotten to schedule (2026-10-17)
+
+**What landed.** Twelve items, one commit each, in contract order: `C-1` `3685548`, `C-2` `3248f60`, `C-3` `e47e660`,
+`C-4` `68fe25b`, `C-5` `0ccdd81`, `C-6` `5e798aa`, `C-7` `a4ed77d`, `C-8` `1ced55b`, `C-9` `8bde65f`, `C-10` `3506e80`,
+`C-11` `5ac1540`, `C-13` `d9e1bcc` — plus a review-convergence fix to `C-4` (`cd1b541`) and the materialization commit
+(`3faf040`). `C-12` was **dropped before execution** and `C-1a` (the five-stack caveat) landed last at `7d73e18`.
+
+**Two inherited claims died in verification, and one was mine.** `C-12`'s bookkeeping premise was false:
+`.agents/states/findings.md:4215` already reads `Status: CLOSED by M12/T2.2-R2 B-15 (7aebc39)`, and `PLAN.md:6163` is
+item 8 of Wave B's **refuted-premise** list, not an open finding — so there was nothing to reconcile, and a state file
+is not authority anyway (`AGENTS.md` §6). `C-11`'s "35-vs-37 drift" was also false: 35 installed paths is Deployment
+**A** (2026-10-13, the M12/T2-R2 build) and 37/37 packaged paths is Deployment **B** (2026-10-14, the build that
+installed `18fbb077…`) — two correct counts of two different deployments. Only the vocabulary half of `4.9` survived.
+The third correction is against **my own proposal message**: I told the owner Gate G18 carried four `live: "PASS"`
+sites; it carries **five** (`:337, :345, :353, :393, :417`), and the deeper fact is that the assertion block
+(`:423-432`) loops over `state`, `contract` and `mock` and **never read `live` at all** — so the false column was not
+merely wrong, it was unasserted. `C-4`'s count also came down from the register's 8 to the 3 rows that actually
+contradict their own adapter headers.
+
+**The item that mattered most was the one nobody scheduled.** `n1a` granted a caveat line on `docs/architecture/five-stack.md`
+and my own materialization put that file in §3's scope but gave it no §4 item — so the grant sat unused until the
+closeout review found the omission. `7d73e18` executes it: `authority.mjs:581-582` binds `o1` to
+`infrastructure`+`data_plant` and `o2` to `semantic`+`intelligence`+`decision`, while the table's Coordinator column
+inverts three rows. The rewrite stays in `M12/T3` as the owner assigned. Lesson recorded: a grant in a contract's
+header is not an item; if it is not in §4 it does not happen.
+
+**Gate evidence.** Baseline before any edit: Windows `npm run verify` exit 0 — **1590 / 106 suites / 1541 pass / 0 fail
+/ 49 skipped**, `Repository policy check passed.` Final tree: exit 0 — **1595 / 1546 pass / 0 fail / 49 skipped** (the
++5 are `C-9`'s two tests and `C-13`'s three). Each item ran the full gate at its own commit, not a subset. WSL lane
+(§6.2, mandatory because WSL exits 0 even when tests fail — the counts were read, never inferred from the exit code):
+`C-4` **12/12** twice (before and after `cd1b541`), `C-9` **2/2**, `C-13` **35/35**, all with zero skips and zero
+failures. Mutation probes, each with the mutation confirmed in the file before the probe was believed: `C-4` three
+(red-before on the unfixed README, flip one row back → kills exactly `Streamlit`, rename `Cloudflare R2` → kills
+exactly the new coverage assertion), `C-9` red-before (`undefined` vs `zink-semantic-v2`), `C-13` two real-tree probes
+through `npm run repo:check` (delete the `test:m8` row → exactly one failure naming it; invent a `release` row →
+exactly one failure naming it) plus the synthetic pair in `tests/repository-policy.test.mjs`. Python lane **NOT RUN**:
+`git diff --name-only 3d0a0f8..HEAD` contains **0** files under `apps/knowledge/`, so no Python gate was affected —
+recorded as not-run-with-reason rather than folded into the pass. `npx prettier --check` and `markdownlint-cli2` clean
+on every edited file; `npm run repo:check` exit 0 after `C-13`.
+
+**Documentation truth re-measured (§6.7) at the final head:** `fourth logical module` → **0** hits in tracked docs;
+`skill-store validate` inside the Model-visible block → **0**; `REQUIRED_SCRIPTS` **9** == registry rows **9**;
+`NOT TESTED` defined in `PLAN.md` §2 → **1** of 18 uses now covered by a definition; `Cursor` in the protocol's role
+lines → replaced by `dsh` (2 sites). One acceptance criterion of mine was itself wrong: §6.7 asked for
+"`REAL_EXECUTED` in README → 0 hits", but the correct end state is *one* hit — the sentence that says the bridge
+refuses to emit it. And `CHANGELOG.md` carries **two** stale `REAL_EXECUTED` claims (`:430` and `:861`), not the one
+the proposal knew; both left as validated history per `n5a`.
+
+**Discovered while executing, recorded and NOT fixed.** `zink-skill-store/src/catalog.mjs:34`'s `DECISION` regex
+admits only `PLAN:M<n>/T<n>-R<n>`, so a manifest lifecycle event **cannot cite a dotted task id** —
+`PLAN:M12/T2.3-R1` is rejected as "A lifecycle event is invalid." The repository's own current task ids are dotted.
+That is a schema decision (RED) and the fixture uses `PLAN:M12/T2-R1` to stay inside scope. Also mine, also recorded:
+during `C-13` an edit briefly deleted `const result = spawnSync(` from `runGit` in `scripts/repository-policy.mjs`;
+it was repaired inside the same item before any commit, and the final file is proven intact by 35/35 policy tests plus
+the full-suite runs on both hosts.
+
+**Still not done, and not claimed by this record:** deployment (never authorized in this wave), live Discord behaviour
+(`NOT TESTED`), `verify.mjs` (`NOT RUN`), and the R16 rehearsal (`NOT RUN`, still the dead rehearsal). **CI was read
+back after the push and is cited in §4's Evidence Level:** run `38944576084` @ `71c2bff` — `quality-gate` SUCCESS
+(`1595 tests / 106 suites / 1542 pass / 0 fail / 53 skipped`, `Repository policy check passed.`) and `python-quality`
+SUCCESS (`208 passed, 34 subtests`); Security run `38944579971` — `secret-scan` SUCCESS (`✅ No leaks detected`, the
+check that matters once a 315-line contract becomes tracked history) and `dependency-audit` failure on the unchanged
+5-high baseline. CI's 53 skips against this host's 49 is the known lane gap, not new evidence. Both runs were dispatched
+by hand because `ci.yml:6-7` triggers on `main` only — open decision **H1**. **Escalated to the owner, untouched by this wave:** `AGENTS.md:3` still addresses "Codex, Cursor,
+subagents" while §3 defines only Codex/dsh/Subagents; `docs/development/conventions.md:26` still says "Cursor execute
+và handoff"; `P04-02`'s owner-of-claim column (deferred by `n4a`); the five-stack table rewrite (`M12/T3`); and
+`CHANGELOG.md:430/:861`. `M12/T2.2-R3` (the Skill Store lifecycle block) and `M12/T3` (H11) remain scheduled, not
+authorized.
+
 ## 9. Deferred beyond V1
 
 Unless separately approved:
@@ -6566,133 +6696,3 @@ never run end to end, so T3 must inherit or precede that repair.
 `R1-A04-01` in the remediation wave (guard reads `AGENT_STACK_POLICY`) leaves `docs/architecture/five-stack.md`
 describing the **opposite** org chart until T3 lands. That is a knowingly-accepted, time-boxed doc/code divergence,
 recorded here so no later reader mistakes the document for current truth.
-
-### Record — `M12/T2.2-R2` Wave B closed: 21 items, 4 follow-ons, and three premises of mine that were wrong (2026-10-16)
-
-**What landed.** All twenty-one §4 items, one commit each, in the frozen §4 order, plus four items that only appeared
-because the wave was being executed: `a62962b` (J-1), `fabaf5b` (K-1), `9891d83` (L-1), `07c31b5` (M-1). Mapping is
-`B-1` `a108cde`, `B-2` `c449cd0`, `B-3` `d34c666`, `B-4` `33f0971`, `B-5` `b7d9d36`, `B-6` `3701804`, `B-7`
-`6f3c970`, `B-8` `a21c610`, `B-9` `0d399d3`, `B-10` `46852f3`, `B-11` `937521c`, `B-12` `f93068e`, `B-13` `7bc3e5d`,
-`B-14` `f316c83`, `B-15` `7aebc39`, `B-16` `5c156d4`, `B-17` `0dddea4`, `B-18` `3f3bb11`, `B-19` `9fa6505`,
-`B-20` `a473907`, `B-21` `5d5f8f0`.
-
-**Three of my own claims in this contract were false, and each is corrected here rather than quietly re-worded.**
-
-1. **`§0.5-H`/`§0.5-I`: "no `configure.mjs` admission is needed".** I read one grep as a proof. The live runtime
-   carried `5966d446…`, B-16 rolled the current build to `fceefc0d…`, and `R13 P1` went red **on WSL only** — the
-   Windows lane skips that assertion, so `npm run verify` stayed green over it. Fixed under grant `j1`; `R13 P6` now
-   re-derives the admitted digest from `3cb8274` through `governancePluginFiles()` instead of trusting a text search.
-2. **The `R7 P1` row in the Evidence Level field** described Wave A's WSL failure as a single live-drift item and
-   classed it as baseline. It was the visible tip: a read-only sweep of all 35 governed paths found **nine** in the
-   same state, i.e. `--preflight` refused the deployed extension outright, and `configure.mjs` has no drift override
-   (`--preflight`, `--apply`, `--dry-run` only). Cause is this programme's own earlier commits rolling packaged builds
-   without admitting the outgoing digest — `61638d8` for `lib/authority.mjs`, `09aa698` for `lib/guard.mjs`, and the
-   `6b0ea0a` / `c680a28` / `c1ad4b3` / `3cb8274` builds the live tree actually carries. Fixed under grant `m1`.
-   Attribution was measured, not argued: the same sweep against a scratch worktree at `fabaf5b^` returned the
-   identical nine, so J-1 and K-1 did not cause it. **Systemic finding: only 3 of 35 governed paths had any
-   live-reachability assertion before `M1 4`.** That gate is the reason this class was invisible.
-3. **The `l1` option name.** I offered the Skill Store lifecycle block as `T2.4`; that label already named
-   the A2 block in the withdrawn R2 grouping, and `M12/T2.1-R3` §5.3 withdrew `T2.4`–`T2.7` altogether. His decision
-   is recorded with the intent intact and the identifier corrected to **`M12/T2.2-R3`**, scheduled and not authorized.
-   (The A2 block this note refers to is `M12/T5` as of `M12/T4-R1` `T4-2`; see §4.17.)
-
-**Item-level notes worth carrying forward.** B-16 stalled a full owner round because *one* production file is pinned
-by three assertions hashing three different inputs; `B-21` (`5d5f8f0`) turned that coincidence into an asserted fact
-(`R6 0d`: packaged bytes must equal working-tree bytes), so a future packaging rewrite fails a gate instead of
-splitting one fact in three. B-19's `heartbeats >= 5` measured the host's timer resolution, not liveness — the gate
-now asserts one tick for liveness and the timeout **by code** for the deadline. K-1 found that the middle disjunct of
-`guard.mjs:1977-1981` has **no producing event sequence** (`WORKFLOW_BRIEF_ACTIVATED` alone advances
-`task.brief_revision`, `workflow.mjs:1508`, and is gated on `workflow_status === "ACTIVE"` at `:1234`, which a task
-with a reserved delegation can never be); the test asserts that refusal instead of fabricating a fixture.
-`M 1`'s first sweep mis-reported `index.mjs` because it read only the asset table — the entrypoint is admitted by the
-two per-mode lists at `configure.mjs:1497`/`:1764` — and that false positive was corrected before anything was
-admitted.
-
-**Gate state at closeout.** Windows `npm run verify` **`verify_exit=0`**, `1590 tests / 1541 pass / 0 fail /
-49 skipped`, `Repository policy check passed.` The first M-1 run was **red** (`verify_exit=1`) on
-`execFileSync` unused in the new test, and because `lint` precedes `npm test` that run proved nothing about the
-suite — re-run after the fix. WSL: eight `configure.mjs`-reading files **114/114**, asset predecessor cluster **90/90**,
-M-1 gate **13/13** with `R13 P1` and `R7 P1` both green. Python lane **204 passed / 4 skipped / 34 subtests**.
-Known-red register for this tier now has **one** entry: `R16-DRIVER-05` (the standing dead rehearsal). CI at the
-closed head is run **`38927821839`** @ `afa9721`: `quality-gate` **SUCCESS** (`1590 tests / 1537 pass / 0 fail /
-53 skipped`, `Repository policy check passed.`) and `python-quality` **SUCCESS** (`208 passed, 34 subtests`). It
-exists only because the run was dispatched by hand — `ci.yml:6-7` triggers on push to `main` alone, so a task-branch
-push starts nothing, which is open decision **H1**. The `Security` workflow was not run at this head and is
-recorded `NOT RUN`.
-
-**Not done, and not claimed.** No deployment (`--apply` was never authorized here; the nine-path refusal is now
-cleared, but installing anything is a separate grant). Live Discord behaviour remains `NOT TESTED`. Wave C
-(`M12/T2.3`) has **no contract and no code** — it needs its own Plan Revision and `Execution Authorization: YES`, and
-`4A.12` must be re-scoped there because `R6-V04-04` refuted its premise. `M12/T2.2-R3` is scheduled only. `K-2`
-(`get_index_run` answering `404` for a corrupt row) was **not granted** and stays in the contract's §5 exclusion list,
-now archived. `guard.mjs`'s two `REASON_UNDECLARED`-only discard paths were fixed by K-1; the run-row decode defect
-and the three H-decisions still open in §11 are not touched.
-
-### Record — `M12/T2.3-R1` Wave C closed: 12 items landed, two claims died, and one grant I had forgotten to schedule (2026-10-17)
-
-**What landed.** Twelve items, one commit each, in contract order: `C-1` `3685548`, `C-2` `3248f60`, `C-3` `e47e660`,
-`C-4` `68fe25b`, `C-5` `0ccdd81`, `C-6` `5e798aa`, `C-7` `a4ed77d`, `C-8` `1ced55b`, `C-9` `8bde65f`, `C-10` `3506e80`,
-`C-11` `5ac1540`, `C-13` `d9e1bcc` — plus a review-convergence fix to `C-4` (`cd1b541`) and the materialization commit
-(`3faf040`). `C-12` was **dropped before execution** and `C-1a` (the five-stack caveat) landed last at `7d73e18`.
-
-**Two inherited claims died in verification, and one was mine.** `C-12`'s bookkeeping premise was false:
-`.agents/states/findings.md:4215` already reads `Status: CLOSED by M12/T2.2-R2 B-15 (7aebc39)`, and `PLAN.md:6163` is
-item 8 of Wave B's **refuted-premise** list, not an open finding — so there was nothing to reconcile, and a state file
-is not authority anyway (`AGENTS.md` §6). `C-11`'s "35-vs-37 drift" was also false: 35 installed paths is Deployment
-**A** (2026-10-13, the M12/T2-R2 build) and 37/37 packaged paths is Deployment **B** (2026-10-14, the build that
-installed `18fbb077…`) — two correct counts of two different deployments. Only the vocabulary half of `4.9` survived.
-The third correction is against **my own proposal message**: I told the owner Gate G18 carried four `live: "PASS"`
-sites; it carries **five** (`:337, :345, :353, :393, :417`), and the deeper fact is that the assertion block
-(`:423-432`) loops over `state`, `contract` and `mock` and **never read `live` at all** — so the false column was not
-merely wrong, it was unasserted. `C-4`'s count also came down from the register's 8 to the 3 rows that actually
-contradict their own adapter headers.
-
-**The item that mattered most was the one nobody scheduled.** `n1a` granted a caveat line on `docs/architecture/five-stack.md`
-and my own materialization put that file in §3's scope but gave it no §4 item — so the grant sat unused until the
-closeout review found the omission. `7d73e18` executes it: `authority.mjs:581-582` binds `o1` to
-`infrastructure`+`data_plant` and `o2` to `semantic`+`intelligence`+`decision`, while the table's Coordinator column
-inverts three rows. The rewrite stays in `M12/T3` as the owner assigned. Lesson recorded: a grant in a contract's
-header is not an item; if it is not in §4 it does not happen.
-
-**Gate evidence.** Baseline before any edit: Windows `npm run verify` exit 0 — **1590 / 106 suites / 1541 pass / 0 fail
-/ 49 skipped**, `Repository policy check passed.` Final tree: exit 0 — **1595 / 1546 pass / 0 fail / 49 skipped** (the
-+5 are `C-9`'s two tests and `C-13`'s three). Each item ran the full gate at its own commit, not a subset. WSL lane
-(§6.2, mandatory because WSL exits 0 even when tests fail — the counts were read, never inferred from the exit code):
-`C-4` **12/12** twice (before and after `cd1b541`), `C-9` **2/2**, `C-13` **35/35**, all with zero skips and zero
-failures. Mutation probes, each with the mutation confirmed in the file before the probe was believed: `C-4` three
-(red-before on the unfixed README, flip one row back → kills exactly `Streamlit`, rename `Cloudflare R2` → kills
-exactly the new coverage assertion), `C-9` red-before (`undefined` vs `zink-semantic-v2`), `C-13` two real-tree probes
-through `npm run repo:check` (delete the `test:m8` row → exactly one failure naming it; invent a `release` row →
-exactly one failure naming it) plus the synthetic pair in `tests/repository-policy.test.mjs`. Python lane **NOT RUN**:
-`git diff --name-only 3d0a0f8..HEAD` contains **0** files under `apps/knowledge/`, so no Python gate was affected —
-recorded as not-run-with-reason rather than folded into the pass. `npx prettier --check` and `markdownlint-cli2` clean
-on every edited file; `npm run repo:check` exit 0 after `C-13`.
-
-**Documentation truth re-measured (§6.7) at the final head:** `fourth logical module` → **0** hits in tracked docs;
-`skill-store validate` inside the Model-visible block → **0**; `REQUIRED_SCRIPTS` **9** == registry rows **9**;
-`NOT TESTED` defined in `PLAN.md` §2 → **1** of 18 uses now covered by a definition; `Cursor` in the protocol's role
-lines → replaced by `dsh` (2 sites). One acceptance criterion of mine was itself wrong: §6.7 asked for
-"`REAL_EXECUTED` in README → 0 hits", but the correct end state is *one* hit — the sentence that says the bridge
-refuses to emit it. And `CHANGELOG.md` carries **two** stale `REAL_EXECUTED` claims (`:430` and `:861`), not the one
-the proposal knew; both left as validated history per `n5a`.
-
-**Discovered while executing, recorded and NOT fixed.** `zink-skill-store/src/catalog.mjs:34`'s `DECISION` regex
-admits only `PLAN:M<n>/T<n>-R<n>`, so a manifest lifecycle event **cannot cite a dotted task id** —
-`PLAN:M12/T2.3-R1` is rejected as "A lifecycle event is invalid." The repository's own current task ids are dotted.
-That is a schema decision (RED) and the fixture uses `PLAN:M12/T2-R1` to stay inside scope. Also mine, also recorded:
-during `C-13` an edit briefly deleted `const result = spawnSync(` from `runGit` in `scripts/repository-policy.mjs`;
-it was repaired inside the same item before any commit, and the final file is proven intact by 35/35 policy tests plus
-the full-suite runs on both hosts.
-
-**Still not done, and not claimed by this record:** deployment (never authorized in this wave), live Discord behaviour
-(`NOT TESTED`), `verify.mjs` (`NOT RUN`), and the R16 rehearsal (`NOT RUN`, still the dead rehearsal). **CI was read
-back after the push and is cited in §4's Evidence Level:** run `38944576084` @ `71c2bff` — `quality-gate` SUCCESS
-(`1595 tests / 106 suites / 1542 pass / 0 fail / 53 skipped`, `Repository policy check passed.`) and `python-quality`
-SUCCESS (`208 passed, 34 subtests`); Security run `38944579971` — `secret-scan` SUCCESS (`✅ No leaks detected`, the
-check that matters once a 315-line contract becomes tracked history) and `dependency-audit` failure on the unchanged
-5-high baseline. CI's 53 skips against this host's 49 is the known lane gap, not new evidence. Both runs were dispatched
-by hand because `ci.yml:6-7` triggers on `main` only — open decision **H1**. **Escalated to the owner, untouched by this wave:** `AGENTS.md:3` still addresses "Codex, Cursor,
-subagents" while §3 defines only Codex/dsh/Subagents; `docs/development/conventions.md:26` still says "Cursor execute
-và handoff"; `P04-02`'s owner-of-claim column (deferred by `n4a`); the five-stack table rewrite (`M12/T3`); and
-`CHANGELOG.md:430/:861`. `M12/T2.2-R3` (the Skill Store lifecycle block) and `M12/T3` (H11) remain scheduled, not
-authorized.
