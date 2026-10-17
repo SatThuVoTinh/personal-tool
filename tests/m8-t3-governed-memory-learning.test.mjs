@@ -349,6 +349,65 @@ describe("M8/T3 canonical Skill Store writer", () => {
       await rm(tmp, { recursive: true, force: true });
     }
   });
+
+  test("T2h: a version directory missing its content is healed, and a real conflict still is not", async () => {
+    const { promoteApprovedSkill, scanCatalog } =
+      await import("../zink-skill-store/src/catalog.mjs");
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "zink-torn-"));
+    const skillsRoot = path.join(tmp, "skills");
+    const versionDir = path.join(skillsRoot, "office", "torn-skill", "1.0.0");
+    try {
+      // A crash after the manifest rename and before the content rename: the
+      // pair is incomplete, so the scanner can never accept it and the writer
+      // must not need out-of-band editing to get past its own state.
+      await mkdir(versionDir, { recursive: true });
+      await writeFile(
+        path.join(versionDir, "manifest.json"),
+        JSON.stringify({ schema_version: 1 }, null, 2),
+        "utf8",
+      );
+
+      const content = "# Torn\n\nComplete pair written by the retry.";
+      const res = await promoteApprovedSkill({
+        skillsRoot,
+        namespace: ["office"],
+        capability: "torn-skill",
+        version: "1.0.0",
+        content,
+        requestingActor: "excel",
+        decisionRef: "PLAN:M8/T3-R1",
+      });
+      assert.equal(
+        res.status,
+        "ACTIVE",
+        "an incomplete pair must be healed rather than reported as a conflict",
+      );
+      const after = await scanCatalog(skillsRoot);
+      assert.deepEqual(after.errors, []);
+
+      // The boundary of that healing: a COMPLETE pair with different bytes is a
+      // genuine conflict and must stay one.
+      await assert.rejects(
+        () =>
+          promoteApprovedSkill({
+            skillsRoot,
+            namespace: ["office"],
+            capability: "torn-skill",
+            version: "1.0.0",
+            content: "# Torn\n\nDifferent bytes entirely.",
+            requestingActor: "excel",
+            decisionRef: "PLAN:M8/T3-R1",
+          }),
+        (error) => {
+          assert.equal(error.code, "SKILL_VERSION_CONFLICT");
+          return true;
+        },
+      );
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("M8/T3 durable skill proposals", () => {

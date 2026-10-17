@@ -964,13 +964,25 @@ async function healWriterResidue(skillsRoot, parentDir, versionDir) {
   try {
     const info = await lstat(versionDir);
     if (!info.isDirectory() || info.isSymbolicLink()) return;
-    try {
-      await lstat(path.join(versionDir, "manifest.json"));
-    } catch (error) {
-      if (error?.code === "ENOENT") {
-        await rm(versionDir, { recursive: true, force: true });
-        await pruneEmptyParents(parentDir, skillsRoot);
+    // The scanner recognizes only a complete pair, so an incomplete pair is
+    // residue by the same argument that makes staging residue non-canonical —
+    // whichever of the two members is the missing one. Judging only
+    // `manifest.json` left a directory that held a manifest without content
+    // unhealable: the replay probe read it, failed, and reported
+    // `SKILL_VERSION_CONFLICT` ("already exists with different content") for a
+    // state this writer created and could never re-enter.
+    let missingMembers = 0;
+    for (const member of ["manifest.json", "SKILL.md"]) {
+      try {
+        await lstat(path.join(versionDir, member));
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw error;
+        missingMembers += 1;
       }
+    }
+    if (missingMembers > 0) {
+      await rm(versionDir, { recursive: true, force: true });
+      await pruneEmptyParents(parentDir, skillsRoot);
     }
   } catch (error) {
     if (error?.code !== "ENOENT") throw error;
