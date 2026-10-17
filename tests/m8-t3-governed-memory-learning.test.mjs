@@ -408,6 +408,69 @@ describe("M8/T3 canonical Skill Store writer", () => {
       await rm(tmp, { recursive: true, force: true });
     }
   });
+
+  test("T2i: the same bytes under a second owner decision are a conflict, not ALREADY_ACTIVE", async () => {
+    const { promoteApprovedSkill, scanCatalog } =
+      await import("../zink-skill-store/src/catalog.mjs");
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "zink-decision-bind-"));
+    const skillsRoot = path.join(tmp, "skills");
+    const content = "# Bound\n\nIdentical bytes, two verdicts.";
+    const call = (decisionRef) => ({
+      skillsRoot,
+      namespace: ["office"],
+      capability: "bound-skill",
+      version: "1.0.0",
+      content,
+      requestingActor: "excel",
+      decisionRef,
+    });
+    try {
+      const first = await promoteApprovedSkill(call("PLAN:M8/T3-R1"));
+      assert.equal(first.status, "ACTIVE");
+
+      const replay = await promoteApprovedSkill(call("PLAN:M8/T3-R1"));
+      assert.equal(
+        replay.status,
+        "ALREADY_ACTIVE",
+        "an unchanged governed act must stay idempotent",
+      );
+
+      await assert.rejects(
+        () => promoteApprovedSkill(call("PLAN:M8/T3-R2")),
+        (error) => {
+          assert.equal(
+            error.code,
+            "SKILL_VERSION_CONFLICT",
+            "a second decision over the same bytes may not report success",
+          );
+          return true;
+        },
+      );
+
+      const { readFile } = await import("node:fs/promises");
+      const manifest = JSON.parse(
+        await readFile(
+          path.join(
+            skillsRoot,
+            "office",
+            "bound-skill",
+            "1.0.0",
+            "manifest.json",
+          ),
+          "utf8",
+        ),
+      );
+      assert.equal(
+        manifest.lifecycle.at(-1).decision_ref,
+        "PLAN:M8/T3-R1",
+        "the refused decision must not have been written over the first",
+      );
+      const after = await scanCatalog(skillsRoot);
+      assert.deepEqual(after.errors, []);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("M8/T3 durable skill proposals", () => {

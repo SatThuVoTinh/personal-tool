@@ -1036,7 +1036,10 @@ async function pruneEmptyParents(fromDir, stopDir) {
  *   model-supplied string can become an arbitrary write target;
  * - content_sha256 is the raw SHA-256 of the exact bytes written;
  * - lifecycle is CANDIDATE then ACTIVE in one governed transition;
- * - identical repeat promotion is idempotent (ALREADY_ACTIVE);
+ * - an identical repeat promotion is idempotent (ALREADY_ACTIVE) only when the
+ *   governed decision and provenance being asked about are the ones the record
+ *   already carries; same bytes under a second decision is a conflict, not a
+ *   silent no-op;
  * - same version with different bytes, or another ACTIVE version of the
  *   same capability, is a fail-closed conflict;
  * - the written record is re-validated through scanCatalog and rolled
@@ -1187,13 +1190,26 @@ export async function promoteApprovedSkillUnlocked({
       .update(markdownBytes)
       .digest("hex");
     const recordedHash = existingManifest?.content?.sha256;
-    const lastStatus = Array.isArray(existingManifest?.lifecycle)
-      ? existingManifest.lifecycle.at(-1)?.status
+    const lastLifecycle = Array.isArray(existingManifest?.lifecycle)
+      ? existingManifest.lifecycle.at(-1)
       : null;
+    const lastStatus = lastLifecycle?.status ?? null;
+    // R3-3: two owner decisions over the same bytes are not the same governed
+    // act. `ALREADY_ACTIVE` used to be decided by content alone, so a repeat
+    // promotion carrying a second `decision_ref` reported success while the
+    // first record — and its provenance — stayed on disk with no signal that
+    // the new decision had been dropped. Identity is the version; this is the
+    // check that the record being confirmed is the record being asked for.
+    const sameDecision = lastLifecycle?.decision_ref === decisionRef;
+    const sameProvenance =
+      JSON.stringify(existingManifest?.provenance ?? null) ===
+      JSON.stringify({ source_type: sourceType, references });
     if (
       recordedHash === contentSha256 &&
       currentHash === contentSha256 &&
-      lastStatus === "ACTIVE"
+      lastStatus === "ACTIVE" &&
+      sameDecision &&
+      sameProvenance
     ) {
       return {
         status: "ALREADY_ACTIVE",
