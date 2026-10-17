@@ -824,6 +824,21 @@ function stagingName(version) {
 }
 
 /**
+ * The grammar `stagingName()` produces, for any version. Writer residue is
+ * identified by its own shape rather than by the promoting caller's version:
+ * a killed publisher leaves `<semver>.pending-*` beside the real version
+ * directories, and `walk` reports every such sibling as
+ * `DIRECTORY_GRAMMAR_INVALID`, which nulls `records` for the whole store.
+ * Names that do not carry the marker after a valid version are deliberately
+ * left alone so a genuinely malformed directory still surfaces as an error.
+ */
+function isStagingResidue(name) {
+  const marker = ".pending-";
+  const at = name.indexOf(marker);
+  return at > 0 && VERSION.test(name.slice(0, at));
+}
+
+/**
  * M11/T1-R1 2.3: the store-wide writer lock seam.
  *
  * The lock lives BESIDE `skillsRoot` (its parent directory), never inside it:
@@ -918,23 +933,31 @@ export async function describeVersionRollbackState(versionDir, removalError) {
 }
 
 /**
- * Removes this writer's own residue: stale `<version>.pending-*` staging
- * directories under the capability parent, and an incomplete version
- * directory that holds no manifest at all. Neither is ever canonical —
- * the catalog recognizes only complete validated pairs — so removing
+ * Removes writer residue: stale `<semver>.pending-*` staging directories under
+ * the capability parent — any version's, not only the promoting caller's,
+ * because one killed publisher otherwise blocks every other — and an
+ * incomplete version directory that holds no manifest at all. Neither is ever
+ * canonical: the catalog recognizes only complete validated pairs, so removing
  * them cannot destroy canonical truth.
  */
-async function healWriterResidue(skillsRoot, parentDir, versionDir, version) {
+async function healWriterResidue(skillsRoot, parentDir, versionDir) {
   try {
     const entries = await readdir(parentDir);
+    let swept = false;
     for (const entry of entries) {
-      if (entry.startsWith(`${version}.pending-`)) {
+      if (isStagingResidue(entry)) {
         await rm(path.join(parentDir, entry), {
           recursive: true,
           force: true,
         });
+        swept = true;
       }
     }
+    // A capability directory left empty by the sweep is itself invalid to the
+    // scanner ("intermediate directories may not be empty"), so pruning it is
+    // part of healing, not an extra cleanup. The promotion recreates it before
+    // it stages (`mkdir(parentDir, { recursive: true })`).
+    if (swept) await pruneEmptyParents(parentDir, skillsRoot);
   } catch (error) {
     if (error?.code !== "ENOENT") throw error;
   }
@@ -1113,7 +1136,7 @@ export async function promoteApprovedSkillUnlocked({
   // writer lock — no other publisher can be staging while we hold it. That is
   // why the heal needs no PID parsing: cross-process residue can only be
   // orphaned, never in flight.
-  await healWriterResidue(skillsRoot, parentDir, versionDir, version);
+  await healWriterResidue(skillsRoot, parentDir, versionDir);
 
   let versionDirPresent = false;
   try {

@@ -299,6 +299,56 @@ describe("M8/T3 canonical Skill Store writer", () => {
       await rm(tmp, { recursive: true, force: true });
     }
   });
+
+  test("T2g: staging residue from a killed promotion of another version does not block this one", async () => {
+    const { promoteApprovedSkill, scanCatalog } =
+      await import("../zink-skill-store/src/catalog.mjs");
+    const { mkdir } = await import("node:fs/promises");
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "zink-crash-cross-"));
+    const skillsRoot = path.join(tmp, "skills");
+    try {
+      // A promotion of 2.0.0 was killed after its staging directory was
+      // created. The name follows `stagingName()`'s real grammar, because a
+      // version-scoped heal only ever recognized the caller's own prefix.
+      const capability = path.join(skillsRoot, "office", "cross-crash-skill");
+      await mkdir(
+        path.join(capability, "2.0.0.pending-4242-1700000000000-deadbeef"),
+        {
+          recursive: true,
+        },
+      );
+      const before = await scanCatalog(skillsRoot);
+      assert.ok(
+        before.errors.some((e) => e.code === "DIRECTORY_GRAMMAR_INVALID"),
+        "the residue must be the store-wide failure the finding describes",
+      );
+
+      const content = "# Cross\n\nComplete bytes under a different version.";
+      const res = await promoteApprovedSkill({
+        skillsRoot,
+        namespace: ["office"],
+        capability: "cross-crash-skill",
+        version: "1.0.0",
+        content,
+        requestingActor: "excel",
+        decisionRef: "PLAN:M8/T3-R1",
+      });
+      assert.equal(res.status, "ACTIVE");
+
+      const after = await scanCatalog(skillsRoot);
+      assert.deepEqual(
+        after.errors,
+        [],
+        "another version's residue may not null the store for this one",
+      );
+      assert.deepEqual(
+        after.records.map((r) => r.manifest.identity.version),
+        ["1.0.0"],
+      );
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("M8/T3 durable skill proposals", () => {
