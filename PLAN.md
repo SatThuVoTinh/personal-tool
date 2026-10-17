@@ -1742,6 +1742,126 @@ Not acted on, pending decision: Discord channel/forum-tag literals also appear i
 production plugin source (server surface identifiers, not personal data; not
 flagged by gitleaks; removing them is a broader behavioural change).
 
+### 4.17 Successor schedule — the tracked disposition authority for the 38 re-filed findings
+
+Written by `M12/T4-R1` item `T4-1` (owner grant `grant 1`, 2026-10-17). It exists because the R2 grouping paragraph
+above routed 38 findings to the identifiers `T2.4`–`T2.7`, which `M12/T2.1-R3` §5.3 then withdrew, so those findings
+had no live successor task. Every row was read before it was written and cites the source that supports its
+disposition. PLAN and register locations are named by section or by entry id rather than by line number, because both
+files grow and a numeric cite there would rot; archived-contract and source-file cites stay numeric because the
+archives are immutable and a source locator is meant to be clickable. **This section, not `.agents/states/findings.md`, is the disposition authority** (the register is working
+memory under `AGENTS.md` §6; whether it becomes tracked is the unanswered `H10`).
+
+Two premises this contract carried into that read and had to drop:
+
+- `ACTIVE.md` §0 said **two** of the 38 are absent from the register. Measured at this head, **one** is:
+  `R5-E09-08` has no `id:` entry — the E09 lane header reads "7 findings, 3 High" and the block holds exactly seven.
+  `R1-A02-01` **is** in the register, but in the Vòng 1 `- **id** —` bullet format rather than the structured `id:`
+  block format, which is why an `id:`-anchored count missed it.
+- `ACTIVE.md` §0 said the four orphan blocks "belong to no running, scheduled, or excluded tier". **7** of the 38 do
+  have an explicit exclusion-with-decision record (`findings.md`'s "Severity was not treated as authorization" paragraph, plus `PLAN.md` §11): they were excluded on
+  purpose and only lost their identifier. The remaining 31 are genuinely undisposed.
+
+Provenance keys the Disposition column cites:
+
+- **P1** — the dead routing is §4's R2 grouping paragraph above; the withdrawal is `T2.1-R3:286-295` plus the owner's
+  `l1` correction, also above.
+- **P2** — the Knowledgebase and adapter blocks were re-filed into the **medium** tier by `T2.1-R3:291`
+  ("+ the remaining Knowledgebase block + the remaining Zink Tools adapter surfaces") and are **absent from Wave B's
+  admitted set** (`T2.2-R2` §0.5-F) — the same orphaning the `l1` note describes for the Skill Store block.
+- **P3** — the only explicit exclusion record in the repo: `findings.md`'s "Severity was not treated as authorization"
+  paragraph.
+- **P4** — `R5-E13-05`'s guard half: admitted to cluster D (`findings.md`'s cluster-D admitted-set row) → **withdrawn** as unbacked by owner
+  answer **I3-A** (`T2.1-R3:245`) → **DECLINED** in Wave B (`T2.2-R2:50-52`). Landed nowhere.
+- **P5** — no item heading in any of the four archived contracts cites any of the 38 ids, and
+  `git log --all --grep` on them returns no commit (the single `R5-E06-*` hit is `R5-E06-07` at `96a6dd2`, a Wave A
+  item that is not in this set). Therefore **no row here reads `LANDED`**, and none is formally `REFUTED` either.
+
+A row reading `OPEN — re-verify` means: no wave record disposes of it, its premise was last read at Vòng 5
+(2026-10-14) or Vòng 6, and the successor band must re-read the cited source before touching it. That is the rule that
+killed eight premises in Wave B and two claims in Wave C, and it applies to a schedule row exactly as it does to a
+code change.
+
+#### 4.17.1 Bands
+
+| Band | Subject | Ids | Fix-risk tier | Prerequisite owner decision | Authorization |
+| --- | --- | --- | --- | --- | --- |
+| `M12/T2.2-R3` | Skill Store lifecycle | 18 | medium (the `l1` correction above) | **H5** (`R5-E03-07`) and **H8** (`R5-E04-05`, per the P3 paragraph) | scheduled, not authorized |
+| `M12/T5` | A2 packaged module graph | 3 | **not assigned by §5.3** — A2 changes how the live plugin resolves source, so it ends at a deployment boundary; this contract proposes "high" and does not promote it to fact | **H6** (`R5-E13-02`); `R1-A02-01` has no §11 tie, and no `--apply`/restart is authorized anywhere in this plan | scheduled, not authorized |
+| `M12/T6` | Knowledgebase block | 14 | medium (`T2.1-R3:291`) | **H9** (`R5-E03-05`). The owner's queue places the H5 answer before this band (§2's queue line), but §11 ties H5 to `R5-E03-07`/`R5-E11-02`, not to any id here | scheduled, not authorized |
+| `M12/T7` | Zink Tools adapter surfaces | 6 | medium (`T2.1-R3:291`) | none recorded in §11 | scheduled, not authorized |
+| `M12/T8` | Gate truth | 15 | medium (`T2.1-R3:291`, "all required-gate changes") | **H1** (`R5-E09-01`, `-08`), **H2** (`-02`), **H3** (`-03`); the other 11 carry no §11 tie | scheduled, not authorized |
+| `M12/T3` | Documentation/skills procedure + H11 shape 1 | 9 | low for the document items; **RED/architectural** for H11 (`PLAN.md` §11 H11 row says the shape "changes canonical architecture, so it is RED") | **H11** answered — the owner chose shape 1 (Main-mediated split) and ordered this band **last** (2026-10-17); `R1-A04-01`/`R1-A04-05` must land first | scheduled, not authorized |
+
+`M12/T5`'s prerequisite was written as **H5** in `ACTIVE.md` §3 `T4-2`. It is not: §11's H5 row cites `R5-E03-07` and `R5-E11-02`, neither of which is in the A2 band, and the owner's queue reads
+`… → a2 → h5 → adapter/knowledgebase/gate-truth …` — the H5 answer sits **between** A2 and the next three bands, not
+inside A2. Corrected here rather than copied forward.
+
+#### 4.17.2 `M12/T5` — A2 packaged module graph (3)
+
+| Finding | Sev | Cat | Register locator (`Where:`) | Disposition | Successor |
+| --- | --- | --- | --- | --- | --- |
+| `R1-A02-01` | Critical | architecture+security | the Vòng 1 bullet list (legacy format, so no `Where:` field) — the deployed plugin loads live repository source through a hardcoded Windows mount path, bypassing the digest-gated packaged assets | `OPEN — P1` + `PLAN.md` §4's R2 exclusions paragraph "is Critical and stays open — this task does not close it"; verified Critical in Vòng 2 (that round's adjudication list: B08's alternative hypothesis refuted, the finding upheld) | `M12/T5` |
+| `R5-E13-02` | High | security | this finding's register entry — `lib/policy.mjs:896`, `:1303-1311` (`resolveRouterApiKey`), `:1313-1317` (`buildSecretsPlan`) | `EXCLUDED — H6` (**P3**; §11's H6 row corrects its details but keeps the premise) | `M12/T5` |
+| `R5-E13-05` | Medium | security | this finding's register entry — `index.mjs:511`; `tests/m7-lane-g-policy.test.mjs:724-733` (M7-063) | `OPEN (removal half) — P1`; guard half `OPEN → WITHDRAWN → DECLINED` per **P4**, landed nowhere. Premise correction: `index.mjs:511` "is not the only tracked occurrence" (this entry's own "Correction" line); Wave B admitted only the guard half, so this row must not re-admit the whole finding as open | `M12/T5` (removal half) |
+
+#### 4.17.3 `M12/T6` — Knowledgebase block (14)
+
+All fourteen: `OPEN — P2` (re-filed to the medium tier, omitted from Wave B's admitted set), premise last read at
+Vòng 5 (2026-10-14), `M12/T6` re-verifies before touching — except `R5-E03-05`, which is `EXCLUDED — H9`.
+
+| Finding | Sev | Cat | Register locator (`Where:`) | Disposition | Successor |
+| --- | --- | --- | --- | --- | --- |
+| `R5-E01-02` | Medium | reliability | this finding's register entry — `main.py:238-297` (`readyz_pdf_identity`, `cache_key`) with `pdf_runtime.py:81-91` | `OPEN — P2`; register status is `LATENT`, not `OPEN`, so a copy of the register field would silently change its meaning | `M12/T6` |
+| `R5-E01-04` | Medium | reliability | this finding's register entry — `database.py:210-219` (`start()` except) + `main.py:166-175` | `OPEN — P2` (conf: Strongly Supported) | `M12/T6` |
+| `R5-E02-01` | High | contract | this finding's register entry — `apps/knowledge/app/main.py:75-78` (`SearchRequest`), `:322-341`, `database.py:1040-1047` | `OPEN — P2`; canonical row for `R5-E01-01`, whose entry reads "DUPLICATE of R5-E02-01 — canonical R5-E02-01" | `M12/T6` |
+| `R5-E02-02` | High | contract | this finding's register entry — `database.py:1050-1082`, `:128-145` (`SearchCandidate`), `main.py:419-449` | `OPEN — P2` | `M12/T6` |
+| `R5-E02-03` | Medium | bug | this finding's register entry — `main.py:451-457` (`min_score` gate), `:414`, `:430` | `OPEN — P2` | `M12/T6` |
+| `R5-E02-04` | Medium | contract | this finding's register entry — `main.py:458-464`, `:395`, `:412`; `retrieval.py:12` | `OPEN — P2` | `M12/T6` |
+| `R5-E02-06` | Medium | reliability | this finding's register entry — `main.py:324-326`, `:356`; `model_probe.py:30`; `retrieval.py:53-65` | `OPEN — P2` (conf: Strongly Supported; cross-linked from `R5-E06-01`'s entry, so `T6` and `T7` share one re-verification) | `M12/T6` |
+| `R5-E03-01` | Medium | contract | this finding's register entry — `apps/knowledge/migrations/001_initial.sql:3-22` vs `:24-96`; `002_pdf_ingestion_foundation.sql:1,20,24,28,47,71,84` | `OPEN — P2` | `M12/T6` |
+| `R5-E03-02` | High | reliability | this finding's register entry — `database.py:180-219` `start()`, `:1710-1738` `_apply_migrations`; `main.py:168-175` | `OPEN — P2`; severity explicitly conditional on the unread `config.py` default (E03 lane's honesty note) | `M12/T6` |
+| `R5-E03-03` | Medium | reliability | this finding's register entry — `database.py:1519-1565`, `:1626-1646`, `:191` pool `command_timeout=30`; `main.py:166-195` | `OPEN — P2` | `M12/T6` |
+| `R5-E03-04` | Medium | perf | this finding's register entry — `002_pdf_ingestion_foundation.sql:1-91` (`:20-26`, `:80-81`); `database.py:1492-1517`, `:1626-1646` | `OPEN — P2` | `M12/T6` |
+| `R5-E03-05` | Medium | perf | this finding's register entry — `001_initial.sql:143-144` (global HNSW) vs `database.py:1012-1082`, `:872-963` | `EXCLUDED — H9` (P3 does not name it; §11's H9 row does: a retention decision that deletes derived content) | `M12/T6` |
+| `R5-E03-06` | Low | perf | this finding's register entry — `001_initial.sql:149-150`, `:108`; `database.py:1040-1047`, `:997-1001` | `OPEN — P2`; do not confuse with `R5-E03-07`, which is in the Skill Store band and tied to H5 | `M12/T6` |
+| `R5-E03-08` | Low | contract | this finding's register entry — `001_initial.sql:87-96` (`source_sidecars`), `:70` (enum), `:117-118` | `OPEN — P2` | `M12/T6` |
+
+#### 4.17.4 `M12/T7` — Zink Tools adapter surfaces (6)
+
+| Finding | Sev | Cat | Register locator (`Where:`) | Disposition | Successor |
+| --- | --- | --- | --- | --- | --- |
+| `R5-E06-01` | High | reliability | this finding's register entry — `knowledge-adapter.mjs:232-235`, `:317-332`, `:408-411` | `OPEN — P2` (conf: "Confirmed (code shape)"; mirrored by `R5-E02-06`) | `M12/T7` |
+| `R5-E06-02` | Medium | bug | this finding's register entry — `knowledge-adapter.mjs:23` (`MAX_KNOWLEDGE_RESPONSE_BYTES = 50 * 1024 * 1024`), `:275-288` | `OPEN — P2` | `M12/T7` |
+| `R5-E06-05` | High | contract | this finding's register entry — `zink-tools/sql/duckdb-bridge.mjs:141-167`, `:188`, `:192`, `:252-259`, `:263`; `sql/validator.mjs:516-540` | `OPEN — P2`; `T2.1-R3:147` still lists it as an `M12/T2.2` item with the `ETIMEDOUT` error shape `Unresolved`, and Wave B never admitted it | `M12/T7` |
+| `R5-E06-06` | Medium | reliability | this finding's register entry — `duckdb-bridge.mjs:203-206`, `:263-267`, `:293-319` | `OPEN — P2` (conf: Strongly Supported) | `M12/T7` |
+| `R5-E06-08` | Medium | reliability | this finding's register entry — `skill-adapter.mjs:234-316` | `OPEN — P2` | `M12/T7` |
+| `R5-E06-09` | Medium | contract | this finding's register entry — `zink-tools/adapters/storage/r2-adapter.mjs:68`, `:144`, `:220-223` (rule stated at `:126-131`) | `OPEN — P2` | `M12/T7` |
+
+#### 4.17.5 `M12/T8` — gate truth (15)
+
+| Finding | Sev | Cat | Register locator (`Where:`) | Disposition | Successor |
+| --- | --- | --- | --- | --- | --- |
+| `R5-E09-01` | High | reliability | this finding's register entry — `.github/workflows/ci.yml:3-8` and `security.yml:3-10` | `EXCLUDED — H1` (**P3**; §11's H1 row re-derives the evidence and adds a weekly `schedule:` the register missed) | `M12/T8` |
+| `R5-E09-02` | High | security | this finding's register entry — `gh api …/branches/main/protection` (repository-level) | `EXCLUDED — H2` (**P3**; §11's H2 row re-confirms the `403`) | `M12/T8` |
+| `R5-E09-03` | High | contract | this finding's register entry — `ci.yml:42-43` + `tests/m11-t1-postgres-sql-gate.test.mjs:43`, `:100`, `:130` | `EXCLUDED — H3` (**P3**; §11's H3 row reshaped the decision twice — "no gate names those skips" corrected to "the gap is enforcement, not visibility", needs a per-family expectation) | `M12/T8` |
+| `R5-E09-04` | Medium | testing-gap | this finding's register entry — `ci.yml:97-100` + `package.json` `test:knowledge` + `apps/knowledge/pyproject.toml:4` | `OPEN — re-verify`; the only H tie is the **superseded** register copy of the ledger, whose H3 row pairs it with `R5-E09-03`; §11's H3 row does not name it. Used as gate-design rationale at `T2.1-R3:304`, never disposed | `M12/T8` |
+| `R5-E09-05` | Medium | doc-drift | this finding's register entry — `tests/repository-policy.test.mjs:84-95` vs `ci.yml:69-100` | `OPEN — re-verify`; one mention repo-wide, no wave record disposes of it | `M12/T8` |
+| `R5-E09-06` | Medium | reliability | this finding's register entry — `security.yml:42-43` `npm audit --audit-level=high`, no baseline/allowlist file in the repo | `OPEN — re-verify`; the unchanged 5-high `dependency-audit` failure is recorded at successive heads throughout this file, yet no record disposes of the id | `M12/T8` |
+| `R5-E09-07` | Medium | security | this finding's register entry — `security.yml:45-59` | `OPEN — re-verify` (conf: Strongly Supported, never Confirmed) | `M12/T8` |
+| `R5-E09-08` | High | **none recorded** | narrative only — the orchestrator's 'One new fact … no lane stated' note; the E09 block holds 7 entries and this id has no `id:` row | `EXCLUDED — H1` (P3 names `-01/02/03/08`), **with half its premise refuted**: §11's H1 row records that "HEAD has zero runs" became false once runs were dispatched, and that the "a human dispatched" attribution is unsupportable. `T4-3` creates the missing register entry | `M12/T8` |
+| `R5-E10-01` | Medium | testing-gap | this finding's register entry — `tests/m11-t1-r2-file-lock-asset-predecessor.test.mjs:47`, `:160-181`; `tests/m8-t2.10-r13-r7-predecessor-allowlist.test.mjs:288-310`; `tests/m12-t2-governed-surface.test.mjs:644-661` | `OPEN — re-verify`; register status `LATENT`, not `OPEN`. This entry pairs it with `R5-E09-03` | `M12/T8` |
+| `R5-E10-02` | Medium | testing-gap | this finding's register entry — `tests/m12-t2-governed-surface.test.mjs:489-505` | `OPEN — re-verify`; **not** covered by Wave B's `B-17`, which is `R5-E10-03` (`T2.2-R2:496`, write set restricted to `:685`/`:692` at `T2.2-R2:247`) | `M12/T8` |
+| `R5-E10-05` | Medium | testing-gap | this finding's register entry — `tests/m11-t1-openclaw-outbound-and-caches.test.mjs:52-55`, `247-266`, `327-372` (env mutation `:79-93`) | `OPEN — re-verify` (conf: Strongly Supported) | `M12/T8` |
+| `R5-E10-06` | Medium | testing-gap | this finding's register entry — `tests/m12-t2-governed-surface.test.mjs:644-645`, `668-672`, `693-707` | `EXCLUDED — needs an owner decision that has no number`: P3 excludes it with a reason ("a digest-pin re-base is its own objective and would ride along with a behaviour fix") and §11 has no row naming it. Re-verified (not refuted) in the Vòng 6 re-derivation table | `M12/T8` |
+| `R5-E10-07` | Low | testing-gap | this finding's register entry — `tests/m11-t1-skill-vector-sql.test.mjs:160-176`; `tests/m7-t3-tools-contract.test.mjs:143-147` | `OPEN — re-verify`; Wave A's `A-7` touched the same file for `R5-E05-01` (`4A.13` mapped at `T2.1-R3:241`, item at `T2.2-R1:213`) and disposes of nothing here | `M12/T8` |
+| `R5-E10-08` | Medium | testing-gap | this finding's register entry — `m10-t2-coordinator-binding:1208-1209`; `m8-t2-governed-runtime-audit:2283`, `:2344`, `:2300`, `:2304`; `m9-t1-functional-truth-remediation:956`; `m11-t3-openclaw-runtime-bounds:99-122` | `OPEN — re-verify`; this is the register's headline "assertions on prose, not behaviour" pattern, and Wave C is an instance of it — `C-13`'s `checkGateRegistry` matches the registry's header row (`scripts/repository-policy.mjs:844`) and `G18`'s coverage loop asserts README text (`tests/m7-t4-orchestration.test.mjs:386-425`) — with no record noting the consequence | `M12/T8` |
+| `R5-E13-03` | Medium | security | this finding's register entry — `README.md:46-52` plus `:60/74/95/107/118/129/140` and `:272-275`; `lib/authority.mjs:619-625`, `:628-636` | `OPEN — re-verify`, with a standing constraint: `T2.1-R3:361` rules its snowflake purge "must not be split from its source-guard". **Wave C did not touch it** — `C-1`/`C-3`/`C-4` are `R5-E11-03`/`-02`/`-04`, and `C-4`'s only README edit was the provider table at `README.md:579-591` | `M12/T8` |
+
+**Count check (`ACTIVE.md` §6.4):** 3 + 14 + 6 + 15 = 38 rows; `EXCLUDED` 7, `OPEN` 31, `LANDED` 0, `REFUTED` 0 at id
+level (four rows carry a partial premise correction instead: `R5-E09-03`, `R5-E09-08`, `R5-E10-06`'s re-derivation, and
+`R5-E13-05`'s occurrence count).
+
 ## 5. Canonical target architecture
 
 The repository retains three logical modules.
