@@ -15,7 +15,7 @@ bản sửa, `docs/architecture/` và `docs/contracts/` là kiến trúc và h�
 
 ## 0. NỘI QUY — KHỐI NÀY CẤM XÓA
 
-**0.1 Vai trò file.** Đây là danh sách bug cần sửa. Mỗi bug đúng một khối `### F-xxx — <tiêu đề>` với 9 dòng field.
+**0.1 Vai trò file.** Đây là danh sách bug cần sửa. Mỗi bug đúng một khối `### F-xxx — <tiêu đề>` với 10 dòng field.
 Ngoại trừ khối §0 và §0.4, file không chứa record lịch sử, không chứa proposal cải tiến, không chứa tường thuật phiên
 làm việc — mấy thứ đó thuộc `PLAN.md` §8/`CHANGELOG.md`/archive, không thuộc đây.
 
@@ -89,10 +89,14 @@ Nó phủ đúng phần tree mà sáu vòng trước chưa từng trích bằng 
 16 file `infrastructure/**`, 21 file `integrations/openclaw/topology/**` (policy JSON + contract schema), 8 provider adapter, và các file config
 mồ côi. Số đo phủ: 99/300 file nguồn bị track có mặt trong register trước vòng này.
 
-Còn **47** bug chưa có `Acceptance criteria` và **110** bug chưa có bước tái hiện — toàn bộ là nhóm Medium/Low/Ungraded,
-tức phần `b2` chưa chạy tới. 23 bug vẫn lấy root cause từ chính kết luận ở tiêu đề. Đó là nợ quy trình của vòng audit
-(audit chỉ đọc, không chạy tái hiện), không phải lỗi của hàng đợi: bug nào thiếu thì bước 1 và bước 2 của nội quy mục
-0.2 là bắt buộc.
+`R7-D*` là id **của vòng delta 2026-10-17**, không tra được về register sáu vòng (id `R7-` duy nhất ở đó là `R7-GATE-01`,
+đã đóng ở §2). Xuất xứ, phán quyết của chủ cho vòng đó, và kết quả đọc lại cả 17 locator ở HEAD: `PLAN.md` §8, record
+`the 17 rows this record under-counted`. Cả 17 hàng đều đã được phiên này tự kiểm tra lại path và khoảng dòng trước khi giữ.
+
+Còn **40** bug chưa có `Acceptance criteria` và **91** bug chưa có bước tái hiện — toàn bộ là nhóm Medium/Low/Ungraded,
+tức phần `b2` chưa chạy tới (47/110 trước lượt `b2-m1…m3`). 23 bug vẫn lấy root cause từ chính kết luận ở tiêu đề. Đó là
+nợ quy trình của vòng audit (audit chỉ đọc, không chạy tái hiện), không phải lỗi của hàng đợi: bug nào thiếu thì bước 1 và
+bước 2 của nội quy mục 0.2 là bắt buộc.
 
 File này được tái cấu trúc ngày 2026-10-17 từ register audit sáu vòng. Mỗi hàng giữ `Legacy register id` để
 `PLAN.md` §4.17/§11 và các contract archive vẫn tra được về id cũ.
@@ -249,7 +253,7 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Root cause: Register kết luận: 0b55dfa silently changed #incidents tag semantics without touching index.mjs; the call-site comment still states the reverted rule. Chưa có phân tích root cause riêng — phải đọc `Where:` ở HEAD hiện tại và viết lại nguyên nhân trước khi sửa (nội quy mục 2).
 - Evidence: Where: index.mjs:321-343 (incidentTagSelectionsFor); git show --stat 0b55dfa · Evidence: the comment still claims a two-stack containment "reports unresolved and the thread is not opened"; surfaceStackTag({currentStack:null, nodeStackIds:["data_plant","intelligence"]}) now returns ANALYTICS (discord-forum-tags.mjs:381-391), and which task decides the tag depends on list order.
 - Reproduction: no test passes more than one task (tests/m12-t2-governed-surface.test.mjs:464, 477).
-- Acceptance criteria: Register chưa có acceptance line. Khi sửa phải viết acceptance từ trạng thái đúng ngược lại tiêu đề "0b55dfa silently changed #incidents tag semantics without touching index.mjs; the call-site comment still states the reverted rule", và acceptance đó là điều kiện duy nhất được phép xóa bug này khỏi file (nội quy mục 6).
+- Acceptance criteria: The comment at index.mjs:321-324 and surfaceStackTag agree: either a two-stack containment really reports unresolved and opens no thread, or the comment states the precedence rule the function implements, and one test pins which task's stack wins when more than one is present.
 - Related findings: nguồn: A13 — Git history and cross-milestone regressions (21…
 
 ### F-010 — skill-loop actor identity is re-derived a third way; the durable proposal records a constant, not the agent
@@ -401,11 +405,11 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Legacy register id: `R2-B02-01`
 - Affected modules: OpenClaw governance plugin + runtime libs
 - Severity: Ungraded
-- Status: OPEN
+- Status: OPEN · premise changed 2026-10-17: locator drifted: the one-shot existsSync is now index.mjs:6112-6118 (was cited as :6095-6101); the loop start at :6119-6120 still depends on it
 - Root cause: Register kết luận: pickup-loop eligibility is a one-shot existsSync at register() time (index.mjs:6095-6101), so a snapshot created after load (first install, or after a guarded lock/snapshot recovery) leaves the coordinator lane permanently dark until…. Chưa có phân tích root cause riêng — phải đọc `Where:` ở HEAD hiện tại và viết lại nguyên nhân trước khi sửa (nội quy mục 2).
 - Evidence: : pickup-loop eligibility is a one-shot existsSync at register() time (index.mjs:6095-6101), so a snapshot created after load (first install, or after a guarded lock/snapshot recovery) leaves the coordinator lane permanently dark until restart — silent no-execution right after the recovery procedures the owner already runs.
-- Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc entry không còn `Where:` — dựng lại locator từ `PLAN.md` §8 ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng pickup-loop eligibility is a one-shot existsSync at register() time (index.mjs:6095-6101), so a snapshot created after load (first install, or after a guarded… trước khi sửa (nội quy mục 3).
-- Acceptance criteria: Register chưa có acceptance line. Khi sửa phải viết acceptance từ trạng thái đúng ngược lại tiêu đề "pickup-loop eligibility is a one-shot existsSync at register() time (index.mjs:6095-6101), so a snapshot created after load (first install, or after a guarded lock/snapshot recovery) leaves the coordinator lane…", và acceptance đó là điều kiện duy nhất được phép xóa bug này khỏi file (nội quy mục 6).
+- Reproduction: Read index.mjs:6112-6118: `const ledgerSnapshotPresent = (() => { try { return existsSync(paths.snapshot) } catch { return false } })()` is evaluated once inside register(), and :6119-6120 starts startCoordinatorPickupLoop only when that snapshot existed at load. Gate it in tests/m10-t1-coordinator-pickup.test.mjs: register the plugin against an empty state dir, create the snapshot afterwards, then assert an approved task is still claimed — today the lane stays dark until restart, which is exactly the state the guarded lock/snapshot recovery procedures leave behind.
+- Acceptance criteria: Pickup eligibility is evaluated when work could be claimed, not once at register() time: a snapshot created after plugin load (first install, or after a guarded recovery) starts the coordinator lane without a restart, and an absent snapshot still refuses to start it.
 - Related findings: nguồn: B02 — runtime / lifecycle (13 assigned claims)
 
 ### F-022 — the deployed plugin loads live repository source through a hardcoded Windows mount path, bypassing the digest-gated packaged assets
@@ -651,7 +655,7 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Status: OPEN — (residual of the fixed out-of-sandbox class)
 - Root cause: a caller omitting sandboxDir can name an absolute host path and have its bytes hashed and recorded unchecked. No non-test caller was found; the live guarded path is guard.mjs:1946-1955, which validates relative logical paths — so LATENT.
 - Evidence: Where: index.mjs:2187-2352, esp. 2279-2298, 2342 (effectiveSandbox = sandboxDir || technicalConfig.sandboxDir || null); lib/artifact-validator.mjs:411,432 gate the symlink and sandbox checks behind sandboxDir · Evidence: (code shape)
-- Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc index.mjs:2187-2352, esp. 2279-2298, 2342 (effectiveSandbox = sandboxDir || technicalConfig.sandboxDir || null); lib/artifact-validator.mjs:411,432 gate the symlink and sandbox checks behind sandboxDir ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng handleExecutionFinished reads and hashes an artifact path with only optional containment trước khi sửa (nội quy mục 3).
+- Reproduction: tests/m7-lane-f-result-integrity.test.mjs already calls handleExecutionFinished over a temp ledger. Add a case that passes an artifact whose path is an absolute host path outside the fixture root while omitting sandboxDir, and assert the artifact is refused. At HEAD index.mjs:2342 sets effectiveSandbox = sandboxDir || technicalConfig.sandboxDir || null, and artifact-validator.mjs:411 and :432 both put the symlink and sandbox checks behind `if (… sandboxDir)`, so with neither supplied the bytes are read, hashed and recorded unchecked.
 - Acceptance criteria: an out-of-sandbox absolute artifact is refused at this seam.
 - Related findings: nguồn: A03 — security and trust boundaries
 
@@ -664,7 +668,7 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Status: OPEN — _(directly relevant to the memory subsystem; feeds Vòng 3)_
 - Root cause: retrieval is logged and scoped by attacker-chosen ids → citation/provenance attributed to another task's run, taskId:"unbound-task" fallbacks silently degrading the audit trail. requestingAgent stays trusted, so namespace authority is not bypassed — provenance and correlation are.
 - Evidence: Where: index.mjs:3449-3455 (skill) and 3560-3566 (knowledge) · Evidence: sessionKey: `params?.session_key || _id?.sessionKey || "unbound-session"` — payload wins, contradicting the adjacent comment "M8-061: … trusted runtime context only. Tool payload never impersonates." The registered schemas advertise `session_key/run_id/task_id/path_prefix/rerank` as model-fillable and drop the contract's additionalProperties:false and required action.
-- Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc index.mjs:3449-3455 (skill) and 3560-3566 (knowledge) ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng the memory-tool executors trust model-supplied session_key / run_id / task_id over the trusted context trước khi sửa (nội quy mục 3).
+- Reproduction: Drive the skill memory-tool executor with a model payload whose session_key, run_id and task_id differ from the trusted context and assert the recorded retrieval scope comes from the trusted context. Measured at HEAD: index.mjs:3449-3452 reads `sessionKey: params?.session_key || _id?.sessionKey || "unbound-session"` and `runId: params?.run_id || _id?.runId || "unbound-run"`, so the payload wins, contradicting the adjacent M8-061 comment; the registered schemas advertise all three as model-fillable. Gate it in tests/m7-lane-d2-question-answer.test.mjs or tests/m12-t1-task-identity.test.mjs.
 - Acceptance criteria: trusted fields win unconditionally; payload correlation keys are refused.
 - Related findings: nguồn: A04 — policy and capability enforcement
 
@@ -677,7 +681,7 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Status: OPEN
 - Root cause: with two configured state roots (known K10), an identical triple minted under one root authorizes the other, and stopping one registration silently revokes the other's pending authorizations. leases.delete(key) also burns the proof when the call is then blocked, so no retry can re-authorize.
 - Evidence: Where: index.mjs:4777-4800 (Symbol.for("…native.leases")), :4684-4697 (leaseKey), :4803-4807, :7438-7449, :7470 · Evidence: leaseKey hashes only {sessionKey, runId, toolCallId} — no ledgerRoot — although registerNativeGuard is scope-keyed (native-boundary.mjs:74); gateway_stop runs leases.clear() and resolves every startingRuns waiter.
-- Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc index.mjs:4777-4800 (Symbol.for("…native.leases")), :4684-4697 (leaseKey), :4803-4807, :7438-7449, :7470 ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng invocation leases and run-start waiters share one process-global registry keyed without the governance scope trước khi sửa (nội quy mục 3).
+- Reproduction: Static proof at HEAD, then a two-root test. leaseKey (index.mjs:4684-4697) hashes only {sessionKey, runId, toolCallId} with no ledgerRoot, while the registry is one process-global Symbol.for("zink.governance.native.leases") map (:4777-4780); gateway_stop then runs leases.clear() and resolves every startingRuns waiter (:4803-4807, :7438-7449, :7470). Gate: instantiate the plugin twice with different ledgerRoot in one process, mint a lease triple under root A, call the governed tool under root B with the same triple and assert refusal; then stop A's registration and assert B's pending authorizations survive.
 - Acceptance criteria: a lease minted under one ledger root never satisfies a call governed by another.
 - Related findings: adjudication Vòng 2: Verified · nguồn: A06 — task, run and session lifecycle
 
@@ -690,8 +694,8 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Status: OPEN
 - Root cause: a reposted/forwarded/stale card for task A, or an owner reply in an unrelated thread, yields a valid durable APPROVE — with no digest to catch it (R1-A07-01).
 - Evidence: Where: index.mjs:1994-1995, :2022-2023 (thread_id: data.threadId ?? null); workflow.mjs:717-718, :826-833
-- Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc index.mjs:1994-1995, :2022-2023 (thread_id: data.threadId ?? null); workflow.mjs:717-718, :826-833 ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng the verdict path never checks that the interaction happened in the recorded approval thread trước khi sửa (nội quy mục 3).
-- Acceptance criteria: Register chưa có acceptance line. Khi sửa phải viết acceptance từ trạng thái đúng ngược lại tiêu đề "the verdict path never checks that the interaction happened in the recorded approval thread", và acceptance đó là điều kiện duy nhất được phép xóa bug này khỏi file (nội quy mục 6).
+- Reproduction: In tests/m7-lane-d-decision.test.mjs, replay WORKFLOW_USER_APPROVAL_DECIDED for a task whose card was surfaced in thread T1 while the payload carries thread_id T2, and assert INVALID_STATE_TRANSITION. At HEAD the verdict path records `thread_id: data.threadId ?? null` (index.mjs:1994-1995, :2022-2023) and the reducer (workflow.mjs:717-718, :826-833) never compares it against the task's approval_thread_id, so a reposted card, a forwarded message or a reply in an unrelated thread all yield a durable APPROVE.
+- Acceptance criteria: A recorded approval decision is accepted only when its thread_id equals the thread the card was surfaced in for that task; a decision from any other thread is refused, and an absent thread id cannot satisfy the comparison.
 - Related findings: adjudication Vòng 2: Verified, raised Medium → High · bug mở: R1-A07-01 · nguồn: A07 — governance and the approval workflow
 
 ### F-044 — Excel write-side containment is lexical while the read side is realpath — the weaker twin remains on the last write path
@@ -1103,11 +1107,11 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Legacy register id: `R1-A02-08`
 - Affected modules: OpenClaw governance plugin + runtime libs
 - Severity: Medium
-- Status: OPEN
+- Status: OPEN · premise changed 2026-10-17: locator corrected: the loop is created at index.mjs:6111-6138 (was cited as :6094-6122) and stopped only at :7459-7464; the four-loop live observation cannot be re-measured on this host
 - Root cause: concurrent duplicate claims / repeated WORKFLOW_TASK_CLAIMED and duplicated coordinator turns over the shared defaultQueueManager singleton.
 - Evidence: Where: index.mjs:6094-6122 (let coordinatorPickupLoop = null inside register), :7442-7447; neighbouring state _does_ latch (:196, :203 globalThis[Symbol.for(…)], :4778 leases, :4804 startingRuns) · Evidence: comment claims "exactly one scheduler instance per plugin registration"; live journal PID 68567 logs coordinator pickup loop started at 13:26:06, 13:26:18, 13:50:52 and 13:52:34 — four loops, one process.
-- Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc index.mjs:6094-6122 (let coordinatorPickupLoop = null inside register), :7442-7447; neighbouring state _does_ latch (:196, :203 globalThis[Symbol.for(…)], :4778 leases, :4804 startingRuns) ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng the coordinator pickup loop is started per register() with no process-level latch — four loops observed in one live process trước khi sửa (nội quy mục 3).
-- Acceptance criteria: Register chưa có acceptance line. Khi sửa phải viết acceptance từ trạng thái đúng ngược lại tiêu đề "the coordinator pickup loop is started per register() with no process-level latch — four loops observed in one live process", và acceptance đó là điều kiện duy nhất được phép xóa bug này khỏi file (nội quy mục 6).
+- Reproduction: At HEAD the scheduler is created inside register() with no process-level latch: index.mjs:6111-6118 evaluates ledgerSnapshotPresent once and :6119-6138 calls startCoordinatorPickupLoop, while neighbouring state does latch on globalThis (:196, :203, the lease map at :4777-4780, startingRuns at :4804) and the only stop is gateway_stop (:7459-7464). Gate it in tests/m10-t1-coordinator-pickup.test.mjs: call register() twice in one process against one state dir and assert exactly one scheduler claims work.
+- Acceptance criteria: One process runs exactly one coordinator pickup scheduler: a second register() in the same process attaches to the existing loop instead of starting another, so two loops sharing defaultQueueManager can never both claim the same queued task.
 - Related findings: adjudication Vòng 2: Verified, re-graded Medium → Low, live-reproduced · nguồn: A02 — module dependencies, shared components and duplication
 
 ### F-076 — ASK_USER attributes a governed question to a run that did not ask it
@@ -1119,8 +1123,8 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Status: OPEN
 - Root cause: WAITING_FOR_USER binds waiting_question_run_id/agent_id to a fabricated owner, breaking the origin-message → task → run → answer correlation that M12 depends on.
 - Evidence: Where: index.mjs:2113-2120; topology/lib/workflow.mjs:226-248, :938-988 (:976-982 requires the payload to equal that resolution) · Evidence: the asker is resolveCurrentRunOwner(authoritativeTask) = the RUNNING delegation or else the root run; coordinator_runs is not part of the resolution, so a coordinator can never be the recorded asker.
-- Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc index.mjs:2113-2120; topology/lib/workflow.mjs:226-248, :938-988 (:976-982 requires the payload to equal that resolution) ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng ASK_USER attributes a governed question to a run that did not ask it trước khi sửa (nội quy mục 3).
-- Acceptance criteria: Register chưa có acceptance line. Khi sửa phải viết acceptance từ trạng thái đúng ngược lại tiêu đề "ASK_USER attributes a governed question to a run that did not ask it", và acceptance đó là điều kiện duy nhất được phép xóa bug này khỏi file (nội quy mục 6).
+- Reproduction: Measured at HEAD: index.mjs:2113 resolves the asker with resolveCurrentRunOwner(authoritativeTask) and :2114-2116 records WORKFLOW_USER_QUESTION_RECORDED with that agent_id and run_id; workflow.mjs:226-228 ownerRunAgentId returns the RUNNING delegation's agent or the root run and coordinator_runs takes no part in the resolution, so a coordinator that actually asked can never be the recorded asker — and :976-982 then requires the answer payload to equal that same fabricated resolution. Gate it in tests/m7-lane-d2-question-answer.test.mjs: ask from a coordinator run and assert the recorded asker is that run.
+- Acceptance criteria: The recorded asker of a governed question is the run that actually asked: waiting_question_run_id and agent_id resolve from the asking run including a coordinator run, and the answer correlation check compares against that same resolution.
 - Related findings: nguồn: A06 — task, run and session lifecycle
 
 ### F-077 — the reducer admits a digest-less result into review, then every verdict requires a digest
@@ -1155,10 +1159,10 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Legacy register id: `R1-A07-05`
 - Affected modules: OpenClaw governance plugin + runtime libs
 - Severity: Medium
-- Status: OPEN
+- Status: OPEN · premise changed 2026-10-17: locators drifted about 17 lines: the flag is set at index.mjs:6893-6912 and the branch is at :6916 (cited as :6876-6899 / :6899-6922)
 - Root cause: the branch returns the guard verdict directly and never calls requestFirstSpawnApproval, so an AUTH_APPROVAL_REQUIRED denial there is a silent dead end with no owner card; a snapshot read failure is swallowed into isPreAdmittedFixture = false.
 - Evidence: Where: index.mjs:6876-6899 (set), :6899-6922 (branch), inside the live event.toolName === "sessions_spawn" path; discriminator is model-supplied parsedProposal.node_id/inputs from event.params.task (:6866-6871) · Evidence: (reachability)
-- Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc index.mjs:6876-6899 (set), :6899-6922 (branch), inside the live event.toolName === "sessions_spawn" path; discriminator is model-supplied parsedProposal.node_id/inputs from event.params.task (:6866-6871) ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng isPreAdmittedFixture is a fixture-named admission branch fully reachable in production trước khi sửa (nội quy mục 3).
+- Reproduction: Read index.mjs:6893-6916 at HEAD: isPreAdmittedFixture is set from a snapshot read inside the live `event.toolName === 'sessions_spawn'` path, its discriminator is model-supplied parsedProposal.node_id and inputs taken from event.params.task, and :6916 returns guard.beforeToolCall's verdict directly without ever calling requestFirstSpawnApproval — so an AUTH_APPROVAL_REQUIRED denial there is a dead end with no owner card, and a snapshot read failure is swallowed into `isPreAdmittedFixture = false` (:6912). Gate it in tests/m10-t2-r12-first-spawn-approval.test.mjs with a production-shaped spawn whose node_id matches a fixture name.
 - Acceptance criteria: no production spawn path can skip the approval surface based on model-supplied JSON.
 - Related findings: adjudication Vòng 2: Verified with correction, severity kept Medium · nguồn: A07 — governance and the approval workflow
 
@@ -1171,7 +1175,7 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Status: OPEN
 - Root cause: without paths the verdict is evaluated against caller-supplied currentState; a nonexistent task id passes, and the verdict returns allowed:true with no durable audit trail. The reducer only backstops when a write is attempted.
 - Evidence: Where: index.mjs:1862 (if (paths)), :1872 (if (authoritativeTask)), :1977 (if (paths && auth.nextState))
-- Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc index.mjs:1862 (if (paths)), :1872 (if (authoritativeTask)), :1977 (if (paths && auth.nextState)) ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng handleDiscordAction's authoritative-state resolution and its ledger write are both optional (paths-gated) trước khi sửa (nội quy mục 3).
+- Reproduction: handleDiscordAction (index.mjs:1797) reads authoritative state only inside `if (paths)` (:1862), applies it only inside `if (authoritativeTask)` (:1872), and writes the ledger only inside `if (paths && auth.nextState)` (:1977). Gate it in tests/m7-lane-d-decision.test.mjs: call handleDiscordAction with no paths and a task id that does not exist, and assert the verdict is DENIED — today it evaluates against the caller-supplied currentState, returns allowed:true, and leaves no durable audit trail.
 - Acceptance criteria: an approval verdict without an authoritative ledger task returns DENIED.
 - Related findings: adjudication Vòng 2: Verified with correction, raised Medium → High · nguồn: A07 — governance and the approval workflow
 
@@ -1207,10 +1211,10 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Legacy register id: `R1-A09-07`
 - Affected modules: OpenClaw governance plugin (Discord), OpenClaw runtime libs
 - Severity: Medium
-- Status: OPEN
+- Status: OPEN · premise changed 2026-10-17: locator drifted: the guard is index.mjs:8307-8308 (cited as :8290); the rest of the evidence is unchanged and the host-log half needs the live WSL tree
 - Root cause: the collision resolves correctly today by precedence, but stale pre-M12 builds stay discoverable and nothing at load proves the component SDK/handler exists — so "unit active, 7 sockets, zero refusals" is not evidence any button can work.
 - Evidence: Where: index.mjs:8290 (if (typeof api.registerInteractiveHandler === "function"), no else); openclaw.plugin.json declares no host version; banner index.mjs:4751 v2026.9.24 vs pinned OPENCLAW_RELEASE = "2026.6.34" (lib/policy.mjs:53); SDK resolved from process.argv[1] (discord-native-send.mjs:227-245) · Evidence: live host log duplicate plugin id resolved by explicit config-selected plugin; global plugin will be overridden by config plugin (… extensions/zink-governance-pre-mig-20260928/index.mjs); ~/.openclaw-zink/extensions/ holds three trees all declaring id: "zink-governance".
-- Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc index.mjs:8290 (if (typeof api.registerInteractiveHandler === "function"), no else); openclaw.plugin.json declares no host version; banner index.mjs:4751 v2026.9.24 vs pinned OPENCLAW_RELEASE = "2026.6.34" (lib/policy.mjs:53); SDK resolved from… ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng silent capability loss at load: no host-compatibility assertion and no interactive-surface self-check trước khi sửa (nội quy mục 3).
+- Reproduction: At HEAD index.mjs:8307 guards interactive registration with `if (typeof api.registerInteractiveHandler === 'function')` and has no else branch, so a host without that API loads green while every button is silently lost; openclaw.plugin.json declares no host version, the banner (index.mjs:4751) reports v2026.9.24 while lib/policy.mjs:53 pins OPENCLAW_RELEASE '2026.6.34', and the component SDK is resolved from process.argv[1] (discord-native-send.mjs:227-245). Gate it in tests/m12-t1-discord-component-registry.test.mjs: register against an api stub lacking registerInteractiveHandler and assert load emits a capability line naming the loss.
 - Acceptance criteria: load emits a capability line for interactive + component-SDK; backup trees live outside the discovery directory.
 - Related findings: nguồn: A09 — Discord and external integrations
 
@@ -1259,10 +1263,10 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Legacy register id: `R1-A14-04`
 - Affected modules: OpenClaw governance plugin + runtime libs
 - Severity: Medium
-- Status: OPEN
+- Status: OPEN · premise changed 2026-10-17: locators drifted: before_tool_call is index.mjs:7467, the unconditional delete is :7487 and the denial :7488 (cited as :7447-7478); leaseKey's identity-bearing throw is :4690
 - Root cause: one bogus or duplicate call destroys the one-shot lease and denies the real call; combined with the 4× model-fallback re-entry (K01) a failed attempt can consume the lease so the retry is denied and surfaces as GOVERNANCE_DENIED.
 - Evidence: Where: index.mjs:7447-7478 (api.on("before_tool_call")), :4684-4697 (leaseKey) · Evidence: leases.delete(key); if (!matched) throw new Error("POLICY_DENIED"); — delete is unconditional; leaseKey throws LINEAGE_MISMATCH: sessionKey=…, runId=…, toolCallId=… which is logged verbatim two lines below, contradicting the module's own "no params, no hash" policy at :7468; leaseKey reads context.X ?? event.X, mixing trusted context with tool payload.
-- Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc index.mjs:7447-7478 (api.on("before_tool_call")), :4684-4697 (leaseKey) ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng tool-call lease verification deletes the lease before checking it; three distinct denials collapse to POLICY_DENIED and leak identity values into the log trước khi sửa (nội quy mục 3).
+- Reproduction: Read index.mjs:7467-7490 at HEAD: `leases.delete(key)` (:7487) runs unconditionally before `if (!matched) throw new Error('POLICY_DENIED')` (:7488), so one bogus or duplicate call burns the one-shot lease and the correct call that follows is denied; the catch at :7489-7490 logs err.message verbatim while leaseKey's throw (:4690) embeds sessionKey, runId and toolCallId, contradicting the 'no params, no hash' comment at :7484. Gate it in the lease suite: deny once with a wrong digest, replay the correct call and assert it is still authorized, and assert no identity value reaches the log.
 - Acceptance criteria: a mismatched call does not disable the next correct call, and the three causes are distinguishable in the log.
 - Related findings: adjudication Vòng 2: Verified with correction · nguồn: A14 — failure handling and reliability
 
@@ -1483,8 +1487,8 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Status: OPEN
 - Root cause: Register kết luận: which bot token opens a production #approvals thread is derived from event-supplied childSessionKey (index.mjs:5292-5295, allowlist o1/o2) rather than the ledger-assigned account. Chưa có phân tích root cause riêng — phải đọc `Where:` ở HEAD hiện tại và viết lại nguyên nhân trước khi sửa (nội quy mục 2).
 - Evidence: : which bot token opens a production #approvals thread is derived from event-supplied childSessionKey (index.mjs:5292-5295, allowlist o1/o2) rather than the ledger-assigned account. Low.
-- Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc entry không còn `Where:` — dựng lại locator từ `PLAN.md` §8 ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng which bot token opens a production #approvals thread is derived from event-supplied childSessionKey (index.mjs:5292-5295, allowlist o1/o2) rather than the… trước khi sửa (nội quy mục 3).
-- Acceptance criteria: Register chưa có acceptance line. Khi sửa phải viết acceptance từ trạng thái đúng ngược lại tiêu đề "which bot token opens a production #approvals thread is derived from event-supplied childSessionKey (index.mjs:5292-5295, allowlist o1/o2) rather than the ledger-assigned account", và acceptance đó là điều kiện duy nhất được phép xóa bug này khỏi file (nội quy mục 6).
+- Reproduction: At HEAD maybePublishDiscordCard (index.mjs:5291) derives the posting agent from `event.childSessionKey` — :5292-5295 match /^agent:([^:]+)/ and then apply an o1/o2 allowlist — and the token used downstream follows that agentId, while the ledger's coordinator/delegation record for the task is never read. Gate it in tests/m12-t2-governed-surface.test.mjs, which already drives this function over a real ledger: announce with a childSessionKey naming o2 for a task the ledger assigned to o1 and assert the o1 account posts.
+- Acceptance criteria: The account that opens an #approvals thread is the one the ledger assigned to the task; an event-supplied childSessionKey may select an agent only when it matches that assignment, and a mismatch is refused instead of silently re-routing the card to another bot.
 - Related findings: nguồn: B01 — security / authorization (all 14 assigned claims…
 
 ### F-105 — integrations/openclaw/orchestration/patterns re-creates the retired L&SC Data Plant and a second orchestrator
@@ -1743,7 +1747,7 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Status: OPEN — (same family as R1-A03-02)
 - Root cause: the owner approves prose the ledger never admitted; @everyone/<@id> and banned patterns are not stripped; >2000 chars is cut with no truncation mark; the body arrives twice per task.
 - Evidence: Where: index.mjs:5291-5337, :5463-5469 (thread body), :5511-5523 (text: bodyContent.slice(0, 2000)); helper lib/discord-forum-tags.mjs:658, bypassed formatter lib/discord-formatter.mjs:701-731 · Evidence: card = extractApprovalCard(payload.output) — the model's own announce text becomes the thread body and is re-posted with buttons; contrast the spawn site at :6706-6709, which explicitly reads from the durable brief. formatForDiscord/sanitizeDiscordText run only in message_sending.
-- Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc index.mjs:5291-5337, :5463-5469 (thread body), :5511-5523 (text: bodyContent.slice(0, 2000)); helper lib/discord-forum-tags.mjs:658, bypassed formatter lib/discord-formatter.mjs:701-731 ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng the announce approval card publishes model-authored prose, twice, unsanitised and silently truncated trước khi sửa (nội quy mục 3).
+- Reproduction: Read index.mjs:5291-5337 at HEAD: the card is extractApprovalCard(payload.output) — the model's own announce text — which becomes the thread body (:5463-5469) and is re-posted with buttons as `text: bodyContent.slice(0, 2000)` (:5511-5523), with discord-forum-tags.mjs:658 slicing again and no truncation mark; formatForDiscord/sanitizeDiscordText (discord-formatter.mjs:701-731) run only in message_sending, so @everyone and mention patterns survive. Gate it in tests/m12-t2-governed-surface.test.mjs with an announce payload over 2000 chars containing a mention, asserting one ledger-derived body, mention-safe and marked if cut.
 - Acceptance criteria: every approval body is ledger-derived, single, and mention-safe.
 - Related findings: adjudication Vòng 2: Verified, raised Medium → High · bug mở: R1-A03-02 · nguồn: A09 — Discord and external integrations
 
@@ -1756,7 +1760,7 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Status: OPEN
 - Root cause: Register kết luận: memory-tool output contracts are declared but validated nowhere, and the adapters already emit out-of-contract values. Chưa có phân tích root cause riêng — phải đọc `Where:` ở HEAD hiện tại và viết lại nguyên nhân trước khi sửa (nội quy mục 2).
 - Evidence: Where: index.mjs:4344-4353 (isCallableExecutionTool excludes zink_skill_* / zink_knowledge_search); skill-adapter.mjs:257-263; knowledge-adapter.mjs:386-391 · Evidence: governed_status:"FAILED" and error_code are outside zink-skill.schema.json:141-153; "NO_MATCH" and semantic_contract_version are outside zink-knowledge.schema.json:86-92 (additionalProperties:false).
-- Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc index.mjs:4344-4353 (isCallableExecutionTool excludes zink_skill_* / zink_knowledge_search); skill-adapter.mjs:257-263; knowledge-adapter.mjs:386-391 ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng memory-tool output contracts are declared but validated nowhere, and the adapters already emit out-of-contract values trước khi sửa (nội quy mục 3).
+- Reproduction: At HEAD isCallableExecutionTool (index.mjs:4344-4353) lists zink_excel, zink_power_bi, zink_sql and the other execution tools but not zink_skill_* or zink_knowledge_search, so validateToolOutputEnvelope never runs for them; the adapters already emit outside their declared schemas — governed_status 'FAILED' with an error_code against zink-skill.schema.json:141-153, and 'NO_MATCH' plus semantic_contract_version against zink-knowledge.schema.json:86-92 which sets additionalProperties:false. Gate it in tests/m7-t3-tools-contract.test.mjs: take a real adapter response and validate it against that tool's own declared output schema.
 - Acceptance criteria: each emitted envelope passes its own declared output schema.
 - Related findings: nguồn: A10 — Zink Tools, adapters and execution contracts
 
@@ -1922,10 +1926,10 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Legacy register id: `R1-A01-05`
 - Affected modules: Zink Tools
 - Severity: Low
-- Status: OPEN
-- Root cause: docs/architecture/zink-tools-boundaries.md lists only Excel/Power BI/SQL/Python/n8n/forecast/optimization/OR/simulation, and lsc-data-flow.md:74 says "do not create provider adapters until a real provider difference requires one".
+- Status: OPEN · premise changed 2026-10-17: two locators drifted — the "do not create provider adapters" rule is `zink-tools-boundaries.md:100`, not `lsc-data-flow.md:74` (that file is 69 lines and never mentions provider adapters), and the doc tool list is `:12-20`, not `:11-18`. The defect stands and is one adapter wider than the register recorded (`storage/r2-adapter.mjs`).
+- Root cause: docs/architecture/zink-tools-boundaries.md:12-20 declares the Zink Tools ownership set (Excel, Power BI, SQL, Python, n8n integration, Forecast, Optimization, Operations Research, Simulation) and :100 states "Do not create provider adapters until a real provider difference requires one", yet nine provider adapters ship outside that set.
 - Evidence: Where: zink-tools/adapters/{mlops/dagshub,mlops/huggingface,mlops/mlflow,compute/databricks,compute/kaggle,analytics/bigquery,analytics/motherduck,app/streamlit}-adapter.mjs, registered at zink-tools/adapters/index.mjs:33-43 · Expected/Actual: docs/architecture/zink-tools-boundaries.md lists only Excel/Power BI/SQL/Python/n8n/forecast/optimization/OR/simulation, and lsc-data-flow.md:74 says "do not create provider adapters until a real provider difference requires one".
-- Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc zink-tools/adapters/{mlops/dagshub,mlops/huggingface,mlops/mlflow,compute/databricks,compute/kaggle,analytics/bigquery,analytics/motherduck,app/streamlit}-adapter.mjs, registered at zink-tools/adapters/index.mjs:33-43 ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng Zink Tools provider adapters exceed the declared tool-ownership set trước khi sửa (nội quy mục 3).
+- Reproduction: Measured at HEAD: `ls zink-tools/adapters/` returns analytics, app, compute, knowledge, mlops, skill-store and storage (dagshub, huggingface, mlflow, databricks, kaggle, bigquery, motherduck, streamlit adapters inside them) and adapters/index.mjs:30-43 exports StreamlitAdapter, KnowledgeAdapter and SkillAdapter, while docs/architecture/zink-tools-boundaries.md:12-20 lists only Excel, Power BI, SQL, Python, n8n integration, Forecast, Optimization, Operations Research and Simulation and :100 of that same file says not to create provider adapters until a real provider difference requires one. Gate it in tests/repository-policy.test.mjs: every directory under zink-tools/adapters/ must appear in the boundary doc's tool list.
 - Acceptance criteria: the documented tool list matches adapters/.
 - Related findings: nguồn: A01 — architecture and system boundaries
 
@@ -1938,7 +1942,7 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Status: OPEN
 - Root cause: a 20-digit or leading-zero configured owner passes config admission but resolves to undefined, denying every owner action (fail-closed self-DoS, not escalation).
 - Evidence: Where: index.mjs:4715-4720 (resolveOwnerDiscordId: /^[0-9]{17,19}$/) vs index.mjs:4767 and lib/authority.mjs:85 (/^[1-9][0-9]{16,19}$/); isConfiguredOwnerActor reads DISCORD_OWNER_ID while the button/ingress gates read config.ownerDiscordId
-- Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc index.mjs:4715-4720 (resolveOwnerDiscordId: /^[0-9]{17,19}$/) vs index.mjs:4767 and lib/authority.mjs:85 (/^[1-9][0-9]{16,19}$/); isConfiguredOwnerActor reads DISCORD_OWNER_ID while the button/ingress gates read config.ownerDiscordId ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng two different owner-snowflake validators and two owner sources trước khi sửa (nội quy mục 3).
+- Reproduction: Both validators are live and disagree: resolveOwnerDiscordId (index.mjs:4715-4718) accepts any 17-19 digits, while :4767 and lib/authority.mjs:85 require a non-zero first digit and up to 20, so a 20-digit or leading-zero configured owner passes config admission and then resolves to undefined — a fail-closed self-DoS rather than an escalation. isConfiguredOwnerActor also reads DISCORD_OWNER_ID while the button and ingress gates read config.ownerDiscordId. Gate it in tests/m12-t2.17-owner-identity-hygiene.test.mjs: configure a leading-zero owner id and assert one canonical verdict from every gate.
 - Acceptance criteria: all gates share one canonical validator and one owner source.
 - Related findings: nguồn: A03 — security and trust boundaries
 
@@ -2143,10 +2147,10 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Legacy register id: `R1-A01-02`
 - Affected modules: OpenClaw governance plugin (Discord), OpenClaw integration, Zink Skill Store
 - Severity: Medium
-- Status: OPEN
+- Status: OPEN · premise changed 2026-10-17: the "only through the Zink Tools boundary" half no longer holds for promotion — platform-boundaries.md:16-22 says promotion happens "in governed runtime code, not in Tools", system-overview.md:18-24 names "trusted internal promotion" beside the model-visible Tools path, and `C-3` (`e47e660`) already corrected the contract sentence. What is unmet is the `src/`-level coupling itself plus the absence of any gate; adjacent to owner decision `H5`.
 - Root cause: docs/architecture/platform-boundaries.md:18-22 and system-overview.md:19-22 — OpenClaw reaches the Skill Store only through the governed Zink Tools boundary. Actual: the promotion path hard-couples to Skill Store internal file layout (SkillAdapter exposes only querySkillStore/propose, zink-tools/adapters/skill-store/skill-adapter.mjs:209).
 - Evidence: Where: integrations/openclaw/plugins/zink-governance/index.mjs:554,820,830,1075,1453 (loadRepoModule("zink-skill-store/src/catalog.mjs"), vector-sync.mjs, promoteApprovedSkillUnlocked, withSkillStoreWriterLock) · Expected/Actual: docs/architecture/platform-boundaries.md:18-22 and system-overview.md:19-22 — OpenClaw reaches the Skill Store only through the governed Zink Tools boundary. Actual: the promotion path hard-couples to Skill Store internal file layout (SkillAdapter exposes only querySkillStore/propose, zink-tools/adapters/skill-store/skill-adapter.mjs:209).
-- Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc integrations/openclaw/plugins/zink-governance/index.mjs:554,820,830,1075,1453 (loadRepoModule("zink-skill-store/src/catalog.mjs"), vector-sync.mjs, promoteApprovedSkillUnlocked, withSkillStoreWriterLock) ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng the governance plugin mutates the Skill Store canonical store and vector index through direct src/ imports, bypassing the Zink Tools boundary trước khi sửa (nội quy mục 3).
+- Reproduction: At HEAD the plugin imports Skill Store internals directly: index.mjs:554 resolves the zink-tools skill adapter by relative path and :1075/:1453 load `zink-skill-store/src/catalog.mjs` and `vector-sync.mjs` through loadRepoModule, calling promoteApprovedSkillUnlocked under withSkillStoreWriterLock, while SkillAdapter exposes only querySkillStore/propose (skill-adapter.mjs:209). Measured 2026-10-17, the doc half of the original claim is weaker than filed: platform-boundaries.md:16-22 puts promotion "in governed runtime code, not in Tools" and system-overview.md:18-24 names "trusted internal promotion" beside the model-visible Tools path, so no architecture file forbids the call — what is missing is any rule or gate about importing `src/` at all. Gate it in tests/repository-policy.test.mjs: no integrations/openclaw source may resolve a zink-skill-store/src path.
 - Acceptance criteria: no zink-skill-store/src/* import from integrations/openclaw.
 - Related findings: nguồn: A01 — architecture and system boundaries
 
@@ -2172,7 +2176,7 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Status: OPEN
 - Root cause: ENOENT/SyntaxError escapes to the host and, per the run-end seam, is re-attributed as a model failure; a module-level load failure takes the whole plugin down. Unknown governance_version rows do fail correctly (GOVERNANCE_HASH_MISMATCH), so only file-level failure is mis-shaped.
 - Evidence: Where: index.mjs:4865-4872 (manifestFor), consumed by guard.mjs:928-936, :7212; runtime.mjs:11 module-level matrix load
-- Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc index.mjs:4865-4872 (manifestFor), consumed by guard.mjs:928-936, :7212; runtime.mjs:11 module-level matrix load ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng a missing or unparseable governance manifest surfaces as a raw filesystem error, not a denial trước khi sửa (nội quy mục 3).
+- Reproduction: Read index.mjs:4865-4872: manifestFor parses the mapping with JSON.parse(readFileSync(…)) and no try/catch, so a missing manifest raises ENOENT and a corrupt one SyntaxError; both escape to the host, where the run-end seam re-attributes them as a model failure, and runtime.mjs:11 loads the reason matrix at module level so that failure takes the whole plugin down. guard.mjs:928-936 and :7212 consume the result, and unknown governance_version rows already fail correctly with GOVERNANCE_HASH_MISMATCH. Gate it in tests/m8-t2.9-manifest-completeness.test.mjs: delete and corrupt the manifest, assert a declared canonical code either way.
 - Acceptance criteria: every policy-artifact read is wrapped and yields a declared canonical code.
 - Related findings: nguồn: A04 — policy and capability enforcement
 
@@ -2224,8 +2228,8 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Status: OPEN — | process.cwd() with no packaged fallback, while policy.mjs:1213 packages the file and :1204-1208 says the packaged preview imports ./excel-writer.mjs → two module instances of the artifact writer in
 - Root cause: Register kết luận: excel-writer.mjs is digest-pinned _and_ overridden from the working tree. Chưa có phân tích root cause riêng — phải đọc `Where:` ở HEAD hiện tại và viết lại nguyên nhân trước khi sửa (nội quy mục 2).
 - Evidence: Evidence: index.mjs:2493-2498 uses findRepoRoot()
-- Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc entry không còn `Where:` — dựng lại locator từ `PLAN.md` §8 ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng excel-writer.mjs is digest-pinned _and_ overridden from the working tree trước khi sửa (nội quy mục 3).
-- Acceptance criteria: Register chưa có acceptance line. Khi sửa phải viết acceptance từ trạng thái đúng ngược lại tiêu đề "excel-writer.mjs is digest-pinned _and_ overridden from the working tree", và acceptance đó là điều kiện duy nhất được phép xóa bug này khỏi file (nội quy mục 6).
+- Reproduction: At HEAD index.mjs:2493-2498 resolves `findRepoRoot() || process.cwd()` and imports integrations/openclaw/lib/excel-writer.mjs from the working tree, so the module whose digest was admitted is not necessarily the module that runs. Measure it two ways: `node -e` printing findRepoRoot() from the deployed layout, and a digest comparison between the packaged asset and the working-tree file — editing the tree changes governed behaviour with no digest change. Gate it in tests/m8-t2.6-r8-asset-provenance.test.mjs.
+- Acceptance criteria: The excel writer that executes is the one whose digest was admitted: the deployed plugin resolves it from its own packaged assets, or the pin covers the working-tree path it actually loads, so a tree edit cannot change governed behaviour without a digest change.
 - Related findings: nguồn: B04 — deployment / dependency integrity
 
 ### F-163 — fixed-name exclusive-create temp files are never cleaned, so one interrupted apply/restore permanently blocks retries
@@ -3158,8 +3162,8 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Affected modules: Zink Tools
 - Severity: High
 - Status: OPEN
-- Root cause: `validateWorkflowOutputData` only requires `data.status` to be a non-empty string, and the success envelope is returned unconditionally afterwards, so the workflow's own state is never mapped to terminal-versus-pending.
-- Evidence: Where: zink-tools/n8n/trigger.mjs:16-27 (`if (typeof data.status !== "string" || data.status.length === 0) return false;` … `return true;`) and :300-318 (`return { … status: "success", output: { workflow_id, data: parsed.data }, artifacts: [] }`) · Evidence: the path is live, not test-only — integrations/openclaw/topology/lib/guard.mjs:231-232 binds `invokeN8n` from the adapter and :1900 dispatches it. `pipeline_notify` is the one workflow whose check demands `data.delivered === true`, which shows the intended completion pattern.
+- Root cause: for `data_plant_ingest` and `data_plant_sync`, `validateWorkflowOutputData` only requires `data.status` to be a non-empty string, and the success envelope is returned unconditionally afterwards, so the workflow's own state is never mapped to terminal-versus-pending.
+- Evidence: Where: zink-tools/n8n/trigger.mjs:16-27 (`data_plant_ingest`) and :29-40 (`data_plant_sync`), each ending `if (typeof data.status !== "string" || data.status.length === 0) return false;` … `return true;`, and :300-318 (`return { … status: "success", output: { workflow_id, data: parsed.data }, artifacts: [] }`) · Evidence: the path is live, not test-only — integrations/openclaw/topology/lib/guard.mjs:230-234 binds `invokeN8n` from the adapter and :1900 dispatches it. `pipeline_notify` is the one workflow whose check demands a boolean `data.delivered` (trigger.mjs:42-50), which shows the intended completion pattern.
 - Reproduction: static — a loopback 200 with `{ data: { ingest_id: "i", status: "accepted" } }` passes :300 and is returned as `status: "success"`; the owner's result report then reads a queued workflow as completed work.
 - Acceptance criteria: a non-terminal `data.status` yields a pending/accepted outcome and never `success`; a test asserts `{ status: "PENDING" }` cannot produce tool success.
 - Related findings: F-144, F-231 · nguồn: R7 delta audit D5 — provider adapters and tool truth

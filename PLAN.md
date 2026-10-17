@@ -7021,7 +7021,8 @@ because it carried a different legacy id. Five further rows had their premises m
 `REFUTED` rather than deleted: `R6-HUNT-01` went to `PARTIAL` under the `e` grant (the two named `scratch/*/scripts/notify.mjs`
 files no longer exist, a token-shape sweep of `scratch/` returns zero files, and `git log --all -- '*notify.mjs'` is
 empty, so the credential literal never entered git objects), plus `F-069` and `F-155`, whose evidence is recorded in the
-rows themselves. Queue arithmetic after this: **219** rows, 5 Critical / 76 High / 112 Medium / 22 Low / 4 Ungraded.
+rows themselves. Queue arithmetic after this: **236** rows, 6 Critical / 83 High / 120 Medium / 23 Low / 4 Ungraded — the
+219 this record first stated was measured before a parallel session appended the 17 `R7-D*` rows named below.
 
 **What `b2` changed inside the register.** The 59 Critical and High rows that lacked a reproduction now carry one,
 written from the code at this head, and 12 of them gained the acceptance line they were missing. Six agents read the
@@ -7030,7 +7031,37 @@ bogus `scope_digest` still reaches `QUEUED`; the P2 asset-predecessor tests repo
 `/home/hoang_vinh/.openclaw-zink` is absent; `evaluateCapabilityAccess` granting `L3` apply across every namespace for
 an agent scoped to one; four concurrent knowledge searches timed 2 508 ms apart behind an upstream `Retry-After: 2`).
 Nine of those rows came back with the premise CHANGED or UNVERIFIABLE rather than confirmed, and the drift is stated in
-the row. The Medium/Low/Ungraded tranche (110 reproductions, 47 acceptances) has not been re-verified yet.
+the row. The Medium/Low/Ungraded tranche still owes **91** reproductions and **40** acceptances (it owed 110 and 47 when
+`3325e5e` was cut; the `b2-m1…m3` batches landed after it, in the working tree).
+
+**The 17 rows this record under-counted, and what they actually are.** `3325e5e`'s own message says "219 rows" while the
+file it committed holds **236** — the difference is `F-225`–`F-241`, whose `Legacy register id`s are `R7-D1-01`…`R7-D7-01`.
+Those ids resolve to nothing in the six-round register (its only `R7-` id is `R7-GATE-01`, closed by `B-19` `9fa6505`), so
+they were first read here as fabricated provenance written by a delegated agent that had been told to stay read-only. That
+reading was **wrong twice over**, and the correction is the point of this paragraph. (1) The rows came from a **second
+session of the owner's own**, running concurrently against the same file under a full-repository audit brief whose rules
+name `findings.md` as the only persistent record and its Lead Agent as the only writer; that session's transcript records
+the owner's ruling verbatim — `delta-only, giữ strict §0.1, id R7-*, backup rồi ghi` — and it did back up first
+(`backups/findings.pre-R7-audit-20261017-180715.md`, `backups/findings.pre-R7-append2-20261017-200705.md`). So `R7-*` is an
+id scheme the owner chose for that round, not an invention, and no agent exceeded its scope. (2) Three of the rows were
+also reported as citing files absent from disk — `operator-rollback.mjs`, `workflow-policy.json`, `state-transitions.json`.
+All three exist. The claim came from a git-ignored scratch helper, `temp/rowcheck.mjs`, whose fixed root list had no
+`topology/policy/` or `topology/fixtures/runtime-regression/` entry, so its resolver reported a miss; the tool was wrong,
+not the rows. Every one
+of the 17 was then re-read at this head by hand: each cited path exists and each checked line range matches, with a single
+overstatement corrected in the row itself (`F-235` claimed `pipeline_notify` demands `data.delivered === true`; trigger.mjs:43
+demands a boolean). `F-225` is the substantive catch of the round and it is Critical: `refuse()` in the historical-recovery
+command only writes a `FAIL` line and sets `process.exitCode = 1`, never throwing or returning, so both of its call sites
+(operator-rollback.mjs:101, :111) fall through to `restoreNativePatch`, `restoreT1RuntimeFiles` and a `systemctl --user
+restart` — the refusal is advisory output, not a gate.
+
+**What the collision itself cost, stated because it is a live hazard.** Two sessions wrote one Git-tracked file for about
+five hours; the shared index meant one session inspected `git diff --cached` at 15:40 UTC while the other committed at
+15:57 UTC. Nothing was lost — the pre-append backups and `git show 3325e5e:docs/execution/findings.md` both re-read clean,
+and the row-id set is contiguous with four intentional gaps (`F-006`, `F-007`, `F-141`, `F-199`) — but a commit message
+written from one session's arithmetic silently became false about a file the other session had grown. The register's §1 now
+carries the R7 provenance so the ids stay resolvable, and the count in any future message must be read from the file at
+commit time, not from the session that started the work.
 
 **Gate consequences of the move, since they are decision-relevant.** Being under `docs/**/*.md` put the register inside
 `markdownlint-cli2` and `prettier --check`, which is why 27 lint findings were repaired by turning technical tokens into
@@ -7096,7 +7127,7 @@ a tier assignment in `ACTIVE.md` §5.3 is not an approval.** Two rows have since
 | **H7** | A referential scheme for Discord identities in durable events, plus the policy for **unknown** ids | **loses its live basis.** `governance/ledger/events.jsonl` is 0 bytes (mtime Sep 18) and a numbers-only snowflake count returns 0 — no third-party identity has ever been written. This is a forward-looking schema decision ("what may future events write"), and must not be put to the owner as remediating an existing exposure. `operator/m7-t2/ledger` was not swept, so that half stays `Unresolved` | `R5-E13-04`, `R6-V09` |
 | **H8** | A governed `DEPRECATED` retirement transition for the Skill Store | stands, better evidenced, with **one prerequisite and one correction**. Prerequisite: applied migrations are keyed on **filename only** (`database.py:1718-1733`, no digest column), so editing `003`'s `CHECK` in place is a silent no-op on an already-migrated database — the fix must be a forward migration (`R6-V10-01`). Correction: cite `R5-E04-05` only; `R5-E04-01/02` are staging-recovery findings, not lifecycle ones (`R6-V10-03`). `REJECTED` is equally writerless, so **two** of four states have no writer | `R5-E04-05`, `catalog.mjs:45, :419-424` |
 | **H9** | Whether unreclaimable PDF text copies get a reclamation path | unchanged; a retention decision that deletes derived content | `R5-E03-05` |
-| **H10** | Whether `.agents/states/findings.md` becomes tracked, and where an archived `ACTIVE.md` should live | **register half ANSWERED 2026-10-17** by "chuyển sang docs/execution đi": the queue moved to **`docs/execution/findings.md`** and is Git-tracked from this head, so the cost `M12/T4-R1` `T4-3` exposed — 31 status rewrites, 11 dated refresh lines and one new entry landing with **no commit at all** — cannot recur. Being tracked also put it inside the `docs/**/*.md` prettier and markdownlint globs, which is why each row now carries one fixed nine-field shape. **The size policy this row asked for is still not set**: the register entered Git at **3 013 lines / ~435 KB** holding 219 queued bugs, after 48 rows left it (43 closed with commit + executed-test evidence, 4 duplicates, 1 resolved blocker) into the file's own §2 closure table, and no trimming rule was approved. The archive half was already settled in practice — six closed contracts now live under `docs/contracts/execution/archive/`, and the scrub rule ran on the latest | this section's own history, `R5-E14-07`, `Record — M12/T4-R1 closed` |
+| **H10** | Whether `.agents/states/findings.md` becomes tracked, and where an archived `ACTIVE.md` should live | **register half ANSWERED 2026-10-17** by "chuyển sang docs/execution đi": the queue moved to **`docs/execution/findings.md`** and is Git-tracked from this head, so the cost `M12/T4-R1` `T4-3` exposed — 31 status rewrites, 11 dated refresh lines and one new entry landing with **no commit at all** — cannot recur. Being tracked also put it inside the `docs/**/*.md` prettier and markdownlint globs, which is why each row now carries one fixed field shape — the owner's nine fields plus the `Legacy register id` his `l1` answer added, ten lines per row. **The size policy this row asked for is still not set**: the register entered Git at **3 244 lines / ~457 KB** holding **236** queued bugs, after 48 rows left it (43 closed with commit + executed-test evidence, 4 duplicates, 1 resolved blocker) into the file's own §2 closure table and a concurrent owner session appended 17 `R7-D*` rows, and no trimming rule was approved. The archive half was already settled in practice — six closed contracts now live under `docs/contracts/execution/archive/`, and the scrub rule ran on the latest | this section's own history, `R5-E14-07`, `Record — M12/T4-R1 closed` |
 | **H11** | **NEW, owner-proposed 2026-10-15: the O1/O2 working relationship.** His words: *"2 điều phối O1 và O2 nên chia đôi task, thảo luận với nhau trong sandbox để khi làm xong, các task mà O1 và O2 cho executor chuyên biệt làm xong, ghép lại phải đúng yêu cầu của anh"* | this is **not** option A or B of the routing question — it is a third answer, and it changes canonical architecture, so it is RED and recorded rather than built. What it contradicts today: `five-stack.md:15-17` ("Main is the only authority that changes execution between coordinators… **O1 and O2 return a transition request to Main instead of invoking one another**") and `:20-23` (missing prerequisites are BLOCKED "rather than a hidden A2A edge"); `policy.mjs:1166` Coordinator Core says the same; `AGENT_SPAWN_POLICY` gives `main → [o1, o2]` and **no** `o1 ↔ o2` edge, which the guard enforces. Sessions also run `context: isolated, sandbox: require, thread: false`, so "a sandbox they discuss in" is a **new shared durable surface**, and `R5-E16-01/02` already proves whole-file rewrites under one lock lose updates when several loops run concurrently. Three shapes are offered below; the recommended order exists because **the execution lane itself has never run end to end**, and its first named prerequisite is **already landed**: `R1-A04-01` closed at `M12/T2.2-R1` `A-1` (`ccf2ad7`) — the guard now validates each node against `AGENT_STACK_POLICY` (`guard.mjs:849` at this head) — and `R1-A04-05` closed at `A-2` (`09aa698`). What would still refuse the split mid-flight is a different defect, proved while `A-1` ran: `main` owns the `decision` node but appears in nobody's spawn list, so Main's merge has no admissible node. That, not the guard/policy drift, is the prerequisite left; it is documented in the `A-1` consequence block below | `docs/architecture/five-stack.md`, `policy.mjs:555-563, 1166-1174`, `guard.mjs:842-853, 865-870`, `R1-A04-01` (closed `ccf2ad7`), `R1-A04-05` (closed `09aa698`) |
 
 **H11, the three shapes (ranked; the owner picks one before any contract is written):**
