@@ -800,9 +800,17 @@ function canonicalTimestamp(date = new Date()) {
   return date.toISOString().replace(/\.\d{3}Z$/u, "Z");
 }
 
-function writerError(code, message) {
+/**
+ * The writer's own refusals. `details` is the machine-readable cause list that
+ * accompanies a code: for `SKILL_IDENTITY_INVALID` it names the single rule the
+ * input broke, and for `CATALOG_INVALID` it names the stage that refused plus
+ * every diagnostic code the catalog reported. Callers that must branch on WHY
+ * read `error.details` instead of parsing the message prose.
+ */
+function writerError(code, message, details = []) {
   const error = new Error(`${code}: ${message}`);
   error.code = code;
+  error.details = details;
   throw error;
 }
 
@@ -1088,16 +1096,20 @@ export async function promoteApprovedSkillUnlocked({
     writerError(
       "SKILL_IDENTITY_INVALID",
       "namespace/capability/version do not satisfy catalog grammar.",
+      ["IDENTITY_GRAMMAR"],
     );
   }
   if (typeof content !== "string" || content.length === 0) {
-    writerError("SKILL_IDENTITY_INVALID", "content must be non-empty.");
+    writerError("SKILL_IDENTITY_INVALID", "content must be non-empty.", [
+      "CONTENT_EMPTY",
+    ]);
   }
   const contentBytes = Buffer.from(content, "utf8");
   if (contentBytes.length > 262_144) {
     writerError(
       "SKILL_IDENTITY_INVALID",
       "content exceeds the 262,144-byte catalog ceiling.",
+      ["CONTENT_CEILING_EXCEEDED"],
     );
   }
   if (typeof decisionRef !== "string" || !DECISION.test(decisionRef)) {
@@ -1107,10 +1119,18 @@ export async function promoteApprovedSkillUnlocked({
     );
   }
   if (!SOURCE_TYPES.has(sourceType)) {
-    writerError("SKILL_IDENTITY_INVALID", "provenance source_type is invalid.");
+    writerError(
+      "SKILL_IDENTITY_INVALID",
+      "provenance source_type is invalid.",
+      ["PROVENANCE_SOURCE_TYPE_INVALID"],
+    );
   }
   if (!Array.isArray(references) || references.length > 32) {
-    writerError("SKILL_IDENTITY_INVALID", "provenance references are invalid.");
+    writerError(
+      "SKILL_IDENTITY_INVALID",
+      "provenance references are invalid.",
+      ["PROVENANCE_REFERENCES_INVALID"],
+    );
   }
   for (const reference of references) {
     if (
@@ -1127,6 +1147,7 @@ export async function promoteApprovedSkillUnlocked({
       writerError(
         "SKILL_IDENTITY_INVALID",
         "a provenance reference is invalid for its type.",
+        ["PROVENANCE_REFERENCE_ITEM_INVALID"],
       );
     }
   }
@@ -1134,6 +1155,7 @@ export async function promoteApprovedSkillUnlocked({
     writerError(
       "SKILL_IDENTITY_INVALID",
       "lifecycle actors must be non-empty.",
+      ["LIFECYCLE_ACTOR_EMPTY"],
     );
   }
 
@@ -1256,6 +1278,10 @@ export async function promoteApprovedSkillUnlocked({
     writerError(
       "CATALOG_INVALID",
       `catalog has pre-existing errors; promotion refused (first: ${first?.code ?? "UNKNOWN"} at ${first?.path ?? "unreported path"}).`,
+      [
+        "PREEXISTING_CATALOG_ERRORS",
+        ...catalog.errors.map((entry) => entry?.code ?? "UNKNOWN"),
+      ],
     );
   }
   const clash = (catalog.records ?? []).find(
@@ -1310,6 +1336,10 @@ export async function promoteApprovedSkillUnlocked({
       writerError(
         "CATALOG_INVALID",
         `staged record failed validation: ${staged.errors[0]?.code ?? "unknown"}.`,
+        [
+          "STAGED_VALIDATION_FAILED",
+          ...staged.errors.map((entry) => entry?.code ?? "UNKNOWN"),
+        ],
       );
     }
     // M10/T2-R22: make the staging directory's own entries durable BEFORE it is
@@ -1354,6 +1384,10 @@ export async function promoteApprovedSkillUnlocked({
       `promoted record failed re-validation: ${
         reverified.errors[0]?.code ?? "unknown"
       }; rollback: ${rollback}.`,
+      [
+        "PROMOTED_REVALIDATION_FAILED",
+        ...reverified.errors.map((entry) => entry?.code ?? "UNKNOWN"),
+      ],
     );
   }
 

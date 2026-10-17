@@ -507,6 +507,75 @@ describe("M8/T3 canonical Skill Store writer", () => {
       await rm(tmp, { recursive: true, force: true });
     }
   });
+
+  test("T2k: the writer puts its cause in error.details, not only in prose", async () => {
+    const { promoteApprovedSkill } =
+      await import("../zink-skill-store/src/catalog.mjs");
+    const { mkdir } = await import("node:fs/promises");
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "zink-details-"));
+    const skillsRoot = path.join(tmp, "skills");
+    const base = {
+      skillsRoot,
+      namespace: ["office"],
+      capability: "details-skill",
+      version: "1.0.0",
+      content: "# Details\n\nCause.",
+      requestingActor: "excel",
+      decisionRef: "PLAN:M8/T3-R1",
+    };
+    const refuse = async (overrides) => {
+      try {
+        await promoteApprovedSkill({ ...base, ...overrides });
+      } catch (error) {
+        return error;
+      }
+      throw new Error("expected the writer to refuse");
+    };
+    try {
+      const grammar = await refuse({ namespace: ["Office!"] });
+      assert.equal(grammar.code, "SKILL_IDENTITY_INVALID");
+      assert.deepEqual(
+        grammar.details,
+        ["IDENTITY_GRAMMAR"],
+        "the identity refusal must name the rule the input broke",
+      );
+
+      const empty = await refuse({ content: "" });
+      assert.deepEqual(
+        empty.details,
+        ["CONTENT_EMPTY"],
+        "a different identity rule must report a different cause",
+      );
+
+      await mkdir(path.join(skillsRoot, "office", "bad_dir"), {
+        recursive: true,
+      });
+      const dirty = await refuse({});
+      assert.equal(dirty.code, "CATALOG_INVALID");
+      assert.equal(dirty.details[0], "PREEXISTING_CATALOG_ERRORS");
+      assert.ok(
+        dirty.details.includes("DIRECTORY_GRAMMAR_INVALID"),
+        "a poisoned tree must surface the diagnostic it found",
+      );
+
+      // The caller's question this item exists to answer: without reading a
+      // single word of prose, is the request bad or is the store bad?
+      const classify = (error) =>
+        error.details[0] === "PREEXISTING_CATALOG_ERRORS" ? "tree" : "input";
+      assert.equal(classify(grammar), "input");
+      assert.equal(classify(empty), "input");
+      assert.equal(classify(dirty), "tree");
+
+      const unwrapped = await refuse({ decisionRef: "not-a-decision" });
+      assert.equal(unwrapped.code, "DECISION_REF_INVALID");
+      assert.ok(
+        Array.isArray(unwrapped.details),
+        "details is always an array, so a caller never has to guard it",
+      );
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("M8/T3 durable skill proposals", () => {
