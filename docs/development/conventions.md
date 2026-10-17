@@ -23,7 +23,7 @@ Dùng Conventional Commits theo mẫu `type(scope): summary`.
 
 - `PLAN.md` giữ durable lifecycle/authorization; khi task đã được owner approve,
   `docs/contracts/execution/ACTIVE.md` là source of truth cho implementation details.
-- Cursor execute và handoff; Cursor không sở hữu final task commit/push theo mặc định.
+- `dsh` execute và handoff; `dsh` không sở hữu final task commit/push theo mặc định.
 - Codex chỉ tạo local implementation commit sau khi review/fix hội tụ và Final
   Quality Gate `PASS`.
 - Sau implementation commit, Codex cập nhật `PLAN.md`, xóa `ACTIVE.md`, dọn state
