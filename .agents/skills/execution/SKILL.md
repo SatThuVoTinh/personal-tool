@@ -117,8 +117,9 @@ Files under `.agents/states/` are optional working memory, never authority.
   execution. It must not restate the full contract.
 - `handoff.md`: Cursor should create/update this at the execution handoff with what
   changed, validation actually run, known limitations/blockers, and review notes.
-- `findings.md`: owned by Codex review/remediation; Cursor must not use it to broaden
-  implementation scope.
+- The defect register is `docs/execution/findings.md`, outside this directory: owned by
+  Codex review/remediation, tracked, and never transient-deleted. dsh must not use it to
+  broaden implementation scope, and a row's existence is not an execution grant.
 
 If any transient state conflicts with `PLAN.md`, the valid `ACTIVE.md`, architecture,
 or persistent contracts, ignore the transient state and follow the authoritative

@@ -90,9 +90,11 @@ Passing tests does not create:
 Cursor implementation alone is not task completion. Codex owns final review,
 bounded remediation, validation, commits, and closeout.
 
-`context.md`, `findings.md`, and `handoff.md` are supplementary transient state.
+`context.md` and `handoff.md` are supplementary transient state.
 They may support validation but never substitute for the valid `ACTIVE.md`, the
-complete final diff, or independently rerun evidence.
+complete final diff, or independently rerun evidence. The defect register at
+`docs/execution/findings.md` is **not** transient state: it is tracked, permanent,
+and its §0 block owns the rules for closing a row.
 
 ## Final Quality Gate
 
@@ -100,7 +102,7 @@ Before the implementation commit, all of these must be true:
 
 - every approved `ACTIVE.md` implementation step is complete;
 - `QUALITY REVIEW PASS` from `code-review/SKILL.md`;
-- zero unresolved actionable in-scope findings, including security findings; if `findings.md` exists, it has zero `OPEN` findings;
+- zero unresolved actionable in-scope findings, including security findings — scoped to what **this task** raised or was authorized to fix; the tracked register at `docs/execution/findings.md` is the repository's whole open-defect backlog and is never a per-task pass/fail condition;
 - every required affected gate is `PASS` against the final implementation state;
 - no unauthorized scope/architecture/contract drift remains;
 - no unrelated change or secret/runtime artifact is staged;
@@ -120,7 +122,7 @@ When the Final Quality Gate passes:
 3. update `CHANGELOG.md`, `README.md`, or canonical docs only when the validated
    task actually requires those durable updates;
 4. delete `docs/contracts/execution/ACTIVE.md`;
-5. delete transient `.agents/states/context.md`, `findings.md`, and `handoff.md` when present;
+5. delete transient `.agents/states/context.md` and `handoff.md` when present — never `docs/execution/findings.md`, whose rows leave only under that file's own §0.2 closure rule;
 6. rerun checks affected by the closeout/documentation changes;
 7. create the **local closeout commit**;
 8. verify `git status --short --branch` is clean;

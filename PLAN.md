@@ -71,9 +71,10 @@ Task: M12/T4 — Governance-record integrity: re-inventory the orphaned findings
   and shrink the release-gate cell that duplicates §8.
   (history) `M12/T2.3` Wave C — **CLOSED 2026-10-17**; the three-wave remediation programme (`M12/T2.1` high,
   `M12/T2.2` medium, `M12/T2.3` low) is complete at the tier level, and the owner's standing order `anh muốn em sửa hết`
-  now runs the successor bands in this queue: `M12/T4` (record) → `M12/T2.2-R3` (Skill Store lifecycle, 18) →
-  `M12/T5` (A2 packaged module graph) → H5 answer → `M12/T6`/`T7`/`T8` (Knowledgebase / Zink Tools adapters / gate
-  truth) → `M12/T3` (H11 shape 1) last.
+  now runs the successor bands in this queue: `M12/T5` (A2 packaged module graph) → H5 answer →
+  `M12/T6`/`T7`/`T8` (Knowledgebase / Zink Tools adapters / gate truth) → `M12/T3` (H11 shape 1) last.
+  `M12/T4` (record) and `M12/T2.2-R3` (Skill Store lifecycle, 18 findings) have both been executed and are closed with
+  their evidence in §8, so they no longer belong to the pending queue.
   The predecessor tier `M12/T2.1` (HIGH-RISK: irreversible loss, exposure, failures nobody can detect) is **CLOSED
   2026-10-15**: all eight items plus four owner-authorized follow-ons landed, its evidence is in §8, and its full
   contract text is preserved verbatim at `docs/contracts/execution/archive/2026-10-15-M12-T2.1-R3.md` — that archive
@@ -117,7 +118,10 @@ Active revision: M12/T2.2-R3 — **Skill Store lifecycle**, materialized 2026-10
   fabricated `(lines None-None)` citation (`R5-E02-05`, **whose only real trigger is a PDF row with a NULL page
   pair**, not markdown), and the destructive default published as an npm test name (`R5-E08-02`).
   Prior revision: M12/T2.1-R2 — superseded 2026-10-15 by its own verification round; see the `Execution
-  Authorization` block below and `.agents/states/findings.md` Vòng 6 for the eleven defects found in it.
+  Authorization` block below, and for the eleven defects found in it the §8 tier tables of this file plus the
+  `F-xxx` rows that still carry their legacy ids in `docs/execution/findings.md`. That register's Vòng 6 narrative was
+  dropped on 2026-10-17 when the owner reduced the file to a bug-only queue, so the defects live in §8 and in the rows,
+  not in a prose lane record.
 Prior revision: M12/T2.1-R1 — the execution wave the owner authorized on 2026-10-14 by answering the
   four-round audit's decision block ("A: A1 + lên lịch A2 / B: B1 / C: C2 / D E F làm theo khuyến nghị
   của em / G có / rồi tạo ACTIVE.md"). Ten frozen items, all inside the `integrations/openclaw` adapter
@@ -409,7 +413,8 @@ Execution Authorization: **NO** — `M12/T2.2-R3` executed and closed on 2026-10
   denominator, and my own two over-counts (`R5-E01-05` at 19 `from None` + 9 bare `except Exception:`, and
   `R5-E12-01`'s replacement claim contradicted by five `PLAN.md` rows that do record `quality-gate SUCCESS`).
   R3 was then written **fresh** rather than patched, and this field restored to YES at the narrower bound. Full
-  detail in `.agents/states/findings.md`, Vòng 6.
+  detail in the §8 records of this file and in the `F-xxx` rows that still carry the `R5-E*`/`R6-V*` legacy ids in
+  `docs/execution/findings.md`.
 Execution Contract: **NONE** — `M12/T2.2-R3` closed on 2026-10-17, so no contract authorizes execution in this
   repository right now. Its approved contract is archived verbatim at
   `docs/contracts/execution/archive/2026-10-17-M12-T2.2-R3.md` (308 lines; the `archive/README.md` sweep was re-run on
@@ -1923,8 +1928,10 @@ above routed 38 findings to the identifiers `T2.4`–`T2.7`, which `M12/T2.1-R3`
 had no live successor task. Every row was read before it was written and cites the source that supports its
 disposition. PLAN and register locations are named by section or by entry id rather than by line number, because both
 files grow and a numeric cite there would rot; archived-contract and source-file cites stay numeric because the
-archives are immutable and a source locator is meant to be clickable. **This section, not `.agents/states/findings.md`, is the disposition authority** (the register is working
-memory under `AGENTS.md` §6; whether it becomes tracked is the unanswered `H10`).
+archives are immutable and a source locator is meant to be clickable. **This section, not `docs/execution/findings.md`, is the disposition authority** — the
+register is a bug queue and grants no authority (`AGENTS.md` §2). It moved out of the Git-ignored
+`.agents/states/findings.md` on the owner's 2026-10-17 instruction "chuyển sang docs/execution đi", which answers the
+register half of `H10`.
 
 Two premises this contract carried into that read and had to drop:
 
@@ -1966,7 +1973,7 @@ code change.
 | `M12/T6` | Knowledgebase block | 14 | medium (`T2.1-R3:291`) | **H9** (`R5-E03-05`). The owner's queue places the H5 answer before this band (§2's queue line), but §11 ties H5 to `R5-E03-07`/`R5-E11-02`, not to any id here | scheduled, not authorized |
 | `M12/T7` | Zink Tools adapter surfaces | 6 | medium (`T2.1-R3:291`) | none recorded in §11 | scheduled, not authorized |
 | `M12/T8` | Gate truth | 15 | medium (`T2.1-R3:291`, "all required-gate changes") | **H1** (`R5-E09-01`, `-08`), **H2** (`-02`), **H3** (`-03`); the other 11 carry no §11 tie | scheduled, not authorized |
-| `M12/T3` | Documentation/skills procedure + H11 shape 1 | 9 | low for the document items; **RED/architectural** for H11 (`PLAN.md` §11 H11 row says the shape "changes canonical architecture, so it is RED") | **H11** answered — the owner chose shape 1 (Main-mediated split) and ordered this band **last** (2026-10-17); `R1-A04-01`/`R1-A04-05` must land first | scheduled, not authorized |
+| `M12/T3` | Documentation/skills procedure + H11 shape 1 | 9 | low for the document items; **RED/architectural** for H11 (`PLAN.md` §11 H11 row says the shape "changes canonical architecture, so it is RED") | **H11** answered — the owner chose shape 1 (Main-mediated split) and ordered this band **last** (2026-10-17). Its two named prerequisites no longer exist as work: `R1-A04-01` and `R1-A04-05` landed under `M12/T2.2-R1` `A-1` (`ccf2ad7`) and `A-2` (`09aa698`), each with its own gate evidence in §8 | scheduled, not authorized |
 
 `M12/T5`'s prerequisite was written as **H5** in `ACTIVE.md` §3 `T4-2`. It is not: §11's H5 row cites `R5-E03-07` and `R5-E11-02`, neither of which is in the A2 band, and the owner's queue reads
 `… → a2 → h5 → adapter/knowledgebase/gate-truth …` — the H5 answer sits **between** A2 and the next three bands, not
@@ -5845,6 +5852,11 @@ contract is more dangerous than the acknowledged gap it would fill.
   `R6-V01-01`, `R6-V05-01/02/03/04`, `R6-V06-01` and the two arithmetic corrections the agent's own re-derivation
   forced (`R5-E01-05` is 19 `from None` + 9 bare `except Exception:`, not 28 + 8; `R5-E12-01`'s replacement claim was
   contradicted by `PLAN.md:223, :257, :270, :312, :369`).
+  **Amended 2026-10-17, additive:** that register was restructured into a bug-only queue on the owner's `j1` and moved
+  to `docs/execution/findings.md`, so its Vòng 6 *narrative* sections no longer exist. The defect **rows** that are
+  still open survive under their legacy ids; the ones that were fixed are listed in that file's §2 closure table, and
+  this record plus §4's `M12/T2.1-R3` narrative are now the durable home of the lane prose. Nothing was deleted to
+  cause this — the narrative moved here.
 - **What the owner was actually asked and what he answered** — the A/B/C/D/E/F/G block and the `vậy A đi` + I1–I7-A
   answers are quoted in §4 above and in the register.
 - **The non-authoritative recovery draft** lives outside the repository at
@@ -6990,6 +7002,48 @@ five-skip delta against this host's 49, so that delta is not fully enumerable fr
 lane therefore stand on Windows and WSL, not on CI, and the record says so instead of rounding `REMOTE-BACKED` up into
 a claim about every gate. Deployment is not authorized by anything in this record; `R3-0` stays `NOT RUN`.
 
+### Record — the bug register became a tracked file, and `b2` re-verified 59 Critical/High rows against HEAD (2026-10-17)
+
+Owner directives for this work: `chuyển sang docs/execution đi . b2, c1, d1, e grant`, on top of the four scoping
+answers taken earlier the same day (`j1` bug-only queue, `k1` CLOSED + commit + executed tests, `l1` sequential `F-xxx`
+ids plus a `Legacy register id` field, `n1` prune only the live tracking tables).
+
+**Disposition of the rows that left the queue.** Five rows in `docs/execution/findings.md` were removed, each into that
+file's §2 closure table, and every one was re-measured against this head rather than inherited from the register:
+`R1-A02-04` and `R1-A09-01` — the unguarded component-build call, closed by `M12/T2.2-R2` `B-10` (`46852f3`), verified
+by running `tests/m12-t1-discord-component-registry.test.mjs` (12 pass / 0 fail, including the case named in the
+commit); `R1-A13-03` — the discarded guard verdict, closed by `B-16` (`5c156d4`), whose message names that id, verified
+with `tests/m12-t2.2-b16-denial-reason.test.mjs` (combined run 19 tests / 19 pass / 0 fail); `R5-E04-02` — the heal
+predicate disagreement, closed by `M12/T2.2-R3` `R3-2` (`812b8ec`), whose message says `Closes R5-E04-02`, verified with
+`tests/m8-t3-governed-memory-learning.test.mjs` (47 pass / 0 fail, `T2h`); and `R6-CFG-03`, a duplicate of `R1-A04-01`
+(`A-1` `ccf2ad7`, `tests/m12-t2.2-a1-stack-authority.test.mjs` 9 pass / 0 fail) that survived the earlier dedupe only
+because it carried a different legacy id. Five further rows had their premises measured dead and were relabelled
+`REFUTED` rather than deleted: `R6-HUNT-01` went to `PARTIAL` under the `e` grant (the two named `scratch/*/scripts/notify.mjs`
+files no longer exist, a token-shape sweep of `scratch/` returns zero files, and `git log --all -- '*notify.mjs'` is
+empty, so the credential literal never entered git objects), plus `F-069` and `F-155`, whose evidence is recorded in the
+rows themselves. Queue arithmetic after this: **219** rows, 5 Critical / 76 High / 112 Medium / 22 Low / 4 Ungraded.
+
+**What `b2` changed inside the register.** The 59 Critical and High rows that lacked a reproduction now carry one,
+written from the code at this head, and 12 of them gained the acceptance line they were missing. Six agents read the
+locators; the field text records which probes actually ran on this host (a `node -e` replay of the reducer showing a
+bogus `scope_digest` still reaches `QUEUED`; the P2 asset-predecessor tests reporting pass while
+`/home/hoang_vinh/.openclaw-zink` is absent; `evaluateCapabilityAccess` granting `L3` apply across every namespace for
+an agent scoped to one; four concurrent knowledge searches timed 2 508 ms apart behind an upstream `Retry-After: 2`).
+Nine of those rows came back with the premise CHANGED or UNVERIFIABLE rather than confirmed, and the drift is stated in
+the row. The Medium/Low/Ungraded tranche (110 reproductions, 47 acceptances) has not been re-verified yet.
+
+**Gate consequences of the move, since they are decision-relevant.** Being under `docs/**/*.md` put the register inside
+`markdownlint-cli2` and `prettier --check`, which is why 27 lint findings were repaired by turning technical tokens into
+code spans instead of by exempting the file. Because the file is now permanent, two rules in the skills had to change or
+they would have fired forever or destroyed the queue: `validating/SKILL.md` step 5 no longer deletes `findings.md` at
+closeout, and its Final Quality Gate no longer requires zero `OPEN` findings repository-wide. `code-review/SKILL.md`
+dropped the second finding-status vocabulary (`OPEN/FIXED/ACCEPTED-RISK/INVALID`) so the register's §0.3 set is the only
+one, and `.agents/states/README.md` now says the register is not a state file. `AGENTS.md` was not touched, per the
+standing `giữ nguyên AGENTS.md` ruling.
+
+**Not done, and not claimed:** no `--apply`, no deployment, no restart, no PR, no merge to `main`. `d1` authorized one
+**local** commit; the task-branch push rule in `AGENTS.md` §12 was not exercised by this record.
+
 ## 9. Deferred beyond V1
 
 Unless separately approved:
@@ -7027,8 +7081,9 @@ the authority for these questions**; the register copy is now a historical note.
 `AGENTS.md` §2/§6: the ledger previously lived only in a git-ignored state file, which grants no authority, and one
 contract revision (R2's own §9) was already destroyed by an overwrite precisely because it was ignored (`H10`).
 Every row below was **re-derived for Vòng 6 wave 2** — where the register's older evidence was refuted, the
-correction is stated rather than the old claim repeated. **None is answered, and none is authorized: a tier
-assignment in `ACTIVE.md` §5.3 is not an approval.**
+correction is stated rather than the old claim repeated. **`H1`–`H9` are unanswered and no row is an execution grant:
+a tier assignment in `ACTIVE.md` §5.3 is not an approval.** Two rows have since been decided — `H10`'s register half
+(2026-10-17) and `H11`'s design choice (the disposition block below) — and neither answer authorizes a band.
 
 | # | Decision | What changed after wave 2 | Where |
 | --- | --- | --- | --- |
@@ -7036,21 +7091,22 @@ assignment in `ACTIVE.md` §5.3 is not an approval.**
 | **H2** | Branch protection cannot be enabled — choose an in-repo merge-blocker substitute, make the repo public, or accept advisory gates | re-confirmed: `gh api …/branches/main/protection` → `403 "Upgrade to GitHub Pro or make this repository public"` while the same token reads the branch, so it is plan-gated, not a scoping artefact. HEAD's Security run is red **right now** and nothing can block a merge | `R5-E09-02`, run `38715090086` |
 | **H3** | A skip policy for CI — floor the skip tier, or make the SQL gate executable there | **shape changed twice.** `m11-t1-skill-vector-sql` is NOT Docker-gated (grep 0; it passes in CI), so the Postgres-service option buys **one** test (`M11-06`), not a tier. And all 52 CI skips are individually named with reasons, so the gap is enforcement not visibility; the 52−46 delta is the 6-test duckdb family, verified (`which duckdb` present on this Windows host and in WSL, absent on the runner). A single global number would fire on 40 legitimate host-capability skips → **needs a per-family expectation** | `PLAN.md` §2 (Active Task, corrected), `R5-E09-03`, `R6-V08-01` |
 | **H4** | Operator chmod of the live 0644 config backup + extending the permission gate to the state root | **de-escalated.** `/home/hoang_vinh` and `/home/hoang_vinh/.openclaw-zink` are both `drwx------`, so "any uid can read the credential set" was false; the file is 1 of 15 copies. The live-data action is not needed. What IS verified and unguarded: `configure.mjs:986-988` returns immediately on win32, so the named-path mode check **has never run on the owner's host**, nothing enumerates the state root, and four subtrees inside it are group-writable (`R6-V09-03`) | `R5-E13-01`, `R6-V09-01` |
-| **H5** | Where `skills.*` schema lives: move the DDL + runner into `zink-skill-store/`, or record the present arrangement as an accepted §9 exception | **support removed.** "R5-E11-02 strengthens this" no longer holds: §9's only imperative about a peer's store is prefixed *cross-project*, and §9 defines the three modules as one repository, so a plugin calling the Skill Store's own exported writer under the Skill Store's own lock is calling the owner. H5 must be decided on **DDL placement alone**; what is actually contradicted is one sentence of `docs/contracts/skill-store/agent-skill-store.md` | `R5-E03-07`, `R5-E11-02` (re-framed), `R6-V10` |
+| **H5** | Where `skills.*` schema lives: move the DDL + runner into `zink-skill-store/`, or record the present arrangement as an accepted §9 exception | **support removed, and that removed support has now landed.** "R5-E11-02 strengthens this" no longer holds: §9's only imperative about a peer's store is prefixed *cross-project*, and §9 defines the three modules as one repository, so a plugin calling the Skill Store's own exported writer under the Skill Store's own lock is calling the owner. H5 must be decided on **DDL placement alone**; what is actually contradicted is one sentence of `docs/contracts/skill-store/agent-skill-store.md`, and that sentence was corrected at `M12/T2.3-R1` `C-3` (`e47e660`) by a doc-only change whose own commit message states it does **not** strengthen H5 — so this row waits on the DDL placement question alone, not on an open finding | `R5-E03-07`, `R5-E11-02` (re-framed; closed `e47e660`), `R6-V10` |
 | **H6** | Route the router key through the SecretRef indirection | premise true, details corrected: `policy.mjs:892-898` bakes `apiKey: resolveRouterApiKey()` from `process.env.ZINK_ROUTER_API_KEY`, and `buildSecretsPlan()` returns **zero** targets, so "the indirection exists in this template and the key skips it" overstates it — bot/gateway tokens route through `secrets.providers`, the router key is baked and unrotatable without re-apply. "Duplicated in every copy" is inference: two `.bak.1/.bak.2` copies predate the router provider entirely | `R5-E13-02`, `R6-V09` |
 | **H7** | A referential scheme for Discord identities in durable events, plus the policy for **unknown** ids | **loses its live basis.** `governance/ledger/events.jsonl` is 0 bytes (mtime Sep 18) and a numbers-only snowflake count returns 0 — no third-party identity has ever been written. This is a forward-looking schema decision ("what may future events write"), and must not be put to the owner as remediating an existing exposure. `operator/m7-t2/ledger` was not swept, so that half stays `Unresolved` | `R5-E13-04`, `R6-V09` |
 | **H8** | A governed `DEPRECATED` retirement transition for the Skill Store | stands, better evidenced, with **one prerequisite and one correction**. Prerequisite: applied migrations are keyed on **filename only** (`database.py:1718-1733`, no digest column), so editing `003`'s `CHECK` in place is a silent no-op on an already-migrated database — the fix must be a forward migration (`R6-V10-01`). Correction: cite `R5-E04-05` only; `R5-E04-01/02` are staging-recovery findings, not lifecycle ones (`R6-V10-03`). `REJECTED` is equally writerless, so **two** of four states have no writer | `R5-E04-05`, `catalog.mjs:45, :419-424` |
 | **H9** | Whether unreclaimable PDF text copies get a reclamation path | unchanged; a retention decision that deletes derived content | `R5-E03-05` |
-| **H10** | Whether `.agents/states/findings.md` becomes tracked, and where an archived `ACTIVE.md` should live | **the archive half is settled in practice, not in this row** — five closed contracts now live under `docs/contracts/execution/archive/` and the scrub rule ran on the fifth (`2026-10-17-M12-T4-R1.md`, nothing removed). What is still the owner's call is the register: measured **5 627 lines / 565 986 bytes**, and `M12/T4-R1` `T4-3` produced the first hard cost of leaving it ignored — 31 status rewrites, 11 dated refresh lines and one new entry landed with **no commit at all**, so the disposition half of the audit trail exists only on this machine and cannot be reviewed, diffed or recovered. A size policy is required before it is tracked | this section's own history, `R5-E14-07`, `Record — M12/T4-R1 closed` |
-| **H11** | **NEW, owner-proposed 2026-10-15: the O1/O2 working relationship.** His words: *"2 điều phối O1 và O2 nên chia đôi task, thảo luận với nhau trong sandbox để khi làm xong, các task mà O1 và O2 cho executor chuyên biệt làm xong, ghép lại phải đúng yêu cầu của anh"* | this is **not** option A or B of the routing question — it is a third answer, and it changes canonical architecture, so it is RED and recorded rather than built. What it contradicts today: `five-stack.md:15-17` ("Main is the only authority that changes execution between coordinators… **O1 and O2 return a transition request to Main instead of invoking one another**") and `:20-23` (missing prerequisites are BLOCKED "rather than a hidden A2A edge"); `policy.mjs:1166` Coordinator Core says the same; `AGENT_SPAWN_POLICY` gives `main → [o1, o2]` and **no** `o1 ↔ o2` edge, which the guard enforces. Sessions also run `context: isolated, sandbox: require, thread: false`, so "a sandbox they discuss in" is a **new shared durable surface**, and `R5-E16-01/02` already proves whole-file rewrites under one lock lose updates when several loops run concurrently. Three shapes are offered below; the recommended order exists because **the execution lane itself has never run end to end**, and `R1-A04-01` must be fixed first whichever shape he picks — otherwise the split he wants is refused mid-flight with `UNAUTHORIZED_TARGET` | `docs/architecture/five-stack.md`, `policy.mjs:555-563, 1166-1174`, `guard.mjs:842-853`, `R1-A04-01`, `R1-A04-05` |
+| **H10** | Whether `.agents/states/findings.md` becomes tracked, and where an archived `ACTIVE.md` should live | **register half ANSWERED 2026-10-17** by "chuyển sang docs/execution đi": the queue moved to **`docs/execution/findings.md`** and is Git-tracked from this head, so the cost `M12/T4-R1` `T4-3` exposed — 31 status rewrites, 11 dated refresh lines and one new entry landing with **no commit at all** — cannot recur. Being tracked also put it inside the `docs/**/*.md` prettier and markdownlint globs, which is why each row now carries one fixed nine-field shape. **The size policy this row asked for is still not set**: the register entered Git at **3 013 lines / ~435 KB** holding 219 queued bugs, after 48 rows left it (43 closed with commit + executed-test evidence, 4 duplicates, 1 resolved blocker) into the file's own §2 closure table, and no trimming rule was approved. The archive half was already settled in practice — six closed contracts now live under `docs/contracts/execution/archive/`, and the scrub rule ran on the latest | this section's own history, `R5-E14-07`, `Record — M12/T4-R1 closed` |
+| **H11** | **NEW, owner-proposed 2026-10-15: the O1/O2 working relationship.** His words: *"2 điều phối O1 và O2 nên chia đôi task, thảo luận với nhau trong sandbox để khi làm xong, các task mà O1 và O2 cho executor chuyên biệt làm xong, ghép lại phải đúng yêu cầu của anh"* | this is **not** option A or B of the routing question — it is a third answer, and it changes canonical architecture, so it is RED and recorded rather than built. What it contradicts today: `five-stack.md:15-17` ("Main is the only authority that changes execution between coordinators… **O1 and O2 return a transition request to Main instead of invoking one another**") and `:20-23` (missing prerequisites are BLOCKED "rather than a hidden A2A edge"); `policy.mjs:1166` Coordinator Core says the same; `AGENT_SPAWN_POLICY` gives `main → [o1, o2]` and **no** `o1 ↔ o2` edge, which the guard enforces. Sessions also run `context: isolated, sandbox: require, thread: false`, so "a sandbox they discuss in" is a **new shared durable surface**, and `R5-E16-01/02` already proves whole-file rewrites under one lock lose updates when several loops run concurrently. Three shapes are offered below; the recommended order exists because **the execution lane itself has never run end to end**, and its first named prerequisite is **already landed**: `R1-A04-01` closed at `M12/T2.2-R1` `A-1` (`ccf2ad7`) — the guard now validates each node against `AGENT_STACK_POLICY` (`guard.mjs:849` at this head) — and `R1-A04-05` closed at `A-2` (`09aa698`). What would still refuse the split mid-flight is a different defect, proved while `A-1` ran: `main` owns the `decision` node but appears in nobody's spawn list, so Main's merge has no admissible node. That, not the guard/policy drift, is the prerequisite left; it is documented in the `A-1` consequence block below | `docs/architecture/five-stack.md`, `policy.mjs:555-563, 1166-1174`, `guard.mjs:842-853, 865-870`, `R1-A04-01` (closed `ccf2ad7`), `R1-A04-05` (closed `09aa698`) |
 
 **H11, the three shapes (ranked; the owner picks one before any contract is written):**
 
 1. **Main-mediated split — smallest.** Main divides one request into an O1 half and an O2 half **inside a single
    brief**, the DAG runs them in parallel with declared cross-node dependencies, and **Main performs the merge and the
    acceptance check**. No coordinator-coordinator edge; no shared workspace; the "discussion" becomes a dependency
-   edge plus Main's synthesis. Work needed: fix `R1-A04-01` (the guard/policy swap) and `R1-A04-05`, then let a brief
-   contain both coordinators' nodes. Cost: no peer review between O1 and O2; disagreements escalate to Main as today.
+   edge plus Main's synthesis. Work needed: the two named fixes are done — `R1-A04-01` at `A-1` (`ccf2ad7`) and
+   `R1-A04-05` at `A-2` (`09aa698`) — and `A-1` proved a brief may already contain both coordinators' nodes; what
+   remains is Main's merge node, which the spawn table still refuses. Cost: no peer review between O1 and O2; disagreements escalate to Main as today.
 2. **Governed hand-off — middle.** O1 and O2 exchange **written, digest-pinned artifacts** through the existing
    governed-reference mechanism (immutable refs + `MISSING_PREREQUISITE`/`BLOCKED`), one rebuttal round each, still
    ordered by Main. Closer to "thảo luận" without a new spawn edge; needs a declared shared-artifact type and a round
@@ -7073,9 +7129,10 @@ currently has **no writer in non-test code** — only two reads, `plugins/zink-g
 which is the phantom field the audit already recorded, so whichever shape he picks must first give that field a real
 writer, or the merge has no owner to hold it.
 
-**No shape above is authorized.** Choosing one is a decision, not an execution grant; it needs its own Plan Revision,
-and `R1-A04-01` (the guard-vs-policy swap) must be fixed first in every case — a split the guard refuses mid-flight is
-exactly the failure the owner would experience as "the bots disagree and nothing runs".
+**No shape above is authorized.** Choosing one is a decision, not an execution grant; it needs its own Plan Revision.
+Its former prerequisite `R1-A04-01` (the guard-vs-policy swap) **was** fixed first, at `A-1` (`ccf2ad7`); the refusal an
+owner would now experience as "the bots disagree and nothing runs" is the missing `main` spawn edge for a `decision`
+node, which is `M12/T3`'s to settle.
 
 ### H11 disposition — owner answers recorded 2026-10-15, work scheduled to `M12/T3`
 

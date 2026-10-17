@@ -214,7 +214,7 @@ Transient state is optional working memory only:
 
 - `.agents/states/context.md` may be created/updated when a long task needs compact
   hot context or resolved discoveries;
-- `.agents/states/findings.md` belongs to review/remediation, not planning authority;
+- `docs/execution/findings.md` belongs to review/remediation, not planning authority;
 - `.agents/states/handoff.md` belongs to execution/review handoff, not planning
   authority.
 

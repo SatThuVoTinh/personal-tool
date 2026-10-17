@@ -24,14 +24,18 @@ discarded.
 
 ## Files
 
-| File          | Purpose                                                            | Typical writer              |
-| ------------- | ------------------------------------------------------------------ | --------------------------- |
-| `context.md`  | verified task-specific facts that would otherwise need rediscovery | any active agent            |
-| `findings.md` | open review/debug/validation findings and their status             | reviewer/debugger/validator |
-| `handoff.md`  | compact transfer from one agent/role to another                    | agent handing off work      |
+| File         | Purpose                                                            | Typical writer           |
+| ------------ | ------------------------------------------------------------------ | ------------------------ |
+| `context.md` | verified task-specific facts that would otherwise need rediscovery | any active agent         |
+| `handoff.md` | compact transfer from one agent/role to another                    | agent handing off work   |
 
-Do not create extra state files unless a repeated need cannot fit these four
-without mixing responsibilities.
+Do not create extra state files unless a repeated need cannot fit these two without
+mixing responsibilities.
+
+The durable defect register is **not** a state file: it lives at
+`docs/execution/findings.md`, is Git-tracked, and its own §0 block defines the
+rules for working a bug. Transient state files may point at a finding id there but
+must not hold a parallel copy of the queue.
 
 ## Required freshness header
 
@@ -65,22 +69,15 @@ Store only **verified facts** that materially reduce rediscovery, for example:
 Separate facts from unresolved assumptions. Unverified guesses do not belong in
 `Verified facts`.
 
-## `findings.md`
+## Findings
 
-Use one record per active finding:
+New review/debug/validation findings are recorded in
+`docs/execution/findings.md` as one `### F-xxx — <title>` block carrying the fields
+that file defines. Do not keep a parallel queue here, and do not re-grade
+`Severity`/`Category` without evidence. That file's §0 block is the authority for
+the status vocabulary and for the conditions required before a row is removed.
 
-```text
-ID:
-Status: OPEN | FIXED | ACCEPTED-RISK | INVALID
-Severity: critical | high | medium | low | note
-Source: review | debugging | validation
-Evidence:
-Affected paths:
-Required remediation:
-Validation after remediation:
-```
-
-A finding is `FIXED` only after the relevant validation passes. Do not delete an
+A finding is closed only after the relevant validation passes. Do not delete an
 open finding merely because another agent cannot reproduce it; update evidence
 and status.
 
@@ -143,12 +140,12 @@ After technical completion:
 4. do not convert state into `CHANGELOG.md` unless validated completion rules are
    independently satisfied.
 
-After the task is fully accepted/closed, delete or clear the three mutable local
+After the task is fully accepted/closed, delete or clear the two mutable local
 state files before the next unrelated task.
 
 ## Version-control policy
 
-`README.md` is permanent repository guidance. The three mutable state files are
+`README.md` is permanent repository guidance. The two mutable state files are
 local hot context and are ignored by Git by default. Create them when needed and
 reset/delete them when the task closes.
 
@@ -178,7 +175,8 @@ Never store:
   Cursor execution authorization.
 - Cursor updates execution checkpoints/handoffs while executing an authorized
   task.
-- Codex review/debug/validation uses `findings.md` and may perform only bounded
+- Codex review/debug/validation records findings in
+  `docs/execution/findings.md` and may perform only bounded
   remediation allowed by `AGENTS.md`.
 - Subagents write only the state explicitly delegated to them.
 

@@ -72,7 +72,7 @@ PLAN task / Plan Revision / authorization
 valid ACTIVE.md
 optional context.md
 optional handoff.md
-optional findings.md
+optional docs/execution/findings.md rows for this area
 complete diff
 affected code/tests
 relevant neighboring code
@@ -108,25 +108,30 @@ Codex may fix it directly.
 
 Any fix must:
 
-* create/update `.agents/states/findings.md` for actionable review findings when useful;
+* create/update `docs/execution/findings.md` for actionable review findings when useful;
 * update `context.md` or `handoff.md` only when they materially improve continuity;
 * rerun affected gates;
 * remain within current authority.
 
 A material fix requires the Owner Decision Protocol. Codex cannot accept risk on
-behalf of the owner; `ACCEPTED-RISK` requires an explicit owner decision.
+behalf of the owner; a row kept out of scope as accepted risk requires the owner's
+explicit decision and is recorded as `EXCLUDED` in the register.
 
 ## Review state discipline
 
-`findings.md` is a transient review/remediation queue, not a contract. When used,
-each actionable finding uses the status vocabulary from
-`.agents/states/README.md`: `OPEN`, `FIXED`, `ACCEPTED-RISK`, or `INVALID`.
-Owner-decision findings remain `OPEN` until the owner decides; `ACCEPTED-RISK`
-requires that explicit decision. A finding may be marked `FIXED` only after its
-affected validation passes.
+The defect register is `docs/execution/findings.md`: tracked, permanent, and **not** a
+contract. New review findings are added there as `### F-xxx` rows, and that file's own §0
+block is the authority for the status vocabulary (`OPEN`, `LATENT`, `HYPOTHESIS`,
+`PARTIAL`, `BLOCKED`, `EXCLUDED`, `REFUTED`), for the one-bug-one-commit rule, and for the
+three conditions required before a row is deleted. `.agents/states/README.md` no longer
+defines a finding status set.
 
-`QUALITY REVIEW PASS` requires zero `OPEN` actionable findings. The file may be
-updated across review/fix iterations, but it must never widen remediation authority
+A finding that needs an owner decision stays `OPEN` (or becomes `EXCLUDED` once the owner
+rules it out of scope); the register never records acceptance on the owner's behalf.
+
+`QUALITY REVIEW PASS` requires zero `OPEN` actionable findings **from this review**; it is
+not a claim about the repository backlog, which is the register's own business. The file
+may be updated across review/fix iterations, but it must never widen remediation authority
 or replace independent inspection of the complete final diff.
 
 ## Review convergence gate

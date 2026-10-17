@@ -35,7 +35,7 @@ Inspect:
 * tests;
 * contracts;
 * `.agents/states/context.md` when present;
-* the relevant entry in `.agents/states/findings.md` when present;
+* the relevant entry in `docs/execution/findings.md` when present;
 * `.agents/states/handoff.md` when it helps reproduce the reported behavior;
 * current failure/evidence.
 
