@@ -78,10 +78,11 @@ Task: M12/T4 — Governance-record integrity: re-inventory the orphaned findings
   2026-10-15**: all eight items plus four owner-authorized follow-ons landed, its evidence is in §8, and its full
   contract text is preserved verbatim at `docs/contracts/execution/archive/2026-10-15-M12-T2.1-R3.md` — that archive
   is decision `H10` / `R3-P04-03`, executed first because §5.1 of the old contract made the scrub rule a prerequisite.
-Active revision: M12/T4-R1 — **Governance-record integrity**, materialized 2026-10-17 on the owner's `grant 1`, the
-  first contract in the queue he set with `anh muốn em sửa hết`. Five items (`T4-1` re-inventory of the 38 findings that
+Active revision: M12/T4-R1 — **Governance-record integrity**, **CLOSED 2026-10-17** with the contract archived at
+  `docs/contracts/execution/archive/2026-10-17-M12-T4-R1.md`; no revision is active. It was materialized 2026-10-17 on
+  the owner's `grant 1`, the first contract in the queue he set with `anh muốn em sửa hết`. Five items (`T4-1` re-inventory of the 38 findings that
   still carried the withdrawn `T2.4`–`T2.7` identifiers, `T4-2` re-filing them as `M12/T5`–`T8`, `T4-3` register-status
-  refresh + the H10 authority rule, `T4-4` shrinking the 9 840-character M12 gate cell under a printed no-fact-loss
+  refresh + the H10 authority rule, `T4-4` shrinking the 9 858-character M12 gate cell under a printed no-fact-loss
   diff, `T4-5` the `Cursor`→`dsh` line in `conventions.md`). No source file, no schema, no gate, no history rewrite.
   (history) Active revision was: M12/T2.3-R1 — **Wave C only, CLOSED 2026-10-17** with the contract archived; the field below records
   how it was approved. Materialized 2026-10-16 after the owner answered the whole escalated
@@ -231,7 +232,13 @@ Task Status: IN PROGRESS — **all eight `R3` items are implemented and locally 
   `Record — the 9Router "cấu hình cũ" report` in §8.
   R1 and R2 both existed with **zero implementation landed under either**, and no prior task's evidence is altered.
   ── **`M12/T2.1` tier is CLOSED 2026-10-15.** The rest of this field describes the new task.**
-Task Status: IN PROGRESS — **`M12/T4` executing** (`T4-1`…`T4-5`, one commit each, under `M12/T4-R1`); per-item
+Task Status: COMPLETE — **`M12/T4` is CLOSED 2026-10-17**: `T4-1`…`T4-5` landed (plus one discovered record defect),
+  §4.17 is now the disposition authority for the 38 re-filed findings, and the M12 release-gate cell no longer
+  duplicates §8. Per-item commits, the five premises this contract corrected in the read (plus one deviation it
+  disclosed and one gate it reported unsatisfiable), the no-fact-loss diff and
+  the escalation list are in `Record — M12/T4-R1 closed` in §8. `T4-3` has no commit: it edited the Git-ignored
+  register, which is `H10`'s consequence demonstrated rather than argued.
+  (history) **`M12/T4` executing** (`T4-1`…`T4-5`, one commit each, under `M12/T4-R1`); per-item
   evidence lands in §8 as each item validates, and nothing in this tier is claimed before it does.
   (history) **`M12/T2.3` Wave C is CLOSED 2026-10-17**: twelve items landed (`C-1`…`C-11`, `C-13`) plus the
   `C-1a` caveat and one review-convergence fix, with `C-12` dropped on a refuted premise. Full per-item evidence, the
@@ -256,7 +263,12 @@ Planning Readiness: APPROVED — the owner approved this contract's scope with `
   adapter/knowledgebase/gate-truth còn lại → t3 h11`. The scope he approved was the one proposed after the premises
   were measured, not assumed: identifiers `M12/T4`–`T8` confirmed unused, the 38 orphan ids counted from the grouping
   paragraph itself, the register's staleness counted (112 entries, 2 `CLOSED`), and the M12 cell measured (9 940-char
-  row, 9 840-char cell, 29 commit hashes, §8 holding 17 records). Where a fact could not be proven it is written as
+  row, 9 840-char cell, 29 commit hashes, §8 holding 17 records). **(Corrected at closeout — the second half of that
+  sentence was wrong: the register held 123 structured `id:` entries with exactly 1 reading `CLOSED` (124 now, after
+  `T4-3` added `R5-E09-08`); the cell is 9 858 characters on the one slicing convention both scripts used, and its
+  machine-token population is 36 unique references of which 18 are seven-hex commit short-shashes, not 29 hashes; and
+  §8 held 15 records with 2 stranded under §11 until `07cca47` moved them. See `Record — M12/T4-R1 closed`, premises
+  3 and 4 and the no-fact-loss proof.)** Where a fact could not be proven it is written as
   unverified rather than promoted into the schedule — the rule that killed two claims in Wave C and eight premises in
   Wave B. (history) The owner approved Wave C's twelve-item scope and answered all five escalated forks on
   2026-10-16 with `n1a n2a n3a n4a n5a`, each the recommended option. The escalated block was produced by verifying
@@ -272,7 +284,12 @@ Planning Readiness: APPROVED — the owner approved this contract's scope with `
   M12/T2.2-R2 Wave B materialized` in §8. What that pass could not execute (it needed a new pinned constant, a live
   re-pin, or a decision about public behaviour) was escalated into `ACTIVE.md` §5 instead of smuggled in.
 Plan Revision: M12/T4-R1
-Execution Authorization: YES — bounded to `ACTIVE.md` §3's items `T4-1`…`T4-5` and §4's three writable files
+Execution Authorization: NO — `M12/T4-R1` executed and closed on 2026-10-17, so this field returns to NO and its
+  contract is archived at `docs/contracts/execution/archive/2026-10-17-M12-T4-R1.md`. Nothing else is authorized: the
+  bands this contract only scheduled (`M12/T2.2-R3`, `M12/T5`…`T8`, `M12/T3`) each still need their own Plan Revision
+  and their own YES, and answering H1–H11 is not a YES either.
+  (history) Execution Authorization was **YES** for `M12/T4-R1`, bounded to `ACTIVE.md` §3's items `T4-1`…`T4-5` and
+  §4's three writable files
   (`PLAN.md`; `.agents/states/findings.md`; `docs/development/conventions.md`, line 26 only), under the `AGENTS.md` §12
   terms (local implementation commits, validation, the closeout commit, push of this non-`main` task branch). Standing
   rulings that bind this contract: `AGENTS.md` is not editable for naming/vocabulary (owner, 2026-10-17); CHANGELOG
@@ -329,28 +346,51 @@ Execution Authorization: YES — bounded to `ACTIVE.md` §3's items `T4-1`…`T4
   `R5-E12-01`'s replacement claim contradicted by five `PLAN.md` rows that do record `quality-gate SUCCESS`).
   R3 was then written **fresh** rather than patched, and this field restored to YES at the narrower bound. Full
   detail in `.agents/states/findings.md`, Vòng 6.
-Execution Contract: `docs/contracts/execution/ACTIVE.md` — **`M12/T4-R1`** (governance-record integrity;
-  granted by the owner's `grant 1` on 2026-10-17). It is transient and Git-ignored; at closeout it is archived
-  under `docs/contracts/execution/archive/` and this field returns to `NONE`.
+Execution Contract: NONE — `docs/contracts/execution/ACTIVE.md` is deleted at this closeout; the contract it carried
+  (`M12/T4-R1`, governance-record integrity, granted by the owner's `grant 1` on 2026-10-17) is archived verbatim at
+  `docs/contracts/execution/archive/2026-10-17-M12-T4-R1.md`, and its §8 closeout record is
+  `Record — M12/T4-R1 closed` in this file. The pointer returns to `NONE` because no contract is in force; the next
+  band needs its own revision and its own file.
+  (history) The field read `docs/contracts/execution/ACTIVE.md` while `M12/T4-R1` was executing. It is transient and
+  Git-ignored; at closeout it is archived under `docs/contracts/execution/archive/` and this field returns to `NONE`.
   (Predecessor `M12/T2.3-R1` archived at closeout to
   `docs/contracts/execution/archive/2026-10-17-M12-T2.3-R1.md`.)
-Review Convergence Gate: **NOT RUN** for `M12/T4-R1` — no review pass has been performed on this contract's work.
+Review Convergence Gate: **PASS** for `M12/T4-R1` — two read-only review passes over the contract's commits. The first
+  found seven real defects in what this contract had just written (the `R5-E13-05` row contradicted itself about which
+  half of that finding is open; the `P5` provenance key claimed a `git log` state that had already changed; §2's
+  approval field still carried the refuted 112/2/9 840/17 premises; the §8 record miscounted its own premises; the
+  register attributed `Status:` lines to the wrong field; six register rows said `OPEN` where §4.17 said `EXCLUDED`;
+  the new `R5-E09-08` entry carried run/SHA counts inconsistent with §11's H1 row). The second pass re-measured the
+  no-fact-loss arithmetic the record had restated and found **that** claim unreproducible too — "67 / 56 / 11" and
+  "kept = 12" and "twelve, not fourteen" were replaced by the classifier's actual output (36 → 5 unique, 31 removed,
+  0 homeless; 15 → 0 across the relocation). Every finding was fixed before this field was set; the full list is in
+  `Record — M12/T4-R1 closed`, §8.
   (History, `M12/T2.3-R1` Wave C: **PASS** — one review pass over the whole wave found a real hole in the control
   `C-4` had just introduced (a provider row renamed away from its adapter slug would drop its own constraint and
   leave Gate G18 green), fixed at `cd1b541` with a mutation probe proving the new assertion fires; the re-review
   found the second issue worth recording: `n1a`'s caveat had been granted in §3 but never scheduled as a §4 item,
   which `7d73e18` then executed. Full detail in
   `Record — M12/T2.3-R1 Wave C closed`, §8.)
-Final Quality Gate: **NOT RUN** for `M12/T4-R1` — no gate has been run against this contract's work yet; the
-  baseline `npm run verify` has not been executed at the materialization commit.
+Final Quality Gate: **PASS** for `M12/T4-R1` — `npm run verify` (its own exit status, never a piped tail) run at the
+  materialization commit `f9b356c` and after each of `ca8e2ff`, `71003fd`, `07cca47`, `4f4536f`, `21f349a`, then again
+  over the final closeout tree: **1595 tests / 106 suites / 1546 pass / 0 fail / 49 skipped**, `Repository policy
+  check passed.` every time, with `npm run repo:check` PASS at each item because `docs/development/conventions.md` is
+  read by `checkGateRegistry`. §6's contract-specific proofs are reported in `Record — M12/T4-R1 closed`, §8: the 38
+  rows re-counted (3 + 14 + 6 + 15), the register's statuses re-counted, the no-fact-loss diff re-measured, and the
+  `M12/T2.[4-7]` grep reported as 0 in `PLAN.md` / 2 in one immutable archive rather than claimed as repo-wide.
+  **WSL lane `NOT RUN`** (no test, source or packaged asset changed) and **Python lane `NOT RUN`** (zero
+  `apps/knowledge/` files in the diff).
   (History, `M12/T2.3-R1` Wave C: **PASS** — full gate run at every item commit and over the final tree
   (Windows `npm run verify` exit 0, **1595 tests / 1546 pass / 0 fail / 49 skipped**, `Repository policy check
   passed.`), the WSL lanes read as counts (12/12, 2/2, 35/35, zero skips), six mutation probes with each mutation
   confirmed in the file first, `§6.7`'s re-grep denominators recorded, and the Python lane `NOT RUN` with the reason
   (zero `apps/knowledge/` files in the diff).)
-Evidence Level: **NONE for `M12/T4-R1`** — nothing in this contract is validated yet; it moves to
-  `LOCAL-VERIFIED` only after the affected gates pass locally, and to `REMOTE-BACKED` only with a CI run id cited
-  from the run log.
+Evidence Level: **LOCAL-VERIFIED for `M12/T4-R1`** — the repository gates above were run and read on this host at
+  every item commit and over the final tree. **`REMOTE-BACKED` is withheld**: no CI run has been dispatched or read
+  for this contract's head, and this level moves only by citing a run id read out of that run's own log. The push of
+  the task branch starts no run by itself (`ci.yml:6-7` triggers on `main` only — open decision **H1**). Nothing here
+  is deployed (`NOT DEPLOYED`), no live Discord behaviour was exercised (`NOT TESTED`), and `verify.mjs` plus the R16
+  rehearsal remain `NOT RUN`.
   (History, `M12/T2.3-R1` Wave C repository gates: **REMOTE-BACKED** — CI run **`38944576084`** @
   `71c2bff52a68972152816a95e31a7ff8d1203fc2` on `codex/m11-t1-audit-remediation`: `quality-gate` **SUCCESS** reading
   `ℹ tests 1595 / suites 106 / pass 1542 / fail 0 / cancelled 0 / skipped 53` and `Repository policy check passed.`, and
@@ -1781,8 +1821,9 @@ Provenance keys the Disposition column cites:
 - **P4** — `R5-E13-05`'s guard half: admitted to cluster D (`findings.md`'s cluster-D admitted-set row) → **withdrawn** as unbacked by owner
   answer **I3-A** (`T2.1-R3:245`) → **DECLINED** in Wave B (`T2.2-R2:50-52`). Landed nowhere.
 - **P5** — no item heading in any of the four archived contracts cites any of the 38 ids, and
-  `git log --all --grep` on them returns no commit (the single `R5-E06-*` hit is `R5-E06-07` at `96a6dd2`, a Wave A
-  item that is not in this set). Therefore **no row here reads `LANDED`**, and none is formally `REFUTED` either.
+  `git log --all --grep` on them returned no commit **before this task** (the single `R5-E06-*` hit is `R5-E06-07` at
+  `96a6dd2`, a Wave A item that is not in this set). Therefore **no row here reads `LANDED`**, and none is formally
+  `REFUTED` either.
 
 A row reading `OPEN — re-verify` means: no wave record disposes of it, its premise was last read at Vòng 5
 (2026-10-14) or Vòng 6, and the successor band must re-read the cited source before touching it. That is the rule that
@@ -1810,7 +1851,7 @@ inside A2. Corrected here rather than copied forward.
 | --- | --- | --- | --- | --- | --- |
 | `R1-A02-01` | Critical | architecture+security | the Vòng 1 bullet list (legacy format, so no `Where:` field) — the deployed plugin loads live repository source through a hardcoded Windows mount path, bypassing the digest-gated packaged assets | `OPEN — P1` + `PLAN.md` §4's R2 exclusions paragraph "is Critical and stays open — this task does not close it"; verified Critical in Vòng 2 (that round's adjudication list: B08's alternative hypothesis refuted, the finding upheld) | `M12/T5` |
 | `R5-E13-02` | High | security | this finding's register entry — `lib/policy.mjs:896`, `:1303-1311` (`resolveRouterApiKey`), `:1313-1317` (`buildSecretsPlan`) | `EXCLUDED — H6` (**P3**; §11's H6 row corrects its details but keeps the premise) | `M12/T5` |
-| `R5-E13-05` | Medium | security | this finding's register entry — `index.mjs:511`; `tests/m7-lane-g-policy.test.mjs:724-733` (M7-063) | `OPEN (removal half) — P1`; guard half `OPEN → WITHDRAWN → DECLINED` per **P4**, landed nowhere. Premise correction: `index.mjs:511` "is not the only tracked occurrence" (this entry's own "Correction" line); Wave B admitted only the guard half, so this row must not re-admit the whole finding as open | `M12/T5` (removal half) |
+| `R5-E13-05` | Medium | security | this finding's register entry — `index.mjs:511`; `tests/m7-lane-g-policy.test.mjs:724-733` (M7-063) | `OPEN (removal half) — P1`; the guard half was admitted only to R2's cluster D (`findings.md`'s cluster-D row), then **withdrawn** as unbacked at `I3-A` and **declined** again in Wave B, so it landed nowhere. Premise correction: `index.mjs:511` "is not the only tracked occurrence" (this entry's own "Correction" line). Because Wave B declined even the guard half, only the removal half is left for `M12/T5` — this row must not be read as re-admitting the whole finding as open | `M12/T5` (removal half) |
 
 #### 4.17.3 `M12/T6` — Knowledgebase block (14)
 
@@ -5001,6 +5042,12 @@ All five contract phases are implemented and validated on the repository only. T
 execution contract is deleted at this closeout; the implementation commit is `c1ad4b3` on
 `codex/m11-t1-audit-remediation`, and this closeout record is the commit that follows it.
 
+*(Detail restored here by `M12/T4-R1` `T4-4` on 2026-10-17, when the §3 release-gate cell was cut: the delivered
+shape was that every component this plugin posts is **built** through the host's `buildDiscordComponentMessage` and
+then registered with `registerBuiltDiscordComponentMessage` against the message id the adapter returns, 24-hour ttl,
+`reusable` — which is what made Approve / Request Revision / Reject stop answering "This component has expired". That
+builder name lived only in the §3 cell, so it moved here rather than being lost.)*
+
 *Gates.* `npm run verify` **PASS** on the Windows host: `format:check` clean,
 `lint` 0 issues (eslint + markdownlint), `npm test` **1417 tests / 1372 pass / 0 fail /
 45 skipped**, `repo:check` "Repository policy check passed.". The 45 skips are the
@@ -6550,9 +6597,108 @@ check that matters once a 315-line contract becomes tracked history) and `depend
 5-high baseline. CI's 53 skips against this host's 49 is the known lane gap, not new evidence. Both runs were dispatched
 by hand because `ci.yml:6-7` triggers on `main` only — open decision **H1**. **Escalated to the owner, untouched by this wave:** `AGENTS.md:3` still addresses "Codex, Cursor,
 subagents" while §3 defines only Codex/dsh/Subagents; `docs/development/conventions.md:26` still says "Cursor execute
-và handoff"; `P04-02`'s owner-of-claim column (deferred by `n4a`); the five-stack table rewrite (`M12/T3`); and
+và handoff" **(that one was later fixed by `M12/T4-R1` `T4-5` at `21f349a`; the `AGENTS.md:3` half stands, because the
+owner's standing ruling of 2026-10-17 keeps `AGENTS.md` out of bounds)**; `P04-02`'s owner-of-claim column (deferred by `n4a`); the five-stack table rewrite (`M12/T3`); and
 `CHANGELOG.md:430/:861`. `M12/T2.2-R3` (the Skill Store lifecycle block) and `M12/T3` (H11) remain scheduled, not
 authorized.
+
+### Record — `M12/T4-R1` closed: the record now answers "what is still open", and five of its own premises did not survive the read (2026-10-17)
+
+**What landed.** Five items plus one discovered-defect fix, one commit each, in contract order: `T4-1` `ca8e2ff`
+(the §4.17 successor schedule — 38 rows, each with category, severity, register locator, disposition and band),
+`T4-2` `71003fd` (§4's grouping paragraph re-filed to `M12/T5`–`M12/T8` and pointed at §4.17), the discovered record
+defect `07cca47` (the `M12/T2.2-R2` and `M12/T2.3-R1` closeouts moved back inside §8), `T4-4` `4f4536f` (the M12
+release-gate row cut from 9 940 to 1 956 characters and its cell — the slice from the third column on, which is how
+both scripts measured it — from 9 858 to 1 874, under the printed no-fact-loss diff below), `T4-5` `21f349a`
+(`docs/development/conventions.md` executor name). **`T4-3` has no commit to cite:** it edits
+`.agents/states/findings.md`, which is Git-ignored, so its evidence is that file's own "Disposition refresh" section
+plus this paragraph — the exact durability problem `H10` exists to settle, now demonstrated rather than argued.
+
+**Five premises this contract brought into the read and had to correct, then one disclosed deviation and one
+unsatisfiable gate.** Each was measured at this head before being written into a tracked file:
+
+1. `ACTIVE.md` §0 said **two** of the 38 findings are absent from the register. **One** is (`R5-E09-08`);
+   `R1-A02-01` is present at the register's Vòng 1 bullet list, in the legacy `- **id** —` format, which is what an
+   `id:`-anchored count misses.
+2. §0 said the four orphan blocks "belong to no running, scheduled, or excluded tier". **7** of the 38 carry an
+   explicit exclusion-with-decision record (the register's "Severity was not treated as authorization" paragraph plus
+   §11): they were excluded on purpose and only lost their identifier. The other 31 are genuinely undisposed.
+3. §0 said the register holds "112 entries, 2 CLOSED". Measured: **123** structured `id:` entries (112 of them with a
+   `Status:` field on the entry line) and **180** distinct legacy bullets in **186** bullet lines, plus 8 un-bolded
+   `- R1-…` bullets — none of which carries `Status:` on its own line, which is exactly how a `Status:`-anchored count
+   loses them — with **1** entry reading `Status: CLOSED by …`. After `T4-3` and the review pass: 27 CLOSED, 2 REFUTED,
+   6 EXCLUDED on `id:` lines (the seven values sum to the 113 status-bearing entry lines; a 7th EXCLUDED,
+   `R5-E03-05`, carries its status on its `cat:` field line), plus 11 dated refresh lines on entries with no status
+   field. The review pass then corrected this contract's own register arithmetic — the refresh paragraph had said
+   "184 bullets / 13 un-bolded", and the file measures 186 and 8 — and aligned six rows with §4.17 rather than leaving
+   them `OPEN` in one file and `EXCLUDED` in the other.
+4. §2 said §8 holds 17 `### Record —` sections and that the M12 row is a 9 940-char row / 9 840-char cell citing 29
+   commit hashes; the first closeout correction restated that as 9 841 chars and 18 unique hashes. Re-measured at
+   `07cca47` — the last head carrying the old cell — with one stated convention: the row line is **9 940** characters
+   and its cell (the slice from the third column on) is **9 858**; the cell's machine-token population is **36 unique**
+   references — 25 hex-shaped, of which 18 are exactly-seven-hex commit short-shashes, 4 are CI run ids and 3 are
+   8-hex digests, plus 11 code/label tokens. §8 holds 15 records inside itself and held 2 more stranded under §11
+   until `07cca47` moved them.
+5. §3 `T4-2` asserted `M12/T5`'s prerequisite is **H5**. §11's H5 row cites `R5-E03-07` and `R5-E11-02`, neither of
+   which is in the A2 band, and the owner's queue puts the H5 answer *after* A2. §4.17 records H6 for `R5-E13-02` and
+   no §11 tie for `R1-A02-01`, whose boundary is deployment.
+6. §3 `T4-1` asked for the table in "the new `PLAN.md` §5". §5 has been Canonical target architecture since before
+   this contract, and inserting a new §5 would renumber §5–§11 — invalidating every `§8` and `§11` citation in the four
+   archived contracts, which are immutable. The table is **§4.17** instead, inside §4 where the routing paragraph it
+   replaces lives. The deviation is disclosed here rather than quietly adopted.
+7. §6.4's consistency gate — "a grep for the defunct identifiers across tracked files returns 0" — is **not
+   satisfiable** without rewriting `docs/contracts/execution/archive/2026-10-16-M12-T2.2-R2.md`, which is admitted
+   evidence and off-limits under `AGENTS.md` §10. `PLAN.md` itself is at 0 hits (from 9); the archive keeps 2. The
+   gate is reported as met for the live routing file and unreachable repo-wide, not waived.
+
+**No-fact-loss proof for `T4-4`, as §6.3 required — restated twice, because the review pass proved the first two
+versions of this sentence wrong.** The measured class, run against `07cca47` (last head with the old cell) and the
+current tree: hex strings of 7–40 characters including the `…` digest form, 9–12-digit CI run ids, `UPPER_SNAKE`
+codes, `R<n>-<LANE>-<nn>` finding ids and `A-n`/`B-n`/`C-n`/`T2.1-n` item labels. Old cell **36** unique tokens →
+new cell **5**: **31 removed**, **5 retained** verbatim, and **0 of the 31 are absent from §8** as it stands. The
+first printed triple was "67 / 56 / 11" and the second was "12 kept"; neither is reproducible under the stated
+classifier — 67 counted occurrences rather than unique tokens, and 12 was the *new* cell's population rather than
+the intersection — so both are replaced by the re-measured numbers above rather than reconciled. Second correction:
+the class cannot see camelCase symbols or multi-word literals, so the commit message's wider wording ("every code
+name … and item label") was never what was measured. Under that wider reading, `buildDiscordComponentMessage` had
+left the cell and existed nowhere in this file, so it is now written into §8's `M12/T1-R1` closeout evidence above;
+`n3a` survives in §2's grant history; and the four verdict values are covered by the §8 live tag dump
+(`STATUS: WAITING|APPROVED|REJECTED|CHANGES|EXPIRED`, `PLAN.md:5204`) — which a literal-string check misses, because
+it stores them pipe-joined rather than as four separate `STATUS: X` literals. Third: measured against §8's own range
+*before* the relocation (`71003fd`), the same classifier reports **15** tokens with no home — 14 references plus
+`C-12` — and **0** after `07cca47`, which is the proof that moving the two stranded records was required work rather
+than tidying.
+
+**Gates.** Baseline `npm run verify` at the materialization commit `f9b356c`: exit 0, **1595 tests / 106 suites /
+1546 pass / 0 fail / 49 skipped**, `Repository policy check passed.` Rerun after `T4-1` (`ca8e2ff`), after `T4-2`
+(`71003fd`), after the relocation (`07cca47`), after `T4-4` (`4f4536f`) and after `T4-5` (`21f349a`): the same
+denominators, exit 0 every time, with `npm run repo:check` PASS at each item because `conventions.md` is read by
+`checkGateRegistry`. `format:check` and `lint` are clean on the one tracked non-`PLAN.md` file this contract touched.
+`PLAN.md` is outside both the prettier glob and the markdownlint config, so the table and the shrunk cell are not
+format-gated — stated rather than assumed. **WSL lane: `NOT RUN`** — no test file, no source file and no packaged
+asset changed, so there is no live-reading assertion for that lane to execute. **Python lane: `NOT RUN`** — zero
+`apps/knowledge/` files in the diff. **CI: `NOT RUN` at the time this record was written** — the closeout push had not
+been dispatched or read back; `REMOTE-BACKED` is withheld, and a run id is cited only if a run is actually read from
+its log, never promised forward. **Review-convergence pass: two read-only review passes over the six commits, whose
+findings are the corrections above** (the `R5-E13-05` row's internal contradiction, the `P5` history claim, the stale
+premises numbers still sitting in §2's approval field, the premises count, and the register's field-line attribution
+in the first; then, in the second, the record's own token arithmetic — "67 / 56 / 11", "kept = 12" and
+"twelve, not fourteen" all failed to reproduce under the stated classifier and are replaced by the re-measured
+**36 → 5, 31 removed, 5 retained, 0 homeless** above, with `15 → 0` as the relocation's proof).
+
+**Escalated by this contract, recorded with evidence, deliberately not fixed:** the recurrence guard that would fail
+a tracked doc citing a withdrawn task id (it widens `repo:check`, so it needs its own grant); `H10` (whether this
+register becomes tracked — `T4-3` now has a concrete cost to cite); `H5` before `M12/T6` (the owner's queue puts the
+H5 answer after A2, and §11's H5 row cites `R5-E03-07` / `R5-E11-02`, so `M12/T4-R1` corrected `ACTIVE.md`'s
+"`H5` before `M12/T5`" instead of copying it); `H1`/`H2`/`H3` before
+`M12/T8`; `CHANGELOG.md:430`/`:861` historical `REAL_EXECUTED` lines; `AGENTS.md:3`'s "Codex, Cursor" audience line
+(the standing ruling keeps `AGENTS.md` out of bounds); `catalog.mjs:34`'s `DECISION` regex, which rejects every
+dotted task id such as `M12/T2.2-R3`; and `K-2`'s `404` for a corrupt run row.
+
+**What this contract did NOT do.** It fixed no behaviour, schema, gate or dependency. It authorized none of the bands
+it scheduled: `M12/T2.2-R3`, `M12/T5`, `M12/T6`, `M12/T7`, `M12/T8` and `M12/T3` all remain `scheduled, not
+authorized`, and §4.17 is where each finding's disposition and re-verification duty is recorded. Deployment stays
+unauthorized; live Discord behaviour stays `NOT TESTED`; `verify.mjs` and the R16 rehearsal stay `NOT RUN`.
 
 ## 9. Deferred beyond V1
 
