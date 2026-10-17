@@ -210,8 +210,13 @@ export function deriveSemanticMetadata(input = {}) {
     }
   }
 
-  // B05: fail-closed — if no namespace resolved, signal AMBIGUOUS
-  const ambiguous = resolvedNamespaces.length === 0 && nsList.length > 0;
+  // B05: fail-closed — if no namespace resolved, signal AMBIGUOUS.
+  // M12/T2.2-R3 R3-8: this used to carry `&& nsList.length > 0`, which made an
+  // ABSENT namespace the one input that never fails closed — it fell through to
+  // `domain: "general"` below, a value the consumer gate
+  // (`CANONICAL_DOMAINS.includes(domain)`) accepts, so "no taxonomy supplied"
+  // and "taxonomy resolved to the generic domain" were indistinguishable.
+  const ambiguous = resolvedNamespaces.length === 0;
   const primaryNamespace = resolvedNamespaces[0] ?? null;
 
   let domain = ambiguous ? "AMBIGUOUS" : "general";

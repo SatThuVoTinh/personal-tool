@@ -9,6 +9,7 @@ import {
   deriveSemanticMetadata,
   renderEmbeddingEnvelope,
   prepareQueryEmbedding,
+  CANONICAL_DOMAINS,
 } from "../zink-tools/common/semantic-contract.mjs";
 
 import {
@@ -465,6 +466,48 @@ describe("M8/T1 Governed Skill Vector Store & Semantic Vector RAG", () => {
     assert.equal(unknownMeta.subtopic, null);
     assert.equal(unknownMeta.ambiguous, true);
     assert.deepEqual(unknownMeta.unresolved_namespaces, ["custom-unknown-ns"]);
+  });
+
+  // =========================================================================
+  // M12/T2.2-R3 R3-8 — an ABSENT namespace is not `general`.
+  //
+  // BUG-11 made an unresolvable namespace fail closed, but the clause that
+  // decided it (`resolvedNamespaces.length === 0 && nsList.length > 0`) treated
+  // "nothing supplied" as not-applicable, so the empty input resolved to
+  // domain `general` — and `general` is inside CANONICAL_DOMAINS, which is the
+  // exact test the consumers apply before accepting a proposal. Absence and
+  // resolution therefore looked identical to every caller downstream.
+  // =========================================================================
+  test("R3-8: no absent or empty namespace yields a domain the consumer gate accepts", () => {
+    for (const [label, input] of [
+      ["omitted", { capability: "no-ns-skill" }],
+      ["empty array", { namespace: [], capability: "no-ns-skill" }],
+      ["explicit undefined", { namespace: undefined, capability: "s" }],
+      ["non-array non-string", { namespace: 42, capability: "s" }],
+    ]) {
+      const meta = deriveSemanticMetadata(input);
+      assert.equal(
+        meta.ambiguous,
+        true,
+        `${label}: an absent namespace must be signalled as AMBIGUOUS`,
+      );
+      assert.equal(meta.domain, "AMBIGUOUS", `${label}: domain`);
+      assert.equal(meta.primary_topic, "AMBIGUOUS", `${label}: primary_topic`);
+      assert.ok(
+        !CANONICAL_DOMAINS.includes(meta.domain),
+        `${label}: domain '${meta.domain}' must not satisfy CANONICAL_DOMAINS, which is what the consumer gate checks`,
+      );
+    }
+
+    // The resolved and the unresolvable cases keep their BUG-11 verdicts.
+    assert.equal(
+      deriveSemanticMetadata({ namespace: ["excel"], capability: "v" }).domain,
+      "office",
+    );
+    assert.ok(
+      CANONICAL_DOMAINS.includes("general"),
+      "`general` stays a legitimate domain for a taxonomy that resolved to it — the defect was reaching it from absence",
+    );
   });
 
   // =========================================================================
