@@ -13,7 +13,7 @@ const mod = (rel) => import(pathToFileURL(path.join(REPO, rel)).href);
 const readSource = (rel) => readFileSync(path.join(REPO, rel), "utf8");
 
 const { chunkSkillContent } = await mod("zink-skill-store/src/vector-sync.mjs");
-const { renderEmbeddingEnvelope } = await mod(
+const { renderEmbeddingEnvelope, deriveSemanticMetadata } = await mod(
   "zink-tools/common/semantic-contract.mjs",
 );
 
@@ -43,9 +43,18 @@ test("R21-01: no chunk ever exceeds the embedding envelope ceiling", () => {
     for (const s of segments) {
       assert.doesNotThrow(
         () =>
+          // M12/T2.2-R3 R3-9 (owner grant `q1`, 2026-10-17): this call used to
+          // pass `skillId`/`headingPath`, keys the renderer has never read, and
+          // it only stayed inside `assert.doesNotThrow` because the renderer
+          // defaulted the missing taxonomy to `general`. Real callers spread
+          // `deriveSemanticMetadata` output, so the budget probe now builds the
+          // envelope the production path actually renders.
           renderEmbeddingEnvelope({
-            skillId: "office/s",
-            headingPath: s.heading_path,
+            ...deriveSemanticMetadata({
+              namespace: ["office"],
+              capability: "s",
+              tags: [],
+            }),
             content: s.content,
           }),
         `${label}: segment ${s.segment_ordinal} must be embeddable`,

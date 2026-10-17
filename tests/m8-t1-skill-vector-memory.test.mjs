@@ -10,6 +10,7 @@ import {
   renderEmbeddingEnvelope,
   prepareQueryEmbedding,
   CANONICAL_DOMAINS,
+  SEMANTIC_CONTRACT_VERSION,
 } from "../zink-tools/common/semantic-contract.mjs";
 
 import {
@@ -73,6 +74,60 @@ describe("M8/T1 Governed Skill Vector Store & Semantic Vector RAG", () => {
     // Original content is unchanged and distinguishable from envelope
     assert.notEqual(envelope, rawContent);
     assert.equal(rawContent.includes("Domain: office"), false);
+  });
+
+  // =========================================================================
+  // M12/T2.2-R3 R3-9 — the envelope may not invent the taxonomy it advertises.
+  // =========================================================================
+  test("R3-9: an envelope without taxonomy raises; a correct one keeps its exact bytes", () => {
+    const rawContent = "# VLOOKUP Guide\n\nUse =VLOOKUP(A1, B:C, 2, FALSE).";
+    const full = {
+      domain: "office",
+      primary_topic: "spreadsheet",
+      subtopic: "formulas",
+      concept: "vlookup optimization",
+      secondary_topics: ["excel", "lookup"],
+      content: rawContent,
+    };
+    // The header bytes are pinned in full: any change here would roll
+    // embedding_input_sha256 for every stored segment and demand a
+    // SEMANTIC_CONTRACT_VERSION bump, which this band does not authorize.
+    assert.equal(
+      renderEmbeddingEnvelope(full),
+      [
+        `Semantic-Contract: ${SEMANTIC_CONTRACT_VERSION}`,
+        "Domain: office",
+        "Primary Topic: spreadsheet",
+        "Subtopic: formulas",
+        "Concept: vlookup optimization",
+        "Secondary Topics: excel, lookup",
+        "",
+        rawContent.trim(),
+      ].join("\n"),
+    );
+
+    for (const [label, params] of [
+      ["no taxonomy at all", { skillId: "office/s", content: "body" }],
+      ["domain only", { domain: "office", content: "body" }],
+      ["primary_topic only", { primary_topic: "spreadsheet", content: "body" }],
+      [
+        "whitespace taxonomy",
+        { domain: "   ", primary_topic: "", content: "body" },
+      ],
+    ]) {
+      assert.throws(
+        () => renderEmbeddingEnvelope(params),
+        /EMBEDDING_ENVELOPE_METADATA_REQUIRED/u,
+        `${label}: must raise rather than render a taxonomy nobody resolved`,
+      );
+    }
+
+    // A non-string body used to die as a bare TypeError inside `.trim()`.
+    assert.ok(
+      renderEmbeddingEnvelope({ ...full, content: 12345 }).endsWith("12345"),
+      "content is coerced, not defaulted and not thrown on",
+    );
+    assert.doesNotThrow(() => renderEmbeddingEnvelope({ ...full }));
   });
 
   // =========================================================================

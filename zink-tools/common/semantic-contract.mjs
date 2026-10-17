@@ -285,17 +285,33 @@ export function deriveSemanticMetadata(input = {}) {
  */
 export function renderEmbeddingEnvelope(params = {}) {
   const {
-    domain = "general",
-    primary_topic = "general",
+    domain,
+    primary_topic,
     subtopic = null,
     concept = null,
     secondary_topics = [],
-    content = "",
+    content,
   } = params;
 
   // B10: strip newlines/CR from metadata values
   const sanitize = (v) =>
     typeof v === "string" ? v.replace(/[\r\n]+/gu, " ").trim() : "";
+
+  // M12/T2.2-R3 R3-9: the taxonomy must arrive, it may not be invented here.
+  // Both fields used to default to "general", so a caller that passed neither
+  // got a well-formed header for a taxonomy nobody resolved — and
+  // computeEmbeddingInputHash then pinned a digest to those bytes, which makes
+  // a fabricated envelope indistinguishable from a real one downstream. The
+  // refusal changes no byte of an envelope that was built correctly, which is
+  // exactly why this needed no SEMANTIC_CONTRACT_VERSION bump.
+  const missingTaxonomy = [];
+  if (!sanitize(domain)) missingTaxonomy.push("Domain");
+  if (!sanitize(primary_topic)) missingTaxonomy.push("Primary Topic");
+  if (missingTaxonomy.length > 0) {
+    throw new Error(
+      `EMBEDDING_ENVELOPE_METADATA_REQUIRED: ${missingTaxonomy.join(", ")} must come from deriveSemanticMetadata`,
+    );
+  }
 
   const headerLines = [
     `Semantic-Contract: ${SEMANTIC_CONTRACT_VERSION}`, // B11
@@ -316,7 +332,7 @@ export function renderEmbeddingEnvelope(params = {}) {
     }
   }
 
-  const rendered = `${headerLines.join("\n")}\n\n${content.trim()}`;
+  const rendered = `${headerLines.join("\n")}\n\n${String(content ?? "").trim()}`;
 
   // B12: enforce max byte bound
   if (byteLength(rendered) > MAX_EMBEDDING_INPUT_BYTES) {
