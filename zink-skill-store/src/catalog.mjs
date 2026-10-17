@@ -1252,9 +1252,10 @@ export async function promoteApprovedSkillUnlocked({
     (catalog.errors.length === 1 &&
       catalog.errors[0]?.code === "SKILLS_ROOT_MISSING");
   if (!catalogUsable) {
+    const first = catalog.errors[0];
     writerError(
       "CATALOG_INVALID",
-      "catalog has pre-existing errors; promotion refused.",
+      `catalog has pre-existing errors; promotion refused (first: ${first?.code ?? "UNKNOWN"} at ${first?.path ?? "unreported path"}).`,
     );
   }
   const clash = (catalog.records ?? []).find(

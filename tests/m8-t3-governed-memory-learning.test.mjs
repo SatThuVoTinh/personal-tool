@@ -471,6 +471,42 @@ describe("M8/T3 canonical Skill Store writer", () => {
       await rm(tmp, { recursive: true, force: true });
     }
   });
+
+  test("T2j: a refusal to promote over a dirty catalog names the diagnostic it found", async () => {
+    const { promoteApprovedSkill } =
+      await import("../zink-skill-store/src/catalog.mjs");
+    const { mkdir } = await import("node:fs/promises");
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "zink-named-cause-"));
+    const skillsRoot = path.join(tmp, "skills");
+    try {
+      await mkdir(path.join(skillsRoot, "office", "bad_dir"), {
+        recursive: true,
+      });
+      await assert.rejects(
+        () =>
+          promoteApprovedSkill({
+            skillsRoot,
+            namespace: ["office"],
+            capability: "named-cause-skill",
+            version: "1.0.0",
+            content: "# Named\n\nCause.",
+            requestingActor: "excel",
+            decisionRef: "PLAN:M8/T3-R1",
+          }),
+        (error) => {
+          assert.equal(error.code, "CATALOG_INVALID");
+          assert.match(
+            error.message,
+            /DIRECTORY_GRAMMAR_INVALID/,
+            "the refusal must carry the code the scanner actually reported",
+          );
+          return true;
+        },
+      );
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("M8/T3 durable skill proposals", () => {
