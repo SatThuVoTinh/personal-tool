@@ -80,7 +80,7 @@ Task: M12/T4 — Governance-record integrity: re-inventory the orphaned findings
   is decision `H10` / `R3-P04-03`, executed first because §5.1 of the old contract made the scrub rule a prerequisite.
 Active revision: M12/T4-R1 — **Governance-record integrity**, materialized 2026-10-17 on the owner's `grant 1`, the
   first contract in the queue he set with `anh muốn em sửa hết`. Five items (`T4-1` re-inventory of the 38 findings that
-  still carry the defunct `M12/T2.4`–`T2.7` identifiers, `T4-2` re-filing them as `M12/T5`–`T8`, `T4-3` register-status
+  still carried the withdrawn `T2.4`–`T2.7` identifiers, `T4-2` re-filing them as `M12/T5`–`T8`, `T4-3` register-status
   refresh + the H10 authority rule, `T4-4` shrinking the 9 840-character M12 gate cell under a printed no-fact-loss
   diff, `T4-5` the `Cursor`→`dsh` line in `conventions.md`). No source file, no schema, no gate, no history rewrite.
   (history) Active revision was: M12/T2.3-R1 — **Wave C only, CLOSED 2026-10-17** with the contract archived; the field below records
@@ -98,7 +98,7 @@ Active revision: M12/T4-R1 — **Governance-record integrity**, materialized 202
   **I1-A** (4A.1 withdrawn — its fix must amend a pinned required gate), **I2-A** (4A.13 withdrawn — V06's
   `R6-V06-01` proved the fix self-blocking), **I3-A** (4A.16(i) withdrawn — the known-red promise unbacked),
   **I4-A** (the `test:r16` recursive-delete guard approved and promoted into this tier as T2.1-8), **I5-A** (doc
-  truth first *within* the low tier), **I6-A** (a `M12/T2.7`-style gate-reach block, re-filed into T2.2 by the
+  truth first *within* the low tier), **I6-A** (a `T2.7`-style gate-reach block, re-filed into T2.2 by the
   tier rule), **I7-A** (commit `PLAN.md` now). R3 is **written fresh** rather than patched, because R2's §7 had
   already fallen out of agreement with its own §4A.15/§5 — the tiering criterion is the risk **of the fix** (high =
   destroys state / exposes material / fails undetectably), **not** defect severity, and it is stated in `ACTIVE.md`
@@ -157,14 +157,17 @@ Prior revision: M12/T2.1-R1 — the execution wave the owner authorized on 2026-
   so this is a schema decision the owner has not made), **D** the `primary_coordinator` writer and the
   `guard.mjs:869-882` decision-node contradiction, **E** the `$ref` identity/verdict package and the
   three missing Knowledgebase routes, and every `R1-A08-*` item except `08`.
-  **Also excluded by R2, with successors named in ACTIVE.md §5.1:** every remaining Vòng 5 finding —
-  `M12/T2.3` for the Skill Store lifecycle (`R5-E04-01/02/04/05/06/07/08/09`, `R5-E05-04/05/07/08`,
-  `R5-E07-01/04/05/06/07`, `R5-E03-07`), `M12/T2.4` for A2 plus `R5-E13-02` and the removal half of
-  `R5-E13-05`, `M12/T2.5` for the Knowledgebase block (`R5-E01-02/04`, `R5-E02-01/02/03/04/06`,
-  `R5-E03-01…06, 08`), `M12/T2.6` for the remaining Zink Tools adapter surfaces (`R5-E06-01/02/05/06/
-  08/09`), `M12/T2.7` for gate truth (`R5-E09-01…08`, `R5-E10-01/02/05/06/07/08`, `R5-E13-03`), and
-  `M12/T3` for documentation and skills procedure (`R5-E12-02/03/05/06/07`, `R3-P04-01/07/08/09`). Ten
-  decisions are recorded as **pending and unauthorized** in ACTIVE.md §9 (H1 CI trigger widening, H2 the
+  **Also excluded by R2:** every remaining Vòng 5 finding. R2 routed them to successor identifiers it invented for the
+  purpose (`T2.3`–`T2.7`); `M12/T2.1-R3` §5.3 withdrew those groupings, and `M12/T4-R1` item `T4-2` re-filed the
+  remainder on 2026-10-17 into the bands recorded in **§4.17**, where each finding also carries its disposition:
+  `M12/T2.2-R3` for the Skill Store lifecycle (`R5-E04-01/02/04/05/06/07/08/09`, `R5-E05-04/05/07/08`,
+  `R5-E07-01/04/05/06/07`, `R5-E03-07` — 18), `M12/T5` for A2 plus `R5-E13-02` and the removal half of `R5-E13-05` (3),
+  `M12/T6` for the Knowledgebase block (`R5-E01-02/04`, `R5-E02-01/02/03/04/06`, `R5-E03-01…06, 08` — 14), `M12/T7` for
+  the remaining Zink Tools adapter surfaces (`R5-E06-01/02/05/06/08/09` — 6), `M12/T8` for gate truth
+  (`R5-E09-01…08`, `R5-E10-01/02/05/06/07/08`, `R5-E13-03` — 15), and `M12/T3` for documentation and skills procedure
+  (`R5-E12-02/03/05/06/07`, `R3-P04-01/07/08/09`). **None of them is authorized;** each needs its own Plan Revision and
+  its own `Execution Authorization: YES`. Eleven
+  decisions are recorded as **pending and unauthorized** in §11 of this file (H1 CI trigger widening, H2 the
   `403` on branch protection, H3 a skip floor, H4 the live 0644 config backup as a guarded operator
   command, H5 `skills.*` schema ownership, H6 the router key as a SecretRef, H7 ledger identity
   references, H8 a governed `DEPRECATED` transition, H9 PDF-content reclamation, H10 whether the findings
@@ -174,11 +177,13 @@ Prior revision: M12/T2.1-R1 — the execution wave the owner authorized on 2026-
 - **Corrected 2026-10-16 (owner answer `l1`).** The paragraph above is the withdrawn R2 grouping and must not be read
   as the current schedule: `M12/T2.1-R3` §5.3 re-filed the **Skill Store lifecycle** block
   (`R5-E04-01/02/04/05/06/07/08/09`, `R5-E05-04/05/07/08`, `R5-E07-01/04/05/06/07`, `R5-E03-07` — 18 findings) into
-  **T2.2**, not `M12/T2.3`, and `T2.4`–`T2.7` no longer exist as groupings. The block was nevertheless absent from
-  the admitted Wave B scope and from `ACTIVE.md` §5, so it belonged to no running tier. The owner assigned it **its
-  own contract after Wave B closes**, recorded here as `M12/T2.2-R3` (the option he chose was named `M12/T2.4`; that
-  ID already names A2 plus `R5-E13-02` in the text above, so the intent — separate contract, medium risk, not folded
-  into the document tier — is kept and only the identifier is corrected). It is **scheduled, not authorized**: no
+  **T2.2**, not `T2.3`, and `T2.4`–`T2.7` no longer exist as groupings. The block was nevertheless absent from
+  the admitted Wave B scope and from that contract's §5 (now readable at
+  `docs/contracts/execution/archive/2026-10-16-M12-T2.2-R2.md`), so it belonged to no running tier. The owner assigned
+  it **its own contract after Wave B closes**, recorded here as `M12/T2.2-R3` (the option he chose was named `T2.4`;
+  that label already named A2 plus `R5-E13-02` in the text above, and A2 now sits in `M12/T5`, so the intent —
+  separate contract, medium risk, not folded into the document tier — is kept and only the identifier is corrected).
+  It is **scheduled, not authorized**: no
   code for it exists, and it needs its own Plan Revision and `Execution Authorization: YES`.
   Honesty obligations the owner should read before accepting anything: deployment is **not** authorized
   by this contract; live Discord behaviour stays `NOT TESTED`; `verify.mjs` stays `NOT RUN`; the R16
@@ -187,8 +192,10 @@ Prior revision: M12/T2.1-R1 — the execution wave the owner authorized on 2026-
   mandatory; and item 4.5 may turn `npm run verify` red by exposing a genuinely incomplete contract set
   — the owner accepted that outcome when he answered "G có". **R2 adds three more:** (a) item 4A.16(i) is
   *designed* to make M7-063 red, because widening its file list brings `index.mjs:511`'s `/mnt/c/…`
-  literal into scope and removing that literal is `M12/T2.4` — that red is truth and must be recorded as
-  a known-red, never repaired by narrowing the guard; (b) **five of the sixteen Vòng 5 sweep lanes are
+  literal into scope and removing that literal is `M12/T5` (§4.17) — that red is truth and must be recorded as
+  a known-red, never repaired by narrowing the guard; **(written before execution: `4A.16(i)` was then withdrawn as
+  unbacked by owner answer `I3-A` and declined again in Wave B, so the known-red never happened — see §4.17's
+  `R5-E13-05` row)**; (b) **five of the sixteen Vòng 5 sweep lanes are
   `NOT RUN`** (E08, E11, E14, E15, E16) and **all twelve Vòng 6 verification lanes are `NOT RUN`** — the
   harness returned a daily usage limit on five consecutive dispatch attempts — so no claim of full-repo
   coverage may be made, and the orchestrator's own re-derivation of ten claims is a **weaker** substitute
@@ -6584,9 +6591,10 @@ because the wave was being executed: `a62962b` (J-1), `fabaf5b` (K-1), `9891d83`
    Attribution was measured, not argued: the same sweep against a scratch worktree at `fabaf5b^` returned the
    identical nine, so J-1 and K-1 did not cause it. **Systemic finding: only 3 of 35 governed paths had any
    live-reachability assertion before `M1 4`.** That gate is the reason this class was invisible.
-3. **The `l1` option name.** I offered the Skill Store lifecycle block as `M12/T2.4`; that identifier already names
+3. **The `l1` option name.** I offered the Skill Store lifecycle block as `T2.4`; that label already named
    the A2 block in the withdrawn R2 grouping, and `M12/T2.1-R3` §5.3 withdrew `T2.4`–`T2.7` altogether. His decision
    is recorded with the intent intact and the identifier corrected to **`M12/T2.2-R3`**, scheduled and not authorized.
+   (The A2 block this note refers to is `M12/T5` as of `M12/T4-R1` `T4-2`; see §4.17.)
 
 **Item-level notes worth carrying forward.** B-16 stalled a full owner round because *one* production file is pinned
 by three assertions hashing three different inputs; `B-21` (`5d5f8f0`) turned that coincidence into an asserted fact
