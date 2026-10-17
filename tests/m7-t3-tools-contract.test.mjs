@@ -1143,6 +1143,25 @@ describe("T3 Domain F - SQL & Path Safety", () => {
       "reports/q1.xlsx",
     );
 
+    // M12/T2.2-R3 R3-10: the returned value is the normalized form the README
+    // promises. Both separators are accepted on the way in, so returning
+    // `logicalPath` verbatim handed callers back a spelling this function had
+    // only half-checked. Accept/deny decisions did not move: measured 36 inputs
+    // against the pre-change module, 0 verdict differences.
+    assert.equal(
+      validateArtifactLogicalPath("data\\sub\\f.csv"),
+      "data/sub/f.csv",
+    );
+    assert.equal(
+      validateArtifactLogicalPath("mixed\\slash/sub.csv"),
+      "mixed/slash/sub.csv",
+    );
+    assert.equal(
+      validateArtifactLogicalPath("reports/q3/inventory_summary.xlsx"),
+      "reports/q3/inventory_summary.xlsx",
+      "a forward-slash path must round-trip byte for byte",
+    );
+
     // Traversal forbidden
     assert.throws(
       () => validateArtifactLogicalPath("../secret.txt"),

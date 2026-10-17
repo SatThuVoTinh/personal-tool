@@ -38,11 +38,9 @@ export function validateArtifactLogicalPath(logicalPath) {
   // 4. Split on / and \
   const segments = logicalPath.split(/[/\\]/u);
 
-  // 5. Assert at least one segment and no segment is empty, ".", or ".."
-  if (segments.length === 0) {
-    throw new Error("SCHEMA_VALIDATION_FAILED");
-  }
-
+  // 5. No segment may be empty, "." or "..". A `split` call always yields at
+  //    least one element, so an empty `segments` is not a state this function
+  //    can be in; the empty-segment test below is what catches `a//b` and `a/`.
   for (const segment of segments) {
     if (segment.length === 0 || segment === "." || segment === "..") {
       throw new Error("SCHEMA_VALIDATION_FAILED");
@@ -59,7 +57,10 @@ export function validateArtifactLogicalPath(logicalPath) {
     }
   }
 
-  return logicalPath;
+  // The validated form. The split above accepts both separators, so returning
+  // `logicalPath` verbatim handed the caller back the backslash spelling it had
+  // only half-checked — README's "normalized path" promise named this return.
+  return segments.join("/");
 }
 
 export function isArtifactLogicalPathValid(logicalPath) {
