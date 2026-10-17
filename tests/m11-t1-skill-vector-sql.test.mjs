@@ -464,3 +464,42 @@ test("R3-7: the failure statement refreshes both digests and clears the segments
     await rm(root, { recursive: true, force: true });
   }
 });
+
+// M12/T2.2-R3 `R3-6` — a control byte in the body must be a catalog diagnostic,
+// not a database error. Before this guard `escapeSqlLiteral` (quote-doubling
+// only) carried `\x00` into the transaction that `buildSkillSyncTransaction`
+// opens, so the failure arrived after psql had already begun one. The scan-side
+// check means the sync never gets as far as a statement.
+test("R3-6: a control-byte body is refused by the scan before any SQL runs", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "m11-r36-"));
+  try {
+    await makeActiveSkill(
+      root,
+      ["office"],
+      "nul-skill",
+      "# Nul\n\nbefore\u0000after",
+    );
+    const issued = [];
+    const report = await syncSkillsToVectorStore({
+      skillsRoot: root,
+      embedFn,
+      dbExecutor: async (sql) => {
+        issued.push(sql);
+        return "";
+      },
+    });
+    assert.equal(report.status, "FAILED");
+    assert.equal(report.error_code, "CATALOG_INVALID");
+    assert.ok(
+      (report.details ?? []).some((e) => e.code === "INVALID_SKILL_CONTENT"),
+      `the refusal must name the byte-level diagnostic, got ${JSON.stringify(report.details)}`,
+    );
+    assert.deepEqual(
+      issued,
+      [],
+      "no statement of any kind may reach the database for a catalog the scan already rejects",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

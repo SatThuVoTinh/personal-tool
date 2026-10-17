@@ -576,6 +576,130 @@ describe("M8/T3 canonical Skill Store writer", () => {
       await rm(tmp, { recursive: true, force: true });
     }
   });
+
+  test("T2l: a control byte in the body is a catalog error, but tab, LF and CR are not", async () => {
+    const { promoteApprovedSkill, scanCatalog } =
+      await import("../zink-skill-store/src/catalog.mjs");
+    const { mkdir, readdir, writeFile } = await import("node:fs/promises");
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "zink-ctrl-byte-"));
+    const skillsRoot = path.join(tmp, "skills");
+
+    // Write the pair directly so the digest always matches: a NUL body must be
+    // refused for its own diagnostic, not for a mismatch this helper caused.
+    const seedBody = async (capability, body) => {
+      const dir = path.join(skillsRoot, "office", capability, "1.0.0");
+      await mkdir(dir, { recursive: true });
+      await writeFile(path.join(dir, "SKILL.md"), body, "utf8");
+      await writeFile(
+        path.join(dir, "manifest.json"),
+        JSON.stringify({
+          schema_version: 1,
+          identity: { namespace: ["office"], capability, version: "1.0.0" },
+          content: {
+            path: "SKILL.md",
+            sha256: createHash("sha256").update(body, "utf8").digest("hex"),
+          },
+          provenance: { source_type: "research", references: [] },
+          lifecycle: [
+            { status: "CANDIDATE", at: "2026-10-17T00:00:00Z", actor: "excel" },
+            {
+              status: "ACTIVE",
+              at: "2026-10-17T01:00:00Z",
+              actor: "owner",
+              decision_ref: "PLAN:M8/T3-R1",
+            },
+          ],
+        }),
+        "utf8",
+      );
+      const scan = await scanCatalog(skillsRoot);
+      return scan.errors
+        .filter((entry) => entry.path.includes(`${capability}/`))
+        .map((entry) => entry.code);
+    };
+
+    try {
+      // The writer shares validateVersion through validateStagedVersion, so a
+      // control byte is refused at publication and names itself in the
+      // details channel `R3-5` added.
+      await assert.rejects(
+        () =>
+          promoteApprovedSkill({
+            skillsRoot,
+            namespace: ["office"],
+            capability: "nul-writer-skill",
+            version: "1.0.0",
+            content: "# Nul\n\nbefore\u0000after",
+            requestingActor: "excel",
+            decisionRef: "PLAN:M8/T3-R1",
+          }),
+        (error) => {
+          assert.equal(error.code, "CATALOG_INVALID");
+          assert.deepEqual(error.details, [
+            "STAGED_VALIDATION_FAILED",
+            "INVALID_SKILL_CONTENT",
+          ]);
+          return true;
+        },
+      );
+      await assert.rejects(
+        () => readdir(path.join(skillsRoot, "office", "nul-writer-skill")),
+        { code: "ENOENT" },
+        "a refused publication must leave no empty capability directory behind",
+      );
+      const healed = await scanCatalog(skillsRoot);
+      assert.deepEqual(
+        healed.errors,
+        [],
+        "an empty capability directory is DIRECTORY_GRAMMAR_INVALID, which would fail the whole store closed",
+      );
+      const survived = await promoteApprovedSkill({
+        skillsRoot,
+        namespace: ["office"],
+        capability: "after-refusal-skill",
+        version: "1.0.0",
+        content: "# Still\n\nA valid promotion after a refusal.",
+        requestingActor: "excel",
+        decisionRef: "PLAN:M8/T3-R1",
+      });
+      assert.equal(
+        survived.status,
+        "ACTIVE",
+        "one bad body must not deny every later skill",
+      );
+
+      // Owner decision `A` exemptions, pinned because they are the only thing
+      // standing between this guard and a store that cannot hold markdown.
+      const clean = await seedBody(
+        "whitespace-skill",
+        "# Guide\r\n\n\tTab-indented step.\n\n- item\u00a0nbsp",
+      );
+      assert.deepEqual(
+        clean,
+        [],
+        "LF, CR and TAB are what every SKILL.md body already contains",
+      );
+
+      for (const [label, byte] of [
+        ["nul", "\u0000"],
+        ["vt", "\u000b"],
+        ["ff", "\u000c"],
+        ["esc", "\u001b"],
+        ["del", "\u007f"],
+      ]) {
+        const codes = await seedBody(
+          `ctrl-${label}-skill`,
+          `# Body\n\nbefore${byte}after`,
+        );
+        assert.ok(
+          codes.includes("INVALID_SKILL_CONTENT"),
+          `${label} (0x${byte.codePointAt(0).toString(16)}) must be reported, got ${codes.join(",")}`,
+        );
+      }
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("M8/T3 durable skill proposals", () => {

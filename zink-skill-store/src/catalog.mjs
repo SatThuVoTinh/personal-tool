@@ -471,6 +471,27 @@ async function readRegularFile(filePath, relativePath, errors, limits = null) {
   }
 }
 
+/**
+ * The sub-0x20 bytes a `SKILL.md` body may carry. Owner decision `A` of
+ * `M12/T2.2-R3` (2026-10-17) named exactly these three, and the exemption is
+ * load-bearing: the guard this reuses (`vector-sync.mjs`'s array-literal check)
+ * is written for identity segments, where no byte below 0x20 can legally
+ * appear, so applied to a markdown body verbatim it refuses `\n` and
+ * fail-closes every skill in the store. Every other C0 byte and DEL stay
+ * refused because the SQL path that motivated the guard cannot represent them.
+ */
+const BODY_WHITESPACE_CODES = new Set([0x09, 0x0a, 0x0d]);
+
+function hasForbiddenControlByte(text) {
+  for (const character of text) {
+    const cp = character.codePointAt(0);
+    if (cp === 0x7f || (cp < 0x20 && !BODY_WHITESPACE_CODES.has(cp))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 async function validateVersion(directory, parts, errors, records, count) {
   const relativeDirectory = skillPath(parts);
   const entries = await readdir(directory, { withFileTypes: true });
@@ -594,6 +615,20 @@ async function validateVersion(directory, parts, errors, records, count) {
       diagnostic(
         "CONTENT_DIGEST_MISMATCH",
         "SKILL.md digest does not match manifest content.sha256.",
+        markdownRelative,
+      ),
+    );
+  }
+  // M12/T2.2-R3 R3-6: a control byte in the body must be a catalog diagnostic,
+  // not a database error. `heading_path` is guarded when the array literal is
+  // built, but the body reaches `escapeSqlLiteral`, which only doubles quotes,
+  // and the chunker's `\s+` collapse does not match NUL — so before this check
+  // a `\x00` was discovered mid-transaction, after psql had already opened one.
+  if (hasForbiddenControlByte(markdown)) {
+    errors.push(
+      diagnostic(
+        "INVALID_SKILL_CONTENT",
+        "SKILL.md contains a control character.",
         markdownRelative,
       ),
     );
@@ -1358,6 +1393,14 @@ export async function promoteApprovedSkillUnlocked({
     await rename(stagingDir, versionDir);
   } catch (error) {
     await rm(stagingDir, { recursive: true, force: true });
+    // `mkdir(parentDir)` above created the capability directory before the pair
+    // was ever staged, so a refusal here would leave it EMPTY — and `walk`
+    // reports an empty capability directory as `DIRECTORY_GRAMMAR_INVALID`,
+    // which fails the whole store closed and denies every later promotion.
+    // Measured at this head: one refused NUL body poisoned the root and the
+    // next valid promotion came back `PREEXISTING_CATALOG_ERRORS`. Reuses the
+    // prune `R3-1` landed for the same residue class.
+    await pruneEmptyParents(parentDir, skillsRoot);
     if (error?.code === "SKILL_IDENTITY_INVALID") throw error;
     if (error?.code === "CATALOG_INVALID") throw error;
     writerError(
