@@ -7147,6 +7147,133 @@ contracts — measured 33 tests / 0 fail / 0 skipped — so the absolute negativ
 **Not done, and not claimed.** The full gate result for this state is recorded in the commit that follows, not here. No
 `--apply`, no deployment, no restart, no PR, no merge to `main`, no push — `d1` authorizes one **local** commit.
 
+### Record — register §1 became counts-only, and `F-324` was refuted again under a probe that had named the wrong symbol (2026-10-18)
+
+**Why this record exists.** Owner letter `p1`, under `j1` (the register holds open defects — not proposals, not
+session narrative). `docs/execution/findings.md` §1 carried 47 non-empty prose lines describing what the audit rounds
+and the challenge passes had done; those paragraphs are relocated here verbatim so the round history stays durable and
+§1 reduces to the tables and the derived counts. Sole write ownership was confirmed by the owner ("phiên kia hết ghi
+rồi") before the move, so no concurrent writer can be racing this edit.
+
+**What §1 now holds** (re-derived from the rows, not hand-tuned): the totals line, the F1–F7 × Severity table, the
+status line, one measured field-gap line, the ungraded set, and a pointer here. 320 rows before and after; the id set is
+identical to HEAD (`temp/check-register.mjs`: lost none, added none, 0 ten-field violations, 0 placeholder sentinels,
+0 cited paths without a tracked match). Gates in the mandatory order — `temp/recount-s1.mjs` PASS at
+total=320 / cat=320 / sev=320 / status=320, then `prettier --write`, then `markdownlint-cli2` 0 issues in 0 files across
+the 20 gated doc files, then `prettier --check` clean. `PLAN.md` itself is in neither doc gate, so this record was not
+prettier-formatted.
+
+**The four `Severity: Ungraded` rows, measured rather than recalled.** `F-021`, `F-103`, `F-104` are OPEN and need the
+owner's grade. `F-020` is REFUTED, so its missing grade has no consequence. This is the set the earlier pick-list called
+option E. The classification predicate is the one `temp/recount-s1.mjs` uses — a Severity value that starts with one of
+the four grade words, else Ungraded — and a naive "is the field empty?" probe returns **0** ungraded because these four
+rows carry the literal word `Ungraded`; that is why the count is quoted with its predicate attached.
+
+**`F-324` — the verdict held, the measurement behind it did not.** The row was relabelled REFUTED on the strength of
+"`buildConfig` runs 0 times in the six bypassing suites". Re-measured here: that count is true but irrelevant, because
+`buildConfig` (`integrations/openclaw/lib/policy.mjs:788`) merely composes the three **exported** resolvers that read
+the variables — `resolveRouterHost` at `:1291`, `resolveRouterBaseUrl` at `:1298`, `resolveRouterApiKey` at `:1308` —
+and each throws `ROUTER_*_UNAVAILABLE` when its variable is unset. The row's Evidence had listed only two of the three
+reads and located all of them "inside `buildConfig`", which is not where they live. The route the title asserts —
+"one of them spawns a generator with the inherited environment" — is what decides the verdict, and that is what was
+measured this time:
+
+- `temp/f324-probe.mjs` over every tracked suite: exactly **6** pre-set the variables with `||=` (the population the row
+  named, unchanged), **12** import `tests/helpers/router-env.mjs`, and **none of the six spawns `configure.mjs` or
+  `verify.mjs`** — the only two files that consume the router values as a generator (`configure.mjs:1252` and `:1593`
+  write `stableJson(buildSecretsPlan())`; `verify.mjs:311-312` and `:511` call the resolvers and compare the plan).
+- `tests/m12-t2.2-m1-live-reachability.test.mjs` does name `configure.mjs`, and that is where the title's "spawns a
+  generator" came from, but it only resolves the path at `:36` and reads the file as **source text** at `:38`; its child
+  processes are `git archive` at `:98` and `tar` at `:104`, and the symbol it imports from that extraction is
+  `governancePluginFiles` at `:109-114`, which reads no `ZINK_ROUTER_*`.
+- `tests/m10-t2-r14-review-defects.test.mjs:89` mentions `validateConfig` — the in-process caller of `buildConfig` — only
+  inside a comment, and its imports are `evaluateCapabilityAccess` and `AGENT_SPAWN_POLICY`, neither of which reads a
+  router variable.
+- Live: the reachability suite prints tests 4 / pass 3 / fail 0 / skipped 1 at baseline and again with a sentinel
+  exported for all three variables, and the sentinel string occurs **0** times in its output
+  (`temp/f324-base.log`, `temp/f324-sent.log`).
+
+So the row stays REFUTED, now with the refutation resting on the spawn-and-consumer set rather than a call count of an
+unrelated symbol, and its `Root cause` no longer claims the live exposure is "a lane addressing the operator's real
+router endpoint" — reaching that would need a lane that both skips the helper and calls a resolver, and measured, none
+of the six does. Nothing in this row is a candidate for deletion: `k1` keeps REFUTED rows in the register.
+
+**Two counts in the relocated text re-measured against the register as it now stands.** (1) The paragraph that says
+the `40/73` pair "vẫn còn trong file" is stale on its own terms: after this §1 rewrite
+`grep -c "40/73" docs/execution/findings.md` returns **0** — nothing in the register asserts those counts any more,
+and the field-gap line in §1 carries the measured 0/0 instead. (2) The `92`/`23` pair is the other kind of stale: the
+predicate is sound, the population and the subset relation were not. Re-run over the current 320 rows, **92** rows take
+their `Root cause` from the title (predicate unchanged: the field contains the first 60 characters of the title, or the
+title contains the first 60 of the field) — the same 92 the paragraph quoted, now over 8 more rows. But **23** is the
+number of rows whose `Root cause` contains `Register kết luận:` at all, and only **22** of those are inside the 92:
+`F-104` carries the phrase without being title-derived. The paragraph presents 23 as a subset of 92, which measured
+here is one row short.
+
+**Round narrative, relocated verbatim from `findings.md` §1.**
+
+Hai lần cập nhật trong ngày 2026-10-17, ghi lại để arithmetic không bị hiểu là số của vòng audit: `F-038`/`R6-HUNT-01`
+đi từ OPEN xuống PARTIAL sau phép đo dưới grant `e`; lượt duyệt `b2` sau đó xóa 5 hàng (4 hàng đóng bằng commit + test
+chạy lại, 1 hàng trùng id), đổi 5 hàng sang REFUTED vì premise bị đo chết, và điền chữ thật vào 59 cặp field của nhóm
+Critical/High.
+
+Vòng audit R7 (2026-10-17 → 2026-10-18, delta) thêm 46 hàng `F-225`–`F-270`, `Legacy register id` theo assignment
+`R7-D1`–`R7-D13`, gồm hai đợt; đối chiếu cuối vòng (`D9`) rút lại **6** hàng trùng root cause với hàng đã có
+(`F-231`/`F-232`/`F-233` → F-125, `F-246` → F-059, `F-256` → F-166, `F-270` → F-205) và viết lại **11** hàng khác vì
+severity hoặc premise của chúng không đứng ở HEAD (`F-226`, `F-228`, `F-229`, `F-234`, `F-242`, `F-248`, `F-249`, `F-251`,
+`F-252`, `F-262` — hàng này bị refuted một nửa rồi ghi lại hẹp hơn, `F-269`). Net vòng delta để lại **40** hàng.
+
+Hai đợt mở đúng những vùng mà sáu vòng trước chưa từng trích: đợt đầu (D1–D7, `F-225`–`F-241`) vào 13 schema
+`zink-tools/contracts/**`, package `apps/knowledge/pdf-runtime`, script của `infrastructure/**`, policy JSON + contract
+schema của `integrations/openclaw/topology/**`, provider adapter và các file config mồ côi; đợt hai (D8, D10A/B, D11A/B,
+D12A/B, D13, `F-242` trở đi) phủ chính xác những gì đợt một tự khai ở mục "chưa inspect" trong report của nó — `guard.mjs`
+đọc trọn file, `authority.mjs`, `database.py`/`config.py`/`main.py` của Knowledgebase, các surface trong
+`integrations/openclaw/lib/`, 12 contract schema của topology đối chiếu reducer, census nhánh skip của 122 file test, và
+toàn bộ script `.ps1`/`.sh` của `infrastructure/docker/scripts/`. Mở không có nghĩa là ra hàng: dedupe theo root cause đã
+thưa nhiều claim về hàng cũ, và đọc mà không thấy lỗi thì register không có gì để ghi.
+
+Số đo phủ, đo lại bằng `temp/coverage-probe3.mjs` trên `git ls-files` (300 file nguồn bị track): **113/300** trước vòng,
+**160/300** sau vòng. Hai con số 99/300 → 137/300 ghi ở bản trước của đoạn này là **sai và bị rút**: predicate đo liệt kê
+`js` trước `json` trong nhóm phần mở rộng, nên mọi path `.schema.json` bị cắt thành `.schema.js` và không khớp file tracked
+nào. Mọi hàng của cả hai đợt đều được Lead tự mở lại locator ở HEAD trước khi ghi; các claim không tự kiểm chứng được thì
+không ghi.
+
+Vòng **R7-C** (2026-10-18, delta tiếp theo trên đúng phần còn trống) thêm **35** hàng `F-271`–`F-305` từ sáu assignment
+read-only (`R7-C1` schemas của `zink-tools/contracts`, `R7-C2` tám provider adapter, `R7-C3` `pdf-runtime` cùng các module
+Knowledgebase chưa trích, `R7-C4` compose overlay và script `.ps1` của `infrastructure/docker`, `R7-C5`/`R7-C5B` validity
+của 69 file test chưa hàng nào naming, `R7-C6` các file mồ côi còn lại), và gộp vị trí mới vào **8** hàng đã tồn tại thay
+vì ghi hàng trùng (`F-240`, `F-218`, `F-207`, `F-105`, `F-252`, `F-055`, `F-223`, `F-243`). Số đo phủ sau vòng này là
+**213/300** (từ 162/300 trước khi ghi): `tests` 73/122, `zink-tools/adapters` 11/12, `infrastructure/docker` 19/21,
+`zink-tools/contracts` 10/13, `integrations/openclaw` 57/59, `apps/knowledge` 23/48. Kết luận của vòng vẫn là **chưa
+complete**: 87 file nguồn chưa hàng nào trích path, và `apps/knowledge` là vùng trống lớn nhất còn lại (25 file).
+Mười một hàng của R7-C mang `Status: LATENT` (8) hoặc `HYPOTHESIS` (3) vì chính measurement của vòng này: tám adapter provider
+không có importer production nào ngoài `tests/m7-t4-orchestration.test.mjs` (đo ở F-105), nên defect trong chúng chỉ chạy
+được qua test; còn ba hypothesis cần một phép đo trước khi sửa (F-287, F-293, F-305).
+
+`R7-D*` là id **của vòng delta 2026-10-17**, không tra được về register sáu vòng (id `R7-` duy nhất ở đó là `R7-GATE-01`,
+đã đóng ở §2). Xuất xứ, phán quyết của chủ cho vòng đó, và kết quả đọc lại cả 17 locator ở HEAD: `PLAN.md` §8, record
+`the 17 rows this record under-counted`. Cả 17 hàng đều đã được phiên này tự kiểm tra lại path và khoảng dòng trước khi giữ.
+
+Vòng **R7-E** (2026-10-18, delta thứ ba liên tiếp, đối tượng đúng là 87 file chưa hàng nào trích path) thêm **20** hàng `F-306`–`F-325` từ năm assignment read-only: `R7-E1` `apps/knowledge/app` (markdown adapter, `run_errors`, reranker, config), `R7-E2` `apps/knowledge/tests` cùng `pdf-runtime`, `R7-E3` các lane Node chưa từng được naming ở `tests/`, `R7-E4` các lane `m7-lane-*`/`m8-t2.*` chưa được đọc, `R7-E5` `zink-tools/contracts` và `zink-tools/adapters`. Lead tự mở lại từng locator ở HEAD trước khi ghi; claim không tự kiểm chứng thì không ghi.
+
+Dedupe theo root cause: **8** hàng đã tồn tại nhận thêm vị trí thay vì mở hàng trùng — `F-240` (bốn chỗ literal tự đối chiếu: timeout do chính test truyền vào `httpx.AsyncClient` rồi được so với "client thật", bảng spawn chép tay thay vì đọc từ guard, `isDeclaredReasonCode` kiểm đúng vocabulary mà nó import, fixture prompt-build do test tự dựng), `F-218` (19 file, khoảng hai chục pin text), `F-207` (tám file, mười tám vị trí matcher rộng hơn diagnostic mà ca đặt tên), `F-275` (ba schema-only contract còn lại), `F-279` (streamlit là phong bì thứ sáu), `F-055` (hai lookup nữa ở `markdown_adapter.py`), `F-213` (ba chỗ `git archive`/`git show` cộng `tar`), `F-300` (hai chỗ "lane báo phủ một thứ mà body không chạy").
+
+Ba claim của vòng này bị chính phép đo chặn trước khi ghi, ghi lại ở đây vì chúng là lỗi của Lead chứ không của hàng đợi: `tests/m11-t1-skill-governance.test.mjs:612-626` có **sáu** `assert.doesNotMatch` chứ không phải bảy; `apps/knowledge/app/reranker.py` raise **mười** code qua một exception type chứ không phải tám; và "19 điểm nối cause" là số bịa — `apps/knowledge/app` có 59 chỗ `raise … from` trong 11 module, còn `apps/knowledge/tests/test_b14_cause_attribution.py:62-70` chỉ gọi tên hai file, và cả module bị `pytest.skip(allow_module_level=True)` ở `:29-35` chặn khi `KNOWLEDGE_TOKENIZER_PATH` chưa được cấp, biến mà chỉ `.github/workflows/ci.yml:99` đặt. Cùng loại: `tests/m8-t2-file-lock.test.mjs:161-167` (tên hứa "repository filesystem (Windows/OneDrive)" nhưng `tempRoot()` ở `:17-18` là `mkdtempSync(path.join(os.tmpdir(), …))`) ban đầu được gộp vào `F-298`; root cause của `F-298` là phân loại retry, nên location đó chuyển sang `F-300` thay vì dán vào hàng sai chủ đề. Claim sai duy nhất đã trót vào file — `F-275` từng ghi "xóa cả bốn file vẫn xanh" — đã bị lượt đối chiếu trước sửa tại HEAD; vòng này chỉ bổ sung phần đo mới: `zink-forecast.schema.json:31-34` mở `parameters` thật, `zink-simulation.schema.json:27` là `additionalProperties` kiểu `number` (vẫn trái `zink-tools/contracts/README.md:12` nhưng hẹp hơn forecast), còn `zink-optimization.schema.json:22-47` hỏng ở nửa thiếu `minItems` chứ không có `parameters` gì cả.
+
+Id legacy của vòng này ban đầu ghi `R7-D1-01`…`R7-D5-05` và **đập vào namespace của vòng 2026-10-17**: phép kiểm tự động tìm thấy bảy va chạm một-một (`R7-D1-04`, `R7-D2-01`, `R7-D4-01`, `R7-D4-02`, `R7-D4-03`, `R7-D4-04`, `R7-D5-02`, mỗi id mang hai hàng). Toàn bộ 20 hàng được đánh số lại thành `R7-E1-01`…`R7-E5-05`, kèm 8 marker gộp và 28 chuỗi nguồn vòng; đo lại, 312 hàng mang đúng 312 `Legacy register id` distinct, nên đoạn trên (`R7-D*` là id của vòng 2026-10-17) vẫn đúng nguyên văn.
+
+Số đo phủ, bằng đúng predicate `temp/coverage-probe3.mjs` trên `git ls-files`: **213/300 → 272/300** (+59 file; `tests` 110/122, `apps/knowledge` 39/48, `zink-tools/contracts` 13/13, `zink-tools/adapters` 12/12, `tests/helpers` 3/3, `integrations/openclaw` 58/59). Còn **28** file chưa hàng nào trích path: 12 ở `tests`, 10 ở `apps/knowledge` (gồm `app/reranker_contract.py`, `tests/test_pdf_foundation.py`, `tests/test_pdf_pipeline.py`, `tests/test_run_errors.py`, `tests/fixture_acceptance.py` và bốn file `pdf-runtime`/`__init__`), 2 compose overlay ở `infrastructure/docker/compose`, cộng `package-lock.json`, `eslint.config.mjs`, `.vscode/settings.json`, `docs/contracts/knowledgebase-migration-digests.json`, `integrations/openclaw/topology/contracts/delegation-proposal.schema.json`. Vòng R7-E vì vậy **chưa complete** theo chính tiêu chí của nó.
+
+Vòng **R7-F** (2026-10-18, hai assignment read-only trên đúng 28 file còn trống) thêm **8** hàng `F-326`–`F-333` và gộp vị trí mới vào bốn hàng đã tồn tại (`F-218`, `F-207`, `F-223`, `F-312`). Lead từ chối ghi năm finding mà mình chưa tự mở lại locator ở HEAD — `m10-t2-r8-ingress-source-diagnostics`, `m10-t2-r12-task-code`, `m10-t2-r18-file-lock`, `m10-t2-r9-duplicate-runid-observability`, `m7-lane-m-spawn-approval` — nên chúng nằm lại `temp/r7f-findings-f1.json` thay vì vào hàng đợi; một lane (`m12-t1-governed-presentation`) được đọc và báo không có gì. Số đo phủ: **272/300 → 291/300**; 9 file chưa hàng nào trích path gồm ba file `__init__`/`__main__` đã đọc và sạch, một lane honest-zero, và năm file chưa được Lead kiểm chứng ở trên.
+
+Vòng đối chiếu (challenge) trên chính 20 hàng R7-E chạy sau đó và **Lead tự áp**, vì chủ grant `e1`: 7 field bị ghi lại (`F-306`/`F-307`/`F-309` sửa `Reproduction`, `F-308` đổi sang `HYPOTHESIS`, `F-318` Medium→Low, `F-324` đổi sang `REFUTED`, `F-291` viết lại `Root cause`), 19 annotation sửa locator/count. Hai hàng có lỗi do chính phiên này ghi: `F-320` trích file **không tồn tại** (`tests/m8-t2.6-r11-boundary-diagnostics.test.mjs`) và `F-324` premise chết — nhưng phép đo ban đầu dùng sai symbol (`buildConfig` chạy 0 lần), symbol không nằm trên route nào của hàng; phép đo ở record này mới là lý do đúng. Năm hàng khác mang locator sai đã sửa: `F-317` (hai window `configure.mjs`), `F-319` (`guard.mjs:772-776`, không phải `native-boundary.mjs` 637 dòng), `F-313` (`Dockerfile:77` là RUN, `:76` là ENV), `F-323` (bốn occurrence của `KNOWLEDGE_EMBEDDING_MODEL` đều ở `knowledge-t3.ps1`), `F-314` (consumer ở `main.py:262`). Lead **không** áp ba con số của challenger mà mình không đo lại được (`F-316` 14-assert, `F-321` 49-pair/18-ALLOWED, `F-322` site list) — challenger cũng sai số của chính mình ở `F-308` (12 literal, đo lại là 13) và `F-312` (đếm thiếu `ONNX_RUNTIME_UNAVAILABLE`).
+
+`F-291` được đo lại từ đầu theo grant `c2`: population là **sáu driver** — bốn chỗ raise từ trong `finally` (`knowledge-t1.ps1:263-265`, `knowledge-t2.ps1:90-97`, `knowledge-t3.ps1:168-177` với helper throw ở `:22-26`, `knowledge-t4.ps1:249-256` với helper ở `:21-25`) và hai chỗ gate `-not $script:bodyFailed` (`knowledge-t5.ps1:287`, `knowledge-t5-live.ps1:535`); `knowledge-t5-common.ps1` là helper chung, không phải driver thứ bảy, và `knowledge-t2-windows.ps1:84-90` được ghi là hàng xóm chưa phân loại vì chưa đo được path throw thật.
+
+Hai con số 40/73 và 23 vẫn còn trong file nhưng đã bị đánh dấu là không tái hiện được ở đoạn đếm queue. Một sửa đổi quy trình của chính phiên này, ghi lại để sau đừng lặp: commit `ec770b3` tuyên bố đã sửa shape `Severity:` nhưng **không chứa** sửa đó — write cả-file của phiên bên kia (bản tiền-`b1`) chen vào giữa lúc kiểm chứng và lúc `git add`, nên staged content là bản bị revert; phép đo "non-bare Severity = 0" đã chạy trên nội dung trước khi bị đè, tức là bằng chứng cũ. `ec770b3` vẫn được giữ trong history (không rewrite), còn sửa đổi thật nằm ở commit kế tiếp, và sau đó toàn bộ gate được chạy lại trên chính file sẽ commit.
+
+Đoạn đếm field cũ ở đây (40 thiếu `Acceptance criteria`, 73 thiếu bước tái hiện, đo trên 294 hàng) và con số 3 mà một lượt khác ghi sau đó **đều không còn đúng**. Đo lại 2026-10-18 trên toàn bộ 320 hàng, với predicate 'field trống, là placeholder, hoặc ngắn dưới 40 ký tự': **0** hàng thiếu `Reproduction`, **0** hàng thiếu `Acceptance criteria`, 0 hàng thiếu một trong hai. Ba hàng `F-015`, `F-017`, `F-020` mang chữ "không tái hiện được" trong field đó là ghi chú verdict của hàng REFUTED, không phải placeholder. Phần `b2` vì thế đã khép: không còn hàng nào trong nhóm Medium/Low/Ungraded thiếu hai field này.
+Phép đo lặp lại bằng `node temp/measure-s1.mjs` (in ra số theo predicate, không đọc từ commit message).
+
 ## 9. Deferred beyond V1
 
 Unless separately approved:
