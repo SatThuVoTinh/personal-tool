@@ -77,7 +77,7 @@ Tổng **312** bug đang mở/đang chờ, chia theo nhóm:
 | F7       | Testing & Verification Gaps — Thiếu kiểm thử và xác minh              | 62      | 0        | 13   | 42     | 7   | 0        |
 | **Tổng** |                                                                       | **312** | 6        | 104  | 161    | 37  | 4        |
 
-Theo trạng thái: OPEN 252 · EXCLUDED 12 · LATENT 27 · REFUTED 8 · PARTIAL 5 · HYPOTHESIS 7 · BLOCKED 1.
+Theo trạng thái: OPEN 251 · EXCLUDED 12 · LATENT 27 · REFUTED 9 · PARTIAL 5 · HYPOTHESIS 7 · BLOCKED 1.
 
 Hai lần cập nhật trong ngày 2026-10-17, ghi lại để arithmetic không bị hiểu là số của vòng audit: `F-038`/`R6-HUNT-01`
 đi từ OPEN xuống PARTIAL sau phép đo dưới grant `e`; lượt duyệt `b2` sau đó xóa 5 hàng (4 hàng đóng bằng commit + test
@@ -3932,10 +3932,10 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Legacy register id: `R7-C5B-B`
 - Affected modules: OpenClaw governance plugin, Gates + CI
 - Severity: Medium
-- Status: OPEN
+- Status: REFUTED — premise measured false 2026-10-18 under the owner's ruling; the row stays in the queue per §0.2 rule 25 and the deletion threshold, because a refuted premise is an owner decision, not pending work.
 - Root cause: the fixture reliably takes the allow path, because the plugin falls back to the recorded parent identity, and the assertion chosen for that branch is that a snapshot task object exists. That predicate holds for any task the test itself created, so the control the title names — a rejected ledger write must block the run — is only ever verified in the branch the fixture does not reach.
 - Evidence: Where: `tests/m7-lane-d3-native-receipts.test.mjs:210-223` — `if (decision.allow === true) { const after = readSnapshot(paths).tasks[taskId]; assert.ok(after); } else { …blocked and BLOCKED assertions… }`, with the comment at `:213-214` explaining that the plugin reconciles this input · Where: the production containment is the subagent-ended path in `integrations/openclaw/plugins/zink-governance/index.mjs` that must set the task to blocked when the write cannot be applied.
-- Reproduction: static mutation probe — make the production path never fail on an unreconcilable requester session so it always allows, and the case passes through the vacuous branch. A red test removes the conditional, constructs the input deterministically producing a rejected write, and asserts the block decision and the blocked status on that exact input.
+- Reproduction: REFUTED by code read 2026-10-18, chain re-opened line by line — the fixture records `parent_session_key: main-session` at `tests/m7-lane-d3-native-receipts.test.mjs:89` and `:103`, then hands the hook `requesterSessionKey: forged-parent-session` at `:209`; `integrations/openclaw/plugins/zink-governance/index.mjs:8000-8001` prefers the supplied value with no fallback to the recorded parent, so the event payload carries the forged key, `integrations/openclaw/topology/lib/workflow.mjs:408-414` matches zero delegations and raises LINEAGE_MISMATCH, and `index.mjs:8021-8031` returns the block helper's shape at `:7954-7956` (`allow: false`, `blocked: true`). The case therefore runs the ELSE branch at `:218-223`, which is the branch holding the containment assertions the row said were unreached; the row's error came from repeating the test's own stale comment at `:213-214`. What survives is far smaller and is a test-shape weakness, not a containment gap: the allow branch at `:215-217` asserts only that a task object the test itself created is truthy, so it would say nothing if a future change made that path reachable. Original claim kept below for the record — static mutation probe — make the production path never fail on an unreconcilable requester session so it always allows, and the case passes through the vacuous branch. A red test removes the conditional, constructs the input deterministically producing a rejected write, and asserts the block decision and the blocked status on that exact input.
 - Acceptance criteria: the case has one deterministic path with an assertion that is false when the containment is removed; no branch of the test may be satisfied by the mere existence of fixture state.
 - Related findings: F-219, F-298, F-088 · nguồn: R7-C delta audit C5B — test validity, second half
 
