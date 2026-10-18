@@ -139,13 +139,8 @@ Vòng đối chiếu (challenge) trên chính 20 hàng R7-E chạy sau đó và 
 
 Hai con số 40/73 và 23 vẫn còn trong file nhưng đã bị đánh dấu là không tái hiện được ở đoạn đếm queue. Một sửa đổi quy trình của chính phiên này, ghi lại để sau đừng lặp: commit `ec770b3` tuyên bố đã sửa shape `Severity:` nhưng **không chứa** sửa đó — write cả-file của phiên bên kia (bản tiền-`b1`) chen vào giữa lúc kiểm chứng và lúc `git add`, nên staged content là bản bị revert; phép đo "non-bare Severity = 0" đã chạy trên nội dung trước khi bị đè, tức là bằng chứng cũ. `ec770b3` vẫn được giữ trong history (không rewrite), còn sửa đổi thật nằm ở commit kế tiếp, và sau đó toàn bộ gate được chạy lại trên chính file sẽ commit.
 
-Còn **40** bug chưa có `Acceptance criteria` (32 Medium, 6 Low, 2 Ungraded) và **73** bug chưa có bước tái hiện (62
-Medium, 10 Low, 1 Ungraded) đo lại trên 294 hàng hiện tại; bản trước ghi 91 bug thiếu bước tái hiện, số đó giảm vì mọi
-hàng R7 và R7-C đều mang hai field này. Toàn bộ nằm ở nhóm Medium/Low/Ungraded, tức phần `b2` chưa chạy tới. Ngoặc "(47/110 trước
-lượt `b2-m1…m3`)" của bản trước bị rút: 110 là số hàng còn thiếu ở một thời điểm đo, 47 là số hàng một lượt khác báo đã
-điền, hai con số không cùng một phép đo nên không đặt cạnh nhau được. **92** hàng lấy root cause từ chính tiêu đề (đo lại 2026-10-18 trên 312 hàng; predicate: `Root cause` chứa 60 ký tự đầu của tiêu đề hoặc ngược lại), trong đó đúng 23 hàng mở đầu bằng `Register kết luận:` — con số của lượt `b2` là một tập con của phép đo này, không phải hai lần đếm cùng một đại lượng, và nó chưa từng được đo lại cho tới câu này. Hai con số 40 và 73 ở đầu đoạn **không tái hiện được**: với quy tắc 'field trống, là placeholder, hoặc ngắn dưới 40 ký tự' thì chỉ 3 hàng thiếu một trong hai field, và cả ba là hàng REFUTED tự ghi "Not reproducible — premise measured dead" (`F-015`, `F-017`, `F-020`). Lead không xóa 40/73 vì không biết predicate của lượt đã sinh ra chúng, nhưng cũng không thể bảo vệ hai con số đó trước phép đo hiện tại. Đó là
-nợ quy trình của vòng audit (audit chỉ đọc, không chạy tái hiện), không phải lỗi của hàng đợi: bug nào thiếu thì bước 1 và
-bước 2 của nội quy mục 0.2 là bắt buộc.
+Đoạn đếm field cũ ở đây (40 thiếu `Acceptance criteria`, 73 thiếu bước tái hiện, đo trên 294 hàng) và con số 3 mà một lượt khác ghi sau đó **đều không còn đúng**. Đo lại 2026-10-18 trên toàn bộ 320 hàng, với predicate 'field trống, là placeholder, hoặc ngắn dưới 40 ký tự': **0** hàng thiếu `Reproduction`, **0** hàng thiếu `Acceptance criteria`, 0 hàng thiếu một trong hai. Ba hàng `F-015`, `F-017`, `F-020` mang chữ "không tái hiện được" trong field đó là ghi chú verdict của hàng REFUTED, không phải placeholder. Phần `b2` vì thế đã khép: không còn hàng nào trong nhóm Medium/Low/Ungraded thiếu hai field này.
+Phép đo lặp lại bằng `node temp/measure-s1.mjs` (in ra số theo predicate, không đọc từ commit message).
 
 File này được tái cấu trúc ngày 2026-10-17 từ register audit sáu vòng. Mỗi hàng giữ `Legacy register id` để
 `PLAN.md` §4.17/§11 và các contract archive vẫn tra được về id cũ.
