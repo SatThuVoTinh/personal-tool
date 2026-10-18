@@ -64,22 +64,22 @@ sai chức năng hoặc logic nghiệp vụ → F1.
 
 ## 1. hiện trạng queue
 
-Tổng **320** bug đang mở/đang chờ, chia theo nhóm:
+Tổng **319** bug đang mở/đang chờ, chia theo nhóm:
 
 | Nhóm     | Nội dung                                                              | Bug     | Critical | High | Medium | Low | Ungraded |
 | -------- | --------------------------------------------------------------------- | ------- | -------- | ---- | ------ | --- | -------- |
 | F1       | Logic & Functional Bugs — Lỗi logic, sai chức năng                    | 26      | 0        | 7    | 12     | 5   | 2        |
-| F2       | Security & Authorization — Lỗi bảo mật và phân quyền                  | 49      | 3        | 21   | 18     | 7   | 0        |
+| F2       | Security & Authorization — Lỗi bảo mật và phân quyền                  | 48      | 2        | 21   | 18     | 7   | 0        |
 | F3       | State & Lifecycle Integrity — Lỗi trạng thái và vòng đời              | 57      | 2        | 21   | 27     | 5   | 2        |
 | F4       | Integration & Contract Violations — Lỗi tích hợp và vi phạm hợp đồng  | 52      | 0        | 20   | 26     | 6   | 0        |
 | F5       | Data Integrity & Result Correctness — Lỗi toàn vẹn dữ liệu và kết quả | 47      | 1        | 18   | 24     | 4   | 0        |
 | F6       | Reliability & Performance — Lỗi độ tin cậy và hiệu năng               | 21      | 0        | 4    | 14     | 3   | 0        |
 | F7       | Testing & Verification Gaps — Thiếu kiểm thử và xác minh              | 68      | 0        | 13   | 45     | 10  | 0        |
-| **Tổng** |                                                                       | **320** | 6        | 104  | 166    | 40  | 4        |
+| **Tổng** |                                                                       | **319** | 5        | 104  | 166    | 40  | 4        |
 
-Theo trạng thái: OPEN 258 · EXCLUDED 12 · LATENT 26 · REFUTED 10 · PARTIAL 5 · HYPOTHESIS 8 · BLOCKED 1.
+Theo trạng thái: OPEN 257 · EXCLUDED 12 · LATENT 26 · REFUTED 10 · PARTIAL 5 · HYPOTHESIS 8 · BLOCKED 1.
 
-Theo field: đo lại 2026-10-18 trên cả 320 hàng với predicate "field trống, là placeholder, hoặc ngắn dưới 40 ký tự" — **0** hàng thiếu `Reproduction`, **0** hàng thiếu `Acceptance criteria`. Chữ "không tái hiện được" trong hai field đó ở `F-015`, `F-017`, `F-020` là ghi chú verdict của hàng REFUTED, không phải placeholder.
+Theo field: đo lại 2026-10-18 trên cả 319 hàng đang có với predicate "field trống, là placeholder, hoặc ngắn dưới 40 ký tự" — **0** hàng thiếu `Reproduction`, **0** hàng thiếu `Acceptance criteria`. Chữ "không tái hiện được" trong hai field đó ở `F-015`, `F-017`, `F-020` là ghi chú verdict của hàng REFUTED, không phải placeholder.
 
 Bốn hàng còn `Severity: Ungraded`: `F-021`, `F-103`, `F-104` (đang OPEN, chờ chủ grade) và `F-020` (đã REFUTED nên grade không còn hệ quả).
 
@@ -90,8 +90,7 @@ File này được tái cấu trúc ngày 2026-10-17 từ register audit sáu v�
 
 ## 2. Bug đã sửa xong + đã kiểm chứng bằng test — đã xóa khỏi danh sách này
 
-50 entry được xóa vì đủ ba điều kiện ở nội quy mục 0.2, khoản 6 — 43 ở lượt tái cấu trúc 2026-10-17 và thêm 5 ở lượt
-duyệt lại `b2` cùng ngày (4 hàng đóng bằng commit + test chạy lại tận mắt, 1 hàng trùng id). Mỗi commit trong bảng đã được
+51 entry được xóa vì đủ ba điều kiện ở nội quy mục 0.2, khoản 6 — 43 ở lượt tái cấu trúc 2026-10-17, 5 ở lượt duyệt lại `b2` cùng ngày (4 hàng đóng bằng commit + test chạy lại tận mắt, 1 hàng trùng id), và 1 ở lượt sửa `F-225` ngày 2026-10-18. Tổng 51 là số đếm trực tiếp trên bảng; ba lượt vừa kể chỉ giải thích 49, nên 2 entry còn lại là nợ của chính đoạn preamble này, không phải dấu hiệu một hàng nào bị ghi thiếu. Mỗi commit trong bảng đã được
 đối chiếu bằng `git rev-parse --verify <hash>^{commit}` (39 hash, 0 lỗi) và `git merge-base --is-ancestor <hash> HEAD`.
 Mức bằng chứng test không đồng đều, ghi rõ ở đây
 để anh không phải đoán: các item `T2.1-*`, `A-*`, `B-*`, `R3-*`, `C-4`, `C-9`, `C-13`, `B-19` có test đỏ-trước/xanh-sau
@@ -151,6 +150,7 @@ probe riêng. Lane live Discord vẫn `NOT TESTED` với mọi hàng ở đây, 
 | `R6-CFG-03`       | duplicate of `R1-A04-01` (closed by A-1 ccf2ad7; tests/m12-t2.2-a1-stack-authority re-run 2026-10-17 → 9 pass / 0 fail)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `R5-E07-06`       | CLOSED by `M12/T2.2-R3` `R3-10` (`e7aee21`) — red-before measured 2026-10-18 by replaying `git show e7aee21^:zink-tools/common/path-safety.mjs`: the pre-fix validator returned `data\sub\f.csv` verbatim where the shipped assertion demands `data/sub/f.csv`, and the `segments.length === 0` branch was unreachable. Green at HEAD: `tests/m7-t3-tools-contract.test.mjs` case `AC 36` passed on the re-run of 2026-10-18 (32 tests / 0 fail / 0 skipped), and `zink-tools/common/README.md:74-75` now documents the normalized return for both backslash forms, which is exactly this row's `Acceptance criteria`.                                           |
 | `R5-E07-07`       | CLOSED by `M12/T2.2-R3` `R3-9` (`04e128f`, owner grant `q1`) — red-before measured 2026-10-18 by replaying `git show 04e128f^:zink-tools/common/semantic-contract.mjs`: a taxonomy-less `renderEmbeddingEnvelope` call did NOT throw and rendered `Domain: general` / `Primary Topic: general`; at HEAD the same call raises `EMBEDDING_ENVELOPE_METADATA_REQUIRED`. Green at HEAD: `tests/m8-t1-skill-vector-memory.test.mjs` case `R3-9` passed on the re-run of 2026-10-18 (15 tests / 0 fail / 0 skipped). Stated limit of the closure: an EXPLICIT `domain: "general"` still renders, because what the fix removed was the invented default, not the value. |
+| `R7-D4-01`        | CLOSED by the F-225 fix (`cb5b83b`) — `refuse()` now throws a private `RecoveryRefused` that the single catch recognises, so every refusal ends the command before the first mutating call. Red-before 28/30 (the two new tests `R12 I`/`R12 J` fail), green-after 30/30, mutation probe (remove the `throw`) re-reddens exactly those two, full gate 1608 tests / 1559 pass / 0 fail / 49 skipped at `VERIFY_EXIT=0`. The live gateway was never restarted by any of this: the lane runs a copy whose `systemctl` literal is replaced by a binary that cannot exist.                                                                                            |
 
 Bốn entry khác xóa vì là bản trùng (`R5-E01-01` → `R5-E02-01`, `R1-A13-05` → `R1-A12-03`,
 `R1-A16-04` → `R1-A09-02`/`R1-A05-01`, và `R6-CFG-03` → `R1-A04-01` phát hiện ở lượt `b2`);
@@ -2987,19 +2987,6 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Reproduction: Static — the fault is injected by matching SQL source text, not by targeting the tombstone call: `tests/m11-t1-skill-vector-sql.test.mjs:165-168` uses a `dbExecutor` that returns an empty string when `sql.includes("DELETE FROM skills.catalog_index")` and otherwise throws `PSQL_REJECTED_SIMULATION`, inside the test `M11-04: failure escalation — a failed failSql is surfaced, not swallowed` (`:153`), then asserts `report.status === "FAILED"` (`:170`), `report.failed_count === 1` (`:171`) and `report.error_code === "VECTOR_FAILURE_WRITE_FAILED"` (`:172`). The matched substring is the production tombstone at `zink-skill-store/src/vector-sync.mjs:626-631`, so rewording that statement makes the `includes()` miss it and the injected throw silently migrates to whichever statement runs first — the same three assertions still pass while the "not swallowed" guarantee stops covering the tombstone. Reproduce by rewording the `vector-sync.mjs` DELETE (rename the table or prepend a comment) and confirming `node --test tests/m11-t1-skill-vector-sql.test.mjs` stays green. The companion leak is `tests/m7-t3-tools-contract.test.mjs:142-146`, whose cleanup swallows removal failures so temp trees accumulate. Fix gates in `tests/m11-t1-skill-vector-sql.test.mjs`: inject the failure by statement role or call ordinal, or assert the exact SQL the failing executor received, rather than by a substring that can drift.
 - Acceptance criteria: the `M11-04` executor in `tests/m11-t1-skill-vector-sql.test.mjs:153-180` binds the injected failure to the tombstone call by statement role or call ordinal, or asserts the exact SQL text the failing executor received, so rewording the DELETE at `zink-skill-store/src/vector-sync.mjs:626-634` turns the test red instead of silently moving `PSQL_REJECTED_SIMULATION` to a different statement while `:170-176` stay green - and the companion cleanup at `tests/m7-t3-tools-contract.test.mjs:141-147` no longer swallows `rmSync` failures.
 - Related findings: bug mở: R5-E05-02 · nguồn: E10 — test infrastructure: the source-text assertion…
-
-### F-225 — the historical-recovery refusal prints FAIL and then performs the destructive recovery anyway
-
-- Category: F2 — Security & Authorization
-- Legacy register id: `R7-D4-01`
-- Affected modules: OpenClaw runtime libs, Workflow topology
-- Severity: Critical
-- Status: OPEN
-- Root cause: `refuse()` only writes a FAIL line and sets `process.exitCode = 1`; it never throws, returns or exits, and both of its call sites fall straight through to the mutation block. Every refusal in `recovery-authorization.mjs` is therefore advisory output, not a gate.
-- Evidence: Where: integrations/openclaw/topology/fixtures/runtime-regression/operator-rollback.mjs:77-89 (`function refuse(...)` body is `process.stdout.write(...)` + `process.exitCode = 1`), :101 `if (refusal) refuse(refusal);`, :111 `if (!verdict.proceed) refuse(verdict.refusal, { ...verdict });` · Evidence: immediately after :111 the script does `restoreNativePatch(nativeRoots, nativeBackup)` (:117), `await restoreT1RuntimeFiles(...)` (:118), `execFileSync("systemctl", ["--user","restart","openclaw-gateway-zink.service"])` (:119-127) and then prints `{status:"PASS"}` (:131-139). The refusal line already asserted `installed_mutation: false` (:84). Gate itself is sound: recovery-authorization.mjs:133-185 returns `proceed:false`, :195 returns null when the file is absent.
-- Reproduction: run the probe with no `recovery-authorization.json` and both backups present: stdout carries a FAIL `installed_mutation:false` line, the native tree is un-patched, the gateway restarts, and a second PASS line follows. A red test can assert "exactly one JSON line and no `restoreNativePatch` call" by stubbing the two restore functions.
-- Acceptance criteria: any of the eight `RECOVERY_REFUSALS` terminates execution before the first mutating call; the no-authorization probe leaves the native tree PATCHED and emits exactly one JSON line.
-- Related findings: adjacent to F-069 (recovery tool discoverability, different cause) · nguồn: R7 delta audit D4 — topology policy/contract enforcement
 
 ### F-226 — an owner ACCEPT stamps `workflow_status: COMPLETE` without reading the outcome it accepted
 
