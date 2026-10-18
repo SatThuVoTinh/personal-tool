@@ -64,20 +64,20 @@ sai chức năng hoặc logic nghiệp vụ → F1.
 
 ## 1. hiện trạng queue
 
-Tổng **259** bug đang mở/đang chờ, chia theo nhóm:
+Tổng **294** bug đang mở/đang chờ, chia theo nhóm:
 
 | Nhóm     | Nội dung                                                              | Bug     | Critical | High | Medium | Low | Ungraded |
 | -------- | --------------------------------------------------------------------- | ------- | -------- | ---- | ------ | --- | -------- |
-| F1       | Logic & Functional Bugs — Lỗi logic, sai chức năng                    | 20      | 0        | 5    | 8      | 5   | 2        |
-| F2       | Security & Authorization — Lỗi bảo mật và phân quyền                  | 41      | 3        | 19   | 15     | 4   | 0        |
-| F3       | State & Lifecycle Integrity — Lỗi trạng thái và vòng đời              | 55      | 2        | 21   | 25     | 5   | 2        |
-| F4       | Integration & Contract Violations — Lỗi tích hợp và vi phạm hợp đồng  | 43      | 0        | 18   | 21     | 4   | 0        |
-| F5       | Data Integrity & Result Correctness — Lỗi toàn vẹn dữ liệu và kết quả | 41      | 1        | 15   | 22     | 3   | 0        |
-| F6       | Reliability & Performance — Lỗi độ tin cậy và hiệu năng               | 19      | 0        | 4    | 13     | 2   | 0        |
-| F7       | Testing & Verification Gaps — Thiếu kiểm thử và xác minh              | 40      | 0        | 10   | 26     | 4   | 0        |
-| **Tổng** |                                                                       | **259** | 6        | 92   | 130    | 27  | 4        |
+| F1       | Logic & Functional Bugs — Lỗi logic, sai chức năng                    | 24      | 0        | 5    | 12     | 5   | 2        |
+| F2       | Security & Authorization — Lỗi bảo mật và phân quyền                  | 47      | 3        | 20   | 18     | 6   | 0        |
+| F3       | State & Lifecycle Integrity — Lỗi trạng thái và vòng đời              | 57      | 2        | 21   | 27     | 5   | 2        |
+| F4       | Integration & Contract Violations — Lỗi tích hợp và vi phạm hợp đồng  | 50      | 0        | 20   | 25     | 5   | 0        |
+| F5       | Data Integrity & Result Correctness — Lỗi toàn vẹn dữ liệu và kết quả | 45      | 1        | 17   | 23     | 4   | 0        |
+| F6       | Reliability & Performance — Lỗi độ tin cậy và hiệu năng               | 21      | 0        | 4    | 14     | 3   | 0        |
+| F7       | Testing & Verification Gaps — Thiếu kiểm thử và xác minh              | 50      | 0        | 12   | 32     | 6   | 0        |
+| **Tổng** |                                                                       | **294** | 6        | 99   | 151    | 34  | 4        |
 
-Theo trạng thái: OPEN 214 · EXCLUDED 12 · LATENT 15 · REFUTED 8 · PARTIAL 5 · HYPOTHESIS 4 · BLOCKED 1.
+Theo trạng thái: OPEN 238 · EXCLUDED 12 · LATENT 23 · REFUTED 8 · PARTIAL 5 · HYPOTHESIS 7 · BLOCKED 1.
 
 Hai lần cập nhật trong ngày 2026-10-17, ghi lại để arithmetic không bị hiểu là số của vòng audit: `F-038`/`R6-HUNT-01`
 đi từ OPEN xuống PARTIAL sau phép đo dưới grant `e`; lượt duyệt `b2` sau đó xóa 5 hàng (4 hàng đóng bằng commit + test
@@ -102,18 +102,28 @@ thưa nhiều claim về hàng cũ, và đọc mà không thấy lỗi thì regi
 Số đo phủ, đo lại bằng `temp/coverage-probe3.mjs` trên `git ls-files` (300 file nguồn bị track): **113/300** trước vòng,
 **160/300** sau vòng. Hai con số 99/300 → 137/300 ghi ở bản trước của đoạn này là **sai và bị rút**: predicate đo liệt kê
 `js` trước `json` trong nhóm phần mở rộng, nên mọi path `.schema.json` bị cắt thành `.schema.js` và không khớp file tracked
-nào. Vùng vẫn chưa có hàng tính theo path được trích: `tests` 69/122, `apps/knowledge` 29/48 (kể cả 7 file
-`pdf-runtime/src`), `infrastructure/docker` 10/21, `zink-tools/contracts` 9/13, `zink-tools/adapters` 8/12 — vòng delta vì
-vậy **chưa complete**, và đó là phần còn lại nếu chủ cho chạy tiếp. Mọi hàng của cả hai đợt đều được Lead tự mở lại
-locator ở HEAD trước khi ghi; các claim không tự kiểm chứng được thì không ghi.
+nào. Mọi hàng của cả hai đợt đều được Lead tự mở lại locator ở HEAD trước khi ghi; các claim không tự kiểm chứng được thì
+không ghi.
+
+Vòng **R7-C** (2026-10-18, delta tiếp theo trên đúng phần còn trống) thêm **35** hàng `F-271`–`F-305` từ sáu assignment
+read-only (`R7-C1` schemas của `zink-tools/contracts`, `R7-C2` tám provider adapter, `R7-C3` `pdf-runtime` cùng các module
+Knowledgebase chưa trích, `R7-C4` compose overlay và script `.ps1` của `infrastructure/docker`, `R7-C5`/`R7-C5B` validity
+của 69 file test chưa hàng nào naming, `R7-C6` các file mồ côi còn lại), và gộp vị trí mới vào **8** hàng đã tồn tại thay
+vì ghi hàng trùng (`F-240`, `F-218`, `F-207`, `F-105`, `F-252`, `F-055`, `F-223`, `F-243`). Số đo phủ sau vòng này là
+**213/300** (từ 162/300 trước khi ghi): `tests` 73/122, `zink-tools/adapters` 11/12, `infrastructure/docker` 19/21,
+`zink-tools/contracts` 10/13, `integrations/openclaw` 57/59, `apps/knowledge` 23/48. Kết luận của vòng vẫn là **chưa
+complete**: 87 file nguồn chưa hàng nào trích path, và `apps/knowledge` là vùng trống lớn nhất còn lại (25 file).
+Mười một hàng của R7-C mang `Status: LATENT` (8) hoặc `HYPOTHESIS` (3) vì chính measurement của vòng này: tám adapter provider
+không có importer production nào ngoài `tests/m7-t4-orchestration.test.mjs` (đo ở F-105), nên defect trong chúng chỉ chạy
+được qua test; còn ba hypothesis cần một phép đo trước khi sửa (F-287, F-293, F-305).
 
 `R7-D*` là id **của vòng delta 2026-10-17**, không tra được về register sáu vòng (id `R7-` duy nhất ở đó là `R7-GATE-01`,
 đã đóng ở §2). Xuất xứ, phán quyết của chủ cho vòng đó, và kết quả đọc lại cả 17 locator ở HEAD: `PLAN.md` §8, record
 `the 17 rows this record under-counted`. Cả 17 hàng đều đã được phiên này tự kiểm tra lại path và khoảng dòng trước khi giữ.
 
 Còn **40** bug chưa có `Acceptance criteria` (32 Medium, 6 Low, 2 Ungraded) và **73** bug chưa có bước tái hiện (62
-Medium, 10 Low, 1 Ungraded) đo lại trên 259 hàng sau vòng R7; bản trước ghi 91 bug thiếu bước tái hiện, số đó giảm vì mọi
-hàng R7 đều mang hai field này. Toàn bộ nằm ở nhóm Medium/Low/Ungraded, tức phần `b2` chưa chạy tới. Ngoặc "(47/110 trước
+Medium, 10 Low, 1 Ungraded) đo lại trên 294 hàng hiện tại; bản trước ghi 91 bug thiếu bước tái hiện, số đó giảm vì mọi
+hàng R7 và R7-C đều mang hai field này. Toàn bộ nằm ở nhóm Medium/Low/Ungraded, tức phần `b2` chưa chạy tới. Ngoặc "(47/110 trước
 lượt `b2-m1…m3`)" của bản trước bị rút: 110 là số hàng còn thiếu ở một thời điểm đo, 47 là số hàng một lượt khác báo đã
 điền, hai con số không cùng một phép đo nên không đặt cạnh nhau được. 23 bug vẫn lấy root cause từ chính kết luận ở tiêu
 đề — con số của lượt `b2`, chưa đo lại. Đó là
@@ -871,10 +881,10 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Severity: Low
 - Status: HYPOTHESIS
 - Root cause: the validated candidate is the object subsequently opened / two path objects, one checked and one used.
-- Evidence: Where: apps/knowledge/app/pdf_foundation.py:150-171 (helper at :110-111, :122-147; config at config.py:64) · Evidence: supplied_relative = sidecar_path.relative_to(vault_root), then canonical_vault_path(...) (:162) runs the link/reparse checks on a re-derived candidate root.joinpath(*posix.parts), while :169 sidecar_path.stat() and :171 sidecar_path.read_bytes() read the original, un-normalised object. · Expected/Actual: the validated candidate is the object subsequently opened / two path objects, one checked and one used.
+- Evidence: Where: apps/knowledge/app/pdf_foundation.py:150-171 (helper at :110-111, :122-147; config at config.py:64) · Evidence: supplied_relative = sidecar_path.relative_to(vault_root), then canonical_vault_path(...) (:162) runs the link/reparse checks on a re-derived candidate root.joinpath(*posix.parts), while :169 sidecar_path.stat() and :171 sidecar_path.read_bytes() read the original, un-normalised object. · Expected/Actual: the validated candidate is the object subsequently opened / two path objects, one checked and one used. · R7-C (vị trí mới, gộp): the same two-lookup topology in the PDF child runner — `apps/knowledge/pdf-runtime/src/zink_pdf_runtime/runner.py:584-601` walks components checking each for being a symlink and then resolves the path again with a separate strict resolve, so the object that was checked and the object that is opened are different lookups.
 - Reproduction: read database.py:235-266 symlink gates plus this call chain with a symlinked vault root in a fixture.
 - Acceptance criteria: the read handle comes from the validated candidate.
-- Related findings: nguồn: E15 — untrusted-input security paths (5 findings; the…
+- Related findings: nguồn: E15 — untrusted-input security paths (5 findings; the… · R7-C delta audit C3: second live site merged here
 
 ### F-056 — the queue lease lifecycle has no runtime driver — a crashed claim never returns
 
@@ -1521,10 +1531,10 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Severity: High
 - Status: OPEN
 - Root cause: AGENTS.md §9 + docs/architecture/lsc-data-flow.md:60-69 forbid an in-repo ETL control plane, a Bronze/Silver/Gold lakehouse, and "a second orchestrator that duplicates OpenClaw/n8n". Actual: the repo ships exactly that, green-tested.
-- Evidence: Where: integrations/openclaw/orchestration/patterns/index.mjs:33-421 (executePattern1_N8nToR2Landing … executePattern10_SyntheticComposition), integrations/openclaw/orchestration/README.md · Evidence: exports stitch landing/silver/gold tiers, MLflow/DagsHub, workflow_id: "data_plant_ingest"; the only consumer is tests/m7-t4-orchestration.test.mjs; no configure.mjs, plugin or lib/ import. · Expected/Actual: AGENTS.md §9 + docs/architecture/lsc-data-flow.md:60-69 forbid an in-repo ETL control plane, a Bronze/Silver/Gold lakehouse, and "a second orchestrator that duplicates OpenClaw/n8n". Actual: the repo ships exactly that, green-tested.
+- Evidence: Where: integrations/openclaw/orchestration/patterns/index.mjs:33-421 (executePattern1_N8nToR2Landing … executePattern10_SyntheticComposition), integrations/openclaw/orchestration/README.md · Evidence: exports stitch landing/silver/gold tiers, MLflow/DagsHub, workflow_id: "data_plant_ingest"; the only consumer is tests/m7-t4-orchestration.test.mjs; no configure.mjs, plugin or lib/ import. · Expected/Actual: AGENTS.md §9 + docs/architecture/lsc-data-flow.md:60-69 forbid an in-repo ETL control plane, a Bronze/Silver/Gold lakehouse, and "a second orchestrator that duplicates OpenClaw/n8n". Actual: the repo ships exactly that, green-tested. · R7-C (đo lại phạm vi): the isolation is wider than the patterns file itself — `grep -rniE "bigquery|motherduck|streamlit|databricks|kaggle|dagshub|huggingface|mlflow" integrations/openclaw/plugins/` returns zero hits, the only importer of `zink-tools/adapters/index.mjs` repo-wide is `tests/m7-t4-orchestration.test.mjs:25`, and the only importer of `orchestration/patterns/index.mjs` is that same test at `:38`. All eight provider adapters under `zink-tools/adapters/{analytics,app,compute,mlops}` are therefore exercised only by that suite, which is why the C2 defects in those files are recorded as LATENT.
 - Reproduction: `node --test tests/m7-t4-orchestration.test.mjs` → 12 pass / 0 fail today, which is the point: the forbidden surface is green-tested (it includes 'Gate G9/G10: Orchestration Patterns P6-P9, Synthetic Composition P10'). Measure the isolation: grep 'orchestration/patterns|executePattern' shows importers are only that test plus README.md:522, orchestration/README.md and zink-tools/python/README.md:33, and configure.mjs, plugins/ and lib/ import none. Pin the invariant in tests/repository-policy.test.mjs: no tracked, test-enforced module may export landing→silver→gold tiers or an MLflow/DagsHub sync chain.
 - Acceptance criteria: No tracked, test-enforced module in this repository stitches landing/silver/gold tiers, a model-registry sync, or a composition function that sequences them; the data/compute flow exists only as the external contract in docs/architecture/lsc-data-flow.md.
-- Related findings: nguồn: A01 — architecture and system boundaries
+- Related findings: nguồn: A01 — architecture and system boundaries · R7-C delta audit C2: measured no-production-importer for all eight adapters; their defect rows (F-276–F-281) are LATENT by this row's finding
 
 ### F-106 — apply mutates surfaces the transaction preimage never captures, yet rollbackSucceeded is licensed by those bytes alone — and one apply stage deletes irreversibly
 
@@ -2795,7 +2805,7 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Severity: Medium
 - Status: OPEN
 - Root cause: Windows pass counts are inflated and the junction case never runs in CI (ubuntu), so per-lane coverage differs while every lane reports the same green number.
-- Evidence: Where: tests/m6-t1-skill-store.test.mjs:519 (SKILL.md symlink → UNSAFE_PATH), :533-543 · Evidence: if (process.platform === "win32") return; before any assertion, while a sibling test uses { skip: process.platform !== "win32" }. · R7 (nạp vị trí mới từ hàng `F-270` bị rút vì trùng root cause): the two platform halves are mutually exclusive and CI satisfies neither — `tests/m6-t1-skill-store.test.mjs:533-544` guards the junction case with `{ skip: process.platform !== "win32" }` (its `:541` assertion is `assert.notEqual((await catalog(root)).errors.length, 0)`), while `tests/m12-t2.2-a3-queue-writer-lock.test.mjs:391-396` returns early with `if (process.platform === "win32") { t.skip("… the WSL lane runs this"); return; }`. `.github/workflows/ci.yml:20` and `:50` are both `runs-on: ubuntu-24.04`, so the junction half executes in no enforced lane; the same split repeats at `tests/m11-t3-durable-state-integrity.test.mjs:997-1000`, `tests/m7-t1-openclaw.test.mjs:1441` and `tests/m11-t1-openclaw-outbound-and-caches.test.mjs:166`.
+- Evidence: Where: tests/m6-t1-skill-store.test.mjs:519 (SKILL.md symlink → UNSAFE_PATH), :533-543 · Evidence: if (process.platform === "win32") return; before any assertion, while a sibling test uses { skip: process.platform !== "win32" }. · R7 (nạp vị trí mới từ hàng `F-270` bị rút vì trùng root cause; thu hẹp lại sau khi Lead tự đo cả bốn site được dẫn): phần _junction_ của phép kiểm không chạy ở bất kỳ lane nào bị buộc — `tests/m6-t1-skill-store.test.mjs:533-544` chặn nó bằng `{ skip: process.platform !== "win32" }` (assertion ở `:541` là `assert.notEqual((await catalog(root)).errors.length, 0)`) trong khi `.github/workflows/ci.yml:20` và `:50` đều `runs-on: ubuntu-24.04`, nên trên lane bị buộc điều kiện chặn là đúng và nó được _báo cáo_ là skip, không phải pass. Đứng cạnh nó, `:519` mới là chỗ defect của hàng này: `if (process.platform === "win32") return;` không gọi `t.skip`, nên chỉ trên Windows phép kiểm mới in ra một kết quả pass không tồn tại; trên ubuntu thì điều kiện sai và assertion vẫn chạy. Bốn site mà bản nháp này gộp chung đã được đo lại và **không cùng defect**: `tests/m12-t2.2-a3-queue-writer-lock.test.mjs:391-396`, `tests/m11-t3-durable-state-integrity.test.mjs:997-1000`, `tests/m7-t1-openclaw.test.mjs:1438-1443` và `tests/m11-t1-openclaw-outbound-and-caches.test.mjs:163-168` đều gọi `t.skip(…)` trước khi return, tức báo cáo skip một cách trung thực; chúng chỉ cho thấy cùng điều kiện nền tảng để phép kiểm không chạy trên Windows, không phải bằng chứng lan rộng của lỗi khai báo ở `:519`. Census tự đo của vòng này (quét mọi `tests/*.test.mjs` lấy các dòng chặn bằng `process.platform === "win32"` rồi return không kèm `t.skip`): đúng **một** site trên toàn repo, tức chính `:519`; biến thể gần nhất là `tests/m12-t2.2-b3-verify-mode-host.test.mjs:32-36`, nơi nhánh win32 gọi `requireMode` để khẳng định _không_ có gì bị từ chối trong khi nhánh POSIX khẳng định `assert.throws`, nên mỗi host chỉ kiểm được một nửa của cùng một hợp đồng — cùng họ nhưng không phải cùng cơ chế, ghi ở đây thay vì mở hàng riêng.
 - Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc tests/m6-t1-skill-store.test.mjs:519 (SKILL.md symlink → UNSAFE_PATH), :533-543 ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng a "test that cannot fail on Windows": the platform guard returns from the test body instead of skipping trước khi sửa (nội quy mục 3).
 - Acceptance criteria: Register chưa có acceptance line. Khi sửa phải viết acceptance từ trạng thái đúng ngược lại tiêu đề "a "test that cannot fail on Windows": the platform guard returns from the test body instead of skipping", và acceptance đó là điều kiện duy nhất được phép xóa bug này khỏi file (nội quy mục 6).
 - Related findings: adjudication Vòng 2: Verified with correction · nguồn: A12 — test validity and regression coverage · R7 delta audit: `F-270` withdrawn as a duplicate of this row, its locations merged here
@@ -2821,10 +2831,10 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Severity: Medium
 - Status: OPEN
 - Root cause: Register kết luận: the verdict-matrix suite counts any thrown error as the specified policy DENY, and three cases require no diagnostic at all. Chưa có phân tích root cause riêng — phải đọc `Where:` ở HEAD hiện tại và viết lại nguyên nhân trước khi sửa (nội quy mục 2).
-- Evidence: Where: tests/m10-t2-r8-ingress-verdict-matrix.test.mjs:271-300, expectedLogs null at :245-252 · Evidence: try { await enterNativeRun(…); verdict="ALLOW" } catch { verdict="DENY" } — a harness fault, a malformed fixture, or GOVERNANCE_CONTEXT_MISSING/GOVERNANCE_RUN_UNAVAILABLE from any cause is recorded as the designed verdict; one test() wraps a loop so the first failure hides the rest.
+- Evidence: Where: tests/m10-t2-r8-ingress-verdict-matrix.test.mjs:271-300, expectedLogs null at :245-252 · Evidence: try { await enterNativeRun(…); verdict="ALLOW" } catch { verdict="DENY" } — a harness fault, a malformed fixture, or GOVERNANCE_CONTEXT_MISSING/GOVERNANCE_RUN_UNAVAILABLE from any cause is recorded as the designed verdict; one test() wraps a loop so the first failure hides the rest. · R7-C (vị trí mới, gộp): the same acceptance-of-anything pattern at `tests/m10-t2-r4-conversational-ingress.test.mjs:499,519,551,562,563,578`, `tests/m10-t2-r5-host-inbound-metadata.test.mjs:562,581,599,618,638,654`, `tests/m10-t2-coordinator-binding.test.mjs:557,579` and `tests/m10-t2-r2-coordinator-execution-authority.test.mjs:987`, where the matcher accepts several distinct denial codes ORed. Measured cause of the indistinguishability at HEAD: `integrations/openclaw/lib/native-boundary.mjs:510-531` converts every non-allow outcome, thrown guard failure and malformed fixture into one `GOVERNANCE_RUN_UNAVAILABLE` error, so the per-rule reason is only reachable through `error.cause.message` or the `logDecisionReason` line that `tests/m12-t2.2-b16-denial-reason.test.mjs:109-113` is currently the only suite to read.
 - Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc tests/m10-t2-r8-ingress-verdict-matrix.test.mjs:271-300, expectedLogs null at :245-252 ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng the verdict-matrix suite counts any thrown error as the specified policy DENY, and three cases require no diagnostic at all trước khi sửa (nội quy mục 3).
 - Acceptance criteria: each DENY case names an expected reason string, with no catch-to-verdict conversion.
-- Related findings: adjudication Vòng 2: Verified, exposure narrowed · nguồn: A12 — test validity and regression coverage
+- Related findings: adjudication Vòng 2: Verified, exposure narrowed · nguồn: A12 — test validity and regression coverage · R7-C delta audit C5: eighteen further deny-path matchers merged here
 
 ### F-208 — deferred/OPEN historical defects are still present at HEAD, and the R16 rehearsal gate is permanently self-skipping
 
@@ -2964,10 +2974,10 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Severity: Medium
 - Status: OPEN — — the inventory's headline pattern
 - Root cause: a comment reword, an import reorder, or a units rename turns suites red while nothing behavioural changed — and the converse is worse: a code change can keep the comment, drop the enforcement, and stay green. The real guarantee ("the deadline is enforced") is never executed anywhere.
-- Evidence: Where: m10-t2-coordinator-binding:1208-1209; m8-t2-governed-runtime-audit:2283, :2344, :2300, :2304; m9-t1-functional-truth-remediation:956; m11-t3-openclaw-runtime-bounds:99-122 · Evidence: assertions on prose and spelling rather than behaviour — assert.ok(source.includes("never a server-echoed field")), source.includes("construction-derived"), pluginSrc.includes("E09: Unified request digest"), pluginSrc.includes("E20: Validate outbound attachments/files linkage"), source.includes("NOT A PROVIDER INTEGRATION"), source.includes("export const DISCORD_REST_DEADLINE_MS = 10_000;"), source.includes('import { execSync } from "node:child_process";'), and assert.ok(!configureSource.includes("setTimeout(abort, 300000)")) beside assert.ok(configureSource.includes("setTimeout(abort, 10000)")).
+- Evidence: Where: m10-t2-coordinator-binding:1208-1209; m8-t2-governed-runtime-audit:2283, :2344, :2300, :2304; m9-t1-functional-truth-remediation:956; m11-t3-openclaw-runtime-bounds:99-122 · Evidence: assertions on prose and spelling rather than behaviour — assert.ok(source.includes("never a server-echoed field")), source.includes("construction-derived"), pluginSrc.includes("E09: Unified request digest"), pluginSrc.includes("E20: Validate outbound attachments/files linkage"), source.includes("NOT A PROVIDER INTEGRATION"), source.includes("export const DISCORD_REST_DEADLINE_MS = 10_000;"), source.includes('import { execSync } from "node:child_process";'), and assert.ok(!configureSource.includes("setTimeout(abort, 300000)")) beside assert.ok(configureSource.includes("setTimeout(abort, 10000)")). · R7-C (vị trí mới, gộp): the whole of `tests/m3-t2-contract.test.mjs`, `tests/m3-t3-contract.test.mjs` and `tests/m3-t4-contract.test.mjs` is `assert.match(<source string>, /regex/)` over `main.py`, `database.py`, `retrieval.py`, the Dockerfile and the `knowledge-t*.ps1` drivers with nothing executed — they run on the ubuntu lane because they only read committed files, and they are the executable form of the Knowledgebase HNSW, RRF, token-budget and read-only-Vault invariants; supporting instances at `tests/m12-t2.2-b6-relevance-rule.test.mjs:69-87`, `tests/m12-t2.2-b9-manifest-completeness.test.mjs:87-101`, `tests/m9-t1-functional-truth-remediation.test.mjs:928-949` (a substring scan for the simulation-contract comment), `tests/m10-t2-r15-critical-path-invariants.test.mjs:50,77,129,188,218`.
 - Reproduction: Register chưa có bước tái hiện riêng; bước gần nhất suy từ acceptance/remediation: no test fails when a comment, import line or section heading is reworded with identical behaviour.
 - Acceptance criteria: no test fails when a comment, import line or section heading is reworded with identical behaviour.
-- Related findings: nguồn: E10 — test infrastructure: the source-text assertion…
+- Related findings: nguồn: E10 — test infrastructure: the source-text assertion… · R7-C delta audit C5B/C2/C5: three whole suites and four further pins merged here
 
 ### F-219 — undetected drift, plus a false premise for later lanes — six tracked executables read like supported probes but can never fail in CI
 
@@ -3029,10 +3039,10 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Severity: Low
 - Status: OPEN
 - Root cause: target directory trees were committed as architecture (AGENTS.md §9 "Target directory trees are architecture, not implementation evidence") while the real operator entry points stayed where the Docker work put them. — Hệ quả: npm run verify says nothing about the PowerShell the runbooks tell the owner to execute, including a backup script. Any future doc pointing at `scripts/verification/<x>.mjs` cites a path that does not exist even on this host. One negative recorded honestly: no phantom-script defect in the reverse direction — every infrastructure/docker/scripts/*.ps1 cited by docs does exist.
-- Evidence: Where: package.json:21-23; scripts/{bootstrap,development,maintenance,verification}/; infrastructure/docker/scripts/ · Evidence: git ls-files scripts/ returns 2 files (repository-check.mjs, repository-policy.mjs); the four advertised category directories are empty on disk and untrackable by git, so a fresh clone has none of them. Meanwhile infrastructure/docker/scripts/ holds ~15 scripts (backup.ps1, build.ps1, preflight.ps1, start.ps1, stop.ps1, knowledge-t1..t5*.ps1, bootstrap-postgres.sh) referenced by README.md:428, :434, :570, :910 and docs/runbooks/knowledge-platform.md:20-29, :55 — and matched by no prettier pattern, no eslint target, and no REQUIRED_SCRIPTS/MAKE_TARGETS entry.
+- Evidence: Where: package.json:21-23; scripts/{bootstrap,development,maintenance,verification}/; infrastructure/docker/scripts/ · Evidence: git ls-files scripts/ returns 2 files (repository-check.mjs, repository-policy.mjs); the four advertised category directories are empty on disk and untrackable by git, so a fresh clone has none of them. Meanwhile infrastructure/docker/scripts/ holds ~15 scripts (backup.ps1, build.ps1, preflight.ps1, start.ps1, stop.ps1, knowledge-t1..t5*.ps1, bootstrap-postgres.sh) referenced by README.md:428, :434, :570, :910 and docs/runbooks/knowledge-platform.md:20-29, :55 — and matched by no prettier pattern, no eslint target, and no REQUIRED_SCRIPTS/MAKE_TARGETS entry. · R7-C (mở rộng đo): the six drivers `knowledge-t1.ps1`, `knowledge-t2.ps1`, `knowledge-t2-windows.ps1`, `knowledge-t3.ps1`, `knowledge-t5.ps1` and `knowledge-t5-remote.ps1` are named by `tests/m3-*.test.mjs` only as text read from disk plus regex assertions, and a grep of `.github/`, `package.json`, `Makefile` and `docs/runbooks/` for those script names returns no hit at all — so no tracked lane executes any of them, which is what makes F-288 through F-293 unverifiable by any gate today.
 - Reproduction: Register chưa có bước tái hiện riêng; bước gần nhất suy từ acceptance/remediation: every script a doc or runbook tells a human to run is covered by at least one verify stage, and no advertised scripts/ category is empty.
 - Acceptance criteria: every script a doc or runbook tells a human to run is covered by at least one verify stage, and no advertised scripts/ category is empty.
-- Related findings: nguồn: E08 — repository tooling: `package.json` scripts…
+- Related findings: nguồn: E08 — repository tooling: `package.json` scripts… · R7-C delta audit C4: six further never-executed scripts merged here
 
 ### F-224 — the failure is injected by SQL source text, so any rewording of the tombstone statement silently moves the injected failure to a different call site while the same assertions still pass — the "not swallowed" guarantee can stop covering…
 
@@ -3211,10 +3221,10 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Severity: Medium
 - Status: OPEN
 - Root cause: the assertions compare a value to a literal the test itself writes, or check only a JS type, so no runtime condition can falsify them — and they are the recorded evidence that three remediation items landed.
-- Evidence: Where: tests/m12-t2.2-b7-ceiling-single-read.test.mjs:52-56 (`assert.deepEqual(BUDGETS, { maxBriefRevisionsPerTask: 16, … })`) and :63 (`assert.equal(typeof workflow.applyWorkflowEvent, "function")`); tests/m12-t2.3-c9-semantic-report-version.test.mjs:74 (`assert.notEqual(SEMANTIC_CONTRACT_VERSION, "v1")`) · Evidence: :63 passes for any function-valued export; :74 fails only if the version literal is reset to `v1`; :52 mirrors ledger.mjs:39-43 (see F-228), so the ceiling is pinned twice and enforced zero times.
+- Evidence: Where: tests/m12-t2.2-b7-ceiling-single-read.test.mjs:52-56 (`assert.deepEqual(BUDGETS, { maxBriefRevisionsPerTask: 16, … })`) and :63 (`assert.equal(typeof workflow.applyWorkflowEvent, "function")`); tests/m12-t2.3-c9-semantic-report-version.test.mjs:74 (`assert.notEqual(SEMANTIC_CONTRACT_VERSION, "v1")`) · Evidence: :63 passes for any function-valued export; :74 fails only if the version literal is reset to `v1`; :52 mirrors ledger.mjs:39-43 (see F-228), so the ceiling is pinned twice and enforced zero times. · R7-C (vị trí mới, gộp vào đây vì trùng root cause với hàng đã ghi): `tests/m10-t2-r20-skill-catalog-and-sql.test.mjs:150-153`, `:160-164` — R20-05 builds `jsKey` and `sqlKey` as the same JS template literal, the SQL expression existing only in the comment at `:161`, and `:173-182` asserts a locally defined charset string does not contain the separator; `tests/m7-t4-orchestration.test.mjs:85-87` loops an eleven-entry literal provider list asserting `p.length > 0`.
 - Reproduction: static — replace `applyWorkflowEvent`'s body with a throw and :63 still passes; set `SEMANTIC_CONTRACT_VERSION` to any string other than `v1` and :74 passes regardless of what the report emits.
 - Acceptance criteria: each assertion is driven by a call whose result depends on the behaviour — invoke the reducer and assert the transition, assert the version string actually present in the report row.
-- Related findings: F-102 (green contract test pins dead schema), F-224 (failure injected by SQL source text), F-228 · nguồn: R7 delta audit D6 — test fidelity
+- Related findings: F-102 (green contract test pins dead schema), F-224 (failure injected by SQL source text), F-228 · nguồn: R7 delta audit D6 — test fidelity · R7-C delta audit C5/C2: four more literal-only assertions merged here
 
 ### F-241 — `infrastructure/networking/networks.yml` is a placeholder whose own premise is already false and which nothing reads
 
@@ -3250,10 +3260,10 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Severity: High
 - Status: OPEN
 - Root cause: the approval resolver reads four stores and nothing in the shipped code writes any of them; the only writers are test fixtures that create the file themselves. The control therefore has no production-reachable pass path, and its failure path (every governed call denied) is the only real behaviour — which is exactly why the ungoverned live branch in F-242 is the effective policy.
-- Evidence: Where: integrations/openclaw/topology/lib/guard.mjs:507 (`const memKey = Symbol.for("zink.governance.approvals");` — the only occurrence in `integrations/`), :558 (`path.join(paths.root, "approvals.json")`), :660 (`consumed-approvals.json`) · Evidence: a repo-wide grep for writers of those stores returns only tests/m11-t3-durable-state-integrity.test.mjs:507 and tests/m7-lane-c-queue.test.mjs:198, i.e. tests fabricate the file the guard reads.
+- Evidence: Where: integrations/openclaw/topology/lib/guard.mjs:507 (`const memKey = Symbol.for("zink.governance.approvals");` — the only occurrence in `integrations/`), :558 (`path.join(paths.root, "approvals.json")`), :660 (`consumed-approvals.json`) · Evidence: a repo-wide grep for writers of those stores returns only tests/m11-t3-durable-state-integrity.test.mjs:507 and tests/m7-lane-c-queue.test.mjs:198, i.e. tests fabricate the file the guard reads. · R7-C (vị trí mới, gộp): the condition branch that depends on these stores is also the only branch of the published approval contract that has no producer — `integrations/openclaw/topology/contracts/approval-request.schema.json:82-112` is enforced at `topology/lib/guard.mjs:624` against `approvals.json` and `approvals/<id>.json` (`guard.mjs:558`, `:578`) which no repository code writes.
 - Reproduction: static — any `requiresApproval:true` call resolved through the guard fails `AUTH_APPROVAL_REQUIRED`/`AUTH_APPROVAL_INVALID` for every `approvalId`, because no durable record can exist; a mutation probe that adds a writer must make the same call pass.
 - Acceptance criteria: a durable minter produces one consumable record per surfaced approval card, and a test proves `AUTH_APPROVAL_REPLAYED` fires on the second consume.
-- Related findings: F-242, F-030, F-032 · nguồn: R7 delta audit D8
+- Related findings: F-242, F-030, F-032 · nguồn: R7 delta audit D8 · R7-C delta audit C6: contract branch with no producer merged here
 
 ### F-244 — the free-text approval ingress fabricates the channel and actor it then validates, so "approval must occur in #approvals" can never fail
 
@@ -3354,10 +3364,10 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Severity: Medium
 - Status: OPEN
 - Root cause: `incident`, `result` and `governance-manifest` appear only in the canonical list that pins hashes; no code or test names them in a validation call. Separately none of the twelve topology contracts declares the version key the manifest reads, so all twelve report the same version forever while only the checksum moves.
-- Evidence: Where: integrations/openclaw/topology/lib/schema.mjs:22-35 (`CANONICAL_CONTRACTS`) and :371-387 (`generateSchemaManifest` reading `x-zink-contract-version` then falling back to `"1.0.0"`) · Evidence: a grep for `validateContract("incident"|"result"|"governance-manifest")` across the repo returns 0 hits; `canonical.mjs:12` sets `SCHEMA_VERSION = "1.0.0"`, pinned as a const in both ledger contracts.
+- Evidence: Where: integrations/openclaw/topology/lib/schema.mjs:22-35 (`CANONICAL_CONTRACTS`) and :371-387 (`generateSchemaManifest` reading `x-zink-contract-version` then falling back to `"1.0.0"`) · Evidence: a grep for `validateContract("incident"|"result"|"governance-manifest")` across the repo returns 0 hits; `canonical.mjs:12` sets `SCHEMA_VERSION = "1.0.0"`, pinned as a const in both ledger contracts. · R7-C (vị trí mới, gộp): `integrations/openclaw/topology/contracts/governance-manifest.schema.json`, `incident.schema.json` and `result.schema.json` are the three members whose names appear in no `validateContract`, `validateContractSchema`, `loadContractSchema` or `resolveContractFilePath` call anywhere outside this register. Measured at HEAD the pinned constants still agree with the live producer, so these are drift-prone rather than wrong today: `max_spawn_depth` const 2 against `TOPOLOGY_POLICY.maxSpawnDepth` 2 (`lib/policy.mjs:546`, `:1115`), `runtime_version` const 2026.6.34 against `OPENCLAW_RELEASE` (`:53`), and the two maxItems of 16 against the largest produced lists of 4 and 3 (`:1849-1861`, `:555-563`).
 - Reproduction: static — edit `ledger-event.schema.json`: the next read re-governs all history under new bytes with the same reported version, failing closed as `EXECUTION_STATE_UNKNOWN` (ledger.mjs validates before the version check) and indistinguishable from corruption.
 - Acceptance criteria: every canonical contract has a named validation call site or the owner declares the contract non-canonical and it leaves the pinned list together with the schema file; each topology contract carries its own version key; a deploy or boot gate calls `verifySchemaManifestChecksums`.
-- Related findings: F-022, F-065, F-250 · nguồn: R7 delta audit D11B
+- Related findings: F-022, F-065, F-250 · nguồn: R7 delta audit D11B · R7-C delta audit C6: three never-loaded contracts merged here
 
 ### F-253 — cancelling an index run leaves a permanent `RUNNING` row, and the unique-running constraint turns that into a self-block reported as a database outage
 
@@ -3566,3 +3576,458 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Reproduction: static — add a step to the python-quality job that runs the child suite: `npm run repo:check` reports the closure-install failure and `npm run verify` goes red, while a new job is not blocked by this rule. Correction recorded here after the D9 challenge: an earlier draft of this row claimed the route was closed entirely; it is closed only inside the pinned job.
 - Acceptance criteria: the two child suites execute in an enforced gate through a lane that policy permits, or the permanent NOT RUN is recorded as an owner decision in `PLAN.md` §3 with a named compensating control — either way F-237 stops being silently closable.
 - Related findings: F-237, F-197, F-074 · nguồn: R7 delta audit D12A — CI skip census
+
+### F-271 — the approval scope digest for `zink_power_bi bind` is derived from input keys its own closed contract forbids, so the approved datasource is not bound
+
+- Category: F2 — Security & Authorization
+- Legacy register id: `R7-C1-01`
+- Affected modules: Zink Tools, OpenClaw governance plugin, governance records
+- Severity: High
+- Status: OPEN
+- Root cause: the material-scope derivation reads two fields the published `bind` branch never declares, and every validated call has already passed the closed schema, so those fields are undefined by construction and the derived material set is always empty. The approval therefore binds the task, revision, tool, operation and model only: an owner who approved a bind against one datasource authorizes a bind against any datasource in the same model.
+- Evidence: Where: `zink-tools/contracts/tools/zink-power-bi.schema.json:20-33` — the bind branch declares exactly operation, model, datasource and tables with `required: ["operation","model","datasource"]` and `additionalProperties: false` · Where: `integrations/openclaw/lib/policy.mjs:2077-2085` — for operation bind it copies `input.source_table` and `input.target_table`, neither of which exists in that branch · Where: `integrations/openclaw/topology/lib/guard.mjs:377-396` — `material_parameters: materialParameters` feeds `deriveApprovalScopeDigest` and then `assert(record.approval_scope_digest === expectedDigest, "AUTH_APPROVAL_INVALID")` · Where: `zink-tools/contracts/tool-call.schema.json:107` — the envelope's power-bi branch sets `input` to `$defs.input` of that same closed schema, and `guard.mjs:1571-1576` validates the call against it before the digest is derived, so the two keys cannot be present. Same mechanism on the sibling tool: `policy.mjs:2067-2076` reads `input.prompt` and `input.template` while `zink-excel.schema.json:44-53` declares only file_path and specification for the generate branch.
+- Reproduction: static — `deriveApprovalMaterialParameters("zink_power_bi","bind",{operation:"bind",model:"M",datasource:"A"})` and the same call with datasource "B" both return an empty object, so `deriveApprovalScopeDigest` returns one digest for two different datasources. A red test mints an approval for one datasource and drives the guard with another, expecting AUTH_APPROVAL_INVALID; a second case asserts that every key `deriveApprovalMaterialParameters` reads for a tool-operation pair is declared in that tool's `$defs.input` branch.
+- Acceptance criteria: two bind inputs differing only in datasource or tables produce different `approval_scope_digest` values, and a gate asserts that the material-parameter reader and the published input branch declare the same key set for every governed tool-operation pair. Widening the digest or deleting the assertion is not an acceptable fix.
+- Related findings: F-126 (the writer ignoring the same contract's fields), F-113 · nguồn: R7-C delta audit C1 — zink-tools contract schemas
+
+### F-272 — the result envelope is validated with a 64 KiB caller default while the per-tool contracts publish 1 MiB outputs, so a successful side-effected call is destroyed after the fact
+
+- Category: F4 — Integration & Contract Violations
+- Legacy register id: `R7-C1-02`
+- Affected modules: Zink Tools, Workflow topology + ledger, OpenClaw governance plugin
+- Severity: High
+- Status: OPEN
+- Root cause: the envelope validator takes its byte budget from an optional parameter and the only production call site omits it, so the default applies; the per-tool output contracts and the n8n adapter's own cap are written an order of magnitude larger. Two independently authored budgets therefore disagree, and the smaller one is enforced at the seam that runs after the work has already happened — the tool succeeded, its side effect is committed, and the governed caller reports a schema failure.
+- Evidence: Where: `integrations/openclaw/topology/lib/schema.mjs:352-359` — `export function validateContractSchema(schemaName, value, maxBytes = 65536)` then `Buffer.byteLength(encoded,"utf8") > maxBytes` gives `invalid("Payload exceeds max bytes")` · Where: `integrations/openclaw/topology/lib/guard.mjs:1944-1949` — `validateContractSchema("tool-result", rawResult)` with no third argument, and the catch turns it into `fail("SCHEMA_VALIDATION_FAILED")` · Where: `zink-tools/contracts/tools/zink-python.schema.json:33-50` — stdout and stderr each allowed up to 1048576 characters, required and closed · Where: `zink-tools/contracts/tools/zink-n8n.schema.json` — the synced-tables list bounds each item at 128 characters and declares no maximum item count, and `schema.mjs:300-305` supplies the implicit ceiling `schema.maxItems ?? 1024`, which is roughly 131 KB of legal content · Where: `zink-tools/n8n/trigger.mjs:219-228` — the adapter itself admits up to 1048576 bytes before raising N8N_RESPONSE_TOO_LARGE.
+- Reproduction: static — a python result with a 200 KB stdout, or an n8n result with about 900 synced-table entries, is legal under its own contract and is rejected by `validateContractSchema("tool-result", …)` at the guard's default budget. A red test validates a contract-legal maximum-size payload for both tools through the real call site and asserts it passes. Deriving one budget from the contracts and deleting the validator's default argument are the only fixes.
+- Acceptance criteria: every payload that satisfies a published per-tool `$defs.output` also satisfies the envelope validation at the budget the production call site uses, with the single budget expressed once; a test drives both tools at their contractual maximum.
+- Related findings: F-128, F-125 · nguồn: R7-C delta audit C1 — zink-tools contract schemas
+
+### F-273 — the envelope's artifact vocabulary has no producer and its size ceiling contradicts the reference contract, so results must ship an empty artifacts array
+
+- Category: F4 — Integration & Contract Violations
+- Legacy register id: `R7-C1-03`
+- Affected modules: Zink Tools, Workflow topology + ledger, OpenClaw governance plugin
+- Severity: Medium
+- Status: OPEN
+- Root cause: the envelope pins an artifact to a three-key closed object, while every record the repository actually produces for an artifact carries a different key set — the ledger uses a content hash and the storage adapter uses its own identity and checksum fields. The shape the contract demands cannot be emitted by any existing producer, and the same artifact class gets two size ceilings in two contracts, so a caller that tried to satisfy both would have to choose which contract to break.
+- Evidence: Where: `zink-tools/contracts/tool-result.schema.json:11-32` — artifact_ref requires logical_path, type and size_bytes with `additionalProperties: false`, and size_bytes has `maximum: 1073741824` · Where: `integrations/openclaw/plugins/zink-governance/index.mjs:2306` — the real producer pushes `{ logical_path: logicalPath, sha256 }` · Where: `zink-tools/adapters/storage/r2-adapter.mjs:79-90` — the storage record is artifact_id, checksum, size_bytes, content_type with no logical_path · Where: `integrations/openclaw/topology/contracts/governed-reference.schema.json:48` — size_bytes for the same class is capped at 16777216 · Where: `integrations/openclaw/topology/lib/guard.mjs:1950-1959` — the guard iterates `rawResult.artifacts` and path-validates each `logical_path`, the only consumer of the field.
+- Reproduction: static — validating the repo's real ledger record shape through `validateContractSchema("tool-result", …)` fails on the missing type key and the unexpected sha256 key, while the contract's own triple validates. A red test asserts that an artifact record produced by the plugin or the storage adapter validates against the envelope, and asserts one shared size ceiling for the artifact class.
+- Acceptance criteria: one canonical artifact-reference definition (same keys, same ceiling) is referenced by both the envelope and the governed-reference contract, and at least one production path emits a non-empty artifacts array that passes envelope validation. Deleting the artifacts member is not an acceptable fix.
+- Related findings: F-051, F-242, F-148 · nguồn: R7-C delta audit C1 — zink-tools contract schemas
+
+### F-274 — the call and result envelopes admit only five of the eight contract-registered tools, and their specialist rules disagree with each other
+
+- Category: F4 — Integration & Contract Violations
+- Legacy register id: `R7-C1-04`
+- Affected modules: Zink Tools, Zink Knowledgebase, Zink Skill Store, OpenClaw governance plugin
+- Severity: Medium
+- Status: LATENT
+- Root cause: the envelope discriminator lists were written per execution tool and never extended when Knowledge and Skill became contract-backed tools, while the loader and the canonical-contract set treat all eight as one family. A governed call for the other three cannot be expressed at all. The two halves also disagree internally: the call side allows several specialists for every tool, while the result side pins a single specialist constant except for one widened branch, so some admitted calls have no valid result shape.
+- Evidence: Where: `zink-tools/contracts/tool-call.schema.json:73,89,106,123,140` — exactly five tool_id consts (sql, excel, power_bi, python, n8n) · Where: `zink-tools/contracts/tool-result.schema.json:99-360` — the same five branches, with `:313` widening only the n8n result to the enum of two specialists · Where: `integrations/openclaw/plugins/zink-governance/index.mjs:3151-3160` — the loader map registers eight tools including zink_skill_search, zink_knowledge_search and zink_skill_propose · Where: `integrations/openclaw/topology/lib/guard.mjs:1571-1576` — the envelope check that a knowledge or skill call would have to pass. Measured this round: no plugin or adapter path currently dispatches those three through the guard envelope seam, so the defect is reachable only for a call routed there; recorded as LATENT rather than OPEN on that measurement.
+- Reproduction: static — `validateContractSchema("tool-call", …)` with tool_id zink_knowledge_search fails to match any branch; a red test asserts that every tool id the loader registers has a matching branch in both envelopes, and that each call branch's specialist set equals its result branch's specialist set.
+- Acceptance criteria: the two envelopes cover every registered tool with matching specialist vocabularies, or the register records the owner's decision that Knowledge and Skill calls are formally outside the envelope contract and the loader stops treating them as members of the same family.
+- Related findings: F-125, F-271, F-128 · nguồn: R7-C delta audit C1 — zink-tools contract schemas
+
+### F-275 — the four schema-only capability contracts declare an open parameters object that contradicts their own directory rule, and no gate validates them at all
+
+- Category: F7 — Testing & Verification Gaps
+- Legacy register id: `R7-C1-05`
+- Affected modules: Zink Tools, Gates + CI
+- Severity: Medium
+- Status: OPEN
+- Root cause: the only loader is keyed by a map that omits these four capabilities, and the single gate touching them checks existence and unique identifiers rather than validation, so nothing in the repository ever validates a payload against them. Because no consumer is ever disappointed, the files carry two contradictions nobody notices: an open parameters object that the same directory's published rule forbids, and a required list thin enough that an empty model is a conforming specification.
+- Evidence: Where: `integrations/openclaw/plugins/zink-governance/index.mjs:3302-3312` — `SCHEMA_ONLY_CAPABILITIES` frozen to the four ids, used only by `isExecutableTool` · Where: `index.mjs:3151-3160` — the loader map contains none of them · Where: `zink-tools/contracts/tools/zink-operations-research.schema.json:41-46` — parameters is `{"type":"object","additionalProperties": true}` and required is only model_type, so a network-flow model with no nodes and no edges validates · Where: `zink-tools/contracts/README.md:12` — the directory's own invariant states that every object sets additionalProperties false · Where: `tests/m7-t3-tools-contract.test.mjs:350-375` — the gate body asserts only `$id` presence and uniqueness; no `validateContractSchema` call names any of the four.
+- Reproduction: static — deleting all four files leaves `npm run verify` green; adding `additionalProperties: false` to the README's rule as a machine check turns the current tree red. A red test validates one passing and one failing fixture per capability through the contract validator, and asserts the closed-object rule across every file in the directory.
+- Acceptance criteria: each schema-only capability has at least one validated positive and one rejected negative fixture in an enforced lane, and the closed-object rule in the directory README is checked mechanically against every tracked contract file. Removing the four contracts is acceptable only as an owner decision recorded with the capability registry that names them.
+- Related findings: F-252, F-128, F-138 · nguồn: R7-C delta audit C1 — zink-tools contract schemas
+
+### F-276 — the BigQuery read-only guard is a private seven-keyword regex instead of the shared SQL validator, so it admits statements the canonical gate refuses and rejects reads that contain none
+
+- Category: F2 — Security & Authorization
+- Legacy register id: `R7-C2-01`
+- Affected modules: Zink Tools
+- Severity: Medium
+- Status: LATENT
+- Root cause: the adapter re-implements the mutation check as a case-insensitive word-boundary regex over the whole query string, instead of calling the repository's validator, which is a tokeniser with a larger keyword set that ignores string literals. The private list is both weaker and noisier: four mutating or privilege keywords from the canonical set are absent, and a read whose literal text merely mentions a blocked word is refused. Recorded as LATENT because the whole adapter layer is unreachable from governed dispatch, which F-105 already records.
+- Evidence: Where: `zink-tools/adapters/analytics/bigquery-adapter.mjs:61-67` — `const upper = input.query.toUpperCase(); if (/\\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE)\\b/.test(upper))` throws BIGQUERY_MUTATION_NOT_PERMITTED · Where: `zink-tools/sql/validator.mjs:1-13` — MUTATION_KEYWORDS is an eleven-entry set adding MERGE, REPLACE, GRANT and REVOKE, with the comment that the check runs on tokens outside string literals · Where: `zink-tools/adapters/analytics/motherduck-adapter.mjs:62-63` — the sibling does call `validateSqlQuery`, proving the intended shape · Where: `bigquery-adapter.mjs:1` — the adapter imports only the caller-authorization helper from the shared bridge.
+- Reproduction: static — GRANT ALL ON t TO u passes the private regex and is returned as a frozen success envelope, while the shared validator throws; a read containing a string literal equal to DELETE is refused by the regex and accepted by the validator. A red test drives a table of statements through both paths and asserts identical verdicts.
+- Acceptance criteria: the adapter delegates its statement gate to the shared validator, and a parameterized matrix over the eleven canonical keywords plus a literal-mention read yields the same verdict from the adapter as from the validator.
+- Related findings: F-105 (this layer has no production importer), F-138, F-144 · nguồn: R7-C delta audit C2 — provider adapters
+
+### F-277 — the DagsHub adapter ignores its configured repository, accepts a wildcard selection, and enforces only the comment that forbids it
+
+- Category: F2 — Security & Authorization
+- Legacy register id: `R7-C2-02`
+- Affected modules: Zink Tools, governance records
+- Severity: Medium
+- Status: LATENT
+- Root cause: the constructor stores an owner, a repository name and a token that no method reads; the sync destination comes entirely from caller parameters, and the guard standing in for "explicitly selected runs" is an array-and-non-empty test, which a wildcard entry satisfies. The file's own documented prohibition on blind or wildcard syncing is therefore unenforced, and the caller-supplied destination means a configured DagsHub credential can be pointed at any repository.
+- Evidence: Where: `zink-tools/adapters/mlops/dagshub-adapter.mjs:22-26` — repoOwner, repoName and token assigned to the instance · Where: `:39-54` — syncSelectedRuns takes repo_owner and repo_name from params and rejects only a non-array or empty selection · Where: `:63-70` — the result echoes the caller's repository and the caller's selection with status SYNC_COMPLETED · Where: `:30` — the comment "Blind or automatic wildcard syncing is strictly forbidden." · Where: `integrations/openclaw/orchestration/patterns/index.mjs:338-341` — the caller hardcodes one owner and checks only the first selected run against MLflow.
+- Reproduction: static — a call with repo_owner and repo_name pointing at another repository and a selection of a single wildcard entry returns SYNC_COMPLETED for that repository and echoes the wildcard as the synced set. A red test asserts a wildcard or unresolvable run id is refused, and that the destination cannot differ from the configured owner and repository.
+- Acceptance criteria: syncSelectedRuns rejects a wildcard entry and any identifier it cannot resolve in the tracking store, and refuses a destination that differs from the configured repository; the configured credential is either actually used or removed from the constructor.
+- Related findings: F-105, F-052, F-171 · nguồn: R7-C delta audit C2 — provider adapters
+
+### F-278 — the MLflow adapter returns shallow-frozen aliases of its live store, so a consumer can rewrite artifact lists and metric history it was told is immutable
+
+- Category: F3 — State & Lifecycle Integrity
+- Legacy register id: `R7-C2-03`
+- Affected modules: Zink Tools
+- Severity: Medium
+- Status: LATENT
+- Root cause: three methods wrap their return value in a shallow freeze over the stored record, which leaves the nested artifact array, the metric arrays and the parameter and tag objects as the same objects the adapter keeps in its map. One method deep-copies with a serialise-and-parse round trip, which shows the intended semantics and makes the other three the defect. A caller that mutates what it received silently corrupts the tracking store for every later reader.
+- Evidence: Where: `zink-tools/adapters/mlops/mlflow-adapter.mjs:57` — createRun returns `Object.freeze({ ...runRecord })` while the record's artifacts, params, tags and metrics objects are still the stored ones · Where: `:90` — logMetrics returns `Object.freeze({ run_id: runId, metrics: { ...run.metrics } })`, whose per-key arrays are shared · Where: `:127` — endRun returns `Object.freeze({ ...run })` · Where: `:141` — getRun returns `Object.freeze(JSON.parse(JSON.stringify(run)))`, the deep copy the others lack · Where: `:86-89` — the store appends into those same arrays.
+- Reproduction: static — pushing a forged entry into the artifact array of a createRun result, then reading the run back through getRun, returns the forged entry; popping a metric history array empties the stored history. A red test mutates each returned shape and asserts the store is unchanged.
+- Acceptance criteria: every method returning run state yields a deep-immutable copy, and a test asserts that mutation attempts on createRun, logMetrics, logArtifact, endRun results leave the subsequent getRun read byte-identical.
+- Related findings: F-105, F-255 · nguồn: R7-C delta audit C2 — provider adapters
+
+### F-279 — the simulation adapters emit no fidelity field, so canned provider results are structurally identical to real ones even though the shared bridge requires consumers to refuse them
+
+- Category: F5 — Data Integrity & Result Correctness
+- Legacy register id: `R7-C2-04`
+- Affected modules: Zink Tools, OpenClaw governance plugin
+- Severity: Medium
+- Status: LATENT
+- Root cause: the simulation contract is published only as a comment on each adapter class, while the result objects carry provider-shaped business fields with no state marker. The shared DuckDB bridge in the same module does stamp a fidelity marker and its own comment states that a governed consumer must see it and refuse to treat the data as live — so the repository already knows the rule these five envelopes break. Nothing prevents a future governed route from presenting fabricated billing bytes, checksums or run identifiers as executed provider work.
+- Evidence: Where: `zink-tools/adapters/analytics/bigquery-adapter.mjs:14-21` — the SIMULATION_CONTRACT block: "A governed path must treat its output as simulation and must never present it as provider execution." · Where: `:89-98` — the returned keys are provider, project_id, dataset, row_count, columns, rows, total_bytes_billed, execution_ms with `total_bytes_billed: 10485760, // 10 MB billed` and no state field · Where: `zink-tools/sql/duckdb-bridge.mjs:240-251` — the sibling comment requiring `FIXTURE_CONTRACT_EXECUTED` for a governed consumer · Where: the same shape holds at `motherduck-adapter.mjs:94-101`, `compute/databricks-adapter.mjs:63-84`, `compute/kaggle-adapter.mjs:63-84`, `mlops/huggingface-adapter.mjs:64-88`.
+- Reproduction: static — the envelopes contain no key a consumer could branch on, and a grep for the marker word in the adapter results returns nothing while the bridge path emits it. A red test asserts every adapter result carries an explicit fidelity field and that a governed consumer helper refuses the fixture value.
+- Acceptance criteria: each adapter result carries an explicit execution-state field, and the governed consumer path that needs business data rejects every value other than a real execution marker; the comment remains as documentation, not as the only signal.
+- Related findings: F-145, F-187, F-105 · nguồn: R7-C delta audit C2 — provider adapters
+
+### F-280 — the analytics adapters echo a target database of their own invention and never call the shared resource allowlist that the bridge enforces
+
+- Category: F4 — Integration & Contract Violations
+- Legacy register id: `R7-C2-05`
+- Affected modules: Zink Tools, OpenClaw governance plugin
+- Severity: Medium
+- Status: LATENT
+- Root cause: both adapters import only the caller-authorization helper, so the resource-authorization helper the shared bridge calls is never consulted; and each one's fallback value for the target database is a name that the published contract does not even enumerate. A caller therefore gets back a resource identifier that no governed contract admits, presented as an authorised result.
+- Evidence: Where: `zink-tools/adapters/analytics/bigquery-adapter.mjs:1` — the import line names only `assertDuckDbCallerAuthorized` · Where: `motherduck-adapter.mjs:1-2` — the same single helper import plus the validator · Where: `bigquery-adapter.mjs:92` — `dataset: input.target_database || "cloud_analytics_lake"` · Where: `motherduck-adapter.mjs:96` — `target_database: input.target_database || "gold"` · Where: `zink-tools/contracts/tools/zink-sql.schema.json:65-68` — the parameter is an enum of knowledge and analytics_read, so neither fallback is legal · Where: `zink-tools/sql/duckdb-bridge.mjs:81-94` and `:184` — the resource allowlist helper that the adapters do not use.
+- Reproduction: static — a call with target_database set to gold returns gold in the envelope with no rejection; the same value fails the contract enum. A red table test drives each adapter with an out-of-enum resource and asserts the same refusal code the bridge raises.
+- Acceptance criteria: both adapters reject a target database outside the contract enum with the shared resource-authorization code, and no adapter's own fallback value appears in a result that does not satisfy the published enum.
+- Related findings: F-144, F-105, F-276 · nguồn: R7-C delta audit C2 — provider adapters
+
+### F-281 — declared ceilings bind nothing in the analytics adapters: an exported timeout constant has no reader, and the row bound omits the sibling's lower clamp so a negative request reports a successful zero-row result
+
+- Category: F6 — Reliability & Performance
+- Legacy register id: `R7-C2-06`
+- Affected modules: Zink Tools
+- Severity: Low
+- Status: LATENT
+- Root cause: the adapters export ceiling constants that no code path consults, take the caller's own timeout option at face value, and clamp the row count only from above. Without the floor the shared bridge applies, a non-positive or nonsense request value turns the row slice into an empty result that is still returned as a success envelope.
+- Evidence: Where: `zink-tools/adapters/analytics/motherduck-adapter.mjs:13` — `export const MOTHERDUCK_MAX_TIMEOUT_MS = 60000;` and a repo-wide grep finds no other occurrence outside its own declaration · Where: `bigquery-adapter.mjs:69-74` and `motherduck-adapter.mjs:74-79` — the timeout appears only inside a simulateTimeout error string built from the caller's option · Where: `bigquery-adapter.mjs:77` — `const maxRows = Math.min(Number(input.max_rows) || 100, BIGQUERY_MAX_ROWS);` · Where: `motherduck-adapter.mjs:82-85` — the same shape · Where: `zink-tools/sql/duckdb-bridge.mjs:202-205` — the sibling clamps with `Math.max(Number(input.max_rows) || …, 1)` before the ceiling · Where: `bigquery-adapter.mjs:85-93` — rows are sliced with that value and `row_count: rows.length` is reported without any error.
+- Reproduction: static — a request with max_rows of negative three computes a negative bound, slices the canned rows away and returns a success envelope with `row_count: 0`; the same input in the bridge clamps to one row. A red test asserts the clamp for non-positive, zero and oversized values.
+- Acceptance criteria: every declared ceiling constant is consulted by a real bounding site, and a non-positive row limit is either clamped to the sibling's floor or rejected with its own error code — never returned as a successful empty result.
+- Related findings: F-184, F-105, F-280 · nguồn: R7-C delta audit C2 — provider adapters
+
+### F-282 — the PDF extraction path reports success without reading the conversion result's status or proving that every requested page contributed content
+
+- Category: F5 — Data Integrity & Result Correctness
+- Legacy register id: `R7-C3-01`
+- Affected modules: Zink Knowledgebase
+- Severity: High
+- Status: OPEN
+- Root cause: the child asks the converter for a page range and materialises whatever items come back, never consulting the result's status or per-page error fields; its OCR stage explicitly yields pages that have no valid backend without recording anything; and the parent validates only each item's shape, ordering and containment inside the requested window, then fails the build solely when the total segment count is zero. A page that produced nothing therefore disappears from the index while the build is marked complete, and only a whole-document-empty case is detectable.
+- Evidence: Where: `apps/knowledge/pdf-runtime/src/zink_pdf_runtime/runner.py:233-237` — `result = converter.convert(source, page_range=(start, end))` then `return _materialize_document_items(result.document, start, end)`, with no inspection of the conversion outcome; a repo-wide grep for the status field of that result returns no reader in the child · Where: `apps/knowledge/pdf-runtime/src/zink_pdf_runtime/docling_ocr.py:59-62` — for each page, if the backend is missing or invalid the page is yielded and the loop continues with zero cells · Where: `apps/knowledge/app/pdf_runtime.py:527-555` — the parent validator checks the key set, ordinal ordering, kind, non-empty content and `requested_start <= page_start <= page_end <= requested_end`, and nothing about coverage of the requested range · Where: `apps/knowledge/app/pdf_pipeline.py:190-195` and `:216-219` — segments are completed per batch and the build fails only `if segment_count == 0`.
+- Reproduction: static — a batch requesting pages 5 to 8 where page 7 has an invalid backend returns items for 5, 6 and 8, completes the batch, and the build finishes READY with page 7 unindexed. A red test drives the extraction with one requested page producing no items and asserts either an error outcome or an explicit uncovered-page report; a second assertion requires the response to carry the set of pages actually covered.
+- Acceptance criteria: the child fails closed unless the conversion outcome is fully successful, the response names the pages it covered, and the parent rejects a batch that omits any requested page that was not proven blank. Removing the parent's non-empty-content check is not an acceptable fix.
+- Related findings: F-055 (the sibling path-check topology), F-257, F-017 · nguồn: R7-C delta audit C3 — pdf-runtime and Knowledgebase modules
+
+### F-283 — the child rewrites every OCR timeout and output-cap breach into a generic runtime failure, so the parent's timeout handling is unreachable for the case it was written for
+
+- Category: F1 — Logic & Functional Bugs
+- Legacy register id: `R7-C3-02`
+- Affected modules: Zink Knowledgebase
+- Severity: Medium
+- Status: OPEN
+- Root cause: the runner's safe-code whitelist omits the two codes the OCR module raises, and its catch-all converts any exception into the generic failure code before the response leaves the process. The parent whitelist still admits both codes and remaps one of them to a build-level timeout reason, but that branch can never fire for work done inside the child, so a slow region and a genuine crash are indistinguishable in durable state.
+- Evidence: Where: `apps/knowledge/pdf-runtime/src/zink_pdf_runtime/ocr.py:85-86` and `:90-91` — the cap raises the output-limit code and a subprocess timeout raises the timeout code · Where: `apps/knowledge/pdf-runtime/src/zink_pdf_runtime/runner.py:17-28` — the safe-code set lists nine codes and contains neither of those two · Where: `:126-127` — `except Exception: return _error("PDF_RUNTIME_FAILED")` · Where: `apps/knowledge/app/pdf_runtime.py:33-40` — the parent whitelist does admit both codes · Where: `apps/knowledge/app/pdf_pipeline.py:196-198` — `code = timeout_code if error.code == "PDF_RUNTIME_TIMEOUT" else error.code`, the branch that the child cannot reach.
+- Reproduction: static — driving the child's dispatch with a stubbed OCR stage that raises the timeout code yields a response carrying the generic failure code. A red test asserts the timeout code survives the child boundary and that the parent's remap executes against the real child, not a mock runtime; the existing parent suite injects the code from a mock and stays green for a path the child cannot produce.
+- Acceptance criteria: the two codes are in the child's whitelist, the extraction arm propagates them instead of collapsing them, and one test proves an in-child timeout reaches the pipeline as the timeout classification.
+- Related findings: F-237, F-269, F-282 · nguồn: R7-C delta audit C3 — pdf-runtime and Knowledgebase modules
+
+### F-284 — the child's worst-case OCR budget is twelve times the parent's operation ceiling and the request schema carries no deadline, so the only real bound is a process-group kill
+
+- Category: F6 — Reliability & Performance
+- Legacy register id: `R7-C3-03`
+- Affected modules: Zink Knowledgebase, deployment topology
+- Severity: Medium
+- Status: OPEN
+- Root cause: each recognised region gets its own fresh deadline of ninety seconds, up to thirty-two regions pass the per-page guard, four pages make a batch, and the request's key set is closed with no deadline field, so the child cannot compose the parent's operation ceiling even if it wanted to. The legal child workload therefore exceeds the parent timeout by an order of magnitude, and the parent's containment is to kill the process group — turning slow-but-progressing extraction into a hard build failure with a runtime-failure code.
+- Evidence: Where: `apps/knowledge/pdf-runtime/src/zink_pdf_runtime/ocr.py:18` — the per-region constant of 90 seconds · Where: `apps/knowledge/pdf-runtime/src/zink_pdf_runtime/docling_ocr.py:64-65` and `:75` — more than thirty-two rects raises, and each region is given `deadline=time.monotonic() + 90` · Where: `apps/knowledge/app/pdf_pipeline.py:39-40` — four pages per batch and an operation ceiling of 15 minutes · Where: `apps/knowledge/pdf-runtime/src/zink_pdf_runtime/runner.py:93-101` — the request key set is exactly protocol_version, operation, source_path, page_start, page_end and the expected identity digest · Where: `apps/knowledge/pdf-runtime/src/zink_pdf_runtime/ocr.py:4-5` — the module docstring itself says the parent process-group contract remains the final containment layer.
+- Reproduction: static — twelve regions at eighty seconds each on one page is 960 seconds, over the 900-second ceiling, so the parent kills the group and the build is failed. A red test asserts the child refuses or degrades a batch whose worst-case region arithmetic exceeds a deadline carried by the request.
+- Acceptance criteria: either the request carries the parent's deadline and the child enforces it across the whole extraction, or the worst-case region-count times per-region budget is proven not to exceed the operation ceiling and a test pins that composition.
+- Related findings: F-283, F-184, F-197 · nguồn: R7-C delta audit C3 — pdf-runtime and Knowledgebase modules
+
+### F-285 — the child's only OCR runner test replaces the subprocess and the output reader, so the deadline, the output cap and the child reaping are asserted by nothing
+
+- Category: F7 — Testing & Verification Gaps
+- Legacy register id: `R7-C3-04`
+- Affected modules: Zink Knowledgebase, Gates + CI
+- Severity: Medium
+- Status: OPEN
+- Root cause: the suite patches the process constructor and the streaming reader wholesale and then asserts only the argument vector tail. Every statement that makes the module's bounded-execution contract real — the deadline comparison, the byte cap, the terminate-and-reap path, the return-code check and the decode guard — is inside the patched region or after it, so the suite would pass with those bodies deleted. This is a different defect from the lane never running: the suite stays vacuous even once it is executed.
+- Evidence: Where: `apps/knowledge/pdf-runtime/tests/test_ocr_contract.py:31-42` — two patch calls supply a mock process and `return_value=b"tsv"` for the reader, then the assertions are the language constant and `command[3:]` · Where: `apps/knowledge/pdf-runtime/src/zink_pdf_runtime/ocr.py:50-61` — the return-code check, the deadline argument and the decode guard · Where: `:80-95` — the selector loop with the byte cap and the timeout reaping · Where: `:96-106` — the terminate-and-reap helper. A grep finds no other test naming the runner function.
+- Reproduction: static mutation probe — replace the output-cap raise with a no-op, or delete the reaping call, and the suite stays green. A red test runs the module against a fake executable that overruns the deadline and exceeds the cap, asserting the typed error codes and that the child was reaped.
+- Acceptance criteria: at least one executed test drives the real reader and process lifecycle against a fixture executable for both the timeout and the output-cap path, and each of those mutations turns the suite red.
+- Related findings: F-237, F-269, F-240, F-218 · nguồn: R7-C delta audit C3 — pdf-runtime and Knowledgebase modules
+
+### F-286 — the processing-identity probe is an echo: the child returns the value it was sent and two parent sites compare it back
+
+- Category: F4 — Integration & Contract Violations
+- Legacy register id: `R7-C3-05`
+- Affected modules: Zink Knowledgebase
+- Severity: Low
+- Status: OPEN
+- Root cause: the child's probe response sets the identity digest field to the request's own expected value, and the parent then rejects the run when that field differs from the same value. The comparison cannot fail. The child does recompute four independent pieces of evidence and the parent checks those for real, so the protection exists — but two call sites read as identity verification while contributing nothing, which is how a future fixer comes to trust a guard that is not there.
+- Evidence: Where: `apps/knowledge/pdf-runtime/src/zink_pdf_runtime/runner.py:70-89` — the recomputed identity is stored in a local and only its other fields are returned, while the response carries the echoed request value, with the comment at `:81-83` acknowledging the echo · Where: `apps/knowledge/app/pdf_runtime.py:499-500` — `if response.get("processing_identity_digest") != request.get("expected_processing_identity_digest"): raise PdfRuntimeError("PDF_RUNTIME_MISMATCH")` · Where: `apps/knowledge/app/pdf_runtime.py:120-130` — the same comparison inside the manifest verification, alongside the four checks that do measure · Where: `apps/knowledge/tests/test_pdf_runtime.py:343` — the suite that names this "recomputes and compares" builds the probe dictionary by hand.
+- Reproduction: static — no child state can make either comparison fire on a well-formed value. A red test asserts that deleting each of the four recomputed comparisons turns the suite red, and either removes the echo-and-compare or renames the field so no code or document presents it as verification.
+- Acceptance criteria: no comparison in the boundary is structurally incapable of failing — the identity claim is either dropped or backed by child-side state, and the surviving enforcement is the recomputed evidence with a mutation probe proving it.
+- Related findings: F-219, F-252, F-282 · nguồn: R7-C delta audit C3 — pdf-runtime and Knowledgebase modules
+
+### F-287 — the segment builder drops runtime items whose content normalises to empty with no counter, unlike its own fail-closed sibling for a wholly empty result
+
+- Category: F5 — Data Integrity & Result Correctness
+- Legacy register id: `R7-C3-06`
+- Affected modules: Zink Knowledgebase
+- Severity: Low
+- Status: HYPOTHESIS
+- Root cause: after the boundary has guaranteed non-empty content, the parent normalises each item and continues past any that normalise away, without recording the drop and without comparing accepted items against emitted segments. The mechanism is confirmed in code; the corpus impact is not, because no measured document yet shows a page whose only items normalise to empty, so this is filed as a hypothesis rather than an observed loss.
+- Evidence: Where: `apps/knowledge/app/pdf_pipeline.py:336-338` — `content = _normalize_content(item["content"])` then `if not content: continue` · Where: `apps/knowledge/app/pdf_runtime.py:539-540` — the guarantee the item was checked against is only truthiness of the raw string · Where: `apps/knowledge/app/pdf_pipeline.py:216-218` — the only aggregate check is the zero-segment case with its dedicated failure code.
+- Reproduction: unconfirmed — a batch whose items are whitespace-only would be accepted by the boundary and silently dropped before segmenting. Before fixing, measure: run the real corpus through the segmenter and count items in versus segments out, and only file this as OPEN if the count differs on a document that has visible content on the page.
+- Acceptance criteria: either a dropped item raises the invalid-output code or the build records the dropped-item count and a test asserts the count is zero for a corpus page known to contain text. Deleting the skip is acceptable only with the fail-closed branch in place.
+- Related findings: F-282, F-017 · nguồn: R7-C delta audit C3 — pdf-runtime and Knowledgebase modules
+
+### F-288 — the acceptance overlay proves network isolation on a topology the deployed stack does not implement, so its boundary evidence transfers to nothing that ships
+
+- Category: F4 — Integration & Contract Violations
+- Legacy register id: `R7-C4-01`
+- Affected modules: deployment topology, Zink Knowledgebase, governance records
+- Severity: Medium
+- Status: OPEN
+- Root cause: the overlay rewrites the model-service URL to an allowlisted proxy route and resets the host-gateway mapping, but that route exists only in an acceptance-only nginx configuration, and the deployed composition keeps direct host-gateway egress. The isolation assertions in the acceptance driver therefore describe a container posture no deployed stack has, while two different contract suites each pin one side as correct and neither compares them.
+- Evidence: Where: `infrastructure/docker/compose/compose.m3-t5.acceptance.yml:26-32` — `KNOWLEDGE_OLLAMA_URL: http://nginx:8080/ollama`, `extra_hosts: !reset []`, read_only and cap_drop on the knowledge service · Where: `infrastructure/docker/compose/compose.core.yml:152` and `:156-157` — the deployed value is the direct host endpoint with the host-gateway mapping · Where: `infrastructure/nginx/conf.d/t5-acceptance.conf:20-33` — the only place the proxied locations exist; a grep for that path in `conf.d/default.conf` returns nothing · Where: `tests/m3-t1-contract.test.mjs:76-78` pins the deployed host-gateway posture and `tests/m3-t5-contract.test.mjs:144-148` pins the overlay posture · Where: `infrastructure/docker/scripts/knowledge-t5-common.ps1:524-553` — the isolation assertions that read as production boundary proofs.
+- Reproduction: static — starting the deployed core plus knowledge composition yields a container with direct egress and no proxy route, so the isolation checks cannot be run against it at all. A red test merges the deployed composition and asserts either the same allowlisted route and internal network, or fails with a message naming the divergence.
+- Acceptance criteria: an enforced lane asserts the deployed merge satisfies the same boundary the acceptance overlay claims, or the owner records a test-visible waiver naming the divergence and the acceptance evidence states which topology it was proved against.
+- Related findings: F-262, F-239, F-223 · nguồn: R7-C delta audit C4 — docker compose overlays and acceptance scripts
+
+### F-289 — the acceptance helper treats any nonzero exit as proof that the database rejected the statement, so the one-ACTIVE-index invariant can go unexercised while the lane prints passed
+
+- Category: F7 — Testing & Verification Gaps
+- Legacy register id: `R7-C4-02`
+- Affected modules: Gates + CI, Zink Knowledgebase
+- Severity: High
+- Status: OPEN
+- Root cause: the negative-case helper sets error handling aside, runs a statement through the container exec path, discards the error stream, and asserts only that the exit code was not zero. Exec failure, malformed SQL, a missing column, an authentication problem and the intended unique-violation all produce the same green result, so the assertion is satisfied by the command not running.
+- Evidence: Where: `infrastructure/docker/scripts/knowledge-t1.ps1:61-84` — the function body: `2>&1 | Out-Null` at `:73-74`, `$exitCode = $LASTEXITCODE` at `:75`, and `if ($exitCode -eq 0) { throw "Expected SQL command to fail but it succeeded." }` at `:81-83` · Where: `:161-177` — the two statements that rely on it to prove the one-active-index constraint · Where: `:242` — the success message the script prints when nothing was actually demonstrated.
+- Reproduction: static — any edit that breaks the second statement's syntax, or a run against a restarting database container, exits nonzero, the helper returns normally and the acceptance reports passed. A red test requires exit code 3 together with captured error text naming the constraint, and asserts the helper fails when no error text was produced; the SQL matrix in `tests/m3-t1-contract.test.mjs:190-191` is where the fixer adds the assertion.
+- Acceptance criteria: the helper asserts the specific constraint-violation signature and reddens on any other failure mode, and a mutation that makes the statement die for an unrelated reason turns the lane red.
+- Related findings: F-219, F-221, F-205 · nguồn: R7-C delta audit C4 — docker compose overlays and acceptance scripts
+
+### F-290 — the acceptance script fixes its compose project name and its fixture identifiers and resets nothing at entry, so a second run fails with an unrelated error and two overlapping runs destroy each other's database
+
+- Category: F3 — State & Lifecycle Integrity
+- Legacy register id: `R7-C4-03`
+- Affected modules: deployment topology, Gates + CI
+- Severity: Medium
+- Status: OPEN
+- Root cause: the project name is a constant and the fixture row identifiers are hardcoded, while the only state purge happens in the success path's finalisation. A run interrupted after the stack came up leaves the volume holding those exact identifiers, so the next run collides on the primary key and reports a compose exit-code failure that names nothing true; two concurrent runs share the same volume and whichever finalises first deletes the other's data mid-flight.
+- Evidence: Where: `infrastructure/docker/scripts/knowledge-t1.ps1:9` — the constant project name · Where: `:13-15` — three hardcoded UUIDs used as the fixture rows · Where: `:132-148` — the inserts that use them · Where: `:249-266` — teardown running only in the finalisation block with `down --volumes --remove-orphans` · Where: `infrastructure/docker/scripts/knowledge-t5.ps1:18-19` — the sibling derives its project name from a per-run identifier, which is the pattern this script lacks.
+- Reproduction: static — kill a run after the stack is up, rerun: the insert collides, psql exits nonzero and the operator reads a compose failure with exit code 3 rather than the real cause. A red test (or a documented precondition, pinned by a lane) asserts the script purges its own project state before building, or namespaces per run so two invocations cannot share a volume.
+- Acceptance criteria: two consecutive invocations with no manual cleanup both report passed, and two overlapping invocations use disjoint state; the invariant is asserted in a tracked lane rather than assumed.
+- Related findings: F-289, F-023, F-192 · nguồn: R7-C delta audit C4 — docker compose overlays and acceptance scripts
+
+### F-291 — acceptance finalisation throws from inside the finally block, so a cleanup failure replaces the real defect, and the sibling run drops the resource-leak error whenever the body already failed
+
+- Category: F1 — Logic & Functional Bugs
+- Legacy register id: `R7-C4-04`
+- Affected modules: deployment topology, Gates + CI
+- Severity: Medium
+- Status: OPEN
+- Root cause: three drivers implement finalisation differently. Two raise a cleanup error from inside their finally block, which in PowerShell replaces whatever failure the body was propagating, so the operator sees only the teardown complaint. The third records a finalisation error but then rethrows it only when the body did not fail, so on exactly the run where both went wrong the container or volume leak is never reported.
+- Evidence: Where: `infrastructure/docker/scripts/knowledge-t1.ps1:259-265` — inside the finally block, `if ($cleanupExitCode -ne 0) { throw "M3/T1 acceptance project cleanup failed with exit code …" }` · Where: `infrastructure/docker/scripts/knowledge-t3.ps1:168-177` — `try { Invoke-Compose @("down","--volumes","--remove-orphans") } finally { … }` inside the outer finally, and the compose helper itself throws on nonzero exit at `:25` · Where: `infrastructure/docker/scripts/knowledge-t5.ps1:269-287` — the finalisation error is captured at `:273` and `:280-282`, then emitted only `if ($null -ne $finalizationError -and -not $script:bodyFailed)` at `:287` · Where: `infrastructure/docker/scripts/knowledge-t5-common.ps1:591-603` — the helper that raises the leak message the driver discards.
+- Reproduction: static — with a failing teardown the first two scripts surface only the cleanup error and the primary defect is lost; with a body failure plus leftover containers the third names only the body error and the leak is never recorded. A red test asserts both conditions appear in the emitted evidence, and that the primary failure remains the thrown one.
+- Acceptance criteria: one shared finalisation contract across the three drivers — cleanup and leak conditions are always written to the evidence and named in the output, never silently dropped, and never substituted for the body's own failure.
+- Related findings: F-101, F-289, F-055 · nguồn: R7-C delta audit C4 — docker compose overlays and acceptance scripts
+
+### F-292 — the acceptance driver resolves the repository through git calls with no working-directory argument, so its attestation can describe a different tree than the files it packaged
+
+- Category: F2 — Security & Authorization
+- Legacy register id: `R7-C4-05`
+- Affected modules: governance records, deployment topology
+- Severity: Medium
+- Status: OPEN
+- Root cause: every consumed file is resolved from the script's own location, but the cleanliness check, the head revision and the blob object ids are read from whichever repository the invocation directory happens to be inside. This repository carries a registered stale worktree with full copies of these scripts, so the mismatch is reachable today: the candidate can be labelled with the other tree's revision and the self-check cannot notice, because the label comes from the same unqualified call.
+- Evidence: Where: `infrastructure/docker/scripts/knowledge-t5-common.ps1:74-79` — `function Assert-T5CleanRepository { $changes = @(git status --porcelain) … }` with no directory argument · Where: `:81-84` — `Get-T5RepositorySha` runs `git rev-parse HEAD` the same way · Where: `:103-108` — blob ids resolved with `git rev-parse "${Treeish}:$relativePath"` while the paths come from the script's own tree · Where: `infrastructure/docker/scripts/knowledge-t5.ps1:118-121` — the resolved sha is written into the evidence and into the image revision label · Where: `infrastructure/docker/scripts/knowledge-t5-remote.ps1:26-32` — the remote comparison built from the same resolution · Where: `git worktree list` currently returns the main tree plus `scratch/wt-discord-idle-reset` at an older revision.
+- Reproduction: static — from the stale worktree as the current directory, invoking the main tree's script resolves HEAD to the worktree's commit while packaging the main tree's compose files and manifests, and the internal consistency check passes because both labels came from the same wrong call. A red test asserts every git probe is pinned to the script tree and that the recorded tree path and revision are compared against the checkout the evidence packaged.
+- Acceptance criteria: all repository probes are invoked with an explicit directory argument bound to the script's own root, and the evidence records that root; a run started from a foreign tree fails with a message naming both revisions.
+- Related findings: F-261 (the stale worktree this depends on), F-219, F-097 · nguồn: R7-C delta audit C4 — docker compose overlays and acceptance scripts
+
+### F-293 — model-service response text is interpolated unescaped into the acceptance SQL literals, so a hostile or malformed tag response writes arbitrary statements
+
+- Category: F2 — Security & Authorization
+- Legacy register id: `R7-C4-06`
+- Affected modules: deployment topology, Zink Knowledgebase
+- Severity: Low
+- Status: HYPOTHESIS
+- Root cause: the acceptance scripts take fields straight out of the local model service's response and splice them into single-quoted SQL literals inside a here-string passed to the database client. The only validation is a truthiness test, so the value's shape is never constrained. Impact is bounded because the target is an ephemeral acceptance database, but the pattern is exactly the one the repository's safety rules forbid: untrusted response data used as command text.
+- Evidence: Where: `infrastructure/docker/scripts/knowledge-t1.ps1:119` — the guard is only `if (-not $model -or -not $model.digest)` · Where: `:137-147` — the insert with `'$($model.digest)'` at `:144` · Where: `:166-173` — the second statement repeating it · Where: `infrastructure/docker/scripts/knowledge-t3.ps1:157` and `knowledge-t5.ps1:174` — the same interpolation shape · Where: the response is fetched from the local tags endpoint by `Invoke-RestMethod`, so its fields are provider-controlled.
+- Reproduction: unconfirmed — a tags response carrying a digest containing a quote and a statement terminates inside the literal and produces two statements where one was intended. Before fixing, measure whether any lane or operator run feeds a non-validated endpoint; the intended assertion is a charset check plus parameter passing, exercised by a fixture whose digest contains a quote.
+- Acceptance criteria: every provider-derived value is validated against its documented shape before use and passed to the database client as a parameter rather than interpolated, and a fixture with a quote-bearing value proves the statement cannot be split.
+- Related findings: F-264, F-052, F-103 · nguồn: R7-C delta audit C4 — docker compose overlays and acceptance scripts
+
+### F-294 — the DuckDB timeout gate drives a test-supplied failure flag, and the only path that exercises the real bound sits behind a skip and inside a conditional assertion
+
+- Category: F7 — Testing & Verification Gaps
+- Legacy register id: `R7-C5-02`
+- Affected modules: Zink Tools, Gates + CI
+- Severity: Medium
+- Status: OPEN
+- Root cause: the gate that is supposed to prove bounded execution passes a flag that makes the function throw before any subprocess is started, so the timeout plumbing is never touched. The single test that does reach the real bound is both skipped whenever the engine probe fails and wrapped in a conditional that asserts nothing when the query answers quickly, and the declared ceiling clamp is never driven by any test. The lane therefore reports green for a resource control that has no executed proof.
+- Evidence: Where: `tests/duckdb-bridge.test.mjs:251-268` — the assertion is `assert.rejects(… { simulateTimeout: true, timeoutMs: 1000 })` · Where: `zink-tools/sql/duckdb-bridge.mjs:212-216` — that flag raises before any execution, while the real bound is the timeout argument at `:262` and the classified error at `:272` · Where: `tests/duckdb-bridge.test.mjs:270-272` and the later cases — `{ skip: duckDbSkip() }` · Where: the boundary case wraps its assertions in a conditional on the observed timeout, so a fast fixture contributes nothing · Where: `zink-tools/sql/duckdb-bridge.mjs:206-209` — the ceiling clamp that no test drives · Where: `.github/workflows/ci.yml` has no step installing the engine.
+- Reproduction: static mutation probe — delete the timeout argument passed to the child process and the suite stays green. A red test runs the module against a fixture executable that hangs, asserts the typed timeout code and that the child was killed, and separately asserts that an oversized requested timeout is clamped to the ceiling.
+- Acceptance criteria: one unskippable assertion proves the subprocess timeout is applied and the child reaped, the clamp is driven at its boundary, and removing either reddens the lane; the flag-driven case may remain but no longer counts as the control's evidence.
+- Related findings: F-304 (the probe that decides the skip), F-221, F-240 · nguồn: R7-C delta audit C5 — test validity, first half
+
+### F-295 — the ingress-registry eviction test compares an empty record against the shape an absent record also produces, so presence and eviction are indistinguishable
+
+- Category: F1 — Logic & Functional Bugs
+- Legacy register id: `R7-C5-03`
+- Affected modules: OpenClaw governance plugin
+- Severity: Medium
+- Status: OPEN
+- Root cause: the assertion that is meant to prove the oldest entry was evicted checks that its mention list equals an empty array, but the fixture never populates mention lists and the read path returns the same empty shape for a missing identifier — a fact the same file proves five lines later in the unknown-id test. Only the size bound is genuinely constrained, so eviction order can be inverted or absent and the suite stays green.
+- Evidence: Where: `tests/m10-t2-r5-host-inbound-metadata.test.mjs:284-293` — three hundred inserts, then `const first = readZinkIngressMetadata("154543000000100000"); assert.deepEqual(first.mentionedUserIds, []);` followed by the store-size bound · Where: `:299-307` — the unknown-identifier test asserting the identical empty shape, which is the proof that the eviction assertion cannot fail · Where: the fixture builder defaults mentioned users to an empty list · Where: the production eviction site whose order is unconstrained is `integrations/openclaw/native-patch.mjs:386`.
+- Reproduction: static mutation probe — change the eviction to remove the newest key and the test still passes. A red test writes records carrying distinct non-empty mention lists, asserts the newest identifier reads back its own list and the evicted identifier reads as absent, and drives the exact boundary at the capacity limit.
+- Acceptance criteria: the eviction assertion is falsifiable — it distinguishes a retained record with content from an absent record — and the boundary case at capacity and capacity-plus-one is exercised.
+- Related findings: F-219, F-240, F-296 · nguồn: R7-C delta audit C5 — test validity, first half
+
+### F-296 — the durability gate is a text search after the last rename in each file, so three of the four writers can lose their directory fsync and stay green
+
+- Category: F7 — Testing & Verification Gaps
+- Legacy register id: `R7-C5-04`
+- Affected modules: Workflow topology + ledger, governance records, Gates + CI
+- Severity: Medium
+- Status: OPEN
+- Root cause: the gate reads each writer's source, slices from the final occurrence of the rename call, and asserts that the remaining text mentions the fsync call. It never names a directory handle, never binds an fsync to a specific rename, and ignores every earlier rename in the same file — so the check is satisfied by one fsync anywhere after the last rename, whatever the other publication paths do.
+- Evidence: Where: `tests/m10-t2-r15-critical-path-invariants.test.mjs:166-178` — the writer list, `assert.match(src, /renameSync/u)`, then `const after = src.slice(src.lastIndexOf("renameSync")); assert.match(after, /fsyncSync/u, …)` · Where the claim is about: `integrations/openclaw/topology/lib/ledger.mjs:602-606`, `integrations/openclaw/lib/queue-manager.mjs:248-254`, `integrations/openclaw/lib/decision-ledger.mjs:293-305`, `integrations/openclaw/lib/artifact-validator.mjs:1389-1397`.
+- Reproduction: static mutation probe — in the ledger writer, retarget the fsync from the directory handle to the already-durable file handle: the rename becomes non-durable on crash and the gate stays green because the text still mentions fsync after the last rename. A red test opens a directory handle and fsyncs it between each rename and the next write, or drives the writer and asserts the syscall sequence.
+- Acceptance criteria: each rename site is individually proven to be followed by a directory fsync, and a mutation that re-targets or removes any one of them reddens the lane.
+- Related findings: F-221, F-219, F-140 · nguồn: R7-C delta audit C5 — test validity, first half
+
+### F-297 — the snapshot-target test wraps its assertions in the condition that is itself under test, so reclassifying one scope silences the check without failing it
+
+- Category: F7 — Testing & Verification Gaps
+- Legacy register id: `R7-C5-05`
+- Affected modules: governance records, Gates + CI
+- Severity: Low
+- Status: OPEN
+- Root cause: the test builds a set of declared scopes from the production pins and then runs its assertions only if that set contains the channel scope. Removing the scope from the pin removes the assertions rather than tripping them, and the preceding array check passes on an empty list. Consequence is limited because a sibling suite in the same lane asserts the same invariant unconditionally, which is why this is Low rather than Medium.
+- Evidence: Where: `tests/m10-t2-r22-publish-durability-and-bounded-backup.test.mjs:190-201` — `assert.ok(Array.isArray(channel));` then `if (scopes.has("discordChannel"))` guarding the only real loop of assertions · Where: `infrastructure/docker/scripts/…/native-patch.mjs` pins the scope values the set is derived from · Where: `tests/m10-t2-r8-deployment-snapshot-safety.test.mjs:127-141` asserts the same inclusion unconditionally.
+- Reproduction: static mutation probe — drop the channel scope from the pin and the guarded loop never executes while the test reports passed. A red test asserts the derived set is non-empty and that every declared scope value has a matching snapshot bucket before iterating.
+- Acceptance criteria: the assertion set cannot be emptied by changing production data — either the scope set is required non-empty, or the invariant is asserted unconditionally as the sibling already does.
+- Related findings: F-240, F-296, F-097 · nguồn: R7-C delta audit C5 — test validity, first half
+
+### F-298 — the lane that names the retry rule never attempts a retry, so widening the transient-failure class in production leaves it green
+
+- Category: F7 — Testing & Verification Gaps
+- Legacy register id: `R7-C5B-A`
+- Affected modules: Workflow topology + ledger, Gates + CI
+- Severity: Medium
+- Status: OPEN
+- Root cause: the case titled as the no-retry-path invariant drives a killed run and asserts only that its reason code belongs to the documented transient pair — which the file's own comment admits means the run is retryable. The behaviour the title claims (a reservation must be refused for a non-transient terminal state) is never performed: no reservation event is applied and no refusal is asserted, so the production classification set is unconstrained.
+- Evidence: Where: `tests/m7-lane-h1-state-replay-matrix.test.mjs:851-881` — outcome killed, then `assert.equal(["RUN_TIMEOUT","TRANSIENT_RUNTIME_FAILURE"].includes(…runtime_reason_code), true, …)` with the comment at `:866-868` stating the run IS retryable here · Where the control lives: `integrations/openclaw/topology/lib/workflow.mjs:1566` (`TRANSIENT_FAILURE_CLASS.has(run.runtime_reason_code)`) and the reconcile gate at `:487` · Where the positive half exists: `:758-849` proves a transient failure does retry, which is the only side actually exercised.
+- Reproduction: static mutation probe — remove the transient-class test from the reconcile path so every failure class becomes retryable, and the case still passes because it never issues a reservation. A red test drives a terminal run whose reason code is outside the transient set and asserts the reservation raises and the task stays blocked.
+- Acceptance criteria: the lane performs the refused-retry case it names, and deleting or widening the production transient class reddens it; the state vocabulary is imported from production rather than hand-copied, or a test asserts the copy equals it.
+- Related findings: F-206, F-219, F-240 · nguồn: R7-C delta audit C5B — test validity, second half
+
+### F-299 — the native-receipts containment case branches on the outcome under test and its positive branch asserts a test-built object is truthy
+
+- Category: F7 — Testing & Verification Gaps
+- Legacy register id: `R7-C5B-B`
+- Affected modules: OpenClaw governance plugin, Gates + CI
+- Severity: Medium
+- Status: OPEN
+- Root cause: the fixture reliably takes the allow path, because the plugin falls back to the recorded parent identity, and the assertion chosen for that branch is that a snapshot task object exists. That predicate holds for any task the test itself created, so the control the title names — a rejected ledger write must block the run — is only ever verified in the branch the fixture does not reach.
+- Evidence: Where: `tests/m7-lane-d3-native-receipts.test.mjs:210-223` — `if (decision.allow === true) { const after = readSnapshot(paths).tasks[taskId]; assert.ok(after); } else { …blocked and BLOCKED assertions… }`, with the comment at `:213-214` explaining that the plugin reconciles this input · Where: the production containment is the subagent-ended path in `integrations/openclaw/plugins/zink-governance/index.mjs` that must set the task to blocked when the write cannot be applied.
+- Reproduction: static mutation probe — make the production path never fail on an unreconcilable requester session so it always allows, and the case passes through the vacuous branch. A red test removes the conditional, constructs the input deterministically producing a rejected write, and asserts the block decision and the blocked status on that exact input.
+- Acceptance criteria: the case has one deterministic path with an assertion that is false when the containment is removed; no branch of the test may be satisfied by the mere existence of fixture state.
+- Related findings: F-219, F-298, F-088 · nguồn: R7-C delta audit C5B — test validity, second half
+
+### F-300 — the test that repeated attempts must not mutate the ledger runs no attempt and asserts only a property of the snapshot builder
+
+- Category: F7 — Testing & Verification Gaps
+- Legacy register id: `R7-C5B-C`
+- Affected modules: Zink Skill Store, governance records, Gates + CI
+- Severity: Low
+- Status: OPEN
+- Root cause: after building one transaction snapshot, the case asserts that none of the recorded preimage paths mention the ledger word. That is a fact about how the builder enumerates targets, not about whether repeated applies touch durable governance state: no attempt is run, no restore happens, and no ledger file is opened, so the named invariant is untested while the lane reports it green.
+- Evidence: Where: `tests/m8-t2.12-r15-attempt-identity.test.mjs:333-347` — `const snapshot = createTransactionSnapshot(rt); assert.equal(Object.keys(snapshot.files).some((rel) => rel.includes("ledger")), false, …)` with the comment at `:336-337` conceding that no apply path here touches the ledger · Where the behaviour lives: the transaction snapshot and apply path in `integrations/openclaw/` restore machinery.
+- Reproduction: static mutation probe — make the restore routine also rewrite a governance ledger path and the case still passes, since it never restores. A red test performs two applies against a tree containing a ledger file and asserts its bytes are unchanged after restore.
+- Acceptance criteria: the case drives repeated applies with a ledger file present and compares its bytes before and after; the preimage-shape check may stay as a secondary assertion but no longer stands as the evidence.
+- Related findings: F-299, F-221, F-101 · nguồn: R7-C delta audit C5B — test validity, second half
+
+### F-301 — the approval card tells the owner the result preview is attached, and no outbound path in the integration can attach a file
+
+- Category: F5 — Data Integrity & Result Correctness
+- Legacy register id: `R7-C6-01`
+- Affected modules: OpenClaw governance plugin, Zink Tools
+- Severity: High
+- Status: OPEN
+- Root cause: the preview renderer writes a PNG to disk and the card line inserts only its base name, while the posting helper takes no file parameter and the transport builds a JSON body. One card variant goes further and prints that the image is attached. The owner therefore approves work believing they have seen a rendered preview of it, when the artefact never leaves the host — and the governance policy that makes a real preview mandatory is satisfied by a claim.
+- Evidence: Where: `integrations/openclaw/lib/discord-result-preview.mjs:139-145` — the file is written and the path returned · Where: `integrations/openclaw/lib/discord-formatter.mjs:699-701` — the card prints the expected-result image line with the sanitised base name · Where: `:892-896` — a sibling card line ends with the text asserting it is attached · Where: `integrations/openclaw/lib/discord-forum-tags.mjs:617-627` — the thread-opening helper's parameter list contains no file, attachment or payload-bytes argument · Where: a repo-wide grep for the multipart encoding, the form-data type and the message-files parameter across `integrations/openclaw/lib` and `plugins` returns no match, and the only attachments references are inbound event fields.
+- Reproduction: static — any first-spawn approval produces a body naming the PNG base name while the request carries no file part; the evidence directory holds the image the owner never sees. A red test captures the outbound request for an approval post with a non-null preview and asserts the body is a multipart payload containing the image bytes.
+- Acceptance criteria: either the outbound path attaches the rendered bytes and a captured request proves it, or the card stops claiming a preview image and the mandatory-preview rule in the policy is withdrawn in the same change. Silently dropping the renderer is not acceptable while the rule still requires it.
+- Related findings: F-259, F-077, F-302 · nguồn: R7-C delta audit C6 — orphan runtime files and contracts
+
+### F-302 — the preview renderer's table inputs have no producer, so every generated image is the placeholder layout while the plan data that would fill it is in scope
+
+- Category: F1 — Logic & Functional Bugs
+- Legacy register id: `R7-C6-02`
+- Affected modules: OpenClaw governance plugin
+- Severity: Medium
+- Status: OPEN
+- Root cause: the renderer accepts declared columns and sample rows and falls back to a labelled placeholder header, but its only production caller passes a target, a title, a truncated note string and an output directory. The fallback is therefore the only path that ever runs, and the governed task nodes carrying the declared criteria are read in the same function for the text card one statement later — the data exists and is simply not handed to the image.
+- Evidence: Where: `integrations/openclaw/lib/discord-result-preview.mjs:71-76` — the parameters default to empty collections and `const headers = headerRow.length > 0 ? headerRow : [UNKNOWN_COLUMN];` · Where the placeholder is defined in the same module · Where: `integrations/openclaw/plugins/zink-governance/index.mjs:6736-6744` — the only call site, with no columns or rows key · Where: `:6774` — the same scope builds plan nodes for the text card.
+- Reproduction: static — every image produced by the governed path renders the placeholder header and a predicted row, so a red test spies the renderer from the card path and asserts a non-empty column set for a task whose nodes declare criteria. Deleting the renderer to make the assertion pass is blocked by F-301's acceptance line.
+- Acceptance criteria: for a task whose snapshot nodes declare validation criteria or inputs, the rendered table's header is not the placeholder value, proved by a test that drives the real card path.
+- Related findings: F-301, F-259 · nguồn: R7-C delta audit C6 — orphan runtime files and contracts
+
+### F-303 — the two tool envelopes resolve only through repo-relative and working-directory paths that packaging does not ship, and the failure is swallowed as a generic schema error
+
+- Category: F4 — Integration & Contract Violations
+- Legacy register id: `R7-C6-03`
+- Affected modules: OpenClaw governance plugin, Zink Tools, Gates + CI
+- Severity: High
+- Status: LATENT
+- Root cause: the contract resolver walks a candidate list whose first entries are the topology directory and its tools subdirectory, then two repo-relative walks, then two working-directory lookups. Packaging copies only the topology contracts and rewrites only the topology-relative specifier, so in a flattened installed tree the two envelope files have no candidate that can exist, and the guard converts the resulting not-found into an undifferentiated validation failure. Whether the live host masks this depends on the working directory it happens to run with, which no lane measures — hence LATENT with the mechanism confirmed.
+- Evidence: Where: `integrations/openclaw/topology/lib/schema.mjs:118-156` — the candidate list, ending in two `process.cwd()` resolutions, and `return null` when none exists · Where: `integrations/openclaw/lib/policy.mjs:1238-1242` — packaging assets are built from the topology contracts directory only · Where: `integrations/openclaw/topology/lib/guard.mjs:1571-1576` — `try { validateContractSchema("tool-call", event.params); } catch { fail("SCHEMA_VALIDATION_FAILED"); }`, which erases a missing-file cause from a malformed-payload symptom · Where: `tests/fixtures/r10-policy-load-probe.mjs:136-160` — the off-repo load probe calls only session and agent operations, never a governed tool, so the envelope path is never exercised outside the repository · Where: `tests/m7-t3-tools-contract.test.mjs:393` runs the same validator from the repository working directory, where a candidate always exists.
+- Reproduction: static — with the working directory set to an empty temporary tree, resolving the two envelope names returns null and validation reports the schema was not found; extend the existing off-repo probe to call the envelope validator and it reddens. The fix must either ship the tool contracts with the plugin or drop working-directory resolution.
+- Acceptance criteria: contract resolution never consults the working directory, the packaged tree resolves every contract the guard validates, and the off-repo probe exercises a governed tool call; a missing contract file is reported with its own reason code rather than folded into a generic validation failure.
+- Related findings: F-252, F-128, F-144 · nguồn: R7-C delta audit C6 — orphan runtime files and contracts
+
+### F-304 — the availability probe folds every failure into "engine not installed", so a hanging or broken DuckDB retires six SQL gates that still report success
+
+- Category: F7 — Testing & Verification Gaps
+- Legacy register id: `R7-C6-04`
+- Affected modules: Gates + CI, Zink Tools
+- Severity: High
+- Status: OPEN
+- Root cause: one catch-all turns a missing binary, a timed-out probe, a permission error and a nonzero exit into the same false value, and the skip helper derived from it returns a message that asserts the engine is absent. Because the test runner treats a skip reason as a skipped test and the lane still exits zero, a partially installed or misbehaving engine silently withdraws the SQL safety coverage while every consumer reports green; no gate counts the skips or verifies the engine's presence.
+- Evidence: Where: `tests/helpers/duckdb-availability.mjs:27-45` — `execFileSync("duckdb", ["-c","SELECT 1"], { timeout: 15000, … })` with `catch { cached = false; }`, and the skip text "DuckDB engine not installed on this host (NOT RUN)" · Where it is consumed: `tests/duckdb-bridge.test.mjs:22,272,292,306,328` and `tests/m7-t4-orchestration.test.mjs:123` · Where nothing checks: a grep for skip or pass-count accounting in `scripts/repository-check.mjs` returns no matches, and no CI step installs the engine before `npm run verify`.
+- Reproduction: static — make the probe time out (a slow or corrupt install) and every dependent gate is reported skipped while the suite passes; the reason recorded is factually wrong. A red test distinguishes the causes — only an absent binary yields NOT RUN, a failed presence check reddens the lane — and one gate records which condition occurred.
+- Acceptance criteria: the probe reports its cause, a non-ENOENT failure reddens the suite, and the release evidence states the engine status per lane rather than inferring it from a skip.
+- Related findings: F-294, F-221, F-197 · nguồn: R7-C delta audit C6 — orphan runtime files and contracts
+
+### F-305 — the preview rasteriser performs no redaction of its own, unlike every other Discord-visible surface
+
+- Category: F2 — Security & Authorization
+- Legacy register id: `R7-C6-06`
+- Affected modules: OpenClaw governance plugin
+- Severity: Low
+- Status: HYPOTHESIS
+- Root cause: the renderer turns note text, columns and rows into image cells without invoking the sanitiser or the forbidden-pattern checks that every text surface applies, so its safety depends entirely on each caller pre-sanitising. Today's caller does sanitise upstream, which is why this is filed as a hypothesis rather than an open exposure: the defect is the missing local control, and it becomes live the moment a second caller passes producer-derived content.
+- Evidence: Where: `integrations/openclaw/lib/discord-result-preview.mjs:71-102` — the table builder stringifies inputs with no sanitise call · Where the sibling rule lives: `integrations/openclaw/lib/discord-formatter.mjs:12-31` defines the identifier sanitiser and the forbidden-pattern set used by every card path · Where the current caller compensates: `integrations/openclaw/plugins/zink-governance/index.mjs:6983` sanitises the task before the preview is built, and `integrations/openclaw/topology/lib/runtime.mjs:86-92` carries the secret-pattern replacements.
+- Reproduction: unconfirmed — no second caller exists today, so nothing to observe; the falsifiable version is a test that passes an unsanitised note or row through the renderer and asserts the secret pattern never reaches the rasterised grid. Before fixing, measure whether the renderer should own the control or the callers should be required to.
+- Acceptance criteria: either the renderer sanitises every inbound string itself and a test proves a token-shaped input cannot survive into the image, or the module's contract states that it accepts pre-sanitised data and a gate rejects unsanitised arguments at the seam.
+- Related findings: F-259, F-301, F-302 · nguồn: R7-C delta audit C6 — orphan runtime files and contracts
