@@ -22,6 +22,7 @@
 // temporary filesystem, so persistence, integrity and recovery are exercised for
 // real without WSL, systemctl, or a live OpenClaw process.
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -35,6 +36,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { applyRuntime } from "../integrations/openclaw/topology/fixtures/runtime-regression/apply-orchestration.mjs";
 import {
@@ -1046,6 +1048,168 @@ test("R12 H2: FALSIFICATION — without orphan detection the runtime is ambiguou
     } finally {
       rt.dispose();
     }
+  }
+});
+
+// F-225: the command that OWNS this gate must stop when it refuses.
+//
+// `operator-rollback.mjs` hardcodes the live host's state and runtime roots, so
+// these cases drive a copy of the shipped file whose two root literals point at the
+// synthetic runtime above and whose relative imports are absolute file URLs. The
+// `systemctl` literal is replaced with a binary that cannot exist: the service
+// restart is not what a refusal is about, and no test lane may be able to restart a
+// real gateway if this file ever regresses again. Every substitution asserts it
+// landed exactly once, and the copy is checked for any remaining live-host path, so
+// a future edit that adds a third root fails here instead of mutating the operator's
+// machine.
+const ROLLBACK_CLI = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "integrations",
+  "openclaw",
+  "topology",
+  "fixtures",
+  "runtime-regression",
+  "operator-rollback.mjs",
+);
+const STATE_DIR_LITERAL = 'const stateDir = "/home/hoang_vinh/.openclaw-zink";';
+const RUNTIME_ROOT_LITERAL =
+  'const runtimeRoot = "/home/hoang_vinh/.local/lib/node_modules/openclaw";';
+
+function substituteOnce(src, needle, replacement, label) {
+  const found = src.split(needle).length - 1;
+  assert.equal(
+    found,
+    1,
+    `${label} must appear exactly once in the shipped command, found ${found}`,
+  );
+  return src.split(needle).join(replacement);
+}
+
+function buildRollbackCommand(rt) {
+  let src = readFileSync(ROLLBACK_CLI, "utf8");
+  src = substituteOnce(
+    src,
+    STATE_DIR_LITERAL,
+    `const stateDir = ${JSON.stringify(rt.stateDir)};`,
+    "stateDir literal",
+  );
+  src = substituteOnce(
+    src,
+    RUNTIME_ROOT_LITERAL,
+    `const runtimeRoot = ${JSON.stringify(rt.runtimeRoot)};`,
+    "runtimeRoot literal",
+  );
+  src = src.replace(
+    /from "(\.[^"]*)"/g,
+    (_match, spec) =>
+      `from ${JSON.stringify(
+        pathToFileURL(path.resolve(path.dirname(ROLLBACK_CLI), spec)).href,
+      )}`,
+  );
+  src = substituteOnce(
+    src,
+    '"systemctl"',
+    '"zink-service-restart-is-forbidden-in-tests"',
+    "systemctl literal",
+  );
+  assert.equal(
+    src.includes("/home/hoang_vinh"),
+    false,
+    "the copy under test must carry no live-host path",
+  );
+  assert.equal(
+    src.includes('"systemctl"'),
+    false,
+    "the copy under test must not be able to restart a real service",
+  );
+  const file = path.join(rt.root, "operator-rollback-under-test.mjs");
+  writeFileSync(file, src, "utf8");
+  return file;
+}
+
+function refusalRecords(stdout) {
+  return stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line !== "");
+}
+
+test("R12 I: a refused argument ends the command at once, reporting one refusal", () => {
+  const rt = buildRuntime();
+  try {
+    const before = readFileSync(
+      path.join(rt.dist, "selection-DopzNY3I.js"),
+      "utf8",
+    );
+    const run = spawnSync(
+      process.execPath,
+      [buildRollbackCommand(rt), "--force"],
+      { encoding: "utf8" },
+    );
+    const lines = refusalRecords(run.stdout);
+    assert.equal(
+      lines.length,
+      1,
+      `one refusal must produce exactly one record, got ${lines.length}: ${JSON.stringify(run.stdout)}`,
+    );
+    const record = JSON.parse(lines[0]);
+    assert.equal(record.status, "FAIL");
+    assert.equal(record.reason, RECOVERY_REFUSALS.UNSUPPORTED_ARGUMENT);
+    assert.equal(record.installed_mutation, false);
+    assert.equal(run.status, 1, "a refused recovery exits non-zero");
+    assert.equal(run.stderr, "");
+    assert.equal(
+      readFileSync(path.join(rt.dist, "selection-DopzNY3I.js"), "utf8"),
+      before,
+      "a refused recovery must not touch the runtime",
+    );
+  } finally {
+    rt.dispose();
+  }
+});
+
+test("R12 J: an unauthorized recovery ends at the authorization gate, not past it", () => {
+  const rt = buildRuntime();
+  try {
+    // Full arguments, valid target, explicit confirmation — and no recovery
+    // authorization on disk. The backup being present is exactly the condition
+    // the gate must not mistake for permission.
+    const run = spawnSync(
+      process.execPath,
+      [
+        buildRollbackCommand(rt),
+        "--target=r12-t1-baseline",
+        `--confirm=${RECOVERY_CONFIRMATION}`,
+      ],
+      { encoding: "utf8" },
+    );
+    const lines = refusalRecords(run.stdout);
+    assert.equal(
+      lines.length,
+      1,
+      `one refusal must produce exactly one record, got ${lines.length}: ${JSON.stringify(run.stdout)}`,
+    );
+    const record = JSON.parse(lines[0]);
+    assert.equal(record.status, "FAIL");
+    assert.equal(record.reason, RECOVERY_REFUSALS.RECOVERY_NOT_AUTHORIZED);
+    assert.equal(record.installed_mutation, false);
+    assert.equal(run.status, 1);
+    assert.equal(run.stderr, "");
+    // The native tree stays patched. On a host that honors 0600 on the identifier
+    // file this is the call the unfixed command reached before it stopped.
+    assert.equal(
+      readFileSync(path.join(rt.dist, "selection-DopzNY3I.js"), "utf8"),
+      R7_SELECTION,
+      "the no-authorization probe must leave the native tree patched",
+    );
+    // The historical recovery evidence is retained and untouched either way.
+    assert.equal(
+      readFileSync(path.join(rt.r12, "t1-config.json"), "utf8"),
+      '{\n  "meta": "T1" }\n',
+    );
+  } finally {
+    rt.dispose();
   }
 });
 

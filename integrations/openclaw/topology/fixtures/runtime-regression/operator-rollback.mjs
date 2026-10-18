@@ -74,6 +74,11 @@ const authorizationPath = path.join(
   "operator/m7-t2/recovery-authorization.json",
 );
 
+// A refusal is terminal, so it unwinds out of the try below instead of running on
+// into the restore it was meant to gate. `configure.mjs` and `verify.mjs` stop the
+// same way — throw, report once from the one catch — and neither calls `process.exit`.
+class RecoveryRefused extends Error {}
+
 function refuse(refusal, extra = {}) {
   process.stdout.write(
     `${JSON.stringify({
@@ -86,6 +91,7 @@ function refuse(refusal, extra = {}) {
     })}\n`,
   );
   process.exitCode = 1;
+  throw new RecoveryRefused(refusal);
 }
 
 function identifiers() {
@@ -138,25 +144,32 @@ try {
     })}\n`,
   );
 } catch (error) {
-  // Only a fixed, disclosable reason. Never a path, never child stderr.
-  const known = [
-    "NATIVE_RESTORE_FAILED",
-    "RESTORE_QUARANTINE_CONFLICT",
-    "RESTORE_VERIFICATION_FAILED",
-    "BACKUP_MANIFEST_INVALID",
-    "NATIVE_BACKUP_MANIFEST_INVALID",
-    "INVALID_IDENTIFIER_FILE",
-  ];
-  process.stdout.write(
-    `${JSON.stringify({
-      status: "FAIL",
-      reason: known.includes(error?.message)
-        ? error.message
-        : "HISTORICAL_RECOVERY_FAILED",
-      action: "HISTORICAL_RECOVERY",
-      isTransactionRollback: false,
-      installed_mutation: true,
-    })}\n`,
-  );
-  process.exitCode = 1;
+  if (error instanceof RecoveryRefused) {
+    // `refuse()` already wrote the single record this command may emit for a
+    // refusal, and nothing was installed. Reporting again here would claim a
+    // mutation the refusal prevented.
+    process.exitCode = 1;
+  } else {
+    // Only a fixed, disclosable reason. Never a path, never child stderr.
+    const known = [
+      "NATIVE_RESTORE_FAILED",
+      "RESTORE_QUARANTINE_CONFLICT",
+      "RESTORE_VERIFICATION_FAILED",
+      "BACKUP_MANIFEST_INVALID",
+      "NATIVE_BACKUP_MANIFEST_INVALID",
+      "INVALID_IDENTIFIER_FILE",
+    ];
+    process.stdout.write(
+      `${JSON.stringify({
+        status: "FAIL",
+        reason: known.includes(error?.message)
+          ? error.message
+          : "HISTORICAL_RECOVERY_FAILED",
+        action: "HISTORICAL_RECOVERY",
+        isTransactionRollback: false,
+        installed_mutation: true,
+      })}\n`,
+    );
+    process.exitCode = 1;
+  }
 }
