@@ -64,37 +64,59 @@ sai chức năng hoặc logic nghiệp vụ → F1.
 
 ## 1. hiện trạng queue
 
-Tổng **236** bug đang mở/đang chờ, chia theo nhóm:
+Tổng **259** bug đang mở/đang chờ, chia theo nhóm:
 
 | Nhóm     | Nội dung                                                              | Bug     | Critical | High | Medium | Low | Ungraded |
 | -------- | --------------------------------------------------------------------- | ------- | -------- | ---- | ------ | --- | -------- |
-| F1       | Logic & Functional Bugs — Lỗi logic, sai chức năng                    | 19      | 0        | 5    | 8      | 4   | 2        |
-| F2       | Security & Authorization — Lỗi bảo mật và phân quyền                  | 36      | 3        | 16   | 14     | 3   | 0        |
-| F3       | State & Lifecycle Integrity — Lỗi trạng thái và vòng đời              | 51      | 2        | 18   | 25     | 4   | 2        |
-| F4       | Integration & Contract Violations — Lỗi tích hợp và vi phạm hợp đồng  | 41      | 0        | 17   | 20     | 4   | 0        |
-| F5       | Data Integrity & Result Correctness — Lỗi toàn vẹn dữ liệu và kết quả | 39      | 1        | 14   | 21     | 3   | 0        |
-| F6       | Reliability & Performance — Lỗi độ tin cậy và hiệu năng               | 14      | 0        | 3    | 9      | 2   | 0        |
-| F7       | Testing & Verification Gaps — Thiếu kiểm thử và xác minh              | 36      | 0        | 10   | 23     | 3   | 0        |
-| **Tổng** |                                                                       | **236** | 6        | 83   | 120    | 23  | 4        |
+| F1       | Logic & Functional Bugs — Lỗi logic, sai chức năng                    | 20      | 0        | 5    | 8      | 5   | 2        |
+| F2       | Security & Authorization — Lỗi bảo mật và phân quyền                  | 41      | 3        | 19   | 15     | 4   | 0        |
+| F3       | State & Lifecycle Integrity — Lỗi trạng thái và vòng đời              | 55      | 2        | 21   | 25     | 5   | 2        |
+| F4       | Integration & Contract Violations — Lỗi tích hợp và vi phạm hợp đồng  | 43      | 0        | 18   | 21     | 4   | 0        |
+| F5       | Data Integrity & Result Correctness — Lỗi toàn vẹn dữ liệu và kết quả | 41      | 1        | 15   | 22     | 3   | 0        |
+| F6       | Reliability & Performance — Lỗi độ tin cậy và hiệu năng               | 19      | 0        | 4    | 13     | 2   | 0        |
+| F7       | Testing & Verification Gaps — Thiếu kiểm thử và xác minh              | 40      | 0        | 10   | 26     | 4   | 0        |
+| **Tổng** |                                                                       | **259** | 6        | 92   | 130    | 27  | 4        |
 
-Theo trạng thái: OPEN 196 · EXCLUDED 12 · LATENT 12 · REFUTED 6 · PARTIAL 5 · HYPOTHESIS 4 · BLOCKED 1.
+Theo trạng thái: OPEN 214 · EXCLUDED 12 · LATENT 15 · REFUTED 8 · PARTIAL 5 · HYPOTHESIS 4 · BLOCKED 1.
 
 Hai lần cập nhật trong ngày 2026-10-17, ghi lại để arithmetic không bị hiểu là số của vòng audit: `F-038`/`R6-HUNT-01`
 đi từ OPEN xuống PARTIAL sau phép đo dưới grant `e`; lượt duyệt `b2` sau đó xóa 5 hàng (4 hàng đóng bằng commit + test
 chạy lại, 1 hàng trùng id), đổi 5 hàng sang REFUTED vì premise bị đo chết, và điền chữ thật vào 59 cặp field của nhóm
 Critical/High.
 
-Vòng audit R7 (2026-10-17, delta) thêm 17 hàng `F-225`–`F-241`, lấy `Legacy register id` theo assignment `R7-D1`–`R7-D7`.
-Nó phủ đúng phần tree mà sáu vòng trước chưa từng trích bằng path: 13 file `zink-tools/contracts/**`, package `apps/knowledge/pdf-runtime`,
-16 file `infrastructure/**`, 21 file `integrations/openclaw/topology/**` (policy JSON + contract schema), 8 provider adapter, và các file config
-mồ côi. Số đo phủ: 99/300 file nguồn bị track có mặt trong register trước vòng này.
+Vòng audit R7 (2026-10-17 → 2026-10-18, delta) thêm 46 hàng `F-225`–`F-270`, `Legacy register id` theo assignment
+`R7-D1`–`R7-D13`, gồm hai đợt; đối chiếu cuối vòng (`D9`) rút lại **6** hàng trùng root cause với hàng đã có
+(`F-231`/`F-232`/`F-233` → F-125, `F-246` → F-059, `F-256` → F-166, `F-270` → F-205) và viết lại **11** hàng khác vì
+severity hoặc premise của chúng không đứng ở HEAD (`F-226`, `F-228`, `F-229`, `F-234`, `F-242`, `F-248`, `F-249`, `F-251`,
+`F-252`, `F-262` — hàng này bị refuted một nửa rồi ghi lại hẹp hơn, `F-269`). Net vòng delta để lại **40** hàng.
+
+Hai đợt mở đúng những vùng mà sáu vòng trước chưa từng trích: đợt đầu (D1–D7, `F-225`–`F-241`) vào 13 schema
+`zink-tools/contracts/**`, package `apps/knowledge/pdf-runtime`, script của `infrastructure/**`, policy JSON + contract
+schema của `integrations/openclaw/topology/**`, provider adapter và các file config mồ côi; đợt hai (D8, D10A/B, D11A/B,
+D12A/B, D13, `F-242` trở đi) phủ chính xác những gì đợt một tự khai ở mục "chưa inspect" trong report của nó — `guard.mjs`
+đọc trọn file, `authority.mjs`, `database.py`/`config.py`/`main.py` của Knowledgebase, các surface trong
+`integrations/openclaw/lib/`, 12 contract schema của topology đối chiếu reducer, census nhánh skip của 122 file test, và
+toàn bộ script `.ps1`/`.sh` của `infrastructure/docker/scripts/`. Mở không có nghĩa là ra hàng: dedupe theo root cause đã
+thưa nhiều claim về hàng cũ, và đọc mà không thấy lỗi thì register không có gì để ghi.
+
+Số đo phủ, đo lại bằng `temp/coverage-probe3.mjs` trên `git ls-files` (300 file nguồn bị track): **113/300** trước vòng,
+**160/300** sau vòng. Hai con số 99/300 → 137/300 ghi ở bản trước của đoạn này là **sai và bị rút**: predicate đo liệt kê
+`js` trước `json` trong nhóm phần mở rộng, nên mọi path `.schema.json` bị cắt thành `.schema.js` và không khớp file tracked
+nào. Vùng vẫn chưa có hàng tính theo path được trích: `tests` 69/122, `apps/knowledge` 29/48 (kể cả 7 file
+`pdf-runtime/src`), `infrastructure/docker` 10/21, `zink-tools/contracts` 9/13, `zink-tools/adapters` 8/12 — vòng delta vì
+vậy **chưa complete**, và đó là phần còn lại nếu chủ cho chạy tiếp. Mọi hàng của cả hai đợt đều được Lead tự mở lại
+locator ở HEAD trước khi ghi; các claim không tự kiểm chứng được thì không ghi.
 
 `R7-D*` là id **của vòng delta 2026-10-17**, không tra được về register sáu vòng (id `R7-` duy nhất ở đó là `R7-GATE-01`,
 đã đóng ở §2). Xuất xứ, phán quyết của chủ cho vòng đó, và kết quả đọc lại cả 17 locator ở HEAD: `PLAN.md` §8, record
 `the 17 rows this record under-counted`. Cả 17 hàng đều đã được phiên này tự kiểm tra lại path và khoảng dòng trước khi giữ.
 
-Còn **40** bug chưa có `Acceptance criteria` và **91** bug chưa có bước tái hiện — toàn bộ là nhóm Medium/Low/Ungraded,
-tức phần `b2` chưa chạy tới (47/110 trước lượt `b2-m1…m3`). 23 bug vẫn lấy root cause từ chính kết luận ở tiêu đề. Đó là
+Còn **40** bug chưa có `Acceptance criteria` (32 Medium, 6 Low, 2 Ungraded) và **73** bug chưa có bước tái hiện (62
+Medium, 10 Low, 1 Ungraded) đo lại trên 259 hàng sau vòng R7; bản trước ghi 91 bug thiếu bước tái hiện, số đó giảm vì mọi
+hàng R7 đều mang hai field này. Toàn bộ nằm ở nhóm Medium/Low/Ungraded, tức phần `b2` chưa chạy tới. Ngoặc "(47/110 trước
+lượt `b2-m1…m3`)" của bản trước bị rút: 110 là số hàng còn thiếu ở một thời điểm đo, 47 là số hàng một lượt khác báo đã
+điền, hai con số không cùng một phép đo nên không đặt cạnh nhau được. 23 bug vẫn lấy root cause từ chính kết luận ở tiêu
+đề — con số của lượt `b2`, chưa đo lại. Đó là
 nợ quy trình của vòng audit (audit chỉ đọc, không chạy tái hiện), không phải lỗi của hàng đợi: bug nào thiếu thì bước 1 và
 bước 2 của nội quy mục 0.2 là bắt buộc.
 
@@ -236,10 +258,10 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Legacy register id: `R1-A10-06`
 - Affected modules: Zink Skill Store, Zink Tools
 - Severity: Medium
-- Status: OPEN
+- Status: OPEN · premise changed 2026-10-18: all three locators drifted; the defect is unchanged. The no-op taxonomy check is `zink-tools/common/semantic-contract.mjs:417-424` (not `skill-adapter.mjs:531-539`), `canonicalSecondaryTopics = []` is `zink-skill-store/src/vector-sync.mjs:6
 - Root cause: any request using the contract-declared secondary_topics filter returns NO_MATCH even when the skill exists, indistinguishable from "no such skill"; unknown primary_topic values pass to SQL and also return NO_MATCH — silent false negatives fed to the agent.
 - Evidence: Where: zink-skill-store/src/vector-sync.mjs:684 (canonicalSecondaryTopics = []); skill-adapter.mjs:531-539; zink-tools/common/semantic-contract.mjs:391-395 · Evidence: the taxonomy check is literally void knownTopics.includes(metadataFilters.primary_topic); — computed and discarded, commented "Non-fatal … not exposed".
-- Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc zink-skill-store/src/vector-sync.mjs:684 (canonicalSecondaryTopics = []); skill-adapter.mjs:531-539; zink-tools/common/semantic-contract.mjs:391-395 ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng two declared skill-search filters can never match: secondary_topics is always empty and the primary_topic check is a no-op trước khi sửa (nội quy mục 3).
+- Reproduction: Static, then one assertion in `tests/m8-t1-skill-vector-memory.test.mjs` (it already imports `prepareQueryEmbedding` and exercises `secondary_topics`). Measured at HEAD: `zink-skill-store/src/vector-sync.mjs:685` sets `const canonicalSecondaryTopics = [];` with the comment that canonical manifests have no `metadata` key, and passes it as `tags` to `deriveSemanticMetadata`, so `c.secondary_topics` is written empty for every skill; `zink-tools/common/semantic-contract.mjs:389-395` still forwards a caller's `secondary_topics` into `metadataFilters`, and `skill-adapter.mjs:548-556` turns it into `c.secondary_topics && ARRAY[...]::text[]` — an overlap test against a column that is always `{}`, so the filter can only ever remove rows. Assert that a search carrying a `secondary_topics` filter returns the same rows as the same search without it. Second half: `semantic-contract.mjs:417-424` computes `const knownTopics = Object.values(KNOWN_TAXONOMY_MAP).map((t) => t.primary_topic);` and then discards it with `void knownTopics.includes(metadataFilters.primary_topic);`, its own comment saying the result is not exposed — assert that an unknown `primary_topic` is either rejected or reported, not silently accepted.
 - Acceptance criteria: Register chưa có acceptance line. Khi sửa phải viết acceptance từ trạng thái đúng ngược lại tiêu đề "two declared skill-search filters can never match: secondary_topics is always empty and the primary_topic check is a no-op", và acceptance đó là điều kiện duy nhất được phép xóa bug này khỏi file (nội quy mục 6).
 - Related findings: adjudication Vòng 2: Verified · nguồn: A10 — Zink Tools, adapters and execution contracts
 
@@ -262,10 +284,10 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Legacy register id: `R1-A16-08`
 - Affected modules: Zink Tools
 - Severity: Medium
-- Status: OPEN — _(third member of the payload-vs-context identity family with R1-A04-08 and R1-A10-04)_
+- Status: OPEN — _(third member of the payload-vs-context identity family with R1-A04-08 and R1-A10-04)_ · premise changed 2026-10-18: two locators drifted: the model-supplied destructure is `skill-adapter.mjs:774-781` (not `:757-764`) and the identity fallback is `:902-903` (not `:885-886`); `index.mjs:3449-3454`, `:3745-3746` and `:1113` all still hold
 - Root cause: the owner approves a skill whose recorded proposer is the constant "specialist"; retrieval correlation is unlinkable to any run. M8-061 is asserted only at the wrapper (index.mjs:4194-4199).
 - Evidence: Where: zink-tools/adapters/skill-store/skill-adapter.mjs:757-764 (requesting_agent from model input), :885-886 (requesting_agent || context?.agentId || "specialist"); the plugin ctx supplies requestingAgent, never agentId (index.mjs:3449-3455), so the trusted fallback is dead by key mismatch; consumers index.mjs:3745-3746, canonical stamp :1113
-- Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc zink-tools/adapters/skill-store/skill-adapter.mjs:757-764 (requesting_agent from model input), :885-886 (requesting_agent || context?.agentId || "specialist"); the plugin ctx supplies requestingAgent, never agentId (index.mjs:3449-3455), so the trusted… ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng skill-loop actor identity is re-derived a third way; the durable proposal records a constant, not the agent trước khi sửa (nội quy mục 3).
+- Reproduction: Static, then gate it in `tests/m7-t5-remediation.test.mjs`, which already drives `executeGovernedSkillQuery`. Measured at HEAD: `skill-adapter.mjs:774-781` destructures `requesting_agent` straight out of the model-supplied `input`, and `:902-903` stamps the durable proposal with `requesting_agent: requesting_agent || context?.agentId || "specialist"`. The trusted fallback is dead by key mismatch — the plugin builds its context at `index.mjs:3449-3454` as `{ sessionKey, runId, taskId, requestingAgent: deriveTrustedRequester(_id) }`, so `context.agentId` is always `undefined` and a payload that omits the field records the literal string `specialist` instead of the real agent. Downstream, `index.mjs:3745-3746` prefers the proposal's own value over the trusted `ctx.requestingAgent`, and `:1113` writes `requestingActor: stored.requesting_agent ?? "unknown"` into the canonical provenance stamp. Call `propose` with a payload whose `requesting_agent` names a different agent than the trusted context and assert the recorded proposal carries the context's identity; then call it with the field omitted and assert the record is not `specialist`.
 - Acceptance criteria: Register chưa có acceptance line. Khi sửa phải viết acceptance từ trạng thái đúng ngược lại tiêu đề "skill-loop actor identity is re-derived a third way; the durable proposal records a constant, not the agent", và acceptance đó là điều kiện duy nhất được phép xóa bug này khỏi file (nội quy mục 6).
 - Related findings: adjudication Vòng 2: Verified with correction, raised to High · bug mở: R1-A04-08, R1-A10-04 · nguồn: A16 — independent end-to-end traceability
 
@@ -275,10 +297,10 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Legacy register id: `R2-B08-04`
 - Affected modules: OpenClaw host install (npm)
 - Severity: Medium
-- Status: OPEN
+- Status: OPEN · premise changed 2026-10-18: the file is `integrations/openclaw/topology/lib/native-patch.mjs`, not `integrations/openclaw/lib/native-patch.mjs`; `:169` does not reference the constant (it is `return path.join(root, "dist", file);`), and the two in-file consumers are `
 - Root cause: a plugin reinstall/upgrade that changes the hashed directory name turns inspect/apply/verify into NATIVE_SOURCE_DRIFT on a supported runtime version.
 - Evidence: Where: native-patch.mjs:122-123 (npm/projects/openclaw-discord-c0892df945/…), used at :169, :889-896, :906-925; comment :854-896 claims derivation from the pins · Evidence: (live match today)
-- Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc native-patch.mjs:122-123 (npm/projects/openclaw-discord-c0892df945/…), used at :169, :889-896, :906-925; comment :854-896 claims derivation from the pins ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng the Discord channel plugin path is pinned by a hardcoded install content-hash trước khi sửa (nội quy mục 3).
+- Reproduction: Static, and gate it where the constant is already imported: `tests/m10-t2-r8-preflight-lineage.test.mjs:90` asserts only `NATIVE_DISCORD_CHANNEL_RELATIVE.includes("@openclaw/discord")`, which a stale install slug satisfies. Measured at HEAD: `native-patch.mjs:122-123` hardcodes `export const NATIVE_DISCORD_CHANNEL_RELATIVE = "npm/projects/openclaw-discord-c0892df945/node_modules/@openclaw/discord";` while the comment directly above it at `:118-121` claims it is "the single source of truth for the executing tree" from which "the patch roots, the snapshot relatives and the operator fixtures all derive". `grep -rn NATIVE_DISCORD_CHANNEL_RELATIVE --include="*.mjs"` shows the slug `c0892df945` reaching `native-patch.mjs:894` and `:914` (snapshot relatives), plus `operator-apply.mjs:45`, `operator-rollback.mjs:54` and `live-governance-probe.mjs:44`, so one npm reinstall that changes the install directory silently repoints the patch root, the snapshot set and all three operator commands together. Assert the relative is resolved from the live install tree, or that a mismatch between it and the tree is a named refusal rather than a wrong path.
 - Acceptance criteria: resolve the channel root from the installed-plugin manifest, or refuse with a named code.
 - Related findings: nguồn: B08 — adversarial independent audit (attempted refutation…
 
@@ -317,7 +339,7 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Status: OPEN
 - Root cause: one corpus split by spelling — a document tagged research indexes with primary_topic domain-research while kb/knowledge-base/literature (which do reach the alias) index as kb-ingestion, and neither the filter nor the envelope can reconcile them. Root cause is two registries extended independently with no precedence or collision check.
 - Evidence: Where: semantic-contract.mjs:48 (NAMESPACE_ALIAS_MAP "research"), :141-145, :172-174 · Evidence: the alias registry (B22) declares research → knowledge, but resolveNamespace consults KNOWN_TAXONOMY_MAP first and that map contains a research key, so the alias is unreachable — and this is the single dead entry, because every other alias value (lscm, power-bi, optimization, python, knowledge, sql) has no shadowing key.
-- Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc semantic-contract.mjs:48 (NAMESPACE_ALIAS_MAP "research"), :141-145, :172-174 ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng one corpus split by spelling — a document tagged research indexes with primary_topic domain-research while kb/knowledge-base/literature (which do reach the… trước khi sửa (nội quy mục 3).
+- Reproduction: Static, and gate it in `tests/m8-t1-skill-vector-memory.test.mjs`, which already imports the semantic contract. Measured at HEAD: `zink-tools/common/semantic-contract.mjs:48` declares the alias `research: "knowledge"` inside `NAMESPACE_ALIAS_MAP`, but `resolveNamespace` at `:169-179` tests `if (KNOWN_TAXONOMY_MAP[ns]) return { resolved: ns, ambiguous: false };` at `:172` before it ever consults the alias map, and `KNOWN_TAXONOMY_MAP` has a `research` key at `:141-145` (`domain: "research"`, `primary_topic: "domain-research"`, `subtopic: "literature-and-notes"`) because `research` is also listed in `CANONICAL_DOMAINS` at `:17`. So `resolveNamespace("research")` returns `research` and the alias is unreachable, while `kb`, `knowledge-base` and `literature` have no shadowing key and do resolve to `knowledge` — one corpus indexed under two different `primary_topic` values depending on the spelling the ingester happened to use. Assert `resolveNamespace` returns the same canonical namespace for every alias in `NAMESPACE_ALIAS_MAP`, which today fails for exactly this one entry.
 - Acceptance criteria: alias and taxonomy keys are provably disjoint, or one documented precedence yields identical metadata for both spellings.
 - Related findings: nguồn: E07 — Zink Tools shared layer (7 findings; the shared…
 
@@ -330,7 +352,7 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Status: REFUTED — refuted at the pre-freeze read of `M12/T2.2-R3` (head `7996a16`): `catalog.mjs:31` SLUG is enforced on `identity.capability` and re-checked by the adapter, so the NO_MATCH path is unreachable. Not a defect — kept only so no later band re-admits it.
 - Root cause: any skill whose manifest capability is not already lowercase-kebab is permanently unfindable by the capability filter — the search returns NO_MATCH, indistinguishable from "no such skill". Explicitly the adjacent, unrecorded seam to R1-A10-06 (which E07 cross-checked and did not restate).
 - Evidence: Where: semantic-contract.mjs:372-378 and :254, :256-265; writer vector-sync.mjs:500-504 (+ :654); filter skill-adapter.mjs:483-487 · Evidence: the query side normalizes (const cap = params.capability.trim().toLowerCase();) while the concept side builds a _different field_ (rawCapability.replace(/-/g," "), returned as concept, no capability key) and the writer stores record.manifest.identity.capability verbatim; the SQL then compares c.capability = ${escapeSqlLiteral(metadataFilters.capability)}.
-- Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc semantic-contract.mjs:372-378 and :254, :256-265; writer vector-sync.mjs:500-504 (+ :654); filter skill-adapter.mjs:483-487 ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng any skill whose manifest capability is not already lowercase-kebab is permanently unfindable by the capability filter — the search returns NO_MATCH… trước khi sửa (nội quy mục 3).
+- Reproduction: Not reproducible — the premise was measured dead and the row stays only so no later band re-admits it. Re-verified at this head: `zink-skill-store/src/catalog.mjs:31` defines `const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;` and `:306` refuses a record whose `identity.capability` fails it (re-checked at `:1127`), so no capability that is not already lowercase-kebab can enter the catalog. The asymmetry the row described is real but harmless: `semantic-contract.mjs:397-398` normalizes the query side with `const cap = params.capability.trim().toLowerCase();` while `:260` builds a separate `concept` field as `rawCapability.replace(/-/g, " ")` and `vector-sync.mjs:498-506` stores the manifest value verbatim — but the stored value is SLUG-constrained, so the comparison at `skill-adapter.mjs:500-502` (`c.capability = <literal>`) can always match. A regression test worth keeping: assert that a manifest whose `identity.capability` is `My_Capability` is refused at catalog admission, which is what makes the filter's normalization sufficient.
 - Acceptance criteria: a write-then-search round trip on a mixed-case capability returns the row.
 - Related findings: bug mở: R1-A10-06 · disposition: refuted at the pre-freeze read of `M12/T2.2-R3` (head `7996a16`): `catalog.mjs:31` SLUG is enforced on `identity.capability` and re-checked by the adapter, so the NO_MATCH path is unreachable. Not a defect — kept only so no later band re-admits it. · nguồn: E07 — Zink Tools shared layer (7 findings; the shared…
 
@@ -343,7 +365,7 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Status: OPEN
 - Root cause: Register kết luận: incident dedupe ignores Discord's truncation flag. Chưa có phân tích root cause riêng — phải đọc `Where:` ở HEAD hiện tại và viết lại nguyên nhân trước khi sửa (nội quy mục 2).
 - Evidence: Evidence: (code): discord-forum-tags.mjs:157 consumes body.threads and never reads has_more, so a first-page-only listing is treated as complete truth → a duplicate #incidents thread is posted for an incident the guard was written to dedupe.
-- Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc entry không còn `Where:` — dựng lại locator từ `PLAN.md` §8 ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng incident dedupe ignores Discord's truncation flag trước khi sửa (nội quy mục 3).
+- Reproduction: Static, and gate it in `tests/m12-t2-forum-tags.test.mjs`, which already drives `readActiveForumThreads` against a stubbed `fetch`. Measured at HEAD: `integrations/openclaw/lib/discord-forum-tags.mjs:154-161` throws on a non-ok response, then returns `(Array.isArray(body?.threads) ? body.threads : []).map(...)` at `:157` and never reads `body.has_more` or `body.next_cursor`; a repo-wide `grep -rn "has_more" --include="*.mjs" integrations/` returns zero hits, so nothing in the plugin paginates. Discord's `GET /channels/{id}/threads/active` caps the response, so once a forum holds more active threads than one page carries, the listing is silently partial and the dedupe at `index.mjs:5140-5146` (`threads.some((thread) => thread.name.includes(token))`) answers false for an incident that is already open. Return a stub body with `has_more: true` and one unrelated thread, then assert the caller refuses to conclude "not already surfaced" rather than posting a duplicate `#incidents` thread.
 - Acceptance criteria: Register chưa có acceptance line. Khi sửa phải viết acceptance từ trạng thái đúng ngược lại tiêu đề "incident dedupe ignores Discord's truncation flag", và acceptance đó là điều kiện duy nhất được phép xóa bug này khỏi file (nội quy mục 6).
 - Related findings: nguồn: B07 — end-to-end: dedup decisions, one refutation, and a…
 
@@ -353,10 +375,10 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Legacy register id: `R5-E02-07`
 - Affected modules: Zink Knowledgebase
 - Severity: Low
-- Status: OPEN
+- Status: REFUTED — premise measured dead 2026-10-18: both halves of the premise measured dead at this head. (1) The `raise AssertionError("Embedding retry loop exhausted without a result.")` is at `apps/knowledge/app/model_probe.py:138`, not `:128`, and it is **unreachable**: the enclosing lo (was: OPEN)
 - Root cause: a real provider outage is attributed to the service's own bug, so operators tune the wrong thing and callers do not retry, because 503 is the retryable code the adapter understands.
 - Evidence: Where: model_probe.py:128 consumed by main.py:364, :473-474 · Evidence: raise AssertionError("Embedding retry loop exhausted without a result."), but the search path catches only except (httpx.HTTPError, ModelProbeError), so the AssertionError bypasses the 503 mapping and lands in the generic except Exception: returning INTERNAL_ERROR 500 — and AssertionError is stripped entirely under python -O.
-- Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc model_probe.py:128 consumed by main.py:364, :473-474 ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng a real provider outage is attributed to the service's own bug, so operators tune the wrong thing and callers do not retry, because 503 is the retryable code… trước khi sửa (nội quy mục 3).
+- Reproduction: Not reproducible — the premise is dead and the row stays only so no later band re-admits it. To re-measure: read `apps/knowledge/app/model_probe.py:111-138` and enumerate the exits of `for attempt in range(2)`; both iterations return on success and the second raises `ModelProbeError(failure_code)` on failure, so the trailing `raise AssertionError(...)` at `:138` has no reaching path. Then confirm `main.py:391-392` maps `ModelProbeError` to 503 `EMBEDDING_MODEL_UNAVAILABLE` before the generic `except Exception` at `:500-501` can turn it into a 500. A worthwhile regression test to keep regardless: force both embedding attempts to fail with a transient status and assert the search endpoint returns 503 `EMBEDDING_MODEL_UNAVAILABLE`, never 500 `INTERNAL_ERROR` — that pins the mapping the row was worried about, without depending on an unreachable raise.
 - Acceptance criteria: every embedding failure mode on the search path resolves to a specific 503 code, never a bare 500.
 - Related findings: nguồn: E02 — Knowledgebase retrieval, provenance and citations (7…
 
@@ -366,10 +388,10 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Legacy register id: `R5-E14-04`
 - Affected modules: OpenClaw runtime libs, OpenClaw integration
 - Severity: Low
-- Status: OPEN
+- Status: OPEN · premise changed 2026-10-18: locator drifted: `assertWorkspaceMatchesTemplate` is exported at `integrations/openclaw/lib/policy.mjs:1498` and called at `:1553`, not `:1496`
 - Root cause: an operator believes an editable workspace template exists on disk and edits a directory nothing reads.
 - Evidence: Where: integrations/openclaw/templates/main-workspace/.gitkeep · Evidence: ls -a shows .gitkeep only; git ls-files shows nothing else there; a repo-wide grep for main-workspace returns zero hits outside that path — while lib/policy.mjs:1496 assertWorkspaceMatchesTemplate() implements the template in code.
-- Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc integrations/openclaw/templates/main-workspace/.gitkeep ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng an operator believes an editable workspace template exists on disk and edits a directory nothing reads trước khi sửa (nội quy mục 3).
+- Reproduction: Static, and gate it in `tests/m7-lane-g-policy.test.mjs`, which already exercises `lib/policy.mjs` exports. Measured at HEAD: `ls -a integrations/openclaw/templates/main-workspace/` returns only `.gitkeep`, `git ls-files integrations/openclaw/templates/` lists `main-workspace/.gitkeep`, `openclaw-gemini-stream-hotfix.mjs` and `openclaw-pass-resolver` and nothing else under that directory, and a repo-wide grep for `main-workspace` outside the register and `.agents/states/` returns zero hits — no code, doc, test or CI step opens it. The template an operator would expect to edit is instead implemented in code as `assertWorkspaceMatchesTemplate` (`integrations/openclaw/lib/policy.mjs:1498`, called at `:1553`). So the directory reads as the editable source of truth and is inert: editing a file there changes nothing, and the real template can only be changed by editing `policy.mjs`. Assert either that the function derives its expectations from files under `templates/main-workspace/`, or that the directory carries a README stating the template lives in `policy.mjs` and the `.gitkeep` is a placeholder.
 - Acceptance criteria: no tracked empty directory whose name a check claims to use.
 - Related findings: nguồn: E14 — repository hygiene: tracked junk, stale artifacts…
 
@@ -392,10 +414,10 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Legacy register id: `R2-B01-04`
 - Affected modules: Chưa xác định — đọc lại Where khi re-verify
 - Severity: Ungraded
-- Status: OPEN
+- Status: REFUTED — premise measured dead 2026-10-18: the thread-body copy is **not** unbounded. `openGovernedForumThread` (`integrations/openclaw/lib/discord-forum-tags.mjs:617`) builds its REST body at `:656-660` as `name: String(title ?? "").slice(0, 100)` and `message: { content: String(bo (was: OPEN)
 - Root cause: Register kết luận: the thread-body copy is unbounded while the component copy truncates at 2000, so a long card fails the REST post, is logged as a warn and returns — a recorded request with no reachable card. Chưa có phân tích root cause riêng — phải đọc `Where:` ở HEAD hiện tại và viết lại nguyên nhân trước khi sửa (nội quy mục 2).
 - Evidence: (sub-defect of A09-04): the thread-body copy is unbounded while the component copy truncates at 2000, so a long card fails the REST post, is logged as a warn and returns — a recorded request with no reachable card.
-- Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc entry không còn `Where:` — dựng lại locator từ `PLAN.md` §8 ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng the thread-body copy is unbounded while the component copy truncates at 2000, so a long card fails the REST post, is logged as a warn and returns — a recorded… trước khi sửa (nội quy mục 3).
+- Reproduction: Not reproducible as stated — both copies are bounded at 2000 and the row stays only so no later band re-admits it. To re-measure: read `integrations/openclaw/lib/discord-forum-tags.mjs:656-660` (thread `message.content` is `String(bodyContent ?? "").slice(0, 2000)`) beside `integrations/openclaw/plugins/zink-governance/index.mjs:1684` (component `content` is `bodyContent.slice(0, 2000)`). A **different and narrower** concern does survive here and should be filed as its own row rather than folded into this one: both sites slice by UTF-16 code units, so a 2000-code-unit cut can split a surrogate pair and post a lone surrogate, while `index.mjs:1935-1939` documents that exact class of bug and `truncateUtf8` (`index.mjs:1953-1958`) already exists to bound by bytes instead. That is a code-unit-vs-byte question, not an unbounded-length question, and this row's evidence does not support it.
 - Acceptance criteria: Register chưa có acceptance line. Khi sửa phải viết acceptance từ trạng thái đúng ngược lại tiêu đề "the thread-body copy is unbounded while the component copy truncates at 2000, so a long card fails the REST post, is logged as a warn and returns — a recorded request with no reachable card", và acceptance đó là điều kiện duy nhất được phép xóa bug này khỏi file (nội quy mục 6).
 - Related findings: nguồn: B01 — security / authorization (all 14 assigned claims…
 
@@ -901,10 +923,10 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Severity: High
 - Status: OPEN · premise changed 2026-10-17: the premise's native-boundary half is already fixed: enterNativeRun logs decision.reason via logDecisionReason (:511) and rethrows GOVERNANCE_RUN_UNAVAILABLE with {cause:error} (:531). Only the guard-side cause-loss and the optional digest
 - Root cause: after a restart an admission refusal is indistinguishable across candidate-count / lineage / snapshot-read failures, and the ledger gains WORKFLOW_CONTINUATION_STARTED for a run whose payload was never compared.
-- Evidence: Where: topology/lib/guard.mjs:1113-1210 (beforeRun), :1133 (void findErr;), :1144, :1159-1183; native-boundary.mjs:495, 504-513 · Evidence: the original findSession error is explicitly discarded; assert/fail (:253-258) throw bare codes with no cause; the E13 digest comparison runs only if (entry.trigger_run_id !== entry.previous_run_id) and if (context.inputProvenance.senderDigest); enterNativeRun logs error.message only and drops decision.reason.
+- Evidence: Where: topology/lib/guard.mjs:1113-1210 (beforeRun), :1133 (void findErr;), :1144, :1159-1183; native-boundary.mjs:495, 504-513 · Evidence: the original findSession error is explicitly discarded; assert/fail (:253-258) throw bare codes with no cause; the E13 digest comparison runs only if (entry.trigger_run_id !== entry.previous_run_id) and if (context.inputProvenance.senderDigest); enterNativeRun logs error.message only and drops decision.reason. · R7 (nạp vị trí mới từ hàng `F-246` bị rút vì trùng root cause): the optional binding is not just conditional, it has no producer — a grep for `senderDigest` across `integrations/` returns only the two read sites `guard.mjs:1162` and `:1164`, so the `assert` can never run and every admitted continuation reaches `WORKFLOW_CONTINUATION_STARTED` (`guard.mjs:1170`) with the trigger digest unexamined. The first-generation case (`entry.trigger_run_id === entry.previous_run_id`, `:1159`) skips the block entirely, so even a produced field would not be compared there.
 - Reproduction: Add a beforeRun test (idiom of tests/m7-lane-e-spawn-boundary.test.mjs or tests/m8-t2.11-r14-native-lineage.test.mjs): build an inter-session continuation whose entry.trigger_run_id === entry.previous_run_id with no inputProvenance.senderDigest, and assert beforeRun still returns allow — proving the E13 digest binding at guard.mjs:1157/:1162 is skippable. Separately assert the findSession error is discarded at :1131 (`void findErr`) and that fail()/assert (guard.mjs:255) emit bare codes with no cause.
 - Acceptance criteria: beforeRun cryptographically binds an inter-session continuation to its trigger digest whenever a prior run or sender provenance exists, instead of allowing the check to be skipped, and a refused admission preserves the original findSession cause.
-- Related findings: nguồn: A05 — runtime, entrypoints and startup behaviour
+- Related findings: nguồn: A05 — runtime, entrypoints and startup behaviour · R7 delta audit: `F-246` withdrawn as a duplicate of this row, its locations merged here
 
 ### F-060 — primary_coordinator is a phantom ledger field, so the live pickup loop can never claim anything
 
@@ -1135,10 +1157,10 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Severity: Medium
 - Status: OPEN
 - Root cause: an unresolvable RESULT_PENDING_REVIEW with no cancellation emitter, plus queue/ledger divergence.
-- Evidence: Where: topology/lib/workflow.mjs:1198-1201 vs :1568-1571; index.mjs:2315-2319; lib/queue-manager.mjs:685-688 · Evidence: task-level WORKFLOW_RESULT_RECORDED treats payload_digest as optional, but requireResultIdentityMatch fails RESULT_MISMATCH unless a digest string exists; callers pass payloadDigest, null when no artifact exists, while finishExecution mints its own fallback digest the ledger never learns.
+- Evidence: Where: topology/lib/workflow.mjs:1198-1201 vs :1568-1571; index.mjs:2315-2319; lib/queue-manager.mjs:685-688 · Evidence: task-level WORKFLOW_RESULT_RECORDED treats payload_digest as optional, but requireResultIdentityMatch fails RESULT_MISMATCH unless a digest string exists; callers pass payloadDigest, null when no artifact exists, while finishExecution mints its own fallback digest the ledger never learns. · R7 (nạp cơ chế mới từ hàng `F-248`, để lại `LATENT`): the store is conditional (`workflow.mjs:1207-1210` sets `execution_payload_digest` only `if (payload.payload_digest)`) while every verdict path opens with `requireCondition(typeof currentDigest === "string", "RESULT_MISMATCH")` at :1580-1583, and the comment at :1584-1587 records that an earlier null-versus-undefined mistake "made EVERY verdict fail and wedged the task in review". Measured at HEAD this session: an event carrying `payload_digest: null` is rejected at append by `validateContract("ledger-event", …)` (`topology/lib/ledger.mjs:543`) with `SCHEMA_INVALID: SCHEMA_VALIDATION_FAILED` — verified by handing a synthetic event to that validator — so the live artifact-less run fails the append rather than wedging, and the wedge itself needs an emitter that omits the key.
 - Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc topology/lib/workflow.mjs:1198-1201 vs :1568-1571; index.mjs:2315-2319; lib/queue-manager.mjs:685-688 ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng the reducer admits a digest-less result into review, then every verdict requires a digest trước khi sửa (nội quy mục 3).
 - Acceptance criteria: Register chưa có acceptance line. Khi sửa phải viết acceptance từ trạng thái đúng ngược lại tiêu đề "the reducer admits a digest-less result into review, then every verdict requires a digest", và acceptance đó là điều kiện duy nhất được phép xóa bug này khỏi file (nội quy mục 6).
-- Related findings: adjudication Vòng 2: Verified, Medium kept · nguồn: A06 — task, run and session lifecycle
+- Related findings: adjudication Vòng 2: Verified, Medium kept · nguồn: A06 — task, run and session lifecycle · R7 delta audit: `F-248` kept as the `LATENT` successor of this row
 
 ### F-078 — a spawn reservation stuck in SPAWN_UNKNOWN has no timeout, no terminal event and no reconciler
 
@@ -1759,10 +1781,10 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Severity: Medium
 - Status: OPEN
 - Root cause: Register kết luận: memory-tool output contracts are declared but validated nowhere, and the adapters already emit out-of-contract values. Chưa có phân tích root cause riêng — phải đọc `Where:` ở HEAD hiện tại và viết lại nguyên nhân trước khi sửa (nội quy mục 2).
-- Evidence: Where: index.mjs:4344-4353 (isCallableExecutionTool excludes zink_skill_* / zink_knowledge_search); skill-adapter.mjs:257-263; knowledge-adapter.mjs:386-391 · Evidence: governed_status:"FAILED" and error_code are outside zink-skill.schema.json:141-153; "NO_MATCH" and semantic_contract_version are outside zink-knowledge.schema.json:86-92 (additionalProperties:false).
+- Evidence: Where: index.mjs:4344-4353 (isCallableExecutionTool excludes zink_skill_* / zink_knowledge_search); skill-adapter.mjs:257-263; knowledge-adapter.mjs:386-391 · Evidence: governed_status:"FAILED" and error_code are outside zink-skill.schema.json:141-153; "NO_MATCH" and semantic_contract_version are outside zink-knowledge.schema.json:86-92 (additionalProperties:false). · R7 (nạp vị trí mới từ ba hàng `F-231`/`F-232`/`F-233` bị rút vì trùng root cause): `loadToolContractSchemas` at index.mjs:3151-3160 does register zink_skill_search, zink_skill_propose and zink_knowledge_search against their contract files, so the three `$defs.output` blocks are loaded and hash-pinned and then never compared to the wire — the gate is not merely untested, it is wired to nothing. `knowledge-adapter.mjs:435-444` returns `governed_status: formattedResults.length === 0 ? "NO_MATCH" : "SUCCESS"` plus `semantic_contract_version`, while the schema's required list is exactly `action, namespace, results, total_count, governed_status` with the object closed; `skill-adapter.mjs:274-280` returns `FAILED` with `error_code: "SKILL_CATALOG_INVALID"` and :761-766 adds a top-level `query` that the ten declared keys of `zink-skill.schema.json:141-153` do not include. Static consequence: with the tool id outside `isCallableExecutionTool`, `outputSchema` is null and `validateToolOutputEnvelope` returns `{ ok: true }` for every one of those payloads.
 - Reproduction: At HEAD isCallableExecutionTool (index.mjs:4344-4353) lists zink_excel, zink_power_bi, zink_sql and the other execution tools but not zink_skill_* or zink_knowledge_search, so validateToolOutputEnvelope never runs for them; the adapters already emit outside their declared schemas — governed_status 'FAILED' with an error_code against zink-skill.schema.json:141-153, and 'NO_MATCH' plus semantic_contract_version against zink-knowledge.schema.json:86-92 which sets additionalProperties:false. Gate it in tests/m7-t3-tools-contract.test.mjs: take a real adapter response and validate it against that tool's own declared output schema.
 - Acceptance criteria: each emitted envelope passes its own declared output schema.
-- Related findings: nguồn: A10 — Zink Tools, adapters and execution contracts
+- Related findings: nguồn: A10 — Zink Tools, adapters and execution contracts · R7 delta audit: `F-231`–`F-233` withdrawn as duplicates of this row, their locations merged here
 
 ### F-126 — zink_excel implements less than its contract: template_path ignored, extra sheets dropped, validate is an existence check
 
@@ -2279,10 +2301,10 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Severity: Medium
 - Status: OPEN
 - Root cause: the existence check copied the index-naming convention (knowledge_*) instead of the catalog key. — Hệ quả: re-running the set (repaired version row, a schema rebuilt from a dump that excluded schema_migrations, or the race in R5-E03-02) aborts on duplicate_type/duplicate_table, the whole migration transaction rolls back, and startup reports DATABASE_UNAVAILABLE.
-- Evidence: Where: apps/knowledge/migrations/001_initial.sql:3-22 (DO block) vs :24-96; 002_pdf_ingestion_foundation.sql:1,20,24,28,47,71,84 · Evidence: the guard asks SELECT 1 FROM pg_type WHERE typname = 'knowledge_index_status' while the object it then creates is CREATE TYPE knowledge.index_status AS ENUM (…); the same prefix mismatch repeats for knowledge_index_run_status→index_run_status and knowledge_index_run_kind→index_run_kind. Postgres stores the unqualified name in pg_type.typname, so the predicate can never match and the guard is dead code; 002 uses bare CREATE TABLE/CREATE UNIQUE INDEX with no IF NOT EXISTS. · Expected/Actual: a replayable migration set / 001 and 002 are replayable only while the schema_migrations row exists. 003 is the only genuinely idempotent file.
+- Evidence: Where: apps/knowledge/migrations/001_initial.sql:3-22 (DO block) vs :24-96; 002_pdf_ingestion_foundation.sql:1,20,24,28,47,71,84 · Evidence: the guard asks SELECT 1 FROM pg_type WHERE typname = 'knowledge_index_status' while the object it then creates is CREATE TYPE knowledge.index_status AS ENUM (…); the same prefix mismatch repeats for knowledge_index_run_status→index_run_status and knowledge_index_run_kind→index_run_kind. Postgres stores the unqualified name in pg_type.typname, so the predicate can never match and the guard is dead code; 002 uses bare CREATE TABLE/CREATE UNIQUE INDEX with no IF NOT EXISTS. · Expected/Actual: a replayable migration set / 001 and 002 are replayable only while the schema_migrations row exists. 003 is the only genuinely idempotent file. · R7 (nạp số đo mới từ hàng `F-256` bị rút vì trùng root cause): `grep -c "IF NOT EXISTS"` over the migration set measures 001_initial.sql = 14, 003_skills_vector_schema.sql = 5, 002_pdf_ingestion_foundation.sql = **0** — 002:1 is a bare `CREATE TABLE knowledge.pdf_content_builds (` and 002:20 a bare `CREATE UNIQUE INDEX knowledge_pdf_content_builds_one_building_idx`, so 002 is the only file whose replay is not self-guarding, independently of the dead pg_type predicate above. The runner keys `schema_migrations.version` on the filename, so a restored dump that omits that row or a renamed file re-executes 002 against a schema that already owns those objects.
 - Reproduction: read-only SELECT typname FROM pg_type t JOIN pg_namespace n ON n.oid=t.typnamespace WHERE n.nspname='knowledge'.
 - Acceptance criteria: applying the set twice against a scratch database leaves identical catalog state and no error.
-- Related findings: bug mở: R5-E03-02 · nguồn: E03 — Knowledgebase persistence: schema, SQL, migrations…
+- Related findings: bug mở: R5-E03-02 · nguồn: E03 — Knowledgebase persistence: schema, SQL, migrations… · R7 delta audit: `F-256` withdrawn as a duplicate of this row, its measurement merged here
 
 ### F-167 — read-only EXPLAIN (ANALYZE, BUFFERS) of the dense branch + SELECT index_id, count(*) FROM knowledge.segments GROUP BY 1, taken while no run holds the lock
 
@@ -2773,10 +2795,10 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Severity: Medium
 - Status: OPEN
 - Root cause: Windows pass counts are inflated and the junction case never runs in CI (ubuntu), so per-lane coverage differs while every lane reports the same green number.
-- Evidence: Where: tests/m6-t1-skill-store.test.mjs:519 (SKILL.md symlink → UNSAFE_PATH), :533-543 · Evidence: if (process.platform === "win32") return; before any assertion, while a sibling test uses { skip: process.platform !== "win32" }.
+- Evidence: Where: tests/m6-t1-skill-store.test.mjs:519 (SKILL.md symlink → UNSAFE_PATH), :533-543 · Evidence: if (process.platform === "win32") return; before any assertion, while a sibling test uses { skip: process.platform !== "win32" }. · R7 (nạp vị trí mới từ hàng `F-270` bị rút vì trùng root cause): the two platform halves are mutually exclusive and CI satisfies neither — `tests/m6-t1-skill-store.test.mjs:533-544` guards the junction case with `{ skip: process.platform !== "win32" }` (its `:541` assertion is `assert.notEqual((await catalog(root)).errors.length, 0)`), while `tests/m12-t2.2-a3-queue-writer-lock.test.mjs:391-396` returns early with `if (process.platform === "win32") { t.skip("… the WSL lane runs this"); return; }`. `.github/workflows/ci.yml:20` and `:50` are both `runs-on: ubuntu-24.04`, so the junction half executes in no enforced lane; the same split repeats at `tests/m11-t3-durable-state-integrity.test.mjs:997-1000`, `tests/m7-t1-openclaw.test.mjs:1441` and `tests/m11-t1-openclaw-outbound-and-caches.test.mjs:166`.
 - Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc tests/m6-t1-skill-store.test.mjs:519 (SKILL.md symlink → UNSAFE_PATH), :533-543 ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng a "test that cannot fail on Windows": the platform guard returns from the test body instead of skipping trước khi sửa (nội quy mục 3).
 - Acceptance criteria: Register chưa có acceptance line. Khi sửa phải viết acceptance từ trạng thái đúng ngược lại tiêu đề "a "test that cannot fail on Windows": the platform guard returns from the test body instead of skipping", và acceptance đó là điều kiện duy nhất được phép xóa bug này khỏi file (nội quy mục 6).
-- Related findings: adjudication Vòng 2: Verified with correction · nguồn: A12 — test validity and regression coverage
+- Related findings: adjudication Vòng 2: Verified with correction · nguồn: A12 — test validity and regression coverage · R7 delta audit: `F-270` withdrawn as a duplicate of this row, its locations merged here
 
 ### F-206 — MODEL_ALLOWLIST_VIOLATION is an unreachable guard whose "coverage" is a tautology
 
@@ -2878,7 +2900,7 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Status: LATENT
 - Root cause: three suites require historical git objects and the external tar binary. On a shallow clone, after a squash-merge to main, or after git gc prunes now-unreachable SHAs, npm test goes red for a non-code cause — and ci.yml:54/security.yml:27 use default (shallow) checkouts, so any job built on them inherits it. Pairs with R5-E09-03: a red that nobody can explain is as bad as a green that proves nothing.
 - Evidence: Where: tests/m11-t1-r2-file-lock-asset-predecessor.test.mjs:47, :160-181; tests/m8-t2.10-r13-r7-predecessor-allowlist.test.mjs:288-310; tests/m12-t2-governed-surface.test.mjs:644-661 · Evidence: const LIVE_SOURCE_COMMIT = "ea84a5a"; then spawnSync("git", ["archive", LIVE_SOURCE_COMMIT, …]) asserted with assert.equal(archive.status, 0, …) plus spawnSync("tar", ["-x", …]); m12-t2 uses execFileSync("git", ["show", "b6d04e8:integrations/…"]). No skip guard.
-- Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc tests/m11-t1-r2-file-lock-asset-predecessor.test.mjs:47, :160-181; tests/m8-t2.10-r13-r7-predecessor-allowlist.test.mjs:288-310; tests/m12-t2-governed-surface.test.mjs:644-661 ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng three suites require historical git objects and the external tar binary trước khi sửa (nội quy mục 3).
+- Reproduction: Static — all three suites shell out to pinned historical SHAs and the external `tar` binary with no skip guard on that dependency: `tests/m11-t1-r2-file-lock-asset-predecessor.test.mjs:47` sets `LIVE_SOURCE_COMMIT = "ea84a5a"` and `liveExtension()` runs `spawnSync("git", ["archive", LIVE_SOURCE_COMMIT, …])` plus `spawnSync("tar", ["-x", …])` under `assert.equal(archive.status, 0, …)` (`:170`) and `assert.equal(tar.status, 0, …)` (`:179`), repeated for `d773856` at `:492-505`; `tests/m8-t2.10-r13-r7-predecessor-allowlist.test.mjs:310` defines `gitShow` over `execFileSync("git", ["show", …])` and calls it at module top level (`:318-325`) for `4f5cc6d`; `tests/m12-t2-governed-surface.test.mjs:652` runs `execFileSync("git", ["show", "b6d04e8:…"])`. The skip guards these files do carry protect only the live-WSL-tree reads (`m11-t1-r2:320-341`, `m8-t2.10:434-440`), never the git-object or `tar` path. Probe on this host: `git cat-file -t` returns `commit` for all seven pinned SHAs, `tar --version` is GNU tar 1.35, and the `quality-gate` job that runs `npm test` checks out with `fetch-depth: 0` (`.github/workflows/ci.yml:26`), so the suites are green today (LATENT); only the shallow `python-quality` checkout at `ci.yml:54` is depth-limited. Reproduce the latent red non-destructively with `git clone --depth 1 <repo> <tmp>` then `node --test tests/m11-t1-r2-file-lock-asset-predecessor.test.mjs` inside it: the pinned SHAs are absent, `git archive` exits non-zero and the status-0 assertion fails for a non-code cause. Fix gates in those same three suites: replace the unconditional status-0 assertions with a reachability precondition that skips when `git cat-file -e <sha>` fails or `tar` is unavailable.
 - Acceptance criteria: Register chưa có acceptance line. Khi sửa phải viết acceptance từ trạng thái đúng ngược lại tiêu đề "three suites require historical git objects and the external tar binary", và acceptance đó là điều kiện duy nhất được phép xóa bug này khỏi file (nội quy mục 6).
 - Related findings: bug mở: R5-E09-03 · nguồn: E10 — test infrastructure: the source-text assertion…
 
@@ -2891,7 +2913,7 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Status: OPEN
 - Root cause: the gate is decorative for ~90 % of the surface it names — a tag id introduced in lib/discord-forum-tags.mjs, configure.mjs, templates/, topology/fixtures/ or an env file keeps it green. Same class as R5-E13-05 (guard aimed at the wrong files) and R4-V01-01 (verification over a set it silently shrank). A real repo-wide walk precedent already exists at tests/m7-lane-g-policy.test.mjs:731.
 - Evidence: Where: tests/m12-t2-governed-surface.test.mjs:489-505 · Evidence: the test is titled "no Discord tag id is hardcoded anywhere in the repository" but reads exactly one file (readFileSync("integrations/openclaw/plugins/zink-governance/index.mjs")) and checks only two things: /applied_tags:\s*\[\s*"\d{15,25}"/u and pluginSource.includes("1545697161985921064").
-- Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc tests/m12-t2-governed-surface.test.mjs:489-505 ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng the gate is decorative for ~90 % of the surface it names — a tag id introduced in lib/discord-forum-tags.mjs, configure.mjs, templates/, topology/fixtures/ or… trước khi sửa (nội quy mục 3).
+- Reproduction: Static — the gate `M12/T2 P1: no Discord tag id is hardcoded anywhere in the repository` (`tests/m12-t2-governed-surface.test.mjs:494`) reads exactly one file, `pluginSource = readFileSync("integrations/openclaw/plugins/zink-governance/index.mjs")` (`:489-492`), and asserts only `/applied_tags:\s*\[\s*"\d{15,25}"/u.test(pluginSource) === false` (`:496`) and `pluginSource.includes("1545697161985921064") === false` (`:501`). Every other surface the title names is real and unread — `integrations/openclaw/lib/discord-forum-tags.mjs`, `integrations/openclaw/configure.mjs`, `integrations/openclaw/templates/`, `integrations/openclaw/topology/fixtures/` and the env files — so a 15-25 digit tag literal introduced in any of them keeps the assertion green. Reproduce by adding an `applied_tags: ["1234567890123456789"]` literal to `lib/discord-forum-tags.mjs` and confirming `node --test tests/m12-t2-governed-surface.test.mjs` still passes. Fix gates in this same test: widen P1 to walk the tracked tree — the multi-file precedent is `tests/m7-lane-g-policy.test.mjs:725-733`, and `tests/repository-policy.test.mjs` already enumerates the repo via `execFileSync("git", …)` — asserting both patterns are absent from every tracked `.mjs`, `.env` and template, not from `index.mjs` alone.
 - Acceptance criteria: Register chưa có acceptance line. Khi sửa phải viết acceptance từ trạng thái đúng ngược lại tiêu đề "the gate is decorative for ~90 % of the surface it names — a tag id introduced in lib/discord-forum-tags.mjs, configure.mjs, templates/, topology/fixtures/ or an env file keeps it green", và acceptance đó là điều kiện duy nhất được phép xóa bug này khỏi file (nội quy mục 6).
 - Related findings: bug mở: R5-E13-05, R4-V01-01 · nguồn: E10 — test infrastructure: the source-text assertion…
 
@@ -2904,7 +2926,7 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Status: OPEN
 - Root cause: one boolean conflates "unreadable" with "readable but drifted". If the installed @openclaw/discord preflight chunk changes upstream — the exact regression these pins exist to catch — both tests SKIP and the suite stays green while the runtime pin is stale. Distinct from R1-A12-01 (unreachable→PASS): here it is drift→silent SKIP.
 - Evidence: Where: tests/m10-t2-r8-preflight-lineage.test.mjs:52-59, 66-74, 124, 150 · Evidence: readLive() swallows everything (`catch { /* try the next path form */ } return null;`), then reachable = live !== null && sha256(live) === CHANNEL_BASELINE_SHA256, and both tests use { skip: skip("live runtime not reachable") }.
-- Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc tests/m10-t2-r8-preflight-lineage.test.mjs:52-59, 66-74, 124, 150 ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng one boolean conflates "unreadable" with "readable but drifted" trước khi sửa (nội quy mục 3).
+- Reproduction: Static — `tests/m10-t2-r8-preflight-lineage.test.mjs:54-63` defines `readLive()` to swallow every error (`catch { /* try the next path form */ }` at `:58-60`, then `return null;` at `:62`), and `reachable` at `:69-72` collapses two distinct states into one boolean: `return live !== null && sha256(live) === CHANNEL_BASELINE_SHA256;` (`:71`). Because `skip = (message) => (reachable ? false : message)` (`:74`) drives `{ skip: skip("live runtime not reachable") }` on both live tests (`:124` and `:150`), a readable artifact whose digest has DRIFTED from the pin drives `reachable` false and both tests SKIP green — the exact regression the pin exists to catch. Reproduce statically by pointing `CHANNEL_BASELINE_SHA256` (`:66-67`) at a wrong digest while a readable file is present, or on the WSL host by editing the live `message-handler.preflight-CbD0u7U7.js`; either way the suite reports two skips, not a failure. Fix gates in this same file: split the boolean so `readLive() !== null` (readable) is separated from digest-equality, and add an assertion that FAILS rather than skips when the artifact is readable but `sha256(live) !== CHANNEL_BASELINE_SHA256`.
 - Acceptance criteria: a readable live artifact whose digest ≠ the pin makes the suite fail, not skip.
 - Related findings: bug mở: R1-A12-01 · nguồn: E10 — test infrastructure: the source-text assertion…
 
@@ -2917,7 +2939,7 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Status: OPEN
 - Root cause: assertions on a process-global singleton owned by the imported plugin, with no reset and no captured baseline; the production code also registers by approval_id (:272-275). Any leftover entry flips 4.2 red or, worse, makes an eviction-order assertion pass for the wrong reason — the file cannot run concurrently and its result depends on which earlier tests ran.
 - Evidence: Where: tests/m11-t1-openclaw-outbound-and-caches.test.mjs:52-55, 247-266, 327-372 (env mutation :79-93) · Evidence: const PENDING_CACHE = () => globalThis[Symbol.for("zink.governance.pending_skill_proposals")]; with absolute assertions assert.equal(cache.size, PENDING_PROPOSALS_LIMIT) / assert.equal(cache.has("evict-0"), false) after seeding LIMIT + 40 entries; cleanup deletes only the ids the test chose.
-- Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc tests/m11-t1-openclaw-outbound-and-caches.test.mjs:52-55, 247-266, 327-372 (env mutation :79-93) ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng assertions on a process-global singleton owned by the imported plugin, with no reset and no captured baseline trước khi sửa (nội quy mục 3).
+- Reproduction: Static — `tests/m11-t1-openclaw-outbound-and-caches.test.mjs:52-53` binds `PENDING_CACHE = () => globalThis[Symbol.for("zink.governance.pending_skill_proposals")]`, a process-global singleton the imported plugin creates once at module load (`integrations/openclaw/plugins/zink-governance/index.mjs:196-197`) and never resets; the file also mutates `process.env.HOME` and `USERPROFILE` (`:81-82`). The eviction test at `:247-265` seeds `PENDING_PROPOSALS_LIMIT + 40` entries then asserts absolute global state — `assert.equal(cache.size, PENDING_PROPOSALS_LIMIT)` (`:256`) and `assert.equal(cache.has("evict-0"), false)` (`:258`) — without capturing the pre-test size, and its `finally` deletes only the ids it chose (`:263`); the completed-execution test at `:327-374` repeats this against `COMPLETED_CACHE`. Because `registerPendingSkillProposal` can insert one record under two keys (`approval_id` and `proposal_id`, `index.mjs:378-387`), residue from any earlier test in the file shifts the eviction boundary, so the assertions pass or fail depending on test order and the suite cannot run concurrently. Reproduce by seeding one extra id into `PENDING_CACHE()` before the `:251` loop, or by running the file under `node --test --test-concurrency`, and watching `:256`/`:258` flip. Fix gates in this same file: capture `const baseline = cache.size` and the key set before seeding and assert the delta, or reset the singleton in a `beforeEach`.
 - Acceptance criteria: Register chưa có acceptance line. Khi sửa phải viết acceptance từ trạng thái đúng ngược lại tiêu đề "assertions on a process-global singleton owned by the imported plugin, with no reset and no captured baseline", và acceptance đó là điều kiện duy nhất được phép xóa bug này khỏi file (nội quy mục 6).
 - Related findings: nguồn: E10 — test infrastructure: the source-text assertion…
 
@@ -2930,7 +2952,7 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Status: EXCLUDED — excluded with a recorded reason (a digest-pin re-base is its own objective, so it should not ride along); no `H` number names it — needs an owner decision that has no number yet.
 - Root cause: the gate freezes one historical digest, its commit (b6d04e8), its occurrence count and the absence of the current build's digest from the allowlist — so the next legitimate lib/discord-forum-tags.mjs change cannot be admitted for deployment without editing this test. It is the re-base cost of any tag fix, including whatever R1-A13-01's surviving mechanism turns out to need.
 - Evidence: Where: tests/m12-t2-governed-surface.test.mjs:644-645, 668-672, 693-707 · Evidence: const DEPLOYED_FORUM_TAGS_SHA256 = "e0a755bb..." plus assert.equal(configureSource.includes(sha256(packaged)), false, "the current build digest must not be allowlisted") and assert.equal(configureSource.split(DEPLOYED_FORUM_TAGS_SHA256).length - 1, 1, "the deployed digest must appear exactly once in the file").
-- Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc tests/m12-t2-governed-surface.test.mjs:644-645, 668-672, 693-707 ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng the gate freezes one historical digest, its commit (b6d04e8), its occurrence count and the absence of the current build's digest from the allowlist — so the… trước khi sửa (nội quy mục 3).
+- Reproduction: Static — `tests/m12-t2-governed-surface.test.mjs` freezes four facts about one historical asset: the digest `DEPLOYED_FORUM_TAGS_SHA256` (`:644-645`), its source commit via `execFileSync("git", ["show", "b6d04e8:integrations/openclaw/lib/discord-forum-tags.mjs"])` (`:652-654`), the occurrence count `assert.equal(configureSource.split(DEPLOYED_FORUM_TAGS_SHA256).length - 1, 1, …)` (`:707-711`), and the absence of the current build's digest `assert.equal(configureSource.includes(sha256(packaged)), false, …)` (`:713-717`). Together these mean admitting a newly deployed `lib/discord-forum-tags.mjs` digest forces an edit to this test: the occurrence-count assertion breaks once the digest appears twice, and the `b6d04e8` commit pin no longer reproduces the new bytes. Reproduce by adding a second allowlisted digest for the asset in `integrations/openclaw/configure.mjs` and confirming `node --test tests/m12-t2-governed-surface.test.mjs` fails at `:707-711` even though the deployment is legitimate. Fix gates in this same test: derive the admitted digest and commit from a data file or from the allowlist table itself instead of hardcoding one digest, one commit and an exact occurrence count. The row is EXCLUDED because a digest-pin re-base is its own objective; this documents the mechanism only.
 - Acceptance criteria: adding a newly deployed asset digest to the allowlist does not require rewriting this test.
 - Related findings: bug mở: R1-A13-01 · disposition: excluded with a recorded reason (a digest-pin re-base is its own objective, so it should not ride along); no `H` number names it — needs an owner decision that has no number yet. · nguồn: E10 — test infrastructure: the source-text assertion…
 
@@ -2956,7 +2978,7 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Status: OPEN
 - Root cause: undetected drift, plus a false premise for later lanes — six tracked executables read like supported probes but can never fail in CI. They are also further instances of the machine-specific state root that decision H4/R5-E13-01 and R5-E13-05 are about.
 - Evidence: Where: integrations/openclaw/topology/fixtures/runtime-regression/{finalization-boundary-probe, operator-token-probe, r11-workspace-probe, runtime-preflight, live-governance-probe, native-patch-probe}.mjs · Evidence: a repo-wide grep returns zero inbound files for the first four; live-governance-probe and native-patch-probe appear only in PLAN.md prose. package.json wires only r16-rehearsal.mjs. Two of them re-encode the machine path — operator-token-probe.mjs:8 and runtime-preflight.mjs:7 hardcode /home/hoang_vinh/.openclaw-zink.
-- Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc integrations/openclaw/topology/fixtures/runtime-regression/{finalization-boundary-probe, operator-token-probe, r11-workspace-probe, runtime-preflight, live-governance-probe, native-patch-probe}.mjs ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng undetected drift, plus a false premise for later lanes — six tracked executables read like supported probes but can never fail in CI trước khi sửa (nội quy mục 3).
+- Reproduction: Static — all six probes are tracked executables (`git ls-files integrations/openclaw/topology/fixtures/runtime-regression/*.mjs` lists `finalization-boundary-probe.mjs`, `operator-token-probe.mjs`, `r11-workspace-probe.mjs`, `runtime-preflight.mjs`, `live-governance-probe.mjs` and `native-patch-probe.mjs`), but nothing invokes them: `package.json` references `runtime-regression` exactly once (`rehearse:r16` → `r16-rehearsal.mjs`), no `npm test` suite imports them, and no `.github/workflows` step runs them, so they can never fail in CI and their drift goes undetected. A repo-wide grep for the six names returns only prose and comment hits — `PLAN.md`, `docs/execution/findings.md`, `docs/contracts/execution/archive/2026-10-16-M12-T2.2-R2.md` and a comment at `integrations/openclaw/topology/lib/runtime-backup.mjs:125` — never an invocation. Two also re-encode the machine state root: `operator-token-probe.mjs:8` and `runtime-preflight.mjs:7` both hardcode `/home/hoang_vinh/.openclaw-zink`. Reproduce with `grep -rn "finalization-boundary-probe|operator-token-probe|r11-workspace-probe|runtime-preflight" package.json .github tests` and observe zero wiring. Fix gates in `tests/repository-policy.test.mjs`: assert every tracked `.mjs` under `integrations/openclaw/topology/fixtures/` is referenced by a `package.json` script or a workflow step, or is deleted.
 - Acceptance criteria: every tracked .mjs under fixtures/ is invoked by a named gate.
 - Related findings: bug mở: R5-E13-01, R5-E13-05 · quyết định chủ: H4 · nguồn: E14 — repository hygiene: tracked junk, stale artifacts…
 
@@ -2969,7 +2991,7 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Status: OPEN
 - Root cause: a speculative target tree committed ahead of implementation — AGENTS.md §8 forbids exactly this. — Hệ quả: a reviewer or executor concludes canonical hashing, lifecycle and routing are fixture-tested when there are zero vectors and zero loaders. Each directory is a future false premise.
 - Evidence: Where: integrations/openclaw/topology/fixtures/{canonical-hash,lifecycle,routing}/README.md · Evidence: each README is its directory's only tracked content, reading "Reserved for synthetic canonicalization / workflow, brief, run and result-acceptance / admission and DAG routing vectors." The parent fixtures/README.md claims the tree holds "Synthetic-only fixtures for canonical hashing, routing, lifecycle". A repo-wide grep for those three paths returns no hits.
-- Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc integrations/openclaw/topology/fixtures/{canonical-hash,lifecycle,routing}/README.md ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng a speculative target tree committed ahead of implementation — AGENTS.md §8 forbids exactly this trước khi sửa (nội quy mục 3).
+- Reproduction: Static — `git ls-files integrations/openclaw/topology/fixtures/{canonical-hash,lifecycle,routing}` returns exactly one tracked file per directory, its `README.md`, and each is only a reservation note: `canonical-hash/README.md:3` "Reserved for synthetic canonicalization vectors.", `lifecycle/README.md:3` "Reserved for synthetic workflow, brief, run and result-acceptance vectors.", `routing/README.md:3` "Reserved for synthetic admission and DAG routing vectors." The parent `integrations/openclaw/topology/fixtures/README.md:3-4` nonetheless advertises "Synthetic-only fixtures for canonical hashing, routing, lifecycle and exact OpenClaw 2026.6.34 runtime regressions", so a reviewer concludes those three areas are fixture-tested when there are zero vectors and zero loaders (a repo-wide grep for the three paths returns no importing file). This is the speculative-target-tree pattern `AGENTS.md` §9 forbids ("Target directory trees are architecture, not implementation evidence"). Reproduce with `git ls-files integrations/openclaw/topology/fixtures/canonical-hash` and the other two, and confirm the only tracked entry is `README.md`. Fix gates in `tests/repository-policy.test.mjs`: assert no tracked fixture directory contains only a reservation README — either the vectors and loaders exist, or the directory is removed and the parent README's claim corrected.
 - Acceptance criteria: no tracked fixture directory contains only a reservation note.
 - Related findings: nguồn: E14 — repository hygiene: tracked junk, stale artifacts…
 
@@ -2992,10 +3014,10 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Legacy register id: `R5-E04-06`
 - Affected modules: Zink Skill Store
 - Severity: Low
-- Status: LATENT
+- Status: LATENT · premise changed 2026-10-18: Both cited locators drifted: detection :756-764 → :791-799 (the cited range now holds `SKILLS_ROOT_MISSING`), clash check :1161-1182 → :1322-1333 (the cited range now holds provenance-reference validation). Mechanism otherwise intact; the s
 - Root cause: the invariant's code is dead vocabulary for sanctioned writers, while the state it guards can only be created by editing files outside the lock — with no digest recompute, no decision binding and no tooling. The owner gets no signal from the store when the invariant was violated by hand; detection arrives as a store-wide records: [] outage rather than a named repair.
 - Evidence: Where: catalog.mjs:756-764 (detection) vs :1161-1182 (clash check) · Evidence: MULTIPLE_ACTIVE_VERSIONS is detected in the reader, but promotion already refuses with SKILL_ACTIVE_CONFLICT on the same namespace+capability predicate, and (per R5-E04-05) no writer can create a second ACTIVE without deleting the first.
-- Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc catalog.mjs:756-764 (detection) vs :1161-1182 (clash check) ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng the invariant's code is dead vocabulary for sanctioned writers, while the state it guards can only be created by editing files outside the lock — with no… trước khi sửa (nội quy mục 3).
+- Reproduction: Static — the reader-side invariant `MULTIPLE_ACTIVE_VERSIONS` (`zink-skill-store/src/catalog.mjs:791-799`, keyed on `namespace.join("/")` plus `capability` at `:790`) fires only when two ACTIVE records share a namespace and capability, but the sanctioned promotion writer already refuses that exact predicate first: `catalog.mjs:1322-1333` computes `clash` on the same `namespace.join("/")`, `capability` and `lifecycle.at(-1).status === "ACTIVE"` and calls `writerError("SKILL_ACTIVE_CONFLICT", …)` (`:1329-1332`). So no writer can create the two-ACTIVE state the reader detects; it is reachable only by hand-editing manifest files outside the lock, with no digest recompute and no decision binding — and the existing gate `tests/m6-t1-skill-store.test.mjs:301-309` proves this by writing two versions directly to disk rather than through the writer. When it does trigger, `scanCatalog` returns `records: sortedErrors.length === 0 ? sortedRecords : []` (`:807`), so the owner sees a store-wide empty-records outage rather than a named repair. Reproduce by extending `tests/m6-t1-skill-store.test.mjs:280-310` to also assert the catalog's `records` array is empty when the hand-written clash exists, and asserting the promotion writer throws `SKILL_ACTIVE_CONFLICT` before any second ACTIVE can be created. Fix gates in `tests/m6-t1-skill-store.test.mjs`: assert the reader emits a targeted diagnostic naming both offending versions for the hand-edited state instead of blanking the whole catalog.
 - Acceptance criteria: Register chưa có acceptance line. Khi sửa phải viết acceptance từ trạng thái đúng ngược lại tiêu đề "the invariant's code is dead vocabulary for sanctioned writers, while the state it guards can only be created by editing files outside the lock — with no digest recompute, no decision binding and no tooling. The owner…", và acceptance đó là điều kiện duy nhất được phép xóa bug này khỏi file (nội quy mục 6).
 - Related findings: bug mở: R5-E04-05 · nguồn: E04 — Skill Store catalog internals (9 findings; the store…
 
@@ -3021,7 +3043,7 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Status: OPEN
 - Root cause: the failure is injected by SQL source text, so any rewording of the tombstone statement silently moves the injected failure to a different call site while the same assertions still pass — the "not swallowed" guarantee can stop covering the intended statement with no red signal. (It is also the only test-side coverage of the R5-E05-02/03 tombstone, which is why those findings went unnoticed.) Leaked temp trees accumulate invisibly on constrained /tmp.
 - Evidence: Where: tests/m11-t1-skill-vector-sql.test.mjs:160-176; tests/m7-t3-tools-contract.test.mjs:143-147 · Evidence: dbExecutor: async (sql) => { if (sql.includes("DELETE FROM skills.catalog_index")) return ""; throw new Error("PSQL_REJECTED_SIMULATION"); } for a test named "failure escalation — a failed failSql is surfaced, not swallowed"; and cleanup try { fs.rmSync(tempDir, …) } catch { void 0; }.
-- Reproduction: Chưa có bước tái hiện ghi sẵn. Điểm khởi đầu bắt buộc: đọc tests/m11-t1-skill-vector-sql.test.mjs:160-176; tests/m7-t3-tools-contract.test.mjs:143-147 ở HEAD hiện tại, rồi dựng test đỏ mô tả đúng the failure is injected by SQL source text, so any rewording of the tombstone statement silently moves the injected failure to a different call site while the… trước khi sửa (nội quy mục 3).
+- Reproduction: Static — the fault is injected by matching SQL source text, not by targeting the tombstone call: `tests/m11-t1-skill-vector-sql.test.mjs:165-168` uses a `dbExecutor` that returns an empty string when `sql.includes("DELETE FROM skills.catalog_index")` and otherwise throws `PSQL_REJECTED_SIMULATION`, inside the test `M11-04: failure escalation — a failed failSql is surfaced, not swallowed` (`:153`), then asserts `report.status === "FAILED"` (`:170`), `report.failed_count === 1` (`:171`) and `report.error_code === "VECTOR_FAILURE_WRITE_FAILED"` (`:172`). The matched substring is the production tombstone at `zink-skill-store/src/vector-sync.mjs:626-631`, so rewording that statement makes the `includes()` miss it and the injected throw silently migrates to whichever statement runs first — the same three assertions still pass while the "not swallowed" guarantee stops covering the tombstone. Reproduce by rewording the `vector-sync.mjs` DELETE (rename the table or prepend a comment) and confirming `node --test tests/m11-t1-skill-vector-sql.test.mjs` stays green. The companion leak is `tests/m7-t3-tools-contract.test.mjs:142-146`, whose cleanup swallows removal failures so temp trees accumulate. Fix gates in `tests/m11-t1-skill-vector-sql.test.mjs`: inject the failure by statement role or call ordinal, or assert the exact SQL the failing executor received, rather than by a substring that can drift.
 - Acceptance criteria: Register chưa có acceptance line. Khi sửa phải viết acceptance từ trạng thái đúng ngược lại tiêu đề "the failure is injected by SQL source text, so any rewording of the tombstone statement silently moves the injected failure to a different call site while the same assertions still pass — the "not swallowed" guarantee…", và acceptance đó là điều kiện duy nhất được phép xóa bug này khỏi file (nội quy mục 6).
 - Related findings: bug mở: R5-E05-02 · nguồn: E10 — test infrastructure: the source-text assertion…
 
@@ -3038,18 +3060,18 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Acceptance criteria: any of the eight `RECOVERY_REFUSALS` terminates execution before the first mutating call; the no-authorization probe leaves the native tree PATCHED and emits exactly one JSON line.
 - Related findings: adjacent to F-069 (recovery tool discoverability, different cause) · nguồn: R7 delta audit D4 — topology policy/contract enforcement
 
-### F-226 — an owner ACCEPT stamps `workflow_status: COMPLETE` without ever reading the outcome it accepted
+### F-226 — an owner ACCEPT stamps `workflow_status: COMPLETE` without reading the outcome it accepted
 
 - Category: F3 — State & Lifecycle Integrity
 - Legacy register id: `R7-D4-02`
 - Affected modules: Workflow topology + ledger
 - Severity: High
 - Status: OPEN
-- Root cause: `WORKFLOW_RESULT_RECORDED` keeps the real outcome only in `root_result.pending_outcome_status`, and `WORKFLOW_USER_RESULT_ACCEPTED` sets `COMPLETE`/`CLOSED` from the verdict alone. No runtime code reads `pending_outcome_status`, so a FAILED or PARTIAL run becomes a COMPLETE task the moment the owner clicks accept.
-- Evidence: Where: integrations/openclaw/topology/lib/workflow.mjs:612-619 (`task.root_result = { ...payload, pending_outcome_status: payload.outcome_status }`, status set to `RESULT_PENDING_REVIEW`) and :621-638 (ACCEPT branch → `task.workflow_status = "COMPLETE"; task.brief_state = "CLOSED"`) · Evidence: `grep -rn pending_outcome_status --include=*.mjs` yields one writer (workflow.mjs:614) plus test readers only (tests/m7-lane-a-workflow.test.mjs:97, tests/m8-t2.3-writer-semantics.test.mjs:143/257/593); `outcome_compatibility` in reason-code-matrix.json declares PARTIAL and FAILED as legal recorded outcomes.
-- Reproduction: apply `WORKFLOW_RESULT_RECORDED` with `outcome_status:"FAILED", reason_code:"RUN_TIMEOUT"` (matrix-legal), then `WORKFLOW_USER_RESULT_ACCEPTED` with a matching digest; the resulting snapshot task is `COMPLETE` while `root_result.outcome_status` is still `FAILED`.
+- Root cause: `WORKFLOW_ROOT_RESULT_RECORDED` keeps the real outcome only in `root_result.pending_outcome_status`, and `WORKFLOW_USER_RESULT_ACCEPTED` sets `COMPLETE`/`CLOSED` from the verdict alone. No runtime code reads `pending_outcome_status`, so a FAILED or PARTIAL run becomes a COMPLETE task the moment the owner clicks accept.
+- Evidence: Where: integrations/openclaw/topology/lib/workflow.mjs:531 opens the `WORKFLOW_ROOT_RESULT_RECORDED` branch, :612-619 is its live arm (`task.root_result = { ...payload, pending_outcome_status: payload.outcome_status }`, status set to `RESULT_PENDING_REVIEW`) and :621-638 (ACCEPT branch → `task.workflow_status = "COMPLETE"; task.brief_state = "CLOSED"`) · Evidence: `grep -rn pending_outcome_status --include=*.mjs` yields one writer (workflow.mjs:614) plus test readers only (tests/m7-lane-a-workflow.test.mjs:97, tests/m8-t2.3-writer-semantics.test.mjs:143/257/593); `outcome_compatibility` in reason-code-matrix.json declares PARTIAL and FAILED as legal recorded outcomes.
+- Reproduction: apply `WORKFLOW_ROOT_RESULT_RECORDED` with `outcome_status:"FAILED", reason_code:"RUN_TIMEOUT"` (matrix-legal), then `WORKFLOW_USER_RESULT_ACCEPTED` with a matching digest; the resulting snapshot task is `COMPLETE` while `root_result.outcome_status` is still `FAILED`.
 - Acceptance criteria: the post-ACCEPT status is derived from the accepted outcome (or a distinct `ACCEPTED_AS_DELIVERED` marker), and a regression test asserts `workflow_status` never contradicts `root_result.outcome_status`.
-- Related findings: F-077, F-085 · nguồn: R7 delta audit D4
+- Related findings: F-077 (same symptom, mechanism newly identified here), F-085, F-248 · nguồn: R7 delta audit D4
 
 ### F-227 — the 12-character task code is minted from `Math.random()` over a 21^4 space and is now the ledger identity the approval is keyed to
 
@@ -3074,20 +3096,20 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Root cause: the two policy files are loaded only by test suites, while runtime reads the same values from frozen literals in code, so the published policy is documentation that no behaviour consults and the two copies can drift apart silently.
 - Evidence: Where: integrations/openclaw/topology/policy/workflow-policy.json:4-8 (`budgets`: 16/10/72) vs topology/lib/ledger.mjs:39-43 (`export const BUDGETS = Object.freeze({ maxBriefRevisionsPerTask: 16, maxStackTransitionsPerTask: 10, maxTotalDelegatedRunsPerTask: 72 })`) · Evidence: a repo-wide grep for `workflow-policy`, `role-capability-manifest` and `state-transitions` outside `tests/` returns nothing; readers are tests/m7-lane-g-policy.test.mjs:630/651/674 and tests/m7-t1-session-authority.test.mjs:267. Only `reason-code-matrix.json` has runtime readers (configure.mjs, lib/policy.mjs, topology/lib/runtime.mjs).
 - Reproduction: static — set the `workflow-policy.json` budgets to 0: every runtime ceiling is unchanged and only `m7-lane-g-policy` reddens, proving the file is inert for behaviour.
-- Acceptance criteria: the file is loaded at the single authoritative site with a behaviour test showing an edit changes observed ceilings, or it is deleted and the literals become the documented source.
+- Acceptance criteria: the file is loaded at the single authoritative site with a behaviour test showing an edit changes observed ceilings, or the owner rules that the literals are the single source, in which case the file and the tests that read it are withdrawn together — an agent may not delete a published policy file to close this row.
 - Related findings: F-127, F-065 · nguồn: R7 delta audit D4 — topology policy and contract enforcement
 
-### F-229 — the declared transition projection forbids the state the reducer writes, and its only checker has zero call sites
+### F-229 — the declared transition projection omits the state the replay arm writes, and its only checker has zero call sites
 
 - Category: F3 — State & Lifecycle Integrity
 - Legacy register id: `R7-D4-05`
 - Affected modules: Workflow topology + ledger
-- Severity: Medium
-- Status: OPEN
-- Root cause: `state-transitions.json` gives `PARTIAL` no inbound edge, while `workflow.mjs` assigns `task.workflow_status = payload.outcome_status` with PARTIAL as a contract-legal outcome; the exported helper that would enforce the projection is never called, and the lane that claims to check the file compares key sets, not edges.
-- Evidence: Where: integrations/openclaw/topology/policy/state-transitions.json — `grep -n PARTIAL` hits only line 54 `"PARTIAL": []`, so no array lists it as a transition target · Evidence: topology/lib/workflow.mjs:607 writes the outcome straight to `workflow_status`; topology/policy/reason-code-matrix.json declares `outcome_compatibility.PARTIAL = ["OPTIONAL_BRANCH_FAILED"]`; topology/lib/runtime.mjs:295 `export function transitionAllowed(...)` has no call site (`grep -rn transitionAllowed --include=*.mjs` returns the definition only); tests/m7-lane-g-policy.test.mjs:700-723 pins key names, not transitions.
-- Reproduction: static — `transitionAllowed("workflow_status", "EXECUTING", "PARTIAL", transitions)` returns false for a transition the reducer actually performs, and nothing notices. A red test can enumerate every `(from, to)` the reducer can produce and assert each appears in the projection.
-- Acceptance criteria: the projection is enforced at the write seam and enumerated edge-by-edge by a test, or it is removed together with the dead helper.
+- Severity: Low
+- Status: LATENT
+- Root cause: `state-transitions.json` gives `PARTIAL` no inbound edge, while the reducer's anchored-replay arm assigns `task.workflow_status = payload.outcome_status`, and PARTIAL is a contract-legal outcome there; the live arm leaves the task in `RESULT_PENDING_REVIEW`, so no current writer produces the edge; the exported helper that would enforce the projection is never called, and the lane that claims to check the file compares key sets, not edges.
+- Evidence: Where: integrations/openclaw/topology/policy/state-transitions.json — `grep -n PARTIAL` hits only line 54 `"PARTIAL": []`, so no array lists it as a transition target · Evidence: topology/lib/workflow.mjs:605-607 — the write sits inside `if (replayAnchored && preVerdictRootResult)`, i.e. replay of pre-verdict history, not the live path; topology/policy/reason-code-matrix.json declares `outcome_compatibility.PARTIAL = ["OPTIONAL_BRANCH_FAILED"]`; topology/lib/runtime.mjs:295 `export function transitionAllowed(...)` has no call site (`grep -rn transitionAllowed --include=*.mjs` returns the definition only); tests/m7-lane-g-policy.test.mjs:700-723 pins key names, not transitions.
+- Reproduction: static — replaying a pre-verdict root result with `outcome_status:"PARTIAL"` performs a transition the projection forbids, and `transitionAllowed("workflow_status", "EXECUTING", "PARTIAL", transitions)` returns false for it; no runtime call site exists to notice either way. A red test can enumerate every `(from, to)` the reducer can produce and assert each appears in the projection.
+- Acceptance criteria: the projection is enforced at the write seam and enumerated edge-by-edge by a test, or the owner retires the projection together with the dead helper and the tests that read it — an agent may not delete the projection to make the check pass.
 - Related findings: F-061, F-127, F-226 · nguồn: R7 delta audit D4
 
 ### F-230 — the transaction preimage hashes raw bytes but stores and re-hashes them as UTF-8 text, so one non-UTF-8 asset makes capture throw
@@ -3103,45 +3125,6 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Acceptance criteria: bodies stored as base64 (or Buffers) with a capture/restore round-trip test over a deliberately binary asset proving byte identity.
 - Related findings: F-131 (same "enumerator meets unseen plugin-tree content" class, different cause) · nguồn: R7 delta audit D4
 
-### F-231 — the output-contract gate only knows the five execution tools, so the Knowledge and Skill output contracts are enforced by nothing
-
-- Category: F7 — Testing & Verification Gaps
-- Legacy register id: `R7-D1-01`
-- Affected modules: Zink Tools, OpenClaw governance plugin (Discord)
-- Severity: High
-- Status: OPEN
-- Root cause: `validateToolOutputEnvelope` hard-codes the checked tool set and returns `{ ok: true }` for anything outside it, while `CANONICAL_TOOL_CONTRACTS` still hashes the Knowledge and Skill contracts — the published shape is certified but never compared to the wire.
-- Evidence: Where: integrations/openclaw/plugins/zink-governance/index.mjs:4343-4356 — `const isCallableExecutionTool = ["zink_excel", "zink_power_bi", "zink_sql", "zink_python", "zink_n8n"].includes(toolId);`, `const outputSchema = isCallableExecutionTool ? contract?.rawSchema?.$defs?.output : null;`, then `if (!outputSchema || typeof outputText !== "string") { return { ok: true }; }` · Evidence: `loadToolContractSchemas` (index.mjs:3151-3160) does register `zink_knowledge_search`, `zink_skill_search` and `zink_skill_propose` against their contract files, so those `$defs.output` blocks are loaded, hashed and never validated.
-- Reproduction: static — `validateToolOutputEnvelope("zink_knowledge_search", { content: [{ text: JSON.stringify({ action: "search", governed_status: "WHATEVER" }) }] }, contract)` returns `{ ok: true }`. A red test asserts a malformed Knowledge or Skill output is blocked at that seam.
-- Acceptance criteria: every tool with a published contract is output-validated at the same seam, or the contracts are declared non-authoritative and dropped from `CANONICAL_TOOL_CONTRACTS`.
-- Related findings: F-144 (same function, opposite symptom — excel/sql successes rejected) · nguồn: R7 delta audit D1 — tool contract schemas
-
-### F-232 — the published `zink-knowledge` output contract contradicts the adapter that emits it
-
-- Category: F4 — Integration & Contract Violations
-- Legacy register id: `R7-D1-02`
-- Affected modules: Zink Tools, Zink Knowledgebase
-- Severity: High
-- Status: OPEN
-- Root cause: the contract's `$defs.output` enumerates only `SUCCESS`/`CONTROLLED_FAILURE` and closes the object, while `knowledge-adapter` emits `NO_MATCH` on an empty search and always adds `semantic_contract_version`, which the contract does not declare.
-- Evidence: Where: zink-tools/contracts/tools/zink-knowledge.schema.json:86-92 — `"governed_status": { "enum": ["SUCCESS", "CONTROLLED_FAILURE"] }`, `required: ["action","namespace","results","total_count","governed_status"]`, `"additionalProperties": false` · Evidence: zink-tools/adapters/knowledge/knowledge-adapter.mjs:435-444 returns `semantic_contract_version: parsed.semantic_contract_version || "zink-semantic-v2"` and `governed_status: formattedResults.length === 0 ? "NO_MATCH" : "SUCCESS"`; the schema's declared output keys are exactly `action, namespace, results, total_count, governed_status` (read from `$defs.output.properties`).
-- Reproduction: static — a zero-hit `zink_knowledge_search` produces `{ governed_status: "NO_MATCH", semantic_contract_version: "zink-semantic-v2", … }`, invalid against `$defs.output` on two counts; invisible today only because of F-231.
-- Acceptance criteria: contract vocabulary and closed shape equal what the adapter emits for both a hit and an empty search, proved by validating a real captured envelope.
-- Related findings: F-231, F-144 · nguồn: R7 delta audit D1
-
-### F-233 — the published `zink-skill` output contract contradicts both the search and the discover path
-
-- Category: F4 — Integration & Contract Violations
-- Legacy register id: `R7-D1-03`
-- Affected modules: Zink Tools, Zink Skill Store
-- Severity: Medium
-- Status: OPEN
-- Root cause: `$defs.output` closes the object to ten declared keys and enumerates `SUCCESS`/`NO_MATCH`/`CONTROLLED_FAILURE`, while the adapter emits `FAILED`, a top-level `query`, and an `error_code` the contract does not declare.
-- Evidence: Where: zink-tools/contracts/tools/zink-skill.schema.json:141-153 — enum `["SUCCESS", "NO_MATCH", "CONTROLLED_FAILURE"]`, `required: ["action","governed_status"]`, `"additionalProperties": false`; declared keys are exactly `action, namespace, skills, skill_content, results, proposal, total_count, governed_status, error, message` · Evidence: zink-tools/adapters/skill-store/skill-adapter.mjs:274-280 returns `governed_status: "FAILED", error_code: "SKILL_CATALOG_INVALID"` and :761-766 returns `action: "search", query: queryTextForEmbedding`.
-- Reproduction: static — an unreadable catalog yields `{ action: "discover", skills: [], governed_status: "FAILED", error_code: "SKILL_CATALOG_INVALID" }`, rejected by `$defs.output`; a successful search yields the undeclared `query`.
-- Acceptance criteria: every action's real output validates against the contract, or the contract declares the failure vocabulary and correlation fields it is meant to describe.
-- Related findings: F-231, F-232 · nguồn: R7 delta audit D1
-
 ### F-234 — the enforced Knowledge input schema is a hand-built registry object, so the published `$defs.input` never gates a call
 
 - Category: F4 — Integration & Contract Violations
@@ -3149,7 +3132,7 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Affected modules: Zink Tools, OpenClaw governance plugin (Discord)
 - Severity: Medium
 - Status: OPEN
-- Root cause: registration prefers `def.parameters` over the contract, and that object is assembled from contract lookups that cannot resolve (`limit`, `primary_topic` are absent from `$defs.input`), so the live seam accepts seven properties the contract forbids and drops two it requires.
+- Root cause: registration prefers `def.parameters` over the contract, and that object is assembled from contract lookups that cannot resolve (`limit`, `primary_topic` are absent from `$defs.input`), so the live seam accepts seven properties the contract forbids and drops the `action` it requires.
 - Evidence: Where: integrations/openclaw/plugins/zink-governance/index.mjs:4258 (`const paramSchema = def.parameters || toolContracts[toolId]?.parameters;`) · Evidence: the registry block :3485-3519 declares `query, limit, primary_topic, action, namespace, path_prefix, rerank, task_id, session_key, run_id` with `required: ["query","namespace"]` and no `additionalProperties`, while zink-tools/contracts/tools/zink-knowledge.schema.json `$defs.input` declares exactly `action, namespace, query, chunk_id, top_k` with `required: ["action","namespace"]` and `additionalProperties: false` (both sets read programmatically). `loadToolContractSchemas`:3169 does set `parameters: rawSchema.$defs?.input`, so the unresolved lookups fall through to the `|| { type: "…" }` defaults instead of failing.
 - Reproduction: static — a knowledge call carrying `path_prefix` or `rerank` satisfies `def.parameters` and is rejected by `$defs.input`; the two schemas disagree, which proves the contract is not the authority.
 - Acceptance criteria: the registration seam validates the published `$defs.input`, or the contract is amended to the accepted surface and a test asserts contract and registry shapes are equal.
@@ -3245,3 +3228,341 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Reproduction: static — the grep proves no code, doc or CI step opens the file, so deleting it changes nothing.
 - Acceptance criteria: the file is removed, or it declares a network that a compose file consumes via `external` or a shared name plus a documented step that creates it.
 - Related findings: F-217, F-220 (stale and target-tree family) · nguồn: R7 delta audit D7 — orphaned config and ownership
+
+### F-242 — the live tool-call branch is selected by model-supplied parameter shape, and for `zink_excel`/`zink_power_bi` it never consumes the approval those operations require
+
+- Category: F2 — Security & Authorization
+- Legacy register id: `R7-D8-01`
+- Affected modules: Zink Tools, OpenClaw governance plugin (Discord)
+- Severity: High
+- Status: OPEN
+- Root cause: which authorization path runs is chosen from the shape of the model's own parameters, and only the n8n sub-branch was given the M7-006 delegation+approval re-entry. The excel branch validates the file path and returns allow, so an operation the policy marks `requiresApproval: true` executes without an approval record, without a delegation binding and without an `AuthorizationDecisionContext`.
+- Evidence: Where: integrations/openclaw/plugins/zink-governance/index.mjs:6327-6348 (`const isSynthetic = Boolean(event.params?.call_id && event.params?.specialist && event.params?.tool_id && event.params?.input);` → only this branch calls `guard.beforeToolCall`), :6350-6360 ("Live OpenClaw agent tool call" → `evaluateToolAccess(context.agentId, event.toolName)` — note `params` defaults to `{}` at :3066), :6365-6381 (the `zink_excel` branch performs path validation only; :6382-6401 is the `zink_sql` sibling), :6607 (`return { allow: true };`) · Evidence: the fix exists for the sibling tool only — :6402-6406 comment "M7-006: the live n8n path uses the SAME canonical registry, delegation scope and approval binding as the guarded path. The live branch previously performed none of them", then :6509-6534 `bindInvocationApproval` and :6543 `guard.beforeToolCall`. Policy declares the requirement: integrations/openclaw/lib/policy.mjs:1648-1653 (`zink_excel: "delegated"`) and :1661-1672 (`populate`/`generate` → `requiresApproval: true`).
+- Reproduction: static — an agent with static capability calls `zink_excel` `{operation:"populate", file_path:…}` with no `call_id` → live branch → path check passes → `allow:true` → `executeExcelOperation` writes the workbook. No approval is read, so nothing can be recorded or replayed-checked. A red test asserts that a `requiresApproval` operation executed with no consumed approval is refused.
+- Acceptance criteria: a tool whose `AUTHORIZATION_MODE_BY_TOOL` entry is `delegated` is refused at the live seam unless `guard.beforeToolCall` produced the decision context; the synthetic/live fork is no longer decided by model-supplied fields.
+- Related findings: F-023, F-025, F-037, F-051 · nguồn: R7 delta audit D8 — adversarial authorization review
+
+### F-243 — no production code ever mints a tool-invocation approval record, so `bindInvocationApproval` is an inert control that only tests can satisfy
+
+- Category: F7 — Testing & Verification Gaps
+- Legacy register id: `R7-D8-02`
+- Affected modules: Zink Tools, OpenClaw governance plugin (Discord)
+- Severity: High
+- Status: OPEN
+- Root cause: the approval resolver reads four stores and nothing in the shipped code writes any of them; the only writers are test fixtures that create the file themselves. The control therefore has no production-reachable pass path, and its failure path (every governed call denied) is the only real behaviour — which is exactly why the ungoverned live branch in F-242 is the effective policy.
+- Evidence: Where: integrations/openclaw/topology/lib/guard.mjs:507 (`const memKey = Symbol.for("zink.governance.approvals");` — the only occurrence in `integrations/`), :558 (`path.join(paths.root, "approvals.json")`), :660 (`consumed-approvals.json`) · Evidence: a repo-wide grep for writers of those stores returns only tests/m11-t3-durable-state-integrity.test.mjs:507 and tests/m7-lane-c-queue.test.mjs:198, i.e. tests fabricate the file the guard reads.
+- Reproduction: static — any `requiresApproval:true` call resolved through the guard fails `AUTH_APPROVAL_REQUIRED`/`AUTH_APPROVAL_INVALID` for every `approvalId`, because no durable record can exist; a mutation probe that adds a writer must make the same call pass.
+- Acceptance criteria: a durable minter produces one consumable record per surfaced approval card, and a test proves `AUTH_APPROVAL_REPLAYED` fires on the second consume.
+- Related findings: F-242, F-030, F-032 · nguồn: R7 delta audit D8
+
+### F-244 — the free-text approval ingress fabricates the channel and actor it then validates, so "approval must occur in #approvals" can never fail
+
+- Category: F2 — Security & Authorization
+- Legacy register id: `R7-D8-03`
+- Affected modules: Zink Tools, OpenClaw governance plugin (Discord)
+- Severity: High
+- Status: OPEN
+- Root cause: the handler is called with constants derived from the action word rather than from the inbound event, and no guild/channel/thread check is performed on the free-text path. The authority rule that follows compares the event against the value the caller invented, and the durable event records that invented channel.
+- Evidence: Where: integrations/openclaw/plugins/zink-governance/index.mjs:8641-8652 (`const isResult = normAction === ACTIONS.ACCEPT_RESULT; const targetChannel = isResult ? "results" : "approvals";` then `handleDiscordAction({ actor: "user", channel: targetChannel, … })`) · Evidence: the only gate on this path is the owner-id equality at :8590, with task correlation by substring at :8609 (`content.includes(taskId)`); `validateActionAuthority` receives no sender id (integrations/openclaw/lib/authority.mjs:217-245).
+- Reproduction: static — the owner typing `APPROVE <task>` in a bot DM or any other channel is admitted and journalled as `channel:"approvals"`; `executeApprovedTask` then fires. A red test asserts that a verdict observed outside the recorded approval surface is denied and writes no event.
+- Acceptance criteria: channel, guild and thread come from the inbound event and are denied unless they equal the recorded approval surface; the ledger can no longer assert a channel that was never observed.
+- Related findings: F-043 (button path's missing thread check — same rule, different mechanism), F-030, F-032 · nguồn: R7 delta audit D8
+
+### F-245 — `bindInvocationApproval` drops the owner-principal equality check whenever the task carries no principal reference
+
+- Category: F2 — Security & Authorization
+- Legacy register id: `R7-D8-04`
+- Affected modules: Zink Tools
+- Severity: Medium
+- Status: LATENT
+- Root cause: the principal assertion is wrapped in `if (originPrincipalRef)`, and the caller derives that value from a three-deep fallback chain, so an absent reference silently removes the "who approved this" binding while every other check still passes.
+- Evidence: Where: integrations/openclaw/topology/lib/guard.mjs:355-361 (`const record = resolveAuthenticatedApproval(…); if (!record …) fail("AUTH_APPROVAL_INVALID"); if (originPrincipalRef) { assert(record.owner_principal_ref === originPrincipalRef, …`) · Evidence: the caller's value is `owner.task?.origin_principal_ref ?? owner.task?.origin?.origin_principal_ref ?? owner.task?.root_principal_ref` (plugins/zink-governance/index.mjs:6516-6519).
+- Reproduction: static — a task snapshot lacking all three fields plus any structurally valid approval record for that task is consumed for any principal. LATENT because no minter exists yet (F-243); it becomes reachable the moment one does.
+- Acceptance criteria: the equality assert is unconditional and a task without a resolvable principal reference fails `AUTH_APPROVAL_INVALID`.
+- Related findings: F-243, F-023, F-031 · nguồn: R7 delta audit D8
+
+### F-247 — `task.accepted_reference_digests` is declared and read but has no writer, so any delegation carrying `input_refs` is refused forever
+
+- Category: F4 — Integration & Contract Violations
+- Legacy register id: `R7-D11B-01`
+- Affected modules: Zink Tools, Zink Knowledgebase (provenance duty)
+- Severity: High
+- Status: OPEN
+- Root cause: the guard requires every handoff reference to match a canonical digest stored on the task projection, but no event type carries reference digests and no reducer branch writes that slot, so the comparison is always `undefined === <hex>`.
+- Evidence: Where: integrations/openclaw/topology/lib/guard.mjs:1487-1492 (`assert(task.accepted_reference_digests?.[ref.ref_id] === canonicalHash("zink-reference-v1", ref), "REFERENCE_INVALID")`) · Evidence: the slot is declared at topology/contracts/ledger-snapshot.schema.json:501-508 and a repo-wide grep for `accepted_reference_digests` returns exactly those two places plus the schema — no writer in `workflow.mjs`, none in `tests/`, none in `docs/`.
+- Reproduction: static — a proposal carrying one governed reference (populated from the model proposal at index.mjs:7140) reaches guard.mjs:1489 and fails `REFERENCE_INVALID`; no committed state can satisfy it.
+- Acceptance criteria: an event type plus a reducer write populate the slot, and a test commits a reference-bearing handoff, reads it back, and asserts both the pass and the REFERENCE_INVALID case.
+- Related findings: F-071, F-144, F-248 · nguồn: R7 delta audit D11B — event contract vs reducer
+
+### F-248 — a result recorded without a payload digest wedges the task in `RESULT_PENDING_REVIEW`: every owner verdict demands a digest that was never stored
+
+- Category: F3 — State & Lifecycle Integrity
+- Legacy register id: `R7-D11B-02`
+- Affected modules: Zink Tools (workflow topology)
+- Severity: High
+- Status: LATENT
+- Root cause: the event contract makes `payload_digest` optional and the reducer stores it only when present, while every verdict path begins by requiring that stored digest to be a string. The task has no exit except cancellation, and the failure looks like an owner decision problem rather than a missing field.
+- Evidence: Where: integrations/openclaw/topology/lib/workflow.mjs:1207-1210 (`task.workflow_status = "RESULT_PENDING_REVIEW"; … if (payload.payload_digest) task.execution_payload_digest = payload.payload_digest;`) vs :1580-1583 (`const currentDigest = task.root_result?.payload_digest ?? task.execution_payload_digest; requireCondition(typeof currentDigest === "string", "RESULT_MISMATCH");`) · Evidence: the comment at :1584-1587 records that a previous null-versus-undefined bug "made EVERY verdict fail and wedged the task in review" — the same wedge remains for the absent-digest case.
+- Reproduction: static — contract-legal but not reachable from the current emitter, so the row stays `LATENT`: `index.mjs:2424-2428` always names the key, and when it computes `payloadDigest = null` (no artifact set and no artifact file, :2313-2319) the append is rejected outright by `validateContract("ledger-event", …)` at `topology/lib/ledger.mjs:543` — verified by handing a synthetic event with a null `payload_digest` to that validator, which throws `SCHEMA_INVALID: SCHEMA_VALIDATION_FAILED`. The live digest-less case is F-077's; the absent-key wedge here fires only for a new emitter or a hand-written event. `WORKFLOW_RESULT_RECORDED {task_id}` with no digest from EXECUTING leaves the status set and no digest; ACCEPT, REJECT, BLOCK and REQUEST_REVISION all throw `RESULT_MISMATCH`, and APPROVAL_DECIDED refuses the status.
+- Acceptance criteria: either `payload_digest` is required in that contract branch, or verdict binding tolerates an unbound result; a test drives ACCEPT after a digest-less record.
+- Related findings: successor to F-077 (that row records the wedge, this one names the mechanism), F-226, F-113, F-249 · nguồn: R7 delta audit D11B
+
+### F-249 — the verdict binds `result_id` against a field the contract forbids, so id-only verdicts always fail
+
+- Category: F4 — Integration & Contract Violations
+- Legacy register id: `R7-D11B-03`
+- Affected modules: Zink Tools (workflow topology)
+- Severity: Medium
+- Status: OPEN
+- Root cause: verdicts may carry `result_id` and the reducer compares it against `task.root_result.result_id`, but `root_result` is stored as `{...payload}` under a closed contract that declares no `result_id`, so the compared value can never exist.
+- Evidence: Where: integrations/openclaw/topology/lib/workflow.mjs:1601-1606 (`if (payload.result_id === undefined) fail("RESULT_MISMATCH"); requireCondition(task.root_result?.result_id !== undefined && payload.result_id === task.root_result.result_id, "RESULT_MISMATCH")`) · Evidence: `$defs.root_result` in topology/contracts/ledger-event.schema.json declares exactly `task_id, brief_revision, native_run_id, agent_id, payload_digest, outcome_status, reason_code, governance_hash, pending_outcome_status` with `"additionalProperties": false` (read programmatically from the file).
+- Reproduction: static — a verdict carrying `result_id` and no `result_digest` reaches :1602 and fails in strict mode; :1600 returns early for anchored replay, so only new strict-mode verdicts are affected.
+- Acceptance criteria: `result_id` is declared in the root-result contract and written by a reducer branch, or the owner declares id-only verdicts unsupported and the branch is withdrawn together with the contract field that admits them; a test drives the id-only verdict either way.
+- Related findings: F-248, F-108 · nguồn: R7 delta audit D11B
+
+### F-250 — the event contract accepts artifact objects the snapshot contract rejects, and the event is fsynced before the projection is validated
+
+- Category: F4 — Integration & Contract Violations
+- Legacy register id: `R7-D11B-04`
+- Affected modules: Zink Tools (workflow topology), Gates + CI
+- Severity: High
+- Status: OPEN
+- Root cause: `artifacts.items` in the event contract is an unconstrained object, the reducer copies items verbatim, and the append-to-journal happens before the resulting snapshot is validated. A result whose artifact item lacks `sha256` therefore becomes durable history that the next read cannot project, which the ledger reports as corruption.
+- Evidence: Where: topology/contracts/ledger-event.schema.json — `"artifacts": { "type": ["array","null"], "maxItems": 10, "items": { "type": "object" } }` vs ledger-snapshot.schema.json `"result_artifacts": { … "items": { "type":"object", "additionalProperties": false, "required": ["logical_path","sha256"], … } }` (both quoted from the files) · Evidence: workflow.mjs:1187-1204 checks only "is an array, length <= 10" and `task.result_artifacts = payload.artifacts.map(a => ({...a}))`; the set digest at :1192-1197 hashes `logical_path`/`sha256` pairs, so a missing `sha256` still matches itself; topology/lib/ledger.mjs:543-552 validates the incoming event and pre-image snapshot, then `appendFileSync` + `fsyncSync`, and only :559 `writeSnapshotAtomic(paths, next)` validates the projection.
+- Reproduction: static — `WORKFLOW_RESULT_RECORDED` with `artifacts:[{logical_path:"a"}]` and a self-consistent `artifact_set_digest` → the event line is durable → snapshot write fails schema validation → the next read meets an unprojectable tail and raises ledger corruption / `EXECUTION_STATE_UNKNOWN`.
+- Acceptance criteria: the event contract declares the artifact item shape identically to the snapshot, or the projection is validated before the append; a test asserts no event becomes durable ahead of a validatable snapshot.
+- Related findings: F-143, F-063, F-248 · nguồn: R7 delta audit D11B
+
+### F-251 — the reason-code reader consults only two of the three matrix sections, and the reducer's suspension write consults none
+
+- Category: F1 — Logic & Functional Bugs
+- Legacy register id: `R7-D11B-05`
+- Affected modules: Workflow topology + ledger
+- Severity: Low
+- Status: OPEN
+- Root cause: `isDeclaredReasonCode` is built from the agent-claim and runtime-reason lists only, so the matrix's third vocabulary section is invisible to every check; and the suspension path assigns `task.reason_code` directly without calling the check at all, unlike its sibling verdict. A declared code can therefore reach durable state through a route no validator covers, and a rename of the matrix section would not be noticed.
+- Evidence: Where: integrations/openclaw/topology/lib/runtime.mjs:70-75 (`AGENT_REASON_CODES.includes(code) || RUNTIME_REASON_CODES.includes(code)`) · Evidence: topology/policy/reason-code-matrix.json carries a third vocabulary section, and read programmatically it is exactly `task_suspension_reasons = ["BLOCKED","DUPLICATE_RESULT_CONFLICT"]`; a repo-wide grep finds no reader for it (only `agent_claims` and `runtime_reasons` are consumed); workflow.mjs:469 assigns `task.reason_code = "BLOCKED"` with no check while :697 demands `isDeclaredReasonCode` for the sibling `WORKFLOW_USER_RESULT_BLOCKED` path; ledger-snapshot.schema.json types reason_code as a free string (maxLength 128), so nothing downstream notices.
+- Reproduction: static — `WORKFLOW_NATIVE_ENDED` with an error outcome yields `task.reason_code === "BLOCKED"` and `isDeclaredReasonCode("BLOCKED") === false` even though the code is declared in the matrix. A red test asserts the validator covers every declared section and that every durable reason passes it.
+- Acceptance criteria: `isDeclaredReasonCode` reads all matrix sections, every `task.reason_code` write is checked against it, and a test asserts each declared suspension reason is reachable or removed.
+- Related findings: F-127, F-229 · nguồn: R7 delta audit D11B — event contract vs reducer
+
+### F-252 — three canonical contracts are hash-pinned but never applied, and a contract edit reports no version change
+
+- Category: F4 — Integration & Contract Violations
+- Legacy register id: `R7-D11B-06`
+- Affected modules: Zink Tools (workflow topology), Gates + CI
+- Severity: Medium
+- Status: OPEN
+- Root cause: `incident`, `result` and `governance-manifest` appear only in the canonical list that pins hashes; no code or test names them in a validation call. Separately none of the twelve topology contracts declares the version key the manifest reads, so all twelve report the same version forever while only the checksum moves.
+- Evidence: Where: integrations/openclaw/topology/lib/schema.mjs:22-35 (`CANONICAL_CONTRACTS`) and :371-387 (`generateSchemaManifest` reading `x-zink-contract-version` then falling back to `"1.0.0"`) · Evidence: a grep for `validateContract("incident"|"result"|"governance-manifest")` across the repo returns 0 hits; `canonical.mjs:12` sets `SCHEMA_VERSION = "1.0.0"`, pinned as a const in both ledger contracts.
+- Reproduction: static — edit `ledger-event.schema.json`: the next read re-governs all history under new bytes with the same reported version, failing closed as `EXECUTION_STATE_UNKNOWN` (ledger.mjs validates before the version check) and indistinguishable from corruption.
+- Acceptance criteria: every canonical contract has a named validation call site or the owner declares the contract non-canonical and it leaves the pinned list together with the schema file; each topology contract carries its own version key; a deploy or boot gate calls `verifySchemaManifestChecksums`.
+- Related findings: F-022, F-065, F-250 · nguồn: R7 delta audit D11B
+
+### F-253 — cancelling an index run leaves a permanent `RUNNING` row, and the unique-running constraint turns that into a self-block reported as a database outage
+
+- Category: F3 — State & Lifecycle Integrity
+- Legacy register id: `R7-D10A-01`
+- Affected modules: Zink Knowledgebase
+- Severity: High
+- Status: OPEN
+- Root cause: the lifecycle records a terminal state only inside `except LifecycleError` and `except Exception`, but the owner-connection termination handler cancels the task, and `asyncio.CancelledError` derives from `BaseException`. The only writer of `INTERRUPTED` runs at startup, so within the same process the row stays `RUNNING` and the one-running partial index blocks every later run.
+- Evidence: Where: apps/knowledge/app/index_lifecycle.py:360-372 (`except LifecycleError as error:` … `except Exception:` → `self._fail(run, "INDEXING_UNEXPECTED_FAILURE", …)`; no `BaseException` arm) · Evidence: apps/knowledge/app/index_runner.py:107-114 (`def on_termination(_): … current_task.cancel()`) and :119-125 (the `finally` releases the lock and unbinds the connection but never marks the run); apps/knowledge/migrations/001_initial.sql:63-65 (`CREATE UNIQUE INDEX … knowledge_index_runs_one_running_idx … WHERE status = 'RUNNING';`)
+- Reproduction: static — owner connection terminates → task cancelled → `CancelledError` escapes `execute()` → row still `RUNNING`; the next `POST /v1/index-runs` INSERT violates the partial unique index, and the `PostgresError` surfaces as a 503 `DATABASE_UNAVAILABLE` until the process restarts.
+- Acceptance criteria: after cancelling a run mid-flight, `SELECT count(*) FROM knowledge.index_runs WHERE status='RUNNING'` is 0 within the same process and a subsequent run request returns 202.
+- Related findings: F-164, F-017, F-101 · nguồn: R7 delta audit D10A — Knowledgebase persistence
+
+### F-254 — `acquire_advisory_lock` leaks a pooled connection whenever the lock query raises, and four leaks make the whole service report a database outage
+
+- Category: F6 — Reliability & Performance
+- Legacy register id: `R7-D10A-02`
+- Affected modules: Zink Knowledgebase
+- Severity: High
+- Status: OPEN
+- Root cause: the connection is acquired before any `try`, and only the negative lock result releases it. Any error from the lock query (a dead backend handed out by the pool, a server restart, a statement timeout) leaves the connection checked out forever.
+- Evidence: Where: apps/knowledge/app/database.py:1567-1574 — `connection = await self._pool.acquire()` / `if await connection.fetchval("SELECT pg_try_advisory_lock($1)", lock_key): return connection` / `await self._pool.release(connection)` / `return None`; no `except` and no `finally` · Evidence: the pool is created with a small `max_size` (database.py around :188-190), and callers are index_runner.py:38 and the reservation path, so the leak is per run attempt.
+- Reproduction: static — one failed reservation per dead connection; once the pool is exhausted every `pool.acquire()` (including search) blocks until the pool timeout and returns 503 `DATABASE_UNAVAILABLE`, with no restart-free recovery.
+- Acceptance criteria: a fake pool whose `fetchval` raises shows `pool.release` called exactly once, and N failed reservations leave the pool's idle count unchanged.
+- Related findings: F-165, F-253 · nguồn: R7 delta audit D10A
+
+### F-255 — mutation transactions resolve the owner connection from a mutable global slot, so a stale run can write inside a newer session's ownership
+
+- Category: F6 — Reliability & Performance
+- Legacy register id: `R7-D10A-03`
+- Affected modules: Zink Knowledgebase
+- Severity: Medium
+- Status: OPEN
+- Root cause: every lifecycle mutation reads `self._owner_connection` at call time instead of using the connection the run was scheduled with, and the liveness check tests whoever currently holds the slot. The unbind path is identity-guarded, which shows the aliasing is known, but the write path is not.
+- Evidence: Where: apps/knowledge/app/database.py:373-381 (`connection = self._owner_connection` … `if connection.is_closed(): raise StateTransitionError("Index ownership connection was lost.")` … `async with connection.transaction():`) · Evidence: index_runner.py:100-102 receives `connection` as a parameter and uses it only for the listener and for `unbind_owner_connection(connection)` at :122.
+- Reproduction: static — session A dies (PostgreSQL auto-releases its advisory lock), session B reserves and binds a new connection, and A's still-scheduled run calls a mutation: `is_closed()` checks B's live connection, so A opens a transaction on B's session and interleaves with B's writes.
+- Acceptance criteria: a run whose bound owner no longer equals `self._owner_connection` raises before executing any statement, proved by a test with two overlapping owner generations.
+- Related findings: F-254, F-253, F-002 (different store, same "live in-memory slot used as authority" shape) · nguồn: R7 delta audit D10A
+
+### F-257 — the PDF publish path inserts one statement per segment while its markdown sibling uses `executemany`, so a large build aborts inside its own transaction
+
+- Category: F6 — Reliability & Performance
+- Legacy register id: `R7-D10A-05`
+- Affected modules: Zink Knowledgebase
+- Severity: Medium
+- Status: OPEN
+- Root cause: the PDF path loops `await connection.execute(INSERT INTO knowledge.segments …)` per segment inside the publish transaction, whereas the markdown path and three other bulk sites already use a single prepared `executemany`. Round trips scale with segment count and consume the command timeout budget of the enclosing transaction.
+- Evidence: Where: apps/knowledge/app/database.py:1275-1281 (`for segment, embedding in zip(segments, embeddings, strict=True): … await connection.execute("""INSERT INTO knowledge.segments (`) · Evidence: the same file uses `await connection.executemany(` at :473, :669 and :1198, the last being the markdown sibling the comment records as "one prepared statement for the whole document".
+- Reproduction: static — a build whose segment count needs more round trips than the command timeout allows aborts `replace_pdf_source`, so incremental runs take `DOCUMENT_INDEXING_FAILED` while the READY build and its extracted text remain on disk.
+- Acceptance criteria: the PDF publish uses one batched statement and a paged read for publication segments, asserted by a synthetic large-build test that completes under the timeout.
+- Related findings: F-092 (unbatched bulk delete, same class different site), F-093, F-175 · nguồn: R7 delta audit D10A
+
+### F-258 — artifact "validation" is extension plus size plus substring: the excel branch checks nothing structural and the ZIP helper is not a ZIP parser
+
+- Category: F5 — Data Integrity & Result Correctness
+- Legacy register id: `R7-D11A-01`
+- Affected modules: Zink Tools, OpenClaw governance plugin (Discord)
+- Severity: High
+- Status: OPEN
+- Root cause: the type comes from the file extension, then the excel branch fails only files under 100 bytes, and the helper named `inspectZipContainsEntries` reads the whole file as latin1 and does `str.includes(keyword)`, so a keyword appearing anywhere in arbitrary payload bytes counts as a container entry. A garbage file with the right name therefore reaches a PASS verdict and feeds the governed result card and artifact digest.
+- Evidence: Where: integrations/openclaw/lib/artifact-validator.mjs:565-573 (`} else if (inferredType === "excel") { result.checks.format = "EXCEL"; if (fileSizeBytes < 100) { … CORRUPT_EXCEL … } }` — no magic-byte, entry or sheet check) and :112-121 (`// J02 & J03: Inspect ZIP central directory / local headers …` then `const str = buf.toString("latin1"); return requiredKeywords.some((kw) => str.includes(kw));`) · Evidence: the type decision is `deriveType` at :293-324 (extension-driven), and the validation status is consumed by `evaluateResultGate` which the formatter renders into the #results card.
+- Reproduction: static — a 200-byte text file named `report.xlsx` returns `status: PASS` with readability and hash true; so does a truncated real workbook. A red test feeds a truncated `.xlsx` and asserts FAIL.
+- Acceptance criteria: the office/document branches parse the container (central directory plus required entry names, `xl/worksheets/*` and `[Content_Types].xml` for xlsx) and truncated or garbage inputs FAIL.
+- Related findings: F-126, F-144, F-259 · nguồn: R7 delta audit D11A — artifact validator and rendering surfaces
+
+### F-259 — the result card sanitizes every sibling field but emits `preview` raw, so untrusted file bytes reach Discord unredacted
+
+- Category: F2 — Security & Authorization
+- Legacy register id: `R7-D11A-02`
+- Affected modules: Zink Tools, OpenClaw governance plugin (Discord)
+- Severity: High
+- Status: OPEN
+- Root cause: the formatter's own contract is to redact paths, secrets and mentions, and it does so for artifact, findings and header fields — but the preview block is interpolated straight from the validator, where it is the file's own lines, with no sanitisation and no message-length ceiling on this renderer.
+- Evidence: Where: integrations/openclaw/lib/discord-formatter.mjs:880-891 (`sanitizeDiscordIdentifier` for task/status/validation, `sanitizeDiscordText` for `keyFindings` and `artifact`) vs :924 (`preview || "*(Không có dữ liệu trích xuất)*",` — raw) · Evidence: `preview` is `gateResult.preview.previewText`, produced by artifact-validator from the file's own content, and the card is returned as `resultCard` at plugins/zink-governance/index.mjs:2405/2475.
+- Reproduction: static — an artifact whose CSV/SQL/markdown bytes contain a Windows path or a token appear verbatim on the #results card; large row sets exceed the 2000-character message ceiling because no chunking is applied on this path.
+- Acceptance criteria: the preview passes through `sanitizeDiscordText` and the assembled card is chunked/capped before send, with a test asserting a path/secret in file bytes never appears in the card.
+- Related findings: F-064 (upstream bytes as adapter message), F-258 · nguồn: R7 delta audit D11A
+
+### F-260 — a directory-fsync failure after a committed rename rolls the in-memory ledger back, so the next successful save erases the owner's decision
+
+- Category: F3 — State & Lifecycle Integrity
+- Legacy register id: `R7-D11A-03`
+- Affected modules: Zink Tools (decision ledger)
+- Severity: Medium
+- Status: OPEN
+- Root cause: `save()` fsyncs the parent directory inside the same try as the rename and rethrows any error the platform tolerates do not; the caller's catch then restores the pre-write in-memory state, which is now behind a disk that already holds the record. A later successful save serialises the stale map over it.
+- Evidence: Where: integrations/openclaw/lib/decision-ledger.mjs:287-293 (write temp, `fsyncSync(fd)`, `renameSync(tempPath, this.storagePath)`) then :302-316 (open dir, `fsyncSync(directoryFd)`, `catch (error) { if (process.platform !== "win32" || !/^(EPERM|EISDIR|EINVAL|ENOTSUP)$/u.test(error?.code ?? "")) { throw error; } }`) · Evidence: the caller rollback at :440-447 (`this.decisions.set(id, record); try { this.save(); } catch (err) { this.decisions.delete(id); if (existing) this.decisions.set(id, existing); throw err; }`) — the same shape the queue's `_mutateWithRollback` uses (queue-manager.mjs:505-520), while the enqueue/claim paths reload from disk on failure.
+- Reproduction: static — inject an fsync error after a successful rename: the owner sees `LEDGER_WRITE_FAILED`, memory drops the decision, the disk keeps it, and the next `save()` deletes it. This is the inverse of "recorded when the write failed".
+- Acceptance criteria: a post-rename durability error is classified as committed-uncertain and the writer reloads from disk (as the queue's claim path already does) instead of restoring the snapshot; a test injects the error and asserts the record survives and memory equals disk.
+- Related findings: F-002, F-154, F-056, F-061 · nguồn: R7 delta audit D11A
+
+### F-261 — a stale git worktree inside `scratch/` carries its own AGENTS.md and PLAN.md that assert owner-level authority, and every gate excludes it
+
+- Category: F3 — State & Lifecycle Integrity
+- Legacy register id: `R7-D12B-01`
+- Affected modules: governance records, repository hygiene
+- Severity: High
+- Status: OPEN
+- Root cause: an earlier agent session left a registered worktree five days behind HEAD inside the gitignored `scratch/`; `git ls-files`, `repo:check`, prettier, eslint and markdownlint all skip it, yet its documents declare themselves the durable source of truth, so a cold resume that globs for PLAN.md or AGENTS.md can read a second, contradictory authority.
+- Evidence: Where: `git worktree list` returns the primary plus `…/personal-tool/scratch/wt-discord-idle-reset  f94c858 [codex/discord-idle-session-reset]` · Evidence: that tree's `PLAN.md` states "`PLAN.md` is the durable source of truth for milestone/task lifecycle state" and its `.git` file contains `gitdir: C:/…/.git/worktrees/wt-discord-idle-reset`; HEAD here is `6e601ae`/`ea3eaa1`, so the copy is stale. Correction to the audit note: that worktree holds no `findings.md` — the register post-dates the branch.
+- Reproduction: static — from the repo root, glob `**/PLAN.md` without gitignore awareness and two authority documents with different task states are returned.
+- Acceptance criteria: no registered worktree under the repo root other than the primary, or a gate asserting `git worktree list` has exactly one entry; the audit charter's "working tree is authoritative" rule is enforced mechanically.
+- Related findings: F-038 (same directory, token-in-script cause), F-097 (worktree loss), F-191 · nguồn: R7 delta audit D12B — repo tooling reach
+
+### F-262 — no tracked lane parses `compose.m4-t5.live.yml`; the operator script that hands it to Docker is its only reader
+
+- Category: F7 — Testing & Verification Gaps
+- Legacy register id: `R7-D12B-02`
+- Affected modules: Gates + CI, deployment topology
+- Severity: Low
+- Status: OPEN
+- Root cause: the live acceptance overlay is the one compose file in the tree that no test or repository gate opens, so a syntactically invalid edit to it is first reported by the live Docker host, in the lane that is already `NOT TESTED`.
+- Evidence: Where: `infrastructure/docker/scripts/knowledge-t5-live.ps1:22` builds the path and `:38` passes it to `docker compose` — a repo-wide grep of `tests/`, `scripts/`, `.github/` and `docs/runbooks/` returns no other reader · Evidence: the siblings are covered, which is why this row was narrowed after the D9 challenge: `tests/m3-t1-contract.test.mjs:59-64` and `tests/m5-docker-contract.test.mjs:27-34` YAML-parse `compose.core.yml` with `parseDocument`, `tests/m5-docker-contract.test.mjs:34` parses `compose.knowledge.yml`, `tests/m12-t2.2-b15-compose-equivalence.test.mjs:33` pins the two other acceptance files byte-identical, `tests/m8-t2.3-blocked-verdict.test.mjs:20` imports `state-transitions.json` as a JSON module, and `integrations/openclaw/topology/lib/runtime.mjs:35-41` fails closed on a malformed `reason-code-matrix.json`.
+- Reproduction: static — the first draft of this row claimed High and that nothing in the gate set parses the behaviour-bearing YAML/JSON artifacts; both halves were refuted by the locators above, and its own reproduction (corrupt `compose.core.yml`, `npm run verify` stays green) does not reproduce: that file is parsed by two tracked suites. What does reproduce is the narrower claim: corrupt `compose.m4-t5.live.yml` into invalid YAML and no lane in `npm run verify` opens it.
+- Acceptance criteria: a tracked lane validates `compose.m4-t5.live.yml` the way the siblings are validated (parse-and-assert, or a gate that YAML-parses every tracked compose file), or the owner records in `PLAN.md` §3 that this file is deliberately gated only by the live run; deleting the overlay or dropping the sibling assertions is not an acceptable fix.
+- Related findings: F-134, F-148, F-239, F-223 · nguồn: R7 delta audit D12B, rewritten by the D9 challenge
+
+### F-263 — each `/v1/search` pays three provider round-trips because identity verification resolves the model with a real embedding call, twice
+
+- Category: F6 — Reliability & Performance
+- Legacy register id: `R7-D10B-01`
+- Affected modules: Zink Knowledgebase
+- Severity: Medium
+- Status: OPEN
+- Root cause: `require_identity` is implemented by calling `model_probe.resolve`, and `resolve` always issues `/api/tags` plus an actual `/api/embed` preflight to learn the dimensions. The search handler calls it before and after the query embedding, so one query costs two tags calls and three embed calls.
+- Evidence: Where: apps/knowledge/app/main.py:382 (`await lifecycle.require_identity(active_index)`), :383 (`query_embedding = await model_probe.embed(…)`), :387 (`await lifecycle.require_identity(active_index)` — the comment records it as an intentional drift check) · Evidence: apps/knowledge/app/index_lifecycle.py:103-109 (`actual = await self._model_probe.resolve(…)`) and model_probe.py `resolve` issuing the embedding preflight purely to derive dimensions.
+- Reproduction: static — one `/v1/search` request reaches main.py:382 → :383 → :387, and each 382/387 performs a full resolve including an embed round trip; provider latency and cost are paid three times per query.
+- Acceptance criteria: a search performs at most two model calls (identity check without a redundant embedding, or a cached dimensions probe), asserted by a provider-call-count stub.
+- Related findings: F-165 (90 s slot arithmetic on the same path), F-190 · nguồn: R7 delta audit D10B — service and model runtime
+
+### F-264 — the n8n Postgres role password is passed on the `psql` command line, where it is visible in the process list
+
+- Category: F2 — Security & Authorization
+- Legacy register id: `R7-D13-01`
+- Affected modules: deployment topology (infrastructure), external automation host
+- Severity: Low
+- Status: OPEN
+- Root cause: the bootstrap script expands the secret into a psql `--set` argument, so the value appears in argv and `/proc/*/cmdline` for the duration of the call, unlike the env-based `PGPASSWORD` pattern the compose file already uses.
+- Evidence: Where: infrastructure/docker/scripts/bootstrap-postgres.sh:10 (`psql --set=ON_ERROR_STOP=1 --set=n8n_password="$N8N_POSTGRES_PASSWORD" <<'SQL'`) with the role password consumed by the following `ALTER ROLE … PASSWORD :'n8n_password'` · Evidence: the value class is the n8n PostgreSQL role password; compose.core.yml:44 shows the env-based alternative already in use in this stack. (Value never quoted.)
+- Reproduction: static — the literal reaches argv at :10; any process observer inside the container during bootstrap reads it.
+- Acceptance criteria: the secret is passed only via `PGPASSWORD` or a file with mode 0600, never via argv.
+- Related findings: F-265, F-064 · nguồn: R7 delta audit D13 — infrastructure scripts
+
+### F-265 — the backup manifest asserts `secrets_included = $false` as a constant over an archive it never inspects
+
+- Category: F5 — Data Integrity & Result Correctness
+- Legacy register id: `R7-D13-02`
+- Affected modules: deployment topology, external automation host
+- Severity: Medium
+- Status: OPEN
+- Root cause: the manifest field is a literal, while the payload is a full `pg_dump` of the automation database (which contains its credential table) plus a tar of the home directory excluding only `config`. The console line hedges to "plaintext"; the machine-readable field does not, so any consumer trusting it is wrong.
+- Evidence: Where: infrastructure/docker/scripts/backup.ps1:113 (`secrets_included = $false`) · Evidence: :84-85 dumps the whole database (`--format=custom`) and :95 excludes only the `config` path from the tar; the Knowledge database is not dumped at all (F-238, different cause).
+- Reproduction: static — dump any populated automation DB: the manifest records `secrets_included=false` regardless of the credential rows inside it.
+- Acceptance criteria: the field is renamed to what is actually known (e.g. `plaintext_secrets_excluded`) and computed by inspecting the archive, or an inspection step proves no credential-bearing object is present.
+- Related findings: F-238, F-264, F-064 · nguồn: R7 delta audit D13
+
+### F-266 — preflight validates an embedding model variable that no runtime component consumes
+
+- Category: F7 — Testing & Verification Gaps
+- Legacy register id: `R7-D13-03`
+- Affected modules: Zink Knowledgebase, deployment topology
+- Severity: Medium
+- Status: OPEN
+- Root cause: the preflight requires and probes `OLLAMA_SMOKE_MODEL`, while the service reads `KNOWLEDGE_EMBEDDING_MODEL`; the two are independent variables with no equality check, and the shipped env example sets both to the same string, so drift is invisible until an operator changes one.
+- Evidence: Where: infrastructure/docker/scripts/preflight.ps1:22 (`$requiredVariables += @("KNOWLEDGE_VAULT_ROOT", "OLLAMA_SMOKE_MODEL")`) and :82 (`Where-Object { $_.name -eq $values.OLLAMA_SMOKE_MODEL }`) · Evidence: infrastructure/docker/compose/compose.core.yml:150 (`KNOWLEDGE_EMBEDDING_MODEL: ${KNOWLEDGE_EMBEDDING_MODEL:-bge-m3:latest}`) and apps/knowledge/app/config.py:50 (same variable read by the service).
+- Reproduction: static — set `KNOWLEDGE_EMBEDDING_MODEL` to an uninstalled tag and leave `OLLAMA_SMOKE_MODEL` valid: preflight prints success, then knowledge readiness fails at index/embed time.
+- Acceptance criteria: preflight asserts the model the runtime will actually use (or refuses when the two variables differ), with the check visible in its output.
+- Related findings: F-070, F-239 · nguồn: R7 delta audit D13
+
+### F-267 — the memory acceptance gate compares against a hardcoded 80% of 4 GiB without reading the container's real ceiling
+
+- Category: F7 — Testing & Verification Gaps
+- Legacy register id: `R7-D13-04`
+- Affected modules: Zink Knowledgebase, Gates + CI
+- Severity: Medium
+- Status: OPEN
+- Root cause: the t4 gate throws when cgroup peak reaches the literal 3435973837 bytes, assuming a 4 GiB limit; the sibling t5 harness does read and assert `HostConfig.Memory == 4294967296`. An overlay that lowers the limit therefore makes the gate unreachably lenient while the run still reports PASS.
+- Evidence: Where: infrastructure/docker/scripts/knowledge-t4.ps1:116 (`if ($peak -ge 3435973837) { throw "Knowledge cgroup peak memory exceeded 80% of its 4 GiB ceiling: $peak bytes." }`) · Evidence: knowledge-t5-common.ps1:446-448 reads `{{.HostConfig.Memory}}` and throws unless it equals 4294967296, and :364 records `knowledge_memory_limit_bytes = 4294967296` — the same invariant asserted two ways in one script family.
+- Reproduction: static — set the knowledge service `mem_limit: 1g` in an overlay and t4's peak gate can never trip; the acceptance still passes while proving nothing about the real ceiling.
+- Acceptance criteria: the gate reads the configured limit before applying the percentage and fails when the limit differs from the documented ceiling.
+- Related findings: F-202 (systemd MemoryMax sibling), F-239 · nguồn: R7 delta audit D13
+
+### F-268 — the live acceptance restore container escapes the label sweeper and its removal exit code is unchecked, so a leak still reports PASS
+
+- Category: F6 — Reliability & Performance
+- Legacy register id: `R7-D13-05`
+- Affected modules: Zink Knowledgebase, deployment topology
+- Severity: Medium
+- Status: OPEN
+- Root cause: the sweeper selects containers by three labels, and the restore container is started with only two of them, so cleanup depends on a single `docker rm -f` whose failure is swallowed; the run then prints its success line with the container still present.
+- Evidence: Where: infrastructure/docker/scripts/knowledge-t5-live.ps1:331 (`--label com.personal-tool.acceptance=t5 --label com.personal-tool.acceptance-run=$runId` — no `persistence` label) and :515 (`if ($script:restoreContainerStarted) { & docker rm -f $restoreContainer 2>$null | Out-Null }` — `$LASTEXITCODE` never checked) · Evidence: knowledge-t5-common.ps1:594 builds the sweep filters including `label=com.personal-tool.persistence=temporary`, which the restore container never carries.
+- Reproduction: static — make the `docker rm -f` fail (container busy or daemon error): evidence still records `PASS`, the script writes its "passed" line and exits 0, and the container persists on the host.
+- Acceptance criteria: either the restore container carries the sweeper's third label or its removal exit code is checked and a failure downgrades the run's result.
+- Related findings: F-239, F-238 · nguồn: R7 delta audit D13
+
+### F-269 — repository policy hardcodes that the pdf-runtime suite stays NOT RUN inside the only Python job CI admits, so F-237's fix needs a new job rather than a step
+
+- Category: F7 — Testing & Verification Gaps
+- Legacy register id: `R7-D12A-01`
+- Affected modules: Zink Knowledgebase, Gates + CI
+- Severity: Medium
+- Status: OPEN
+- Root cause: the `repo:check` workflow rule rejects any `run` step of the `python-quality` job whose text names the child package, and the suite command is scoped to the parent directory — so the two tracked contract suites for the PDF runtime cannot be executed by adding a step to the job that exists. The prohibition is job-scoped, not absolute: the remediation is a second job, which is an owner decision about the required-gate shape rather than a routine fix.
+- Evidence: Where: scripts/repository-policy.mjs:415-419 (`const steps = workflowSteps(workflowPath, workflow, PYTHON_QUALITY_JOB)`) and :458-475 (`if (step.run.includes("pdf-runtime") || step.run.includes("zink_pdf_runtime")) { failures.push(`job ${PYTHON_QUALITY_JOB} must not install the pdf-runtime closure.`) }`), with the intent stated at :458-459 ("It must stay an explicit NOT RUN in CI rather than being installed here or implied.") · Evidence: package.json:25 scopes the suite to pytest over the parent tests directory of apps/knowledge; the suites with no invocation are apps/knowledge/pdf-runtime/tests/test_ocr_contract.py and test_range_contract.py; tests/repository-policy.test.mjs:345-359 asserts the python-quality job must exist, so the job cannot be repurposed silently.
+- Reproduction: static — add a step to the python-quality job that runs the child suite: `npm run repo:check` reports the closure-install failure and `npm run verify` goes red, while a new job is not blocked by this rule. Correction recorded here after the D9 challenge: an earlier draft of this row claimed the route was closed entirely; it is closed only inside the pinned job.
+- Acceptance criteria: the two child suites execute in an enforced gate through a lane that policy permits, or the permanent NOT RUN is recorded as an owner decision in `PLAN.md` §3 with a named compensating control — either way F-237 stops being silently closable.
+- Related findings: F-237, F-197, F-074 · nguồn: R7 delta audit D12A — CI skip census
