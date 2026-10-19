@@ -240,6 +240,103 @@ class ReadyzAttributionTests(unittest.IsolatedAsyncioTestCase):
             response.json(), {"status": "not_ready", "code": "INTERNAL_ERROR"}
         )
 
+    async def test_the_pdf_identity_memo_follows_the_content_it_hashes(self) -> None:
+        """F-091 (R5-E01-02): the memo was keyed on PATHS, not on content.
+
+        The memo promised to be "recomputed only if one of those inputs
+        changes", but its key held the three file paths, and a path cannot
+        change at runtime. A runtime lock rewritten in place therefore
+        replayed the pre-change digest forever, and the probe was checked
+        against an identity the run path no longer computes.
+        """
+
+        app = self.pdf_enabled_app()
+        lock = Path(self.vault.name) / "pdf-runtime.lock"
+        identities: list[str] = []
+
+        def identity(*_args, **_kwargs):
+            identities.append(f"identity-{len(identities) + 1}")
+            return identities[-1]
+
+        app.state.pdf_runtime.probe = AsyncMock()
+        try:
+            with patch(
+                "app.main.processing_identity_for_runtime", side_effect=identity
+            ):
+                first = await self.readyz(app)
+                # The same path, different bytes.
+                lock.write_text("a longer lock body than before\n", encoding="utf8")
+                second = await self.readyz(app)
+        finally:
+            await app.state.model_probe.close()
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(
+            len(identities),
+            2,
+            "the identity must be recomputed when the hashed bytes change",
+        )
+        self.assertEqual(
+            app.state.pdf_runtime.probe.await_args.args[0],
+            identities[1],
+            "the probe must be handed the identity of the CURRENT bytes",
+        )
+
+    async def test_the_opt_out_parameter_is_exercised(self) -> None:
+        """F-314 (R7-E2-05): the opt-out branch had no executed case.
+
+        The case table was a literal list of five fixtures, and the
+        `require_reranker` parameter -- which changes which dependency the
+        route requires -- was never varied, so a regression in it was
+        invisible.
+        """
+
+        self.app.state.database.get_active_index = AsyncMock(return_value=ACTIVE)
+        self.app.state.model_probe.resolve = AsyncMock(return_value=EMBEDDING)
+        self.app.state.reranker = None
+
+        transport = httpx.ASGITransport(app=self.app, raise_app_exceptions=False)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            refused = await client.request("GET", "/readyz")
+            waived = await client.request("GET", "/readyz?require_reranker=false")
+
+        self.assertEqual(refused.status_code, 503)
+        self.assertEqual(refused.json()["code"], "RERANKER_UNAVAILABLE")
+        self.assertEqual(waived.status_code, 200)
+
+    async def test_the_reranker_failure_code_reaches_the_readiness_answer(self) -> None:
+        """F-310 (R7-E1-06): one constant cannot name the real cause.
+
+        The bootstrap wrote a single string into a field nothing read, so a
+        bad artifact pin and an unusable graph produced the same observable
+        state. The code the reranker raised is now carried, and the
+        readiness route reads it.
+        """
+
+        self.app.state.database.get_active_index = AsyncMock(return_value=ACTIVE)
+        self.app.state.reranker = None
+        self.app.state.reranker_error = "RERANKER_ARTIFACT_MISSING"
+
+        response = await self.readyz()
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["code"], "RERANKER_ARTIFACT_MISSING")
+
+    def test_only_a_code_shaped_reranker_message_is_carried(self) -> None:
+        """F-310 (R7-E1-06): the carried value is a code, not free text."""
+
+        self.assertEqual(
+            _reranker_error_code(RerankerUnavailableError("RERANKER_GRAPH_INVALID")),
+            "RERANKER_GRAPH_INVALID",
+        )
+        self.assertEqual(
+            _reranker_error_code(RerankerUnavailableError("a free-text failure")),
+            "RERANKER_UNAVAILABLE",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

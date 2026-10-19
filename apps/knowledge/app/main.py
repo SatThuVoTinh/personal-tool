@@ -4,6 +4,7 @@ import asyncio
 from contextlib import asynccontextmanager
 import logging
 from pathlib import Path
+import re
 from typing import AsyncIterator, Literal
 
 import asyncpg
