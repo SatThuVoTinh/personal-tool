@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { EXECUTION_STATE_SIMULATED } from "../../common/execution-state.mjs";
 
 export class DatabricksAdapterError extends Error {
   constructor(code, message) {
@@ -68,6 +69,9 @@ export class DatabricksComputeAdapter {
 
     return Object.freeze({
       provider: "databricks",
+      // F-279 (R7-C2-04): `status` and `state` describe the fabricated job's
+      // own lifecycle; this field says that no real provider ran.
+      execution_state: EXECUTION_STATE_SIMULATED,
       task_id: context.task_id,
       job_id: params.job_id,
       run_id: runId,

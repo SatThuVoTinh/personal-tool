@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { EXECUTION_STATE_SIMULATED } from "../../common/execution-state.mjs";
 
 export class KaggleAdapterError extends Error {
   constructor(code, message) {
@@ -68,6 +69,9 @@ export class KaggleComputeAdapter {
 
     return Object.freeze({
       provider: "kaggle",
+      // F-279 (R7-C2-04): the explicit fidelity marker. `status`/`state`
+      // describe the fabricated kernel's own lifecycle, not a real run.
+      execution_state: EXECUTION_STATE_SIMULATED,
       task_id: context.task_id,
       job_id: jobId,
       kernel_slug: params.kernel_slug,

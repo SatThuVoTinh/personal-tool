@@ -1,3 +1,5 @@
+import { EXECUTION_STATE_SIMULATED } from "../../common/execution-state.mjs";
+
 export class StreamlitAdapterError extends Error {
   constructor(code, message) {
     super(message);
@@ -51,6 +53,10 @@ export class StreamlitAdapter {
 
     return Object.freeze({
       provider: "streamlit",
+      // F-279 (R7-C2-04): the explicit fidelity marker. `status: "READY"` and
+      // the endpoint URL are shaped exactly like a real deployment; without
+      // this field a governed consumer could not refuse them.
+      execution_state: EXECUTION_STATE_SIMULATED,
       task_id,
       gold_dataset_id,
       view_name,

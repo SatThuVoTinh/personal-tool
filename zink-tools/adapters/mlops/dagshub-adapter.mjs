@@ -129,6 +129,8 @@ export class DagsHubAdapter {
 
     return Object.freeze({
       provider: "dagshub",
+      // F-279 (R7-C2-04): the explicit fidelity marker.
+      execution_state: EXECUTION_STATE_SIMULATED,
       repository: `${repo_owner}/${repo_name}`,
       synced_run_ids: Object.freeze([...selected_run_ids]),
       synced_runs_count: selected_run_ids.length,

@@ -1,4 +1,10 @@
-import { assertDuckDbCallerAuthorized } from "../../sql/duckdb-bridge.mjs";
+import {
+  assertDuckDbCallerAuthorized,
+  assertDuckDbResourceAuthorized,
+  DUCKDB_MAX_TIMEOUT_MS,
+} from "../../sql/duckdb-bridge.mjs";
+import { assertReadOnlyStatement } from "../../sql/validator.mjs";
+import { EXECUTION_STATE_SIMULATED } from "../../common/execution-state.mjs";
 
 export class BigQueryAdapterError extends Error {
   constructor(code, message) {
@@ -61,15 +67,17 @@ export class BigQueryAdapter {
     const upper = input.query.toUpperCase();
     if (/\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE)\b/.test(upper)) {
       throw new BigQueryAdapterError(
-        "BIGQUERY_MUTATION_NOT_PERMITTED",
-        "Mutations are not permitted on BigQuery read interface.",
+        err.message === "SQL_MUTATION_NOT_PERMITTED"
+          ? "BIGQUERY_MUTATION_NOT_PERMITTED"
+          : "BIGQUERY_SYNTAX_ERROR",
+        `Query validation failed: ${err.message}`,
       );
     }
 
     if (options.simulateTimeout) {
       throw new BigQueryAdapterError(
         "BIGQUERY_TIMEOUT",
-        `BigQuery query timed out after ${options.timeoutMs || BIGQUERY_DEFAULT_TIMEOUT_MS}ms`,
+        `BigQuery query timed out after ${timeoutMs}ms`,
       );
     }
 
@@ -88,8 +96,13 @@ export class BigQueryAdapter {
 
     return Object.freeze({
       provider: "bigquery",
+      // F-279 (R7-C2-04): the envelope now says, in a field a consumer can
+      // refuse on, that these rows were fabricated by a contract test double.
+      // `status` and `state` describe the fabricated job's own lifecycle and
+      // never carried that information.
+      execution_state: EXECUTION_STATE_SIMULATED,
       project_id: this.projectId,
-      dataset: input.target_database || "cloud_analytics_lake",
+      dataset: input.target_database,
       row_count: rows.length,
       columns: Object.freeze(columns),
       rows: Object.freeze(rows),

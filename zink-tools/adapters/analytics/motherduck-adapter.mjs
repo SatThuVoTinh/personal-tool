@@ -1,5 +1,9 @@
-import { assertDuckDbCallerAuthorized } from "../../sql/duckdb-bridge.mjs";
+import {
+  assertDuckDbCallerAuthorized,
+  assertDuckDbResourceAuthorized,
+} from "../../sql/duckdb-bridge.mjs";
 import { validateSqlQuery } from "../../sql/validator.mjs";
+import { EXECUTION_STATE_SIMULATED } from "../../common/execution-state.mjs";
 
 export class MotherDuckAdapterError extends Error {
   constructor(code, message) {
@@ -74,13 +78,13 @@ export class MotherDuckAdapter {
     if (options.simulateTimeout) {
       throw new MotherDuckAdapterError(
         "MOTHERDUCK_TIMEOUT",
-        `MotherDuck query timed out after ${options.timeoutMs || MOTHERDUCK_DEFAULT_TIMEOUT_MS}ms`,
+        `MotherDuck query timed out after ${timeoutMs}ms`,
       );
     }
 
     const executionMs = Date.now() - startTime;
     const maxRows = Math.min(
-      Number(input.max_rows) || 100,
+      Math.max(Number(input.max_rows) || 100, 1),
       MOTHERDUCK_MAX_ROWS,
     );
 
@@ -93,7 +97,11 @@ export class MotherDuckAdapter {
 
     return Object.freeze({
       provider: "motherduck",
-      target_database: input.target_database || "gold",
+      // F-279 (R7-C2-04): the explicit fidelity marker. Without it a
+      // governed consumer could not tell a canned Gold row set from a real
+      // remote read.
+      execution_state: EXECUTION_STATE_SIMULATED,
+      target_database: input.target_database,
       row_count: rows.length,
       columns: Object.freeze(columns),
       rows: Object.freeze(rows),

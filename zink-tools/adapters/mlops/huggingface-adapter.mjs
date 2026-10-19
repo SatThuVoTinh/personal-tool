@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { EXECUTION_STATE_SIMULATED } from "../../common/execution-state.mjs";
 
 export class HuggingFaceAdapterError extends Error {
   constructor(code, message) {
@@ -68,6 +69,10 @@ export class HuggingFaceAdapter {
 
     return Object.freeze({
       provider: "huggingface",
+      // F-279 (R7-C2-04): the explicit fidelity marker. `candidate_status`
+      // says the candidate was not promoted; it never said that no real
+      // provider evaluation ran.
+      execution_state: EXECUTION_STATE_SIMULATED,
       repo_id,
       revision,
       checksum,
