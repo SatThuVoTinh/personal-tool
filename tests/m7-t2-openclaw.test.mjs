@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -2087,4 +2088,42 @@ test("budget reservations reject counter rollback and non-integer amounts", () =
       /budget exhausted/u,
     );
   }
+});
+
+// M12/T9 F-018: an operator believed an editable workspace template existed on
+// disk and edited a directory nothing reads. The template is implemented in
+// `policy.mjs`, so the directory must say so, and a tracked empty directory
+// whose name a check claims to use must not exist.
+test("F-018: templates/main-workspace says where the workspace template lives", () => {
+  const directory = path.resolve(
+    "integrations",
+    "openclaw",
+    "templates",
+    "main-workspace",
+  );
+  const entries = readdirSync(directory);
+  assert.ok(
+    entries.includes("README.md"),
+    "the directory must carry a README that says where the template lives",
+  );
+  const readme = readFileSync(path.join(directory, "README.md"), "utf8");
+  assert.match(
+    readme,
+    /integrations\/openclaw\/lib\/policy\.mjs/u,
+    "the README must name the file that implements the template",
+  );
+  assert.match(
+    readme,
+    /assertWorkspaceMatchesTemplate/u,
+    "the README must name the function that implements the template",
+  );
+  const policy = readFileSync(
+    path.resolve("integrations", "openclaw", "lib", "policy.mjs"),
+    "utf8",
+  );
+  assert.match(
+    policy,
+    /export function assertWorkspaceMatchesTemplate\(/u,
+    "the template must exist in code, since nothing reads this directory",
+  );
 });
