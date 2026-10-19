@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { DecisionLedger } from "../integrations/openclaw/lib/decision-ledger.mjs";
+import {
+  DecisionLedger,
+  canonicalDecisionKey,
+} from "../integrations/openclaw/lib/decision-ledger.mjs";
 
 function freshLedger() {
   const dir = mkdtempSync(path.join(tmpdir(), "lane-d-"));

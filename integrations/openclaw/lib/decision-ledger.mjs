@@ -215,11 +215,19 @@ function canonicalRecordBytes(record) {
 }
 
 export class DecisionLedger {
-  constructor({ storagePath = resolveDefaultStoragePath() } = {}) {
+  constructor({
+    storagePath = resolveDefaultStoragePath(),
+    // M12/T9 F-260: the post-rename directory fsync is the one step whose
+    // failure used to erase a COMMITTED record, and a healthy filesystem
+    // cannot provoke it from the outside, so the failure is injectable here
+    // for the regression case. `null` means the real fsync.
+    directoryFsync = null,
+  } = {}) {
     this.storagePath = storagePath;
     this.decisions = new Map();
     this.corrupt = false;
     this.loadError = null;
+    this.directoryFsync = directoryFsync;
     this.load();
   }
 
@@ -300,18 +308,39 @@ export class DecisionLedger {
           // `lib/queue-manager.mjs` both do this (M7-066), and queue-manager's
           // comment states the intent explicitly. win32-tolerant, same as those two.
           try {
-            const directoryFd = openSync(dir, "r");
-            try {
-              fsyncSync(directoryFd);
-            } finally {
-              closeSync(directoryFd);
+            if (typeof this.directoryFsync === "function") {
+              this.directoryFsync();
+            } else {
+              const directoryFd = openSync(dir, "r");
+              try {
+                fsyncSync(directoryFd);
+              } finally {
+                closeSync(directoryFd);
+              }
             }
           } catch (error) {
             if (
-              process.platform !== "win32" ||
-              !/^(EPERM|EISDIR|EINVAL|ENOTSUP)$/u.test(error?.code ?? "")
+              process.platform === "win32" &&
+              /^(EPERM|EISDIR|EINVAL|ENOTSUP)$/u.test(error?.code ?? "")
             ) {
-              throw error;
+              // The platform cannot fsync a directory at all. The rename is
+              // still committed and there is nothing to report.
+            } else {
+              // M12/T9 F-260: the rename ABOVE already committed the write. A
+              // directory-fsync failure after it is a DURABILITY warning, not a
+              // failed write, and it used to be rethrown as one: the caller's
+              // catch then restored the pre-write in-memory state, which is
+              // now BEHIND a disk that already holds the record, and the next
+              // successful save serialised that stale map over the owner's
+              // decision. The commit is now classified as uncertain and the
+              // in-memory map is reloaded from the disk that holds it.
+              const uncertain = new Error(
+                `LEDGER_COMMIT_UNCERTAIN: the record was committed but the directory entry could not be fsynced (${error?.code ?? "unknown error"})`,
+              );
+              uncertain.code = "LEDGER_COMMIT_UNCERTAIN";
+              uncertain.committed = true;
+              uncertain.cause = error;
+              throw uncertain;
             }
           }
         },
@@ -328,6 +357,14 @@ export class DecisionLedger {
       // Only ever a temp this process created: an `EEXIST` refusal is someone
       // else's file, and deleting it would turn a refusal into a side effect.
       if (tempIsOurs) removeWriterResidue(tempPath);
+      if (err?.committed === true) {
+        // The record IS on disk. The in-memory map is reloaded from it, so
+        // memory and disk agree again, and the uncertain commit is reported
+        // as such instead of being relabelled as a refused write.
+        this.decisions.clear();
+        this.load();
+        throw err;
+      }
       failLedger(`LEDGER_WRITE_FAILED: ${err?.message}`);
     }
   }
@@ -441,8 +478,14 @@ export class DecisionLedger {
     try {
       this.save();
     } catch (err) {
-      this.decisions.delete(id);
-      if (existing) this.decisions.set(id, existing);
+      // M12/T9 F-260: a COMMITTED-UNCERTAIN write is not a failed write. The
+      // record is on disk and the map was reloaded from it, so restoring the
+      // pre-write snapshot here would put memory BEHIND the disk and the next
+      // successful save would erase the owner's decision.
+      if (err?.committed !== true) {
+        this.decisions.delete(id);
+        if (existing) this.decisions.set(id, existing);
+      }
       throw err;
     }
     return record;
@@ -529,8 +572,12 @@ export class DecisionLedger {
     try {
       this.save();
     } catch (err) {
-      this.decisions.set(active.decisionId, active);
-      this.decisions.delete(successorId);
+      // M12/T9 F-260: same rule as `recordDecision` — a committed-uncertain
+      // write is not rolled back from memory.
+      if (err?.committed !== true) {
+        this.decisions.set(active.decisionId, active);
+        this.decisions.delete(successorId);
+      }
       throw err;
     }
     return successor;
