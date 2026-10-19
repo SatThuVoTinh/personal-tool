@@ -56,6 +56,49 @@ const MAKE_TARGETS = {
   verify: "npm run verify",
 };
 
+// The findings register is the one queue every remediation band reads. It is
+// tracked, so every row edit carries a commit, an author and a diff.
+const FINDINGS_REGISTER_PATH = "docs/execution/findings.md";
+// The register moved out of the Git-ignored states tree on 2026-10-17. A
+// tracked file that still cites the retired path without naming the current
+// one sends a reader to a file that does not exist.
+const RETIRED_REGISTER_PATH = ".agents/states/findings.md";
+const CURRENT_REGISTER_PATH = "docs/execution/findings.md";
+// The ten fields every register row carries (findings.md 0.1) and the status
+// vocabulary of 0.3.
+const FINDINGS_REGISTER_FIELDS = [
+  "Category",
+  "Legacy register id",
+  "Affected modules",
+  "Severity",
+  "Status",
+  "Root cause",
+  "Evidence",
+  "Reproduction",
+  "Acceptance criteria",
+  "Related findings",
+];
+const FINDINGS_STATUS_VOCABULARY = new Set([
+  "OPEN",
+  "LATENT",
+  "HYPOTHESIS",
+  "PARTIAL",
+  "BLOCKED",
+  "EXCLUDED",
+  "REFUTED",
+]);
+// The secret-scan allowlist suppresses whole directories. These are the
+// recorded scopes: a tracked path outside them that the allowlist regexes
+// suppress is a scope that grew without a record, and the total is capped.
+const SECRET_SCAN_ALLOWED_SCOPES = [
+  "tests/",
+  "apps/knowledge/tests/",
+  "apps/knowledge/pdf-runtime/tests/",
+  // The one file the allowlist names by path rather than by scope.
+  "integrations/openclaw/orchestration/README.md",
+];
+const SECRET_SCAN_SUPPRESSED_CEILING = 200;
+
 const WORKFLOW_PATHS = {
   ci: ".github/workflows/ci.yml",
   security: ".github/workflows/security.yml",
@@ -278,8 +321,12 @@ function checkWorkflowTriggers(
   const pushBranches = push?.branches;
   const hasMainPullRequest =
     Array.isArray(pullRequestBranches) && pullRequestBranches.includes("main");
+  // An unfiltered push trigger covers every branch, main included, so it
+  // satisfies the "push for main" requirement without naming main.
   const hasMainPush =
-    Array.isArray(pushBranches) && pushBranches.includes("main");
+    push !== undefined &&
+    (pushBranches === undefined ||
+      (Array.isArray(pushBranches) && pushBranches.includes("main")));
 
   if (
     !hasMainPullRequest ||
@@ -290,6 +337,20 @@ function checkWorkflowTriggers(
       formatWorkflowFailure(
         workflowPath,
         "must trigger pull_request and push for main plus workflow_dispatch.",
+      ),
+    );
+  }
+
+  // The secret scan is the only lane that can see a credential committed to a
+  // task branch. Scoping its push trigger to `main` left every branch push
+  // unscanned, so a credential could reach main through a merge without any
+  // lane ever having looked at the branch. The scan must therefore run for a
+  // push to ANY branch, not only to the default one.
+  if (securityWorkflow && push && Array.isArray(pushBranches)) {
+    failures.push(
+      formatWorkflowFailure(
+        workflowPath,
+        "the secret scan must run on a push to any branch, so the push trigger must not be narrowed to a branch list.",
       ),
     );
   }
@@ -443,6 +504,74 @@ function checkPythonQualityJob(workflowPath, workflow, failures) {
     );
   }
 
+  // The suite is invoked through `npm run test:knowledge`, and package.json
+  // pins devEngines.runtime to node >=24.15.0 <25 with onFail=error, so a job
+  // that loses the Node toolchain makes npm abort before pytest collects
+  // anything — the gate would report a pass it never earned. The pinned
+  // tokenizer fetch and its checksum are the same kind of dependency: seven
+  // Knowledgebase modules skip at import when KNOWLEDGE_TOKENIZER_PATH is
+  // unset, so losing the fetch turns the attribution gates into skips.
+  if (actionStepIndex(steps, ACTIONS.setupNode) < 0) {
+    failures.push(
+      formatWorkflowFailure(
+        workflowPath,
+        `job ${PYTHON_QUALITY_JOB} must use pinned actions/setup-node, because the suite is invoked through npm and package.json pins the Node runtime.`,
+      ),
+    );
+  }
+  if (runStepIndex(steps, "npm install --global npm@12.0.2") < 0) {
+    failures.push(
+      formatWorkflowFailure(
+        workflowPath,
+        `job ${PYTHON_QUALITY_JOB} must install the pinned npm@12.0.2 bootstrap.`,
+      ),
+    );
+  }
+  if (toolchainAssertionIndex(steps) < 0) {
+    failures.push(
+      formatWorkflowFailure(
+        workflowPath,
+        `job ${PYTHON_QUALITY_JOB} must assert the Node and npm versions.`,
+      ),
+    );
+  }
+  const tokenizerIndex = steps.findIndex(
+    (step) =>
+      isObject(step) &&
+      typeof step.run === "string" &&
+      /sha256sum --check --strict/u.test(step.run),
+  );
+  if (tokenizerIndex < 0) {
+    failures.push(
+      formatWorkflowFailure(
+        workflowPath,
+        `job ${PYTHON_QUALITY_JOB} must fetch the pinned tokenizer and verify it with sha256sum --check --strict.`,
+      ),
+    );
+  }
+  const suiteStep = steps.find(
+    (step) => runStepIndex([step], "npm run test:knowledge") >= 0,
+  );
+  if (!suiteStep || suiteStep.env?.KNOWLEDGE_TOKENIZER_PATH === undefined) {
+    failures.push(
+      formatWorkflowFailure(
+        workflowPath,
+        `job ${PYTHON_QUALITY_JOB} must set KNOWLEDGE_TOKENIZER_PATH on the suite step, or the Knowledgebase attribution gates skip at import.`,
+      ),
+    );
+  }
+  const syncStep = steps.find(
+    (step) => runStepIndex([step], "uv sync --locked") >= 0,
+  );
+  if (!syncStep || syncStep["working-directory"] !== "apps/knowledge") {
+    failures.push(
+      formatWorkflowFailure(
+        workflowPath,
+        `job ${PYTHON_QUALITY_JOB} must run uv sync --locked in working-directory apps/knowledge.`,
+      ),
+    );
+  }
+
   const syncIndex = runStepIndex(steps, "uv sync --locked");
   const suiteIndex = runStepIndex(steps, "npm run test:knowledge");
   checkOrderedStepIndexes(
@@ -560,18 +689,24 @@ function checkSecurityWorkflow(workflowPath, workflow, failures) {
       ),
     );
   }
-  for (const name of [
-    "GITLEAKS_ENABLE_COMMENTS",
-    "GITLEAKS_ENABLE_UPLOAD_ARTIFACT",
-  ]) {
-    if (environment?.[name] !== "false") {
-      failures.push(
-        formatWorkflowFailure(
-          workflowPath,
-          `job secret-scan Gitleaks must set ${name} to the string false.`,
-        ),
-      );
-    }
+  if (environment?.GITLEAKS_ENABLE_COMMENTS !== "false") {
+    failures.push(
+      formatWorkflowFailure(
+        workflowPath,
+        "job secret-scan Gitleaks must set GITLEAKS_ENABLE_COMMENTS to the string false.",
+      ),
+    );
+  }
+  // The report artifact is what makes a "zero leaks" claim re-inspectable
+  // instead of a sentence in a plan file: without it, nobody can look at what
+  // the scan actually found.
+  if (environment?.GITLEAKS_ENABLE_UPLOAD_ARTIFACT !== "true") {
+    failures.push(
+      formatWorkflowFailure(
+        workflowPath,
+        "job secret-scan Gitleaks must set GITLEAKS_ENABLE_UPLOAD_ARTIFACT to the string true so the scan report is a retained artifact.",
+      ),
+    );
   }
   if (Object.hasOwn(environment ?? {}, "GITLEAKS_LICENSE")) {
     failures.push(
@@ -681,7 +816,11 @@ function resolveTrackedPath(repositoryRoot, repositoryPath) {
   return filePath;
 }
 
-export function checkWorkingTreeTextPolicy(repositoryRoot, trackedFiles) {
+export function checkWorkingTreeTextPolicy(
+  repositoryRoot,
+  trackedFiles,
+  editorConfig = readEditorConfig(repositoryRoot),
+) {
   const failures = [];
 
   for (const repositoryPath of trackedFiles) {
@@ -703,17 +842,239 @@ export function checkWorkingTreeTextPolicy(repositoryRoot, trackedFiles) {
       );
     }
 
-    const lines = contents.toString("utf8").split("\n");
-    for (let index = 0; index < lines.length; index += 1) {
-      if (/[ \t]+\r?$/.test(lines[index])) {
-        failures.push(
-          `Working-tree file has trailing whitespace: ${repositoryPath}:${index + 1}`,
-        );
+    // The editor-facing `.editorconfig` owns the trailing-whitespace rule
+    // for each file class and this gate defers to it. The two used to state
+    // opposite requirements for Markdown — `.editorconfig` declares a hard
+    // break legal, this gate rejected the same bytes — so which rule won
+    // depended on which surface the operator touched last.
+    if (editorConfig.trimsTrailingWhitespace(repositoryPath)) {
+      const lines = contents.toString("utf8").split("\n");
+      for (let index = 0; index < lines.length; index += 1) {
+        if (/[ \t]+\r?$/.test(lines[index])) {
+          failures.push(
+            `Working-tree file has trailing whitespace: ${repositoryPath}:${index + 1}`,
+          );
+        }
       }
     }
   }
 
   return failures;
+}
+
+/**
+ * The findings register is a machine-checked queue, not prose: every row
+ * carries the ten fields findings.md 0.1 defines and a status from the 0.3
+ * vocabulary. A row that drifts from that shape is a row no agent can read
+ * the same way, and the register had no executable reader at all.
+ */
+export function checkFindingsRegister(markdown) {
+  const failures = [];
+  const blocks = String(markdown ?? "")
+    .split(/^### /mu)
+    .slice(1);
+  if (!blocks.length) {
+    return ["The findings register carries no `### F-xxx` row block."];
+  }
+
+  for (const block of blocks) {
+    const header = block.split("\n", 1)[0].trim();
+    const id = /^F-\d+/u.exec(header)?.[0] ?? header;
+    for (const field of FINDINGS_REGISTER_FIELDS) {
+      const match = new RegExp(`^- ${field}:[ ]*(.*)$`, "mu").exec(block);
+      if (!match) {
+        failures.push(`Register row ${id} is missing the "${field}:" field.`);
+        continue;
+      }
+      if (field !== "Status" && match[1].trim().length === 0) {
+        failures.push(`Register row ${id} has an empty "${field}:" field.`);
+      }
+    }
+    // A row that carries a field the register does not define has drifted from
+    // the ten-field shape, and a reader cannot tell which field is the
+    // authoritative one. An eleventh field is a failure, not a new fact.
+    for (const match of block.matchAll(/^- ([A-Za-z][A-Za-z ]*):/gmu)) {
+      if (!FINDINGS_REGISTER_FIELDS.includes(match[1].trim())) {
+        failures.push(
+          `Register row ${id} carries a field the register does not define: "${match[1].trim()}".`,
+        );
+      }
+    }
+    const status = /^- Status:[ ]*([A-Z]+)/mu.exec(block)?.[1];
+    if (!status) {
+      failures.push(`Register row ${id} carries no Status: value.`);
+    } else if (!FINDINGS_STATUS_VOCABULARY.has(status)) {
+      failures.push(
+        `Register row ${id} uses a Status outside the register vocabulary: ${status}.`,
+      );
+    }
+  }
+
+  return failures;
+}
+
+/**
+ * A tracked document that still points at the retired register path must also
+ * name the current one, or the reader resolves to a file that does not exist.
+ *
+ * The frozen contracts under `docs/contracts/` are exempt: they are the
+ * immutable record of what a past band was told, and rewriting a citation
+ * inside them would falsify that record.
+ */
+export function checkRegisterCitations(repositoryRoot, trackedFiles) {
+  const failures = [];
+  for (const repositoryPath of trackedFiles) {
+    if (!repositoryPath.endsWith(".md")) continue;
+    if (repositoryPath.startsWith("docs/contracts/")) continue;
+    const filePath = resolveTrackedPath(repositoryRoot, repositoryPath);
+    if (!existsSync(filePath)) continue;
+    const contents = readFileSync(filePath, "utf8");
+    if (!contents.includes(RETIRED_REGISTER_PATH)) continue;
+    if (!contents.includes(CURRENT_REGISTER_PATH)) {
+      failures.push(
+        `Tracked document cites the retired register path without naming the current one: ${repositoryPath}`,
+      );
+    }
+  }
+  return failures;
+}
+
+/**
+ * The secret-scan allowlist suppresses whole directories, and nothing read it:
+ * the suppressed set could grow without any lane noticing. The scopes below
+ * are the recorded ones, and the total is capped, so a new suppressed
+ * directory or an unbounded growth fails the policy check.
+ */
+export function checkSecretScanAllowlist(repositoryRoot, trackedFiles) {
+  const failures = [];
+  const configPath = path.join(repositoryRoot, ".gitleaks.toml");
+  if (!existsSync(configPath)) {
+    return ["The secret-scan allowlist file .gitleaks.toml is missing."];
+  }
+  const config = readFileSync(configPath, "utf8");
+  const allowlistBlock = /\[allowlist\]([\s\S]*?)(?=\n\[|$)/u.exec(config);
+  if (!allowlistBlock) {
+    return [
+      "The secret-scan allowlist file .gitleaks.toml has no [allowlist] block.",
+    ];
+  }
+  const patterns = [...allowlistBlock[1].matchAll(/'''([^']*)'''/gu)].map(
+    (match) => match[1],
+  );
+  if (!patterns.length) {
+    return ["The secret-scan allowlist declares no path pattern."];
+  }
+
+  const suppressed = [];
+  for (const repositoryPath of trackedFiles) {
+    for (const pattern of patterns) {
+      let expression;
+      try {
+        expression = new RegExp(pattern, "u");
+      } catch {
+        failures.push(
+          `The secret-scan allowlist pattern is not a valid regular expression: ${pattern}`,
+        );
+        expression = null;
+      }
+      if (!expression) break;
+      if (expression.test(repositoryPath)) {
+        suppressed.push(repositoryPath);
+        break;
+      }
+    }
+  }
+
+  const outsideScope = suppressed.filter(
+    (repositoryPath) =>
+      !SECRET_SCAN_ALLOWED_SCOPES.some((scope) =>
+        repositoryPath.startsWith(scope),
+      ) && !SECRET_SCAN_ALLOWED_SCOPES.includes(repositoryPath),
+  );
+  for (const repositoryPath of outsideScope) {
+    failures.push(
+      `A tracked path is suppressed by the secret-scan allowlist outside every recorded scope: ${repositoryPath}`,
+    );
+  }
+  if (suppressed.length > SECRET_SCAN_SUPPRESSED_CEILING) {
+    failures.push(
+      `The secret-scan allowlist suppresses ${suppressed.length} tracked paths, above the recorded ceiling of ${SECRET_SCAN_SUPPRESSED_CEILING}.`,
+    );
+  }
+
+  return failures;
+}
+
+/**
+ * A generated tree under a module path must not be stageable. The ignore
+ * rules for `backups/`, `logs/` and `temp/` were root-anchored, so a nested
+ * capture — a live-state snapshot that may carry credential-derived material
+ * — was invisible to `git status` and one `git add -A` away from history.
+ */
+export function checkNestedGeneratedTreesIgnored(repositoryRoot) {
+  const failures = [];
+  for (const nested of [
+    "apps/knowledge/backups/capture.json",
+    "integrations/openclaw/backups/capture.json",
+    "integrations/openclaw/logs/run.log",
+    "zink-tools/backups/capture.json",
+  ]) {
+    const result = runGit(repositoryRoot, ["check-ignore", "-q", "--", nested]);
+    if (result.status !== 0) {
+      failures.push(
+        `A generated tree under a module path is not ignored and can be staged: ${nested}`,
+      );
+    }
+  }
+  return failures;
+}
+
+/**
+ * Read the trailing-whitespace policy `.editorconfig` declares per file
+ * class. `trim_trailing_whitespace = false` marks a class whose trailing
+ * spaces are meaningful (Markdown hard breaks).
+ */
+function readEditorConfig(repositoryRoot) {
+  const configPath = path.join(repositoryRoot, ".editorconfig");
+  const rules = [];
+  if (existsSync(configPath)) {
+    let section = null;
+    for (const line of readFileSync(configPath, "utf8").split(/\r?\n/u)) {
+      const sectionMatch = /^\s*\[([^\]]+)\]\s*$/u.exec(line);
+      if (sectionMatch) {
+        section = sectionMatch[1].trim();
+        continue;
+      }
+      const propertyMatch =
+        /^\s*trim_trailing_whitespace\s*=\s*(\S+)\s*$/u.exec(line);
+      if (propertyMatch && section) {
+        rules.push({ pattern: section, trims: propertyMatch[1] === "true" });
+      }
+    }
+  }
+
+  const matches = (repositoryPath, pattern) => {
+    const source = pattern
+      .split("/")
+      .map((part) =>
+        part === "**"
+          ? ".*"
+          : part.replace(/[.+^${}()|[\]\\]/gu, "\\$&").replace(/\*/gu, "[^/]*"),
+      )
+      .join("/");
+    return new RegExp(`^${source}($|/.*)$`, "u").test(repositoryPath);
+  };
+
+  return {
+    trimsTrailingWhitespace: (repositoryPath) => {
+      for (const rule of rules) {
+        if (matches(repositoryPath, rule.pattern)) {
+          return rule.trims;
+        }
+      }
+      return true;
+    },
+  };
 }
 
 export function checkRequiredFiles(repositoryRoot) {
@@ -940,6 +1301,21 @@ export function collectRepositoryFailures(repositoryRoot) {
   failures.push(...checkTrackedFilePolicies(trackedFiles));
   failures.push(...checkWorkingTreeTextPolicy(repositoryRoot, trackedFiles));
   failures.push(...checkGitWhitespace(repositoryRoot));
+
+  // The register is the queue every band reads, so it must be tracked: an
+  // untracked register gives every row edit no commit, no author and no diff.
+  if (!trackedFiles.includes(FINDINGS_REGISTER_PATH)) {
+    failures.push(
+      `The findings register is not tracked: ${FINDINGS_REGISTER_PATH}`,
+    );
+  }
+  const registerPath = path.join(repositoryRoot, FINDINGS_REGISTER_PATH);
+  if (existsSync(registerPath)) {
+    failures.push(...checkFindingsRegister(readFileSync(registerPath, "utf8")));
+  }
+  failures.push(...checkRegisterCitations(repositoryRoot, trackedFiles));
+  failures.push(...checkSecretScanAllowlist(repositoryRoot, trackedFiles));
+  failures.push(...checkNestedGeneratedTreesIgnored(repositoryRoot));
 
   const packagePath = path.join(repositoryRoot, "package.json");
   const makefilePath = path.join(repositoryRoot, "Makefile");

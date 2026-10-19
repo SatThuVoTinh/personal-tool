@@ -15,10 +15,14 @@ import { fileURLToPath } from "node:url";
 
 import {
   checkCommandDefinitions,
+  checkFindingsRegister,
   checkFormatGlobQuoting,
   checkGateRegistry,
   checkGitWhitespace,
+  checkNestedGeneratedTreesIgnored,
+  checkRegisterCitations,
   checkRequiredFiles,
+  checkSecretScanAllowlist,
   checkTestListReconciliation,
   checkTrackedFilePolicies,
   checkWorkflowDefinitions,
@@ -104,8 +108,28 @@ jobs:
         with:
           python-version: "3.13"
       - run: pip install --disable-pip-version-check "uv==0.12.5"
-      - run: uv sync --locked
-      - run: npm run test:knowledge
+      - run: python -c "import sys; assert sys.version_info[:2] == (3, 13), sys.version"
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: "24.15.0"
+          package-manager-cache: false
+      - working-directory: \${{ runner.temp }}
+        run: npm install --global npm@12.0.2
+      - run: |
+          test "$(node --version)" = "v24.15.0"
+          test "$(npm --version)" = "12.0.2"
+      - name: Fetch pinned tokenizer
+        run: |
+          mkdir -p "\${{ runner.temp }}/knowledge-artifacts"
+          curl --fail --location --silent --show-error \
+            --output "\${{ runner.temp }}/knowledge-artifacts/tokenizer.json" \
+            "https://huggingface.co/BAAI/bge-reranker-v2-m3/resolve/953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e/tokenizer.json"
+          echo "69564b696052886ed0ac63fa393e928384e0f8caada38c1f4864a9bfbf379c15  \${{ runner.temp }}/knowledge-artifacts/tokenizer.json" | sha256sum --check --strict
+      - working-directory: apps/knowledge
+        run: uv sync --locked
+      - env:
+          KNOWLEDGE_TOKENIZER_PATH: \${{ runner.temp }}/knowledge-artifacts/tokenizer.json
+        run: npm run test:knowledge
 `;
 
 const VALID_SECURITY_WORKFLOW = `name: Security
@@ -114,7 +138,6 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [main]
   schedule:
     - cron: "0 2 * * 1"
   workflow_dispatch:
@@ -149,13 +172,22 @@ jobs:
         env:
           GITHUB_TOKEN: \${{ github.token }}
           GITLEAKS_ENABLE_COMMENTS: "false"
-          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "true"
 `;
 
 function writeValidWorkflows(repositoryRoot) {
   writeWorkflow(repositoryRoot, "ci.yml", VALID_CI_WORKFLOW);
   writeWorkflow(repositoryRoot, "security.yml", VALID_SECURITY_WORKFLOW);
 }
+
+// The two Knowledgebase steps the golden fixture carries, named so the
+// mutation cases below cannot drift away from the fixture they mutate.
+const KNOWLEDGE_SUITE_STEP =
+  "      - env:\n" +
+  "          KNOWLEDGE_TOKENIZER_PATH: ${{ runner.temp }}/knowledge-artifacts/tokenizer.json\n" +
+  "        run: npm run test:knowledge\n";
+const UV_SYNC_STEP =
+  "      - working-directory: apps/knowledge\n        run: uv sync --locked\n";
 
 test("rejects a tracked .env file", () => {
   withTemporaryRepository((repositoryRoot) => {
@@ -380,8 +412,11 @@ test("requires a blocking Knowledgebase Python job in CI", () => {
       repositoryRoot,
       "ci.yml",
       VALID_CI_WORKFLOW.replace(
-        "      - run: npm run test:knowledge",
-        "      - run: npm run test:knowledge\n        continue-on-error: true",
+        KNOWLEDGE_SUITE_STEP,
+        KNOWLEDGE_SUITE_STEP.replace(
+          "        run: npm run test:knowledge\n",
+          "        run: npm run test:knowledge\n        continue-on-error: true\n",
+        ),
       ),
     );
     writeWorkflow(repositoryRoot, "security.yml", VALID_SECURITY_WORKFLOW);
@@ -397,7 +432,7 @@ test("rejects a CI job that drops or reorders the Knowledgebase suite", () => {
     writeWorkflow(
       repositoryRoot,
       "ci.yml",
-      VALID_CI_WORKFLOW.replace("      - run: npm run test:knowledge\n", ""),
+      VALID_CI_WORKFLOW.replace(KNOWLEDGE_SUITE_STEP, ""),
     );
     writeWorkflow(repositoryRoot, "security.yml", VALID_SECURITY_WORKFLOW);
     assert.ok(
@@ -414,8 +449,8 @@ test("rejects a CI job that drops or reorders the Knowledgebase suite", () => {
       repositoryRoot,
       "ci.yml",
       VALID_CI_WORKFLOW.replace(
-        "      - run: uv sync --locked\n      - run: npm run test:knowledge",
-        "      - run: npm run test:knowledge\n      - run: uv sync --locked",
+        UV_SYNC_STEP,
+        KNOWLEDGE_SUITE_STEP + UV_SYNC_STEP,
       ),
     );
     writeWorkflow(repositoryRoot, "security.yml", VALID_SECURITY_WORKFLOW);
@@ -433,8 +468,8 @@ test("rejects pulling the pdf-runtime closure into the Python CI job", () => {
       repositoryRoot,
       "ci.yml",
       VALID_CI_WORKFLOW.replace(
-        "      - run: uv sync --locked",
-        "      - run: uv sync --locked --directory pdf-runtime",
+        "        run: uv sync --locked",
+        "        run: uv sync --locked --directory pdf-runtime",
       ),
     );
     writeWorkflow(repositoryRoot, "security.yml", VALID_SECURITY_WORKFLOW);
@@ -509,10 +544,7 @@ test("requires exactly one CI executor for the Knowledgebase Python suite", () =
   });
 
   // Moving the suite to a job that is not the designated owner.
-  const misplaced = VALID_CI_WORKFLOW.replace(
-    "      - run: npm run test:knowledge\n",
-    "",
-  ).replace(
+  const misplaced = VALID_CI_WORKFLOW.replace(KNOWLEDGE_SUITE_STEP, "").replace(
     "      - run: npm run verify",
     "      - run: npm run test:knowledge\n      - run: npm run verify",
   );
