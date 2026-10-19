@@ -44,6 +44,21 @@ test("R18-01: a committed result survives a failing release", () => {
       { committed: true, seq: 7 },
       "the guarded call's own result must survive a failed release",
     );
+    // M12/T9 F-334: the case asserted only the returned value, so deleting the
+    // forcing step above made it pass vacuously ? the very failure this
+    // comment warns about. The precondition is now asserted: the release must
+    // actually have failed, which is observable as the lock directory still
+    // being there.
+    assert.equal(
+      existsSync(lockDir),
+      true,
+      "the release must have failed for this case to mean anything; if the lock directory is gone the forcing step no longer forces a failure",
+    );
+    assert.equal(
+      existsSync(path.join(lockDir, "in-flight")),
+      true,
+      "the file that makes `rmdirSync` fail must still be inside the lock directory",
+    );
   } finally {
     cleanup([base]);
   }
