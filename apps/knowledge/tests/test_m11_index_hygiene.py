@@ -28,6 +28,7 @@ import os
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import AsyncMock, patch
 from uuid import UUID, uuid4
 
 from app.database import AcceptedIndexRun, KnowledgeDatabase
@@ -233,6 +234,243 @@ class FailedIndexGarbageCollectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([statement for statement, _ in content], list(FAILED_INDEX_CONTENT))
         for _, args in content:
             self.assertEqual(args, ([index_id],))
+
+
+class FakePool:
+    """The pool surface `KnowledgeDatabase` uses, recorded."""
+
+    def __init__(self, connection: FakeConnection) -> None:
+        self.connection = connection
+        self.acquired = 0
+        self.released: list[FakeConnection] = []
+        self.closed = False
+
+    async def acquire(self) -> FakeConnection:
+        self.acquired += 1
+        return self.connection
+
+    async def release(self, connection: FakeConnection) -> None:
+        self.released.append(connection)
+
+    async def close(self) -> None:
+        self.closed = True
+
+    async def fetch(self, sql: str, *args: object) -> object:
+        return await self.connection.fetch(sql, *args)
+
+    async def fetchrow(self, sql: str, *args: object) -> object:
+        return await self.connection.fetchrow(sql, *args)
+
+    async def fetchval(self, sql: str, *args: object) -> object:
+        return await self.connection.fetchval(sql, *args)
+
+
+class StartupSweepAndLockTests(unittest.IsolatedAsyncioTestCase):
+    async def test_the_startup_sweep_is_chunked(self) -> None:
+        """F-092 (R5-E03-03): one statement carried every failed index id.
+
+        The pool runs every statement under a 30 s `command_timeout`, so a
+        full-corpus shadow put thousands of ids into one DELETE and the
+        whole sweep either finished or aborted with no partial progress.
+        """
+
+        ids = [uuid4() for _ in range(1200)]
+        connection = FakeConnection()
+
+        await KnowledgeDatabase._purge_index_content(connection, ids)
+
+        content = deletes(connection)
+        self.assertEqual(len(content), 9)
+        for statement, args in content:
+            self.assertLessEqual(len(args[0]), 500)
+        covered = {value for _, args in content for value in args[0]}
+        self.assertEqual(covered, set(ids))
+
+    async def test_the_schema_is_applied_under_the_advisory_lock(self) -> None:
+        """F-149 (R5-E03-02): the DDL used to run unserialized.
+
+        Two replicas booting together ran CREATE EXTENSION and CREATE TYPE
+        against one catalog; the loser raised duplicate_object and the
+        operator read it as "the database is down".
+        """
+
+        connection = FakeConnection(fetchvals=[True, True, True], fetches=[[]])
+        pool = FakePool(connection)
+        database = KnowledgeDatabase(
+            "localhost", 5432, "knowledge", "zink", "secret", Path("migrations")
+        )
+        with patch("app.database.asyncpg.create_pool", new=AsyncMock(return_value=pool)):
+            await database.start()
+
+        self.assertIsNone(database.startup_error_code)
+        ordered = [statement for (called, statement, _) in connection.calls if called == "execute"]
+        lock = next(
+            index for index, statement in enumerate(ordered) if "pg_advisory_lock" in statement
+        )
+        schema = next(
+            index for index, statement in enumerate(ordered) if "CREATE SCHEMA" in statement
+        )
+        self.assertLess(lock, schema, "the DDL must run under the lock")
+        self.assertTrue(
+            any("pg_advisory_unlock" in statement for statement in ordered)
+        )
+
+    async def test_a_failed_boot_re_attempts_and_runs_the_recovery(self) -> None:
+        """F-164 (R5-E01-04): the failure used to be a process-lifetime flag.
+
+        The pool was nulled, nothing reopened it, and the interrupted-run
+        recovery -- the repair the operator most needs -- was skipped for the
+        life of the process, so the service answered 503 until an external
+        restart.
+        """
+
+        connection = FakeConnection(fetchvals=[True, True, True], fetches=[[]])
+        pool = FakePool(connection)
+        database = KnowledgeDatabase(
+            "localhost", 5432, "knowledge", "zink", "secret", Path("migrations")
+        )
+        recovered: list[str] = []
+
+        async def recovery() -> None:
+            recovered.append("recovered")
+
+        database.set_recovery_callback(recovery)
+        attempts: list[int] = []
+
+        async def create_pool(*_args: object, **_kwargs: object) -> FakePool:
+            attempts.append(1)
+            if len(attempts) == 1:
+                raise RuntimeError("postgres is not up yet")
+            return pool
+
+        with patch(
+            "app.database.asyncpg.create_pool",
+            new=AsyncMock(side_effect=create_pool),
+        ), patch("app.database.RECONNECT_INTERVAL_SECONDS", 0.01):
+            await database.start()
+            self.assertEqual(database.startup_error_code, "DATABASE_UNAVAILABLE")
+            for _ in range(100):
+                if database.available:
+                    break
+                await asyncio.sleep(0.02)
+            was_available = database.available
+            error_code = database.startup_error_code
+            await database.stop()
+
+        self.assertGreaterEqual(len(attempts), 2)
+        self.assertTrue(was_available)
+        self.assertEqual(recovered, ["recovered"])
+        self.assertIsNone(error_code)
+
+    async def test_a_schema_lock_timeout_is_named_not_reported_as_an_outage(
+        self,
+    ) -> None:
+        """F-149 (R5-E03-02): a schema race is not "the database is down"."""
+
+        connection = FakeConnection()
+        original_execute = connection.execute
+
+        async def failing_execute(sql: str, *args: object) -> None:
+            await original_execute(sql, *args)
+            if "pg_advisory_lock" in sql:
+                raise asyncio.TimeoutError()
+
+        connection.execute = failing_execute  # type: ignore[method-assign]
+        pool = FakePool(connection)
+        database = KnowledgeDatabase(
+            "localhost", 5432, "knowledge", "zink", "secret", Path("migrations")
+        )
+        with patch("app.database.asyncpg.create_pool", new=AsyncMock(return_value=pool)):
+            await database.start()
+
+        self.assertEqual(database.startup_error_code, "MIGRATION_LOCK_UNAVAILABLE")
+        self.assertNotEqual(database.startup_error_code, "DATABASE_UNAVAILABLE")
+
+    async def test_a_failed_lock_query_releases_the_connection(self) -> None:
+        """F-254 (R7-D10A-02): four leaks exhausted the pool."""
+
+        connection = FakeConnection()
+
+        async def failing_fetchval(sql: str, *args: object) -> object:
+            raise RuntimeError("dead backend")
+
+        connection.fetchval = failing_fetchval  # type: ignore[method-assign]
+        pool = FakePool(connection)
+        database = KnowledgeDatabase(
+            "localhost", 5432, "knowledge", "zink", "secret", Path("migrations")
+        )
+        database._pool = pool  # type: ignore[assignment]
+
+        with self.assertRaises(RuntimeError):
+            await database.acquire_advisory_lock(1)
+
+        self.assertEqual(len(pool.released), 1)
+        self.assertEqual(pool.acquired, 1)
+
+    async def test_the_barrier_poll_runs_off_the_event_loop(self) -> None:
+        """F-189 (R5-E16-04): the barrier blocked the loop that serves /search.
+
+        The continuation poll ran its file operations synchronously inside
+        an `async def`, up to ten times a second for up to ten minutes.
+        """
+
+        with TemporaryDirectory() as directory:
+            resolved = Path(directory)
+            token = "a" * 64
+            (resolved / "continue").write_text(token, encoding="ascii")
+            database = KnowledgeDatabase(
+                "localhost", 5432, "knowledge", "zink", "secret", Path("migrations")
+            )
+            dispatched: list[str] = []
+            original = asyncio.to_thread
+
+            async def spy(func, /, *args, **kwargs):
+                dispatched.append(getattr(func, "__name__", str(func)))
+                return await original(func, *args, **kwargs)
+
+            with patch("asyncio.to_thread", side_effect=spy):
+                await database._await_backup_barrier_continuation(
+                    resolved, token, asyncio.get_running_loop().time() + 5
+                )
+
+            self.assertIn("exists", dispatched)
+            self.assertIn("read_text", dispatched)
+            self.assertTrue((resolved / "completed").is_file())
+
+    async def test_the_pdf_publish_uses_one_batched_statement(self) -> None:
+        """F-257 (R7-D10A-05): the PDF path inserted one row per segment."""
+
+        run = running_run()
+        connection = FakeConnection(
+            fetchrows=[run_row(run)],
+            fetchvals=["BUILDING", uuid4()],
+        )
+        database = database_with(connection)
+        segments = [
+            PdfPublicationSegment(0, "PDF_PASSAGE", "first", 1, 1, None),
+            PdfPublicationSegment(1, "PDF_PASSAGE", "second", 2, 2, None),
+        ]
+        embeddings = [[0.0] * 1024, [0.0] * 1024]
+
+        await database.replace_pdf_source(
+            run,
+            source_path="02. Books/report.pdf",
+            content_identity_digest="a" * 64,
+            title="Report",
+            canonical_topics=("AI",),
+            tags=("ai",),
+            build_id=str(uuid4()),
+            segments=segments,
+            embeddings=embeddings,
+        )
+
+        inserts = [
+            call
+            for call in connection.calls
+            if call[0] == "executemany" and "INSERT INTO knowledge.segments" in call[1]
+        ]
+        self.assertEqual(len(inserts), 1)
+        self.assertEqual(len(inserts[0][2][0]), 2)
 
 
 class TimeoutClassificationPinTests(unittest.TestCase):

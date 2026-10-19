@@ -181,10 +181,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     search_limiter = SearchCapacityLimiter(capacity=2)
 
-    @asynccontextmanager
-    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        await database.start()
-        if database.available:
+    async def recover_interrupted_state() -> None:
+        """Repair the state a crashed or late database left behind.
+
+        F-092 (R5-E03-03): the sweep is chunked and idempotent, so it can be
+        repeated. F-164 (R5-E01-04): it also runs when a re-attempted
+        connection succeeds, because the state it repairs is exactly the
+        state a boot that failed before the sweep skipped. A sweep that
+        fails is NAMED, and it does not stop the service from becoming
+        ready: the rows it would delete belong to indexes that are already
+        FAILED, and the next attempt repeats the sweep.
+        """
+
+        if not database.available:
+            return
+        try:
             startup_owner = database.take_startup_owner_connection()
             if startup_owner is None:
                 await coordinator.recover_startup()

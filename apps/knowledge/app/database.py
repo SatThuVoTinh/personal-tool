@@ -49,6 +49,18 @@ _PDF_CONTENT_IDENTITY_INDEXES = {
     "knowledge_pdf_content_builds_one_building_idx",
     "knowledge_pdf_content_builds_one_ready_idx",
 }
+# F-092 (R5-E03-03): the pool runs every statement under a 30 s
+# `command_timeout`, and the startup sweep used to hand EVERY failed index id
+# to one `DELETE ... WHERE index_id = ANY($1::uuid[])`. A full-corpus shadow
+# therefore put thousands of ids in a single statement with a single
+# timeout. The sweep is chunked: the same rows are deleted, one bounded
+# statement at a time.
+PURGE_CHUNK_SIZE = 500
+# F-164 (R5-E01-04): how long the process waits before re-attempting a
+# connection that failed at boot. The pool is re-created, the schema is
+# applied and the interrupted-run recovery runs as soon as the database
+# answers, instead of leaving the process permanently "unavailable".
+RECONNECT_INTERVAL_SECONDS = 5.0
 _PDF_SEGMENT_TYPES = {
     "PDF_PASSAGE",
     "PDF_TABLE",
@@ -1889,17 +1901,27 @@ class KnowledgeDatabase:
         `segments` and `pdf_source_details` also cascade from `sources`; they
         are deleted explicitly so each relation's cleanup is separately
         verifiable. Idempotent: an already-purged index matches zero rows.
+
+        F-092 (R5-E03-03): the id list is CHUNKED. One statement carrying
+        every failed index id ran under the pool's 30 s `command_timeout`,
+        so a full-corpus shadow either finished or aborted the whole sweep
+        with no partial progress and no name. Each chunk is a bounded
+        statement, and a chunk that fails propagates so the caller can name
+        the sweep; the next attempt repeats it, because deleting the same
+        rows again is a no-op.
         """
         if not index_ids:
             return
         ids = list(index_ids)
-        for statement in (
-            "DELETE FROM knowledge.segments WHERE index_id = ANY($1::uuid[])",
-            "DELETE FROM knowledge.pdf_source_details WHERE index_id = ANY($1::uuid[])",
-            # Removing the source rows also cascades `source_sidecars`.
-            "DELETE FROM knowledge.sources WHERE index_id = ANY($1::uuid[])",
-        ):
-            await connection.execute(statement, ids)
+        for offset in range(0, len(ids), PURGE_CHUNK_SIZE):
+            chunk = ids[offset : offset + PURGE_CHUNK_SIZE]
+            for statement in (
+                "DELETE FROM knowledge.segments WHERE index_id = ANY($1::uuid[])",
+                "DELETE FROM knowledge.pdf_source_details WHERE index_id = ANY($1::uuid[])",
+                # Removing the source rows also cascades `source_sidecars`.
+                "DELETE FROM knowledge.sources WHERE index_id = ANY($1::uuid[])",
+            ):
+                await connection.execute(statement, chunk)
 
     @staticmethod
     def _validate_pdf_batch_topology(
