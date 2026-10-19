@@ -324,9 +324,15 @@ describe("M8/T3 canonical Skill Store writer", () => {
       // so it is now reported as residue: invisible to the error list and to
       // the record set, and swept by the writer under the store-wide lock.
       const before = await scanCatalog(skillsRoot);
-      assert.ok(
-        before.errors.some((e) => e.code === "DIRECTORY_GRAMMAR_INVALID"),
-        "the residue must be the store-wide failure the finding describes",
+      assert.deepEqual(
+        before.errors,
+        [],
+        "writer residue must not be a catalog error",
+      );
+      assert.equal(
+        before.residue.length,
+        1,
+        `the residue must be reported as residue: ${JSON.stringify(before.residue)}`,
       );
 
       const content = "# Cross\n\nComplete bytes under a different version.";
@@ -487,6 +493,161 @@ describe("M8/T3 canonical Skill Store writer", () => {
           assert.equal(error.code, "SKILL_VERSION_CONFLICT");
           return true;
         },
+      );
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  // M12/T9-R1 F-098 — a lifecycle event must be able to cite the task id the
+  // plan actually uses.
+  //
+  // The DECISION grammar admitted only `PLAN:M<n>/T<n>-R<n>`, but the
+  // repository's own revisions are dotted (`M12/T2.2-R3`, `M12/T2.1-R3`,
+  // `M12/T2.3-R1`): a promotion authorized by one of those contracts could not
+  // cite the contract that authorized it, and the Wave C fixture had to fall
+  // back to `PLAN:M12/T2-R1` to stay inside the grammar. The stored record's
+  // SHAPE is unchanged — `decision_ref` is still the same string in the same
+  // lifecycle event, and a decision is still required for every status
+  // beyond CANDIDATE — only the accepted id shape is widened to the plan's.
+  test("F-098: a lifecycle event may cite the plan's own dotted task ids", async () => {
+    const { promoteApprovedSkill, scanCatalog } =
+      await import("../zink-skill-store/src/catalog.mjs");
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "zink-dotted-task-"));
+    const skillsRoot = path.join(tmp, "skills");
+    try {
+      let index = 0;
+      for (const decisionRef of [
+        "PLAN:M12/T9-R1",
+        "PLAN:M12/T2.2-R3",
+        "PLAN:M12/T2.1-R3",
+        "PLAN:M8/T3-R1",
+      ]) {
+        index += 1;
+        const res = await promoteApprovedSkill({
+          skillsRoot,
+          namespace: ["office"],
+          capability: `dotted-skill-${index}`,
+          version: "1.0.0",
+          content: `# Dotted\n\nCites ${decisionRef}.`,
+          requestingActor: "excel",
+          decisionRef,
+        });
+        assert.equal(res.status, "ACTIVE", `${decisionRef} must be accepted`);
+      }
+      const catalog = await scanCatalog(skillsRoot);
+      assert.deepEqual(catalog.errors, []);
+      // The grammar still refuses what is not a plan task id.
+      for (const decisionRef of [
+        "PLAN:M12/T2.2",
+        "PLAN:M12/T2.2-R",
+        "PLAN:X12/T2.2-R3",
+        "M12/T2.2-R3",
+      ]) {
+        await assert.rejects(
+          () =>
+            promoteApprovedSkill({
+              skillsRoot,
+              namespace: ["office"],
+              capability: "other-skill",
+              version: "1.0.0",
+              content: "# Other\n\nAnother.",
+              requestingActor: "excel",
+              decisionRef,
+            }),
+          (error) => {
+            assert.equal(error.code, "DECISION_REF_INVALID");
+            return true;
+          },
+        );
+      }
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  // M12/T9-R1 F-168 — the replay probe compared content, decision and
+  // provenance but never the ACTORS, and its provenance equality was a plain
+  // `JSON.stringify`, which is key-order sensitive.
+  //
+  // (1) A different actor is a different governed act: reporting it as
+  // ALREADY_ACTIVE dropped the new actors and told the caller the record it
+  // did not write was the one it had asked about.
+  // (2) The same record, whose manifest simply carries its provenance keys in
+  // another order, IS the same governed act and must not be refused.
+  test("F-168: the replay probe compares the actors and the provenance canonically", async () => {
+    const { promoteApprovedSkill } =
+      await import("../zink-skill-store/src/catalog.mjs");
+    const { readFile, writeFile } = await import("node:fs/promises");
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "zink-actor-bind-"));
+    const skillsRoot = path.join(tmp, "skills");
+    const content = "# Actors\n\nIdentical bytes.";
+    const call = (overrides = {}) => ({
+      skillsRoot,
+      namespace: ["office"],
+      capability: "actor-skill",
+      version: "1.0.0",
+      content,
+      requestingActor: "excel",
+      ownerActor: "owner",
+      decisionRef: "PLAN:M8/T3-R1",
+      sourceType: "research",
+      references: [{ type: "plan", ref: "M8/T3-R1" }],
+      ...overrides,
+    });
+    try {
+      const first = await promoteApprovedSkill(call());
+      assert.equal(first.status, "ACTIVE");
+
+      // (1) The same bytes under a different owner actor is NOT the same
+      // governed act, and must be refused loudly.
+      await assert.rejects(
+        () => promoteApprovedSkill(call({ ownerActor: "another-owner" })),
+        (error) => {
+          assert.equal(error.code, "SKILL_VERSION_CONFLICT");
+          return true;
+        },
+      );
+      // The same, for the requesting actor.
+      await assert.rejects(
+        () =>
+          promoteApprovedSkill(call({ requestingActor: "another-requester" })),
+        (error) => {
+          assert.equal(error.code, "SKILL_VERSION_CONFLICT");
+          return true;
+        },
+      );
+
+      // (2) The same governed act, re-asked with the same actors, over a
+      // manifest whose provenance keys are in another order.
+      const manifestPath = path.join(
+        skillsRoot,
+        "office",
+        "actor-skill",
+        "1.0.0",
+        "manifest.json",
+      );
+      const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+      await writeFile(
+        manifestPath,
+        JSON.stringify(
+          {
+            ...manifest,
+            provenance: {
+              references: manifest.provenance.references,
+              source_type: manifest.provenance.source_type,
+            },
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+      const again = await promoteApprovedSkill(call());
+      assert.equal(
+        again.status,
+        "ALREADY_ACTIVE",
+        "the same record must not be refused over key order alone",
       );
     } finally {
       await rm(tmp, { recursive: true, force: true });

@@ -31,9 +31,26 @@ import {
 const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const VERSION = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
 const DIGEST = /^[0-9a-f]{64}$/;
-const DECISION = /^PLAN:M(?:0|[1-9][0-9]*)\/(?:T|S)[1-9][0-9]*-R[1-9][0-9]*$/;
+/**
+ * M12/T9-R1 F-098: the plan's own task-id shape.
+ *
+ * The repository's task ids are DOTTED — `M12/T2.2-R3`, `M12/T2.1-R3`,
+ * `M12/T2.3-R1` — while the old grammar admitted only `M<n>/T<n>-R<n>`. A
+ * promotion authorized by one of those contracts could therefore not cite the
+ * contract that authorized it, and a fixture had to fall back to
+ * `PLAN:M12/T2-R1` to stay inside the grammar.
+ *
+ * The shape stays tight: a milestone number, a `T`/`S` task number with
+ * optional dotted sub-tasks, and a revision number. Nothing else is accepted,
+ * and the STORED record is unchanged — `decision_ref` is still the same
+ * string in the same lifecycle event, and a decision is still required for
+ * every status beyond CANDIDATE.
+ */
+const TASK_ID =
+  "M(?:0|[1-9][0-9]*)/(?:T|S)[1-9][0-9]*(?:\\.[1-9][0-9]*)*-R[1-9][0-9]*";
+const DECISION = new RegExp(`^PLAN:${TASK_ID}$`);
 const GIT_SHA = /^[0-9a-f]{40}$/;
-const PLAN_REF = /^M(?:0|[1-9][0-9]*)\/(?:T|S)[1-9][0-9]*-R[1-9][0-9]*$/;
+const PLAN_REF = new RegExp(`^${TASK_ID}$`);
 const SOURCE_TYPES = new Set([
   "owner-authored",
   "demonstration",
@@ -209,6 +226,28 @@ class JsonParser {
 
 function diagnostic(code, message, relativePath) {
   return { code, message, path: relativePath };
+}
+
+/**
+ * A canonical JSON rendering: object keys sorted, so two structurally equal
+ * values always produce the same string.
+ *
+ * `JSON.stringify` alone is key-order sensitive, so a manifest whose
+ * `provenance` was written with its two keys in the other order compared
+ * unequal to the very same provenance — and that comparison decides whether a
+ * repeat promotion is the same governed act or a conflict.
+ */
+function canonicalJson(value) {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
+  }
+  if (isObject(value)) {
+    return `{${Object.keys(value)
+      .sort(compareStrings)
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value ?? null);
 }
 
 function compareStrings(left, right) {
@@ -641,7 +680,7 @@ async function validateVersion(directory, parts, errors, records, count) {
   });
 }
 
-async function walk(directory, parts, errors, records, count) {
+async function walk(directory, parts, errors, records, count, residue) {
   let info;
   try {
     info = await lstat(directory);
@@ -699,6 +738,7 @@ async function walk(directory, parts, errors, records, count) {
           errors,
           records,
           count,
+          residue,
         );
       }
     }
@@ -755,6 +795,7 @@ async function walk(directory, parts, errors, records, count) {
       errors,
       records,
       count,
+      residue,
     );
   }
 }
@@ -770,6 +811,7 @@ function sortDiagnostics(errors) {
 export async function scanCatalog(skillsRoot) {
   const errors = [];
   const records = [];
+  const residue = [];
   let rootInfo;
   try {
     rootInfo = await lstat(skillsRoot);
@@ -778,7 +820,7 @@ export async function scanCatalog(skillsRoot) {
     errors.push(
       diagnostic("SKILLS_ROOT_MISSING", "Skills root is missing.", "skills"),
     );
-    return { errors, records };
+    return { errors, records, residue };
   }
   if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) {
     errors.push(
@@ -790,7 +832,7 @@ export async function scanCatalog(skillsRoot) {
     );
   } else {
     const resolvedRoot = await realpath(skillsRoot);
-    await walk(resolvedRoot, [], errors, records, { value: 0 });
+    await walk(resolvedRoot, [], errors, records, { value: 0 }, residue);
   }
   const active = new Map();
   for (const record of records) {
@@ -809,7 +851,7 @@ export async function scanCatalog(skillsRoot) {
       errors.push(
         diagnostic(
           "MULTIPLE_ACTIVE_VERSIONS",
-          "Namespace and capability have multiple ACTIVE versions.",
+          `Namespace and capability have multiple ACTIVE versions: ${first.relativePath} and ${record.relativePath}.`,
           record.relativePath,
         ),
       );
@@ -1050,6 +1092,29 @@ async function healWriterResidue(skillsRoot, parentDir, versionDir) {
 }
 
 /**
+ * Removes every writer residue the scanner found anywhere in the store.
+ *
+ * `healWriterResidue` clears the residue of the capability being promoted
+ * into; this clears the rest of the store, so one killed publisher can never
+ * leave another one behind for the next reader to trip over. It runs under
+ * the store-wide writer lock, which is what makes deleting another
+ * capability's `*.pending-*` directory safe: no other publisher can be
+ * staging while the lock is held, so a staged directory can only be orphaned.
+ *
+ * Residue is never canonical — the catalog recognizes only complete validated
+ * pairs — so removing it cannot destroy canonical truth.
+ */
+async function sweepWriterResidue(skillsRoot, residue) {
+  for (const entry of residue ?? []) {
+    const parts = entry?.parts;
+    if (!Array.isArray(parts) || parts.length === 0) continue;
+    const target = path.join(skillsRoot, ...parts);
+    await rm(target, { recursive: true, force: true });
+    await pruneEmptyParents(path.dirname(target), skillsRoot);
+  }
+}
+
+/**
  * Removes directories left empty by healing, walking up from `fromDir`
  * toward (and excluding) `stopDir`. Only empty directories are removed;
  * the first non-empty directory stops the walk.
@@ -1283,7 +1348,8 @@ export async function promoteApprovedSkillUnlocked({
       currentHash === contentSha256 &&
       lastStatus === "ACTIVE" &&
       sameDecision &&
-      sameProvenance
+      sameProvenance &&
+      sameActors
     ) {
       return {
         status: "ALREADY_ACTIVE",
