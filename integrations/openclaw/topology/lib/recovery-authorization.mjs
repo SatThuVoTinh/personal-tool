@@ -60,7 +60,21 @@ export const RECOVERY_REFUSALS = Object.freeze({
   RECOVERY_TARGET_NOT_AUTHORIZED: "RECOVERY_TARGET_NOT_AUTHORIZED",
   RECOVERY_NOT_CONFIRMED: "RECOVERY_NOT_CONFIRMED",
   RECOVERY_BACKUP_MISSING: "RECOVERY_BACKUP_MISSING",
+  RECOVERY_AUTHORIZATION_TIMESTAMP_INVALID:
+    "RECOVERY_AUTHORIZATION_TIMESTAMP_INVALID",
+  RECOVERY_AUTHORIZATION_EXPIRED: "RECOVERY_AUTHORIZATION_EXPIRED",
 });
+
+/**
+ * M12/T9 F-337: an authorization record used to stay armed indefinitely. Only
+ * its SHAPE was checked — an `EXPLICIT` flag, a target, the confirmation and
+ * a timestamp that had to be a STRING — so a record written for one recovery
+ * exercise still authorized the next one, months later, against a runtime
+ * that had moved several patch generations beyond the one the operator
+ * actually approved. The record is now bounded by a freshness window, and its
+ * timestamp must be a real instant.
+ */
+export const RECOVERY_AUTHORIZATION_MAX_AGE_MS = 60 * 60 * 1000;
 
 /** Parse `--target=<name>` and `--confirm=<CONFIRMATION>`. */
 export function parseRecoveryArguments(argv) {
@@ -86,7 +100,10 @@ export function parseRecoveryArguments(argv) {
  * `Deployment Authorized: YES` line can never be read as permission to tear the
  * runtime down.
  */
-export function evaluateRecoveryAuthorization(record) {
+export function evaluateRecoveryAuthorization(
+  record,
+  { now = Date.now(), maxAgeMs = RECOVERY_AUTHORIZATION_MAX_AGE_MS } = {},
+) {
   if (record === null || record === undefined)
     return {
       authorized: false,
@@ -114,6 +131,23 @@ export function evaluateRecoveryAuthorization(record) {
       authorized: false,
       refusal: RECOVERY_REFUSALS.RECOVERY_NOT_AUTHORIZED,
     };
+  // M12/T9 F-337: the timestamp must be a real instant, and the record must
+  // still be fresh. A non-ISO value is refused, and a record older than the
+  // window no longer arms the destructive path.
+  const authorizedAt = Date.parse(record.authorizedAt);
+  if (!Number.isFinite(authorizedAt)) {
+    return {
+      authorized: false,
+      refusal: RECOVERY_REFUSALS.RECOVERY_AUTHORIZATION_TIMESTAMP_INVALID,
+    };
+  }
+  const ageMs = now - authorizedAt;
+  if (ageMs > maxAgeMs || ageMs < -maxAgeMs) {
+    return {
+      authorized: false,
+      refusal: RECOVERY_REFUSALS.RECOVERY_AUTHORIZATION_EXPIRED,
+    };
+  }
   if (!Object.hasOwn(KNOWN_RECOVERY_TARGETS, record.target))
     return {
       authorized: false,
@@ -134,6 +168,8 @@ export function authorizeHistoricalRecovery({
   authorization,
   options,
   backupPresent,
+  now = Date.now(),
+  maxAgeMs = RECOVERY_AUTHORIZATION_MAX_AGE_MS,
 }) {
   const denial = (refusal, extra = {}) => ({
     proceed: false,
@@ -143,7 +179,10 @@ export function authorizeHistoricalRecovery({
     ...extra,
   });
 
-  const verdict = evaluateRecoveryAuthorization(authorization);
+  const verdict = evaluateRecoveryAuthorization(authorization, {
+    now,
+    maxAgeMs,
+  });
   if (!verdict.authorized) return denial(verdict.refusal);
 
   if (!options || !options.target)

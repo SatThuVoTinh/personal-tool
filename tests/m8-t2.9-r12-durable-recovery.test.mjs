@@ -35,7 +35,7 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import test, { describe, it } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { applyRuntime } from "../integrations/openclaw/topology/fixtures/runtime-regression/apply-orchestration.mjs";
@@ -166,12 +166,22 @@ function mutateToR11(rt) {
   );
 }
 
+/**
+ * M12/T9 F-337: a fresh authorization instant, captured once so the fixture
+ * is stable across calls.
+ */
+const FRESH_AUTHORIZED_AT = new Date().toISOString();
+
 /** A valid explicit recovery authorization naming the only known target. */
 const recoveryAuthorization = (overrides = {}) => ({
   recoveryAuthorization: "EXPLICIT",
   target: "r12-t1-baseline",
   confirmation: RECOVERY_CONFIRMATION,
-  authorizedAt: "2026-09-30T00:00:00.000Z",
+  // M12/T9 F-337: the record is bounded by a freshness window now, so the
+  // fixture must be a FRESH record. The window itself is exercised by the
+  // dedicated case at the end of this file. The instant is captured ONCE so
+  // two calls of the fixture produce the same record.
+  authorizedAt: FRESH_AUTHORIZED_AT,
   ...overrides,
 });
 
@@ -1238,3 +1248,76 @@ function existsOutside(stateDir, name) {
     if (existsAsFile(candidate)) return true;
   return false;
 }
+
+// =========================================================================
+// M12/T9 F-337 — the historical-recovery gate accepted an authorization
+// record of any age and never bound it to the runtime it is about to tear
+// down. A record written once stayed armed indefinitely.
+// =========================================================================
+describe("M12/T9 F-337 — the recovery authorization record is bounded", () => {
+  it("F-337: a fresh record authorizes, an old or malformed one does not", () => {
+    const now = Date.parse("2026-10-20T12:00:00.000Z");
+    const fresh = evaluateRecoveryAuthorization(
+      {
+        recoveryAuthorization: "EXPLICIT",
+        target: "r12-t1-baseline",
+        confirmation: RECOVERY_CONFIRMATION,
+        authorizedAt: "2026-10-20T11:30:00.000Z",
+      },
+      { now },
+    );
+    assert.equal(fresh.authorized, true, "a fresh record still authorizes");
+
+    // A record that is older than the window no longer arms the destructive
+    // path: it was written for a different runtime generation.
+    const stale = evaluateRecoveryAuthorization(
+      {
+        recoveryAuthorization: "EXPLICIT",
+        target: "r12-t1-baseline",
+        confirmation: RECOVERY_CONFIRMATION,
+        authorizedAt: "2026-09-30T00:00:00.000Z",
+      },
+      { now },
+    );
+    assert.equal(stale.authorized, false);
+    assert.equal(
+      stale.refusal,
+      RECOVERY_REFUSALS.RECOVERY_AUTHORIZATION_EXPIRED,
+    );
+
+    // A non-ISO timestamp is refused rather than accepted.
+    const malformed = evaluateRecoveryAuthorization(
+      {
+        recoveryAuthorization: "EXPLICIT",
+        target: "r12-t1-baseline",
+        confirmation: RECOVERY_CONFIRMATION,
+        authorizedAt: "not-a-date",
+      },
+      { now },
+    );
+    assert.equal(malformed.authorized, false);
+    assert.equal(
+      malformed.refusal,
+      RECOVERY_REFUSALS.RECOVERY_AUTHORIZATION_TIMESTAMP_INVALID,
+    );
+
+    // And the complete gate refuses the stale record too, so the refusal is
+    // not only reachable through the record evaluator.
+    const gate = authorizeHistoricalRecovery({
+      authorization: {
+        recoveryAuthorization: "EXPLICIT",
+        target: "r12-t1-baseline",
+        confirmation: RECOVERY_CONFIRMATION,
+        authorizedAt: "2026-09-30T00:00:00.000Z",
+      },
+      options: { target: "r12-t1-baseline", confirmed: true },
+      backupPresent: true,
+      now,
+    });
+    assert.equal(gate.proceed, false);
+    assert.equal(
+      gate.refusal,
+      RECOVERY_REFUSALS.RECOVERY_AUTHORIZATION_EXPIRED,
+    );
+  });
+});
