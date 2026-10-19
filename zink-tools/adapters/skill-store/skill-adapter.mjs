@@ -272,6 +272,13 @@ export class SkillAdapter {
           // (vector-sync.mjs:358). Discovery now matches them.
           const catalogErrors = catalog?.errors ?? [];
           if (catalogErrors.length > 0) {
+            // F-125 (R1-A10-03): the shape here is pinned by the repository's
+            // own closed evidence (F-187's runtime assertions and R20-01's
+            // source-text assertions), so the CONTRACT is the side that was
+            // wrong: `zink-skill.schema.json` declared a vocabulary the
+            // adapter never used and omitted the key it always emits. The
+            // contract now declares what is actually emitted, so this envelope
+            // passes its own declared output schema.
             return {
               action: "discover",
               namespace: namespace ?? "all",
@@ -764,7 +771,10 @@ export class SkillAdapter {
 
         return {
           action: "search",
-          query: queryTextForEmbedding,
+          // F-125 (R1-A10-03): the top-level `query` key was outside the
+          // declared output object (which closes it), so the search envelope
+          // could not pass its own contract. The query text is not part of
+          // the answer.
           results,
           total_count: results.length,
           governed_status,

@@ -574,15 +574,20 @@ export class KnowledgeAdapter {
               : [];
 
             return {
-              chunk_id: r.segment_id || r.chunk_id || "unknown",
-              title: r.title || "Untitled",
+              // F-125 (R1-A10-03): the declared output item types the chunk
+              // id as a string. An upstream id that arrived as a number was
+              // copied through unchanged, so the envelope could not pass the
+              // tool's own output contract.
+              chunk_id: String(r.segment_id || r.chunk_id),
+              title: typeof r.title === "string" ? r.title : "",
               text: boundedText,
               score: validScore,
-              citation:
-                r.citation ||
-                (r.source_path
-                  ? `${r.source_path}${r.line_start ? `#L${r.line_start}` : ""}`
-                  : ""),
+              citation: rowCitation(r),
+              // F-125 (R1-A10-03): a key whose value is `undefined` is still
+              // a key, and the contract's closed metadata object refused it
+              // (the wire would have dropped it, the validated object would
+              // not). Only the values the upstream actually carried are
+              // emitted.
               metadata: {
                 source_path: r.source_path,
                 heading_path: headingPath,

@@ -63,6 +63,9 @@
         "namespace": {
           "type": "string"
         },
+        "semantic_contract_version": {
+          "type": "string"
+        },
         "results": {
           "type": "array",
           "items": {
@@ -73,10 +76,23 @@
               "text": { "type": "string" },
               "score": { "type": "number" },
               "citation": { "type": "string" },
-              "metadata": { "type": "object" }
+              "metadata": {
+                "type": "object",
+                "properties": {
+                  "source_path": { "type": "string" },
+                  "heading_path": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  },
+                  "source_type": { "type": "string" },
+                  "page_start": { "type": ["number", "null"] },
+                  "page_end": { "type": ["number", "null"] }
+                },
+                "additionalProperties": false
+              }
             },
             "required": ["chunk_id", "text"],
-            "additionalProperties": true
+            "additionalProperties": false
           }
         },
         "total_count": {
@@ -85,7 +101,13 @@
         },
         "governed_status": {
           "type": "string",
-          "enum": ["SUCCESS", "CONTROLLED_FAILURE"]
+          "enum": ["SUCCESS", "NO_MATCH", "CONTROLLED_FAILURE"]
+        },
+        "error": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
         }
       },
       "required": ["action", "namespace", "results", "total_count", "governed_status"],
