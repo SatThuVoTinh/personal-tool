@@ -110,12 +110,40 @@ export function stableJson(value) {
   return `{${keys.map((k) => `${JSON.stringify(k)}:${stableJson(value[k])}`).join(",")}}`;
 }
 
+/**
+ * M12/T9 F-303: contract resolution is repository-relative ONLY — the working
+ * directory is not a candidate, so a run whose cwd held another `zink-tools/`
+ * tree can no longer validate against files outside the repository.
+ *
+ * A caller that legitimately holds contracts somewhere else (a materialised
+ * pointer tree, a packaged install) declares that location HERE, explicitly,
+ * instead of relying on where the process happens to be started.
+ */
+let extraContractRoots = [];
+
+export function setContractResolutionRoots(roots = []) {
+  extraContractRoots = (Array.isArray(roots) ? roots : []).filter(
+    (root) => typeof root === "string" && root.length > 0,
+  );
+}
+
 export function resolveContractFilePath(name) {
   let cleanName = String(name || "").trim();
   if (cleanName.startsWith("tools/")) cleanName = cleanName.slice(6);
   if (cleanName.endsWith(".schema.json")) cleanName = cleanName.slice(0, -12);
 
   const candidatePaths = [
+    // 0. Declared roots (M12/T9 F-303): an explicit location, never the cwd.
+    ...extraContractRoots.flatMap((root) => [
+      path.resolve(
+        root,
+        "zink-tools/contracts/tools",
+        `${cleanName}.schema.json`,
+      ),
+      path.resolve(root, "zink-tools/contracts", `${cleanName}.schema.json`),
+      path.resolve(root, "contracts/tools", `${cleanName}.schema.json`),
+      path.resolve(root, "contracts", `${cleanName}.schema.json`),
+    ]),
     // 1. Local contracts directory (in plugin or topology)
     path.resolve(__dirname, "../contracts", `${cleanName}.schema.json`),
     path.resolve(__dirname, "../contracts/tools", `${cleanName}.schema.json`),
@@ -135,17 +163,11 @@ export function resolveContractFilePath(name) {
       "../../../../zink-tools/contracts",
       `${cleanName}.schema.json`,
     ),
-    // 3. Current working directory zink-tools
-    path.resolve(
-      process.cwd(),
-      "zink-tools/contracts/tools",
-      `${cleanName}.schema.json`,
-    ),
-    path.resolve(
-      process.cwd(),
-      "zink-tools/contracts",
-      `${cleanName}.schema.json`,
-    ),
+    // M12/T9 F-303: the working directory is NOT a candidate. A run whose cwd
+    // held another `zink-tools/` tree silently validated against files
+    // outside the repository, so the same contract name could resolve to
+    // different bytes depending on where the process was started. Resolution
+    // is repository-relative only.
   ];
 
   for (const candidate of candidatePaths) {
