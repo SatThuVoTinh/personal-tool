@@ -4785,6 +4785,9 @@ function leaseKey(context, event = {}) {
   const runId = context.runId ?? event.runId;
   const toolCallId = context.toolCallId ?? event.toolCallId;
   if (!sessionKey || !runId || !toolCallId)
+    // M12/T9 F-087: the diagnostic names the MISSING lineage, never its value. The
+    // module's own log policy is "no params, no hash", and a session key / run id /
+    // tool call id is exactly the identity this line used to print.
     throw new Error(
       "LINEAGE_MISMATCH: session_key, run_id and tool_call_id are all required",
     );
@@ -4907,6 +4910,22 @@ export default {
         return undefined;
       }
       return entry.hash;
+    }
+    /**
+     * M12/T9 F-087: consume the lease ONLY when it authorizes THIS call. A wrong or
+     * duplicated call must not destroy the one-shot proof, or the correct call that
+     * follows is denied with nothing left to check.
+     */
+    function consumeLease(key, hash) {
+      const expected = getLease(key);
+      if (expected === undefined || expected !== hash) return false;
+      leases.delete(scopedLeaseKey(key));
+      return true;
+    }
+    /** M12/T9 F-042: revoke only the leases this registration owns. */
+    function clearScopeLeases() {
+      for (const [k, entry] of leases)
+        if (entry.scope === leaseScope) leases.delete(k);
     }
     // Notification waiters are transient, not authority. After notification the
     // guard still requires the exact receipt persisted in the trusted ledger.
@@ -7592,8 +7611,12 @@ export default {
         api.logger?.warn?.(
           `[zink-lease:get] match=${matched} agent=${context.agentId} tool=${event.toolName}`,
         );
-        leases.delete(key);
-        if (!matched) throw new Error("POLICY_DENIED");
+        // M12/T9 F-087: only the call the lease authorizes may consume it. A wrong
+        // or duplicated call must not burn the one-shot proof, and the three causes
+        // are named so the log says WHICH one refused the call.
+        if (matched) consumeLease(key, actualHash);
+        if (!expected) throw new Error("POLICY_DENIED:LEASE_MISSING");
+        if (!matched) throw new Error("POLICY_DENIED:LEASE_DIGEST_MISMATCH");
       } catch (err) {
         api.logger?.warn?.(`[zink-lease:blocked] ${err?.message ?? err}`);
         return {

@@ -771,6 +771,276 @@ const DEPLOYED_FORUM_TAGS_SHA256 =
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 
+function leaseHarness(tag) {
+  const root = mkdtempSync(path.join(os.tmpdir(), `m12t9-lease-${tag}-`));
+  const paths = ledgerPaths(root);
+  ensureLedger(paths);
+  for (const agentId of [
+    "main",
+    "o1",
+    "o2",
+    "excel",
+    "power-bi",
+    "sql",
+    "python",
+  ]) {
+    mkdirSync(path.join(root, "workspaces", agentId), { recursive: true });
+    mkdirSync(path.join(root, "agents", agentId, "agent"), { recursive: true });
+  }
+  const hooks = new Map();
+  const logs = [];
+  governancePlugin.register({
+    pluginConfig: {
+      ledgerRoot: paths.root,
+      ownerDiscordId: "123456789012345678",
+      enabled: true,
+    },
+    on: (name, handler) => hooks.set(name, handler),
+    registerTool: () => {},
+    logger: {
+      warn: (m) => logs.push(String(m)),
+      info: (m) => logs.push(String(m)),
+      error: (m) => logs.push(String(m)),
+    },
+  });
+  return { root, paths, hooks, logs };
+}
+
+const LEASE_TOOL = "zink_skill_propose";
+const LEASE_AGENT = "excel";
+const LEASE_PARAMS = { namespace: "default" };
+
+/** The native gate's event shape: one tool call in one assistant batch. */
+function nativeToolEvent(name, args, id = "call-0") {
+  const part = { type: "toolCall", name, id, arguments: args };
+  return {
+    assistantMessage: { role: "assistant", content: [part] },
+    toolCall: part,
+    args,
+  };
+}
+
+const nativeConfig = (scope) => ({
+  plugins: {
+    entries: {
+      "zink-governance": { enabled: true, config: { ledgerRoot: scope } },
+    },
+  },
+});
+
+/** Drive the native gate so the plugin mints the lease for this call. */
+async function mintLease(h, context, params = LEASE_PARAMS, id = "call-0") {
+  const agent = {};
+  installNativeToolGate(agent, nativeConfig(h.paths.root), {
+    agentId: context.agentId,
+    sessionKey: context.sessionKey,
+    runId: context.runId,
+  });
+  await agent.beforeToolCall(nativeToolEvent(LEASE_TOOL, params, id));
+}
+
+test("M12/T9 F-087: a mismatched call does not destroy the one-shot lease", async () => {
+  const h = leaseHarness("f087");
+  try {
+    const context = {
+      agentId: LEASE_AGENT,
+      sessionKey: "agent:excel:session-1",
+      runId: "run-1",
+      toolCallId: "call-0",
+    };
+    await mintLease(h, context);
+
+    // A call whose parameters do not match the authorized digest is refused...
+    const wrong = h.hooks.get("before_tool_call")(
+      {
+        toolName: LEASE_TOOL,
+        params: { ...LEASE_PARAMS, namespace: "other" },
+      },
+      context,
+    );
+    assert.equal(wrong?.block, true, "a mismatched call must be refused");
+
+    // ...and it must NOT have burned the lease the real call needs.
+    const right = h.hooks.get("before_tool_call")(
+      { toolName: LEASE_TOOL, params: { ...LEASE_PARAMS } },
+      context,
+    );
+    assert.equal(
+      right,
+      undefined,
+      "the correct call that follows a mismatched one must still be authorized",
+    );
+  } finally {
+    h.hooks.get("gateway_stop")?.();
+    rmSync(h.root, { recursive: true, force: true });
+  }
+});
+
+test("M12/T9 F-087: the three refusal causes are distinguishable and carry no identity", async () => {
+  const h = leaseHarness("f087-log");
+  try {
+    const context = {
+      agentId: LEASE_AGENT,
+      sessionKey: "agent:excel:session-2",
+      runId: "run-2",
+      toolCallId: "call-0",
+    };
+    // 1. No lease at all.
+    assert.equal(
+      h.hooks.get("before_tool_call")(
+        { toolName: LEASE_TOOL, params: { ...LEASE_PARAMS } },
+        context,
+      )?.block,
+      true,
+    );
+    // 2. A lease whose digest does not match.
+    await mintLease(h, context);
+    assert.equal(
+      h.hooks.get("before_tool_call")(
+        {
+          toolName: LEASE_TOOL,
+          params: { ...LEASE_PARAMS, namespace: "other" },
+        },
+        context,
+      )?.block,
+      true,
+    );
+    // 3. Missing lineage.
+    assert.equal(
+      h.hooks.get("before_tool_call")(
+        { toolName: LEASE_TOOL, params: { ...LEASE_PARAMS } },
+        { agentId: LEASE_AGENT },
+      )?.block,
+      true,
+    );
+
+    const blocked = h.logs.filter((line) =>
+      line.includes("[zink-lease:blocked]"),
+    );
+    assert.equal(blocked.length, 3, `three refusals, got ${blocked.length}`);
+    assert.match(blocked[0], /LEASE_MISSING/u);
+    assert.match(blocked[1], /LEASE_DIGEST_MISMATCH/u);
+    assert.match(blocked[2], /LINEAGE_MISMATCH/u);
+    for (const line of blocked) {
+      assert.equal(
+        line.includes(context.sessionKey),
+        false,
+        `an identity value reached the log: ${line}`,
+      );
+      assert.equal(
+        line.includes(context.runId),
+        false,
+        `an identity value reached the log: ${line}`,
+      );
+    }
+  } finally {
+    h.hooks.get("gateway_stop")?.();
+    rmSync(h.root, { recursive: true, force: true });
+  }
+});
+
+test("M12/T9 F-042: a lease minted under one ledger root never satisfies another", async () => {
+  const a = leaseHarness("f042-a");
+  const b = leaseHarness("f042-b");
+  try {
+    const context = {
+      agentId: LEASE_AGENT,
+      sessionKey: "agent:excel:shared",
+      runId: "run-shared",
+      toolCallId: "call-0",
+    };
+    await mintLease(a, context);
+    // The SAME triple, checked by the registration that governs a different root.
+    const crossed = b.hooks.get("before_tool_call")(
+      { toolName: LEASE_TOOL, params: { ...LEASE_PARAMS } },
+      context,
+    );
+    assert.equal(
+      crossed?.block,
+      true,
+      "a lease minted under another ledger root must not authorize this call",
+    );
+    // The owner of the lease is still authorized.
+    assert.equal(
+      a.hooks.get("before_tool_call")(
+        { toolName: LEASE_TOOL, params: { ...LEASE_PARAMS } },
+        context,
+      ),
+      undefined,
+    );
+
+    // Stopping one registration must not revoke the other's pending authorizations.
+    const bContext = { ...context, sessionKey: "agent:excel:b-only" };
+    await mintLease(b, bContext);
+    a.hooks.get("gateway_stop")?.();
+    assert.equal(
+      b.hooks.get("before_tool_call")(
+        { toolName: LEASE_TOOL, params: { ...LEASE_PARAMS } },
+        bContext,
+      ),
+      undefined,
+      "stopping another registration must not revoke this one's authorization",
+    );
+  } finally {
+    a.hooks.get("gateway_stop")?.();
+    b.hooks.get("gateway_stop")?.();
+    rmSync(a.root, { recursive: true, force: true });
+    rmSync(b.root, { recursive: true, force: true });
+  }
+});
+// ---------------------------------------------------------------------------
+// M12/T9 F-080 / F-158 - the verdict is bound to an authoritative task, and a
+// policy artifact read fails with a canonical code
+// ---------------------------------------------------------------------------
+
+test("M12/T9 F-080: an approval verdict for a task the ledger does not hold is denied", () => {
+  const h = leaseHarness("f080");
+  try {
+    // The ledger is readable and holds no such task, so the caller named a task
+    // that does not exist. There is nothing to approve, and the verdict says so
+    // instead of evaluating the caller-supplied currentState.
+    const unknownTask = handleDiscordAction({
+      actor: "user",
+      channel: "approvals",
+      taskId: "a-task-the-ledger-never-opened",
+      action: "APPROVE",
+      currentState: "APPROVAL_PENDING",
+      paths: h.paths,
+    });
+    assert.equal(unknownTask.allowed, false);
+    assert.equal(unknownTask.status, "DENIED");
+    assert.match(unknownTask.reason, /NO_AUTHORITATIVE_TASK/u);
+  } finally {
+    h.hooks.get("gateway_stop")?.();
+    rmSync(h.root, { recursive: true, force: true });
+  }
+});
+
+test("M12/T9 F-158: a missing or unparseable governance manifest is a canonical denial", () => {
+  assert.throws(
+    () =>
+      readGovernanceManifests(
+        "C:/definitely-not-here/governance-manifests.json",
+      ),
+    /GOVERNANCE_DEPENDENCY_MISSING/u,
+    "a missing manifest must not surface a raw filesystem error",
+  );
+  const corrupt = path.join(
+    os.tmpdir(),
+    `m12t9-governance-manifest-${process.pid}.json`,
+  );
+  writeFileSync(corrupt, "{ this is not json");
+  try {
+    assert.throws(
+      () => readGovernanceManifests(corrupt),
+      /GOVERNANCE_DEPENDENCY_MISSING/u,
+      "an unparseable manifest must not surface a raw syntax error",
+    );
+  } finally {
+    rmSync(corrupt, { force: true });
+  }
+});
+
 test("M12/T2-R3: the deployed forum-tag asset digest is admitted under its own path", () => {
   // Provenance first: the admitted digest is not an operator-measured number taken on faith,
   // it is what the repository's own committed source packages to.
