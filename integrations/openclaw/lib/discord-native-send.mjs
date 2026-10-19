@@ -306,6 +306,26 @@ async function resolveComponentSdk({
 }
 
 /**
+ * The outcome of a component-registration attempt.
+ *
+ * Registration is NOT a delivery verdict: the card is delivered either way, a dead
+ * button degrades to the `APPROVE <code>` reply path, and a registration failure must
+ * never be turned into a delivery failure. It IS the only signal that says whether
+ * the buttons on a posted card can be clicked at all, and a bare boolean could not
+ * tell "this card carries no buttons" apart from "the host refused the
+ * registration" — M12/T9 F-193: the production caller discarded the value, so
+ * an unregistered card was indistinguishable from a card with nothing to register.
+ */
+export const COMPONENT_REGISTRATION_OUTCOME = Object.freeze({
+  REGISTERED: "REGISTERED",
+  NO_COMPONENTS: "NO_COMPONENTS",
+  NO_MESSAGE_ID: "NO_MESSAGE_ID",
+  SDK_UNAVAILABLE: "SDK_UNAVAILABLE",
+  BUILD_FAILED: "BUILD_FAILED",
+  REGISTRATION_FAILED: "REGISTRATION_FAILED",
+});
+
+/**
  * Build the host component bundle (components + registry entries) for adapter-shaped
  * buttons. Returns null when the host SDK cannot be reached **or when the build throws**,
  * having already said which.
@@ -353,7 +373,7 @@ export async function buildNativeComponentBundle({
  * Register a built bundle against the message id that now carries it. A miss is
  * reported and returns false: the card itself is delivered and readable, and the
  * `APPROVE <code>` reply path still works, so a registration failure must never be
- * turned into a delivery failure.
+ * turned into a delivery failure — but it must not be silent either (M12/T9 F-193).
  */
 export function registerNativeComponents({
   sdk,

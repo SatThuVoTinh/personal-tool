@@ -352,6 +352,178 @@ describe("M12/T1 P1 — components are built and registered through the host", (
   });
 });
 
+// M12/T9 F-193: the posted-card registration seam had no test at all, and every
+// failure mode returned the same bare `false`, so an unregistered card (every click
+// answers "This component has expired") was indistinguishable from a card that
+// carried no buttons. The production caller discarded the value entirely.
+describe("M12/T9 F-193 - a posted card that cannot register its buttons says so", () => {
+  it("names a registration failure instead of reporting the no-buttons short circuit", async () => {
+    const h = adapterHarness({ failRegister: true });
+    const { logs, logger } = logHarness();
+    const outcome = await registerPostedNativeComponents({
+      api: h.api,
+      buttons: buttonSpecs(),
+      messageId: "msg-posted-1",
+      accountId: "main",
+      sdk: h.sdk,
+      logger,
+    });
+    assert.equal(
+      outcome,
+      COMPONENT_REGISTRATION_OUTCOME.REGISTRATION_FAILED,
+      "a refused registration must be reported as itself",
+    );
+    assert.notEqual(
+      outcome,
+      COMPONENT_REGISTRATION_OUTCOME.NO_COMPONENTS,
+      "a card whose buttons could not be registered is not a card with no buttons",
+    );
+    assert.match(logs.join("\n"), /COMPONENT_REGISTRATION_FAILED/u);
+  });
+
+  it("reports the no-buttons case separately", async () => {
+    const h = adapterHarness();
+    const outcome = await registerPostedNativeComponents({
+      api: h.api,
+      buttons: [],
+      messageId: "msg-posted-2",
+      accountId: "main",
+      sdk: h.sdk,
+    });
+    assert.equal(outcome, COMPONENT_REGISTRATION_OUTCOME.NO_COMPONENTS);
+  });
+
+  it("reports REGISTERED when the host accepted the registration", async () => {
+    const h = adapterHarness();
+    const outcome = await registerPostedNativeComponents({
+      api: h.api,
+      buttons: buttonSpecs(),
+      messageId: "msg-posted-3",
+      accountId: "main",
+      sdk: h.sdk,
+    });
+    assert.equal(outcome, COMPONENT_REGISTRATION_OUTCOME.REGISTERED);
+    assert.equal(
+      h.calls.some((c) => c.kind === "register"),
+      true,
+      "the host registry must actually have been written",
+    );
+  });
+
+  it("names a build failure instead of reporting a registration failure", async () => {
+    const h = adapterHarness({ failBuild: true });
+    const { logs, logger } = logHarness();
+    const outcome = await registerPostedNativeComponents({
+      api: h.api,
+      buttons: buttonSpecs(),
+      messageId: "msg-posted-4",
+      accountId: "main",
+      sdk: h.sdk,
+      logger,
+    });
+    assert.equal(outcome, COMPONENT_REGISTRATION_OUTCOME.BUILD_FAILED);
+    assert.notEqual(
+      outcome,
+      COMPONENT_REGISTRATION_OUTCOME.REGISTRATION_FAILED,
+      "a build that never produced a bundle is not a refused registration",
+    );
+    assert.match(logs.join("\n"), /COMPONENT_BUILD_FAILED/u);
+  });
+
+  it("names an unreachable host sdk instead of reporting a registration failure", async () => {
+    const h = adapterHarness();
+    const { logs, logger } = logHarness();
+    const outcome = await registerPostedNativeComponents({
+      api: h.api,
+      buttons: buttonSpecs(),
+      messageId: "msg-posted-5",
+      accountId: "main",
+      sdk: null,
+      resolveSdk: () => {
+        throw new Error("openclaw/plugin-sdk/discord not resolvable");
+      },
+      logger,
+    });
+    assert.equal(outcome, COMPONENT_REGISTRATION_OUTCOME.SDK_UNAVAILABLE);
+    assert.match(logs.join("\n"), /COMPONENT_SDK_UNAVAILABLE/u);
+  });
+
+  it("names a missing message id instead of reporting a registration failure", async () => {
+    const h = adapterHarness();
+    const { logs, logger } = logHarness();
+    const outcome = await registerPostedNativeComponents({
+      api: h.api,
+      buttons: buttonSpecs(),
+      messageId: "",
+      accountId: "main",
+      sdk: h.sdk,
+      logger,
+    });
+    assert.equal(outcome, COMPONENT_REGISTRATION_OUTCOME.NO_MESSAGE_ID);
+    assert.notEqual(
+      outcome,
+      COMPONENT_REGISTRATION_OUTCOME.REGISTRATION_FAILED,
+      "a post that returned no id is not a refused registration",
+    );
+    assert.match(logs.join("\n"), /COMPONENT_REGISTRATION_SKIPPED/u);
+  });
+});
+
+describe("M12/T9 F-083 - the load reports the capabilities it actually has", () => {
+  it("names the interactive-handler loss when the host cannot register one", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "m12t9-cap-"));
+    const paths = ledgerPaths(root);
+    ensureLedger(paths);
+    for (const agentId of [
+      "main",
+      "o1",
+      "o2",
+      "excel",
+      "power-bi",
+      "sql",
+      "python",
+    ]) {
+      mkdirSync(path.join(root, "workspaces", agentId), { recursive: true });
+      mkdirSync(path.join(root, "agents", agentId, "agent"), {
+        recursive: true,
+      });
+    }
+    const logs = [];
+    const plugin = (
+      await import("../integrations/openclaw/plugins/zink-governance/index.mjs")
+    ).default;
+    plugin.register({
+      pluginConfig: {
+        ledgerRoot: paths.root,
+        ownerDiscordId: "123456789012345678",
+        enabled: true,
+      },
+      on: () => {},
+      registerTool: () => {},
+      // A host WITHOUT registerInteractiveHandler: it loads green while every
+      // button is silently lost.
+      logger: {
+        warn: (m) => logs.push(String(m)),
+        info: (m) => logs.push(String(m)),
+        error: (m) => logs.push(String(m)),
+      },
+    });
+    try {
+      const line = logs.find((entry) =>
+        entry.includes("[zink-governance] capabilities:"),
+      );
+      assert.ok(
+        line,
+        `the load must emit a capability line: ${JSON.stringify(logs)}`,
+      );
+      assert.match(line, /interactive_handler=MISSING/u);
+      assert.match(line, /component_sdk=(available|MISSING)/u);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("M12/T1 P1 — an approval decision is recorded with its own reason", () => {
   async function decisionHarness(tag) {
     const root = mkdtempSync(path.join(os.tmpdir(), `m12t1-reason-${tag}-`));
