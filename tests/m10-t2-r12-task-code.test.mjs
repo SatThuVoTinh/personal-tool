@@ -7,9 +7,10 @@
 // Two properties are load bearing and are pinned here:
 //
 // 1. The code is a DISPLAY ALIAS. The canonical 64-hex task_id stays the ledger
-//    key and stays inside the button custom_id. A 12-character code over a
-//    28-symbol alphabet has under 620k combinations, so it must never be the
-//    thing that proves WHICH task is being approved.
+//    key and stays inside the button custom_id. A 12-character code over the
+//    21-symbol alphabet this lane pins has under 200k combinations for its
+//    four random characters (21^4 = 194,481), so it must never be the thing
+//    that proves WHICH task is being approved.
 //
 // 2. Uniqueness is enforced at generation, not hoped for. 21 profiles, seven
 //    agents, many tasks per day: a collision would let the owner approve the
@@ -105,6 +106,20 @@ test("R12 code: the alphabet omits every confusable character", () => {
     "the alphabet must not repeat a symbol",
   );
   assert.equal(TASK_CODE_ALPHABET.length, 21);
+  // M12/T9 F-335: the header's collision budget is computed from the alphabet
+  // this lane pins, so the prose and the pin cannot drift apart silently.
+  // The four random characters of a 12-character code are the only part of
+  // the space that is not the date.
+  const randomSpace = TASK_CODE_ALPHABET.length ** 4;
+  assert.equal(
+    randomSpace,
+    194481,
+    "the four random characters' space is 21^4 for the pinned alphabet",
+  );
+  assert.ok(
+    randomSpace < 200000,
+    `the code space must stay under 200k combinations, got ${randomSpace}`,
+  );
   // And every produced suffix character must come from the alphabet.
   for (let index = 0; index < TASK_CODE_ALPHABET.length; index++) {
     const code = buildTaskCode({
