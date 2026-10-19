@@ -45,7 +45,8 @@
             "N8N_REDIRECT_BLOCKED",
             "N8N_TRANSPORT_ERROR",
             "N8N_UNAVAILABLE",
-            "N8N_CONFIGURATION_INVALID"
+            "N8N_CONFIGURATION_INVALID",
+            "N8N_WORKFLOW_PENDING"
           ]
         },
         "message": {

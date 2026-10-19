@@ -9,6 +9,51 @@ export class N8nAdapterError extends Error {
   }
 }
 
+/**
+ * F-235 (R7-D5-01): the workflow's own state, mapped to an outcome.
+ *
+ * Measured at HEAD: `validateWorkflowOutputData` required only a non-empty
+ * `data.status` string and the success envelope was returned unconditionally
+ * afterwards, so a workflow that had merely ACCEPTED a job ("accepted",
+ * "queued", "pending") was reported to the owner as completed work.
+ *
+ * The vocabulary below is the conservative reading: only a state that names
+ * completion is terminal success, only a state that names failure is terminal
+ * failure, and everything else is PENDING. The contract declares `status` as
+ * a free string, so an unrecognised state is pending rather than success.
+ */
+export const N8N_TERMINAL_SUCCESS_STATES = Object.freeze([
+  "completed",
+  "complete",
+  "success",
+  "succeeded",
+  "finished",
+  "done",
+]);
+
+export const N8N_TERMINAL_FAILURE_STATES = Object.freeze([
+  "failed",
+  "failure",
+  "error",
+  "cancelled",
+  "canceled",
+  "aborted",
+]);
+
+/**
+ * Classifies a workflow's reported state.
+ *
+ * @param {string} state
+ * @returns {"success"|"failure"|"pending"}
+ */
+export function classifyWorkflowState(state) {
+  if (typeof state !== "string") return "pending";
+  const normalized = state.trim().toLowerCase();
+  if (N8N_TERMINAL_SUCCESS_STATES.includes(normalized)) return "success";
+  if (N8N_TERMINAL_FAILURE_STATES.includes(normalized)) return "failure";
+  return "pending";
+}
+
 function validateWorkflowOutputData(workflowId, data) {
   if (!data || typeof data !== "object" || Array.isArray(data)) {
     return false;
@@ -49,6 +94,23 @@ function validateWorkflowOutputData(workflowId, data) {
     return true;
   }
   return false;
+}
+
+/**
+ * The outcome the workflow's own data describes.
+ *
+ * @param {string} workflowId
+ * @param {object} data
+ * @returns {"success"|"failure"|"pending"|null} null when the data is invalid
+ */
+export function classifyWorkflowOutcome(workflowId, data) {
+  if (!validateWorkflowOutputData(workflowId, data)) return null;
+  if (workflowId === "pipeline_notify") {
+    // The notification workflow reports completion with a boolean, and the
+    // boolean is the completion signal.
+    return data.delivered === true ? "success" : "failure";
+  }
+  return classifyWorkflowState(data.status);
 }
 
 /**
@@ -302,6 +364,35 @@ export async function invokeN8n(
         "SCHEMA_VALIDATION_FAILED",
         "Upstream domain data failed schema validation.",
       );
+    }
+
+    // F-235 (R7-D5-01): the workflow's own state decides the outcome. A job
+    // that has only been accepted is not completed work, so it is reported as
+    // pending and NEVER as a success envelope.
+    const outcome = classifyWorkflowOutcome(input.workflow_id, parsed.data);
+    if (outcome === "failure") {
+      throw new N8nAdapterError(
+        "N8N_UPSTREAM_ERROR",
+        "Upstream workflow reported a terminal failure.",
+      );
+    }
+    if (outcome === "pending") {
+      // The envelope's status vocabulary is pinned to
+      // success | error | timeout | cancelled (tests/m9-t1:1079-1083), so a
+      // pending outcome is carried in the `error` member under its own code
+      // rather than as a fifth status value. It is still a refusal to report
+      // completed work, and the code names the state.
+      return {
+        call_id: decisionContext.correlation.call_id,
+        tool_id: decisionContext.scope.common.toolId,
+        specialist: decisionContext.scope.common.agentId,
+        status: "error",
+        error: {
+          code: "N8N_WORKFLOW_PENDING",
+          message: `Upstream workflow is not terminal (state '${parsed.data.status ?? "pending"}'); the run is queued, not completed.`,
+        },
+        artifacts: [],
+      };
     }
 
     // Construct and return trusted tool-result envelope
