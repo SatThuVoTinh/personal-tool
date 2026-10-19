@@ -200,6 +200,17 @@ function summarizeKnowledgeFailure(data) {
   return parts.join("; ").slice(0, KNOWLEDGE_FAILURE_MAX_CHARS);
 }
 
+// F-145 (R1-A14-08): the citation a row can actually prove, or "" when it can
+// prove none. The provenance gate and the formatter both read it, so the gate
+// cannot admit a row the formatter would then have to cite with an invention.
+function rowCitation(row) {
+  if (typeof row.citation === "string" && row.citation) return row.citation;
+  if (typeof row.source_path === "string" && row.source_path) {
+    return `${row.source_path}${row.line_start ? `#L${row.line_start}` : ""}`;
+  }
+  return "";
+}
+
 // Search capacity in personal-tool-knowledge-1 is strictly capped at 2.
 // We maintain an in-process AsyncSemaphore across adapter instances to queue
 // concurrent searches and prevent HTTP 429 SEARCH_CAPACITY_EXCEEDED (M16).
@@ -507,6 +518,38 @@ export class KnowledgeAdapter {
           const parsed = JSON.parse(response.data);
           const rawResults = parsed.results || [];
 
+          // F-145 (R1-A14-08): provenance is the guarantee this module exists
+          // to enforce. HEAD substituted `chunk_id: ... || "unknown"`,
+          // `title: ... || "Untitled"` and an empty citation for a row that
+          // carried none, counted that row in `total_count` and returned the
+          // envelope under `governed_status: "SUCCESS"`, so an uncited row read
+          // as retrieved evidence. A row with no chunk identity and no citation
+          // is not evidence; refusing it is reported, never silent.
+          const provenanceRows = [];
+          let unprovenancedRows = 0;
+          for (const raw of rawResults) {
+            if (!raw || typeof raw !== "object") {
+              unprovenancedRows += 1;
+              continue;
+            }
+            if (!(raw.segment_id || raw.chunk_id) || !rowCitation(raw)) {
+              unprovenancedRows += 1;
+              continue;
+            }
+            provenanceRows.push(raw);
+          }
+          if (unprovenancedRows > 0) {
+            return {
+              action,
+              namespace: namespace || "core",
+              results: [],
+              total_count: 0,
+              governed_status: "CONTROLLED_FAILURE",
+              error: "KNOWLEDGE_PROVENANCE_MISSING",
+              message: `${unprovenancedRows} of ${rawResults.length} retrieved rows carried no chunk identity or no citation; such a row is never returned as evidence.`,
+            };
+          }
+
           // M12, M13, M15: Schema validation and per-result bounding
           const formattedResults = rawResults.map((r) => {
             const rawScore = Number(r.rerank_score ?? r.dense_score ?? 0);
@@ -593,7 +636,11 @@ export class KnowledgeAdapter {
         total_count: 0,
         governed_status: "CONTROLLED_FAILURE",
         error: "KNOWLEDGE_SERVICE_UNAVAILABLE",
-        message: error.message || "Knowledgebase service is unavailable.",
+        // F-145 (R1-A14-08): the fixed sentence, never `error.message`. A
+        // JSON.parse SyntaxError quotes the upstream body it choked on, and a
+        // socket error names the host and port; both reached the caller, and
+        // therefore the model and the cards, as failure text.
+        message: "Knowledgebase service is unavailable.",
       };
     }
   }
