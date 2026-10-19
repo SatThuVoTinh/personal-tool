@@ -630,6 +630,10 @@ export const SPECIALIST_SOFTWARE_LABELS = Object.freeze({
 const PLAN_FIELD_LIMIT = 600;
 const DISCORD_BODY_LIMIT = 2000;
 const PLAN_TRUNCATION_MARK = "…(xem toàn bộ kế hoạch trong phiên)";
+// M12/T9 F-259: the preview is file content, so it is bounded before it can
+// push the card past Discord's 2000-character ceiling.
+const PREVIEW_FIELD_LIMIT = 900;
+const RESULT_TRUNCATION_MARK = "…(phần dữ liệu bị cắt theo giới hạn Discord)";
 
 function clipField(value, limit = PLAN_FIELD_LIMIT) {
   const text = typeof value === "string" ? value.trim() : "";
@@ -917,11 +921,24 @@ export function formatGovernedResultCard({
     );
   }
 
-  return [
+  // M12/T9 F-259: the preview is the artifact's OWN text — its lines, its
+  // paths, its tokens. Every sibling field on this card is sanitised; the
+  // preview was interpolated raw, so a Windows path or a bearer token inside
+  // the file reached Discord unredacted. It now goes through the same
+  // sanitiser as the other free-text fields, and it is bounded.
+  const cleanPreview = sanitizeDiscordText(
+    preview || "*(Không có dữ liệu trích xuất)*",
+  );
+  const cappedPreview =
+    cleanPreview.length > PREVIEW_FIELD_LIMIT
+      ? `${cleanPreview.slice(0, PREVIEW_FIELD_LIMIT).trimEnd()}…`
+      : cleanPreview;
+
+  const head = [
     ...headerLines,
     "",
     "#### 🔍 Dữ liệu Mẫu & Xem trước Thực tế (Actual Preview):",
-    preview || "*(Không có dữ liệu trích xuất)*",
+    cappedPreview,
     previewImgSection,
     "#### 📦 Tệp Sản phẩm (Artifact):",
     `- ${cleanArtifact}`,
@@ -930,20 +947,26 @@ export function formatGovernedResultCard({
     cleanFindings,
     "",
     "---",
+  ]
+    .filter((line) => line !== null)
+    .join("\n");
+  const footer = [
     "**Thao tác dành cho User (Buttons & Action IDs):**",
     `- Bấm **[ACCEPT / COMPLETE]** (\`${actionAcceptId}\`) để nghiệm thu và hoàn thành tác vụ.`,
     `- Bấm **[REJECT]** (\`${actionRejectId}\`) để bác bỏ kết quả.`,
     `- Bấm **[REQUEST REVISION]** (\`${actionRevisionId}\`) để yêu cầu chạy lại/tinh chỉnh.`,
-  ]
-    .filter((line) => line !== null)
-    .join("\n");
+  ].join("\n");
+  // The card is one Discord message: it must fit the platform ceiling, and
+  // the action footer must stay whole — a card whose buttons were cut off is
+  // exactly how an owner ends up unable to act.
+  if (head.length + footer.length + 1 <= DISCORD_BODY_LIMIT) {
+    return `${head}\n${footer}`;
+  }
+  const budget =
+    DISCORD_BODY_LIMIT - footer.length - RESULT_TRUNCATION_MARK.length - 2;
+  const cut = head.lastIndexOf("\n", Math.max(0, budget));
+  return `${head.slice(0, cut > 0 ? cut : budget).trimEnd()}\n${RESULT_TRUNCATION_MARK}\n${footer}`;
 }
-
-/**
- * Formats an Incident Card for #incidents with normalized lifecycle.
- * Implements ACTIVE.md Section 9 and sanitized status/severity (F13).
- * States: RECEIVED -> INVESTIGATING -> REPAIRING -> RESOLVED
- */
 export function formatIncidentCard({
   incidentId,
   taskId = null,
