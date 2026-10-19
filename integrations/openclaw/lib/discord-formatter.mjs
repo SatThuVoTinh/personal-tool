@@ -897,7 +897,13 @@ export function formatGovernedResultCard({
     previewImage &&
     typeof previewImage === "string" &&
     !previewImage.includes("..")
-      ? `\n🖼️ **Hình ảnh Preview Trực quan (Screenshot/Render):** \`${sanitizeDiscordIdentifier(path.basename(previewImage))}\` *(đã đính kèm)*\n`
+      ? // M12/T9 F-301: the card said the image was ATTACHED. No governed
+        // outbound path in this integration can attach a file — the publish
+        // helper takes no file argument and the transport builds a JSON body —
+        // so the owner was told they had seen a rendered preview that never
+        // left the host. The card now states the truth: the preview is rendered
+        // on the host and is named for the record, and it is NOT attached.
+        `\n🖼️ **Hình ảnh Preview Trực quan (Screenshot/Render):** \`${sanitizeDiscordIdentifier(path.basename(previewImage))}\` *(ảnh đã render trên host — KHÔNG đính kèm vào tin nhắn này)*\n`
       : "";
   const actionAcceptId = `zink:result:accept:${cleanTask}:${attempt}`;
   const actionRejectId = `zink:result:reject:${cleanTask}:${attempt}`;

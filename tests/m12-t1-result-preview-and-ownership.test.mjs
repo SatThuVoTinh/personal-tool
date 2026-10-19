@@ -6,7 +6,14 @@
 // confinement, and the provenance rule that replaced the blanket specialist suppression.
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { mkdtempSync, readFileSync, rmSync, existsSync } from "node:fs";
+import {
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  existsSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -15,6 +22,7 @@ import {
   buildPreviewTable,
   renderExpectedResultPreview,
 } from "../integrations/openclaw/lib/discord-result-preview.mjs";
+import { formatGovernedResultCard } from "../integrations/openclaw/lib/discord-formatter.mjs";
 import {
   assertMediaInsideRoots,
   sendNativePayload,
@@ -269,6 +277,66 @@ describe("M12/T1 P4 — the executing specialist may report its own task", () =>
       const verdict = evaluateSpecialistProvenance(input);
       assert.equal(verdict.allowed, false, `${reason} must stay blocked`);
       assert.equal(verdict.reason, reason);
+    }
+  });
+});
+
+// =========================================================================
+// M12/T9 F-301 — the card told the owner the preview image was ATTACHED, and
+// no outbound path in the integration can attach a file: the governed publish
+// helper takes no file argument and the transport builds a JSON body.
+//
+// The card now states the truth — the preview is rendered on the host and is
+// named for the record, and it is NOT attached to this message. The renderer
+// is NOT dropped: the governance policy still requires a real rendered
+// preview, and it still produces one.
+// =========================================================================
+describe("M12/T9 F-301 — the card does not claim an attachment it cannot make", () => {
+  it("F-301: the card states the preview is on the host, not attached", () => {
+    const card = formatGovernedResultCard({
+      taskId: "13102026CDEF",
+      attempt: 1,
+      executionStatus: "EXECUTION_FINISHED",
+      technicalValidation: "PASS",
+      businessValidation: "PASS",
+      preview: "| A | B |\n| 1 | 2 |",
+      previewImage: "expected_result_excel.png",
+      artifact: "s3://bucket/result.xlsx",
+      keyFindings: "Sản lượng tăng 15%",
+    });
+    assert.equal(
+      card.includes("đã đính kèm"),
+      false,
+      "the card must not claim the image is attached: no governed outbound path can attach a file",
+    );
+    assert.match(
+      card,
+      /KHÔNG đính kèm/u,
+      "the card must say the preview is not attached to this message",
+    );
+    assert.match(card, /expected_result_excel\.png/);
+  });
+
+  it("F-301: the renderer still produces a real PNG on the host", () => {
+    const root = tempRoot("f301");
+    try {
+      const rendered = renderExpectedResultPreview({
+        target: "excel",
+        title: "Kết quả dự kiến",
+        columns: ["SKU", "Qty"],
+        rows: [["A1", 100]],
+        outputDirectory: root,
+      });
+      assert.ok(existsSync(rendered), "the preview PNG must really be written");
+      const bytes = readFileSync(rendered);
+      assert.deepEqual(
+        [...bytes.subarray(0, 8)],
+        [...PNG_SIGNATURE],
+        "the preview must be a real PNG",
+      );
+      assert.ok(bytes.length > 1000, "the preview must carry real pixels");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });
