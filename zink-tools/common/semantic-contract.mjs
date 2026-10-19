@@ -20,7 +20,19 @@ export const CANONICAL_DOMAINS = Object.freeze([
 
 // ─── Alias registry (B22) ─────────────────────────────────────────────────────
 // Maps lowercase surface aliases → canonical namespace slug.
-// All values MUST appear in KNOWN_TAXONOMY_MAP.
+//
+// Two invariants, and both are load-bearing:
+//   1. every VALUE is a key of KNOWN_TAXONOMY_MAP — the alias points at a
+//      canonical namespace;
+//   2. every KEY is NOT a key of KNOWN_TAXONOMY_MAP — an alias is a surface
+//      spelling, never a canonical namespace of its own.
+//
+// Invariant 2 is what F-014 (R5-E07-04) was about. `resolveNamespace`
+// consults the taxonomy FIRST, so an alias key that is also a taxonomy key is
+// unreachable: the alias never fires and one corpus is indexed under two
+// topics depending on the spelling the ingester happened to use. `research`
+// was exactly that one dead entry. A test pins the disjointness, so the two
+// registries cannot drift apart again.
 export const NAMESPACE_ALIAS_MAP = Object.freeze({
   // supply-chain family
   "supply-chain": "lscm",
@@ -138,11 +150,16 @@ export const KNOWN_TAXONOMY_MAP = Object.freeze({
     primary_topic: "process-automation",
     subtopic: "workflow-and-scripts",
   }),
-  research: Object.freeze({
-    domain: "research",
-    primary_topic: "domain-research",
-    subtopic: "literature-and-notes",
-  }),
+  // F-014 (R5-E07-04): there is deliberately NO `research` key here.
+  // `NAMESPACE_ALIAS_MAP` declares `research` a surface spelling of the
+  // `knowledge` namespace, and this map is the canonical registry — but it
+  // also carried a `research` key, and `resolveNamespace` consults the
+  // taxonomy first, so the alias was unreachable. One corpus was then indexed
+  // under two topics: `domain-research` for the spelling "research" and
+  // `kb-ingestion` for "kb" / "knowledge-base" / "literature". The taxonomy
+  // key shadowed the alias; removing it makes the alias reachable and gives
+  // every spelling the same canonical namespace, the same domain ("research")
+  // and the same primary topic ("kb-ingestion").
   system: Object.freeze({
     domain: "governance",
     primary_topic: "system-control",
