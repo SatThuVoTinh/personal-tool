@@ -1,6 +1,7 @@
 import {
   buildSpawnProposal,
   canonicalHash,
+  deriveApprovalPlanDigest,
   deriveTaskId,
   isTaskCodeForm,
   TASK_CODE_LENGTH,
@@ -724,7 +725,14 @@ export function applyWorkflowEvent(
     exactKeys(
       payload,
       ["task_id", "actor", "channel", "decision"],
-      ["message_id", "thread_id", "scope_digest", "reason"],
+      [
+        "message_id",
+        "thread_id",
+        "scope_digest",
+        "reason",
+        // F-023: the brief revision the owner approved.
+        "brief_revision",
+      ],
     );
     requireCondition(
       payload.decision === "APPROVE" ||
@@ -750,6 +758,42 @@ export function applyWorkflowEvent(
       "INVALID_STATE_TRANSITION",
     );
     if (payload.decision === "APPROVE") {
+      // F-023: the owner's APPROVE is bound to the PLAN it approved, not to
+      // the task id alone.
+      //
+      // The binding is checked against the task's OWN recorded brief, so it
+      // cannot be satisfied by a caller-supplied summary: a digest that does
+      // not match the plan the ledger holds is a wrong-scope consent and is
+      // refused, and a decision that names a superseded brief revision is a
+      // stale consent and is refused.
+      //
+      // Both checks are keyed on data the DECISION carries, so an approval
+      // recorded before this rule existed (no revision, no digest) still
+      // replays byte-identically.
+      if (
+        payload.brief_revision !== undefined &&
+        payload.brief_revision !== null
+      ) {
+        requireCondition(
+          Number.isSafeInteger(payload.brief_revision) &&
+            payload.brief_revision >= 1,
+          "SCHEMA_INVALID",
+        );
+        requireCondition(
+          payload.brief_revision === task.brief_revision,
+          "SUPERSEDED_REVISION",
+        );
+      }
+      if (payload.scope_digest !== undefined && payload.scope_digest !== null) {
+        requireCondition(
+          payload.scope_digest ===
+            deriveApprovalPlanDigest({
+              brief_revision: task.brief_revision,
+              nodes: task.nodes,
+            }),
+          "RESULT_MISMATCH",
+        );
+      }
       task.workflow_status = "QUEUED";
       task.approved_at = eventTime;
     } else if (payload.decision === "REJECT") {
@@ -1576,8 +1620,7 @@ function reconcileForRetry(task, nodeId, eventTime) {
  * verdict recorded against result A could be replayed against result B. The
  * digest is authoritative; the legacy result id is accepted only when the
  * digest is absent, and an unbound verdict is refused.
- */
-function requireResultIdentityMatch(task, payload, replayAnchored = false) {
+ */ function requireResultIdentityMatch(task, payload, replayAnchored = false) {
   const currentDigest =
     task.root_result?.payload_digest ?? task.execution_payload_digest;
   requireCondition(typeof currentDigest === "string", "RESULT_MISMATCH");

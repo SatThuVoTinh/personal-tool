@@ -224,6 +224,30 @@ export function canonicalHash(domain, value) {
 }
 
 /**
+ * F-023: the ONE digest of the plan an owner approved.
+ *
+ * The owner's APPROVE used to be bound to a task id only: nothing in the
+ * ledger tied the consent to the work that then ran, so a re-brief between the
+ * card and the click executed the new plan under the old consent. This digest
+ * is derived from the task's OWN recorded brief — its revision and its whole
+ * node graph, every node's input/constraints/validation digests included — so
+ * it changes exactly when the plan changes, and it can be recomputed by any
+ * reader from the snapshot alone.
+ *
+ * It is deliberately derived from the recorded plan and not from a caller
+ * supplied summary, so a model-authored card body can never decide what the
+ * owner "approved".
+ */
+export function deriveApprovalPlanDigest({ brief_revision, nodes } = {}) {
+  return canonicalHash("zink-approval-plan-v1", {
+    brief_revision: Number.isSafeInteger(brief_revision)
+      ? brief_revision
+      : null,
+    nodes: Array.isArray(nodes) ? nodes : [],
+  });
+}
+
+/**
  * M12/T1-R1: this is no longer the identity mint. It stays exported and stays the
  * authoritative derivation for the 64-hex ids already written into the live ledger
  * (the reducer re-derives those to prove a legacy record was not tampered with), and

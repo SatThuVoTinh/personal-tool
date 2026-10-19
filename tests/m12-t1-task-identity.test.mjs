@@ -9,7 +9,15 @@
 // longer a function of that message.
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { readdirSync, readFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import {
@@ -17,11 +25,22 @@ import {
   TASK_CODE_LENGTH,
   TASK_CODE_PATTERN,
   TASK_ID_PATTERN,
+  deriveApprovalPlanDigest,
   deriveTaskId,
   mintTaskId,
 } from "../integrations/openclaw/topology/lib/canonical.mjs";
 import { applyWorkflowEvent } from "../integrations/openclaw/topology/lib/workflow.mjs";
-import { findTaskByOriginBinding } from "../integrations/openclaw/plugins/zink-governance/index.mjs";
+import {
+  isDeclaredReasonCode,
+  loadReasonPolicy,
+} from "../integrations/openclaw/topology/lib/runtime.mjs";
+import {
+  deriveGovernedDispatchTarget,
+  findTaskByOriginBinding,
+  mintUserPrincipalRef,
+} from "../integrations/openclaw/plugins/zink-governance/index.mjs";
+import { derivePrincipalRef } from "../integrations/openclaw/topology/lib/canonical.mjs";
+import { ledgerPaths } from "../integrations/openclaw/topology/lib/ledger.mjs";
 
 const emptyProjection = () => ({ tasks: {}, sequence: 0 });
 
@@ -466,6 +485,494 @@ describe("M12/T1 P2 — the custom_id byte budget is no longer at the cliff", ()
         ),
       /CUSTOM_ID_TOO_LONG/u,
       "a legacy id with a two-digit revision cannot be delivered as a button at all",
+    );
+  });
+});
+
+// ===========================================================================
+// M12/T9 - the reducer binds a decision to the plan and to the outcome
+// ===========================================================================
+// F-023: the owner's APPROVE used to be bound to a task id only. Nothing in
+// the ledger tied the consent to the work that then ran, so a re-brief between
+// the card and the click executed the NEW plan under the OLD consent, and a
+// wrong-scope digest was accepted and ignored.
+//
+// F-226: an owner ACCEPT stamped workflow_status COMPLETE from the verdict
+// alone, so a FAILED or PARTIAL run became a COMPLETE task the moment the
+// owner clicked accept - the ledger then contradicted the outcome it had
+// recorded.
+//
+// F-251: the reason-code matrix publishes three vocabularies and the check
+// that guards every durable `task.reason_code` read only two of them, so a
+// declared suspension code was invisible to it.
+//
+// F-057: nothing in the ledger ever wrote task.primary_coordinator, so every
+// approved task died at COORDINATOR_NOT_EXECUTABLE before it could be
+// enqueued, while the owner was told it had been queued.
+
+describe("M12/T9 - the reducer binds a decision to the plan and the outcome", () => {
+  const emptyProjection = () => ({ tasks: {}, sequence: 0 });
+
+  function openedPayload(overrides = {}) {
+    const base = {
+      origin: "discord",
+      origin_principal_ref: "a".repeat(64),
+      origin_message_id: "12345678901234567",
+      root_agent_id: "main",
+      root_session_key: "agent:main:sess-1",
+      root_run_id: "run-1",
+      ...overrides,
+    };
+    return { ...base, task_id: deriveTaskId(base) };
+  }
+
+  function briefNode(nodeId, agentId, stackId) {
+    return {
+      node_id: nodeId,
+      agent_id: agentId,
+      stack_id: stackId,
+      dependencies: [],
+      required: false,
+      input_digest: "1".repeat(64),
+      constraints_digest: "2".repeat(64),
+      validation_digest: "3".repeat(64),
+    };
+  }
+
+  function openedWithBrief(overrides = {}) {
+    const opened = openedPayload(overrides);
+    let snapshot = applyWorkflowEvent(
+      emptyProjection(),
+      "WORKFLOW_OPENED",
+      opened,
+    );
+    snapshot = applyWorkflowEvent(snapshot, "WORKFLOW_BRIEF_ACTIVATED", {
+      task_id: opened.task_id,
+      brief_revision: 1,
+      semantic_contract_status: "VALID",
+      nodes: [briefNode("node-excel", "excel", "data_plant")],
+    });
+    return { opened, snapshot };
+  }
+
+  it("F-023: an approval whose scope digest does not match the recorded plan is refused", () => {
+    const { opened, snapshot } = openedWithBrief();
+    assert.throws(
+      () =>
+        applyWorkflowEvent(snapshot, "WORKFLOW_USER_APPROVAL_DECIDED", {
+          task_id: opened.task_id,
+          actor: "user",
+          channel: "approvals",
+          decision: "APPROVE",
+          scope_digest: "f".repeat(64),
+        }),
+      { code: "RESULT_MISMATCH" },
+      "a wrong-scope consent must not transition the task",
+    );
+    assert.equal(
+      snapshot.tasks[opened.task_id].workflow_status,
+      "ACTIVE",
+      "the refused approval leaves the task where it was",
+    );
+  });
+
+  it("F-023: an approval bound to the recorded plan is accepted", () => {
+    const { opened, snapshot } = openedWithBrief();
+    const planDigest = deriveApprovalPlanDigest({
+      brief_revision: snapshot.tasks[opened.task_id].brief_revision,
+      nodes: snapshot.tasks[opened.task_id].nodes,
+    });
+    const approved = applyWorkflowEvent(
+      snapshot,
+      "WORKFLOW_USER_APPROVAL_DECIDED",
+      {
+        task_id: opened.task_id,
+        actor: "user",
+        channel: "approvals",
+        decision: "APPROVE",
+        scope_digest: planDigest,
+        brief_revision: 1,
+      },
+    );
+    assert.equal(approved.tasks[opened.task_id].workflow_status, "QUEUED");
+    assert.ok(approved.tasks[opened.task_id].approved_at);
+  });
+
+  it("F-023: an approval that names a superseded brief revision is refused", () => {
+    const { opened, snapshot } = openedWithBrief();
+    assert.throws(
+      () =>
+        applyWorkflowEvent(snapshot, "WORKFLOW_USER_APPROVAL_DECIDED", {
+          task_id: opened.task_id,
+          actor: "user",
+          channel: "approvals",
+          decision: "APPROVE",
+          brief_revision: 7,
+        }),
+      { code: "SUPERSEDED_REVISION" },
+      "a stale consent must not transition the task",
+    );
+  });
+
+  it("F-023: the plan digest changes when the plan changes", () => {
+    const { opened, snapshot } = openedWithBrief();
+    const before = deriveApprovalPlanDigest({
+      brief_revision: snapshot.tasks[opened.task_id].brief_revision,
+      nodes: snapshot.tasks[opened.task_id].nodes,
+    });
+    const other = deriveApprovalPlanDigest({
+      brief_revision: snapshot.tasks[opened.task_id].brief_revision,
+      nodes: [briefNode("node-sql", "sql", "data_plant")],
+    });
+    assert.notEqual(before, other);
+    assert.match(before, /^[a-f0-9]{64}$/u);
+  });
+
+  it("F-226: an accepted FAILED outcome does not become a COMPLETE task", () => {
+    const { opened, snapshot } = openedWithBrief();
+    const digest = "c".repeat(64);
+    const reviewed = applyWorkflowEvent(
+      snapshot,
+      "WORKFLOW_ROOT_RESULT_RECORDED",
+      {
+        task_id: opened.task_id,
+        brief_revision: 1,
+        native_run_id: "run-1",
+        agent_id: "main",
+        payload_digest: digest,
+        outcome_status: "FAILED",
+        reason_code: "RUN_TIMEOUT",
+        governance_hash: "d".repeat(64),
+      },
+    );
+    assert.equal(
+      reviewed.tasks[opened.task_id].workflow_status,
+      "RESULT_PENDING_REVIEW",
+    );
+    const accepted = applyWorkflowEvent(
+      reviewed,
+      "WORKFLOW_USER_RESULT_ACCEPTED",
+      {
+        task_id: opened.task_id,
+        actor: "user",
+        channel: "results",
+        decision: "ACCEPT",
+        result_digest: digest,
+        outcome_status: "FAILED",
+      },
+    );
+    assert.equal(
+      accepted.tasks[opened.task_id].workflow_status,
+      "FAILED",
+      "the accepted outcome must survive the verdict",
+    );
+    assert.equal(accepted.tasks[opened.task_id].brief_state, "CLOSED");
+  });
+
+  it("F-226: an acceptance that re-labels the recorded outcome is refused", () => {
+    const { opened, snapshot } = openedWithBrief();
+    const digest = "c".repeat(64);
+    const reviewed = applyWorkflowEvent(
+      snapshot,
+      "WORKFLOW_ROOT_RESULT_RECORDED",
+      {
+        task_id: opened.task_id,
+        brief_revision: 1,
+        native_run_id: "run-1",
+        agent_id: "main",
+        payload_digest: digest,
+        outcome_status: "FAILED",
+        reason_code: "RUN_TIMEOUT",
+        governance_hash: "d".repeat(64),
+      },
+    );
+    assert.throws(
+      () =>
+        applyWorkflowEvent(reviewed, "WORKFLOW_USER_RESULT_ACCEPTED", {
+          task_id: opened.task_id,
+          actor: "user",
+          channel: "results",
+          decision: "ACCEPT",
+          result_digest: digest,
+          outcome_status: "COMPLETE",
+        }),
+      { code: "RESULT_MISMATCH" },
+      "a verdict may not re-label the result it accepts",
+    );
+  });
+
+  it("F-226: a COMPLETE outcome still closes the task as COMPLETE", () => {
+    const { opened, snapshot } = openedWithBrief();
+    const digest = "c".repeat(64);
+    const reviewed = applyWorkflowEvent(
+      snapshot,
+      "WORKFLOW_ROOT_RESULT_RECORDED",
+      {
+        task_id: opened.task_id,
+        brief_revision: 1,
+        native_run_id: "run-1",
+        agent_id: "main",
+        payload_digest: digest,
+        outcome_status: "COMPLETE",
+        reason_code: "NONE",
+        governance_hash: "d".repeat(64),
+      },
+    );
+    const accepted = applyWorkflowEvent(
+      reviewed,
+      "WORKFLOW_USER_RESULT_ACCEPTED",
+      {
+        task_id: opened.task_id,
+        actor: "user",
+        channel: "results",
+        decision: "ACCEPT",
+        result_digest: digest,
+        outcome_status: "COMPLETE",
+      },
+    );
+    assert.equal(accepted.tasks[opened.task_id].workflow_status, "COMPLETE");
+  });
+
+  it("F-251: every declared matrix section is visible to the reason-code check", () => {
+    const policy = loadReasonPolicy();
+    assert.ok(Array.isArray(policy.task_suspension_reasons));
+    for (const code of policy.task_suspension_reasons) {
+      assert.equal(
+        isDeclaredReasonCode(code),
+        true,
+        `${code} is declared by the matrix and must pass the check`,
+      );
+    }
+  });
+
+  it("F-251: the durable reason a suspended task carries passes the check", () => {
+    const opened = openedPayload();
+    const snapshot = applyWorkflowEvent(
+      emptyProjection(),
+      "WORKFLOW_OPENED",
+      opened,
+    );
+    const withDelegation = {
+      ...snapshot,
+      tasks: {
+        [opened.task_id]: {
+          ...snapshot.tasks[opened.task_id],
+          delegations: {
+            "del-1": {
+              delegation_id: "del-1",
+              agent_id: "o1",
+              parent_session_key: "agent:main:sess-1",
+              native_run_id: "native-1",
+              child_session_key: "agent:o1:child-1",
+              run_state: "RUNNING",
+              brief_revision: 1,
+            },
+          },
+        },
+      },
+    };
+    const blocked = applyWorkflowEvent(
+      withDelegation,
+      "WORKFLOW_NATIVE_ENDED",
+      {
+        task_id: opened.task_id,
+        native_run_id: "native-1",
+        child_session_key: "agent:o1:child-1",
+        parent_session_key: "agent:main:sess-1",
+        outcome: "error",
+      },
+    );
+    const reason = blocked.tasks[opened.task_id].reason_code;
+    assert.equal(reason, "BLOCKED");
+    assert.equal(
+      isDeclaredReasonCode(reason),
+      true,
+      "a durable reason code must pass the published-vocabulary check",
+    );
+  });
+
+  it("F-057: an opened task carries the coordinator the ledger recorded", () => {
+    const opened = openedPayload();
+    const snapshot = applyWorkflowEvent(emptyProjection(), "WORKFLOW_OPENED", {
+      ...opened,
+      primary_coordinator: "o1",
+    });
+    assert.equal(snapshot.tasks[opened.task_id].primary_coordinator, "o1");
+    const dispatch = deriveGovernedDispatchTarget({
+      ...snapshot.tasks[opened.task_id],
+      nodes: [{ node_id: "node-excel", agent_id: "excel" }],
+    });
+    assert.equal(dispatch.ok, true);
+    assert.equal(dispatch.coordinator, "o1");
+  });
+
+  it("F-057: a task with no recorded coordinator is not dispatchable", () => {
+    const opened = openedPayload();
+    const snapshot = applyWorkflowEvent(
+      emptyProjection(),
+      "WORKFLOW_OPENED",
+      opened,
+    );
+    const dispatch = deriveGovernedDispatchTarget({
+      ...snapshot.tasks[opened.task_id],
+      nodes: [{ node_id: "node-excel", agent_id: "excel" }],
+    });
+    assert.equal(dispatch.ok, false);
+    assert.equal(dispatch.error, "COORDINATOR_NOT_EXECUTABLE");
+  });
+
+  it("F-057: a coordinator that is not an executable coordinator is refused", () => {
+    const opened = openedPayload();
+    assert.throws(
+      () =>
+        applyWorkflowEvent(emptyProjection(), "WORKFLOW_OPENED", {
+          ...opened,
+          primary_coordinator: "main",
+        }),
+      { code: "UNAUTHORIZED_TARGET" },
+    );
+  });
+});
+// ===========================================================================
+// F-108 - parent_agent_id is declared once, in a shared $defs block
+// ===========================================================================
+// The ledger's spawn reservation and the delegation envelope both carry the
+// agent that owns a delegation, and they declared it twice with DIFFERENT
+// value sets: the ledger accepted all seven agents, the envelope accepted
+// three. Both are enforced at runtime, so a reservation the ledger accepted
+// could be a handoff the envelope refuses - a sealed half-record in the audit
+// trail.
+//
+// Only main, o1 and o2 can spawn: the specialists have no spawn targets, so a
+// specialist can never be a parent. The reducer's own topology gate already
+// refuses one, so no reservation the ledger ever accepted can name a
+// specialist as its parent and the narrower vocabulary loses no history.
+describe("M12/T9 - F-108: the parent agent is declared once", () => {
+  const contractDir = path.resolve("integrations/openclaw/topology/contracts");
+
+  function inlineParentAgentEnums(node, file, found, trail = "") {
+    if (Array.isArray(node)) {
+      for (const item of node) inlineParentAgentEnums(item, file, found, trail);
+      return;
+    }
+    if (!node || typeof node !== "object") return;
+    for (const [key, value] of Object.entries(node)) {
+      const at = trail ? `${trail}.${key}` : key;
+      // The shared declaration itself is the ONE place the value set is
+      // written; every other occurrence must reference it.
+      const isTheDeclaration =
+        file === "ledger-event.schema.json" && at === "$defs.parent_agent_id";
+      if (key === "parent_agent_id" && value && typeof value === "object") {
+        if (isTheDeclaration) found.push({ file, declaration: at });
+        else if (Array.isArray(value.enum))
+          found.push({ file, enum: value.enum });
+        else if (typeof value.$ref === "string")
+          found.push({ file, ref: value.$ref });
+        else found.push({ file, other: Object.keys(value) });
+      }
+      inlineParentAgentEnums(value, file, found, at);
+    }
+  }
+
+  it("F-108: no contract declares a second inline enum for the parent agent", () => {
+    const files = readdirSync(contractDir).filter((file) =>
+      /^[a-z-]+\.schema\.json$/u.test(file),
+    );
+    const declarations = [];
+    const references = [];
+    const foundDeclarations = [];
+    for (const file of files) {
+      const schema = JSON.parse(
+        readFileSync(path.join(contractDir, file), "utf8"),
+      );
+      const found = [];
+      inlineParentAgentEnums(schema, file, found);
+      for (const entry of found) {
+        if (entry.declaration) foundDeclarations.push(entry);
+        else if (entry.enum) declarations.push(entry);
+        else if (entry.ref) references.push(entry);
+        else
+          assert.fail(
+            `${file}: parent_agent_id must be an enum or a $ref, saw ${JSON.stringify(entry.other)}`,
+          );
+      }
+    }
+    assert.equal(
+      declarations.length,
+      0,
+      `the parent agent must be declared once, saw ${declarations.length} inline enum(s)`,
+    );
+    assert.equal(
+      foundDeclarations.length,
+      1,
+      "exactly one shared declaration of the parent agent must exist",
+    );
+    assert.ok(
+      references.length >= 2,
+      "both the ledger event and the delegation envelope must reference the shared declaration",
+    );
+    for (const reference of references) {
+      assert.ok(
+        [
+          "ledger-event.schema.json#/$defs/parent_agent_id",
+          "#/$defs/parent_agent_id",
+        ].includes(reference.ref),
+        `${reference.file} must reference the shared declaration, saw ${reference.ref}`,
+      );
+    }
+  });
+
+  it("F-108: the shared declaration names exactly the agents that can spawn", () => {
+    const schema = JSON.parse(
+      readFileSync(path.join(contractDir, "ledger-event.schema.json"), "utf8"),
+    );
+    assert.deepEqual(schema.$defs.parent_agent_id.enum, ["main", "o1", "o2"]);
+  });
+
+  it("F-108: the ledger and the envelope accept and refuse the same values", async () => {
+    const { validateContract } =
+      await import("../integrations/openclaw/topology/lib/schema.mjs");
+    const envelope = {
+      schema_version: "1.0.0",
+      governance_version: "m8-t2.3-r5",
+      task_id: "a".repeat(64),
+      brief_revision: 1,
+      node_id: "node-1",
+      delegation_id: "b".repeat(64),
+      attempt: 1,
+      parent_agent_id: "o1",
+      target_agent_id: "excel",
+      target_stack: "data_plant",
+      expected_governance_hash: "c".repeat(64),
+      inputs: "x",
+      input_refs: [],
+      constraints: "{}",
+      validation_criteria: "{}",
+      remaining_task_budget: {
+        revisions: 1,
+        transitions: 1,
+        delegated_runs: 1,
+      },
+      requested_output_schema: "agent-result-payload",
+    };
+    for (const parent of ["main", "o1", "o2"]) {
+      assert.doesNotThrow(
+        () =>
+          validateContract("delegation-envelope", {
+            ...envelope,
+            parent_agent_id: parent,
+          }),
+        `${parent} is a legal parent`,
+      );
+    }
+    assert.throws(
+      () =>
+        validateContract("delegation-envelope", {
+          ...envelope,
+          parent_agent_id: "excel",
+        }),
+      { code: "SCHEMA_VALIDATION_FAILED" },
+      "a specialist has no spawn targets and can never be a parent",
     );
   });
 });

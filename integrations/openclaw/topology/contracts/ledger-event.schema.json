@@ -1164,8 +1164,14 @@
                 "maxLength": 256
               },
               "scope_digest": {
+                "description": "F-023: the digest of the PLAN the owner approved (canonical.mjs deriveApprovalPlanDigest over the task's brief revision and node graph). It is what binds the consent to the work that runs: a digest that does not match the recorded plan is refused. NULL is accepted only for an approval recorded before the binding existed; a new approval must carry it.",
                 "type": ["string", "null"],
                 "pattern": "^[a-f0-9]{64}$"
+              },
+              "brief_revision": {
+                "description": "F-023: the brief revision the owner approved. It must still be the task's current revision, so an approval issued for a superseded plan cannot transition the task.",
+                "type": ["integer", "null"],
+                "minimum": 1
               },
               "reason": {
                 "type": ["string", "null"],
