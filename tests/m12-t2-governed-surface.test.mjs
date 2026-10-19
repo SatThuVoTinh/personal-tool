@@ -7,15 +7,24 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+  writeFileSync,
+  readFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import test, { describe, it } from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   approvalTagSelectionsFor,
+  handleDiscordAction,
   incidentIdentityFor,
   incidentTagSelectionsFor,
+  readGovernanceManifests,
   resultSoftwareLabelFor,
   resultTagSelectionsFor,
 } from "../integrations/openclaw/plugins/zink-governance/index.mjs";
@@ -24,12 +33,15 @@ import {
   createForumTagResolver,
 } from "../integrations/openclaw/lib/discord-forum-tags.mjs";
 import { governancePluginFiles } from "../integrations/openclaw/lib/policy.mjs";
+import governancePlugin from "../integrations/openclaw/plugins/zink-governance/index.mjs";
 import {
+  ensureLedger,
   ledgerPaths,
   readSnapshot,
   recordWorkflowEvent,
 } from "../integrations/openclaw/topology/lib/ledger.mjs";
 import { deriveTaskId } from "../integrations/openclaw/topology/lib/canonical.mjs";
+import { installNativeToolGate } from "../integrations/openclaw/topology/lib/native-boundary.mjs";
 import { canonicalHash } from "../integrations/openclaw/topology/lib/canonical.mjs";
 
 const OFFICE = "1545425766161063937";
@@ -491,14 +503,127 @@ const pluginSource = readFileSync(
   "utf8",
 );
 
-test("M12/T2 P1: no Discord tag id is hardcoded anywhere in the repository", () => {
+test("M12/T9 F-009: a containment over several tasks is tagged by the precedence rule", () => {
+  // The rule the comment used to contradict: the STACK tag names the surface the
+  // containment's OUTPUT belongs to, so the deepest stack the containment reaches wins.
+  const twoTasks = incidentTagSelectionsFor(
+    [
+      { nodes: [NODE_EXCEL], current_stack: "data_plant" },
+      { nodes: [NODE_POWERBI], current_stack: "intelligence" },
+    ],
+    { reason: "SPAWN_LINEAGE_MISMATCH", scope: "ALL_LIVE_RUNS" },
+  );
+  assert.deepEqual(
+    twoTasks.selections.map((entry) => `${entry.category}:${entry.value}`),
+    ["STATUS:OPEN", "SEVERITY:HIGH", "STACK:ANALYTICS"],
+    "intelligence is downstream of data_plant, so the containment is ANALYTICS",
+  );
+  // The order of the affected tasks does not decide the tag.
+  const reversed = incidentTagSelectionsFor(
+    [
+      { nodes: [NODE_POWERBI], current_stack: "intelligence" },
+      { nodes: [NODE_EXCEL], current_stack: "data_plant" },
+    ],
+    { reason: "SPAWN_LINEAGE_MISMATCH", scope: "ALL_LIVE_RUNS" },
+  );
   assert.equal(
-    /applied_tags:\s*\[\s*"\d{15,25}"/u.test(pluginSource),
+    reversed.selections.find((entry) => entry.category === "STACK").value,
+    "ANALYTICS",
+    "task order must not move the stack tag",
+  );
+  // A SINGLE affected task still uses its own bound stack, even a shallower one.
+  const oneTask = incidentTagSelectionsFor(
+    [{ nodes: [NODE_EXCEL], current_stack: "data_plant" }],
+    { reason: "SPAWN_LINEAGE_MISMATCH", scope: "ALL_LIVE_RUNS" },
+  );
+  assert.equal(
+    oneTask.selections.find((entry) => entry.category === "STACK").value,
+    "DATA",
+    "the executing stack of a single affected task wins",
+  );
+  // No stack evidence at all is still unresolved, not a guess.
+  assert.deepEqual(
+    incidentTagSelectionsFor([], {
+      reason: "SPAWN_LINEAGE_MISMATCH",
+      scope: "NONE",
+    }).absent,
+    ["STACK"],
+  );
+});
+
+// M12/T9 F-214: this gate used to read ONE file while claiming to cover the whole
+// repository, so a tag id introduced in `lib/discord-forum-tags.mjs`, `configure.mjs`,
+// `templates/`, `topology/fixtures/` or an env file kept it green. It now walks the
+// tracked tree the way `scripts/repository-policy.mjs` `listTrackedFiles` does.
+//
+// The former STATUS: WAITING id is written in two halves on purpose: the gate file is
+// itself a tracked source file, and a literal that names the id would make the gate
+// fail on its own text.
+const FORMER_STATUS_WAITING_TAG_ID = "154569716198592" + "1064";
+const SNOWFLAKE_APPLIED_TAGS_PATTERN = /applied_tags:\s*\[\s*"\d{15,25}"/u;
+const REPO_ROOT = path.resolve(
+  fileURLToPath(new URL(".", import.meta.url)),
+  "..",
+);
+
+/** Every tracked source, template, fixture and env file in the repository. */
+function trackedGovernedSourceFiles() {
+  const output = execFileSync(
+    "git",
+    ["-c", `safe.directory=${REPO_ROOT}`, "ls-files", "-z"],
+    {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      maxBuffer: 32 * 1024 * 1024,
+      windowsHide: true,
+    },
+  );
+  return output
+    .split("\0")
+    .filter(Boolean)
+    .filter((relative) => {
+      const base = path.basename(relative);
+      if (/\.(?:mjs|js|cjs|ts|json)$/iu.test(base)) return true;
+      if (/(^|\/)(?:templates|fixtures)\//iu.test(relative)) return true;
+      if (base === ".env" || base.startsWith(".env.")) return true;
+      return false;
+    });
+}
+
+test("M12/T2 P1: no Discord tag id is hardcoded anywhere in the repository", () => {
+  const files = trackedGovernedSourceFiles();
+  assert.ok(
+    files.length > 50,
+    `the tracked tree must actually be walked, got ${files.length} files`,
+  );
+  const offenders = [];
+  for (const relative of files) {
+    let content;
+    try {
+      content = readFileSync(path.join(REPO_ROOT, relative), "utf8");
+    } catch {
+      continue;
+    }
+    if (content.includes("\u0000")) continue;
+    if (SNOWFLAKE_APPLIED_TAGS_PATTERN.test(content))
+      offenders.push(`${relative}: snowflake-shaped applied_tags`);
+    if (content.includes(FORMER_STATUS_WAITING_TAG_ID))
+      offenders.push(`${relative}: the former STATUS: WAITING tag id`);
+  }
+  assert.deepEqual(
+    offenders,
+    [],
+    `tag ids belong to Discord; the repository holds names only: ${offenders.join(", ")}`,
+  );
+  // The plugin source is still read directly, so a failure names the file even if the
+  // tracked-tree walk is ever narrowed again.
+  assert.equal(
+    SNOWFLAKE_APPLIED_TAGS_PATTERN.test(pluginSource),
     false,
     "tag ids belong to Discord; the repository holds names only",
   );
   assert.equal(
-    pluginSource.includes("1545697161985921064"),
+    pluginSource.includes(FORMER_STATUS_WAITING_TAG_ID),
     false,
     "the former STATUS: WAITING literal must be gone",
   );

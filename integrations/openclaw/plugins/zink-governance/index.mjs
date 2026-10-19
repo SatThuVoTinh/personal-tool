@@ -322,8 +322,20 @@ export function resultSoftwareLabelFor(task) {
 
 /**
  * The incidents trio. SEVERITY is what the containment decision actually was, and STACK is
- * the affected tasks' own recorded stack; a containment that spans two stacks has no single
- * honest tag, so it reports unresolved and the thread is not opened rather than picking one.
+ * the affected tasks' own recorded stack.
+ *
+ * M12/T9 F-009: the comment this replaces claimed that a containment spanning two stacks
+ * reports unresolved and opens no thread. That is not what `surfaceStackTag` does, and it
+ * has not done since the one-tagging rule landed: the STACK tag is the surface the
+ * containment's OUTPUT belongs to, so a containment that reaches further downstream is
+ * tagged by that downstream surface. The precedence is `decision > intelligence >
+ * data_plant > semantic > infrastructure` (STACK_TAG_PRECEDENCE), and it is applied over
+ * the union of every affected task's node stacks.
+ *
+ * `current_stack` still wins when the ledger has bound one - but only for a SINGLE
+ * affected task, because a containment over several tasks has no single executing stack
+ * and the union decides. Nothing is invented when there is no stack evidence at all:
+ * the caller then reports an unresolved tag and posts nothing.
  */
 export function incidentTagSelectionsFor(
   tasks,
