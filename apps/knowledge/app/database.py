@@ -26,6 +26,17 @@ class StateTransitionError(RuntimeError):
     """Raised when a lifecycle transaction no longer owns its expected state."""
 
 
+class MigrationLockError(RuntimeError):
+    """Raised when the schema lock could not be taken within its budget.
+
+    F-149 (R5-E03-02): the schema was applied on an unserialized pool
+    connection, so two replicas racing at boot ran the same DDL against one
+    catalog. The loser now waits for the lock; a wait that runs out of
+    budget is THIS, and never the "database is down" the operator used to
+    read for a schema race.
+    """
+
+
 class PdfContentIdentityExistsError(RuntimeError):
     """An in-progress or READY build already owns this content identity."""
 
@@ -229,7 +240,19 @@ class KnowledgeDatabase:
             )
             barrier_completed = self._acceptance_barrier_is_completed()
             if self._acceptance_backup_barrier_dir is None or barrier_completed:
-                await self._apply_migrations()
+                # F-149 (R5-E03-02): the schema used to be applied on a plain
+                # pool connection, so two replicas racing at boot ran
+                # CREATE EXTENSION / CREATE TYPE against the same catalog and
+                # the loser raised duplicate_object. The DDL now runs under
+                # the same advisory lock that guards a run, and the loser
+                # WAITS for it instead of racing.
+                connection = await self.acquire_migration_lock(self._advisory_lock_key)
+                try:
+                    await self._apply_migrations(connection)
+                finally:
+                    await self.release_advisory_lock(
+                        connection, self._advisory_lock_key
+                    )
             else:
                 connection = await self.acquire_advisory_lock(self._advisory_lock_key)
                 if connection is None:
@@ -244,6 +267,11 @@ class KnowledgeDatabase:
                     await self.release_advisory_lock(connection, self._advisory_lock_key)
                     raise
             await self.assert_searchable_segment_type_domain()
+        except MigrationLockError:
+            # F-149: a schema race is not "the database is down". The refusal
+            # is named, so the operator can tell the two apart.
+            self.startup_error_code = "MIGRATION_LOCK_UNAVAILABLE"
+            await self._abort_startup()
         except Exception:
             self.startup_error_code = "DATABASE_UNAVAILABLE"
             if self._startup_owner_connection is not None:
@@ -252,10 +280,55 @@ class KnowledgeDatabase:
                 self.unbind_owner_connection(connection)
                 await self.release_advisory_lock(connection, self._advisory_lock_key)
             if self._pool is not None:
-                await self._pool.close()
-                self._pool = None
+                return
+            try:
+                self._pool = await asyncpg.create_pool(
+                    host=self._database_host,
+                    port=self._database_port,
+                    database=self._database_name,
+                    user=self._database_user,
+                    password=self._database_password,
+                    min_size=1,
+                    max_size=4,
+                    timeout=10,
+                    command_timeout=30,
+                )
+                # F-149 (R5-E03-02): the re-applied schema takes the same
+                # lock the first boot took.
+                connection = await self.acquire_migration_lock(self._advisory_lock_key)
+                try:
+                    await self._apply_migrations(connection)
+                finally:
+                    await self.release_advisory_lock(
+                        connection, self._advisory_lock_key
+                    )
+            except Exception:
+                # The database is still unreachable. The next attempt repeats
+                # the connect and the schema application.
+                if self._pool is not None:
+                    await self._pool.close()
+                    self._pool = None
+                continue
+            self.startup_error_code = None
+            if self._recovery_callback is not None:
+                try:
+                    await self._recovery_callback()
+                except Exception as error:
+                    # The database is back; the recovery it repairs failed.
+                    # The failure is named, and the sweep it performs is
+                    # idempotent, so the next attempt repeats it.
+                    logger.error(
+                        "knowledge.reconnect_recovery_incomplete code=%s error=%s",
+                        "STARTUP_RECOVERY_INCOMPLETE",
+                        error,
+                        exc_info=True,
+                    )
+            return
 
     async def stop(self) -> None:
+        if self._reconnect_task is not None:
+            self._reconnect_task.cancel()
+            self._reconnect_task = None
         if self._pool is not None:
             await self._pool.close()
             self._pool = None
@@ -1707,6 +1780,39 @@ class KnowledgeDatabase:
             return connection
         await self._pool.release(connection)
         return None
+
+    async def acquire_migration_lock(self, lock_key: int) -> asyncpg.Connection:
+        """Take the schema lock, WAITING for the session that holds it.
+
+        F-149 (R5-E03-02): the DDL used to run on an unserialized pool
+        connection, so two replicas booting together raced `CREATE EXTENSION`
+        and `CREATE TYPE` against one catalog and the loser raised
+        `duplicate_object` -- reported to the operator as "the database is
+        down". The loser now waits for the lock and converges.
+        """
+
+        if self._pool is None:
+            raise RuntimeError("Database pool is unavailable.")
+        connection = await self._pool.acquire()
+        try:
+            await connection.execute("SELECT pg_advisory_lock($1)", lock_key)
+        except (asyncio.TimeoutError, TimeoutError) as error:
+            await self._release_quietly(connection)
+            raise MigrationLockError("MIGRATION_LOCK_TIMEOUT") from error
+        except BaseException:
+            await self._release_quietly(connection)
+            raise
+        return connection
+
+    async def _release_quietly(self, connection: asyncpg.Connection) -> None:
+        """Return a connection to the pool without masking the original fault."""
+
+        if self._pool is None:
+            return
+        try:
+            await self._pool.release(connection)
+        except Exception:
+            pass
 
     async def release_advisory_lock(self, connection: asyncpg.Connection, lock_key: int) -> None:
         if self._pool is None:

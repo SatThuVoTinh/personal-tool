@@ -31,6 +31,7 @@ from tempfile import TemporaryDirectory
 from uuid import UUID, uuid4
 
 from app.database import AcceptedIndexRun, KnowledgeDatabase
+from app.database import PdfPublicationSegment
 from app.markdown_adapter import (
     MarkdownSegment,
     MarkdownSource,
