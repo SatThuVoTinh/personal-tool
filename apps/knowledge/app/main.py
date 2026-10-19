@@ -459,6 +459,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             "text": candidate.text,
                             "heading_path": list(candidate.heading_path),
                             "indexed_by_run_id": candidate.indexed_by_run_id,
+                            # F-072 (R5-E02-02): the immutable source
+                            # identity. A path can be reused by different
+                            # bytes and an index run covers thousands of
+                            # files, so neither identifies the revision the
+                            # answer was produced from.
+                            "source_id": candidate.source_id,
+                            "source_sha256": candidate.source_sha256,
+                            "canonical_topics": list(candidate.canonical_topics),
                             "dense_score": None if candidate.dense_distance is None else 1.0 - candidate.dense_distance,
                             "fts_score": candidate.fts_score,
                             "rrf_score": item.rrf_score,
@@ -466,6 +474,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             "source_type": candidate.source_type,
                             "citation": {
                                 "source_path": candidate.source_path,
+                                # F-072 (R5-E02-02): the identity travels with
+                                # the citation, so a surfaced citation can be
+                                # re-verified by re-hashing the source.
+                                "source_id": candidate.source_id,
+                                "source_sha256": candidate.source_sha256,
                                 "line_start": candidate.line_start,
                                 "line_end": candidate.line_end,
                                 "page_start": candidate.page_start,

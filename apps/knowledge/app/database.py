@@ -147,6 +147,38 @@ class SearchCandidate:
     page_start: int | None = None
     page_end: int | None = None
     bbox: tuple[float, float, float, float] | None = None
+    # F-072 (R5-E02-02): the immutable identity of the SOURCE this chunk
+    # came from. A path is mutable -- a file can be moved or edited and keep
+    # its path -- and an index-run id covers thousands of files, so neither
+    # identifies the revision an answer was produced from.
+    source_id: str | None = None
+    source_sha256: str | None = None
+    canonical_topics: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class SegmentRecord:
+    """One indexed segment, with the identity of the source it came from."""
+
+    id: str
+    index_id: str
+    source_id: str
+    source_sha256: str
+    source_path: str
+    source_type: str
+    source_mime_type: str
+    title: str
+    text: str
+    heading_path: tuple[str, ...]
+    primary_topic: str
+    canonical_topics: tuple[str, ...]
+    tags: tuple[str, ...]
+    line_start: int | None
+    line_end: int | None
+    page_start: int | None
+    page_end: int | None
+    bbox: tuple[float, float, float, float] | None
+    indexed_by_run_id: str
 
 
 class ActiveIndexChangedError(RuntimeError):
@@ -1057,7 +1089,7 @@ class KnowledgeDatabase:
                     WITH ann AS MATERIALIZED (
                       SELECT id, source_path, title, primary_topic, tags, heading_path,
                              text, line_start, line_end, page_start, page_end, bbox,
-                             segment_type, indexed_by_run_id,
+                             segment_type, indexed_by_run_id, source_id, canonical_topics,
                              embedding <=> $2::vector AS dense_distance
                       FROM knowledge.segments
                       WHERE {common}
@@ -1075,7 +1107,7 @@ class KnowledgeDatabase:
                     )
                     SELECT segments.id, source_path, title, primary_topic, tags,
                            heading_path, text, line_start, line_end, page_start, page_end, bbox,
-                           segment_type, indexed_by_run_id,
+                           segment_type, indexed_by_run_id, source_id, canonical_topics,
                            ts_rank_cd('{{0.1,0.2,0.4,1.0}}', search_vector,
                                       parsed.value, 0) AS fts_score
                     FROM knowledge.segments, parsed
@@ -1085,18 +1117,48 @@ class KnowledgeDatabase:
                     """,
                     UUID(index_id), query, primary_topic, tags, path_prefix, list(segment_types),
                 )
+                # F-072 (R5-E02-02): the immutable source identity is read in
+                # ONE extra statement, inside the same snapshot, instead of a
+                # join -- a join on the ANN branch would put the HNSW scan at
+                # the planner's discretion.
+                source_digests = await self._source_digests(
+                    connection,
+                    {str(row["source_id"]) for row in (*dense_rows, *fts_rows)},
+                )
         active_after = await self._pool.fetchval(
             "SELECT id::text FROM knowledge.indexes WHERE status = 'ACTIVE'"
         )
         if active_after != index_id:
             raise ActiveIndexChangedError("ACTIVE index changed.")
         return (
-            [self._candidate_from_row(row, "dense_distance") for row in dense_rows],
-            [self._candidate_from_row(row, "fts_score") for row in fts_rows],
+            [
+                self._candidate_from_row(row, "dense_distance", source_digests)
+                for row in dense_rows
+            ],
+            [
+                self._candidate_from_row(row, "fts_score", source_digests)
+                for row in fts_rows
+            ],
         )
 
     @staticmethod
-    def _candidate_from_row(row: asyncpg.Record, score_name: str) -> SearchCandidate:
+    async def _source_digests(
+        connection: asyncpg.Connection, source_ids: set[str]
+    ) -> dict[str, str]:
+        if not source_ids:
+            return {}
+        rows = await connection.fetch(
+            "SELECT id::text, sha256 FROM knowledge.sources WHERE id = ANY($1::uuid[])",
+            [UUID(source_id) for source_id in sorted(source_ids)],
+        )
+        return {str(row["id"]): str(row["sha256"]) for row in rows}
+
+    @staticmethod
+    def _candidate_from_row(
+        row: asyncpg.Record,
+        score_name: str,
+        source_digests: Mapping[str, str] | None = None,
+    ) -> SearchCandidate:
         segment_type = str(row["segment_type"])
         if segment_type == "MARKDOWN_PASSAGE":
             source_type = "MARKDOWN"

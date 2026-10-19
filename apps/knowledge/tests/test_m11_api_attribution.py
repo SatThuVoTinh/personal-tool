@@ -21,7 +21,9 @@ patched on the app's own state objects.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import re
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -46,8 +48,14 @@ from app.database import (
     ActiveIndex,
     IndexRunState,
     SearchCandidate,
+    SegmentRecord,
 )
-from app.main import SEARCH_QUERY_MAX_CHARS, create_app
+from app.main import (
+    QUERY_EMBEDDING_TIMEOUT_SECONDS,
+    SEARCH_CAPACITY_RETRY_AFTER_SECONDS,
+    SEARCH_QUERY_MAX_CHARS,
+    create_app,
+)
 from app.markdown_adapter import QUERY_BUDGET_FIXTURE, QUERY_MAX_TOKENS
 from app.model_probe import ResolvedEmbeddingModel
 from app.run_errors import SafeRunError, serialize_errors
@@ -70,6 +78,11 @@ def candidate(identifier: str) -> SearchCandidate:
         indexed_by_run_id="run-1",
         dense_distance=0.1,
         fts_score=1.0,
+        # F-072 (R5-E02-02): the immutable source identity travels with every
+        # candidate.
+        source_id="source-1",
+        source_sha256="a" * 64,
+        canonical_topics=("AI",),
     )
 
 
