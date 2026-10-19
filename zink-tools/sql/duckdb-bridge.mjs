@@ -475,15 +475,27 @@ export async function executeGovernedDuckDbQuery(context, input, options = {}) {
     "CREATE TABLE IF NOT EXISTS knowledge (id INTEGER, name VARCHAR, category VARCHAR, value DOUBLE, created_at VARCHAR);",
     "INSERT INTO knowledge VALUES (1, 'artifact-alpha', 'silver', 100.5, '2026-09-14T00:00:00Z'), (2, 'artifact-beta', 'silver', 250.0, '2026-09-14T01:00:00Z');",
     "CREATE TABLE IF NOT EXISTS analytics_read AS SELECT * FROM knowledge;",
-    input.query.trim().endsWith(";")
-      ? input.query.trim()
-      : `${input.query.trim()};`,
+    boundQuery.trim().endsWith(";")
+      ? boundQuery.trim()
+      : `${boundQuery.trim()};`,
   ].join(" ");
 
   let parsedRows = [];
   try {
-    const rawOut = execFileSync("duckdb", ["-json", "-c", initSql], {
+    // F-294 (R7-C5-02): the child is spawned through an injectable seam so a
+    // lane can prove the timeout is applied to a REAL child and that the child
+    // is reaped. Measured at HEAD: the only timeout assertion drove
+    // `simulateTimeout`, a flag that raises before any subprocess exists, so
+    // the `timeout` option below was never exercised and removing it changed
+    // no count in any lane. The seam is an internal option of this function
+    // (never a model-reachable field); the default is the real spawn.
+    const spawn =
+      typeof options.execFileSyncImpl === "function"
+        ? options.execFileSyncImpl
+        : execFileSync;
+    const rawOut = spawn("duckdb", ["-json", "-c", initSql], {
       timeout: timeoutMs,
+      maxBuffer,
       encoding: "utf8",
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -492,6 +504,17 @@ export async function executeGovernedDuckDbQuery(context, input, options = {}) {
       parsedRows = JSON.parse(trimmed);
     }
   } catch (err) {
+    // Measured on this host: a buffer overrun and a timeout both terminate the
+    // child with `signal: "SIGTERM"` and `status: null`, so the signal cannot
+    // separate them; the spawn `code` is the discriminator. The overrun is a
+    // local plumbing limit and must not be reported as an engine failure
+    // (`R5-E06-06`).
+    if (err.code === "ENOBUFS") {
+      throw new DuckDbBridgeError(
+        "DUCKDB_RESULT_TOO_LARGE",
+        `Query result exceeded the ${maxBuffer} byte engine output ceiling.`,
+      );
+    }
     if (err.code === "ETIMEDOUT") {
       throw new DuckDbBridgeError(
         "DUCKDB_TIMEOUT",
