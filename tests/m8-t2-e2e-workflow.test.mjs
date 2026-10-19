@@ -462,6 +462,9 @@ describe("M8/T2 Mandatory E2E Workflow & Failure Injection Suite", () => {
     assert.equal(parsed.topicCode, "02");
     assert.equal(parsed.taskNumber, "0105");
 
+    // F-008 (R1-A10-06): a topic filter is validated against the topics the
+    // index can carry, so the sample here is a recognized one - an
+    // unrecognized topic is refused by name, not forwarded to SQL.
     const queryEmbed = prepareQueryEmbedding({
       query: "Calculate safety stock",
       primary_topic: "inventory",

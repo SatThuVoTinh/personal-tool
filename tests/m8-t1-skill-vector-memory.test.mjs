@@ -2,7 +2,7 @@ import test, { describe } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, rm, readFile } from "node:fs/promises";
 import os from "node:os";
 
 import {
@@ -10,6 +10,8 @@ import {
   renderEmbeddingEnvelope,
   prepareQueryEmbedding,
   CANONICAL_DOMAINS,
+  KNOWN_TAXONOMY_MAP,
+  NAMESPACE_ALIAS_MAP,
   SEMANTIC_CONTRACT_VERSION,
 } from "../zink-tools/common/semantic-contract.mjs";
 
@@ -134,11 +136,15 @@ describe("M8/T1 Governed Skill Vector Store & Semantic Vector RAG", () => {
   // Test 2: BUG-02 — Metadata filters are never concatenated into query embedding
   // =========================================================================
   test("BUG-02: prepareQueryEmbedding preserves exact query string without filter contamination", () => {
+    // F-008 (R1-A10-06): `secondary_topics` is no longer one of the
+    // accepted filters - it is refused by name, because the column it
+    // compared against is always empty, so it could only remove rows. The
+    // refusal is pinned by the F-008 case below; what this case pins is that
+    // no accepted filter leaks into the query text.
     const prepared = prepareQueryEmbedding({
       query: "How to use XLOOKUP?",
       primary_topic: "spreadsheet",
       subtopic: "modern-formulas",
-      secondary_topics: ["lookup", "excel"],
       capability: "xlookup-guide",
     });
 
@@ -154,7 +160,6 @@ describe("M8/T1 Governed Skill Vector Store & Semantic Vector RAG", () => {
     assert.deepEqual(prepared.metadataFilters, {
       primary_topic: "spreadsheet",
       subtopic: "modern-formulas",
-      secondary_topics: ["lookup", "excel"],
       capability: "xlookup-guide",
     });
   });
@@ -877,5 +882,196 @@ describe("M8/T1 Governed Skill Vector Store & Semantic Vector RAG", () => {
     );
     assert.match(formattedMessage, /Duyệt đề xuất: /u);
     await rm(proposalStorageDir, { recursive: true, force: true });
+  });
+
+  // =========================================================================
+  // F-008 (R1-A10-06) — a filter that can only remove rows is withdrawn, and
+  // an unrecognized topic is refused by name instead of answering NO_MATCH.
+  // =========================================================================
+  test("F-008: the secondary_topics filter is refused by name and never reaches SQL", async () => {
+    // The contract layer refuses the filter outright. The stored column is
+    // always empty (the writer passes `canonicalSecondaryTopics = []`, because
+    // a canonical skill manifest carries no metadata key to derive topics
+    // from), so the overlap test could only remove rows - and it removed them
+    // silently, answering NO_MATCH, which no caller can tell from "no such
+    // skill".
+    for (const value of [["lookup"], "lookup"]) {
+      assert.throws(
+        () =>
+          prepareQueryEmbedding({
+            query: "How to use XLOOKUP?",
+            secondary_topics: value,
+          }),
+        /SECONDARY_TOPICS_FILTER_UNSUPPORTED/u,
+      );
+    }
+
+    // A filter set the contract still accepts carries no secondary_topics key.
+    const prepared = prepareQueryEmbedding({
+      query: "How to use XLOOKUP?",
+      primary_topic: "spreadsheet",
+      subtopic: "modern-formulas",
+      capability: "xlookup-guide",
+    });
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(
+        prepared.metadataFilters,
+        "secondary_topics",
+      ),
+      false,
+      "the withdrawn filter may not be forwarded to the SQL builder",
+    );
+
+    // The adapter refuses before it builds a statement, so no predicate that
+    // can only remove rows is ever sent to the index.
+    let refusedSql = null;
+    const refusing = new SkillAdapter(undefined, {
+      embedFn: async () => [new Array(1024).fill(0.1)],
+      dbExecutor: async (sql) => {
+        refusedSql = sql;
+        return "";
+      },
+    });
+    const refused = await refusing.querySkillStore({
+      action: "search",
+      query: "How to use XLOOKUP?",
+      secondary_topics: ["lookup"],
+    });
+    assert.equal(refused.governed_status, "CONTROLLED_FAILURE");
+    assert.equal(refused.error, "SECONDARY_TOPICS_FILTER_UNSUPPORTED");
+    assert.match(refused.message, /SECONDARY_TOPICS_FILTER_UNSUPPORTED/u);
+    assert.equal(
+      refusedSql,
+      null,
+      "a withdrawn filter may not reach the index",
+    );
+
+    // A search that does reach the index carries no secondary_topics clause.
+    let searchSql = null;
+    const searching = new SkillAdapter(undefined, {
+      embedFn: async () => [new Array(1024).fill(0.1)],
+      dbExecutor: async (sql) => {
+        searchSql = sql;
+        return `ZINK_FRESHNESS|${new Date().toISOString()}`;
+      },
+    });
+    const found = await searching.querySkillStore({
+      action: "search",
+      query: "How to use XLOOKUP?",
+    });
+    assert.equal(found.governed_status, "NO_MATCH");
+    assert.ok(searchSql, "the search must reach the index");
+    assert.equal(
+      /secondary_topics/u.test(searchSql),
+      false,
+      "the SQL builder must not know the withdrawn predicate",
+    );
+
+    // The builder half of the withdrawal is pinned in the source as well: the
+    // contract-layer refusal happens before the builder runs, so a clause
+    // that was left behind there would be dead code that still answers only
+    // with empty rows if it ever woke up.
+    const adapterSource = await readFile(
+      new URL(
+        "../zink-tools/adapters/skill-store/skill-adapter.mjs",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    assert.equal(
+      adapterSource.includes("c.secondary_topics"),
+      false,
+      "the SQL builder must not carry the withdrawn predicate",
+    );
+  });
+
+  test("F-008: an unrecognized primary_topic is refused by name instead of being forwarded to SQL", async () => {
+    assert.throws(
+      () =>
+        prepareQueryEmbedding({
+          query: "How to use XLOOKUP?",
+          primary_topic: "not-a-topic",
+        }),
+      /UNKNOWN_PRIMARY_TOPIC_FILTER/u,
+    );
+
+    // A topic the index can carry is accepted, canonicalized, and forwarded.
+    const prepared = prepareQueryEmbedding({
+      query: "How to use XLOOKUP?",
+      primary_topic: "  KB-INGESTION  ",
+    });
+    assert.equal(prepared.metadataFilters.primary_topic, "kb-ingestion");
+
+    let refusedSql = null;
+    const adapter = new SkillAdapter(undefined, {
+      embedFn: async () => [new Array(1024).fill(0.1)],
+      dbExecutor: async (sql) => {
+        refusedSql = sql;
+        return "";
+      },
+    });
+    const refused = await adapter.querySkillStore({
+      action: "search",
+      query: "How to use XLOOKUP?",
+      primary_topic: "not-a-topic",
+    });
+    assert.equal(refused.governed_status, "CONTROLLED_FAILURE");
+    assert.equal(refused.error, "UNKNOWN_PRIMARY_TOPIC_FILTER");
+    assert.match(refused.message, /UNKNOWN_PRIMARY_TOPIC_FILTER/u);
+    assert.equal(
+      refusedSql,
+      null,
+      "an unrecognized topic may not reach the index",
+    );
+  });
+
+  // =========================================================================
+  // F-014 (R5-E07-04) — one corpus, one spelling.
+  // =========================================================================
+  test("F-014: the alias and taxonomy registries are disjoint, so every spelling reaches one canonical namespace", () => {
+    const taxonomyKeys = Object.keys(KNOWN_TAXONOMY_MAP);
+    for (const [alias, target] of Object.entries(NAMESPACE_ALIAS_MAP)) {
+      assert.equal(
+        taxonomyKeys.includes(alias),
+        false,
+        `alias '${alias}' must not shadow a taxonomy key: the taxonomy is consulted first, so the alias would be unreachable`,
+      );
+      assert.equal(
+        taxonomyKeys.includes(target),
+        true,
+        `alias '${alias}' points at '${target}', which is not a taxonomy key`,
+      );
+    }
+
+    // Every alias is reachable: it resolves to exactly the canonical namespace
+    // it declares.
+    for (const [alias, target] of Object.entries(NAMESPACE_ALIAS_MAP)) {
+      const meta = deriveSemanticMetadata({ namespace: [alias] });
+      assert.deepEqual(
+        meta.resolved_namespaces,
+        [target],
+        `alias '${alias}' must resolve to '${target}'`,
+      );
+    }
+
+    // The four spellings of the knowledge namespace carry identical metadata,
+    // so one corpus is indexed under one primary topic.
+    const spellings = ["research", "kb", "knowledge-base", "literature"];
+    for (const spelling of spellings) {
+      const meta = deriveSemanticMetadata({ namespace: [spelling] });
+      assert.deepEqual(
+        {
+          domain: meta.domain,
+          primary_topic: meta.primary_topic,
+          subtopic: meta.subtopic,
+        },
+        {
+          domain: "research",
+          primary_topic: "kb-ingestion",
+          subtopic: "literature-and-provenance",
+        },
+        `spelling '${spelling}' must carry the knowledge taxonomy`,
+      );
+    }
   });
 });

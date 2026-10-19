@@ -503,7 +503,8 @@ export class SkillAdapter {
           );
         }
 
-        // K09: both namespace and secondary_topics applied in SQL.
+        // K09: the namespace filter is applied in SQL. (The secondary_topics
+        // half of this clause was withdrawn — F-008, see below.)
         // M11/T1: array-valued namespaces used to skip the B15 taxonomy
         // validation (which only covers the string form) and the literal was
         // interpolated unquoted — invalid SQL for any real psql, and a
@@ -545,15 +546,17 @@ export class SkillAdapter {
           );
         }
 
-        const targetSecTopics =
-          metadataFilters.secondary_topics || input.secondary_topics;
-        if (Array.isArray(targetSecTopics) && targetSecTopics.length > 0) {
-          whereClauses.push(
-            `c.secondary_topics && ${escapeSqlLiteral(
-              toPostgresArrayLiteral(targetSecTopics),
-            )}::text[]`,
-          );
-        }
+        // F-008 (R1-A10-06): the `secondary_topics` predicate is WITHDRAWN
+        // here, together with the contract-layer forwarding it depended on
+        // (zink-tools/common/semantic-contract.mjs).
+        //
+        // The column it compared against is always empty: the writer passes
+        // `canonicalSecondaryTopics = []` (zink-skill-store/src/vector-sync.mjs),
+        // because a canonical skill manifest carries no metadata key to derive
+        // topics from. So the overlap test could only remove rows — and it
+        // removed them silently, answering NO_MATCH, which no caller can tell
+        // from "no such skill". The contract layer refuses the filter by name,
+        // so no statement can carry it any more.
 
         // K08: Use json_build_object to prevent pipe-character splitting corruption
         //

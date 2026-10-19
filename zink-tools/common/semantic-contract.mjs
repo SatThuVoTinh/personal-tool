@@ -165,7 +165,24 @@ function byteLength(str) {
   return Buffer.byteLength(str, "utf8");
 }
 
-// B05/B22: namespace resolution — fail-closed for unknown namespaces
+// F-008 (R1-A10-06): a contract-layer refusal carries a machine-readable code
+// beside the named code in its message, so the adapter that catches it can
+// report WHICH refusal it was instead of a generic adapter error.
+function contractError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+// B05/B22: namespace resolution — fail-closed for unknown namespaces.
+//
+// The precedence, and it is the only one:
+//   1. the canonical taxonomy (KNOWN_TAXONOMY_MAP),
+//   2. the surface-alias registry (NAMESPACE_ALIAS_MAP),
+//   3. a canonical domain slug (CANONICAL_DOMAINS).
+//
+// Step 1 comes first, which is exactly why an alias key that is also a
+// taxonomy key is unreachable — see the alias registry's invariants (F-014).
 function resolveNamespace(raw) {
   const ns = raw?.toLowerCase() ?? "";
   if (!ns) return { resolved: null, ambiguous: true };
@@ -272,6 +289,28 @@ export function deriveSemanticMetadata(input = {}) {
 }
 
 /**
+ * The primary_topic values the index can actually carry.
+ *
+ * Derived from the writer's own function (deriveSemanticMetadata) over every
+ * namespace that resolves, so the accepted filter values and the stored values
+ * cannot drift apart: a topic is accepted exactly when some namespace derives
+ * it. The canonical domains are part of the sweep because a namespace that
+ * resolves to a canonical domain without a taxonomy entry stores that slug
+ * as its topic.
+ */
+function knownPrimaryTopics() {
+  const topics = new Set();
+  for (const namespace of [
+    ...Object.keys(KNOWN_TAXONOMY_MAP),
+    ...CANONICAL_DOMAINS,
+  ]) {
+    const meta = deriveSemanticMetadata({ namespace: [namespace] });
+    if (!meta.ambiguous) topics.add(meta.primary_topic);
+  }
+  return topics;
+}
+
+/**
  * Renders the deterministic semantic envelope string.
  * B10: sanitize metadata values to prevent newline/CR header injection.
  * B11: embed versioned semantic-contract id.
@@ -360,9 +399,11 @@ export function computeEmbeddingInputHash(text) {
 /**
  * Prepares query embedding input and validates metadata filters.
  * B13: canonicalize/lowercase all filter values.
- * B14: include secondary_topics filter.
+ * B14 (F-008): the secondary_topics filter is WITHDRAWN — it is refused with
+ * a named code instead of being forwarded, because it can never match a row.
  * B15: validate namespace filter against canonical taxonomy.
- * B16: validate filters against canonical taxonomy where possible.
+ * B16: validate primary_topic against the topics the index can carry, and
+ * refuse an unrecognized one with a named code.
  *
  * IMPORTANT: Query embedding MUST use query text only.
  * Metadata filters MUST NOT be concatenated into query text.
@@ -385,14 +426,29 @@ export function prepareQueryEmbedding(params = {}) {
   if (params.subtopic && typeof params.subtopic === "string") {
     metadataFilters.subtopic = params.subtopic.trim().toLowerCase();
   }
-  // B14: forward secondary_topics filter (was accepted but not forwarded)
-  if (
-    Array.isArray(params.secondary_topics) &&
-    params.secondary_topics.length > 0
-  ) {
-    metadataFilters.secondary_topics = params.secondary_topics
-      .filter((t) => typeof t === "string" && t.trim())
-      .map((t) => t.trim().toLowerCase());
+  // F-008 (R1-A10-06): the `secondary_topics` filter is WITHDRAWN here and
+  // in the SQL builder (zink-tools/adapters/skill-store/skill-adapter.mjs)
+  // together.
+  //
+  // The column it compared against is always empty: the writer passes
+  // `canonicalSecondaryTopics = []` (zink-skill-store/src/vector-sync.mjs),
+  // because a canonical skill manifest carries no metadata key to derive
+  // topics from. So `c.secondary_topics && '{...}'` was an overlap test
+  // against `{}` for every row - a predicate that could only remove rows,
+  // and it removed them silently: the search answered NO_MATCH, which no
+  // caller can tell from "no such skill". Honoring the filter needs a writer
+  // change, so the filter is refused by name instead of being forwarded.
+  const requestedSecondaryTopics = params.secondary_topics;
+  const hasSecondaryTopics =
+    (Array.isArray(requestedSecondaryTopics) &&
+      requestedSecondaryTopics.length > 0) ||
+    (typeof requestedSecondaryTopics === "string" &&
+      requestedSecondaryTopics.trim() !== "");
+  if (hasSecondaryTopics) {
+    throw contractError(
+      "SECONDARY_TOPICS_FILTER_UNSUPPORTED",
+      "SECONDARY_TOPICS_FILTER_UNSUPPORTED: the secondary_topics filter cannot match any indexed skill, so it is refused instead of being applied",
+    );
   }
   if (params.capability && typeof params.capability === "string") {
     const cap = params.capability.trim().toLowerCase();
@@ -412,16 +468,23 @@ export function prepareQueryEmbedding(params = {}) {
     }
     metadataFilters.namespace = resolved;
   }
-  // B16: validate primary_topic against known taxonomy values (internal check only)
+  // B16 / F-008 (R1-A10-06): validate primary_topic against the topics the
+  // index can carry.
+  //
+  // This used to compute the known topics and throw the result away
+  // (`void knownTopics.includes(...)`): the check was not a check at all, so
+  // an unrecognized topic was forwarded to SQL and answered NO_MATCH — a
+  // silent false negative, indistinguishable from "no skill has that topic".
+  // The refusal is at the contract layer, so the predicate never reaches the
+  // statement. (The earlier note that enforcement was out of scope is
+  // superseded: F-008's acceptance criteria asks for exactly this.)
   if (metadataFilters.primary_topic) {
-    const knownTopics = Object.values(KNOWN_TAXONOMY_MAP).map(
-      (t) => t.primary_topic,
-    );
-    // Non-fatal: validation noted but not exposed in public output. In this shape it is
-    // not a check at all — the result is discarded, so an unknown `primary_topic` passes
-    // silently. Making it enforce anything would change what the governed search path
-    // accepts, which is outside 4A.11; recorded rather than half-fixed.
-    void knownTopics.includes(metadataFilters.primary_topic);
+    if (!knownPrimaryTopics().has(metadataFilters.primary_topic)) {
+      throw contractError(
+        "UNKNOWN_PRIMARY_TOPIC_FILTER",
+        `UNKNOWN_PRIMARY_TOPIC_FILTER: "${metadataFilters.primary_topic}" is not a primary topic the index can carry`,
+      );
+    }
   }
 
   return {
