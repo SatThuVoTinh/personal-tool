@@ -108,7 +108,8 @@ Phải tuân thủ schema JSON đóng với đúng 5 trường gốc sau:
   - `[CANDIDATE, ACTIVE, DEPRECATED]`: phiên bản cũ không còn khuyến nghị.
   - `[CANDIDATE, REJECTED]`: đề xuất bị từ chối, không bao giờ thành ACTIVE.
   - Mọi sự kiện từ `ACTIVE` trở đi bắt buộc có `decision_ref` dạng
-    `PLAN:M../T..-R..`.
+    `PLAN:M../T..-R..` (task id có thể có phần nhánh dấu chấm, ví dụ
+    `PLAN:M12/T2.2-R3` — đúng dạng id mà `PLAN.md` dùng).
 
 ---
 
@@ -161,11 +162,17 @@ Chạy công cụ CLI để xác nhận toàn bộ catalog hợp lệ:
 node zink-skill-store/bin/skill-store.mjs validate
 ```
 
-Nếu thành công, màn hình sẽ in ra:
+Nếu thành công, màn hình sẽ in ra đúng một dòng JSON:
 
 ```json
-{ "status": "valid", "manifest_count": 1 }
+{ "status": "valid", "manifest_count": 0 }
 ```
+
+`manifest_count` là số bản ghi `manifest.json` đang có trong cây `skills/`.
+Cây `skills/` được theo dõi trong repository này hiện chỉ chứa `README.md`,
+nên số đó là `0` cho tới khi có promotion đầu tiên được owner phê duyệt; khi
+cây đã có kỹ năng, số sẽ bằng số bản ghi thật. Lệnh `validate` không mở cổng
+mạng và không ghi gì vào đĩa.
 
 Catalog fail-closed: một bản ghi lỗi làm toàn bộ catalog không hợp lệ, kể cả
 các bản ghi đúng khác — không có chế độ "đọc được phần đúng".
@@ -190,10 +197,14 @@ Công cụ CLI tại `bin/skill-store.mjs` trả về mã thoát (exit code) chu
 | Mã thoát | Tên trạng thái           | Ý nghĩa                                                                             | Xử lý                                                                          |
 | :------: | ------------------------ | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
 | **`0`**  | `SUCCESS`                | Lệnh thực thi thành công hoàn toàn                                                  | Tiếp tục quy trình                                                             |
-| **`1`**  | `OPERATIONAL_FAILURE`    | Lỗi hệ thống ngoại lệ ngoài dự kiến                                                 | Kiểm tra quyền truy cập đĩa hoặc Node.js runtime                               |
-| **`2`**  | `CATALOG_ERROR`          | Lỗi cú pháp JSON, sai schema manifest, sai mã băm SHA-256, hoặc trùng lặp phiên bản | Đọc thông báo chi tiết trong `stderr` và sửa lại manifest/hash                 |
+| **`1`**  | `OPERATIONAL_FAILURE`    | Lệnh thất bại ngoài dự kiến; `stderr` nêu đúng mã lý do trong `error.code`          | Đọc `error.code` và `error.details` trong `stderr` rồi xử lý theo mã đó        |
+| **`2`**  | `CATALOG_INVALID`        | Lỗi cú pháp JSON, sai schema manifest, sai mã băm SHA-256, hoặc trùng lặp phiên bản | Đọc thông báo chi tiết trong `stderr` và sửa lại manifest/hash                 |
 | **`3`**  | `ACTIVE_SKILL_NOT_FOUND` | Không tìm thấy kỹ năng có trạng thái `ACTIVE` tương ứng                             | Kiểm tra lại cờ `--namespace`, `--capability` hoặc đặt `status` thành `ACTIVE` |
 | **`4`**  | `CLI_INPUT_INVALID`      | Tham số dòng lệnh không đúng định dạng slug hoặc thiếu cờ                           | Kiểm tra lại cú pháp gọi lệnh CLI                                              |
+
+Mã trong cột "Tên trạng thái" là mã **thật** do CLI phát ra trong `stderr`
+(dưới dạng `{"error":{"code":...,"message":...,"details":[...]}}`), nên có thể
+phân biệt bằng máy mà không phải đọc lời giải thích.
 
 ---
 
@@ -213,9 +224,37 @@ Các mẫu báo cáo chuẩn lưu trữ tại `templates/`:
 
 ## 7. Xử lý Sự cố Thường Gặp (Troubleshooting)
 
-| Vấn đề                                              | Nguyên nhân                                                                           | Cách khắc phục                                                                                                                                                                  |
-| --------------------------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Lệnh `validate` trả về mã 2 kèm lỗi digest mismatch | Tệp `SKILL.md` đã bị chỉnh sửa sau khi tạo manifest                                   | Không tự sửa hash để "khớp": nội dung chuẩn tắc chỉ thay đổi qua promotion được phê duyệt; kiểm tra vòng đời và nguồn gốc bản ghi. Chú ý định dạng mã hóa UTF-8 (không có BOM). |
-| Lệnh `get` trả về `ACTIVE_SKILL_NOT_FOUND` (mã 3)   | Kỹ năng có tồn tại nhưng đang ở trạng thái `CANDIDATE`/`REJECTED` hoặc catalog có lỗi | Đề xuất `CANDIDATE` phải qua phê duyệt chủ sở hữu mới thành `ACTIVE`; bản ghi `REJECTED` không bao giờ thành `ACTIVE`. Kiểm tra lại cờ `--namespace`, `--capability`.           |
-| Lỗi `CLI_INPUT_INVALID` (mã 4)                      | Tên namespace hoặc capability chứa chữ in hoa hoặc ký tự `_`                          | Đổi tên thư mục và tham số sang chữ thường, dùng dấu gạch ngang `-` (vd: `supply-chain` thay vì `SupplyChain` hay `supply_chain`).                                              |
-| Lỗi trùng lặp phiên bản (`DUPLICATE_VERSION`)       | Có 2 thư mục kỹ năng cùng khai báo một phiên bản                                      | Đảm bảo mỗi phiên bản là duy nhất trong cùng một capability.                                                                                                                    |
+| Vấn đề                                                                                         | Nguyên nhân                                                                               | Cách khắc phục                                                                                                                                                                  |
+| ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Lệnh `validate` trả về mã 2 kèm lỗi digest mismatch                                            | Tệp `SKILL.md` đã bị chỉnh sửa sau khi tạo manifest                                       | Không tự sửa hash để "khớp": nội dung chuẩn tắc chỉ thay đổi qua promotion được phê duyệt; kiểm tra vòng đời và nguồn gốc bản ghi. Chú ý định dạng mã hóa UTF-8 (không có BOM). |
+| Lệnh `get` trả về `ACTIVE_SKILL_NOT_FOUND` (mã 3)                                              | Kỹ năng có tồn tại nhưng đang ở trạng thái `CANDIDATE`/`REJECTED` hoặc catalog có lỗi     | Đề xuất `CANDIDATE` phải qua phê duyệt chủ sở hữu mới thành `ACTIVE`; bản ghi `REJECTED` không bao giờ thành `ACTIVE`. Kiểm tra lại cờ `--namespace`, `--capability`.           |
+| Lỗi `CLI_INPUT_INVALID` (mã 4)                                                                 | Tên namespace hoặc capability chứa chữ in hoa hoặc ký tự `_`                              | Đổi tên thư mục và tham số sang chữ thường, dùng dấu gạch ngang `-` (vd: `supply-chain` thay vì `SupplyChain` hay `supply_chain`).                                              |
+| Lỗi trùng lặp phiên bản (`MULTIPLE_ACTIVE_VERSIONS` khi đọc, `SKILL_VERSION_CONFLICT` khi ghi) | Có 2 thư mục kỹ năng cùng khai báo một phiên bản `ACTIVE` cho cùng namespace + capability | Đảm bảo mỗi phiên bản là duy nhất trong cùng một capability; writer sẽ từ chối (`SKILL_VERSION_CONFLICT`) trước khi tạo ra trạng thái đó.                                       |
+
+---
+
+## 8. Khôi phục lock ghi của kho kỹ năng (Operator lock recovery)
+
+Skill Store dùng một writer lock riêng, đặt **cạnh** cây `skills/` (không
+phải bên trong), và đặt tên theo cây nó bảo vệ. Khi một tiến trình bị giết
+giữa chừng, thư mục lock còn lại và mọi lần promotion sau đó đều thất bại
+fail-closed cho tới khi có người dọn.
+
+Công cụ dưới đây là hành động vận hành đó, ở chế độ **chỉ đọc** mặc định:
+
+```powershell
+node zink-skill-store/bin/skill-store-lock-recovery.mjs --root <đường-dẫn-tuyệt-đối-tới-skills>
+```
+
+Nó in ra một dòng JSON gồm các thông tin suy ra được (lock có tồn tại, pid của
+holder, holder còn sống hay không, các mục lạ trong thư mục lock) và **không
+xoá gì cả**. Muốn dọn lock bị bỏ rơi, phải chứng minh holder đã chết và phải
+gõ xác nhận:
+
+```powershell
+node zink-skill-store/bin/skill-store-lock-recovery.mjs --root <đường-dẫn> --recover --confirm=ORPHAN_LOCK_RECOVERY
+```
+
+Các trường hợp bị **từ chối** (không xoá gì): holder còn đang chạy, bản ghi
+owner không đọc được hoặc sai dạng, thư mục lock có mục lạ, hoặc thiếu xác
+nhận. Đây là các quy tắc giống hệt công cụ khôi phục lock của ledger.

@@ -588,6 +588,166 @@ test("fails closed when another catalog record is invalid", async () => {
   });
 });
 
+// M12/T9-R1 F-358 — the module README must not document vocabularies the
+// shipped code does not define.
+//
+// The README named `DUPLICATE_VERSION` (no shipped file raises it: the reader
+// raises `MULTIPLE_ACTIVE_VERSIONS` and the writer raises
+// `SKILL_VERSION_CONFLICT`) and `CATALOG_ERROR` (the CLI answers
+// `CATALOG_INVALID`), and its `validate` example could not occur on the
+// tracked tree. A reader who copied any of it got an error message naming
+// something the code never says.
+//
+// The lane below makes the README checkable: every error name it documents
+// must exist in the shipped code, and the documented output must be the
+// output the CLI really prints.
+// M12/T9-R1 F-067 — the Skill Store ships its own guarded lock recovery.
+//
+// The operator tool that exists today recovers ONE governed lock root (the
+// ledger's `writer.lock`). The Skill Store's writer lock is a DIFFERENT root,
+// so a stranded one froze every later promotion with `FILE_LOCK_TIMEOUT` and
+// no operator action could clear it.
+//
+// The guard is the point: a LIVE holder is refused, an unreadable owner
+// record is inspected rather than reclaimed, a stray entry is refused, and
+// nothing is removed without the typed confirmation.
+test("the Skill Store's own lock recovery is guarded", async () => {
+  await temporaryStore(async (root) => {
+    const lockDir = skillStoreWriterLockDir(root);
+    mkdirSync(lockDir, { recursive: true });
+
+    // (1) A lock held by a LIVE process (this test) is never reclaimed.
+    writeFileSync(
+      path.join(lockDir, "owner.json"),
+      JSON.stringify({ pid: process.pid, token: "a".repeat(32) }),
+    );
+    const live = recoverSkillStoreLock({ root });
+    assert.equal(live.exitCode, 1);
+    assert.equal(live.report.action, "REFUSED_LIVE_HOLDER");
+    assert.equal(live.report.holder_alive, true);
+    assert.equal(live.report.recovered, false);
+    assert.ok(existsSync(lockDir), "a live holder's lock must survive");
+
+    // (2) A lock whose holder is gone is reported, read-only by default.
+    writeFileSync(
+      path.join(lockDir, "owner.json"),
+      JSON.stringify({ pid: 2147483646, token: "b".repeat(32) }),
+    );
+    const reported = recoverSkillStoreLock({ root });
+    assert.equal(reported.exitCode, 0);
+    assert.equal(reported.report.action, "REPORT");
+    assert.equal(reported.report.holder_alive, false);
+    assert.equal(reported.report.mutated, false);
+    assert.ok(existsSync(lockDir), "the default mode must not remove anything");
+
+    // (3) Recovery without the typed confirmation is refused.
+    const unconfirmed = recoverSkillStoreLock({ root, recover: true });
+    assert.equal(unconfirmed.exitCode, 1);
+    assert.equal(unconfirmed.report.action, "REFUSED_UNCONFIRMED");
+    assert.ok(
+      existsSync(lockDir),
+      "an unconfirmed recovery must change nothing",
+    );
+
+    // (4) Recovery WITH the confirmation clears the stranded lock.
+    const recovered = recoverSkillStoreLock({
+      root,
+      recover: true,
+      confirm: "ORPHAN_LOCK_RECOVERY",
+    });
+    assert.equal(recovered.exitCode, 0);
+    assert.equal(recovered.report.action, "RECOVERED");
+    assert.equal(recovered.report.recovered, true);
+    assert.equal(existsSync(lockDir), false);
+
+    // (5) A lock with an unreadable owner record is inspected, not reclaimed.
+    mkdirSync(lockDir, { recursive: true });
+    writeFileSync(path.join(lockDir, "owner.json"), "not json");
+    const malformed = recoverSkillStoreLock({
+      root,
+      recover: true,
+      confirm: "ORPHAN_LOCK_RECOVERY",
+    });
+    assert.equal(malformed.exitCode, 1);
+    assert.equal(malformed.report.action, "INSPECT");
+    assert.equal(malformed.report.reason, "OWNER_ENTRY_UNREADABLE");
+    assert.ok(existsSync(lockDir), "an unverifiable lock must survive");
+
+    // (6) A stray entry in the lock directory is refused.
+    writeFileSync(
+      path.join(lockDir, "owner.json"),
+      JSON.stringify({ pid: 2147483646, token: "c".repeat(32) }),
+    );
+    writeFileSync(path.join(lockDir, "stray.txt"), "stray");
+    const stray = recoverSkillStoreLock({
+      root,
+      recover: true,
+      confirm: "ORPHAN_LOCK_RECOVERY",
+    });
+    assert.equal(stray.exitCode, 1);
+    assert.equal(stray.report.action, "INSPECT");
+    assert.equal(stray.report.reason, "STRAY_LOCK_ENTRY");
+    assert.ok(existsSync(lockDir), "a lock with a stray entry must survive");
+  });
+});
+
+test("the documented error names and the documented output match the shipped code", async () => {
+  const readme = readFileSync(
+    new URL("../zink-skill-store/README.md", import.meta.url),
+    "utf8",
+  );
+  const shipped = [
+    "../zink-skill-store/src/catalog.mjs",
+    "../zink-skill-store/src/vector-sync.mjs",
+    "../zink-skill-store/bin/skill-store.mjs",
+  ]
+    .map((rel) => readFileSync(new URL(rel, import.meta.url), "utf8"))
+    .join("\n");
+
+  // (1) Every error/identifier name the README documents must be defined by
+  // the shipped code.
+  const documented = [
+    ...readme.matchAll(/`([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)`/gu),
+  ].map((match) => match[1]);
+  assert.ok(
+    documented.length > 0,
+    "the README must document at least one error name",
+  );
+  for (const name of new Set(documented)) {
+    assert.ok(
+      shipped.includes(name),
+      `the README documents ${name}, which no shipped file defines`,
+    );
+  }
+
+  // (2) The documented `validate` output must be the output the CLI prints.
+  // The blocks are compared as parsed JSON, so the README's formatting (and
+  // the formatter's) cannot make the comparison drift.
+  const documentedOutput = [...readme.matchAll(/```json\n([\s\S]*?)\n```/gu)]
+    .map((match) => JSON.parse(match[1]))
+    .find((value) => value && "manifest_count" in value);
+  assert.ok(
+    documentedOutput,
+    "the README must document the validate output in a json block",
+  );
+  await temporaryStore(async (root) => {
+    const result = await executeCli(["validate"], root);
+    assert.deepEqual(JSON.parse(result.stdout), documentedOutput);
+  });
+
+  // (3) The documented exit codes must be the ones the CLI can return.
+  const table = readme.slice(
+    readme.indexOf("## 5. Chi tiết Lệnh CLI"),
+    readme.indexOf("## 6. Quản trị"),
+  );
+  for (const exitCode of ["0", "1", "2", "3", "4"]) {
+    assert.ok(
+      table.includes(`**\`${exitCode}\`**`),
+      `the exit-code table must document exit code ${exitCode}`,
+    );
+  }
+});
+
 test("enforces CLI exit codes and output channels", async () => {
   await temporaryStore(async (root) => {
     const invalid = await executeCli(["validate", "extra"], root);
