@@ -404,6 +404,23 @@ export function validateContractSchema(schemaName, value, maxBytes) {
   return true;
 }
 
+/**
+ * M12/T9 F-128: the version a contract PUBLISHES, derived the same way for
+ * every contract.
+ *
+ * The manifest used to print the literal "1.0.0" for every contract that
+ * carried no version marker, so a contract edited without its marker still
+ * reported the same version and only the hash moved. A contract that declares
+ * no version now reports "unknown" — never a fabricated one.
+ */
+function readContractVersion(parsed) {
+  const declared = parsed?.["x-zink-contract-version"] ?? parsed?.version;
+  if (typeof declared !== "string" || declared.trim().length === 0) {
+    return "unknown";
+  }
+  return declared.trim();
+}
+
 export function generateSchemaManifest() {
   const manifest = {
     version: "1.0.0",
@@ -425,7 +442,7 @@ export function generateSchemaManifest() {
       file: `${name}.schema.json`,
       hash,
       title: parsed.title || name,
-      version: parsed["x-zink-contract-version"] || parsed.version || "1.0.0",
+      version: readContractVersion(parsed),
     };
   }
   for (const name of CANONICAL_TOOL_CONTRACTS) {
