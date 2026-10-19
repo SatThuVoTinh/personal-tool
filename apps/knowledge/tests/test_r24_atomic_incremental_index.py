@@ -21,10 +21,24 @@ from app.database import (
 
 
 class _Transaction:
+    """A transaction stand-in that RECORDS that it is open.
+
+    F-311 (R7-E2-01): the stand-in entered and exited without recording
+    anything, so the property the module docstring names as the point of
+    the whole suite -- the stale, superseded, active and cleanup statements
+    all committing as one unit -- was unobservable, and replacing the
+    production transaction context left the suite green.
+    """
+
+    def __init__(self, connection: "FakeConnection") -> None:
+        self._connection = connection
+
     async def __aenter__(self) -> "_Transaction":
+        self._connection.transaction_depth += 1
         return self
 
     async def __aexit__(self, *exc: object) -> bool:
+        self._connection.transaction_depth -= 1
         return False
 
 
@@ -39,29 +53,37 @@ class FakeConnection:
         self.fetchrows = fetchrows or []
         self.fetches = fetches or []
         self.calls: list[tuple[str, str, tuple[object, ...]]] = []
+        # F-311 (R7-E2-01): the transaction depth every call was issued at,
+        # recorded beside the call itself.
+        self.transaction_depth = 0
+        self.call_depths: list[int] = []
 
     def is_closed(self) -> bool:
         return False
 
     def transaction(self) -> _Transaction:
-        return _Transaction()
+        return _Transaction(self)
+
+    def _record(self, verb: str, sql: str, args: tuple[object, ...]) -> None:
+        self.calls.append((verb, " ".join(sql.split()), args))
+        self.call_depths.append(self.transaction_depth)
 
     async def execute(self, sql: str, *args: object) -> None:
-        self.calls.append(("execute", " ".join(sql.split()), args))
+        self._record("execute", sql, args)
 
     async def executemany(self, sql: str, values: object) -> None:
-        self.calls.append(("executemany", " ".join(sql.split()), (values,)))
+        self._record("executemany", sql, (values,))
 
     async def fetchval(self, sql: str, *args: object) -> object:
-        self.calls.append(("fetchval", " ".join(sql.split()), args))
+        self._record("fetchval", sql, args)
         return self.fetchvals.pop(0)
 
     async def fetchrow(self, sql: str, *args: object) -> object:
-        self.calls.append(("fetchrow", " ".join(sql.split()), args))
+        self._record("fetchrow", sql, args)
         return self.fetchrows.pop(0)
 
     async def fetch(self, sql: str, *args: object) -> object:
-        self.calls.append(("fetch", " ".join(sql.split()), args))
+        self._record("fetch", sql, args)
         return self.fetches.pop(0)
 
 
@@ -184,6 +206,32 @@ class ShadowPublishTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(lock)
         activate = sql_for(connection, "fetchval", "WHERE id = $1 AND status = 'BUILDING'")
         self.assertEqual(activate[0][1], (UUID(run.index_id),))
+
+    async def test_every_statement_of_the_swap_ran_inside_the_transaction(self) -> None:
+        """F-311 (R7-E2-01): the atomicity property must be observable.
+
+        The fake recorded no transaction event, so replacing the production
+        transaction context with a plain connection left the suite green:
+        a crash between the supersede and the active write could leave two
+        active indexes.
+        """
+
+        run = self._run()
+        superseded = uuid4()
+        connection = FakeConnection(
+            fetchvals=["BUILDING", uuid4(), superseded],
+            fetchrows=[self._state_row(run)],
+            fetches=[[], [{"id": superseded}]],
+        )
+        database = database_with(connection)
+
+        await database.complete_incremental(run, 3, 2, {"01. Knowledge/AI/removed.md"})
+
+        self.assertTrue(connection.calls)
+        for depth in connection.call_depths:
+            self.assertGreater(
+                depth, 0, "every statement of the swap must run inside the transaction"
+            )
 
     async def test_publish_aborts_when_shadow_cannot_activate(self) -> None:
         run = self._run()
