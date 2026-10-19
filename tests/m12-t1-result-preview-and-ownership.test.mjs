@@ -261,6 +261,51 @@ describe("M12/T1 P4 — the executing specialist may report its own task", () =>
     );
   });
 
+  it("admits a task that is active but already claimed, and the admitted set is the production's own", () => {
+    // M12/T9 F-316: the rule admits three situations, but the claimed-active
+    // clause appeared in the fixtures ONLY as a denial built without the claim
+    // timestamp, so the clause was never exercised and deleting it changed
+    // nothing. This is the executed positive case for it.
+    const admitted = evaluateSpecialistProvenance({
+      agentId: "excel",
+      task: {
+        task_id: "13102026CDEF",
+        approved_at: "2026-10-13T03:00:00.000Z",
+        claimed_at: "2026-10-13T03:01:00.000Z",
+        workflow_status: "ACTIVE",
+      },
+      delegationAgentId: "excel",
+    });
+    assert.deepEqual(admitted, { allowed: true, taskId: "13102026CDEF" });
+
+    // And the status matrix is asserted EQUAL to the production's own
+    // vocabulary: the admitted set is derived from the rule itself, so a
+    // change to the rule reddens this assertion instead of passing silently.
+    const admittedStatuses = [
+      "ACTIVE",
+      "COMPLETE",
+      "EXECUTING",
+      "RESULT_PENDING_REVIEW",
+      "REJECTED",
+    ].filter(
+      (status) =>
+        evaluateSpecialistProvenance({
+          agentId: "excel",
+          task: {
+            task_id: "13102026CDEF",
+            approved_at: "2026-10-13T03:00:00.000Z",
+            claimed_at: "2026-10-13T03:01:00.000Z",
+            workflow_status: status,
+          },
+        }).allowed,
+    );
+    assert.deepEqual(
+      admittedStatuses,
+      ["ACTIVE", "EXECUTING", "RESULT_PENDING_REVIEW"],
+      "the admitted status set must be the production's own vocabulary",
+    );
+  });
+
   it("still blocks everything that is not its own approved running work", () => {
     const cases = [
       [{ agentId: "excel", task: null }, "TASK_NOT_KNOWN"],
