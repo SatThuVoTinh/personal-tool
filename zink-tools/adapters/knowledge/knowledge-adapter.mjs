@@ -291,11 +291,15 @@ export class KnowledgeAdapter {
             reqHeaders["Content-Length"] = Buffer.byteLength(requestPayload);
           }
 
-          // M07: Auth binding
-          const apiKey =
-            this.options.apiKey ||
-            input.api_key ||
-            process.env.KNOWLEDGE_API_KEY;
+          // M07: Auth binding.
+          //
+          // F-029 (R1-A10-04): the bearer token came from
+          // `this.options.apiKey || input.api_key || env`, so a model-supplied
+          // `api_key` in the tool payload became the credential on the only
+          // outbound internal-service call this adapter makes. The token is
+          // now the governance-supplied one (the adapter's own option) or the
+          // operator's environment; the payload never supplies it.
+          const apiKey = this.options.apiKey || process.env.KNOWLEDGE_API_KEY;
           if (apiKey) {
             reqHeaders["Authorization"] = `Bearer ${apiKey}`;
           }
