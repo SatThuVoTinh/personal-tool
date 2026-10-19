@@ -230,6 +230,62 @@ export function chunkSkillContent(rawContent) {
 }
 
 /**
+ * A dollar-quote tag that cannot occur in `text`.
+ *
+ * PostgreSQL ends a dollar-quoted string at the first matching tag, so a
+ * `DO $$ ... $$` body that carried an untrusted `$$` — a skill body, a
+ * failure reason — was truncated before psql had finished reading it, and the
+ * statement was rejected as a syntax error instead of doing its work. The
+ * tag below is derived from the text itself and grows until it cannot be a
+ * substring of it, so the body always closes exactly where it should.
+ */
+export function dollarQuoteTag(text) {
+  const source = String(text ?? "");
+  let tag = "$zink";
+  while (source.includes(`${tag}$`)) tag = `${tag}z`;
+  return `${tag}$`;
+}
+
+/**
+ * M12/T9-R1 F-054: the docker container name.
+ *
+ * The name reaches `docker exec` as an argv token, where a leading `--` is
+ * parsed by docker as its own option rather than as the container name. It
+ * comes from the environment (or from caller options), so it is checked
+ * BEFORE the spawn: an invalid name is refused, not handed to docker.
+ *
+ * Docker's own container-name grammar is `[a-zA-Z0-9][a-zA-Z0-9_.-]*`; the
+ * value is not echoed in the refusal, because an environment value that
+ * failed this check may be something else entirely.
+ */
+const CONTAINER_NAME = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/;
+
+export function validatePostgresContainerName(name) {
+  if (typeof name !== "string" || !CONTAINER_NAME.test(name)) {
+    throw new Error(
+      "POSTGRES_CONTAINER_INVALID: the PostgreSQL container name is not a valid container name.",
+    );
+  }
+  return name;
+}
+
+/**
+ * M12/T9-R1 F-054: the SERVER-side bound of a query.
+ *
+ * Killing the `docker exec` client does not stop the query: psql is already
+ * inside the container, and the server-side statement keeps running after the
+ * client has reported `DB_TIMEOUT`. The advertised deadline was therefore a
+ * client-side illusion. `statement_timeout` is the server's own bound — it
+ * cancels the running statement — so the deadline now holds where the work
+ * actually happens.
+ */
+export function withServerSideTimeout(sql, timeoutMs) {
+  const bounded =
+    Number.isSafeInteger(timeoutMs) && timeoutMs > 0 ? timeoutMs : 30000;
+  return `SET statement_timeout = ${bounded};\n${sql}`;
+}
+
+/**
  * Executes a PostgreSQL command via docker exec or custom query executor (L07, L08, L09).
  */
 export async function executePostgresQuery(sql, options = {}) {
@@ -315,6 +371,15 @@ export async function executePostgresQuery(sql, options = {}) {
         clearTimeout(timer);
         if (code === 0) {
           resolve(stdout.trim());
+        } else if (
+          /statement timeout|canceling statement due to/u.test(stderr)
+        ) {
+          // F-054: the server cancelled the statement at its own deadline.
+          // The caller must see the same class of failure as the client-side
+          // timeout, not a generic database error it cannot classify.
+          reject(
+            new Error(`DB_TIMEOUT: Database query exceeded ${dbTimeoutMs}ms`),
+          );
         } else {
           reject(
             new Error(`Database error (code ${code}): ${stderr || stdout}`),
