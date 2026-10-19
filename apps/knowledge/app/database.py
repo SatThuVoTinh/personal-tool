@@ -431,12 +431,21 @@ class KnowledgeDatabase:
         request_path = resolved / "request"
         if request_path.is_symlink() or not request_path.is_file():
             raise RuntimeError("Invalid acceptance backup barrier request.")
-        token = request_path.read_text(encoding="ascii").strip()
+        # F-189 (R5-E16-04): the barrier polled its continuation file with
+        # SYNCHRONOUS reads inside an `async def`, up to ten times a second
+        # for up to ten minutes, on the one event loop that also serves
+        # `/search`. Every file operation is now off the loop, so a barrier in
+        # flight leaves the loop free to serve a request.
+        token = await asyncio.to_thread(request_path.read_text, encoding="ascii")
+        token = token.strip()
         if not re.fullmatch(r"[a-f0-9]{64}", token):
             raise RuntimeError("Invalid acceptance backup barrier request.")
         snapshot_path = resolved / "snapshot.json"
         continue_path = resolved / "continue"
-        if snapshot_path.exists() or continue_path.exists():
+        completed_path = resolved / "completed"
+        if await asyncio.to_thread(snapshot_path.exists) or await asyncio.to_thread(
+            continue_path.exists
+        ):
             raise RuntimeError("Acceptance backup barrier state is not clean.")
 
         async with connection.transaction(isolation="repeatable_read", readonly=True):
@@ -485,41 +494,73 @@ class KnowledgeDatabase:
                 "database": dict(database_identity),
                 "extensions": extensions,
             }
-            descriptor = os.open(
-                snapshot_path,
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
-                0o600,
+            await asyncio.to_thread(
+                self._write_barrier_snapshot, snapshot_path, payload
             )
-            try:
-                with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-                    json.dump(payload, stream, sort_keys=True, separators=(",", ":"))
-                    stream.flush()
-                    os.fsync(stream.fileno())
-            finally:
-                if not snapshot_path.exists():
-                    raise RuntimeError("Acceptance backup snapshot was not persisted.")
 
             deadline = asyncio.get_running_loop().time() + 600
-            while True:
-                if continue_path.exists():
-                    if continue_path.is_symlink() or not continue_path.is_file():
-                        raise RuntimeError("Invalid acceptance backup continuation state.")
-                    if continue_path.read_text(encoding="ascii").strip() != token:
-                        raise RuntimeError("Invalid acceptance backup continuation token.")
-                    completed_path = resolved / "completed"
-                    descriptor = os.open(
-                        completed_path,
-                        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
-                        0o600,
-                    )
-                    with os.fdopen(descriptor, "w", encoding="ascii") as stream:
-                        stream.write(token)
-                        stream.flush()
-                        os.fsync(stream.fileno())
-                    break
-                if asyncio.get_running_loop().time() >= deadline:
-                    raise TimeoutError("Acceptance backup barrier timed out.")
-                await asyncio.sleep(0.1)
+            await self._await_backup_barrier_continuation(resolved, token, deadline)
+
+    async def _await_backup_barrier_continuation(
+        self, resolved: Path, token: str, deadline: float
+    ) -> None:
+        """Wait for the continuation file, off the event loop.
+
+        F-189 (R5-E16-04): the wait polled the continuation file with
+        SYNCHRONOUS reads inside an `async def`, up to ten times a second
+        for up to ten minutes, on the one event loop that also serves
+        `/search`. Every file operation is dispatched to a worker thread,
+        so a barrier in flight leaves the loop free to serve a request.
+        """
+
+        continue_path = resolved / "continue"
+        completed_path = resolved / "completed"
+        while True:
+            if await asyncio.to_thread(continue_path.exists):
+                if await asyncio.to_thread(
+                    continue_path.is_symlink
+                ) or not await asyncio.to_thread(continue_path.is_file):
+                    raise RuntimeError("Invalid acceptance backup continuation state.")
+                continuation = await asyncio.to_thread(
+                    continue_path.read_text, encoding="ascii"
+                )
+                if continuation.strip() != token:
+                    raise RuntimeError("Invalid acceptance backup continuation token.")
+                await asyncio.to_thread(
+                    self._write_barrier_completion, completed_path, token
+                )
+                return
+            if asyncio.get_running_loop().time() >= deadline:
+                raise TimeoutError("Acceptance backup barrier timed out.")
+            await asyncio.sleep(0.1)
+
+    @staticmethod
+    def _write_barrier_snapshot(snapshot_path: Path, payload: dict[str, object]) -> None:
+        descriptor = os.open(
+            snapshot_path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                json.dump(payload, stream, sort_keys=True, separators=(",", ":"))
+                stream.flush()
+                os.fsync(stream.fileno())
+        finally:
+            if not snapshot_path.exists():
+                raise RuntimeError("Acceptance backup snapshot was not persisted.")
+
+    @staticmethod
+    def _write_barrier_completion(completed_path: Path, token: str) -> None:
+        descriptor = os.open(
+            completed_path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+        with os.fdopen(descriptor, "w", encoding="ascii") as stream:
+            stream.write(token)
+            stream.flush()
+            os.fsync(stream.fileno())
 
     def bind_owner_connection(self, connection: asyncpg.Connection) -> None:
         """Route run-state mutations through the session that owns the lock."""
