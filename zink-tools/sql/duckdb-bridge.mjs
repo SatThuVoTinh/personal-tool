@@ -13,6 +13,11 @@ export const DUCKDB_MAX_TIMEOUT_MS = 30000;
 export const DUCKDB_DEFAULT_MAX_ROWS = 100;
 export const DUCKDB_MAX_ROWS_CEILING = 1000;
 
+// F-186 (R5-E06-06): the engine child's stdio bound is an explicit, repo-owned
+// ceiling instead of Node's 1 MiB default, which turned an ordinary wide result
+// into spawnSync's ENOBUFS.
+export const DUCKDB_MAX_STDIO_BYTES = 8 * 1024 * 1024;
+
 export const ALLOWLISTED_DATABASES = Object.freeze([
   "knowledge",
   "analytics_read",
@@ -413,6 +418,18 @@ export async function executeGovernedDuckDbQuery(context, input, options = {}) {
     Number(options.timeoutMs) || DUCKDB_DEFAULT_TIMEOUT_MS,
     DUCKDB_MAX_TIMEOUT_MS,
   );
+  // F-186 (R5-E06-06): a repo-owned stdio bound, so a buffer overrun means the
+  // result genuinely exceeded a declared ceiling rather than silently tripping
+  // Node's 1 MiB default.
+  const maxBuffer =
+    Number(options.maxBuffer) > 0
+      ? Number(options.maxBuffer)
+      : DUCKDB_MAX_STDIO_BYTES;
+
+  // 5b. F-117 (R5-E06-05): bind the declared parameters into the statement. The
+  // validator has already required exact placeholder/parameter set equality, so
+  // every `:name` in the query has a value here.
+  const boundQuery = bindParameters(input.query, input.parameters || []);
 
   // 6. Execute bounded query (in contract/mock mode or via direct engine)
   if (options.simulateTimeout) {
@@ -522,9 +539,20 @@ export async function executeGovernedDuckDbQuery(context, input, options = {}) {
     });
   }
 
-  const sliced = parsedRows.slice(0, maxRows);
-  const columns = Object.keys(sliced[0]);
-  const rows = sliced.map((item) => Object.values(item));
+  // F-186 (R5-E06-06): measured at HEAD, `parsedRows.slice(0, maxRows)` returned
+  // the first max_rows rows with `row_count` equal to that page, so a caller
+  // could not tell "2 rows total" from "1 of 2 shown" and the model asserted the
+  // page was the table. The ceiling is now enforced instead of applied
+  // silently: a returned result is always the whole result.
+  if (parsedRows.length > maxRows) {
+    throw new DuckDbBridgeError(
+      "DUCKDB_RESULT_LIMIT_EXCEEDED",
+      `Query produced ${parsedRows.length} rows, above max_rows ${maxRows}; add a LIMIT to the query or raise max_rows.`,
+    );
+  }
+
+  const columns = Object.keys(parsedRows[0]);
+  const rows = parsedRows.map((item) => Object.values(item));
 
   return Object.freeze({
     execution_state: "FIXTURE_CONTRACT_EXECUTED",
