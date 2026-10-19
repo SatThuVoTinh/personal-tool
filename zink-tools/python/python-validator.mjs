@@ -53,11 +53,80 @@ const FILE_IO_MODULES = new Set([
 ]);
 
 // ---------------------------------------------------------------------------
+// Deny rules (F-236 / R7-D5-02)
+// ---------------------------------------------------------------------------
+
+/**
+ * The constructs a governed Python artifact must not contain.
+ *
+ * Measured at HEAD: `validatePythonFileContent` was a regex line/classifier
+ * that counted definitions, classes and imports and tagged the imported
+ * modules. It had no deny rule and returned no violation field, so nothing it
+ * observed could be refused, while the README and the CHANGELOG published it
+ * as the AST safety gate for `zink_python`.
+ *
+ * These rules are the observable half of that gate: each one is a construct
+ * the summariser can see without executing anything, and each one is reported
+ * with the line it was seen on so a caller can refuse the file.
+ */
+export const PYTHON_DENY_RULES = Object.freeze([
+  {
+    rule: "PYTHON_EXEC",
+    description: "exec() executes arbitrary code at runtime.",
+    pattern: /(^|[^.\w])exec\s*\(/,
+  },
+  {
+    rule: "PYTHON_EVAL",
+    description: "eval() executes arbitrary code at runtime.",
+    pattern: /(^|[^.\w])eval\s*\(/,
+  },
+  {
+    rule: "PYTHON_OS_SYSTEM",
+    description: "os.system() runs a host command.",
+    pattern: /\bos\s*\.\s*system\s*\(/,
+  },
+  {
+    rule: "PYTHON_SUBPROCESS",
+    description: "the subprocess module runs a host command.",
+    pattern: /(^|[^.\w])subprocess\b/,
+  },
+  {
+    rule: "PYTHON_OPEN",
+    description: "open() reaches the host filesystem.",
+    pattern: /(^|[^.\w])open\s*\(/,
+  },
+]);
+
+/**
+ * The deny rules a piece of Python content violates.
+ *
+ * @param {string} content
+ * @returns {Array<{rule: string, description: string, line: number}>}
+ */
+export function findPythonViolations(content) {
+  if (typeof content !== "string") return [];
+  const lines = content.split(/\r?\n/);
+  const violations = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    for (const { rule, description, pattern } of PYTHON_DENY_RULES) {
+      if (pattern.test(line)) {
+        violations.push({ rule, description, line: index + 1 });
+      }
+    }
+  }
+  return violations;
+}
+
+// ---------------------------------------------------------------------------
 // Main API
 // ---------------------------------------------------------------------------
 
 /**
  * Statically analyzes the content of a Python script file.
+ *
+ * F-236 (R7-D5-02): the analysis now carries a violation set, so the
+ * observations it makes can be refused instead of only described.
  *
  * @param {string} content - Raw Python file content
  * @returns {{
@@ -72,6 +141,7 @@ const FILE_IO_MODULES = new Set([
  *   fileIoModules: string[],
  *   hasMainBlock: boolean,
  *   firstLines: string[],
+ *   violations: Array<{rule: string, description: string, line: number}>,
  * }}
  */
 export function validatePythonFileContent(content) {
@@ -128,7 +198,29 @@ export function validatePythonFileContent(content) {
     fileIoModules,
     hasMainBlock,
     firstLines: nonEmpty.slice(0, 10),
+    // F-236 (R7-D5-02): the deny rules the summary observed, reported with
+    // the line each was seen on.
+    violations: findPythonViolations(content),
   };
+}
+
+/**
+ * F-236 (R7-D5-02): refuses a Python file that violates a deny rule.
+ *
+ * The summariser itself never throws on a violation, because a preview of a
+ * refused file is still useful to an operator. This is the refusal the
+ * governed path calls.
+ *
+ * @param {string} content - Raw Python file content
+ * @returns {void}
+ */
+export function assertNoPythonViolations(content) {
+  const violations = findPythonViolations(content);
+  if (violations.length === 0) return;
+  const summary = violations
+    .map((violation) => `${violation.rule} at line ${violation.line}`)
+    .join("; ");
+  throw new Error(`PYTHON_POLICY_VIOLATION: ${summary}`);
 }
 
 /**
