@@ -431,3 +431,134 @@ describe("V16 — the packaging rewriter cannot rewrite its own specification", 
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// M12/T9 F-004 - a config key the plugin reads must be DECLARABLE
+// ---------------------------------------------------------------------------
+
+describe("M12/T9 F-004: the config keys the plugin reads are declared", () => {
+  const manifest = JSON.parse(
+    readFileSync(
+      new URL(
+        "../integrations/openclaw/plugins/zink-governance/openclaw.plugin.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
+  const declared = manifest.configSchema.properties;
+
+  it("declares the skill-approval decision ref and the guild id", () => {
+    // Without these two the plugin's own reads are unreachable: the manifest
+    // sets additionalProperties:false, so a key it does not declare can never
+    // be configured, and the read always sees undefined.
+    for (const key of ["skillApprovalDecisionRef", "discordGuildId"]) {
+      assert.ok(
+        Object.prototype.hasOwnProperty.call(declared, key),
+        `${key} is read by the plugin and must be declared in configSchema`,
+      );
+    }
+    assert.equal(
+      manifest.configSchema.additionalProperties,
+      false,
+      "the schema is closed, so an undeclared key is unreachable",
+    );
+  });
+
+  it("keeps the declared keys in step with the keys the plugin reads", () => {
+    const source = readFileSync(
+      new URL(
+        "../integrations/openclaw/plugins/zink-governance/index.mjs",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    const read = new Set();
+    for (const match of source.matchAll(/\bconfig\.([A-Za-z_][A-Za-z0-9_]*)/gu))
+      read.add(match[1]);
+    for (const match of source.matchAll(
+      /\bconfig\?\.\s*([A-Za-z_][A-Za-z0-9_]*)/gu,
+    ))
+      read.add(match[1]);
+    // The legacy single-channel aliases are read as FALLBACKS for the forum ids
+    // the build emits; they are deliberately not configurable, so they are the
+    // only reads a closed schema may not declare.
+    const LEGACY_ALIASES = new Set([
+      "approvalsChannelId",
+      "incidentsChannelId",
+      "officeChannelId",
+      "resultsChannelId",
+    ]);
+    const undeclared = [...read]
+      .filter((key) => !declared[key] && !LEGACY_ALIASES.has(key))
+      .sort();
+    assert.deepEqual(
+      undeclared,
+      [],
+      `every config key the plugin reads must be declared: ${undeclared.join(", ")}`,
+    );
+  });
+});
+
+// M12/T9 F-201: the packaging whitelist and its rewrite engine had no
+// completeness gate, and the deployed entrypoint's module graph was never
+// imported by any test. Adding one module imported by index.mjs shipped green
+// through CI and then died at gateway start with ERR_MODULE_NOT_FOUND.
+describe("M12/T9 F-201 - the deployed entrypoint's module graph resolves", () => {
+  const relativeSpecifiers = (source) =>
+    [...source.matchAll(/(?:from|import)\s+"(\.[^"]+)"/gu)].map(
+      (match) => match[1],
+    );
+
+  it("resolves every relative specifier of the deployed entrypoint", async () => {
+    const { assets, entrypoint } = governancePluginFiles();
+    const root = deployShape(assets);
+    try {
+      const entryPath = path.join(root, "index.mjs");
+      writeFileSync(entryPath, entrypoint);
+      const specifiers = relativeSpecifiers(entrypoint);
+      assert.ok(
+        specifiers.length > 0,
+        "the entrypoint must import something for this gate to mean anything",
+      );
+      for (const specifier of specifiers) {
+        assert.ok(
+          existsSync(path.join(root, specifier)),
+          `the deployed entrypoint imports ${specifier}, which is not a packaged asset`,
+        );
+      }
+      // The graph must actually load: this is the ERR_MODULE_NOT_FOUND the
+      // gateway used to die with.
+      await import(pathToFileURL(entryPath).href);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("detects an entrypoint that imports a module the package does not carry", async () => {
+    const { assets, entrypoint } = governancePluginFiles();
+    const root = deployShape(assets);
+    try {
+      const broken = `${entrypoint}\nimport "./lib/not-packaged.mjs";\n`;
+      const specifiers = relativeSpecifiers(broken);
+      assert.ok(
+        specifiers.includes("./lib/not-packaged.mjs"),
+        "the gate must see the added specifier",
+      );
+      assert.equal(
+        existsSync(path.join(root, "./lib/not-packaged.mjs")),
+        false,
+        "the broken specifier must not be a packaged asset",
+      );
+      // And the import step must fail on it, exactly as the gateway did.
+      const brokenPath = path.join(root, "index-broken.mjs");
+      writeFileSync(brokenPath, broken);
+      await assert.rejects(
+        () => import(pathToFileURL(brokenPath).href),
+        /ERR_MODULE_NOT_FOUND|Cannot find module/u,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
