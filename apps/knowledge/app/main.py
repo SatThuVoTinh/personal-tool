@@ -79,6 +79,18 @@ class IndexRunAcceptedResponse(BaseModel):
 # reach this number.
 SEARCH_QUERY_MAX_CHARS = 1024
 
+# F-165 (R5-E02-06): the query embedding used to inherit the probe client's
+# 90 s read timeout, and the single retry added another 90 s plus a second of
+# backoff, so one slow provider held one of the two search slots for roughly
+# 181 s. Two slow responses closed `/v1/search` to every other caller. The
+# attempt is now bounded well below the client default.
+QUERY_EMBEDDING_TIMEOUT_SECONDS = 30.0
+
+# F-165 (R5-E02-06): the limiter is a two-slot, no-queue limiter, so the
+# refusal has to tell the caller when to come back. Without a `Retry-After`
+# the caller could not back off correctly and the 429 read as "no results".
+SEARCH_CAPACITY_RETRY_AFTER_SECONDS = 1
+
 
 class SearchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")

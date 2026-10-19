@@ -83,6 +83,15 @@ class OllamaModelProbe:
         if not isinstance(digest, str) or not _MODEL_DIGEST.fullmatch(digest):
             raise ModelProbeError("EMBEDDING_MODEL_UNAVAILABLE")
 
+        if expected_dimensions is not None:
+            if expected_dimensions < 1:
+                raise ModelProbeError("EMBEDDING_MODEL_UNAVAILABLE")
+            return ResolvedEmbeddingModel(
+                name=model_name,
+                digest=digest,
+                dimensions=expected_dimensions,
+            )
+
         embeddings = await self._embed_batch(
             model_name,
             ["knowledge-model-preflight"],
@@ -94,26 +103,44 @@ class OllamaModelProbe:
             dimensions=len(embeddings[0]),
         )
 
-    async def embed(self, model_name: str, texts: list[str]) -> list[list[float]]:
-        """Return one finite embedding per supplied retrieval text."""
+    async def embed(
+        self,
+        model_name: str,
+        texts: list[str],
+        timeout: float | None = None,
+    ) -> list[list[float]]:
+        """Return one finite embedding per supplied retrieval text.
+
+        `timeout` bounds ONE attempt at the provider (F-165 / R5-E02-06). The
+        client default is 90 s, which held one of the two search slots for up
+        to 181 s once the single retry was added, so a degraded provider
+        turned the whole retrieval surface into a 429 wall.
+        """
         if not texts:
             return []
         embeddings: list[list[float]] = []
         for offset in range(0, len(texts), _EMBED_BATCH_SIZE):
             batch = texts[offset : offset + _EMBED_BATCH_SIZE]
-            embeddings.extend(await self._embed_batch(model_name, batch))
+            embeddings.extend(await self._embed_batch(model_name, batch, timeout))
         return embeddings
 
     async def _embed_batch(
-        self, model_name: str, texts: list[str]
+        self, model_name: str, texts: list[str], timeout: float | None = None
     ) -> list[list[float]]:
         last_error: BaseException | None = None
+        # `httpx` treats an explicit `timeout=None` as "no timeout at all", so
+        # the request default is only left in place by NOT passing the
+        # argument. The bounded form is therefore an explicit keyword.
+        request_kwargs: dict[str, object] = {}
+        if timeout is not None:
+            request_kwargs["timeout"] = httpx.Timeout(timeout, connect=3.0)
         for attempt in range(2):
             failure_code: str | None = None
             try:
                 response = await self._client.post(
                     f"{self._base_url}/api/embed",
                     json={"model": model_name, "input": texts},
+                    **request_kwargs,
                 )
                 response.raise_for_status()
             except httpx.TimeoutException as error:
