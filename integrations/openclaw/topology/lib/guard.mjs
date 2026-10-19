@@ -26,6 +26,8 @@ import {
   checkSchema,
   stableJson,
   typeMatches,
+  TOOL_CALL_ENVELOPE_MAX_BYTES,
+  TOOL_RESULT_ENVELOPE_MAX_BYTES,
 } from "./schema.mjs";
 import {
   createTrustedResultEnvelope,
@@ -197,22 +199,12 @@ async function ensureDependencies() {
       // first, then the working directory. Machine-specific absolute paths are
       // prohibited. Every dependency is fail-closed: a missing validator is
       // GOVERNANCE_DEPENDENCY_MISSING, never a no-op allow.
-      const loadShared = async (relativePath) => {
-        const shared = [
-          path.resolve(_moduleDir, "../../../../" + relativePath),
-          path.resolve(process.cwd(), relativePath),
-        ];
-        for (const candidate of shared) {
-          try {
-            const loaded = await import(pathToFileURL(candidate).href);
-            if (loaded) return loaded;
-          } catch {
-            /* next candidate */
-          }
-        }
-        return null;
-      };
-
+      // M12/T9 F-024: ONE resolver for the shared zink-tools modules. The
+      // guard and the plugin used to have two different ones, so the same
+      // dependency could be loaded from two different trees and the two
+      // copies could disagree. See `loadSharedGovernanceModule` below.
+      const loadShared = (relativePath) =>
+        loadSharedGovernanceModule(relativePath);
       const pathSafety = await loadShared("zink-tools/common/path-safety.mjs");
       validateArtifactLogicalPath =
         typeof pathSafety?.validateArtifactLogicalPath === "function"
@@ -235,10 +227,84 @@ async function ensureDependencies() {
       N8nAdapterError = n8nAdapter?.N8nAdapterError ?? Error;
       depsN8nLoaded = invokeN8n !== null;
 
-      depsLoaded = true;
+      // M12/T9 F-024: the ready flag used to be set UNCONDITIONALLY, so
+      // `whenGovernanceDependenciesReady()` answered `ready: true` while
+      // `validateSqlQuery` was still null, and the guard-gated tools failed
+      // closed as GOVERNANCE_DEPENDENCY_MISSING. Ready now means what it says:
+      // path-safety, the SQL validator and the n8n adapter all loaded.
+      depsLoaded = computeGovernanceReadiness({
+        pathSafetyLoaded: depsPathSafetyLoaded,
+        sqlLoaded: depsSqlLoaded,
+        n8nLoaded: depsN8nLoaded,
+      });
     })();
   }
   await depsPromise;
+}
+
+/**
+ * M12/T9 F-024: the readiness rule, as a pure function so it is provable
+ * without a broken installation. Ready means: path-safety, the SQL validator
+ * and the n8n adapter all actually loaded.
+ */
+export function computeGovernanceReadiness({
+  pathSafetyLoaded = false,
+  sqlLoaded = false,
+  n8nLoaded = false,
+} = {}) {
+  return pathSafetyLoaded === true && sqlLoaded === true && n8nLoaded === true;
+}
+
+/**
+ * M12/T9 F-024: ONE resolver for the shared zink-tools modules.
+ *
+ * The guard and the plugin used to have two different resolvers for the same
+ * dependencies — the guard resolved from its own module directory plus the
+ * working directory, the plugin from a repo-root walk plus a machine-specific
+ * absolute path — so the same module could be loaded from two different
+ * trees, and the two copies could disagree. Both now use this one, and the
+ * candidate order is the same for both.
+ *
+ * The working directory is still the LAST resort: it is the only candidate
+ * that works in the flattened installed tree. It is never the first.
+ */
+export function resolveSharedGovernanceModulePath(
+  relativePath,
+  { roots = [] } = {},
+) {
+  const candidates = [
+    ...roots
+      .filter((root) => typeof root === "string" && root.length > 0)
+      .map((root) => path.resolve(root, relativePath)),
+    path.resolve(_moduleDir, "../../../../" + relativePath),
+    path.resolve(process.cwd(), relativePath),
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+export async function loadSharedGovernanceModule(
+  relativePath,
+  { roots = [] } = {},
+) {
+  const candidates = [
+    ...roots
+      .filter((root) => typeof root === "string" && root.length > 0)
+      .map((root) => path.resolve(root, relativePath)),
+    path.resolve(_moduleDir, "../../../../" + relativePath),
+    path.resolve(process.cwd(), relativePath),
+  ];
+  for (const candidate of candidates) {
+    try {
+      const loaded = await import(pathToFileURL(candidate).href);
+      if (loaded) return loaded;
+    } catch {
+      /* next candidate */
+    }
+  }
+  return null;
 }
 
 /**
@@ -249,7 +315,14 @@ async function ensureDependencies() {
  */
 export async function whenGovernanceDependenciesReady() {
   await ensureDependencies();
-  return Object.freeze({ ready: depsLoaded, policyLoaded: depsPolicyLoaded });
+  return Object.freeze({
+    // M12/T9 F-024: `ready` now means every shared module actually loaded.
+    ready: depsLoaded,
+    policyLoaded: depsPolicyLoaded,
+    pathSafetyLoaded: depsPathSafetyLoaded,
+    sqlLoaded: depsSqlLoaded,
+    n8nLoaded: depsN8nLoaded,
+  });
 }
 
 function fail(code) {

@@ -756,6 +756,13 @@ export function adapterUnavailableResponse(tool, error) {
 let sqlValidatorModule = null;
 let pathSafetyModule = null;
 
+// M12/T9 F-024: the plugin and the guard used to have TWO resolvers for the
+// same zink-tools dependencies — the plugin walked up to a repo root (with a
+// machine-specific absolute path in the list) and the guard resolved from its
+// own module directory plus the working directory — so the same module could
+// be loaded from two different trees and the two copies could disagree about
+// the same decision. There is now ONE resolver, in the guard, and the plugin
+// hands it the repo root it found.
 async function loadRepoModule(relativePath) {
   const attempts = [];
   try {
