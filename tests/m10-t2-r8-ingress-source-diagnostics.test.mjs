@@ -35,14 +35,27 @@ function runInjection({
 }) {
   const calls = [];
   const stderrLines = [];
+  // M12/T9 F-336: ONE shared, append-only sequence records BOTH channels, so
+  // the ORDER of the stderr report and the child-logger call is observable.
+  // Two independent captures can only prove that each channel was written.
+  const order = [];
+  const provided = loggerArg ?? {
+    info: () => {},
+    warn: () => {},
+    error: () => {},
+  };
   const logger =
     loggerArg === null
       ? undefined
-      : (loggerArg ?? {
-          info: (...args) => calls.push(args),
-          warn: () => {},
-          error: () => {},
-        });
+      : {
+          info: (...args) => {
+            calls.push(args);
+            order.push("logger");
+            provided.info?.(...args);
+          },
+          warn: (...args) => provided.warn?.(...args),
+          error: (...args) => provided.error?.(...args),
+        };
   // M10/T2-R8: the injection awaits the preflight intake gate, and the host
   // function it lives in is `async`, so the harness builds an async function
   // exactly like the host.
@@ -64,7 +77,14 @@ function runInjection({
     params,
     logger,
     globalThis,
-    { stderr: { write: (s) => stderrLines.push(s) } },
+    {
+      stderr: {
+        write: (s) => {
+          stderrLines.push(s);
+          order.push("stderr");
+        },
+      },
+    },
     effectiveRoute,
     resolvedAccountId,
   );
@@ -72,6 +92,7 @@ function runInjection({
   return {
     calls,
     stderr: stderrLines,
+    order,
     record: registry instanceof Map ? registry.get(MSG) : undefined,
     flat: calls
       .flat()
@@ -273,25 +294,26 @@ test("R8 D7: diagnostics are emitted even when the registry write is skipped", (
 });
 
 test("R8 D10: the report reaches stderr unfiltered, before the logger call", () => {
-  const order = [];
-  const logger = {
-    info: () => {
-      order.push("logger");
-    },
-  };
-  const { stderr } = runInjection({
+  // M12/T9 F-336: the old case counted two INDEPENDENT captures and never
+  // compared their order, so any interleaving satisfied it. The harness now
+  // records both channels in ONE shared, append-only sequence, and the
+  // sequence itself is asserted.
+  const { stderr, order } = runInjection({
     message: msg({
       rawDataValue: { mentions: [{ id: MAIN_BOT }], mention_roles: [] },
     }),
     threadOwnerId: null,
     params: { data: dispatch({ mentions: [{ id: MAIN_BOT }] }) },
-    loggerArg: logger,
   });
   assert.equal(stderr.length, 1, "exactly one stderr line per inbound message");
   assert.match(stderr[0], /^\[zink-ingress-meta\] /);
   assert.match(stderr[0], /"du":1/);
   assert.match(stderr[0], /"ru":1/);
-  assert.equal(order.length, 1, "the child logger still receives the report");
+  assert.deepEqual(
+    order,
+    ["stderr", "logger"],
+    "the stderr report must precede the child logger call",
+  );
 });
 
 test("R8 D11: a broken child logger is reported on stderr, never swallowed", () => {
