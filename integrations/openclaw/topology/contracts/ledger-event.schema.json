@@ -761,6 +761,11 @@
               "decision": {
                 "const": "ACCEPT"
               },
+              "outcome_status": {
+                "description": "F-226: the outcome the owner accepted. The post-ACCEPT workflow status is DERIVED from it, so a FAILED or PARTIAL run can never become a COMPLETE task because a button was clicked. It must equal the outcome the ledger recorded for the pending result.",
+                "type": ["string", "null"],
+                "enum": ["COMPLETE", "PARTIAL", "BLOCKED", "FAILED", null]
+              },
               "result_id": {
                 "type": ["string", "null"],
                 "maxLength": 128

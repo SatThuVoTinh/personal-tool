@@ -637,7 +637,14 @@ export function applyWorkflowEvent(
     exactKeys(
       payload,
       ["task_id", "actor", "channel", "decision"],
-      ["result_id", "result_digest", "message_id", "thread_id"],
+      [
+        "result_id",
+        "result_digest",
+        "message_id",
+        "thread_id",
+        // F-226: the outcome the owner accepted.
+        "outcome_status",
+      ],
     );
     requireCondition(payload.actor === "user", "POLICY_DENIED");
     requireCondition(payload.channel === "results", "CHANNEL_MISMATCH");
@@ -647,8 +654,16 @@ export function applyWorkflowEvent(
       "INVALID_STATE_TRANSITION",
     );
     requireResultIdentityMatch(task, payload, replayAnchored);
-    task.workflow_status = "COMPLETE";
-    task.brief_state = "CLOSED";
+    // F-226: the post-ACCEPT status is DERIVED from the accepted outcome. It
+    // used to be stamped COMPLETE from the verdict alone, so a FAILED or
+    // PARTIAL run became a COMPLETE task the moment the owner clicked accept
+    // — the ledger then contradicted the outcome it had recorded.
+    const acceptedOutcome = resolveAcceptedOutcome(task, payload);
+    task.workflow_status = acceptedOutcome;
+    // A BLOCKED outcome stays RECOVERABLE, exactly as the sibling
+    // WORKFLOW_USER_RESULT_BLOCKED verdict keeps the brief open: closing the
+    // brief would strand a task the owner may still reconcile or cancel.
+    if (acceptedOutcome !== "BLOCKED") task.brief_state = "CLOSED";
     task.user_accepted_at = eventTime;
     return next;
   }
@@ -1626,6 +1641,38 @@ function reconcileForRetry(task, nodeId, eventTime) {
   if (stale.length !== 1) return false;
   reconcileTransientAttempt(task, stale[0], eventTime);
   return true;
+}
+
+/**
+ * F-226: the post-ACCEPT workflow status, derived from the outcome the owner
+ * accepted.
+ *
+ * The recorded outcome is the only thing that can say what the run actually
+ * produced. An ACCEPT is a verdict on a result, not a statement that the work
+ * succeeded, so the status follows the result: a FAILED or PARTIAL run stays
+ * FAILED or PARTIAL and a BLOCKED one stays BLOCKED.
+ *
+ * The decision MAY name the outcome it accepted; when it does, the name must
+ * equal the outcome the ledger recorded, so a decision cannot re-label the
+ * result it is accepting. A decision that names no outcome is a verdict
+ * recorded before the binding existed: it keeps the legacy COMPLETE, so every
+ * already-written acceptance still replays byte-identically.
+ */
+function resolveAcceptedOutcome(task, payload) {
+  const recorded = task.root_result?.outcome_status ?? null;
+  const claimed = payload.outcome_status ?? null;
+  if (claimed !== null) {
+    requireCondition(
+      ["COMPLETE", "PARTIAL", "BLOCKED", "FAILED"].includes(claimed),
+      "SCHEMA_INVALID",
+    );
+    requireCondition(
+      recorded === null || claimed === recorded,
+      "RESULT_MISMATCH",
+    );
+    return claimed === "COMPLETE" ? "COMPLETE" : claimed;
+  }
+  return "COMPLETE";
 }
 
 /**
