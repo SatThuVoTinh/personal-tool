@@ -97,9 +97,9 @@ const rawDispatch = (overrides = {}) => ({
   ...overrides,
 });
 
-test("R8 F1: wrapper-empty but rawDataValue carries Main preserves Main", () => {
+test("R8 F1: wrapper-empty but rawDataValue carries Main preserves Main", async () => {
   clearStash();
-  runPreflightInjection({
+  const resolved = await runPreflightInjection({
     message: discordMessage({
       rawDataValue: {
         mentions: [{ id: MAIN_BOT, username: "main" }],
@@ -108,6 +108,11 @@ test("R8 F1: wrapper-empty but rawDataValue carries Main preserves Main", () => 
     threadOwnerId: null,
     params: { data: rawDispatch() },
   });
+  assert.equal(
+    resolved,
+    undefined,
+    "with no preflight gate registered the injection must resolve to no decision at all",
+  );
   const record = readStash(MSG);
   assert.ok(record, "a record must be written");
   assert.deepEqual(
@@ -117,15 +122,20 @@ test("R8 F1: wrapper-empty but rawDataValue carries Main preserves Main", () => 
   );
 });
 
-test("R8 F2: wrapper-empty and rawDataValue-empty but dispatch carries Main preserves Main", () => {
+test("R8 F2: wrapper-empty and rawDataValue-empty but dispatch carries Main preserves Main", async () => {
   clearStash();
-  runPreflightInjection({
+  const resolved = await runPreflightInjection({
     message: discordMessage(),
     threadOwnerId: null,
     params: {
       data: rawDispatch({ mentions: [{ id: MAIN_BOT, username: "main" }] }),
     },
   });
+  assert.equal(
+    resolved,
+    undefined,
+    "with no preflight gate registered the injection must resolve to no decision at all",
+  );
   const record = readStash(MSG);
   assert.ok(record, "a record must be written");
   assert.deepEqual(
@@ -135,13 +145,18 @@ test("R8 F2: wrapper-empty and rawDataValue-empty but dispatch carries Main pres
   );
 });
 
-test("R8 F3: all sources empty records empty (deny preserved)", () => {
+test("R8 F3: all sources empty records empty (deny preserved)", async () => {
   clearStash();
-  runPreflightInjection({
+  const resolved = await runPreflightInjection({
     message: discordMessage(),
     threadOwnerId: null,
     params: { data: rawDispatch() },
   });
+  assert.equal(
+    resolved,
+    undefined,
+    "with no preflight gate registered the injection must resolve to no decision at all",
+  );
   const record = readStash(MSG);
   assert.ok(record, "a record must be written");
   assert.deepEqual(
@@ -151,13 +166,18 @@ test("R8 F3: all sources empty records empty (deny preserved)", () => {
   );
 });
 
-test("R8 F4: wrapper-present still records without params (legacy scope intact)", () => {
+test("R8 F4: wrapper-present still records without params (legacy scope intact)", async () => {
   clearStash();
-  runPreflightInjection({
+  const resolved = await runPreflightInjection({
     message: discordMessage({ mentionedUsers: [{ id: MAIN_BOT }] }),
     threadOwnerId: null,
     params: undefined,
   });
+  assert.equal(
+    resolved,
+    undefined,
+    "with no preflight gate registered the injection must resolve to no decision at all",
+  );
   const record = readStash(MSG);
   assert.ok(record, "a record must be written");
   assert.deepEqual(
@@ -167,14 +187,19 @@ test("R8 F4: wrapper-present still records without params (legacy scope intact)"
   );
 });
 
-test("R8 F5: dispatch role mention for Main is preserved", () => {
+test("R8 F5: dispatch role mention for Main is preserved", async () => {
   clearStash();
   const MAIN_ROLE = "1545471797452087390";
-  runPreflightInjection({
+  const resolved = await runPreflightInjection({
     message: discordMessage(),
     threadOwnerId: null,
     params: { data: rawDispatch({ mention_roles: [MAIN_ROLE] }) },
   });
+  assert.equal(
+    resolved,
+    undefined,
+    "with no preflight gate registered the injection must resolve to no decision at all",
+  );
   const record = readStash(MSG);
   assert.ok(record, "a record must be written");
   assert.deepEqual(
@@ -184,9 +209,9 @@ test("R8 F5: dispatch role mention for Main is preserved", () => {
   );
 });
 
-test("R8 F6: malformed raw entries are dropped, valid kept", () => {
+test("R8 F6: malformed raw entries are dropped, valid kept", async () => {
   clearStash();
-  runPreflightInjection({
+  const resolved = await runPreflightInjection({
     message: discordMessage(),
     threadOwnerId: null,
     params: {
@@ -195,6 +220,11 @@ test("R8 F6: malformed raw entries are dropped, valid kept", () => {
       }),
     },
   });
+  assert.equal(
+    resolved,
+    undefined,
+    "with no preflight gate registered the injection must resolve to no decision at all",
+  );
   const record = readStash(MSG);
   assert.ok(record, "a record must be written");
   assert.deepEqual(
@@ -202,4 +232,36 @@ test("R8 F6: malformed raw entries are dropped, valid kept", () => {
     [MAIN_BOT],
     "only well-formed snowflakes survive",
   );
+});
+
+test("R8 F7: a denying preflight gate reaches the caller as null", async () => {
+  // M12/T9 F-328: this lane built an ASYNC harness and every case called it
+  // bare, so the promise was discarded and the value the gate produces was
+  // never observed. The gate's early return is now reachable here: a stub
+  // predicate plus `effectiveRoute.agentId` makes the injection return null,
+  // which is what tells the host to create no run at all.
+  clearStash();
+  const GATE_KEY = Symbol.for("zink.governance.native.preflightIngress");
+  const previous = globalThis[GATE_KEY];
+  globalThis[GATE_KEY] = async () => ({
+    allow: false,
+    reason: "NON_MAIN_DIRECT_INGRESS",
+  });
+  try {
+    const resolved = await runPreflightInjection({
+      message: discordMessage(),
+      threadOwnerId: null,
+      params: { data: rawDispatch() },
+      effectiveRoute: { agentId: "python" },
+      resolvedAccountId: "acct-1",
+    });
+    assert.equal(
+      resolved,
+      null,
+      "the denial must reach the caller: a null context means the host enqueues nothing",
+    );
+  } finally {
+    if (previous === undefined) delete globalThis[GATE_KEY];
+    else globalThis[GATE_KEY] = previous;
+  }
 });
