@@ -1038,7 +1038,21 @@ export function createGovernanceGuard({
           context.agentId,
         "LINEAGE_MISMATCH",
       );
-      if (owner.delegation || event.yielded === true) return { allow: true };
+      if (owner.delegation) return { allow: true };
+      // F-088: a yield is not a success, but a run that yielded has made NO
+      // completion claim at all: `success` is absent, which is the documented
+      // path for a run that asked something and is waiting for the owner. That
+      // path is admitted, and the task stays open.
+      //
+      // What must never pass is an EXPLICIT failure carried on the yield flag.
+      // The flag used to short-circuit the success assertion below, so a
+      // FAILED run passed the run-end gate and recorded no terminal event at
+      // all: the ledger then showed an open task the owner had been told had
+      // finished.
+      if (event.yielded === true) {
+        if (event.success === false) fail("EXECUTION_STATE_UNKNOWN");
+        return { allow: true };
+      }
       assert(event.success === true, "EXECUTION_STATE_UNKNOWN");
       // M7-020: the root result closes governed work, so it requires an active
       // brief. The approval requirement belongs on the spawn RESERVATION, which
