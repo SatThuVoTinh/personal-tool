@@ -309,7 +309,20 @@
                 "type": ["array", "null"],
                 "maxItems": 10,
                 "items": {
-                  "type": "object"
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["logical_path", "sha256"],
+                  "properties": {
+                    "logical_path": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 512
+                    },
+                    "sha256": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$"
+                    }
+                  }
                 }
               },
               "artifact_set_digest": {
@@ -1308,6 +1321,10 @@
           "minLength": 1,
           "maxLength": 256
         },
+        "primary_coordinator": {
+          "description": "F-057: the coordinator that owns this task's execution. OPTIONAL, so every event already in the ledger replays byte-identically, but REQUIRED for a task the pickup loop may claim: without it the ledger names no coordinator and the dispatch fails closed. Only o1/o2 are executable coordinators (main coordinates, the specialists execute).",
+          "enum": ["o1", "o2"]
+        },
         "root_run_id": {
           "type": "string",
           "minLength": 1,
@@ -1353,7 +1370,7 @@
           "pattern": "^[a-z][a-z0-9_-]{0,63}$"
         },
         "parent_agent_id": {
-          "enum": ["main", "o1", "o2", "excel", "power-bi", "sql", "python"]
+          "$ref": "#/$defs/parent_agent_id"
         },
         "parent_session_key": {
           "type": "string",

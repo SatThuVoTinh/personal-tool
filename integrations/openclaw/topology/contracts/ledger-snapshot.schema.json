@@ -107,6 +107,10 @@
                   "minLength": 1,
                   "maxLength": 256
                 },
+                "primary_coordinator": {
+                  "description": "F-057: the coordinator that owns this task's execution, taken from the ledger and never defaulted. OPTIONAL so every task recorded before the field existed still validates under additionalProperties:false; its ABSENCE is what makes a task non-dispatchable, so a pre-existing task can never acquire a coordinator by replay.",
+                  "enum": ["o1", "o2"]
+                },
                 "root_run_id": {
                   "type": "string",
                   "minLength": 1,
@@ -208,15 +212,7 @@
                           ]
                         },
                         "parent_agent_id": {
-                          "enum": [
-                            "main",
-                            "o1",
-                            "o2",
-                            "excel",
-                            "power-bi",
-                            "sql",
-                            "python"
-                          ]
+                          "$ref": "ledger-event.schema.json#/$defs/parent_agent_id"
                         },
                         "parent_session_key": {
                           "type": "string",

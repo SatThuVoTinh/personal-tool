@@ -302,7 +302,11 @@ export function applyWorkflowEvent(
       // already in the live ledger predate it, and replaying them must stay
       // byte-identical, so a task without a code is valid and simply has none.
       // Passing this as a REQUIRED key rejects every pre-existing event.
-      ["task_code"],
+      //
+      // F-057: the coordinator that owns this task's execution is OPTIONAL for
+      // the same reason — a task recorded before the field existed has none,
+      // and replaying it must stay byte-identical.
+      ["task_code", "primary_coordinator"],
     );
     requireCondition(payload.origin === "discord", "POLICY_DENIED");
     requireCondition(
@@ -318,6 +322,16 @@ export function applyWorkflowEvent(
       Object.hasOwn(roles, payload.root_agent_id),
       "UNAUTHORIZED_TARGET",
     );
+    // F-057: the coordinator is taken from the ledger, never defaulted. Only
+    // o1/o2 are executable coordinators: main coordinates, the specialists
+    // execute, and no other value may be recorded as the owner of the work.
+    if (payload.primary_coordinator !== undefined) {
+      requireCondition(
+        payload.primary_coordinator === "o1" ||
+          payload.primary_coordinator === "o2",
+        "UNAUTHORIZED_TARGET",
+      );
+    }
     // M12/T1-R1: a legacy 64-hex identity is re-derivable from its origin binding,
     // so re-deriving it here is what proves a pre-existing record was not tampered
     // with. The 12-character identity is minted at admission and is deliberately
