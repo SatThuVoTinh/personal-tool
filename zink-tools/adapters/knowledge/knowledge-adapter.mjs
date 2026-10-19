@@ -465,10 +465,31 @@ export class KnowledgeAdapter {
             reqHeaders["Authorization"] = `Bearer ${apiKey}`;
           }
 
-          // M17: Task lineage headers
-          if (context.taskId) reqHeaders["X-Task-Id"] = String(context.taskId);
-          if (context.agentId)
-            reqHeaders["X-Agent-Id"] = String(context.agentId);
+          // M17 + F-103 (R2-B01-02): identity and correlation come from the
+          // trusted runtime context only. Measured at HEAD: `if (context.agentId)`
+          // never fired on the live path (the plugin derives the trusted identity
+          // and stores it as `requestingAgent`, `index.mjs:3565`), so every
+          // governed call reached the service with no identity, while `X-Task-Id`
+          // forwarded `params.task_id` — a declared tool parameter the model
+          // supplies (`index.mjs:3549-3563`) — as bare correlation. Identity is
+          // now read from the key the runtime actually writes, and a task id the
+          // caller's own payload named is not forwarded as the task this call is
+          // attributed to: this seam has no ledger to bind it against.
+          const trustedAgent =
+            typeof context.requestingAgent === "string" &&
+            context.requestingAgent.trim()
+              ? context.requestingAgent.trim()
+              : typeof context.agentId === "string" && context.agentId.trim()
+                ? context.agentId.trim()
+                : "";
+          if (trustedAgent) reqHeaders["X-Agent-Id"] = trustedAgent;
+          const payloadNamedTaskId =
+            typeof input?.task_id === "string" && input.task_id.trim()
+              ? input.task_id.trim()
+              : "";
+          if (context.taskId && !payloadNamedTaskId) {
+            reqHeaders["X-Task-Id"] = String(context.taskId);
+          }
           if (context.attemptToken)
             reqHeaders["X-Attempt-Token"] = String(context.attemptToken);
 
