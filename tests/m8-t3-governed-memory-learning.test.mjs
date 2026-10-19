@@ -317,6 +317,12 @@ describe("M8/T3 canonical Skill Store writer", () => {
           recursive: true,
         },
       );
+      // M12/T9-R1 F-150: the residue used to be reported as a catalog error
+      // (`DIRECTORY_GRAMMAR_INVALID`), and because the scan collapses the
+      // record set to `[]` whenever any diagnostic exists, one killed
+      // publisher anywhere nulled the WHOLE store. Residue is never canonical,
+      // so it is now reported as residue: invisible to the error list and to
+      // the record set, and swept by the writer under the store-wide lock.
       const before = await scanCatalog(skillsRoot);
       assert.ok(
         before.errors.some((e) => e.code === "DIRECTORY_GRAMMAR_INVALID"),
@@ -344,6 +350,84 @@ describe("M8/T3 canonical Skill Store writer", () => {
       assert.deepEqual(
         after.records.map((r) => r.manifest.identity.version),
         ["1.0.0"],
+      );
+      // F-150: the sweep is store-wide, so the residue is gone afterwards and
+      // not merely tolerated.
+      assert.deepEqual(
+        after.residue,
+        [],
+        "the writer's store-wide sweep must clear the residue",
+      );
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("T2g2: residue in one capability does not null the store, and the sweep is store-wide", async () => {
+    const { promoteApprovedSkill, scanCatalog, getActiveSkill } =
+      await import("../zink-skill-store/src/catalog.mjs");
+    const { mkdir } = await import("node:fs/promises");
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "zink-residue-reader-"));
+    const skillsRoot = path.join(tmp, "skills");
+    try {
+      // A healthy, readable skill ...
+      const promoted = await promoteApprovedSkill({
+        skillsRoot,
+        namespace: ["office"],
+        capability: "reader-skill",
+        version: "1.0.0",
+        content: "# Reader\n\nReadable bytes.",
+        requestingActor: "excel",
+        decisionRef: "PLAN:M8/T3-R1",
+      });
+      assert.equal(promoted.status, "ACTIVE");
+      // ... beside the residue of a killed publisher in a THIRD capability, so
+      // neither the promoting capability's own heal nor the reader can see it.
+      await mkdir(
+        path.join(
+          skillsRoot,
+          "office",
+          "third-skill",
+          "2.0.0.pending-4242-1700000000000-deadbeef",
+        ),
+        { recursive: true },
+      );
+      const catalog = await scanCatalog(skillsRoot);
+      assert.deepEqual(
+        catalog.errors,
+        [],
+        "residue must not be a catalog error",
+      );
+      assert.deepEqual(
+        catalog.records.map((r) => r.manifest.identity.capability),
+        ["reader-skill"],
+        "the healthy record must survive the residue",
+      );
+      const active = await getActiveSkill(skillsRoot, "office", "reader-skill");
+      assert.ok(active.skill, "the ACTIVE skill must stay readable");
+      assert.equal(active.skill.manifest.identity.version, "1.0.0");
+
+      // A promotion into a DIFFERENT capability is not blocked by the residue,
+      // and it sweeps it.
+      const second = await promoteApprovedSkill({
+        skillsRoot,
+        namespace: ["office"],
+        capability: "other-skill",
+        version: "1.0.0",
+        content: "# Other\n\nOther bytes.",
+        requestingActor: "excel",
+        decisionRef: "PLAN:M8/T3-R1",
+      });
+      assert.equal(
+        second.status,
+        "ACTIVE",
+        "the residue must not block a later promotion",
+      );
+      const afterSweep = await scanCatalog(skillsRoot);
+      assert.deepEqual(
+        afterSweep.residue,
+        [],
+        "the sweep must clear the residue store-wide",
       );
     } finally {
       await rm(tmp, { recursive: true, force: true });

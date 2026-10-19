@@ -722,6 +722,23 @@ async function walk(directory, parts, errors, records, count) {
     return;
   }
   for (const entry of entries) {
+    // M12/T9-R1 F-150: a killed publisher leaves a `<semver>.pending-*`
+    // staging directory beside the real version directories. `walk` used to
+    // report every such sibling as `DIRECTORY_GRAMMAR_INVALID`, and because
+    // `scanCatalog` collapses `records` to `[]` whenever any diagnostic
+    // exists, ONE residue anywhere nulled the whole store: no skill was
+    // readable, no later promotion could run, and the only cure was a human
+    // finding a hidden directory. Residue is never canonical — the catalog
+    // recognizes only complete validated pairs — so it is reported as RESIDUE
+    // (invisible to the record set and to the error list) and swept by the
+    // writer under the store-wide lock.
+    if (isStagingResidue(entry.name)) {
+      residue.push({
+        path: skillPath([...parts, entry.name]),
+        parts: [...parts, entry.name],
+      });
+      continue;
+    }
     if (!entry.isDirectory() || entry.isSymbolicLink()) {
       errors.push(
         diagnostic(
@@ -1319,6 +1336,12 @@ export async function promoteApprovedSkillUnlocked({
       ],
     );
   }
+  // M12/T9-R1 F-150: the residue of a killed publisher is never canonical and
+  // must not survive anywhere in the store. The heal above cleared the
+  // promoting capability's own residue; this clears every OTHER capability's,
+  // under the same store-wide writer lock. It is driven by the scan's own
+  // residue list, so it removes exactly what the scanner saw and nothing else.
+  await sweepWriterResidue(skillsRoot, catalog.residue);
   const clash = (catalog.records ?? []).find(
     (record) =>
       record.manifest?.identity?.namespace?.join("/") === nsArray.join("/") &&
