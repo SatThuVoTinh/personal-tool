@@ -250,6 +250,33 @@ export class KnowledgeAdapter {
     this.timeout =
       options.timeout || Number(process.env.KNOWLEDGE_TIMEOUT_MS) || 120000;
     this.options = options;
+    // F-053 (R1-A03-06): the last non-local host this adapter announced, so a
+    // departure from the trusted host set is reported once, not once per call.
+    this.announcedRemoteEndpoint = null;
+  }
+
+  /**
+   * F-053 (R1-A03-06): an admitted non-local endpoint is a bypass of the
+   * built-in trusted host set, so it is announced. `onRemoteEndpoint` and
+   * `logger.warn` are both optional sinks; the announcement is idempotent per
+   * adapter instance.
+   *
+   * @param {string} hostname
+   * @param {boolean} acknowledged
+   */
+  announceRemoteEndpoint(hostname, acknowledged) {
+    if (this.announcedRemoteEndpoint === hostname) return;
+    this.announcedRemoteEndpoint = hostname;
+    if (typeof this.options.onRemoteEndpoint === "function") {
+      this.options.onRemoteEndpoint(hostname);
+    }
+    if (typeof this.options.logger?.warn === "function") {
+      this.options.logger.warn(
+        `KNOWLEDGE_ENDPOINT_REMOTE: outbound knowledge calls target non-local host '${hostname}'${
+          acknowledged ? " (allowRemote acknowledged)" : ""
+        }`,
+      );
+    }
   }
 
   async queryKnowledge(input = {}, context = {}) {
@@ -321,25 +348,23 @@ export class KnowledgeAdapter {
 
       const targetUrl = new URL(targetPath);
 
-      // M06: SSRF / Host Allowlist Validation
-      if (targetUrl.protocol !== "http:" && targetUrl.protocol !== "https:") {
+      // M06: SSRF / Host Allowlist Validation. F-053 (R1-A03-06): the check is
+      // no longer skippable — `allowRemote` cannot admit a host that is not
+      // explicitly allowlisted, and an admitted non-local host is announced.
+      const endpointDecision = classifyKnowledgeEndpoint(
+        targetUrl,
+        this.options,
+      );
+      if (!endpointDecision.allowed) {
         throw new KnowledgeAdapterError(
-          `Protocol '${targetUrl.protocol}' is forbidden by SSRF policy`,
+          endpointDecision.reason,
           "KNOWLEDGE_ENDPOINT_FORBIDDEN",
         );
       }
-      const allowedHosts = new Set([
-        "localhost",
-        "127.0.0.1",
-        "host.docker.internal",
-        "knowledge-api",
-        "personal-tool-knowledge-1",
-        ...(this.options.allowedHosts || []),
-      ]);
-      if (!allowedHosts.has(targetUrl.hostname) && !this.options.allowRemote) {
-        throw new KnowledgeAdapterError(
-          `SSRF_PROTECTION: Host '${targetUrl.hostname}' is not in trusted allowlist`,
-          "KNOWLEDGE_ENDPOINT_FORBIDDEN",
+      if (endpointDecision.remote) {
+        this.announceRemoteEndpoint(
+          endpointDecision.hostname,
+          endpointDecision.acknowledged,
         );
       }
 
@@ -416,6 +441,10 @@ export class KnowledgeAdapter {
         const remainingBudgetMs = () => callDeadlineAt - Date.now();
 
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+          const attemptTimeoutMs = Math.max(
+            1,
+            Math.min(perAttemptCapMs, remainingBudgetMs()),
+          );
           const isPost = action === "search";
           const reqHeaders = {};
           if (isPost) {
@@ -463,7 +492,7 @@ export class KnowledgeAdapter {
               {
                 method: isPost ? "POST" : "GET",
                 headers: reqHeaders,
-                timeout: reqTimeout,
+                timeout: attemptTimeoutMs,
               },
               (res) => {
                 // M08 + F-170 (R5-E06-02): the ceiling is named in BYTES, so the
@@ -477,30 +506,48 @@ export class KnowledgeAdapter {
                 let receivedBytes = 0;
                 let aborted = false;
                 res.on("data", (chunk) => {
-                  data += chunk;
-                  if (data.length > MAX_KNOWLEDGE_RESPONSE_BYTES) {
+                  if (aborted) return;
+                  const buffer = Buffer.isBuffer(chunk)
+                    ? chunk
+                    : Buffer.from(String(chunk), "utf8");
+                  receivedBytes += buffer.length;
+                  if (receivedBytes > MAX_KNOWLEDGE_RESPONSE_BYTES) {
+                    aborted = true;
+                    chunks.length = 0;
                     req.destroy();
-                    reject(
+                    settle(
+                      reject,
                       new KnowledgeAdapterError(
                         "Upstream response exceeded 50MB ceiling",
                         "KNOWLEDGE_RESPONSE_TOO_LARGE",
                       ),
                     );
+                    return;
                   }
+                  chunks.push(buffer);
                 });
-                res.on("end", () =>
-                  resolve({
+                res.on("end", () => {
+                  if (aborted) return;
+                  settle(resolve, {
                     status: res.statusCode,
                     headers: res.headers,
-                    data,
-                  }),
-                );
+                    data: Buffer.concat(chunks).toString("utf8"),
+                  });
+                });
               },
             );
-            req.on("error", (err) => reject(err));
+            req.on("error", (err) =>
+              settle(resolve, {
+                status: 0,
+                headers: {},
+                data: "",
+                transportError: err,
+              }),
+            );
             req.on("timeout", () => {
               req.destroy();
-              reject(
+              settle(
+                reject,
                 new KnowledgeAdapterError(
                   "Knowledge request timeout",
                   "KNOWLEDGE_SERVICE_TIMEOUT",
@@ -611,7 +658,7 @@ export class KnowledgeAdapter {
           }
 
           // M12, M13, M15: Schema validation and per-result bounding
-          const formattedResults = rawResults.map((r) => {
+          const formattedResults = provenanceRows.map((r) => {
             const rawScore = Number(r.rerank_score ?? r.dense_score ?? 0);
             const validScore = Number.isFinite(rawScore)
               ? Math.max(-1, Math.min(1, rawScore))
@@ -649,9 +696,13 @@ export class KnowledgeAdapter {
               // not). Only the values the upstream actually carried are
               // emitted.
               metadata: {
-                source_path: r.source_path,
+                ...(typeof r.source_path === "string"
+                  ? { source_path: r.source_path }
+                  : {}),
                 heading_path: headingPath,
-                source_type: r.source_type,
+                ...(typeof r.source_type === "string"
+                  ? { source_type: r.source_type }
+                  : {}),
                 page_start:
                   typeof r.page_start === "number" ? r.page_start : null,
                 page_end: typeof r.page_end === "number" ? r.page_end : null,
@@ -688,7 +739,7 @@ export class KnowledgeAdapter {
             : `Knowledge service failed the request (HTTP ${response.status}); its response body is not forwarded.`,
         };
       } finally {
-        if (shouldAcquireSemaphore) {
+        if (holdsSearchPermit) {
           sharedSearchSemaphore.release();
         }
       }
