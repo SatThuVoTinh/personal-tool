@@ -388,6 +388,16 @@ export async function generateSkillEmbeddings(texts, options = {}) {
       throw new Error("EMBEDDING_INVALID_JSON_RESPONSE");
     }
 
+    // M12/T9-R1 F-046: the model identity must be REPORTED, not merely
+    // compared when the endpoint happens to volunteer it. The old guards were
+    // both conditioned on the field being present, so a response that
+    // omitted it was a PASS — exactly the case the check exists for, because
+    // the vectors could then have come from any model at all.
+    if (typeof data.model !== "string" || data.model.length === 0) {
+      throw new Error(
+        `EMBEDDING_MODEL_UNREPORTED: the endpoint did not report which model produced these vectors (expected ${modelName}).`,
+      );
+    }
     // Verify returned model identity (L03). M11/T1: exact equality — a
     // startsWith check accepted any "bge-m3-*" alias swap.
     if (data.model && data.model !== modelName) {
