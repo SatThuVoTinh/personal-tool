@@ -19,6 +19,15 @@ export const ALLOWLISTED_DATABASES = Object.freeze([
 ]);
 
 // Patterns strictly denied to prevent filesystem escapes, arbitrary host executions, or sandbox breaches
+//
+// F-037 (R5-E15-03): measured at HEAD this list was a fail-open deny-list and
+// five members of the dangerous class were absent: `glob`, `read_text`,
+// `read_blob`, `CREATE SECRET` and `SET`. The statement validator downstream
+// refuses all of them too, but the bridge's OWN guard is the one that runs
+// first, and it accepted them by construction. The list now covers the class
+// it claims to cover, and `assertDuckDbSafety` additionally refuses every
+// table-function call, so the deny-list is no longer the only thing standing
+// between a model-authored query and a host file read.
 const ESCAPE_PATTERNS = [
   /\bATTACH\b/i,
   /\bDETACH\b/i,
@@ -27,6 +36,10 @@ const ESCAPE_PATTERNS = [
   /\bread_parquet\w*\b/i,
   /\bread_json\w*\b/i,
   /\bparquet_scan\b/i,
+  // F-037: the host-file read functions the deny-list did not name.
+  /\bread_text\w*\b/i,
+  /\bread_blob\w*\b/i,
+  /\bglob\w*\b/i,
   /\bINSTALL\b/i,
   /\bLOAD\b/i,
   /\bPRAGMA\b/i,
@@ -34,6 +47,11 @@ const ESCAPE_PATTERNS = [
   /\bEXECUTE\b/i,
   /\bIMPORT\b/i,
   /\bEXPORT\b/i,
+  // F-037: a credential/configuration statement. `SET` is matched in
+  // statement position only, so a query that merely mentions the word inside
+  // a string literal is not refused for it.
+  /^\s*SET\b/i,
+  /\bCREATE\s+SECRET\b/i,
   /\bcmd\.exe\b/i,
   /\bpowershell\b/i,
   /\bwsl\b/i,
@@ -41,6 +59,73 @@ const ESCAPE_PATTERNS = [
   /\bsh\b/i,
   /\bbash\b/i,
 ];
+
+// F-037 (R5-E15-03): the governed SQL subset admits no table function at all —
+// the statement validator refuses every parenthesis in a projection, a WHERE
+// clause or a FROM clause. A table function is therefore never legitimate
+// here, and refusing the shape positively is what makes "a query using an
+// unlisted table function is refused" a property of the bridge rather than a
+// property of a deny-list that has to be complete.
+//
+// The rule is scoped to the FROM clause, because that is where a table
+// function appears. A parenthesised projection or a parenthesised value list
+// is a different thing and keeps the statement validator's own verdict, so the
+// bridge's refusal never masks the more precise code.
+const TABLE_FUNCTION_CALL = /\b[A-Za-z_][A-Za-z0-9_]*\s*\(/u;
+const FROM_CLAUSE = /\bFROM\b/iu;
+const CLAUSE_TERMINATOR = /\b(?:WHERE|ORDER|LIMIT|OFFSET)\b/iu;
+
+/**
+ * Replaces every single-quoted string literal with an empty placeholder, so a
+ * clause keyword or a parenthesis inside a literal cannot be read as syntax.
+ *
+ * @param {string} sql
+ * @returns {string}
+ */
+function stripSqlStringLiterals(sql) {
+  let out = "";
+  let i = 0;
+  while (i < sql.length) {
+    const ch = sql[i];
+    if (ch !== "'") {
+      out += ch;
+      i += 1;
+      continue;
+    }
+    out += ch;
+    i += 1;
+    while (i < sql.length) {
+      if (sql[i] === "'" && sql[i + 1] === "'") {
+        out += "''";
+        i += 2;
+        continue;
+      }
+      if (sql[i] === "'") {
+        out += "'";
+        i += 1;
+        break;
+      }
+      out += sql[i];
+      i += 1;
+    }
+  }
+  return out;
+}
+
+/**
+ * The FROM clause of a statement, with string literals blanked out.
+ *
+ * @param {string} sql
+ * @returns {string} the clause text, or "" when the statement has no FROM
+ */
+function fromClauseOf(sql) {
+  const stripped = stripSqlStringLiterals(sql);
+  const fromIndex = stripped.search(FROM_CLAUSE);
+  if (fromIndex < 0) return "";
+  const rest = stripped.slice(fromIndex + "FROM".length);
+  const terminator = rest.search(CLAUSE_TERMINATOR);
+  return terminator < 0 ? rest : rest.slice(0, terminator);
+}
 
 export class DuckDbBridgeError extends Error {
   /**
@@ -115,14 +200,20 @@ export function assertDuckDbSafety(query, parameters = []) {
           `Forbidden database manipulation statement detected: ${pattern.source}`,
         );
       }
-      if (/read_csv|read_parquet|read_json|parquet_scan/i.test(query)) {
+      if (
+        /read_csv|read_parquet|read_json|parquet_scan|read_text|read_blob|glob/i.test(
+          query,
+        )
+      ) {
         throw new DuckDbBridgeError(
           "DUCKDB_FILESYSTEM_ACCESS_DENIED",
           `Direct filesystem scan forbidden: ${pattern.source}`,
         );
       }
       if (
-        /powershell|cmd|wsl|docker|sh|bash|PRAGMA|INSTALL|LOAD/i.test(query)
+        /powershell|cmd|wsl|docker|sh|bash|PRAGMA|INSTALL|LOAD|SECRET|SET/i.test(
+          query,
+        )
       ) {
         throw new DuckDbBridgeError(
           "DUCKDB_HOST_EXECUTION_DENIED",
@@ -134,6 +225,17 @@ export function assertDuckDbSafety(query, parameters = []) {
         `Disallowed pattern in query: ${pattern.source}`,
       );
     }
+  }
+
+  // 1b. F-037 (R5-E15-03): no table function is admissible in the governed
+  // subset, so a call is refused by shape rather than by name. This is what
+  // makes an UNLISTED table function impossible to reach: the previous
+  // deny-list could only refuse the names it happened to carry.
+  if (TABLE_FUNCTION_CALL.test(fromClauseOf(query))) {
+    throw new DuckDbBridgeError(
+      "DUCKDB_TABLE_FUNCTION_DENIED",
+      "Table functions are not part of the governed read-only subset.",
+    );
   }
 
   // 2. Check parameter values for path traversal or command escape vectors
