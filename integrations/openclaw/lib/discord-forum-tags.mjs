@@ -128,37 +128,68 @@ export async function readForumTags({
 }
 
 /**
+ * M12/T9 F-016: how many active-thread pages one listing may read. Bounded so a forum
+ * that keeps answering "there is more" cannot turn a dedupe read into an unbounded loop.
+ */
+export const FORUM_THREAD_MAX_PAGES = 20;
+
+/**
  * List the threads a forum currently holds. Used only where no durable publication marker
  * exists (incidents) to keep a retry from opening a second thread for the same incident;
  * the durable ledger fields are the primary guard everywhere else.
+ *
+ * M12/T9 F-016: Discord's active-thread listing is paginated. A first-page-only read is a
+ * PARTIAL listing, and the incident dedupe answers "this incident is not open yet" from
+ * it, which is exactly how a second #incidents thread gets opened for an incident that is
+ * already open. So the listing follows the cursor while Discord reports another page, and
+ * reports TRUNCATION to the caller whenever it cannot prove the listing is complete. The
+ * caller must treat a truncated listing as "unable to conclude", never as "not open".
+ *
+ * The pagination contract of the live endpoint could not be exercised on this host, so
+ * the cursor is read from either `next_cursor` or `before` and sent back as `before`,
+ * which is the parameter Discord's channel-scoped thread listings use. A body that
+ * reports `has_more` without offering a cursor is therefore reported as truncated
+ * rather than silently treated as complete.
  */
 export async function readActiveForumThreads({
   channelId,
   token,
   fetchImpl = globalThis.fetch,
   deadlineMs,
+  maxPages = FORUM_THREAD_MAX_PAGES,
 }) {
   if (!channelId) throw new Error("FORUM_TAG_CHANNEL_REQUIRED");
   if (!token) throw new Error("FORUM_TAG_TOKEN_REQUIRED");
   assertTagDeadline(deadlineMs);
-  const response = await fetchImpl(
-    `https://discord.com/api/v10/channels/${channelId}/threads/active`,
-    {
+  const threads = [];
+  let cursor = null;
+  for (let page = 0; page < maxPages; page += 1) {
+    const url = new URL(
+      `https://discord.com/api/v10/channels/${channelId}/threads/active`,
+    );
+    if (cursor) url.searchParams.set("before", cursor);
+    const response = await fetchImpl(url.href, {
       headers: {
         Authorization: `Bot ${token}`,
         "Content-Type": "application/json",
       },
       signal: AbortSignal.timeout(deadlineMs),
-    },
-  );
-  if (!response.ok)
-    throw new Error(`DISCORD_THREAD_LIST_FAILED_${response.status}`);
-  const body = await response.json();
-  return (Array.isArray(body?.threads) ? body.threads : []).map((thread) => ({
-    id: thread?.id,
-    name: thread?.name ?? "",
-    normalized: normalizeTagName(thread?.name ?? ""),
-  }));
+    });
+    if (!response.ok)
+      throw new Error(`DISCORD_THREAD_LIST_FAILED_${response.status}`);
+    const body = await response.json();
+    for (const thread of Array.isArray(body?.threads) ? body.threads : [])
+      threads.push({
+        id: thread?.id,
+        name: thread?.name ?? "",
+        normalized: normalizeTagName(thread?.name ?? ""),
+      });
+    if (body?.has_more !== true) return { threads, truncated: false };
+    const next = String(body?.next_cursor ?? body?.before ?? "").trim();
+    if (!next) return { threads, truncated: true };
+    cursor = next;
+  }
+  return { threads, truncated: true };
 }
 
 /**

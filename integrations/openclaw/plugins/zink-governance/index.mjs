@@ -357,6 +357,25 @@ export function incidentTagSelectionsFor(
 }
 
 /**
+ * M12/T9 F-016: whether an #incidents thread may be opened for a containment.
+ *
+ * A TRUNCATED listing cannot answer "is this incident already open?", so the honest answer
+ * is "unable to conclude" and the surface is skipped. The owner's rule is that a blind post
+ * is how a duplicate incident gets made, so a partial listing must never be read as "not
+ * open yet". The decision is a pure function so the dedupe rule can be pinned by a test
+ * without a live forum.
+ */
+export function incidentSurfaceDecision(listing, token) {
+  if (listing?.truncated)
+    return { open: false, reason: "THREAD_LIST_TRUNCATED" };
+  const already = (Array.isArray(listing?.threads) ? listing.threads : []).some(
+    (thread) => String(thread?.name ?? "").includes(String(token ?? "")),
+  );
+  if (already) return { open: false, reason: "ALREADY_SURFACED" };
+  return { open: true, reason: null };
+}
+
+/**
  * A stable per-containment identity. #incidents has no incident record in the ledger and
  * this task is not authorized to invent one, so the thread title carries this token and the
  * forum's active-thread list is what makes a retry recognizable instead of duplicated.
@@ -5269,7 +5288,17 @@ export default {
           fetchImpl: globalThis.fetch,
           deadlineMs: DISCORD_REST_DEADLINE_MS,
         });
-        alreadySurfaced = threads.some((thread) => thread.name.includes(token));
+        // M12/T9 F-016: a truncated listing cannot answer "is this incident already open?".
+        // The honest answer is "unable to conclude", so the surface is skipped rather than
+        // opened a second time for an incident that is already open.
+        const decision = incidentSurfaceDecision(listing, token);
+        if (decision.reason === "THREAD_LIST_TRUNCATED") {
+          api.logger?.warn?.(
+            `[zink-governance] INCIDENT_SURFACE_SKIPPED incident=${token} cause=THREAD_LIST_TRUNCATED`,
+          );
+          return null;
+        }
+        alreadySurfaced = decision.reason === "ALREADY_SURFACED";
       } catch (listError) {
         api.logger?.warn?.(
           `[zink-governance] INCIDENT_SURFACE_SKIPPED incident=${token} cause=THREAD_LIST_UNREADABLE ${listError?.message}`,

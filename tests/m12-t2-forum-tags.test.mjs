@@ -28,6 +28,7 @@ import {
   surfaceStackTag,
   transitionGovernedForumStatus,
 } from "../integrations/openclaw/lib/discord-forum-tags.mjs";
+import { incidentSurfaceDecision } from "../integrations/openclaw/plugins/zink-governance/index.mjs";
 
 // Non-routable placeholders: value shape only, never the owner's live ids.
 const APPROVALS_CHANNEL = "1000000000000000001";
@@ -398,14 +399,147 @@ describe("M12/T2 P1 — reads go through the bounded Discord path", () => {
   });
 
   it("lists active threads so an incident retry can be recognized", async () => {
-    const threads = await readActiveForumThreads({
+    const listing = await readActiveForumThreads({
       channelId: INCIDENTS_CHANNEL,
       token: "t",
       fetchImpl: fakeFetch().fetchImpl,
       deadlineMs: 5000,
     });
-    assert.equal(threads.length, 1);
-    assert.equal(threads[0].normalized, "INCIDENT 12345678ABCD ALREADY OPEN");
+    assert.equal(listing.threads.length, 1);
+    assert.equal(
+      listing.threads[0].normalized,
+      "INCIDENT 12345678ABCD ALREADY OPEN",
+    );
+    assert.equal(listing.truncated, false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M12/T9 F-016 — a first-page-only listing is a PARTIAL listing
+// ---------------------------------------------------------------------------
+
+describe("M12/T9 F-016 - a truncated thread listing is reported, never treated as complete", () => {
+  function pagedFetch(pages) {
+    const calls = [];
+    const fetchImpl = async (url, init = {}) => {
+      calls.push({ url, init });
+      const index = calls.length - 1;
+      const page = pages[Math.min(index, pages.length - 1)];
+      return { ok: true, json: async () => page };
+    };
+    return { fetchImpl, calls };
+  }
+
+  it("follows the cursor while Discord reports another page", async () => {
+    const { fetchImpl, calls } = pagedFetch([
+      {
+        threads: [{ id: "t1", name: "INCIDENT 11111111AAAA" }],
+        has_more: true,
+        next_cursor: "cursor-2",
+      },
+      {
+        threads: [{ id: "t2", name: "INCIDENT 22222222BBBB" }],
+        has_more: false,
+      },
+    ]);
+    const listing = await readActiveForumThreads({
+      channelId: INCIDENTS_CHANNEL,
+      token: "t",
+      fetchImpl,
+      deadlineMs: 5000,
+    });
+    assert.equal(
+      listing.truncated,
+      false,
+      "a complete listing is not truncated",
+    );
+    assert.equal(listing.threads.length, 2, "both pages are read");
+    assert.equal(calls.length, 2, "the second page is requested");
+    assert.ok(
+      calls[1].url.includes("cursor-2"),
+      `the second page must carry the cursor, got ${calls[1].url}`,
+    );
+  });
+
+  it("reports truncation when Discord says more exists but no cursor is offered", async () => {
+    const { fetchImpl } = pagedFetch([
+      {
+        threads: [{ id: "t1", name: "INCIDENT 11111111AAAA" }],
+        has_more: true,
+      },
+    ]);
+    const listing = await readActiveForumThreads({
+      channelId: INCIDENTS_CHANNEL,
+      token: "t",
+      fetchImpl,
+      deadlineMs: 5000,
+    });
+    assert.equal(
+      listing.truncated,
+      true,
+      "a listing that cannot be completed is truncated",
+    );
+    assert.equal(listing.threads.length, 1);
+  });
+
+  it("reports truncation when the page budget is exhausted", async () => {
+    const { fetchImpl, calls } = pagedFetch([
+      {
+        threads: [{ id: "t1", name: "INCIDENT 11111111AAAA" }],
+        has_more: true,
+        next_cursor: "cursor-loop",
+      },
+    ]);
+    const listing = await readActiveForumThreads({
+      channelId: INCIDENTS_CHANNEL,
+      token: "t",
+      fetchImpl,
+      deadlineMs: 5000,
+      maxPages: 3,
+    });
+    assert.equal(listing.truncated, true);
+    assert.equal(calls.length, 3, "the page budget is bounded");
+  });
+
+  it("refuses to open a second thread when the listing could not be completed", async () => {
+    // The caller's dedupe rule, driven by the SAME stub body that carries has_more.
+    // A partial listing must read as "unable to conclude", never as "not open yet".
+    const { fetchImpl } = pagedFetch([
+      {
+        threads: [{ id: "t1", name: "INCIDENT 99999999ZZZZ" }],
+        has_more: true,
+      },
+    ]);
+    const listing = await readActiveForumThreads({
+      channelId: INCIDENTS_CHANNEL,
+      token: "t",
+      fetchImpl,
+      deadlineMs: 5000,
+    });
+    const decision = incidentSurfaceDecision(listing, "99999999ZZZZ");
+    assert.equal(
+      decision.open,
+      false,
+      "a truncated listing cannot authorise a post",
+    );
+    assert.equal(decision.reason, "THREAD_LIST_TRUNCATED");
+  });
+
+  it("opens a thread only for a complete listing that does not carry the token", async () => {
+    const complete = await readActiveForumThreads({
+      channelId: INCIDENTS_CHANNEL,
+      token: "t",
+      fetchImpl: fakeFetch().fetchImpl,
+      deadlineMs: 5000,
+    });
+    assert.deepEqual(incidentSurfaceDecision(complete, "99999999ZZZZ"), {
+      open: true,
+      reason: null,
+    });
+    assert.deepEqual(incidentSurfaceDecision(complete, "12345678ABCD"), {
+      open: false,
+      reason: "ALREADY_SURFACED",
+    });
   });
 });
 
