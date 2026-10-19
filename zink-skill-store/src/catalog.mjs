@@ -1341,8 +1341,23 @@ export async function promoteApprovedSkillUnlocked({
     // check that the record being confirmed is the record being asked for.
     const sameDecision = lastLifecycle?.decision_ref === decisionRef;
     const sameProvenance =
-      JSON.stringify(existingManifest?.provenance ?? null) ===
-      JSON.stringify({ source_type: sourceType, references });
+      canonicalJson(existingManifest?.provenance ?? null) ===
+      canonicalJson({ source_type: sourceType, references });
+    // M12/T9-R1 F-168: the actors are part of the governed act. They were
+    // written into the record and compared nowhere, so a repeat promotion
+    // under a different requesting or owner actor reported ALREADY_ACTIVE and
+    // silently dropped the new actors: the record said one thing and the
+    // caller was told another.
+    const lifecycleEvents = Array.isArray(existingManifest?.lifecycle)
+      ? existingManifest.lifecycle
+      : [];
+    const storedCandidate = lifecycleEvents.find(
+      (event) => event?.status === "CANDIDATE",
+    );
+    const storedActive = lifecycleEvents.at(-1);
+    const sameActors =
+      storedCandidate?.actor === String(requestingActor) &&
+      storedActive?.actor === String(ownerActor);
     if (
       recordedHash === contentSha256 &&
       currentHash === contentSha256 &&
