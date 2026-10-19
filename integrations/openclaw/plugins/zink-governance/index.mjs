@@ -1909,6 +1909,16 @@ export function handleDiscordAction({
         status: "FAILED",
       };
     }
+    if (!authoritativeTask) {
+      // M12/T9 F-080: the ledger was readable and holds no such task, so the
+      // caller named a task that does not exist. There is nothing to approve.
+      return {
+        allowed: false,
+        reason:
+          "NO_AUTHORITATIVE_TASK: an approval verdict requires an authoritative ledger task",
+        status: "DENIED",
+      };
+    }
   }
 
   // 3. Normalize action and validate 5-tuple authority
@@ -2188,6 +2198,14 @@ export function handleDiscordAction({
     }
   }
 
+  // M12/T9 F-080: a verdict is bound to the AUTHORITATIVE ledger task. When the
+  // ledger is readable and holds no such task, the verdict is refused above.
+  //
+  // The paths-less case is NOT changed here: the repository's own end-to-end
+  // contract (tests/m8-t2-e2e-workflow.test.mjs) pins an unpersisted verdict as
+  // allowed, and changing it needs a pinned-assertion decision that this
+  // remediation does not carry. It is reported as a residual, not silently
+  // narrowed.
   return {
     allowed: true,
     nextState: auth.nextState,
