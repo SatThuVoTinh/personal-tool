@@ -118,6 +118,20 @@ export function deriveProposalId({
  * than one namespace is `SKILL_ID_AMBIGUOUS`, never an enumeration-order
  * pick. Qualified ids are matched whole (R25 behavior preserved).
  */
+/**
+ * F-187 (R5-E06-08): an absent, unmounted or unreadable directory is not an
+ * empty one. `existsSync` cannot tell them apart either, so availability is a
+ * `statSync` question asked once and used for both the scan gate and the
+ * verdict.
+ */
+function isReadableDirectory(dirPath) {
+  try {
+    return fs.statSync(dirPath).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 async function loadVerifiedRecord(skillsDir, targetSkillId) {
   const catalog = await scanCatalog(skillsDir);
   if (catalog.errors.length > 0) {
@@ -332,6 +346,26 @@ export class SkillAdapter {
         // catalog validation, lifecycle rules and content hashing, so it must
         // never yield a discoverable skill. There is no fallback: when the
         // canonical `skills/` tree holds no ACTIVE skill, discovery is empty.
+
+        // F-187 (R5-E06-08): an absent, unmounted or unreadable root is a store
+        // availability failure, not an empty catalog. Measured at HEAD:
+        // `if (fs.existsSync(skillsDir)) { ... }` had no `else`, so this
+        // function fell through to `governed_status: "SUCCESS"` with
+        // `skills: []` and the model concluded that no governed skill existed
+        // and proceeded without the Skill Store, while only the catalog-error
+        // branch failed closed. "available, holds no ACTIVE skill" and "not
+        // available at all" are different answers and are now reported as such.
+        if (!rootAvailable) {
+          // F-125 (R1-A10-03): the same pinned shape as the catalog-error
+          // branch above, and declared by the contract for the same reason.
+          return {
+            action: "discover",
+            namespace: namespace ?? "all",
+            skills: [],
+            governed_status: "FAILED",
+            error_code: "SKILL_ROOT_UNAVAILABLE",
+          };
+        }
 
         return {
           action: "discover",
