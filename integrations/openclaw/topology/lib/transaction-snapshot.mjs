@@ -28,6 +28,7 @@
 //   * The snapshot is verified by re-hashing every body it holds, so a tampered
 //     or truncated snapshot is rejected before it is used to restore anything.
 import { createHash, randomBytes } from "node:crypto";
+import { Buffer } from "node:buffer";
 import {
   chmodSync,
   closeSync,
@@ -199,11 +200,23 @@ export function createTransactionSnapshot(roots) {
     if (!stat.isFile())
       throw new Error("TRANSACTION_SNAPSHOT_TARGET_NOT_REGULAR");
     const body = readFileSync(absolute);
+    // F-230: the digest is taken over the RAW bytes, so the body must be
+    // recorded in a form that reproduces them. Stored as UTF-8 text, every
+    // byte that is not valid UTF-8 was lost, and the re-hash of the stored
+    // text then disagreed with the digest the capture had recorded - so one
+    // binary asset made the whole capture fail with
+    // TRANSACTION_SNAPSHOT_INCONSISTENT and left no rollback target at all.
+    //
+    // A body that IS valid UTF-8 round-trips through the text form exactly, so
+    // it keeps the shape every snapshot already has; only a body that would
+    // be lossy is stored base64-encoded.
+    const text = body.toString("utf8");
+    const lossless = Buffer.from(text, "utf8").equals(body);
     files[relative] = {
       existed: true,
       sha256: digest(body),
       mode: stat.mode & 0o777,
-      body: body.toString("utf8"),
+      ...(lossless ? { body: text } : { body_base64: body.toString("base64") }),
     };
   }
 
@@ -216,6 +229,23 @@ export function createTransactionSnapshot(roots) {
   // Never hand back a snapshot that cannot already be trusted.
   verifyTransactionSnapshot(snapshot);
   return snapshot;
+}
+
+/**
+ * F-230: the recorded BYTES of one snapshot entry.
+ *
+ * A snapshot written by the current capture carries the exact bytes, base64
+ * encoded, so the digest it recorded and the bytes it can restore are the same
+ * value. A snapshot written before that rule carries the body as UTF-8 text;
+ * a body that was valid UTF-8 re-encodes to the same bytes, so it still
+ * verifies and still restores byte-exactly. A body that was NOT valid UTF-8
+ * could never be captured in that form, so there is nothing to preserve.
+ */
+function snapshotBytes(entry) {
+  if (typeof entry.body_base64 === "string")
+    return Buffer.from(entry.body_base64, "base64");
+  if (typeof entry.body === "string") return Buffer.from(entry.body, "utf8");
+  return null;
 }
 
 /**
@@ -235,9 +265,9 @@ export function verifyTransactionSnapshot(snapshot) {
     if (!entry.existed) continue;
     if (!/^[a-f0-9]{64}$/u.test(entry.sha256 ?? ""))
       throw new Error("TRANSACTION_SNAPSHOT_INCONSISTENT");
-    if (typeof entry.body !== "string")
-      throw new Error("TRANSACTION_SNAPSHOT_INCONSISTENT");
-    if (digest(entry.body) !== entry.sha256)
+    const body = snapshotBytes(entry);
+    if (body === null) throw new Error("TRANSACTION_SNAPSHOT_INCONSISTENT");
+    if (digest(body) !== entry.sha256)
       throw new Error("TRANSACTION_SNAPSHOT_INCONSISTENT");
     if (!Number.isInteger(entry.mode) || entry.mode < 0 || entry.mode > 0o777)
       throw new Error("TRANSACTION_SNAPSHOT_INCONSISTENT");
@@ -282,7 +312,9 @@ export function restoreTransactionSnapshot(snapshot) {
       continue;
     }
     mkdirSync(path.dirname(absolute), { recursive: true });
-    writeFileSync(absolute, entry.body, "utf8");
+    // F-230: the restored bytes are the recorded bytes, not a re-encoding of
+    // them, so a preimage that is not valid UTF-8 is restored byte-exactly.
+    writeFileSync(absolute, snapshotBytes(entry));
     chmodSync(absolute, entry.mode);
   }
   return {
