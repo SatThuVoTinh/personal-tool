@@ -1773,10 +1773,25 @@ class KnowledgeDatabase:
         return len(rows)
 
     async def acquire_advisory_lock(self, lock_key: int) -> asyncpg.Connection | None:
+        """Take the run lock, or report that another session holds it.
+
+        F-254 (R7-D10A-02): the connection was acquired before any `try`, and
+        only the negative result released it. A lock query that raised (a
+        dead backend handed out by the pool, a server restart, a statement
+        timeout) therefore left the connection checked out forever, and four
+        such leaks exhausted the pool: every later call, search included,
+        blocked until the pool timeout and answered "database unavailable".
+        """
+
         if self._pool is None:
             raise RuntimeError("Database pool is unavailable.")
         connection = await self._pool.acquire()
-        if await connection.fetchval("SELECT pg_try_advisory_lock($1)", lock_key):
+        try:
+            locked = await connection.fetchval("SELECT pg_try_advisory_lock($1)", lock_key)
+        except BaseException:
+            await self._release_quietly(connection)
+            raise
+        if locked:
             return connection
         await self._pool.release(connection)
         return None
