@@ -114,7 +114,6 @@ test("R17 4: the heartbeat predicate stays strict — no near-miss is exempted",
     "discord channel marker": { channelId: "discord" },
     "discord provider marker": { messageProvider: "discord" },
     "no sentinel": { transcriptPrompt: "are you there?" },
-    "sentinel only on prompt": { transcriptPrompt: "hello" },
   };
   for (const [label, override] of Object.entries(nearMisses)) {
     const context = { ...base, ...override };
@@ -145,6 +144,45 @@ test("R17 4: the heartbeat predicate stays strict — no near-miss is exempted",
       `${label} keeps the pre-existing refusal`,
     );
   }
+});
+
+test("R17 4b: the sentinel on the `prompt` field alone qualifies, and off both fields it does not", () => {
+  // M12/T9 F-326: the pure-liveness exemption accepts the sentinel from
+  // EITHER context field, but the only case that named the second field
+  // OVERRODE the first one instead, so the branch it advertised was never
+  // entered and its negative assertion was satisfied trivially. The second
+  // disjunct now has a producer and a negative, so deleting it reddens this
+  // lane.
+  const base = heartbeatContext();
+  const onPromptOnly = {
+    ...base,
+    transcriptPrompt: undefined,
+    prompt: HEARTBEAT_LIVENESS_SENTINEL,
+  };
+  assert.equal(
+    isPureLivenessHeartbeat(onPromptOnly),
+    true,
+    "the sentinel on the `prompt` field alone must still qualify",
+  );
+  const verdict = classifyInternalRunEnd({
+    agentId: onPromptOnly.agentId,
+    sessionKey: onPromptOnly.sessionKey,
+    runId: onPromptOnly.runId,
+    ownedByLedger: false,
+    pureLivenessHeartbeat: isPureLivenessHeartbeat(onPromptOnly),
+  });
+  assert.equal(
+    verdict.isInternal,
+    true,
+    "run-end must reach the same verdict the admission predicate reached",
+  );
+
+  const onNeither = { ...base, transcriptPrompt: undefined, prompt: undefined };
+  assert.equal(
+    isPureLivenessHeartbeat(onNeither),
+    false,
+    "the sentinel on neither field must not qualify",
+  );
 });
 
 test("R17 5: a ledger-owned session is governed even when it IS a heartbeat", () => {
