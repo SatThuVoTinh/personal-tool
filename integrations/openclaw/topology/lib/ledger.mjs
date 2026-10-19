@@ -5,18 +5,21 @@ import {
   closeSync,
   existsSync,
   fsyncSync,
+  fstatSync,
   mkdirSync,
   openSync,
   readFileSync,
+  readSync,
   renameSync,
   unlinkSync,
   writeFileSync,
   lstatSync,
 } from "node:fs";
+import { Buffer } from "node:buffer";
 import path from "node:path";
 import process from "node:process";
 import { applyWorkflowEvent } from "./workflow.mjs";
-import { validateContract } from "./schema.mjs";
+import { schemaFile, validateContract } from "./schema.mjs";
 import { withFileLockSync, lockDirFor } from "../../lib/file-lock.mjs";
 import {
   canonicalHash,
@@ -52,6 +55,24 @@ export const RUN_STATES = Object.freeze([
   "CANCELLED",
   "UNKNOWN",
 ]);
+
+/**
+ * F-065: the ONE declaration of the governance versions this reader accepts.
+ *
+ * It used to exist as two independent hand-maintained literals in this file
+ * (one in the upgrade inspector, one in the replay reader), derived from
+ * neither the contract nor each other, so the two could drift apart silently:
+ * a version the inspector called CURRENT could be one the reader refused, and
+ * the whole ledger would read as corruption.
+ *
+ * The contract is the single source: the ledger-event schema already declares
+ * the closed enum of versions an event may carry, and a reader that accepts
+ * anything else is accepting an event no writer was allowed to produce. The
+ * versions a writer may EMIT are still governed by canonical.mjs.
+ */
+export const SUPPORTED_GOVERNANCE_VERSIONS = Object.freeze(
+  schemaFile("ledger-event").properties.governance_version.enum,
+);
 
 // A-6 / R6-V11-01: the segments `ledgerPaths` appends. A caller that passes an
 // already-joined root gets them appended a second time, which mints a new,
