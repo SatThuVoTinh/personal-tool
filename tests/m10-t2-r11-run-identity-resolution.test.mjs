@@ -167,9 +167,17 @@ async function spawnDecision(guard, sessionKey, runId, agentId = "o1") {
       { agentId: "main", sessionKey, runId },
       null,
     );
-    return { allow: d?.allow === true, reason: d?.reason ?? null };
+    // M12/T9 F-327: the two channels are kept apart. The guard REFUSES by
+    // throwing the canonical code, so a decision that came back as a reason
+    // and a decision that came back as a throw are different facts and must
+    // not be folded into one.
+    return { allow: d?.allow === true, reason: d?.reason ?? null, threw: null };
   } catch (error) {
-    return { allow: false, threw: error?.message ?? String(error) };
+    return {
+      allow: false,
+      reason: null,
+      threw: error?.message ?? String(error),
+    };
   }
 }
 
@@ -186,26 +194,33 @@ test("R11: each run resolves its OWN task when two share a session", async () =>
     const fresh = await spawnDecision(guard, sessionKey, "run-r11-fresh");
     assert.equal(fresh.allow, false);
     assert.equal(
-      fresh.reason ?? fresh.threw,
+      fresh.threw,
       "AUTH_APPROVAL_REQUIRED",
-      `fresh run must hit its own approval gate, got: ${fresh.reason ?? fresh.threw}`,
+      `fresh run must hit its own approval gate, got: ${fresh.threw ?? fresh.reason}`,
     );
 
     // Case 1 (fresh task, correct identity): the APPROVED run passes the
-    // approval gate — proving it resolved task A. It must NOT report
-    // AUTH_APPROVAL_REQUIRED; whatever later verdict it reaches is the normal
-    // path for an approved spawn, not this test's concern.
+    // approval gate — proving it resolved task A. M12/T9 F-327: this case used
+    // to assert only that ONE other code was absent, so a run that fell back
+    // to an unknown task and reported EXECUTION_STATE_UNKNOWN satisfied it.
+    // The guard's real approved outcome is a boolean allow, and that is what
+    // is asserted now.
     const approved = await spawnDecision(guard, sessionKey, "run-r11-approved");
-    assert.notEqual(
-      approved.reason ?? approved.threw,
-      "AUTH_APPROVAL_REQUIRED",
-      `approved run must pass its own approval gate, got: ${approved.reason ?? approved.threw}`,
+    assert.equal(
+      approved.threw,
+      null,
+      `approved run must not be refused, got: ${approved.threw}`,
+    );
+    assert.equal(
+      approved.allow,
+      true,
+      "approved run must be ALLOWED, not merely not-AUTH_APPROVAL_REQUIRED",
     );
 
     // Case 3 (legitimate continuation): same run twice resolves the same task.
     const again = await spawnDecision(guard, sessionKey, "run-r11-fresh");
     assert.equal(
-      again.reason ?? again.threw,
+      again.threw,
       "AUTH_APPROVAL_REQUIRED",
       "repeat call must resolve identically",
     );
@@ -214,9 +229,9 @@ test("R11: each run resolves its OWN task when two share a session", async () =>
     const bogus = await spawnDecision(guard, sessionKey, "run-no-such-run");
     assert.equal(bogus.allow, false);
     assert.equal(
-      bogus.reason ?? bogus.threw,
+      bogus.threw,
       "EXECUTION_STATE_UNKNOWN",
-      `bogus run must hit lineage, got: ${bogus.reason ?? bogus.threw}`,
+      `bogus run must hit lineage, got: ${bogus.threw ?? bogus.reason}`,
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
