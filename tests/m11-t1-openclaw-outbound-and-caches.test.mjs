@@ -54,6 +54,36 @@ const PENDING_CACHE = () =>
 const COMPLETED_CACHE = () =>
   globalThis[Symbol.for("zink.governance.completed_executions")];
 
+/**
+ * Run `body` against an empty process-global cache and restore the previous
+ * contents afterwards.
+ *
+ * The plugin creates these caches once at module load and never resets them,
+ * so every assertion on their absolute contents depended on which earlier
+ * test in the file had run: a leftover entry shifts the oldest-first eviction
+ * boundary, so `cache.size` and the eviction assertions could pass or fail on
+ * test order alone. The cache tests below now measure an isolated cache and
+ * leave the shared singleton exactly as they found it.
+ */
+function withIsolatedCache(cache, body) {
+  const isSet = typeof cache.add === "function";
+  const saved = isSet ? new Set(cache) : new Map(cache);
+  const clear = () => {
+    for (const key of [...cache.keys()]) cache.delete(key);
+  };
+  clear();
+  try {
+    return body();
+  } finally {
+    clear();
+    if (isSet) {
+      for (const value of saved) cache.add(value);
+    } else {
+      for (const [key, value] of saved) cache.set(key, value);
+    }
+  }
+}
+
 function tempRoot(prefix) {
   return mkdtempSync(path.join(os.tmpdir(), prefix));
 }
@@ -246,12 +276,9 @@ test("M11-4.1: message_sending blocks an escaping attachment, keeps http(s) pass
 
 test("M11-4.2: the pending-proposal cache is capped and evicts the oldest insertion", () => {
   const cache = PENDING_CACHE();
-  const added = [];
-  try {
+  withIsolatedCache(cache, () => {
     for (let i = 0; i < PENDING_PROPOSALS_LIMIT + 40; i++) {
-      const proposalId = `evict-${i}`;
-      added.push(proposalId);
-      registerPendingSkillProposal({ proposal_id: proposalId });
+      registerPendingSkillProposal({ proposal_id: `evict-${i}` });
     }
     assert.equal(cache.size, PENDING_PROPOSALS_LIMIT);
     // Map iteration order is insertion order, so the oldest keys leave first.
@@ -259,9 +286,7 @@ test("M11-4.2: the pending-proposal cache is capped and evicts the oldest insert
     assert.equal(cache.has(`evict-${40 - 1}`), false);
     assert.equal(cache.has(`evict-${40}`), true);
     assert.equal(cache.has(`evict-${PENDING_PROPOSALS_LIMIT + 39}`), true);
-  } finally {
-    for (const proposalId of added) cache.delete(proposalId);
-  }
+  });
 });
 
 test("M11-4.2: a terminal proposal state removes it from the pending cache", async () => {
@@ -329,51 +354,53 @@ test("M11-4.2: the completed-execution replay guard is bounded oldest-first", ()
   const cache = COMPLETED_CACHE();
   const seeded = [];
   try {
-    for (let i = 0; i < COMPLETED_EXECUTIONS_LIMIT; i++) {
-      const key = `seed-${i}`;
-      seeded.push(key);
-      cache.add(key);
-    }
-    const queueManager = new QueueManager({
-      storagePath: path.join(dir, "queue.json"),
+    withIsolatedCache(cache, () => {
+      for (let i = 0; i < COMPLETED_EXECUTIONS_LIMIT; i++) {
+        const key = `seed-${i}`;
+        seeded.push(key);
+        cache.add(key);
+      }
+      const queueManager = new QueueManager({
+        storagePath: path.join(dir, "queue.json"),
+      });
+      queueManager.enqueueTask({
+        taskId: "bounded-run",
+        primaryCoordinator: "o1",
+      });
+      const claim = queueManager.claimTaskById({
+        taskId: "bounded-run",
+        agentId: "o1",
+      });
+      const artifact = path.join(dir, "out.csv");
+      writeFileSync(artifact, "date,revenue\n2026-10-01,1000", "utf8");
+      const args = {
+        taskId: "bounded-run",
+        agentId: "o1",
+        leaseId: claim.leaseId,
+        attempt: claim.task.attempt,
+        artifacts: [artifact],
+        technicalConfig: {
+          expectedType: "csv",
+          expectedFields: ["date", "revenue"],
+        },
+        businessData: { revenue: 1000 },
+        businessConfig: { kpiConstraints: { revenue: { min: 500 } } },
+        idempotencyKey: "bounded-execution-1",
+        queueManager,
+      };
+      const first = handleExecutionFinished(args);
+      assert.equal(first.status, "READY_FOR_REVIEW");
+      assert.equal(
+        cache.size,
+        COMPLETED_EXECUTIONS_LIMIT,
+        "the set stays capped",
+      );
+      assert.equal(cache.has("seed-0"), false, "the oldest key left first");
+      assert.equal(cache.has("seed-1"), true);
+      assert.equal(cache.has("bounded-execution-1"), true);
+      // Inside the window a replay is still refused.
+      assert.equal(handleExecutionFinished(args).status, "ALREADY_COMPLETED");
     });
-    queueManager.enqueueTask({
-      taskId: "bounded-run",
-      primaryCoordinator: "o1",
-    });
-    const claim = queueManager.claimTaskById({
-      taskId: "bounded-run",
-      agentId: "o1",
-    });
-    const artifact = path.join(dir, "out.csv");
-    writeFileSync(artifact, "date,revenue\n2026-10-01,1000", "utf8");
-    const args = {
-      taskId: "bounded-run",
-      agentId: "o1",
-      leaseId: claim.leaseId,
-      attempt: claim.task.attempt,
-      artifacts: [artifact],
-      technicalConfig: {
-        expectedType: "csv",
-        expectedFields: ["date", "revenue"],
-      },
-      businessData: { revenue: 1000 },
-      businessConfig: { kpiConstraints: { revenue: { min: 500 } } },
-      idempotencyKey: "bounded-execution-1",
-      queueManager,
-    };
-    const first = handleExecutionFinished(args);
-    assert.equal(first.status, "READY_FOR_REVIEW");
-    assert.equal(
-      cache.size,
-      COMPLETED_EXECUTIONS_LIMIT,
-      "the set stays capped",
-    );
-    assert.equal(cache.has("seed-0"), false, "the oldest key left first");
-    assert.equal(cache.has("seed-1"), true);
-    assert.equal(cache.has("bounded-execution-1"), true);
-    // Inside the window a replay is still refused.
-    assert.equal(handleExecutionFinished(args).status, "ALREADY_COMPLETED");
   } finally {
     for (const key of seeded) cache.delete(key);
     cache.delete("bounded-execution-1");
