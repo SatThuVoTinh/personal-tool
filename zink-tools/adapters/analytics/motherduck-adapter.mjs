@@ -83,7 +83,14 @@ export class MotherDuckAdapter {
       );
     }
 
-    // 3. Check timeout / mock options
+    // 4. Check timeout / mock options.
+    // F-281 (R7-C2-06): the declared MOTHERDUCK_MAX_TIMEOUT_MS ceiling bounds
+    // the effective timeout instead of the caller's option being echoed at face
+    // value.
+    const timeoutMs = Math.min(
+      Number(options.timeoutMs) || MOTHERDUCK_DEFAULT_TIMEOUT_MS,
+      MOTHERDUCK_MAX_TIMEOUT_MS,
+    );
     if (options.simulateTimeout) {
       throw new MotherDuckAdapterError(
         "MOTHERDUCK_TIMEOUT",
@@ -92,6 +99,9 @@ export class MotherDuckAdapter {
     }
 
     const executionMs = Date.now() - startTime;
+    // F-281 (R7-C2-06): the row bound has the sibling bridge's floor as well as
+    // its ceiling, so a non-positive request cannot become a successful empty
+    // result.
     const maxRows = Math.min(
       Math.max(Number(input.max_rows) || 100, 1),
       MOTHERDUCK_MAX_ROWS,

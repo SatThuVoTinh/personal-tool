@@ -89,6 +89,14 @@ export class BigQueryAdapter {
       );
     }
 
+    // 4. Check timeout / mock options.
+    // F-281 (R7-C2-06): the effective timeout is bounded, not taken from the
+    // caller at face value. This adapter declares no timeout ceiling of its own,
+    // so the shared SQL capability ceiling applies.
+    const timeoutMs = Math.min(
+      Number(options.timeoutMs) || BIGQUERY_DEFAULT_TIMEOUT_MS,
+      DUCKDB_MAX_TIMEOUT_MS,
+    );
     if (options.simulateTimeout) {
       throw new BigQueryAdapterError(
         "BIGQUERY_TIMEOUT",
@@ -97,7 +105,13 @@ export class BigQueryAdapter {
     }
 
     const executionMs = Date.now() - startTime;
-    const maxRows = Math.min(Number(input.max_rows) || 100, BIGQUERY_MAX_ROWS);
+    // F-281 (R7-C2-06): the row bound has the sibling bridge's floor as well as
+    // its ceiling, so a non-positive request cannot become a successful empty
+    // result.
+    const maxRows = Math.min(
+      Math.max(Number(input.max_rows) || 100, 1),
+      BIGQUERY_MAX_ROWS,
+    );
 
     const columns = [
       "dataset_name",
