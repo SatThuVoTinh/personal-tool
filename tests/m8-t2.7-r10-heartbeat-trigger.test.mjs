@@ -374,19 +374,49 @@ test("R10 F: replaying the same Discord message id creates no duplicate task", a
 });
 
 test("R10 F: an exempt heartbeat gets no fabricated governance receipt", async () => {
-  await withPlugin(async ({ paths, hooks }) => {
-    const result = await hooks.get(
-      "before_prompt_build",
+  await withPlugin(async ({ paths, hooks, native }) => {
+    // M12/T9 F-318: this case used to resolve the hook with a Map lookup that
+    // carried the intended call arguments as EXTRA lookup keys, so it received
+    // the HANDLER itself. Awaiting a plain function yields the function, the
+    // inspected property was therefore absent by construction, and both
+    // assertions were structural ? the case that names the production
+    // exemption never reached it. The hook is now invoked the way the host
+    // invokes it, and the outcome it produces is asserted.
+    const heartbeat = {
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      runId: "hb",
+      trigger: "heartbeat",
+      transcriptPrompt: SENTINEL,
+    };
+    const result = await hooks.get("before_prompt_build")({}, heartbeat);
+    assert.deepEqual(
+      result,
       {},
-      {
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        runId: "hb",
-        trigger: "heartbeat",
-        transcriptPrompt: SENTINEL,
-      },
+      "the exemption must hand back no governance context at all",
     );
     assert.equal(result?.prependContext, undefined);
     assert.equal(Object.keys(readSnapshot(paths).tasks).length, 0);
+
+    // The same hook, a governed run: the handler must produce a REAL context
+    // string, so this pair cannot pass with a handler that never ran.
+    const governed = {
+      channelId: "discord",
+      agentId: "main",
+      senderId: OWNER,
+      currentMessageId: "123456789012345904",
+      content: "@main ordinary request",
+      mentions: [{ username: "main" }],
+      sessionKey: "main-session",
+      runId: "discord-governed-904",
+    };
+    await enterNativeRun(native, governed);
+    const governedResult = await hooks.get("before_prompt_build")({}, governed);
+    assert.equal(
+      typeof governedResult?.prependContext,
+      "string",
+      "a governed run must receive a real governance context from the same hook",
+    );
+    assert.ok(governedResult.prependContext.length > 0);
   });
 });
