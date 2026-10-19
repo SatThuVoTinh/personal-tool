@@ -32,7 +32,20 @@ class OllamaModelProbe:
     async def close(self) -> None:
         await self._client.aclose()
 
-    async def resolve(self, model_name: str) -> ResolvedEmbeddingModel:
+    async def resolve(
+        self, model_name: str, expected_dimensions: int | None = None
+    ) -> ResolvedEmbeddingModel:
+        """Resolve the deployed model identity.
+
+        `expected_dimensions` is the caller's own knowledge of the vector
+        width. When it is supplied the probe does NOT issue the embedding
+        preflight: the dimension is already known, and the preflight was the
+        second and third provider round trip of every `/v1/search`
+        (F-263 / R7-D10B-01). The caller that supplies the width checks the
+        width of the vectors it actually received, so the check the preflight
+        performed is not lost -- only the redundant call is.
+        """
+
         timeout = httpx.Timeout(10.0, connect=3.0)
         last_error: BaseException | None = None
         for attempt in range(2):

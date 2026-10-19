@@ -51,7 +51,12 @@ class FakeProbe:
         self.resolve_calls = 0
         self.embed_calls = 0
 
-    async def resolve(self, _: str) -> ResolvedEmbeddingModel:
+    async def resolve(
+        self, _: str, expected_dimensions: int | None = None
+    ) -> ResolvedEmbeddingModel:
+        # F-263 (R7-D10B-01): the production probe takes the known vector
+        # width so it does not have to embed a probe string to learn it. The
+        # fake mirrors that signature.
         identity = self.identities[min(self.resolve_calls, len(self.identities) - 1)]
         self.resolve_calls += 1
         return identity
@@ -70,6 +75,7 @@ class FakeDatabase:
         self.completed = False
         self.completed_args: tuple[object, ...] = ()
         self.published = False
+        self.fail_cleanup = False
 
     async def get_index(self, _: str) -> ActiveIndex:
         return EXPECTED

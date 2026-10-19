@@ -10,6 +10,71 @@ from app.model_probe import ModelProbeError, OllamaModelProbe
 
 
 class OllamaModelProbeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_resolve_with_a_known_width_makes_no_embedding_call(self) -> None:
+        """F-263 (R7-D10B-01): the identity check must not embed.
+
+        `resolve` used to learn the vector width by embedding a probe
+        string. The search called it twice, so one query cost two model-list
+        round trips and three embedding round trips.
+        """
+
+        embed_calls = 0
+        tags_calls = 0
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal embed_calls, tags_calls
+            if request.url.path == "/api/tags":
+                tags_calls += 1
+                return httpx.Response(
+                    200,
+                    json={"models": [{"name": "bge-m3:latest", "digest": "a" * 64}]},
+                )
+            embed_calls += 1
+            return httpx.Response(200, json={"embeddings": [[0.0, 1.0]]})
+
+        probe = OllamaModelProbe("http://ollama")
+        await probe._client.aclose()
+        probe._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        try:
+            resolved = await probe.resolve(
+                "bge-m3:latest", expected_dimensions=1024
+            )
+        finally:
+            await probe.close()
+
+        self.assertEqual(embed_calls, 0)
+        self.assertEqual(tags_calls, 1)
+        self.assertEqual(resolved.digest, "a" * 64)
+        self.assertEqual(resolved.dimensions, 1024)
+
+    async def test_the_embedding_deadline_reaches_the_wire(self) -> None:
+        """F-165 (R5-E02-06): the bound must be the request's own.
+
+        The query embedding inherited the client's 90 s read timeout, and one
+        retry doubled it, so a slow provider held a search slot for roughly
+        181 s.
+        """
+
+        observed_read_timeouts: list[float] = []
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            observed_read_timeouts.append(request.extensions["timeout"]["read"])
+            return httpx.Response(200, json={"embeddings": [[0.0, 1.0]]})
+
+        probe = OllamaModelProbe("http://ollama")
+        await probe._client.aclose()
+        probe._client = httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+            timeout=httpx.Timeout(90.0, connect=3.0),
+        )
+        try:
+            await probe.embed("bge-m3:latest", ["hello"], timeout=30.0)
+            await probe.embed("bge-m3:latest", ["hello"])
+        finally:
+            await probe.close()
+
+        self.assertEqual(observed_read_timeouts, [30.0, 90.0])
+
     async def test_resolve_validates_digest_and_finite_probe_vector(self) -> None:
         observed_preflight_inputs: list[list[str]] = []
         observed_read_timeouts: dict[str, float] = {}

@@ -105,8 +105,22 @@ class IndexLifecycle:
         )
 
     async def require_identity(self, expected: ActiveIndex) -> None:
+        """Refuse to work against a model that is not the indexed one.
+
+        F-263 (R7-D10B-01): the resolution used to issue an embedding
+        preflight on every call, so one `/v1/search` paid two model-list
+        round trips and three embedding round trips. The index already knows
+        the vector width, and every caller checks the width of the vectors it
+        received, so the width is passed in and the redundant embedding call
+        is not made. The digest comparison -- the part that can actually fail
+        -- is unchanged.
+        """
+
         try:
-            actual = await self._model_probe.resolve(expected.embedding_model_name)
+            actual = await self._model_probe.resolve(
+                expected.embedding_model_name,
+                expected_dimensions=expected.embedding_dimensions,
+            )
         except (httpx.HTTPError, ModelProbeError) as error:
             raise LifecycleError("EMBEDDING_MODEL_UNAVAILABLE") from error
         if not self.matches(expected, actual):
