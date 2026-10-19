@@ -364,6 +364,35 @@ class IndexLifecycle:
         except LifecycleError as error:
             await self._fail(run, error.code, [SafeRunError(error.code, error.source_path)], discovered, indexed, failed)
             return []
+        except asyncio.CancelledError:
+            # F-253 (R7-D10A-01): the owner-connection termination handler
+            # cancels the run task, and `asyncio.CancelledError` derives from
+            # `BaseException`, so the `except Exception` arm below never ran
+            # and the run row stayed RUNNING. The partial unique index then
+            # refused every later run and the violation surfaced as a 503
+            # "database unavailable" until the process restarted. The run is
+            # marked terminal here, inside the same process, and the
+            # cancellation is re-raised.
+            try:
+                await asyncio.shield(
+                    self._fail(
+                        run,
+                        "INDEX_RUN_INTERRUPTED",
+                        [SafeRunError("INDEX_RUN_INTERRUPTED")],
+                        discovered,
+                        indexed,
+                        failed,
+                    )
+                )
+            except Exception as error:
+                logger.error(
+                    "knowledge.run_interrupt_unrecorded code=%s run_id=%s error=%s",
+                    "INDEX_RUN_INTERRUPTED",
+                    run.id,
+                    error,
+                    exc_info=True,
+                )
+            raise
         except Exception:
             await self._fail(
                 run,

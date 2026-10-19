@@ -106,6 +106,8 @@ class FakeDatabase:
         self.failures.append((args, kwargs))
 
     async def cleanup_superseded(self, _: list[str]) -> None:
+        if self.fail_cleanup:
+            raise RuntimeError("cleanup detail must not escape")
         return None
 
 
@@ -123,6 +125,88 @@ def lifecycle(database: FakeDatabase, probe: FakeProbe, scanner: FakeScanner) ->
 
 
 class IndexLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_a_cancelled_run_is_marked_terminal(self) -> None:
+        """F-253 (R7-D10A-01): a cancelled run left a permanent RUNNING row.
+
+        The owner-connection termination handler cancels the run task, and
+        `asyncio.CancelledError` derives from `BaseException`, so the
+        lifecycle's `except Exception` arm never ran. The partial unique
+        index then refused every later run and the violation surfaced as a
+        503 "database unavailable" until the process restarted.
+        """
+
+        item = source("cancel", "digest")
+        database = FakeDatabase()
+        probe = FakeProbe([MATCHING])
+        started = asyncio.Event()
+
+        async def slow_embed(*_args: object, **_kwargs: object) -> list[list[float]]:
+            started.set()
+            await asyncio.sleep(30)
+            return [[0.0] * 1024]
+
+        probe.embed = slow_embed  # type: ignore[method-assign]
+        instance = lifecycle(database, probe, FakeScanner(item))
+        task = asyncio.create_task(
+            instance.execute(
+                AcceptedIndexRun("run-1", "index-1", "INCREMENTAL", "RUNNING")
+            )
+        )
+        await started.wait()
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+
+        self.assertTrue(database.failures, "a cancelled run must be recorded")
+        self.assertEqual(database.failures[0][0][1], "INDEX_RUN_INTERRUPTED")
+
+    async def test_a_failed_cleanup_leaves_an_attributable_record(self) -> None:
+        """F-101 (R5-E01-05): the module had no logging facility at all.
+
+        A failed cleanup was swallowed, so the owner saw silent Postgres
+        growth and an unattributable 500 with nothing to read afterwards.
+        """
+
+        database = FakeDatabase()
+        database.fail_cleanup = True
+        instance = lifecycle(database, FakeProbe([MATCHING]), FakeScanner())
+
+        with self.assertLogs("app.index_lifecycle", level="ERROR") as captured:
+            await instance.cleanup(["old-index"])
+
+        joined = "\n".join(captured.output)
+        self.assertIn("CLEANUP_FAILED", joined)
+        self.assertIn("old-index", joined)
+
+    async def test_a_directory_scoped_failure_keeps_its_location(self) -> None:
+        """F-307 (R7-E1-02): the class that needs locating lost its location.
+
+        A directory-scoped read failure had its path nulled, so two of them
+        collapsed into one reported error and the operator was told a
+        directory failed without being told which one.
+        """
+
+        database = FakeDatabase()
+        scan_error = MarkdownValidationError(
+            "01. Knowledge/AI", "SOURCE_READ_FAILED", "directory"
+        )
+
+        class FailingScanner:
+            def scan_vault(
+                self, _: Path, *, include_valid_sources_on_error: bool = False
+            ) -> MarkdownScanResult:
+                return MarkdownScanResult(False, 1, 0, (), (scan_error,))
+
+        instance = lifecycle(database, FakeProbe([MATCHING]), FailingScanner())
+
+        await instance.execute(
+            AcceptedIndexRun("run-1", EXPECTED.id, "INCREMENTAL", "RUNNING")
+        )
+
+        recorded = database.failures[0][0][2]
+        self.assertEqual(recorded[0].source_path, "01. Knowledge/AI")
+        self.assertEqual(recorded[0].code, "SOURCE_READ_FAILED")
+
     async def test_incremental_model_drift_after_embedding_stops_the_run(self) -> None:
         item = source("drift", "new")
         database = FakeDatabase()
