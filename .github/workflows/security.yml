@@ -3,8 +3,10 @@ name: Security
 on:
   pull_request:
     branches: [main]
+  # No branch filter: the secret scan must see every branch push, not only the
+  # default branch, or a credential committed to a task branch reaches main
+  # through a merge without any lane ever having looked at the branch.
   push:
-    branches: [main]
   schedule:
     - cron: "0 2 * * 1"
   workflow_dispatch:
@@ -56,4 +58,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GITLEAKS_ENABLE_COMMENTS: "false"
-          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+          # The report artifact is what makes a "zero leaks" claim
+          # re-inspectable instead of a sentence in a plan file.
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "true"
