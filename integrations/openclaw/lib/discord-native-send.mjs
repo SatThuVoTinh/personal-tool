@@ -45,7 +45,7 @@
  * incident). Never falls back to raw REST silently.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -327,10 +327,13 @@ export const COMPONENT_REGISTRATION_OUTCOME = Object.freeze({
 
 /**
  * Build the host component bundle (components + registry entries) for adapter-shaped
- * buttons. Returns null when the host SDK cannot be reached **or when the build throws**,
- * having already said which.
+ * buttons and say WHICH failure happened when there is no bundle.
+ *
+ * Returns `{ bundle, outcome }`: `bundle` is null when the host SDK cannot be reached
+ * or when the build throws, and `outcome` then names which of the two it was, so the
+ * caller can report the real cause instead of a generic miss.
  */
-export async function buildNativeComponentBundle({
+async function resolveNativeComponentBundle({
   buttons,
   accountId = null,
   sdk,
@@ -346,18 +349,26 @@ export async function buildNativeComponentBundle({
     api,
     contextLabel,
   });
-  if (!componentSdk) return null;
+  if (!componentSdk) {
+    return {
+      bundle: null,
+      outcome: COMPONENT_REGISTRATION_OUTCOME.SDK_UNAVAILABLE,
+    };
+  }
   // A build throw used to escape as a generic delivery failure and take the whole card with
   // it — text body and the `APPROVE <code>` reply path alike. Text-only delivery is exactly
   // what this function already promises when the SDK cannot be reached, so the same shape
-  // applies here: name the degrade and return null.
+  // applies here: name the degrade and report the outcome.
   try {
     return {
-      sdk: componentSdk,
-      buildResult: componentSdk.buildDiscordComponentMessage({
-        spec: buildHostComponentSpec(buttons),
-        accountId: accountId ?? undefined,
-      }),
+      bundle: {
+        sdk: componentSdk,
+        buildResult: componentSdk.buildDiscordComponentMessage({
+          spec: buildHostComponentSpec(buttons),
+          accountId: accountId ?? undefined,
+        }),
+      },
+      outcome: COMPONENT_REGISTRATION_OUTCOME.REGISTERED,
     };
   } catch (buildError) {
     warn(
@@ -365,13 +376,26 @@ export async function buildNativeComponentBundle({
       api,
       `[zink-governance] COMPONENT_BUILD_FAILED${contextLabel}: the card is delivered as text only, so the APPROVE code path survives: ${buildError?.message}`,
     );
-    return null;
+    return {
+      bundle: null,
+      outcome: COMPONENT_REGISTRATION_OUTCOME.BUILD_FAILED,
+    };
   }
 }
 
 /**
+ * Build the host component bundle (components + registry entries) for adapter-shaped
+ * buttons. Returns null when the host SDK cannot be reached **or when the build throws**,
+ * having already said which.
+ */
+export async function buildNativeComponentBundle(options) {
+  const { bundle } = await resolveNativeComponentBundle(options);
+  return bundle;
+}
+
+/**
  * Register a built bundle against the message id that now carries it. A miss is
- * reported and returns false: the card itself is delivered and readable, and the
+ * reported as its own outcome: the card itself is delivered and readable, and the
  * `APPROVE <code>` reply path still works, so a registration failure must never be
  * turned into a delivery failure — but it must not be silent either (M12/T9 F-193).
  */
@@ -383,14 +407,14 @@ export function registerNativeComponents({
   api = null,
   contextLabel = "",
 }) {
-  if (!buildResult) return false;
+  if (!buildResult) return COMPONENT_REGISTRATION_OUTCOME.NO_COMPONENTS;
   if (!messageId) {
     warn(
       logger,
       api,
       `[zink-governance] COMPONENT_REGISTRATION_SKIPPED${contextLabel}: no message id was returned, so the buttons on this card cannot resolve`,
     );
-    return false;
+    return COMPONENT_REGISTRATION_OUTCOME.NO_MESSAGE_ID;
   }
   try {
     sdk.registerBuiltDiscordComponentMessage({
@@ -398,14 +422,14 @@ export function registerNativeComponents({
       messageId,
       ttlMs: DISCORD_COMPONENT_TTL_MS,
     });
-    return true;
+    return COMPONENT_REGISTRATION_OUTCOME.REGISTERED;
   } catch (registerError) {
     warn(
       logger,
       api,
       `[zink-governance] COMPONENT_REGISTRATION_FAILED${contextLabel}: buttons on message ${messageId} cannot be clicked: ${registerError?.message}`,
     );
-    return false;
+    return COMPONENT_REGISTRATION_OUTCOME.REGISTRATION_FAILED;
   }
 }
 
@@ -423,8 +447,10 @@ export async function registerPostedNativeComponents({
   resolveSdk = resolveHostDiscordComponentSdk,
   logger = null,
 }) {
-  if (!Array.isArray(buttons) || buttons.length === 0) return false;
-  const bundle = await buildNativeComponentBundle({
+  if (!Array.isArray(buttons) || buttons.length === 0) {
+    return COMPONENT_REGISTRATION_OUTCOME.NO_COMPONENTS;
+  }
+  const { bundle, outcome } = await resolveNativeComponentBundle({
     buttons,
     accountId,
     sdk,
@@ -433,7 +459,7 @@ export async function registerPostedNativeComponents({
     api,
     contextLabel: " (posted rest site)",
   });
-  if (!bundle) return false;
+  if (!bundle) return outcome;
   return registerNativeComponents({
     sdk: bundle.sdk,
     buildResult: bundle.buildResult,
@@ -450,6 +476,30 @@ export async function registerPostedNativeComponents({
  * `mediaLocalRoots` is missing), but refusing here means the governed path never even
  * asks the host to read a file outside the task's own artifact directory.
  */
+/**
+ * Resolve the REAL path of `target`, or of the nearest ancestor that exists, so a
+ * path whose leaf does not exist yet is still checked against the real directory
+ * that will hold it. A leaf that does not exist cannot be a symlink itself, so the
+ * nearest existing ancestor is the only place a link can hide.
+ */
+function realpathOfNearestExistingAncestor(target) {
+  let current = path.resolve(target);
+  const tail = [];
+  for (;;) {
+    try {
+      const real = realpathSync(current);
+      return tail.length === 0 ? real : path.join(real, ...tail);
+    } catch (error) {
+      const code = error?.code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
+      const parent = path.dirname(current);
+      if (parent === current) return path.resolve(target);
+      tail.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
 export function assertMediaInsideRoots(mediaUrl, mediaLocalRoots) {
   if (typeof mediaUrl !== "string" || mediaUrl.length === 0) {
     throw new Error("MEDIA_URL_REQUIRED");
@@ -462,15 +512,29 @@ export function assertMediaInsideRoots(mediaUrl, mediaLocalRoots) {
     throw new Error("MEDIA_LOCAL_ROOTS_REQUIRED");
   }
   const resolvedMedia = path.resolve(mediaUrl);
-  const allowed = roots.some(
+  const declaredRoots = roots.filter(
     (root) =>
-      typeof root === "string" &&
-      root.length > 0 &&
-      !root.includes("..") &&
-      (resolvedMedia === path.resolve(root) ||
-        resolvedMedia.startsWith(path.resolve(root) + path.sep)),
+      typeof root === "string" && root.length > 0 && !root.includes(".."),
   );
-  if (!allowed) {
+  const lexicallyAllowed = declaredRoots.some(
+    (root) =>
+      resolvedMedia === path.resolve(root) ||
+      resolvedMedia.startsWith(path.resolve(root) + path.sep),
+  );
+  if (!lexicallyAllowed) {
+    throw new Error("MEDIA_PATH_OUTSIDE_ROOTS");
+  }
+  // M12/T9 F-039: the prefix test above is LEXICAL, so a symlink or junction
+  // inside a declared root can point outside it while the path still reads as
+  // inside. The sibling containment on the attachment path already resolves the
+  // real path; this boundary now does the same, so one boundary has one
+  // containment idiom instead of two.
+  const realMedia = realpathOfNearestExistingAncestor(resolvedMedia);
+  const reallyAllowed = declaredRoots.some((root) => {
+    const realRoot = realpathOfNearestExistingAncestor(path.resolve(root));
+    return realMedia === realRoot || realMedia.startsWith(realRoot + path.sep);
+  });
+  if (!reallyAllowed) {
     throw new Error("MEDIA_PATH_OUTSIDE_ROOTS");
   }
   return resolvedMedia;

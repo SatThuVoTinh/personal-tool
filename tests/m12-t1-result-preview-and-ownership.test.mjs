@@ -125,6 +125,31 @@ describe("M12/T1 P4 — attachment confinement", () => {
     }
   });
 
+  // M12/T9 F-039: the containment was a lexical prefix test, so a link inside a
+  // declared root that points OUTSIDE it passed. The sibling attachment
+  // containment already resolves the real path; this boundary must not be the
+  // weaker twin.
+  it("refuses a linked media path that resolves outside the declared root", () => {
+    const root = tempRoot("media-link");
+    const outside = tempRoot("media-outside");
+    const link = path.join(root, "j");
+    try {
+      const secret = path.join(outside, "host-secret.png");
+      writeFileSync(secret, PNG_SIGNATURE);
+      symlinkSync(outside, link, "junction");
+      assert.throws(
+        () =>
+          assertMediaInsideRoots(path.join(link, "host-secret.png"), [root]),
+        /MEDIA_PATH_OUTSIDE_ROOTS/u,
+        "a link that leaves the declared root must be refused",
+      );
+    } finally {
+      rmSync(link, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
   it("passes the media through the host payload with its roots", async () => {
     const root = tempRoot("payload");
     try {
