@@ -254,3 +254,145 @@ describe("Lane D — decision ledger authority (M7-022/023/033/070)", () => {
     );
   });
 });
+
+// M12/T9 F-345: the contract declared one deterministic id rule and the store
+// enforced another. The contract now states the enforced rule, including the
+// 12-hex chain prefix, and this pins it against the store instead of against
+// an id the caller passed in.
+describe("M12/T9 F-345 - the documented id derivation is the enforced one", () => {
+  const OWNER = "123456789012345678";
+
+  it("derives dec-<16 hex of the governed key> when the caller supplies no id", () => {
+    const ledger = freshLedger();
+    const key = canonicalDecisionKey({
+      topic: "T",
+      question: "Q",
+      scope: "global",
+      taskId: null,
+      domain: null,
+    });
+    const record = ledger.recordDecision({
+      topic: "T",
+      question: "Q",
+      decision: "yes",
+      confirmedBy: OWNER,
+      scope: "global",
+    });
+    assert.equal(record.decisionId, `dec-${key.slice(0, 16)}`);
+    assert.match(record.decisionId, /^dec-[0-9a-f]{16}$/u);
+  });
+
+  it("gives a chain generation the documented 12-hex prefix and the generation number", () => {
+    const ledger = freshLedger();
+    const key = canonicalDecisionKey({
+      topic: "T",
+      question: "Q",
+      scope: "global",
+      taskId: null,
+      domain: null,
+    });
+    ledger.recordDecision({
+      topic: "T",
+      question: "Q",
+      decision: "yes",
+      confirmedBy: OWNER,
+      scope: "global",
+    });
+    const corrected = ledger.correctDecision({
+      topic: "T",
+      question: "Q",
+      decision: "no",
+      confirmedBy: OWNER,
+      scope: "global",
+    });
+    assert.equal(corrected.decisionId, `dec-${key.slice(0, 12)}-s2`);
+    assert.match(corrected.decisionId, /^dec-[0-9a-f]{12}-s\d+$/u);
+  });
+
+  it("states the same rule in the contract, so the two cannot drift", () => {
+    const contract = readFileSync(
+      new URL("../docs/contracts/decision-ledger.md", import.meta.url),
+      "utf8",
+    );
+    assert.match(
+      contract,
+      /dec-<first 16 hex of the\s+governed key>/u,
+      "the contract must state the root derivation",
+    );
+    assert.match(
+      contract,
+      /dec-<first 12 hex of the governed key>-s<n>/u,
+      "the contract must state the chain prefix and its length",
+    );
+    assert.match(
+      contract,
+      /explicit `decisionId`/u,
+      "the contract must state whether a caller may supply the id",
+    );
+  });
+
+  it("uses a caller-supplied id verbatim, as the contract states", () => {
+    const ledger = freshLedger();
+    const record = ledger.recordDecision({
+      decisionId: "D1",
+      topic: "T",
+      question: "Q",
+      decision: "yes",
+      confirmedBy: OWNER,
+    });
+    assert.equal(record.decisionId, "D1");
+  });
+});
+
+describe("M12/T9 F-260 — a post-rename durability error must not erase a recorded decision", () => {
+  it("F-260: the committed record survives, and memory equals disk", () => {
+    // M12/T9 F-260: the directory fsync AFTER the rename used to be rethrown
+    // as a write failure. The caller then restored its pre-write in-memory
+    // state, which is BEHIND a disk that already held the record, and the
+    // next successful save serialised that stale map over the owner's
+    // decision — the inverse of "recorded when the write failed".
+    const dir = mkdtempSync(path.join(tmpdir(), "lane-d-f260-"));
+    const storagePath = path.join(dir, "ledger.json");
+    const ledger = new DecisionLedger({
+      storagePath,
+      directoryFsync: () => {
+        const error = new Error("injected directory fsync failure");
+        error.code = "EIO";
+        throw error;
+      },
+    });
+
+    assert.throws(
+      () =>
+        ledger.recordDecision({
+          topic: "T",
+          decision: "D",
+          confirmedBy: "123456789012345678",
+        }),
+      /LEDGER_COMMIT_UNCERTAIN/,
+    );
+
+    // The record SURVIVED on disk ...
+    const onDisk = JSON.parse(readFileSync(storagePath, "utf8"));
+    assert.equal(onDisk.length, 1, "the committed record must be on disk");
+    assert.equal(onDisk[0].decision, "D");
+
+    // ... and memory equals disk.
+    assert.equal(ledger.listAll().length, 1);
+    assert.equal(ledger.listAll()[0].decision, "D");
+
+    // And the NEXT save does not erase it.
+    ledger.directoryFsync = null;
+    ledger.recordDecision({
+      topic: "T2",
+      decision: "D2",
+      confirmedBy: "123456789012345678",
+    });
+    const after = JSON.parse(readFileSync(storagePath, "utf8"));
+    assert.equal(after.length, 2, "the earlier record must still be there");
+    assert.ok(
+      after.some((entry) => entry.decision === "D"),
+      "the earlier decision must not be erased by the next save",
+    );
+  });
+});

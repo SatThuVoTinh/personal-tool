@@ -23,12 +23,21 @@ the main operational state and is never written here.
   source of truth across processes.
 - Every record requires a **verified owner principal** in `confirmedBy`. An
   agent, an observed answer, or inferred behavior can never author a decision.
-- A record id is deterministic: `dec-<first 16 hex of the governed key>`, where
-  the governed key is `topic + question + scope + scope identity`. Confirming
-  the same governed question twice therefore resolves to one record.
+- A record id is derived from the governed key: `dec-<first 16 hex of the
+governed key>`, where the governed key is `topic + question + scope + scope
+identity`. Confirming the same governed question twice therefore resolves to
+  one record.
+- A caller MAY supply an explicit `decisionId`, and then that id is used
+  verbatim: the derivation is the default, not a rejection of the caller's
+  handle. The governed key, not the id, is what the store looks up, so a
+  record written under an explicit id is still found by its key.
 - The governed key is also the **chain identity**. A correction replaces the
   answer for that key, so the key is shared by the whole chain while each
-  generation gets a distinct id (`dec-<key prefix>-s<n>`).
+  generation gets a distinct id: `dec-<first 12 hex of the governed key>-s<n>`,
+  where `n` is the number of records already in the chain plus one, so the
+  first correction of a one-record chain is `-s2`. The chain prefix is 12 hex,
+  not the 16 the root record uses, and the two forms are distinct by
+  construction.
 
 ## Lifecycle
 
