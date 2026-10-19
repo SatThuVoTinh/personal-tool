@@ -5,6 +5,7 @@ import os from "node:os";
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { crc32, deflateRawSync } from "node:zlib";
 import { setTimeout } from "node:timers/promises";
 
 import {
@@ -838,7 +839,7 @@ describe("Data File Format Handler Enrichment — multi-format validation & prev
   // -------------------------------------------------------------------------
   // Power BI (.pbix / .pbit)
   // -------------------------------------------------------------------------
-  test("Power BI: validateTechnicalArtifact passes for valid ZIP magic bytes", async () => {
+  test("Power BI: validateTechnicalArtifact passes for a real PBIX container", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "zink-fmt-pbix-"));
     try {
       const pbixFile = path.join(tempDir, "dashboard.pbix");
@@ -855,6 +856,7 @@ describe("Data File Format Handler Enrichment — multi-format validation & prev
       assert.equal(result.status, VALIDATION_STATUS.PASS);
       assert.equal(result.checks.inferredType, "powerbi");
       assert.equal(result.checks.magicBytesValid, true);
+      assert.equal(result.checks.powerbiStructureValid, true);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -1000,7 +1002,7 @@ describe("Data File Format Handler Enrichment — multi-format validation & prev
   // -------------------------------------------------------------------------
   // DOCX
   // -------------------------------------------------------------------------
-  test("DOCX: validateTechnicalArtifact passes for valid ZIP magic bytes", async () => {
+  test("DOCX: validateTechnicalArtifact passes for a real DOCX container", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "zink-fmt-docx-"));
     try {
       const docxFile = path.join(tempDir, "report.docx");
@@ -1016,6 +1018,7 @@ describe("Data File Format Handler Enrichment — multi-format validation & prev
       assert.equal(result.status, VALIDATION_STATUS.PASS);
       assert.equal(result.checks.inferredType, "docx");
       assert.equal(result.checks.magicBytesValid, true);
+      assert.equal(result.checks.docxStructureValid, true);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -3127,5 +3130,300 @@ describe("A-Series: Discord Component Callback Schema & Interaction Guards (A14-
       instructions.includes("1545696207316455527"),
       "A30: should use production approvals ID",
     );
+  });
+});
+// =========================================================================
+// M12/T9 F-126 ? zink_excel implements less than its published contract.
+//
+// Measured pre-fix: `template_path` was accepted and then ignored, `generate`
+// wrote only `specification.sheets[0]`, `load` answered a hardcoded
+// `["Sheet1"]` for every workbook, and `validate` answered `valid: exists`
+// while echoing the caller's own rules back as `rules_checked`.
+// =========================================================================
+describe("F-126 ? zink_excel implements its published contract", () => {
+  test("F-126-1: generate writes every declared sheet and load reports the real sheet names", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "zink-f126-"));
+    try {
+      const generated = executeExcelOperation(
+        {
+          operation: "generate",
+          file_path: "two-sheets.xlsx",
+          specification: {
+            sheets: [
+              { name: "Alpha", columns: ["a"], rows: [["1"]] },
+              { name: "Beta", columns: ["b"], rows: [["2"]] },
+            ],
+          },
+        },
+        dir,
+      );
+      assert.equal(generated.status, "success");
+      assert.deepEqual(generated.summary.sheets, ["Alpha", "Beta"]);
+
+      const loaded = executeExcelOperation(
+        { operation: "load", file_path: "two-sheets.xlsx" },
+        dir,
+      );
+      assert.equal(loaded.status, "success");
+      assert.deepEqual(
+        loaded.summary.sheets,
+        ["Alpha", "Beta"],
+        "load must report the workbook's real sheet names, not a constant",
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("F-126-2: validate evaluates every rule and returns a per-rule verdict", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "zink-f126-"));
+    try {
+      const emptyPath = path.join(dir, "empty.xlsx");
+      writeFileSync(emptyPath, Buffer.alloc(0));
+      const res = executeExcelOperation(
+        {
+          operation: "validate",
+          file_path: emptyPath,
+          rules: ["file_existence", "non_empty", "readable_workbook"],
+        },
+        dir,
+      );
+      assert.equal(res.status, "success");
+      assert.equal(
+        res.summary.valid,
+        false,
+        "a zero-byte workbook is not valid",
+      );
+      const byRule = Object.fromEntries(
+        res.summary.rule_results.map((entry) => [entry.rule, entry.passed]),
+      );
+      assert.equal(byRule.file_existence, true);
+      assert.equal(byRule.non_empty, false);
+      assert.equal(byRule.readable_workbook, false);
+      assert.equal(res.summary.rules_checked.length, 3);
+
+      assert.throws(
+        () =>
+          executeExcelOperation(
+            {
+              operation: "validate",
+              file_path: emptyPath,
+              rules: ["no_such_rule"],
+            },
+            dir,
+          ),
+        /EXCEL_RULE_UNSUPPORTED/u,
+        "a rule this module cannot evaluate is refused, never reported as a success",
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("F-126-3: populate consumes template_path and preserves the template's sheets", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "zink-f126-"));
+    try {
+      const templatePath = path.join(dir, "template.xlsx");
+      const templateBytes = buildMultiSheetWorkbookBuffer([
+        { name: "Header", rows: [["col"]] },
+        { name: "Extra", rows: [["keep"]] },
+      ]);
+      writeFileSync(templatePath, templateBytes);
+
+      const res = executeExcelOperation(
+        {
+          operation: "populate",
+          file_path: path.join(dir, "populated.xlsx"),
+          template_path: templatePath,
+          data: [["value"]],
+        },
+        dir,
+      );
+      assert.equal(res.status, "success");
+      assert.equal(res.summary.template_applied, true);
+      assert.deepEqual(res.summary.sheets, ["Header", "Extra"]);
+
+      const populated = readZipEntries(
+        readFileSync(path.join(dir, "populated.xlsx")),
+      );
+      const sheetXml = populated
+        .get("xl/worksheets/sheet1.xml")
+        .toString("utf8");
+      assert.match(
+        sheetXml,
+        /<t>col<\/t>/u,
+        "the template's own row must survive the population",
+      );
+      assert.match(
+        sheetXml,
+        /<t>value<\/t>/u,
+        "the supplied data must be written into the template",
+      );
+      assert.ok(
+        populated.has("xl/worksheets/sheet2.xml"),
+        "the template's second sheet must survive the population",
+      );
+      assert.deepEqual(
+        readFileSync(templatePath),
+        templateBytes,
+        "the template file itself must not be mutated",
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("F-126-4: a template_path outside the workspace is refused", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "zink-f126-"));
+    try {
+      assert.throws(
+        () =>
+          executeExcelOperation(
+            {
+              operation: "populate",
+              file_path: path.join(dir, "populated.xlsx"),
+              template_path: "../outside/template.xlsx",
+              data: [["value"]],
+            },
+            dir,
+          ),
+        /ARTIFACT_PATH_ESCAPE/u,
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// =========================================================================
+// M12/T9 F-258 — artifact "validation" was extension plus size plus substring.
+//
+// Measured pre-fix: a 200-byte text file named `report.xlsx` returned
+// `status: PASS`, because the type came from the extension, the excel branch
+// only failed files under 100 bytes, and the ZIP helper asked whether a
+// keyword appeared anywhere in the file's bytes.
+// =========================================================================
+describe("F-258 — the office/document branches parse the container", () => {
+  test("F-258-1: a garbage file with an .xlsx name FAILS", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "zink-f258-"));
+    try {
+      const garbage = path.join(dir, "report.xlsx");
+      await writeFile(garbage, "x".repeat(400), "utf8");
+      const result = validateTechnicalArtifact({ filePath: garbage });
+      assert.equal(result.status, VALIDATION_STATUS.FAIL);
+      assert.ok(
+        result.errors.some((e) => e.includes("CORRUPT_EXCEL")),
+        `the garbage workbook must be reported, got ${JSON.stringify(result.errors)}`,
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("F-258-2: a TRUNCATED real workbook FAILS", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "zink-f258-"));
+    try {
+      const real = buildMultiSheetWorkbookBuffer([
+        { name: "S", rows: [["a", "b"]] },
+      ]);
+      const truncatedPath = path.join(dir, "truncated.xlsx");
+      await writeFile(truncatedPath, real.subarray(0, 200));
+      const result = validateTechnicalArtifact({ filePath: truncatedPath });
+      assert.equal(result.status, VALIDATION_STATUS.FAIL);
+      assert.ok(
+        result.errors.some((e) => e.includes("CORRUPT_EXCEL")),
+        `the truncated workbook must be reported, got ${JSON.stringify(result.errors)}`,
+      );
+
+      // And the SAME bytes, complete, are a valid workbook.
+      const wholePath = path.join(dir, "whole.xlsx");
+      await writeFile(wholePath, real);
+      const whole = validateTechnicalArtifact({ filePath: wholePath });
+      assert.equal(whole.status, VALIDATION_STATUS.PASS);
+      assert.equal(whole.checks.excelStructureValid, true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("F-258-3: a keyword inside payload bytes is not a container entry", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "zink-f258-"));
+    try {
+      // The old helper searched the whole file as latin1, so a keyword inside
+      // arbitrary payload bytes counted as a container entry.
+      const impostor = path.join(dir, "impostor.docx");
+      await writeFile(
+        impostor,
+        `PK\x03\x04${"[Content_Types].xml".repeat(40)}`,
+        "binary",
+      );
+      const result = validateTechnicalArtifact({ filePath: impostor });
+      assert.equal(result.status, VALIDATION_STATUS.FAIL);
+      assert.ok(
+        result.errors.some((e) => e.includes("INVALID_DOCX_STRUCTURE")),
+        `the keyword must not count as an entry, got ${JSON.stringify(result.errors)}`,
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// =========================================================================
+// M12/T9 F-259 — the result card sanitizes every sibling field but emitted
+// `preview` raw, so untrusted file bytes reached Discord unredacted.
+//
+// Measured pre-fix: an artifact whose CSV/SQL/markdown bytes contain a
+// Windows path or a token appeared verbatim on the #results card, and a large
+// row set exceeded the 2000-character message ceiling because no chunking was
+// applied on this path.
+// =========================================================================
+describe("F-259 — the result card sanitizes the preview and fits the ceiling", () => {
+  test("F-259-1: a path or a token inside the file bytes never reaches the card", () => {
+    const card = formatGovernedResultCard({
+      taskId: "TASK-042",
+      attempt: 1,
+      preview: [
+        "source: C:\\Users\\admin\\secret\\report.csv",
+        "token: Bearer abc.def.ghi",
+        `hash: ${"a".repeat(64)}`,
+      ].join("\n"),
+      artifact: "s3://bucket/result.xlsx",
+      keyFindings: "Sản lượng tăng 15%",
+    });
+    assert.equal(
+      card.includes("C:\\Users\\admin"),
+      false,
+      "a Windows path in the file bytes must not appear on the card",
+    );
+    assert.equal(
+      card.includes("Bearer"),
+      false,
+      "a token in the file bytes must not appear on the card",
+    );
+    assert.equal(
+      card.includes("a".repeat(64)),
+      false,
+      "a 64-hex hash in the file bytes must not appear on the card",
+    );
+    assert.match(card, /Dữ liệu Mẫu/);
+    assert.match(card, /Sản lượng tăng 15%/);
+  });
+
+  test("F-259-2: the card fits Discord's ceiling with the action footer intact", () => {
+    const card = formatGovernedResultCard({
+      taskId: "TASK-042",
+      attempt: 1,
+      preview: "row\n".repeat(5000),
+      artifact: "s3://bucket/result.xlsx",
+      keyFindings: "Sản lượng tăng 15%",
+    });
+    assert.ok(
+      card.length <= 2000,
+      `the card must fit the 2000-character ceiling, got ${card.length}`,
+    );
+    assert.match(card, /\[ACCEPT \/ COMPLETE\]/);
+    assert.match(card, /\[REJECT\]/);
+    assert.match(card, /\[REQUEST REVISION\]/);
   });
 });

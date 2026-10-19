@@ -111,10 +111,104 @@ export function spreadsheetColumnLetter(index) {
   return letter;
 }
 
-export function buildWorkbookBuffer(rows = [], sheetName = "Sheet1") {
+/**
+ * Minimal ZIP reader ? the mirror of `createZipArchive` above.
+ *
+ * F-126: `load` used to report a hardcoded `["Sheet1"]` and `populate` had no
+ * way to read a template, because nothing in this module could open the
+ * container it writes. This reads the central directory and inflates the
+ * entries, so the sheet names and the template parts come from the real file
+ * instead of from a constant.
+ */
+export function readZipEntries(buf) {
+  if (!Buffer.isBuffer(buf) || buf.length < 22) {
+    throw new Error("ZIP_CONTAINER_UNREADABLE: not a ZIP archive");
+  }
+  let eocd = -1;
+  const lowest = Math.max(0, buf.length - 66000);
+  for (let i = buf.length - 22; i >= lowest; i--) {
+    if (buf.readUInt32LE(i) === 0x06054b50) {
+      eocd = i;
+      break;
+    }
+  }
+  if (eocd < 0) {
+    throw new Error(
+      "ZIP_CONTAINER_UNREADABLE: end-of-central-directory not found",
+    );
+  }
+  const entryCount = buf.readUInt16LE(eocd + 10);
+  let offset = buf.readUInt32LE(eocd + 16);
+  const entries = new Map();
+  for (let i = 0; i < entryCount; i++) {
+    if (offset + 46 > buf.length || buf.readUInt32LE(offset) !== 0x02014b50) {
+      throw new Error(
+        "ZIP_CONTAINER_UNREADABLE: central directory entry invalid",
+      );
+    }
+    const method = buf.readUInt16LE(offset + 10);
+    const compressedSize = buf.readUInt32LE(offset + 20);
+    const nameLen = buf.readUInt16LE(offset + 28);
+    const extraLen = buf.readUInt16LE(offset + 30);
+    const commentLen = buf.readUInt16LE(offset + 32);
+    const localOffset = buf.readUInt32LE(offset + 42);
+    const name = buf
+      .subarray(offset + 46, offset + 46 + nameLen)
+      .toString("utf8");
+    if (
+      localOffset + 30 > buf.length ||
+      buf.readUInt32LE(localOffset) !== 0x04034b50
+    ) {
+      throw new Error(
+        `ZIP_CONTAINER_UNREADABLE: local header invalid for ${name}`,
+      );
+    }
+    const localNameLen = buf.readUInt16LE(localOffset + 26);
+    const localExtraLen = buf.readUInt16LE(localOffset + 28);
+    const dataStart = localOffset + 30 + localNameLen + localExtraLen;
+    const raw = buf.subarray(dataStart, dataStart + compressedSize);
+    const content = method === 0 ? Buffer.from(raw) : zlib.inflateRawSync(raw);
+    entries.set(name, content);
+    offset += 46 + nameLen + extraLen + commentLen;
+  }
+  return entries;
+}
+
+function decodeXmlEntities(value) {
+  return String(value)
+    .replace(/&lt;/gu, "<")
+    .replace(/&gt;/gu, ">")
+    .replace(/&quot;/gu, '"')
+    .replace(/&apos;/gu, "'")
+    .replace(/&amp;/gu, "&");
+}
+
+/**
+ * The real sheet names of a workbook, read from `xl/workbook.xml`.
+ *
+ * F-126: `load` reported `["Sheet1"]` for every workbook, so a caller could
+ * not tell a one-sheet report from a twelve-sheet model.
+ */
+export function readWorkbookSheetNames(buf) {
+  const entries = readZipEntries(buf);
+  const workbookPart = entries.get("xl/workbook.xml");
+  if (!workbookPart) {
+    throw new Error(
+      "XLSX_WORKBOOK_PART_MISSING: xl/workbook.xml is not present",
+    );
+  }
+  const xml = workbookPart.toString("utf8");
+  const names = [];
+  for (const match of xml.matchAll(/<sheet\b[^>]*\bname="([^"]*)"/gu)) {
+    names.push(decodeXmlEntities(match[1]));
+  }
+  return names;
+}
+
+function buildSheetRowsXml(rows, startRow = 1) {
   let sheetRowsXml = "";
   for (let rIdx = 0; rIdx < rows.length; rIdx++) {
-    const rowNum = rIdx + 1;
+    const rowNum = rIdx + startRow;
     let cellsXml = "";
     const row = Array.isArray(rows[rIdx]) ? rows[rIdx] : [rows[rIdx]];
     for (let cIdx = 0; cIdx < row.length; cIdx++) {
@@ -128,8 +222,30 @@ export function buildWorkbookBuffer(rows = [], sheetName = "Sheet1") {
     }
     sheetRowsXml += `<row r="${rowNum}">${cellsXml}</row>`;
   }
+  return sheetRowsXml;
+}
 
-  const safeSheetName = sheetName.replace(/[^a-zA-Z0-9_-]/g, "") || "Sheet1";
+function safeSheetName(name) {
+  return (
+    String(name ?? "")
+      .replace(/[^a-zA-Z0-9_-]/gu, "")
+      .slice(0, 31) || "Sheet1"
+  );
+}
+
+/**
+ * Build a workbook with EVERY sheet the caller declared.
+ *
+ * F-126: the writer emitted exactly one `xl/worksheets/sheet1.xml` and read
+ * only `specification.sheets[0]`, so `sheets[1..]` were dropped silently while
+ * the tool reported `status: "success"`.
+ */
+export function buildMultiSheetWorkbookBuffer(sheets = []) {
+  const list = (Array.isArray(sheets) ? sheets : []).map((sheet, index) => ({
+    name: safeSheetName(sheet?.name || `Sheet${index + 1}`),
+    rows: Array.isArray(sheet?.rows) ? sheet.rows : [],
+  }));
+  if (list.length === 0) list.push({ name: "Sheet1", rows: [] });
 
   const files = {
     "[Content_Types].xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -137,7 +253,12 @@ export function buildWorkbookBuffer(rows = [], sheetName = "Sheet1") {
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
   <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
-  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+${list
+  .map(
+    (_s, i) =>
+      `  <Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`,
+  )
+  .join("\n")}
 </Types>`,
     "_rels/.rels": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
@@ -145,27 +266,252 @@ export function buildWorkbookBuffer(rows = [], sheetName = "Sheet1") {
 </Relationships>`,
     "xl/_rels/workbook.xml.rels": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+${list
+  .map(
+    (_s, i) =>
+      `  <Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`,
+  )
+  .join("\n")}
 </Relationships>`,
     "xl/workbook.xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <sheets>
-    <sheet name="${safeSheetName}" sheetId="1" r:id="rId1"/>
+${list
+  .map(
+    (sheet, i) =>
+      `    <sheet name="${escapeXml(sheet.name)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`,
+  )
+  .join("\n")}
   </sheets>
 </workbook>`,
-    "xl/worksheets/sheet1.xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+  };
+
+  list.forEach((sheet, i) => {
+    files[`xl/worksheets/sheet${i + 1}.xml`] =
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <sheetData>
-    ${sheetRowsXml}
+    ${buildSheetRowsXml(sheet.rows)}
   </sheetData>
-</worksheet>`,
-  };
+</worksheet>`;
+  });
 
   return createZipArchive(files);
 }
 
+export function buildWorkbookBuffer(rows = [], sheetName = "Sheet1") {
+  return buildMultiSheetWorkbookBuffer([{ name: sheetName, rows }]);
+} /**
+ * The four operations the published contract declares
+ * (`zink-tools/contracts/tools/zink-excel.schema.json`).
+ *
+ * F-126: the writer accepted any verb, so a call could come back with an
+ * `operation` the contract forbids. Aliases are mapped onto the closed
+ * vocabulary; anything else is refused by an explicit error code and is never
+ * reported as a success.
+ */
+const EXCEL_OPERATIONS = Object.freeze({
+  load: "load",
+  read: "load",
+  validate: "validate",
+  generate: "generate",
+  create: "generate",
+  append: "generate",
+  write: "generate",
+  populate: "populate",
+});
+
+function normalizeExcelOperation(operation) {
+  const key = String(operation || "generate")
+    .trim()
+    .toLowerCase();
+  const mapped = EXCEL_OPERATIONS[key];
+  if (!mapped) {
+    throw new Error(`EXCEL_OPERATION_UNSUPPORTED: ${key}`);
+  }
+  return mapped;
+}
+
+/**
+ * The closed rule vocabulary `validate` can evaluate.
+ *
+ * F-126: `validate` used to report `valid: exists` and echo the caller's own
+ * `rules` back as `rules_checked` without evaluating any of them. Each rule
+ * now produces its own verdict; an unknown rule is refused rather than
+ * silently ignored.
+ */
+const EXCEL_VALIDATION_RULES = Object.freeze({
+  file_existence: (ctx) => ({
+    passed: ctx.exists === true,
+    detail: ctx.exists
+      ? "the workbook file exists"
+      : "the workbook file does not exist",
+  }),
+  extension_check: (ctx) => ({
+    passed: ctx.extension === ".xlsx",
+    detail: `the file extension is ${ctx.extension}`,
+  }),
+  non_empty: (ctx) => ({
+    passed: ctx.sizeBytes > 0,
+    detail: `the workbook is ${ctx.sizeBytes} bytes`,
+  }),
+  readable_workbook: (ctx) => ({
+    passed: Array.isArray(ctx.sheets),
+    detail: Array.isArray(ctx.sheets)
+      ? "the workbook is a readable OOXML package"
+      : `the workbook could not be read as a workbook (${ctx.sheetError})`,
+  }),
+  has_sheets: (ctx) => ({
+    passed: Array.isArray(ctx.sheets) && ctx.sheets.length > 0,
+    detail: Array.isArray(ctx.sheets)
+      ? `the workbook declares ${ctx.sheets.length} sheet(s)`
+      : "the workbook declares no sheet",
+  }),
+});
+
+function evaluateExcelRules(rules, ctx) {
+  const ruleResults = [];
+  for (const rule of rules) {
+    const evaluator = EXCEL_VALIDATION_RULES[rule];
+    if (!evaluator) {
+      throw new Error(`EXCEL_RULE_UNSUPPORTED: ${rule}`);
+    }
+    const verdict = evaluator(ctx);
+    ruleResults.push({
+      rule,
+      passed: verdict.passed === true,
+      detail: verdict.detail,
+    });
+  }
+  return ruleResults;
+}
+
+function xmlAttr(tag, name) {
+  const match = tag.match(new RegExp(`\\b${name}="([^"]*)"`, "u"));
+  return match ? match[1] : null;
+}
+
+/**
+ * Apply `rows` to a template workbook, preserving everything the template
+ * already contains.
+ *
+ * F-126: `template_path` was accepted by the contract and by the parameter
+ * list, and then ignored ? `populate` regenerated the workbook from `data` and
+ * reported `status: "success"`, so the owner's formatting and formulas were
+ * silently lost. The template's own parts (styles, theme, every other sheet)
+ * are copied verbatim and the new rows are appended to the target sheet, so
+ * the template's existing rows, formulas and formatting survive.
+ */
+function buildPopulatedWorkbook(templateBuffer, sheetName, rows) {
+  const entries = readZipEntries(templateBuffer);
+  const workbookXml = entries.get("xl/workbook.xml")?.toString("utf8");
+  if (!workbookXml) {
+    throw new Error(
+      "XLSX_WORKBOOK_PART_MISSING: xl/workbook.xml is not present in the template",
+    );
+  }
+  const relsXml =
+    entries.get("xl/_rels/workbook.xml.rels")?.toString("utf8") || "";
+  const relTargets = new Map();
+  for (const tag of relsXml.matchAll(/<Relationship\b[^>]*>/gu)) {
+    const id = xmlAttr(tag[0], "Id");
+    const target = xmlAttr(tag[0], "Target");
+    if (id && target) relTargets.set(id, target);
+  }
+  const sheetTags = [...workbookXml.matchAll(/<sheet\b[^>]*>/gu)].map(
+    (match) => match[0],
+  );
+  if (sheetTags.length === 0) {
+    throw new Error(
+      "XLSX_TEMPLATE_HAS_NO_SHEET: the template declares no sheet",
+    );
+  }
+  let chosen = null;
+  for (const tag of sheetTags) {
+    const name = decodeXmlEntities(xmlAttr(tag, "name") || "");
+    const relId = xmlAttr(tag, "r:id");
+    if (!chosen) chosen = { name, relId };
+    if (name === sheetName) {
+      chosen = { name, relId };
+      break;
+    }
+  }
+  const relTarget = chosen.relId ? relTargets.get(chosen.relId) : null;
+  if (!relTarget) {
+    throw new Error(
+      "XLSX_TEMPLATE_SHEET_UNRESOLVED: the target sheet part is not declared",
+    );
+  }
+  const partPath = relTarget.startsWith("/")
+    ? relTarget.slice(1)
+    : relTarget.startsWith("xl/")
+      ? relTarget
+      : `xl/${relTarget}`;
+  const sheetPart = entries.get(partPath);
+  if (!sheetPart) {
+    throw new Error(
+      `XLSX_TEMPLATE_SHEET_UNRESOLVED: ${partPath} is not present in the template`,
+    );
+  }
+  const sheetXml = sheetPart.toString("utf8");
+  const rowNumbers = [...sheetXml.matchAll(/<row\b[^>]*\br="(\d+)"/gu)].map(
+    (match) => Number(match[1]),
+  );
+  const startRow = (rowNumbers.length ? Math.max(...rowNumbers) : 0) + 1;
+  const rowsXml = buildSheetRowsXml(rows, startRow);
+  let populatedSheetXml;
+  if (/<sheetData\s*\/>/u.test(sheetXml)) {
+    populatedSheetXml = sheetXml.replace(
+      /<sheetData\s*\/>/u,
+      `<sheetData>${rowsXml}</sheetData>`,
+    );
+  } else if (/<sheetData>/u.test(sheetXml)) {
+    populatedSheetXml = sheetXml.replace(
+      "</sheetData>",
+      `${rowsXml}</sheetData>`,
+    );
+  } else {
+    throw new Error(
+      "XLSX_TEMPLATE_SHEET_DATA_MISSING: the target sheet has no <sheetData>",
+    );
+  }
+  const files = {};
+  for (const [name, content] of entries) {
+    files[name] = name === partPath ? populatedSheetXml : content;
+  }
+  return {
+    buffer: createZipArchive(files),
+    sheetNames: sheetTags.map((tag) =>
+      decodeXmlEntities(xmlAttr(tag, "name") || ""),
+    ),
+    targetSheet: chosen.name,
+  };
+}
+
+function rowsFromData(data) {
+  if (Array.isArray(data)) {
+    return data.map((item) =>
+      Array.isArray(item) ? item : Object.values(item),
+    );
+  }
+  if (data && typeof data === "object") return [Object.values(data)];
+  return [];
+}
+
+function sheetsFromSpecification(specification) {
+  const declared = Array.isArray(specification?.sheets)
+    ? specification.sheets
+    : [];
+  return declared
+    .map((sheet, index) => ({
+      name: sheet?.name || `Sheet${index + 1}`,
+      rows: Array.isArray(sheet?.rows) ? sheet.rows : [],
+    }))
+    .filter((sheet) => sheet.rows.length > 0);
+}
+
 export function executeExcelOperation(params, baseDir = null) {
-  const op = params?.operation || "generate";
+  const op = normalizeExcelOperation(params?.operation);
   const rawPath = params?.file_path || "workbook.xlsx";
   let cleanPath = rawPath;
   if (cleanPath.startsWith("/workspace/")) {
@@ -210,58 +556,113 @@ export function executeExcelOperation(params, baseDir = null) {
   }
   const publicFileName = path.basename(targetPath);
 
-  if (op === "load" || op === "read") {
-    let checkPath = targetPath;
-    if (!fs.existsSync(checkPath)) {
+  if (op === "load") {
+    if (!fs.existsSync(targetPath)) {
       return {
         status: "ERROR",
+        success: false,
         tool: "zink_excel",
         operation: op,
         file_path: publicFileName,
         error: `File not found: ${publicFileName}`,
       };
     }
-    const stat = fs.statSync(checkPath);
+    const stat = fs.statSync(targetPath);
+    // F-126: the sheet names come from the workbook itself, not from a
+    // hardcoded `["Sheet1"]`.
+    let sheets = [];
+    let readable = true;
+    let readError = null;
+    try {
+      sheets = readWorkbookSheetNames(fs.readFileSync(targetPath));
+    } catch (error) {
+      readable = false;
+      readError = error?.message || String(error);
+    }
+    if (!readable) {
+      return {
+        status: "ERROR",
+        success: false,
+        tool: "zink_excel",
+        operation: op,
+        file_path: publicFileName,
+        error: `Workbook is not readable: ${readError}`,
+      };
+    }
     return {
       status: "success",
+      success: true,
       tool: "zink_excel",
       operation: op,
       file_path: publicFileName,
       summary: {
         exists: true,
         size_bytes: stat.size,
-        sheets: ["Sheet1"],
+        sheets,
         last_modified: stat.mtime.toISOString(),
       },
     };
   }
 
   if (op === "validate") {
+    // F-126: `validate` evaluated nothing. It now evaluates every rule the
+    // caller declared and reports one verdict per rule; a rule this module
+    // cannot evaluate is refused by an explicit error code.
+    const rules =
+      Array.isArray(params?.rules) && params.rules.length > 0
+        ? params.rules
+        : ["file_existence", "extension_check"];
     const exists = fs.existsSync(targetPath);
+    let sheets = null;
+    let sheetError = null;
+    let sizeBytes = 0;
+    if (exists) {
+      sizeBytes = fs.statSync(targetPath).size;
+      try {
+        sheets = readWorkbookSheetNames(fs.readFileSync(targetPath));
+      } catch (error) {
+        sheetError = error?.message || String(error);
+      }
+    }
+    const ruleResults = evaluateExcelRules(rules, {
+      exists,
+      sizeBytes,
+      extension: path.extname(targetPath).toLowerCase(),
+      sheets,
+      sheetError,
+    });
+    const valid = ruleResults.every((entry) => entry.passed);
     return {
-      status: exists ? "success" : "ERROR",
+      status: "success",
+      success: true,
       tool: "zink_excel",
-      operation: "validate",
+      operation: op,
       file_path: publicFileName,
       summary: {
-        valid: exists,
-        rules_checked: params?.rules || ["file_existence", "extension_check"],
+        valid,
+        rules_checked: rules,
+        rule_results: ruleResults,
       },
     };
   }
 
-  // generate, create, populate, append, write
+  // generate, create, append, write, populate
+  const templatePath = params?.template_path;
+  if (templatePath && op !== "populate") {
+    throw new Error(
+      `EXCEL_TEMPLATE_UNSUPPORTED_OPERATION: template_path is only honoured by the populate operation`,
+    );
+  }
+
+  const declaredSheets = sheetsFromSpecification(params?.specification);
   let rows = [];
-  if (Array.isArray(params?.specification?.sheets?.[0]?.rows)) {
-    rows = params.specification.sheets[0].rows;
+  let sheetName =
+    params?.specification?.sheets?.[0]?.name || params?.sheet_name || "Sheet1";
+  if (declaredSheets.length > 0) {
+    rows = declaredSheets[0].rows;
+    sheetName = declaredSheets[0].name;
   } else if (params?.data) {
-    if (Array.isArray(params.data)) {
-      rows = params.data.map((item) =>
-        Array.isArray(item) ? item : Object.values(item),
-      );
-    } else if (typeof params.data === "object") {
-      rows = [Object.values(params.data)];
-    }
+    rows = rowsFromData(params.data);
   }
 
   if (rows.length === 0) {
@@ -270,9 +671,44 @@ export function executeExcelOperation(params, baseDir = null) {
     );
   }
 
-  const sheetName =
-    params?.specification?.sheets?.[0]?.name || params?.sheet_name || "Sheet1";
-  const buf = buildWorkbookBuffer(rows, sheetName);
+  let buf;
+  let writtenSheetNames = [sheetName];
+  let templateApplied = false;
+  if (op === "populate" && templatePath) {
+    // F-126: `template_path` is consumed, not ignored.
+    const templateTarget = path.isAbsolute(templatePath)
+      ? templatePath
+      : path.resolve(effectiveBase || ".", templatePath);
+    if (effectiveBase) {
+      const rel = path.relative(path.resolve(effectiveBase), templateTarget);
+      if (rel.startsWith("..") || path.isAbsolute(rel)) {
+        throw new Error(
+          `ARTIFACT_PATH_ESCAPE: template_path must stay inside the workspace`,
+        );
+      }
+    }
+    if (!fs.existsSync(templateTarget)) {
+      throw new Error(
+        `EXCEL_TEMPLATE_NOT_FOUND: ${path.basename(templateTarget)}`,
+      );
+    }
+    const populated = buildPopulatedWorkbook(
+      fs.readFileSync(templateTarget),
+      sheetName,
+      rows,
+    );
+    buf = populated.buffer;
+    writtenSheetNames = populated.sheetNames;
+    sheetName = populated.targetSheet;
+    templateApplied = true;
+  } else if (declaredSheets.length > 1) {
+    // F-126: every declared sheet is written, not only the first.
+    buf = buildMultiSheetWorkbookBuffer(declaredSheets);
+    writtenSheetNames = declaredSheets.map((sheet) => sheet.name);
+    sheetName = declaredSheets[0].name;
+  } else {
+    buf = buildWorkbookBuffer(rows, sheetName);
+  }
 
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
   fs.writeFileSync(targetPath, buf);
@@ -292,6 +728,7 @@ export function executeExcelOperation(params, baseDir = null) {
 
   return {
     status: "success",
+    success: true,
     tool: "zink_excel",
     operation: op,
     file_path: logicalFilePath,
@@ -304,8 +741,9 @@ export function executeExcelOperation(params, baseDir = null) {
     summary: {
       rows: rows.length,
       columns: rows[0]?.length || 1,
-      sheets: [sheetName],
+      sheets: writtenSheetNames,
       size_bytes: buf.length,
+      template_applied: templateApplied,
       preview_image: path.basename(previewPath),
       preview_png: path.basename(previewPngPath),
       file_path: logicalFilePath,
@@ -313,7 +751,6 @@ export function executeExcelOperation(params, baseDir = null) {
     },
   };
 }
-
 export function renderSheetPreviewSvg(rows, sheetName = "Sheet1") {
   const displayRows = rows.slice(0, 15);
   const maxCols = Math.min(
