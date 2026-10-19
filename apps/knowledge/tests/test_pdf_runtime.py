@@ -30,13 +30,14 @@ from app.pdf_runtime import (
 
 
 class ParentIsolationTests(unittest.TestCase):
-    # Reviewed change: the parent closure gained a test-only `dev` dependency
-    # group (`pytest`), which the runtime image does not install. The isolation
-    # invariant below still holds: no docling/transformers/torch closure leaks
-    # into the parent project. Any further change to these files must advance
-    # these digests deliberately and re-prove the negative assertions.
+    # F-212 (R5-E09-04): the parent project gained the pytest configuration
+    # the Knowledgebase lane needs (`[tool.pytest.ini_options]`). The
+    # isolation invariant below still holds: no docling/transformers/torch
+    # closure leaks into the parent project. Any further change to these
+    # files must advance these digests deliberately and re-prove the negative
+    # assertions.
     EXPECTED_PARENT_LOCK_SHA256 = "f72af19a34094109bcb7e6d4d6d24c0c2d5c1fa1de7d9a9f470c45fac3720c92"
-    EXPECTED_PARENT_PROJECT_SHA256 = "fd4f09651c4566b2a579e0a9011f401d61d99687d9fc0d6315b93de8bd1456c4"
+    EXPECTED_PARENT_PROJECT_SHA256 = "46c5c960598c00b7f26ac9aaf62608bc0447f0a36aa5a76a2ffa56f4aa3dd1e5"
 
     def test_parent_lock_and_import_closure_excludes_pdf_runtime_dependencies(self) -> None:
         root = Path(__file__).resolve().parents[1]

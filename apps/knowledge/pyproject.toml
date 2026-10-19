@@ -22,3 +22,12 @@ dev = [
 
 [tool.uv]
 package = false
+
+# F-212 (R5-E09-04): the Knowledgebase lane reported a bare pass count, so a
+# SHRINKING collected set read as an unchanged green and an unreported skip
+# was invisible. `-rs` surfaces every skip reason in the summary and
+# `--strict-markers` turns an unregistered marker into an error instead of a
+# silent pass. The collected-count floor lives in `tests/conftest.py`, which
+# is the only place that can see the collected set.
+[tool.pytest.ini_options]
+addopts = "-rs --strict-markers"
