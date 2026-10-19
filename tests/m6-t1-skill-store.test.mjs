@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -11,8 +13,16 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { executeCli } from "../zink-skill-store/bin/skill-store.mjs";
-import { scanCatalog } from "../zink-skill-store/src/catalog.mjs";
+import {
+  classifyCliError,
+  executeCli,
+} from "../zink-skill-store/bin/skill-store.mjs";
+import { recoverSkillStoreLock } from "../zink-skill-store/bin/skill-store-lock-recovery.mjs";
+import {
+  promoteApprovedSkill,
+  scanCatalog,
+  skillStoreWriterLockDir,
+} from "../zink-skill-store/src/catalog.mjs";
 
 async function temporaryStore(callback) {
   const root = mkdtempSync(path.join(tmpdir(), "zink-skill-store-"));
@@ -515,20 +525,31 @@ test("rejects links at root and content-file boundaries", async () => {
       rmSync(target, { force: true, recursive: true });
     }
   });
-  await temporaryStore(async (root) => {
-    if (process.platform === "win32") return;
-    const directory = writeSkill(root);
-    const target = path.join(root, "target.md");
-    writeFileSync(target, "# target\n");
-    rmSync(path.join(directory, "SKILL.md"));
-    symlinkSync(target, path.join(directory, "SKILL.md"), "file");
-    assert.ok(
-      (await catalog(root)).errors.some(
-        (error) => error.code === "UNSAFE_PATH",
-      ),
-    );
-  });
 });
+
+// The file-symlinked SKILL.md scenario used to live inside the case above and
+// to return early on Windows, so the reporter printed a plain PASS for a
+// scenario that never ran. It is its own case now and carries the same
+// declarative skip its siblings use, so a Windows run reports it as skipped
+// instead of silently inflating the pass count.
+test(
+  "rejects a file symlinked over a skill content file",
+  { skip: process.platform === "win32" },
+  async () => {
+    await temporaryStore(async (root) => {
+      const directory = writeSkill(root);
+      const target = path.join(root, "target.md");
+      writeFileSync(target, "# target\n");
+      rmSync(path.join(directory, "SKILL.md"));
+      symlinkSync(target, path.join(directory, "SKILL.md"), "file");
+      assert.ok(
+        (await catalog(root)).errors.some(
+          (error) => error.code === "UNSAFE_PATH",
+        ),
+      );
+    });
+  },
+);
 
 test(
   "treats a Windows junction as a separately covered rejected link",
