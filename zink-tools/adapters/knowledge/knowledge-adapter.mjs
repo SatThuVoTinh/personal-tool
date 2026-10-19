@@ -401,8 +401,19 @@ export class KnowledgeAdapter {
       try {
         let response;
         const maxAttempts = 3;
-        const reqTimeout =
-          input?.timeout || context?.timeout || this.timeout || 120000;
+        // F-184 (R1-A14-07): one deadline for the whole call. Every attempt is
+        // capped to what remains of it and a retry is only taken while budget
+        // remains, so no `zink_knowledge_search` can outlive its budget however
+        // many attempts it makes.
+        const callBudgetMs = resolveKnowledgeCallBudget(
+          this.timeout,
+          input,
+          context,
+        );
+        const callDeadlineAt = Date.now() + callBudgetMs;
+        const perAttemptCapMs =
+          Number(this.timeout) > 0 ? Number(this.timeout) : 120_000;
+        const remainingBudgetMs = () => callDeadlineAt - Date.now();
 
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
           const isPost = action === "search";
@@ -433,6 +444,20 @@ export class KnowledgeAdapter {
             reqHeaders["X-Attempt-Token"] = String(context.attemptToken);
 
           response = await new Promise((resolve, reject) => {
+            // F-184 (R1-A14-07): ECONNREFUSED/ECONNRESET - the common
+            // container-restart case - used to reject straight out of the retry
+            // loop, so the most frequent transient failure got no retry at all
+            // while the rarest (a 503) was retried three times. A transport error
+            // is now a retryable outcome like any other: it resolves as a
+            // status-less response, and the original error is re-thrown once the
+            // attempts or the budget are exhausted, so the caller-visible
+            // CONTROLLED_FAILURE / KNOWLEDGE_SERVICE_UNAVAILABLE is unchanged.
+            let settled = false;
+            const settle = (fn, value) => {
+              if (settled) return;
+              settled = true;
+              fn(value);
+            };
             const req = client.request(
               targetUrl,
               {
@@ -488,13 +513,16 @@ export class KnowledgeAdapter {
             req.end();
           });
 
-          // M09 & M10: Respect Retry-After header with configurable jitter
-          if (
-            (response.status === 429 ||
-              response.status === 503 ||
-              response.status === 504) &&
-            attempt < maxAttempts
-          ) {
+          // M09 & M10: Respect Retry-After header with configurable jitter.
+          // F-184 (R1-A14-07): a transport failure (status 0) is retryable, and
+          // each attempt is bounded by the call budget rather than by a
+          // per-attempt timeout of its own.
+          const retryableOutcome =
+            response.status === 0 ||
+            response.status === 429 ||
+            response.status === 503 ||
+            response.status === 504;
+          if (retryableOutcome && attempt < maxAttempts) {
             let retryDelayMs = attempt * 1500;
             const retryHeader = response.headers?.["retry-after"];
             if (retryHeader) {
@@ -516,10 +544,34 @@ export class KnowledgeAdapter {
                   ? attempt * 200
                   : Math.floor(Math.random() * 1000);
 
-            await setTimeout(retryDelayMs + jitterMs);
+            const remainingBeforeWaitMs = remainingBudgetMs();
+            if (remainingBeforeWaitMs <= 0) break;
+            if (holdsSearchPermit) {
+              sharedSearchSemaphore.release();
+              holdsSearchPermit = false;
+            }
+            // F-184 (R1-A14-07): the wait never outlives the call budget.
+            await setTimeout(
+              Math.min(retryDelayMs + jitterMs, remainingBeforeWaitMs),
+            );
+            if (remainingBudgetMs() <= 0) break;
+            if (shouldAcquireSemaphore) {
+              await sharedSearchSemaphore.acquire();
+              holdsSearchPermit = true;
+            }
             continue;
           }
           break;
+        }
+
+        if (response.status === 0) {
+          // F-184 (R1-A14-07): the transport never produced an HTTP status. The
+          // original error is re-thrown so the outer catch keeps mapping this to
+          // CONTROLLED_FAILURE / KNOWLEDGE_SERVICE_UNAVAILABLE.
+          throw (
+            response.transportError ??
+            new Error("Knowledge transport failure without a status")
+          );
         }
 
         if (response.status >= 200 && response.status < 300) {
