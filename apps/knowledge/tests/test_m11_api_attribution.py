@@ -409,7 +409,147 @@ class ApiAttributionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         results = response.json()["results"]
         self.assertEqual([item["segment_id"] for item in results], ["a", "b"])
-        self.assertTrue(all(item["rerank_score"] < 0.5 for item in results))
+        for item in results:
+            # A fused RRF rank score is order 1e-2; reporting it as a rerank
+            # score is the defect. The field is null, and the fused score is
+            # still reported under its own name.
+            self.assertIsNone(item["rerank_score"])
+            self.assertGreater(item["rrf_score"], 0.0)
+
+    async def test_total_count_reports_the_matching_pool_not_the_page_length(
+        self,
+    ) -> None:
+        """F-132 (R5-E02-04) and F-140 (R5-E01-06).
+
+        `total_count` was the length of the PAGE, so a 20-candidate pool cut
+        to `limit=5` read as "only 5 matches exist" and an agent concluded
+        the corpus held nothing more on the topic. The response now says how
+        many results exist and whether the page was truncated.
+        """
+
+        self.app.state.database.get_active_index = AsyncMock(return_value=ACTIVE)
+        self.app.state.database.search_candidates = AsyncMock(
+            return_value=([candidate(f"c{index}") for index in range(20)], [])
+        )
+
+        response = await self.request(
+            "POST",
+            "/v1/search",
+            json={"query": "topic", "rerank": False, "limit": 5},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["total_count"], 20)
+        self.assertEqual(body["returned_count"], 5)
+        self.assertEqual(len(body["results"]), 5)
+        self.assertTrue(body["has_more"])
+        self.assertEqual(body["candidate_pool_count"], 20)
+
+    async def test_an_untruncated_page_reports_no_more_results(self) -> None:
+        """F-140 (R5-E01-06): completeness is distinguishable from truncation."""
+
+        self.app.state.database.get_active_index = AsyncMock(return_value=ACTIVE)
+        self.app.state.database.search_candidates = AsyncMock(
+            return_value=([candidate("a"), candidate("b")], [])
+        )
+
+        response = await self.request(
+            "POST", "/v1/search", json={"query": "topic", "rerank": False, "limit": 5}
+        )
+
+        body = response.json()
+        self.assertEqual(body["total_count"], 2)
+        self.assertFalse(body["has_more"])
+
+    async def test_a_refused_search_carries_a_retry_after(self) -> None:
+        """F-165 (R5-E02-06): the caller must be able to back off."""
+
+        limiter = self.app.state.search_limiter
+        held = [await limiter.try_acquire(), await limiter.try_acquire()]
+        try:
+            response = await self.request(
+                "POST", "/v1/search", json={"query": "topic"}
+            )
+        finally:
+            for lease in held:
+                await lease.release()
+
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(
+            response.json()["detail"]["code"], "SEARCH_CAPACITY_EXCEEDED"
+        )
+        self.assertEqual(
+            response.headers["retry-after"],
+            str(SEARCH_CAPACITY_RETRY_AFTER_SECONDS),
+        )
+
+    async def test_the_query_embedding_is_bounded_by_a_request_deadline(self) -> None:
+        """F-165 (R5-E02-06): one slow provider must not hold a slot for 181 s."""
+
+        self.app.state.database.get_active_index = AsyncMock(return_value=ACTIVE)
+        self.app.state.database.search_candidates = AsyncMock(
+            return_value=([candidate("a")], [])
+        )
+
+        response = await self.request(
+            "POST", "/v1/search", json={"query": "topic", "rerank": False}
+        )
+
+        self.assertEqual(response.status_code, 200)
+        embed = self.app.state.model_probe.embed
+        self.assertIsNotNone(embed.await_args)
+        self.assertEqual(
+            embed.await_args.kwargs.get("timeout"),
+            QUERY_EMBEDDING_TIMEOUT_SECONDS,
+        )
+        # The client default is 90 s; the request-level deadline must be
+        # strictly shorter or it is not a bound at all.
+        self.assertLess(QUERY_EMBEDDING_TIMEOUT_SECONDS, 90.0)
+
+    async def test_one_search_pays_one_embedding_call_and_two_model_lists(
+        self,
+    ) -> None:
+        """F-263 (R7-D10B-01): the identity check must not embed.
+
+        `require_identity` resolved the model by asking the provider for the
+        dimensions, which is an embedding call. The search asked for the
+        identity twice, so one query cost two model-list calls and three
+        embedding calls.
+        """
+
+        embed_calls: list[list[str]] = []
+        tags_calls: list[str] = []
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/api/tags":
+                tags_calls.append(request.url.path)
+                return httpx.Response(
+                    200,
+                    json={"models": [{"name": "bge-m3:latest", "digest": "a" * 64}]},
+                )
+            embed_calls.append(json.loads(request.content)["input"])
+            return httpx.Response(200, json={"embeddings": [[0.0] * 1024]})
+
+        probe = self.app.state.model_probe
+        await probe._client.aclose()
+        probe._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        # The setUp mocks shadow the real methods on the instance; the real
+        # ones are what this case measures.
+        del probe.resolve
+        del probe.embed
+        self.app.state.database.get_active_index = AsyncMock(return_value=ACTIVE)
+        self.app.state.database.search_candidates = AsyncMock(
+            return_value=([candidate("a")], [])
+        )
+
+        response = await self.request(
+            "POST", "/v1/search", json={"query": "topic", "rerank": False}
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(embed_calls), 1)
+        self.assertEqual(len(tags_calls), 2)
 
     async def test_min_score_still_filters_reranked_results(self) -> None:
         self.app.state.database.get_active_index = AsyncMock(return_value=ACTIVE)

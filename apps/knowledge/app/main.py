@@ -536,13 +536,35 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     # rank score (order 1e-2), so the same filter silently
                     # emptied every page. The field stays reported unchanged.
                     results = [r for r in results if r.get("rerank_score", 0) >= request.min_score]
-                results.sort(key=lambda item: (-item["rerank_score"], -item["rrf_score"], item["segment_id"]))
+                if reranked:
+                    results.sort(
+                        key=lambda item: (
+                            -item["rerank_score"],
+                            -item["rrf_score"],
+                            item["segment_id"],
+                        )
+                    )
+                else:
+                    results.sort(
+                        key=lambda item: (-item["rrf_score"], item["segment_id"])
+                    )
                 bounded_results = results[:request.limit]
                 return {
                     "index_id": active_index.id,
                     "query": query,
                     "semantic_contract_version": "zink-semantic-v2",
-                    "total_count": len(bounded_results),
+                    # F-132 (R5-E02-04) and F-140 (R5-E01-06): `total_count`
+                    # used to be the LENGTH OF THE PAGE, so a 20-candidate
+                    # pool cut to `limit=5` read as "only 5 matches exist" and
+                    # an agent concluded the corpus held nothing more. It is
+                    # now the number of matching results that EXIST, and
+                    # `has_more` / `candidate_pool_count` say whether the page
+                    # was truncated. No ceiling moved: the pool is still
+                    # MAX_RERANK_CANDIDATES and the page is still `limit`.
+                    "total_count": len(results),
+                    "returned_count": len(bounded_results),
+                    "has_more": len(results) > len(bounded_results),
+                    "candidate_pool_count": len(fused_candidates),
                     "results": bounded_results,
                 }
             raise HTTPException(status_code=503, detail={"code": "ACTIVE_INDEX_CHANGED"})
