@@ -2336,3 +2336,65 @@ test("L6: the shipped execution path routes both callers through the shared owne
   );
   assert.ok(flattened.includes("AWAITING_COORDINATOR_PICKUP"));
 });
+
+// M12/T9 F-346: a durable contract counted the code it audits and both counts
+// were wrong (it claimed 18 consumers and 18 cases; the measured populations
+// are 24 and 19). The contract now states a derived count with its measurement
+// command, and this re-derives both numbers, so a change in the population
+// cannot pass unnoticed.
+function findSessionConsumers() {
+  let matches = 0;
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const child = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(child);
+        continue;
+      }
+      if (!entry.name.endsWith(".mjs")) continue;
+      const body = fs.readFileSync(child, "utf8");
+      matches += (body.match(/findSession\(/gu) ?? []).length;
+    }
+  };
+  walk(path.resolve("integrations", "openclaw"));
+  // The definition itself is not a consumer.
+  return matches - 1;
+}
+
+test("F-346: the contract's audited-population counts are the measured ones", () => {
+  const contract = fs.readFileSync(
+    path.resolve("docs", "contracts", "coordinator-session-binding.md"),
+    "utf8",
+  );
+  const consumers = findSessionConsumers();
+  const stated = contract.match(/All (\d+) `findSession` consumers/u);
+  const statedAudit = contract.match(
+    /audit all (\d+) `findSession` consumers/u,
+  );
+  const statedCases = contract.match(
+    /coordinator-execution-authority\.test\.mjs` \((\d+) cases\)/u,
+  );
+  assert.ok(stated, "the contract must state the audited population");
+  assert.ok(statedAudit, "the contract must state the audited population");
+  assert.ok(statedCases, "the contract must state the regression-suite size");
+  assert.equal(
+    Number(stated[1]),
+    consumers,
+    "the contract's audited population is stale; re-derive it and update the contract",
+  );
+  assert.equal(
+    Number(statedAudit[1]),
+    consumers,
+    "the two statements of the audited population must agree",
+  );
+  const suite = fs.readFileSync(
+    path.resolve("tests", "m10-t2-r2-coordinator-execution-authority.test.mjs"),
+    "utf8",
+  );
+  const cases = (suite.match(/^test\(/gmu) ?? []).length;
+  assert.equal(
+    Number(statedCases[1]),
+    cases,
+    "the contract's regression-suite size is stale; re-derive it and update the contract",
+  );
+});

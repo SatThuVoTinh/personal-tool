@@ -230,8 +230,11 @@ attached to a queue claim — never as something it is not.
 `{ task_id, task, coordinatorRun }` with deliberately NO `delegation` object.
 Every existing consumer assumes the two-shape model (`owner.delegation?.X ??
 task.root_Y`), under which a bound coordinator would silently inherit
-Main/root-agent semantics. All 18 sites must be audited in the implementation
-task; the minimum known changes:
+Main/root-agent semantics. All 24 `findSession` consumers must be audited in the
+implementation task; the count is derived, not remembered (re-derive it with
+`git grep -n 'findSession(' -- '*.mjs' ':!tests'`, which also matches the
+definition in `integrations/openclaw/topology/lib/workflow.mjs`; the consumers
+are the remaining 24). The minimum known changes:
 
 ```text
 topology/lib/guard.mjs
@@ -338,7 +341,7 @@ A future implementation task, if authorized, covers ONLY:
 1. add WORKFLOW_COORDINATOR_RUN_BOUND
 2. update workflow reducer
 3. update findSession identity resolution
-4. audit all 18 findSession consumers
+4. audit all 24 `findSession` consumers (the count is derived, not remembered)
 5. add bound-coordinator spawn rule using existing AGENT_SPAWN_POLICY
 6. update beforeRun / beforeRunEnd / subagent_ended consumers as required
 7. wire existing coordinator-pickup runtime seam
@@ -555,8 +558,10 @@ Cross-process exactly-once is still not claimed and must not be claimed.
 
 ### 14.7 Evidence and status
 
-`tests/m10-t2-r2-coordinator-execution-authority.test.mjs` (18 tests) is the
-regression suite, including the fencing/race evidence. Repository-local
+`tests/m10-t2-r2-coordinator-execution-authority.test.mjs` (19 cases) is the
+regression suite, including the fencing/race evidence. The case count is
+derived, not remembered (re-derive it with
+`grep -c '^test(' tests/m10-t2-r2-coordinator-execution-authority.test.mjs`). Repository-local
 validation only: `npm test`, lint, format, repository policy. No gateway
 control, no deployment, no `.openclaw-zink` mutation, no live runtime
 verification. Deployment Authorized: NO. Deployment Status: NOT DEPLOYED. Live
