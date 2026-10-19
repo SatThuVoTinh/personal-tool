@@ -459,7 +459,7 @@ export function generateSchemaManifest() {
       file: path.basename(filePath),
       hash,
       title: parsed.title || name,
-      version: parsed["x-zink-contract-version"] || "1.0.0",
+      version: readContractVersion(parsed),
     };
   }
   const manifestStr = JSON.stringify({
@@ -472,8 +472,39 @@ export function generateSchemaManifest() {
   return Object.freeze(manifest);
 }
 
+/**
+ * M12/T9 F-322: the COMMITTED expectation for the contract manifest.
+ *
+ * The verifier used to regenerate the manifest it was comparing against, so
+ * every hash comparison was disk-versus-disk inside one process and the only
+ * property it demonstrated was that hashing is deterministic. Nothing
+ * compared the repository's contracts against a committed expectation, so
+ * editing a numeric ceiling in any tool contract left every lane green.
+ *
+ * UPDATE PROCEDURE (owner-visible, one step, same commit as the contract
+ * change): run
+ *   node -e "import('./integrations/openclaw/topology/lib/schema.mjs').then(m => console.log(m.generateSchemaManifest().manifestChecksum))"
+ * and put the printed value below.
+ */
+export const PINNED_SCHEMA_MANIFEST_CHECKSUM =
+  "2d1b9d1121535e749668266808141b400aae11d5d95ce1f720dabee503046465";
+
 export function verifySchemaManifestChecksums(manifest = null) {
-  const target = manifest || generateSchemaManifest();
+  if (manifest === null) {
+    // M12/T9 F-322: the generated manifest is compared against the COMMITTED
+    // expectation, not against itself.
+    const generated = generateSchemaManifest();
+    if (generated.manifestChecksum !== PINNED_SCHEMA_MANIFEST_CHECKSUM) {
+      return {
+        valid: false,
+        mismatch: "manifest",
+        expected: PINNED_SCHEMA_MANIFEST_CHECKSUM,
+        actual: generated.manifestChecksum,
+      };
+    }
+    manifest = generated;
+  }
+  const target = manifest;
   // Iterating only whatever the manifest happens to contain cannot notice a member that
   // was dropped on the way in, so completeness is checked against the canonical lists.
   const incomplete = [
