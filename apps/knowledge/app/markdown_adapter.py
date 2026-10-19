@@ -310,7 +310,17 @@ class MarkdownVaultScanner:
             for entry in entries:
                 path = Path(entry.path)
                 relative = path.relative_to(vault_root).as_posix()
-                if self._is_link_like_entry(entry):
+                try:
+                    link_like = self._is_link_like_entry(entry)
+                except OSError:
+                    # F-325 (R7-E1-05): an unreadable component is not "no
+                    # link". The old helper returned False for both, so a
+                    # component whose metadata cannot be read was admitted
+                    # and indexed. The entry is refused, with the code that
+                    # names the real cause.
+                    errors.append(self._error(relative, "SOURCE_READ_FAILED"))
+                    continue
+                if link_like:
                     if path.suffix == ".md":
                         candidates.append(path)
                     else:
@@ -328,15 +338,20 @@ class MarkdownVaultScanner:
 
     @staticmethod
     def _is_link_like_entry(entry: os.DirEntry[str]) -> bool:
-        try:
-            if entry.is_symlink():
-                return True
-            is_junction = getattr(entry, "is_junction", None)
-            if is_junction is not None and is_junction():
-                return True
-            metadata = entry.stat(follow_symlinks=False)
-        except OSError:
-            return False
+        """Say whether an entry is link-like.
+
+        F-325 (R7-E1-05): an OSError while stating the entry used to be
+        reported as "not a link", which is the one answer that admits the
+        entry. The error is now raised to the caller, which refuses the
+        entry with the code that names the real cause.
+        """
+
+        if entry.is_symlink():
+            return True
+        is_junction = getattr(entry, "is_junction", None)
+        if is_junction is not None and is_junction():
+            return True
+        metadata = entry.stat(follow_symlinks=False)
         attributes = getattr(metadata, "st_file_attributes", 0)
         reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
         if not (reparse_flag and attributes & reparse_flag):
@@ -359,8 +374,14 @@ class MarkdownVaultScanner:
             source_path = candidate.name
             return None, [self._error(source_path, "SOURCE_PATH_OUTSIDE_VAULT")]
 
-        if self._has_link_component(knowledge_root, candidate):
-            return None, [self._error(source_path, "SOURCE_LINK_NOT_ALLOWED")]
+        try:
+            if self._has_link_component(knowledge_root, candidate):
+                return None, [self._error(source_path, "SOURCE_LINK_NOT_ALLOWED")]
+        except OSError:
+            # F-325 (R7-E1-05): a component whose metadata cannot be read is
+            # "cannot tell", not "no link". The source is refused with the
+            # code that names the real cause, never admitted.
+            return None, [self._error(source_path, "SOURCE_READ_FAILED")]
 
         try:
             resolved = candidate.resolve(strict=True)
@@ -461,14 +482,18 @@ class MarkdownVaultScanner:
 
     @staticmethod
     def _has_link_component(root: Path, candidate: Path) -> bool:
+        """Say whether any component of the candidate is a link.
+
+        F-325 (R7-E1-05): an OSError while stating a component used to be
+        reported as "no link", the one answer that admits the candidate. The
+        error is now raised to the caller, which refuses the source.
+        """
+
         current = root
         relative = candidate.relative_to(root)
         for component in relative.parts:
             current = current / component
-            try:
-                metadata = os.lstat(current)
-            except OSError:
-                return False
+            metadata = os.lstat(current)
             if stat.S_ISLNK(metadata.st_mode):
                 return True
             attributes = getattr(metadata, "st_file_attributes", 0)
