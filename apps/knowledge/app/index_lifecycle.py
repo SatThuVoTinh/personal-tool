@@ -162,16 +162,20 @@ class IndexLifecycle:
                     return []
             if not scan.succeeded:
                 scan_failed = True
+                # F-307 (R7-E1-02): the per-source COUNT still counts only
+                # the errors that name a specific markdown file, but the
+                # error keeps its LOCATION. A directory-scoped read failure
+                # used to have its path nulled, so the class of errors that
+                # most needs locating was the class that lost its location
+                # -- and, with the path nulled, two of them collapsed into
+                # one reported error.
                 source_error_paths = {
                     error.source_path
                     for error in scan.errors
                     if error.source_path.endswith(".md")
                 }
                 errors.extend(
-                    SafeRunError(
-                        error.code,
-                        error.source_path if error.source_path in source_error_paths else None,
-                    )
+                    SafeRunError(error.code, error.source_path)
                     for error in scan.errors
                 )
                 failed = len(source_error_paths)

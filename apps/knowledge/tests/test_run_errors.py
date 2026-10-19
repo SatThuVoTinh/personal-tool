@@ -17,10 +17,51 @@ class RunErrorsTests(unittest.TestCase):
         errors = [SafeRunError("Z", z_path), SafeRunError("A", None), SafeRunError("Z", z_path)]
         errors.extend(SafeRunError(f"E{index:03d}", a_path) for index in range(60))
         payload = json.loads(serialize_errors(errors))
-        self.assertEqual(payload["total_error_count"], 62)
+        # F-307 (R7-E1-02): the count is the number of errors SUPPLIED (63),
+        # not the length of the deduplicated set (62).
+        self.assertEqual(payload["total_error_count"], 63)
         self.assertTrue(payload["truncated"])
         self.assertEqual(len(payload["errors"]), MAX_ERROR_ENTRIES)
         self.assertEqual(payload["errors"][0], {"code": "A", "source_path": None})
+
+    def test_the_total_counts_the_errors_supplied_not_the_deduplicated_set(self) -> None:
+        """F-307 (R7-E1-02): the count used to under-report."""
+
+        errors = [
+            SafeRunError("SOURCE_READ_FAILED", "01. Knowledge/AI"),
+            SafeRunError("SOURCE_READ_FAILED", "01. Knowledge/Data"),
+        ]
+
+        payload = deserialize_errors(serialize_errors(errors))
+
+        self.assertEqual(payload["total_error_count"], 2)
+        self.assertEqual(len(payload["errors"]), 2)
+        self.assertEqual(
+            [entry["source_path"] for entry in payload["errors"]],
+            ["01. Knowledge/AI", "01. Knowledge/Data"],
+        )
+
+    def test_a_repeated_error_still_counts_once_per_occurrence(self) -> None:
+        """F-307 (R7-E1-02): the reported list is deduplicated, the count is not."""
+
+        payload = deserialize_errors(
+            serialize_errors([SafeRunError("X", None), SafeRunError("X", None)])
+        )
+
+        self.assertEqual(payload["total_error_count"], 2)
+        self.assertEqual(len(payload["errors"]), 1)
+        self.assertFalse(payload["truncated"])
+
+    def test_the_truncation_flag_reflects_the_raw_list(self) -> None:
+        """F-307 (R7-E1-02): the flag used to be derived from the reduced list."""
+
+        errors = [SafeRunError("X", None)] * (MAX_ERROR_ENTRIES + 10)
+
+        payload = deserialize_errors(serialize_errors(errors))
+
+        self.assertEqual(payload["total_error_count"], MAX_ERROR_ENTRIES + 10)
+        self.assertTrue(payload["truncated"])
+        self.assertEqual(len(payload["errors"]), 1)
 
     def test_legacy_failure_detail_is_redacted(self) -> None:
         payload = deserialize_errors("password=not-safe")

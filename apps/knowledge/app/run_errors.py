@@ -27,7 +27,17 @@ class SafeRunError:
 
 
 def serialize_errors(errors: Iterable[SafeRunError]) -> str:
-    unique = {_sanitize_error(error) for error in errors}
+    """Serialise run errors, counting the errors SUPPLIED.
+
+    F-307 (R7-E1-02): the count used to be the length of the DEDUPLICATED,
+    sanitised set, so `total_error_count` was not the number of errors and
+    the truncation flag was derived from the reduced list. The count is now
+    the number of error objects supplied, and the flag says whether the
+    REPORTED list was cut.
+    """
+
+    supplied = list(errors)
+    unique = {_sanitize_error(error) for error in supplied}
     ordered = sorted(unique, key=lambda item: (item[0] or "", item[1]))
     return json.dumps(
         {
@@ -35,8 +45,11 @@ def serialize_errors(errors: Iterable[SafeRunError]) -> str:
                 SafeRunError(code=code, source_path=source_path).as_dict()
                 for source_path, code in ordered[:MAX_ERROR_ENTRIES]
             ],
-            "total_error_count": len(ordered),
-            "truncated": len(ordered) > MAX_ERROR_ENTRIES,
+            "total_error_count": len(supplied),
+            # F-307 (R7-E1-02): the flag reflects the RAW list -- more
+            # errors happened than the cap allows to be reported -- not the
+            # reduced one.
+            "truncated": len(supplied) > MAX_ERROR_ENTRIES,
         },
         separators=(",", ":"),
         sort_keys=True,
@@ -75,8 +88,14 @@ def deserialize_errors(detail: str | None) -> dict[str, Any]:
             or total < len(entries)
             or not isinstance(truncated, bool)
             or len(entries) > MAX_ERROR_ENTRIES
-            or truncated != (total > len(entries))
-            or (truncated and len(entries) != MAX_ERROR_ENTRIES)
+            # F-307 (R7-E1-02): the count is the number of errors SUPPLIED
+            # and the flag says whether the reported list was cut, so the
+            # two are related by the reported list and not by each other.
+            or truncated != (total > MAX_ERROR_ENTRIES)
+            # A payload that claims errors but reports none (or reports
+            # some while claiming none) cannot be produced by the
+            # serialiser and is not read as one.
+            or (total == 0) != (len(entries) == 0)
         ):
             return fallback
         safe_entries = []
