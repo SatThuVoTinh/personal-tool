@@ -83,6 +83,14 @@ for slug, display_topic in CANONICAL_SLUG_TO_TOPIC.items():
     if display_topic in TOPIC_TO_TAG:
         TOPIC_TO_TAG[slug] = TOPIC_TO_TAG[display_topic]
 TAG_TO_TOPIC = {tag: topic for topic, tag in TOPIC_TAGS}
+# F-308 (R7-E1-03): the write side now recognises the SAME alias spellings
+# the query side publishes. The eighteen-entry slug table was only ever
+# consulted when a query filtered by topic, so a note tagged with an alias
+# produced no topic, stayed invisible to a topic filter, and -- when it
+# carried aliases only -- was refused with a "missing tag" error that named
+# the wrong cause.
+for _slug, _display_topic in CANONICAL_SLUG_TO_TOPIC.items():
+    TAG_TO_TOPIC.setdefault(f"#{_slug}", _display_topic)
 ERROR_PRECEDENCE = {
     code: index
     for index, code in enumerate(
@@ -413,6 +421,11 @@ class MarkdownVaultScanner:
             TAG_TO_TOPIC[raw_tag] for raw_tag in raw_tags if raw_tag in TAG_TO_TOPIC
         )
         if not canonical_topics:
+            # F-308 (R7-E1-03): the alias spellings the module publishes are
+            # recognised on the write side now, so a note that carries one of
+            # them produces its canonical topic. A note whose tags the module
+            # does not recognise at all is still refused with the missing-tag
+            # code, which names the cause the owner can act on.
             errors.append(self._error(source_path, "REQUIRED_TOPIC_TAG_MISSING"))
 
         segments, segmentation_errors = self._segment_blocks(source_path, blocks)

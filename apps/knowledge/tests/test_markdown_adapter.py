@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.markdown_adapter import (
+    CANONICAL_SLUG_TO_TOPIC,
     MAX_CHARS,
     MAX_RETRIEVAL_TOKENS,
     PAIR_MAX_TOKENS,
