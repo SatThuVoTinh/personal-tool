@@ -23,7 +23,9 @@ FILE_LOCK_BUSY  FILE_LOCK_TIMEOUT  EXECUTION_STATE_UNKNOWN
 ```
 
 Every governance ledger write and every `--apply` takes the store-wide writer
-lock at `<ledger-root>/writer.lock` (`integrations/openclaw/topology/lib/ledger.mjs:130`).
+lock at `<ledger-root>/writer.lock` (`withWriterLock` in
+`integrations/openclaw/topology/lib/ledger.mjs`, which resolves the lock
+directory with `lockDirFor` in `integrations/openclaw/lib/file-lock.mjs`).
 When that lock's `owner.json` names a process that no longer exists — the usual
 cause is a killed gateway restart — every writer refuses, and
 `configure.mjs --apply` ends with `Ledger writer unavailable

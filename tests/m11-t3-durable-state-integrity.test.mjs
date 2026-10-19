@@ -1033,3 +1033,100 @@ test("B11-3: ensureLedger threads one memo, and every other entry point gets a f
   assert.match(body, /privateDir\(paths\.root, visited\)/u);
   assert.match(body, /privateDir\(path\.dirname\(paths\.root\), visited\)/u);
 });
+
+// M12/T9 F-347: the outage runbook cited a line number for the writer lock,
+// and the cited line was the symlink-target array rather than the lock
+// acquisition, so an operator following it read a validator and concluded the
+// mechanism lived elsewhere. A line-number citation cannot survive a moving
+// file, so the runbook now names the symbol and this resolves symbols.
+test("F-347: the outage runbook names the symbol that takes the writer lock", () => {
+  const runbook = readFileSync(
+    new URL("../docs/runbooks/governed-outage-classes.md", import.meta.url),
+    "utf8",
+  );
+  assert.match(runbook, /withWriterLock/u, "the runbook must name the symbol");
+  assert.match(runbook, /lockDirFor/u, "the runbook must name the symbol");
+  assert.doesNotMatch(
+    runbook,
+    /ledger\.mjs:\d+/u,
+    "a bare line number cannot survive a moving file",
+  );
+  const ledger = readFileSync(
+    new URL(
+      "../integrations/openclaw/topology/lib/ledger.mjs",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.match(ledger, /function withWriterLock\(/u);
+  const fileLock = readFileSync(
+    new URL("../integrations/openclaw/lib/file-lock.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.match(fileLock, /export function lockDirFor\(/u);
+});
+
+test("F-347: every source line citation in the runbooks resolves", () => {
+  const runbookDir = new URL("../docs/runbooks/", import.meta.url);
+  const citation = /`([^`\s]+\.(?:mjs|json|md|yml|yaml)):(\d+)`/gu;
+  for (const entry of readdirSync(runbookDir, { withFileTypes: true })) {
+    if (!entry.name.endsWith(".md")) continue;
+    const body = readFileSync(new URL(entry.name, runbookDir), "utf8");
+    for (const match of body.matchAll(citation)) {
+      const [, relative, line] = match;
+      const target = new URL(`../../${relative}`, import.meta.url);
+      assert.ok(
+        existsSync(target),
+        `${entry.name} cites ${relative}, which does not exist`,
+      );
+      const lines = readFileSync(target, "utf8").split("\n");
+      assert.ok(
+        Number(line) <= lines.length,
+        `${entry.name} cites ${relative}:${line}, which is past the end of the file`,
+      );
+    }
+  }
+});
+
+// =========================================================================
+// M12/T9 F-250 — the event contract accepted artifact objects the SNAPSHOT
+// contract rejects, and the event was fsynced before the projection was
+// validated. A result whose artifact item lacked `sha256` therefore became
+// durable history that the next read could not project, which the ledger
+// reports as corruption.
+//
+// The event contract now declares the artifact item shape identically to the
+// snapshot's, so such an event is refused BEFORE it is durable.
+// =========================================================================
+test("F-250: an event whose artifact lacks sha256 is refused by the contract", () => {
+  const event = (artifacts) => ({
+    schema_version: "1.0.0",
+    governance_version: "m8-t2.3-r5",
+    sequence: 1,
+    type: "WORKFLOW_RESULT_RECORDED",
+    payload: {
+      task_id: "c".repeat(64),
+      artifacts,
+    },
+    created_at: "2026-10-20T00:00:00.000Z",
+    previous_event_digest: null,
+    event_digest: "a".repeat(64),
+  });
+
+  // The artifact item that the SNAPSHOT contract rejects must be rejected by
+  // the EVENT contract too, so the event can never become durable ahead of a
+  // projection the next read cannot build.
+  assert.throws(
+    () => validateContract("ledger-event", event([{ logical_path: "a.csv" }])),
+    /SCHEMA_INVALID|SCHEMA_VALIDATION_FAILED/u,
+    "an artifact without sha256 must be refused",
+  );
+  // And the shape the snapshot requires is accepted.
+  assert.equal(
+    validateContract(
+      "ledger-event",
+      event([{ logical_path: "a.csv", sha256: "b".repeat(64) }]),
+    ),
+    true,
+  );
+});
