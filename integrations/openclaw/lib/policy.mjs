@@ -20,6 +20,7 @@ import {
 import {
   ZINK_TOOLS_ACCESS_MATRIX,
   AGENT_STACK_POLICY,
+  isDiscordSnowflake,
   AGENT_IDS,
   AGENT_DEFINITIONS,
   DISCORD_BOT_IDS,
@@ -562,15 +563,14 @@ export const AGENT_SPAWN_POLICY = Object.freeze({
   python: Object.freeze([]),
 });
 
-// Frozen M8/T1 Discord Mobile mention grammar, transcribed from the validated
-// deployed configuration. Each pattern matches an explicit mention trigger
-// (raw @handle, <@id> snowflake, or alias text) with the M8/T1 punctuation
-// lookahead. Two surgical updates vs the transcribed values (R4 PATCH-E):
-// o1 "knowledge" -> "etl" and o2 "orchestrator" -> "analytics", which were the
-// retired Data Plant display names those aliases once matched. `AGENT_DEFINITIONS`
-// now carries stack-neutral coordinator names; these grammar patterns stay
-// unchanged because they are transcribed from the deployed mention grammar and
-// resolve through `AGENT_ALIASES`, not through the display names.
+// M8/T1 Discord Mobile mention grammar. Each pattern matches an explicit
+// mention trigger (raw @handle, <@id> snowflake, or alias text) with the M8/T1
+// punctuation lookahead. Two surgical updates vs the originally transcribed
+// values (R4 PATCH-E): o1 "knowledge" -> "etl" and o2 "orchestrator" ->
+// "analytics", which were the retired Data Plant display names those aliases
+// once matched. `AGENT_DEFINITIONS` now carries stack-neutral coordinator
+// names, and the grammar resolves through `AGENT_ALIASES`, not through the
+// display names.
 //
 // The patterns are DERIVED from the canonical AGENT_ALIASES table in
 // authority.mjs, which is the ingress-resolution source of truth. They used to
@@ -668,7 +668,6 @@ const COMMAND_POSTURE = Object.freeze({
   restart: false,
 });
 
-const SNOWFLAKE = /^[1-9]\d{16,19}$/u;
 const TEMPLATE_FILES = Object.freeze([".gitkeep", "AGENTS.md"]);
 export const GOVERNANCE_PLUGIN_TEMPLATE = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -772,7 +771,7 @@ export function parseIdentifiers(values) {
     ...DISCORD_SURFACE_IDENTIFIERS,
   ];
   for (const name of names) {
-    if (!SNOWFLAKE.test(values[name] ?? "")) {
+    if (!isDiscordSnowflake(values[name] ?? "")) {
       throw new Error(`${name} must be a numeric Discord snowflake`);
     }
   }
@@ -1028,9 +1027,11 @@ export function buildConfig({ stateDir, identifiers }) {
       discord: {
         enabled: true,
         defaultAccount: "main",
-        // N14: DM policy is "disabled" at the bot level. The README description
-        // of "DM allowlist" refers to an operator intent, not a currently active
-        // feature. Changing this requires explicit owner approval and a separate task.
+        // N14: DM policy is "disabled" at the bot level. The persisted shape is
+        // `dmPolicy` plus `dm: { enabled, groupEnabled }`; there is no
+        // `directMessages` key in this configuration, and a key the build does
+        // not emit cannot be set. Changing the policy requires explicit owner
+        // approval and a separate task.
         dmPolicy: "disabled",
         dm: { enabled: false, groupEnabled: false },
         groupPolicy: "allowlist",
@@ -1039,13 +1040,11 @@ export function buildConfig({ stateDir, identifiers }) {
         // only visible to explicitly allowlisted channels. Operators must ensure
         // that forum threads used for execution are included in the allowlist.
         contextVisibility: "allowlist",
-        // A11/N13: inheritParent=false is the correct and intentional configuration.
-        // The README description of inheritParent:true refers to a desired runtime
-        // behavior for forum posts, but OpenClaw's inheritParent controls whether
-        // a spawned thread inherits the parent channel's access permissions —
-        // not the session context. This config is authoritative; README was
-        // describing intent rather than this specific config field. Changing
-        // this to true would alter access-control semantics and is a RED decision.
+        // A11/N13: inheritParent=false is the correct and intentional
+        // configuration, and it is the value the README documents. OpenClaw's
+        // inheritParent controls whether a spawned thread inherits the parent
+        // channel's access permissions — not the session context. Changing
+        // it to true would alter access-control semantics and is a RED decision.
         thread: { inheritParent: false },
         // A14/A15: native=false means OpenClaw native slash commands are disabled.
         // Approval/Reject/Revision interactions are implemented as formatted
@@ -1353,7 +1352,7 @@ export function renderSystemdDropIn(stateDir) {
     "bin",
     "openclaw-gemini-stream-hotfix.mjs",
   );
-  return `[Service]\nEnvironment=OPENCLAW_PROFILE=${PROFILE}\nEnvironment=OPENCLAW_STATE_DIR=${stateDir}\nEnvironment=PASSWORD_STORE_DIR=${passStore}\nEnvironment=GNUPGHOME=${gpgHome}\nEnvironment=PATH=${userBin}:/usr/local/bin:/usr/bin:/bin\nExecStartPre=${nodeBinary} ${hotfix} --check\nMemoryMax=768M\n`;
+  return `[Service]\nEnvironment=OPENCLAW_PROFILE=${PROFILE}\nEnvironment=OPENCLAW_STATE_DIR=${stateDir}\nEnvironment=PASSWORD_STORE_DIR=${passStore}\nEnvironment=GNUPGHOME=${gpgHome}\nEnvironment=PATH=${userBin}:/usr/local/bin:/usr/bin:/bin\nExecStartPre=${nodeBinary} ${hotfix} --ensure\nMemoryMax=768M\n`;
 }
 
 export function renderLegacySystemdDropInR16(stateDir) {

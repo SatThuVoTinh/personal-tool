@@ -79,10 +79,11 @@ export const ACTIONS = Object.freeze({
 });
 
 /**
- * A Discord snowflake, validated. Shared shape with `parseIdentifiers` in
- * policy.mjs, which is the canonical place a configured identity is admitted.
+ * A Discord snowflake, validated. The canonical shape lives in
+ * `isDiscordSnowflake` below; `parseIdentifiers` in policy.mjs and every owner
+ * gate use that one validator, so a configured identity and the gate that
+ * admits it can never disagree about the shape (M12/T9 F-139).
  */
-const SNOWFLAKE = /^[1-9][0-9]{16,19}$/u;
 
 /**
  * The owner actor, derived from CONFIGURATION only.
@@ -110,9 +111,32 @@ const SNOWFLAKE = /^[1-9][0-9]{16,19}$/u;
 function isConfiguredOwnerActor(lowerCasedActor) {
   const configured =
     typeof process !== "undefined" ? process.env?.DISCORD_OWNER_ID : undefined;
-  if (typeof configured !== "string" || !SNOWFLAKE.test(configured))
-    return false;
+  if (!isOwnerDiscordId(configured)) return false;
   return lowerCasedActor === configured.toLowerCase();
+}
+
+/**
+ * The owner id, validated by ONE canonical shape.
+ *
+ * M12/T9 F-139: the owner id was validated by three different regexes (17-19
+ * digits anywhere in the plugin, 17-20 here, 17-20 in the configuration
+ * admission), so a 20-digit configured owner was admitted by the configuration
+ * and then denied by every owner gate: a fail-closed self-DoS rather than an
+ * escalation. `isDiscordSnowflake` is the canonical shape; the owner id uses
+ * it and nothing else.
+ */
+export function isOwnerDiscordId(value) {
+  return isDiscordSnowflake(value);
+}
+
+/**
+ * The owner id, from CONFIGURATION only, or `undefined` when it is absent or
+ * malformed. The caller-facing gates read `config.ownerDiscordId`; this is the
+ * one place that turns it into a usable identity.
+ */
+export function resolveOwnerDiscordId(config) {
+  const ownerId = config?.ownerDiscordId;
+  return isOwnerDiscordId(ownerId) ? ownerId : undefined;
 }
 
 /**
