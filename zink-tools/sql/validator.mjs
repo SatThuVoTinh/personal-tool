@@ -49,6 +49,43 @@ const FORBIDDEN_KEYWORDS = new Set([
 ]);
 
 /**
+ * F-276 (R7-C2-01): the token-level half of the governed read-only subset,
+ * exported so that a provider adapter delegates its statement gate HERE
+ * instead of re-implementing it.
+ *
+ * Measured at HEAD: the BigQuery adapter re-implemented the mutation check as
+ * an uppercased word-boundary regex over the whole query string, with seven
+ * keywords instead of the canonical eleven (MERGE, REPLACE, GRANT and REVOKE
+ * were absent) and no string-literal awareness (so a read whose literal text
+ * merely mentioned a blocked word was refused). This function is the
+ * repository's own tokenizer applied to the same question, so the keyword set,
+ * the literal handling and the refusal codes are the canonical ones.
+ *
+ * The STATEMENT SHAPE (a required FROM clause, alias rules, the projection
+ * grammar) stays with `validateSqlQuery`, which the DuckDB bridge applies in
+ * full. This gate answers the narrower question "does this statement carry a
+ * mutating or reserved token", and it never looks inside a string literal.
+ *
+ * @param {string} query - A single statement
+ * @returns {boolean} true when the statement carries no refused token
+ */
+export function assertReadOnlyStatement(query) {
+  if (typeof query !== "string") {
+    throw new Error("SQL_UNSUPPORTED_SYNTAX");
+  }
+  const tokens = tokenizeSql(query);
+  for (const tok of tokens) {
+    if (tok.type === "MUTATION_KEYWORD") {
+      throw new Error("SQL_MUTATION_NOT_PERMITTED");
+    }
+    if (tok.type === "FORBIDDEN_KEYWORD") {
+      throw new Error("SQL_UNSUPPORTED_SYNTAX");
+    }
+  }
+  return true;
+}
+
+/**
  * Validates a SQL query and parameters according to the Lean Option B minimum safe subset.
  * Throws SQL_MUTATION_NOT_PERMITTED or SQL_UNSUPPORTED_SYNTAX on any violation.
  *
