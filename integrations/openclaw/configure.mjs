@@ -489,6 +489,13 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // successor can replace it; the current build is accepted by content
     // comparison.
     "6ece2af4b3469183f803a46c0551c90b1b44e27adfc3ef8d0c95af8df7eb6d16",
+    // M12/T9: the proven live build's quota telemetry (commit ea84a5a,
+    // re-derived through the real packaging generator). M12/T9 F-130 moved the
+    // module's comments and the one canonical owner validator, so the deployed
+    // tree's bytes become a predecessor. Without this entry --preflight refuses
+    // the deployed extension. The new digest is deliberately NOT listed: it is
+    // the current build, accepted by content comparison.
+    "2eb3af1d5f275f8c9cd156ac70d2ee3713f1ba0aae7fea5f6e1c63ee3c86005f",
   ]),
   "lib/queue-manager.mjs": Object.freeze([
     "a8021088a4e9373fcf74cf4dd31433c8606b9505eaf74c5fa922839ee716776a",

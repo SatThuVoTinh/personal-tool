@@ -200,10 +200,11 @@ export function resolveRuntimeModel({
   store,
   agentId,
   now = Date.now(),
-  // The governed set is a single entry under M10/T2-R9, so the fallback branches
-  // below are unreachable in production. `allowlist` exists so those branches
-  // stay covered by tests when a second model is declared later; production
-  // callers pass nothing and get MODEL_ALLOWLIST.
+  // The governed set is the owner's ordered five-model chain (M10/T2-R12), so
+  // the fallback branch below IS reachable in production: index 1 is the first
+  // fallback the host steps down to when the primary fails or the quota runs
+  // low. `allowlist` exists so a caller can resolve against a different
+  // governed set; production callers pass nothing and get MODEL_ALLOWLIST.
   allowlist = MODEL_ALLOWLIST,
 }) {
   if (typeof agentId !== "string" || !CANONICAL_AGENTS.has(agentId)) {
@@ -211,10 +212,10 @@ export function resolveRuntimeModel({
   }
   const primary = allowlist[0];
   const fallback = allowlist[1];
-  // A primary is mandatory; a fallback is not. M10/T2-R9 (owner decision) reduced
-  // the governed model set to the router's single `execute` combo entry, so
-  // requiring a fallback here would make every resolution throw and take all
-  // seven agents down. With no fallback the resolver stays on the primary and
+  // A primary is mandatory; a fallback is not. The governed set is the owner's
+  // ordered five-model chain (M10/T2-R12), so a fallback exists in production
+  // and the resolver steps down to index 1 when the primary fails or the quota
+  // runs low. With no fallback at all the resolver stays on the primary and
   // reports NO_FALLBACK_AVAILABLE, which is the honest verdict: there is no
   // second governed model to move to.
   if (!primary) throw new Error("MODEL_ALLOWLIST_UNAVAILABLE");

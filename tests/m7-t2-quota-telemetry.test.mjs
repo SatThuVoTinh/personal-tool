@@ -17,6 +17,7 @@ import {
   AGENT_IDS,
   MODEL_ALLOWLIST,
 } from "../integrations/openclaw/lib/policy.mjs";
+import { readFileSync } from "node:fs";
 
 const AGENTS = [...AGENT_IDS];
 const T0 = 1_800_000_000_000;
@@ -459,24 +460,50 @@ describe("T3 — proactive fallback resolution", () => {
     assert.equal(staleResult.reason, RESOLUTION_REASON.STALE_KEEP_PRIMARY);
   });
 
-  it("TEST M: fallback can never escape the canonical allowlist", () => {
-    const store = createQuotaTelemetryStore();
-    for (const agentId of AGENTS) {
-      recordQuotaSnapshot(store, snapshot(agentId, 1, T0));
-      const result = resolveRuntimeModel({ store, agentId, now: T0 });
-      assert.ok(
-        MODEL_ALLOWLIST.includes(result.model),
-        `${agentId} model must be allowlisted`,
-      );
+  it("TEST M: the resolver consults only the first two allowlist entries", () => {
+    // The MODEL_ALLOWLIST_VIOLATION guard cannot fire through a real
+    // allowlist: the resolver reads allowlist[0] and allowlist[1] and returns
+    // one of them, so `allowlist.includes(chosen)` is a tautology. The
+    // membership re-assertion that used to stand here therefore counted as
+    // coverage of an invariant that cannot fail. What IS reachable is the
+    // resolver's own contract, and it is asserted here in a falsifiable form:
+    // a poisoned third entry must never be chosen, for any agent and any
+    // quota reading. If the resolver ever consulted a later entry, this case
+    // would go red.
+    const poisoned = Object.freeze([
+      MODEL_ALLOWLIST[0],
+      MODEL_ALLOWLIST[1],
+      "router/never-selected",
+    ]);
+    for (const remainingPct of [100, 50, 20, 0]) {
+      for (const agentId of AGENTS) {
+        const store = createQuotaTelemetryStore();
+        recordQuotaSnapshot(store, snapshot(agentId, remainingPct, T0));
+        const result = resolveRuntimeModel({
+          store,
+          agentId,
+          now: T0,
+          allowlist: poisoned,
+        });
+        assert.ok(
+          poisoned.slice(0, 2).includes(result.model),
+          `${agentId} at ${remainingPct}% must resolve to the primary or the fallback, got ${result.model}`,
+        );
+        assert.notEqual(
+          result.model,
+          poisoned[2],
+          `${agentId} must never resolve to an entry the resolver does not consult`,
+        );
+      }
     }
   });
 
   it("TEST M2: a one-entry allowlist can only ever return that entry", async () => {
-    // The MODEL_ALLOWLIST_VIOLATION guard is unreachable by construction — the
-    // resolver only ever chooses primary or fallback, both drawn from the same
-    // allowlist. This asserts the reachable invariant instead: whatever
-    // allowlist is supplied, the result stays inside it, and a single entry
-    // yields that entry for every agent.
+    // A single entry leaves no fallback, so the resolver stays on the primary
+    // and reports the honest verdict. The membership re-assertion that used to
+    // close this case was a tautology — the returned model WAS the only
+    // entry — so it is replaced by the reachable invariant: with one entry the
+    // resolver never reaches for a second one and never reports a fallback.
     const single = Object.freeze(["router/execute"]);
     for (const agentId of AGENTS) {
       const store = createQuotaTelemetryStore();
@@ -488,9 +515,36 @@ describe("T3 — proactive fallback resolution", () => {
         allowlist: single,
       });
       assert.equal(result.model, "router/execute");
-      assert.ok(single.includes(result.model));
       assert.equal(result.latch, "primary");
+      assert.equal(
+        result.reason,
+        RESOLUTION_REASON.NO_FALLBACK_AVAILABLE,
+        "a one-entry allowlist has nowhere to fall back to",
+      );
     }
+  });
+
+  it("TEST M3: the allowlist-violation guard refuses a model the allowlist does not contain", () => {
+    // The guard is unreachable through a real allowlist (TEST M), so it had no
+    // case that could fail and no mutation could kill it. It IS reachable
+    // through an allowlist whose own membership test disagrees with its
+    // contents, and that is the contract it implements: the resolver refuses
+    // to answer with a model its allowlist does not contain. This case makes
+    // the guard reachable and testable — removing the guard turns it red.
+    const lying = ["router/execute"];
+    lying.includes = () => false;
+    const store = createQuotaTelemetryStore();
+    recordQuotaSnapshot(store, snapshot("o1", 50, T0));
+    assert.throws(
+      () =>
+        resolveRuntimeModel({
+          store,
+          agentId: "o1",
+          now: T0,
+          allowlist: lying,
+        }),
+      /MODEL_ALLOWLIST_VIOLATION/u,
+    );
   });
 
   it("TEST K: concurrent resolution is deterministic and writes no session state", async () => {
@@ -580,6 +634,57 @@ describe("T3 — proactive fallback resolution", () => {
     assert.throws(
       () => resolveRuntimeModel({ store, agentId: "root", now: T0 }),
       /UNKNOWN_AGENT/,
+    );
+  });
+});
+
+// M12/T9 F-130: the comments asserted a provider, a key and a model set the
+// build no longer follows, so a maintainer "fixing" the code toward the
+// comment would have broken it.
+describe("M12/T9 F-130 - the comments describe the governed set the build uses", () => {
+  it("states the five-model chain and a reachable fallback", () => {
+    const quota = readFileSync(
+      new URL(
+        "../integrations/openclaw/lib/quota-telemetry.mjs",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    assert.doesNotMatch(
+      quota,
+      /single entry/u,
+      "the governed set has been the owner's five-model chain since M10/T2-R12",
+    );
+    assert.doesNotMatch(
+      quota,
+      /unreachable in production/u,
+      "the fallback branch is reachable in production",
+    );
+    assert.match(quota, /five-model chain/u);
+    assert.equal(
+      MODEL_ALLOWLIST.length,
+      5,
+      "the governed set is the owner's five-model chain",
+    );
+
+    const policy = readFileSync(
+      new URL("../integrations/openclaw/lib/policy.mjs", import.meta.url),
+      "utf8",
+    );
+    assert.doesNotMatch(
+      policy,
+      /README description of inheritParent:true/u,
+      "the README documents inheritParent: false; the rebuttal quoted a statement it does not make",
+    );
+    assert.doesNotMatch(
+      policy,
+      /transcribed from the validated/u,
+      "the mention grammar is derived from AGENT_ALIASES, not transcribed",
+    );
+    assert.doesNotMatch(
+      policy,
+      /of "DM allowlist"/u,
+      "the configuration emits dmPolicy and dm, not a DM allowlist",
     );
   });
 });
