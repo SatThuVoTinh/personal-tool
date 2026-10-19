@@ -471,7 +471,11 @@ export class SkillAdapter {
 
           storedSkill = {
             skill_id,
-            lifecycle_state: "active",
+            // F-204 (R1-A10-07): one store state, one spelling. `apply` used to
+            // stamp "active" while `discover` stamped "ACTIVE" and `read`
+            // refused anything that was not "ACTIVE", so the same ACTIVE skill
+            // was described two different ways depending on the action.
+            lifecycle_state: "ACTIVE",
             content,
             signature: `sha256:${digest}`,
             namespace: verifiedRecord.manifest?.identity?.namespace,
@@ -1052,10 +1056,12 @@ export class SkillAdapter {
         };
       }
 
-      throw new SkillAdapterError(
-        `Unsupported action: ${action}`,
-        "SKILL_ACTION_INVALID",
-      );
+      // F-204 (R1-A10-07): the invalid-action rejection is the pre-dispatch
+      // check above, which already rejects every action outside ALLOWED_ACTIONS
+      // (and a forbidden one) before this block runs. A second, identical
+      // rejection used to close this try block; no input could reach it - each
+      // of the six allowed branches returns - so it made the rejection look like
+      // it lived where it could never fire.
     } catch (error) {
       if (error instanceof SkillAdapterError) throw error;
       return {
