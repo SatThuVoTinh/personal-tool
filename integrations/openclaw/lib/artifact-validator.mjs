@@ -109,19 +109,74 @@ export function parseCsvLine(line) {
   return fields;
 }
 
-// J02 & J03: Inspect ZIP central directory / local headers for required entry patterns
-export function inspectZipContainsEntries(filePath, requiredKeywords) {
+// J02 & J03: Inspect ZIP central directory / local headers for required entry patterns.
+//
+// M12/T9 F-258: this helper read the whole file as latin1 and asked whether a
+// keyword appeared ANYWHERE in the bytes, so a keyword inside arbitrary
+// payload bytes counted as a container entry and a garbage file reached a
+// PASS verdict. The CENTRAL DIRECTORY is parsed instead: the entry names come
+// from the container's own index, and a file that is not a readable ZIP has no
+// entries at all.
+export function readZipEntryNames(filePath) {
+  let buf;
   try {
-    const buf = readFileSync(filePath);
-    if (buf.length < 22) return false;
-    const str = buf.toString("latin1");
-    return requiredKeywords.some((kw) => str.includes(kw));
+    buf = readFileSync(filePath);
   } catch {
-    return false;
+    return null;
   }
+  if (buf.length < 22) return null;
+  let eocd = -1;
+  const lowest = Math.max(0, buf.length - 66000);
+  for (let i = buf.length - 22; i >= lowest; i--) {
+    if (buf.readUInt32LE(i) === 0x06054b50) {
+      eocd = i;
+      break;
+    }
+  }
+  if (eocd < 0) return null;
+  const entryCount = buf.readUInt16LE(eocd + 10);
+  let offset = buf.readUInt32LE(eocd + 16);
+  const names = [];
+  for (let i = 0; i < entryCount; i++) {
+    if (offset + 46 > buf.length) return null;
+    if (buf.readUInt32LE(offset) !== 0x02014b50) return null;
+    const nameLen = buf.readUInt16LE(offset + 28);
+    const extraLen = buf.readUInt16LE(offset + 30);
+    const commentLen = buf.readUInt16LE(offset + 32);
+    names.push(
+      buf.subarray(offset + 46, offset + 46 + nameLen).toString("utf8"),
+    );
+    offset += 46 + nameLen + extraLen + commentLen;
+  }
+  return names;
 }
 
-// J01: Python syntax validator using py_compile with AST bracket fallback
+/** An entry matches a required keyword by name or by path prefix. */
+function zipEntryMatches(entryName, keyword) {
+  return (
+    entryName === keyword ||
+    entryName.startsWith(keyword) ||
+    entryName.includes(`/${keyword}`)
+  );
+}
+
+/** True when the container is a readable ZIP holding AT LEAST ONE of the parts. */
+export function inspectZipContainsEntries(filePath, requiredKeywords) {
+  const names = readZipEntryNames(filePath);
+  if (!names) return false;
+  return requiredKeywords.some((keyword) =>
+    names.some((name) => zipEntryMatches(name, keyword)),
+  );
+}
+
+/** True when the container is a readable ZIP holding EVERY one of the parts. */
+export function inspectZipContainsAllEntries(filePath, requiredKeywords) {
+  const names = readZipEntryNames(filePath);
+  if (!names) return false;
+  return requiredKeywords.every((keyword) =>
+    names.some((name) => zipEntryMatches(name, keyword)),
+  );
+} // J01: Python syntax validator using py_compile with AST bracket fallback
 export function validatePythonSyntax(filePath, content) {
   try {
     execFileSync("python", ["-m", "py_compile", filePath], {
@@ -563,13 +618,38 @@ export function validateTechnicalArtifact({
       result.errors.push(`CSV_READ_ERROR: ${readErr?.message}`);
     }
   } else if (inferredType === "excel") {
-    // Basic structural presence check
+    // M12/T9 F-258: this branch checked NOTHING structural. The type came
+    // from the file extension, the only check was a 100-byte floor, and the
+    // verdict was a PASS for any file over it — so a 200-byte text file named
+    // `report.xlsx` reached the governed result card. The container is now
+    // parsed: a workbook must be a readable ZIP that declares its content
+    // types and at least one worksheet.
     result.checks.format = "EXCEL";
     if (fileSizeBytes < 100) {
       result.status = VALIDATION_STATUS.FAIL;
       result.errors.push(
         "CORRUPT_EXCEL: File size too small to be valid workbook",
       );
+      result.checks.excelStructureValid = false;
+    } else {
+      const names = readZipEntryNames(filePath);
+      const hasContentTypes =
+        Array.isArray(names) && names.includes("[Content_Types].xml");
+      const hasWorksheet =
+        Array.isArray(names) &&
+        names.some(
+          (name) => name.startsWith("xl/worksheets/") && name.endsWith(".xml"),
+        );
+      result.checks.excelStructureValid = hasContentTypes && hasWorksheet;
+      if (!result.checks.excelStructureValid) {
+        result.status = VALIDATION_STATUS.FAIL;
+        const missing = [];
+        if (!hasContentTypes) missing.push("[Content_Types].xml");
+        if (!hasWorksheet) missing.push("xl/worksheets/*.xml");
+        result.errors.push(
+          `CORRUPT_EXCEL: Workbook container is missing required part(s): ${missing.join(", ")}`,
+        );
+      }
     }
   } else if (inferredType === "sql") {
     try {
@@ -676,26 +756,25 @@ export function validateTechnicalArtifact({
         "CORRUPT_POWERBI: File does not have valid ZIP/PBIX magic bytes (PK\\x03\\x04)",
       );
     } else {
-      // J03: Inspect internal Power BI structures
-      if (fileSizeBytes >= 100) {
-        const hasPbixStructure = inspectZipContainsEntries(filePath, [
-          "DataModel",
-          "DataMashup",
-          "DiagramLayout",
-          "Report/Layout",
-          "[Content_Types].xml",
-          "Version",
-          "Settings",
-        ]);
-        result.checks.powerbiStructureValid = hasPbixStructure;
-        if (!hasPbixStructure) {
-          result.status = VALIDATION_STATUS.FAIL;
-          result.errors.push(
-            "INVALID_POWERBI_STRUCTURE: ZIP archive does not contain recognizable Power BI structures (DataModel, DataMashup, Report/Layout, Version)",
-          );
-        }
-      } else {
-        result.checks.powerbiStructureValid = true;
+      // J03: Inspect internal Power BI structures.
+      // M12/T9 F-258: the structure check now reads the archive's own central
+      // directory, so a keyword inside arbitrary payload bytes no longer
+      // counts as an entry.
+      const hasPbixStructure = inspectZipContainsEntries(filePath, [
+        "DataModel",
+        "DataMashup",
+        "DiagramLayout",
+        "Report/Layout",
+        "[Content_Types].xml",
+        "Version",
+        "Settings",
+      ]);
+      result.checks.powerbiStructureValid = hasPbixStructure;
+      if (!hasPbixStructure) {
+        result.status = VALIDATION_STATUS.FAIL;
+        result.errors.push(
+          "INVALID_POWERBI_STRUCTURE: ZIP archive does not contain recognizable Power BI structures (DataModel, DataMashup, Report/Layout, Version)",
+        );
       }
     }
   } else if (inferredType === "parquet") {
@@ -792,22 +871,19 @@ export function validateTechnicalArtifact({
         "CORRUPT_DOCX: File does not have valid ZIP/DOCX magic bytes (PK\\x03\\x04)",
       );
     } else {
-      if (fileSizeBytes >= 100) {
-        const hasDocxStructure = inspectZipContainsEntries(filePath, [
-          "word/",
-          "[Content_Types].xml",
-          "_rels/",
-          "word/document.xml",
-        ]);
-        result.checks.docxStructureValid = hasDocxStructure;
-        if (!hasDocxStructure) {
-          result.status = VALIDATION_STATUS.FAIL;
-          result.errors.push(
-            "INVALID_DOCX_STRUCTURE: ZIP archive does not contain recognizable DOCX structures (word/, [Content_Types].xml)",
-          );
-        }
-      } else {
-        result.checks.docxStructureValid = true;
+      // M12/T9 F-258: the DOCX structure is read from the archive's own
+      // central directory and BOTH required parts must be present. A truncated
+      // or garbage container is not a DOCX, whatever its magic bytes say.
+      const hasDocxStructure = inspectZipContainsAllEntries(filePath, [
+        "[Content_Types].xml",
+        "word/document.xml",
+      ]);
+      result.checks.docxStructureValid = hasDocxStructure;
+      if (!hasDocxStructure) {
+        result.status = VALIDATION_STATUS.FAIL;
+        result.errors.push(
+          "INVALID_DOCX_STRUCTURE: ZIP archive does not contain recognizable DOCX structures (word/, [Content_Types].xml)",
+        );
       }
     }
   } else if (inferredType === "doc") {

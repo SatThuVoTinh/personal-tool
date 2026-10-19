@@ -275,6 +275,13 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // current build, accepted by content comparison.
     "86234954a8d7469a621f5a1dcc18ec2252520e907ae6766cfd84d6eb48bbb978",
     "0b35496fdebe5e204bfc4395057e9a54e5635060a1af1fe47146dd391ebeac79",
+    // M12/T9: the proven live build's artifact validator (commit ea84a5a,
+    // re-derived through the real packaging generator). M12/T9 F-258 changed
+    // the excel branch, so the deployed tree's bytes become a predecessor.
+    // Without this entry --preflight refuses the deployed extension. The new
+    // digest is deliberately NOT listed: it is the current build, accepted by
+    // content comparison.
+    "5da6478dc2cab265b4107cf2327e563e5ccf1aeab978dfda9892ba30bd122567",
   ]),
   "lib/authority.mjs": Object.freeze([
     // M10/T2-R14: the outgoing R12/R13 build currently deployed, byte-proven by

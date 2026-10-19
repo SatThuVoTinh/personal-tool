@@ -79,7 +79,64 @@ import {
   AGENT_SPAWN_POLICY,
   agentInstructions,
 } from "../integrations/openclaw/lib/policy.mjs";
-import { executeExcelOperation } from "../integrations/openclaw/lib/excel-writer.mjs";
+import {
+  executeExcelOperation,
+  buildMultiSheetWorkbookBuffer,
+  readZipEntries,
+} from "../integrations/openclaw/lib/excel-writer.mjs";
+
+/**
+ * A minimal, CORRECT ZIP writer for the container fixtures.
+ *
+ * M12/T9 F-258: the artifact validator now parses the container's central
+ * directory, so a fixture must be a real container. The previous 7-byte
+ * magic-bytes stub is exactly the truncated input the finding requires to
+ * FAIL, so it is replaced by a real archive and the truncated case is asserted
+ * separately.
+ */
+function buildZip(entries) {
+  const locals = [];
+  const centrals = [];
+  let offset = 0;
+  for (const [name, content] of entries) {
+    const nameBuf = Buffer.from(name, "utf8");
+    const data = Buffer.from(content, "utf8");
+    const compressed = deflateRawSync(data);
+    const crc = crc32(data);
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(0, 6);
+    local.writeUInt16LE(8, 8);
+    local.writeUInt32LE(crc, 14);
+    local.writeUInt32LE(compressed.length, 18);
+    local.writeUInt32LE(data.length, 22);
+    local.writeUInt16LE(nameBuf.length, 26);
+    locals.push(local, nameBuf, compressed);
+
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(20, 4);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt16LE(0, 8);
+    central.writeUInt16LE(8, 10);
+    central.writeUInt32LE(crc, 16);
+    central.writeUInt32LE(compressed.length, 20);
+    central.writeUInt32LE(data.length, 24);
+    central.writeUInt16LE(nameBuf.length, 28);
+    central.writeUInt32LE(offset, 42);
+    centrals.push(central, nameBuf);
+    offset += local.length + nameBuf.length + compressed.length;
+  }
+  const centralBuf = Buffer.concat(centrals);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(entries.length, 8);
+  eocd.writeUInt16LE(entries.length, 10);
+  eocd.writeUInt32LE(centralBuf.length, 12);
+  eocd.writeUInt32LE(offset, 16);
+  return Buffer.concat([...locals, centralBuf, eocd]);
+}
 // A14-A22, A24, A30: Discord component callback schema and interaction guards
 import {
   DISCORD_COMPONENT_ACTION_NAMESPACE,
@@ -785,8 +842,14 @@ describe("Data File Format Handler Enrichment — multi-format validation & prev
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "zink-fmt-pbix-"));
     try {
       const pbixFile = path.join(tempDir, "dashboard.pbix");
-      // PK\x03\x04 = ZIP local file header signature
-      const buf = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00]);
+      // M12/T9 F-258: the fixture is a REAL container now. The former
+      // 7-byte magic-bytes stub asserted that a truncated archive is a valid
+      // PBIX, which is the defect this finding is about.
+      const buf = buildZip([
+        ["[Content_Types].xml", "<Types/>"],
+        ["DataModel", "binary-model"],
+        ["Report/Layout", "layout-json"],
+      ]);
       await writeFile(pbixFile, buf);
       const result = validateTechnicalArtifact({ filePath: pbixFile });
       assert.equal(result.status, VALIDATION_STATUS.PASS);
@@ -941,7 +1004,13 @@ describe("Data File Format Handler Enrichment — multi-format validation & prev
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "zink-fmt-docx-"));
     try {
       const docxFile = path.join(tempDir, "report.docx");
-      const buf = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x00]);
+      // M12/T9 F-258: a REAL container now — the former 7-byte magic-bytes
+      // stub asserted that a truncated archive is a valid DOCX.
+      const buf = buildZip([
+        ["[Content_Types].xml", "<Types/>"],
+        ["word/document.xml", "<document/>"],
+        ["_rels/.rels", "<Relationships/>"],
+      ]);
       await writeFile(docxFile, buf);
       const result = validateTechnicalArtifact({ filePath: docxFile });
       assert.equal(result.status, VALIDATION_STATUS.PASS);
