@@ -128,6 +128,42 @@ DATABASE_RESERVATION_ERRORS = DATABASE_ERRORS + (RuntimeError,)
 PDF_READY_LOCK_TIMEOUT_SECONDS = 2.0
 
 
+def _reranker_error_code(error: BaseException) -> str:
+    """The code a reranker failure carries, when it is one.
+
+    F-310 (R7-E1-06): the reranker raises a fixed vocabulary of codes
+    (`RERANKER_MANIFEST_INVALID`, `RERANKER_ARTIFACT_MISSING`, …). The
+    bootstrap used to throw that vocabulary away and write one constant, so
+    the operator could not tell a bad artifact pin from a corrupted image or
+    an unusable graph. Only a code-shaped message is carried; anything else
+    is the generic name.
+    """
+
+    message = str(error).strip()
+    if re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", message):
+        return message
+    return "RERANKER_UNAVAILABLE"
+
+
+def _file_content_evidence(path: Path) -> tuple[str, int, int]:
+    """Cheap evidence that a hashed file's CONTENT changed.
+
+    F-091 (R5-E01-02): the `/readyz` processing-identity memo was keyed on the
+    three file PATHS, so a file rewritten in place at the same path replayed
+    the pre-change digest forever. The memo now keys on the modification time
+    and the size of the bytes that are hashed, which is the cheap evidence
+    the acceptance criteria name, and a rewrite at the same path is a
+    different key. A missing file is its own evidence, so a path that
+    appears later is also a different key.
+    """
+
+    try:
+        metadata = path.stat()
+    except OSError:
+        return (str(path), -1, -1)
+    return (str(path), metadata.st_mtime_ns, metadata.st_size)
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     configured_settings = settings or Settings.from_environment()
     database = KnowledgeDatabase(
@@ -214,6 +250,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             else:
                 coordinator.adopt_startup_reservation(startup_owner)
                 await database.recover_interrupted_runs()
+        except Exception as error:
+            logger.error(
+                "knowledge.startup_recovery_incomplete code=%s error=%s",
+                "STARTUP_RECOVERY_INCOMPLETE",
+                error,
+                exc_info=True,
+            )
+
+    database.set_recovery_callback(recover_interrupted_state)
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        await database.start()
+        await recover_interrupted_state()
         reranker: OnnxReranker | None = None
         reranker_error: str | None = None
         try:
@@ -222,8 +272,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 configured_settings.reranker_manifest_path,
                 token_budget,
             )
-        except RerankerUnavailableError:
-            reranker_error = "RERANKER_UNAVAILABLE"
+        except RerankerUnavailableError as error:
+            # F-310 (R7-E1-06): the bootstrap caught the typed error without
+            # binding it and wrote one constant, so the only surviving
+            # identity of a failed start-up was a string that cannot tell a
+            # bad artifact pin from a corrupted image or an unusable graph.
+            # The code the reranker raised is kept, and it is READ by the
+            # readiness route below.
+            reranker_error = _reranker_error_code(error)
+            logger.error(
+                "knowledge.reranker_unavailable code=%s", reranker_error, exc_info=True
+            )
         app.state.reranker = reranker
         app.state.reranker_error = reranker_error
         try:
@@ -301,7 +360,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # at least as strict as the default request it stands for; callers
             # that genuinely run without reranking can still pass
             # `?require_reranker=false`.
-            return JSONResponse(status_code=503, content={"status": "not_ready", "code": "RERANKER_UNAVAILABLE"})
+            # F-310 (R7-E1-06): the code is the one the reranker raised, so
+            # an artifact problem and a graph problem are distinguishable.
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": "not_ready",
+                    "code": app.state.reranker_error or "RERANKER_UNAVAILABLE",
+                },
+            )
         try:
             actual_model = await model_probe.resolve(configured_settings.embedding_model)
         except (httpx.HTTPError, ModelProbeError):
@@ -335,9 +402,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 active_index.embedding_model_name,
                 active_index.embedding_model_digest,
                 active_index.embedding_dimensions,
-                str(configured_settings.pdf_runtime_lock_path),
-                str(configured_settings.pdf_runtime_manifest_path),
-                str(configured_settings.tokenizer_path),
+                *_file_content_evidence(configured_settings.pdf_runtime_lock_path),
+                *_file_content_evidence(configured_settings.pdf_runtime_manifest_path),
+                *_file_content_evidence(configured_settings.tokenizer_path),
             )
             try:
                 if readyz_pdf_identity is None or readyz_pdf_identity[0] != cache_key:

@@ -37,8 +37,9 @@ if not _TOKENIZER or not Path(_TOKENIZER).is_file():
 
 from app.config import Settings
 from app.database import ActiveIndex
-from app.main import create_app
+from app.main import _reranker_error_code, create_app
 from app.model_probe import ModelProbeError, ResolvedEmbeddingModel
+from app.reranker import RerankerUnavailableError
 
 EMBEDDING = ResolvedEmbeddingModel("bge-m3:latest", "a" * 64, 1024)
 ACTIVE = ActiveIndex("index-1", "bge-m3:latest", "a" * 64, 1024)
