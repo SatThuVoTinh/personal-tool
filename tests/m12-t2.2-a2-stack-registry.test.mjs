@@ -40,6 +40,7 @@ import {
 } from "../integrations/openclaw/topology/lib/ledger.mjs";
 import { deriveTaskId } from "../integrations/openclaw/topology/lib/canonical.mjs";
 import {
+  AGENT_SPAWN_POLICY,
   AGENT_STACK_POLICY,
   STACK_IDS,
   TOOL_POLICY,
@@ -646,6 +647,132 @@ function authoringLedger(rootAgentId) {
  * ledger facts: a passing guard decision is not the assertion, the durable
  * write is.
  */
+// ===========================================================================
+// M12/T9 F-118 -- the canonical five-stack table must name the coordinator
+// that can actually spawn that stack's specialists.
+//
+// The table was written by hand from a retired roster and had drifted into the
+// inverse of the enforced spawn tree: it made O2 the Data Plant owner and O1
+// the Semantic/Intelligence owner, while the code binds the ETL specialists
+// under O1 and BI under O2. No lane read the markdown, so it could stay
+// literally true about its own caveat while its rows were wrong.
+// ===========================================================================
+
+const FIVE_STACK_DOC = fs.readFileSync(
+  new URL("../docs/architecture/five-stack.md", import.meta.url),
+  "utf8",
+);
+
+const FIVE_STACK_ROWS = FIVE_STACK_DOC.split("\n")
+  .map((line) => line.trim())
+  .filter((line) => line.startsWith("|") && !/^\|[\s|:-]+\|$/.test(line))
+  .slice(1)
+  .map((line) =>
+    line
+      .split("|")
+      .slice(1, -1)
+      .map((cell) => cell.trim()),
+  );
+
+const STACK_DISPLAY = {
+  infrastructure: "infrastructure",
+  data_plant: "data plant",
+  semantic: "semantic",
+  intelligence: "intelligence",
+  decision: "decision",
+};
+
+const SPECIALIST_DISPLAY = [
+  ["excel", /\bExcel\b/iu],
+  ["sql", /\bSQL\b/iu],
+  ["python", /\bPython\b/iu],
+  ["power-bi", /\bPower[\s-]?BI\b/iu],
+];
+
+const COORDINATOR_DISPLAY = [
+  ["main", /\bMain\b/iu],
+  ["o1", /\bO1\b/iu],
+  ["o2", /\bO2\b/iu],
+];
+
+test("F-118: five-stack.md names the coordinator that can spawn each stack's specialists", () => {
+  const seen = new Set();
+  for (const cells of FIVE_STACK_ROWS) {
+    const [stackCell, coordinatorCell, executorCell] = cells;
+    const stack = Object.keys(STACK_DISPLAY).find((id) =>
+      stackCell.toLowerCase().includes(STACK_DISPLAY[id]),
+    );
+    assert.ok(stack, `unknown stack row: ${stackCell}`);
+    seen.add(stack);
+
+    // The coordinator cell must name exactly the coordinators the enforced
+    // stack policy binds to the stack (Main may be named in addition: it holds
+    // every stack and is the only authority that moves work between them).
+    const bound = Object.entries(AGENT_SPAWN_POLICY)
+      .filter(
+        ([agentId, children]) =>
+          children.length > 0 &&
+          agentId !== "main" &&
+          (AGENT_STACK_POLICY[agentId] ?? []).includes(stack),
+      )
+      .map(([agentId]) => agentId)
+      .sort();
+    const named = COORDINATOR_DISPLAY.filter(([, pattern]) =>
+      pattern.test(coordinatorCell),
+    ).map(([agentId]) => agentId);
+    const namedCoordinators = named
+      .filter((agentId) => agentId !== "main")
+      .sort();
+    assert.deepEqual(
+      namedCoordinators,
+      bound,
+      `${stack}: the coordinator column must name the coordinator(s) the enforced stack policy binds to it`,
+    );
+
+    // The executor cell lists specialists, never a coordinator: "O2 designated
+    // support" is how the inverted table hid a coordinator in a specialist slot.
+    for (const [agentId, pattern] of COORDINATOR_DISPLAY) {
+      assert.equal(
+        pattern.test(executorCell),
+        false,
+        `${stack}: the executor column must not name a coordinator (${agentId})`,
+      );
+    }
+
+    const listed = SPECIALIST_DISPLAY.filter(([, pattern]) =>
+      pattern.test(executorCell),
+    ).map(([agentId]) => agentId);
+
+    for (const agentId of listed) {
+      assert.ok(
+        (AGENT_STACK_POLICY[agentId] ?? []).includes(stack),
+        `${stack}: ${agentId} is not admitted on that stack`,
+      );
+      assert.ok(
+        named.some((coordinatorId) =>
+          (AGENT_SPAWN_POLICY[coordinatorId] ?? []).includes(agentId),
+        ),
+        `${stack}: no coordinator named in the row can spawn ${agentId}`,
+      );
+    }
+
+    // Completeness: every specialist the bound coordinator can dispatch onto
+    // this stack must be listed, so a row cannot quietly narrow a stack.
+    for (const coordinatorId of bound) {
+      for (const agentId of AGENT_SPAWN_POLICY[coordinatorId] ?? []) {
+        if (!(AGENT_STACK_POLICY[agentId] ?? []).includes(stack)) continue;
+        assert.ok(
+          listed.includes(agentId),
+          `${stack}: ${agentId} is admitted and ${coordinatorId} can spawn it, so the row must list it`,
+        );
+      }
+    }
+  }
+  for (const stack of Object.keys(STACK_DISPLAY)) {
+    assert.ok(seen.has(stack), `five-stack.md lost the ${stack} row`);
+  }
+});
+
 async function admit(nodes, rootAgentId) {
   const fixture = authoringLedger(rootAgentId);
   try {

@@ -600,11 +600,14 @@ export const AGENT_DEFINITIONS = Object.freeze([
   Object.freeze({ id: "main", name: "Main" }),
   // Display names for the two coordinators. They used to be "ETL Coordinator"
   // and "Analytics Coordinator" — retired L&SC Data Plant branding that
-  // `AGENTS.md` §9 forbids for a runtime role, and it also contradicted
-  // `docs/architecture/five-stack.md`, where O2 coordinates the data stack and
-  // O1 coordinates the semantic/intelligence stacks. The names are stack-neutral
-  // now so they cannot pre-judge that routing decision; the ingress aliases
-  // ("điều phối 1/2") already used this vocabulary.
+  // `AGENTS.md` §9 forbids for a runtime role. The names are stack-neutral
+  // now so they cannot pre-judge the routing decision; the ownership lives in
+  // `AGENT_STACK_POLICY` (this file) and `AGENT_SPAWN_POLICY` (policy.mjs), and
+  // `docs/architecture/five-stack.md` is derived from those two tables and
+  // gated against them (M12/T9 F-118: the table had been written by hand from
+  // a retired roster and had drifted into the inverse of the enforced spawn
+  // tree). The ingress aliases ("điều phối 1/2") already used this
+  // vocabulary.
   Object.freeze({ id: "o1", name: "Coordinator O1" }),
   Object.freeze({ id: "o2", name: "Coordinator O2" }),
   Object.freeze({ id: "excel", name: "Excel" }),
