@@ -26,19 +26,45 @@ test("every id the resolver can resolve is reported valid", () => {
 
 test("a well-formed id with an unregistered topic code is not valid", () => {
   const id = "08-01-0001";
-  assert.throws(() => resolveReferenceIdMeaning(id), /not registered/u);
+  // M12/T9 F-330: the diagnostic names the registry that refused the id.
+  assert.throws(
+    () => resolveReferenceIdMeaning(id),
+    /topic code "08" is not registered/u,
+  );
   assert.equal(isValidStructuredReferenceId(id), false, id);
 });
 
 test("a well-formed id with an unregistered execution code is not valid", () => {
   const id = "01-06-0001";
-  assert.throws(() => resolveReferenceIdMeaning(id), /not registered/u);
+  // M12/T9 F-330: the diagnostic names the registry that refused the id.
+  assert.throws(
+    () => resolveReferenceIdMeaning(id),
+    /execution code "06" is not registered/u,
+  );
   assert.equal(isValidStructuredReferenceId(id), false, id);
 });
 
 test("an id outside both registries is refused, not merely shape-checked", () => {
   const id = "99-99-0001";
-  assert.equal(Object.hasOwn(REFERENCE_TOPIC_CODES, "99"), false);
+  // M12/T9 F-330: the old case probed only the topic registry and then
+  // asserted the boolean predicate, which wraps the resolver and therefore
+  // cannot say WHICH registry refused. Each assertion now names the registry
+  // it probes, and the resolver's own diagnostic is asserted.
+  assert.equal(
+    Object.hasOwn(REFERENCE_TOPIC_CODES, "99"),
+    false,
+    "the TOPIC registry must not hold 99",
+  );
+  assert.equal(
+    Object.hasOwn(REFERENCE_EXECUTION_CODES, "99"),
+    false,
+    "the EXECUTION registry must not hold 99",
+  );
+  assert.throws(
+    () => resolveReferenceIdMeaning(id),
+    /topic code "99" is not registered/u,
+    "the resolver must name the registry that refused the id",
+  );
   assert.equal(isValidStructuredReferenceId(id), false, id);
 });
 
