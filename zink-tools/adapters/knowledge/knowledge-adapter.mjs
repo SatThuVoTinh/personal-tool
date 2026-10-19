@@ -441,8 +441,16 @@ export class KnowledgeAdapter {
                 timeout: reqTimeout,
               },
               (res) => {
-                let data = "";
-                // M08: Bounded upstream response body buffer
+                // M08 + F-170 (R5-E06-02): the ceiling is named in BYTES, so the
+                // body is accumulated as bytes. `data += chunk` decoded every
+                // chunk on its own — a multi-byte character spanning two chunks
+                // became U+FFFD — and `data.length` counted UTF-16 code units,
+                // so ~150 MB of Vietnamese text fitted under a 50 MB ceiling and
+                // the corrupted body was then parsed, formatted and counted as
+                // SUCCESS.
+                const chunks = [];
+                let receivedBytes = 0;
+                let aborted = false;
                 res.on("data", (chunk) => {
                   data += chunk;
                   if (data.length > MAX_KNOWLEDGE_RESPONSE_BYTES) {
