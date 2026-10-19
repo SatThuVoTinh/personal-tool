@@ -829,3 +829,342 @@ test("the real format scripts quote every glob so CI expands them the same way W
       "CI format gate checks one directory level and never sees the test files",
   );
 });
+
+// ---------------------------------------------------------------------------
+// The secret scan: every branch, and a retained report
+// ---------------------------------------------------------------------------
+
+test("the secret scan must run on a push to any branch and publish its report", () => {
+  withTemporaryDirectory((repositoryRoot) => {
+    // A push trigger narrowed to a branch list leaves every task branch
+    // unscanned, so a credential committed to a branch reaches main through a
+    // merge without any lane ever having looked at the branch.
+    writeWorkflow(repositoryRoot, "ci.yml", VALID_CI_WORKFLOW);
+    writeWorkflow(
+      repositoryRoot,
+      "security.yml",
+      VALID_SECURITY_WORKFLOW.replace(
+        "  push:\n",
+        "  push:\n    branches: [main]\n",
+      ),
+    );
+    const failures = checkWorkflowDefinitions(repositoryRoot);
+    assert.ok(
+      failures.some((failure) =>
+        failure.includes("must run on a push to any branch"),
+      ),
+      `expected the narrowed push trigger to fail; got: ${failures.join(" | ")}`,
+    );
+  });
+
+  withTemporaryDirectory((repositoryRoot) => {
+    // Without the report artifact a "zero leaks" claim is a sentence in a
+    // plan file, not something anybody can look at.
+    writeWorkflow(repositoryRoot, "ci.yml", VALID_CI_WORKFLOW);
+    writeWorkflow(
+      repositoryRoot,
+      "security.yml",
+      VALID_SECURITY_WORKFLOW.replace(
+        '          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "true"',
+        '          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"',
+      ),
+    );
+    const failures = checkWorkflowDefinitions(repositoryRoot);
+    assert.ok(
+      failures.some((failure) =>
+        failure.includes("GITLEAKS_ENABLE_UPLOAD_ARTIFACT"),
+      ),
+      `expected the missing report artifact to fail; got: ${failures.join(" | ")}`,
+    );
+  });
+});
+
+test("the shipped security workflow scans every branch push and retains its report", () => {
+  const shipped = readFileSync(
+    path.join(REPO_ROOT, ".github", "workflows", "security.yml"),
+    "utf8",
+  );
+  assert.match(
+    shipped,
+    /^ {2}push:\n(?! {4}branches:)/mu,
+    "the secret scan must trigger on a push to any branch",
+  );
+  assert.match(
+    shipped,
+    /GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "true"/u,
+    "the secret scan must publish a retained report artifact",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// The Knowledgebase Python job: the toolchain and the pinned tokenizer
+// ---------------------------------------------------------------------------
+
+test("the python-quality job must keep the toolchain and the pinned tokenizer", () => {
+  const pythonQualityBlock = VALID_CI_WORKFLOW.slice(
+    VALID_CI_WORKFLOW.indexOf("  python-quality:"),
+  );
+  const mutations = [
+    [
+      '      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38\n        with:\n          node-version: "24.15.0"\n          package-manager-cache: false\n',
+      "",
+      "actions/setup-node",
+    ],
+    [
+      "      - working-directory: ${{ runner.temp }}\n        run: npm install --global npm@12.0.2\n",
+      "",
+      "npm@12.0.2 bootstrap",
+    ],
+    [
+      '      - run: |\n          test "$(node --version)" = "v24.15.0"\n          test "$(npm --version)" = "12.0.2"\n',
+      "",
+      "Node and npm versions",
+    ],
+    [
+      '          echo "69564b696052886ed0ac63fa393e928384e0f8caada38c1f4864a9bfbf379c15  ${{ runner.temp }}/knowledge-artifacts/tokenizer.json" | sha256sum --check --strict\n',
+      "",
+      "pinned tokenizer",
+    ],
+    [
+      "      - working-directory: apps/knowledge\n        run: uv sync --locked\n",
+      "      - run: uv sync --locked\n",
+      "working-directory apps/knowledge",
+    ],
+    [
+      "          KNOWLEDGE_TOKENIZER_PATH: ${{ runner.temp }}/knowledge-artifacts/tokenizer.json\n",
+      "",
+      "KNOWLEDGE_TOKENIZER_PATH",
+    ],
+  ];
+
+  for (const [from, to, expected] of mutations) {
+    assert.ok(
+      pythonQualityBlock.includes(from),
+      `the golden fixture must carry: ${expected}`,
+    );
+    const mutatedBlock = pythonQualityBlock.replace(from, to);
+    assert.notEqual(mutatedBlock, pythonQualityBlock, expected);
+    const mutated = VALID_CI_WORKFLOW.replace(pythonQualityBlock, mutatedBlock);
+    withTemporaryDirectory((repositoryRoot) => {
+      writeWorkflow(repositoryRoot, "ci.yml", mutated);
+      writeWorkflow(repositoryRoot, "security.yml", VALID_SECURITY_WORKFLOW);
+      const failures = checkWorkflowDefinitions(repositoryRoot);
+      assert.ok(
+        failures.some((failure) => failure.includes(expected)),
+        `dropping ${expected} must fail the policy check; got: ${failures.join(" | ")}`,
+      );
+    });
+  }
+});
+
+test("the shipped CI workflow keeps the python-quality toolchain and tokenizer", () => {
+  const shipped = readFileSync(
+    path.join(REPO_ROOT, ".github", "workflows", "ci.yml"),
+    "utf8",
+  );
+  assert.match(shipped, /actions\/setup-node@249/u);
+  assert.match(shipped, /npm install --global npm@12\.0\.2/u);
+  assert.match(shipped, /sha256sum --check --strict/u);
+  assert.match(shipped, /KNOWLEDGE_TOKENIZER_PATH/u);
+  assert.match(shipped, /working-directory: apps\/knowledge/u);
+});
+
+// ---------------------------------------------------------------------------
+// The findings register: tracked, well-shaped, and never cited by a dead path
+// ---------------------------------------------------------------------------
+
+const REGISTER_ROW = [
+  "### F-001 — a row",
+  "",
+  "- Category: F1 — Logic & Functional Bugs",
+  "- Legacy register id: `R1-A01-01`",
+  "- Affected modules: something",
+  "- Severity: Medium",
+  "- Status: OPEN",
+  "- Root cause: because.",
+  "- Evidence: where.",
+  "- Reproduction: how.",
+  "- Acceptance criteria: what.",
+  "- Related findings: none.",
+  "",
+].join("\n");
+
+test("the findings register must carry the ten fields and a known status", () => {
+  assert.deepEqual(checkFindingsRegister(REGISTER_ROW), []);
+
+  const missingField = REGISTER_ROW.replace("- Root cause: because.\n", "");
+  assert.ok(
+    checkFindingsRegister(missingField).some((failure) =>
+      failure.includes('"Root cause:"'),
+    ),
+  );
+
+  const emptyField = REGISTER_ROW.replace("- Evidence: where.", "- Evidence:");
+  assert.ok(
+    checkFindingsRegister(emptyField).some((failure) =>
+      failure.includes('empty "Evidence:"'),
+    ),
+  );
+
+  const unknownStatus = REGISTER_ROW.replace(
+    "- Status: OPEN",
+    "- Status: DONE",
+  );
+  assert.ok(
+    checkFindingsRegister(unknownStatus).some((failure) =>
+      failure.includes("outside the register vocabulary"),
+    ),
+  );
+
+  const eleventhField = REGISTER_ROW.replace(
+    "- Related findings: none.",
+    "- Related findings: none.\n- Writer: somebody",
+  );
+  assert.ok(
+    checkFindingsRegister(eleventhField).some((failure) =>
+      failure.includes("a field the register does not define"),
+    ),
+    "an eleventh field is a row that drifted from the register shape",
+  );
+});
+
+test("the shipped findings register is well-shaped", () => {
+  const register = readFileSync(
+    path.join(REPO_ROOT, "docs", "execution", "findings.md"),
+    "utf8",
+  );
+  assert.deepEqual(
+    checkFindingsRegister(register),
+    [],
+    "every register row must carry the ten fields and a status from the register vocabulary",
+  );
+});
+
+test("the findings register is tracked, so every row edit carries a commit", () => {
+  assert.ok(
+    listTrackedFiles(REPO_ROOT).includes("docs/execution/findings.md"),
+    "an untracked register gives every row edit no commit, no author and no diff",
+  );
+});
+
+test("a tracked document must not point at the retired register path alone", () => {
+  withTemporaryRepository((repositoryRoot) => {
+    writeTrackedFile(
+      repositoryRoot,
+      "docs/plan.md",
+      "The queue lives in .agents/states/findings.md.\n",
+    );
+    const failures = checkRegisterCitations(repositoryRoot, ["docs/plan.md"]);
+    assert.equal(failures.length, 1, failures.join(" | "));
+    assert.match(failures[0], /docs\/plan\.md/u);
+  });
+
+  withTemporaryRepository((repositoryRoot) => {
+    writeTrackedFile(
+      repositoryRoot,
+      "docs/plan.md",
+      "The queue moved: .agents/states/findings.md is now docs/execution/findings.md.\n",
+    );
+    assert.deepEqual(
+      checkRegisterCitations(repositoryRoot, ["docs/plan.md"]),
+      [],
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The secret-scan allowlist scope, and the generated trees under a module
+// ---------------------------------------------------------------------------
+
+test("the secret-scan allowlist may only suppress the recorded scopes", () => {
+  const failures = checkSecretScanAllowlist(
+    REPO_ROOT,
+    listTrackedFiles(REPO_ROOT),
+  );
+  assert.deepEqual(failures, [], failures.join(" | "));
+});
+
+test("a tracked path outside every recorded scope must fail the policy check", () => {
+  withTemporaryRepository((repositoryRoot) => {
+    writeTrackedFile(
+      repositoryRoot,
+      ".gitleaks.toml",
+      "[extend]\nuseDefault = true\n\n[allowlist]\npaths = [ '''secretive/.*''' ]\n",
+    );
+    writeTrackedFile(repositoryRoot, "secretive/token.txt", "value\n");
+    const failures = checkSecretScanAllowlist(repositoryRoot, [
+      "secretive/token.txt",
+    ]);
+    assert.equal(failures.length, 1, failures.join(" | "));
+    assert.match(failures[0], /outside every recorded scope/u);
+  });
+});
+
+test("a generated tree under a module path must not be stageable", () => {
+  assert.deepEqual(
+    checkNestedGeneratedTreesIgnored(REPO_ROOT),
+    [],
+    "a nested capture is a live-state snapshot that can carry credential-derived material",
+  );
+});
+
+test("the trailing-whitespace gate defers to the editor-facing .editorconfig", () => {
+  withTemporaryRepository((repositoryRoot) => {
+    writeTrackedFile(
+      repositoryRoot,
+      ".editorconfig",
+      "root = true\n\n[*.md]\ntrim_trailing_whitespace = false\n",
+    );
+    writeTrackedFile(repositoryRoot, "note.md", "a hard break  \n");
+    assert.deepEqual(
+      checkWorkingTreeTextPolicy(repositoryRoot, ["note.md"]),
+      [],
+      "Markdown hard breaks are legal per .editorconfig, and the gate must defer to it",
+    );
+
+    writeTrackedFile(repositoryRoot, "code.mjs", "const x = 1;   \n");
+    assert.ok(
+      checkWorkingTreeTextPolicy(repositoryRoot, ["code.mjs"]).some((failure) =>
+        failure.includes("trailing whitespace"),
+      ),
+      "a file class the editorconfig does not exempt is still checked",
+    );
+  });
+});
+
+// =========================================================================
+// M12/T9 F-138 — the Zink Tools provider adapters exceeded the declared
+// tool-ownership set, and nothing compared the two.
+//
+// The canonical boundary document lists the adapters the package exports; this
+// gate makes that list load-bearing, so an adapter that ships without being
+// declared is caught here instead of in a review.
+// =========================================================================
+test("F-138: every shipped Zink Tools adapter is declared in the boundary document", () => {
+  const boundaryPath = path.join(
+    REPO_ROOT,
+    "docs",
+    "architecture",
+    "zink-tools-boundaries.md",
+  );
+  const boundary = readFileSync(boundaryPath, "utf8").toLowerCase();
+  const adaptersDir = path.join(REPO_ROOT, "zink-tools", "adapters");
+  const declared = [];
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name.endsWith("-adapter.mjs")) {
+        declared.push(entry.name.replace(/-adapter\.mjs$/u, ""));
+      }
+    }
+  };
+  walk(adaptersDir);
+  assert.ok(declared.length > 0, "the package must export adapters");
+  for (const name of declared) {
+    assert.ok(
+      boundary.includes(name.toLowerCase()),
+      `the adapter "${name}" must be declared in docs/architecture/zink-tools-boundaries.md`,
+    );
+  }
+});
