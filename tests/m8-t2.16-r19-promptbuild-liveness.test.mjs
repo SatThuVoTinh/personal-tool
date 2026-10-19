@@ -44,6 +44,8 @@ import {
 import { pathToFileURL, fileURLToPath } from "node:url";
 import os from "node:os";
 import path from "node:path";
+
+import { skipWhenUnreachable } from "./helpers/historical-read.mjs";
 import test from "node:test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -452,66 +454,74 @@ test("R19 I2: a context with no runId has no record", async () => {
 // G / H — R18 and the pinned native runtime stay intact
 // ---------------------------------------------------------------------------
 
-test("R19 G: R18's boundary recovery is byte-for-byte unchanged", () => {
-  // M10/T2-R5 UPDATE (owner Option A): the boundary intentionally gains the
-  // deterministic preflight-registry read plus the structured frozen fields.
-  // R18's recovery must be intact UNDER that extension, so this test pins
-  // both halves: every R18 recovery marker plus the R5 markers, and the
-  // file must equal the R5-authorized bytes (see digest below) so any
-  // further unreviewed boundary mutation still fails.
-  const R18_COMMIT = "980b36e";
-  const sha = (v) => createHash("sha256").update(v).digest("hex");
-  const current = readFileSync(BOUNDARY_PATH, "utf8");
-  const atR18 = execFileSync(
-    "git",
-    [
-      "show",
-      `${R18_COMMIT}:integrations/openclaw/topology/lib/native-boundary.mjs`,
-    ],
-    { cwd: REPO, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
-  );
-  assert.notEqual(
-    sha(current),
-    sha(atR18),
-    "the boundary carries the R4-authorized threadId extension",
-  );
-  assert.ok(
-    current.includes("rememberRunLiveness("),
-    "R18's admission-time recording must still be present",
-  );
-  assert.ok(
-    current.includes("context.trigger ?? liveness?.trigger"),
-    "R18's run-end recovery must still be present",
-  );
-  assert.ok(
-    current.includes("threadId: params.currentThreadId") === false,
-    "the patch-side expression lives in the patcher, never duplicated here",
-  );
-  assert.ok(
-    current.includes("const threadId = context.threadId ?? null;"),
-    "R4's explicit absent behavior must be present",
-  );
-  assert.ok(
-    current.includes("GOVERNANCE_CONTEXT_MISSING"),
-    "R4's malformed-threadId fail-closed must be present",
-  );
-  // M10/T2-R12: the boundary now carries exactly one further change on top of
-  // the R10 bytes — resolveGovernance exported as a read-only test seam, no
-  // behavior change. The pin moves to those bytes; its purpose as a change
-  // detector is unchanged.
-  // M11/T3 Phase 1: the boundary now carries A3's cause-preserving diagnostics on
-  // top of those bytes. The host-visible codes and verdicts are unchanged, so
-  // this pin still works purely as a change detector.
-  //
-  // PROBE ONLY — B-16 would move this to `fceefc0d…` (the reason diagnostics).
-  // This pinned assertion is NOT in the owner's grant; see
-  // `.agents/states/wave-b-premises.md`.
-  assert.equal(
-    sha(current),
-    "fceefc0df03228c91511779880c21a81d75579633e86ceae54d9696446d0081d",
-    "the boundary must equal the bytes the R19 suite was extended against, plus M11/T3 A3",
-  );
-});
+test(
+  "R19 G: R18's boundary recovery is byte-for-byte unchanged",
+  { skip: skipWhenUnreachable(REPO, "980b36e") },
+  () => {
+    // M10/T2-R5 UPDATE (owner Option A): the boundary intentionally gains the
+    // deterministic preflight-registry read plus the structured frozen fields.
+    // R18's recovery must be intact UNDER that extension, so this test pins
+    // both halves: every R18 recovery marker plus the R5 markers, and the
+    // file must equal the R5-authorized bytes (see digest below) so any
+    // further unreviewed boundary mutation still fails.
+    const R18_COMMIT = "980b36e";
+    const sha = (v) => createHash("sha256").update(v).digest("hex");
+    const current = readFileSync(BOUNDARY_PATH, "utf8");
+    const atR18 = execFileSync(
+      "git",
+      [
+        "show",
+        `${R18_COMMIT}:integrations/openclaw/topology/lib/native-boundary.mjs`,
+      ],
+      { cwd: REPO, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
+    );
+    assert.notEqual(
+      sha(current),
+      sha(atR18),
+      "the boundary carries the R4-authorized threadId extension",
+    );
+    assert.ok(
+      current.includes("rememberRunLiveness("),
+      "R18's admission-time recording must still be present",
+    );
+    assert.ok(
+      current.includes("context.trigger ?? liveness?.trigger"),
+      "R18's run-end recovery must still be present",
+    );
+    assert.ok(
+      current.includes("threadId: params.currentThreadId") === false,
+      "the patch-side expression lives in the patcher, never duplicated here",
+    );
+    assert.ok(
+      current.includes("const threadId = context.threadId ?? null;"),
+      "R4's explicit absent behavior must be present",
+    );
+    assert.ok(
+      current.includes("GOVERNANCE_CONTEXT_MISSING"),
+      "R4's malformed-threadId fail-closed must be present",
+    );
+    // M10/T2-R12: the boundary now carries exactly one further change on top of
+    // the R10 bytes — resolveGovernance exported as a read-only test seam, no
+    // behavior change. The pin moves to those bytes; its purpose as a change
+    // detector is unchanged.
+    // M11/T3 Phase 1: the boundary now carries A3's cause-preserving diagnostics on
+    // top of those bytes. The host-visible codes and verdicts are unchanged, so
+    // this pin still works purely as a change detector.
+    //
+    // The boundary now carries B-16's reason diagnostics on top of the M11/T3
+    // A3 bytes, and that build is landed and CI-verified: PLAN.md §3 records
+    // M11/T3-R1 as CLOSED with `3cb8274` landing the "cause-preserving
+    // message-only diagnostics at the three native-boundary seams", and the
+    // M11/T3-R1 record names `fceefc0d…` as the build B-16 rolled the boundary
+    // to. The pin therefore cites a tracked authority. It is not an ungranted
+    // probe, and it does not defer its evidence to a Git-ignored state file.
+    assert.equal(
+      sha(current),
+      "fceefc0df03228c91511779880c21a81d75579633e86ceae54d9696446d0081d",
+      "the boundary must equal the bytes the R19 suite was extended against, plus M11/T3 A3 and B-16's reason diagnostics (landed in 3cb8274)",
+    );
+  },
+);
 
 test("R19 H: R18's run-end behaviour is functionally intact", async () => {
   await withPlugin(async ({ native, logged }) => {
