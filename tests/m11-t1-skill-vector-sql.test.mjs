@@ -470,6 +470,254 @@ test("R3-7: the failure statement refreshes both digests and clears the segments
 // only) carried `\x00` into the transaction that `buildSkillSyncTransaction`
 // opens, so the failure arrived after psql had already begun one. The scan-side
 // check means the sync never gets as far as a statement.
+// M12/T9-R1 F-152 — a catalog with one invalid file must still retire the
+// skills the owner deprecated.
+//
+// Before the fix the tombstone was skipped whenever the scan reported
+// anything, so one malformed SKILL.md anywhere kept every previously READY
+// row alive — including the rows of retired skills. The index still reported
+// FRESH for up to the 7-day SLA, and the adapter kept serving skills the
+// owner had retired.
+//
+// The narrow statement is the whole fix: it deletes the rows it can PROVE are
+// retired and leaves every other row alone, so an incomplete catalog can
+// never turn "not known to be active" into "deleted".
+test("F-152: a retired skill is retired even when another record is invalid", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "m11-f152-"));
+  try {
+    // A skill the owner retired ...
+    await makeRetiredSkill(
+      root,
+      ["office"],
+      "retired-skill",
+      "# Retired\n\nOld.",
+    );
+    // ... and an unrelated record the scan rejects.
+    await makeActiveSkill(
+      root,
+      ["office"],
+      "poisoned-skill",
+      "# Poisoned\n\nbefore\u0000after",
+    );
+    const statements = [];
+    const report = await syncSkillsToVectorStore({
+      skillsRoot: root,
+      embedFn,
+      dbExecutor: async (sql) => {
+        statements.push(sql);
+        return "";
+      },
+    });
+    // The invalid catalog is still reported as such: the operator must see
+    // why the sync did not complete.
+    assert.equal(report.status, "FAILED");
+    assert.equal(report.error_code, "CATALOG_INVALID");
+    assert.ok(
+      (report.details ?? []).some((e) => e.code === "INVALID_SKILL_CONTENT"),
+      `the refusal must still name the byte-level diagnostic, got ${JSON.stringify(report.details)}`,
+    );
+    // The retirement reached the database.
+    const retirement = statements.find((s) =>
+      s.includes("DELETE FROM skills.catalog_index"),
+    );
+    assert.ok(
+      retirement,
+      `the retirement must still reach the database: ${JSON.stringify(statements)}`,
+    );
+    assert.ok(
+      retirement.includes("office|retired-skill|1.0.0"),
+      `the retired skill must be tombstoned: ${retirement}`,
+    );
+    // And a row whose skill could not be read is NOT deleted: the catalog is
+    // incomplete, so "not known to be active" must not mean "deleted".
+    assert.ok(
+      !retirement.includes("poisoned-skill"),
+      `an unprovable row must not be deleted: ${retirement}`,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// M12/T9-R1 F-019 — a `$$` inside untrusted text must not truncate the
+// dollar-quoted block.
+//
+// The READY transaction and the FAILED row are both `DO $$ ... $$;` blocks,
+// and PostgreSQL ends a dollar-quoted string at the first matching tag. A
+// skill body or a failure reason containing `$$` therefore closed the block
+// early: the statement was a syntax error, the skill's whole transaction was
+// refused, and the failure reason never reached the row it was written for.
+test("F-019: a `$$` in the body or in the failure reason cannot truncate the block", async () => {
+  // (1) The READY path: a skill body carrying `$$`.
+  const ready = await mkdtemp(path.join(os.tmpdir(), "m11-f019-ready-"));
+  try {
+    await makeActiveSkill(
+      ready,
+      ["office"],
+      "dollar-skill",
+      "# Dollar\n\nA body that carries $$ inside it.",
+    );
+    const statements = [];
+    const report = await syncSkillsToVectorStore({
+      skillsRoot: ready,
+      embedFn,
+      dbExecutor: async (sql) => {
+        statements.push(sql);
+        return "";
+      },
+    });
+    assert.equal(report.status, "READY");
+    const transaction = statements.find((s) =>
+      s.includes("INSERT INTO skills.segments"),
+    );
+    assert.ok(transaction, "the skill must be written");
+    assertWellFormedDollarQuote(transaction, "the READY transaction");
+    assert.ok(
+      transaction.includes("carries $$ inside"),
+      `the body must reach the statement intact: ${transaction}`,
+    );
+  } finally {
+    await rm(ready, { recursive: true, force: true });
+  }
+
+  // (2) The FAILED path: a failure reason carrying `$$`.
+  const failed = await mkdtemp(path.join(os.tmpdir(), "m11-f019-fail-"));
+  try {
+    await makeActiveSkill(
+      failed,
+      ["office"],
+      "dollar-failure",
+      "# Dollar\n\nA body that carries $$ inside it.",
+    );
+    const statements = [];
+    const report = await syncSkillsToVectorStore({
+      skillsRoot: failed,
+      embedFn: async () => {
+        throw new Error("EMBEDDING_ENDPOINT_DOWN_$$ with a $$ reason");
+      },
+      dbExecutor: async (sql) => {
+        statements.push(sql);
+        return "";
+      },
+    });
+    assert.equal(report.failed_count, 1);
+    const failure = statements.find((s) =>
+      s.includes("sync_status = 'FAILED'"),
+    );
+    assert.ok(failure, "the failure must still be recorded");
+    assertWellFormedDollarQuote(failure, "the FAILED block");
+    assert.ok(
+      failure.includes("with a $$ reason"),
+      `the reason must reach the failure row intact: ${failure}`,
+    );
+  } finally {
+    await rm(failed, { recursive: true, force: true });
+  }
+});
+
+// M12/T9-R1 F-054 — the container name and the deadline.
+//
+// (1) The container name reaches `docker exec` as an argv token, where a
+// leading `--` is parsed by docker as its own option. It comes from the
+// environment, so it must be refused before the spawn.
+// (2) Killing the `docker exec` client does not stop the query: psql is
+// already inside the container and the server-side statement keeps running
+// after the client reported DB_TIMEOUT. The deadline must hold where the
+// work happens, so the server gets its own bound.
+test("F-054: the container name is refused and the deadline reaches the server", async () => {
+  // (1) The name is checked, and an invalid one never reaches docker.
+  for (const name of [
+    "--rm",
+    "-it",
+    "--version",
+    "postgres;drop",
+    "with space",
+    "",
+    null,
+  ]) {
+    assert.throws(
+      () => validatePostgresContainerName(name),
+      /POSTGRES_CONTAINER_INVALID/u,
+      `${JSON.stringify(name)} must be refused`,
+    );
+  }
+  assert.equal(
+    validatePostgresContainerName("personal-tool-postgres-1"),
+    "personal-tool-postgres-1",
+  );
+  await assert.rejects(
+    () => executePostgresQuery("SELECT 1", { postgresContainer: "--rm" }),
+    /POSTGRES_CONTAINER_INVALID/u,
+    "the refusal must happen before the spawn",
+  );
+
+  // (2) The server-side bound is part of the statement psql receives.
+  const bounded = withServerSideTimeout("SELECT 1", 30000);
+  assert.ok(
+    bounded.startsWith("SET statement_timeout = 30000;\n"),
+    `the server must be bounded: ${bounded}`,
+  );
+  assert.ok(bounded.endsWith("SELECT 1"), "the caller's SQL must be preserved");
+  assert.equal(
+    withServerSideTimeout("SELECT 1", 0),
+    "SET statement_timeout = 30000;\nSELECT 1",
+    "a nonsensical deadline must fall back to the documented default",
+  );
+});
+
+// M12/T9-R1 F-046 — the model identity must be REPORTED.
+//
+// The two guards were both conditioned on the endpoint volunteering the
+// field, so a response that omitted it was a PASS: the vectors could then
+// have come from any model at all, and the sync still reported READY.
+test("F-046: a response that does not report its model is refused", async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    const jsonResponse = (payload) => async () => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      text: async () => JSON.stringify(payload),
+    });
+    const vectors = [new Array(EXPECTED_DIMENSIONS).fill(0.01)];
+
+    // No `model` at all: the endpoint did not say which model produced these.
+    globalThis.fetch = jsonResponse({ embeddings: vectors });
+    await assert.rejects(
+      () =>
+        generateSkillEmbeddings(["t"], {
+          ollamaUrl: "http://127.0.0.1:11434",
+        }),
+      /EMBEDDING_MODEL_UNREPORTED/u,
+    );
+
+    // A different model: refused, as before.
+    globalThis.fetch = jsonResponse({
+      model: "bge-m3-tampered",
+      embeddings: vectors,
+    });
+    await assert.rejects(
+      () =>
+        generateSkillEmbeddings(["t"], {
+          ollamaUrl: "http://127.0.0.1:11434",
+        }),
+      /EMBEDDING_MODEL_MISMATCH/u,
+    );
+
+    // The exact model: accepted.
+    globalThis.fetch = jsonResponse({
+      model: "bge-m3:latest",
+      embeddings: vectors,
+    });
+    const ok = await generateSkillEmbeddings(["t"], {
+      ollamaUrl: "http://127.0.0.1:11434",
+    });
+    assert.equal(ok.length, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("R3-6: a control-byte body is refused by the scan before any SQL runs", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "m11-r36-"));
   try {

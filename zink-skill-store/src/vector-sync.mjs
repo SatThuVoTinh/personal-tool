@@ -579,6 +579,20 @@ export async function syncSkillsToVectorStore(options = {}) {
     return Array.isArray(lifecycle) && lifecycle.at(-1)?.status === "ACTIVE";
   });
 
+  // M12/T9-R1 F-152: the skills the catalog proves are RETIRED. Their derived
+  // rows must be removed even when an unrelated record is invalid, otherwise
+  // one bad file freezes every retirement in the store for the whole SLA
+  // window and the adapter keeps serving retired skills.
+  //
+  // Only a readable manifest counts: a skill whose manifest cannot be read
+  // is NOT provably retired, so its row is left alone rather than deleted on
+  // a guess.
+  const retiredKeys = catalog.records
+    .filter(
+      (record) => record.manifest?.lifecycle?.at(-1)?.status === "DEPRECATED",
+    )
+    .map((record) => tombstoneKey(record.manifest.identity));
+
   const syncReport = {
     status: "RUNNING",
     sync_generation_id: syncGenerationId,
@@ -588,6 +602,53 @@ export async function syncSkillsToVectorStore(options = {}) {
     failed_count: 0,
     skills: [],
   };
+
+  if (catalogErrors.length > 0) {
+    // F-152: the tombstone used to be skipped entirely whenever the scan
+    // reported anything, so ONE invalid file anywhere left every previously
+    // READY row in place — including the rows of skills the owner had
+    // retired — while the index still reported FRESH for up to the 7-day SLA
+    // and the adapter kept serving them.
+    //
+    // The narrow statement deletes ONLY the rows it can prove are retired.
+    // A row whose skill could not be read is left alone: the catalog is
+    // incomplete, so "not in the active set" would mean "not known", and
+    // deleting on that basis would destroy a live skill's vectors.
+    if (retiredKeys.length > 0) {
+      const retirementSql = `
+        DELETE FROM skills.catalog_index
+        WHERE status = 'ACTIVE'
+        AND (${TOMBSTONE_KEY_SQL_EXPRESSION}) IN (
+          SELECT unnest(${escapeSqlLiteral(
+            toPostgresArrayLiteral(retiredKeys),
+          )}::text[])
+        );
+      `;
+      try {
+        await executePostgresQuery(retirementSql, options);
+      } catch (error) {
+        return {
+          status: "FAILED",
+          error_code: "VECTOR_TOMBSTONE_SYNC_FAILED",
+          error: String(
+            error?.message || "Tombstone synchronization failed",
+          ).slice(0, MAX_FAILURE_REASON_LENGTH),
+          details: catalogErrors,
+          sync_generation_id: syncGenerationId,
+          synced_count: 0,
+          failed_count: 1,
+        };
+      }
+    }
+    return {
+      status: "FAILED",
+      error_code: "CATALOG_INVALID",
+      details: catalogErrors,
+      sync_generation_id: syncGenerationId,
+      synced_count: 0,
+      failed_count: 0,
+    };
+  }
 
   // 3. Tombstone synchronization for removed or deprecated skills (K24)
   const activeKeys = activeRecords.map((r) => {
