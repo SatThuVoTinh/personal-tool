@@ -14,6 +14,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -38,6 +39,7 @@ import {
 } from "../integrations/openclaw/topology/lib/ledger.mjs";
 import { DecisionLedger } from "../integrations/openclaw/lib/decision-ledger.mjs";
 import { resolveAuthenticatedApproval } from "../integrations/openclaw/topology/lib/guard.mjs";
+import { validateContract } from "../integrations/openclaw/topology/lib/schema.mjs";
 import { skillStoreWriterLockDir } from "../zink-skill-store/src/catalog.mjs";
 import { SkillAdapter } from "../zink-tools/adapters/skill-store/skill-adapter.mjs";
 
