@@ -25,6 +25,41 @@ function cliError(message) {
   );
 }
 
+/**
+ * Maps a thrown error onto the CLI's error envelope.
+ *
+ * M12/T9-R1 F-096: the catch used to have no binding at all, so `error.code`
+ * and `error.details` were unreachable BY CONSTRUCTION and every failure
+ * answered the same blanket `OPERATIONAL_FAILURE` with an empty details
+ * list. A caller could therefore not tell "your input is invalid" (retryable)
+ * from "the tree is poisoned" (needs an operator) without parsing prose.
+ *
+ * The governed writer (`catalog.mjs`'s `writerError`) classifies every
+ * refusal with a `code` and a machine-readable `details` list, and that
+ * shape is what identifies a classified failure here. Anything else is an
+ * unexpected fault and keeps the blanket code.
+ */
+export function classifyCliError(error) {
+  if (Array.isArray(error?.details)) {
+    return {
+      code:
+        typeof error?.code === "string" && error.code
+          ? error.code
+          : "OPERATIONAL_FAILURE",
+      message:
+        typeof error?.message === "string" && error.message
+          ? error.message
+          : "Skill Store operation failed.",
+      details: error.details,
+    };
+  }
+  return {
+    code: "OPERATIONAL_FAILURE",
+    message: "Skill Store operation failed.",
+    details: [],
+  };
+}
+
 function parseGet(args) {
   if (args.length !== 4) return null;
   const values = new Map();
@@ -100,18 +135,9 @@ export async function executeCli(args, skillsRoot = canonicalSkillsRoot) {
       );
     }
     return cliError("Invalid skill-store command.");
-  } catch {
-    return response(
-      1,
-      {
-        error: {
-          code: "OPERATIONAL_FAILURE",
-          message: "Skill Store operation failed.",
-          details: [],
-        },
-      },
-      "stderr",
-    );
+  } catch (error) {
+    const classified = classifyCliError(error);
+    return response(1, { error: classified }, "stderr");
   }
 }
 

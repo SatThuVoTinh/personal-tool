@@ -617,5 +617,37 @@ test("enforces CLI exit codes and output channels", async () => {
       JSON.parse(operational.stderr).error.code,
       "OPERATIONAL_FAILURE",
     );
+
+    // M12/T9-R1 F-096: a fault the writer already classified must reach the
+    // caller as THAT classification — with its machine-readable details — and
+    // not as the blanket OPERATIONAL_FAILURE. The catch used to have no
+    // binding, so `error.code` and `error.details` were unreachable by
+    // construction.
+    const classified = classifyCliError({
+      code: "SKILL_ACTIVE_CONFLICT",
+      message: "capability already has ACTIVE version 1.0.0",
+      details: ["SKILL_ACTIVE_CONFLICT"],
+    });
+    assert.equal(classified.code, "SKILL_ACTIVE_CONFLICT");
+    assert.deepEqual(classified.details, ["SKILL_ACTIVE_CONFLICT"]);
+    // An unexpected fault keeps the blanket class.
+    const unclassified = classifyCliError(new Error("boom"));
+    assert.equal(unclassified.code, "OPERATIONAL_FAILURE");
+    assert.deepEqual(unclassified.details, []);
+
+    // And a poisoned catalog reaches the caller as one classifiable outcome,
+    // not as prose to be parsed.
+    await temporaryStore(async (root) => {
+      writeSkill(root, { manifestBytes: "{" });
+      const poisoned = await executeCli(["validate"], root);
+      assert.equal(poisoned.exitCode, 2);
+      assert.equal(poisoned.stdout, "");
+      const parsed = JSON.parse(poisoned.stderr);
+      assert.equal(parsed.error.code, "CATALOG_INVALID");
+      assert.ok(
+        parsed.error.details.length > 0,
+        "the details must name the cause",
+      );
+    });
   });
 });
