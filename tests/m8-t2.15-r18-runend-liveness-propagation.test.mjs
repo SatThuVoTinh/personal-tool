@@ -573,7 +573,10 @@ test("R18 13: R18 leaves the pinned native patch byte-identical", () => {
   // tests/m10-t2-r8-preflight-lineage.test.mjs.
   assert.equal(
     sha256(readFileSync(NATIVE_PATCH_PATH, "utf8")),
-    "b81b006a3832620a28d626f806d150dac837c99c7c117579bf3cb7da3d81e6c3",
+    // M12/T9: rolled for F-146 and F-163 - the predecessor branch now takes the
+    // backup the caller handed it, and a failed atomic replace leaves no
+    // residue. The pin still forbids ANY other drift.
+    "6ece51a102dc423470f0271c55c931f04e44930b2e1545ab110254420b456874",
     "native-patch.mjs must equal the R8-stderr-grounded-authorized bytes; any other drift fails",
   );
 });

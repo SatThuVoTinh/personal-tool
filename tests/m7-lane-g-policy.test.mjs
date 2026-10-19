@@ -456,8 +456,14 @@ describe("Lane G — policy & lifecycle contract reconciliation", () => {
       moduleSource.match(
         /ensureNativeBackup\(backupRoot, roots, inspection, version\)/gu,
       ).length,
-      3,
-      "fresh patch, re-take and converge must all share the one backup builder",
+      // M12/T9: four now - the declaration plus THREE paths (predecessor
+      // upgrade, re-take and converge). The predecessor branch rewrote the
+      // live runtime without taking the backup the caller handed it (F-146),
+      // so it now shares the one builder like every other path. The
+      // regression this test guards against is a SECOND DECLARATION, which
+      // the two assertions above still pin.
+      4,
+      "predecessor upgrade, fresh patch, re-take and converge must all share the one backup builder",
     );
     assert.equal(
       moduleSource.match(/const next = nativeBackupManifest\(roots\);/gu)

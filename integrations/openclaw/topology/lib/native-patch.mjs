@@ -1043,6 +1043,15 @@ export function applyNativePatch(input, backupRoot) {
       )
     )
       throw new Error("NATIVE_PATCH_PARTIAL_STATE");
+    // F-146: this branch rewrites the live runtime, so it needs the same
+    // recovery path the converge branch has. The predecessor's preimage is the
+    // upstream baseline, which the branch derives in memory, so the SAME
+    // preimage set the converge branch writes is written BEFORE the first
+    // write. A branch that cannot back up must not rewrite the runtime: the
+    // backupRoot the caller handed us is either used or refused, never
+    // silently discarded.
+    if (!backupRoot) throw new Error("NATIVE_BACKUP_REQUIRED");
+    ensureNativeBackup(backupRoot, roots, inspection, version);
     // Derive the whole plan in memory BEFORE the first write, so a failure here
     // cannot leave a half-converted runtime.
     const plan = Object.entries(inspection)
@@ -1052,18 +1061,23 @@ export function applyNativePatch(input, backupRoot) {
         after: entry.after,
         mode: lstatSync(sourcePath(roots, file, version)).mode & 0o777,
       }));
-    assertNoLinks(bridgeFile(root));
-    if (
-      !existsSync(bridgeFile(root)) ||
-      sha256(readFileSync(bridgeFile(root))) !== sha256(bridgeContents())
-    )
-      replaceAtomic(bridgeFile(root), bridgeContents(), 0o600);
-    for (const { file, after, mode } of plan)
-      replaceAtomic(sourcePath(roots, file, version), after, mode);
-    // `checkNativePatch` is the same verification the other paths end with: every
-    // pinned source must now invert exactly to the baseline, and the bridge must
-    // be the current repository boundary.
-    return checkNativePatch(roots);
+    try {
+      assertNoLinks(bridgeFile(root));
+      if (
+        !existsSync(bridgeFile(root)) ||
+        sha256(readFileSync(bridgeFile(root))) !== sha256(bridgeContents())
+      )
+        replaceAtomic(bridgeFile(root), bridgeContents(), 0o600);
+      for (const { file, after, mode } of plan)
+        replaceAtomic(sourcePath(roots, file, version), after, mode);
+      // `checkNativePatch` is the same verification the other paths end with: every
+      // pinned source must now invert exactly to the baseline, and the bridge must
+      // be the current repository boundary.
+      return checkNativePatch(roots);
+    } catch (cause) {
+      restoreNativePatch(roots, backupRoot);
+      throw new Error("NATIVE_APPLY_FAILED_RESTORED", { cause });
+    }
   }
   if (Object.values(inspection).every((entry) => entry.state === "PATCHED")) {
     if (
