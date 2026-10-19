@@ -2,8 +2,10 @@ import test, { describe } from "node:test";
 import assert from "node:assert/strict";
 import { executeGovernedDuckDbQuery } from "../zink-tools/sql/duckdb-bridge.mjs";
 import {
+  classifyDuckDbEngineProbe,
   duckDbEngineAvailable,
   duckDbSkip,
+  DUCKDB_ENGINE_STATUS,
 } from "./helpers/duckdb-availability.mjs";
 
 describe("Governed DuckDB Windows Bridge (M7/T4 G4 & G5)", () => {
@@ -413,4 +415,46 @@ describe("Governed DuckDB Windows Bridge (M7/T4 G4 & G5)", () => {
     assert.equal(res.execution_state, "TEST_SIMULATION");
     assert.equal(res.row_count, 2);
   });
+});
+
+test("F-304: only an absent binary yields NOT RUN; a broken engine reddens the lane", () => {
+  // M12/T9 F-304: the probe used to fold every failure into "not installed",
+  // so a hanging or broken engine retired the SQL gates behind a skip whose
+  // reason was factually wrong, and the lane still exited zero. The cause is
+  // now reported, and the skip is only produced for an absent binary.
+  const absent = classifyDuckDbEngineProbe(() => {
+    const error = new Error("spawn duckdb ENOENT");
+    error.code = "ENOENT";
+    throw error;
+  });
+  assert.equal(absent.status, DUCKDB_ENGINE_STATUS.NOT_INSTALLED);
+  assert.match(absent.detail, /not installed/u);
+  assert.equal(
+    duckDbSkip(absent),
+    absent.detail,
+    "an absent engine is still NOT RUN, with an accurate reason",
+  );
+
+  for (const code of ["ETIMEDOUT", "EACCES", "ENOEXEC", 1]) {
+    const broken = classifyDuckDbEngineProbe(() => {
+      const error = new Error("the engine did not answer");
+      error.code = code;
+      throw error;
+    });
+    assert.equal(
+      broken.status,
+      DUCKDB_ENGINE_STATUS.BROKEN,
+      `a probe failure with code ${code} is BROKEN, not NOT INSTALLED`,
+    );
+    assert.match(broken.detail, /FAILURE, not NOT RUN/u);
+    assert.equal(
+      duckDbSkip(broken),
+      false,
+      `a broken engine must NOT be retired behind a skip (code ${code})`,
+    );
+  }
+
+  const available = classifyDuckDbEngineProbe(() => {});
+  assert.equal(available.status, DUCKDB_ENGINE_STATUS.AVAILABLE);
+  assert.equal(duckDbSkip(available), false);
 });
