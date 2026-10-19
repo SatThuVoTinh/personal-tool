@@ -224,7 +224,118 @@ test("R8 L7: the refusal text is a sentence, not an identifier", () => {
       false,
       `${code} must not appear in the model-visible refusal`,
     );
-  // The historical codes must not reappear anywhere in the boundary source.
-  const source = POLICY_REFUSAL_TEXT;
-  assert.equal(source.includes("GOVERNANCE"), false);
+  // M12/T9 F-331: the previous version of this case scanned
+  // `POLICY_REFUSAL_TEXT` ? the very 41-character string the loop above had
+  // already read ? while its comment claimed the retired codes must not
+  // reappear "anywhere in the boundary source". The guarantee is now exercised
+  // where it is claimed, in the next case: every refusal branch of the
+  // boundary is driven and no internal code may escape on the model-visible
+  // channel.
+});
+
+test("R8 L8: every refusal branch keeps its canonical code off the model-visible channel", async () => {
+  // M12/T9 F-331: the model-visible channel is the only channel a governance
+  // identifier can leak through ? the host copies `decision.reason` into the
+  // tool result the model reads. Each refusal branch of the boundary is driven
+  // here, and two things are asserted for every one of them: the host receives
+  // the refusal sentence and nothing else, and the canonical code IS recorded
+  // on the diagnostic channel, so the audit trail is not lost with the leak.
+  const branches = [
+    {
+      name: "the assistant message is missing",
+      canonical: "GOVERNANCE_BATCH_MISSING",
+      build: () => {
+        const e = event();
+        delete e.assistantMessage;
+        return { e };
+      },
+    },
+    {
+      name: "the batch carries no tool call",
+      canonical: "GOVERNANCE_BATCH_INVALID",
+      build: () => {
+        const e = event();
+        e.assistantMessage.content = [{ type: "text", text: "hello" }];
+        return { e };
+      },
+    },
+    {
+      name: "the tool call is not part of the batch",
+      canonical: "GOVERNANCE_BATCH_INVALID",
+      build: () => {
+        const e = event();
+        e.toolCall.id = "call-other";
+        return { e };
+      },
+    },
+    {
+      name: "a yield batch is refused",
+      canonical: "YIELD_BATCH_DENIED",
+      build: () => {
+        const e = event("sessions_yield");
+        e.assistantMessage.content = [
+          { type: "toolCall", id: "call-1", name: "sessions_yield" },
+        ];
+        return { e, agentId: "sql" };
+      },
+    },
+    {
+      name: "the guard denies without naming a code",
+      canonical: "GOVERNANCE_DENIED",
+      build: () => ({
+        e: event(),
+        guard: guard({ beforeToolCall: async () => ({ allow: false }) }),
+      }),
+    },
+    {
+      name: "a spawn decision carries an invalid label",
+      canonical: "GOVERNANCE_DECISION_INVALID",
+      build: () => ({
+        e: event("sessions_spawn"),
+        guard: guard({
+          beforeToolCall: async () => ({
+            allow: true,
+            spawnLabel: "not-a-hash",
+          }),
+        }),
+      }),
+    },
+    {
+      name: "the run is already aborted",
+      canonical: "GOVERNANCE_UNAVAILABLE",
+      build: () => ({ e: event(), aborted: true }),
+    },
+  ];
+
+  for (const branch of branches) {
+    const {
+      e,
+      guard: guardImpl = guard(),
+      agentId = "main",
+      aborted = false,
+    } = branch.build();
+    const agent = install(guardImpl, agentId);
+    const controller = new globalThis.AbortController();
+    if (aborted) controller.abort();
+    let decision;
+    const lines = await withLogs(async () => {
+      decision = await agent.beforeToolCall(e, controller.signal);
+    });
+    assert.equal(decision.block, true, `${branch.name} must block`);
+    assert.equal(
+      decision.reason,
+      POLICY_REFUSAL_TEXT,
+      `${branch.name} must hand the host the refusal sentence`,
+    );
+    assert.equal(
+      /[A-Z]{2,}/u.test(decision.reason),
+      false,
+      `${branch.name} must not put an internal identifier on the model-visible channel`,
+    );
+    assert.match(
+      lines.join("\n"),
+      new RegExp(branch.canonical, "u"),
+      `${branch.name} must record ${branch.canonical} in diagnostics`,
+    );
+  }
 });
