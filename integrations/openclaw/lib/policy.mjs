@@ -1336,6 +1336,13 @@ export function buildAuthOrderPlan() {
   };
 }
 
+// M12/T9 F-179: the drop-in installs a boot dependency (the Gemini stream
+// hotfix must be in place) but the apply ceremony never establishes that
+// state, and the old `--check` gate exits non-zero until an operator runs the
+// hotfix by hand. With `Restart=always` and `StartLimitBurst=5` that is a
+// permanent outage: five failed ExecStartPre attempts in 60 s and the unit is
+// locked out. `--ensure` establishes the state the gate depends on, so a
+// fresh apply-then-start boots.
 export function renderSystemdDropIn(stateDir) {
   const passStore = path.join(stateDir, "secrets", "password-store");
   const gpgHome = path.join(stateDir, "secrets", "gnupg");

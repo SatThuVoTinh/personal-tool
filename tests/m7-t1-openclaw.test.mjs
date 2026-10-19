@@ -39,9 +39,11 @@ import {
   validateConfig,
 } from "../integrations/openclaw/lib/policy.mjs";
 import {
+  HOTFIX_BOOT_ACTION,
   OPENCLAW_HOTFIX_ARTIFACTS,
   OPENCLAW_HOTFIX_RELEASE,
   assertPatchedInvariants,
+  hotfixBootAction,
   patchContents,
   requireKnownHash,
   requireSupportedRelease,
@@ -923,9 +925,13 @@ test("M7/T1 builder is dry-run safe and apply materializes no secrets", () => {
       readFileSync(dropInPath, "utf8"),
       renderSystemdDropIn(stateDir),
     );
+    // M12/T9 F-179: the boot gate is `--ensure`, not `--check`. A `--check`
+    // gate exits non-zero until an operator runs the hotfix by hand, and the
+    // apply ceremony never establishes that state, so apply-then-start failed
+    // the unit five times in 60 s and left the assistant down.
     assert.match(
       readFileSync(dropInPath, "utf8"),
-      /ExecStartPre=.*openclaw-gemini-stream-hotfix\.mjs --check/u,
+      /ExecStartPre=.*openclaw-gemini-stream-hotfix\.mjs --ensure/u,
     );
     assert.equal(
       existsSync(path.join(stateDir, "secrets", "password-store")),
@@ -948,6 +954,51 @@ test("M7/T1 builder is dry-run safe and apply materializes no secrets", () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+// M12/T9 F-179: a freshly applied, unpatched profile must survive
+// apply-then-start. The live systemd lane is NOT RUN here (it needs a WSL
+// host and a real unit), so this pins the two decisions that lane depends on:
+// the drop-in carries the establishing gate, and that gate repairs instead of
+// failing the unit.
+test("F-179: a fresh apply-then-start survives the hotfix boot gate", () => {
+  const stateDir = path.join(temporaryDirectory(), ".openclaw-zink");
+  const dropIn = renderSystemdDropIn(stateDir);
+  assert.match(
+    dropIn,
+    /ExecStartPre=.*openclaw-gemini-stream-hotfix\.mjs --ensure/u,
+    "the boot gate must establish the state it depends on",
+  );
+  assert.doesNotMatch(
+    dropIn,
+    /openclaw-gemini-stream-hotfix\.mjs --check/u,
+    "a --check gate cannot pass on a profile the apply ceremony never patched",
+  );
+
+  assert.equal(
+    hotfixBootAction({ state: "original" }),
+    HOTFIX_BOOT_ACTION.REPAIR,
+    "an unpatched but applicable runtime must be repaired, not refused",
+  );
+  assert.equal(
+    hotfixBootAction({ state: "r18-predecessor" }),
+    HOTFIX_BOOT_ACTION.REPAIR,
+    "the R18 predecessor state must be upgraded, not refused",
+  );
+  assert.equal(
+    hotfixBootAction({ state: "patched" }),
+    HOTFIX_BOOT_ACTION.ALREADY_PATCHED,
+  );
+  assert.equal(
+    hotfixBootAction({ state: "original", releaseSupported: false }),
+    HOTFIX_BOOT_ACTION.NOT_APPLICABLE,
+    "an openclaw package update must not deadlock the unit",
+  );
+  assert.throws(
+    () => hotfixBootAction({ state: "half-written" }),
+    /unsupported partial state/u,
+    "a runtime that cannot be repaired still fails the boot",
+  );
 });
 
 test("M7/T1 builder upgrades only the exact R16 drop-in and rejects owned drift", () => {

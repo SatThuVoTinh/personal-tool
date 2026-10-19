@@ -271,15 +271,19 @@ The utility accepts only OpenClaw `2026.6.34` and exact known original, R18
 predecessor, or fully patched SHA-256 state across four frozen bundle artifacts.
 It validates every artifact before writing, rolls back completed writes if a
 later write fails, rejects any other partial state, and makes repeated
-apply/check calls safe. The generated service drop-in runs `--check` in
-`ExecStartPre`, so a package update or restored vendor file cannot silently
-start without review.
+apply/check calls safe. The generated service drop-in runs `--ensure` in
+`ExecStartPre`: when the hotfix applies to the installed runtime it puts it in
+place and verifies it, so a fresh `configure --apply` followed by a start
+boots instead of failing the unit five times in 60 s (M12/T9 F-179). When the
+installed release is not the one this hotfix targets, the gate says so in the
+journal and does not fail the unit; a runtime that cannot be repaired still
+fails the boot.
 
 For an owner-approved rollback, stop the named service first, run `--revert`,
 and restore the exact pre-hotfix drop-in from the matching repository revision before
-starting the service. The R17 drop-in intentionally refuses to start against an
-unpatched artifact. Do not remove the preflight alone or resume on another
-OpenClaw release.
+starting the service. `--revert` restores the pristine vendor artifacts, and the
+`--ensure` gate then finds nothing to repair. Do not remove the preflight
+alone or resume on another OpenClaw release.
 
 Install the named service using the same profile/state environment and reload
 the drop-in:
