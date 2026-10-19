@@ -7422,3 +7422,16 @@ never run end to end, so T3 must inherit or precede that repair.
 `R1-A04-01` in the remediation wave (guard reads `AGENT_STACK_POLICY`) leaves `docs/architecture/five-stack.md`
 describing the **opposite** org chart until T3 lands. That is a knowingly-accepted, time-boxed doc/code divergence,
 recorded here so no later reader mistakes the document for current truth.
+
+## Active task — M12/T9 (owner order: sửa hết findings)
+
+Task: M12/T9 — Remediate all actionable findings in docs/execution/findings.md
+Milestone: M12 — Governed Discord interaction lifecycle and governed presentation
+Plan Revision: M12/T9-R1
+Planning Readiness: APPROVED — owner approved via "được, làm đi, chạy 1 lần xong hết luôn" (2026-10-19).
+Execution Authorization: YES — bounded to docs/contracts/execution/ACTIVE.md §3 rules and §2 ownership; AGENTS.md §12 terms (local commits, validation, closeout commit, push of non-main task branch). No deployment, no live Discord, no --apply.
+Execution Contract: docs/contracts/execution/ACTIVE.md
+Task Status: IN PROGRESS
+Evidence Level: LOCAL-VERIFIED (pending)
+Review Convergence Gate: NOT RUN
+Final Quality Gate: NOT RUN
