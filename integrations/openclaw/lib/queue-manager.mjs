@@ -610,8 +610,74 @@ export class QueueManager {
           `EXECUTION_FENCE_EXPIRED: ${taskId} lease expired at ${item.leaseExpiresAt}`,
         );
       }
+      // F-056 (legacy R1-A06-01): the lease clock moved only through
+      // `heartbeat()`, and `heartbeat()` had no production caller, so
+      // `lastHeartbeatAt` stood at `claimedAt` for the whole life of every
+      // EXECUTING item. The lease therefore expired DEFAULT_LEASE_SECONDS
+      // after the CLAIM rather than after the owner's last activity, and the
+      // stale detector - which keys on heartbeat age - could not tell a live
+      // execution from a dead one.
+      //
+      // Committing a governed mutation under this fence IS the owner's proof
+      // of liveness: it presented the current leaseId, the current attempt
+      // and the current claimant, and every one of them was just verified
+      // against durable state inside the queue's own critical section. So the
+      // lease is renewed here, from that proof.
+      //
+      // What this deliberately does not do:
+      //  - it never extends an EXPIRED lease: the check above throws
+      //    EXECUTION_FENCE_EXPIRED first, so a resurrected owner cannot
+      //    reclaim a lease it already lost;
+      //  - it never revives a REVOKED or SUPERSEDED lease: the attempt,
+      //    status, claimant and leaseId checks above throw first;
+      //  - it never mints a lease, an attempt or an owner: only the two
+      //    timestamps of the lease that is already held move;
+      //  - it never requeues anything: recovery stays the only path back to
+      //    QUEUED, and a live execution is no longer mistaken for a dead one.
+      this._renewLeaseUnderFence(item);
       return operation(item);
     });
+  }
+
+  /**
+   * F-056 (legacy R1-A06-01): renew the lease of the execution that has just
+   * proved, under the current-execution fence, that it is still alive.
+   *
+   * The lease window is read back from the lease the item already holds
+   * (`leaseExpiresAt - lastHeartbeatAt`), so this introduces no second source
+   * of truth for how long a lease lasts and cannot lengthen it: a dead owner
+   * still loses its authority exactly DEFAULT_LEASE_SECONDS after its last
+   * action.
+   *
+   * Anything that would make the renewal ambiguous leaves the lease exactly as
+   * it was. An item whose two timestamps are missing or unparsable is not a
+   * lease this queue issued, and guessing a window for it would be worse than
+   * not renewing.
+   */
+  _renewLeaseUnderFence(item) {
+    const expiresAt = Date.parse(item?.leaseExpiresAt ?? "");
+    const lastBeat = Date.parse(item?.lastHeartbeatAt ?? "");
+    if (!Number.isFinite(expiresAt) || !Number.isFinite(lastBeat)) return;
+    const windowMs = expiresAt - lastBeat;
+    if (!Number.isFinite(windowMs) || windowMs <= 0) return;
+    const now = Date.now();
+    item.lastHeartbeatAt = new Date(now).toISOString();
+    item.leaseExpiresAt = new Date(now + windowMs).toISOString();
+    try {
+      this.save();
+    } catch (err) {
+      // A durable write that failed must not leave process memory ahead of
+      // persisted authority, and the caller's commit must not run against a
+      // lease that only exists in memory. Reloading restores the projection
+      // and the failed write denies the mutation.
+      try {
+        this.load();
+      } catch {
+        // The projection could not be re-read either. The original write
+        // failure is the one that matters, so it is the one that is reported.
+      }
+      throw err;
+    }
   }
 
   /**

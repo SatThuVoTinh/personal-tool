@@ -174,7 +174,7 @@ assert.ok(
  * carry it.
  */
 const M11_T3_ENTRYPOINT_SHA256 =
-  "2023e86715f9b105e2649388b4587ad635f89cc9db7a10e1a04c2247daa6818e";
+  "870a8f0c055d5582246cfbdb94d6dcf2207d53cdd0bd22fb132959d3190dcd3a";
 const M12_T2_2_OUTGOING_ENTRYPOINT_SHA256 =
   "513beb15c3d7624c0a928c4c1556dc44d4c4cff4f1e00980f24b298a25751c0d";
 assert.ok(
@@ -1081,9 +1081,23 @@ test("R13 B3: the build the live runtime carries is accepted and converges", asy
     // replaced here is the one this test was actually pinning. No `configure.mjs` entry is
     // added: this is the CURRENT build, which is accepted by content comparison and
     // deliberately never allowlisted; the live `f7995d51…` stays admitted.
+    // M12/T9-R1 F-056 (legacy R1-A06-01), re-valued in band. The queue's
+    // current-execution fence now renews the lease it just verified, so the
+    // lease clock moves in production and a live execution is no longer fenced
+    // out at the lease cliff. The queue writer's bytes therefore changed, and
+    // this pin tracks the CURRENT build of that asset. Moved from
+    // `4e6ae88e9e6fe0b30ebbeb3d655a186c69660b6211103738faaba28f313283aa`,
+    // proven to be this file's own digest at HEAD immediately before the edit
+    // (`git cat-file blob HEAD:integrations/openclaw/lib/queue-manager.mjs`
+    // -> sha256 8cd9446a...), so the value replaced here is the one this test
+    // was actually pinning. No `configure.mjs` entry is added: this is the
+    // CURRENT build, which is accepted by content comparison and deliberately
+    // never allowlisted; the live `a5580bb6...` (measured read-only on the WSL
+    // runtime) and the admitted `f7995d51...` both stay admitted predecessors,
+    // so the upgrade path is unchanged.
     assert.equal(
       sha256(readFileSync(p.asset("lib/queue-manager.mjs"), "utf8")),
-      "8cd9446a43b660560a89fd5febf7d52a820fbbeb6a109c7c07477de5d0ccc56c",
+      "4e6ae88e9e6fe0b30ebbeb3d655a186c69660b6211103738faaba28f313283aa",
       "an accepted predecessor must converge onto the current queue writer",
     );
   } finally {
