@@ -716,3 +716,111 @@ test("M12/T2-R3: the deployed forum-tag asset digest is admitted under its own p
     "the current build digest must not be allowlisted",
   );
 });
+
+// =========================================================================
+// M12/T9 F-244 — the free-text approval ingress fabricated the channel and
+// the actor it then validated, so "approval must occur in #approvals" could
+// never fail: an owner typing `APPROVE <task>` in a DM or in any other
+// channel was admitted and journalled as `channel: "approvals"`.
+// =========================================================================
+describe("M12/T9 F-244 — a verdict is recorded only where it was observed", () => {
+  const OWNER = "123456789012345678";
+  const APPROVALS_CHANNEL = "1545471797452087390";
+  const FOREIGN_CHANNEL = "1545430000000000123";
+
+  function seed(root) {
+    const paths = ledgerPaths(root);
+    ensureLedger(paths);
+    const origin = {
+      origin: "discord",
+      origin_principal_ref: "b".repeat(64),
+      origin_message_id: "1556249093729427459",
+    };
+    const taskId = deriveTaskId(origin);
+    recordWorkflowEvent(paths, "WORKFLOW_OPENED", {
+      ...origin,
+      task_id: taskId,
+      root_agent_id: "main",
+      root_session_key: "main-session",
+      root_run_id: "main-run",
+    });
+    // The task must be ON the approval surface for a verdict to be accepted.
+    recordWorkflowEvent(paths, "WORKFLOW_APPROVAL_REQUESTED", {
+      task_id: taskId,
+      agent_id: "main",
+      session_key: "main-session",
+      run_id: "main-run",
+    });
+    return { paths, taskId };
+  }
+
+  function registerPlugin(paths, logs) {
+    const hooks = new Map();
+    governancePlugin.register({
+      pluginConfig: {
+        ledgerRoot: paths.root,
+        ownerDiscordId: OWNER,
+        approvalsChannelId: APPROVALS_CHANNEL,
+        resultsChannelId: APPROVALS_CHANNEL,
+        enabled: true,
+      },
+      on: (name, handler) => hooks.set(name, handler),
+      registerTool: () => {},
+      logger: {
+        warn: (m) => logs.push(String(m)),
+        info: (m) => logs.push(String(m)),
+        error: (m) => logs.push(String(m)),
+      },
+    });
+    return hooks;
+  }
+
+  it("F-244: an approval observed outside #approvals is denied and writes no event", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "m12t9-f244-"));
+    const logs = [];
+    try {
+      const { paths, taskId } = seed(root);
+      const hooks = registerPlugin(paths, logs);
+      const handler = hooks.get("message_received");
+      assert.ok(handler, "the plugin must register the inbound text handler");
+
+      const before = readFileSync(paths.events, "utf8");
+      await handler(
+        {
+          content: `APPROVE ${taskId}`,
+          messageId: "1556249093729427460",
+          senderId: OWNER,
+          channelId: FOREIGN_CHANNEL,
+        },
+        { channelId: FOREIGN_CHANNEL },
+      );
+      assert.equal(
+        readFileSync(paths.events, "utf8"),
+        before,
+        "a verdict observed outside the approval surface must write no event",
+      );
+      assert.ok(
+        logs.some((line) => line.includes("APPROVAL_SURFACE_MISMATCH")),
+        `the refusal must be recorded, got ${JSON.stringify(logs)}`,
+      );
+
+      // The SAME verdict, observed IN the approval surface, is recorded.
+      await handler(
+        {
+          content: `APPROVE ${taskId}`,
+          messageId: "1556249093729427461",
+          senderId: OWNER,
+          channelId: APPROVALS_CHANNEL,
+        },
+        { channelId: APPROVALS_CHANNEL },
+      );
+      assert.notEqual(
+        readFileSync(paths.events, "utf8"),
+        before,
+        "the approval observed in #approvals must be recorded",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

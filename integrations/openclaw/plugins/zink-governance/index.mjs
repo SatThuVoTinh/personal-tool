@@ -22,6 +22,7 @@ import {
   resolveN8nInvocation,
   bindInvocationApproval,
   whenGovernanceDependenciesReady,
+  loadSharedGovernanceModule,
 } from "../../topology/lib/guard.mjs";
 import {
   checkSchema,
@@ -131,6 +132,7 @@ import {
 
 import {
   buildNativeComponentPayload,
+  hostComponentSdkCandidates,
   registerPostedNativeComponents,
   sendNativePayload,
 } from "../../lib/discord-native-send.mjs";
@@ -764,25 +766,15 @@ let pathSafetyModule = null;
 // the same decision. There is now ONE resolver, in the guard, and the plugin
 // hands it the repo root it found.
 async function loadRepoModule(relativePath) {
-  const attempts = [];
+  let root = null;
   try {
-    const root = findRepoRoot();
-    if (root) attempts.push(pathToFileURL(path.join(root, relativePath)).href);
+    root = findRepoRoot();
   } catch {
     /* ignore */
   }
-  attempts.push(
-    new URL(`../../../../${relativePath}`, import.meta.url).href,
-    pathToFileURL(path.resolve(process.cwd(), relativePath)).href,
-  );
-  for (const href of attempts) {
-    try {
-      return await import(href);
-    } catch {
-      /* next candidate */
-    }
-  }
-  return null;
+  return loadSharedGovernanceModule(relativePath, {
+    roots: root ? [root] : [],
+  });
 }
 
 export async function validateLiveSqlQuery(query, parameters) {
@@ -4764,7 +4756,7 @@ function leaseKey(context, event = {}) {
   const toolCallId = context.toolCallId ?? event.toolCallId;
   if (!sessionKey || !runId || !toolCallId)
     throw new Error(
-      `LINEAGE_MISMATCH: sessionKey=${sessionKey}, runId=${runId}, toolCallId=${toolCallId}`,
+      "LINEAGE_MISMATCH: session_key, run_id and tool_call_id are all required",
     );
   return canonicalHash("zink-native-call-v1", {
     sessionKey,
@@ -4856,21 +4848,26 @@ export default {
       Object.defineProperty(globalThis, leasesKey, { value: new Map() });
     }
     const leases = globalThis[leasesKey];
-    // E10: Lease TTL — entries expire after 10 minutes to prevent unbounded growth
     const LEASE_TTL_MS = 10 * 60 * 1000;
+    const leaseScope = path.resolve(String(config.ledgerRoot ?? ""));
+    const scopedLeaseKey = (key) => `${leaseScope}\u0000${key}`;
     function setLease(key, hash) {
-      // Prune expired entries first
       const now = Date.now();
       for (const [k, entry] of leases) {
         if (entry.expiresAt < now) leases.delete(k);
       }
-      leases.set(key, { hash, expiresAt: now + LEASE_TTL_MS });
+      leases.set(scopedLeaseKey(key), {
+        hash,
+        expiresAt: now + LEASE_TTL_MS,
+        scope: leaseScope,
+      });
     }
     function getLease(key) {
-      const entry = leases.get(key);
+      const scoped = scopedLeaseKey(key);
+      const entry = leases.get(scoped);
       if (!entry) return undefined;
       if (entry.expiresAt < Date.now()) {
-        leases.delete(key);
+        leases.delete(scoped);
         return undefined;
       }
       return entry.hash;
@@ -4941,11 +4938,8 @@ export default {
     }
     const manifestFor = (agentId) => {
       if (!ids.has(agentId)) throw new Error("UNAUTHORIZED_TARGET");
-      const mapping = JSON.parse(
-        readFileSync(
-          new URL("./governance-manifests.json", import.meta.url),
-          "utf8",
-        ),
+      const mapping = readGovernanceManifests(
+        new URL("./governance-manifests.json", import.meta.url),
       );
       const expected = mapping[agentId];
       if (!expected || expected.governance_version !== GOVERNANCE_VERSION)
@@ -5214,7 +5208,7 @@ export default {
       });
       let alreadySurfaced;
       try {
-        const threads = await readActiveForumThreads({
+        const listing = await readActiveForumThreads({
           channelId: incidentsForumId,
           token: botToken,
           fetchImpl: globalThis.fetch,
@@ -8720,6 +8714,46 @@ export default {
         const currentState = isResult
           ? "RESULT_PENDING_REVIEW"
           : "APPROVAL_PENDING";
+
+        // M12/T9 F-244: the channel is OBSERVED, never invented. The action
+        // word used to decide which channel the verdict was recorded in, so
+        // the owner typing `APPROVE <task>` in a DM or in any other channel
+        // was admitted and journalled as `channel: "approvals"` — the
+        // authority rule then compared the event against the value the caller
+        // had itself fabricated, so "approval must occur in #approvals" could
+        // never fail. The verdict is now accepted only where it was observed.
+        const observedChannelId = String(
+          ctx.channelId ??
+            event.channelId ??
+            ctx.conversationId ??
+            ctx.interaction?.channelId ??
+            "",
+        )
+          .replace(/^channel:/u, "")
+          .trim();
+        const expectedSurfaceId = isResult
+          ? resolveDiscordDestination(
+              config,
+              "discordResultsForumId",
+              "resultsChannelId",
+            )
+          : resolveDiscordDestination(
+              config,
+              "discordApprovalsForumId",
+              "approvalsChannelId",
+            );
+        if (
+          observedChannelId.length === 0 ||
+          expectedSurfaceId === undefined ||
+          observedChannelId !== expectedSurfaceId
+        ) {
+          // Fail closed: without a configured destination, or outside it,
+          // there is no approval surface to record a verdict in.
+          api.logger?.warn?.(
+            "[zink-governance] text action blocked: APPROVAL_SURFACE_MISMATCH",
+          );
+          return;
+        }
 
         const res = handleDiscordAction({
           actor: "user",
