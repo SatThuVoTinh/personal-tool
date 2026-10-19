@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { validateArtifactLogicalPath } from "../../common/path-safety.mjs";
 
 /**
  * The two governed storage zones. A bucket outside this set is a contract
@@ -64,6 +65,9 @@ export class R2StorageAdapter {
         "Missing required parameters: task_id, run_id, artifact_id, data",
       );
     }
+    // F-052 + F-171: the key is assembled from a validated logical id only, so
+    // no second spelling can address this object.
+    assertLogicalArtifactId(artifact_id);
 
     const key = `landing/${artifact_id}`;
     if (this.storage.has(key)) {
@@ -102,6 +106,7 @@ export class R2StorageAdapter {
       checksum: record.checksum,
       size_bytes: record.size_bytes,
       created_at: record.created_at,
+      artifact_ref: record.artifact_ref,
     });
   }
 
@@ -114,9 +119,17 @@ export class R2StorageAdapter {
    * @param {string} params.artifact_id
    * @param {number} params.version
    * @param {string|Buffer} params.data
+   * @param {string} [params.content_type="application/octet-stream"]
    * @returns {Promise<object>}
    */
-  async promoteToSilver({ task_id, run_id, artifact_id, version, data }) {
+  async promoteToSilver({
+    task_id,
+    run_id,
+    artifact_id,
+    version,
+    data,
+    content_type = "application/octet-stream",
+  }) {
     if (
       !task_id ||
       !run_id ||
@@ -134,6 +147,9 @@ export class R2StorageAdapter {
     // value like "../../landing/orders" injects path syntax into the namespace,
     // and a non-positive or fractional version would create a Silver revision
     // that no monotonic promotion could ever have produced. Validate before use.
+    // F-052 + F-171: the identifier beside it is interpolated the same way, so
+    // it is validated before the version rather than only truthiness-tested.
+    assertLogicalArtifactId(artifact_id);
     if (
       typeof version !== "number" ||
       !Number.isSafeInteger(version) ||
@@ -172,6 +188,7 @@ export class R2StorageAdapter {
       provider_run_id: `r2-silver-${run_id}-v${version}`,
       checksum,
       size_bytes: payload.length,
+      content_type,
       created_at: new Date().toISOString(),
       data: payload,
     });
@@ -189,6 +206,7 @@ export class R2StorageAdapter {
       checksum: record.checksum,
       size_bytes: record.size_bytes,
       created_at: record.created_at,
+      artifact_ref: record.artifact_ref,
     });
   }
 
@@ -213,6 +231,9 @@ export class R2StorageAdapter {
         `Unknown storage bucket '${String(bucket)}'. Allowed buckets: ${R2_ALLOWED_BUCKETS.join(", ")}.`,
       );
     }
+    // F-052 + F-171: read is the third entry point that builds a key from the
+    // caller-supplied identifier.
+    assertLogicalArtifactId(artifact_id);
     if (bucket === "silver") {
       if (
         typeof version !== "number" ||
