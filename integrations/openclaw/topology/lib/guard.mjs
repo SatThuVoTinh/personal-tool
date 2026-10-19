@@ -427,12 +427,17 @@ export function bindInvocationApproval({
   }
   const record = resolveAuthenticatedApproval(paths, approvalId);
   if (!record || typeof record !== "object") fail("AUTH_APPROVAL_INVALID");
-  if (originPrincipalRef) {
-    assert(
+  // M12/T9 F-245: the principal assertion was wrapped in a conditional, and
+  // the caller derives the reference from a three-deep fallback chain — so a
+  // task that names no principal silently lost the "who approved this"
+  // binding while every other check still passed. The reference is now
+  // REQUIRED: an approval that cannot name its principal is invalid.
+  assert(
+    typeof originPrincipalRef === "string" &&
+      originPrincipalRef.length > 0 &&
       record.owner_principal_ref === originPrincipalRef,
-      "AUTH_APPROVAL_INVALID",
-    );
-  }
+    "AUTH_APPROVAL_INVALID",
+  );
   assert(record.task_id === taskId, "AUTH_APPROVAL_INVALID");
   assert(
     String(record.brief_revision) === String(briefRevision),

@@ -1,6 +1,7 @@
-import test, { describe } from "node:test";
+import test, { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -25,6 +26,7 @@ import {
 
 import {
   createGovernanceGuard,
+  bindInvocationApproval,
   validateContractSchema,
   verifyResultCorrelation,
   makeErrorResult,
@@ -33,6 +35,10 @@ import {
   deepFreeze,
 } from "../integrations/openclaw/topology/lib/guard.mjs";
 
+import {
+  TOOL_CALL_ENVELOPE_MAX_BYTES,
+  TOOL_RESULT_ENVELOPE_MAX_BYTES,
+} from "../integrations/openclaw/topology/lib/schema.mjs";
 import { validateSqlQuery } from "../zink-tools/sql/validator.mjs";
 import { validateArtifactLogicalPath } from "../zink-tools/common/path-safety.mjs";
 import { invokeN8n, N8nAdapterError } from "../zink-tools/n8n/trigger.mjs";
@@ -66,6 +72,10 @@ function createMockLedger() {
         workflow_status: "ACTIVE",
         brief_state: "ACTIVE",
         brief_revision: 1,
+        // M12/T9 F-245: the approval binding now REQUIRES a resolvable
+        // principal reference on the task, so the fixture's task names the
+        // principal the approval record is bound to.
+        origin_principal_ref: "b".repeat(64),
         root_agent_id: "main",
         root_session_key: "main-session",
         root_run_id: "main-run",
@@ -139,10 +149,22 @@ function createMockLedger() {
     paths,
     guard,
     cleanup: () => {
+      // The removal failure used to be swallowed, so a temporary tree that
+      // could not be deleted accumulated invisibly on a constrained %TEMP%.
+      // It is surfaced now, after the built-in retries, because a cleanup
+      // that cannot complete is a fact the operator has to see.
       try {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-      } catch {
-        void 0;
+        fs.rmSync(tempDir, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      } catch (error) {
+        throw new Error(
+          `the temporary governance tree ${tempDir} could not be removed: ${error.message}`,
+          { cause: error },
+        );
       }
     },
   };
@@ -390,12 +412,23 @@ describe("T3 Domain B - Schema & Closed Object Models", () => {
         session_key: "sess-01",
       },
     };
-    assert.doesNotThrow(() => validateContractSchema("tool-call", validCall));
+    assert.doesNotThrow(() =>
+      validateContractSchema(
+        "tool-call",
+        validCall,
+        TOOL_CALL_ENVELOPE_MAX_BYTES,
+      ),
+    );
 
     // Extra property on root throws SCHEMA_VALIDATION_FAILED
     const extraPropCall = { ...validCall, unexpected_extra: "malicious" };
     assert.throws(
-      () => validateContractSchema("tool-call", extraPropCall),
+      () =>
+        validateContractSchema(
+          "tool-call",
+          extraPropCall,
+          TOOL_CALL_ENVELOPE_MAX_BYTES,
+        ),
       /SCHEMA_VALIDATION_FAILED/,
     );
   });
@@ -415,13 +448,22 @@ describe("T3 Domain B - Schema & Closed Object Models", () => {
       artifacts: [],
     };
     assert.doesNotThrow(() =>
-      validateContractSchema("tool-result", validResult),
+      validateContractSchema(
+        "tool-result",
+        validResult,
+        TOOL_RESULT_ENVELOPE_MAX_BYTES,
+      ),
     );
 
     // Spoofed specialist: tool_id is zink_sql but specialist is excel -> fails
     const spoofedResult = { ...validResult, specialist: "excel" };
     assert.throws(
-      () => validateContractSchema("tool-result", spoofedResult),
+      () =>
+        validateContractSchema(
+          "tool-result",
+          spoofedResult,
+          TOOL_RESULT_ENVELOPE_MAX_BYTES,
+        ),
       /SCHEMA_VALIDATION_FAILED/,
     );
 
@@ -432,7 +474,12 @@ describe("T3 Domain B - Schema & Closed Object Models", () => {
       specialist: "excel",
     };
     assert.throws(
-      () => validateContractSchema("tool-result", crossToolSpoof),
+      () =>
+        validateContractSchema(
+          "tool-result",
+          crossToolSpoof,
+          TOOL_RESULT_ENVELOPE_MAX_BYTES,
+        ),
       /SCHEMA_VALIDATION_FAILED/,
     );
   });
@@ -455,7 +502,11 @@ describe("T3 Domain B - Schema & Closed Object Models", () => {
       },
     };
     assert.doesNotThrow(() =>
-      validateContractSchema("tool-call", validPythonCall),
+      validateContractSchema(
+        "tool-call",
+        validPythonCall,
+        TOOL_CALL_ENVELOPE_MAX_BYTES,
+      ),
     );
 
     // Invalid static stack enum fails schema validation
@@ -464,7 +515,12 @@ describe("T3 Domain B - Schema & Closed Object Models", () => {
       input: { ...validPythonCall.input, stack: "invalid_stack_name" },
     };
     assert.throws(
-      () => validateContractSchema("tool-call", invalidStackCall),
+      () =>
+        validateContractSchema(
+          "tool-call",
+          invalidStackCall,
+          TOOL_CALL_ENVELOPE_MAX_BYTES,
+        ),
       /SCHEMA_VALIDATION_FAILED/,
     );
   });
@@ -1269,5 +1325,182 @@ describe("T3 Domain G & H - Governance, Regression & Scope", () => {
     );
     const serialized = JSON.stringify(errRes);
     assert.ok(!serialized.includes(secret));
+  });
+});
+
+// =========================================================================
+// M12/T9 F-245 — `bindInvocationApproval` dropped the owner-principal
+// equality check whenever the task carried no principal reference, so an
+// approval was consumed for ANY principal.
+// =========================================================================
+describe("M12/T9 F-245 — the approval is bound to a named principal", () => {
+  it("F-245: a task without a resolvable principal reference is refused", () => {
+    const fixture = createMockLedger();
+    try {
+      const task_id = "c".repeat(64);
+      const brief_revision = 1;
+      const tool_id = "zink_excel";
+      const operation = "populate";
+      const exact_target = "reports/budget.xlsx";
+      const material_parameters = { data: { values: [1, 2, 3] } };
+      const expires_at = new Date(Date.now() + 60000).toISOString();
+      const approval_scope_digest = deriveApprovalScopeDigest({
+        task_id,
+        brief_revision,
+        tool_id,
+        operation,
+        exact_target,
+        material_parameters,
+        expires_at,
+      });
+      const approvalId = "22222222-2222-4000-8000-222222222222";
+      const approvalsDir = path.join(fixture.paths.root, "approvals");
+      fs.mkdirSync(approvalsDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(approvalsDir, `${approvalId}.json`),
+        JSON.stringify({
+          owner_principal_ref: "b".repeat(64),
+          task_id,
+          brief_revision,
+          tool_id,
+          operation,
+          exact_target,
+          approval_scope_digest,
+          expires_at,
+        }),
+      );
+
+      const bind = (originPrincipalRef) =>
+        bindInvocationApproval({
+          paths: fixture.paths,
+          approvalId,
+          taskId: task_id,
+          briefRevision: brief_revision,
+          originPrincipalRef,
+          toolId: tool_id,
+          operationName: operation,
+          actualTarget: exact_target,
+          input: {
+            operation,
+            file_path: exact_target,
+            data: { values: [1, 2, 3] },
+          },
+          runId: "test-run-excel",
+          currentTime: Date.now(),
+        });
+
+      // The matching principal consumes the approval.
+      assert.doesNotThrow(() => bind("b".repeat(64)));
+
+      // A DIFFERENT principal is refused.
+      assert.throws(
+        () => bind("d".repeat(64)),
+        /AUTH_APPROVAL_INVALID/u,
+        "an approval must not be consumed for another principal",
+      );
+
+      // And a task that names NO principal is refused too — the principal
+      // binding is unconditional.
+      assert.throws(
+        () => bind(undefined),
+        /AUTH_APPROVAL_INVALID/u,
+        "an approval must not be consumed when no principal can be resolved",
+      );
+    } finally {
+      fixture.cleanup();
+    }
+  });
+});
+
+// =========================================================================
+// M12/T9 F-272 — the result envelope was validated with a 64 KiB caller
+// default while the reachable n8n/python paths publish budgets an order of
+// magnitude larger, so a successful side-effected call was destroyed AFTER
+// the fact.
+//
+// The budget is now published once, in the module that enforces it, and every
+// call site states which one it uses.
+// =========================================================================
+describe("M12/T9 F-272 — the envelope budget matches the published tool outputs", () => {
+  it("F-272: a contract-legal maximum python output passes the envelope", () => {
+    const envelope = {
+      call_id: "00000000-0000-4000-8000-000000000001",
+      tool_id: "zink_python",
+      specialist: "python",
+      status: "success",
+      output: {
+        exit_code: 0,
+        stdout: "x".repeat(1048576),
+        stderr: "y".repeat(1048576),
+      },
+      artifacts: [],
+    };
+    assert.doesNotThrow(() =>
+      validateContractSchema(
+        "tool-result",
+        envelope,
+        TOOL_RESULT_ENVELOPE_MAX_BYTES,
+      ),
+    );
+  });
+
+  it("F-272: a contract-legal maximum n8n output passes the envelope", () => {
+    const envelope = {
+      call_id: "00000000-0000-4000-8000-000000000001",
+      tool_id: "zink_n8n",
+      specialist: "o2",
+      status: "success",
+      output: {
+        workflow_id: "data_plant_sync",
+        data: {
+          sync_id: "s".repeat(128),
+          status: "completed",
+          synced_tables: Array.from(
+            { length: 1000 },
+            (_v, i) => `table_${String(i).padStart(8, "0")}`,
+          ),
+        },
+      },
+      artifacts: [],
+    };
+    assert.doesNotThrow(() =>
+      validateContractSchema(
+        "tool-result",
+        envelope,
+        TOOL_RESULT_ENVELOPE_MAX_BYTES,
+      ),
+    );
+  });
+
+  it("F-272: the guard's call sites use the PUBLISHED budget, not a default", () => {
+    const source = readFileSync(
+      new URL(
+        "../integrations/openclaw/topology/lib/guard.mjs",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    assert.ok(
+      source.includes("TOOL_RESULT_ENVELOPE_MAX_BYTES"),
+      "the tool-result seam must state the published budget",
+    );
+    assert.ok(
+      source.includes("TOOL_CALL_ENVELOPE_MAX_BYTES"),
+      "the tool-call seam must state the published budget",
+    );
+    // And the validator no longer carries a silent default.
+    const schemaSource = readFileSync(
+      new URL(
+        "../integrations/openclaw/topology/lib/schema.mjs",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    assert.ok(
+      !/export function validateContractSchema\(schemaName, value, maxBytes =/u.test(
+        schemaSource,
+      ),
+      "the validator must not carry a default budget: every call site states one",
+    );
   });
 });
