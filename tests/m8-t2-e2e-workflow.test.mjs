@@ -47,8 +47,19 @@ describe("M8/T2 Mandatory E2E Workflow & Failure Injection Suite", () => {
       const taskId = "TASK-100-HAPPY";
 
       // 1. #office: User initiates request, Main assigns Primary (O1)
-      const state1 = TASK_STATES.PREFLIGHT;
-      assert.equal(state1, "PREFLIGHT");
+      // M12/T9 F-329: the PREFLIGHT state used to be compared with itself, so
+      // only the assertion text could falsify it. It is now fed to the
+      // production authority: a task still in PREFLIGHT has no approval
+      // surface, so an approval attempt is refused.
+      const preflightApproval = validateActionAuthority({
+        actor: ACTORS.USER,
+        channel: CHANNELS.APPROVALS,
+        taskId,
+        currentState: TASK_STATES.PREFLIGHT,
+        action: ACTIONS.APPROVE,
+      });
+      assert.equal(preflightApproval.allowed, false);
+      assert.match(preflightApproval.reason, /INVALID_STATE_TRANSITION/);
 
       // 2. Preflight passes -> moves to #approvals (APPROVAL_PENDING)
       const state2 = TASK_STATES.APPROVAL_PENDING;
@@ -147,7 +158,13 @@ describe("M8/T2 Mandatory E2E Workflow & Failure Injection Suite", () => {
   });
 
   // =========================================================================
-  // 20 Required Failure & Edge Scenarios (ACTIVE.md Section 37)
+  // 20 Required Failure & Edge Scenarios.
+  //
+  // M12/T9 F-329: the header used to cite "ACTIVE.md Section 37" as the
+  // requirement source, but that file is a transient execution contract and is
+  // not tracked. The tracked sources are the canonical architecture
+  // (`docs/architecture/system-overview.md`) and the authority code these
+  // cases drive (`integrations/openclaw/lib/authority.mjs`).
   // =========================================================================
 
   // Scenario 1: approval REJECT
@@ -290,16 +307,30 @@ describe("M8/T2 Mandatory E2E Workflow & Failure Injection Suite", () => {
 
   // Scenario 9: Discord reconnect / duplicate action protection
   test("Scenario 09 & 10: Duplicate actions from Discord resends are rejected", () => {
-    // Attempting to accept a task that is already COMPLETE
-    const res = validateActionAuthority({
+    // M12/T9 F-329: the case used to issue ONE call with the end state
+    // hand-set, so there was no first delivery and no resend. The action is
+    // now issued twice: the first delivery is accepted, and the resend of the
+    // SAME message - which arrives after the first delivery already moved the
+    // task - is refused.
+    const first = validateActionAuthority({
       actor: ACTORS.USER,
       channel: CHANNELS.RESULTS,
       taskId: "SCEN-10",
-      currentState: TASK_STATES.COMPLETE,
+      currentState: TASK_STATES.RESULT_PENDING_REVIEW,
       action: ACTIONS.ACCEPT_RESULT,
     });
-    assert.equal(res.allowed, false);
-    assert.match(res.reason, /INVALID_STATE_TRANSITION/);
+    assert.equal(first.allowed, true, "the first delivery must be accepted");
+    assert.equal(first.nextState, TASK_STATES.COMPLETE);
+
+    const resend = validateActionAuthority({
+      actor: ACTORS.USER,
+      channel: CHANNELS.RESULTS,
+      taskId: "SCEN-10",
+      currentState: first.nextState,
+      action: ACTIONS.ACCEPT_RESULT,
+    });
+    assert.equal(resend.allowed, false);
+    assert.match(resend.reason, /INVALID_STATE_TRANSITION/);
   });
 
   // Scenario 11: Stale attempt action rejection
@@ -344,13 +375,34 @@ describe("M8/T2 Mandatory E2E Workflow & Failure Injection Suite", () => {
   });
 
   // Scenario 14: Artifact technical failure (file missing / empty)
-  test("Scenario 14: Non-existent or empty artifact fails Technical Validation", () => {
+  test("Scenario 14: Non-existent or empty artifact fails Technical Validation", async () => {
     const gate = evaluateResultGate({
       artifactPath: "non_existent_file_path.xlsx",
     });
     assert.equal(gate.technical.status, VALIDATION_STATUS.FAIL);
     assert.equal(gate.overallStatus, VALIDATION_STATUS.FAIL);
     assert.equal(gate.isReadyForUserReview, false);
+
+    // M12/T9 F-329: the empty-artifact half of this scenario named no case at
+    // all. A zero-byte file is written here and its OWN diagnostic is
+    // asserted, so the empty-content path is no longer unobserved.
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "zink-scen-14-"));
+    try {
+      const emptyPath = path.join(tempDir, "empty.csv");
+      await writeFile(emptyPath, Buffer.alloc(0));
+      const emptyGate = evaluateResultGate({
+        artifactPath: emptyPath,
+        technicalConfig: { expectedType: "csv" },
+      });
+      assert.equal(emptyGate.technical.status, VALIDATION_STATUS.FAIL);
+      assert.equal(emptyGate.overallStatus, VALIDATION_STATUS.FAIL);
+      assert.ok(
+        emptyGate.technical.errors.some((e) => e.startsWith("FILE_EMPTY:")),
+        `the empty artifact must report FILE_EMPTY, got ${JSON.stringify(emptyGate.technical.errors)}`,
+      );
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   // Scenario 15: Technical PASS but Business FAIL = RESULT BLOCKED
@@ -467,9 +519,12 @@ describe("M8/T2 Mandatory E2E Workflow & Failure Injection Suite", () => {
     // unrecognized topic is refused by name, not forwarded to SQL.
     const queryEmbed = prepareQueryEmbedding({
       query: "Calculate safety stock",
-      primary_topic: "inventory",
+      primary_topic: "supply-chain",
     });
     assert.equal(queryEmbed.queryTextForEmbedding, "Calculate safety stock");
-    assert.equal(queryEmbed.queryTextForEmbedding.includes("inventory"), false);
+    assert.equal(
+      queryEmbed.queryTextForEmbedding.includes("supply-chain"),
+      false,
+    );
   });
 });
