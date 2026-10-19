@@ -74,7 +74,14 @@ COPY pdf-runtime/pyproject.toml pdf-runtime/uv.lock pdf-runtime/requirements.txt
 COPY pdf-runtime/src ./pdf-runtime/src
 COPY tests ./tests
 ENV KNOWLEDGE_TOKENIZER_PATH=/app/artifacts/tokenizer.json
-RUN uv run --locked --no-sync python -m unittest discover -s tests -v
+# F-313 (R7-E2-04): the directory has ONE authoritative runner. The image
+# stage used `unittest discover`, which cannot import the seven modules that
+# import the test framework at module level, so the image lane reported an
+# import error instead of the suite and the two runners disagreed about what
+# the directory contains. The image lane now runs the SAME pytest invocation
+# the CI lane runs, against the same pinned tokenizer, and the collected-set
+# floor in `tests/conftest.py` applies here too.
+RUN uv sync --locked && uv run --no-sync python -m pytest tests -q
 
 FROM python:3.13.14-slim-bookworm@sha256:de572b33eae61a53675a87bbd02b5e365df7b6b2b06c9276124e965cec08c452 AS runtime
 
