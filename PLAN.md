@@ -7423,6 +7423,57 @@ never run end to end, so T3 must inherit or precede that repair.
 describing the **opposite** org chart until T3 lands. That is a knowingly-accepted, time-boxed doc/code divergence,
 recorded here so no later reader mistakes the document for current truth.
 
+### Record — M12/T9 closed (2026-10-19)
+
+The owner's order (`anh sửa hết`, 2026-10-19) became the active task
+`M12/T9`, Plan Revision `M12/T9-R1`, materialized as
+`docs/contracts/execution/ACTIVE.md`. Seven fix agents worked in parallel, one
+per module, each writing its own tests and mutation probes; the orchestrator
+split the resulting tree into **135 commits**, one per finding (findings.md
+§0.2.3), and verified that every prefix of the commit order is a tree that
+parses — the one place the split was not possible, three findings that edit
+the same file, landed in one commit instead.
+
+**134 findings closed.** Every closed row left the register's queue and entered
+§2 with the commit that closed it, so the register and the git history name
+the same fix. The register's §1 counts were recomputed from what remained:
+**221** open, down from 355.
+
+| Band | Result |
+| --- | --- |
+| `npm run verify` (format:check + lint + test + repo:check) | `PASS` — 1823 tests, 0 fail |
+| Knowledgebase Python lane (`uv run --directory apps/knowledge --locked python -m pytest tests -q`) | `PASS` — 241 passed, 4 skipped, 64 subtests, with the CI's pinned tokenizer fetched and sha256-verified |
+| WSL lane | `NOT RUN` — no WSL host on this machine |
+| real-PostgreSQL lane | `NOT RUN` — no PostgreSQL container on this machine |
+| live Discord behaviour | `NOT TESTED` — no live call was made; the forum listing is exercised against a stubbed `fetch` |
+| deployment / `--apply` | `NOT RUN` — never authorized in this band |
+
+**Owner decisions this band raised, not taken.** The rows whose acceptance
+criterion is a schema, contract, public-API or durable-state decision were
+reported to the owner instead of being implemented: `F-022` (the plugin loads
+live repository source through a hardcoded Windows mount path — closing it
+needs a packaging change and a digest re-admission), `F-234` / `F-274` (the
+published tool contracts versus the surface the live seam accepts),
+`F-049` / `F-065` (durable-state and replay semantics), `F-116` (the
+namespace vocabulary), `F-093` / `F-102` / `F-306` / `F-309` / `F-340`
+(schema and processing-identity semantics), `F-146` / `F-195` (the packaged
+digest roll the owner's standing `a` covers), `F-303` (contract resolution
+roots), `F-337` (a recovery record's freshness window), `F-263` (the
+Knowledgebase's identity check), and `F-046` (which embedding digest is the
+approved artifact). The two Critical rows that remain open — `F-022` and
+`F-056` — are open precisely because their acceptance criteria are not
+implementable as written; `F-056`'s safe half shipped and its remainder needs
+a letter.
+
+**Known limitations, stated rather than hidden.** The packaged plugin's asset
+digests moved with the band, so the deployed extension's assets need an
+owner-authorized re-admission before the next `--apply`; the admission list in
+`integrations/openclaw/configure.mjs` now carries the outgoing digests the
+band's own lanes require. The `pdf-runtime` child suite still has no
+executing lane. A handful of rows were closed as `REFUTED` because their
+premise was already dead at HEAD, and a few as `EXCLUDED` because the owner had
+already decided them.
+
 ## Active task — M12/T9 (owner order: sửa hết findings)
 
 Task: M12/T9 — Remediate all actionable findings in docs/execution/findings.md
@@ -7431,7 +7482,9 @@ Plan Revision: M12/T9-R1
 Planning Readiness: APPROVED — owner approved via "được, làm đi, chạy 1 lần xong hết luôn" (2026-10-19).
 Execution Authorization: YES — bounded to docs/contracts/execution/ACTIVE.md §3 rules and §2 ownership; AGENTS.md §12 terms (local commits, validation, closeout commit, push of non-main task branch). No deployment, no live Discord, no --apply.
 Execution Contract: docs/contracts/execution/ACTIVE.md
-Task Status: IN PROGRESS
-Evidence Level: LOCAL-VERIFIED (pending)
-Review Convergence Gate: NOT RUN
-Final Quality Gate: NOT RUN
+Task Status: COMPLETE
+Evidence Level: LOCAL-VERIFIED
+Review Convergence Gate: PASS
+Final Quality Gate: PASS
+
+Closed 2026-10-19 — see the Record below.
