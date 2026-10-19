@@ -311,10 +311,48 @@ test("rejects path mismatch, digest mismatch, and multiple active versions", asy
   await temporaryStore(async (root) => {
     writeSkill(root);
     writeSkill(root, { version: "2.0.0" });
-    assert.ok(
-      (await catalog(root)).errors.some(
-        (error) => error.code === "MULTIPLE_ACTIVE_VERSIONS",
-      ),
+    const result = await catalog(root);
+    const clash = result.errors.find(
+      (error) => error.code === "MULTIPLE_ACTIVE_VERSIONS",
+    );
+    assert.ok(clash, "the two ACTIVE versions must be diagnosed");
+    // F-222: the diagnostic must name BOTH offending records, and the healthy
+    // records must survive instead of the whole catalog collapsing to `[]`.
+    assert.match(
+      clash.message,
+      /1\.0\.0/u,
+      `the diagnostic must name the first offending record: ${clash.message}`,
+    );
+    assert.match(
+      clash.message,
+      /2\.0\.0/u,
+      `the diagnostic must name the second offending record: ${clash.message}`,
+    );
+    assert.equal(
+      result.records.length,
+      2,
+      "the healthy records must survive an unrelated diagnostic",
+    );
+  });
+  // F-222: the sanctioned writer still refuses to create the two-ACTIVE state
+  // the reader detects, so the invariant stays unreachable through the writer.
+  await temporaryStore(async (root) => {
+    writeSkill(root);
+    await assert.rejects(
+      () =>
+        promoteApprovedSkill({
+          skillsRoot: root,
+          namespace: ["supply-chain", "inventory"],
+          capability: "safety-stock",
+          version: "2.0.0",
+          content: "# Second\n\nAnother version.",
+          requestingActor: "excel",
+          decisionRef: "PLAN:M6/T1-R4",
+        }),
+      (error) => {
+        assert.equal(error.code, "SKILL_ACTIVE_CONFLICT");
+        return true;
+      },
     );
   });
 });
@@ -584,7 +622,25 @@ test("fails closed when another catalog record is invalid", async () => {
     assert.equal(result.exitCode, 2);
     assert.equal(result.stdout, "");
     assert.equal(JSON.parse(result.stderr).error.code, "CATALOG_INVALID");
-    assert.deepEqual((await catalog(root)).records, []);
+    // F-222: the CLI still fails closed, but the scan no longer blanks the
+    // healthy records — the owner is shown the named repair instead of an
+    // empty store.
+    const scanned = await catalog(root);
+    assert.ok(
+      scanned.errors.length > 0,
+      "the invalid record is still diagnosed",
+    );
+    assert.equal(
+      scanned.records.length,
+      2,
+      "the record set must no longer be blanked by an unrelated diagnostic",
+    );
+    assert.ok(
+      scanned.records.some(
+        (record) => record.manifest.identity.capability === "safety-stock",
+      ),
+      "the healthy record must survive the unrelated diagnostic",
+    );
   });
 });
 

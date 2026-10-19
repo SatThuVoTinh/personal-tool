@@ -847,7 +847,12 @@ export async function scanCatalog(skillsRoot) {
     )
       continue;
     const key = `${identity.namespace.join("/")}\u0000${identity.capability}`;
-    if (active.has(key)) {
+    const first = active.get(key);
+    if (first) {
+      // F-222: the diagnostic must name BOTH offending records. It used to
+      // name only the second one, so an operator who found the state by hand
+      // could not tell which two versions collided without re-reading the
+      // tree — and the whole catalog was blanked while they did it.
       errors.push(
         diagnostic(
           "MULTIPLE_ACTIVE_VERSIONS",
@@ -863,7 +868,19 @@ export async function scanCatalog(skillsRoot) {
   );
   return {
     errors: sortedErrors,
-    records: sortedErrors.length === 0 ? sortedRecords : [],
+    // F-222: the record set is no longer blanked by an unrelated diagnostic.
+    // It used to be `sortedErrors.length === 0 ? sortedRecords : []`, so ONE
+    // bad file anywhere answered every read with "the store is empty" — the
+    // owner saw a store-wide outage instead of a named repair. Every consumer
+    // of the scan already fails closed on `errors` (the CLI, `getActiveSkill`,
+    // the promotion writer's pre-check and the Zink Tools adapter), so the
+    // healthy records are safe to hand back beside the diagnostics.
+    records: sortedRecords,
+    // F-150: writer residue is reported, never diagnosed. It is not canonical,
+    // so it must not null the record set, and it is swept by the writer.
+    residue: residue.sort((left, right) =>
+      compareStrings(left.path, right.path),
+    ),
   };
 }
 
