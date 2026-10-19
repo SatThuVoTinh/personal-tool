@@ -248,7 +248,8 @@ export class SkillAdapter {
         const found = [];
         const skillsDir = this.skillsRoot;
 
-        if (fs.existsSync(skillsDir)) {
+        const rootAvailable = isReadableDirectory(skillsDir);
+        if (rootAvailable) {
           let catalog = null;
           try {
             catalog = await scanCatalog(skillsDir);
@@ -779,9 +780,19 @@ export class SkillAdapter {
           version: skillVersion,
           content,
           reason,
-          requesting_agent,
           tags: inputTags,
         } = input;
+        // F-010 (R1-A16-08): the proposal's requester identity comes from
+        // trusted runtime context only. A model-supplied `requesting_agent` is
+        // business metadata and is never read here — the plugin supplies the
+        // identity under `requestingAgent` (`index.mjs:3687-3693`). When the
+        // trusted context carries none, the field is omitted rather than
+        // replaced by a constant such as "specialist" or "unknown".
+        const trustedRequestingAgent =
+          typeof context?.requestingAgent === "string" &&
+          context.requestingAgent.trim()
+            ? context.requestingAgent.trim()
+            : undefined;
 
         // NOTE: nonce/expiry are never accepted from model input. Replay
         // boundaries are generated in trusted code below; a model must not
@@ -902,8 +913,12 @@ export class SkillAdapter {
           // The exact bytes the owner will approve. The durable proposal is
           // the authority for what materialization may write.
           content: rawContent,
-          requesting_agent:
-            requesting_agent || context?.agentId || "specialist",
+          // F-010: only ever the trusted requester, never the payload's claim;
+          // the key is omitted — not defaulted to a constant — when the trusted
+          // context carries no identity.
+          ...(trustedRequestingAgent
+            ? { requesting_agent: trustedRequestingAgent }
+            : {}),
           reason: reason.trim(),
           status: "CANDIDATE",
           created_at: new Date().toISOString(),
