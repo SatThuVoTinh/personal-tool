@@ -5,6 +5,7 @@ from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -15,6 +16,10 @@ import asyncpg
 
 from .markdown_adapter import MarkdownSource
 from .run_errors import SafeRunError, serialize_errors
+
+# F-101 (R5-E01-05): the module had no logging facility at all, so a
+# failure that nothing else recorded left no attributable record.
+logger = logging.getLogger(__name__)
 
 
 class StateTransitionError(RuntimeError):

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
+import logging
 from pathlib import Path
 
 import httpx
@@ -18,6 +19,9 @@ from .model_probe import ModelProbeError, OllamaModelProbe, ResolvedEmbeddingMod
 from .pdf_foundation import PdfFoundationError, PdfSidecar, discover_pdf_sidecars
 from .pdf_pipeline import PdfBuildError, PdfContentBuilder
 from .run_errors import SafeRunError
+
+# F-101 (R5-E01-05): the module had no logging facility at all.
+logger = logging.getLogger(__name__)
 
 
 class LifecycleError(RuntimeError):
@@ -435,6 +439,19 @@ class IndexLifecycle:
     async def cleanup(self, index_ids: list[str]) -> None:
         try:
             await self._database.cleanup_superseded(index_ids)
-        except Exception:
-            # Cleanup is explicitly outside the correctness lifecycle.
+        except Exception as error:
+            # F-101 (R5-E01-05): the module had no logging facility at all,
+            # so a failed cleanup left nothing behind: the owner saw silent
+            # Postgres growth and an unattributable 500. The failure is now a
+            # record that names the code and the identifiers it is about.
+            # Cleanup stays outside the correctness lifecycle -- the run has
+            # already been published -- so the failure is recorded, not
+            # raised.
+            logger.error(
+                "knowledge.cleanup_failed code=%s index_ids=%s error=%s",
+                "CLEANUP_FAILED",
+                ",".join(index_ids),
+                error,
+                exc_info=True,
+            )
             return

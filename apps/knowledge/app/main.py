@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+import logging
 from pathlib import Path
 from typing import AsyncIterator, Literal
 
@@ -19,6 +20,7 @@ from .database import (
     ActiveIndex,
     ActiveIndexChangedError,
     KnowledgeDatabase,
+    SegmentRecord,
     StateTransitionError,
 )
 from .index_lifecycle import IndexLifecycle, LifecycleError
@@ -50,6 +52,12 @@ from .retrieval import (
     render_pdf_citation,
 )
 from .run_errors import SafeRunError, deserialize_errors
+
+# F-101 (R5-E01-05): the module had no logging facility at all, so every
+# 500 was unattributable after the fact and a failed cleanup left no record
+# the owner could read. The logger is the module's own; the record names the
+# code and the identifier it is about.
+logger = logging.getLogger(__name__)
 
 
 class IndexRunRequest(BaseModel):
@@ -498,6 +506,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except DATABASE_ERRORS as error:
             raise HTTPException(status_code=503, detail={"code": "DATABASE_UNAVAILABLE"}) from error
         except Exception as error:
+            # F-101 (R5-E01-05): the record names the code. The query text
+            # is NOT logged: it is user content, and the traceback already
+            # carries the cause.
+            logger.error(
+                "knowledge.search_failed code=%s",
+                "INTERNAL_ERROR",
+                exc_info=True,
+            )
             raise HTTPException(status_code=500, detail={"code": "INTERNAL_ERROR"}) from error
         finally:
             await lease.release()
@@ -593,8 +609,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 status_code=503, detail={"code": "DATABASE_UNAVAILABLE"}
             ) from error
         except Exception as error:
-            # B-18: the sibling mapper above. A run whose lookup faulted must not
-            # be a codeless 500.
+            # B-18's sibling mapper above. A run whose lookup faulted must not
+            # be a codeless 500. F-101: the record names the run.
+            logger.error(
+                "knowledge.index_run_lookup_failed code=%s run_id=%s",
+                "INTERNAL_ERROR",
+                run_id,
+                exc_info=True,
+            )
             raise HTTPException(status_code=500, detail={"code": "INTERNAL_ERROR"}) from error
         if run is None:
             raise HTTPException(status_code=404, detail={"code": "INDEX_RUN_NOT_FOUND"})

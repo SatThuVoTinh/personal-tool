@@ -608,7 +608,12 @@ export async function syncSkillsToVectorStore(options = {}) {
     //
     // `|` is provably unambiguous: every component is a skill path segment
     // restricted to /^[a-zA-Z0-9_.-]+$/u, so none of them can contain it.
-    return `${id.namespace.join("/")}|${id.capability}|${id.version}`;
+    //
+    // M12/T9-R1 F-240: both sides are now built from the shipped constants
+    // (`tombstoneKey` / `TOMBSTONE_KEY_SQL_EXPRESSION`) instead of from two
+    // copies of the same template literal, so the two sides can be compared by
+    // execution rather than by reading the source.
+    return tombstoneKey(id);
   });
 
   try {
