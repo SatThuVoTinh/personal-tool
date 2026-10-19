@@ -25,6 +25,74 @@ export class R2AdapterError extends Error {
 }
 
 /**
+ * F-273 (R7-C1-03): the canonical artifact reference.
+ *
+ * The tool-result envelope pins an artifact to a three-key closed object —
+ * `logical_path`, `type`, `size_bytes` — and no path in the repository
+ * emitted that shape: the ledger's artifact-set entry carries a content hash,
+ * and this storage record carries its own identity and checksum fields. A
+ * result therefore had to ship an empty artifacts array.
+ *
+ * This is the shape the storage path now emits, so the envelope's definition
+ * is the shape at least one path actually produces. The envelope contract
+ * itself (`zink-tools/contracts/tool-result.schema.json`) is unchanged: it
+ * already declares exactly this triple, and it is validated here against a
+ * non-empty artifact list.
+ *
+ * @param {string} logicalPath - the governed storage key
+ * @param {string} type - the content type
+ * @param {number} sizeBytes
+ * @returns {{logical_path: string, type: string, size_bytes: number}}
+ */
+export function toArtifactReference(logicalPath, type, sizeBytes) {
+  return Object.freeze({
+    logical_path: logicalPath,
+    type,
+    size_bytes: sizeBytes,
+  });
+}
+
+/**
+ * F-052 (R5-E15-02) + F-171 (R5-E06-09): `artifact_id` is interpolated straight
+ * into the storage key (`landing/${artifact_id}`,
+ * `silver/${artifact_id}/v${version}`), so the rationale this file already
+ * states for `version` was equally true of the identifier beside it - "a value
+ * like `../../landing/orders` injects path syntax into the namespace". Measured
+ * at HEAD: `putLandingArtifact({ artifact_id: "../../silver/orders/v1" })` was
+ * accepted and stored under the key `landing/../../silver/orders/v1`, and
+ * `promoteToSilver` accepted `"../escape"`, so two keys could address one
+ * object and both the landing-immutability check and the Silver-collision check
+ * were aliasable. The identifier must therefore be a single logical name: no
+ * separators, no traversal spelling, no reserved device name, no control
+ * characters. The general invariant lives in this module's
+ * `common/path-safety.mjs` and is reused rather than re-implemented; R2 adds the
+ * single-segment rule its own key namespace needs.
+ *
+ * @param {unknown} artifact_id
+ * @returns {string} the validated logical identifier
+ */
+export function assertLogicalArtifactId(artifact_id) {
+  let normalised;
+  try {
+    normalised = validateArtifactLogicalPath(artifact_id);
+  } catch {
+    normalised = null;
+  }
+  if (
+    normalised === null ||
+    normalised !== artifact_id ||
+    normalised.includes("/") ||
+    normalised.includes("..")
+  ) {
+    throw new R2AdapterError(
+      "R2_INVALID_ARTIFACT_ID",
+      "artifact_id must be a single logical identifier: no separators, no traversal segments, no reserved device names.",
+    );
+  }
+  return normalised;
+}
+
+/**
  * Cloudflare R2 Storage Adapter
  * Governs Landing (immutable by default) and Silver (versioned/immutable) artifact storage.
  *
@@ -91,6 +159,10 @@ export class R2StorageAdapter {
       size_bytes: payload.length,
       content_type,
       created_at: new Date().toISOString(),
+      // F-273 (R7-C1-03): the canonical artifact reference, so a governed
+      // result can carry a non-empty artifact list that passes the envelope
+      // contract instead of shipping an empty one.
+      artifact_ref: toArtifactReference(key, content_type, payload.length),
       data: payload,
     });
 
@@ -190,6 +262,8 @@ export class R2StorageAdapter {
       size_bytes: payload.length,
       content_type,
       created_at: new Date().toISOString(),
+      // F-273 (R7-C1-03): the canonical artifact reference.
+      artifact_ref: toArtifactReference(key, content_type, payload.length),
       data: payload,
     });
 
