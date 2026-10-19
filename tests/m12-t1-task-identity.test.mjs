@@ -44,6 +44,64 @@ import { ledgerPaths } from "../integrations/openclaw/topology/lib/ledger.mjs";
 
 const emptyProjection = () => ({ tasks: {}, sequence: 0 });
 
+// ---------------------------------------------------------------------------
+// M12/T9 F-031 - the ANSWER_USER principal is minted with the identity secret
+// ---------------------------------------------------------------------------
+
+describe("M12/T9 F-031: a recorded user principal is not recomputable from source", () => {
+  const SNOWFLAKE = "123456789012345678";
+  const IDENTITY_SECRET = "1".repeat(64);
+
+  it("mints the ref with the identity key, never with the literal that was in the source", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "m12t9-principal-"));
+    try {
+      const paths = ledgerPaths(root);
+      mkdirSync(path.dirname(paths.identityKey), { recursive: true });
+      writeFileSync(paths.identityKey, `${IDENTITY_SECRET}\n`);
+      const minted = mintUserPrincipalRef(paths, SNOWFLAKE);
+      assert.equal(
+        minted,
+        derivePrincipalRef(IDENTITY_SECRET, SNOWFLAKE),
+        "the ref must be the one the identity secret mints",
+      );
+      assert.notEqual(
+        minted,
+        derivePrincipalRef("identity-key", SNOWFLAKE),
+        "the literal key that was in the public source must never mint a ref",
+      );
+      assert.notEqual(
+        minted,
+        derivePrincipalRef("2".repeat(64), SNOWFLAKE),
+        "a different identity secret must mint a different ref",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses to mint anything when the identity key is absent or unusable", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "m12t9-principal-"));
+    try {
+      const paths = ledgerPaths(root);
+      assert.equal(
+        mintUserPrincipalRef(paths, SNOWFLAKE),
+        null,
+        "an absent identity key must refuse, not fall back to a weaker key",
+      );
+      mkdirSync(path.dirname(paths.identityKey), { recursive: true });
+      writeFileSync(paths.identityKey, "not-a-64-hex-secret\n");
+      assert.equal(
+        mintUserPrincipalRef(paths, SNOWFLAKE),
+        null,
+        "an unusable identity key must refuse, not fall back to a weaker key",
+      );
+      assert.equal(mintUserPrincipalRef(null, SNOWFLAKE), null);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 const LEGACY_ID = deriveTaskId({
   origin: "discord",
   origin_principal_ref: "a".repeat(64),

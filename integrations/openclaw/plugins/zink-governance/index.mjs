@@ -2140,10 +2140,18 @@ export function handleDiscordAction({
         // M7-042: the answer is recorded as a USER act with an explicit
         // principal and message id. The reducer requires both, so a caller
         // cannot attribute an answer to an agent or an unidentifiable author.
-        const answerPrincipal = derivePrincipalRef(
-          "identity-key",
-          String(userPrincipal),
-        );
+        // M12/T9 F-031: the principal is minted with the identity secret, never
+        // with a literal that is in the public source. Without the key the
+        // answer cannot be attributed, so it is refused.
+        const answerPrincipal = mintUserPrincipalRef(paths, userPrincipal);
+        if (!answerPrincipal) {
+          return {
+            allowed: false,
+            reason:
+              "MISSING_IDENTITY_SECRET: ANSWER_USER requires the identity key to mint a user principal",
+            status: "DENIED",
+          };
+        }
         const answerMessageId =
           data.messageId ?? data.origin_message_id ?? null;
         if (
@@ -4685,6 +4693,68 @@ async function resolveRunModelFor(config, context) {
     );
   } catch {
     return null;
+  }
+}
+
+/**
+ * M12/T9 F-031: the identity secret that mints a principal ref.
+ *
+ * A durably recorded "verified user principal" must not be recomputable from
+ * public source, and the two trust levels must share ONE vocabulary. The
+ * ANSWER_USER path used to mint with the literal string "identity-key", which is
+ * in the public source: anyone who knew the snowflake could recompute the
+ * recorded ref, and any later comparison between the two trust levels was
+ * meaningless. The identity key is the SAME 64-hex secret the ingress path
+ * already uses.
+ *
+ * Returns null when the key is absent or unusable, so the caller can fail
+ * closed instead of minting a ref with a weaker key.
+ */
+export function mintUserPrincipalRef(paths, userPrincipal) {
+  if (!paths || userPrincipal === null || userPrincipal === undefined)
+    return null;
+  const identityPath =
+    paths.identityKey || path.resolve(paths.root, "../identity.key");
+  try {
+    noLinks(identityPath);
+    if (!existsSync(identityPath)) return null;
+    const key = readFileSync(identityPath, "utf8").trim();
+    if (!/^[a-f0-9]{64}$/u.test(key)) return null;
+    return derivePrincipalRef(key, String(userPrincipal));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * M12/T9 F-083: can the host's Discord component SDK be reached from the running
+ * entrypoint? The answer decides whether a button this plugin posts can ever be
+ * answered, so it is computed once at load and named in the capability line.
+ */
+function componentSdkResolvable() {
+  try {
+    const entrypoint = process.argv?.[1] ?? "";
+    if (!entrypoint) return false;
+    return hostComponentSdkCandidates(entrypoint).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * M12/T9 F-158: the governance manifest is a POLICY ARTIFACT. A missing or
+ * unparseable one used to raise ENOENT or SyntaxError, which escapes to the host
+ * and is re-attributed as a model failure by the run-end seam - and a module-level
+ * load failure takes the whole plugin down. Every policy-artifact read now fails
+ * with a declared canonical code instead.
+ */
+export function readGovernanceManifests(manifestUrl) {
+  try {
+    const parsed = JSON.parse(readFileSync(manifestUrl, "utf8"));
+    if (!parsed || typeof parsed !== "object") throw new Error("not an object");
+    return parsed;
+  } catch {
+    throw new Error("GOVERNANCE_DEPENDENCY_MISSING");
   }
 }
 
