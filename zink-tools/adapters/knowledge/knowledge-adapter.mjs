@@ -23,6 +23,111 @@ const FORBIDDEN_ACTIONS = new Set([
 export const MAX_KNOWLEDGE_RESPONSE_BYTES = 50 * 1024 * 1024; // 50MB ceiling (M08)
 export const MAX_RESULT_TEXT_BYTES = 64 * 1024; // 64KB ceiling per result (M15)
 
+// F-073 (R5-E06-01): the longest wait this adapter will honour from an
+// upstream `Retry-After`. Measured at HEAD: `retryDelayMs = seconds * 1000`
+// was uncapped, so an upstream answering `429` with `Retry-After: 86400`
+// parked an attempt for a day while still holding one of the two process-wide
+// search permits; both slots sleeping meant every later `zink_knowledge_search`
+// from any agent queued forever and the run died on the host deadline.
+export const MAX_KNOWLEDGE_RETRY_AFTER_MS = 30_000;
+
+// F-184 (R1-A14-07): the ceiling for ONE `zink_knowledge_search` call, not per
+// attempt. Measured at HEAD: `reqTimeout` was applied to each of up to three
+// attempts, so the shipped 120 s default allowed ~364 s (3 x 120 s + backoff)
+// inside a run whose `runTimeoutSeconds` is 300 (lib/policy.mjs:549) - the run
+// was killed mid-attempt and the host reported GOVERNANCE_COMPLETION_UNAVAILABLE
+// - and a caller/model-supplied `timeout` was unbounded. 240 s keeps 60 s of the
+// run budget for governance overhead. This module cannot import the plugin's
+// policy module (the deployed extension ships only `lib/` and `contracts/`), so
+// the relationship is recorded here and pinned by a test.
+export const MAX_KNOWLEDGE_CALL_TIMEOUT_MS = 240_000;
+
+/**
+ * Resolves the per-CALL budget: the caller's requested timeout, clamped to this
+ * module's ceiling.
+ *
+ * @param {number|undefined} adapterTimeout
+ * @param {{timeout?: unknown}} [input]
+ * @param {{timeout?: unknown}} [context]
+ * @returns {number}
+ */
+export function resolveKnowledgeCallBudget(adapterTimeout, input, context) {
+  const requested = Number(
+    input?.timeout ?? context?.timeout ?? adapterTimeout,
+  );
+  if (Number.isFinite(requested) && requested > 0) {
+    return Math.min(requested, MAX_KNOWLEDGE_CALL_TIMEOUT_MS);
+  }
+  const fallback = Number(adapterTimeout);
+  if (Number.isFinite(fallback) && fallback > 0) {
+    return Math.min(fallback, MAX_KNOWLEDGE_CALL_TIMEOUT_MS);
+  }
+  return 120_000;
+}
+
+// M06 + F-053 (R1-A03-06): the built-in trusted host set. `allowRemote` used to
+// be a blanket off switch for the whole SSRF check
+// (`!allowedHosts.has(host) && !this.options.allowRemote`), so a single
+// operator flag disabled host validation, silently, on the only outbound path
+// that reaches the internal knowledge service. A host outside this set now
+// needs an explicit `allowedHosts` entry *and* the `allowRemote`
+// acknowledgement, and every admitted non-local endpoint is announced once per
+// adapter instead of being used invisibly.
+export const KNOWLEDGE_TRUSTED_HOSTS = Object.freeze([
+  "localhost",
+  "127.0.0.1",
+  "host.docker.internal",
+  "knowledge-api",
+  "personal-tool-knowledge-1",
+]);
+
+/**
+ * Decides whether an endpoint may be called, and whether that decision was a
+ * departure from the built-in trusted set.
+ *
+ * @param {URL} targetUrl
+ * @param {{allowedHosts?: string[], allowRemote?: boolean}} [options]
+ * @returns {{allowed: boolean, hostname: string, remote: boolean, acknowledged: boolean, reason?: string}}
+ */
+export function classifyKnowledgeEndpoint(targetUrl, options = {}) {
+  const hostname = targetUrl.hostname;
+  if (targetUrl.protocol !== "http:" && targetUrl.protocol !== "https:") {
+    return {
+      allowed: false,
+      hostname,
+      remote: false,
+      acknowledged: false,
+      reason: `Protocol '${targetUrl.protocol}' is forbidden by SSRF policy`,
+    };
+  }
+  const acknowledged = options.allowRemote === true;
+  if (KNOWLEDGE_TRUSTED_HOSTS.includes(hostname)) {
+    return { allowed: true, hostname, remote: false, acknowledged };
+  }
+  const explicitlyListed =
+    Array.isArray(options.allowedHosts) &&
+    options.allowedHosts.includes(hostname);
+  if (!explicitlyListed) {
+    return {
+      allowed: false,
+      hostname,
+      remote: true,
+      acknowledged,
+      reason: `SSRF_PROTECTION: Host '${hostname}' is not in trusted allowlist`,
+    };
+  }
+  if (!acknowledged) {
+    return {
+      allowed: false,
+      hostname,
+      remote: true,
+      acknowledged: false,
+      reason: `SSRF_PROTECTION: Host '${hostname}' is allowlisted but not acknowledged; set allowRemote to permit a non-local knowledge endpoint`,
+    };
+  }
+  return { allowed: true, hostname, remote: true, acknowledged: true };
+}
+
 /**
  * Truncate to at most `maxBytes` UTF-8 bytes without splitting a character.
  *
@@ -276,6 +381,11 @@ export class KnowledgeAdapter {
       if (shouldAcquireSemaphore) {
         await sharedSearchSemaphore.acquire();
       }
+      // F-073 (R5-E06-01): tracked as a flag rather than "did we acquire",
+      // because the permit is returned before an upstream-chosen retry wait and
+      // re-acquired after it — a sleeping attempt must never occupy a search
+      // slot.
+      let holdsSearchPermit = shouldAcquireSemaphore;
 
       try {
         let response;
@@ -371,7 +481,13 @@ export class KnowledgeAdapter {
             if (retryHeader) {
               const seconds = parseInt(retryHeader, 10);
               if (!isNaN(seconds) && seconds > 0) {
-                retryDelayMs = seconds * 1000;
+                // F-073 (R5-E06-01): clamped, because an upstream-chosen wait
+                // is not a repo-owned ceiling. The permit is returned before
+                // the wait begins, below.
+                retryDelayMs = Math.min(
+                  seconds * 1000,
+                  MAX_KNOWLEDGE_RETRY_AFTER_MS,
+                );
               }
             }
             const jitterMs =
