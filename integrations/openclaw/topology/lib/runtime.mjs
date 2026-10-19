@@ -15,6 +15,12 @@ const REASON_POLICY_URL = new URL(
 const REASON_POLICY_REQUIRED = [
   ["agent_claims", "array"],
   ["runtime_reasons", "array"],
+  // F-251: the matrix publishes THREE vocabularies. The third one
+  // (task_suspension_reasons) names the codes the reducer writes when it
+  // suspends a task, and it was the only section no reader consulted: a
+  // declared suspension code was therefore invisible to the very check that
+  // every other durable reason passes.
+  ["task_suspension_reasons", "array"],
   ["outcome_compatibility", "object"],
 ];
 
@@ -62,16 +68,24 @@ export function loadReasonPolicy(policyUrl = REASON_POLICY_URL) {
 const reasonPolicy = loadReasonPolicy();
 export const AGENT_REASON_CODES = Object.freeze(reasonPolicy.agent_claims);
 export const RUNTIME_REASON_CODES = Object.freeze(reasonPolicy.runtime_reasons);
+export const TASK_SUSPENSION_REASON_CODES = Object.freeze(
+  reasonPolicy.task_suspension_reasons,
+);
+// F-251: ONE membership set built from EVERY section the matrix publishes, so
+// a code the policy declares can never be invisible to the check that guards
+// durable `task.reason_code` writes.
+const DECLARED_REASON_CODES = new Set([
+  ...AGENT_REASON_CODES,
+  ...RUNTIME_REASON_CODES,
+  ...TASK_SUSPENSION_REASON_CODES,
+]);
 
 /**
- * Membership in a vocabulary the policy file already publishes. Derived from the two
+ * Membership in a vocabulary the policy file already publishes. Derived from the
  * declared sets rather than a third list, so nothing here widens the contract.
  */
 export function isDeclaredReasonCode(code) {
-  return (
-    typeof code === "string" &&
-    (AGENT_REASON_CODES.includes(code) || RUNTIME_REASON_CODES.includes(code))
-  );
+  return typeof code === "string" && DECLARED_REASON_CODES.has(code);
 }
 
 const SECRET_PATTERN =
