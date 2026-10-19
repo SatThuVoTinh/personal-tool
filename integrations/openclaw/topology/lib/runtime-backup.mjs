@@ -12,6 +12,7 @@ import {
   fsyncSync,
   renameSync,
   chmodSync,
+  unlinkSync,
 } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -346,7 +347,20 @@ export async function restoreT1RuntimeFiles({ stateDir, identifiers }) {
     writeNew(savedConfig, current);
   if (!current || digest(current) !== digest(fallback)) {
     writeNew(temporary, fallback);
-    renameSync(temporary, config);
+    try {
+      renameSync(temporary, config);
+    } catch (cause) {
+      // F-163: the restore temp has a FIXED name, so a residue left by an
+      // interrupted write makes every later restore refuse with
+      // RESTORE_TEMP_CONFLICT forever. The temp is removed on the failure
+      // path, so a failed restore leaves no residue and the next one runs.
+      try {
+        unlinkSync(temporary);
+      } catch (error) {
+        if (!["ENOENT", "EPERM", "EISDIR"].includes(error?.code)) throw error;
+      }
+      throw cause;
+    }
     syncDirectory(stateDir);
   }
   chmodSync(config, 0o600);

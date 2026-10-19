@@ -838,8 +838,23 @@ function replaceAtomic(file, contents, mode) {
   const temporary = `${file}.zink-r12-tmp`;
   assertNoLinks(file);
   writeExclusive(temporary, contents, mode);
-  chmodSync(temporary, mode);
-  renameSync(temporary, file);
+  try {
+    chmodSync(temporary, mode);
+    renameSync(temporary, file);
+  } catch (cause) {
+    // F-163: the temp name is FIXED and created exclusively, so a residue
+    // left by an interrupted write makes every later replace of this file die
+    // with EEXIST - including the six rollback writes inside
+    // restoreNativePatch, so the residue of a failed apply blocked its own
+    // recovery. The temp is removed on every failure path, so a failed write
+    // leaves no residue and the next attempt succeeds.
+    try {
+      unlinkSync(temporary);
+    } catch (error) {
+      if (!["ENOENT", "EPERM", "EISDIR"].includes(error?.code)) throw error;
+    }
+    throw cause;
+  }
   syncDirectory(path.dirname(file));
 }
 
