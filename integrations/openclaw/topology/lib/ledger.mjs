@@ -228,18 +228,7 @@ export function inspectLedgerUpgrade(paths) {
   } catch {
     throw new Error("EXECUTION_STATE_UNKNOWN");
   }
-  const supportedVersions = new Set([
-    GOVERNANCE_VERSION,
-    // m8-t2.2-r4 is RETAINED, not replaced: it is the version the deployed
-    // writer emitted, and dropping it would make every ledger it wrote
-    // permanently unreadable. It is ambiguous for replay semantics (see the
-    // reader's compatibility path) but its events remain valid.
-    "m8-t2.2-r4",
-    "m8-t2.1-r3",
-    "m8-t2-r9",
-    "m7-t5-r13",
-    "m7-t2-r12",
-  ]);
+  const supportedVersions = new Set(SUPPORTED_GOVERNANCE_VERSIONS);
   if (supportedVersions.has(snapshot?.governance_version)) {
     readSnapshotLocked(paths, false);
     return "CURRENT";
@@ -282,17 +271,7 @@ function readSnapshotLocked(paths, repairSnapshot = true) {
   try {
     let snapshot = JSON.parse(readFileSync(paths.snapshot, "utf8"));
     validateContract("ledger-snapshot", snapshot, Number.MAX_SAFE_INTEGER);
-    const supportedVersions = new Set([
-      GOVERNANCE_VERSION,
-      // RETAINED for readability, including the semantically ambiguous
-      // m8-t2.2-r4. Replaced versions would make the ledger they wrote
-      // permanently unreadable.
-      "m8-t2.2-r4",
-      "m8-t2.1-r3",
-      "m8-t2-r9",
-      "m7-t5-r13",
-      "m7-t2-r12",
-    ]);
+    const supportedVersions = new Set(SUPPORTED_GOVERNANCE_VERSIONS);
     if (
       !snapshot ||
       snapshot.schema_version !== SCHEMA_VERSION ||
@@ -304,10 +283,40 @@ function readSnapshotLocked(paths, repairSnapshot = true) {
       snapshot.sequence < 0
     )
       throw new Error("invalid snapshot");
-    const lines = readFileSync(paths.events, "utf8")
+    const rawLines = readFileSync(paths.events, "utf8")
       .split("\n")
       .map((line) => line.trim())
       .filter(Boolean);
+    // F-143: a torn tail. The writer appends AND fsyncs the event BEFORE the
+    // snapshot that anchors it, so a partially written FINAL line provably has
+    // no snapshot anchor: it was never acknowledged, never projected, and can
+    // be dropped instead of making every read and every write fail forever.
+    // A damaged line anywhere else is real corruption and still throws, and a
+    // damaged FINAL line the snapshot DID anchor is real corruption too — the
+    // snapshot proves the event existed, so dropping it would silently lose
+    // acknowledged history.
+    const events = [];
+    let tornTailBytes = 0;
+    for (const [index, line] of rawLines.entries()) {
+      try {
+        events.push(JSON.parse(line));
+      } catch (error) {
+        const isFinalLine = index === rawLines.length - 1;
+        const isUnanchored = rawLines.length > snapshot.sequence;
+        if (!isFinalLine || !isUnanchored) throw error;
+        tornTailBytes = Buffer.byteLength(line, "utf8");
+        break;
+      }
+    }
+    if (tornTailBytes > 0) {
+      // The dropped remainder is REPORTED, never silently swallowed: the byte
+      // count is a measurement, the content is untrusted ledger data and is
+      // deliberately not logged.
+      console.error(
+        "[zink-ledger] torn journal tail dropped:",
+        `JOURNAL_TORN_TAIL bytes=${tornTailBytes}`,
+      );
+    }
     let previous = null;
     let lastSequence = 0;
     const tail = [];
@@ -347,8 +356,8 @@ function readSnapshotLocked(paths, repairSnapshot = true) {
     // Computed ONLY from the event stream: an ambiguous-era journal is one that
     // carries any pre-verdict stamp. The snapshot under verification is never
     // consulted, so this is not circular.
-    const journalHasPreVerdictStamp = lines.some((line) =>
-      PRE_VERDICT_VERSIONS.has(JSON.parse(line).governance_version),
+    const journalHasPreVerdictStamp = events.some((event) =>
+      PRE_VERDICT_VERSIONS.has(event.governance_version),
     );
     // Resolve one event's writer semantics from its own stamp alone. The
     // m8-t2.2-r4 stamp is the ambiguous one: it falls through to the
@@ -358,8 +367,7 @@ function readSnapshotLocked(paths, repairSnapshot = true) {
       if (PRE_VERDICT_VERSIONS.has(event.governance_version)) return true;
       return journalHasPreVerdictStamp;
     };
-    for (const line of lines) {
-      const event = JSON.parse(line);
+    for (const event of events) {
       validateContract("ledger-event", event);
       const { event_digest, ...unsigned } = event;
       if (
@@ -544,6 +552,45 @@ export function appendEvent(paths, snapshot, type, payload = {}) {
   });
 }
 
+/**
+ * F-143: refuse to append to a journal that ends in an unterminated record.
+ *
+ * The writer emits every event as one newline-terminated record, so a file
+ * that does NOT end with a newline ends in a partially written record: the
+ * append was interrupted (crash, ENOSPC, drvfs EIO) after the bytes reached
+ * the file but before the newline did.
+ *
+ * The READER tolerates that record - it was never acknowledged and never
+ * anchored by a snapshot, so dropping it and reporting it is safe, and it is
+ * what stops one interrupted append from making the whole ledger unreadable
+ * forever.
+ *
+ * The WRITER does not. The journal is append-only durable state, and a
+ * committed lane requires a broken event log to refuse new appends and to be
+ * left exactly as it is - "not silently repaired or extended". So the writer
+ * refuses with a named code and leaves the residue in place for an operator
+ * to repair; it never truncates the file behind the operator's back.
+ */
+function assertJournalAppendable(paths) {
+  if (!existsSync(paths.events)) return;
+  const fd = openSync(paths.events, "r");
+  try {
+    const size = fstatSync(fd).size;
+    if (size === 0) return;
+    const buffer = Buffer.alloc(1);
+    readSync(fd, buffer, 0, 1, size - 1);
+    if (buffer[0] !== 0x0a) {
+      const error = new Error(
+        "JOURNAL_TORN_TAIL: the event log ends in an unterminated record; new appends are refused until it is repaired",
+      );
+      error.code = "JOURNAL_TORN_TAIL";
+      throw error;
+    }
+  } finally {
+    closeSync(fd);
+  }
+}
+
 function appendEventLocked(
   paths,
   snapshot,
@@ -564,6 +611,7 @@ function appendEventLocked(
   validateContract("ledger-event", { ...event, event_digest });
   validateContract("ledger-snapshot", snapshot, Number.MAX_SAFE_INTEGER);
   const line = `${JSON.stringify({ ...event, event_digest })}\n`;
+  assertJournalAppendable(paths);
   const fd = openSync(paths.events, "a", 0o600);
   try {
     appendFileSync(fd, line, "utf8");

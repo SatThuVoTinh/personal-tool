@@ -892,3 +892,177 @@ test("P17: runCoordinatorPickup itself enforces the evidence contract", async ()
     true,
   );
 });
+
+// ===========================================================================
+// F-143 - one interrupted append must not make the ledger unreadable forever
+// ===========================================================================
+// The pickup loop reads its tasks from the ledger, so a journal that cannot be
+// read is a queue that can never be claimed. The trigger is a crash / ENOSPC /
+// drvfs EIO in the middle of an append: the bytes of the next event reach the
+// file, the terminating newline never does.
+//
+// The writer appends AND fsyncs an event BEFORE the snapshot that anchors it,
+// so a partially written FINAL line provably has no snapshot anchor: it was
+// never acknowledged and never projected. Dropping it is therefore safe, and
+// the alternative (refusing every read) is what made one interrupted append
+// permanently unrecoverable.
+
+test("F-143: a torn journal tail is dropped and reported, the ledger still reads, and the writer refuses", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "zink-torn-tail-"));
+  try {
+    const { ledgerPaths, ensureLedger, readSnapshot, recordWorkflowEvent } =
+      await import("../integrations/openclaw/topology/lib/ledger.mjs");
+    const { deriveTaskId } =
+      await import("../integrations/openclaw/topology/lib/canonical.mjs");
+    const paths = ledgerPaths(dir);
+    ensureLedger(paths);
+    const base = {
+      origin: "discord",
+      origin_principal_ref: "a".repeat(64),
+      origin_message_id: "12345678901234567",
+      root_agent_id: "main",
+      root_session_key: "agent:main:sess-1",
+      root_run_id: "run-1",
+    };
+    const opened = { ...base, task_id: deriveTaskId(base) };
+    recordWorkflowEvent(paths, "WORKFLOW_OPENED", opened);
+
+    // The bytes of the next event reached the file; the newline never did.
+    const torn = JSON.stringify({
+      type: "WORKFLOW_OPENED",
+      payload: { task_id: "b".repeat(64) },
+    }).slice(0, 40);
+    fs.appendFileSync(paths.events, torn, "utf8");
+
+    const reported = [];
+    const originalError = console.error;
+    console.error = (...args) => reported.push(args.map(String).join(" "));
+    let snapshot;
+    try {
+      snapshot = readSnapshot(paths);
+    } finally {
+      console.error = originalError;
+    }
+    assert.ok(snapshot.tasks[opened.task_id], "the acknowledged task survives");
+    assert.equal(
+      reported.some((line) => line.includes("JOURNAL_TORN_TAIL")),
+      true,
+      "the dropped remainder must be reported, not swallowed",
+    );
+
+    // The journal is append-only durable state, so the WRITER refuses a new
+    // append while the residue is there - and it leaves the file exactly as
+    // it is: the residue is never silently repaired or extended, and the
+    // ledger stays READABLE while the operator repairs it.
+    const second = {
+      ...base,
+      origin_message_id: "22345678901234567",
+      root_run_id: "run-2",
+      root_session_key: "agent:main:sess-2",
+    };
+    assert.throws(
+      () =>
+        recordWorkflowEvent(paths, "WORKFLOW_OPENED", {
+          ...second,
+          task_id: deriveTaskId(second),
+        }),
+      { code: "JOURNAL_TORN_TAIL" },
+      "a journal with an unterminated record must refuse new appends",
+    );
+    assert.equal(
+      fs.readFileSync(paths.events, "utf8").endsWith(torn),
+      true,
+      "the residue must be left exactly as it was",
+    );
+    const reread = readSnapshot(paths);
+    assert.ok(reread.tasks[opened.task_id], "the ledger must stay readable");
+    assert.equal(reread.sequence, snapshot.sequence);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("F-143: a damaged line that is NOT the tail is still real corruption", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "zink-torn-mid-"));
+  try {
+    const { ledgerPaths, ensureLedger, readSnapshot, recordWorkflowEvent } =
+      await import("../integrations/openclaw/topology/lib/ledger.mjs");
+    const { deriveTaskId } =
+      await import("../integrations/openclaw/topology/lib/canonical.mjs");
+    const paths = ledgerPaths(dir);
+    ensureLedger(paths);
+    const base = {
+      origin: "discord",
+      origin_principal_ref: "a".repeat(64),
+      origin_message_id: "12345678901234567",
+      root_agent_id: "main",
+      root_session_key: "agent:main:sess-1",
+      root_run_id: "run-1",
+    };
+    recordWorkflowEvent(paths, "WORKFLOW_OPENED", {
+      ...base,
+      task_id: deriveTaskId(base),
+    });
+    // A damaged line in the middle, with a valid line after it: the snapshot
+    // already anchored the lines around it, so this is corruption, not an
+    // interrupted append, and it must still be refused.
+    fs.appendFileSync(paths.events, '{"broken":true}\n', "utf8");
+    fs.appendFileSync(paths.events, '{"also":"broken"}', "utf8");
+    assert.throws(
+      () => readSnapshot(paths),
+      { code: "EXECUTION_STATE_UNKNOWN" },
+      "a damaged non-final line must not be silently dropped",
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+// ===========================================================================
+// F-065 - the accepted governance versions have ONE declaration
+// ===========================================================================
+// The reader used to carry two independent hand-maintained lists of the
+// versions it accepts - one in the upgrade inspector and one in the replay
+// reader - derived from neither the contract nor each other. The contract
+// already declares the closed enum, so the reader now derives its set from
+// it: a version the contract does not allow is a version no writer was
+// permitted to emit.
+test("F-065: the supported governance versions come from the contract enum", async () => {
+  const { SUPPORTED_GOVERNANCE_VERSIONS } =
+    await import("../integrations/openclaw/topology/lib/ledger.mjs");
+  const contract = JSON.parse(
+    fs.readFileSync(
+      new URL(
+        "../integrations/openclaw/topology/contracts/ledger-event.schema.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
+  assert.deepEqual(
+    [...SUPPORTED_GOVERNANCE_VERSIONS].sort(),
+    [...contract.properties.governance_version.enum].sort(),
+    "the reader must accept exactly the versions the contract declares",
+  );
+  const source = fs.readFileSync(
+    new URL(
+      "../integrations/openclaw/topology/lib/ledger.mjs",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  // One declaration, one use. The two former readers each carried their own
+  // literal list, and both of them named the CURRENT version - so a literal
+  // set that names it is a second copy of the supported list.
+  const literalSets = source.match(/new Set\(\[[^\]]*\]\)/gsu) ?? [];
+  for (const set of literalSets) {
+    assert.ok(
+      !set.includes("m8-t2.3-r5"),
+      `the ledger must not restate the supported versions as a literal: ${set}`,
+    );
+  }
+  assert.equal(
+    (source.match(/new Set\(SUPPORTED_GOVERNANCE_VERSIONS\)/gu) ?? []).length,
+    2,
+    "both readers must derive their set from the one declaration",
+  );
+});
