@@ -1197,6 +1197,10 @@
     }
   ],
   "$defs": {
+    "parent_agent_id": {
+      "description": "F-108: the agent that OWNS the delegation, i.e. the one that spawns the target. Declared ONCE here and referenced by every contract that carries it, so the ledger and the delegation envelope can never disagree about which values are legal: a reservation the ledger accepted must be a handoff the envelope accepts, and vice versa. Only main, o1 and o2 can spawn - the specialists have no spawn targets - so a specialist can never be a parent, and the reducer's own topology gate already refuses one.",
+      "enum": ["main", "o1", "o2"]
+    },
     "semantic_contract_status": {
       "enum": ["VALID", "MISSING", "AMBIGUOUS"]
     },
