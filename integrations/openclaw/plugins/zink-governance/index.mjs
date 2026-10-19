@@ -4855,6 +4855,12 @@ export default {
     };
     const stateDir = path.resolve(config.ledgerRoot, "../../..");
     // Invocation leases prove the native gate ran. They are not workflow state.
+    //
+    // M12/T9 F-042: this registry is ONE process-global map, so a lease minted under
+    // one ledger root used to satisfy a call governed by another, and stopping one
+    // registration revoked the other's pending authorizations. Every entry is now
+    // partitioned by the governance root that minted it, and a stop revokes only the
+    // scope it owns.
     const leasesKey = Symbol.for("zink.governance.native.leases");
     if (!globalThis[leasesKey]) {
       Object.defineProperty(globalThis, leasesKey, { value: new Map() });
@@ -7537,7 +7543,8 @@ export default {
     });
     api.on("gateway_stop", () => {
       for (const check of [...startingRuns]) check(true);
-      leases.clear();
+      // M12/T9 F-042: only this registration's leases are revoked.
+      clearScopeLeases();
       try {
         coordinatorPickupLoop?.stop();
       } catch {
