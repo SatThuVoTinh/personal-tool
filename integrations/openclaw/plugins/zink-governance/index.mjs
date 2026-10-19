@@ -8411,6 +8411,19 @@ export default {
       };
     });
 
+    // M12/T9 F-083: a host without the interactive API loads GREEN while every
+    // button is silently lost, and the component SDK is resolved from the running
+    // entrypoint. Both are named at load, so a silent capability loss is visible
+    // in the log instead of being inferred from a card that never reacts.
+    const interactiveHandlerAvailable =
+      typeof api.registerInteractiveHandler === "function";
+    const componentSdkAvailable = componentSdkResolvable();
+
+    const capabilityLine = `[zink-governance] capabilities: interactive_handler=${interactiveHandlerAvailable ? "available" : "MISSING"} component_sdk=${componentSdkAvailable ? "available" : "MISSING"}`;
+    if (interactiveHandlerAvailable && componentSdkAvailable)
+      api.logger?.info?.(capabilityLine);
+    else api.logger?.warn?.(capabilityLine);
+
     // Interactive button callback handler for Discord components (namespace: "zink")
     if (typeof api.registerInteractiveHandler === "function") {
       api.registerInteractiveHandler({

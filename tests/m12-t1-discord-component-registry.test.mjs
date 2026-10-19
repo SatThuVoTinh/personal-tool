@@ -17,6 +17,8 @@ import {
   buildNativeComponentPayload,
   sendNativePayload,
   hostComponentSdkCandidates,
+  registerPostedNativeComponents,
+  COMPONENT_REGISTRATION_OUTCOME,
   NATIVE_BUTTON_STYLE,
   DISCORD_COMPONENT_TTL_MS,
 } from "../integrations/openclaw/lib/discord-native-send.mjs";
