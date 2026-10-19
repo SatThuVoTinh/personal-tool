@@ -16,6 +16,17 @@ from app.pdf_foundation import (
     processing_identity_digest,
 )
 
+# F-332 (R7-F2-01): the domain bytes and the digest they produce are pinned
+# HERE as DATA. The suite used to import the constant from the module under
+# test and rebuild the expected digest from that import, so changing the
+# domain re-keyed every stored content identity -- and every READY build
+# would re-extract -- while the suite stayed green. A golden digest recorded
+# once is the independent pin.
+EXPECTED_PDF_CONTENT_DOMAIN = b"zink:knowledge:pdf-content:v1"
+GOLDEN_CONTENT_IDENTITY_DIGEST = (
+    "b404b4a30e9428fbaf151f56eb8562a641ab88bf31aa24905b9d535bfd50204a"
+)
+
 
 class PdfFoundationTests(unittest.TestCase):
     def make_vault(self) -> tuple[tempfile.TemporaryDirectory[str], Path]:
@@ -36,7 +47,7 @@ class PdfFoundationTests(unittest.TestCase):
     def test_content_identity_uses_raw_digests_and_big_endian_lengths(self) -> None:
         pdf, sidecar, processing = ("11" * 32, "22" * 32, "33" * 32)
         expected = hashlib.sha256(
-            PDF_CONTENT_DOMAIN
+            EXPECTED_PDF_CONTENT_DOMAIN
             + (32).to_bytes(4, "big")
             + bytes.fromhex(pdf)
             + (32).to_bytes(4, "big")
@@ -46,6 +57,21 @@ class PdfFoundationTests(unittest.TestCase):
         ).hexdigest()
         self.assertEqual(content_identity_digest(pdf, sidecar, processing), expected)
         self.assertNotEqual(content_identity_digest(pdf, sidecar, processing), content_identity_digest(pdf, sidecar, "44" * 32))
+
+    def test_the_content_identity_domain_is_pinned_as_data(self) -> None:
+        """F-332 (R7-F2-01): the persisted lookup key needs an independent pin.
+
+        The domain bytes namespace the digest that joins the persisted
+        `knowledge.pdf_content_builds` rows. A change to them re-keys every
+        stored identity, so the literal is asserted here as data and the
+        digest it produces is asserted verbatim.
+        """
+
+        self.assertEqual(PDF_CONTENT_DOMAIN, EXPECTED_PDF_CONTENT_DOMAIN)
+        self.assertEqual(
+            content_identity_digest("11" * 32, "22" * 32, "33" * 32),
+            GOLDEN_CONTENT_IDENTITY_DIGEST,
+        )
 
     def test_processing_identity_is_canonical_and_rejects_float(self) -> None:
         left = {"schema_version": 1, "paths": ["artifacts/model"], "runtime": {"python": "3.13"}}
