@@ -270,6 +270,110 @@ export function assertDuckDbSafety(query, parameters = []) {
 }
 
 /**
+ * Renders one bound parameter value as a DuckDB literal.
+ *
+ * @param {unknown} value
+ * @param {string} name
+ * @returns {string}
+ */
+function toDuckDbLiteral(value, name) {
+  if (value === null || value === undefined) return "NULL";
+  if (typeof value === "boolean") return value ? "TRUE" : "FALSE";
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new DuckDbBridgeError(
+        "DUCKDB_INVALID_PARAMETER",
+        `Parameter '${name}' must be a finite number.`,
+      );
+    }
+    return String(value);
+  }
+  if (typeof value !== "string") {
+    throw new DuckDbBridgeError(
+      "DUCKDB_INVALID_PARAMETER",
+      `Parameter '${name}' must be a string, number, boolean or null.`,
+    );
+  }
+  // The control range is the point of the pattern, not an accident of it.
+  // eslint-disable-next-line no-control-regex
+  if (/[\0\x01-\x1F\x7F]/u.test(value)) {
+    throw new DuckDbBridgeError(
+      "DUCKDB_INVALID_PARAMETER",
+      `Parameter '${name}' must not contain control characters.`,
+    );
+  }
+  return `'${value.replace(/'/gu, "''")}'`;
+}
+
+/**
+ * F-117 (R5-E06-05): substitutes the validated `:name` placeholders with
+ * literals.
+ *
+ * Measured at HEAD: `parameters` was validated (`validateSqlQuery` requires
+ * exact set equality between the query's placeholders and the declared
+ * parameter names, and `assertDuckDbSafety` scans every value) and then
+ * discarded - `initSql` interpolated `input.query` verbatim - so EVERY
+ * contract-valid parameterized `zink_sql` call reached the engine with
+ * `:name` unsubstituted and failed `DUCKDB_EXECUTION_ERROR`, while the values
+ * the traversal scan protected never reached SQL at all.
+ *
+ * The scan mirrors the validator's tokenizer: a `:name` inside a string literal
+ * is data, not a placeholder, and single quotes are doubled so a value cannot
+ * terminate its own literal.
+ *
+ * @param {string} query
+ * @param {Array<{name: string, value: unknown}>} [parameters]
+ * @returns {string}
+ */
+export function bindParameters(query, parameters = []) {
+  const byName = new Map();
+  for (const param of parameters || []) {
+    if (param && typeof param.name === "string") {
+      byName.set(param.name, param.value);
+    }
+  }
+
+  let out = "";
+  let i = 0;
+  while (i < query.length) {
+    const ch = query[i];
+    if (ch === "'") {
+      const start = i;
+      i += 1;
+      while (i < query.length) {
+        if (query[i] === "'") {
+          if (query[i + 1] === "'") {
+            i += 2;
+            continue;
+          }
+          i += 1;
+          break;
+        }
+        i += 1;
+      }
+      out += query.slice(start, i);
+      continue;
+    }
+    if (ch === ":") {
+      let j = i + 1;
+      let name = "";
+      while (j < query.length && /[A-Za-z0-9_]/u.test(query[j])) {
+        name += query[j];
+        j += 1;
+      }
+      if (name && /^[A-Za-z_][A-Za-z0-9_]*$/u.test(name) && byName.has(name)) {
+        out += toDuckDbLiteral(byName.get(name), name);
+        i = j;
+        continue;
+      }
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+
+/**
  * Executes a governed query against the DuckDB bridge.
  * @param {object} context - Execution context containing agent_id, task_id
  * @param {object} input - Input conforming to zink-sql.schema.json
