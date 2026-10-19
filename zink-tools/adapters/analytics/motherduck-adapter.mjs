@@ -62,7 +62,16 @@ export class MotherDuckAdapter {
       );
     }
 
-    // 2. Validate Lean Option B SQL
+    // 2. Verify the target database resource against the shared allowlist.
+    // F-280 (R7-C2-05): the binding resource allowlist is the one the shared
+    // bridge enforces; this adapter has no resource names of its own.
+    try {
+      assertDuckDbResourceAuthorized(input.target_database);
+    } catch (err) {
+      throw new MotherDuckAdapterError(err.code, err.message);
+    }
+
+    // 3. Validate Lean Option B SQL
     try {
       validateSqlQuery(input.query, input.parameters || []);
     } catch (err) {

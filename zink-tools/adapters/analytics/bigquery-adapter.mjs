@@ -63,9 +63,24 @@ export class BigQueryAdapter {
       );
     }
 
-    // 2. Reject mutation keywords for read-only safety
-    const upper = input.query.toUpperCase();
-    if (/\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE)\b/.test(upper)) {
+    // 2. Verify the target database resource against the shared allowlist.
+    // F-280 (R7-C2-05): the binding resource allowlist is the one the shared
+    // bridge enforces; this adapter has no resource names of its own.
+    try {
+      assertDuckDbResourceAuthorized(input.target_database);
+    } catch (err) {
+      throw new BigQueryAdapterError(err.code, err.message);
+    }
+
+    // 3. Delegate the statement gate to the shared validator.
+    // F-276 (R7-C2-01): this used to be a private seven-keyword regex over
+    // the uppercased whole query, so MERGE, REPLACE, GRANT and REVOKE were
+    // admitted, and a read whose literal text merely mentioned a blocked word
+    // was refused. The shared tokenizer answers both questions the canonical
+    // way, and the sibling MotherDuck adapter already delegated here.
+    try {
+      assertReadOnlyStatement(input.query);
+    } catch (err) {
       throw new BigQueryAdapterError(
         err.message === "SQL_MUTATION_NOT_PERMITTED"
           ? "BIGQUERY_MUTATION_NOT_PERMITTED"
