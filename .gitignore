@@ -13,11 +13,18 @@
 **/*.license
 
 # Runtime data and generated artifacts
+# The generated-tree rules are not root-anchored: a capture under a module
+# path (integrations/openclaw/backups/, apps/knowledge/logs/, ...) is the same
+# kind of artifact, and a root-anchored rule left it invisible to git status
+# and one "git add -A" away from history.
 /backups/*
+**/backups/*
 !/backups/.gitkeep
 /logs/*
+**/logs/*
 !/logs/.gitkeep
 /temp/*
+**/temp/*
 !/temp/.gitkeep
 /infrastructure/docker/volumes/**
 /infrastructure/databases/**/backups/**
