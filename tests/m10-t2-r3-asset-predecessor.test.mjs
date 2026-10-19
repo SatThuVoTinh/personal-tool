@@ -143,7 +143,7 @@ const HYGIENE_ASSET_PREDECESSORS = Object.freeze({
 // `configure.mjs`. The digest below is deliberately NOT listed there: it is the current
 // build, accepted by content comparison.
 const CURRENT_ENTRYPOINT_SHA256 =
-  "2023e86715f9b105e2649388b4587ad635f89cc9db7a10e1a04c2247daa6818e";
+  "870a8f0c055d5582246cfbdb94d6dcf2207d53cdd0bd22fb132959d3190dcd3a";
 
 const identifiers = Object.freeze({
   discordGuildId: "123456789012345678",
@@ -312,27 +312,38 @@ test("R3 P1: all ten predecessor digests are reproduced from the hygiene-build c
   );
 });
 
-test("R3 P2: the live runtime agrees with the proven digests where reachable", async () => {
+test("R3 P2: the live runtime agrees with the proven digests where reachable", async (t) => {
   // Read-only cross-check against the real deployed tree. On platforms where
   // the WSL live state dir is not mounted this is a skip, never a pass: the
   // committed-source derivation in R3 P1 is already a byte-exact proof.
+  //
+  // The read and the comparison are separated on purpose. A single try/catch
+  // around both made an unreadable live root and a drifted live artifact
+  // indistinguishable — the catch swallowed the digest mismatch, so the suite
+  // reported a pass it never earned. An unreadable root skips with a named
+  // reason; a readable artifact that does not match the proven digest fails.
   const live = "/home/hoang_vinh/.openclaw-zink/extensions/zink-governance";
-  let checked = 0;
+  const bodies = new Map();
   try {
-    for (const [rel, digest] of Object.entries(HYGIENE_ASSET_PREDECESSORS)) {
-      const body = readFileSync(path.join(live, ...rel.split("/")), "utf8");
-      assert.equal(
-        sha256(body),
-        digest,
-        `live ${rel} must match the proven digest`,
-      );
-      checked += 1;
+    for (const rel of Object.keys(HYGIENE_ASSET_PREDECESSORS)) {
+      bodies.set(rel, readFileSync(path.join(live, ...rel.split("/")), "utf8"));
     }
-    const entrypoint = readFileSync(path.join(live, "index.mjs"), "utf8");
-    assert.equal(sha256(entrypoint), HYGIENE_ENTRYPOINT_SHA256);
+    bodies.set("index.mjs", readFileSync(path.join(live, "index.mjs"), "utf8"));
   } catch (error) {
-    if (checked > 0) throw error;
+    t.skip(
+      `the live runtime root is not reachable on this host: ${error.code ?? error.message}`,
+    );
+    return;
   }
+
+  for (const [rel, digest] of Object.entries(HYGIENE_ASSET_PREDECESSORS)) {
+    assert.equal(
+      sha256(bodies.get(rel)),
+      digest,
+      `live ${rel} must match the proven digest`,
+    );
+  }
+  assert.equal(sha256(bodies.get("index.mjs")), HYGIENE_ENTRYPOINT_SHA256);
 });
 
 // ---------------------------------------------------------------------------

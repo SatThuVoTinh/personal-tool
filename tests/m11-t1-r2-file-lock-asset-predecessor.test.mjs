@@ -32,6 +32,8 @@ import process from "node:process";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 
+import { skipWhenUnreachable } from "./helpers/historical-read.mjs";
+
 const REPO = process.cwd();
 const CONFIGURE = path.join(REPO, "integrations", "openclaw", "configure.mjs");
 const CONFIGURE_SOURCE = readFileSync(CONFIGURE, "utf8");
@@ -189,6 +191,10 @@ async function liveExtension() {
   }
 }
 
+// The reachability precondition for the historical-object reads below is
+// shared with the other suites that unpack a pinned commit: a shallow clone
+// or a pruned object store must produce a named skip, never a red suite for
+// a non-code cause.
 /** The bounds of the shared ALLOWED_GOVERNANCE_ASSET_SHA256 declaration. */
 function assetTable() {
   const start = CONFIGURE_SOURCE.indexOf(
@@ -219,125 +225,151 @@ function listedDigests(block) {
 // PROVENANCE — before trusting the admission
 // ---------------------------------------------------------------------------
 
-test("R2 P1: the live runtime IS the ea84a5a packaged build and differs from the current build in exactly two files", async () => {
-  const live = await liveExtension();
-  const current = await currentBuild();
-  assert.equal(
-    sha256(live.entrypoint),
-    LIVE_ENTRYPOINT_SHA256,
-    "the proven live entrypoint must reproduce from its source commit",
-  );
-  assert.equal(
-    sha256(live.assets["lib/file-lock.mjs"]),
-    LIVE_FILE_LOCK_SHA256,
-    "the proven live file-lock asset must reproduce from its source commit",
-  );
-  assert.equal(
-    sha256(current.assets["lib/file-lock.mjs"]),
-    CURRENT_FILE_LOCK_SHA256,
-    "the working tree must carry the final file-lock build",
-  );
-  // The whole gap R2 closed, stated exactly: of the packaged files, the
-  // ea84a5a build differs from the working tree in the entrypoint (admitted),
-  // in lib/file-lock.mjs (admitted by R2 and again by M11/T3), in the two
-  // assets M11/T3 Phase 1 necessarily moved — lib/native-boundary.mjs (A3) and
-  // lib/queue-manager.mjs (A4) — and in the four assets Phase 2 moved:
-  // lib/file-lock.mjs (B1), lib/ledger.mjs (B2/B3), lib/decision-ledger.mjs
-  // (B4) and lib/guard.mjs (B5). Each divergence is admitted below, so the
-  // deployed build stays upgradable. Anything beyond this set would mean the
-  // 33-file scan that motivated R2 was wrong.
-  const differing = Object.keys(current.assets).filter(
-    // M12/T1-R1 packages a new asset that the installed tree does not carry yet; a
-    // file with no installed predecessor has no digest to admit, so it counts as a
-    // divergence rather than crashing the comparison.
-    (rel) =>
-      !(rel in live.assets) ||
-      sha256(live.assets[rel]) !== sha256(current.assets[rel]),
-  );
-  assert.deepEqual(
-    differing.sort(),
-    [
-      // M11/T3-R1 moved these five.
-      "lib/decision-ledger.mjs",
-      "lib/file-lock.mjs",
-      "lib/guard.mjs",
-      "lib/ledger.mjs",
-      "lib/native-boundary.mjs",
-      "lib/queue-manager.mjs",
-      // M12/T1-R1 moved the rest: the 12-character identity widens the task_id
-      // vocabulary in every contract that carries one, changes canonical.mjs and
-      // workflow.mjs, edits the comment in authority.mjs, rewrites the approval
-      // transport/formatter/excel-writer, adds the result-preview renderer, and
-      // regenerates governance-manifests.json because its hash covers policy.mjs.
-      // M12/T2-R1 then widened the same set: the forum-tag module is new (no
-      // installed predecessor), the two ledger contracts gain the surfaced events,
-      // and the entrypoint/formatter/policy/canonical/workflow move with them.
-      "contracts/approval-request.schema.json",
-      "contracts/delegation-envelope.schema.json",
-      "contracts/execution-brief.schema.json",
-      "contracts/governed-reference.schema.json",
-      "contracts/incident.schema.json",
-      "contracts/ledger-event.schema.json",
-      "contracts/ledger-snapshot.schema.json",
-      "contracts/result.schema.json",
-      "contracts/trusted-result-envelope.schema.json",
-      "governance-manifests.json",
-      "lib/authority.mjs",
-      "lib/canonical.mjs",
-      "lib/discord-formatter.mjs",
-      "lib/discord-forum-tags.mjs",
-      "lib/discord-native-send.mjs",
-      "lib/discord-result-preview.mjs",
-      "lib/excel-writer.mjs",
-      // M12/T2.2-R2 B-9, admitted by owner decision §0.5-E: a manifest that lost a canonical
-      // member used to verify as `valid: true` because the generator skipped what it could not
-      // resolve and the verifier iterated only what survived. Both ends now assert coverage.
-      "lib/schema.mjs",
-      "lib/policy.mjs",
-      // M12/T2.2-R2 B-8, admitted by owner decision §0.5-E: the reason-code matrix load is
-      // now named (`REASON_POLICY_UNREADABLE` / `_MALFORMED` / `_INCOMPLETE`) instead of
-      // crashing module evaluation with a raw fs/JSON error, and one workflow reason_code
-      // accept went through the published vocabulary.
-      "lib/runtime.mjs",
-      "lib/workflow.mjs",
-    ].sort(),
-    "only the M11/T3, M12/T1 and M12/T2 assets may diverge from the proven live build",
-  );
-  const table = assetTable();
-  for (const rel of differing) {
-    // An asset this task introduces has no installed predecessor to admit; the
-    // packaging guard in configure.mjs accepts it because the installed path is
-    // missing rather than different.
-    if (!(rel in live.assets)) continue;
+test(
+  "R2 P1: the live runtime IS the ea84a5a packaged build and differs from the current build in exactly two files",
+  { skip: skipWhenUnreachable(REPO, "ea84a5a") },
+  async () => {
+    const live = await liveExtension();
+    const current = await currentBuild();
     assert.equal(
-      listedDigests(keyBlock(table, rel)).includes(sha256(live.assets[rel])),
-      true,
-      `the ea84a5a ${rel} digest must be an admitted predecessor`,
+      sha256(live.entrypoint),
+      LIVE_ENTRYPOINT_SHA256,
+      "the proven live entrypoint must reproduce from its source commit",
     );
-  }
-});
+    assert.equal(
+      sha256(live.assets["lib/file-lock.mjs"]),
+      LIVE_FILE_LOCK_SHA256,
+      "the proven live file-lock asset must reproduce from its source commit",
+    );
+    assert.equal(
+      sha256(current.assets["lib/file-lock.mjs"]),
+      CURRENT_FILE_LOCK_SHA256,
+      "the working tree must carry the final file-lock build",
+    );
+    // The whole gap R2 closed, stated exactly: of the packaged files, the
+    // ea84a5a build differs from the working tree in the entrypoint (admitted),
+    // in lib/file-lock.mjs (admitted by R2 and again by M11/T3), in the two
+    // assets M11/T3 Phase 1 necessarily moved — lib/native-boundary.mjs (A3) and
+    // lib/queue-manager.mjs (A4) — and in the four assets Phase 2 moved:
+    // lib/file-lock.mjs (B1), lib/ledger.mjs (B2/B3), lib/decision-ledger.mjs
+    // (B4) and lib/guard.mjs (B5). Each divergence is admitted below, so the
+    // deployed build stays upgradable. Anything beyond this set would mean the
+    // 33-file scan that motivated R2 was wrong.
+    const differing = Object.keys(current.assets).filter(
+      // M12/T1-R1 packages a new asset that the installed tree does not carry yet; a
+      // file with no installed predecessor has no digest to admit, so it counts as a
+      // divergence rather than crashing the comparison.
+      (rel) =>
+        !(rel in live.assets) ||
+        sha256(live.assets[rel]) !== sha256(current.assets[rel]),
+    );
+    assert.deepEqual(
+      differing.sort(),
+      [
+        // M11/T3-R1 moved these five.
+        "lib/decision-ledger.mjs",
+        "lib/file-lock.mjs",
+        "lib/guard.mjs",
+        "lib/ledger.mjs",
+        "lib/native-boundary.mjs",
+        "lib/queue-manager.mjs",
+        // M12/T1-R1 moved the rest: the 12-character identity widens the task_id
+        // vocabulary in every contract that carries one, changes canonical.mjs and
+        // workflow.mjs, edits the comment in authority.mjs, rewrites the approval
+        // transport/formatter/excel-writer, adds the result-preview renderer, and
+        // regenerates governance-manifests.json because its hash covers policy.mjs.
+        // M12/T2-R1 then widened the same set: the forum-tag module is new (no
+        // installed predecessor), the two ledger contracts gain the surfaced events,
+        // and the entrypoint/formatter/policy/canonical/workflow move with them.
+        "contracts/approval-request.schema.json",
+        "contracts/delegation-envelope.schema.json",
+        "contracts/execution-brief.schema.json",
+        "contracts/governed-reference.schema.json",
+        "contracts/incident.schema.json",
+        "contracts/ledger-event.schema.json",
+        "contracts/ledger-snapshot.schema.json",
+        "contracts/result.schema.json",
+        "contracts/trusted-result-envelope.schema.json",
+        "governance-manifests.json",
+        // M12/T9: the artifact validator and the quota telemetry moved in this
+        // band (the validator's excel branch and the telemetry's unreachable
+        // comments), so their bytes now differ from the proven live build. Both
+        // outgoing digests are admitted in configure.mjs, so the deployed tree
+        // stays upgradable.
+        "lib/artifact-validator.mjs",
+        "lib/authority.mjs",
+        "lib/canonical.mjs",
+        "lib/discord-formatter.mjs",
+        "lib/discord-forum-tags.mjs",
+        "lib/discord-native-send.mjs",
+        "lib/discord-result-preview.mjs",
+        "lib/excel-writer.mjs",
+        // M12/T2.2-R2 B-9, admitted by owner decision §0.5-E: a manifest that lost a canonical
+        // member used to verify as `valid: true` because the generator skipped what it could not
+        // resolve and the verifier iterated only what survived. Both ends now assert coverage.
+        "lib/schema.mjs",
+        "lib/policy.mjs",
+        // M12/T9: the quota telemetry's comments and the one canonical owner
+        // validator moved in this band; the outgoing digest is admitted in
+        // configure.mjs.
+        "lib/quota-telemetry.mjs",
+        // M12/T2.2-R2 B-8, admitted by owner decision §0.5-E: the reason-code matrix load is
+        // now named (`REASON_POLICY_UNREADABLE` / `_MALFORMED` / `_INCOMPLETE`) instead of
+        // crashing module evaluation with a raw fs/JSON error, and one workflow reason_code
+        // accept went through the published vocabulary.
+        "lib/runtime.mjs",
+        "lib/workflow.mjs",
+      ].sort(),
+      "only the M11/T3, M12/T1 and M12/T2 assets may diverge from the proven live build",
+    );
+    const table = assetTable();
+    for (const rel of differing) {
+      // An asset this task introduces has no installed predecessor to admit; the
+      // packaging guard in configure.mjs accepts it because the installed path is
+      // missing rather than different.
+      if (!(rel in live.assets)) continue;
+      assert.equal(
+        listedDigests(keyBlock(table, rel)).includes(sha256(live.assets[rel])),
+        true,
+        `the ea84a5a ${rel} digest must be an admitted predecessor`,
+      );
+    }
+  },
+);
 
-test("R2 P2: the live runtime agrees with the proven digest where readable", async () => {
+test("R2 P2: the live runtime agrees with the proven digest where readable", async (t) => {
   // Read-only cross-check against the real deployed tree. On a host where the
   // live state directory is not reachable this is a skip, never a silent pass:
   // R2 P1 already proves the digest from the committed source.
+  //
+  // The read and the comparison are separated on purpose. One try/catch around
+  // both made an unreadable live root and a drifted live artifact
+  // indistinguishable — the catch swallowed the digest mismatch and the suite
+  // reported a pass it never earned. Unreadable skips with a named reason; a
+  // readable artifact that does not match the proven digest fails.
   const live = "/home/hoang_vinh/.openclaw-zink/extensions/zink-governance";
-  let checked = 0;
+  let fileLock;
+  let entrypoint;
   try {
-    assert.equal(
-      sha256(readFileSync(path.join(live, "lib", "file-lock.mjs"), "utf8")),
-      LIVE_FILE_LOCK_SHA256,
-      "the live file-lock asset must match the proven digest",
-    );
-    checked += 1;
-    assert.equal(
-      sha256(readFileSync(path.join(live, "index.mjs"), "utf8")),
-      LIVE_ENTRYPOINT_SHA256,
-      "the live entrypoint must still be the admitted predecessor",
-    );
+    fileLock = readFileSync(path.join(live, "lib", "file-lock.mjs"), "utf8");
+    entrypoint = readFileSync(path.join(live, "index.mjs"), "utf8");
   } catch (error) {
-    if (checked > 0) throw error;
+    t.skip(
+      `the live runtime root is not reachable on this host: ${error.code ?? error.message}`,
+    );
+    return;
   }
+
+  assert.equal(
+    sha256(fileLock),
+    LIVE_FILE_LOCK_SHA256,
+    "the live file-lock asset must match the proven digest",
+  );
+  assert.equal(
+    sha256(entrypoint),
+    LIVE_ENTRYPOINT_SHA256,
+    "the live entrypoint must still be the admitted predecessor",
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -408,123 +440,142 @@ test("R2 0b: preflight and apply still share the single asset allowlist", () => 
 // ACCEPTANCE — the observed production state
 // ---------------------------------------------------------------------------
 
-test("R2 1: the exact production failure state passes preflight and converges on apply", async () => {
-  const live = await liveExtension();
-  const current = await currentBuild();
-  const p = provisioned();
-  try {
-    // Reproduce the live runtime: the predecessor entrypoint and the predecessor
-    // file-lock asset, everything else already current.
-    writeFileSync(p.asset("index.mjs"), live.entrypoint, "utf8");
-    writeFileSync(
-      p.asset("lib/file-lock.mjs"),
-      live.assets["lib/file-lock.mjs"],
-      "utf8",
-    );
-    const parsed = JSON.parse(p.preflight().toString("utf8"));
-    assert.equal(
-      parsed.preflight,
-      "PASS",
-      "preflight must accept the live state",
-    );
-    assert.equal(parsed.installedMutation, false, "preflight must not mutate");
-    assert.equal(
-      sha256(readFileSync(p.asset("lib/file-lock.mjs"), "utf8")),
-      LIVE_FILE_LOCK_SHA256,
-      "preflight must leave the predecessor in place",
-    );
-    p.apply();
-    assert.equal(
-      sha256(readFileSync(p.asset("lib/file-lock.mjs"), "utf8")),
-      sha256(current.assets["lib/file-lock.mjs"]),
-      "apply must upgrade the admitted predecessor onto the current build",
-    );
-    assert.equal(
-      sha256(readFileSync(p.asset("index.mjs"), "utf8")),
-      sha256(current.entrypoint),
-      "apply must converge the entrypoint too",
-    );
-  } finally {
-    rmSync(p.root, { recursive: true, force: true });
-  }
-});
+test(
+  "R2 1: the exact production failure state passes preflight and converges on apply",
+  { skip: skipWhenUnreachable(REPO, "ea84a5a") },
+  async () => {
+    const live = await liveExtension();
+    const current = await currentBuild();
+    const p = provisioned();
+    try {
+      // Reproduce the live runtime: the predecessor entrypoint and the predecessor
+      // file-lock asset, everything else already current.
+      writeFileSync(p.asset("index.mjs"), live.entrypoint, "utf8");
+      writeFileSync(
+        p.asset("lib/file-lock.mjs"),
+        live.assets["lib/file-lock.mjs"],
+        "utf8",
+      );
+      const parsed = JSON.parse(p.preflight().toString("utf8"));
+      assert.equal(
+        parsed.preflight,
+        "PASS",
+        "preflight must accept the live state",
+      );
+      assert.equal(
+        parsed.installedMutation,
+        false,
+        "preflight must not mutate",
+      );
+      assert.equal(
+        sha256(readFileSync(p.asset("lib/file-lock.mjs"), "utf8")),
+        LIVE_FILE_LOCK_SHA256,
+        "preflight must leave the predecessor in place",
+      );
+      p.apply();
+      assert.equal(
+        sha256(readFileSync(p.asset("lib/file-lock.mjs"), "utf8")),
+        sha256(current.assets["lib/file-lock.mjs"]),
+        "apply must upgrade the admitted predecessor onto the current build",
+      );
+      assert.equal(
+        sha256(readFileSync(p.asset("index.mjs"), "utf8")),
+        sha256(current.entrypoint),
+        "apply must converge the entrypoint too",
+      );
+    } finally {
+      rmSync(p.root, { recursive: true, force: true });
+    }
+  },
+);
 
 // ---------------------------------------------------------------------------
 // REJECTION — the admission is load-bearing, not a blanket
 // ---------------------------------------------------------------------------
 
-test("R2 2: a one-byte perturbation of the admitted predecessor is refused without mutation", async () => {
-  const live = await liveExtension();
-  const p = provisioned();
-  try {
-    const target = p.asset("lib/file-lock.mjs");
-    const perturbed = `${live.assets["lib/file-lock.mjs"]}// one extra byte\n`;
-    assert.notEqual(sha256(perturbed), LIVE_FILE_LOCK_SHA256);
-    writeFileSync(target, perturbed, "utf8");
-    assert.throws(
-      p.preflight,
-      /Governance plugin asset drift detected/u,
-      "preflight must refuse a perturbed predecessor",
-    );
-    assert.throws(
-      p.apply,
-      /Governance plugin asset drift detected/u,
-      "apply must refuse a perturbed predecessor",
-    );
-    assert.equal(
-      readFileSync(target, "utf8"),
-      perturbed,
-      "a refused asset must be left byte-identical",
-    );
-  } finally {
-    rmSync(p.root, { recursive: true, force: true });
-  }
-});
+test(
+  "R2 2: a one-byte perturbation of the admitted predecessor is refused without mutation",
+  { skip: skipWhenUnreachable(REPO, "ea84a5a") },
+  async () => {
+    const live = await liveExtension();
+    const p = provisioned();
+    try {
+      const target = p.asset("lib/file-lock.mjs");
+      const perturbed = `${live.assets["lib/file-lock.mjs"]}// one extra byte\n`;
+      assert.notEqual(sha256(perturbed), LIVE_FILE_LOCK_SHA256);
+      writeFileSync(target, perturbed, "utf8");
+      assert.throws(
+        p.preflight,
+        /Governance plugin asset drift detected/u,
+        "preflight must refuse a perturbed predecessor",
+      );
+      assert.throws(
+        p.apply,
+        /Governance plugin asset drift detected/u,
+        "apply must refuse a perturbed predecessor",
+      );
+      assert.equal(
+        readFileSync(target, "utf8"),
+        perturbed,
+        "a refused asset must be left byte-identical",
+      );
+    } finally {
+      rmSync(p.root, { recursive: true, force: true });
+    }
+  },
+);
 
-test("R2 3: the never-installed d773856 intermediate is still refused", async () => {
-  // The admission is bounded to what actually ran. Provenance of this fixture:
-  // `d773856` sits between the live build and the current build, so its bytes
-  // are a real historic asset — and admitting it would let an unobserved
-  // revision pass the gate.
-  const scratch = mkdtempSync(path.join(tmpdir(), "zink-r2-mid-"));
-  let bytes;
-  try {
-    const archive = spawnSync(
-      "git",
-      ["archive", "d773856", "--", "integrations/openclaw"],
-      { cwd: REPO, maxBuffer: 256 * 1024 * 1024 },
-    );
-    assert.equal(archive.status, 0, "git archive of d773856 must succeed");
-    assert.equal(
-      spawnSync("tar", ["-x", "-C", scratch], {
-        input: archive.stdout,
-        maxBuffer: 256 * 1024 * 1024,
-      }).status,
-      0,
-      "extracting the archived tree must succeed",
-    );
-    const { governancePluginFiles } = await import(
-      pathToFileURL(
-        path.join(scratch, "integrations", "openclaw", "lib", "policy.mjs"),
-      ).href
-    );
-    bytes = governancePluginFiles().assets["lib/file-lock.mjs"];
-    assert.equal(sha256(bytes), NEVER_INSTALLED_SHA256);
-  } finally {
-    rmSync(scratch, { recursive: true, force: true });
-  }
-  const p = provisioned();
-  try {
-    const target = p.asset("lib/file-lock.mjs");
-    writeFileSync(target, bytes, "utf8");
-    assert.throws(
-      p.preflight,
-      /Governance plugin asset drift detected/u,
-      "preflight must refuse a revision that was never live",
-    );
-    assert.throws(p.apply, /Governance plugin asset drift detected/u);
-    assert.equal(sha256(readFileSync(target, "utf8")), NEVER_INSTALLED_SHA256);
-  } finally {
-    rmSync(p.root, { recursive: true, force: true });
-  }
-});
+test(
+  "R2 3: the never-installed d773856 intermediate is still refused",
+  { skip: skipWhenUnreachable(REPO, "d773856") },
+  async () => {
+    // The admission is bounded to what actually ran. Provenance of this fixture:
+    // `d773856` sits between the live build and the current build, so its bytes
+    // are a real historic asset — and admitting it would let an unobserved
+    // revision pass the gate.
+    const scratch = mkdtempSync(path.join(tmpdir(), "zink-r2-mid-"));
+    let bytes;
+    try {
+      const archive = spawnSync(
+        "git",
+        ["archive", "d773856", "--", "integrations/openclaw"],
+        { cwd: REPO, maxBuffer: 256 * 1024 * 1024 },
+      );
+      assert.equal(archive.status, 0, "git archive of d773856 must succeed");
+      assert.equal(
+        spawnSync("tar", ["-x", "-C", scratch], {
+          input: archive.stdout,
+          maxBuffer: 256 * 1024 * 1024,
+        }).status,
+        0,
+        "extracting the archived tree must succeed",
+      );
+      const { governancePluginFiles } = await import(
+        pathToFileURL(
+          path.join(scratch, "integrations", "openclaw", "lib", "policy.mjs"),
+        ).href
+      );
+      bytes = governancePluginFiles().assets["lib/file-lock.mjs"];
+      assert.equal(sha256(bytes), NEVER_INSTALLED_SHA256);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+    const p = provisioned();
+    try {
+      const target = p.asset("lib/file-lock.mjs");
+      writeFileSync(target, bytes, "utf8");
+      assert.throws(
+        p.preflight,
+        /Governance plugin asset drift detected/u,
+        "preflight must refuse a revision that was never live",
+      );
+      assert.throws(p.apply, /Governance plugin asset drift detected/u);
+      assert.equal(
+        sha256(readFileSync(target, "utf8")),
+        NEVER_INSTALLED_SHA256,
+      );
+    } finally {
+      rmSync(p.root, { recursive: true, force: true });
+    }
+  },
+);

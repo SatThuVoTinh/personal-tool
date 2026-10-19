@@ -19,6 +19,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import os from "node:os";
 import path from "node:path";
+
+import { skipWhenUnreachable } from "./helpers/historical-read.mjs";
 import process from "node:process";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
@@ -196,22 +198,26 @@ function keyBlock(table, key) {
 // PROVENANCE — 1/1 before admission
 // ---------------------------------------------------------------------------
 
-test("R6 P1: the R6-era boundary digest is reproduced from its source commit", async () => {
-  const hygiene = await hygieneExtension();
-  assert.equal(
-    sha256(hygiene.assets["lib/native-boundary.mjs"]),
-    HYGIENE_BOUNDARY_SHA256,
-    "the committed R18 source must reproduce the digest R6 admitted",
-  );
-  // M12/T2-R1: this case used to cross-check the LIVE installed file against
-  // HYGIENE_BOUNDARY_SHA256. That equality was a photograph of the day R6 was
-  // written: the live runtime has since moved to later builds, so the check went
-  // red on any host that can read the live tree while the admission R6 proves is
-  // still exactly right. The live invariant belongs to R13 P1, which reads this
-  // same installed path and requires it to be either the build the repository
-  // derives now or a digest admitted in configure.mjs. Repeating equality here
-  // would only re-create the drift defect R13 removes.
-});
+test(
+  "R6 P1: the R6-era boundary digest is reproduced from its source commit",
+  { skip: skipWhenUnreachable(REPO, HYGIENE_SOURCE_COMMIT) },
+  async () => {
+    const hygiene = await hygieneExtension();
+    assert.equal(
+      sha256(hygiene.assets["lib/native-boundary.mjs"]),
+      HYGIENE_BOUNDARY_SHA256,
+      "the committed R18 source must reproduce the digest R6 admitted",
+    );
+    // M12/T2-R1: this case used to cross-check the LIVE installed file against
+    // HYGIENE_BOUNDARY_SHA256. That equality was a photograph of the day R6 was
+    // written: the live runtime has since moved to later builds, so the check went
+    // red on any host that can read the live tree while the admission R6 proves is
+    // still exactly right. The live invariant belongs to R13 P1, which reads this
+    // same installed path and requires it to be either the build the repository
+    // derives now or a digest admitted in configure.mjs. Repeating equality here
+    // would only re-create the drift defect R13 removes.
+  },
+);
 
 // ---------------------------------------------------------------------------
 // THE ALLOWLIST — exactly one addition, at its own path
@@ -305,49 +311,60 @@ test("R6 0c: preflight and apply share the single asset allowlist", () => {
 // ACCEPTANCE — the exact production deadlock, then its resolution
 // ---------------------------------------------------------------------------
 
-test("R6 1: the proven predecessor passes preflight and converges on apply", async () => {
-  const hygiene = await hygieneExtension();
-  const current = await currentBuild();
-  const p = provisioned();
-  try {
-    const target = p.asset("lib/native-boundary.mjs");
-    assert.equal(
-      sha256(hygiene.assets["lib/native-boundary.mjs"]),
-      HYGIENE_BOUNDARY_SHA256,
-      "fixture bytes must be the proven predecessor",
-    );
-    writeFileSync(target, hygiene.assets["lib/native-boundary.mjs"], "utf8");
-    const out = p.preflight().toString("utf8");
-    const parsed = JSON.parse(out);
-    assert.equal(parsed.preflight, "PASS");
-    assert.equal(parsed.installedMutation, false);
-    assert.equal(sha256(readFileSync(target, "utf8")), HYGIENE_BOUNDARY_SHA256);
-    p.apply();
-    assert.equal(
-      sha256(readFileSync(target, "utf8")),
-      sha256(current.assets["lib/native-boundary.mjs"]),
-      "apply must install the candidate bytes",
-    );
-  } finally {
-    rmSync(p.root, { recursive: true, force: true });
-  }
-});
+test(
+  "R6 1: the proven predecessor passes preflight and converges on apply",
+  { skip: skipWhenUnreachable(REPO, HYGIENE_SOURCE_COMMIT) },
+  async () => {
+    const hygiene = await hygieneExtension();
+    const current = await currentBuild();
+    const p = provisioned();
+    try {
+      const target = p.asset("lib/native-boundary.mjs");
+      assert.equal(
+        sha256(hygiene.assets["lib/native-boundary.mjs"]),
+        HYGIENE_BOUNDARY_SHA256,
+        "fixture bytes must be the proven predecessor",
+      );
+      writeFileSync(target, hygiene.assets["lib/native-boundary.mjs"], "utf8");
+      const out = p.preflight().toString("utf8");
+      const parsed = JSON.parse(out);
+      assert.equal(parsed.preflight, "PASS");
+      assert.equal(parsed.installedMutation, false);
+      assert.equal(
+        sha256(readFileSync(target, "utf8")),
+        HYGIENE_BOUNDARY_SHA256,
+      );
+      p.apply();
+      assert.equal(
+        sha256(readFileSync(target, "utf8")),
+        sha256(current.assets["lib/native-boundary.mjs"]),
+        "apply must install the candidate bytes",
+      );
+    } finally {
+      rmSync(p.root, { recursive: true, force: true });
+    }
+  },
+);
 
-test("R6 2: a one-byte perturbation of the predecessor is refused", async () => {
-  const hygiene = await hygieneExtension();
-  const p = provisioned();
-  try {
-    const target = p.asset("lib/native-boundary.mjs");
-    const perturbed = `${hygiene.assets["lib/native-boundary.mjs"]}// x\n`;
-    assert.notEqual(sha256(perturbed), HYGIENE_BOUNDARY_SHA256);
-    writeFileSync(target, perturbed, "utf8");
-    assert.throws(p.preflight, /Governance plugin asset drift detected/u);
-    assert.throws(p.apply, /Governance plugin asset drift detected/u);
-    assert.equal(readFileSync(target, "utf8"), perturbed);
-  } finally {
-    rmSync(p.root, { recursive: true, force: true });
-  }
-});
+test(
+  "R6 2: a one-byte perturbation of the predecessor is refused",
+  { skip: skipWhenUnreachable(REPO, HYGIENE_SOURCE_COMMIT) },
+  async () => {
+    const hygiene = await hygieneExtension();
+    const p = provisioned();
+    try {
+      const target = p.asset("lib/native-boundary.mjs");
+      const perturbed = `${hygiene.assets["lib/native-boundary.mjs"]}// x\n`;
+      assert.notEqual(sha256(perturbed), HYGIENE_BOUNDARY_SHA256);
+      writeFileSync(target, perturbed, "utf8");
+      assert.throws(p.preflight, /Governance plugin asset drift detected/u);
+      assert.throws(p.apply, /Governance plugin asset drift detected/u);
+      assert.equal(readFileSync(target, "utf8"), perturbed);
+    } finally {
+      rmSync(p.root, { recursive: true, force: true });
+    }
+  },
+);
 
 test("R6 3: an unknown digest on this path is refused without mutation", () => {
   const p = provisioned();
@@ -362,21 +379,25 @@ test("R6 3: an unknown digest on this path is refused without mutation", () => {
   }
 });
 
-test("R6 4: the proven digest at the WRONG path is refused", async () => {
-  const hygiene = await hygieneExtension();
-  const p = provisioned();
-  try {
-    writeFileSync(
-      p.asset("lib/queue-manager.mjs"),
-      hygiene.assets["lib/native-boundary.mjs"],
-      "utf8",
-    );
-    assert.throws(
-      p.preflight,
-      /Governance plugin asset drift detected/u,
-      "path binding must hold: the boundary digest is not a queue-manager digest",
-    );
-  } finally {
-    rmSync(p.root, { recursive: true, force: true });
-  }
-});
+test(
+  "R6 4: the proven digest at the WRONG path is refused",
+  { skip: skipWhenUnreachable(REPO, HYGIENE_SOURCE_COMMIT) },
+  async () => {
+    const hygiene = await hygieneExtension();
+    const p = provisioned();
+    try {
+      writeFileSync(
+        p.asset("lib/queue-manager.mjs"),
+        hygiene.assets["lib/native-boundary.mjs"],
+        "utf8",
+      );
+      assert.throws(
+        p.preflight,
+        /Governance plugin asset drift detected/u,
+        "path binding must hold: the boundary digest is not a queue-manager digest",
+      );
+    } finally {
+      rmSync(p.root, { recursive: true, force: true });
+    }
+  },
+);
