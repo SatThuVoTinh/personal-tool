@@ -1201,7 +1201,6 @@ export function createGovernanceGuard({
         if (bound) {
           owner = bound;
         } else {
-          void findErr;
           const candidates = Object.entries(snapshot.tasks).filter(
             ([, task]) => {
               const entry = task.continuations?.[context.runId];
@@ -1212,46 +1211,60 @@ export function createGovernanceGuard({
               );
             },
           );
-          assert(candidates.length === 1, "EXECUTION_STATE_UNKNOWN");
-          const [task_id, task] = candidates[0];
-          const entry = task.continuations?.[context.runId];
-          assert(
-            entry &&
-              context.inputProvenance?.kind === "inter_session" &&
-              context.inputProvenance.sourceTool === "subagent_announce" &&
-              context.inputProvenance.sourceSessionKey ===
-                entry.source_session_key,
-            "LINEAGE_MISMATCH",
-          );
-          // E13: Cryptographically bind inter-session trust to the trigger sender event & accepted payload digest
-          const trigger = Object.values(task.delegations || {}).find(
-            (run) => run.native_run_id === entry.trigger_run_id,
-          );
-          if (entry.trigger_run_id !== entry.previous_run_id) {
+          // F-059: the original findSession failure is the CAUSE of this
+          // refusal, and it used to be discarded (`void findErr`), so the
+          // operator saw a bare code with no reason attached. The refusal code
+          // names the symptom; the cause names the reason.
+          try {
+            assert(candidates.length === 1, "EXECUTION_STATE_UNKNOWN");
+            const [task_id, task] = candidates[0];
+            const entry = task.continuations?.[context.runId];
             assert(
-              trigger && trigger.accepted_payload_digest,
+              entry &&
+                context.inputProvenance?.kind === "inter_session" &&
+                context.inputProvenance.sourceTool === "subagent_announce" &&
+                context.inputProvenance.sourceSessionKey ===
+                  entry.source_session_key,
               "LINEAGE_MISMATCH",
             );
-            if (context.inputProvenance.senderDigest) {
+            // E13: Cryptographically bind inter-session trust to the trigger sender event & accepted payload digest
+            const trigger = Object.values(task.delegations || {}).find(
+              (run) => run.native_run_id === entry.trigger_run_id,
+            );
+            if (entry.trigger_run_id !== entry.previous_run_id) {
               assert(
-                context.inputProvenance.senderDigest ===
-                  trigger.accepted_payload_digest,
+                trigger && trigger.accepted_payload_digest,
                 "LINEAGE_MISMATCH",
               );
+              if (context.inputProvenance.senderDigest) {
+                assert(
+                  context.inputProvenance.senderDigest ===
+                    trigger.accepted_payload_digest,
+                  "LINEAGE_MISMATCH",
+                );
+              }
             }
+            const next = recordWorkflowEvent(
+              paths,
+              "WORKFLOW_CONTINUATION_STARTED",
+              {
+                task_id,
+                next_run_id: context.runId,
+                session_key: context.sessionKey,
+                source_session_key: context.inputProvenance.sourceSessionKey,
+                agent_id: context.agentId,
+              },
+            );
+            owner = findSession(next, context.sessionKey, context.runId);
+          } catch (cause) {
+            // F-059: the original findSession failure is the CAUSE of this
+            // refusal. The refusal code still names the symptom; the cause
+            // names the reason. The refusal itself is re-thrown unchanged -
+            // only the discarded reason is attached underneath it.
+            if (cause instanceof Error && cause.cause === undefined)
+              cause.cause = findErr;
+            throw cause;
           }
-          const next = recordWorkflowEvent(
-            paths,
-            "WORKFLOW_CONTINUATION_STARTED",
-            {
-              task_id,
-              next_run_id: context.runId,
-              session_key: context.sessionKey,
-              source_session_key: context.inputProvenance.sourceSessionKey,
-              agent_id: context.agentId,
-            },
-          );
-          owner = findSession(next, context.sessionKey, context.runId);
         }
       }
       // M7-020: this is RUN ADMISSION, not work authorization. A native run may
