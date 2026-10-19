@@ -181,7 +181,188 @@ class ApiAttributionTests(unittest.IsolatedAsyncioTestCase):
             ["02. Books/Authority/report.pdf"],
         )
 
-    async def test_min_score_does_not_filter_the_rrf_path(self) -> None:
+    async def test_the_three_advertised_actions_resolve_to_a_route(self) -> None:
+        """F-071 (R1-A16-07): three advertised actions had no server route.
+
+        `retrieve`, `citation` and `metadata` are advertised to the model,
+        so the citation round trip ended in an HTTP 404 and the surviving
+        citations could not be tied to the run that produced them.
+        """
+
+        record = SegmentRecord(
+            id="segment-1",
+            index_id="index-1",
+            source_id="source-1",
+            source_sha256="a" * 64,
+            source_path="01. Knowledge/AI/note.md",
+            source_type="MARKDOWN",
+            source_mime_type="text/markdown",
+            title="Note",
+            text="body",
+            heading_path=("Title",),
+            primary_topic="AI",
+            canonical_topics=("AI",),
+            tags=("ai",),
+            line_start=1,
+            line_end=2,
+            page_start=None,
+            page_end=None,
+            bbox=None,
+            indexed_by_run_id="run-1",
+        )
+        self.app.state.database.get_segment = AsyncMock(return_value=record)
+
+        for path, action in (
+            ("/v1/chunk/segment-1", "retrieve"),
+            ("/v1/citation/segment-1", "citation"),
+            ("/v1/metadata/segment-1", "metadata"),
+        ):
+            with self.subTest(action=action):
+                response = await self.request("GET", path)
+
+                self.assertEqual(response.status_code, 200)
+                body = response.json()
+                self.assertEqual(body["action"], action)
+                self.assertEqual(body["index_id"], "index-1")
+                self.assertEqual(body["indexed_by_run_id"], "run-1")
+                row = body["results"][0]
+                self.assertEqual(row["segment_id"], "segment-1")
+                self.assertEqual(row["source_id"], "source-1")
+                self.assertEqual(row["source_sha256"], "a" * 64)
+                self.assertTrue(row["citation"])
+
+    async def test_an_unknown_segment_is_refused_with_a_named_code(self) -> None:
+        """F-071 (R1-A16-07): a missing chunk is named, not a bare 404."""
+
+        self.app.state.database.get_segment = AsyncMock(return_value=None)
+
+        response = await self.request("GET", "/v1/chunk/segment-1")
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["detail"]["code"], "SEGMENT_NOT_FOUND")
+
+    async def test_every_search_result_carries_the_immutable_source_identity(
+        self,
+    ) -> None:
+        """F-072 (R5-E02-02): a path is not an identity.
+
+        A file can be moved or edited and keep its path, and an index run
+        covers thousands of files, so neither identifies the revision an
+        answer was produced from.
+        """
+
+        self.app.state.database.get_active_index = AsyncMock(return_value=ACTIVE)
+        self.app.state.database.search_candidates = AsyncMock(
+            return_value=([candidate("a")], [])
+        )
+
+        response = await self.request(
+            "POST", "/v1/search", json={"query": "topic", "rerank": False}
+        )
+
+        self.assertEqual(response.status_code, 200)
+        item = response.json()["results"][0]
+        self.assertEqual(item["source_id"], "source-1")
+        self.assertEqual(item["source_sha256"], "a" * 64)
+        self.assertEqual(item["citation"]["source_sha256"], "a" * 64)
+        self.assertEqual(item["citation"]["source_id"], "source-1")
+
+    async def test_a_failed_startup_sweep_is_named_and_does_not_stop_the_service(
+        self,
+    ) -> None:
+        """F-092 (R5-E03-03) and F-101 (R5-E01-05).
+
+        The startup sweep deletes the published content of indexes that are
+        already FAILED. A sweep that fails must be NAMED and must not stop
+        the service from becoming ready; the next attempt repeats it,
+        because deleting the same rows again is a no-op.
+        """
+
+        class _Pool:
+            async def close(self) -> None:
+                return None
+
+        database = self.app.state.database
+        database.start = AsyncMock()
+        database._pool = _Pool()  # type: ignore[assignment]
+        self.app.state.coordinator.recover_startup = AsyncMock(
+            side_effect=RuntimeError("sweep failed")
+        )
+
+        with self.assertLogs("app.main", level="ERROR") as captured:
+            async with self.app.router.lifespan_context(self.app):
+                pass
+
+        joined = "\n".join(captured.output)
+        self.assertIn("STARTUP_RECOVERY_INCOMPLETE", joined)
+
+    async def test_the_documented_response_keys_exist(self) -> None:
+        """F-357 (R7-OC2-02): the walkthrough read fields the service never returns.
+
+        The operator walkthrough was written against an assumed response
+        shape: `$status.state`, `$results.hits`, `$hit.document_title` and
+        `$hit.score` are not keys any handler returns, so a reader who copied
+        it enumerated a null collection and printed nothing.
+        """
+
+        readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(
+            encoding="utf-8"
+        )
+        documented = sorted(set(re.findall(r"\$(\w+)\.(\w+)", readme)))
+        self.assertTrue(documented, "the walkthrough must read something")
+
+        self.app.state.database.get_active_index = AsyncMock(return_value=ACTIVE)
+        self.app.state.database.search_candidates = AsyncMock(
+            return_value=([candidate("a")], [])
+        )
+        search = await self.request(
+            "POST", "/v1/search", json={"query": "topic", "rerank": False}
+        )
+        body = search.json()
+        allowed = (
+            set(body)
+            | set(body["results"][0])
+            | set(body["results"][0]["citation"])
+        )
+        detail = serialize_errors([SafeRunError("SCAN_FAILED")])
+        self.app.state.database.get_run = AsyncMock(
+            return_value=IndexRunState(
+                id="run-1",
+                index_id="index-1",
+                kind="INCREMENTAL",
+                status="FAILED",
+                started_at="2026-10-12T00:00:00Z",
+                finished_at="2026-10-12T00:01:00Z",
+                sources_discovered=2,
+                sources_indexed=0,
+                sources_failed=1,
+                failure_code="SCAN_FAILED",
+                failure_detail=detail,
+            )
+        )
+        self.app.state.database.get_run_source_counts = AsyncMock(return_value=[])
+        run = await self.request("GET", "/v1/index-runs/run-1")
+        allowed |= set(run.json())
+
+        for variable, key in documented:
+            with self.subTest(variable=variable, key=key):
+                self.assertIn(
+                    key,
+                    allowed,
+                    f"the walkthrough reads ${variable}.{key}, which no handler returns",
+                )
+
+    async def test_min_score_on_the_rrf_path_is_refused(self) -> None:
+        """F-012 (R5-E02-03): a threshold that cannot be enforced is refused.
+
+        The M11/T1-R1 fix kept `min_score` off the RRF path by gating the
+        filter on `reranked`, but the same branch reported the fused RRF rank
+        score under the name `rerank_score`. The caller therefore received
+        200 with two hits and every `rerank_score` far below the threshold it
+        had asked to enforce -- an unenforceable threshold that read as
+        enforced.
+        """
+
         self.app.state.database.get_active_index = AsyncMock(return_value=ACTIVE)
         self.app.state.database.search_candidates = AsyncMock(
             return_value=([candidate("a"), candidate("b")], [])

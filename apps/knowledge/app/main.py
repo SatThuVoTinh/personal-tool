@@ -518,6 +518,169 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             await lease.release()
 
+    def _citation_markdown(
+        title: str,
+        source_path: str,
+        line_start: int | None,
+        line_end: int | None,
+        page_start: int | None,
+        page_end: int | None,
+        source_type: str,
+    ) -> str:
+        if source_type == "PDF" and page_start is not None and page_end is not None:
+            return render_pdf_citation(title, source_path, page_start, page_end)
+        return render_citation(title, source_path, line_start, line_end)
+
+    async def _read_segment(segment_id: str) -> SegmentRecord:
+        """Read one indexed segment, or refuse with a named code.
+
+        F-071 (R1-A16-07): `retrieve`, `citation` and `metadata` were
+        advertised to the model but had no route, so the citation round trip
+        ended in an HTTP 404 and the surviving citations could not be tied
+        to the run that produced them.
+        """
+
+        if not database.available:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": database.startup_error_code or "DATABASE_UNAVAILABLE"},
+            )
+        try:
+            record = await database.get_segment(segment_id)
+        except ValueError:
+            # A malformed identifier is a segment that does not exist.
+            record = None
+        except DATABASE_ERRORS as error:
+            raise HTTPException(
+                status_code=503, detail={"code": "DATABASE_UNAVAILABLE"}
+            ) from error
+        except Exception as error:
+            raise HTTPException(
+                status_code=500, detail={"code": "INTERNAL_ERROR"}
+            ) from error
+        if record is None:
+            raise HTTPException(status_code=404, detail={"code": "SEGMENT_NOT_FOUND"})
+        return record
+
+    @app.get("/v1/chunk/{segment_id}", response_model=None)
+    async def get_chunk(segment_id: str) -> dict[str, object]:
+        record = await _read_segment(segment_id)
+        citation = _citation_markdown(
+            record.title,
+            record.source_path,
+            record.line_start,
+            record.line_end,
+            record.page_start,
+            record.page_end,
+            record.source_type,
+        )
+        row = {
+            "segment_id": record.id,
+            "chunk_id": record.id,
+            "index_id": record.index_id,
+            "indexed_by_run_id": record.indexed_by_run_id,
+            "source_id": record.source_id,
+            "source_sha256": record.source_sha256,
+            "source_path": record.source_path,
+            "source_type": record.source_type,
+            "title": record.title,
+            "text": record.text,
+            "heading_path": list(record.heading_path),
+            "citation": citation,
+        }
+        return {
+            "action": "retrieve",
+            "segment_id": record.id,
+            "index_id": record.index_id,
+            "indexed_by_run_id": record.indexed_by_run_id,
+            "results": [row],
+        }
+
+    @app.get("/v1/citation/{segment_id}", response_model=None)
+    async def get_citation(segment_id: str) -> dict[str, object]:
+        record = await _read_segment(segment_id)
+        citation = _citation_markdown(
+            record.title,
+            record.source_path,
+            record.line_start,
+            record.line_end,
+            record.page_start,
+            record.page_end,
+            record.source_type,
+        )
+        row = {
+            "segment_id": record.id,
+            "chunk_id": record.id,
+            "index_id": record.index_id,
+            "indexed_by_run_id": record.indexed_by_run_id,
+            "source_id": record.source_id,
+            "source_sha256": record.source_sha256,
+            "source_path": record.source_path,
+            "source_type": record.source_type,
+            "title": record.title,
+            "text": record.text,
+            "citation": citation,
+            "citation_block": {
+                "source_path": record.source_path,
+                "source_id": record.source_id,
+                "source_sha256": record.source_sha256,
+                "line_start": record.line_start,
+                "line_end": record.line_end,
+                "page_start": record.page_start,
+                "page_end": record.page_end,
+                "bbox": list(record.bbox) if record.bbox is not None else None,
+                "markdown": citation,
+            },
+        }
+        return {
+            "action": "citation",
+            "segment_id": record.id,
+            "index_id": record.index_id,
+            "indexed_by_run_id": record.indexed_by_run_id,
+            "results": [row],
+        }
+
+    @app.get("/v1/metadata/{segment_id}", response_model=None)
+    async def get_metadata(segment_id: str) -> dict[str, object]:
+        record = await _read_segment(segment_id)
+        row = {
+            "segment_id": record.id,
+            "chunk_id": record.id,
+            "index_id": record.index_id,
+            "indexed_by_run_id": record.indexed_by_run_id,
+            "source_id": record.source_id,
+            "source_sha256": record.source_sha256,
+            "source_path": record.source_path,
+            "source_type": record.source_type,
+            "source_mime_type": record.source_mime_type,
+            "title": record.title,
+            "primary_topic": record.primary_topic,
+            "canonical_topics": list(record.canonical_topics),
+            "tags": list(record.tags),
+            "heading_path": list(record.heading_path),
+            "line_start": record.line_start,
+            "line_end": record.line_end,
+            "page_start": record.page_start,
+            "page_end": record.page_end,
+            "bbox": list(record.bbox) if record.bbox is not None else None,
+            "citation": _citation_markdown(
+                record.title,
+                record.source_path,
+                record.line_start,
+                record.line_end,
+                record.page_start,
+                record.page_end,
+                record.source_type,
+            ),
+        }
+        return {
+            "action": "metadata",
+            "segment_id": record.id,
+            "index_id": record.index_id,
+            "indexed_by_run_id": record.indexed_by_run_id,
+            "results": [row],
+        }
+
     @app.post("/v1/index-runs", status_code=status.HTTP_202_ACCEPTED, response_model=IndexRunAcceptedResponse)
     async def create_index_run(request: IndexRunRequest) -> IndexRunAcceptedResponse:
         if not database.available:

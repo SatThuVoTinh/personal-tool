@@ -1104,6 +1104,7 @@ class KnowledgeDatabase:
             source_type = "PDF"
         else:
             raise StateTransitionError("Search result has an unknown segment type.")
+        source_id = str(row["source_id"]) if row["source_id"] is not None else None
         return SearchCandidate(
             id=str(row["id"]),
             source_path=row["source_path"],
@@ -1121,6 +1122,73 @@ class KnowledgeDatabase:
             page_start=int(row["page_start"]) if row["page_start"] is not None else None,
             page_end=int(row["page_end"]) if row["page_end"] is not None else None,
             bbox=tuple(float(value) for value in row["bbox"]) if row["bbox"] is not None else None,
+            source_id=source_id,
+            source_sha256=(source_digests or {}).get(source_id),
+            canonical_topics=tuple(row["canonical_topics"]),
+        )
+
+    async def get_segment(self, segment_id: str) -> SegmentRecord | None:
+        """Read one indexed segment with the identity of its source.
+
+        F-071 (R1-A16-07): three advertised actions (`retrieve`, `citation`,
+        `metadata`) had no route at all, so the citation round trip ended in
+        an HTTP 404 and the surviving citations could not be tied to the
+        index run that produced them.
+        """
+
+        if self._pool is None:
+            raise RuntimeError("Database pool is unavailable.")
+        row = await self._pool.fetchrow(
+            """
+            SELECT segments.id::text, segments.index_id::text, segments.source_id::text,
+                   segments.source_path, segments.title, segments.text, segments.heading_path,
+                   segments.primary_topic, segments.canonical_topics, segments.tags,
+                   segments.segment_type, segments.line_start, segments.line_end,
+                   segments.page_start, segments.page_end, segments.bbox,
+                   segments.indexed_by_run_id::text,
+                   sources.sha256 AS source_sha256, sources.source_type AS source_type,
+                   sources.mime_type AS source_mime_type
+            FROM knowledge.segments
+            JOIN knowledge.sources
+              ON knowledge.sources.id = segments.source_id
+             AND knowledge.sources.index_id = segments.index_id
+            WHERE segments.id = $1
+            """,
+            UUID(segment_id),
+        )
+        if row is None:
+            return None
+        segment_type = str(row["segment_type"])
+        if segment_type == "MARKDOWN_PASSAGE":
+            source_type = "MARKDOWN"
+        elif segment_type in {"PDF_PASSAGE", "PDF_TABLE", "PDF_FIGURE_TEXT"}:
+            source_type = "PDF"
+        else:
+            raise StateTransitionError("Indexed segment has an unknown segment type.")
+        return SegmentRecord(
+            id=str(row["id"]),
+            index_id=str(row["index_id"]),
+            source_id=str(row["source_id"]),
+            source_sha256=str(row["source_sha256"]),
+            source_path=str(row["source_path"]),
+            source_type=source_type,
+            source_mime_type=str(row["source_mime_type"]),
+            title=str(row["title"]),
+            text=str(row["text"]),
+            heading_path=tuple(row["heading_path"]),
+            primary_topic=str(row["primary_topic"]),
+            canonical_topics=tuple(row["canonical_topics"]),
+            tags=tuple(row["tags"]),
+            line_start=int(row["line_start"]) if row["line_start"] is not None else None,
+            line_end=int(row["line_end"]) if row["line_end"] is not None else None,
+            page_start=int(row["page_start"]) if row["page_start"] is not None else None,
+            page_end=int(row["page_end"]) if row["page_end"] is not None else None,
+            bbox=(
+                tuple(float(value) for value in row["bbox"])
+                if row["bbox"] is not None
+                else None
+            ),
+            indexed_by_run_id=str(row["indexed_by_run_id"]),
         )
 
     async def set_discovered(self, run_id: str, discovered: int) -> None:
