@@ -425,7 +425,11 @@ class PdfBuildLifecycleTests(unittest.IsolatedAsyncioTestCase):
             segment_count=1,
         )
 
-        with self.assertRaisesRegex(PdfBuildError, "PDF_RUNTIME_FAILED"):
+        # F-333 (R7-F2-02): the parent-side failure carries its OWN code.
+        # `PDF_RUNTIME_FAILED` means the child runtime died, and a suite
+        # that asserts the generic code for a case it titled specifically
+        # reinforced the fold.
+        with self.assertRaisesRegex(PdfBuildError, "PDF_BUILD_STATE_INVALID"):
             await self.builder(database, runtime).build(self.sidecar, identity)
         self.assertEqual(runtime.ranges, [])
 
@@ -482,7 +486,7 @@ class PdfBuildLifecycleTests(unittest.IsolatedAsyncioTestCase):
         )
         database.recovery_error = True
 
-        with self.assertRaisesRegex(PdfBuildError, "PDF_RUNTIME_FAILED"):
+        with self.assertRaisesRegex(PdfBuildError, "PDF_BUILD_STATE_INVALID"):
             await self.builder(database, runtime).build(self.sidecar, identity)
         self.assertTrue(database.recovered)
         self.assertEqual(runtime.ranges, [])

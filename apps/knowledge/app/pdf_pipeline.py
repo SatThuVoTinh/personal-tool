@@ -132,7 +132,11 @@ class PdfContentBuilder:
                     batch_size=PAGES_PER_BATCH,
                 )
             except PdfContentIdentityExistsError as error:
-                raise PdfBuildError("PDF_RUNTIME_FAILED") from error
+                # F-333 (R7-F2-02): a parent-side failure carries its OWN
+                # code. `PDF_RUNTIME_FAILED` means the child runtime died;
+                # a content-identity race is not that, and an operator could
+                # not tell a schema race from a dead child.
+                raise PdfBuildError("PDF_CONTENT_IDENTITY_EXISTS") from error
             batch_states = tuple((batch, "PENDING") for batch in batches)
             segment_count = 0
         else:
@@ -153,7 +157,9 @@ class PdfContentBuilder:
                     state, page_count
                 )
             except StateTransitionError as error:
-                raise PdfBuildError("PDF_RUNTIME_FAILED") from error
+                # F-333 (R7-F2-02): the recovery path's own state fault is a
+                # parent-side failure with its own code.
+                raise PdfBuildError("PDF_BUILD_STATE_INVALID") from error
             build = state.build
             batch_states = tuple((entry.batch, entry.status) for entry in state.batches)
             segment_count = state.segment_count
@@ -169,7 +175,9 @@ class PdfContentBuilder:
                 if batch_status == "SUCCEEDED":
                     continue
                 if batch_status != "PENDING":
-                    raise PdfBuildError("PDF_RUNTIME_FAILED")
+                    # F-333 (R7-F2-02): an illegal batch status is a
+                    # parent-side failure with its own code.
+                    raise PdfBuildError("PDF_BATCH_STATUS_INVALID")
                 await self._require_after_commit_deadline(cumulative_deadline, build)
                 await self._assert_baseline_or_fail(sidecar, baseline, build)
                 await self._database.start_pdf_content_batch(batch)
