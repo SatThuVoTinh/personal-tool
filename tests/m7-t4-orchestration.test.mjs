@@ -442,3 +442,352 @@ describe("M7/T4 External Infrastructure & Governed Orchestration (G0 - G20)", ()
     assert.ok(pkg.devDependencies["@eslint/js"]);
   });
 });
+
+// ===========================================================================
+// F-195 - the live governance probe must not write the PRODUCTION ledger
+// ===========================================================================
+// The probe is a synthetic instrument: it writes its own fixtures into the
+// state root it inspects and then reports PASS about the result. Run against
+// the production root it therefore (a) mutates the live governance history
+// while calling itself a probe, and (b) reports PASS for a precondition it
+// created itself - a fact nothing in its output said.
+//
+// The gates are explicit and come BEFORE any write: the state root must be
+// named, and the production root additionally needs an acknowledgement.
+describe("M12/T9 - the live governance probe cannot write the production ledger silently", () => {
+  const probeUrl = new URL(
+    "../integrations/openclaw/topology/fixtures/runtime-regression/live-governance-probe.mjs",
+    import.meta.url,
+  );
+  const probePath = fileURLToPath(probeUrl);
+
+  test("F-195: the probe refuses to run when no state root is named", () => {
+    const result = spawnSync(process.execPath, [probePath], {
+      encoding: "utf8",
+      env: { ...process.env, ZINK_PROBE_STATE_DIR: "" },
+    });
+    assert.equal(result.status, 2, "the probe must stop before any write");
+    assert.match(result.stdout, /PROBE_STATE_DIR_NOT_NAMED/u);
+  });
+
+  test("F-195: the probe refuses to write the production ledger without an acknowledgement", () => {
+    const result = spawnSync(
+      process.execPath,
+      [probePath, "/home/hoang_vinh/.openclaw-zink"],
+      { encoding: "utf8" },
+    );
+    assert.equal(result.status, 2, "the probe must stop before any write");
+    assert.match(result.stdout, /PRODUCTION_LEDGER_WRITE_NOT_ACKNOWLEDGED/u);
+  });
+
+  test("F-195: the probe names no production state root as a default", () => {
+    const source = fs.readFileSync(probePath, "utf8");
+    assert.ok(
+      source.includes("PROBE_STATE_DIR_NOT_NAMED"),
+      "the probe must name the condition it refuses on",
+    );
+    assert.ok(
+      source.includes("PRODUCTION_LEDGER_WRITE_NOT_ACKNOWLEDGED"),
+      "the production write must need an explicit acknowledgement",
+    );
+  });
+});
+// ===========================================================================
+// F-088 - a yielded run is not a successful run
+// ===========================================================================
+// The run-end gate returned allow:true whenever the host reported
+// event.yielded === true, BEFORE the success assertion. A FAILED run therefore
+// passed the gate and recorded no terminal event at all: the ledger kept
+// showing an open task the owner had been told had finished.
+//
+// A yielded run is admitted when it succeeded, or when the ledger shows the
+// terminal event it claims - a governed question recorded for THAT run.
+describe("M12/T9 - F-088: the run-end gate refuses a failed run that only yielded", () => {
+  const openedBase = {
+    origin: "discord",
+    origin_principal_ref: "a".repeat(64),
+    origin_message_id: "12345678901234567",
+    root_agent_id: "main",
+    root_session_key: "agent:main:sess-1",
+    root_run_id: "run-1",
+  };
+
+  function openedSnapshot() {
+    return {
+      tasks: {},
+      sequence: 0,
+    };
+  }
+
+  test("F-088: a failed run that only yielded is refused", async () => {
+    const { applyWorkflowEvent } =
+      await import("../integrations/openclaw/topology/lib/workflow.mjs");
+    const { deriveTaskId } =
+      await import("../integrations/openclaw/topology/lib/canonical.mjs");
+    const { createGovernanceGuard } =
+      await import("../integrations/openclaw/topology/lib/guard.mjs");
+    const payload = { ...openedBase, task_id: deriveTaskId(openedBase) };
+    const snapshot = applyWorkflowEvent(
+      openedSnapshot(),
+      "WORKFLOW_OPENED",
+      payload,
+    );
+    const guard = createGovernanceGuard({
+      paths: {},
+      manifestFor: () => ({}),
+      _snapshotOverride: snapshot,
+    });
+    const context = {
+      agentId: "main",
+      sessionKey: openedBase.root_session_key,
+      runId: openedBase.root_run_id,
+    };
+    assert.throws(
+      () => guard.beforeRunEnd({ success: false, yielded: true }, context),
+      { message: "EXECUTION_STATE_UNKNOWN" },
+      "a failed run must not pass the run-end gate because it yielded",
+    );
+    assert.throws(
+      () =>
+        guard.beforeRunEnd(
+          {
+            success: false,
+            yielded: true,
+            lastAssistant: { stopReason: "error" },
+          },
+          context,
+        ),
+      { message: "EXECUTION_STATE_UNKNOWN" },
+    );
+  });
+
+  test("F-088: a failed run without the yield flag is still refused", async () => {
+    const { applyWorkflowEvent } =
+      await import("../integrations/openclaw/topology/lib/workflow.mjs");
+    const { deriveTaskId } =
+      await import("../integrations/openclaw/topology/lib/canonical.mjs");
+    const { createGovernanceGuard } =
+      await import("../integrations/openclaw/topology/lib/guard.mjs");
+    const payload = { ...openedBase, task_id: deriveTaskId(openedBase) };
+    const snapshot = applyWorkflowEvent(
+      openedSnapshot(),
+      "WORKFLOW_OPENED",
+      payload,
+    );
+    const guard = createGovernanceGuard({
+      paths: {},
+      manifestFor: () => ({}),
+      _snapshotOverride: snapshot,
+    });
+    const context = {
+      agentId: "main",
+      sessionKey: openedBase.root_session_key,
+      runId: openedBase.root_run_id,
+    };
+    assert.throws(
+      () => guard.beforeRunEnd({ success: false, yielded: false }, context),
+      { message: "EXECUTION_STATE_UNKNOWN" },
+    );
+  });
+
+  test("F-088: a yielded run that succeeded is still admitted", async () => {
+    const { applyWorkflowEvent } =
+      await import("../integrations/openclaw/topology/lib/workflow.mjs");
+    const { deriveTaskId } =
+      await import("../integrations/openclaw/topology/lib/canonical.mjs");
+    const { createGovernanceGuard } =
+      await import("../integrations/openclaw/topology/lib/guard.mjs");
+    const payload = { ...openedBase, task_id: deriveTaskId(openedBase) };
+    const snapshot = applyWorkflowEvent(
+      openedSnapshot(),
+      "WORKFLOW_OPENED",
+      payload,
+    );
+    const guard = createGovernanceGuard({
+      paths: {},
+      manifestFor: () => ({}),
+      _snapshotOverride: snapshot,
+    });
+    const context = {
+      agentId: "main",
+      sessionKey: openedBase.root_session_key,
+      runId: openedBase.root_run_id,
+    };
+    const verdict = guard.beforeRunEnd(
+      { success: true, yielded: true },
+      context,
+    );
+    assert.equal(verdict.allow, true);
+  });
+});
+// ===========================================================================
+// F-230 - the transaction preimage must round-trip binary bytes
+// ===========================================================================
+// The capture hashed the raw bytes but STORED them as UTF-8 text, and the
+// verifier re-hashed the stored text. Every byte that is not valid UTF-8 was
+// therefore lost on the way in and the re-hash disagreed with the digest the
+// capture had recorded: one binary asset made the whole capture throw
+// TRANSACTION_SNAPSHOT_INCONSISTENT and left no rollback target at all.
+//
+// The body is now stored as base64, so the bytes that were hashed are the
+// bytes that are restored.
+describe("M12/T9 - F-230: a transaction snapshot round-trips binary bytes", () => {
+  function buildFixture() {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "zink-snapshot-"));
+    const stateDir = path.join(root, "state");
+    const runtimeRoot = path.join(root, "runtime");
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.mkdirSync(runtimeRoot, { recursive: true });
+    // A deliberately non-UTF-8 asset: 0xff and 0xfe are not valid UTF-8.
+    const bytes = Buffer.from([0xff, 0xfe, 0x00, 0x41, 0x80, 0x42]);
+    fs.writeFileSync(path.join(stateDir, "openclaw.json"), bytes);
+    return { root, stateDir, runtimeRoot, bytes };
+  }
+
+  test("F-230: a binary asset is captured, verified and restored byte-exactly", async () => {
+    const {
+      createTransactionSnapshot,
+      verifyTransactionSnapshot,
+      restoreTransactionSnapshot,
+    } =
+      await import("../integrations/openclaw/topology/lib/transaction-snapshot.mjs");
+    const { createHash } = await import("node:crypto");
+    const fixture = buildFixture();
+    try {
+      const snapshot = createTransactionSnapshot({
+        stateDir: fixture.stateDir,
+        runtimeRoot: fixture.runtimeRoot,
+      });
+      const entry = snapshot.files["openclaw.json"];
+      assert.equal(entry.existed, true);
+      assert.equal(
+        entry.sha256,
+        createHash("sha256").update(fixture.bytes).digest("hex"),
+        "the digest must be taken over the raw bytes",
+      );
+      assert.doesNotThrow(
+        () => verifyTransactionSnapshot(snapshot),
+        "a binary asset must not make the capture unverifiable",
+      );
+      // Mutate the live asset and roll back.
+      fs.writeFileSync(
+        path.join(fixture.stateDir, "openclaw.json"),
+        Buffer.from([0x00, 0x01]),
+      );
+      restoreTransactionSnapshot(snapshot);
+      const restored = fs.readFileSync(
+        path.join(fixture.stateDir, "openclaw.json"),
+      );
+      assert.deepEqual(
+        [...restored],
+        [...fixture.bytes],
+        "the restored preimage must be byte-identical",
+      );
+    } finally {
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  test("F-230: a snapshot written before the rule still verifies", async () => {
+    const { verifyTransactionSnapshot } =
+      await import("../integrations/openclaw/topology/lib/transaction-snapshot.mjs");
+    const { createHash } = await import("node:crypto");
+    const text = '{"schema_version":"1.0.0"}';
+    const legacy = {
+      schema: "zink-transaction-snapshot/1",
+      stateDir: "/tmp/state",
+      runtimeRoot: "/tmp/runtime",
+      files: {
+        "openclaw.json": {
+          existed: true,
+          sha256: createHash("sha256").update(text, "utf8").digest("hex"),
+          mode: 0o600,
+          body: text,
+        },
+      },
+    };
+    assert.doesNotThrow(
+      () => verifyTransactionSnapshot(legacy),
+      "a text-body snapshot written before the rule must still verify",
+    );
+  });
+});
+
+// ===========================================================================
+// F-059 - a refused admission keeps the cause it refused for
+// ===========================================================================
+// The run-admission path discarded the original findSession failure
+// (`void findErr`) and then threw a bare code, so the operator saw a symptom
+// with no reason attached: an admission refusal that could not be told apart
+// from a candidate-count, a lineage or a snapshot-read failure.
+describe("M12/T9 - F-059: a refused admission preserves the original cause", () => {
+  test("F-059: the refusal carries the findSession failure as its cause", async () => {
+    const { createGovernanceGuard } =
+      await import("../integrations/openclaw/topology/lib/guard.mjs");
+    // A task with a pending continuation for this run, but no session the
+    // guard can resolve: findSession therefore fails, and the continuation
+    // path is the one that has to explain WHY.
+    const snapshot = {
+      tasks: {
+        ["a".repeat(64)]: {
+          task_id: "a".repeat(64),
+          workflow_status: "ACTIVE",
+          brief_state: "ACTIVE",
+          root_agent_id: "main",
+          root_session_key: "agent:main:sess-1",
+          root_run_id: "run-1",
+          nodes: [],
+          delegations: {},
+          continuations: {
+            "run-2": {
+              session_key: "agent:o1:child-2",
+              source_session_key: "agent:o1:child-1",
+              trigger_run_id: "run-1",
+              previous_run_id: "run-1",
+              started: false,
+            },
+          },
+        },
+      },
+      sequence: 0,
+    };
+    const guard = createGovernanceGuard({
+      paths: {},
+      manifestFor: () => ({}),
+      _snapshotOverride: snapshot,
+    });
+    let thrown = null;
+    try {
+      guard.beforeRun(
+        {},
+        {
+          agentId: "o1",
+          sessionKey: "agent:o1:child-2",
+          runId: "run-2",
+          inputProvenance: {
+            kind: "not_inter_session",
+            sourceTool: "subagent_announce",
+            sourceSessionKey: "agent:o1:child-1",
+          },
+        },
+      );
+    } catch (error) {
+      thrown = error;
+    }
+    assert.ok(thrown, "the admission must be refused");
+    assert.equal(
+      thrown.message,
+      "LINEAGE_MISMATCH",
+      "the refusal still names the symptom",
+    );
+    assert.ok(
+      thrown.cause,
+      "the refusal must carry the original findSession failure as its cause",
+    );
+    assert.equal(
+      thrown.cause.message,
+      "EXECUTION_STATE_UNKNOWN",
+      "the cause is the failure the guard actually hit",
+    );
+  });
+});

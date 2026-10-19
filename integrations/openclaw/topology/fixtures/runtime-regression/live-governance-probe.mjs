@@ -22,7 +22,41 @@ import {
 } from "../../lib/native-patch.mjs";
 import { validateContract } from "../../lib/schema.mjs";
 
-const stateDir = "/home/hoang_vinh/.openclaw-zink";
+// F-195: this probe is a synthetic instrument, not a read-only one. It writes
+// its own fixtures into the state root it inspects, so it must never silently
+// default to the PRODUCTION root: a "PASS" derived from a precondition the
+// probe created itself says nothing about ingress, delivery or the live
+// ledger, and writing that "PASS" into the production history is a mutation
+// dressed as a probe.
+//
+// Two explicit gates, both before any write:
+//   1. the state root must be NAMED (env or argv) - there is no default;
+//   2. a target that IS the production root additionally needs an explicit
+//      acknowledgement, because that is the only case where the probe's own
+//      fixtures land in the live governance history.
+const PRODUCTION_STATE_DIR = "/home/hoang_vinh/.openclaw-zink";
+const PRODUCTION_WRITE_ACK = "--acknowledge-production-ledger-write";
+const stateDir = process.env.ZINK_PROBE_STATE_DIR ?? process.argv[2] ?? null;
+if (!stateDir) {
+  process.stdout.write(
+    `${JSON.stringify({ stage: "preflight", status: "FAIL", reason: "PROBE_STATE_DIR_NOT_NAMED" })}\n`,
+  );
+  process.exit(2);
+}
+const writesProductionLedger =
+  path.resolve(stateDir) === path.resolve(PRODUCTION_STATE_DIR);
+if (writesProductionLedger && !process.argv.includes(PRODUCTION_WRITE_ACK)) {
+  process.stdout.write(
+    `${JSON.stringify({ stage: "preflight", status: "FAIL", reason: "PRODUCTION_LEDGER_WRITE_NOT_ACKNOWLEDGED" })}\n`,
+  );
+  process.exit(2);
+}
+// Every PASS this probe prints states that its own fixture seeded the ledger,
+// so the record can never be read as evidence about a real ingress path.
+const PRECONDITION = {
+  ledger_precondition: "PROBE_WRITTEN",
+  ledger_target: writesProductionLedger ? "production" : "scratch",
+};
 const runtimeRoot = "/home/hoang_vinh/.local/lib/node_modules/openclaw";
 const executable = "/home/hoang_vinh/.local/bin/openclaw";
 const environment = {
@@ -148,7 +182,9 @@ try {
       "COMPLETE",
     );
     await checkTools(agentId, fixture.sessionKey);
-    process.stdout.write(`${JSON.stringify({ stage, status: "PASS" })}\n`);
+    process.stdout.write(
+      `${JSON.stringify({ stage, status: "PASS", ...PRECONDITION })}\n`,
+    );
     await delay(6000);
   }
   await delay(60000);
@@ -246,7 +282,7 @@ Never directly spawn any specialist. Use the frozen native fields and semantic p
     await checkTools(run.agent_id, run.child_session_key);
   }
   process.stdout.write(
-    `${JSON.stringify({ stage, status: "PASS", accepted_children: 6 })}\n`,
+    `${JSON.stringify({ stage, status: "PASS", accepted_children: 6, ...PRECONDITION })}\n`,
   );
 } catch (error) {
   // Never emit model output, RPC arguments, raw response or stderr. Preserve a
