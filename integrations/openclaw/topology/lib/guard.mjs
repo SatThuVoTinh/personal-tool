@@ -1656,7 +1656,13 @@ export function createGovernanceGuard({
 
       // 5. Zink Contract Schema Validation
       try {
-        validateContractSchema("tool-call", event.params);
+        // M12/T9 F-272: the budget is the one the module publishes, not the
+        // validator's old 64 KiB default.
+        validateContractSchema(
+          "tool-call",
+          event.params,
+          TOOL_CALL_ENVELOPE_MAX_BYTES,
+        );
       } catch {
         fail("SCHEMA_VALIDATION_FAILED");
       }
@@ -2029,7 +2035,14 @@ export function createGovernanceGuard({
 
       // 12. Post-Dispatch Result Validation & Correlation
       try {
-        validateContractSchema("tool-result", rawResult);
+        // M12/T9 F-272: the budget is the one the module publishes, not the
+        // validator's old 64 KiB default, which was an order of magnitude
+        // below what the published tool-output contracts allow.
+        validateContractSchema(
+          "tool-result",
+          rawResult,
+          TOOL_RESULT_ENVELOPE_MAX_BYTES,
+        );
       } catch {
         fail("SCHEMA_VALIDATION_FAILED");
       }

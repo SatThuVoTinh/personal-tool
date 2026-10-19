@@ -349,7 +349,28 @@ export function validateContract(name, value, maxBytes = 65536) {
   }
 }
 
-export function validateContractSchema(schemaName, value, maxBytes = 65536) {
+/**
+ * M12/T9 F-272: the envelope budgets, expressed ONCE.
+ *
+ * The validator used to carry a 64 KiB DEFAULT, and the only production call
+ * site used the default — while the published per-tool `$defs.output`
+ * contracts allow far more (zink-python alone allows 1 MiB of stdout and 1 MiB
+ * of stderr, and the n8n output bounds its synced-table list at about 131 KB).
+ * Two independently authored budgets therefore disagreed, and the SMALLER one
+ * was enforced at the seam that runs after the work has already happened: the
+ * tool succeeded, its side effect was committed, and the governed caller
+ * reported a schema failure.
+ *
+ * The budgets live here, in the module that enforces them, and every call
+ * site states which one it uses.
+ */
+export const TOOL_CALL_ENVELOPE_MAX_BYTES = 65536;
+export const TOOL_RESULT_ENVELOPE_MAX_BYTES = 4 * 1024 * 1024;
+
+export function validateContractSchema(schemaName, value, maxBytes) {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
+    invalid("A byte budget is required");
+  }
   const rootSchema = loadContractSchema(schemaName);
   if (value !== undefined) {
     const encoded = JSON.stringify(value);
