@@ -358,7 +358,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def search(request: SearchRequest) -> dict[str, object]:
         lease = await search_limiter.try_acquire()
         if lease is None:
-            raise HTTPException(status_code=429, detail={"code": "SEARCH_CAPACITY_EXCEEDED"})
+            raise HTTPException(
+                status_code=429,
+                detail={"code": "SEARCH_CAPACITY_EXCEEDED"},
+                headers={"Retry-After": str(SEARCH_CAPACITY_RETRY_AFTER_SECONDS)},
+            )
         try:
             if not database.available:
                 raise HTTPException(
@@ -388,7 +392,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     raise HTTPException(status_code=503, detail={"code": "ACTIVE_INDEX_UNAVAILABLE"})
                 try:
                     await lifecycle.require_identity(active_index)
-                    query_embedding = await model_probe.embed(active_index.embedding_model_name, [query])
+                    query_embedding = await model_probe.embed(
+                        active_index.embedding_model_name,
+                        [query],
+                        timeout=QUERY_EMBEDDING_TIMEOUT_SECONDS,
+                    )
                     # The model can be swapped while the embedding request is
                     # in flight.  Check the immutable index identity again
                     # before entering the repeatable-read retrieval snapshot.
@@ -415,6 +423,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         continue
                     raise HTTPException(status_code=503, detail={"code": "ACTIVE_INDEX_CHANGED"}) from error
                 reranked = request.rerank and app.state.reranker is not None
+                if not reranked and request.min_score is not None:
+                    # F-012 (R5-E02-03): `min_score` is a reranker-score
+                    # threshold. On the RRF path no reranker ran, so there is no
+                    # reranker score for it to compare against. The M11/T1-R1
+                    # fix kept the field but made it carry the fused RRF rank
+                    # score (order 1e-2), so the threshold was never enforced
+                    # and every number the caller was told was a "rerank score"
+                    # was a different quantity. A threshold that cannot be
+                    # enforced is refused instead of silently ignored.
+                    raise HTTPException(
+                        status_code=422, detail={"code": "INVALID_SEARCH_REQUEST"}
+                    )
                 if reranked:
                     # M10/T2-R21: the pool is MAX_RERANK_CANDIDATES, not the
                     # page size. `min(MAX_RERANK_CANDIDATES, request.limit)` was
@@ -470,7 +490,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             "dense_score": None if candidate.dense_distance is None else 1.0 - candidate.dense_distance,
                             "fts_score": candidate.fts_score,
                             "rrf_score": item.rrf_score,
-                            "rerank_score": raw_score,
+                            # F-012 (R5-E02-03): only a reranker produces a
+                            # rerank score. On the RRF path the field is null,
+                            # never a fused rank score wearing the name.
+                            "rerank_score": raw_score if reranked else None,
                             "source_type": candidate.source_type,
                             "citation": {
                                 "source_path": candidate.source_path,

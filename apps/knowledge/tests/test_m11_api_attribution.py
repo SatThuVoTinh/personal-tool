@@ -387,10 +387,27 @@ class ApiAttributionTests(unittest.IsolatedAsyncioTestCase):
             json={"query": "topic", "rerank": False, "min_score": 0.5},
         )
 
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(
+            response.json(), {"detail": {"code": "INVALID_SEARCH_REQUEST"}}
+        )
+
+    async def test_the_rrf_path_does_not_label_a_fused_score_as_a_rerank_score(
+        self,
+    ) -> None:
+        """F-012 (R5-E02-03): only a reranker produces a rerank score."""
+
+        self.app.state.database.get_active_index = AsyncMock(return_value=ACTIVE)
+        self.app.state.database.search_candidates = AsyncMock(
+            return_value=([candidate("a"), candidate("b")], [])
+        )
+
+        response = await self.request(
+            "POST", "/v1/search", json={"query": "topic", "rerank": False}
+        )
+
         self.assertEqual(response.status_code, 200)
         results = response.json()["results"]
-        # RRF scores are order 1e-2, so thresholding them with a reranker score
-        # used to empty every page. The field is still reported.
         self.assertEqual([item["segment_id"] for item in results], ["a", "b"])
         self.assertTrue(all(item["rerank_score"] < 0.5 for item in results))
 
