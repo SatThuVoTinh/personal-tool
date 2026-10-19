@@ -21,6 +21,8 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+
+import { skipWhenUnreachable } from "./helpers/historical-read.mjs";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 // This suite reads only committed source and git history; it never spawns
@@ -75,22 +77,26 @@ async function r5Extension() {
 // PROVENANCE — 1/1 before admission
 // ---------------------------------------------------------------------------
 
-test("R8 P1: the R5 entrypoint digest is reproduced from its source commit", async () => {
-  const r5 = await r5Extension();
-  assert.equal(
-    sha256(r5.entrypoint),
-    R5_OBSERVABILITY_BASELINE_SHA256,
-    "the committed R5 source must reproduce the digest R8 admits",
-  );
-  // M12/T2-R1: the live cross-check below this assertion used to require the
-  // installed entrypoint to still BE R5's build. Deployments after R8 moved it
-  // forward, so the equality went red on any host that can read the live tree
-  // while R8's admission — 0fb628e8 in both per-mode lists, proven by R8 0 —
-  // remains correct. R13 P2 owns the live half: it reads the same installed
-  // entrypoint and requires it to be the build the repository derives now or a
-  // digest admitted in both mode gates, which is the check that keeps
-  // --preflight and --apply agreeing.
-});
+test(
+  "R8 P1: the R5 entrypoint digest is reproduced from its source commit",
+  { skip: skipWhenUnreachable(REPO, R5_SOURCE_COMMIT) },
+  async () => {
+    const r5 = await r5Extension();
+    assert.equal(
+      sha256(r5.entrypoint),
+      R5_OBSERVABILITY_BASELINE_SHA256,
+      "the committed R5 source must reproduce the digest R8 admits",
+    );
+    // M12/T2-R1: the live cross-check below this assertion used to require the
+    // installed entrypoint to still BE R5's build. Deployments after R8 moved it
+    // forward, so the equality went red on any host that can read the live tree
+    // while R8's admission — 0fb628e8 in both per-mode lists, proven by R8 0 —
+    // remains correct. R13 P2 owns the live half: it reads the same installed
+    // entrypoint and requires it to be the build the repository derives now or a
+    // digest admitted in both mode gates, which is the check that keeps
+    // --preflight and --apply agreeing.
+  },
+);
 
 // ---------------------------------------------------------------------------
 // THE ALLOWLIST — exactly one addition, in BOTH per-mode lists
