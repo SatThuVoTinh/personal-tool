@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import {
   registerTools,
   loadToolContractSchemas,
@@ -378,5 +381,64 @@ describe("Lane B — tool ingress & contract authority", () => {
       ).content[0].text,
     );
     assert.notEqual(wrappedAllow.status, "DENIED");
+  });
+
+  it("F-144: a successful zink_excel run satisfies its own output contract", async () => {
+    // Measured pre-fix: the excel writer's own success envelope was rejected
+    // by the excel contract ? `status`/`tool`/`preview_*` are not declared
+    // there and `success` was never emitted ? so every successful workbook
+    // came back to the agent as INVALID_OUTPUT_SCHEMA while a failed tool
+    // passed the same gate.
+    const contracts = loadToolContractSchemas();
+    const excelContract = contracts.zink_excel;
+    assert.ok(excelContract?.rawSchema?.$defs?.output);
+    const { executeExcelOperation } =
+      await import("../integrations/openclaw/lib/excel-writer.mjs");
+    const dir = mkdtempSync(path.join(tmpdir(), "zink-f144-"));
+    try {
+      const result = executeExcelOperation(
+        {
+          operation: "generate",
+          file_path: "report.xlsx",
+          specification: {
+            sheets: [{ name: "S", columns: ["a"], rows: [["x"]] }],
+          },
+        },
+        dir,
+      );
+      assert.equal(result.status, "success");
+      const check = validateToolOutputEnvelope(
+        "zink_excel",
+        { content: [{ type: "text", text: JSON.stringify(result) }] },
+        excelContract,
+      );
+      assert.equal(
+        check.ok,
+        true,
+        `a successful excel run must not be INVALID_OUTPUT_SCHEMA: ${JSON.stringify(check.response ?? {})}`,
+      );
+
+      // The gate is not weakened: an output that really violates the contract
+      // is still blocked.
+      const blocked = validateToolOutputEnvelope(
+        "zink_excel",
+        {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ operation: "generate", bogus: true }),
+            },
+          ],
+        },
+        excelContract,
+      );
+      assert.equal(blocked.ok, false);
+      assert.equal(
+        JSON.parse(blocked.response.content[0].text).code,
+        "INVALID_OUTPUT_SCHEMA",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
