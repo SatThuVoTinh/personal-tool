@@ -385,7 +385,13 @@ class MarkdownVaultScanner:
         # the run still stops, but it now stops with the offending path named
         # instead of an unattributed INDEXING_UNEXPECTED_FAILURE.
         try:
-            raw_bytes = candidate.read_bytes()
+            # F-055 (R5-E15-05): the read comes from the VALIDATED candidate.
+            # The size bound above was measured on `resolved` while the read
+            # used `candidate` -- two path objects, one checked and one
+            # opened -- so the object that was bounded and the object that
+            # was read were not provably the same file. The read handle is
+            # now the validated one.
+            raw_bytes = resolved.read_bytes()
         except OSError:
             return None, [self._error(source_path, "SOURCE_READ_FAILED")]
 
