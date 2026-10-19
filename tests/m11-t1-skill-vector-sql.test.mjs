@@ -20,6 +20,9 @@ import {
   chunkSkillContent,
   toPostgresArrayLiteral,
   escapeSqlLiteral,
+  executePostgresQuery,
+  validatePostgresContainerName,
+  withServerSideTimeout,
   EXPECTED_DIMENSIONS,
   EXPECTED_MODEL_DIGEST,
   MAX_EMBEDDING_PAYLOAD_BYTES,
@@ -44,6 +47,66 @@ async function makeActiveSkill(root, namespace, capability, contentText) {
         at: "2026-10-01T01:00:00Z",
         actor: "owner",
         decision_ref: "PLAN:M11/T1-R1",
+      },
+    ],
+  };
+  await writeFile(path.join(dir, "SKILL.md"), contentText, "utf8");
+  await writeFile(
+    path.join(dir, "manifest.json"),
+    JSON.stringify(manifest, null, 2),
+    "utf8",
+  );
+  return sha;
+}
+
+/**
+ * A dollar-quoted block must open and close with the SAME tag, and the tag
+ * must not occur inside the block: PostgreSQL ends the string at the first
+ * matching tag, so a stray `$$` in untrusted text closed the block early and
+ * the statement was a syntax error.
+ */
+function assertWellFormedDollarQuote(sql, label) {
+  const opening = sql.match(/DO (\$[A-Za-z0-9_]*\$)/u);
+  assert.ok(opening, `${label} must open with a dollar-quote tag`);
+  const tag = opening[1];
+  assert.notEqual(
+    tag,
+    "$$",
+    `${label} must not use the anonymous tag: untrusted text can carry it`,
+  );
+  assert.equal(
+    sql.split(tag).length - 1,
+    2,
+    `${label} must open and close with ${tag} exactly once`,
+  );
+  assert.ok(
+    sql.includes(`END ${tag};`),
+    `${label} must close with the tag it opened with`,
+  );
+}
+
+async function makeRetiredSkill(root, namespace, capability, contentText) {
+  const dir = path.join(root, ...namespace, capability, "1.0.0");
+  await mkdir(dir, { recursive: true });
+  const sha = createHash("sha256").update(contentText, "utf8").digest("hex");
+  const manifest = {
+    schema_version: 1,
+    identity: { namespace, capability, version: "1.0.0" },
+    content: { path: "SKILL.md", sha256: sha },
+    provenance: { source_type: "research", references: [] },
+    lifecycle: [
+      { status: "CANDIDATE", at: "2026-10-01T00:00:00Z", actor: "excel" },
+      {
+        status: "ACTIVE",
+        at: "2026-10-01T01:00:00Z",
+        actor: "owner",
+        decision_ref: "PLAN:M11/T1-R1",
+      },
+      {
+        status: "DEPRECATED",
+        at: "2026-10-02T00:00:00Z",
+        actor: "owner",
+        decision_ref: "PLAN:M11/T1-R2",
       },
     ],
   };
@@ -150,6 +213,23 @@ test("M11-03: one atomic transaction per skill, READY set only after all segment
   assert.match(sql, /source_sha256/u);
 });
 
+/**
+ * The tombstone statement, identified by its ROLE and not by the text it
+ * happens to contain.
+ *
+ * The failure injection used to match the SQL source text
+ * (`sql.includes("DELETE FROM skills.catalog_index")`). That binding made the
+ * coverage of BOTH refusal paths depend on one table name: a rewording of the
+ * tombstone changed which statement the executor refused, and the tombstone
+ * refusal path (`VECTOR_TOMBSTONE_SYNC_FAILED`) was never exercised at all —
+ * the case named the tombstone and only ever proved the secondary write
+ * refusal. The role binding keeps the injection on the tombstone whatever the
+ * text becomes, and the two cases below cover the two paths separately.
+ */
+function isTombstoneStatement(sql) {
+  return /^\s*DELETE\b/iu.test(String(sql ?? ""));
+}
+
 test("M11-04: failure escalation — a failed failSql is surfaced, not swallowed", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "m11-fail-"));
   try {
@@ -159,11 +239,15 @@ test("M11-04: failure escalation — a failed failSql is surfaced, not swallowed
       "broken-skill",
       "# Broken\n\nBody.",
     );
+    const received = [];
     const report = await syncSkillsToVectorStore({
       skillsRoot: root,
       embedFn,
       dbExecutor: async (sql) => {
-        if (sql.includes("DELETE FROM skills.catalog_index")) return "";
+        received.push(sql);
+        // The tombstone is the only statement allowed to succeed, so the
+        // refusal lands on the secondary failure write.
+        if (isTombstoneStatement(sql)) return "";
         throw new Error("PSQL_REJECTED_SIMULATION");
       },
     });
@@ -173,6 +257,68 @@ test("M11-04: failure escalation — a failed failSql is surfaced, not swallowed
     assert.ok(
       report.skills[0].error.includes("PSQL_REJECTED_SIMULATION"),
       "the primary failure reason must remain visible",
+    );
+    // The exact SQL the failing executor received is asserted, so the refusal
+    // is provably the failure write and the tombstone is provably untouched.
+    const tombstones = received.filter(isTombstoneStatement);
+    assert.equal(
+      tombstones.length,
+      1,
+      "exactly one tombstone statement is issued",
+    );
+    assert.match(
+      tombstones[0],
+      /DELETE\s+FROM\s+skills\.catalog_index/iu,
+      `the surviving tombstone must still be the derived-index delete: ${tombstones[0]}`,
+    );
+    const refused = received.filter((sql) => !isTombstoneStatement(sql));
+    assert.ok(
+      refused.length >= 1,
+      "the failure write must have reached the executor and been refused",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("M11-04b: a refused tombstone is surfaced, not swallowed", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "m11-fail-tombstone-"));
+  try {
+    await makeActiveSkill(
+      root,
+      ["office"],
+      "broken-skill",
+      "# Broken\n\nBody.",
+    );
+    const received = [];
+    const report = await syncSkillsToVectorStore({
+      skillsRoot: root,
+      embedFn,
+      dbExecutor: async (sql) => {
+        received.push(sql);
+        if (isTombstoneStatement(sql)) {
+          throw new Error("PSQL_REJECTED_SIMULATION");
+        }
+        return "";
+      },
+    });
+    assert.equal(report.status, "FAILED");
+    assert.equal(report.error_code, "VECTOR_TOMBSTONE_SYNC_FAILED");
+    assert.equal(report.failed_count, 1);
+    assert.ok(
+      String(report.error ?? "").includes("PSQL_REJECTED_SIMULATION"),
+      "the tombstone refusal reason must remain visible",
+    );
+    const refused = received.filter(isTombstoneStatement);
+    assert.equal(
+      refused.length,
+      1,
+      "exactly one tombstone statement is issued",
+    );
+    assert.match(
+      refused[0],
+      /DELETE\s+FROM\s+skills\.catalog_index/iu,
+      `the refused statement must be the derived-index tombstone: ${refused[0]}`,
     );
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -419,7 +565,11 @@ test("R3-7: the failure statement refreshes both digests and clears the segments
     // One atomic block, the shape the READY path already uses: the id comes
     // back from the upsert and the segment delete runs against that id, so a
     // crash cannot leave a FAILED row with its vectors behind.
-    assert.ok(failSql.includes("DO $$") && failSql.includes("END $$;"));
+    // M12/T9-R1 F-019: the block now opens and closes with a NAMED
+    // dollar-quote tag, because the failure reason is untrusted text and can
+    // carry `$$`. The guarantee this case pins — one atomic block — is
+    // unchanged.
+    assertWellFormedDollarQuote(failSql, "the FAILED block");
     assert.match(failSql, /RETURNING id INTO v_skill_id;/u);
     const deleteAt = failSql.indexOf(
       "DELETE FROM skills.segments WHERE skill_id = v_skill_id;",

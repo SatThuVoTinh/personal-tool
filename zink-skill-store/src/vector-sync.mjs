@@ -237,10 +237,11 @@ export async function executePostgresQuery(sql, options = {}) {
     return options.dbExecutor(sql);
   }
 
-  const containerName =
+  const containerName = validatePostgresContainerName(
     process.env.POSTGRES_CONTAINER ||
-    options.postgresContainer ||
-    "personal-tool-postgres-1";
+      options.postgresContainer ||
+      "personal-tool-postgres-1",
+  );
   const dbTimeoutMs = options.dbTimeoutMs || 30000;
 
   return new Promise((resolve, reject) => {
@@ -322,7 +323,7 @@ export async function executePostgresQuery(sql, options = {}) {
       }
     });
 
-    child.stdin.write(sql);
+    child.stdin.write(withServerSideTimeout(sql, dbTimeoutMs));
     child.stdin.end();
   });
 }
@@ -400,11 +401,20 @@ export async function generateSkillEmbeddings(texts, options = {}) {
     }
     // Verify returned model identity (L03). M11/T1: exact equality — a
     // startsWith check accepted any "bge-m3-*" alias swap.
-    if (data.model && data.model !== modelName) {
+    if (data.model !== modelName) {
       throw new Error(
         `EMBEDDING_MODEL_MISMATCH: expected exactly ${modelName}, got ${data.model}`,
       );
     }
+    // The digest pin still fires when the endpoint volunteers the digest. It
+    // has no other reachable path: the live producer answers `model,
+    // embeddings, total_duration, load_duration, prompt_eval_count` and never
+    // `model_version`, and the pinned value does not match the artifact the
+    // endpoint has installed (measured 2026-10-19: the endpoint's own model
+    // list reports `sha256:7907646426070047a77226ac3e684fbbe8410524f7b4a74d
+    // 02837e43f2146bab` for `bge-m3:latest`). Which artifact is approved —
+    // and therefore where the digest comes from — is an owner decision, not
+    // something this module may decide on its own.
     if (
       data.model_version &&
       EXPECTED_MODEL_DIGEST &&
@@ -501,9 +511,30 @@ function buildSkillSyncTransaction({
     )
     .join(",\n            ");
 
+  // M12/T9-R1 F-019: the block below is dollar-quoted, and PostgreSQL ends a
+  // dollar-quoted string at the first matching tag. The skill body is
+  // untrusted text that reaches this statement, so a body containing `$$`
+  // used to truncate the statement before psql had finished reading it, and
+  // the whole skill's transaction was rejected as a syntax error. The tag is
+  // chosen so it cannot occur in ANY of the interpolated values.
+  const tag = dollarQuoteTag(
+    [
+      nsLit,
+      secLit,
+      subtopicLit,
+      capability,
+      version,
+      contentHash,
+      skillEmbeddingHash,
+      semanticMeta.domain,
+      semanticMeta.primary_topic,
+      valuesRows,
+    ].join("\n"),
+  );
+
   return `
       BEGIN;
-      DO $$
+      DO ${tag}
       DECLARE
         v_skill_id uuid;
       BEGIN
@@ -551,10 +582,42 @@ function buildSkillSyncTransaction({
         UPDATE skills.catalog_index
         SET sync_status = 'READY', synced_at = now()
         WHERE id = v_skill_id;
-      END $$;
+      END ${tag};
       COMMIT;
     `;
 }
+
+/**
+ * The derived-index tombstone key, in ONE place.
+ *
+ * The tombstone compares a row's identity against the set of skills the
+ * canonical catalog still holds, and the comparison is only sound when the
+ * JavaScript key and the SQL key are the SAME string. They are built from the
+ * same three components and the same separator, and the separator is `|`,
+ * which no identity component can contain (the catalog's identity grammar
+ * admits only lowercase kebab-case segments and SemVer versions).
+ *
+ * Exported so the guarantee is provable by execution rather than by reading
+ * two copies of the same template literal: a test can build the SQL side from
+ * `TOMBSTONE_KEY_SQL_EXPRESSION` and compare it with this function's answer
+ * for the same identity.
+ */
+export function tombstoneKey(identity) {
+  return `${identity.namespace.join("/")}|${identity.capability}|${identity.version}`;
+}
+
+/**
+ * The SQL side of `tombstoneKey`.
+ *
+ * `array_to_string(namespace, '/')` renders the namespace array the way
+ * `namespace.join("/")` renders it in JavaScript. `namespace::text` would NOT:
+ * it renders a `text[]` with braces and no separators (`{a,b}`), so the two
+ * sides could never be equal and the predicate would have retired every
+ * ACTIVE row. The separator literal appears exactly twice because the key has
+ * three components.
+ */
+export const TOMBSTONE_KEY_SQL_EXPRESSION =
+  "array_to_string(namespace, '/') || '|' || capability || '|' || version";
 
 /**
  * Synchronizes canonical Git-native ACTIVE skills into derived PostgreSQL vector tables.
@@ -572,16 +635,7 @@ export async function syncSkillsToVectorStore(options = {}) {
 
   // 1. Scan and validate canonical catalog (Phase 5, §8)
   const catalog = await scanCatalog(skillsRoot);
-  if (catalog.errors.length > 0) {
-    return {
-      status: "FAILED",
-      error_code: "CATALOG_INVALID",
-      details: catalog.errors,
-      sync_generation_id: syncGenerationId,
-      synced_count: 0,
-      failed_count: 0,
-    };
-  }
+  const catalogErrors = catalog.errors ?? [];
 
   // 2. Filter strictly for ACTIVE skills (BUG-04)
   const activeRecords = catalog.records.filter((record) => {
@@ -702,7 +756,7 @@ export async function syncSkillsToVectorStore(options = {}) {
     const tombstoneSql = `
       DELETE FROM skills.catalog_index
       WHERE status = 'ACTIVE'
-      AND (array_to_string(namespace, '/') || '|' || capability || '|' || version) NOT IN (
+      AND (${TOMBSTONE_KEY_SQL_EXPRESSION}) NOT IN (
         SELECT unnest(${escapeSqlLiteral(
           toPostgresArrayLiteral(activeKeys),
         )}::text[])
@@ -872,8 +926,17 @@ export async function syncSkillsToVectorStore(options = {}) {
           capability,
           tags: [],
         });
+        // M12/T9-R1 F-019: the failure reason is untrusted text (it carries an
+        // upstream error message) and the block below is dollar-quoted, so a
+        // reason containing `$$` truncated the statement before psql had
+        // finished reading it. The tag cannot occur in the reason, so the
+        // block closes exactly where it should and the reason reaches the
+        // failure row intact.
+        const failureTag = dollarQuoteTag(
+          [nsPgArray, capability, version, boundedReason].join("\n"),
+        );
         const failSql = `
-          DO $$
+          DO ${failureTag}
           DECLARE
             v_skill_id uuid;
           BEGIN
@@ -904,7 +967,7 @@ export async function syncSkillsToVectorStore(options = {}) {
             RETURNING id INTO v_skill_id;
 
             DELETE FROM skills.segments WHERE skill_id = v_skill_id;
-          END $$;
+          END ${failureTag};
         `;
         await executePostgresQuery(failSql, options);
       } catch {
