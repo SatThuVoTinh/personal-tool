@@ -1577,32 +1577,56 @@ class KnowledgeDatabase:
                     """,
                     UUID(run.index_id), source_id, UUID(build_id),
                 )
+                # F-257 (R7-D10A-05): the markdown sibling publishes a whole
+                # document through ONE prepared statement. The PDF path used
+                # to issue one INSERT per segment, so the round trips scaled
+                # with the segment count and consumed the command timeout of
+                # the enclosing transaction, which aborted the publish while
+                # the READY build and its extracted text stayed on disk.
+                segment_rows: list[tuple[Any, ...]] = []
                 for segment, embedding in zip(segments, embeddings, strict=True):
                     vector = "[" + ",".join(format(value, ".17g") for value in embedding) + "]"
-                    await connection.execute(
-                        """
-                        INSERT INTO knowledge.segments (
-                          id, index_id, source_id, segment_type, chunk_ordinal, source_path,
-                          title, primary_topic, canonical_topics, tags, heading_path,
-                          heading_text, text, page_start, page_end, bbox, embedding,
-                          search_vector, indexed_by_run_id
-                        ) VALUES (
-                          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-                          $14, $15, $16, $17::vector,
-                          setweight(to_tsvector('simple', $7), 'A') ||
-                          setweight(to_tsvector('simple', array_to_string($9::text[], ' ')), 'A') ||
-                          setweight(to_tsvector('simple', $12), 'B') ||
-                          setweight(to_tsvector('simple', $13), 'D'),
-                          $18
+                    segment_rows.append(
+                        (
+                            uuid4(),
+                            UUID(run.index_id),
+                            source_id,
+                            segment.segment_type,
+                            segment.chunk_ordinal,
+                            source_path,
+                            title,
+                            canonical_topics[0],
+                            list(canonical_topics),
+                            list(tags),
+                            [title],
+                            title,
+                            segment.content,
+                            segment.page_start,
+                            segment.page_end,
+                            list(segment.bbox) if segment.bbox is not None else None,
+                            vector,
+                            UUID(run.id),
                         )
-                        """,
-                        uuid4(), UUID(run.index_id), source_id, segment.segment_type,
-                        segment.chunk_ordinal, source_path, title, canonical_topics[0],
-                        list(canonical_topics), list(tags), [title], title, segment.content,
-                        segment.page_start, segment.page_end,
-                        list(segment.bbox) if segment.bbox is not None else None,
-                        vector, UUID(run.id),
                     )
+                await connection.executemany(
+                    """
+                    INSERT INTO knowledge.segments (
+                      id, index_id, source_id, segment_type, chunk_ordinal, source_path,
+                      title, primary_topic, canonical_topics, tags, heading_path,
+                      heading_text, text, page_start, page_end, bbox, embedding,
+                      search_vector, indexed_by_run_id
+                    ) VALUES (
+                      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+                      $14, $15, $16, $17::vector,
+                      setweight(to_tsvector('simple', $7), 'A') ||
+                      setweight(to_tsvector('simple', array_to_string($9::text[], ' ')), 'A') ||
+                      setweight(to_tsvector('simple', $12), 'B') ||
+                      setweight(to_tsvector('simple', $13), 'D'),
+                      $18
+                    )
+                    """,
+                    segment_rows,
+                )
 
     async def complete_incremental(
         self,
