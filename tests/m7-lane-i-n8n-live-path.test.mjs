@@ -12,6 +12,8 @@ import {
   resolveN8nInvocation,
   bindInvocationApproval,
   whenGovernanceDependenciesReady,
+  computeGovernanceReadiness,
+  resolveSharedGovernanceModulePath,
 } from "../integrations/openclaw/topology/lib/guard.mjs";
 import {
   ensureLedger,
@@ -37,6 +39,26 @@ const nextMessageId = () => String(snowflake++);
 
 function fixture() {
   return mkdtempSync(path.join(os.tmpdir(), "lane-n8n-"));
+}
+
+/**
+ * M12/T9 F-320: the native gate hands the host ONE operator-facing sentence
+ * (`POLICY_REFUSAL_TEXT`) for every refusal, and sends the canonical reason
+ * code to the diagnostic channel. A case that only asserts the sentence
+ * therefore proves that SOMETHING refused the call, never WHICH rule fired, so
+ * this helper captures the diagnostic channel for the assertion that names the
+ * rule the case is titled after.
+ */
+async function withDiagnostics(fn) {
+  const original = console.error;
+  const lines = [];
+  console.error = (...args) => lines.push(args.join(" "));
+  try {
+    await fn();
+  } finally {
+    console.error = original;
+  }
+  return lines.join("\n");
 }
 
 function briefNode(agentId) {
