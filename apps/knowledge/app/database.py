@@ -231,11 +231,26 @@ class KnowledgeDatabase:
         self._pool: asyncpg.Pool | None = None
         self._owner_connection: asyncpg.Connection | None = None
         self._startup_owner_connection: asyncpg.Connection | None = None
+        self._reconnect_task: asyncio.Task[None] | None = None
+        self._recovery_callback: Callable[[], Awaitable[None]] | None = None
         self.startup_error_code: str | None = None
 
     @property
     def available(self) -> bool:
         return self._pool is not None
+
+    def set_recovery_callback(
+        self, callback: Callable[[], Awaitable[None]] | None
+    ) -> None:
+        """Register the recovery the process must run once the database returns.
+
+        F-164 (R5-E01-04): the interrupted-run recovery lived in the
+        application's lifespan, so a boot that failed before it ran skipped
+        the repair for the life of the process. The database now calls this
+        callback when a re-attempted connection succeeds.
+        """
+
+        self._recovery_callback = callback
 
     async def start(self) -> None:
         try:
@@ -286,11 +301,40 @@ class KnowledgeDatabase:
             await self._abort_startup()
         except Exception:
             self.startup_error_code = "DATABASE_UNAVAILABLE"
-            if self._startup_owner_connection is not None:
-                connection = self._startup_owner_connection
-                self._startup_owner_connection = None
-                self.unbind_owner_connection(connection)
-                await self.release_advisory_lock(connection, self._advisory_lock_key)
+            await self._abort_startup()
+            # F-164 (R5-E01-04): the failure used to be a sticky, process
+            # lifetime flag: the pool was nulled, nothing reopened it, and
+            # the interrupted-run recovery that repairs the state the
+            # operator most needs was skipped for the life of the process.
+            # The process now re-attempts the connection and runs the
+            # recovery as soon as the database answers.
+            self._start_reconnect_loop()
+
+    async def _abort_startup(self) -> None:
+        if self._startup_owner_connection is not None:
+            connection = self._startup_owner_connection
+            self._startup_owner_connection = None
+            self.unbind_owner_connection(connection)
+            await self.release_advisory_lock(connection, self._advisory_lock_key)
+        if self._pool is not None:
+            await self._pool.close()
+            self._pool = None
+
+    def _start_reconnect_loop(self) -> None:
+        if self._reconnect_task is not None:
+            return
+        try:
+            self._reconnect_task = asyncio.get_running_loop().create_task(
+                self._reconnect_loop()
+            )
+        except RuntimeError:
+            # No running loop: the caller drives `start()` outside the event
+            # loop, so there is nothing to re-attempt from.
+            self._reconnect_task = None
+
+    async def _reconnect_loop(self) -> None:
+        while True:
+            await asyncio.sleep(RECONNECT_INTERVAL_SECONDS)
             if self._pool is not None:
                 return
             try:
