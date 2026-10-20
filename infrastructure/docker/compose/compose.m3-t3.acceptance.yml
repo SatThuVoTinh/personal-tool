@@ -6,6 +6,11 @@ services:
         protocol: tcp
 
   knowledge:
+    environment:
+      # F-323 (R7-E5-04): the acceptance stacks pin the model their vector
+      # dimensions were designed for, so two byte-identical overlays cannot
+      # resolve two different models and the dimension gate stays meaningful.
+      KNOWLEDGE_EMBEDDING_MODEL: bge-m3:latest
     volumes:
       - type: bind
         source: ${KNOWLEDGE_ACCEPTANCE_VAULT_ROOT}
