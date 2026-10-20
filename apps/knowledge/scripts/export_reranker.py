@@ -128,6 +128,37 @@ def assert_dynamic_graph_contract(
     return evidence
 
 
+def measured_graph_contract(
+    session: ort.InferenceSession, evidence: list[dict[str, int | str]]
+) -> dict[str, object]:
+    """The graph contract, measured from the exported session.
+
+    F-309 (R7-E1-04): the contract used to be typed into the manifest, and
+    the runtime compared that manifest against the same literals, so the
+    guard could only ever agree with the file it trusted. Every value here
+    is measured: the axes from the exported input's rank, the batch and
+    sequence ceilings from the probe that was actually run, and the
+    one-logit-per-pair flag from the exported output's rank.
+    """
+
+    inputs = session.get_inputs()
+    outputs = session.get_outputs()
+    ranks = {len(item.shape) for item in inputs}
+    if len(ranks) != 1 or len(outputs) != 1:
+        raise RuntimeError("ONNX_GRAPH_CONTRACT_UNMEASURED")
+    rank = ranks.pop()
+    sequence_axis = rank - 1
+    return {
+        "batch_axis": sequence_axis - 1,
+        "sequence_axis": sequence_axis,
+        "max_batch_size": max(int(entry["batch_size"]) for entry in evidence),
+        "max_sequence_length": max(
+            int(entry["sequence_length"]) for entry in evidence
+        ),
+        "one_logit_per_pair": len(outputs[0].shape) == 1,
+    }
+
+
 def assert_fidelity(
     model, tokenizer, sessions: tuple[ort.InferenceSession, ...]
 ) -> list[dict[str, object]]:
@@ -209,14 +240,26 @@ def main() -> None:
     graph_files.update(external_data_files(int8))
     files = {path.name: digest(path) for path in sorted(graph_files, key=str)}
     files["tokenizer.json"] = ARTIFACT_SHA256_EXPECTED
-    runtime_paths = {int8, *external_data_files(int8), artifacts / "tokenizer.json"}
+    # F-309 (R7-E1-04): the fidelity evidence is part of the shipped artifact
+    # set now, and the manifest pins its digest, so the runtime can re-verify
+    # it at load. It used to be written by this step and then dropped: it was
+    # not in the runtime file set, the manifest had no member for it, and
+    # nothing downstream could re-verify the measurement it records.
+    files[fidelity_path.name] = digest(fidelity_path)
+    runtime_paths = {
+        int8,
+        *external_data_files(int8),
+        artifacts / "tokenizer.json",
+        fidelity_path,
+    }
     runtime_files = {path.name: files[path.name] for path in runtime_paths}
+    graph_contract = measured_graph_contract(session, graph_evidence)
     runtime_artifacts = Path("/app/runtime-artifacts")
     runtime_artifacts.mkdir(exist_ok=True)
     for source_path in runtime_paths:
         shutil.copy2(source_path, runtime_artifacts / source_path.name)
     (runtime_artifacts / "reranker-manifest.json").write_text(
-        json.dumps({"model_name": RERANKER_MODEL_NAME, "revision": RERANKER_REVISION, "source_model_sha256": SOURCE_MODEL_SHA256, "tokenizer_sha256": ARTIFACT_SHA256_EXPECTED, "files": files, "runtime_files": runtime_files, "inputs": inputs, "outputs": outputs, "graph_contract": {"batch_axis": 0, "sequence_axis": 1, "max_batch_size": 20, "max_sequence_length": 1024, "one_logit_per_pair": True}, "exporter": {"torch": torch.__version__, "transformers": __import__("transformers").__version__, "opset": 17, "dynamo": False}, "quantizer": {"onnxruntime": ort.__version__, "kind": "dynamic-int8", "weight_type": "QInt8", "per_channel": False, "reduce_range": True}, "fidelity_evidence_sha256": digest(fidelity_path)}, sort_keys=True),
+        json.dumps({"model_name": RERANKER_MODEL_NAME, "revision": RERANKER_REVISION, "source_model_sha256": SOURCE_MODEL_SHA256, "tokenizer_sha256": ARTIFACT_SHA256_EXPECTED, "files": files, "runtime_files": runtime_files, "inputs": inputs, "outputs": outputs, "graph_contract": graph_contract, "exporter": {"torch": torch.__version__, "transformers": __import__("transformers").__version__, "opset": 17, "dynamo": False}, "quantizer": {"onnxruntime": ort.__version__, "kind": "dynamic-int8", "weight_type": "QInt8", "per_channel": False, "reduce_range": True}, "fidelity_evidence_sha256": files[fidelity_path.name]}, sort_keys=True),
         encoding="utf-8",
     )
 

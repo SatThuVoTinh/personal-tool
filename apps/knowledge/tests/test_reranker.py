@@ -108,9 +108,14 @@ class RerankerConstructorTests(unittest.TestCase):
         model.write_bytes(b"not-a-real-onnx-graph")
         tokenizer = root / "tokenizer.json"
         tokenizer.write_bytes(b"{}")
+        # F-309 (R7-E1-04): the fidelity evidence is part of the shipped file
+        # set, so the fixture ships it too.
+        fidelity = root / "reranker-fidelity.json"
+        fidelity.write_bytes(b"{}")
         digests = {
             "model.int8.onnx": hashlib.sha256(model.read_bytes()).hexdigest(),
             "tokenizer.json": hashlib.sha256(tokenizer.read_bytes()).hexdigest(),
+            "reranker-fidelity.json": hashlib.sha256(fidelity.read_bytes()).hexdigest(),
         }
         manifest = {
             "model_name": RERANKER_MODEL_NAME,
@@ -122,6 +127,8 @@ class RerankerConstructorTests(unittest.TestCase):
             "inputs": [],
             "outputs": [],
             "graph_contract": {},
+            # F-309 (R7-E1-04): the fidelity evidence is shipped and pinned.
+            "fidelity_evidence_sha256": digests["reranker-fidelity.json"],
         }
         manifest_path = root / "manifest.json"
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
@@ -186,6 +193,7 @@ class RerankerConstructorTests(unittest.TestCase):
 class RerankerTests(unittest.IsolatedAsyncioTestCase):
     def test_manifest_provenance_is_exact_and_paths_cannot_escape(self) -> None:
         artifact_hash = "0" * 64
+        fidelity_hash = "1" * 64
         manifest = ArtifactManifest(
             model_name=RERANKER_MODEL_NAME,
             revision=RERANKER_REVISION,
@@ -194,14 +202,18 @@ class RerankerTests(unittest.IsolatedAsyncioTestCase):
             files={
                 "model.int8.onnx": artifact_hash,
                 "tokenizer.json": ARTIFACT_SHA256_EXPECTED,
+                "reranker-fidelity.json": fidelity_hash,
             },
             runtime_files={
                 "model.int8.onnx": artifact_hash,
                 "tokenizer.json": ARTIFACT_SHA256_EXPECTED,
+                "reranker-fidelity.json": fidelity_hash,
             },
             inputs=(),
             outputs=(),
             graph_contract={},
+            # F-309 (R7-E1-04): the fidelity evidence is shipped and pinned.
+            fidelity_evidence_sha256=fidelity_hash,
         )
         reranker = object.__new__(OnnxReranker)
         reranker._model_path = Path("model.int8.onnx")
