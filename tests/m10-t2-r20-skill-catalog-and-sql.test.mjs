@@ -4,12 +4,10 @@
 // Both defects were reproduced against the pre-fix code by execution.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 import {
   syncSkillsToVectorStore,
@@ -18,25 +16,8 @@ import {
   EXPECTED_DIMENSIONS,
 } from "../zink-skill-store/src/vector-sync.mjs";
 import { scanCatalog } from "../zink-skill-store/src/catalog.mjs";
-
-const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const readSource = (rel) => readFileSync(path.join(REPO, rel), "utf8");
-
-const vectorSyncSrc = readSource("zink-skill-store/src/vector-sync.mjs");
-const adapterSrc = readSource(
-  "zink-tools/adapters/skill-store/skill-adapter.mjs",
-);
-
-const codeOf = (src) =>
-  src
-    .split("\n")
-    .filter(
-      (l) =>
-        !l.trim().startsWith("//") &&
-        !l.trim().startsWith("*") &&
-        !l.trim().startsWith("/*"),
-    )
-    .join("\n");
+import { SkillAdapter } from "../zink-tools/adapters/skill-store/skill-adapter.mjs";
+import { isArtifactLogicalPathValid } from "../zink-tools/common/path-safety.mjs";
 
 /**
  * Writes one canonical skill under `root` and returns nothing. The MANIFEST
@@ -142,60 +123,133 @@ function evaluateTombstoneSql(expression, identity) {
     .join("");
 }
 
-test("R20-01: discovery fails closed when the catalog is invalid", () => {
-  // Proven pre-fix: scanCatalog returns records: [] whenever errors is non-empty
-  // (catalog.mjs:732). One tampered skill therefore made
-  // `catalog.records.length > 0` false, and the adapter fell through to a disk
-  // walk that re-read the same files with NO digest or manifest validation and
-  // still answered governed_status: "SUCCESS", listing the tampered skill as
-  // discoverable.
+test("R20-01: discovery fails closed when the catalog is invalid", async () => {
+  // Proven pre-fix: scanCatalog returned records: [] whenever errors was
+  // non-empty (catalog.mjs:732). One tampered skill therefore made
+  // `catalog.records.length > 0` false, and the adapter fell through to a
+  // disk walk that re-read the same files with NO digest or manifest
+  // validation and still answered governed_status: "SUCCESS", listing the
+  // tampered skill as discoverable.
   //
-  // The other two consumers of the same scan already failed closed
-  // (catalog.mjs:738 getActiveSkill, vector-sync.mjs:358). Discovery must too.
-  const code = codeOf(adapterSrc);
-  assert.match(
-    code,
-    /catalogErrors\.length > 0/u,
-    "discovery must inspect catalog.errors, not infer validity from record count",
-  );
-  assert.match(
-    code,
-    /error_code:\s*"SKILL_CATALOG_INVALID"/u,
-    "an invalid catalog must produce an explicit error code",
-  );
-  assert.match(
-    code,
-    /governed_status:\s*"FAILED"/u,
-    "an invalid catalog must not report SUCCESS",
-  );
-  // M11/T1-R1 (2.1): the permissive disk walk is deleted outright, not just
-  // gated. Read/apply now resolve only through scanCatalog, so discovery has
-  // no second, unvalidated path to fall through to.
-  assert.equal(
-    code.includes("function walkActive"),
-    false,
-    "the permissive walk must no longer exist at all",
-  );
+  // F-240: the guarantee used to be read out of the adapter's SOURCE TEXT
+  // with regular expressions, so a rewording of the shipped code could break
+  // the case without changing the behaviour, and a behavioural change could
+  // keep the text and lose the guarantee. It is now proven by execution: the
+  // adapter's own discover action is called over a store whose bytes do not
+  // match their manifest digest, and the ANSWER must fail closed.
+  const root = await mkdtemp(path.join(os.tmpdir(), "r20-discover-"));
+  try {
+    const dir = path.join(
+      root,
+      "supply-chain",
+      "inventory",
+      "safety-stock",
+      "1.0.0",
+    );
+    await mkdir(dir, { recursive: true });
+    // The bytes on disk are NOT the bytes the manifest approved.
+    const onDisk = "# Tampered\n\nBytes that were never approved.\n";
+    const approved = "# Tampered\n\nBytes that were approved.\n";
+    await writeFile(path.join(dir, "SKILL.md"), onDisk, "utf8");
+    await writeFile(
+      path.join(dir, "manifest.json"),
+      JSON.stringify(
+        {
+          schema_version: 1,
+          identity: {
+            namespace: ["supply-chain", "inventory"],
+            capability: "safety-stock",
+            version: "1.0.0",
+          },
+          content: {
+            path: "SKILL.md",
+            sha256: createHash("sha256").update(approved, "utf8").digest("hex"),
+          },
+          provenance: { source_type: "research", references: [] },
+          lifecycle: [
+            {
+              status: "CANDIDATE",
+              at: "2026-10-01T00:00:00Z",
+              actor: "excel",
+            },
+            {
+              status: "ACTIVE",
+              at: "2026-10-01T01:00:00Z",
+              actor: "owner",
+              decision_ref: "PLAN:M11/T1-R1",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    // The catalog refuses the drifted bytes in the first place.
+    const catalog = await scanCatalog(root);
+    assert.ok(
+      catalog.errors.some((error) => error.code === "CONTENT_DIGEST_MISMATCH"),
+      `the catalog must refuse the drifted bytes: ${JSON.stringify(catalog.errors)}`,
+    );
+
+    // And discovery must fail closed over that store, never listing the
+    // tampered skill.
+    const adapter = new SkillAdapter(root, { skillsRoot: root });
+    const discovered = await adapter.querySkillStore({ action: "discover" });
+    assert.equal(
+      discovered.governed_status,
+      "FAILED",
+      "an invalid catalog must not report SUCCESS",
+    );
+    assert.equal(
+      discovered.error_code,
+      "SKILL_CATALOG_INVALID",
+      "an invalid catalog must produce an explicit error code",
+    );
+    assert.deepEqual(
+      discovered.skills,
+      [],
+      "no skill may be listed out of an invalid catalog",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
-test("R20-02: the tombstone key carries no NUL separator", () => {
-  // PostgreSQL `text` cannot store a NUL byte, so the statement aborted and the
-  // catch turned every sync into VECTOR_TOMBSTONE_SYNC_FAILED before ingestion
-  // was reached. The skill identity rules also forbid control characters in a
-  // skill path (path-safety.mjs rejects /[\0\x01-\x1F\x7F]/).
-  const code = codeOf(vectorSyncSrc);
+test("R20-02: the issued tombstone statement carries no NUL separator", async () => {
+  // PostgreSQL `text` cannot store a NUL byte, so the statement aborted and
+  // the catch turned every sync into VECTOR_TOMBSTONE_SYNC_FAILED before
+  // ingestion was reached. The skill identity rules also forbid control
+  // characters in a skill path (path-safety.mjs rejects /[\0\x01-\x1F\x7F]/).
+  //
+  // F-240: the pre-fix case scanned the module's SOURCE TEXT for the escape,
+  // so it could not fail for any production change that mattered — only for a
+  // rewording of the file. The statement the sync really issues is the
+  // evidence now: it must carry the production key and no NUL byte at all.
+  const { statements, identity } = await captureSyncStatements(
+    ["office", "ops"],
+    "s",
+  );
+  const tombstone = statements.find((s) =>
+    s.includes("DELETE FROM skills.catalog_index"),
+  );
+  assert.ok(tombstone, "the sync must issue a tombstone statement");
   assert.equal(
-    code.includes("\\u0000"),
+    tombstone.includes("\u0000"),
     false,
-    "no \\u0000 escape may survive in code",
+    "the issued statement must carry no NUL escape",
   );
   assert.equal(
-    code.includes(String.fromCharCode(0)),
+    tombstone.includes(String.fromCharCode(0)),
     false,
-    "no raw NUL byte may survive in code",
+    "the issued statement must carry no raw NUL byte",
+  );
+  assert.ok(
+    tombstone.includes(tombstoneKey(identity)),
+    `the statement must carry the production key: ${tombstone}`,
   );
 });
-
 test("R20-03: the JS key and the SQL predicate build the SAME string", async () => {
   // Pre-fix the sides were structurally incomparable even ignoring the NUL:
   // the left side was `namespace::text || capability || version`, where
@@ -251,23 +305,31 @@ test("R20-03: the JS key and the SQL predicate build the SAME string", async () 
 test("R20-04: the separator cannot occur in any identity component", () => {
   // The fix is only sound if `|` is unambiguous. Every component is a skill
   // path segment restricted to /^[a-zA-Z0-9_.-]+$/u, so it cannot contain `|`.
-  const safety = readSource("zink-tools/common/path-safety.mjs");
-  assert.match(
-    safety,
-    /const SAFE_SEGMENT_PATTERN = \/\^\[a-zA-Z0-9_\.-\]\+\$\/u/u,
-    "path safety must still restrict skill path segments",
+  //
+  // F-240: the pre-fix case asserted that a charset string DEFINED INSIDE the
+  // test did not contain the separator - a statement about the test, not about
+  // the store - and read the store's own grammar out of its SOURCE TEXT, so a
+  // rewording of the shipped validator could break the case without changing
+  // the behaviour. The grammar is now DRIVEN: the shipped path validator is
+  // called with a segment carrying the separator, with a legal one and with a
+  // control character, so the case can only fail if the shipped validator
+  // stops refusing them.
+  assert.equal(
+    isArtifactLogicalPathValid("office/safe|stock/1.0.0"),
+    false,
+    "the shipped path validator must refuse a segment carrying the separator",
   );
-  assert.ok(
-    safety.includes("/[\\0\\x01-\\x1F\\x7F]/u"),
-    "path safety must still reject control characters",
+  assert.equal(
+    isArtifactLogicalPathValid("office/safe-stock/1.0.0"),
+    true,
+    "the shipped path validator must still accept a legal segment",
   );
-  // And the separator itself is outside the allowed set.
-  assert.ok(
-    !/[a-zA-Z0-9_.-]/.test("|"),
-    "the separator is outside the segment charset",
+  assert.equal(
+    isArtifactLogicalPathValid("office/safe\u0000stock/1.0.0"),
+    false,
+    "the shipped path validator must refuse a control character",
   );
 });
-
 test("R20-05: the two sides render identically for a real identity", () => {
   // F-240: the pre-fix case compared two template literals written INSIDE the
   // test — `jsKey` and `sqlKey` were the same expression — so it could not
