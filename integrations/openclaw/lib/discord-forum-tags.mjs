@@ -500,6 +500,15 @@ export function resultStatusTag({ decision, outcomeStatus }) {
     outcomeStatus === undefined
   )
     return { category: "STATUS", value: "SUCCESS" };
+  // M12/T9 F-005: a FAILED outcome is a result the owner accepted, and this
+  // forum's own vocabulary has a status for it. It used to fall through to
+  // `null`, so an accepted-but-failed result opened no #results thread at all:
+  // the governed post was cancelled by the tag derivation, not by any verdict.
+  if (outcomeStatus === "FAILED")
+    return { category: "STATUS", value: "FAILED" };
+  // BLOCKED and CANCELLED stay unmapped on purpose: they are not outcomes the
+  // owner accepted, and forcing them into FAILED would report a verdict that
+  // was never made. See the owner decision carried by F-005.
   return null;
 }
 
@@ -533,6 +542,16 @@ const RESULT_TYPE_BY_TARGET = Object.freeze({
   python: "ANALYSIS",
   "power-bi": "REPORT",
   powerbi: "REPORT",
+  // M12/T9 F-005: a coordinator's own result names no software target, so the
+  // TYPE derivation had no entry for it and a coordinator-only DAG - the DAG
+  // the live spawn gate commits - opened no #results thread at all. What a
+  // coordinator delivers is a written result for the owner, which is a REPORT.
+  //
+  // The caller must try a SPECIALIST target before a coordinator one, so a
+  // mixed DAG is typed by the software that produced the deliverable.
+  main: "REPORT",
+  o1: "REPORT",
+  o2: "REPORT",
 });
 
 export function resultTypeTag({ artifactPaths = [], target, declaredType }) {

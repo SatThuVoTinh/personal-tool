@@ -302,7 +302,10 @@ export function resultTagSelectionsFor(task, artifactPaths = []) {
     .map((node) => node?.agent_id)
     .filter((agentId) => typeof agentId === "string" && agentId);
   let type = null;
-  for (const target of [undefined, ...nodeAgents]) {
+  // F-005: the SPECIALIST targets are tried first, so a mixed DAG stays
+  // typed by the software that produced the deliverable. The coordinator
+  // (`undefined`) is the fallback, not the first guess.
+  for (const target of [...nodeAgents, undefined]) {
     type = resultTypeTag({ artifactPaths, target });
     if (type) break;
   }
