@@ -17,10 +17,18 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const REPO_ROOT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+);
 
 const STANDARD_DIRECTORIES = new Set([".git", ".tmp", "node_modules"]);
-const OWNER_MAP = path.join(REPO_ROOT, "docs", "architecture", "repository-topology.md");
+const OWNER_MAP = path.join(
+  REPO_ROOT,
+  "docs",
+  "architecture",
+  "repository-topology.md",
+);
 
 function trackedTopLevel() {
   return execFileSync("git", ["ls-files"], { cwd: REPO_ROOT, encoding: "utf8" })
@@ -56,7 +64,9 @@ test("F-372: no top-level directory on disk is untracked, unowned and unignored"
     if (STANDARD_DIRECTORIES.has(name)) return false;
     if (tracked.has(name)) return false;
     if (ignored.has(name)) return false;
-    return !ownerMap.includes(`\`${name}/\``) && !ownerMap.includes(`\`${name}\``);
+    return (
+      !ownerMap.includes(`\`${name}/\``) && !ownerMap.includes(`\`${name}\``)
+    );
   });
 
   assert.deepEqual(

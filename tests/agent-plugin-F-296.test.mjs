@@ -18,10 +18,13 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const REPO_ROOT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+);
 
-
-const load = async (rel) => import(pathToFileURL(path.join(REPO_ROOT, rel)).href);
+const load = async (rel) =>
+  import(pathToFileURL(path.join(REPO_ROOT, rel)).href);
 
 // The recorder must be installed BEFORE the plugin is imported: the plugin's
 // `import { openSync } from "node:fs"` captures the value at instantiation.
@@ -156,5 +159,3 @@ test("F-296: the directory fsync is not the file's own fsync", async () => {
     "the file handle was already durable; only the directory entry was not",
   );
 });
-
-

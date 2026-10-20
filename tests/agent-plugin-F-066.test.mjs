@@ -16,27 +16,31 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const REPO_ROOT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+);
 
-
-const load = async (rel) => import(pathToFileURL(path.join(REPO_ROOT, rel)).href);
+const load = async (rel) =>
+  import(pathToFileURL(path.join(REPO_ROOT, rel)).href);
 
 const plugin = await load(
   "integrations/openclaw/plugins/zink-governance/index.mjs",
 );
-const { QueueManager } = await load("integrations/openclaw/lib/queue-manager.mjs");
-const {
-  ensureLedger,
-  ledgerPaths,
-  readSnapshot,
-  recordWorkflowEvent,
-} = await load("integrations/openclaw/topology/lib/ledger.mjs");
+const { QueueManager } = await load(
+  "integrations/openclaw/lib/queue-manager.mjs",
+);
+const { ensureLedger, ledgerPaths, readSnapshot, recordWorkflowEvent } =
+  await load("integrations/openclaw/topology/lib/ledger.mjs");
 const { deriveTaskId, canonicalHash } = await load(
   "integrations/openclaw/topology/lib/canonical.mjs",
 );
 
 const SOURCE = readFileSync(
-  path.join(REPO_ROOT, "integrations/openclaw/plugins/zink-governance/index.mjs"),
+  path.join(
+    REPO_ROOT,
+    "integrations/openclaw/plugins/zink-governance/index.mjs",
+  ),
   "utf8",
 );
 
@@ -180,7 +184,9 @@ test("F-066: the chain moves the queue to RESULT_PENDING_REVIEW and produces the
     const artifact = path.join(root, "result.csv");
     writeFileSync(artifact, "date,revenue\n2026-01-01,10\n", "utf8");
 
-    const queue = new QueueManager({ storagePath: path.join(root, "queue.json") });
+    const queue = new QueueManager({
+      storagePath: path.join(root, "queue.json"),
+    });
     queue.enqueueTask({ taskId, primaryCoordinator: "o1" });
     const claim = queue.claimTaskById({ taskId, agentId: "o1" });
 
@@ -225,11 +231,3 @@ test("F-066: the artifact reader takes the delivered set and invents nothing", (
   assert.deepEqual(plugin.readExecutionArtifacts({}), []);
   assert.deepEqual(plugin.readExecutionArtifacts(null), []);
 });
-
-
-
-
-
-
-
-

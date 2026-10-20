@@ -31,7 +31,11 @@ test("F-305: the table builder sanitises the headers, the cells and the notes", 
     rows: [[`cell${TOKEN}`]],
     notes: `note${TOKEN}`,
   });
-  for (const value of [...table.headers, ...table.rows.flat(), table.notes ?? ""]) {
+  for (const value of [
+    ...table.headers,
+    ...table.rows.flat(),
+    table.notes ?? "",
+  ]) {
     assert.ok(
       !String(value).includes(TOKEN),
       `the preview must not carry a token-shaped value: ${value}`,

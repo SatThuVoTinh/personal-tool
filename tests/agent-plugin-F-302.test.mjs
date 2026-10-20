@@ -8,17 +8,20 @@
 // task's own plan nodes were read one statement later for the text card.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import os from "node:os";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const REPO_ROOT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+);
 
-const load = async (rel) => import(pathToFileURL(path.join(REPO_ROOT, rel)).href);
+const load = async (rel) =>
+  import(pathToFileURL(path.join(REPO_ROOT, rel)).href);
 const plugin = await load(
   "integrations/openclaw/plugins/zink-governance/index.mjs",
 );
-const { renderExpectedResultPreview, buildPreviewTable } = await load(
+const { buildPreviewTable } = await load(
   "integrations/openclaw/lib/discord-result-preview.mjs",
 );
 
@@ -72,7 +75,10 @@ test("F-302: a task with no declared plan keeps the placeholder", () => {
 test("F-302: the real card path hands the table to the renderer", () => {
   // The preview call site must pass the produced columns and rows.
   const source = readFileSync(
-    path.join(REPO_ROOT, "integrations/openclaw/plugins/zink-governance/index.mjs"),
+    path.join(
+      REPO_ROOT,
+      "integrations/openclaw/plugins/zink-governance/index.mjs",
+    ),
     "utf8",
   );
   const at = source.indexOf("renderExpectedResultPreview({");
@@ -95,9 +101,7 @@ test("F-305: the seam refuses a token-shaped string", () => {
     "a token-shaped string must not be accepted at the seam",
   );
   assert.equal(
-    plugin.previewInputIsSanitised(
-      "ghp_abcdefghijklmnopqrstuvwxyz0123456789",
-    ),
+    plugin.previewInputIsSanitised("ghp_abcdefghijklmnopqrstuvwxyz0123456789"),
     false,
   );
   assert.equal(
@@ -127,12 +131,9 @@ test("F-302/F-305: a declared plan with a token is refused before the image", ()
     ...inputs.columns,
     ...inputs.rows.flat(),
     inputs.notes,
-  ]
-    .filter(
-      (value) =>
-        typeof value === "string" && !plugin.previewInputIsSanitised(value),
-    );
+  ].filter(
+    (value) =>
+      typeof value === "string" && !plugin.previewInputIsSanitised(value),
+  );
   assert.equal(unsanitised.length > 0, true, "the token must be caught");
 });
-
-

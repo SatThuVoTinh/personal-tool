@@ -133,10 +133,12 @@ const SECRET_SCAN_ALLOWED_SCOPES = [
     measured: 1,
   },
 ];
-// The measured total is 224 tracked paths. The ceiling carries headroom for
-// one band's new test files; a band that exceeds it must re-measure and
-// record the new number, which is the visible act the row asked for.
-const SECRET_SCAN_SUPPRESSED_CEILING = 260;
+// The measured total was 224 tracked paths; the M12/T9 band added 51 lanes
+// under the recorded `tests/` scope, so the measured total is now 275. The
+// ceiling carries headroom for one band's new test files; a band that exceeds
+// it must re-measure and record the new number, which is the visible act the
+// row asked for.
+const SECRET_SCAN_SUPPRESSED_CEILING = 320;
 
 // The workflow step that compares the live audit with the recorded baseline.
 const AUDIT_BASELINE_SCRIPT = "scripts/audit-baseline.mjs";

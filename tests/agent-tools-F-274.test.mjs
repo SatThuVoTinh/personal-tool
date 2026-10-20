@@ -39,7 +39,9 @@ function resolveRepositoryRoot() {
       path.resolve(here, ...Array.from({ length: i + 1 }, () => "..")),
     ),
     process.env.ZINK_REPO,
-  ].filter((candidate) => typeof candidate === "string" && candidate.length > 0);
+  ].filter(
+    (candidate) => typeof candidate === "string" && candidate.length > 0,
+  );
   for (const candidate of candidates) {
     if (existsSync(path.join(candidate, "zink-tools", "contracts"))) {
       return candidate;
@@ -66,10 +68,7 @@ const PLUGIN_MANIFEST = JSON.parse(
   ),
 );
 const PLUGIN_SOURCE = readFileSync(
-  path.join(
-    REPO,
-    "integrations/openclaw/plugins/zink-governance/index.mjs",
-  ),
+  path.join(REPO, "integrations/openclaw/plugins/zink-governance/index.mjs"),
   "utf8",
 );
 
@@ -204,11 +203,15 @@ function specialistVocabulary(branch) {
 }
 
 function callBranchesFor(toolId) {
-  return branchesOf(CALL_SCHEMA).filter((branch) => toolIdOf(branch) === toolId);
+  return branchesOf(CALL_SCHEMA).filter(
+    (branch) => toolIdOf(branch) === toolId,
+  );
 }
 
 function resultBranchesFor(toolId) {
-  return branchesOf(RESULT_SCHEMA).filter((branch) => toolIdOf(branch) === toolId);
+  return branchesOf(RESULT_SCHEMA).filter(
+    (branch) => toolIdOf(branch) === toolId,
+  );
 }
 
 /**
@@ -223,7 +226,9 @@ function policyVocabulary(toolId) {
     execution = [];
   }
   if (execution.length > 0) return execution;
-  return AGENT_IDS.filter((agentId) => canAccessMemoryTool(agentId, toolId)).sort();
+  return AGENT_IDS.filter((agentId) =>
+    canAccessMemoryTool(agentId, toolId),
+  ).sort();
 }
 
 test("F-274: the loader registers the tools the envelopes must cover", () => {
@@ -341,11 +346,7 @@ test("F-274: every registered tool has a call and a result that validate", () =>
     };
     assert.doesNotThrow(
       () =>
-        validateContractSchema(
-          "tool-call",
-          call,
-          TOOL_CALL_ENVELOPE_MAX_BYTES,
-        ),
+        validateContractSchema("tool-call", call, TOOL_CALL_ENVELOPE_MAX_BYTES),
       `${toolId}: a governed call must validate against the call envelope`,
     );
     const result = {
@@ -371,7 +372,9 @@ test("F-274: every registered tool has a call and a result that validate", () =>
 test("F-274: a specialist the policy does not grant is refused by the call envelope", () => {
   for (const toolId of REGISTERED_TOOLS) {
     const vocabulary = policyVocabulary(toolId);
-    const forbidden = AGENT_IDS.find((agentId) => !vocabulary.includes(agentId));
+    const forbidden = AGENT_IDS.find(
+      (agentId) => !vocabulary.includes(agentId),
+    );
     if (forbidden === undefined) {
       // The policy grants this tool to every agent, so there is no forbidden
       // specialist to try: the vocabulary itself is the whole roster.
@@ -393,15 +396,9 @@ test("F-274: a specialist the policy does not grant is refused by the call envel
     };
     assert.throws(
       () =>
-        validateContractSchema(
-          "tool-call",
-          call,
-          TOOL_CALL_ENVELOPE_MAX_BYTES,
-        ),
+        validateContractSchema("tool-call", call, TOOL_CALL_ENVELOPE_MAX_BYTES),
       /SCHEMA_VALIDATION_FAILED/u,
       `${toolId}: the call envelope must refuse the specialist '${forbidden}'`,
     );
   }
 });
-
-

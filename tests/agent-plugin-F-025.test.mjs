@@ -12,9 +12,13 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const REPO_ROOT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+);
 
-const load = async (rel) => import(pathToFileURL(path.join(REPO_ROOT, rel)).href);
+const load = async (rel) =>
+  import(pathToFileURL(path.join(REPO_ROOT, rel)).href);
 
 const { ensureLedger, ledgerPaths, readSnapshot, recordWorkflowEvent } =
   await load("integrations/openclaw/topology/lib/ledger.mjs");
@@ -153,7 +157,10 @@ test("F-025: a STALE card (an earlier brief revision) cannot approve", () => {
 
 test("F-025: the announce card renders the ADMITTED brief, not the model text", () => {
   const source = readFileSync(
-    path.join(REPO_ROOT, "integrations/openclaw/plugins/zink-governance/index.mjs"),
+    path.join(
+      REPO_ROOT,
+      "integrations/openclaw/plugins/zink-governance/index.mjs",
+    ),
     "utf8",
   );
   assert.equal(

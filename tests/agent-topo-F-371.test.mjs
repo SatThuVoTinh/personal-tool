@@ -350,13 +350,9 @@ test("F-371: the legacy 64-hex delegation id still replays", () => {
     };
     let thrown = null;
     try {
-      applyWorkflowEvent(
-        state,
-        "WORKFLOW_SPAWN_RESERVED",
-        legacy,
-        null,
-        { replayAnchored: true },
-      );
+      applyWorkflowEvent(state, "WORKFLOW_SPAWN_RESERVED", legacy, null, {
+        replayAnchored: true,
+      });
     } catch (error) {
       thrown = error;
     }

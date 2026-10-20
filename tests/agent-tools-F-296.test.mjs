@@ -44,7 +44,9 @@ function resolveRepositoryRoot() {
       path.resolve(here, ...Array.from({ length: i + 1 }, () => "..")),
     ),
     process.env.ZINK_REPO,
-  ].filter((candidate) => typeof candidate === "string" && candidate.length > 0);
+  ].filter(
+    (candidate) => typeof candidate === "string" && candidate.length > 0,
+  );
   for (const candidate of candidates) {
     if (existsSync(path.join(candidate, "zink-tools", "contracts"))) {
       return candidate;
@@ -253,7 +255,10 @@ function proveEveryRenameIsFollowedByADirectoryFsync(relative) {
     // Form B: the directory fsync is delegated to a local helper whose own
     // body binds an fsync to a handle opened with the read flag.
     const helper = helpers.find((candidate) => {
-      const call = new RegExp(`\\b${escapeRegExp(candidate.name)}\\s*\\(`, "gu");
+      const call = new RegExp(
+        `\\b${escapeRegExp(candidate.name)}\\s*\\(`,
+        "gu",
+      );
       let match;
       while ((match = call.exec(window)) !== null) {
         // The definition itself is not a call.
@@ -400,5 +405,3 @@ try {
     `the fsync after the rename must be applied to the PARENT DIRECTORY handle (${observed.fsyncedPath}), not to the file handle`,
   );
 });
-
-

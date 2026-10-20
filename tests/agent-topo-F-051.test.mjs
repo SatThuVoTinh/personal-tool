@@ -81,12 +81,16 @@ const guardSource = readFileSync(
 test("F-051: the path-shaped scope is derived from the published contracts, not from tool ids", () => {
   // The guard must not carry a tool-id-keyed path check any more.
   assert.equal(
-    guardSource.includes("validateArtifactLogicalPath(validatedParams.input.file_path)"),
+    guardSource.includes(
+      "validateArtifactLogicalPath(validatedParams.input.file_path)",
+    ),
     false,
     "the path check must not read one tool's field by name",
   );
   assert.equal(
-    guardSource.includes("validateArtifactLogicalPath(validatedParams.input.entrypoint)"),
+    guardSource.includes(
+      "validateArtifactLogicalPath(validatedParams.input.entrypoint)",
+    ),
     false,
     "the path check must not read one tool's field by name",
   );
@@ -137,7 +141,9 @@ test("F-051: every governed tool has a declaration and every declared field is r
 test("F-051: only filesystem paths are path-shaped", () => {
   const declared = JSON.stringify(PATH_SHAPED_INPUT_FIELDS);
   const excel = inputPropertyNames("tools/zink-excel.schema.json#/$defs/input");
-  const python = inputPropertyNames("tools/zink-python.schema.json#/$defs/input");
+  const python = inputPropertyNames(
+    "tools/zink-python.schema.json#/$defs/input",
+  );
   const knowledge = inputPropertyNames(
     "tools/zink-knowledge.schema.json#/$defs/input",
   );

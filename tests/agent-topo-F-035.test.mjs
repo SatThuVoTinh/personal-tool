@@ -14,7 +14,13 @@
 //   3. the builder calls the enumeration on the preflight/apply path, and the
 //      named-path checks it replaces are still there.
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -34,7 +40,10 @@ const builderSource = readFileSync(
 function fixture() {
   const root = mkdtempSync(path.join(os.tmpdir(), "f035-state-"));
   writeFileSync(path.join(root, "openclaw.json"), "{}\n");
-  writeFileSync(path.join(root, "openclaw.json.bak-mobile-1789615159090"), "{}\n");
+  writeFileSync(
+    path.join(root, "openclaw.json.bak-mobile-1789615159090"),
+    "{}\n",
+  );
   mkdirSync(path.join(root, "operator"), { recursive: true });
   return root;
 }
@@ -89,7 +98,10 @@ test("F-035: the refusal is named and names the offending file", () => {
     );
     // A clean state root is accepted.
     assert.doesNotThrow(() =>
-      assertStateRootFileModes(root, { platform: "linux", modeOf: () => 0o600 }),
+      assertStateRootFileModes(root, {
+        platform: "linux",
+        modeOf: () => 0o600,
+      }),
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -98,9 +110,7 @@ test("F-035: the refusal is named and names the offending file", () => {
 
 test("F-035: the builder refuses on the preflight/apply path and keeps its named checks", () => {
   assert.ok(
-    builderSource.includes(
-      'from "./topology/lib/state-root-modes.mjs"',
-    ),
+    builderSource.includes('from "./topology/lib/state-root-modes.mjs"'),
     "the builder must use the shared enumeration",
   );
   assert.ok(
@@ -108,9 +118,14 @@ test("F-035: the builder refuses on the preflight/apply path and keeps its named
     "the builder must call the enumeration",
   );
   const dryRun = builderSource.indexOf('if (options.mode === "dry-run")');
-  const enumeration = builderSource.indexOf("assertStateRootFileModes(stateDir);");
+  const enumeration = builderSource.indexOf(
+    "assertStateRootFileModes(stateDir);",
+  );
   const firstMutation = builderSource.indexOf("await createRuntimeBackup(");
-  assert.ok(dryRun >= 0 && enumeration > dryRun, "the call must be after --dry-run");
+  assert.ok(
+    dryRun >= 0 && enumeration > dryRun,
+    "the call must be after --dry-run",
+  );
   assert.ok(
     firstMutation > 0 && enumeration < firstMutation,
     "the call must be before the apply mutates anything, so the apply fails closed too",

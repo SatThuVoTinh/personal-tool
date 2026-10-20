@@ -23,7 +23,11 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createGovernanceGuard } from "../integrations/openclaw/topology/lib/guard.mjs";
-import { ensureLedger, ledgerPaths, readSnapshot } from "../integrations/openclaw/topology/lib/ledger.mjs";
+import {
+  ensureLedger,
+  ledgerPaths,
+  readSnapshot,
+} from "../integrations/openclaw/topology/lib/ledger.mjs";
 import { TOOL_POLICY } from "../integrations/openclaw/lib/policy.mjs";
 
 const TASK_ID = "20261021ABCD1234";

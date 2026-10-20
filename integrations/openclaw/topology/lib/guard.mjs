@@ -918,7 +918,8 @@ function evaluateProspectiveTask(task, context, cause) {
   if (task.brief_state !== "ACTIVE") refuse("INVALID_STATE_TRANSITION");
   if (!Number.isSafeInteger(task.brief_revision) || task.brief_revision < 1)
     refuse("INVALID_STATE_TRANSITION");
-  if (task.root_agent_id !== context.agentId) refuse("INVALID_STATE_TRANSITION");
+  if (task.root_agent_id !== context.agentId)
+    refuse("INVALID_STATE_TRANSITION");
   if (task.root_session_key !== context.sessionKey) refuse("LINEAGE_MISMATCH");
   if (task.root_run_id !== context.runId) refuse("LINEAGE_MISMATCH");
   return {
@@ -1463,28 +1464,28 @@ export function createGovernanceGuard({
                     "LINEAGE_MISMATCH",
                   );
                 }
+              }
+              const next = recordWorkflowEvent(
+                paths,
+                "WORKFLOW_CONTINUATION_STARTED",
+                {
+                  task_id,
+                  next_run_id: context.runId,
+                  session_key: context.sessionKey,
+                  source_session_key: context.inputProvenance.sourceSessionKey,
+                  agent_id: context.agentId,
+                },
+              );
+              owner = findSession(next, context.sessionKey, context.runId);
+            } catch (cause) {
+              // F-059: the original findSession failure is the CAUSE of this
+              // refusal. The refusal code still names the symptom; the cause
+              // names the reason. The refusal itself is re-thrown unchanged -
+              // only the discarded reason is attached underneath it.
+              if (cause instanceof Error && cause.cause === undefined)
+                cause.cause = findErr;
+              throw cause;
             }
-            const next = recordWorkflowEvent(
-              paths,
-              "WORKFLOW_CONTINUATION_STARTED",
-              {
-                task_id,
-                next_run_id: context.runId,
-                session_key: context.sessionKey,
-                source_session_key: context.inputProvenance.sourceSessionKey,
-                agent_id: context.agentId,
-              },
-            );
-            owner = findSession(next, context.sessionKey, context.runId);
-          } catch (cause) {
-            // F-059: the original findSession failure is the CAUSE of this
-            // refusal. The refusal code still names the symptom; the cause
-            // names the reason. The refusal itself is re-thrown unchanged -
-            // only the discarded reason is attached underneath it.
-            if (cause instanceof Error && cause.cause === undefined)
-              cause.cause = findErr;
-            throw cause;
-          }
           }
         }
       }
@@ -2116,10 +2117,7 @@ export function createGovernanceGuard({
           "AUTH_SCOPE_MISMATCH",
         );
         assert(runId === delRunId, "LINEAGE_MISMATCH");
-        assert(
-          delegationTools.includes(candidateToolId),
-          "AUTH_POLICY_DENIED",
-        );
+        assert(delegationTools.includes(candidateToolId), "AUTH_POLICY_DENIED");
 
         if (candidateToolId === "zink_python") {
           assert(

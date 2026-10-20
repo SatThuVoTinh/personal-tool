@@ -628,6 +628,8 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // surrogate on emoji) and makes a failed post-start binding write
     // attributable instead of aborting the pickup tick.
     "c00bbb6b02087c7de5bcb74b76a54638817b7c08e509a8775e8c1512bc104637",
+    // M12/T9: the live build's bytes for this asset, admitted so --preflight still accepts the deployed extension. The band moved this asset, so its current build is accepted by content comparison.
+    "fe367beae4913a52e437739c1f185668174c976bd377f871f6a088c4f6d3818f",
   ]),
   "lib/file-lock.mjs": Object.freeze([
     // M10/T2-R18: the FIRST predecessor entry for this asset. It had none,

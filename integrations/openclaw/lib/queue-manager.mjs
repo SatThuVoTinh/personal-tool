@@ -377,8 +377,7 @@ export class QueueManager {
     // and a failed attempt has to remove what it made. `topology/lib/ledger.mjs`
     // already wrote its snapshot this way; this is the same discipline, not a new
     // atomic writer.
-    const temp =
-      tempPath ?? `${storagePath}.tmp-${process.pid}-${Date.now()}`;
+    const temp = tempPath ?? `${storagePath}.tmp-${process.pid}-${Date.now()}`;
     let fd = null;
     let tempIsOurs = false;
     try {

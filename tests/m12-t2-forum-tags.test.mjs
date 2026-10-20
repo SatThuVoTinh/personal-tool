@@ -450,12 +450,24 @@ describe("M12/T9 F-016 - a truncated thread listing is reported, never treated a
   it("follows the cursor while Discord reports another page", async () => {
     const { fetchImpl, calls } = pagedFetch([
       {
-        threads: [{ id: "t1", name: "INCIDENT 11111111AAAA", parent_id: INCIDENTS_CHANNEL }],
+        threads: [
+          {
+            id: "t1",
+            name: "INCIDENT 11111111AAAA",
+            parent_id: INCIDENTS_CHANNEL,
+          },
+        ],
         has_more: true,
         next_cursor: "cursor-2",
       },
       {
-        threads: [{ id: "t2", name: "INCIDENT 22222222BBBB", parent_id: INCIDENTS_CHANNEL }],
+        threads: [
+          {
+            id: "t2",
+            name: "INCIDENT 22222222BBBB",
+            parent_id: INCIDENTS_CHANNEL,
+          },
+        ],
         has_more: false,
       },
     ]);
@@ -482,7 +494,13 @@ describe("M12/T9 F-016 - a truncated thread listing is reported, never treated a
   it("reports truncation when Discord says more exists but no cursor is offered", async () => {
     const { fetchImpl } = pagedFetch([
       {
-        threads: [{ id: "t1", name: "INCIDENT 11111111AAAA", parent_id: INCIDENTS_CHANNEL }],
+        threads: [
+          {
+            id: "t1",
+            name: "INCIDENT 11111111AAAA",
+            parent_id: INCIDENTS_CHANNEL,
+          },
+        ],
         has_more: true,
       },
     ]);
@@ -513,7 +531,13 @@ describe("M12/T9 F-016 - a truncated thread listing is reported, never treated a
   it("reports truncation when the page budget is exhausted", async () => {
     const { fetchImpl, calls } = pagedFetch([
       {
-        threads: [{ id: "t1", name: "INCIDENT 11111111AAAA", parent_id: INCIDENTS_CHANNEL }],
+        threads: [
+          {
+            id: "t1",
+            name: "INCIDENT 11111111AAAA",
+            parent_id: INCIDENTS_CHANNEL,
+          },
+        ],
         has_more: true,
         next_cursor: "cursor-loop",
       },
@@ -535,7 +559,13 @@ describe("M12/T9 F-016 - a truncated thread listing is reported, never treated a
     // A partial listing must read as "unable to conclude", never as "not open yet".
     const { fetchImpl } = pagedFetch([
       {
-        threads: [{ id: "t1", name: "INCIDENT 99999999ZZZZ", parent_id: INCIDENTS_CHANNEL }],
+        threads: [
+          {
+            id: "t1",
+            name: "INCIDENT 99999999ZZZZ",
+            parent_id: INCIDENTS_CHANNEL,
+          },
+        ],
         has_more: true,
       },
     ]);

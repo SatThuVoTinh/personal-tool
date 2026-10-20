@@ -11,12 +11,18 @@ import test from "node:test";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const REPO_ROOT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+);
 
 const plugin = await import(
   pathToFileURL(
-    path.join(REPO_ROOT, "integrations/openclaw/plugins/zink-governance/index.mjs"),
-  ).href,
+    path.join(
+      REPO_ROOT,
+      "integrations/openclaw/plugins/zink-governance/index.mjs",
+    ),
+  ).href
 );
 
 test("F-027: an L1 (DISCOVER) namespace denies every content-bearing action", () => {
@@ -62,11 +68,7 @@ test("F-027: the mutating actions keep their canonical denial", () => {
       query: "x",
       action,
     });
-    assert.equal(
-      verdict.allowed,
-      false,
-      `action=${action} must stay denied`,
-    );
+    assert.equal(verdict.allowed, false, `action=${action} must stay denied`);
     assert.equal(verdict.reason, "KB_ACTION_DENIED");
   }
 });
@@ -81,4 +83,3 @@ test("F-027: the canonical action translation is total and explicit", () => {
   assert.equal(plugin.canonicalKnowledgeAction("admin"), "admin");
   assert.equal(plugin.canonicalKnowledgeAction("delete"), "delete");
 });
-

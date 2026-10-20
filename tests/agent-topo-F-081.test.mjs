@@ -35,9 +35,7 @@ function lineage(tag) {
 }
 
 const lines = (paths) =>
-  readFileSync(paths.events, "utf8")
-    .split("\n")
-    .filter(Boolean);
+  readFileSync(paths.events, "utf8").split("\n").filter(Boolean);
 
 describe("F-081 - a discarded receipt is reported to the caller", () => {
   it("a duplicate receipt is reported as discarded", () => {

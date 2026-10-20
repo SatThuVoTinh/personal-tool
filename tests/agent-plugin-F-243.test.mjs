@@ -20,10 +20,13 @@ import { mkdtempSync, existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const REPO_ROOT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+);
 
-
-const load = async (rel) => import(pathToFileURL(path.join(REPO_ROOT, rel)).href);
+const load = async (rel) =>
+  import(pathToFileURL(path.join(REPO_ROOT, rel)).href);
 
 const plugin = await load(
   "integrations/openclaw/plugins/zink-governance/index.mjs",
@@ -94,14 +97,14 @@ test("F-243: the minter writes one consumable record under the ledger root", () 
 test("F-243: the guard's own resolver finds the minted record", () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "f243b-"));
   const minted = mint(root);
-  const resolved = resolveAuthenticatedApproval(
-    { root },
-    minted.approvalId,
-  );
+  const resolved = resolveAuthenticatedApproval({ root }, minted.approvalId);
   assert.ok(resolved, "the resolver must find the minted record");
   assert.equal(resolved.task_id, TASK_ID);
   assert.equal(resolved.owner_principal_ref, PRINCIPAL);
-  assert.equal(resolved.approval_scope_digest, minted.record.approval_scope_digest);
+  assert.equal(
+    resolved.approval_scope_digest,
+    minted.record.approval_scope_digest,
+  );
 });
 
 test("F-243: the record is consumable exactly once, and the replay is named", async () => {
@@ -168,6 +171,3 @@ test("F-243: the minter refuses to mint without an owner or a known operation", 
     /APPROVAL_OPERATION_UNKNOWN/u,
   );
 });
-
-
-

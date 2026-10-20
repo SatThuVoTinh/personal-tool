@@ -131,7 +131,8 @@ export function renderExpectedResultPreview({
     throw new Error("RESULT_PREVIEW_OUTPUT_DIR_UNSAFE");
   }
   const sheetTitle =
-    sanitizeDiscordText(String(title ?? "")).trim() || `expected ${target} result`;
+    sanitizeDiscordText(String(title ?? "")).trim() ||
+    `expected ${target} result`;
   const { headers, rows: tableRows } = buildPreviewTable({
     columns,
     rows,

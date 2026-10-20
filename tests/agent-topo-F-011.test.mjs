@@ -16,12 +16,7 @@
 //   3. an install that cannot be resolved - none, or more than one - is a
 //      named refusal, never a silent fallback to the pinned path.
 import assert from "node:assert/strict";
-import {
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -99,7 +94,9 @@ test("F-011: a reinstall that changes the install directory is followed, not mis
     assert.ok(
       nativePatchedDiscordChannelRelatives(
         resolveNativeDiscordChannelRelative(second.root),
-      ).every((relative) => relative.startsWith("npm/projects/openclaw-discord-99aa00ff/")),
+      ).every((relative) =>
+        relative.startsWith("npm/projects/openclaw-discord-99aa00ff/"),
+      ),
       "the channel relatives must name the installed project",
     );
   } finally {

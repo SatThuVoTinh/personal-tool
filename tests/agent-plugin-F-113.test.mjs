@@ -12,9 +12,13 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const REPO_ROOT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+);
 
-const load = async (rel) => import(pathToFileURL(path.join(REPO_ROOT, rel)).href);
+const load = async (rel) =>
+  import(pathToFileURL(path.join(REPO_ROOT, rel)).href);
 const plugin = await load(
   "integrations/openclaw/plugins/zink-governance/index.mjs",
 );
@@ -25,7 +29,10 @@ const { deriveTaskId } = await load(
 );
 
 const SOURCE = readFileSync(
-  path.join(REPO_ROOT, "integrations/openclaw/plugins/zink-governance/index.mjs"),
+  path.join(
+    REPO_ROOT,
+    "integrations/openclaw/plugins/zink-governance/index.mjs",
+  ),
   "utf8",
 );
 
@@ -41,8 +48,13 @@ test("F-113: a pending-result producer exists outside the accept path", () => {
   assert.ok(runEnd > 0, "the run-end seam must announce the pending result");
   const acceptPath = SOURCE.indexOf("surfaceAcceptedResult({");
   assert.ok(acceptPath > 0);
-  const announce = SOURCE.indexOf("surfacePendingResult({ taskId, resultsForumId })");
-  assert.ok(announce > 0, "the producer must be called by the announcement seam");
+  const announce = SOURCE.indexOf(
+    "surfacePendingResult({ taskId, resultsForumId })",
+  );
+  assert.ok(
+    announce > 0,
+    "the producer must be called by the announcement seam",
+  );
 });
 
 test("F-113: the pending surface carries the accept control", () => {

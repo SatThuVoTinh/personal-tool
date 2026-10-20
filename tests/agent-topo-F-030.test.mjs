@@ -8,9 +8,6 @@
 // is bound to a real one.
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 
 import { validateContract } from "../integrations/openclaw/topology/lib/schema.mjs";
 import { applyWorkflowEvent } from "../integrations/openclaw/topology/lib/workflow.mjs";
@@ -31,10 +28,14 @@ const OPENED = {
 function opened() {
   const payload = { ...OPENED };
   const task_id = deriveTaskId(payload);
-  const snapshot = applyWorkflowEvent({ tasks: {}, sequence: 0 }, "WORKFLOW_OPENED", {
-    ...payload,
-    task_id,
-  });
+  const snapshot = applyWorkflowEvent(
+    { tasks: {}, sequence: 0 },
+    "WORKFLOW_OPENED",
+    {
+      ...payload,
+      task_id,
+    },
+  );
   return { task_id, snapshot };
 }
 

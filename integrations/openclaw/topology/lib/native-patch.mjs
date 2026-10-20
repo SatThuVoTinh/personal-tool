@@ -191,7 +191,7 @@ export function resolveNativeDiscordChannelRelative(stateDir) {
       continue;
     const manifestPath = path.join(packageRoot, "package.json");
     if (existsSync(manifestPath)) {
-      let manifest = null;
+      let manifest;
       try {
         manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
       } catch {
@@ -204,8 +204,7 @@ export function resolveNativeDiscordChannelRelative(stateDir) {
   }
   if (candidates.length === 0)
     throw new Error(NATIVE_DISCORD_CHANNEL_UNRESOLVED);
-  if (candidates.length > 1)
-    throw new Error(NATIVE_DISCORD_CHANNEL_AMBIGUOUS);
+  if (candidates.length > 1) throw new Error(NATIVE_DISCORD_CHANNEL_AMBIGUOUS);
   return `npm/projects/${candidates[0]}/node_modules/${NATIVE_DISCORD_CHANNEL_PACKAGE}`;
 }
 

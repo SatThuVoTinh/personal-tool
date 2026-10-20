@@ -21,7 +21,6 @@ import {
   createGovernanceGuard,
   resolveN8nInvocation,
   resolveAuthenticatedApproval,
-  bindInvocationApproval,
   whenGovernanceDependenciesReady,
   loadSharedGovernanceModule,
 } from "../../topology/lib/guard.mjs";
@@ -7578,7 +7577,7 @@ export default {
 
           // The delegation is the authority for the call, and it is resolved
           // from the LEDGER - never asserted by the caller.
-          let owner = null;
+          let owner;
           try {
             owner = findSession(
               readSnapshot(paths),
@@ -7614,7 +7613,7 @@ export default {
                 reason: "AUTH_APPROVAL_REQUIRED",
               };
             }
-            let approvalRecord = null;
+            let approvalRecord;
             try {
               approvalRecord = resolveAuthenticatedApproval(paths, approvalId);
             } catch (approvalErr) {

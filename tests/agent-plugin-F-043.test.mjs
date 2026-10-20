@@ -12,7 +12,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const REPO_ROOT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+);
 
 const load = async (rel) =>
   import(pathToFileURL(path.join(REPO_ROOT, rel)).href);
@@ -101,10 +104,7 @@ test("F-043: an ABSENT thread id cannot satisfy the comparison", () => {
     const res = approve(paths, taskId, { threadId: null });
     assert.equal(res.allowed, false, "an absent thread must not approve");
     assert.match(res.reason, /APPROVAL_THREAD_MISMATCH/u);
-    assert.equal(
-      readSnapshot(paths).tasks[taskId].workflow_status,
-      "ACTIVE",
-    );
+    assert.equal(readSnapshot(paths).tasks[taskId].workflow_status, "ACTIVE");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

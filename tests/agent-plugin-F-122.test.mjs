@@ -11,7 +11,10 @@ import test from "node:test";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const REPO_ROOT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+);
 
 const pluginPath = path.join(
   REPO_ROOT,
@@ -19,9 +22,8 @@ const pluginPath = path.join(
 );
 const plugin = await import(pathToFileURL(pluginPath).href);
 const { AGENT_STACK_POLICY } = await import(
-  pathToFileURL(
-    path.join(REPO_ROOT, "integrations/openclaw/lib/policy.mjs"),
-  ).href
+  pathToFileURL(path.join(REPO_ROOT, "integrations/openclaw/lib/policy.mjs"))
+    .href
 );
 
 test("F-122: a roster agent resolves its canonical stack", () => {
@@ -52,12 +54,12 @@ test("F-122: the plugin holds no silent data_plant default", () => {
   assert.equal(
     /\|\|\s*"data_plant"/u.test(source),
     false,
-    "no `|| \"data_plant\"` fallback may remain in the plugin",
+    'no `|| "data_plant"` fallback may remain in the plugin',
   );
   assert.equal(
     /\?\?\s*"data_plant"/u.test(source),
     false,
-    "no `?? \"data_plant\"` fallback may remain in the plugin",
+    'no `?? "data_plant"` fallback may remain in the plugin',
   );
 });
 

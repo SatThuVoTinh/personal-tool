@@ -16,36 +16,39 @@
 // guard, and the branch is chosen by POLICY, never by the payload.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const REPO_ROOT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+);
 
-
-const load = async (rel) => import(pathToFileURL(path.join(REPO_ROOT, rel)).href);
+const load = async (rel) =>
+  import(pathToFileURL(path.join(REPO_ROOT, rel)).href);
 
 const plugin = await load(
   "integrations/openclaw/plugins/zink-governance/index.mjs",
 );
-const {
-  ensureLedger,
-  ledgerPaths,
-  recordWorkflowEvent,
-} = await load("integrations/openclaw/topology/lib/ledger.mjs");
-const {
-  buildSpawnProposal,
-  canonicalHash,
-  deriveTaskId,
-} = await load("integrations/openclaw/topology/lib/canonical.mjs");
+const { ensureLedger, ledgerPaths, recordWorkflowEvent } = await load(
+  "integrations/openclaw/topology/lib/ledger.mjs",
+);
+const { buildSpawnProposal, canonicalHash, deriveTaskId } = await load(
+  "integrations/openclaw/topology/lib/canonical.mjs",
+);
 const { installNativeToolGate } = await load(
   "integrations/openclaw/topology/lib/native-boundary.mjs",
 );
-const {
-  agentInstructions,
-  governanceHash,
-  AGENT_IDS,
-} = await load("integrations/openclaw/lib/policy.mjs");
+const { agentInstructions, governanceHash, AGENT_IDS } = await load(
+  "integrations/openclaw/lib/policy.mjs",
+);
 
 const OWNER = "32345678901234567";
 const THREAD_ID = "1111111111111111111";
@@ -338,14 +341,16 @@ test("F-242: a delegated live call WITH a consumed approval is authorized by the
 });
 
 test("F-242: the canonical operation comes from the policy, not from the payload", () => {
-  assert.equal(plugin.governedOperationFor("zink_excel", { operation: "populate" }), "populate");
-  assert.equal(plugin.governedOperationFor("zink_excel", { operation: "publish" }), null);
+  assert.equal(
+    plugin.governedOperationFor("zink_excel", { operation: "populate" }),
+    "populate",
+  );
+  assert.equal(
+    plugin.governedOperationFor("zink_excel", { operation: "publish" }),
+    null,
+  );
   assert.equal(plugin.governedOperationFor("zink_python", {}), "execute");
   assert.equal(plugin.governedOperationFor("zink_sql", {}), "query");
   assert.equal(plugin.governedOperationFor("zink_n8n", {}), "trigger");
   assert.equal(plugin.governedOperationFor("zink_unknown", {}), null);
 });
-
-
-
-

@@ -16,7 +16,6 @@ import { test } from "node:test";
 
 import { governancePluginFiles } from "../integrations/openclaw/lib/policy.mjs";
 
-
 /** Every repository-relative module path the entrypoint names. */
 function runtimeModulesNamedByEntrypoint(source) {
   return [

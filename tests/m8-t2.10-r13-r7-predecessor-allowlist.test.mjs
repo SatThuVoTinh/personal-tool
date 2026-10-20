@@ -174,7 +174,7 @@ assert.ok(
  * carry it.
  */
 const M11_T3_ENTRYPOINT_SHA256 =
-  "b2e5b318ab73ce65c1aa6d7f190874ef7aede6bd21073be3d19beea28d71bc73";
+  "4d63cde063b48488ff25c43adfd836933b49e02642fb32202b124f8670c6b318";
 const M12_T2_2_OUTGOING_ENTRYPOINT_SHA256 =
   "513beb15c3d7624c0a928c4c1556dc44d4c4cff4f1e00980f24b298a25751c0d";
 assert.ok(
@@ -1097,7 +1097,7 @@ test("R13 B3: the build the live runtime carries is accepted and converges", asy
     // so the upgrade path is unchanged.
     assert.equal(
       sha256(readFileSync(p.asset("lib/queue-manager.mjs"), "utf8")),
-      "4e6ae88e9e6fe0b30ebbeb3d655a186c69660b6211103738faaba28f313283aa",
+      "961c9552176a2d74672c02fd85424ecf914f9023337b3382db0ad42008eba741",
       "an accepted predecessor must converge onto the current queue writer",
     );
   } finally {

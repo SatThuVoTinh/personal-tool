@@ -106,13 +106,21 @@ describe("F-032 - an APPROVE must bind to a recorded approval request", () => {
     const { root, paths } = lineage("request");
     try {
       const taskId = openTask(paths);
-      recordWorkflowEvent(paths, "WORKFLOW_APPROVAL_REQUESTED", request(taskId));
+      recordWorkflowEvent(
+        paths,
+        "WORKFLOW_APPROVAL_REQUESTED",
+        request(taskId),
+      );
       recordWorkflowEvent(paths, "WORKFLOW_APPROVAL_SURFACED", {
         task_id: taskId,
         channel: "approvals",
         thread_id: THREAD,
       });
-      recordWorkflowEvent(paths, "WORKFLOW_USER_APPROVAL_DECIDED", decide(taskId));
+      recordWorkflowEvent(
+        paths,
+        "WORKFLOW_USER_APPROVAL_DECIDED",
+        decide(taskId),
+      );
       const task = readSnapshot(paths).tasks[taskId];
       assert.equal(task.workflow_status, "QUEUED");
       assert.ok(task.approved_at, "the decision must be recorded");

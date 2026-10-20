@@ -82,7 +82,10 @@ export function buildTaskCode({ date, random }) {
  */
 export function normalizeGovernanceThreadId(value) {
   if (typeof value !== "string") return null;
-  const canonical = value.trim().replace(/^channel:/u, "").trim();
+  const canonical = value
+    .trim()
+    .replace(/^channel:/u, "")
+    .trim();
   return canonical.length > 0 ? canonical : null;
 }
 
