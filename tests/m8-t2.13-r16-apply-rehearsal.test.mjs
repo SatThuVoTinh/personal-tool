@@ -51,6 +51,8 @@ import {
   classifyApplyReason,
 } from "../integrations/openclaw/topology/fixtures/runtime-regression/apply-orchestration.mjs";
 import {
+  NATIVE_DISCORD_CHANNEL_RELATIVE,
+  NATIVE_RUNTIME_PINS,
   applyNativePatch,
   checkNativePatch,
   inspectNativePatch,
@@ -71,7 +73,12 @@ import {
   assertNoSymlinkComponents,
   parseIdentifiers,
 } from "../integrations/openclaw/lib/policy.mjs";
-import { fingerprint, R16_ROOTS } from "./helpers/r16-fingerprint.mjs";
+import {
+  fingerprint,
+  R16_COMPONENTS,
+  R16_ROOTS,
+  R16_TREES,
+} from "./helpers/r16-fingerprint.mjs";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 const CONFIGURE = path.join(REPO, "integrations", "openclaw", "configure.mjs");
@@ -1032,6 +1039,52 @@ test(
     }
   },
 );
+
+test("R16-SCOPE: the fingerprint covers every root the real patcher writes", () => {
+  // The isolation proof is a comparison of two fingerprints, so it can only
+  // speak about the roots it enumerates. The Discord channel package is one of
+  // the roots the patcher writes: it lives inside the state root, and the
+  // patched preflight in it is the file the ingress repair rewrites. A scope
+  // that omits it proves nothing about the tree that actually changes.
+  const channelComponents = R16_COMPONENTS.filter(([label]) =>
+    label.startsWith("discord-channel/"),
+  );
+  assert.ok(
+    channelComponents.length > 0,
+    "the fingerprint must enumerate the Discord channel package",
+  );
+  for (const [label, relative, root] of channelComponents) {
+    assert.equal(root, "state", `${label} must be a state-relative component`);
+    assert.ok(
+      relative.startsWith(NATIVE_DISCORD_CHANNEL_RELATIVE),
+      `${label} must live under the installed channel package: ${relative}`,
+    );
+  }
+  assert.ok(
+    R16_TREES.some(
+      ([label, relative]) =>
+        label === "discord-channel" &&
+        relative === NATIVE_DISCORD_CHANNEL_RELATIVE,
+    ),
+    "the channel package must also be fingerprinted as a whole subtree",
+  );
+  // Every channel-scoped pin must be covered, so a new governed artifact in
+  // that package cannot drop out of the scope silently.
+  const pinnedChannelFiles = Object.values(NATIVE_RUNTIME_PINS)
+    .flatMap((pin) => Object.entries(pin.sources ?? {}))
+    .filter(([, entry]) => entry.scope === "discordChannel")
+    .map(([file]) => file);
+  assert.ok(
+    pinnedChannelFiles.length > 0,
+    "the pins must declare at least one channel-scoped artifact",
+  );
+  for (const file of pinnedChannelFiles) {
+    assert.ok(
+      channelComponents.some(([label]) => label.endsWith(`/${file}`)),
+      `the pinned channel artifact ${file} must be in the fingerprint scope`,
+    );
+  }
+});
 
 test("R16-08: the operator preflight names every known refusal class and leaks no message", () => {
   // Provenance of this guard: a real deployment refusal arrived as
