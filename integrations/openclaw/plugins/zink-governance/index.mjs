@@ -41,6 +41,7 @@ import {
   evaluateCapabilityAccess,
   GOVERNED_SKILL_NAMESPACE_CATALOG,
   AGENT_SPAWN_POLICY,
+  AGENT_STACK_POLICY,
   ZINK_CAPABILITY_REGISTRY,
 } from "../../lib/policy.mjs";
 import {
@@ -73,6 +74,7 @@ import {
 } from "../../lib/coordinator-pickup.mjs";
 import {
   canonicalHash,
+  deriveApprovalPlanDigest,
   derivePrincipalRef,
   GOVERNANCE_VERSION,
   isTaskCodeForm,
@@ -1984,6 +1986,21 @@ export async function handleSkillDiscordAction({
 }
 
 /**
+ * M12/T9 F-043 (legacy R1-A07-04): the thread a decision came from, normalized
+ * the way the interaction path normalizes it (`channel:` is a transport
+ * prefix, not a different thread). An absent thread is `null` - never a value
+ * that can satisfy a comparison against a recorded approval thread.
+ */
+function normalizeDecisionThreadId(threadId) {
+  if (typeof threadId !== "string") return null;
+  const value = threadId
+    .trim()
+    .replace(/^channel:/u, "")
+    .trim();
+  return value.length > 0 ? value : null;
+}
+
+/**
  * Handles Discord user/agent actions with strict 5-tuple validation:
  * Actor + Channel + Task + Current State + Action.
  * Implements ACTIVE.md Sections 4, 5, 8, 31, 32.
@@ -2185,6 +2202,50 @@ export function handleDiscordAction({
         normAction === ACTIONS.REJECT_APPROVAL ||
         normAction === ACTIONS.REQUEST_REVISION_APPROVAL
       ) {
+        // M12/T9 F-043 (legacy R1-A07-04): the verdict must come from the
+        // thread the card was surfaced in. The recorded `thread_id` was never
+        // compared with the task's own `approval_thread_id`, so a reposted,
+        // forwarded or stale card - or an owner reply in an unrelated thread -
+        // yielded a durable APPROVE. An ABSENT thread id satisfied the
+        // comparison by being absent, so the refusal has to be explicit: the
+        // decision must NAME the recorded thread, and nothing is recorded when
+        // it does not.
+        const recordedApprovalThreadId =
+          authoritativeTask?.approval_thread_id ?? null;
+        if (recordedApprovalThreadId) {
+          const decisionThreadId = normalizeDecisionThreadId(data.threadId);
+          if (decisionThreadId !== recordedApprovalThreadId) {
+            return {
+              allowed: false,
+              reason:
+                "APPROVAL_THREAD_MISMATCH: the decision must come from the approval thread the card was surfaced in",
+              status: "DENIED",
+            };
+          }
+        }
+        // M12/T9 F-025 (legacy R1-A03-02): the consent is bound to the PLAN
+        // that will execute. The digest is derived from the task's OWN recorded
+        // brief (its revision and its whole node graph) - never from a
+        // caller-supplied summary - so a model-authored card body can never
+        // decide what the owner approved. The reducer compares the recorded
+        // digest with the plan it holds and refuses a consent that does not
+        // match, and the brief revision the button carries is recorded with it
+        // so a STALE card (issued for an earlier revision) is refused too.
+        const authoritativePlanDigest = deriveApprovalPlanDigest({
+          brief_revision: authoritativeTask?.brief_revision,
+          nodes: Array.isArray(authoritativeTask?.nodes)
+            ? authoritativeTask.nodes
+            : [],
+        });
+        const decidedBriefRevision = (() => {
+          const supplied = data.briefRevision;
+          if (Number.isSafeInteger(supplied) && supplied >= 1) return supplied;
+          if (typeof supplied === "string") {
+            const trimmed = supplied.trim();
+            if (/^[0-9]{1,3}$/u.test(trimmed)) return Number(trimmed);
+          }
+          return undefined;
+        })();
         recordWorkflowEvent(paths, "WORKFLOW_USER_APPROVAL_DECIDED", {
           task_id: taskId,
           actor: normalizeActor(actor),
@@ -2197,7 +2258,10 @@ export function handleDiscordAction({
                 : "REQUEST_REVISION",
           message_id: data.messageId ?? data.origin_message_id ?? null,
           thread_id: data.threadId ?? null,
-          scope_digest: data.scopeDigest ?? null,
+          scope_digest: authoritativePlanDigest,
+          ...(decidedBriefRevision !== undefined
+            ? { brief_revision: decidedBriefRevision }
+            : {}),
           reason: safeReason,
         });
       } else if (normAction === ACTIONS.ACCEPT_RESULT) {
@@ -3288,6 +3352,86 @@ export function containOutboundAttachment(filePath, agentId, context = null) {
   return { contained: true, realPath };
 }
 
+/**
+ * M12/T9 F-122 (legacy R1-A04-04): the stack an agent owns is CANONICAL, and
+ * an unmapped agent is REFUSED BY NAME.
+ *
+ * Four sites used to answer "which stack?" with a silent fallback to the
+ * `data_plant` stack, so a delegation with no recorded `stack_id` and no
+ * matching task node was granted the data-plant scope instead of a named
+ * refusal, and an agent id the plugin's private table did not list silently
+ * received `data_plant` nodes which were then written into durable
+ * WORKFLOW_BRIEF_ACTIVATED state.
+ *
+ * The mapping below is validated against the canonical `AGENT_STACK_POLICY`:
+ * a "primary" stack the agent is not permitted to own is not a mapping at all,
+ * and an agent the canonical roster does not know has NO stack - which is a
+ * refusal (AUTH_UNAUTHORIZED_TARGET), never a default.
+ */
+const CANONICAL_AGENT_PRIMARY_STACK = Object.freeze({
+  main: "decision",
+  o1: "data_plant",
+  o2: "intelligence",
+  excel: "data_plant",
+  "power-bi": "intelligence",
+  sql: "data_plant",
+  python: "data_plant",
+});
+
+export function canonicalAgentPrimaryStack(agentId) {
+  if (typeof agentId !== "string" || agentId.length === 0) return null;
+  const primary = CANONICAL_AGENT_PRIMARY_STACK[agentId];
+  if (!primary) return null;
+  const permitted = AGENT_STACK_POLICY[agentId];
+  if (!Array.isArray(permitted) || !permitted.includes(primary)) return null;
+  return primary;
+}
+
+/**
+ * M12/T9 F-113 (legacy R1-A16-03): the durable proof that a result was shown
+ * to the owner. Both result surfaces (the pending announcement and the
+ * accepted publication) record the SAME event shape, so the two can never
+ * drift apart.
+ */
+export function buildResultSurfaceEvent({ taskId, threadId, resultDigest }) {
+  const surfaceEvent = {
+    task_id: taskId,
+    channel: "results",
+    thread_id: threadId,
+  };
+  if (/^[a-f0-9]{64}$/u.test(String(resultDigest ?? "")))
+    surfaceEvent.result_digest = resultDigest;
+  return surfaceEvent;
+}
+
+/**
+ * M12/T9 F-027 (legacy R1-A04-02) — the Knowledgebase access matrix carries a
+ * DISCOVER tier (`L1`) and the canonical policy enforces it on the `read`
+ * action. The knowledge TOOL never used that vocabulary: its own contract
+ * declares `search | retrieve | citation | metadata`, so the L1 branch was
+ * unreachable dead code and the L1 column carried no security meaning at all
+ * (measured: `evaluateToolAccess("main", "zink_knowledge_search", {namespace:
+ * "finance"})` returned `allowed: true`).
+ *
+ * This seam now TRANSLATES the tool's action into the canonical policy action
+ * instead of inventing a policy of its own: every content-bearing knowledge
+ * action IS a read, and the mutating actions are passed through unchanged so
+ * the canonical denial list keeps its full force. The policy table stays the
+ * single source of truth for what L1 means.
+ */
+const KB_CONTENT_ACTIONS = Object.freeze([
+  "search",
+  "retrieve",
+  "citation",
+  "metadata",
+]);
+
+export function canonicalKnowledgeAction(action) {
+  const value = typeof action === "string" ? action.trim().toLowerCase() : "";
+  if (value.length === 0) return "read";
+  return KB_CONTENT_ACTIONS.includes(value) ? "read" : value;
+}
+
 export function evaluateToolAccess(agentId, toolName, params = {}) {
   if (!ids.has(agentId)) {
     return { allowed: false, reason: "UNKNOWN_AGENT" };
@@ -3300,7 +3444,7 @@ export function evaluateToolAccess(agentId, toolName, params = {}) {
       agentId,
       "zink_knowledge",
       params.namespace,
-      params.action || "search",
+      canonicalKnowledgeAction(params.action),
     );
     return access.allowed
       ? { allowed: true, level: access.level }
@@ -5378,13 +5522,11 @@ export default {
         );
         return null;
       }
-      const surfaceEvent = {
-        task_id: taskId,
-        channel: "results",
-        thread_id: surfaced.threadId,
-      };
-      if (/^[a-f0-9]{64}$/u.test(String(queueItem.resultDigest ?? "")))
-        surfaceEvent.result_digest = queueItem.resultDigest;
+      const surfaceEvent = buildResultSurfaceEvent({
+        taskId,
+        threadId: surfaced.threadId,
+        resultDigest: queueItem.resultDigest,
+      });
       try {
         recordWorkflowEvent(paths, "WORKFLOW_RESULT_SURFACED", surfaceEvent);
       } catch (recordError) {
@@ -5393,6 +5535,161 @@ export default {
         );
       }
       return surfaced.threadId;
+    }
+
+    /**
+     * M12/T9 F-113 (legacy R1-A16-03): a result that waits for the owner's
+     * verdict must be VISIBLE to him, with the control that accepts it.
+     *
+     * Before this producer existed, the ONLY producer able to make a pending
+     * result visible was the ACCEPT path itself - so the accept path had
+     * nothing to accept, and the owner saw the task approved and then silence.
+     * This producer announces the pending result as soon as the ledger records
+     * it, carries the accept control, and records WORKFLOW_RESULT_SURFACED so
+     * the announcement is provable rather than assumed.
+     *
+     * It is idempotent on the recorded `results_thread_id`: one task has one
+     * #results thread, and a second run-end never opens a second one.
+     */
+    async function surfacePendingResult({ taskId, resultsForumId }) {
+      let task;
+      try {
+        task = readSnapshot(paths)?.tasks?.[taskId] ?? null;
+      } catch {
+        api.logger?.warn?.(
+          `[zink-governance] pending result state unreadable for task ${taskId}; no #results thread opened`,
+        );
+        return null;
+      }
+      if (!task) return null;
+      // Only a result that is genuinely waiting for the owner is announced
+      // here; an accepted result is published by `surfaceAcceptedResult`.
+      if (task.workflow_status !== "RESULT_PENDING_REVIEW") return null;
+      if (task.results_thread_id) return task.results_thread_id;
+      let token;
+      try {
+        token = resolveDiscordBotToken("main");
+      } catch {
+        api.logger?.warn?.(
+          `[zink-governance] pending result thread not posted for task ${taskId}: CREDENTIAL_UNAVAILABLE`,
+        );
+        return null;
+      }
+      const queueItem = defaultQueueManager.getTask(taskId) ?? {};
+      const artifactPaths = [
+        ...(Array.isArray(queueItem.artifacts) ? queueItem.artifacts : []),
+        ...(Array.isArray(queueItem.resultArtifacts)
+          ? queueItem.resultArtifacts
+          : []),
+      ]
+        .map((artifact) =>
+          typeof artifact === "string"
+            ? artifact
+            : (artifact?.logical_path ?? ""),
+        )
+        .filter(Boolean);
+      const surfaced = await postGovernedThread({
+        surface: "results",
+        channelId: resultsForumId,
+        token,
+        title: `⏳ [KẾT QUẢ CHỜ DUYỆT] ${displayTaskToken(taskId)}`,
+        bodyContent: renderGovernedResultBody({
+          taskId,
+          software: resultSoftwareLabelFor(task),
+          outcomeStatus: task?.root_result?.outcome_status,
+          resultDigest: queueItem.resultDigest ?? null,
+          planSteps: renderGovernedPlanSteps(
+            Array.isArray(task?.nodes) ? task.nodes : [],
+          ),
+        }),
+        selections: resultTagSelectionsFor(task, artifactPaths),
+      });
+      if (!surfaced.posted) {
+        api.logger?.warn?.(
+          `[zink-governance] pending result thread not posted for task ${taskId}: ${surfaced.code}`,
+        );
+        return null;
+      }
+      const surfaceEvent = buildResultSurfaceEvent({
+        taskId,
+        threadId: surfaced.threadId,
+        resultDigest: queueItem.resultDigest,
+      });
+      try {
+        recordWorkflowEvent(paths, "WORKFLOW_RESULT_SURFACED", surfaceEvent);
+      } catch (recordError) {
+        api.logger?.error?.(
+          `[zink-governance] PENDING_RESULT_SURFACE_UNRECORDED task=${taskId} thread=${surfaced.threadId} cause=${recordError?.message}`,
+        );
+      }
+      // The accept control: the owner must be able to ACT on the announcement,
+      // not only read about it.
+      try {
+        const revision = String(task.brief_revision ?? 1);
+        const buttons = [
+          {
+            customId: buildComponentCustomId(
+              DISCORD_COMPONENT_ACTION_NAMESPACE.RESULT_ACCEPT,
+              taskId,
+              revision,
+            ),
+            label: "Accept",
+            style: 3,
+            emoji: { name: "✅" },
+          },
+          {
+            customId: buildComponentCustomId(
+              DISCORD_COMPONENT_ACTION_NAMESPACE.RESULT_REJECT,
+              taskId,
+              revision,
+            ),
+            label: "Reject",
+            style: 4,
+            emoji: { name: "❌" },
+          },
+        ];
+        await sendNativePayload({
+          api,
+          to: surfaced.threadId,
+          threadId: surfaced.threadId,
+          accountId: "main",
+          buttons,
+          payload: buildNativeComponentPayload({
+            text: "**Accept** để nghiệm thu kết quả, **Reject** để từ chối kết quả này.",
+            buttons,
+          }),
+        });
+      } catch (controlError) {
+        api.logger?.warn?.(
+          `[zink-governance] pending result controls not delivered for task ${taskId}: ${controlError?.message}`,
+        );
+      }
+      return surfaced.threadId;
+    }
+
+    /**
+     * M12/T9 F-113 (legacy R1-A16-03): the announcement seam. Fire-and-forget
+     * with its own catch: the result is already durable in the ledger, so a
+     * surface failure is recorded and never rewrites what the run produced.
+     */
+    function announcePendingResult(taskId) {
+      if (!taskId) return;
+      const resultsForumId = resolveDiscordDestination(
+        config,
+        "discordResultsForumId",
+        "resultsChannelId",
+      );
+      if (!resultsForumId) {
+        api.logger?.warn?.(
+          "[zink-governance] pending result not announced: no configured results forum",
+        );
+        return;
+      }
+      surfacePendingResult({ taskId, resultsForumId }).catch((announceErr) => {
+        api.logger?.warn?.(
+          `[zink-governance] pending result not announced for task ${taskId}: ${announceErr?.message}`,
+        );
+      });
     }
 
     /**
@@ -5699,13 +5996,10 @@ export default {
         return { status: "BLOCKED", error: "ANNOUNCE_DELIVERY_FAILED" };
       }
 
-      let bodyContent = card.content;
-      if (!bodyContent.includes("[APPROVE]")) {
-        bodyContent += `\n\n---\n**Thao tác dành cho User (Buttons & Actions):**\n- Phản hồi **APPROVE** hoặc bấm **[APPROVE]** để phê duyệt đưa vào hàng đợi thực thi.\n- Phản hồi **REJECT** hoặc bấm **[REJECT]** để từ chối kế hoạch.\n- Phản hồi **REQUEST REVISION** để yêu cầu sửa đổi kế hoạch.`;
-      }
-
       let taskId;
       let briefRevision;
+      let admittedNodes = [];
+      let admittedTaskCode = null;
       try {
         const snapshot = readSnapshot(paths);
         const owner = findSession(
@@ -5717,6 +6011,17 @@ export default {
         if (owner?.task_id) {
           taskId = owner.task_id;
           briefRevision = owner.task?.brief_revision;
+          // M12/T9 F-025 (legacy R1-A03-02): the plan the owner reads must be
+          // the ADMITTED brief - the ledger's own recorded node graph - and not
+          // the model's card text. These are the nodes the approval is bound to.
+          admittedNodes = Array.isArray(owner.task?.nodes)
+            ? owner.task.nodes
+            : [];
+          admittedTaskCode =
+            typeof owner.task?.task_code === "string" &&
+            owner.task.task_code.length > 0
+              ? owner.task.task_code
+              : null;
         }
       } catch {
         api.logger?.warn?.(
@@ -5728,6 +6033,27 @@ export default {
           "[zink-governance] Discord approval card blocked: EXACT_TASK_CORRELATION_REQUIRED",
         );
         return { status: "BLOCKED", error: "EXACT_TASK_CORRELATION_REQUIRED" };
+      }
+
+      // M12/T9 F-025 (legacy R1-A03-02): the card the owner approves is
+      // rendered from the ADMITTED brief with the same canonical builder the
+      // first-spawn card uses. The announce's own text is model output: it was
+      // never admitted, so it must never be presented as the plan the owner is
+      // approving - the plan that executes is the ledger's recorded brief, and
+      // the verdict is bound to it (scope_digest + brief_revision below).
+      const governedCard = buildFirstSpawnApprovalCard({
+        taskId,
+        taskCode: admittedTaskCode,
+        briefRevision,
+        targetAgentId: agentId,
+        spawnInputs: "",
+        spawnNodeId: null,
+        planNodes: admittedNodes,
+        previewImage: null,
+      });
+      let bodyContent = governedCard.bodyContent;
+      if (!bodyContent.includes("[APPROVE]")) {
+        bodyContent += `\n\n---\n**Thao tác dành cho User (Buttons & Actions):**\n- Phản hồi **APPROVE** hoặc bấm **[APPROVE]** để phê duyệt đưa vào hàng đợi thực thi.\n- Phản hồi **REJECT** hoặc bấm **[REJECT]** để từ chối kế hoạch.\n- Phản hồi **REQUEST REVISION** để yêu cầu sửa đổi kế hoạch.`;
       }
 
       const approveCustomId = buildComponentCustomId(
@@ -7450,15 +7776,21 @@ export default {
               ? parsedProposal.validation_criteria
               : "agent-result-payload.schema.json";
 
-          const CANONICAL_AGENT_PRIMARY_STACK = Object.freeze({
-            main: "decision",
-            o1: "data_plant",
-            o2: "intelligence",
-            excel: "data_plant",
-            "power-bi": "intelligence",
-            sql: "data_plant",
-            python: "data_plant",
-          });
+          // M12/T9 F-122: the stack an agent owns is canonical, and an agent the
+          // canonical roster does not know is REFUSED BY NAME. The target's
+          // stack is resolved BEFORE anything is written, so an unmapped agent
+          // can never receive a `data_plant` node and never records one.
+          const targetPrimaryStack = canonicalAgentPrimaryStack(targetAgentId);
+          if (!targetPrimaryStack) {
+            api.logger?.warn?.(
+              `[zink-governance] spawn blocked: agent '${targetAgentId}' has no canonical stack mapping (canonical topology violation)`,
+            );
+            return {
+              allow: false,
+              block: true,
+              reason: "AUTH_UNAUTHORIZED_TARGET",
+            };
+          }
 
           if (owner && owner.task) {
             const task = owner.task;
@@ -7473,22 +7805,26 @@ export default {
                 "sql",
                 "python",
               ];
-              const nodes = candidateAgents.map((id) => ({
-                node_id: `node-${id}`,
-                agent_id: id,
-                stack_id: CANONICAL_AGENT_PRIMARY_STACK[id] || "data_plant",
-                dependencies: [],
-                required: false,
-                input_digest: canonicalHash("zink-input-v1", sanitizedTask),
-                constraints_digest: canonicalHash(
-                  "zink-constraints-v1",
-                  canonicalConstraints,
-                ),
-                validation_digest: canonicalHash(
-                  "zink-validation-v1",
-                  canonicalValidation,
-                ),
-              }));
+              const nodes = candidateAgents
+                .map((id) => ({
+                  node_id: `node-${id}`,
+                  agent_id: id,
+                  // F-122: no silent default. An agent with no canonical stack
+                  // contributes NO node rather than a `data_plant` one.
+                  stack_id: canonicalAgentPrimaryStack(id),
+                  dependencies: [],
+                  required: false,
+                  input_digest: canonicalHash("zink-input-v1", sanitizedTask),
+                  constraints_digest: canonicalHash(
+                    "zink-constraints-v1",
+                    canonicalConstraints,
+                  ),
+                  validation_digest: canonicalHash(
+                    "zink-validation-v1",
+                    canonicalValidation,
+                  ),
+                }))
+                .filter((node) => node.stack_id !== null);
 
               if (
                 candidateNodeId &&
@@ -7497,9 +7833,9 @@ export default {
                 nodes.push({
                   node_id: candidateNodeId,
                   agent_id: targetAgentId,
-                  stack_id:
-                    CANONICAL_AGENT_PRIMARY_STACK[targetAgentId] ||
-                    "data_plant",
+                  // F-122: the target's stack was resolved (and refused when it
+                  // is unmapped) before this record was attempted.
+                  stack_id: targetPrimaryStack,
                   dependencies: [],
                   required: false,
                   input_digest: canonicalHash("zink-input-v1", sanitizedTask),
@@ -7791,6 +8127,22 @@ export default {
           );
         }
         if (owner && !owner.delegation && owner.task?.brief_state === "DRAFT") {
+          // M12/T9 F-122: the node's stack is canonical, and an agent with no
+          // canonical stack is refused BY NAME. The previous inline table fell
+          // back to the data-plant stack, so an unmapped agent silently
+          // received a data-plant node and that node was written into durable
+          // state.
+          const directStackId = canonicalAgentPrimaryStack(context.agentId);
+          if (!directStackId) {
+            api.logger?.warn?.(
+              `[zink-governance] brief activation refused: agent '${context.agentId}' has no canonical stack mapping`,
+            );
+            return {
+              allow: false,
+              reason: "AUTH_UNAUTHORIZED_TARGET",
+              taskCompleted: false,
+            };
+          }
           try {
             recordWorkflowEvent(paths, "WORKFLOW_BRIEF_ACTIVATED", {
               task_id: owner.task_id,
@@ -7800,16 +8152,7 @@ export default {
                 {
                   node_id: `node-${context.agentId}`,
                   agent_id: context.agentId,
-                  stack_id:
-                    {
-                      main: "decision",
-                      o1: "data_plant",
-                      o2: "intelligence",
-                      excel: "data_plant",
-                      "power-bi": "intelligence",
-                      sql: "data_plant",
-                      python: "data_plant",
-                    }[context.agentId] || "data_plant",
+                  stack_id: directStackId,
                   dependencies: [],
                   required: true,
                   input_digest: canonicalHash(
@@ -7852,7 +8195,14 @@ export default {
           return { allow: true, taskCompleted: false, coordinatorRun: true };
         }
         try {
-          return guard.beforeRunEnd(event, context);
+          const runEnd = guard.beforeRunEnd(event, context);
+          // M12/T9 F-113 (legacy R1-A16-03): a result the owner has to judge
+          // must be announced to him as soon as the ledger records it. The
+          // ACCEPT path is not the only producer able to make a pending result
+          // visible, so a task can never sit pending with zero producers able
+          // to announce it.
+          announcePendingResult(owner?.task_id ?? null);
+          return runEnd;
         } catch (err) {
           // In live Discord conversational interactions with human user, Main is the conversational interface to #office.
           // Plain-text conversational replies (clarifications, status, plan explanations, questions)
@@ -8965,6 +9315,10 @@ export default {
                 threadId,
                 origin_message_id: ctx.interaction?.messageId,
                 resultId: parsed.revision || `res-${parsed.taskId}`,
+                // M12/T9 F-025 (legacy R1-A03-02): the button carries the brief
+                // revision the card was issued for, so the verdict can be
+                // refused when the plan it showed has been superseded.
+                briefRevision: parsed.revision,
               },
             });
 
