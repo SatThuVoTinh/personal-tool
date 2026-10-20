@@ -66,6 +66,11 @@ The former self-built L&SC Data Plant is replaced by a **logical external
 infrastructure flow**, not another repository module. Forecasting, optimization,
 operations research and simulation remain first-class capabilities.
 
+**Permanent `NOT RUN` decisions recorded in this table (owner decisions, not open work).**
+
+- **The `pdf-runtime` child suites — `apps/knowledge/pdf-runtime/tests/test_ocr_contract.py` and `test_range_contract.py` — are a permanent `NOT RUN` in every lane.** The repository policy forbids the `python-quality` job from installing the `pdf-runtime` closure (`scripts/repository-policy.mjs`: *"It must stay an explicit NOT RUN in CI rather than being installed here or implied"*), and the only other executor would be a Docker lane that no policy permits. **Compensating control:** the parent-side contract lane in `apps/knowledge/tests/test_pdf_runtime_coverage_and_deadline.py` and `apps/knowledge/tests/test_pdf_ocr_runner_contract.py` covers the same conversion-outcome, deadline-cap and reader-reap behaviour from the parent process, so the behaviour the child suite would assert is still gated — only the child's own process boundary is not. A row can no longer be closed by silently skipping that suite: `tests/repository-policy.test.mjs` asserts the policy's own rule, and `F-269`'s status records the decision here.
+- **The R16 apply rehearsal is a permanent `NOT RUN` on every lane that cites it.** `tests/m8-t2.13-r16-apply-rehearsal.test.mjs` now declares the reason it cannot start ("the R16 apply rehearsal runs only inside the private mount namespace the rehearsal driver creates, and this platform has no live runtime to clone") and the number of rehearsal-gated cases is declared and machine-checked, so a reader can no longer mistake a skipped gate for a green one.
+
 ## 4. Current focus
 
 ```text
