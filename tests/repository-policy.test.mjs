@@ -1405,6 +1405,63 @@ test("F-038: no credential literal exists in the local scratch directory", () =>
 });
 
 // ---------------------------------------------------------------------------
+// F-137 — an ownerless top-level tree that duplicates a Zink Tools capability
+//
+// `models/forecast`, `models/optimization`, ... are the Zink Tools capability
+// paths under a different root. A tree an agent can write into and that no
+// canonical document owns is a surface with no contract behind it.
+// ---------------------------------------------------------------------------
+const LOCAL_WORKING_AREAS = new Set([
+  ".git",
+  ".tmp",
+  "node_modules",
+  "scratch",
+]);
+
+test("F-137: no ownerless top-level tree duplicates a Zink Tools capability name", () => {
+  const capabilityNames = new Set(
+    readdirSync(path.join(REPO_ROOT, "zink-tools"), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name),
+  );
+  assert.ok(
+    capabilityNames.size > 0,
+    "zink-tools must publish its capability paths",
+  );
+
+  const tracked = listTrackedFiles(REPO_ROOT);
+  const offenders = [];
+  for (const entry of readdirSync(REPO_ROOT, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    if (LOCAL_WORKING_AREAS.has(entry.name)) continue;
+    const relative = `${entry.name}/`;
+    const carriesTrackedContent = tracked.some((file) =>
+      file.startsWith(relative),
+    );
+    if (carriesTrackedContent) continue;
+    const children = readdirSync(path.join(REPO_ROOT, entry.name), {
+      withFileTypes: true,
+    })
+      .filter((child) => child.isDirectory())
+      .map((child) => child.name);
+    const duplicates = [
+      ...(capabilityNames.has(entry.name) ? [entry.name] : []),
+      ...children.filter((child) => capabilityNames.has(child)),
+    ];
+    if (duplicates.length > 0) {
+      offenders.push(
+        `${entry.name}/ duplicates the Zink Tools capability path(s) ${duplicates.join(", ")} and no canonical document owns it`,
+      );
+    }
+  }
+  assert.deepEqual(
+    offenders,
+    [],
+    `an ownerless top-level tree that duplicates a capability path is a surface with no contract behind it: ${offenders.join("; ")}`,
+  );
+});
+
+// ---------------------------------------------------------------------------
 // F-344 — an archive-cited legacy id that resolves to nothing
 //
 // The register keeps a `Legacy register id` so a row can be traced back to
