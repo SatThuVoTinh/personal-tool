@@ -808,6 +808,31 @@ function sortDiagnostics(errors) {
   );
 }
 
+/**
+ * The identity a record is filed under: its namespace path and its capability
+ * slug. Two records with the same identity are two VERSIONS of one skill.
+ */
+function identityKey(record) {
+  const identity = record?.manifest?.identity;
+  if (
+    !isObject(identity) ||
+    !Array.isArray(identity.namespace) ||
+    typeof identity.capability !== "string"
+  )
+    return null;
+  return `${identity.namespace.join("/")}\u0000${identity.capability}`;
+}
+
+/**
+ * Whether the record's LAST lifecycle event is ACTIVE. The catalog's grammar
+ * allows `CANDIDATE,ACTIVE,DEPRECATED`, so a retired version is a legal
+ * record that stays in the tree beside its successor.
+ */
+function isActiveRecord(record) {
+  const lifecycle = record?.manifest?.lifecycle;
+  return Array.isArray(lifecycle) && lifecycle.at(-1)?.status === "ACTIVE";
+}
+
 export async function scanCatalog(skillsRoot) {
   const errors = [];
   const records = [];
@@ -846,7 +871,7 @@ export async function scanCatalog(skillsRoot) {
       lifecycle.at(-1)?.status !== "ACTIVE"
     )
       continue;
-    const key = `${identity.namespace.join("/")}\u0000${identity.capability}`;
+    const key = identityKey(record);
     const first = active.get(key);
     if (first) {
       // F-222: the diagnostic must name BOTH offending records. It used to
@@ -863,9 +888,32 @@ export async function scanCatalog(skillsRoot) {
     } else active.set(key, record);
   }
   const sortedErrors = sortDiagnostics(errors);
-  const sortedRecords = records.sort((left, right) =>
-    compareStrings(left.relativePath, right.relativePath),
-  );
+  const sortedRecords = records.sort((left, right) => {
+    // F-064 (R1-A10-01): the ACTIVE version of an identity sorts BEFORE its
+    // superseded siblings, so "the first record of this identity" IS the
+    // active one for every consumer that resolves a skill by first match.
+    //
+    // A retired version is a legal catalog record (`CANDIDATE,ACTIVE,DEPRECATED`
+    // is a legal lifecycle) and it sorts BEFORE its successor by relative path
+    // (`.../1.0.0` < `.../2.0.0`). A consumer that resolved by path order
+    // therefore picked the RETIRED record, the ACTIVE version became
+    // unreachable, and the read/apply gate refused with SKILL_NOT_ACTIVE — the
+    // skill silently disappeared from the apply boundary as soon as any
+    // superseded version existed.
+    //
+    // Only the order INSIDE one identity changes. The ACTIVE records keep
+    // their path order relative to each other, so every consumer that filters
+    // on the lifecycle (the vector sync's ingest and retirement tombstones,
+    // the promotion clash check, the CLI's `getActiveSkill`) sees exactly the
+    // same sequence as before.
+    const leftKey = identityKey(left);
+    if (leftKey !== null && leftKey === identityKey(right)) {
+      const leftActive = isActiveRecord(left) ? 0 : 1;
+      const rightActive = isActiveRecord(right) ? 0 : 1;
+      if (leftActive !== rightActive) return leftActive - rightActive;
+    }
+    return compareStrings(left.relativePath, right.relativePath);
+  });
   return {
     errors: sortedErrors,
     // F-222: the record set is no longer blanked by an unrelated diagnostic.

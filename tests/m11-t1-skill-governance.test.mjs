@@ -624,3 +624,98 @@ test("M11-11: unwired reconciliation and dead manifest reads are removed", () =>
   const cat = code(readFileSync(CATALOG_PATH, "utf8"));
   assert.doesNotMatch(cat, /JSON\.parse\(\s*new TextDecoder/u);
 });
+
+// ---------------------------------------------------------------------------
+// F-064 (R1-A10-01): a superseded version must never hide the ACTIVE one
+// ---------------------------------------------------------------------------
+test("F-064: read/apply/validate resolve the ACTIVE version when a superseded one coexists", async () => {
+  const { root, skillsRoot } = await freshRoots();
+  try {
+    // 1.0.0 was retired (CANDIDATE,ACTIVE,DEPRECATED) and sorts BEFORE 2.0.0
+    // by relative path, so a resolver that takes the first path match
+    // resolves the retired record and the ACTIVE version becomes unreachable:
+    // the read/apply gate then refuses with SKILL_NOT_ACTIVE and the skill
+    // silently disappears from the apply boundary.
+    const writeVersion = async (version, status, body) => {
+      const dir = path.join(
+        skillsRoot,
+        "office",
+        "rotating-capability",
+        version,
+      );
+      await mkdir(dir, { recursive: true });
+      const lifecycle = [
+        { status: "CANDIDATE", at: "2026-10-01T00:00:00Z", actor: "excel" },
+        {
+          status: "ACTIVE",
+          at: "2026-10-01T01:00:00Z",
+          actor: "owner",
+          decision_ref: "PLAN:M11/T1-R1",
+        },
+      ];
+      if (status === "DEPRECATED") {
+        lifecycle.push({
+          status: "DEPRECATED",
+          at: "2026-10-02T00:00:00Z",
+          actor: "owner",
+          decision_ref: "PLAN:M11/T1-R1",
+        });
+      }
+      await writeFile(path.join(dir, "SKILL.md"), body, "utf8");
+      await writeFile(
+        path.join(dir, "manifest.json"),
+        JSON.stringify(
+          {
+            schema_version: 1,
+            identity: {
+              namespace: ["office"],
+              capability: "rotating-capability",
+              version,
+            },
+            content: { path: "SKILL.md", sha256: sha(body) },
+            provenance: { source_type: "research", references: [] },
+            lifecycle,
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+    };
+
+    const retiredBody = "# Rotating\n\nThe retired 1.0.0 body.\n";
+    const activeBody = "# Rotating\n\nThe current 2.0.0 body.\n";
+    await writeVersion("1.0.0", "DEPRECATED", retiredBody);
+    await writeVersion("2.0.0", "ACTIVE", activeBody);
+
+    const catalog = await scanCatalog(skillsRoot);
+    assert.equal(
+      catalog.errors.length,
+      0,
+      `both versions must be valid records: ${JSON.stringify(catalog.errors)}`,
+    );
+    assert.equal(catalog.records.length, 2);
+
+    const adapter = new SkillAdapter(skillsRoot, { skillsRoot });
+    for (const action of ["read", "apply", "validate"]) {
+      const result = await adapter.querySkillStore({
+        action,
+        skill_id: "office/rotating-capability",
+      });
+      assert.equal(result.governed_status, "SUCCESS", `${action} must succeed`);
+      assert.equal(
+        result.skill_content.version,
+        "2.0.0",
+        `${action} must resolve the ACTIVE version, not the superseded one`,
+      );
+      assert.equal(result.skill_content.lifecycle_state, "ACTIVE");
+      assert.equal(
+        result.skill_content.content,
+        activeBody,
+        `${action} must serve the ACTIVE version's bytes`,
+      );
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
