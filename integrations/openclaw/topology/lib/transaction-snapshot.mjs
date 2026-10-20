@@ -81,6 +81,15 @@ export const SNAPSHOT_TARGETS = Object.freeze({
     "extensions/zink-governance/package.json",
     "extensions/zink-governance/openclaw.plugin.json",
     "extensions/zink-governance/governance-manifests.json",
+    // M12/T9 F-106: the builder's apply branch writes these four, so they are
+    // mutated surfaces of the apply. The preimage did not record them, so a
+    // failed apply reported `rollbackSucceeded: true` while the resolver, the
+    // hotfix utility and the two auth plans stayed at the NEW revision: the
+    // rollback compared only the bytes it had captured.
+    "zink-auth-secret-plan.json",
+    "zink-auth-order-plan.json",
+    "bin/openclaw-pass-resolver",
+    "bin/openclaw-gemini-stream-hotfix.mjs",
   ]),
   runtime: nativePatchedRuntimeRelatives(),
   // M10/T2-R8: the patched Discord preflight lives in the INSTALLED CHANNEL
@@ -90,6 +99,16 @@ export const SNAPSHOT_TARGETS = Object.freeze({
   // tracking — the same "mutated but untracked" hole the derived runtime list
   // was introduced to close, one tree over.
   discordChannel: nativePatchedDiscordChannelRelatives(),
+  // M12/T9 F-106: the unit drop-in is the third governed root.
+  //
+  // The builder writes `~/.config/systemd/user/<unit>.service.d/10-zink.conf`
+  // in its apply branch, and that path is in NEITHER the state directory nor
+  // the OpenClaw runtime root, so a two-root preimage could not hold it at
+  // all: the drop-in was rewritten by every apply and restored by none, and
+  // the rollback reported success while the unit still carried the new
+  // revision. The drop-in is therefore a target of its own root, named by the
+  // caller that owns it.
+  systemd: Object.freeze(["openclaw-gateway-zink.service.d/10-zink.conf"]),
 });
 
 const digest = (body) => createHash("sha256").update(body).digest("hex");
@@ -112,26 +131,32 @@ function noLinks(target) {
  * a newly added asset cannot silently escape the snapshot. An irregular entry is
  * a hard error, never a silently skipped component.
  */
+function listFilesRecursively(root, relative = "") {
+  const found = [];
+  for (const name of readdirSync(path.join(root, relative))) {
+    const child = relative ? `${relative}/${name}` : name;
+    const stat = lstatSync(path.join(root, child));
+    if (stat.isSymbolicLink())
+      throw new Error("TRANSACTION_SNAPSHOT_SYMLINK_DENIED");
+    if (stat.isDirectory()) found.push(...listFilesRecursively(root, child));
+    else if (stat.isFile()) found.push(child);
+    else throw new Error("TRANSACTION_SNAPSHOT_TARGET_NOT_REGULAR");
+  }
+  return found.sort();
+}
+
 function discoverExtensionAssets(extensionRoot) {
   if (!existsSync(extensionRoot)) return [];
-  const found = [];
-  const visit = (relative) => {
-    for (const name of readdirSync(path.join(extensionRoot, relative))) {
-      const child = relative ? `${relative}/${name}` : name;
-      const stat = lstatSync(path.join(extensionRoot, child));
-      if (stat.isSymbolicLink())
-        throw new Error("TRANSACTION_SNAPSHOT_SYMLINK_DENIED");
-      if (stat.isDirectory()) visit(child);
-      else if (stat.isFile()) found.push(`extensions/zink-governance/${child}`);
-      else throw new Error("TRANSACTION_SNAPSHOT_TARGET_NOT_REGULAR");
-    }
-  };
-  visit("");
-  return found.sort();
+  return listFilesRecursively(extensionRoot).map(
+    (child) => `extensions/zink-governance/${child}`,
+  );
 }
 
 /** Which root a recorded relative path belongs to. */
 function rootForRelative(relative) {
+  // M12/T9 F-106: the systemd drop-in is the third root, and it is named
+  // explicitly so it can never be mistaken for a runtime-relative path.
+  if (SNAPSHOT_TARGETS.systemd.includes(relative)) return "systemdRoot";
   return SNAPSHOT_TARGETS.state.includes(relative) ||
     relative.startsWith("extensions/zink-governance/") ||
     SNAPSHOT_TARGETS.discordChannel.includes(relative)
@@ -144,7 +169,14 @@ function rootForRelative(relative) {
  * path that would escape its root.
  */
 function resolveRelative(snapshot, relative) {
-  const base = path.resolve(snapshot[rootForRelative(relative)]);
+  const root = rootForRelative(relative);
+  const declared = snapshot[root];
+  // M12/T9 F-106: a path whose root was never named cannot be resolved. It is
+  // refused rather than guessed, so a snapshot that lost its systemd root
+  // fails closed instead of resolving against the wrong tree.
+  if (typeof declared !== "string" || !declared)
+    throw new Error("TRANSACTION_SNAPSHOT_TARGET_MISMATCH");
+  const base = path.resolve(declared);
   const absolute = path.resolve(base, relative);
   if (absolute !== base && !absolute.startsWith(base + path.sep))
     throw new Error("TRANSACTION_SNAPSHOT_TARGET_MISMATCH");
@@ -154,7 +186,14 @@ function resolveRelative(snapshot, relative) {
 function rootsFrom(snapshot) {
   if (!snapshot?.stateDir || !snapshot?.runtimeRoot)
     throw new Error("TRANSACTION_SNAPSHOT_INCONSISTENT");
-  return { stateDir: snapshot.stateDir, runtimeRoot: snapshot.runtimeRoot };
+  return {
+    stateDir: snapshot.stateDir,
+    runtimeRoot: snapshot.runtimeRoot,
+    // M12/T9 F-106: the third root is OPTIONAL, so a snapshot captured before
+    // the drop-in was tracked still resolves. A path that needs it and does
+    // not have it is refused by `resolveRelative`.
+    systemdRoot: snapshot.systemdRoot ?? null,
+  };
 }
 
 /**
@@ -163,10 +202,11 @@ function rootsFrom(snapshot) {
  * remove a file the apply created.
  */
 export function createTransactionSnapshot(roots) {
-  const { stateDir, runtimeRoot } = roots ?? {};
+  const { stateDir, runtimeRoot, systemdRoot = null } = roots ?? {};
   if (!stateDir || !runtimeRoot)
     throw new Error("TRANSACTION_SNAPSHOT_NO_ROOTS");
-  for (const root of [stateDir, runtimeRoot]) noLinks(root);
+  for (const root of [stateDir, runtimeRoot, systemdRoot].filter(Boolean))
+    noLinks(root);
 
   // M12/T9 F-011: the channel targets follow the INSTALLED package, so a
   // reinstall that changes the install directory is covered instead of missed.
@@ -192,6 +232,15 @@ export function createTransactionSnapshot(roots) {
       relative,
       root: runtimeRoot,
     })),
+    // M12/T9 F-106: the unit drop-in is captured from the THIRD root when the
+    // caller names it. A caller that does not name it captures no systemd
+    // target, which is why the live apply names it explicitly.
+    ...(systemdRoot
+      ? SNAPSHOT_TARGETS.systemd.map((relative) => ({
+          relative,
+          root: systemdRoot,
+        }))
+      : []),
   ];
   const discovered = discoverExtensionAssets(
     path.join(stateDir, "extensions", "zink-governance"),
@@ -238,6 +287,9 @@ export function createTransactionSnapshot(roots) {
     schema: "zink-transaction-snapshot/1",
     stateDir: path.resolve(stateDir),
     runtimeRoot: path.resolve(runtimeRoot),
+    // M12/T9 F-106: the third root travels with the snapshot, so a restore
+    // resolves the unit drop-in against the tree it was captured from.
+    systemdRoot: systemdRoot ? path.resolve(systemdRoot) : null,
     files,
   };
   // Never hand back a snapshot that cannot already be trusted.
@@ -443,6 +495,74 @@ export function verifyLiveRestore(roots, snapshot, options = {}) {
   };
 }
 
+/**
+ * M12/T9 F-106: the relative path an absolute path has under a governed root,
+ * or null when it lies outside every root the snapshot declares.
+ */
+function relativeUnderAnyRoot(roots, absolutePath) {
+  const target = path.resolve(absolutePath);
+  for (const root of [roots.stateDir, roots.runtimeRoot, roots.systemdRoot]) {
+    if (typeof root !== "string" || !root) continue;
+    const base = path.resolve(root);
+    if (target === base) return "";
+    if (target.startsWith(base + path.sep))
+      return path.relative(base, target).split(path.sep).join("/");
+  }
+  return null;
+}
+
+/**
+ * M12/T9 F-106: can the transaction preimage recreate this path?
+ *
+ * The preimage IS the rollback target, so a path it does not record cannot be
+ * brought back by a rollback. A file the preimage recorded under the same
+ * relative path is recreatable. A DIRECTORY is recreatable only when EVERY
+ * file under it is recorded, because anything else would be deleted for good
+ * with no preimage to restore it from.
+ *
+ * The answer is false for a path outside every governed root, and false for a
+ * path the snapshot cannot resolve: an unknown path is never assumed to be
+ * recreatable.
+ */
+export function preimageRecreates(snapshot, absolutePath) {
+  const roots = rootsFrom(snapshot);
+  const relative = relativeUnderAnyRoot(roots, absolutePath);
+  if (relative === null) return false;
+  const files = snapshot.files ?? {};
+  if (Object.hasOwn(files, relative)) return true;
+  const stat = lstatSync(absolutePath, { throwIfNoEntry: false });
+  if (!stat?.isDirectory()) return false;
+  for (const child of listFilesRecursively(absolutePath)) {
+    const childRelative = relative ? `${relative}/${child}` : child;
+    if (!Object.hasOwn(files, childRelative)) return false;
+  }
+  return true;
+}
+
+/**
+ * M12/T9 F-106: delete a path ONLY when the transaction can recreate it.
+ *
+ * The apply's prune stages used to delete whole trees that no preimage could
+ * restore - the legacy r12 quarantine among them - so a failed apply left
+ * unique evidence gone for good while the rollback reported success. The
+ * delete is now gated on the preimage: what the transaction cannot recreate is
+ * RETAINED, and the caller is told which path was kept and why.
+ *
+ * The removal happens HERE, so a caller cannot delete a path without passing
+ * the gate. A path outside every governed root is never recreatable, so it is
+ * never deleted either.
+ */
+export function pruneTransactionPath(snapshot, absolutePath) {
+  if (!preimageRecreates(snapshot, absolutePath))
+    return {
+      deleted: false,
+      retained: absolutePath,
+      reason: "TRANSACTION_PREIMAGE_CANNOT_RECREATE",
+    };
+  rmSync(absolutePath, { recursive: true, force: true });
+  return { deleted: true, retained: null, reason: null };
+}
+
 // ---------------------------------------------------------------------------
 // R12 — durable transaction persistence.
 //
@@ -645,6 +765,11 @@ export function persistTransactionSnapshot(
     snapshotPath: PREIMAGE_DIR,
     stateDir: snapshot.stateDir,
     runtimeRoot: snapshot.runtimeRoot,
+    // M12/T9 F-106: the third root is part of the record, so a recovery that
+    // reloads the preimage can restore the unit drop-in as well. It is
+    // OPTIONAL, so a record written before the drop-in was tracked still
+    // loads; the manifest binding covers it either way.
+    systemdRoot: snapshot.systemdRoot ?? null,
     files,
   };
   record.manifestDigest = manifestDigest(record);
@@ -713,6 +838,10 @@ export function loadTransaction(stateDir, id) {
     schema: "zink-transaction-snapshot/1",
     stateDir: record.stateDir,
     runtimeRoot: record.runtimeRoot,
+    // M12/T9 F-106: the third root comes back with the record. A record
+    // written before the drop-in was tracked carries none, and the paths that
+    // would need it are then refused rather than resolved against a guess.
+    systemdRoot: record.systemdRoot ?? null,
     files: {},
   };
   for (const [relative, entry] of Object.entries(record.files)) {

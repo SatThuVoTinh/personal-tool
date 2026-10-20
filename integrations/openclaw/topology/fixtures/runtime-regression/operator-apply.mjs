@@ -30,6 +30,7 @@ import {
   findOrphanedTransaction,
   markTransactionComplete,
   persistTransactionSnapshot,
+  pruneTransactionPath,
   restoreTransactionSnapshot,
   verifyLiveRestore,
   verifyTransactionSnapshot,
@@ -65,14 +66,18 @@ const service = "openclaw-gateway-zink.service";
 // M12/T9 F-182: the drop-in this apply writes. It is the authoritative
 // statement of the unit definition the apply intended, so the loaded-unit
 // check compares the manager's own view against THIS file.
-const dropInPath = path.join(
+//
+// M12/T9 F-106: the drop-in lives in a THIRD root - outside the state
+// directory and outside the OpenClaw runtime root - so the transaction
+// preimage needs that root named, or the file the apply rewrites is the one
+// file the rollback cannot restore.
+const systemdRoot = path.join(
   path.dirname(stateDir),
   ".config",
   "systemd",
   "user",
-  `${service}.d`,
-  "10-zink.conf",
 );
+const dropInPath = path.join(systemdRoot, `${service}.d`, "10-zink.conf");
 
 function readIdentifiers() {
   assertNoSymlinkComponents(identifiersPath);
@@ -226,11 +231,25 @@ const oldQuarantine = path.join(
 const report = await applyRuntime({
   readIdentifiers,
   runBuilder,
-  pruneQuarantine() {
-    if (existsSync(oldQuarantine))
-      rmSync(oldQuarantine, { recursive: true, force: true });
+  pruneQuarantine(snapshot) {
+    // M12/T9 F-106: the quarantine prune used to delete the legacy r12
+    // quarantine outright. That tree is deliberately never a transaction
+    // target - it stays historical recovery evidence - so no preimage could
+    // recreate it and the delete destroyed unique evidence for good. The
+    // delete is now gated on the preimage: what the transaction cannot
+    // recreate is RETAINED. The removal itself lives in the gate, so this
+    // stage cannot delete anything the transaction could not restore.
+    return pruneTransactionPath(snapshot, oldQuarantine);
   },
   pruneStaleNativeBackup() {
+    // M12/T9 F-106: this prune is NOT gated on the transaction preimage, and
+    // deliberately so. `native-r12` is the native patch's OWN recovery target:
+    // the module contract states that the transaction never references it, and
+    // the patch stage that follows rebuilds it from the live baseline in the
+    // same apply. It is pruned only when the runtime is entirely at BASELINE,
+    // where the bytes it holds are the live runtime's own bytes, so nothing
+    // unique is destroyed. Gating it on the preimage would instead make a
+    // stale native backup fail the apply with NATIVE_BACKUP_MANIFEST_INVALID.
     if (!existsSync(nativeBackup)) return;
     const inspection = inspectNativePatch(nativeRoots);
     if (
@@ -249,7 +268,7 @@ const report = await applyRuntime({
   // superseded config and quarantines the governance extension. Both remain
   // available for deliberate historical recovery via operator-rollback.mjs.
   createTransactionSnapshot: () =>
-    createTransactionSnapshot({ stateDir, runtimeRoot }),
+    createTransactionSnapshot({ stateDir, runtimeRoot, systemdRoot }),
   verifyTransactionSnapshot,
   // R12: the preimage is persisted and re-read before mutation, so a process
   // that dies mid-apply still leaves a usable recovery target. `persist`

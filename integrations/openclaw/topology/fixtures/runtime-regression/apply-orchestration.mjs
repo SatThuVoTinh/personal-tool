@@ -186,10 +186,16 @@ export async function applyRuntime(deps) {
     deps.runBuilder("--apply", identifiers, transaction?.attemptId ?? null);
 
     stage = "quarantine-prune";
-    deps.pruneQuarantine();
+    // M12/T9 F-106: the prune is handed the transaction preimage, because a
+    // stage that deletes must be able to tell what the transaction can
+    // recreate. What it cannot recreate is retained, never deleted.
+    deps.pruneQuarantine(snapshot);
 
     stage = "native-backup-prune";
-    deps.pruneStaleNativeBackup();
+    // The native backup is the native patch's OWN recovery target: the patch
+    // stage that follows rebuilds it from the live baseline in this same
+    // apply, so the preimage is not what restores it.
+    deps.pruneStaleNativeBackup(snapshot);
 
     stage = "native-patch";
     deps.applyNativePatch();
