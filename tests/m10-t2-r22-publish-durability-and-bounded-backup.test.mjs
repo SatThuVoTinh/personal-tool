@@ -190,15 +190,48 @@ test("R22-05: channel-scope pins are tracked as state-relative targets", () => {
   const channel = nativePatchedDiscordChannelRelatives();
   assert.ok(Array.isArray(channel));
   const scopes = new Set();
+  const expectedChannel = new Set();
   for (const pin of Object.values(NATIVE_RUNTIME_PINS))
-    for (const entry of Object.values(pin.sources))
+    for (const [file, entry] of Object.entries(pin.sources)) {
       scopes.add(entry.scope ?? "runtime");
-  if (scopes.has("discordChannel"))
-    for (const relative of channel)
-      assert.ok(
-        SNAPSHOT_TARGETS.discordChannel.includes(relative),
-        relative + " must be a state-relative snapshot target",
-      );
+      if (entry.scope === "discordChannel")
+        expectedChannel.add(
+          `${NATIVE.NATIVE_DISCORD_CHANNEL_RELATIVE}/dist/${file}`,
+        );
+    }
+  // The scope set must not be empty. While it was, the assertion loop below
+  // was unreachable and the case still reported PASS, so reclassifying one
+  // scope silenced the check instead of failing it.
+  assert.ok(scopes.size > 0, "the declared pin scopes must not be empty");
+  // The channel scope must itself be declared: the Discord preflight is a
+  // governed artifact, and dropping its scope would empty the assertion set
+  // below without failing anything.
+  assert.ok(
+    expectedChannel.size > 0,
+    "the pins must declare at least one channel-scoped artifact",
+  );
+  // Every declared scope must own a snapshot bucket, so a scope can never
+  // appear without a rollback target.
+  for (const scope of scopes) {
+    assert.ok(
+      Object.prototype.hasOwnProperty.call(SNAPSHOT_TARGETS, scope),
+      `the declared scope ${scope} has no snapshot bucket`,
+    );
+  }
+  // The channel invariant is asserted UNCONDITIONALLY, against the pins the
+  // production derivation reads, and not against the snapshot list that is
+  // derived from the same pins - that comparison cannot fail.
+  assert.deepEqual(
+    [...expectedChannel].sort(),
+    [...channel].sort(),
+    "the channel targets must be exactly the pins declared under the channel scope",
+  );
+  for (const relative of channel) {
+    assert.ok(
+      SNAPSHOT_TARGETS.discordChannel.includes(relative),
+      relative + " must be a state-relative snapshot target",
+    );
+  }
 });
 
 // T2.1-2 (R5-E04-03): a rejected promotion rolls its version directory back, and
