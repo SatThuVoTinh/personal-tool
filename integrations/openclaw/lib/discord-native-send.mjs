@@ -43,6 +43,13 @@
  * Failure semantics: native path unavailable -> throw
  * NATIVE_OUTBOUND_UNAVAILABLE; delivery failure -> throw (caller logs an
  * incident). Never falls back to raw REST silently.
+ *
+ * M12/T9 F-183: the send is BOUNDED. A stalled Discord socket used to pin this
+ * seam forever, because the adapter's promise was awaited with no deadline and
+ * no abort — the defect class M11/T3-R1 removed for the REST fetch sites. The
+ * seam now stops waiting at the deadline and refuses with a named code, and a
+ * Discord rate limit is surfaced with its `Retry-After` / `X-RateLimit` facts so
+ * a bounded retry is possible instead of a silently lost card.
  */
 
 import { existsSync, readFileSync, realpathSync } from "node:fs";
@@ -72,6 +79,22 @@ const MAX_CUSTOM_ID_LENGTH = 100;
 // re-type a code, so each card is registered for a day. This is a per-call value
 // passed to the host API, not a change to host or global configuration.
 export const DISCORD_COMPONENT_TTL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * M12/T9 F-183: the bound on the native outbound send.
+ *
+ * It is the SAME bound the REST fetch sites already use
+ * (`DISCORD_REST_DEADLINE_MS` in the plugin). The plugin imports THIS module,
+ * so a lib module cannot import its own caller; the two constants are pinned
+ * equal by `tests/agent-discord-F-183.test.mjs`.
+ */
+export const DISCORD_NATIVE_DEADLINE_MS = 10_000;
+
+/** The named code a never-settling adapter is refused with. */
+export const NATIVE_DELIVERY_TIMEOUT = "NATIVE_DELIVERY_TIMEOUT";
+
+/** The named code a Discord rate limit is surfaced with. */
+export const NATIVE_DELIVERY_RATE_LIMITED = "NATIVE_DELIVERY_RATE_LIMITED";
 
 // The host spec vocabulary for one button; `NATIVE_BUTTON_STYLE` numbers are the
 // Discord wire values, so the two must be translated rather than passed through.
@@ -541,8 +564,141 @@ export function assertMediaInsideRoots(mediaUrl, mediaLocalRoots) {
 }
 
 /**
+ * Refuse a missing or nonsensical deadline rather than defaulting to "wait
+ * forever" — the same rule the forum-tag module applies to its REST calls.
+ */
+function assertNativeDeadline(deadlineMs) {
+  if (
+    typeof deadlineMs !== "number" ||
+    !Number.isFinite(deadlineMs) ||
+    deadlineMs <= 0
+  )
+    throw new Error("NATIVE_DEADLINE_REQUIRED");
+}
+
+/**
+ * Await the host adapter's send under a bounded deadline.
+ *
+ * The adapter's promise belongs to the host and exposes no abort contract this
+ * repository can verify, so the seam enforces the bound on its own wait: a send
+ * that has not settled at the deadline is refused by a named code. A send that
+ * settles later is ignored, and its late rejection is absorbed so it cannot
+ * become an unhandled rejection in the host process.
+ */
+async function sendWithinDeadline(send, deadlineMs) {
+  let timer = null;
+  const sent = Promise.resolve().then(send);
+  // The send may settle after the deadline; that rejection is not the caller's
+  // failure any more, so it must not surface as an unhandled rejection.
+  sent.catch(() => undefined);
+  try {
+    return await Promise.race([
+      sent,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          const error = new Error(
+            `${NATIVE_DELIVERY_TIMEOUT}: adapter sendPayload did not settle within ${deadlineMs}ms`,
+          );
+          error.code = NATIVE_DELIVERY_TIMEOUT;
+          error.deadlineMs = deadlineMs;
+          reject(error);
+        }, deadlineMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+  }
+}
+
+const DISCORD_RATE_LIMIT_STATUS = 429;
+
+/** Read one header from a `Headers` instance or from a plain header object. */
+function readHeaderValue(headers, name) {
+  if (!headers) return null;
+  if (typeof headers.get === "function") {
+    const value = headers.get(name);
+    return value === undefined || value === null ? null : String(value);
+  }
+  if (typeof headers !== "object") return null;
+  const wanted = name.toLowerCase();
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === wanted)
+      return value === undefined || value === null ? null : String(value);
+  }
+  return null;
+}
+
+function numberOrNull(value) {
+  if (value === null || value === undefined) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/**
+ * The status and the rate-limit headers Discord sends, read from the places a
+ * Discord HTTP error carries them. The host's error shape is not ours, so the
+ * read is defensive: a 429 whose headers cannot be read still surfaces as a
+ * rate limit — the status alone stops a blind retry — it just cannot say when
+ * to come back.
+ */
+function rateLimitFacts(error) {
+  const status = numberOrNull(
+    error?.status ??
+      error?.statusCode ??
+      error?.response?.status ??
+      error?.rawError?.status ??
+      error?.cause?.status,
+  );
+  if (status !== DISCORD_RATE_LIMIT_STATUS) return null;
+  const headers =
+    error?.headers ??
+    error?.response?.headers ??
+    error?.rawError?.headers ??
+    error?.cause?.headers ??
+    null;
+  const retryAfterSeconds = numberOrNull(
+    readHeaderValue(headers, "retry-after"),
+  );
+  const resetSeconds = numberOrNull(
+    readHeaderValue(headers, "x-ratelimit-reset"),
+  );
+  return {
+    status,
+    retryAfterMs:
+      retryAfterSeconds === null
+        ? null
+        : Math.max(0, Math.round(retryAfterSeconds * 1000)),
+    rateLimitResetAt:
+      resetSeconds === null ? null : Math.round(resetSeconds * 1000),
+    rateLimitRemaining: readHeaderValue(headers, "x-ratelimit-remaining"),
+  };
+}
+
+/**
+ * Turn a Discord rate limit into a refusal the caller can act on: the named
+ * code carries the status and the `Retry-After` / `X-RateLimit` facts, so a
+ * bounded retry is possible instead of a silently lost card. The original
+ * failure is kept as the cause.
+ */
+function rateLimitedDeliveryError(error, facts) {
+  const limited = new Error(
+    `${NATIVE_DELIVERY_RATE_LIMITED}: status=${facts.status} retryAfterMs=${facts.retryAfterMs ?? "unknown"} rateLimitResetAt=${facts.rateLimitResetAt ?? "unknown"} rateLimitRemaining=${facts.rateLimitRemaining ?? "unknown"}`,
+    { cause: error },
+  );
+  limited.code = NATIVE_DELIVERY_RATE_LIMITED;
+  limited.status = facts.status;
+  limited.retryAfterMs = facts.retryAfterMs;
+  limited.rateLimitResetAt = facts.rateLimitResetAt;
+  limited.rateLimitRemaining = facts.rateLimitRemaining;
+  return limited;
+}
+
+/**
  * Send through the native outbound adapter. Returns { messageId, channelId }.
  * @throws NATIVE_OUTBOUND_UNAVAILABLE when the seam is missing.
+ * @throws NATIVE_DELIVERY_TIMEOUT when the adapter has not settled at the
+ * deadline.
+ * @throws NATIVE_DELIVERY_RATE_LIMITED when Discord answered 429.
  */
 export async function sendNativePayload({
   api,
@@ -556,7 +712,9 @@ export async function sendNativePayload({
   sdk,
   resolveSdk = resolveHostDiscordComponentSdk,
   logger = null,
+  deadlineMs = DISCORD_NATIVE_DEADLINE_MS,
 }) {
+  assertNativeDeadline(deadlineMs);
   const loadAdapter = api?.runtime?.channel?.outbound?.loadAdapter;
   if (typeof loadAdapter !== "function") {
     throw new Error("NATIVE_OUTBOUND_UNAVAILABLE: loadAdapter missing");
@@ -627,7 +785,20 @@ export async function sendNativePayload({
   }
   if (accountId) context.accountId = accountId;
   context.payload = outboundPayload;
-  const result = await adapter.sendPayload(context);
+  // M12/T9 F-183: the send is bounded. A stalled Discord socket must not pin
+  // this seam, so the wait ends at the deadline and the refusal carries a named
+  // code; a rate limit is surfaced with the facts a bounded retry needs.
+  let result;
+  try {
+    result = await sendWithinDeadline(
+      () => adapter.sendPayload(context),
+      deadlineMs,
+    );
+  } catch (error) {
+    const facts = rateLimitFacts(error);
+    if (facts) throw rateLimitedDeliveryError(error, facts);
+    throw error;
+  }
   if (!result || typeof result !== "object") {
     throw new Error("NATIVE_DELIVERY_FAILED: empty adapter result");
   }
