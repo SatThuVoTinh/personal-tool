@@ -79,6 +79,132 @@ export const ACTIONS = Object.freeze({
 });
 
 /**
+ * M12/T9 F-085: the ONE reviewed mapping between the authority vocabulary and
+ * the ledger decision vocabulary.
+ *
+ * Three vocabularies used to meet only inside the plugin entrypoint:
+ *
+ *   - the authority action names (`ACTIONS`, above), which tell an APPROVAL
+ *     verdict apart from a RESULT verdict;
+ *   - the ledger decision strings (`WORKFLOW_USER_APPROVAL_DECIDED.decision`),
+ *     which are the only values the workflow reducer commits for that event;
+ *   - the channel, which decides whether a bare "REJECT" is an approval or a
+ *     result verdict.
+ *
+ * The reducer commits exactly three decision values for
+ * `WORKFLOW_USER_APPROVAL_DECIDED` (APPROVE, REJECT, REQUEST_REVISION); the
+ * result verdicts travel on their own event types
+ * (`WORKFLOW_USER_RESULT_ACCEPTED`, `WORKFLOW_USER_RESULT_REJECTED`,
+ * `WORKFLOW_RESULT_REVISION_REQUESTED`). This table is therefore the single
+ * reviewed statement of which authority action maps to which ledger decision
+ * string, and `normalizeAuthorityAction` is the single statement of how a bare
+ * action word is resolved against the channel it was taken on.
+ *
+ * `validateActionAuthority` below uses both, so the authority gate and the
+ * ledger write can never disagree about a verdict. The plugin entrypoint must
+ * use both as well instead of its own inline channel ternary — a writer that
+ * trusts the published contract must never be able to mint a decision the
+ * reducer refuses, and a decision must never be recorded under a name the
+ * reducer does not commit.
+ */
+export const LEDGER_APPROVAL_DECISIONS = Object.freeze({
+  APPROVE: "APPROVE",
+  REJECT: "REJECT",
+  REQUEST_REVISION: "REQUEST_REVISION",
+});
+
+/**
+ * The closed set of decision values the reducer commits for
+ * `WORKFLOW_USER_APPROVAL_DECIDED`. The published contract
+ * (`ledger-event.schema.json`) admits exactly this set; anything else in that
+ * enum is dead vocabulary a trusting writer could mint and the reducer would
+ * refuse.
+ */
+export const LEDGER_APPROVAL_DECISION_VALUES = Object.freeze(
+  Object.values(LEDGER_APPROVAL_DECISIONS),
+);
+
+/**
+ * The authority action -> ledger decision mapping, for the approval verdicts.
+ * A result verdict has no entry here on purpose: it is carried by its own
+ * event type, not by `WORKFLOW_USER_APPROVAL_DECIDED`.
+ */
+export const AUTHORITY_ACTION_LEDGER_DECISION = Object.freeze({
+  [ACTIONS.APPROVE]: LEDGER_APPROVAL_DECISIONS.APPROVE,
+  [ACTIONS.REJECT_APPROVAL]: LEDGER_APPROVAL_DECISIONS.REJECT,
+  [ACTIONS.REQUEST_REVISION_APPROVAL]:
+    LEDGER_APPROVAL_DECISIONS.REQUEST_REVISION,
+});
+
+/**
+ * The ledger decision string an authority action resolves to, or `null` when
+ * the action is not an approval verdict. A result verdict resolves to `null`
+ * here BY DESIGN: it is recorded on its own event type, and returning `null`
+ * keeps "no approval decision" distinguishable from "an approval decision we
+ * do not know".
+ */
+export function resolveLedgerDecision(action) {
+  const key = typeof action === "string" ? action.toUpperCase().trim() : "";
+  return Object.hasOwn(AUTHORITY_ACTION_LEDGER_DECISION, key)
+    ? AUTHORITY_ACTION_LEDGER_DECISION[key]
+    : null;
+}
+
+/**
+ * Resolve one action word against the channel it was taken on.
+ *
+ * This is the single place that answers "is this REJECT an approval or a
+ * result verdict?". It is total: it never throws, and an action it does not
+ * recognise is returned in canonical upper-case form so the authority gate
+ * denies it by name instead of crashing on it.
+ */
+export function normalizeAuthorityAction(action, channel) {
+  if (!action) return null;
+  const upper = String(action).toUpperCase().trim();
+  const normChannel = normalizeChannel(channel);
+  if (upper === "REJECT") {
+    if (normChannel === CHANNELS.RESULTS) return ACTIONS.REJECT_RESULT;
+    if (normChannel === CHANNELS.APPROVALS) return ACTIONS.REJECT_APPROVAL;
+    return upper;
+  }
+  if (upper === "REQUEST_REVISION") {
+    if (normChannel === CHANNELS.RESULTS) {
+      return ACTIONS.REQUEST_REVISION_RESULT;
+    }
+    if (normChannel === CHANNELS.APPROVALS) {
+      return ACTIONS.REQUEST_REVISION_APPROVAL;
+    }
+    return upper;
+  }
+  return upper;
+}
+
+/**
+ * M12/T9 F-112: the agents that may own the execution of a task.
+ *
+ * `main` coordinates and is never an executable coordinator; the specialists
+ * execute and never coordinate. Only `o1` and `o2` can be the primary
+ * coordinator of an approved task, and only they can be spawned BY another
+ * coordinator — which is why a coordinator id among a DAG's node agent ids is
+ * the ASSIGNMENT and never a capability (see `projectGovernedCapabilities` in
+ * `lib/policy.mjs`).
+ */
+export const EXECUTABLE_COORDINATOR_IDS = Object.freeze(["o1", "o2"]);
+
+/**
+ * M7-073: coordinator must be o1/o2 for executable queue work.
+ *
+ * The predicate lives here, in the canonical authority module, because the
+ * queue projection, the dispatch derivation and the spawn policy must all
+ * answer "is this an executable coordinator?" the same way. It used to live
+ * only in `lib/queue-manager.mjs`, which made the answer unreachable from
+ * `lib/policy.mjs` without a circular import.
+ */
+export function isExecutableCoordinator(rootAgentId) {
+  return EXECUTABLE_COORDINATOR_IDS.includes(rootAgentId);
+}
+
+/**
  * A Discord snowflake, validated. The canonical shape lives in
  * `isDiscordSnowflake` below; `parseIdentifiers` in policy.mjs and every owner
  * gate use that one validator, so a configured identity and the gate that
@@ -196,17 +322,10 @@ export function validateActionAuthority({
   const normActor = normalizeActor(actor);
   const normChannel = normalizeChannel(channel);
   const normState = currentState ? currentState.toUpperCase().trim() : null;
-  let normAction = action ? action.toUpperCase().trim() : null;
-  if (normAction === "REJECT") {
-    if (normChannel === CHANNELS.RESULTS) normAction = ACTIONS.REJECT_RESULT;
-    else if (normChannel === CHANNELS.APPROVALS)
-      normAction = ACTIONS.REJECT_APPROVAL;
-  } else if (normAction === "REQUEST_REVISION") {
-    if (normChannel === CHANNELS.RESULTS)
-      normAction = ACTIONS.REQUEST_REVISION_RESULT;
-    else if (normChannel === CHANNELS.APPROVALS)
-      normAction = ACTIONS.REQUEST_REVISION_APPROVAL;
-  }
+  // M12/T9 F-085: the channel-dependent action resolution lives in ONE place
+  // (`normalizeAuthorityAction`), so this gate and the ledger write can never
+  // disagree about which verdict an action word means.
+  const normAction = normalizeAuthorityAction(action, channel);
 
   if (!normActor) return { allowed: false, reason: "UNKNOWN_ACTOR" };
   if (!normChannel) return { allowed: false, reason: "UNKNOWN_CHANNEL" };
@@ -649,6 +768,14 @@ export const AGENT_DEFINITIONS = Object.freeze([
 // identity comes only from validated configuration (see `isConfiguredOwnerActor`
 // and `resolveOwnerDiscordId`). Changing a bot or role id is a roster change,
 // not a permission change.
+//
+// M12/T9 F-048: THIS FILE IS THE ONLY SOURCE of the server-scoped identity
+// map. The map used to be published a second time in `README.md`, which lives
+// under a synced third-party store (OneDrive) and is pushable to a remote —
+// publishing the bot ids, the role ids and the surface ids gave a reader the
+// complete set needed to impersonate an agent mention surface, and the copies
+// could silently diverge. No tracked markdown file may carry a raw Discord
+// snowflake again; documentation points here instead.
 export const DISCORD_BOT_IDS = Object.freeze({
   main: "1545436878835163156",
   o1: "1545437953197744248",
@@ -667,6 +794,29 @@ export const DISCORD_ROLE_IDS = Object.freeze({
   "power-bi": "1545612740398157957",
   sql: "1545612050099609730",
   python: "1545615832556507220",
+});
+
+/**
+ * M12/T9 F-048: the server-scoped surface ids (the office channel and the
+ * three governed forums), in the same canonical registry as the bot and role
+ * ids.
+ *
+ * These are the "documented baseline values" the governance instruction body
+ * falls back to when a caller supplies no runtime configuration. They lived in
+ * `lib/policy.mjs`, which made the identity map live in two files that could
+ * diverge; the VALUES are unchanged, so the governance manifest digest is
+ * unchanged, and the deployed build needs no re-admission.
+ *
+ * At runtime the operator's own configuration wins: `parseIdentifiers` refuses
+ * to build a configuration whose surface ids are not valid snowflakes, and
+ * every outbound post target is resolved from the configuration, never from
+ * these defaults.
+ */
+export const DISCORD_CHANNEL_IDS = Object.freeze({
+  office: "1545425766161063937",
+  approvals: "1545696207316455527",
+  results: "1545696269010477056",
+  incidents: "1545696360018481182",
 });
 
 export const DISCORD_SURFACE_IDENTIFIERS = Object.freeze([

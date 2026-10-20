@@ -24,12 +24,14 @@ import {
   AGENT_IDS,
   AGENT_DEFINITIONS,
   DISCORD_BOT_IDS,
+  DISCORD_CHANNEL_IDS,
   DISCORD_SURFACE_IDENTIFIERS,
   AGENT_ROSTER_VERSION,
   ACCOUNT_OWNERSHIP_MAP,
   CANONICAL_AGENT_ROSTER,
   validateAgentRoster,
   AGENT_ALIASES,
+  isExecutableCoordinator,
   resolveMentionedAgents,
   resolveIngressRouting,
   validateCrossLayerIdentity,
@@ -563,6 +565,122 @@ export const AGENT_SPAWN_POLICY = Object.freeze({
   python: Object.freeze([]),
 });
 
+/**
+ * M12/T9 F-112: the ONE capability projection of a DAG.
+ *
+ * A node whose agent id is an executable coordinator (`o1`/`o2`) names the
+ * ASSIGNMENT, not a capability: the coordinator is the agent that will run the
+ * task, so requiring it as a spawnable capability would ask the spawn policy
+ * to contain a coordinator — which no coordinator's spawn set does, and which
+ * made every approved task unreachable.
+ *
+ * The queue projection and the dispatch derivation both use this function, so
+ * "the capabilities this task requires" is one answer in one place, not two
+ * answers that can drift.
+ */
+export function projectGovernedCapabilities(nodes) {
+  return [
+    ...new Set(
+      (Array.isArray(nodes) ? nodes : [])
+        .map((node) => node?.agent_id)
+        .filter(
+          (agentId) =>
+            typeof agentId === "string" &&
+            agentId.length > 0 &&
+            // Coordinators are the assignment, not a capability.
+            !isExecutableCoordinator(agentId),
+        ),
+    ),
+  ].sort();
+}
+
+/**
+ * M12/T9 F-112: derive the governed execution target of an approved task from
+ * the AUTHORITATIVE task record.
+ *
+ * Nothing here is a default. A missing or non-executable coordinator, an empty
+ * DAG, a DAG naming an agent outside the canonical roster, and a DAG that asks
+ * a coordinator for a specialist it may not spawn are all fail-closed BLOCKED
+ * outcomes, because guessing would mean running work under an identity or a
+ * topology the owner never approved. The coordinator is never assumed to be
+ * "o1" and the specialist set is never assumed to be a fixed list: both come
+ * from the task the owner actually approved.
+ *
+ * Containment is checked against the canonical AGENT_SPAWN_POLICY, which is the
+ * same table `guard.beforeToolCall` enforces on the live `sessions_spawn` path.
+ * A graph that is not reachable through canonical topology is a governance
+ * error: the offending specialist is never silently dropped, the coordinator is
+ * never silently replaced, and the task is never narrowed to the runnable
+ * subset, because the owner approved the whole graph.
+ *
+ * Two rules changed with F-112:
+ *
+ *   1. A coordinator id among the node agent ids is never reported unreachable
+ *      and is never required to be spawnable. It is the assignment.
+ *   2. `requiredCapabilities` is exactly `projectGovernedCapabilities(nodes)` —
+ *      the same projection the queue builds from the same nodes — so the
+ *      dispatch target and the queue projection can never disagree about what
+ *      the task requires.
+ *
+ * A DAG whose nodes are all coordinators is therefore dispatchable with an
+ * empty capability set: the coordinator executes it itself. That is the DAG
+ * the live spawn gate commits (a root agent may only name the agents it may
+ * spawn), and refusing it is what made "no DAG Main can author is
+ * dispatchable" true.
+ */
+export function deriveGovernedDispatchTarget(task) {
+  if (!task || typeof task !== "object") {
+    return {
+      ok: false,
+      error: "TASK_NOT_FOUND",
+    };
+  }
+  const coordinator = task.primary_coordinator;
+  if (!isExecutableCoordinator(coordinator)) {
+    return {
+      ok: false,
+      error: "COORDINATOR_NOT_EXECUTABLE",
+    };
+  }
+  const nodeAgentIds = (Array.isArray(task.nodes) ? task.nodes : [])
+    .map((node) => node?.agent_id)
+    .filter((agentId) => typeof agentId === "string" && agentId.length > 0);
+  // The roster is canonical, so a DAG naming an unknown agent is a governance
+  // defect and must not be narrowed into a runnable subset.
+  const unknown = nodeAgentIds.filter(
+    (agentId) => !AGENT_IDS.includes(agentId),
+  );
+  if (unknown.length > 0) {
+    return { ok: false, error: "UNKNOWN_SPECIALIST_IN_DAG" };
+  }
+  if (nodeAgentIds.length === 0) {
+    return { ok: false, error: "NO_EXECUTABLE_SPECIALIST" };
+  }
+  // Canonical topology containment. Read the table that the live spawn gate
+  // enforces rather than introducing a local copy, so a topology change can
+  // never be legal here and illegal there. A coordinator node id is the
+  // assignment and is exempt: AGENT_SPAWN_POLICY is never required to contain
+  // a coordinator.
+  const spawnable = AGENT_SPAWN_POLICY[coordinator] ?? [];
+  const unreachable = nodeAgentIds.filter(
+    (agentId) =>
+      !isExecutableCoordinator(agentId) && !spawnable.includes(agentId),
+  );
+  if (unreachable.length > 0) {
+    return {
+      ok: false,
+      error: "SPECIALIST_NOT_REACHABLE_FROM_COORDINATOR",
+      unreachable,
+      coordinator,
+    };
+  }
+  return {
+    ok: true,
+    coordinator,
+    requiredCapabilities: projectGovernedCapabilities(task.nodes),
+  };
+}
+
 // M8/T1 Discord Mobile mention grammar. Each pattern matches an explicit
 // mention trigger (raw @handle, <@id> snowflake, or alias text) with the M8/T1
 // punctuation lookahead. Two surgical updates vs the originally transcribed
@@ -763,6 +881,78 @@ export function defaultStateDirectory() {
 export function defaultSystemdUserDirectory() {
   return path.join(homedir(), ".config", "systemd", "user");
 }
+
+/**
+ * M12/T9 F-002: the ONE configured governance store root.
+ *
+ * The ledger event journal, the ledger snapshot, the decision ledger and the
+ * task queue are all durable governance state, and they used to live under
+ * TWO roots: the configured `ledgerRoot` for the first two, and a
+ * home-directory default for the last two. A process that wrote through the
+ * configured root and read through the default root saw two different files,
+ * and the default-root stores were module-level singletons whose in-memory
+ * map was filled ONCE at import — so a second process's write was invisible
+ * to the first, and the first's write could replace the second's whole
+ * decision set.
+ *
+ * The root is therefore explicit, configured once by whoever owns the
+ * configuration (the plugin entrypoint, from its validated `ledgerRoot`), and
+ * there is NO fallback: an unconfigured store is a named refusal, never a
+ * silent home-directory default. `configureGovernedStoreRoot` is the only
+ * writer and `resolveGovernedStoreRoot` the only reader.
+ */
+let governedStoreRoot = null;
+
+/**
+ * Bind the process to the governance store root. The root must be absolute:
+ * a relative root would resolve against whatever working directory the host
+ * happens to have, which is the same class of ambiguity this replaces.
+ */
+export function configureGovernedStoreRoot(root) {
+  if (typeof root !== "string" || root.trim().length === 0) {
+    const error = new Error(
+      "GOVERNANCE_STORE_ROOT_INVALID: the governance store root must be a non-empty path",
+    );
+    error.code = "GOVERNANCE_STORE_ROOT_INVALID";
+    throw error;
+  }
+  if (!path.isAbsolute(root)) {
+    const error = new Error(
+      `GOVERNANCE_STORE_ROOT_INVALID: the governance store root must be absolute (got ${root})`,
+    );
+    error.code = "GOVERNANCE_STORE_ROOT_INVALID";
+    throw error;
+  }
+  governedStoreRoot = path.resolve(root);
+  return governedStoreRoot;
+}
+
+/**
+ * The configured governance store root, or a named refusal. There is no
+ * default: a store that cannot say where it lives must not answer a
+ * governance question from a guessed path.
+ */
+export function resolveGovernedStoreRoot() {
+  if (governedStoreRoot === null) {
+    const error = new Error(
+      "GOVERNANCE_STORE_ROOT_UNCONFIGURED: the governance store root was never configured",
+    );
+    error.code = "GOVERNANCE_STORE_ROOT_UNCONFIGURED";
+    throw error;
+  }
+  return governedStoreRoot;
+}
+
+/** Whether the governance store root has been configured in this process. */
+export function governedStoreRootConfigured() {
+  return governedStoreRoot !== null;
+}
+
+/** The file name of the task queue inside the governance store root. */
+export const QUEUE_STORE_FILE = "task-queue.json";
+
+/** The file name of the decision ledger inside the governance store root. */
+export const DECISION_STORE_FILE = "decision-ledger.json";
 
 export function parseIdentifiers(values) {
   const names = [
@@ -1138,12 +1328,17 @@ function instructionBody(agentId, identifiers = null) {
   const stacks = AGENT_STACK_POLICY[agentId].join(", ");
   const targets = AGENT_SPAWN_POLICY[agentId].join(", ") || "none";
   // A30: Resolve channel IDs from identifiers if available to prevent drift
-  const officeId = identifiers?.discordOfficeChannelId ?? "1545425766161063937";
+  // (M12/T9 F-048: the baseline values live in `lib/authority.mjs`, the ONE
+  // source of the server-scoped identity map; the VALUES are unchanged, so the
+  // governance manifest digest is unchanged).
+  const officeId =
+    identifiers?.discordOfficeChannelId ?? DISCORD_CHANNEL_IDS.office;
   const approvalsId =
-    identifiers?.discordApprovalsForumId ?? "1545696207316455527";
-  const resultsId = identifiers?.discordResultsForumId ?? "1545696269010477056";
+    identifiers?.discordApprovalsForumId ?? DISCORD_CHANNEL_IDS.approvals;
+  const resultsId =
+    identifiers?.discordResultsForumId ?? DISCORD_CHANNEL_IDS.results;
   const incidentsId =
-    identifiers?.discordIncidentsForumId ?? "1545696360018481182";
+    identifiers?.discordIncidentsForumId ?? DISCORD_CHANNEL_IDS.incidents;
   const schemaText = (name) =>
     JSON.stringify(
       JSON.parse(

@@ -11,10 +11,25 @@ import {
 } from "node:fs";
 import { randomUUID, createHash } from "node:crypto";
 import path from "node:path";
-import os from "node:os";
-import { TASK_STATES } from "./authority.mjs";
+import { TASK_STATES, isExecutableCoordinator } from "./authority.mjs";
 import { withFileLockSync, lockDirFor } from "./file-lock.mjs";
-import { assertNoSymlinkComponents } from "./policy.mjs";
+import {
+  assertNoSymlinkComponents,
+  projectGovernedCapabilities,
+  QUEUE_STORE_FILE,
+  resolveGovernedStoreRoot,
+} from "./policy.mjs";
+
+/**
+ * M7-073: coordinator must be o1/o2 for executable queue work.
+ *
+ * The predicate itself lives in `lib/authority.mjs` (the canonical authority
+ * module) so the queue projection, the dispatch derivation and the spawn
+ * policy cannot answer "is this an executable coordinator?" differently. It
+ * is re-exported here because the queue is where the queue-side callers
+ * already import it from.
+ */
+export { isExecutableCoordinator };
 
 /**
  * Remove a temp file this process created but could not rename. The codes are
@@ -121,13 +136,6 @@ export function mapLedgerStatusToQueue(ledgerTask) {
 }
 
 /**
- * M7-073: coordinator must be o1/o2 for executable queue work.
- */
-export function isExecutableCoordinator(rootAgentId) {
-  return rootAgentId === "o1" || rootAgentId === "o2";
-}
-
-/**
  * M7-010: the claimant must be the designated coordinator or a listed
  * required capability. Returns true when the binding holds.
  */
@@ -138,26 +146,57 @@ export function isAssignedClaimant(item, agentId) {
   return (item?.requiredCapabilities ?? []).includes(agentId);
 }
 
-function resolveDefaultStoragePath() {
-  const dir = path.join(os.homedir(), ".openclaw-zink");
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
-  }
-  return path.join(dir, "task-queue.json");
+/**
+ * M12/T9 F-002: the task queue lives under the ONE configured governance store
+ * root, and there is no home-directory default.
+ *
+ * The queue used to default to `~/.openclaw-zink/task-queue.json` while the
+ * ledger event journal and the snapshot lived under the configured
+ * `ledgerRoot`: two roots for one governance state, and a module-level
+ * singleton whose map was filled ONCE at import, so the queue a process
+ * answered from was not the queue it wrote to.
+ *
+ * The root is configured explicitly (`configureGovernedStoreRoot` in
+ * `lib/policy.mjs`) by whoever owns the configuration, and an unconfigured
+ * store is a named refusal rather than a guessed path.
+ */
+export function resolveQueueStoragePath(root = null) {
+  const base = root === null ? resolveGovernedStoreRoot() : root;
+  return path.join(base, QUEUE_STORE_FILE);
 }
 
 export class QueueManager {
-  constructor({ storagePath = resolveDefaultStoragePath() } = {}) {
-    this.storagePath = storagePath;
+  constructor({ storagePath = null } = {}) {
+    // M12/T9 F-002: the store path is EXPLICIT or it is resolved from the ONE
+    // configured governance store root. There is no home-directory default and
+    // no import-time file access, so importing this module never creates or
+    // reads a directory.
+    this._explicitStoragePath =
+      typeof storagePath === "string" && storagePath.trim().length > 0
+        ? storagePath
+        : null;
     this.queue = new Map();
     this._projectionVersion = 0;
-    this.load();
+    if (this._explicitStoragePath) this.load();
+  }
+
+  /**
+   * The durable location of this projection.
+   *
+   * With no explicit path it is resolved from the configured governance store
+   * root on every access, so a projection that is configured late still reads
+   * and writes the ONE configured root.
+   */
+  get storagePath() {
+    return this._explicitStoragePath ?? resolveQueueStoragePath();
+  }
+
+  set storagePath(value) {
+    this._explicitStoragePath =
+      typeof value === "string" && value.trim().length > 0 ? value : null;
   }
 
   withLock(fn) {
-    if (!this.storagePath) {
-      return fn();
-    }
     const dir = path.dirname(this.storagePath);
     const lockDir = lockDirFor(dir, `${path.basename(this.storagePath)}.lock`);
     // The lock lives beside the queue file, so the directory `save()` creates on
@@ -192,45 +231,76 @@ export class QueueManager {
     }
   }
 
+  /**
+   * M12/T9 F-002: read the durable projection and REPLACE the in-memory view.
+   *
+   * The load is a replacement, not an accumulation, and every read path calls
+   * it first: the map this projection holds is a cache of the file, never the
+   * authority on its own.
+   *
+   * The replacement happens IN PLACE. A captured reference to `this.queue`
+   * stays the live map, so a caller that read a row and then wrote it back
+   * cannot lose the write to a map object that is no longer current — which
+   * is exactly the shape the plugin's notification seam uses.
+   */
   load() {
-    if (!this.storagePath) return;
+    // Resolved OUTSIDE the read: an unconfigured store is a configuration
+    // refusal and keeps its own name, never "the file is unreadable".
+    const storagePath = this.storagePath;
+    let rebuilt;
     try {
-      if (existsSync(this.storagePath)) {
-        const raw = readFileSync(this.storagePath, "utf8");
+      if (existsSync(storagePath)) {
+        const raw = readFileSync(storagePath, "utf8");
         const data = JSON.parse(raw);
         if (!Array.isArray(data)) {
           throw new Error("QUEUE_STORAGE_SCHEMA_INVALID");
         }
-        const rebuilt = new Map();
+        rebuilt = new Map();
         for (const item of data) {
           if (!item || typeof item.taskId !== "string" || !item.taskId) {
             throw new Error("QUEUE_STORAGE_SCHEMA_INVALID");
           }
           rebuilt.set(item.taskId, item);
         }
-        this.queue = rebuilt;
       } else {
-        this.queue = new Map();
+        rebuilt = new Map();
       }
     } catch (err) {
       throw new Error(`QUEUE_STORAGE_READ_FAILED: ${err?.message}`, {
         cause: err,
       });
     }
+    this.queue.clear();
+    for (const [taskId, item] of rebuilt) {
+      this.queue.set(taskId, item);
+    }
+  }
+
+  /**
+   * M12/T9 F-002: re-read the durable projection.
+   *
+   * Every read path calls this first, so an answer is always derived from the
+   * file on disk and never from a map that was populated at import time.
+   */
+  refresh() {
+    this.load();
+    return this;
   }
 
   save() {
-    if (!this.storagePath) return;
+    // Resolved OUTSIDE the write: an unconfigured store is a configuration
+    // refusal and keeps its own name, never "the file could not be written".
+    const storagePath = this.storagePath;
     // M12/T2.2-R2 B-12: `.tmp-<pid>-<ms>` is predictable, so the temp has to be
     // created (`"wx"`) rather than adopted from whatever is already at that path,
     // and a failed attempt has to remove what it made. `topology/lib/ledger.mjs`
     // already wrote its snapshot this way; this is the same discipline, not a new
     // atomic writer.
-    const tempPath = `${this.storagePath}.tmp-${process.pid}-${Date.now()}`;
+    const tempPath = `${storagePath}.tmp-${process.pid}-${Date.now()}`;
     let fd = null;
     let tempIsOurs = false;
     try {
-      const dir = path.dirname(this.storagePath);
+      const dir = path.dirname(storagePath);
       // Before anything is created: `mkdirSync(recursive)` would otherwise happily
       // materialize the queue through a symlinked ancestor.
       assertNoSymlinkComponents(tempPath);
@@ -245,7 +315,7 @@ export class QueueManager {
       fsyncSync(fd);
       closeSync(fd);
       fd = null;
-      renameSync(tempPath, this.storagePath);
+      renameSync(tempPath, storagePath);
       // M7-066: fsync the parent directory after rename so the rename itself
       // is durable, matching the ledger writer guarantee (win32-tolerant).
       try {
@@ -1005,11 +1075,23 @@ export class QueueManager {
     });
   }
 
+  /**
+   * M12/T9 F-002: the durable queue item for one task id, or `null`.
+   *
+   * The read re-reads the file, so this never answers from a map that was
+   * populated when the instance was created — the projection a process reads
+   * is the projection every writer wrote.
+   */
   getTask(taskId) {
+    this.refresh();
     return this.queue.get(taskId) || null;
   }
 
+  /**
+   * M12/T9 F-002: the durable active-task set, read from the file.
+   */
   listActiveTasks() {
+    this.refresh();
     // M7-031: every terminal state is excluded; RESULT_PENDING_REVIEW stays.
     return Array.from(this.queue.values()).filter(
       (t) => !QUEUE_TERMINAL_STATES.includes(t.status),
@@ -1101,18 +1183,7 @@ export class QueueManager {
           const fencedAttempt = liveRuns
             .map((run) => run.attempt)
             .find((value) => Number.isSafeInteger(value));
-          const capabilities = [
-            ...new Set(
-              (ledgerTask.nodes ?? [])
-                .map((node) => node?.agent_id)
-                .filter(
-                  (agentId) =>
-                    typeof agentId === "string" &&
-                    // Coordinators are the assignment, not a capability.
-                    !isExecutableCoordinator(agentId),
-                ),
-            ),
-          ].sort();
+          const capabilities = projectGovernedCapabilities(ledgerTask.nodes);
           let status = mappedStatus;
           let leaseId = null;
           let attempt = Number.isSafeInteger(fencedAttempt) ? fencedAttempt : 1;
@@ -1178,4 +1249,13 @@ export class QueueManager {
   }
 }
 
+/**
+ * M12/T9 F-002: the process-wide queue projection.
+ *
+ * It is NOT a load-once singleton any more: the instance holds no state until
+ * the governance store root is configured, it touches no file at import, and
+ * every read re-reads the durable file. Until the root is configured, every
+ * use is a named refusal (`GOVERNANCE_STORE_ROOT_UNCONFIGURED`) rather than a
+ * silent home-directory default.
+ */
 export const defaultQueueManager = new QueueManager();

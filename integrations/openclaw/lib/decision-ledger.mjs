@@ -11,9 +11,12 @@ import {
 } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
-import os from "node:os";
 import { lockDirFor, withFileLockSync } from "./file-lock.mjs";
-import { assertNoSymlinkComponents } from "./policy.mjs";
+import {
+  assertNoSymlinkComponents,
+  DECISION_STORE_FILE,
+  resolveGovernedStoreRoot,
+} from "./policy.mjs";
 
 /**
  * Remove a temp this process created but could not rename; same tolerance set,
@@ -39,16 +42,25 @@ function removeWriterResidue(tempPath) {
  * - Enforces Human Semantic Authority: AI agents may propose, but only user confirmation persists.
  */
 
-function resolveDefaultStoragePath() {
-  const dir = path.join(os.homedir(), ".openclaw-zink");
-  if (!existsSync(dir)) {
-    try {
-      mkdirSync(dir, { recursive: true });
-    } catch {
-      /* ignore */
-    }
-  }
-  return path.join(dir, "decision-ledger.json");
+/**
+ * M12/T9 F-002: the decision store lives under the ONE configured governance
+ * store root, and there is no home-directory default.
+ *
+ * The store used to default to `~/.openclaw-zink/decision-ledger.json` while
+ * the ledger event journal and the snapshot lived under the configured
+ * `ledgerRoot`. A process that wrote through the configured root and read
+ * through the default root was reading and writing two different files, and
+ * the default-root store was a module-level singleton whose map was filled ONCE
+ * at import — so a second process's decision was invisible to the first and
+ * the first's save could replace the second's whole decision set.
+ *
+ * The root is configured explicitly (`configureGovernedStoreRoot` in
+ * `lib/policy.mjs`) by whoever owns the configuration, and an unconfigured
+ * store is a named refusal rather than a guessed path.
+ */
+export function resolveDecisionLedgerStoragePath(root = null) {
+  const base = root === null ? resolveGovernedStoreRoot() : root;
+  return path.join(base, DECISION_STORE_FILE);
 }
 
 const DECISION_SCOPES = Object.freeze(["global", "domain", "task-specific"]);
@@ -216,29 +228,73 @@ function canonicalRecordBytes(record) {
 
 export class DecisionLedger {
   constructor({
-    storagePath = resolveDefaultStoragePath(),
+    storagePath = null,
     // M12/T9 F-260: the post-rename directory fsync is the one step whose
     // failure used to erase a COMMITTED record, and a healthy filesystem
     // cannot provoke it from the outside, so the failure is injectable here
     // for the regression case. `null` means the real fsync.
     directoryFsync = null,
   } = {}) {
-    this.storagePath = storagePath;
+    // M12/T9 F-002: the store path is EXPLICIT or it is resolved from the ONE
+    // configured governance store root. There is no home-directory default and
+    // no import-time file access: an instance created without a path holds an
+    // empty map until the root is configured, so importing this module never
+    // creates or reads a directory.
+    this._explicitStoragePath =
+      typeof storagePath === "string" && storagePath.trim().length > 0
+        ? storagePath
+        : null;
     this.decisions = new Map();
     this.corrupt = false;
     this.loadError = null;
     this.directoryFsync = directoryFsync;
-    this.load();
+    // M12/T9 F-002: `true` makes the next write REPLACE the durable set
+    // instead of merging into it. It is set only by `clear()`.
+    this._replaceDurableSet = false;
+    if (this._explicitStoragePath) this.load();
+  }
+
+  /**
+   * The durable location of this store.
+   *
+   * With no explicit path it is resolved from the configured governance store
+   * root on every access, so a store that is configured late still reads and
+   * writes the ONE configured root instead of a home-directory default.
+   */
+  get storagePath() {
+    return this._explicitStoragePath ?? resolveDecisionLedgerStoragePath();
+  }
+
+  set storagePath(value) {
+    this._explicitStoragePath =
+      typeof value === "string" && value.trim().length > 0 ? value : null;
   }
 
   assertUsable() {
     if (this.corrupt) failLedger("LEDGER_CORRUPT");
   }
 
+  /**
+   * M12/T9 F-002: read the durable file and REPLACE the in-memory view.
+   *
+   * The load is a replacement, not an accumulation: a store whose map was
+   * filled once and then merged with every later read answered from a mix of
+   * the file as it was and the file as it is. Every read path re-reads the
+   * durable file, so the map is never the authority — the file is.
+   *
+   * The replacement happens IN PLACE, so a captured reference to
+   * `this.decisions` stays the live map.
+   */
   load() {
+    // Resolved OUTSIDE the read: an unconfigured store is a configuration
+    // refusal and keeps its own name, never "the file is corrupt".
+    const storagePath = this.storagePath;
+    this.corrupt = false;
+    this.loadError = null;
+    const rebuilt = new Map();
     try {
-      if (existsSync(this.storagePath)) {
-        const raw = readFileSync(this.storagePath, "utf8");
+      if (existsSync(storagePath)) {
+        const raw = readFileSync(storagePath, "utf8");
         const entries = JSON.parse(raw);
         if (!Array.isArray(entries)) {
           this.corrupt = true;
@@ -251,18 +307,90 @@ export class DecisionLedger {
             this.loadError = "LEDGER_SCHEMA_INVALID";
             return;
           }
-          this.decisions.set(d.decisionId, d);
+          rebuilt.set(d.decisionId, d);
         }
       }
     } catch (err) {
       this.corrupt = true;
       this.loadError = err?.code ?? "LEDGER_CORRUPT";
+      return;
+    }
+    this.decisions.clear();
+    for (const [id, record] of rebuilt) {
+      this.decisions.set(id, record);
     }
   }
 
+  /**
+   * M12/T9 F-002: re-read the durable decision set.
+   *
+   * Every read path calls this first, so an answer is always derived from the
+   * file on disk and never from a map that was populated at import time.
+   */
+  refresh() {
+    this.load();
+    return this;
+  }
+
+  /**
+   * M12/T9 F-002: the durable decision set, read under the writer lock.
+   *
+   * A file that exists but cannot be read or parsed is a REFUSAL, never an
+   * empty set: overwriting it would destroy the owner's decisions, and
+   * answering "no prior decision" from a file this process could not read is
+   * the failure mode this store is not allowed to have.
+   */
+  readDurableEntries() {
+    const durable = new Map();
+    const storagePath = this.storagePath;
+    if (!existsSync(storagePath)) return durable;
+    let entries;
+    try {
+      entries = JSON.parse(readFileSync(storagePath, "utf8"));
+    } catch (err) {
+      const error = new Error(
+        `LEDGER_CORRUPT: the durable decision ledger could not be read (${err?.code ?? err?.message})`,
+      );
+      error.code = "LEDGER_CORRUPT";
+      error.cause = err;
+      throw error;
+    }
+    if (!Array.isArray(entries)) {
+      const error = new Error(
+        "LEDGER_CORRUPT: the durable decision ledger is not a list of records",
+      );
+      error.code = "LEDGER_CORRUPT";
+      throw error;
+    }
+    for (const d of entries) {
+      if (!validateDecisionRecord(d)) {
+        const error = new Error(
+          "LEDGER_CORRUPT: the durable decision ledger holds an invalid record",
+        );
+        error.code = "LEDGER_CORRUPT";
+        throw error;
+      }
+      durable.set(d.decisionId, d);
+    }
+    return durable;
+  }
+
+  /**
+   * Write the decision set durably.
+   *
+   * The write MERGES the durable set by default: the lock serialises the
+   * write, it does not reload, so the whole decision set must not be
+   * rewritten from this process's in-memory map — a concurrent writer's
+   * decisions would be silently replaced. `clear()` sets the replace flag
+   * first, because its intent is to REPLACE the durable set with the
+   * (empty) in-memory one.
+   */
   save() {
-    const dir = path.dirname(this.storagePath);
-    const tempPath = `${this.storagePath}.tmp-${process.pid}-${Date.now()}`;
+    // Resolved OUTSIDE the write: an unconfigured store is a configuration
+    // refusal and keeps its own name, never "the write failed".
+    const storagePath = this.storagePath;
+    const dir = path.dirname(storagePath);
+    const tempPath = `${storagePath}.tmp-${process.pid}-${Date.now()}`;
     let fd = null;
     let tempIsOurs = false;
     try {
@@ -291,7 +419,20 @@ export class DecisionLedger {
       withFileLockSync(
         lockDirFor(dir, `${path.basename(this.storagePath)}.lock`),
         () => {
-          const data = Array.from(this.decisions.values());
+          // M12/T9 F-002: the lock serialises the write, it does not reload.
+          // The whole decision set used to be rewritten from this process's
+          // in-memory map, so a second process's decision was silently
+          // replaced by this process's copy. The durable set is therefore read
+          // back INSIDE the lock and merged, and this process's records win
+          // only for the ids it actually holds. `clear()` asks for the
+          // replacement instead, because that is what erasing the store means.
+          const durable = this._replaceDurableSet
+            ? new Map()
+            : this.readDurableEntries();
+          for (const [id, record] of this.decisions) {
+            durable.set(id, record);
+          }
+          const data = Array.from(durable.values());
           fd = openSync(tempPath, "wx", 0o600);
           tempIsOurs = true;
           writeFileSync(fd, JSON.stringify(data, null, 2) + "\n", "utf8");
@@ -299,6 +440,14 @@ export class DecisionLedger {
           closeSync(fd);
           fd = null;
           renameSync(tempPath, this.storagePath);
+          // The durable set is now the file's content, so the in-memory view
+          // is set to exactly that: memory and disk agree, and the next write
+          // merges against the same state. The map is updated IN PLACE, so a
+          // captured reference stays live.
+          this.decisions.clear();
+          for (const [id, record] of durable) {
+            this.decisions.set(id, record);
+          }
           // M10/T2-R17: fsync the parent directory after the rename, so the rename
           // ITSELF is durable. Without it the file's contents are fsynced but the
           // name swap can still be lost on a crash, leaving the pre-rename file in
@@ -365,6 +514,15 @@ export class DecisionLedger {
         this.load();
         throw err;
       }
+      // M12/T9 F-002: an unreadable durable file is a corrupt store, not a
+      // write failure. It keeps its own name so the operator can tell "the
+      // disk could not be written" from "the disk could not be read, and was
+      // therefore not overwritten".
+      if (err?.code === "LEDGER_CORRUPT") {
+        this.decisions.clear();
+        this.load();
+        throw err;
+      }
       failLedger(`LEDGER_WRITE_FAILED: ${err?.message}`);
     }
   }
@@ -401,6 +559,11 @@ export class DecisionLedger {
         "HUMAN_CONFIRMATION_REQUIRED: Agents cannot author decisions without a verified user principal",
       );
     }
+    // M12/T9 F-002: the conflict check reads the DURABLE set, not a map that
+    // was filled when this instance was created. A decision another process
+    // recorded in the meantime is therefore visible here, and the write below
+    // merges with it instead of replacing it.
+    this.refresh();
     this.assertUsable();
     const normalizedScope = String(scope).toLowerCase().trim();
     if (!DECISION_SCOPES.includes(normalizedScope)) {
@@ -516,6 +679,10 @@ export class DecisionLedger {
         "HUMAN_CONFIRMATION_REQUIRED: Agents cannot author decisions without a verified user principal",
       );
     }
+    // M12/T9 F-002: the correction reads the DURABLE set (see
+    // `recordDecision`), so a decision another process recorded in the
+    // meantime is part of the chain this correction supersedes.
+    this.refresh();
     this.assertUsable();
     const normalizedScope = String(scope).toLowerCase().trim();
     if (!DECISION_SCOPES.includes(normalizedScope)) {
@@ -599,6 +766,11 @@ export class DecisionLedger {
     domain = null,
     key = null,
   } = {}) {
+    // M12/T9 F-002: the answer comes from the durable file. The map this
+    // store holds is a cache of that file, refreshed here, and never the
+    // authority on its own — so a decision recorded by another process is
+    // visible to this one instead of being silently replaced by it.
+    this.refresh();
     this.assertUsable();
     const normTopic = topic ? topic.toUpperCase().trim() : null;
     const normScope = scope ? String(scope).toLowerCase().trim() : null;
@@ -723,18 +895,52 @@ export class DecisionLedger {
     return matches.length > 0;
   }
 
+  /**
+   * M12/T9 F-002: the durable record for one decision id, or `null`.
+   *
+   * The read re-reads the file, so this never answers from a map that was
+   * populated when the instance was created.
+   */
   getDecision(decisionId) {
+    this.refresh();
+    this.assertUsable();
     return this.decisions.get(decisionId) || null;
   }
 
+  /**
+   * M12/T9 F-002: the durable decision set, read from the file.
+   */
   listAll() {
+    this.refresh();
+    this.assertUsable();
     return Array.from(this.decisions.values());
   }
 
+  /**
+   * Erase the store.
+   *
+   * The write REPLACES the durable set instead of merging into it: a clear
+   * that merged would be a no-op, because the durable records would be merged
+   * straight back in.
+   */
   clear() {
     this.decisions.clear();
-    this.save();
+    this._replaceDurableSet = true;
+    try {
+      this.save();
+    } finally {
+      this._replaceDurableSet = false;
+    }
   }
 }
 
+/**
+ * M12/T9 F-002: the process-wide decision store.
+ *
+ * It is NOT a load-once singleton any more: the instance holds no state until
+ * the governance store root is configured, it touches no file at import, and
+ * every read re-reads the durable file. Until the root is configured, every
+ * use is a named refusal (`GOVERNANCE_STORE_ROOT_UNCONFIGURED`) rather than a
+ * silent home-directory default.
+ */
 export const defaultDecisionLedger = new DecisionLedger();
