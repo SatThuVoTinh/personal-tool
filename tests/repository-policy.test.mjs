@@ -1829,3 +1829,97 @@ test("F-089: the PLAN.md authorization header is reachable in one bounded read",
     `the authorization header must be resolvable from one bounded read: ${missing.join(", ")}`,
   );
 });
+
+// ---------------------------------------------------------------------------
+// F-110 — the OpenClaw README must document only what the build emits
+//
+// The README still printed the retired Google provider: `plugins.allow` named
+// `google`, the permitted-alias block named two `google/gemini-*` aliases, the
+// operator was told to insert 21 `GEMINI_API_KEY` password-store entries, and
+// seven `openclaw models auth order set --provider google` commands were
+// printed. The build emits ONE model provider (the router) with five model
+// ids, the allowlist `['discord','zink-governance']`, and no auth order at
+// all. Every fact below is read from the policy module, never hardcoded here,
+// so the lane tracks the build instead of a photograph of it.
+//
+// The documentation half of this row is the orchestrator's; this lane is the
+// half that keeps the README honest afterwards.
+// ---------------------------------------------------------------------------
+test("F-110: the OpenClaw README documents only what the build emits", async () => {
+  const readme = readFileSync(
+    path.join(REPO_ROOT, "integrations", "openclaw", "README.md"),
+    "utf8",
+  );
+  const policy = await import("../integrations/openclaw/lib/policy.mjs");
+
+  // The provider. The build emits exactly one model provider.
+  assert.match(
+    readme,
+    new RegExp(`\\b${policy.ROUTER_PROVIDER_ID}\\b`, "iu"),
+    `the README must name the governed model provider the build emits (${policy.ROUTER_PROVIDER_ID})`,
+  );
+
+  // The model ids, read from the policy module — never written down here.
+  for (const modelId of policy.ROUTER_PROVIDER_MODEL_IDS) {
+    assert.ok(
+      readme.includes(modelId),
+      `the README must name the governed model id the build emits: ${modelId}`,
+    );
+  }
+
+  // The plugin allowlist, exactly as the build emits it.
+  const allowlist = /plugins\.allow\s*=\s*(\[[^\]]*\])/u.exec(readme);
+  assert.ok(
+    allowlist,
+    "the README must document the plugin allowlist the build emits, as plugins.allow=[...]",
+  );
+  assert.deepEqual(
+    JSON.parse(allowlist[1].replaceAll("'", '"')),
+    [...policy.GOVERNANCE_PLUGIN_ALLOWLIST],
+    "the README's plugin allowlist must be the one the build emits, with no retired plugin entry",
+  );
+
+  // Every provider a printed command names must be a governed provider.
+  for (const match of readme.matchAll(/--provider\s+([A-Za-z0-9_-]+)/gu)) {
+    assert.equal(
+      match[1],
+      policy.ROUTER_PROVIDER_ID,
+      `the README prints a command for the provider '${match[1]}', which the build no longer emits (the only governed provider is '${policy.ROUTER_PROVIDER_ID}')`,
+    );
+  }
+
+  // Every auth-order command the README prints must name an agent the
+  // policy's own auth-order plan carries. The plan carries none, so the
+  // seven retired `--provider google` orders cannot survive.
+  const authOrder = policy.buildAuthOrderPlan();
+  for (const match of readme.matchAll(
+    /openclaw\s+models\s+auth\s+order\s+set\s+--agent\s+([A-Za-z0-9_-]+)/gu,
+  )) {
+    assert.ok(
+      Object.hasOwn(authOrder.agents, match[1]),
+      `the README prints an auth-order command for '${match[1]}', but the policy's auth-order plan names no such agent (the plan is empty by design: one router credential serves every agent)`,
+    );
+  }
+
+  // Every password-store entry the README tells the operator to insert must be
+  // an entry the policy emits. The 21 retired `GEMINI_API_KEY_*` entries are
+  // not, and neither is any entry the router does not own.
+  const entries = new Set([
+    ...Object.values(policy.PASS_ENTRY_IDS.discord),
+    policy.PASS_ENTRY_IDS.gateway,
+  ]);
+  for (const match of readme.matchAll(/zink\/openclaw\/[A-Za-z0-9_${}]+/gu)) {
+    const documented = match[0];
+    const template = documented.includes("${");
+    const prefix = template
+      ? documented.slice(0, documented.indexOf("${"))
+      : documented;
+    const known = template
+      ? [...entries].some((entry) => entry.startsWith(prefix))
+      : entries.has(documented);
+    assert.ok(
+      known,
+      `the README tells the operator to insert '${documented}', which is not an entry the policy emits`,
+    );
+  }
+});
