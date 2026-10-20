@@ -9,6 +9,11 @@ import {
   parseIdentifiers,
   assertNoSymlinkComponents,
 } from "../../../lib/policy.mjs";
+import {
+  KNOWN_REFUSAL_REASONS,
+  assertSameRefusalClasses,
+  refusalOutput,
+} from "./refusal-classifier.mjs";
 
 const stateDir = "/home/hoang_vinh/.openclaw-zink";
 const input = path.join(stateDir, "operator/m7-t2/discord-identifiers.json");
@@ -49,13 +54,22 @@ try {
   );
 } catch (error) {
   // Classify only known static diagnostics; unknown output stays undisclosed.
-  const output = String(error.stderr ?? "");
-  // The list is ordered most-specific first because `find` wins the tie: a mode
-  // drift on the hotfix must be reported as the hotfix, not as a generic mode class.
-  // M12/T2 deployment attempt: a real refusal arrived as `PREFLIGHT_REJECTED` because
-  // none of these classes named it, and an undiagnosable fail-closed gate costs the
-  // operator a whole round trip. The classes below are static literals from
-  // `configure.mjs` / `policy.mjs` - never a message, which could quote config content.
+  //
+  // M12/T9 F-159: the MATCHING RULE is shared with the apply driver
+  // (`refusal-classifier.mjs`), and the class SET is asserted equal to the
+  // shared set at load time, so the two drivers can never drift apart.
+  //
+  // Both drivers exec the same builder child, so the identical refusal used
+  // to resolve to a different code (or to no code at all) depending on which
+  // driver reported it: eighteen diagnostics were named only here and
+  // degraded to `PREFLIGHT_REJECTED` on the apply path, while the apply
+  // driver degraded this driver's `INVALID_IDENTIFIER_FILE` to
+  // `APPLY_REJECTED`.
+  //
+  // The list below stays HERE (this driver is the reader's statement of what
+  // it names) and the shared classifier is the authority; the equality check
+  // fails closed on the first byte of drift, so a hand-maintained copy can
+  // never become a second truth.
   const known = [
     "governance instructions drift",
     "Agent governance instructions drift",
@@ -77,6 +91,9 @@ try {
     "surface IDs must be distinct",
     "Existing config must be canonical JSON",
     "Ledger corruption",
+    "INVALID_IDENTIFIER_FILE",
+    "GATEWAY_NOT_ACTIVE",
+    "GATEWAY_UNIT_NOT_RELOADED",
     "symlink",
     "mode drift",
     "Policy drift",
@@ -85,8 +102,9 @@ try {
     "EACCES",
     "ENOENT",
   ];
+  assertSameRefusalClasses(known, KNOWN_REFUSAL_REASONS);
   const reason =
-    known.find((entry) => output.includes(entry) || error.code === entry) ??
+    known.find((entry) => refusalOutput(error).includes(entry)) ??
     "PREFLIGHT_REJECTED";
   process.stdout.write(
     `${JSON.stringify({ stage, status: "FAIL", reason, installed_mutation: false })}\n`,

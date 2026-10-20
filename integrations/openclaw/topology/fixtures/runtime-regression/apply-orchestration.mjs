@@ -48,6 +48,10 @@ import {
   ROLLBACK_SAFETY_UNAVAILABLE,
   TRANSACTION_STATUS,
 } from "../../lib/transaction-snapshot.mjs";
+import {
+  KNOWN_REFUSAL_REASONS,
+  classifyRefusal,
+} from "./refusal-classifier.mjs";
 
 /**
  * Reported when the apply returned success but the live runtime does not reflect
@@ -330,24 +334,15 @@ function attemptRollback(deps, snapshot, report) {
  * Identifier values, config bodies, secrets and raw child-process stderr must
  * never reach model-visible output, so only known static diagnostics are
  * named and everything else collapses to PREFLIGHT_REJECTED.
+ *
+ * M12/T9 F-159: the list and the matching rule are SHARED with the preflight
+ * driver (`refusal-classifier.mjs`), because both drivers exec the same
+ * builder child and the identical refusal used to resolve to a different code
+ * depending on which driver reported it. Only the fallback differs: this mode
+ * reports `APPLY_REJECTED`, the preflight mode reports `PREFLIGHT_REJECTED`.
  */
-export const KNOWN_REASONS = [
-  "governance instructions drift",
-  "Governance plugin asset",
-  "Governance plugin entrypoint",
-  "Governance plugin manifest",
-  "Policy drift",
-  "EXECUTION_STATE_UNKNOWN",
-  "INVALID_IDENTIFIER_FILE",
-  "GATEWAY_NOT_ACTIVE",
-  "permission",
-  "EACCES",
-  "ENOENT",
-];
+export const KNOWN_REASONS = KNOWN_REFUSAL_REASONS;
 
 export function classifyApplyReason(error) {
-  const output = `${error?.stderr ?? ""}${error?.message ?? ""}${error?.code ?? ""}`;
-  return (
-    KNOWN_REASONS.find((reason) => output.includes(reason)) ?? "APPLY_REJECTED"
-  );
+  return classifyRefusal(error, "APPLY_REJECTED");
 }

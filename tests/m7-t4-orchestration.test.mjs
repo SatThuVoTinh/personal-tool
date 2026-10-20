@@ -904,6 +904,121 @@ describe("M12/T9 - F-062: the admission liveness is consumed once and re-recorde
   });
 });
 
+describe("M12/T9 - F-159: one refusal classifier for both operator drivers", () => {
+  const repoFile = (relative) =>
+    fileURLToPath(new URL(`../${relative}`, import.meta.url));
+
+  test("F-159: the preflight and the apply name the same refusal the same way", async () => {
+    const { classifyRefusal } =
+      await import("../integrations/openclaw/topology/fixtures/runtime-regression/refusal-classifier.mjs");
+    const { classifyApplyReason } =
+      await import("../integrations/openclaw/topology/fixtures/runtime-regression/apply-orchestration.mjs");
+    // Every one of these was named by ONE driver only, so the other degraded
+    // it to a meaningless fallback.
+    const diagnostics = [
+      "Ledger corruption",
+      "symlink",
+      "mode drift",
+      "Systemd drop-in",
+      "Auth order plan",
+      "Password-store resolver",
+      "Governance plugin package",
+      "ROUTER_HOST_UNAVAILABLE",
+      "ROUTER_PORT_UNAVAILABLE",
+      "ROUTER_API_KEY_UNAVAILABLE",
+      "must be a numeric Discord snowflake",
+      "Existing config must be canonical JSON",
+      "T2 backup manifest",
+      "Auth SecretRef plan",
+      "Governance identity key",
+      "surface IDs must be distinct",
+      "Gemini stream hotfix utility",
+      "INVALID_IDENTIFIER_FILE",
+      "GATEWAY_NOT_ACTIVE",
+      "Policy drift",
+    ];
+    for (const diagnostic of diagnostics) {
+      const error = {
+        stderr: `builder refused: ${diagnostic}`,
+        message: "",
+        code: "",
+      };
+      const preflight = classifyRefusal(error, "PREFLIGHT_REJECTED");
+      const apply = classifyApplyReason(error);
+      assert.equal(
+        preflight,
+        apply,
+        `both modes must name "${diagnostic}" the same way`,
+      );
+      assert.notEqual(preflight, "PREFLIGHT_REJECTED");
+      assert.notEqual(apply, "APPLY_REJECTED");
+    }
+    // A refusal no class names still collapses to the mode's own fallback.
+    const unknown = {
+      stderr: "something else entirely",
+      message: "",
+      code: "",
+    };
+    assert.equal(
+      classifyRefusal(unknown, "PREFLIGHT_REJECTED"),
+      "PREFLIGHT_REJECTED",
+    );
+    assert.equal(classifyApplyReason(unknown), "APPLY_REJECTED");
+  });
+
+  test("F-159: a drifted class set is refused instead of silently diverging", async () => {
+    const { assertSameRefusalClasses, KNOWN_REFUSAL_REASONS } =
+      await import("../integrations/openclaw/topology/fixtures/runtime-regression/refusal-classifier.mjs");
+    assert.equal(
+      assertSameRefusalClasses(KNOWN_REFUSAL_REASONS, KNOWN_REFUSAL_REASONS),
+      true,
+    );
+    assert.throws(
+      () => assertSameRefusalClasses(["A"], ["B"]),
+      /REFUSAL_CLASS_SET_DRIFT/u,
+      "a drifted class set must fail closed, not report a class the other driver does not know",
+    );
+    assert.throws(
+      () => assertSameRefusalClasses(["B", "A"], ["A", "B"]),
+      /REFUSAL_CLASS_SET_DRIFT/u,
+      "the ORDER is part of the contract: the most specific class must be found first",
+    );
+  });
+
+  test("F-159: neither driver keeps a second list of its own", () => {
+    const applySource = fs.readFileSync(
+      repoFile(
+        "integrations/openclaw/topology/fixtures/runtime-regression/apply-orchestration.mjs",
+      ),
+      "utf8",
+    );
+    assert.ok(
+      applySource.includes('from "./refusal-classifier.mjs"'),
+      "the apply driver must use the shared classifier",
+    );
+    assert.ok(
+      !/const\s+KNOWN_REASONS\s*=\s*\[/u.test(applySource),
+      "the apply driver must not keep a literal list of its own",
+    );
+    const preflightSource = fs.readFileSync(
+      repoFile(
+        "integrations/openclaw/topology/fixtures/runtime-regression/operator-preflight.mjs",
+      ),
+      "utf8",
+    );
+    assert.ok(
+      preflightSource.includes('from "./refusal-classifier.mjs"'),
+      "the preflight driver must use the shared matching rule",
+    );
+    assert.ok(
+      preflightSource.includes(
+        "assertSameRefusalClasses(known, KNOWN_REFUSAL_REASONS)",
+      ),
+      "the preflight driver must assert that its class set is the shared one, in the same order",
+    );
+  });
+});
+
 describe("M12/T9 - F-157: one derivation per concept", () => {
   const repoFile = (relative) =>
     fileURLToPath(new URL(`../${relative}`, import.meta.url));
