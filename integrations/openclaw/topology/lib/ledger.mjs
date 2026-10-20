@@ -43,6 +43,20 @@ const INITIAL_BUDGET = Object.freeze({
   delegated_runs_used: 0,
 });
 
+// M12/T9 F-228: the published workflow policy is NOT the source of the task
+// ceilings yet.
+//
+// `topology/policy/workflow-policy.json` publishes the budgets that this file
+// also carries as frozen literals, so the published policy is documentation that
+// no behaviour consults. Loading it here is the fix, and it is NOT applied yet
+// because the packager (`lib/policy.mjs`, the governance-library agent's shared
+// surface) does not materialize `policy/workflow-policy.json` into the deployed
+// plugin tree: a loader without the asset breaks the deployed tree at import
+// (`tests/m7-t2-plugin-packaging.test.mjs` proves it).
+//
+// Until both halves land, the drift between the published file and this table
+// is asserted by `tests/agent-topo-F-228.test.mjs`, so the two copies cannot
+// diverge silently in the meantime.
 export const BUDGETS = Object.freeze({
   maxBriefRevisionsPerTask: 16,
   maxStackTransitionsPerTask: 10,
