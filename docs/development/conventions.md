@@ -7,7 +7,7 @@ Tài liệu này quy định cách làm việc với repository Personal Tool. M
 - `main` là nhánh ổn định và là nhánh mặc định của repository.
 - Commit bootstrap đầu tiên được tạo trực tiếp trên `main` để thiết lập repository trống. Sau đó, mỗi task dùng nhánh ngắn hạn theo mẫu `m<milestone>/t<task>-<slug>`, ví dụ `m1/t1-git-github-conventions`.
 - Dùng chữ thường ASCII và dấu gạch ngang trong `slug`; không dùng khoảng trắng hoặc tên mơ hồ như `fix` hay `update`.
-- Mọi thay đổi sau bootstrap được merge vào `main` qua pull request. Branch protection và required CI chỉ được cấu hình sau khi CI thực sự tồn tại.
+- Mọi thay đổi sau bootstrap được commit trên một task branch (`m<milestone>/t<task>-<slug>`) rồi push branch đó lên remote; **tạo hoặc merge pull request vào `main` cần owner authorization riêng** (xem `AGENTS.md` §12). Branch protection và required CI chỉ được cấu hình sau khi CI thực sự tồn tại.
 - Không force-push vào `main`, không commit trực tiếp secret, binary build output hoặc runtime state.
 
 ## Commit
@@ -102,6 +102,14 @@ $npm = "$env:APPDATA\npm\npm.cmd"
 - `repo:check` parses YAML 1.2 and validates executable `jobs.*.steps`. Comments, metadata, step names, and substrings are never evidence of a workflow contract. Branch protection remains out of scope until checks are stable.
 
 Không sửa `PATH`, không cài lại Node/npm và không thay đổi global toolchain chỉ để xử lý fallback này. CI M1/T3 sẽ provision npm 12.0.2 rõ ràng.
+
+## Generated tree, backup và state directory
+
+- `backups/`, `logs/`, `temp/`, `scratch/` và `.agents/states/*.md` là các **generated tree**: không phải bản ghi chính, không được commit, và không được coi là bản ghi chuẩn nhất.
+- **Owner:** `.agents/states/` — working memory của band đang chạy, do agent giữ; `scratch/` — làm việc tạm của agent; `temp/` — sản phẩm tạm của một phiên làm việc; `logs/` — output runtime; `backups/` — snapshot/dump của quá trình backup được owner cho phép.
+- **Mức đích:** `.gitignore` khóa theo mẫu `**/backups/*`, `**/logs/*`, `**/temp/*` (không root-anchored), nên một thư mục `backups/`/`logs/`/`temp/` ở dưới bất kỳ module nào cũng không bị stage vào commit. `repo:check` có gate `checkNestedGeneratedTreesIgnored` kiểm tra quy tắc này.
+- **Retention:** không được xóa dừng cờ dữ liệu chưa bản ghi chuẩn nhất. `docs/execution/findings.md` là register chính thức; `backups/findings.*.md` chỉ là **snapshot của register**, không phải bản ghi chuẩn nhất — khi hai bản khác nhau, `docs/execution/findings.md` là bản chuẩn. Snapshot trong `backups/` là dữ liệu local: không commit, không in ra báo cáo, và bị xóa theo quyết định của owner.
+- **Bảo mật:** `backups/` chứa **script được track tạo ra** và **có digest được ghi lại**. Một file dump đẹn đứng trong thư mục backup là dữ liệu không có provenance — không được xem là bản ghi hợp lệ.
 
 ## Secret và dữ liệu cục bộ
 
