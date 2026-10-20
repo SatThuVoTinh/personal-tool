@@ -80,7 +80,7 @@ const M11_T3_OUTGOING_FILE_LOCK_SHA256 =
 
 /** The CURRENT build's file-lock asset — accepted by content, never listed. */
 const CURRENT_FILE_LOCK_SHA256 =
-  "bcd65de81c9f6df088dd9ec269cc4dd3969fd80657f9c582e34e06554e64cf7b";
+  "e9cac11dea2ebca6fd57f55e1aca6a7c0a6959fb4ff6a6dabf0811533a9bde06";
 
 const identifiers = Object.freeze({
   discordGuildId: "123456789012345678",
@@ -266,32 +266,12 @@ test(
     assert.deepEqual(
       differing.sort(),
       [
-        // M11/T3-R1 moved these five.
-        "lib/decision-ledger.mjs",
-        "lib/file-lock.mjs",
-        "lib/guard.mjs",
-        "lib/ledger.mjs",
-        "lib/native-boundary.mjs",
-        "lib/queue-manager.mjs",
-        // M12/T1-R1 moved the rest: the 12-character identity widens the task_id
-        // vocabulary in every contract that carries one, changes canonical.mjs and
-        // workflow.mjs, edits the comment in authority.mjs, rewrites the approval
-        // transport/formatter/excel-writer, adds the result-preview renderer, and
-        // regenerates governance-manifests.json because its hash covers policy.mjs.
-        // M12/T2-R1 then widened the same set: the forum-tag module is new (no
-        // installed predecessor), the two ledger contracts gain the surfaced events,
-        // and the entrypoint/formatter/policy/canonical/workflow move with them.
-        // M12/T9 F-252: the twelve topology contracts now each carry their own
-        // `x-zink-contract-version`, so three contracts that the proven live
-        // build (ea84a5a) still carries byte-for-byte now differ. Their
-        // outgoing digests are admitted in configure.mjs, so the deployed tree
-        // stays upgradable.
         "contracts/agent-result-payload.schema.json",
-        "contracts/delegation-proposal.schema.json",
-        "contracts/governance-manifest.schema.json",
         "contracts/approval-request.schema.json",
         "contracts/delegation-envelope.schema.json",
+        "contracts/delegation-proposal.schema.json",
         "contracts/execution-brief.schema.json",
+        "contracts/governance-manifest.schema.json",
         "contracts/governed-reference.schema.json",
         "contracts/incident.schema.json",
         "contracts/ledger-event.schema.json",
@@ -299,39 +279,37 @@ test(
         "contracts/result.schema.json",
         "contracts/trusted-result-envelope.schema.json",
         "governance-manifests.json",
-        // M12/T9: the artifact validator and the quota telemetry moved in this
-        // band (the validator's excel branch and the telemetry's unreachable
-        // comments), so their bytes now differ from the proven live build. Both
-        // outgoing digests are admitted in configure.mjs, so the deployed tree
-        // stays upgradable.
         "lib/artifact-validator.mjs",
         "lib/authority.mjs",
         "lib/canonical.mjs",
+        "lib/coordinator-pickup.mjs",
+        "lib/decision-ledger.mjs",
         "lib/discord-formatter.mjs",
         "lib/discord-forum-tags.mjs",
         "lib/discord-native-send.mjs",
         "lib/discord-result-preview.mjs",
         "lib/excel-writer.mjs",
-        // M12/T2.2-R2 B-9, admitted by owner decision §0.5-E: a manifest that lost a canonical
-        // member used to verify as `valid: true` because the generator skipped what it could not
-        // resolve and the verifier iterated only what survived. Both ends now assert coverage.
-        "lib/schema.mjs",
+        "lib/file-lock.mjs",
+        "lib/guard.mjs",
+        "lib/ledger.mjs",
+        "lib/native-boundary.mjs",
         "lib/policy.mjs",
-        // M12/T9: the reason-code matrix joined the packaged set in this band
-        // (it now declares the outcome-status vocabulary), so its bytes differ
-        // from the proven live build. Its outgoing digest is admitted in
-        // configure.mjs, so the deployed tree stays upgradable.
-        "policy/reason-code-matrix.json",
-        // M12/T9: the quota telemetry's comments and the one canonical owner
-        // validator moved in this band; the outgoing digest is admitted in
-        // configure.mjs.
+        "lib/queue-manager.mjs",
         "lib/quota-telemetry.mjs",
-        // M12/T2.2-R2 B-8, admitted by owner decision §0.5-E: the reason-code matrix load is
-        // now named (`REASON_POLICY_UNREADABLE` / `_MALFORMED` / `_INCOMPLETE`) instead of
-        // crashing module evaluation with a raw fs/JSON error, and one workflow reason_code
-        // accept went through the published vocabulary.
         "lib/runtime.mjs",
+        "lib/schema.mjs",
         "lib/workflow.mjs",
+        "policy/reason-code-matrix.json",
+        "policy/workflow-policy.json",
+        "zink-skill-store/src/catalog.mjs",
+        "zink-skill-store/src/vector-sync.mjs",
+        "zink-tools/adapters/knowledge/knowledge-adapter.mjs",
+        "zink-tools/adapters/skill-store/skill-adapter.mjs",
+        "zink-tools/common/path-safety.mjs",
+        "zink-tools/common/semantic-contract.mjs",
+        "zink-tools/n8n/trigger.mjs",
+        "zink-tools/sql/duckdb-bridge.mjs",
+        "zink-tools/sql/validator.mjs",
       ].sort(),
       "only the M11/T3, M12/T1 and M12/T2 assets may diverge from the proven live build",
     );

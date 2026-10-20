@@ -818,7 +818,7 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // the deployed extension. The digest this build produces is deliberately
     // NOT listed: it is the current build and is accepted by content
     // comparison.
-    "fceefc0df03228c91511779880c21a81d75579633e86ceae54d9696446d0081d",
+
   ]),
   "lib/runtime.mjs": Object.freeze([
     // M10/T2-R15: the outgoing build currently deployed, byte-proven by

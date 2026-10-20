@@ -103,7 +103,7 @@ const R12_OUTGOING_NATIVE_BOUNDARY_SHA256 =
  * comparison and deliberately NOT listed.
  */
 const M11_T3_NATIVE_BOUNDARY_SHA256 =
-  "fceefc0df03228c91511779880c21a81d75579633e86ceae54d9696446d0081d";
+  "a4e30801aba1e00a2f23e63f1d8b0882f4daa60833adfb2a0d72aa536f464380";
 /**
  * M12/T2.2-R2 J-1: the boundary build the LIVE runtime ACTUALLY carries,
  * byte-proven by `sha256sum` of the installed asset on the WSL host. B-16 rolled
@@ -174,7 +174,7 @@ assert.ok(
  * carry it.
  */
 const M11_T3_ENTRYPOINT_SHA256 =
-  "4d63cde063b48488ff25c43adfd836933b49e02642fb32202b124f8670c6b318";
+  "9c1b6e1e94e1bff06509f166c98b671f85716e2f4d511eed578916420e9174ed";
 const M12_T2_2_OUTGOING_ENTRYPOINT_SHA256 =
   "513beb15c3d7624c0a928c4c1556dc44d4c4cff4f1e00980f24b298a25751c0d";
 assert.ok(
@@ -1097,7 +1097,7 @@ test("R13 B3: the build the live runtime carries is accepted and converges", asy
     // so the upgrade path is unchanged.
     assert.equal(
       sha256(readFileSync(p.asset("lib/queue-manager.mjs"), "utf8")),
-      "961c9552176a2d74672c02fd85424ecf914f9023337b3382db0ad42008eba741",
+      "f2774f580fa45d48ad0cfeb59b93aae2cee4e97f5ab03077a9d0802b400d7572",
       "an accepted predecessor must converge onto the current queue writer",
     );
   } finally {

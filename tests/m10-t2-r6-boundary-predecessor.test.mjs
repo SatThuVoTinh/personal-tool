@@ -66,7 +66,7 @@ const HYGIENE_BOUNDARY_SHA256 =
  * entry's bytes from commit `3cb8274` instead of trusting a grep.
  */
 const CANDIDATE_BOUNDARY_SHA256 =
-  "fceefc0df03228c91511779880c21a81d75579633e86ceae54d9696446d0081d";
+  "a4e30801aba1e00a2f23e63f1d8b0882f4daa60833adfb2a0d72aa536f464380";
 
 /** The build R8 replaces; listed as an approved predecessor. */
 const R6_BOUNDARY_SHA256 =
