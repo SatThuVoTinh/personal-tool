@@ -3,7 +3,19 @@ useDefault = true
 
 [allowlist]
 description = "Allow synthetic Discord IDs and test fixtures"
+# Every pattern is ANCHORED. The old allowlist carried one unanchored pattern
+# (`tests/.*`), which matched every path containing `tests/` - 224 tracked
+# paths - and no lane read this file, so the suppressed set could grow without
+# a record. The anchored set below suppresses exactly the same 224 paths: what
+# changes is that the set is now explicit, and the policy gate
+# (`scripts/repository-policy.mjs`, SECRET_SCAN_ALLOWED_SCOPES) fails when a
+# pattern is unanchored, when a pattern names a scope no record names, when a
+# recorded scope has no pattern, when a suppressed path falls outside every
+# recorded scope, when the total exceeds the measured ceiling, and when a
+# recorded fingerprint in .gitleaksignore names a file that is not tracked.
 paths = [
-  '''tests/.*''',
-  '''integrations/openclaw/orchestration/README\.md'''
+  '''^tests/.*''',
+  '''^apps/knowledge/tests/.*''',
+  '''^apps/knowledge/pdf-runtime/tests/.*''',
+  '''^integrations/openclaw/orchestration/README\.md$'''
 ]

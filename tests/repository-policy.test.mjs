@@ -1131,9 +1131,103 @@ test("a tracked path outside every recorded scope must fail the policy check", (
     const failures = checkSecretScanAllowlist(repositoryRoot, [
       "secretive/token.txt",
     ]);
-    assert.equal(failures.length, 1, failures.join(" | "));
-    assert.match(failures[0], /outside every recorded scope/u);
+    // F-339: the allowlist is now read and bounded, so an unanchored pattern
+    // is reported for what it is (it matches paths its scope does not name),
+    // for being a scope no record names, and for every recorded scope it
+    // leaves without a pattern. The scope failure itself is still required.
+    assert.ok(
+      failures.some((failure) => /outside every recorded scope/u.test(failure)),
+      failures.join(" | "),
+    );
+    assert.ok(
+      failures.some((failure) => /is not anchored/u.test(failure)),
+      failures.join(" | "),
+    );
+    assert.ok(
+      failures.some((failure) => /no record names/u.test(failure)),
+      failures.join(" | "),
+    );
+    assert.ok(
+      failures.some((failure) => /has no allowlist pattern/u.test(failure)),
+      failures.join(" | "),
+    );
   });
+});
+
+test("F-339: an anchored pattern that no record names must fail the policy check", () => {
+  withTemporaryRepository((repositoryRoot) => {
+    writeTrackedFile(
+      repositoryRoot,
+      ".gitleaks.toml",
+      "[extend]\nuseDefault = true\n\n[allowlist]\npaths = [ '''^secretive/.*''' ]\n",
+    );
+    writeTrackedFile(repositoryRoot, "secretive/token.txt", "value\n");
+    const failures = checkSecretScanAllowlist(repositoryRoot, [
+      "secretive/token.txt",
+    ]);
+    assert.ok(
+      failures.some((failure) => /no record names/u.test(failure)),
+      `an anchored pattern is still a scope nobody recorded: ${failures.join(" | ")}`,
+    );
+    assert.equal(
+      failures.some((failure) => /is not anchored/u.test(failure)),
+      false,
+      "an anchored pattern must not be reported as unanchored",
+    );
+  });
+});
+
+test("F-339: a fingerprint that names an untracked file must fail the policy check", () => {
+  withTemporaryRepository((repositoryRoot) => {
+    writeTrackedFile(
+      repositoryRoot,
+      ".gitleaks.toml",
+      "[extend]\nuseDefault = true\n\n[allowlist]\npaths = [ '''^tests/.*''' ]\n",
+    );
+    writeTrackedFile(
+      repositoryRoot,
+      ".gitleaksignore",
+      "d73f20cc5fd5fd14533b34e2840517c49b9989b1:gone/file.md:generic-api-key:142\n",
+    );
+    writeTrackedFile(
+      repositoryRoot,
+      "tests/keep.mjs",
+      "export const keep = 1;\n",
+    );
+    const failures = checkSecretScanAllowlist(repositoryRoot, [
+      "tests/keep.mjs",
+    ]);
+    assert.ok(
+      failures.some((failure) =>
+        /names a file the repository does not track/u.test(failure),
+      ),
+      `a recorded fingerprint must name a file the repository still tracks: ${failures.join(" | ")}`,
+    );
+  });
+});
+
+test("F-339: the shipped allowlist is anchored and its scopes are recorded", () => {
+  const config = readFileSync(path.join(REPO_ROOT, ".gitleaks.toml"), "utf8");
+  const block = /\[allowlist\]([\s\S]*?)(?=\n\[|$)/u.exec(config);
+  assert.ok(block, "the shipped allowlist must have an [allowlist] block");
+  const patterns = [...block[1].matchAll(/'''([^']*)'''/gu)].map(
+    (match) => match[1],
+  );
+  assert.ok(patterns.length > 0, "the shipped allowlist must declare patterns");
+  for (const pattern of patterns) {
+    assert.ok(
+      pattern.startsWith("^"),
+      `the shipped allowlist pattern must be anchored: ${pattern}`,
+    );
+  }
+  // The suppressed set is exactly the recorded scopes: no tracked path is
+  // suppressed by a pattern that a record does not name, and every recorded
+  // scope is exercised.
+  const failures = checkSecretScanAllowlist(
+    REPO_ROOT,
+    listTrackedFiles(REPO_ROOT),
+  );
+  assert.deepEqual(failures, [], failures.join(" | "));
 });
 
 test("a generated tree under a module path must not be stageable", () => {

@@ -95,16 +95,48 @@ const FINDINGS_STATUS_VOCABULARY = new Set([
   "REFUTED",
 ]);
 // The secret-scan allowlist suppresses whole directories. These are the
-// recorded scopes: a tracked path outside them that the allowlist regexes
-// suppress is a scope that grew without a record, and the total is capped.
+// recorded scopes: each one names the ANCHORED pattern the allowlist file
+// must carry, so a tracked path is suppressed only through a scope that a
+// record names.
+//
+// F-339 (R7-OA-02): the allowlist carried ONE unanchored pattern
+// (`tests/.*`), which matched every path containing `tests/` - 224 tracked
+// paths at the measurement below - and nothing read the allowlist files, so
+// the suppressed set could grow without any lane noticing. The anchored set
+// suppresses exactly the same 224 paths, so the scan's behaviour is
+// unchanged; what changes is that the set is now EXPLICIT and READ.
+//
+// The recorded scopes, their anchored patterns, and the tracked paths each
+// one suppressed at the measurement (2026-10-20, M12/T9):
 const SECRET_SCAN_ALLOWED_SCOPES = [
-  "tests/",
-  "apps/knowledge/tests/",
-  "apps/knowledge/pdf-runtime/tests/",
-  // The one file the allowlist names by path rather than by scope.
-  "integrations/openclaw/orchestration/README.md",
+  {
+    scope: "tests/",
+    pattern: "^tests/.*",
+    measured: 195,
+  },
+  {
+    scope: "apps/knowledge/tests/",
+    pattern: "^apps/knowledge/tests/.*",
+    measured: 26,
+  },
+  {
+    scope: "apps/knowledge/pdf-runtime/tests/",
+    pattern: "^apps/knowledge/pdf-runtime/tests/.*",
+    measured: 2,
+  },
+  {
+    // The one file the allowlist names by path rather than by scope. It is
+    // also fingerprinted line-precisely in .gitleaksignore, so the
+    // duplication is recorded rather than accidental.
+    scope: "integrations/openclaw/orchestration/README.md",
+    pattern: "^integrations/openclaw/orchestration/README\\.md$",
+    measured: 1,
+  },
 ];
-const SECRET_SCAN_SUPPRESSED_CEILING = 200;
+// The measured total is 224 tracked paths. The ceiling carries headroom for
+// one band's new test files; a band that exceeds it must re-measure and
+// record the new number, which is the visible act the row asked for.
+const SECRET_SCAN_SUPPRESSED_CEILING = 260;
 
 // The workflow step that compares the live audit with the recorded baseline.
 const AUDIT_BASELINE_SCRIPT = "scripts/audit-baseline.mjs";
@@ -975,6 +1007,33 @@ export function checkSecretScanAllowlist(repositoryRoot, trackedFiles) {
     return ["The secret-scan allowlist declares no path pattern."];
   }
 
+  // Every pattern must be ANCHORED and must be one the records name. An
+  // unanchored pattern matches a path the scope does not name - that is how
+  // the suppressed set grew to 224 tracked paths without a record - and an
+  // unrecorded pattern suppresses a scope nothing reviews.
+  const recordedPatterns = new Set(
+    SECRET_SCAN_ALLOWED_SCOPES.map((entry) => entry.pattern),
+  );
+  for (const pattern of patterns) {
+    if (!pattern.startsWith("^")) {
+      failures.push(
+        `The secret-scan allowlist pattern is not anchored: ${pattern}. An unanchored pattern matches paths its scope does not name, so the suppressed set grows without a record.`,
+      );
+    }
+    if (!recordedPatterns.has(pattern)) {
+      failures.push(
+        `The secret-scan allowlist suppresses a scope that no record names: ${pattern}. Record it in SECRET_SCAN_ALLOWED_SCOPES before it suppresses anything.`,
+      );
+    }
+  }
+  for (const entry of SECRET_SCAN_ALLOWED_SCOPES) {
+    if (!patterns.includes(entry.pattern)) {
+      failures.push(
+        `A recorded secret-scan scope has no allowlist pattern: ${entry.scope} (${entry.pattern}).`,
+      );
+    }
+  }
+
   const suppressed = [];
   for (const repositoryPath of trackedFiles) {
     for (const pattern of patterns) {
@@ -997,9 +1056,11 @@ export function checkSecretScanAllowlist(repositoryRoot, trackedFiles) {
 
   const outsideScope = suppressed.filter(
     (repositoryPath) =>
-      !SECRET_SCAN_ALLOWED_SCOPES.some((scope) =>
-        repositoryPath.startsWith(scope),
-      ) && !SECRET_SCAN_ALLOWED_SCOPES.includes(repositoryPath),
+      !SECRET_SCAN_ALLOWED_SCOPES.some(
+        (entry) =>
+          repositoryPath.startsWith(entry.scope) ||
+          repositoryPath === entry.scope,
+      ),
   );
   for (const repositoryPath of outsideScope) {
     failures.push(
@@ -1010,6 +1071,31 @@ export function checkSecretScanAllowlist(repositoryRoot, trackedFiles) {
     failures.push(
       `The secret-scan allowlist suppresses ${suppressed.length} tracked paths, above the recorded ceiling of ${SECRET_SCAN_SUPPRESSED_CEILING}.`,
     );
+  }
+
+  // The fingerprint file is the per-file record of a suppression. Every
+  // fingerprint must name a file the repository still tracks, or the record
+  // points at nothing and the suppression it describes cannot be reviewed.
+  const ignorePath = path.join(repositoryRoot, ".gitleaksignore");
+  if (existsSync(ignorePath)) {
+    const tracked = new Set(trackedFiles);
+    for (const line of readFileSync(ignorePath, "utf8").split("\n")) {
+      const entry = line.trim();
+      if (entry.length === 0 || entry.startsWith("#")) continue;
+      const parts = entry.split(":");
+      const file = parts[1];
+      if (!file) {
+        failures.push(
+          `A secret-scan fingerprint is not in the <commit>:<file>:<rule>:<line> form: ${entry}`,
+        );
+        continue;
+      }
+      if (!tracked.has(file)) {
+        failures.push(
+          `A secret-scan fingerprint names a file the repository does not track: ${entry}`,
+        );
+      }
+    }
   }
 
   return failures;
