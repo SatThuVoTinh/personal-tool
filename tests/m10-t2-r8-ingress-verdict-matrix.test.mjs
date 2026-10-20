@@ -253,88 +253,204 @@ const expectedLogs = {
   "cli-operator": null,
 };
 
-test("R8 matrix: every ingress class reaches its specified verdict", async () => {
+// The policy reason each DENY case must be refused for, and the refusal code
+// the boundary must raise for it. The matrix used to book ANY thrown error as
+// the specified verdict, so an infrastructure fault (a malformed fixture, a
+// missing governance context, a harness IO error) satisfied every DENY row at
+// once.
+//
+// `reason` is the canonical policy reason the ingress decision carries and the
+// ingress log names; `null` marks a case whose denial is decided below the
+// ingress layer and therefore has no ingress reason code.
+// `code` is the refusal the boundary raises. The boundary re-throws every
+// non-allow outcome under one umbrella contract code, so the designed refusal
+// is the inner cause.
+const expectedDenials = {
+  "untagged-plain": { reason: "MISSING_MENTION", code: "GOVERNANCE_DENIED" },
+  "mention-other-bot": {
+    reason: "NON_MAIN_DIRECT_INGRESS",
+    code: "GOVERNANCE_DENIED",
+  },
+  "mention-owner-user": {
+    reason: "MISSING_MENTION",
+    code: "GOVERNANCE_DENIED",
+  },
+  "reply-other-bot": { reason: "MISSING_MENTION", code: "GOVERNANCE_DENIED" },
+  "reply-user": { reason: "MISSING_MENTION", code: "GOVERNANCE_DENIED" },
+  "thread-foreign": { reason: "MISSING_MENTION", code: "GOVERNANCE_DENIED" },
+  "specialist-plain": {
+    reason: "NON_MAIN_DIRECT_INGRESS",
+    code: "GOVERNANCE_DENIED",
+  },
+  "specialist-mention-main": {
+    reason: "NON_MAIN_DIRECT_INGRESS",
+    code: "GOVERNANCE_DENIED",
+  },
+  "o1-plain": { reason: "NON_MAIN_DIRECT_INGRESS", code: "GOVERNANCE_DENIED" },
+  "nonowner-mention": { reason: "POLICY_DENIED", code: "GOVERNANCE_DENIED" },
+  "bot-author": { reason: "BOT_INGRESS_DENIED", code: "GOVERNANCE_DENIED" },
+  "missing-msgid": { reason: "LINEAGE_MISMATCH", code: "GOVERNANCE_DENIED" },
+  "bad-msgid": { reason: "LINEAGE_MISMATCH", code: "GOVERNANCE_DENIED" },
+  "empty-session": { reason: "MISSING_MENTION", code: "GOVERNANCE_DENIED" },
+  // These two never enter authenticateIngress: the channel check fails first,
+  // so the inner guard refuses them for a missing spawn receipt and the
+  // ingress log stays silent.
+  "webchat-operator": { reason: null, code: "EXECUTION_STATE_UNKNOWN" },
+  "cli-operator": { reason: null, code: "EXECUTION_STATE_UNKNOWN" },
+};
+
+// The governance codes that mean "the harness or the runtime failed", never
+// "the policy denied this message". A denial booked from one of these is a
+// false green.
+const INFRASTRUCTURE_CODES = new Set([
+  "GOVERNANCE_CONTEXT_MISSING",
+  "GOVERNANCE_UNAVAILABLE",
+  "GOVERNANCE_REGISTRATION_INVALID",
+  "GOVERNANCE_BATCH_MISSING",
+  "GOVERNANCE_BATCH_INVALID",
+  "GOVERNANCE_DECISION_INVALID",
+  "GOVERNANCE_ABORTED",
+]);
+
+// The umbrella contract code the boundary re-throws every refusal under. It is
+// the host-visible string, so it carries no information about WHICH refusal
+// happened; the inner cause does.
+const REFUSAL_CONTRACT_CODE = "GOVERNANCE_RUN_UNAVAILABLE";
+
+test("R8 matrix: every ingress class reaches its specified verdict", async (t) => {
+  // Each case runs as its own subtest: the matrix used to be one test body
+  // wrapping the whole loop, so the first failing case aborted the run and
+  // every later verdict was reported as untested.
   for (const [name, shape, stash, expected] of cases) {
-    await withPlugin(async ({ paths, native, logged }) => {
-      const ctx = base(shape);
-      if (stash) {
-        const KEY = "__zink_ingress_metadata_r5";
-        if (!globalThis[KEY]) globalThis[KEY] = new Map();
-        globalThis[KEY].set(ctx.currentMessageId, {
-          mentionedUserIds: stash.mentionedUserIds ?? [],
-          mentionedRoleIds: [],
-          replyReferenceMessageId: stash.replyReferenceMessageId ?? null,
-          replyReferenceAuthorId: stash.replyReferenceAuthorId ?? null,
-          threadOwnerId: stash.threadOwnerId ?? null,
-          authorIsBot: stash.authorIsBot ?? false,
-        });
-      }
-      const before = readSnapshot(paths);
-      let verdict;
-      try {
-        await enterNativeRun(native, ctx);
-        verdict = "ALLOW";
-      } catch {
-        verdict = "DENY";
-      }
-      assert.equal(verdict, expected, `${name}: expected ${expected}`);
-      // Diagnostic observability: the verdict must be attributable in logs.
-      const wantLog = expectedLogs[name];
-      const joined = logged.join("\n");
-      if (wantLog === null) {
-        assert.equal(
-          joined.includes("ingress denied:") ||
-            joined.includes("MAIN_DIRECTED") ||
-            joined.includes("MAIN_CONVERSATION_CONTINUATION"),
-          false,
-          `${name}: exempt path must stay silent at ingress`,
+    await t.test(name, async () => {
+      await withPlugin(async ({ paths, native, logged }) => {
+        const ctx = base(shape);
+        if (stash) {
+          const KEY = "__zink_ingress_metadata_r5";
+          if (!globalThis[KEY]) globalThis[KEY] = new Map();
+          globalThis[KEY].set(ctx.currentMessageId, {
+            mentionedUserIds: stash.mentionedUserIds ?? [],
+            mentionedRoleIds: [],
+            replyReferenceMessageId: stash.replyReferenceMessageId ?? null,
+            replyReferenceAuthorId: stash.replyReferenceAuthorId ?? null,
+            threadOwnerId: stash.threadOwnerId ?? null,
+            authorIsBot: stash.authorIsBot ?? false,
+          });
+        }
+        const before = readSnapshot(paths);
+        let verdict;
+        // The refusal is captured, not discarded: a thrown error is only the
+        // specified verdict when it IS the specified refusal.
+        let cause = null;
+        try {
+          await enterNativeRun(native, ctx);
+          verdict = "ALLOW";
+        } catch (error) {
+          verdict = "DENY";
+          cause = error;
+        }
+        assert.equal(verdict, expected, `${name}: expected ${expected}`);
+        if (expected === "DENY") {
+          assert.ok(
+            cause instanceof Error,
+            `${name}: a denial must be a raised refusal`,
+          );
+          // The boundary re-throws every non-allow outcome under one umbrella
+          // contract code; the designed refusal is the inner cause.
+          assert.equal(
+            cause.message,
+            REFUSAL_CONTRACT_CODE,
+            `${name}: the host-visible refusal code must not change`,
+          );
+          const root = cause.cause instanceof Error ? cause.cause : cause;
+          assert.equal(
+            root.message,
+            expectedDenials[name].code,
+            `${name}: must be refused by ${expectedDenials[name].code}, not by ${root.message}`,
+          );
+          assert.equal(
+            INFRASTRUCTURE_CODES.has(root.message),
+            false,
+            `${name}: an infrastructure fault is not a policy denial`,
+          );
+          // The reason the guard refused for is named, so the row states which
+          // policy rule it covers instead of only that something denied.
+          const wantReason = expectedDenials[name].reason;
+          if (wantReason !== null) {
+            assert.ok(
+              logged.some((line) =>
+                line.includes(`ingress denied: reason=${wantReason}`),
+              ),
+              `${name}: expected the policy reason ${wantReason}`,
+            );
+          }
+        } else {
+          assert.equal(
+            cause,
+            null,
+            `${name}: an admitted run must not raise a refusal`,
+          );
+        }
+        // Diagnostic observability: the verdict must be attributable in logs.
+        const wantLog = expectedLogs[name];
+        const joined = logged.join("\n");
+        if (wantLog === null) {
+          assert.equal(
+            joined.includes("ingress denied:") ||
+              joined.includes("MAIN_DIRECTED") ||
+              joined.includes("MAIN_CONVERSATION_CONTINUATION"),
+            false,
+            `${name}: exempt path must stay silent at ingress`,
+          );
+        } else {
+          assert.ok(
+            joined.includes(wantLog),
+            `${name}: expected log fragment ${JSON.stringify(wantLog)}`,
+          );
+        }
+        const after = readSnapshot(paths);
+        if (expected === "DENY") {
+          // A denied message must not invoke the runtime: no task, no ledger
+          // mutation, no queue entry.
+          assert.equal(
+            after.sequence,
+            before.sequence,
+            `${name}: denied run must not mutate the ledger`,
+          );
+          assert.equal(
+            Object.keys(after.tasks).length,
+            Object.keys(before.tasks).length,
+            `${name}: denied run must not open a task`,
+          );
+        } else if (name === "heartbeat") {
+          // Heartbeat exemption admits without opening a task (no ledger
+          // owner by design) and without mutating state.
+          assert.equal(
+            after.sequence,
+            before.sequence,
+            `${name}: heartbeat must not mutate the ledger`,
+          );
+        } else {
+          // An admitted message opens exactly one Main task through the
+          // governed path (model invocation itself is host-side).
+          assert.equal(
+            Object.keys(after.tasks).length,
+            Object.keys(before.tasks).length + 1,
+            `${name}: admitted run must open exactly one task`,
+          );
+          const created = Object.values(after.tasks).at(-1);
+          assert.equal(
+            created.root_agent_id,
+            "main",
+            `${name}: task owned by main`,
+          );
+        }
+        // Stash hygiene: each case uses a unique message id (Discord ids are
+        // unique in production); remove it so cases stay independent.
+        globalThis["__zink_ingress_metadata_r5"]?.delete?.(
+          ctx.currentMessageId,
         );
-      } else {
-        assert.ok(
-          joined.includes(wantLog),
-          `${name}: expected log fragment ${JSON.stringify(wantLog)}`,
-        );
-      }
-      const after = readSnapshot(paths);
-      if (expected === "DENY") {
-        // A denied message must not invoke the runtime: no task, no ledger
-        // mutation, no queue entry.
-        assert.equal(
-          after.sequence,
-          before.sequence,
-          `${name}: denied run must not mutate the ledger`,
-        );
-        assert.equal(
-          Object.keys(after.tasks).length,
-          Object.keys(before.tasks).length,
-          `${name}: denied run must not open a task`,
-        );
-      } else if (name === "heartbeat") {
-        // Heartbeat exemption admits without opening a task (no ledger
-        // owner by design) and without mutating state.
-        assert.equal(
-          after.sequence,
-          before.sequence,
-          `${name}: heartbeat must not mutate the ledger`,
-        );
-      } else {
-        // An admitted message opens exactly one Main task through the
-        // governed path (model invocation itself is host-side).
-        assert.equal(
-          Object.keys(after.tasks).length,
-          Object.keys(before.tasks).length + 1,
-          `${name}: admitted run must open exactly one task`,
-        );
-        const created = Object.values(after.tasks).at(-1);
-        assert.equal(
-          created.root_agent_id,
-          "main",
-          `${name}: task owned by main`,
-        );
-      }
-      // Stash hygiene: each case uses a unique message id (Discord ids are
-      // unique in production); remove it so cases stay independent.
-      globalThis["__zink_ingress_metadata_r5"]?.delete?.(ctx.currentMessageId);
+      });
     });
   }
 });
