@@ -4,6 +4,7 @@ import {
   lstatSync,
   existsSync,
   mkdirSync,
+  readdirSync,
   writeFileSync,
   openSync,
   closeSync,
@@ -123,6 +124,113 @@ export const NATIVE_DISCORD_CHANNEL_RELATIVE =
   "npm/projects/openclaw-discord-c0892df945/node_modules/@openclaw/discord";
 
 /**
+ * M12/T9 F-011: the channel root is RESOLVED, never pinned.
+ *
+ * The Discord channel is an INSTALLED PLUGIN PACKAGE, and the directory npm
+ * installs it into carries the install's content hash. A reinstall or an
+ * upgrade changes that directory name, so a hardcoded relative silently
+ * repoints the patch roots, the snapshot relatives and all three operator
+ * commands at a directory that no longer exists - and the failure reads as
+ * NATIVE_SOURCE_DRIFT on a supported runtime version.
+ *
+ * The root is therefore RESOLVED from the installed plugin's own manifest:
+ * the state directory's npm project store is enumerated, the project that
+ * holds the `@openclaw/discord` package is identified, and the package's
+ * manifest must name the package it claims to hold.
+ *
+ * The named refusals are the point of the row: an install that cannot be
+ * resolved, an install that cannot be resolved to exactly ONE project, and a
+ * relative that was PINNED to an install content-hash are three different
+ * conditions and each has its own code.
+ */
+export const NATIVE_DISCORD_CHANNEL_PACKAGE = "@openclaw/discord";
+export const NATIVE_DISCORD_CHANNEL_PROJECT_PREFIX = "openclaw-discord";
+export const NATIVE_DISCORD_CHANNEL_UNRESOLVED =
+  "NATIVE_DISCORD_CHANNEL_UNRESOLVED";
+export const NATIVE_DISCORD_CHANNEL_AMBIGUOUS =
+  "NATIVE_DISCORD_CHANNEL_AMBIGUOUS";
+export const NATIVE_DISCORD_CHANNEL_PIN_REFUSED =
+  "NATIVE_DISCORD_CHANNEL_PIN_REFUSED";
+
+/**
+ * The installed Discord channel package root, RELATIVE TO THE STATE DIRECTORY.
+ *
+ * Resolution is by the INSTALLED PLUGIN, never by a pinned directory name:
+ *
+ *   1. the state directory's npm project store is enumerated;
+ *   2. every project that holds a `node_modules/@openclaw/discord` package
+ *      directory is a candidate;
+ *   3. the candidate's own manifest, when it has one, must name the package
+ *      the directory claims to hold - a manifest that names something else is
+ *      a refusal, never a silent skip.
+ *
+ * Exactly one candidate must remain. Zero is UNRESOLVED, more than one is
+ * AMBIGUOUS: both refuse, and neither falls back to a pinned path.
+ */
+export function resolveNativeDiscordChannelRelative(stateDir) {
+  if (typeof stateDir !== "string" || stateDir.length === 0)
+    throw new Error(NATIVE_DISCORD_CHANNEL_UNRESOLVED);
+  const projects = path.join(stateDir, "npm", "projects");
+  let entries;
+  try {
+    entries = readdirSync(projects, { withFileTypes: true });
+  } catch {
+    throw new Error(NATIVE_DISCORD_CHANNEL_UNRESOLVED);
+  }
+  const candidates = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    if (!entry.name.startsWith(NATIVE_DISCORD_CHANNEL_PROJECT_PREFIX)) continue;
+    const packageRoot = path.join(
+      projects,
+      entry.name,
+      "node_modules",
+      ...NATIVE_DISCORD_CHANNEL_PACKAGE.split("/"),
+    );
+    if (!existsSync(packageRoot) || !lstatSync(packageRoot).isDirectory())
+      continue;
+    const manifestPath = path.join(packageRoot, "package.json");
+    if (existsSync(manifestPath)) {
+      let manifest = null;
+      try {
+        manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+      } catch {
+        throw new Error(NATIVE_DISCORD_CHANNEL_UNRESOLVED);
+      }
+      if (manifest?.name !== NATIVE_DISCORD_CHANNEL_PACKAGE)
+        throw new Error(NATIVE_DISCORD_CHANNEL_UNRESOLVED);
+    }
+    candidates.push(entry.name);
+  }
+  if (candidates.length === 0)
+    throw new Error(NATIVE_DISCORD_CHANNEL_UNRESOLVED);
+  if (candidates.length > 1)
+    throw new Error(NATIVE_DISCORD_CHANNEL_AMBIGUOUS);
+  return `npm/projects/${candidates[0]}/node_modules/${NATIVE_DISCORD_CHANNEL_PACKAGE}`;
+}
+
+/** The installed Discord channel package root, absolute. */
+export function nativeDiscordChannelRoot(stateDir) {
+  return path.join(stateDir, resolveNativeDiscordChannelRelative(stateDir));
+}
+
+/**
+ * Refuse a channel relative that is not the INSTALLED one.
+ *
+ * This is the control the row asks for: a relative pinned to an install
+ * content-hash cannot be used as a path once the install moved, and the
+ * refusal is a named code rather than a wrong path.
+ */
+export function assertNativeDiscordChannelRelative(stateDir, relative) {
+  const resolved = resolveNativeDiscordChannelRelative(stateDir);
+  if (relative !== resolved)
+    throw new Error(
+      `${NATIVE_DISCORD_CHANNEL_PIN_REFUSED}: the channel root must be resolved from the installed-plugin manifest (${resolved}), not pinned to ${relative}`,
+    );
+  return resolved;
+}
+
+/**
  * Which governed root a pinned source resolves against. A source with no
  * `scope` belongs to the runtime root, which is every source that predates the
  * Discord channel being recognised as a separately installed plugin.
@@ -143,6 +251,9 @@ export function nativeRoots(input) {
   return {
     runtimeRoot: value.runtimeRoot ?? null,
     discordChannelRoot: value.discordChannelRoot ?? null,
+    // M12/T9 F-011: the state directory is where the installed Discord
+    // channel package is resolved from, so the roots carry it.
+    stateDir: value.stateDir ?? null,
   };
 }
 
@@ -901,12 +1012,14 @@ export function nativePatchedRuntimeRelatives() {
  * pins keeps "mutated but untracked" structurally impossible on the tree the
  * host actually executes.
  */
-export function nativePatchedDiscordChannelRelatives() {
+export function nativePatchedDiscordChannelRelatives(
+  channelRelative = NATIVE_DISCORD_CHANNEL_RELATIVE,
+) {
   const relatives = new Set();
   for (const pin of Object.values(NATIVE_RUNTIME_PINS))
     for (const [file, entry] of Object.entries(pin.sources))
       if (entry.scope === "discordChannel")
-        relatives.add(`${NATIVE_DISCORD_CHANNEL_RELATIVE}/dist/${file}`);
+        relatives.add(`${channelRelative}/dist/${file}`);
   return Object.freeze([...relatives].sort());
 }
 
@@ -921,12 +1034,19 @@ export function nativePatchedDiscordChannelRelatives() {
 export function nativeRuntimePostImage(input) {
   const roots = nativeRoots(input);
   const inspection = inspectNativePatch(roots);
+  // M12/T9 F-011: the post-image is stated against the INSTALLED channel
+  // package, so it follows a reinstall instead of naming a directory that no
+  // longer exists. The state directory is the only place the install can be
+  // resolved from, so it is part of the governed roots.
+  const channelRelative = roots.stateDir
+    ? resolveNativeDiscordChannelRelative(roots.stateDir)
+    : NATIVE_DISCORD_CHANNEL_RELATIVE;
   const entries = Object.entries(inspection).map(([file, entry]) => {
     const relative =
       NATIVE_RUNTIME_PINS[resolveRuntimeVersion(roots.runtimeRoot)].sources[
         file
       ].scope === "discordChannel"
-        ? `${NATIVE_DISCORD_CHANNEL_RELATIVE}/dist/${file}`
+        ? `${channelRelative}/dist/${file}`
         : `dist/${file}`;
     return { relative, sha256: entry.afterDigest };
   });

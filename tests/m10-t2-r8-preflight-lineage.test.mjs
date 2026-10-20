@@ -16,9 +16,18 @@
 // exported verbatim so the mistake remains auditable.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import {
+  assertNativeDiscordChannelRelative,
   DISCORD_PREFLIGHT_ANCHOR,
   DISCORD_PREFLIGHT_INJECTION,
   DISCORD_PREFLIGHT_INJECTION_R5,
@@ -152,10 +161,41 @@ test("R8 L0: the pin names the file the host actually executes", () => {
     false,
     "the unloadable runtime-root copy must never be pinned again",
   );
-  assert.ok(
-    NATIVE_DISCORD_CHANNEL_RELATIVE.includes("@openclaw/discord"),
-    "the channel root must name the installed plugin package",
-  );
+  // M12/T9 F-011: the channel root is RESOLVED from the installed plugin's
+  // own manifest, and a relative PINNED to an install content-hash is REFUSED
+  // with a named code. One reinstall changes the install directory, and the
+  // pinned constant used to repoint the patch roots, the snapshot relatives and
+  // all three operator commands at a directory that no longer exists.
+  {
+    const stateRoot = mkdtempSync(path.join(os.tmpdir(), "f011-gate-"));
+    try {
+      const packageRoot = path.join(
+        stateRoot,
+        "npm",
+        "projects",
+        "openclaw-discord-99aa00ff",
+        "node_modules",
+        "@openclaw",
+        "discord",
+      );
+      mkdirSync(packageRoot, { recursive: true });
+      writeFileSync(
+        path.join(packageRoot, "package.json"),
+        JSON.stringify({ name: "@openclaw/discord" }),
+      );
+      assert.throws(
+        () =>
+          assertNativeDiscordChannelRelative(
+            stateRoot,
+            NATIVE_DISCORD_CHANNEL_RELATIVE,
+          ),
+        /NATIVE_DISCORD_CHANNEL_PIN_REFUSED/u,
+        "a pinned install content-hash must be refused with a named code",
+      );
+    } finally {
+      rmSync(stateRoot, { recursive: true, force: true });
+    }
+  }
 });
 
 test("R8 L0b: the live channel region is a recognised predecessor", () => {

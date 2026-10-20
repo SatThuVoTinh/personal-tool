@@ -45,8 +45,10 @@ import {
 import path from "node:path";
 import process from "node:process";
 import {
+  NATIVE_DISCORD_CHANNEL_AMBIGUOUS,
   nativePatchedDiscordChannelRelatives,
   nativePatchedRuntimeRelatives,
+  resolveNativeDiscordChannelRelative,
 } from "./native-patch.mjs";
 
 /**
@@ -166,11 +168,23 @@ export function createTransactionSnapshot(roots) {
     throw new Error("TRANSACTION_SNAPSHOT_NO_ROOTS");
   for (const root of [stateDir, runtimeRoot]) noLinks(root);
 
+  // M12/T9 F-011: the channel targets follow the INSTALLED package, so a
+  // reinstall that changes the install directory is covered instead of missed.
+  // An install that cannot be resolved to exactly one project fails closed;
+  // an install that is simply not there contributes no live file.
+  let channelTargets = SNAPSHOT_TARGETS.discordChannel;
+  try {
+    channelTargets = nativePatchedDiscordChannelRelatives(
+      resolveNativeDiscordChannelRelative(stateDir),
+    );
+  } catch (error) {
+    if (error?.message === NATIVE_DISCORD_CHANNEL_AMBIGUOUS) throw error;
+  }
   const fixed = [
     ...SNAPSHOT_TARGETS.state.map((relative) => ({ relative, root: stateDir })),
     // M10/T2-R8: channel targets are state-relative, so they resolve inside the
     // state root that is already validated and snapshotted.
-    ...SNAPSHOT_TARGETS.discordChannel.map((relative) => ({
+    ...channelTargets.map((relative) => ({
       relative,
       root: stateDir,
     })),

@@ -18,7 +18,7 @@ import {
   applyNativePatch,
   checkNativePatch,
   inspectNativePatch,
-  NATIVE_DISCORD_CHANNEL_RELATIVE,
+  nativeDiscordChannelRoot,
   nativeRuntimePostImage,
 } from "../../lib/native-patch.mjs";
 import {
@@ -51,8 +51,10 @@ const runtimeRoot = "/home/hoang_vinh/.local/lib/node_modules/openclaw";
 // part of the runtime bundle, so the patch is given that root explicitly. It
 // lives inside the state directory, which is why the transaction snapshot needs
 // no third root to cover it.
-const discordChannelRoot = path.join(stateDir, NATIVE_DISCORD_CHANNEL_RELATIVE);
-const nativeRoots = { runtimeRoot, discordChannelRoot };
+const discordChannelRoot = nativeDiscordChannelRoot(stateDir);
+// M12/T9 F-011: the state directory is part of the governed roots, so
+// the post-image is stated against the INSTALLED channel package.
+const nativeRoots = { runtimeRoot, discordChannelRoot, stateDir };
 const nativeBackup = path.join(stateDir, "operator", "m7-t2", "native-r12");
 const identifiersPath = path.join(
   stateDir,

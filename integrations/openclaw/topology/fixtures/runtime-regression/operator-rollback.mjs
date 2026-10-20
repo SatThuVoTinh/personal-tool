@@ -33,7 +33,7 @@ import process from "node:process";
 import {
   restoreNativePatch,
   inspectNativePatch,
-  NATIVE_DISCORD_CHANNEL_RELATIVE,
+  nativeDiscordChannelRoot,
 } from "../../lib/native-patch.mjs";
 import { restoreT1RuntimeFiles } from "../../lib/runtime-backup.mjs";
 import {
@@ -60,8 +60,10 @@ const runtimeRoot = "/home/hoang_vinh/.local/lib/node_modules/openclaw";
 // M10/T2-R8: restore must resolve the SAME governed roots that produced the
 // patch, including the installed Discord channel package, or the ingress repair
 // would survive a rollback as an untracked mutation.
-const discordChannelRoot = path.join(stateDir, NATIVE_DISCORD_CHANNEL_RELATIVE);
-const nativeRoots = { runtimeRoot, discordChannelRoot };
+const discordChannelRoot = nativeDiscordChannelRoot(stateDir);
+// M12/T9 F-011: the state directory is part of the governed roots, so
+// the post-image is stated against the INSTALLED channel package.
+const nativeRoots = { runtimeRoot, discordChannelRoot, stateDir };
 const nativeBackup = path.join(stateDir, "operator", "m7-t2", "native-r12");
 const t1Config = path.join(
   stateDir,

@@ -18,7 +18,7 @@ import {
 } from "../../lib/canonical.mjs";
 import {
   checkNativePatch,
-  NATIVE_DISCORD_CHANNEL_RELATIVE,
+  nativeDiscordChannelRoot,
 } from "../../lib/native-patch.mjs";
 import { validateContract } from "../../lib/schema.mjs";
 
@@ -125,7 +125,9 @@ function nestedChildStage(matrixStage, agentId) {
 try {
   checkNativePatch({
     runtimeRoot,
-    discordChannelRoot: path.join(stateDir, NATIVE_DISCORD_CHANNEL_RELATIVE),
+    // M12/T9 F-011: the channel root is RESOLVED from the installed plugin, so
+    // the probe follows a reinstall instead of probing a pinned directory.
+    discordChannelRoot: nativeDiscordChannelRoot(stateDir),
   });
   stage = "gateway-auth";
   environment.OPENCLAW_GATEWAY_TOKEN = await resolveGatewayToken(
