@@ -7,6 +7,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1615,6 +1616,69 @@ test("F-353: the nested AGENTS.md bootstrap step is conditional", () => {
     agents,
     /nearest[^\n]*applicable[^\n]*nested[^\n]*AGENTS\.md/iu,
     "the bootstrap step must state that the nested AGENTS.md layer applies only where one exists",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// F-366 — every generated tree is ignored, wherever it is
+//
+// The ignore rules for `backups/`, `logs/` and `temp/` are no longer
+// root-anchored, so a capture under a module path is invisible to `git
+// status` and one `git add -A` away from history. The recorded check named
+// four fixed paths; this one walks the tree, so a new module path cannot
+// reintroduce the hole.
+// ---------------------------------------------------------------------------
+test("F-366: every generated tree named backups, logs or temp is ignored by git", () => {
+  const generated = [];
+  const walk = (directory, depth) => {
+    if (depth > 6) return;
+    let entries;
+    try {
+      entries = readdirSync(directory, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if ([".git", "node_modules", ".venv", "__pycache__"].includes(entry.name))
+        continue;
+      const full = path.join(directory, entry.name);
+      if (["backups", "logs", "temp"].includes(entry.name)) {
+        generated.push(full);
+        continue;
+      }
+      walk(full, depth + 1);
+    }
+  };
+  walk(REPO_ROOT, 0);
+  assert.ok(generated.length > 0, "the repository must carry generated trees");
+
+  const notIgnored = [];
+  for (const directory of generated) {
+    const probe = path
+      .relative(REPO_ROOT, path.join(directory, "generated-tree-probe"))
+      .replaceAll("\\", "/");
+    try {
+      execFileSync(
+        "git",
+        [
+          "-c",
+          `safe.directory=${REPO_ROOT}`,
+          "check-ignore",
+          "-q",
+          "--",
+          probe,
+        ],
+        { cwd: REPO_ROOT, stdio: "ignore" },
+      );
+    } catch {
+      notIgnored.push(probe);
+    }
+  }
+  assert.deepEqual(
+    notIgnored,
+    [],
+    `a generated tree is not ignored and can be staged: ${notIgnored.join(", ")}`,
   );
 });
 
