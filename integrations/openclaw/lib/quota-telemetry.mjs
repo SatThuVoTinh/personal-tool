@@ -260,6 +260,14 @@ export function resolveRuntimeModel({
   store.latches.set(agentId, nextLatch);
 
   // Model selection can never escape the canonical allowlist.
+  //
+  // M12/T9 F-206: this guard is REACHABLE, not dead. The resolver reads only
+  // `allowlist[0]` and `allowlist[1]`, so with a real array the membership
+  // test cannot fail - which is why `tests/m7-t2-quota-telemetry.test.mjs`
+  // TEST M asserts the reachable invariant (the resolver consults only the
+  // first two entries) instead of re-asserting a tautology, and TEST M3
+  // exercises this guard through an allowlist whose own membership test
+  // disagrees with its contents. Removing the guard turns TEST M3 red.
   if (!allowlist.includes(chosen)) {
     throw new Error("MODEL_ALLOWLIST_VIOLATION");
   }
