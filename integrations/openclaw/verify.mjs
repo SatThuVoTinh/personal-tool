@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { Buffer } from "node:buffer";
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { clearTimeout, setTimeout } from "node:timers";
@@ -48,6 +48,20 @@ const REPOSITORY_ROOT = path.resolve(
 );
 const LIVE_COMMAND_TIMEOUT_MS = 45_000;
 const LIVE_PROBE_CONCURRENCY = 1;
+// M12/T9 F-202: the systemd drop-in DIRECTORY is the unit the ceiling is
+// enforced against, not the one file this gate byte-compares.
+//
+// systemd reads every `*.conf` fragment in `<unit>.service.d/` in lexical
+// order and a later fragment wins every single-valued assignment, so a
+// sibling `20-override.conf` raises `MemoryMax=` above the 768M ceiling, or
+// removes it, or injects an `ExecStart=` - while a gate that only compared
+// `10-zink.conf` still printed PASS.
+const SYSTEMD_DROP_IN_DIRECTORY = "openclaw-gateway-zink.service.d";
+const SYSTEMD_DROP_IN_NAME = "10-zink.conf";
+// M12/T9 F-203: the governed state root of the live WSL host. A host that
+// cannot reach it inspected a copy of the governed tree, not the governed
+// tree, so its verdict is NOT RUN rather than PASS.
+const GOVERNED_STATE_TREE = "/home/hoang_vinh/.openclaw-zink";
 const DISCORD_FORBIDDEN_PERMISSIONS = Object.freeze([
   "Administrator",
   "ManageChannels",
@@ -148,6 +162,54 @@ export function requireMode(filePath, expected) {
       `Unexpected mode for ${filePath}: expected ${expected.toString(8)}`,
     );
   }
+}
+
+// M12/T9 F-202: the effective drop-in set is the whole directory.
+//
+// The refusal names every fragment that is not the rendered drop-in, so an
+// operator can act on it, and it keeps the established "Systemd drop-in"
+// wording the operator refusal classifier already knows.
+export function assertNoUnownedSystemdDropIns(dropInDirectory) {
+  if (!existsSync(dropInDirectory)) return [];
+  if (!statSync(dropInDirectory).isDirectory()) {
+    throw new Error(
+      `Systemd drop-in drift detected: ${dropInDirectory} is not a directory`,
+    );
+  }
+  const unowned = readdirSync(dropInDirectory)
+    .filter((name) => name !== SYSTEMD_DROP_IN_NAME)
+    .sort();
+  if (unowned.length > 0) {
+    throw new Error(
+      `Systemd drop-in drift detected: unowned fragment(s) beside ${SYSTEMD_DROP_IN_NAME} in ${dropInDirectory}: ${unowned.join(", ")}`,
+    );
+  }
+  return unowned;
+}
+
+// M12/T9 F-203: what this run inspected, and whether that inspection can be
+// recorded as deployment evidence.
+//
+// `requireMode` returns early on win32, so on that host the whole mode
+// battery is vacuous while the gate still read PASS. The record below travels
+// with every PASS, so a reader can tell a governed-tree inspection from a
+// copy of one.
+export function buildInspectionRecord(stateDir) {
+  const posixModesEnforced = hostEnforcesPosixModes(process.platform);
+  let governedStateTreeReachable;
+  try {
+    governedStateTreeReachable = statSync(GOVERNED_STATE_TREE).isDirectory();
+  } catch {
+    governedStateTreeReachable = false;
+  }
+  return {
+    stateTree: stateDir,
+    posixModesEnforced,
+    governedStateTree: GOVERNED_STATE_TREE,
+    governedStateTreeReachable,
+    deploymentEvidence:
+      posixModesEnforced && governedStateTreeReachable ? "PASS" : "NOT RUN",
+  };
 }
 
 function displayCommand(command, args) {
@@ -408,11 +470,8 @@ async function main() {
   const agentDirs = AGENT_IDS.map((agentId) =>
     path.join(stateDir, "agents", agentId, "agent"),
   );
-  const dropInPath = path.join(
-    systemdUserDir,
-    "openclaw-gateway-zink.service.d",
-    "10-zink.conf",
-  );
+  const dropInDirectory = path.join(systemdUserDir, SYSTEMD_DROP_IN_DIRECTORY);
+  const dropInPath = path.join(dropInDirectory, SYSTEMD_DROP_IN_NAME);
   const pluginDirectory = path.join(
     stateDir,
     "extensions",
@@ -528,6 +587,10 @@ async function main() {
   if (readFileSync(dropInPath, "utf8") !== renderSystemdDropIn(stateDir)) {
     throw new Error("Systemd drop-in drift detected");
   }
+  // M12/T9 F-202: the ceiling is enforced against the EFFECTIVE drop-in set,
+  // so a sibling fragment that raises or removes `MemoryMax=` or injects an
+  // `ExecStart=` cannot survive a green verify.
+  assertNoUnownedSystemdDropIns(dropInDirectory);
   const pluginFiles = governancePluginFiles();
   for (const [relative, contents] of Object.entries(pluginFiles.assets)) {
     const target = path.join(pluginDirectory, relative);
@@ -558,7 +621,19 @@ async function main() {
       true,
     );
   }
-  const result = { static: "PASS", live: [] };
+  // M12/T9 F-203: every PASS records the tree it inspected and whether the
+  // host enforces POSIX modes. `static` is the gate's own verdict - every
+  // check it made passed - and `deploymentEvidence` is the verdict a reader
+  // may record as deployment evidence: NOT RUN on a host that cannot reach
+  // the governed tree or does not enforce POSIX modes, so a green Windows
+  // run against the homedir copy can no longer be filed as a deployment.
+  const inspection = buildInspectionRecord(stateDir);
+  const result = {
+    static: "PASS",
+    live: [],
+    deploymentEvidence: inspection.deploymentEvidence,
+    inspection,
+  };
   if (options.live) {
     const command = options["openclaw-bin"] ?? "openclaw";
     const environment = {

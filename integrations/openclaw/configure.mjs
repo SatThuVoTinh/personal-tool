@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, lstatSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import {
   createRuntimeBackup,
   runtimeBackupPath,
@@ -52,6 +52,24 @@ const REPOSITORY_ROOT = path.resolve(
   "..",
   "..",
 );
+// M12/T9 F-202: the systemd drop-in DIRECTORY is the unit the ceiling is
+// enforced against, not the one file this builder renders.
+//
+// systemd reads every `*.conf` fragment in `<unit>.service.d/` in lexical
+// order, and a later fragment wins every single-valued assignment. A sibling
+// `20-override.conf` therefore raises `MemoryMax=` above the 768M ceiling
+// this drop-in sets, or removes it, or injects an `ExecStart=` - while every
+// gate that only compared `10-zink.conf` still printed PASS.
+const SYSTEMD_DROP_IN_DIRECTORY = "openclaw-gateway-zink.service.d";
+const SYSTEMD_DROP_IN_NAME = "10-zink.conf";
+// M12/T9 F-203: the governed state root of the live WSL host.
+//
+// The builder refuses any state directory other than this one's own
+// `~/.openclaw-zink`, so on the live host the inspected tree IS this path. A
+// host that cannot reach it - a Windows preflight against the NTFS copy, a CI
+// runner - has inspected a tree that is not the governed one, and its verdict
+// is NOT RUN rather than PASS.
+const GOVERNED_STATE_TREE = "/home/hoang_vinh/.openclaw-zink";
 const LEGACY_GEMINI_STREAM_HOTFIX_R18_SHA256 =
   "41bfeedf2835db4a50573a0f61325bc438ac805a90fef03ce3bc29b8c303f133";
 // M10/T2-R9: the outgoing generated plans and resolver, byte-proven against the
@@ -1174,6 +1192,59 @@ function requireFileMode(filePath, expectedMode, label) {
   }
 }
 
+// M12/T9 F-202: the effective drop-in set is the whole directory.
+//
+// The refusal names every fragment that is not the rendered drop-in, so an
+// operator can act on it, and it keeps the established "Systemd drop-in"
+// wording the operator refusal classifier already knows.
+function assertNoUnownedSystemdDropIns(dropInDirectory) {
+  if (!existsSync(dropInDirectory)) return [];
+  const stat = lstatSync(dropInDirectory);
+  if (!stat.isDirectory()) {
+    throw new Error(
+      `Systemd drop-in drift detected: ${dropInDirectory} is not a directory`,
+    );
+  }
+  const unowned = readdirSync(dropInDirectory)
+    .filter((name) => name !== SYSTEMD_DROP_IN_NAME)
+    .sort();
+  if (unowned.length > 0) {
+    throw new Error(
+      `Systemd drop-in drift detected: unowned fragment(s) beside ${SYSTEMD_DROP_IN_NAME} in ${dropInDirectory}: ${unowned.join(", ")}`,
+    );
+  }
+  return unowned;
+}
+
+// M12/T9 F-203: what this run inspected, and whether that inspection can be
+// recorded as deployment evidence.
+//
+// `requireFileMode` returns early on win32, so on that host the whole mode
+// battery is vacuous while the gate still read PASS. The record below travels
+// with every PASS, so a reader can tell a governed-tree inspection from a
+// copy of one.
+function hostEnforcesPosixModes(platform) {
+  return platform !== "win32";
+}
+
+function buildInspectionRecord(stateDir) {
+  const posixModesEnforced = hostEnforcesPosixModes(process.platform);
+  let governedStateTreeReachable;
+  try {
+    governedStateTreeReachable = lstatSync(GOVERNED_STATE_TREE).isDirectory();
+  } catch {
+    governedStateTreeReachable = false;
+  }
+  return {
+    stateTree: stateDir,
+    posixModesEnforced,
+    governedStateTree: GOVERNED_STATE_TREE,
+    governedStateTreeReachable,
+    deploymentEvidence:
+      posixModesEnforced && governedStateTreeReachable ? "PASS" : "NOT RUN",
+  };
+}
+
 function materializeOwnedFile(
   filePath,
   contents,
@@ -1288,10 +1359,14 @@ async function main() {
     ),
     passStoreDirectory: path.join(stateDir, "secrets", "password-store"),
     gpgHomeDirectory: path.join(stateDir, "secrets", "gnupg"),
+    systemdDropInDirectory: path.join(
+      systemdUserDir,
+      SYSTEMD_DROP_IN_DIRECTORY,
+    ),
     systemdDropInPath: path.join(
       systemdUserDir,
-      "openclaw-gateway-zink.service.d",
-      "10-zink.conf",
+      SYSTEMD_DROP_IN_DIRECTORY,
+      SYSTEMD_DROP_IN_NAME,
     ),
     governancePluginDirectory: path.join(
       stateDir,
@@ -1699,10 +1774,26 @@ async function main() {
     0o600,
     [renderLegacySystemdDropInR16(stateDir)],
   );
+  // M12/T9 F-202: the ceiling is enforced against the EFFECTIVE drop-in set.
+  // This gate runs in preflight mode and in apply mode (it stands above the
+  // mode branch), so a sibling fragment refuses both before anything is
+  // installed or mutated.
+  assertNoUnownedSystemdDropIns(output.systemdDropInDirectory);
 
   if (options.mode === "preflight") {
+    // M12/T9 F-203: every PASS records the tree it inspected and whether the
+    // host enforces POSIX modes, and a host that cannot reach the governed
+    // tree records NOT RUN rather than a PASS that reads as deployment
+    // evidence.
+    const inspection = buildInspectionRecord(stateDir);
     process.stdout.write(
-      `${stableJson({ ...output, preflight: "PASS", installedMutation: false })}`,
+      `${stableJson({
+        ...output,
+        preflight: "PASS",
+        installedMutation: false,
+        deploymentEvidence: inspection.deploymentEvidence,
+        inspection,
+      })}`,
     );
     return;
   }
@@ -1978,10 +2069,23 @@ async function main() {
     0o600,
     [renderLegacySystemdDropInR16(stateDir)],
   );
+  // M12/T9 F-202: the apply re-checks the EFFECTIVE drop-in set after it
+  // wrote its own fragment, so a sibling that appeared while the apply ran
+  // cannot survive the ceremony.
+  assertNoUnownedSystemdDropIns(output.systemdDropInDirectory);
   // F-111: the transaction is spent by the apply that used it, so a second
   // `--apply` against the same transaction is refused.
   markBuilderApplyConsumed(stateDir, applyTransaction);
-  process.stdout.write(`${stableJson(output)}`);
+  // M12/T9 F-203: the applied state carries the same inspection record the
+  // preflight emits, so neither verdict can be read without it.
+  const inspection = buildInspectionRecord(stateDir);
+  process.stdout.write(
+    `${stableJson({
+      ...output,
+      deploymentEvidence: inspection.deploymentEvidence,
+      inspection,
+    })}`,
+  );
 }
 
 try {
