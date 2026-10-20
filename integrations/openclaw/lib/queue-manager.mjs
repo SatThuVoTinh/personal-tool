@@ -177,6 +177,13 @@ export class QueueManager {
         : null;
     this.queue = new Map();
     this._projectionVersion = 0;
+    // M12/T9 F-154: how many queue critical sections THIS instance currently
+    // holds. The lock itself is a directory on disk and is NOT reentrant, so a
+    // `save()` issued from inside `withLock()` must not try to take it again -
+    // it would deadlock against the lock its own caller holds. The counter
+    // records that the caller already holds it, so `save()` writes inside the
+    // held section instead of competing for it.
+    this._lockDepth = 0;
     if (this._explicitStoragePath) this.load();
   }
 
@@ -209,7 +216,16 @@ export class QueueManager {
       return withFileLockSync(lockDir, () => {
         bodyReached = true;
         this.load();
-        return fn();
+        // M12/T9 F-154: the critical section is entered here, so `save()` calls
+        // made from the body must write INSIDE it rather than take the lock
+        // again. The counter is released in a `finally` so a throwing body
+        // never leaves the instance believing it still holds the lock.
+        this._lockDepth += 1;
+        try {
+          return fn();
+        } finally {
+          this._lockDepth -= 1;
+        }
       });
     } catch (err) {
       if (err?.code === "FILE_LOCK_BUSY") {
@@ -287,35 +303,101 @@ export class QueueManager {
     return this;
   }
 
+  /**
+   * M12/T9 F-154: the durable writer takes the queue lock ITSELF.
+   *
+   * It used to rely on every caller wrapping its work in `withLock()`, and one
+   * shipped caller did not: the plugin's notification seam set the projection
+   * and called `save()` bare, so its write could land INSIDE another writer's
+   * critical section and erase a committed row. `decision-ledger.mjs` already
+   * self-locks; the queue now does the same, so a concurrent unlocked writer is
+   * serialised against the critical section instead of interleaving with it.
+   *
+   * The lock is a directory on disk and is NOT reentrant, so this method does
+   * not take it when the caller already holds it: `withLock()` counts the
+   * sections this instance holds, and a `save()` issued from inside one writes
+   * inside that section. That is the same discipline the nested-lock refusal
+   * pins: the lock is still not reentrant, only the writer knows when it is
+   * already inside it.
+   *
+   * Contention surfaces as the pre-existing QUEUE_LOCK_TIMEOUT, so an
+   * unlocked writer is REFUSED rather than silently losing its write to a
+   * concurrent one.
+   */
   save() {
     // Resolved OUTSIDE the write: an unconfigured store is a configuration
     // refusal and keeps its own name, never "the file could not be written".
     const storagePath = this.storagePath;
+    const dir = path.dirname(storagePath);
+    const tempPath = `${storagePath}.tmp-${process.pid}-${Date.now()}`;
+    if (this._lockDepth > 0) {
+      // The caller already holds this instance's queue critical section.
+      return this._saveUnlocked(storagePath, tempPath);
+    }
+    // The link guard runs BEFORE the lock is taken: the lock directory lives
+    // beside the queue file, so acquiring it first would create a directory
+    // inside the very linked path the guard exists to refuse.
+    try {
+      assertNoSymlinkComponents(tempPath);
+    } catch (err) {
+      throw new Error(`QUEUE_STORAGE_WRITE_FAILED: ${err?.message}`, {
+        cause: err,
+      });
+    }
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true });
+    }
+    const lockDir = lockDirFor(dir, `${path.basename(storagePath)}.lock`);
+    try {
+      return withFileLockSync(lockDir, () =>
+        this._saveUnlocked(storagePath, tempPath),
+      );
+    } catch (err) {
+      if (err?.code === "FILE_LOCK_BUSY") {
+        throw new Error(
+          "QUEUE_LOCK_TIMEOUT: Failed to acquire queue file lock",
+          { cause: err },
+        );
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * The write itself, with the queue lock already held by the caller.
+   *
+   * Every mutator reaches this through `withLock()`, which reloads the durable
+   * projection first; `save()` reaches it through the lock it takes itself.
+   * Splitting it out is what lets `save()` self-lock without deadlocking the
+   * `withLock(() => { ... save() })` paths.
+   */
+  _saveUnlocked(storagePath = this.storagePath, tempPath = null) {
     // M12/T2.2-R2 B-12: `.tmp-<pid>-<ms>` is predictable, so the temp has to be
     // created (`"wx"`) rather than adopted from whatever is already at that path,
     // and a failed attempt has to remove what it made. `topology/lib/ledger.mjs`
     // already wrote its snapshot this way; this is the same discipline, not a new
     // atomic writer.
-    const tempPath = `${storagePath}.tmp-${process.pid}-${Date.now()}`;
+    const temp =
+      tempPath ?? `${storagePath}.tmp-${process.pid}-${Date.now()}`;
     let fd = null;
     let tempIsOurs = false;
     try {
       const dir = path.dirname(storagePath);
       // Before anything is created: `mkdirSync(recursive)` would otherwise happily
       // materialize the queue through a symlinked ancestor.
-      assertNoSymlinkComponents(tempPath);
+      assertNoSymlinkComponents(temp);
       if (!existsSync(dir)) {
         mkdirSync(dir, { recursive: true });
       }
       const nextProjectionVersion = this._projectionVersion + 1;
       const data = Array.from(this.queue.values());
-      fd = openSync(tempPath, "wx", 0o600);
+      fd = openSync(temp, "wx", 0o600);
       tempIsOurs = true;
       writeFileSync(fd, JSON.stringify(data, null, 2) + "\n", "utf8");
       fsyncSync(fd);
       closeSync(fd);
       fd = null;
-      renameSync(tempPath, storagePath);
+      renameSync(temp, storagePath);
       // M7-066: fsync the parent directory after rename so the rename itself
       // is durable, matching the ledger writer guarantee (win32-tolerant).
       try {
@@ -344,7 +426,7 @@ export class QueueManager {
       // Closed first, so the removal can succeed on Windows as well as POSIX.
       // Only ever a temp this process created: an `EEXIST` refusal is someone
       // else's file, and deleting it would turn a refusal into a side effect.
-      if (tempIsOurs) removeWriterResidue(tempPath);
+      if (tempIsOurs) removeWriterResidue(temp);
       throw new Error(`QUEUE_STORAGE_WRITE_FAILED: ${err?.message}`, {
         cause: err,
       });
@@ -882,6 +964,21 @@ export class QueueManager {
    * Complete task - only from a verified user ACCEPT decision tied to the
    * current result (M7-012). The queue never invents completion authority:
    * the caller proves the user principal and the current result digest.
+   *
+   * M12/T9 F-026: completion is bound to the AUTHORITATIVE owner and to a
+   * result digest the queue itself recorded.
+   *
+   * Before this, the identity check ran only when `item.ownerPrincipalRef` was
+   * non-empty, so a task with no recorded owner accepted ANY non-empty
+   * principal: the queue recorded an identity instead of verifying one. Now a
+   * task with no authoritative owner is refused outright - an owner that was
+   * never projected from the ledger cannot be presented by anyone.
+   *
+   * The digest half is bound the same way. The digest must be the one the
+   * queue recorded when the execution finished (`finishExecution` wrote both
+   * the digest and the finish timestamp, and no other path writes either), so a
+   * caller cannot satisfy the check with a value it minted, and the recorded
+   * digest must belong to the CURRENT attempt rather than a superseded one.
    */
   completeTask({
     taskId,
@@ -903,19 +1000,6 @@ export class QueueManager {
             "USER_PRINCIPAL_REQUIRED: Completion requires a verified user principal",
           );
         }
-        // Lane H2: when the authoritative owner principal is projected onto
-        // this task, completion must present THAT principal. A non-empty string
-        // is not an identity, so the queue verifies the identity it was given
-        // rather than merely recording it.
-        if (
-          typeof item.ownerPrincipalRef === "string" &&
-          item.ownerPrincipalRef &&
-          userPrincipalRef !== item.ownerPrincipalRef
-        ) {
-          throw new Error(
-            "USER_PRINCIPAL_MISMATCH: Completion principal is not the authoritative task owner",
-          );
-        }
         // M7-012: fake or stale confirmation references are denied. The
         // digest must equal the current authoritative result digest.
         if (typeof item.resultDigest !== "string" || !item.resultDigest) {
@@ -923,9 +1007,48 @@ export class QueueManager {
             "RESULT_DIGEST_REQUIRED: No authoritative result digest is recorded for this task",
           );
         }
+        // M12/T9 F-026: the digest must be the one the queue's OWN finish path
+        // recorded. `finishExecution` writes the digest together with the
+        // finish timestamp and the attempt it belongs to, so a digest that is
+        // not accompanied by that record was not produced by the authoritative
+        // execution, and a digest bound to a superseded attempt is history.
+        if (
+          typeof item.executionFinishedAt !== "string" ||
+          !item.executionFinishedAt
+        ) {
+          throw new Error(
+            "RESULT_DIGEST_REQUIRED: No authoritative finished execution is recorded for this task",
+          );
+        }
+        if (
+          Number.isSafeInteger(item.resultAttempt) &&
+          item.resultAttempt !== item.attempt
+        ) {
+          throw new Error(
+            "RESULT_MISMATCH: The recorded result digest belongs to a superseded attempt",
+          );
+        }
         if (resultDigest !== item.resultDigest) {
           throw new Error(
             "RESULT_MISMATCH: Confirmation does not reference the current authoritative result",
+          );
+        }
+        // M12/T9 F-026: Lane H2. The authoritative owner principal is projected
+        // onto this task from the ledger; when it is ABSENT there is nobody to
+        // verify against, so completion is refused rather than accepted from
+        // whoever presented a non-empty string. When it is present, the
+        // presented principal must BE it.
+        if (
+          typeof item.ownerPrincipalRef !== "string" ||
+          !item.ownerPrincipalRef
+        ) {
+          throw new Error(
+            "OWNER_PRINCIPAL_REQUIRED: Completion requires an authoritative task owner",
+          );
+        }
+        if (userPrincipalRef !== item.ownerPrincipalRef) {
+          throw new Error(
+            "USER_PRINCIPAL_MISMATCH: Completion principal is not the authoritative task owner",
           );
         }
 

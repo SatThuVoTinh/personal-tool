@@ -125,7 +125,7 @@ test("A-3: an unlocked set+save from a stale instance erases a task another writ
 
   // Exactly what `recordCoordinatorNotification` used to do: mutate the map,
   // then save it.
-  stale.queue.set("t-third", rowLike(stale.getTask("t-first"), "t-third"));
+  stale.queue.set("t-third", rowLike(stale.queue.get("t-first"), "t-third"));
   stale.save();
 
   const after = new QueueManager({ storagePath });
@@ -148,7 +148,7 @@ test("A-3: the same mutation through withLock survives, because withLock reloads
   seed(storagePath, "t-second");
 
   stale.withLock(() => {
-    stale.queue.set("t-third", rowLike(stale.getTask("t-first"), "t-third"));
+    stale.queue.set("t-third", rowLike(stale.queue.get("t-first"), "t-third"));
     stale.save();
   });
 
@@ -223,13 +223,26 @@ test("A-3: contention and storage failure stay returned failures at that seam, n
 // The trap that must stay closed
 // ===========================================================================
 
-test("A-3 pin: QueueManager.save() must NOT acquire the queue lock itself — the lock is not reentrant", () => {
+test("A-3 pin: QueueManager.save() must not re-take the queue lock it already holds — the lock is not reentrant", () => {
   const saveAt = QUEUE_SOURCE.indexOf("  save() {");
   assert.notEqual(saveAt, -1, "save() must still exist");
-  assert.doesNotMatch(
-    balancedBody(QUEUE_SOURCE, saveAt),
-    /withFileLockSync|tryAcquire/u,
-    "save() must stay lock-free: every locked mutator calls it from inside withLock, and a self-locking save would deadlock the queue",
+  const body = codeOnly(balancedBody(QUEUE_SOURCE, saveAt));
+
+  // M12/T9 F-154: the durable writer now takes the queue lock ITSELF, so the
+  // invariant is no longer "save() never locks" - it is that a save() issued
+  // from INSIDE a critical section must not take the lock a second time. The
+  // lock is a directory on disk and is NOT reentrant, so a second acquisition
+  // would deadlock against the lock its own caller holds: the writer has to
+  // know whether it is already inside the section.
+  assert.match(
+    body,
+    /_lockDepth\s*>\s*0/u,
+    "save() must detect that the caller already holds the queue critical section",
+  );
+  assert.match(
+    body,
+    /_saveUnlocked\(/u,
+    "a save() issued inside a held critical section must write inside it",
   );
 
   // Executable half: the lock really is non-reentrant, which is why a
@@ -249,7 +262,18 @@ test("A-3 pin: QueueManager.save() must NOT acquire the queue lock itself — th
   assert.throws(
     () => manager.withLock(() => manager.withLock(() => "never")),
     /QUEUE_LOCK_TIMEOUT/u,
-    "acquiring the queue lock twice in one process must fail, so save() can never lock itself",
+    "acquiring the queue lock twice in one process must fail, so the writer - not the lock - has to avoid the second acquisition",
+  );
+
+  // And the writer really does avoid it: a save() issued from inside a held
+  // critical section completes instead of deadlocking against itself.
+  manager.withLock(() => {
+    manager.save();
+  });
+  assert.notEqual(
+    new QueueManager({ storagePath }).getTask("t-one-lock"),
+    null,
+    "a save() inside the held section must complete and keep the row",
   );
 });
 
@@ -430,9 +454,25 @@ test("B-12 pin: both writers open their temp exclusively and clean up after them
     ["queue-manager", QUEUE_SOURCE],
     ["decision-ledger", DECISION_LEDGER_SOURCE],
   ]) {
-    const saveAt = source.search(/^ {2}save\(\) \{/mu);
-    assert.notEqual(saveAt, -1, `${label}: save() must still exist`);
-    const body = codeOnly(balancedBody(source, saveAt));
+    // M12/T9 F-154: the queue's durable write moved into `_saveUnlocked()` so
+    // that `save()` can take the queue lock itself without deadlocking the
+    // `withLock(() => { ... save() })` paths. The invariant is unchanged - the
+    // temp is opened exclusively, and a failed write removes it - so the pin
+    // reads the body that actually performs the write.
+    const writeBody = ["_saveUnlocked", "save"]
+      .map((name) => {
+        const at = source.search(
+          new RegExp(`^ {2}${name}\\([^)]*\\) \\{`, "mu"),
+        );
+        return at === -1 ? "" : codeOnly(balancedBody(source, at));
+      })
+      .find((candidate) => candidate.includes("openSync("));
+    assert.notEqual(
+      writeBody,
+      undefined,
+      `${label}: the durable write body must be found`,
+    );
+    const body = writeBody;
     assert.match(
       body,
       /openSync\([^)]*"wx"/u,
