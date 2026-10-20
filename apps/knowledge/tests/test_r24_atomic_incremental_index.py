@@ -151,6 +151,19 @@ class ShadowAcceptTests(unittest.IsolatedAsyncioTestCase):
             connection, "execute", "INSERT INTO knowledge.pdf_source_details"
         )
         self.assertTrue(details_clone)
+        # F-102 (R5-E03-08): the sidecar relation was declared and never
+        # carried, so a row a future writer adds was silently dropped from
+        # every shadow index. The clone carries it across the publish.
+        sidecars_clone = sql_for(
+            connection, "execute", "INSERT INTO knowledge.source_sidecars"
+        )
+        self.assertTrue(sidecars_clone)
+        for needle in (
+            "FROM knowledge.source_sidecars live",
+            "staged.source_path = original.source_path",
+            "WHERE live.index_id = $3",
+        ):
+            self.assertIn(needle, sidecars_clone[0][0])
         # Re-stamped provenance: cloned rows carry the shadow run id because the
         # indexed_by_run_id foreign key is index-scoped.
         self.assertEqual(sources_clone[0][1][1], UUID(run.id))
