@@ -19,6 +19,10 @@ $scriptDirectory = Split-Path -Parent $PSCommandPath
 $dockerDirectory = Split-Path -Parent $scriptDirectory
 $composeFile = Join-Path $dockerDirectory "compose\compose.core.yml"
 $utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
+# F-265 (R7-D13-02): the secret claim in the manifest is computed by
+# inspecting the archives this script produces, so the decision lives in one
+# place instead of being asserted as a constant over an archive nobody read.
+. (Join-Path $scriptDirectory "backup-inspection.ps1")
 
 function Invoke-Compose {
   param([string[]]$Arguments, [string[]]$Profiles = @())
@@ -39,6 +43,18 @@ function Get-ComposeOutput {
     throw "Docker Compose command failed with exit code $LASTEXITCODE."
   }
   return ($output -join [Environment]::NewLine).Trim()
+}
+
+function Invoke-ComposeCapture {
+  param([string[]]$Arguments, [string[]]$Profiles = @())
+
+  $composeArguments = @("--project-name", $ProjectName, "--env-file", $EnvironmentFile, "-f", $composeFile)
+  foreach ($profile in $Profiles) { $composeArguments += @("--profile", $profile) }
+  $output = & docker compose @composeArguments @Arguments 2>$null
+  if ($LASTEXITCODE -ne 0) {
+    throw "Docker Compose command failed with exit code $LASTEXITCODE."
+  }
+  return @($output | ForEach-Object { $_.ToString() })
 }
 
 function Assert-DatabaseName {
@@ -100,6 +116,25 @@ Invoke-Compose -Profiles @("automation") -Arguments @(
   "set -eu; tar -C /home/node/.n8n --exclude=config -czf /backup/n8n-home.tar.gz .; if tar -tzf /backup/n8n-home.tar.gz | grep -Eq '(^|/)config$'; then exit 1; fi"
 )
 
+# F-265 (R7-D13-02): the archives are listed before the manifest claims
+# anything about them. The home archive is read with `tar -tzf` and every
+# database dump is read with `pg_restore --list`, so the claim below is a
+# result and not an assumption.
+$homeArchiveEntries = @(Invoke-ComposeCapture -Profiles @("automation") -Arguments @(
+  "run", "--rm", "--no-deps", "-T", "--entrypoint", "/bin/sh", "-v",
+  $backupMount, "n8n", "-c",
+  "set -eu; tar -tzf /backup/n8n-home.tar.gz"
+) | Where-Object { $_ })
+$archiveObjectsByDatabase = [ordered]@{}
+foreach ($database in $Databases) {
+  $listing = @(Invoke-ComposeCapture -Profiles @("bootstrap") -Arguments @(
+    "run", "--rm", "--no-deps", "-T", "--entrypoint", "pg_restore", "-v",
+    $backupMount, "postgres-bootstrap", "--list", "/backup/postgres/$database.dump"
+  ) | Where-Object { $_ })
+  $archiveObjectsByDatabase[$database] = @(Get-BackupArchiveObjectNames $listing)
+}
+$secretInspection = Get-BackupSecretInspection -HomeArchiveEntries $homeArchiveEntries -ArchiveObjectsByDatabase $archiveObjectsByDatabase
+
 $files = @()
 foreach ($file in @(Get-ChildItem -LiteralPath $backupRoot -File -Recurse)) {
   $relativePath = Get-RelativePath $backupRoot $file.FullName
@@ -111,11 +146,12 @@ foreach ($file in @(Get-ChildItem -LiteralPath $backupRoot -File -Recurse)) {
 }
 
 $manifest = [ordered]@{
-  backup_format_version = 2
+  backup_format_version = 3
   created_at = [DateTime]::UtcNow.ToString("o")
   compose_project = $ProjectName
   files = $files
-  secrets_included = $false
+  plaintext_secrets_excluded = $secretInspection.plaintext_secrets_excluded
+  secret_inspection = $secretInspection
 }
 [IO.File]::WriteAllText(
   (Join-Path $backupRoot "manifest.json"),
@@ -123,4 +159,4 @@ $manifest = [ordered]@{
   $utf8WithoutBom
 )
 
-Write-Output "Created PostgreSQL/n8n backup manifest at $backupRoot without plaintext secrets."
+Write-Output "Created PostgreSQL/n8n backup manifest at $backupRoot. Plaintext secrets excluded: $($secretInspection.plaintext_secrets_excluded). Credential-bearing database objects in the archive: $($secretInspection.credential_bearing_objects.Count)."

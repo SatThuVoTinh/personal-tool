@@ -55,4 +55,11 @@ after n8n has been stopped:
 powershell -NoProfile -ExecutionPolicy Bypass -File ./infrastructure/docker/scripts/backup.ps1 -BackupDirectory C:/safe/empty/backup -EnvironmentFile ./infrastructure/docker/env/.env
 ```
 
+The manifest's `plaintext_secrets_excluded` field is computed by inspecting the
+archives the run has just produced: the n8n home archive is listed and every
+database dump is read with `pg_restore --list`. Its companion
+`secret_inspection` field records what that inspection found, including the
+credential-bearing database objects the dumps carry, so the claim can be
+audited instead of believed.
+
 Restore automation is not implemented in the current runtime contract.

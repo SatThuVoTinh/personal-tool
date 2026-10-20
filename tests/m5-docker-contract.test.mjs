@@ -146,8 +146,14 @@ test("M5/T1-R2 validates only environment variables used by each profile", () =>
 // eslint target and not in the npm script set, so the repository could not see
 // it change. The contract it has to keep is asserted here.
 test("M5/T1-R2 the backup driver keeps its safety contract", () => {
-  // The manifest declares that no plaintext secret is carried.
-  assert.match(backup, /secrets_included = \$false/);
+  // F-265 (R7-D13-02): the manifest's secret claim is computed by inspecting
+  // the archives the script produces, and it names what is actually known.
+  assert.match(
+    backup,
+    /plaintext_secrets_excluded = \$secretInspection\.plaintext_secrets_excluded/,
+  );
+  assert.match(backup, /pg_restore/);
+  assert.match(backup, /tar -tzf/);
   // The backup directory must be empty, so a backup never overwrites another.
   assert.match(backup, /BackupDirectory must be empty to prevent overwrite/);
   // A zero-length database dump is a failed backup, not a backup.
