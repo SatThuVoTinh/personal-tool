@@ -20,7 +20,11 @@ import path from "node:path";
 import process from "node:process";
 import { applyWorkflowEvent } from "./workflow.mjs";
 import { schemaFile, validateContract } from "./schema.mjs";
-import { withFileLockSync, lockDirFor } from "../../lib/file-lock.mjs";
+import {
+  withFileLockSync,
+  lockDirFor,
+  LOCK_OWNER_FILE,
+} from "../../lib/file-lock.mjs";
 import {
   canonicalHash,
   utcNow,
@@ -216,8 +220,14 @@ export function readSnapshot(paths) {
 
 // Builder-only, explicit R11 -> R12 transition. Never migrate a live task or
 // reset counters. The owner-approved pre-apply backup must precede apply.
-export function inspectLedgerUpgrade(paths) {
+//
+// M12/T9 F-070: the inspection now also probes the WRITER LOCK, so a
+// preflight that passes is a preflight that can be applied. The lock probe is
+// skipped by the one caller that already HOLDS the lock (the upgrade itself),
+// because a nested acquisition would deadlock.
+export function inspectLedgerUpgrade(paths, options = null) {
   validateLedgerPaths(paths);
+  if (options?.probeWriterLock !== false) assertLedgerWriterLockUsable(paths);
   if (!existsSync(paths.snapshot) && !existsSync(paths.events))
     return "MISSING";
   if (!existsSync(paths.snapshot) || !existsSync(paths.events))
@@ -255,7 +265,9 @@ export function inspectLedgerUpgrade(paths) {
 
 export function upgradeEmptyLegacyLedger(paths) {
   return withWriterLock(paths, () => {
-    const state = inspectLedgerUpgrade(paths);
+    // The writer lock is HELD here, so the lock probe is skipped: it exists to
+    // catch an ORPHANED lock before the apply, not to re-acquire our own.
+    const state = inspectLedgerUpgrade(paths, { probeWriterLock: false });
     if (state === "EMPTY_R11")
       writeSnapshotAtomic(paths, {
         ...emptySnapshot(),
@@ -263,6 +275,82 @@ export function upgradeEmptyLegacyLedger(paths) {
       });
     return readSnapshotLocked(paths);
   });
+}
+
+/**
+ * M12/T9 F-070: the liveness of the ledger WRITER LOCK, read without
+ * touching it.
+ *
+ * The lock protocol is explicit that a crashed holder leaves the lock
+ * directory behind and that recovery is an OPERATOR action (see
+ * `lib/file-lock.mjs`). Until now nothing but the apply path ever noticed:
+ * the preflight read the snapshot and the events directly, so it reported
+ * CURRENT while the very next `--apply` died with "Ledger writer
+ * unavailable" — one wasted deployment grant per orphan, while the ledger
+ * kept failing closed in between.
+ *
+ * The probe is READ-ONLY on purpose:
+ *
+ *   - it never acquires the lock, so it cannot block a live writer and it
+ *     cannot turn a read-only preflight into a mutation;
+ *   - a lock whose holder is provably DEAD is an orphan and fails the
+ *     preflight with the same code the apply path uses;
+ *   - a lock whose holder is ALIVE is left alone: the apply path still
+ *     refuses it, exactly as before, and refusing the preflight too would
+ *     break the ordinary case of inspecting a running gateway;
+ *   - a lock that cannot be read (no owner record yet, or an unreadable one)
+ *     is UNVERIFIED and never fails closed on a guess — a fresh acquisition
+ *     has a window in which the directory exists and the owner record does
+ *     not, and a probe that refused there would produce false refusals.
+ */
+export function inspectLedgerWriterLock(paths) {
+  const lock = lockDirFor(paths.root, "writer.lock");
+  if (!existsSync(lock)) return { state: "ABSENT", pid: null };
+  const ownerPath = path.join(lock, LOCK_OWNER_FILE);
+  let owner;
+  try {
+    owner = JSON.parse(readFileSync(ownerPath, "utf8"));
+  } catch {
+    return { state: "UNVERIFIED", pid: null };
+  }
+  const pid = Number.isInteger(owner?.pid) ? owner.pid : null;
+  if (pid === null || pid <= 0) return { state: "UNVERIFIED", pid: null };
+  try {
+    // Signal 0 tests for existence and permission only; it never signals the
+    // process. EPERM means a process exists under another user, which is
+    // exactly the "alive" answer.
+    process.kill(pid, 0);
+    return { state: "HELD", pid };
+  } catch (error) {
+    if (error?.code === "ESRCH" || error?.code === "EINVAL")
+      return { state: "ORPHANED", pid };
+    if (error?.code === "EPERM") return { state: "HELD", pid };
+    return { state: "UNVERIFIED", pid };
+  }
+}
+
+/**
+ * M12/T9 F-070: refuse an ORPHANED writer lock before the apply is spent.
+ *
+ * The message is a fixed literal — never a path, a pid or a config value —
+ * because it is read by the operator-facing classifier. It keeps the
+ * established "Ledger writer unavailable" wording, so the refusal reads the
+ * same in the preflight and on the apply path, and it adds the reason the
+ * preflight can now prove.
+ */
+export function assertLedgerWriterLockUsable(paths) {
+  const state = inspectLedgerWriterLock(paths);
+  if (state.state === "ORPHANED") {
+    const error = new Error(
+      "Ledger writer unavailable: the writer lock is orphaned",
+      {
+        cause: new Error("LEDGER_WRITER_LOCK_ORPHANED"),
+      },
+    );
+    error.code = "EXECUTION_STATE_UNKNOWN";
+    throw error;
+  }
+  return state;
 }
 
 function readSnapshotLocked(paths, repairSnapshot = true) {

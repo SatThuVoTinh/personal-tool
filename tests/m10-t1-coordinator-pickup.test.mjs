@@ -3,6 +3,8 @@ import { test } from "node:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
+import process from "node:process";
 
 import { QueueManager } from "../integrations/openclaw/lib/queue-manager.mjs";
 import {
@@ -1065,4 +1067,80 @@ test("F-065: the supported governance versions come from the contract enum", asy
     2,
     "both readers must derive their set from the one declaration",
   );
+});
+
+// ===========================================================================
+// M12/T9 - F-070: the preflight must see the orphaned writer lock.
+// ===========================================================================
+test("F-070: an orphaned writer lock fails the preflight, not only the apply", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "zink-f070-"));
+  try {
+    const {
+      ledgerPaths,
+      ensureLedger,
+      inspectLedgerUpgrade,
+      inspectLedgerWriterLock,
+      upgradeEmptyLegacyLedger,
+    } = await import("../integrations/openclaw/topology/lib/ledger.mjs");
+    const { lockDirFor, LOCK_OWNER_FILE } =
+      await import("../integrations/openclaw/lib/file-lock.mjs");
+    const paths = ledgerPaths(dir);
+    ensureLedger(paths);
+
+    // No lock at all: the inspection passes, exactly as before.
+    assert.deepEqual(inspectLedgerWriterLock(paths), {
+      state: "ABSENT",
+      pid: null,
+    });
+    assert.equal(inspectLedgerUpgrade(paths), "CURRENT");
+
+    // A holder that is ALIVE is not an orphan: the preflight keeps its
+    // verdict, because refusing it would break the ordinary case of
+    // inspecting a running gateway.
+    const lock = lockDirFor(paths.root, "writer.lock");
+    fs.mkdirSync(lock, { recursive: true });
+    const ownerPath = path.join(lock, LOCK_OWNER_FILE);
+    fs.writeFileSync(
+      ownerPath,
+      JSON.stringify({ pid: process.pid, token: "0".repeat(32) }),
+      "utf8",
+    );
+    assert.equal(inspectLedgerWriterLock(paths).state, "HELD");
+    assert.equal(inspectLedgerUpgrade(paths), "CURRENT");
+
+    // A holder that is provably DEAD is an orphan: the preflight now fails,
+    // so the operator learns it before the apply grant is spent.
+    const dead = spawnSync(process.execPath, ["-e", "0"]);
+    assert.ok(dead.pid, "the probe needs a pid that is known to be gone");
+    fs.writeFileSync(
+      ownerPath,
+      JSON.stringify({ pid: dead.pid, token: "0".repeat(32) }),
+      "utf8",
+    );
+    assert.equal(inspectLedgerWriterLock(paths).state, "ORPHANED");
+    assert.throws(
+      () => inspectLedgerUpgrade(paths),
+      { code: "EXECUTION_STATE_UNKNOWN" },
+      "an orphaned writer lock must fail the preflight",
+    );
+    assert.throws(
+      () => inspectLedgerUpgrade(paths),
+      /Ledger writer unavailable/u,
+      "the refusal keeps the wording the operator report already knows",
+    );
+    assert.throws(
+      () => upgradeEmptyLegacyLedger(paths),
+      { code: "EXECUTION_STATE_UNKNOWN" },
+      "the apply path still refuses an orphaned writer lock",
+    );
+
+    // The recovery is an operator action, and the probe never takes it.
+    assert.equal(
+      fs.existsSync(lock),
+      true,
+      "the probe must not remove the lock",
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
