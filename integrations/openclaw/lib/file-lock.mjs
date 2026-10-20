@@ -79,8 +79,45 @@ function busyWaitMs(ms) {
  */
 export const LOCK_OWNER_FILE = "owner.json";
 
-/** lockDir -> token recorded by the acquisition this process performed. */
-const heldTokens = new Map();
+/**
+ * M12/T9 F-058: the holder registry is PROCESS-GLOBAL, not per module instance.
+ *
+ * The Skill Store imports this module by relative path
+ * (`zink-skill-store/src/catalog.mjs` -> `../../integrations/openclaw/lib/file-lock.mjs`)
+ * while the packaged plugin loads its own copy at a different URL
+ * (`<plugin>/lib/file-lock.mjs`). Two ESM instances of the same source are two
+ * modules, so a per-instance `heldTokens` map meant `ownsRecordedLock()` was
+ * false across instances: the releasing instance did not recognise the token it
+ * had acquired, refused the release with FILE_LOCK_NOT_OWNER, and the error was
+ * swallowed by `withFileLock`'s `finally` - so the lock directory stayed behind
+ * and every later writer hit FILE_LOCK_BUSY. That is the orphan-lock/outage
+ * class this registry exists to prevent.
+ *
+ * `Symbol.for` gives one key across every realm and every copy of this module,
+ * and `globalThis` gives one holder map per PROCESS. The registry is keyed by
+ * the lock directory, which is the same path string in both copies, so the
+ * token recorded by one instance is the token the other instance can verify.
+ */
+const HELD_TOKENS_KEY = Symbol.for("zink.file-lock.heldTokens");
+const heldTokens = (globalThis[HELD_TOKENS_KEY] ??= new Map());
+
+/**
+ * M12/T9 F-058: the token THIS instance recorded for a lock directory.
+ *
+ * The process-wide registry above answers "does this PROCESS hold this
+ * lock?", which is what a second loaded copy of this module needs: the copy
+ * that releases a lock the other copy acquired must be able to verify the
+ * on-disk token. It cannot answer "did THIS holder record this token?", and
+ * that is the question the owner-token protocol exists for. After an operator
+ * removes a live holder's lock directory and another holder takes the same
+ * path, the first holder's `finally` must NOT delete the second holder's lock
+ * directory - that is how two writers enter the critical section and fork the
+ * event chain beyond digest-chain recovery.
+ *
+ * So every instance keeps its OWN record, and the process registry is the
+ * fallback for an instance that never acquired the lock itself.
+ */
+const instanceTokens = new Map();
 
 function normalizeLockDir(lockDir) {
   if (typeof lockDir !== "string" || lockDir.length === 0) {
@@ -133,6 +170,7 @@ export function tryAcquire(lockDir) {
     }
     throw err;
   }
+  instanceTokens.set(dir, token);
   heldTokens.set(dir, token);
   return true;
 }
@@ -143,7 +181,11 @@ export function tryAcquire(lockDir) {
  * @returns false when there is nothing to release (no lock present).
  */
 function ownsRecordedLock(dir) {
-  const expected = heldTokens.get(dir);
+  // This instance's own record wins: it is the only answer to "did THIS
+  // holder record this token?". The process-wide registry is the fallback for
+  // an instance that never acquired the lock itself - the second loaded copy
+  // of this module (M12/T9 F-058).
+  const expected = instanceTokens.get(dir) ?? heldTokens.get(dir);
   if (expected === undefined) {
     if (!existsSync(dir)) {
       return false; // idempotent no-op for an absent lock
@@ -221,6 +263,7 @@ export function release(lockDir) {
   for (let attempt = 0; attempt < RELEASE_RETRY_ATTEMPTS; attempt++) {
     const round = removalRound(dir);
     if (round.released) {
+      instanceTokens.delete(dir);
       heldTokens.delete(dir);
       return;
     }
@@ -232,6 +275,7 @@ export function release(lockDir) {
   // in-process token survives into the next acquisition of the same path, whose
   // release then deletes whichever lock is present — two writers inside the
   // critical section, which is exactly what the owner token exists to prevent.
+  instanceTokens.delete(dir);
   heldTokens.delete(dir);
   throw lastError ?? notOwnerError(dir, "lock directory could not be removed");
 }
@@ -249,6 +293,7 @@ export async function releaseAsync(lockDir) {
   for (let attempt = 0; attempt < RELEASE_RETRY_ATTEMPTS; attempt++) {
     const round = removalRound(dir);
     if (round.released) {
+      instanceTokens.delete(dir);
       heldTokens.delete(dir);
       return;
     }
@@ -256,6 +301,7 @@ export async function releaseAsync(lockDir) {
     if (round.fatal) break;
     if (attempt + 1 < RELEASE_RETRY_ATTEMPTS) await delay(1 << attempt);
   }
+  instanceTokens.delete(dir);
   heldTokens.delete(dir);
   throw lastError ?? notOwnerError(dir, "lock directory could not be removed");
 }
