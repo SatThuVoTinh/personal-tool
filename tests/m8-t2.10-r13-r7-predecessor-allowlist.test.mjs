@@ -174,7 +174,7 @@ assert.ok(
  * carry it.
  */
 const M11_T3_ENTRYPOINT_SHA256 =
-  "870a8f0c055d5582246cfbdb94d6dcf2207d53cdd0bd22fb132959d3190dcd3a";
+  "b2e5b318ab73ce65c1aa6d7f190874ef7aede6bd21073be3d19beea28d71bc73";
 const M12_T2_2_OUTGOING_ENTRYPOINT_SHA256 =
   "513beb15c3d7624c0a928c4c1556dc44d4c4cff4f1e00980f24b298a25751c0d";
 assert.ok(

@@ -103,6 +103,17 @@ export const invalid = (reason = "") => {
 };
 
 // C04: Key-order-independent JSON stringification for const and enum comparison
+//
+// M12/T9 F-157: the canonical COMPARISON serializer.
+//
+// ROLE: it answers "are these two JSON values the same?" — key-sorted and
+// compact, so a comparison never depends on the order the keys were written
+// in. It is deliberately NOT the hash preimage serializer
+// (`canonical.mjs`'s `canonicalJson`, which normalizes unicode and rejects
+// anything JSON cannot represent) and NOT the config writer
+// (`lib/policy.mjs`'s `stableJson`, whose pretty bytes are pinned by the
+// admission digests). Three serializers, three roles, each stated where it
+// lives.
 export function stableJson(value) {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
@@ -199,6 +210,33 @@ export function loadContractSchema(name) {
 
 export function schemaFile(name) {
   return loadContractSchema(name);
+}
+
+/**
+ * M12/T9 F-127: the enum a CONTRACT declares for one payload property of one
+ * event type, read from the contract itself.
+ *
+ * The ledger-event contract states each event's payload in an `allOf` branch
+ * guarded by `if: { properties: { type: { const: <event> } } }`. A consumer
+ * that must know what a published event can carry reads it here instead of
+ * re-listing the values in code — so a contract change cannot leave a
+ * hand-maintained copy behind, and the reducer cannot accept a value the
+ * contract would refuse at append time.
+ *
+ * Returns null when the contract declares no such property, which is the
+ * fail-closed answer: a caller must treat "no declaration" as "nothing is
+ * allowed", never as "anything is allowed".
+ */
+export function eventPayloadEnum(contractName, eventType, property) {
+  const schema = schemaFile(contractName);
+  const blocks = Array.isArray(schema?.allOf) ? schema.allOf : [];
+  for (const block of blocks) {
+    if (block?.if?.properties?.type?.const !== eventType) continue;
+    const declared =
+      block?.then?.properties?.payload?.properties?.[property]?.enum;
+    if (Array.isArray(declared)) return Object.freeze([...declared]);
+  }
+  return null;
 }
 function typeMatches(type, value) {
   if (type === "null") return value === null;
@@ -487,7 +525,7 @@ export function generateSchemaManifest() {
  * and put the printed value below.
  */
 export const PINNED_SCHEMA_MANIFEST_CHECKSUM =
-  "2d1b9d1121535e749668266808141b400aae11d5d95ce1f720dabee503046465";
+  "f35473a9fa0ceb6f10bfb3a6280022515abca21fe8c7dee7093711a33fbb5d0b";
 
 export function verifySchemaManifestChecksums(manifest = null) {
   if (manifest === null) {

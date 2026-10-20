@@ -10,6 +10,7 @@ const _moduleDir = path.dirname(fileURLToPath(import.meta.url));
 import {
   buildSpawnProposal,
   canonicalHash,
+  deriveReferenceId,
   GOVERNANCE_VERSION,
   SCHEMA_VERSION,
 } from "./canonical.mjs";
@@ -1591,8 +1592,11 @@ export function createGovernanceGuard({
         );
         for (const ref of handoff.input_refs)
           assert(
+            // M12/T9 F-157: the ONE derivation of a reference id. The check
+            // used to re-inline the reference hash under its own domain tag,
+            // so the tag lived in two places and the two could disagree.
             task.accepted_reference_digests?.[ref.ref_id] ===
-              canonicalHash("zink-reference-v1", ref),
+              deriveReferenceId(ref),
             "REFERENCE_INVALID",
           );
         // M8-055: this governed route and the live adapter route both build

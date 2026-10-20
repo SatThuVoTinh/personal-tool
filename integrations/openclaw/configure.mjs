@@ -778,6 +778,8 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
   ]),
   "policy/reason-code-matrix.json": Object.freeze([
     "982896fe4fcc856728f8348058f19b69d89eabd9974bdaf4311c4afa510fc200",
+    // M12/T9: the live build's bytes for this asset, admitted so --preflight still accepts the deployed extension. The band moved this asset, so its current build is accepted by content comparison.
+    "4cd6544495ac5879afb81401c443999ed209f411462f94033807bba1ff446c1e",
   ]),
 });
 

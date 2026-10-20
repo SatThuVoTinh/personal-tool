@@ -903,3 +903,176 @@ describe("M12/T9 - F-062: the admission liveness is consumed once and re-recorde
     );
   });
 });
+
+describe("M12/T9 - F-157: one derivation per concept", () => {
+  const repoFile = (relative) =>
+    fileURLToPath(new URL(`../${relative}`, import.meta.url));
+
+  test("F-157: the approval scope has ONE derivation and the reference id has ONE derivation", () => {
+    const canonical = fs.readFileSync(
+      repoFile("integrations/openclaw/topology/lib/canonical.mjs"),
+      "utf8",
+    );
+    assert.ok(
+      !/export function deriveApprovalScopeDigest/u.test(canonical),
+      "the verbatim approval-scope twin must not survive in the topology library: the deployed plugin flattens both files into one lib/, so the two would hash the same scope differently",
+    );
+    const guard = fs.readFileSync(
+      repoFile("integrations/openclaw/topology/lib/guard.mjs"),
+      "utf8",
+    );
+    assert.ok(
+      !guard.includes('canonicalHash("zink-reference-v1"'),
+      "the guard must call the single reference derivation instead of re-inlining the domain tag",
+    );
+    assert.ok(
+      guard.includes("deriveReferenceId(ref)"),
+      "the guard must call the single reference derivation",
+    );
+  });
+
+  test("F-157: the canonicalizers declare their distinct roles", () => {
+    const canonical = fs.readFileSync(
+      repoFile("integrations/openclaw/topology/lib/canonical.mjs"),
+      "utf8",
+    );
+    const schema = fs.readFileSync(
+      repoFile("integrations/openclaw/topology/lib/schema.mjs"),
+      "utf8",
+    );
+    assert.ok(
+      canonical.includes("HASH PREIMAGE serializer"),
+      "the hash preimage serializer must state its role",
+    );
+    assert.ok(
+      schema.includes("COMPARISON serializer"),
+      "the comparison serializer must state its role",
+    );
+  });
+});
+
+describe("M12/T9 - F-127: one declaration owns the outcome vocabulary", () => {
+  const repoFile = (relative) =>
+    fileURLToPath(new URL(`../${relative}`, import.meta.url));
+  const OUTCOME_PROPERTIES = new Set([
+    "outcome_status",
+    "outcome_claim",
+    "accepted_outcome_status",
+    "pending_outcome_status",
+  ]);
+
+  function collectOutcomeEnums(node, where = "$", found = []) {
+    if (Array.isArray(node)) {
+      node.forEach((item, index) =>
+        collectOutcomeEnums(item, `${where}[${index}]`, found),
+      );
+      return found;
+    }
+    if (!node || typeof node !== "object") return found;
+    for (const [key, value] of Object.entries(node)) {
+      if (
+        OUTCOME_PROPERTIES.has(key) &&
+        value &&
+        typeof value === "object" &&
+        Array.isArray(value.enum)
+      ) {
+        found.push([`${where}.${key}`, value.enum]);
+        continue;
+      }
+      collectOutcomeEnums(value, `${where}.${key}`, found);
+    }
+    return found;
+  }
+
+  test("F-127: every outcome enum in the contracts equals the ONE declared vocabulary", async () => {
+    const { OUTCOME_STATUSES } =
+      await import("../integrations/openclaw/topology/lib/runtime.mjs");
+    const matrix = JSON.parse(
+      fs.readFileSync(
+        repoFile(
+          "integrations/openclaw/topology/policy/reason-code-matrix.json",
+        ),
+        "utf8",
+      ),
+    );
+    assert.deepEqual(
+      matrix.outcome_statuses,
+      ["COMPLETE", "PARTIAL", "BLOCKED", "FAILED"],
+      "the matrix declares the outcome vocabulary exactly once",
+    );
+    assert.deepEqual(
+      [...OUTCOME_STATUSES],
+      matrix.outcome_statuses,
+      "the runtime derives the vocabulary from that one declaration",
+    );
+    let checked = 0;
+    for (const name of [
+      "agent-result-payload",
+      "ledger-event",
+      "ledger-snapshot",
+      "trusted-result-envelope",
+    ]) {
+      const schema = JSON.parse(
+        fs.readFileSync(
+          repoFile(
+            `integrations/openclaw/topology/contracts/${name}.schema.json`,
+          ),
+          "utf8",
+        ),
+      );
+      for (const [where, values] of collectOutcomeEnums(schema)) {
+        const withoutNull = values.filter((value) => value !== null);
+        assert.deepEqual(
+          [...withoutNull].sort(),
+          [...matrix.outcome_statuses].sort(),
+          `${name}: ${where} must equal the declared vocabulary`,
+        );
+        checked += 1;
+      }
+    }
+    assert.ok(
+      checked >= 6,
+      `every outcome enum in the contracts must be checked (found ${checked})`,
+    );
+  });
+
+  test("F-127: the cancellation codes the reducer accepts are the matrix row intersected with the published contract", async () => {
+    const { eventPayloadEnum } =
+      await import("../integrations/openclaw/topology/lib/schema.mjs");
+    const matrix = JSON.parse(
+      fs.readFileSync(
+        repoFile(
+          "integrations/openclaw/topology/policy/reason-code-matrix.json",
+        ),
+        "utf8",
+      ),
+    );
+    const contract = eventPayloadEnum(
+      "ledger-event",
+      "WORKFLOW_CANCELLED",
+      "reason_code",
+    );
+    assert.deepEqual(contract, ["OWNER_CANCELLED", "PARENT_CANCELLED"]);
+    assert.deepEqual(
+      matrix.outcome_compatibility.CANCELLED.filter((code) =>
+        contract.includes(code),
+      ),
+      ["OWNER_CANCELLED", "PARENT_CANCELLED"],
+      "the reducer accepts what the policy AND the contract express",
+    );
+    // PENDING OWNER DECISION (F-127): the matrix declares SUPERSEDED_REVISION
+    // under CANCELLED, but the published ledger-event contract cannot carry
+    // it. Widening a published schema is a contract change (ACTIVE.md 3 rule
+    // 9), so the reducer refuses the code and this assertion PINS the
+    // divergence: it turns RED the moment the owner resolves it, in either
+    // direction.
+    assert.deepEqual(
+      matrix.outcome_compatibility.CANCELLED.filter(
+        (code) => !contract.includes(code),
+      ),
+      ["SUPERSEDED_REVISION"],
+    );
+  });
+});
+
+// ===========================================================================

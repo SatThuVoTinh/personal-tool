@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { applyWorkflowEvent } from "../integrations/openclaw/topology/lib/workflow.mjs";
+import {
+  applyWorkflowEvent,
+  resolveCurrentRunOwner,
+} from "../integrations/openclaw/topology/lib/workflow.mjs";
 import { deriveTaskId } from "../integrations/openclaw/topology/lib/canonical.mjs";
 
 function openedPayload(overrides = {}) {
@@ -353,3 +356,256 @@ describe("Lane A — workflow/event authority (M7-001/013/014/015/016/069)", () 
     assert.equal(JSON.stringify(readSnapshot(paths)), snapBefore);
   });
 });
+
+// ===========================================================================
+// M12/T9 - F-076 / F-077 / F-078: the reducer binds the run that ASKED, the
+// result that is PENDING, and the attempt that was ABANDONED.
+// ===========================================================================
+describe("M12/T9 - F-076/F-077/F-078: the reducer binds the run that asked, the result that is pending and the attempt that was abandoned", () => {
+  function approve(snapshot, taskId) {
+    return applyWorkflowEvent(snapshot, "WORKFLOW_USER_APPROVAL_DECIDED", {
+      task_id: taskId,
+      actor: "user",
+      channel: "approvals",
+      decision: "APPROVE",
+    });
+  }
+
+  function claim(snapshot, taskId, agentId) {
+    return applyWorkflowEvent(snapshot, "WORKFLOW_TASK_CLAIMED", {
+      task_id: taskId,
+      agent_id: agentId,
+    });
+  }
+
+  /** A task with one ABANDONED spawn: a reservation whose receipt never came. */
+  function withAbandonedSpawn(snapshot, taskId) {
+    const next = globalThis.structuredClone(snapshot);
+    next.tasks[taskId].delegations = {
+      "del-1": {
+        delegation_id: "del-1",
+        node_id: "node-1",
+        agent_id: "sql",
+        parent_agent_id: "o1",
+        parent_session_key: "agent:o1:sess-1",
+        parent_run_id: "run-1",
+        tool_call_id: "call-1",
+        turn: 1,
+        attempt: 1,
+        brief_revision: 1,
+        stack_id: "data_plant",
+        run_state: "SPAWN_UNKNOWN",
+      },
+    };
+    return next;
+  }
+
+  it("F-076: a coordinator-bound task records the COORDINATOR run as the asker", () => {
+    const { payload, snapshot } = openOne();
+    const queued = approve(snapshot, payload.task_id);
+    const executing = claim(queued, payload.task_id, "o1");
+    const bound = applyWorkflowEvent(
+      executing,
+      "WORKFLOW_COORDINATOR_RUN_BOUND",
+      {
+        task_id: payload.task_id,
+        coordinator: "o1",
+        attempt: 1,
+        lease_id: "lease-1",
+        session_key: "agent:o1:sess-c",
+        run_id: "coord-run-1",
+      },
+    );
+    assert.deepEqual(
+      resolveCurrentRunOwner(bound.tasks[payload.task_id]),
+      {
+        agent_id: "o1",
+        session_key: "agent:o1:sess-c",
+        run_id: "coord-run-1",
+        attempt: 1,
+      },
+      "the bound coordinator run is the task's live run",
+    );
+    const asked = applyWorkflowEvent(bound, "WORKFLOW_USER_QUESTION_RECORDED", {
+      task_id: payload.task_id,
+      agent_id: "o1",
+      question: "which table?",
+      session_key: "agent:o1:sess-c",
+      run_id: "coord-run-1",
+    });
+    const task = asked.tasks[payload.task_id];
+    assert.equal(task.workflow_status, "WAITING_FOR_USER");
+    assert.equal(task.waiting_question_run_id, "coord-run-1");
+    assert.equal(task.waiting_question_agent_id, "o1");
+    assert.equal(task.waiting_question_session_key, "agent:o1:sess-c");
+    // The answer correlates with the run that ASKED, not with the root run.
+    const answered = applyWorkflowEvent(
+      asked,
+      "WORKFLOW_USER_ANSWER_RECORDED",
+      {
+        task_id: payload.task_id,
+        answer: "the blue one",
+        actor: "user",
+        user_principal_ref: "b".repeat(64),
+        message_id: "22345678901234567",
+      },
+    );
+    assert.equal(answered.tasks[payload.task_id].workflow_status, "EXECUTING");
+  });
+
+  it("F-076: the root run can no longer be recorded as the asker of a coordinator-bound task", () => {
+    const { payload, snapshot } = openOne();
+    const bound = applyWorkflowEvent(
+      claim(approve(snapshot, payload.task_id), payload.task_id, "o1"),
+      "WORKFLOW_COORDINATOR_RUN_BOUND",
+      {
+        task_id: payload.task_id,
+        coordinator: "o1",
+        attempt: 1,
+        lease_id: "lease-1",
+        session_key: "agent:o1:sess-c",
+        run_id: "coord-run-1",
+      },
+    );
+    assert.throws(
+      () =>
+        applyWorkflowEvent(bound, "WORKFLOW_USER_QUESTION_RECORDED", {
+          task_id: payload.task_id,
+          agent_id: "main",
+          question: "which table?",
+          session_key: "agent:main:sess-1",
+          run_id: "run-1",
+        }),
+      { code: "LINEAGE_MISMATCH" },
+      "a run that is not the live run must not be recordable as the asker",
+    );
+  });
+
+  it("F-077: a task-level result recorded without a digest carries ONE digest and is closed by one verdict", () => {
+    const { payload, snapshot } = openOne();
+    const executing = claim(
+      approve(snapshot, payload.task_id),
+      payload.task_id,
+      "o1",
+    );
+    const recorded = applyWorkflowEvent(executing, "WORKFLOW_RESULT_RECORDED", {
+      task_id: payload.task_id,
+      agent_id: "o1",
+      attempt: 1,
+      technical_status: "PASS",
+      business_status: "PASS",
+    });
+    const task = recorded.tasks[payload.task_id];
+    assert.equal(task.workflow_status, "RESULT_PENDING_REVIEW");
+    assert.match(
+      task.execution_payload_digest,
+      /^[a-f0-9]{64}$/u,
+      "the ledger must carry exactly one digest for a result that carried none",
+    );
+    // The digest is a function of the recorded facts, not of the clock: the
+    // same event replays to the same digest, so a replay cannot re-label it.
+    const replayed = applyWorkflowEvent(executing, "WORKFLOW_RESULT_RECORDED", {
+      task_id: payload.task_id,
+      agent_id: "o1",
+      attempt: 1,
+      technical_status: "PASS",
+      business_status: "PASS",
+    });
+    assert.equal(
+      replayed.tasks[payload.task_id].execution_payload_digest,
+      task.execution_payload_digest,
+    );
+    const accepted = applyWorkflowEvent(
+      recorded,
+      "WORKFLOW_USER_RESULT_ACCEPTED",
+      {
+        task_id: payload.task_id,
+        actor: "user",
+        channel: "results",
+        decision: "ACCEPT",
+      },
+    );
+    assert.equal(
+      accepted.tasks[payload.task_id].workflow_status,
+      "COMPLETE",
+      "one owner verdict must close the review instead of wedging it",
+    );
+  });
+
+  it("F-077: a verdict that names a FOREIGN digest is still refused", () => {
+    const { payload, snapshot } = openOne();
+    const executing = claim(
+      approve(snapshot, payload.task_id),
+      payload.task_id,
+      "o1",
+    );
+    const recorded = applyWorkflowEvent(executing, "WORKFLOW_RESULT_RECORDED", {
+      task_id: payload.task_id,
+      agent_id: "o1",
+      attempt: 1,
+      technical_status: "PASS",
+      business_status: "PASS",
+    });
+    assert.throws(
+      () =>
+        applyWorkflowEvent(recorded, "WORKFLOW_USER_RESULT_ACCEPTED", {
+          task_id: payload.task_id,
+          actor: "user",
+          channel: "results",
+          decision: "ACCEPT",
+          result_digest: "e".repeat(64),
+        }),
+      { code: "RESULT_MISMATCH" },
+      "the M7-062 binding still refuses a verdict that names another result",
+    );
+  });
+
+  it("F-078: an abandoned spawn is reconciled so the root result is no longer refused", () => {
+    const { payload, snapshot } = openOne();
+    const recorded = applyWorkflowEvent(
+      withAbandonedSpawn(snapshot, payload.task_id),
+      "WORKFLOW_ROOT_RESULT_RECORDED",
+      {
+        task_id: payload.task_id,
+        brief_revision: 1,
+        native_run_id: "run-1",
+        agent_id: "main",
+        payload_digest: "c".repeat(64),
+        outcome_status: "COMPLETE",
+        reason_code: "NONE",
+        governance_hash: "d".repeat(64),
+      },
+    );
+    const task = recorded.tasks[payload.task_id];
+    assert.equal(
+      task.workflow_status,
+      "RESULT_PENDING_REVIEW",
+      "an abandoned spawn must not refuse the root result for ever",
+    );
+    const run = task.delegations["del-1"];
+    assert.equal(run.run_state, "FAILED");
+    assert.equal(run.recovery_reason, "SPAWN_RECEIPT_LOST");
+    assert.equal(run.runtime_reason_code, "TRANSIENT_RUNTIME_FAILURE");
+  });
+
+  it("F-078: a late report about an abandoned spawn gets a terminal outcome instead of LINEAGE_MISMATCH", () => {
+    const { payload, snapshot } = openOne();
+    const after = applyWorkflowEvent(
+      withAbandonedSpawn(snapshot, payload.task_id),
+      "WORKFLOW_NATIVE_ENDED",
+      {
+        task_id: payload.task_id,
+        native_run_id: "child-native-1",
+        child_session_key: "agent:sql:child-1",
+        parent_session_key: "agent:o1:sess-1",
+        outcome: "error",
+      },
+    );
+    const run = after.tasks[payload.task_id].delegations["del-1"];
+    assert.equal(run.run_state, "FAILED");
+    assert.equal(run.recovery_reason, "SPAWN_RECEIPT_LOST");
+    assert.equal(run.runtime_reason_code, "TRANSIENT_RUNTIME_FAILURE");
+  });
+});
+
+// ===========================================================================

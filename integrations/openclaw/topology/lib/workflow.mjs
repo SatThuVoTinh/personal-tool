@@ -8,11 +8,12 @@ import {
   TASK_CODE_PATTERN,
   TASK_ID_PATTERN,
 } from "./canonical.mjs";
-import { validateContract } from "./schema.mjs";
+import { validateContract, eventPayloadEnum } from "./schema.mjs";
 import {
   isDeclaredReasonCode,
   outcomeReasonAllowed,
   workflowAggregate,
+  OUTCOME_STATUSES,
 } from "./runtime.mjs";
 import { AGENT_STACK_POLICY } from "../../lib/authority.mjs";
 // B-7: the ceilings are declared once, in the ledger's canonical `BUDGETS`. `ledger.mjs:18`
@@ -42,6 +43,11 @@ const terminal = new Set([
 // D05: BLOCKED is not an active run — blocked runs must not count as active
 // for prerequisite checks (would cause deadlock). BLOCKED requires recovery.
 const activeRun = new Set(["PENDING", "SPAWN_UNKNOWN", "RUNNING", "UNKNOWN"]);
+// M12/T9 F-127: the cancellation reasons the published ledger-event CONTRACT
+// can carry, read from the contract itself rather than re-listed here.
+const CANCELLATION_REASON_CODES = Object.freeze(
+  eventPayloadEnum("ledger-event", "WORKFLOW_CANCELLED", "reason_code") ?? [],
+);
 // M8-056: the documented transient-failure class. Only these reasons justify a
 // retry; every other failure class has no automatic or operator retry path.
 const TRANSIENT_FAILURE_CLASS = new Set([
@@ -224,14 +230,48 @@ function isSupersededAttempt(task, run) {
 // M7-041: the agent that owns a run identity. A run is owned by exactly one
 // agent, so an event claiming a different agent_id is a lineage violation, not
 // a presentation detail.
+//
+// M12/T9 F-076: a bound coordinator run owns its OWN turn. Without this branch
+// the owner of a coordinator-bound task was always reported as the ROOT agent,
+// so a question the coordinator actually asked was attributed to a run that
+// never asked it.
 function ownerRunAgentId(owner, task) {
+  if (owner.coordinatorRun) return owner.coordinatorRun.coordinator;
   return owner.delegation ? owner.delegation.agent_id : task.root_agent_id;
+}
+
+/**
+ * M12/T9 F-076: the LIVE coordinator binding of a task.
+ *
+ * A coordinator run is bound to a queue attempt by WORKFLOW_COORDINATOR_RUN_BOUND,
+ * and an attempt is single-use: the reducer refuses to bind an attempt below one
+ * that is already bound, so the HIGHEST bound attempt is the live generation and
+ * every older binding is audit history.
+ *
+ * A coordinator run has no delegation, so it cannot be read from the delegation
+ * projection the way a RUNNING delegation is. It is the third owner shape the
+ * ledger already declares (see findSession): a gateway-started run that owns the
+ * task's execution without delegation lineage.
+ */
+function liveCoordinatorRun(task) {
+  const bindings = Object.values(task.coordinator_runs ?? {});
+  if (bindings.length === 0) return null;
+  return bindings.reduce((live, candidate) =>
+    Number(candidate?.attempt) > Number(live?.attempt) ? candidate : live,
+  );
 }
 
 // M7-041: the canonical current run owner of a task. Exactly one run may be
 // live at a time: the single RUNNING delegation, otherwise the root run. Any
 // caller that must name the governing run takes it from here rather than from
 // caller-controlled data, and the reducer re-derives the same value.
+//
+// M12/T9 F-076: a bound coordinator run IS the live run of its task. The
+// gateway started that run and it is the one executing the task, so naming the
+// root run instead attributed a governed question to a run that did not ask
+// it. The order is unchanged for the other two shapes: a RUNNING delegation is
+// still the owner when one exists, because a specialist that is running is the
+// live turn.
 export function resolveCurrentRunOwner(task) {
   const running = Object.values(task.delegations ?? {}).filter(
     (run) => run.run_state === "RUNNING",
@@ -246,6 +286,15 @@ export function resolveCurrentRunOwner(task) {
       session_key: run.child_session_key,
       run_id: run.native_run_id,
       attempt: run.attempt,
+    };
+  }
+  const coordinator = liveCoordinatorRun(task);
+  if (coordinator) {
+    return {
+      agent_id: coordinator.coordinator,
+      session_key: coordinator.session_key,
+      run_id: coordinator.run_id,
+      attempt: coordinator.attempt,
     };
   }
   return {
@@ -426,6 +475,33 @@ export function applyWorkflowEvent(
         run.child_session_key === payload.child_session_key &&
         run.parent_session_key === payload.parent_session_key,
     );
+    if (matches.length === 0) {
+      // M12/T9 F-078: a late report about a spawn whose receipt was lost.
+      // The ledger never learned this child's identity, so the report matches
+      // no delegation — and the refusal (LINEAGE_MISMATCH) named a lineage
+      // fault where the real condition is an abandoned attempt. When exactly
+      // one abandoned spawn of this parent exists, the report IS that
+      // attempt's terminal outcome: the attempt is reconciled to a terminal
+      // run_state and the report is consumed, so the task is no longer wedged
+      // and the late report no longer raises an unexplainable error. A report
+      // that matches nothing, and a report whose parent has more than one
+      // abandoned spawn, are still refused — the lineage check is unchanged
+      // wherever it can be.
+      const abandoned = Object.values(task.delegations).filter(
+        (run) =>
+          run.run_state === "SPAWN_UNKNOWN" &&
+          !run.native_run_id &&
+          run.parent_session_key === payload.parent_session_key,
+      );
+      if (abandoned.length === 1) {
+        reconcileAbandonedSpawns(
+          task,
+          eventTime,
+          (run) => run === abandoned[0],
+        );
+        return next;
+      }
+    }
     requireCondition(matches.length === 1, "LINEAGE_MISMATCH");
     requireCondition(
       ["ok", "error", "timeout", "killed", "reset", "deleted"].includes(
@@ -526,14 +602,27 @@ export function applyWorkflowEvent(
       ["task_id", "reason_code", "actor"],
       ["channel", "message_id"],
     );
+    // M12/T9 F-127: the cancellation reasons are DERIVED, not re-listed.
+    //
+    // The handler used to hardcode ["OWNER_CANCELLED", "PARENT_CANCELLED"]
+    // while the published reason-code matrix declares a third code under
+    // `outcome_compatibility.CANCELLED` (SUPERSEDED_REVISION), so a
+    // cancellation the policy declares was refused POLICY_DENIED by the
+    // reducer. The accepted set is now the matrix row, intersected with the
+    // enum the ledger-event CONTRACT declares for this payload: the policy
+    // says which reasons are legitimate, the contract says which ones a
+    // durable event can carry, and a reason only one of them declares is
+    // refused rather than accepted and then rejected at append time.
+    const cancellationReasons = CANCELLATION_REASON_CODES.filter((code) =>
+      outcomeReasonAllowed("CANCELLED", code),
+    );
     requireCondition(
-      ["OWNER_CANCELLED", "PARENT_CANCELLED"].includes(payload.reason_code),
+      cancellationReasons.includes(payload.reason_code),
       "POLICY_DENIED",
     );
     requireCondition(
       (payload.reason_code === "OWNER_CANCELLED" && payload.actor === "user") ||
-        (payload.reason_code === "PARENT_CANCELLED" &&
-          payload.actor === "main"),
+        (payload.reason_code !== "OWNER_CANCELLED" && payload.actor === "main"),
       "POLICY_DENIED",
     );
     requireCondition(!terminal.has(task.workflow_status));
@@ -578,6 +667,12 @@ export function applyWorkflowEvent(
     const current = Object.values(task.delegations).filter(
       (run) => run.brief_revision === task.brief_revision,
     );
+    // M12/T9 F-078: an abandoned spawn (a reservation whose receipt never
+    // arrived) is reconciled HERE, in the event that observes it, so the root
+    // result is no longer refused MISSING_PREREQUISITE by an attempt whose
+    // identity the ledger never learned. Only an attempt with NO identity is
+    // reconciled — a running child that reported itself still blocks.
+    reconcileAbandonedSpawns(task, eventTime);
     // D18: WORKFLOW_ROOT_RESULT_RECORDED must block while any run for the current
     // brief revision is still RUNNING (or in another active state). This gate
     // ensures no successful native children are abandoned mid-execution.
@@ -1279,8 +1374,22 @@ export function applyWorkflowEvent(
     }
     task.workflow_status = "RESULT_PENDING_REVIEW";
     task.result_pending_at = payload.recorded_at ?? eventTime;
-    if (payload.payload_digest)
-      task.execution_payload_digest = payload.payload_digest;
+    // M12/T9 F-077: the ledger carries EXACTLY ONE digest for this result.
+    //
+    // The store used to be conditional (`if (payload.payload_digest)`), so a
+    // result recorded without a digest left the task in RESULT_PENDING_REVIEW
+    // with no identity at all — and every verdict then failed RESULT_MISMATCH,
+    // because the binding requires a digest to compare against. The task was
+    // wedged in review with no operator path.
+    //
+    // When the caller supplies the digest it is authoritative and unchanged.
+    // When it does not, the reducer mints ONE from the facts the result
+    // itself consists of (the task, the brief revision, the artifact set), so
+    // the digest is a function of WHAT was produced — never of the clock, the
+    // writer or the attempt — it is stable across replay, and a verdict that
+    // names it is bound to THIS result and to no other.
+    task.execution_payload_digest =
+      payload.payload_digest ?? reducerMintedResultDigest(task);
     return next;
   }
   // M7-020: a spawn reservation creates governed work, so it is a
@@ -1292,6 +1401,19 @@ export function applyWorkflowEvent(
     // reservation. The task is BLOCKED at this point, so the post-approval gate
     // below is evaluated against the restored state.
     reconcileForRetry(task, payload.node_id, eventTime);
+    // M12/T9 F-078: an abandoned spawn of the SAME node (a reservation whose
+    // receipt never arrived) is reconciled here too, so a fresh attempt is
+    // not refused SPAWN_UNKNOWN by an attempt the ledger never learned the
+    // identity of. The reconciliation is scoped to this node AND to a strictly
+    // OLDER attempt on purpose: a replay of the SAME attempt is a duplicate
+    // reservation, not a retry, and it keeps its refusal (SPAWN_UNKNOWN). The
+    // retry gate below then sees a terminal FAILED attempt in the documented
+    // transient class, which is the existing retry path.
+    reconcileAbandonedSpawns(
+      task,
+      eventTime,
+      (run) => run.node_id === payload.node_id && run.attempt < payload.attempt,
+    );
     // Option (b) migration: anchored replay trusts admission (see above).
     if (!replayAnchored) requirePostApprovalState(task);
     return applySpawnReserved(next, task, payload, replayAnchored);
@@ -1616,6 +1738,47 @@ function reconcileTransientAttempt(task, run, eventTime) {
 }
 
 /**
+ * M12/T9 F-078: a spawn reservation whose receipt never arrived.
+ *
+ * The ledger learns a child's identity ONLY from WORKFLOW_SPAWN_RECEIVED. A
+ * reservation whose receipt is lost therefore leaves its delegation in
+ * SPAWN_UNKNOWN forever, and SPAWN_UNKNOWN is an ACTIVE run:
+ *
+ *   - it blocks WORKFLOW_ROOT_RESULT_RECORDED (MISSING_PREREQUISITE),
+ *   - it blocks a re-reservation of the same node (SPAWN_UNKNOWN),
+ *   - and a late report about it matches no identity at all
+ *     (LINEAGE_MISMATCH), because the ledger never learned the run id.
+ *
+ * The task had no operator path out: not a cancellation of the whole task, and
+ * not a budgeted brief supersede.
+ *
+ * The reconciliation is bounded to what the ledger can PROVE. Only a
+ * delegation that never received an identity (no native_run_id) is reconciled,
+ * so a child that reported itself is never swept away, and the task's own
+ * status is never touched. It is journaled inside the event that observes it,
+ * so it survives replay, and the runtime reason code it stamps is the
+ * documented transient class, so the existing retry path (a fresh attempt for
+ * the same node) is the way forward.
+ */
+const ABANDONED_SPAWN_REASON = "SPAWN_RECEIPT_LOST";
+
+function reconcileAbandonedSpawns(task, eventTime, predicate = () => true) {
+  const abandoned = Object.values(task.delegations ?? {}).filter(
+    (run) =>
+      run.run_state === "SPAWN_UNKNOWN" && !run.native_run_id && predicate(run),
+  );
+  for (const run of abandoned) {
+    run.run_state = "FAILED";
+    run.runtime_reason_code = "TRANSIENT_RUNTIME_FAILURE";
+    run.recovery_needed_at = eventTime;
+    run.recovery_reason = ABANDONED_SPAWN_REASON;
+    run.reconciled_at = eventTime;
+    run.superseded_at = eventTime;
+  }
+  return abandoned.length;
+}
+
+/**
  * M8-056: a retry reservation IS the reconcile trigger. Reserving a fresh attempt
  * for a node whose previous attempt is stuck in the documented transient class
  * reconciles that attempt in the same atomic event. Without this the retry class
@@ -1662,10 +1825,7 @@ function resolveAcceptedOutcome(task, payload) {
   const recorded = task.root_result?.outcome_status ?? null;
   const claimed = payload.outcome_status ?? null;
   if (claimed !== null) {
-    requireCondition(
-      ["COMPLETE", "PARTIAL", "BLOCKED", "FAILED"].includes(claimed),
-      "SCHEMA_INVALID",
-    );
+    requireCondition(OUTCOME_STATUSES.includes(claimed), "SCHEMA_INVALID");
     requireCondition(
       recorded === null || claimed === recorded,
       "RESULT_MISMATCH",
@@ -1676,11 +1836,51 @@ function resolveAcceptedOutcome(task, payload) {
 }
 
 /**
+ * M12/T9 F-077: the digest the reducer mints for a task-level result whose
+ * caller supplied none.
+ *
+ * The preimage is built ONLY from facts the snapshot keeps, so the digest can
+ * be RE-DERIVED from the task projection alone. That is what lets a reader
+ * tell a reducer-minted digest from a caller-supplied one — and therefore
+ * lets the verdict binding know that a digest-less result is bound to the
+ * single pending result, while a result the CALLER named keeps the M7-062
+ * obligation that a verdict must name it.
+ *
+ * The preimage carries no clock and no caller-supplied fact: the digest is a
+ * function of WHAT was produced (the task, the brief revision and the
+ * artifact set), never of WHEN it was recorded, so it is identical at write
+ * time and at every replay, and a pure reducer call without an event
+ * timestamp produces the same digest as the journaled one.
+ *
+ * Every value in the preimage is fixed once the result is recorded: the task
+ * id and the brief revision never move while the task waits for review, and
+ * the artifact-set digest is written by the same event.
+ */
+function reducerMintedResultDigest(task) {
+  return canonicalHash("zink-workflow-result-v1", {
+    task_id: task.task_id,
+    brief_revision: task.brief_revision,
+    artifact_set_digest: task.artifact_set_digest ?? null,
+  });
+}
+
+/**
  * M7-062: the ONE result-identity binding. A user verdict (accept, reject, or
  * request a revision) must name the exact result it applies to, otherwise a
  * verdict recorded against result A could be replayed against result B. The
  * digest is authoritative; the legacy result id is accepted only when the
  * digest is absent, and an unbound verdict is refused.
+ *
+ * M12/T9 F-077: the ONE exception, and it is narrow. A task-level result
+ * (WORKFLOW_RESULT_RECORDED, the coordinator's own result) whose caller
+ * supplied NO digest had no identity at all, so every verdict against it was
+ * refused with RESULT_MISMATCH and the task stayed in RESULT_PENDING_REVIEW
+ * for ever. The reducer now mints ONE digest for that result, and a verdict
+ * that names nothing binds to it — but ONLY when the recorded digest is the
+ * reducer's own mint. A result the CALLER named keeps the M7-062 obligation
+ * in full: an unbound verdict against it is still refused, and a verdict that
+ * names a digest is still compared with the recorded one, so a stale card is
+ * still refused.
  */ function requireResultIdentityMatch(task, payload, replayAnchored = false) {
   const currentDigest =
     task.root_result?.payload_digest ?? task.execution_payload_digest;
@@ -1702,7 +1902,14 @@ function resolveAcceptedOutcome(task, payload) {
   // (RESULT_PENDING_REVIEW) and the digest comparison when a digest IS
   // supplied both still apply, and new verdicts stay fully bound.
   if (replayAnchored) return;
-  if (payload.result_id === undefined) fail("RESULT_MISMATCH");
+  if (payload.result_id === undefined) {
+    requireCondition(
+      task.root_result === undefined &&
+        task.execution_payload_digest === reducerMintedResultDigest(task),
+      "RESULT_MISMATCH",
+    );
+    return;
+  }
   requireCondition(
     task.root_result?.result_id !== undefined &&
       payload.result_id === task.root_result.result_id,

@@ -22,6 +22,13 @@ const REASON_POLICY_REQUIRED = [
   // every other durable reason passes.
   ["task_suspension_reasons", "array"],
   ["outcome_compatibility", "object"],
+  // M12/T9 F-127: the ONE declaration of the outcome vocabulary. It used to be
+  // re-listed independently in six places (two schemas, the ledger snapshot,
+  // the trusted result envelope, the agent result payload and a regex in this
+  // file), so editing one copy silently re-labelled history or rejected
+  // writes for an outcome another copy did not declare. Every consumer now
+  // derives from THIS list.
+  ["outcome_statuses", "array"],
 ];
 
 // This matrix is what every governed denial gets attributed to, so a load that dies as a raw
@@ -71,6 +78,11 @@ export const RUNTIME_REASON_CODES = Object.freeze(reasonPolicy.runtime_reasons);
 export const TASK_SUSPENSION_REASON_CODES = Object.freeze(
   reasonPolicy.task_suspension_reasons,
 );
+// M12/T9 F-127: the outcome vocabulary, derived from the ONE declaration. A
+// consumer that needs "is this an outcome?" asks here instead of re-listing
+// the four values.
+export const OUTCOME_STATUSES = Object.freeze(reasonPolicy.outcome_statuses);
+export const OUTCOME_STATUS_SET = new Set(OUTCOME_STATUSES);
 // F-251: ONE membership set built from EVERY section the matrix publishes, so
 // a code the policy declares can never be invisible to the check that guards
 // durable `task.reason_code` writes.
@@ -159,7 +171,7 @@ export function validateAgentClaim(payload) {
   inspectText(payload);
   if (!payload || typeof payload !== "object" || Array.isArray(payload))
     throw new Error("SCHEMA_INVALID");
-  if (!/^(COMPLETE|PARTIAL|BLOCKED|FAILED)$/u.test(payload.outcome_claim ?? ""))
+  if (!OUTCOME_STATUS_SET.has(payload.outcome_claim ?? ""))
     throw new Error("SCHEMA_INVALID");
   if (!AGENT_REASON_CODES.includes(payload.reason_claim))
     throw new Error("SCHEMA_INVALID");

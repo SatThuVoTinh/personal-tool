@@ -309,6 +309,11 @@ test(
         // resolve and the verifier iterated only what survived. Both ends now assert coverage.
         "lib/schema.mjs",
         "lib/policy.mjs",
+        // M12/T9: the reason-code matrix joined the packaged set in this band
+        // (it now declares the outcome-status vocabulary), so its bytes differ
+        // from the proven live build. Its outgoing digest is admitted in
+        // configure.mjs, so the deployed tree stays upgradable.
+        "policy/reason-code-matrix.json",
         // M12/T9: the quota telemetry's comments and the one canonical owner
         // validator moved in this band; the outgoing digest is admitted in
         // configure.mjs.

@@ -213,6 +213,29 @@ function requireSnowflake(value) {
   return value;
 }
 
+/**
+ * M12/T9 F-157: the canonical HASH PREIMAGE serializer.
+ *
+ * ROLE: it produces the preimage of every governance digest. It normalizes
+ * unicode (NFC), drops undefined fields, sorts object keys and rejects
+ * anything JSON cannot represent faithfully (a non-integer number, a
+ * non-plain object), so the preimage is a function of WHAT was hashed and
+ * never of the order the caller happened to write the keys in.
+ *
+ * It is deliberately NOT interchangeable with the other two serializers, and
+ * each of them says the same about itself:
+ *
+ *   - `schema.mjs`'s `stableJson` is the COMPARISON serializer (key-sorted,
+ *     compact, no normalization): it answers "are these two JSON values the
+ *     same?".
+ *   - `lib/policy.mjs`'s `stableJson` is the CONFIG WRITER (pretty, key order
+ *     preserved): it answers "which bytes go into the operator's config
+ *     file?", and those bytes are pinned by the admission digests.
+ *
+ * Unifying them would change the bytes of every digest and of every written
+ * config, so each keeps its one role. What this band removes is the
+ * DUPLICATED DERIVATION (see `deriveReferenceId`), not the distinct roles.
+ */
 export function canonicalJson(value) {
   return JSON.stringify(normalize(value));
 }
@@ -364,12 +387,15 @@ export function buildSpawnProposal(fields) {
   };
 }
 
+/**
+ * M12/T9 F-157: the ONE derivation of a reference id.
+ *
+ * The guard used to re-inline `canonicalHash("zink-reference-v1", ref)` at its
+ * check site, so the domain tag lived in two places and the two could
+ * disagree. It calls this instead.
+ */
 export function deriveReferenceId(value) {
   return canonicalHash("zink-reference-v1", value);
-}
-
-export function deriveApprovalScopeDigest(value) {
-  return canonicalHash("zink-approval-scope-v1", value);
 }
 
 export function derivePrincipalRef(identityKey, rawDiscordId) {
