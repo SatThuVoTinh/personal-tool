@@ -525,10 +525,13 @@
                 "enum": ["user", "main"]
               },
               "channel": {
-                "type": "string"
+                "description": "M12/T9 F-030: the governed surface the cancellation was decided on. A cancellation that names a surface must name a REAL one: the provenance of an owner-cancel against a coordinator-cancel is otherwise unfalsifiable in the durable history, exactly as it is for every other verdict.",
+                "enum": ["results", "approvals"]
               },
               "message_id": {
-                "type": "string"
+                "description": "M12/T9 F-030: the Discord message (snowflake) the cancellation was decided on. Same pattern as the pinned verdict siblings: a bare string accepted any fabricated id.",
+                "type": ["string", "null"],
+                "pattern": "^[1-9][0-9]{16,19}$"
               }
             }
           }

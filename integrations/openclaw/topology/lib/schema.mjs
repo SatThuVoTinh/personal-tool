@@ -523,6 +523,9 @@ export function generateSchemaManifest() {
  * change): run
  *   node -e "import('./integrations/openclaw/topology/lib/schema.mjs').then(m => console.log(m.generateSchemaManifest().manifestChecksum))"
  * and put the printed value below.
+ * publishes instead of "unknown" for all of them, and F-030's pinning of the
+ * WORKFLOW_CANCELLED payload moved the ledger-event bytes. The value below is
+ * the checksum of THAT state.
  */
 export const PINNED_SCHEMA_MANIFEST_CHECKSUM =
   "f35473a9fa0ceb6f10bfb3a6280022515abca21fe8c7dee7093711a33fbb5d0b";

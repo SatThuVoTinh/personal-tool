@@ -625,6 +625,28 @@ export function applyWorkflowEvent(
         (payload.reason_code !== "OWNER_CANCELLED" && payload.actor === "main"),
       "POLICY_DENIED",
     );
+    // M12/T9 F-030: the cancellation's SURFACE provenance, checked here as well
+    // as in the published contract.
+    //
+    // The contract pins `channel` to the two governed surfaces and `message_id`
+    // to the Discord snowflake pattern, exactly like the pinned verdict
+    // siblings. The reducer checks them too, because the reducer is the gate
+    // every write passes through: a cancel record that may claim any channel
+    // and any message id makes the owner-cancel / coordinator-cancel
+    // provenance unfalsifiable in the durable history.
+    if (payload.channel !== undefined) {
+      requireCondition(
+        payload.channel === "results" || payload.channel === "approvals",
+        "SCHEMA_INVALID",
+      );
+    }
+    if (payload.message_id !== undefined && payload.message_id !== null) {
+      requireCondition(
+        typeof payload.message_id === "string" &&
+          /^[1-9][0-9]{16,19}$/u.test(payload.message_id),
+        "SCHEMA_INVALID",
+      );
+    }
     requireCondition(!terminal.has(task.workflow_status));
     task.workflow_status = "CANCELLED";
     task.brief_state = "CLOSED";
