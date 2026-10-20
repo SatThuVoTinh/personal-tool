@@ -134,7 +134,9 @@ function isAuditOnlyEvent(type) {
  */
 export function tasksWithoutTerminalRecord(snapshot) {
   return Object.entries(snapshot?.tasks ?? {})
-    .filter(([, task]) => !TERMINAL_WORKFLOW_STATUSES.has(task?.workflow_status))
+    .filter(
+      ([, task]) => !TERMINAL_WORKFLOW_STATUSES.has(task?.workflow_status),
+    )
     .map(([task_id]) => task_id)
     .sort();
 }
@@ -293,6 +295,22 @@ export function readSnapshot(paths) {
   return withWriterLock(paths, () => readSnapshotLocked(paths));
 }
 
+/**
+ * M12/T9 F-063: the replay, and the branch it discarded.
+ *
+ * `readSnapshot` returns the snapshot alone, and the published snapshot
+ * contract forbids extra members, so the discarded branch is a separate
+ * read-only report. An operator can therefore reconcile a forked journal
+ * instead of the replay refusing to read it.
+ */
+export function readSnapshotWithReport(paths) {
+  const report = { discardedBranches: [] };
+  const snapshot = withWriterLock(paths, () =>
+    readSnapshotLocked(paths, true, report),
+  );
+  return { snapshot, discardedBranches: report.discardedBranches };
+}
+
 // Builder-only, explicit R11 -> R12 transition. Never migrate a live task or
 // reset counters. The owner-approved pre-apply backup must precede apply.
 //
@@ -428,7 +446,50 @@ export function assertLedgerWriterLockUsable(paths) {
   return state;
 }
 
-function readSnapshotLocked(paths, repairSnapshot = true) {
+/**
+ * M12/T9 F-063: a forked pair in the journal.
+ *
+ * Two writers behind one lock emit the SAME sequence number with different
+ * payloads, so the journal carries two branches from one point. The branch the
+ * journal CONTINUED on is the live one - the successor event's
+ * `previous_event_digest` names it - and the snapshot anchor names it when the
+ * fork sits at the accepted head. The other branch is DISCARDED, and it is
+ * REPORTED, so the reader answers a forked journal with a reconciliation path
+ * instead of a bare "event chain mismatch".
+ */
+function resolveForkSurvivors(events, snapshot) {
+  const bySequence = new Map();
+  for (const event of events) {
+    const bucket = bySequence.get(event.sequence);
+    if (bucket) bucket.push(event);
+    else bySequence.set(event.sequence, [event]);
+  }
+  const survivors = new Map();
+  for (const [sequence, candidates] of bySequence) {
+    if (candidates.length < 2) continue;
+    const successor = (bySequence.get(sequence + 1) ?? [])[0];
+    const anchored =
+      sequence === snapshot.sequence &&
+      typeof snapshot.last_event_digest === "string"
+        ? snapshot.last_event_digest
+        : null;
+    const survivor =
+      (successor
+        ? candidates.find(
+            (candidate) =>
+              candidate.event_digest === successor.previous_event_digest,
+          )
+        : undefined) ??
+      (anchored
+        ? candidates.find((candidate) => candidate.event_digest === anchored)
+        : undefined) ??
+      candidates[0];
+    survivors.set(sequence, survivor);
+  }
+  return { bySequence, survivors };
+}
+
+function readSnapshotLocked(paths, repairSnapshot = true, report = null) {
   if (repairSnapshot) ensureLedger(paths);
   else validateLedgerPaths(paths);
   try {
@@ -485,6 +546,11 @@ function readSnapshotLocked(paths, repairSnapshot = true) {
     const tail = [];
     let journalBudget = { tasks: {} };
     let anchoredBudget = journalBudget.tasks;
+    // M12/T9 F-063: the fork map is computed from the journal itself, so a
+    // forked pair is recognised before the chain check refuses it.
+    const { bySequence, survivors } = resolveForkSurvivors(events, snapshot);
+    const discardedBranches = [];
+    if (report) report.discardedBranches = discardedBranches;
     // Option (b) migration 2026-09-29: anchored trust is a property of a
     // ledger that HAS recorded, operator-accepted history, so it requires a
     // recorded head. A ledger with no head (sequence 0, the state of a freshly
@@ -533,6 +599,31 @@ function readSnapshotLocked(paths, repairSnapshot = true) {
     for (const event of events) {
       validateContract("ledger-event", event);
       const { event_digest, ...unsigned } = event;
+      const forkCandidates = bySequence.get(event.sequence) ?? [];
+      if (forkCandidates.length > 1) {
+        const survivor = survivors.get(event.sequence);
+        if (event !== survivor) {
+          if (survivor && survivor.event_digest === event_digest) {
+            // The same event twice is corruption, not a fork: the fail-stop
+            // shape stays.
+            throw new Error("event chain mismatch");
+          }
+          if (
+            canonicalHash("zink-ledger-event-v1", unsigned) !== event_digest
+          ) {
+            throw new Error("event chain mismatch");
+          }
+          // M12/T9 F-063: the branch the journal did not continue on. It is
+          // reported, never replayed.
+          discardedBranches.push({
+            sequence: event.sequence,
+            event_digest,
+            type: event.type,
+            created_at: event.created_at,
+          });
+          continue;
+        }
+      }
       if (
         event.schema_version !== SCHEMA_VERSION ||
         !supportedVersions.has(event.governance_version) ||
@@ -588,6 +679,17 @@ function readSnapshotLocked(paths, repairSnapshot = true) {
       )
         throw new Error("snapshot anchor mismatch");
       if (event.sequence > snapshot.sequence) tail.push(event);
+    }
+    if (discardedBranches.length > 0) {
+      // The discarded branch is REPORTED, never silently swallowed: the
+      // sequence numbers are a measurement, the event content is untrusted
+      // ledger data and is deliberately not logged.
+      console.error(
+        "[zink-ledger] forked branch discarded:",
+        `LEDGER_FORK_DISCARDED count=${discardedBranches.length} sequences=${[
+          ...new Set(discardedBranches.map((branch) => branch.sequence)),
+        ].join(",")}`,
+      );
     }
     if (
       snapshot.sequence > lastSequence ||
