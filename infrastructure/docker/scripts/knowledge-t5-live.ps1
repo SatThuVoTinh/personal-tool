@@ -510,9 +510,27 @@ catch {
 finally {
   $evidence.finished_at = [DateTime]::UtcNow.ToString("o")
   $finalizationError = $null
-  try { Write-T5Evidence "live" $runId $evidence | Out-Null } catch { $finalizationError = $_.Exception }
+  # F-268 (R7-D13-05): the restore container is removed BEFORE the evidence is
+  # written, because a removal that fails has to be visible in the recorded
+  # result. The run used to swallow the removal's exit code and print its
+  # success line with the container still on the host. The container also
+  # carries the sweeper's third label now, so a leaked container is selected
+  # by the same filter set as every other temporary resource.
   try {
-    if ($script:restoreContainerStarted) { & docker rm -f $restoreContainer 2>$null | Out-Null }
+    if ($script:restoreContainerStarted) {
+      & docker rm -f $restoreContainer 2>$null | Out-Null
+      if ($LASTEXITCODE -ne 0) {
+        $evidence.result = "FAIL"
+        $evidence.error_code = "ACCEPTANCE_CONTAINER_LEAK"
+        throw "The disposable recovery container could not be removed: $restoreContainer"
+      }
+    }
+  }
+  catch {
+    if ($null -eq $finalizationError) { $finalizationError = $_.Exception }
+  }
+  try { Write-T5Evidence "live" $runId $evidence | Out-Null } catch { if ($null -eq $finalizationError) { $finalizationError = $_.Exception } }
+  try {
     if ($evidence.result -ne "PASS" -and $script:knowledgeStarted) {
       $previous = $ErrorActionPreference; $ErrorActionPreference = "Continue"
       try { Invoke-LiveCompose @("stop", "knowledge") | Out-Null } finally { $ErrorActionPreference = $previous }
