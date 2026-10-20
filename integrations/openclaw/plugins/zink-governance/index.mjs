@@ -131,6 +131,8 @@ import {
   MISSING_MENTION_REFUSAL,
   DISCORD_BOT_IDS,
   AGENT_IDS,
+  normalizeAuthorityAction,
+  resolveLedgerDecision,
 } from "../../lib/authority.mjs";
 
 import {
@@ -2171,18 +2173,11 @@ export function handleDiscordAction({
   }
 
   // 3. Normalize action and validate 5-tuple authority
-  const normAction = action
-    ? typeof action === "string" && action.toUpperCase().trim() === "REJECT"
-      ? normalizeChannel(channel) === CHANNELS.RESULTS
-        ? ACTIONS.REJECT_RESULT
-        : ACTIONS.REJECT_APPROVAL
-      : typeof action === "string" &&
-          action.toUpperCase().trim() === "REQUEST_REVISION"
-        ? normalizeChannel(channel) === CHANNELS.RESULTS
-          ? ACTIONS.REQUEST_REVISION_RESULT
-          : ACTIONS.REQUEST_REVISION_APPROVAL
-        : action
-    : action;
+  // F-085: the ONE reviewed mapping between the authority vocabulary and the
+  // ledger decision vocabulary. The plugin does not carry its own ternary:
+  // "is this REJECT an approval or a result verdict?" is answered in one
+  // place, so the plugin and the authority gate cannot disagree.
+  const normAction = normalizeAuthorityAction(action, channel);
 
   const auth = validateActionAuthority({
     actor,
@@ -2300,11 +2295,11 @@ export function handleDiscordAction({
           actor: normalizeActor(actor),
           channel: normalizeChannel(channel),
           decision:
-            normAction === ACTIONS.APPROVE
-              ? "APPROVE"
-              : normAction === ACTIONS.REJECT_APPROVAL
-                ? "REJECT"
-                : "REQUEST_REVISION",
+    // F-085: the ONE reviewed mapping from the authority action to the
+    // ledger decision vocabulary. The plugin does not carry its own
+    // ternary: the ledger's `decision` value and the authority gate's
+    // verdict come from one mapping, so they cannot disagree.
+    resolveLedgerDecision(normAction) ?? normAction,
           message_id: data.messageId ?? data.origin_message_id ?? null,
           thread_id: data.threadId ?? null,
           scope_digest: authoritativePlanDigest,
@@ -6739,11 +6734,11 @@ export default {
         transitionApprovalTag({
           taskId,
           decision:
-            normAction === ACTIONS.APPROVE
-              ? "APPROVE"
-              : normAction === ACTIONS.REJECT_APPROVAL
-                ? "REJECT"
-                : "REQUEST_REVISION",
+    // F-085: the ONE reviewed mapping from the authority action to the
+    // ledger decision vocabulary. The plugin does not carry its own
+    // ternary: the ledger's `decision` value and the authority gate's
+    // verdict come from one mapping, so they cannot disagree.
+    resolveLedgerDecision(normAction) ?? normAction,
         }).catch((tagErr) => {
           api.logger?.warn?.(
             `[zink-governance] approval tag not transitioned for task ${taskId}: ${tagErr?.message}`,
