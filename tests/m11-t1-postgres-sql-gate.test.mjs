@@ -11,7 +11,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
@@ -23,8 +23,86 @@ const REPO_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
 );
+const MIGRATIONS_DIR = path.join(REPO_ROOT, "apps", "knowledge", "migrations");
 const CONTAINER = process.env.POSTGRES_CONTAINER || "personal-tool-postgres-1";
 const EXPECTED_DIMENSIONS = 1024;
+// The migration that creates the `skills` schema the gate's statements read.
+// It needs the pgvector extension, so a container without pgvector skips the
+// lane; every OTHER tracked migration failing is a real defect and must be
+// red, not a skip.
+const VECTOR_SCHEMA_MIGRATION = "003_skills_vector_schema.sql";
+
+/**
+ * Every tracked migration, in the order the runtime applies them.
+ *
+ * The gate used to apply the vector-schema migration alone, so
+ * `001_initial.sql` and `002_pdf_ingestion_foundation.sql` never executed
+ * against a real PostgreSQL in any lane and their defects stayed
+ * undetectable. The set is read from the tracked directory, so a migration
+ * added later is picked up instead of silently skipped.
+ */
+function trackedMigrations() {
+  return readdirSync(MIGRATIONS_DIR)
+    .filter((name) => name.endsWith(".sql"))
+    .sort()
+    .map((name) => ({ name, path: path.join(MIGRATIONS_DIR, name) }));
+}
+
+/**
+ * Apply every tracked migration, in order, to the scratch database and report
+ * the set that was applied.
+ *
+ * The runtime creates the `knowledge` schema before it applies the migrations
+ * (apps/knowledge/app/database.py), so the gate does the same; the migrations
+ * themselves only create objects INSIDE that schema.
+ */
+function applyTrackedMigrations(dbName) {
+  const bootstrap = dockerExec([
+    "psql",
+    "-U",
+    "postgres",
+    "-d",
+    dbName,
+    "--set=ON_ERROR_STOP=1",
+    "-t",
+    "-A",
+    "-c",
+    "CREATE SCHEMA IF NOT EXISTS knowledge;",
+  ]);
+  if (bootstrap.status !== 0) {
+    throw new Error(
+      `could not create the knowledge schema: ${(bootstrap.stderr || bootstrap.stdout || "").slice(0, 400)}`,
+    );
+  }
+  const applied = [];
+  for (const migration of trackedMigrations()) {
+    const sql = readFileSync(migration.path, "utf8");
+    const res = dockerExec(
+      [
+        "psql",
+        "-U",
+        "postgres",
+        "-d",
+        dbName,
+        "--set=ON_ERROR_STOP=1",
+        "-t",
+        "-A",
+        "-f",
+        "-",
+      ],
+      sql,
+    );
+    if (res.status !== 0) {
+      const failure = new Error(
+        `tracked migration ${migration.name} did not apply: ${(res.stderr || res.stdout || "").slice(0, 400)}`,
+      );
+      failure.migration = migration.name;
+      throw failure;
+    }
+    applied.push(migration.name);
+  }
+  return applied;
+}
 
 function dockerExec(args, input) {
   const res = spawnSync("docker", ["exec", "-i", CONTAINER, ...args], {
@@ -104,34 +182,29 @@ test("M11-06: generated statements execute against real PostgreSQL (scratch DB)"
   }
 
   try {
-    const migration = readFileSync(
-      path.join(
-        REPO_ROOT,
-        "apps/knowledge/migrations/003_skills_vector_schema.sql",
-      ),
-      "utf8",
-    );
-    const apply = dockerExec(
-      [
-        "psql",
-        "-U",
-        "postgres",
-        "-d",
-        dbName,
-        "--set=ON_ERROR_STOP=1",
-        "-t",
-        "-A",
-        "-f",
-        "-",
-      ],
-      migration,
-    );
-    if (apply.status !== 0) {
-      t.skip(
-        `pgvector/migration unavailable in container: ${apply.stderr?.slice(0, 300)}`,
-      );
-      return;
+    // Every tracked migration, in order. The gate used to apply the
+    // vector-schema migration alone, so the other two never executed against
+    // a real PostgreSQL in any lane.
+    let appliedMigrations;
+    try {
+      appliedMigrations = applyTrackedMigrations(dbName);
+    } catch (error) {
+      if (error?.migration === VECTOR_SCHEMA_MIGRATION) {
+        t.skip(
+          `pgvector/migration unavailable in container: ${String(error?.message ?? error).slice(0, 300)}`,
+        );
+        return;
+      }
+      throw error;
     }
+    t.diagnostic(
+      `tracked migrations applied: ${appliedMigrations.join(", ") || "(none)"}`,
+    );
+    assert.deepEqual(
+      appliedMigrations,
+      trackedMigrations().map((migration) => migration.name),
+      "the gate must apply EVERY tracked migration, in order",
+    );
 
     const runSql = (sql) => {
       const res = dockerExec(
@@ -295,34 +368,27 @@ test("R3-12: the failure statement runs on real PostgreSQL and clears the segmen
       return (res.stdout || "").trim();
     };
 
-    const migration = readFileSync(
-      path.join(
-        REPO_ROOT,
-        "apps/knowledge/migrations/003_skills_vector_schema.sql",
-      ),
-      "utf8",
-    );
-    const applied = dockerExec(
-      [
-        "psql",
-        "-U",
-        "postgres",
-        "-d",
-        dbName,
-        "--set=ON_ERROR_STOP=1",
-        "-t",
-        "-A",
-        "-f",
-        "-",
-      ],
-      migration,
-    );
-    if (applied.status !== 0) {
-      t.skip(
-        `pgvector/migration unavailable in container: ${applied.stderr?.slice(0, 300)}`,
-      );
-      return;
+    // Every tracked migration, in order (see the M11-06 case above).
+    let appliedMigrations;
+    try {
+      appliedMigrations = applyTrackedMigrations(dbName);
+    } catch (error) {
+      if (error?.migration === VECTOR_SCHEMA_MIGRATION) {
+        t.skip(
+          `pgvector/migration unavailable in container: ${String(error?.message ?? error).slice(0, 300)}`,
+        );
+        return;
+      }
+      throw error;
     }
+    t.diagnostic(
+      `tracked migrations applied: ${appliedMigrations.join(", ") || "(none)"}`,
+    );
+    assert.deepEqual(
+      appliedMigrations,
+      trackedMigrations().map((migration) => migration.name),
+      "the gate must apply EVERY tracked migration, in order",
+    );
 
     const root = await mkdtemp(path.join(os.tmpdir(), "m12-r3-12-"));
     try {
