@@ -1538,6 +1538,18 @@ export function governancePluginFiles() {
     path.join(topology, "policy", "reason-code-matrix.json"),
     "utf8",
   );
+  // M12/T9 F-228: the published workflow policy travels with the build.
+  //
+  // `topology/lib/ledger.mjs` reads it RELATIVELY
+  // (`new URL("../policy/workflow-policy.json", import.meta.url)`), so from the
+  // packaged `lib/ledger.mjs` the file has to sit at `<plugin>/policy/`.
+  // Without this asset the packaged plugin dies at import with ENOENT, and
+  // every governed value the policy publishes would stay a duplicate literal
+  // in the code instead of being read from the one published file.
+  assets["policy/workflow-policy.json"] = readFileSync(
+    path.join(topology, "policy", "workflow-policy.json"),
+    "utf8",
+  );
   assets["governance-manifests.json"] = stableJson(
     Object.fromEntries(
       AGENT_IDS.map((agentId) => [
