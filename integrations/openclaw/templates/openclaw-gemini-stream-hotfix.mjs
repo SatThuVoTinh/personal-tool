@@ -257,6 +257,36 @@ function resolveRuntime() {
   });
 }
 
+/**
+ * F-296: fsync the PARENT DIRECTORY after a rename.
+ *
+ * A rename is only durable once the directory entry that carries it is
+ * flushed, and the file's own fsync does not do that. The other writers in
+ * this repository (topology/lib/ledger.mjs, lib/queue-manager.mjs,
+ * lib/decision-ledger.mjs, lib/artifact-validator.mjs,
+ * topology/lib/native-patch.mjs, topology/lib/runtime-backup.mjs) all fsync
+ * the parent directory for exactly this reason; this template published the
+ * renamed file without it, so a crash right after the rename could lose the
+ * replacement.
+ *
+ * Windows cannot fsync a directory handle, so the platform error is tolerated
+ * there and only there, exactly as the sibling writers do.
+ */
+function syncDirectory(directory) {
+  let descriptor;
+  try {
+    descriptor = openSync(directory, "r");
+    fsyncSync(descriptor);
+  } catch (error) {
+    if (
+      process.platform !== "win32" ||
+      !["EPERM", "EISDIR", "EINVAL", "ENOTSUP"].includes(error.code)
+    )
+      throw error;
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
+}
 function writeAtomically(filePath, contents, fileMode) {
   const temporaryPath = `${filePath}.zink-hotfix-${process.pid}.tmp`;
   let descriptor;
@@ -268,6 +298,7 @@ function writeAtomically(filePath, contents, fileMode) {
     descriptor = undefined;
     chmodSync(temporaryPath, fileMode);
     renameSync(temporaryPath, filePath);
+    syncDirectory(path.dirname(filePath));
   } catch (error) {
     if (descriptor !== undefined) {
       try {
