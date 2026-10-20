@@ -437,13 +437,23 @@ describe("Lane G — policy & lifecycle contract reconciliation", () => {
       NATIVE_RUNTIME_PINS,
       NATIVE_SUPPORTED_RUNTIME_VERSIONS,
     } = await import("../integrations/openclaw/topology/lib/native-patch.mjs");
+    const { GOVERNANCE_VERSION } = await import(
+      "../integrations/openclaw/topology/lib/canonical.mjs",
+    );
     // The manifest must be declared in exactly ONE place. The defect was two
     // declarations with divergent fields, so a second literal is the regression.
     const moduleSource = readFileSync(
       path.join(REPO, "integrations/openclaw/topology/lib/native-patch.mjs"),
       "utf8",
     );
-    const manifestLiterals = moduleSource.match(/version: "m7-t2-r12"/gu);
+    // M12/T9 F-185: the manifest's version is no longer a frozen literal - it
+    // is stamped from the one authoritative governance-revision source
+    // (`GOVERNANCE_VERSION` in `topology/lib/canonical.mjs`), so the literal
+    // this test used to pin is gone. The claim the test exists to make is
+    // UNCHANGED: the manifest must be declared exactly once, in the shared
+    // builder. It is now pinned against the authoritative constant, so a
+    // SECOND declaration of the version is still the regression it catches.
+    const manifestLiterals = moduleSource.match(/version: GOVERNANCE_VERSION/gu);
     assert.equal(
       manifestLiterals.length,
       1,
@@ -482,7 +492,7 @@ describe("Lane G — policy & lifecycle contract reconciliation", () => {
         const manifest = nativeBackupManifest(root);
         assert.equal(
           manifest.version,
-          "m7-t2-r12",
+          GOVERNANCE_VERSION,
           `${version}: manifest version`,
         );
         assert.equal(
