@@ -420,6 +420,10 @@ try {
   if (-not $ConfirmPersistentIndex) { throw "ConfirmPersistentIndex is required." }
   if (-not (Test-Path -LiteralPath $EnvironmentFile -PathType Leaf)) { throw "Runtime environment file is missing." }
   Assert-T5CleanRepository
+  # F-292 (R7-C4-05): the live run mutates the operational tree, so the tree
+  # it packages is the script's own and it is recorded in the evidence.
+  $null = Assert-T5RepositoryIdentity
+  $evidence.repository_root = $script:T5RepositoryRoot
   $canonicalVault = Get-T5CanonicalVaultRoot $VaultRoot
   Assert-T5ExpectedSourcePath $canonicalVault $ExpectedSourcePath | Out-Null
   $filters = Get-T5SearchFilters $canonicalVault $ExpectedSourcePath

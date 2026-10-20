@@ -126,7 +126,10 @@ ORDER BY 1;
 try {
   if (-not (Test-Path -LiteralPath $EnvironmentFile -PathType Leaf)) { throw "Runtime environment file is missing: $EnvironmentFile" }
   Assert-T5CleanRepository
-  $candidateSha = Get-T5RepositorySha
+  # F-292 (R7-C4-05): the candidate describes the tree this script packages,
+  # so the revision is read from that tree and the tree itself is recorded.
+  $candidateSha = Assert-T5RepositoryIdentity
+  $evidence.repository_root = $script:T5RepositoryRoot
   $env:KNOWLEDGE_IMAGE_REVISION = $candidateSha
   if ($Mode -eq "Fixture") {
     $fixtureCopyRoot = Join-Path ([IO.Path]::GetTempPath()) "personal-tool-m4-t5-fixture-$runId"

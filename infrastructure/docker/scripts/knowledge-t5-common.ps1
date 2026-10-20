@@ -71,26 +71,67 @@ namespace PersonalTool {
 '@
 }
 
+# F-292 (R7-C4-05): every repository probe names the directory it reads.
+# The script's own tree is the tree the driver packages, so its revision is
+# read from that tree and not from whichever repository the invocation
+# directory happens to be inside.
 function Assert-T5CleanRepository {
-  $changes = @(git status --porcelain)
+  $changes = @(git -C $script:T5RepositoryRoot status --porcelain)
   if ($LASTEXITCODE -ne 0 -or $changes.Count -ne 0) {
     throw "M3/T5 acceptance requires a clean working tree."
   }
 }
 
 function Get-T5RepositorySha {
-  $sha = (git rev-parse HEAD).Trim()
+  $sha = (git -C $script:T5RepositoryRoot rev-parse HEAD).Trim()
   if ($LASTEXITCODE -ne 0 -or $sha -notmatch '^[0-9a-f]{40}$') {
     throw "Unable to resolve the current repository SHA."
   }
   return $sha
 }
 
+function ConvertTo-T5ComparablePath {
+  param([string]$Path)
+
+  if (-not $Path) { return "" }
+  return $Path.Replace("\", "/").TrimEnd("/")
+}
+
+# The decision that turns a foreign tree into a failure, separated from the
+# probes so it can be exercised on its own: the script's own tree at the same
+# revision is accepted, and anything else names both revisions.
+function New-T5RepositoryIdentityError {
+  param([string]$ScriptRoot, [string]$ScriptSha, [string]$InvocationRoot, [string]$InvocationSha)
+
+  if (-not $InvocationRoot) { return $null }
+  $sameRoot = (ConvertTo-T5ComparablePath $InvocationRoot) -ieq (ConvertTo-T5ComparablePath $ScriptRoot)
+  if ($sameRoot -and $ScriptSha -ceq $InvocationSha) { return $null }
+  return "Acceptance must run from the script's own working tree. The script tree '$ScriptRoot' is at revision $ScriptSha; the invocation tree '$InvocationRoot' is at revision $InvocationSha."
+}
+
+function Assert-T5RepositoryIdentity {
+  $scriptSha = Get-T5RepositorySha
+  $invocationDirectory = (Get-Location).Path
+  $invocationRoot = $null
+  $invocationSha = $null
+  $rootOutput = & git -C $invocationDirectory rev-parse --show-toplevel 2>$null
+  if ($LASTEXITCODE -eq 0 -and $rootOutput) {
+    $invocationRoot = (@($rootOutput) | Select-Object -First 1).ToString().Trim()
+    $shaOutput = & git -C $invocationDirectory rev-parse HEAD 2>$null
+    if ($LASTEXITCODE -eq 0 -and $shaOutput) {
+      $invocationSha = (@($shaOutput) | Select-Object -First 1).ToString().Trim()
+    }
+  }
+  $identityError = New-T5RepositoryIdentityError -ScriptRoot $script:T5RepositoryRoot -ScriptSha $scriptSha -InvocationRoot $invocationRoot -InvocationSha $invocationSha
+  if ($identityError) { throw $identityError }
+  return $scriptSha
+}
+
 function Get-T5CandidatePathManifest {
   param([string]$Treeish = "HEAD")
 
   if ($Treeish -notmatch '^(HEAD|[0-9a-f]{40,64}|[A-Za-z0-9_.]+/[A-Za-z0-9_.-]+)$') { throw "Candidate Git tree identity is invalid." }
-  [string[]]$paths = @(git ls-tree -r --name-only $Treeish |
+  [string[]]$paths = @(git -C $script:T5RepositoryRoot ls-tree -r --name-only $Treeish |
     ForEach-Object { $_.Replace("\", "/") } |
     Where-Object { Test-T5CandidateAffectingPath $_ })
   [Array]::Sort($paths, [PersonalTool.T5Utf8ByteComparer]::new())
@@ -102,7 +143,7 @@ function Get-T5CandidatePathManifest {
   $manifestBytes = [Collections.Generic.List[byte]]::new()
   $entries = foreach ($relativePath in $paths) {
     if ($relativePath.Contains("\")) { throw "Candidate path is not POSIX-normalized: $relativePath" }
-    $oid = (& git rev-parse "${Treeish}:$relativePath").Trim()
+    $oid = (& git -C $script:T5RepositoryRoot rev-parse "${Treeish}:$relativePath").Trim()
     if ($LASTEXITCODE -ne 0 -or $oid -notmatch '^[0-9a-f]{40,64}$') {
       throw "Unable to resolve candidate Git blob OID: $relativePath"
     }
@@ -353,7 +394,7 @@ function Get-T5Candidate {
   param([string]$ModelName = "bge-m3:latest")
 
   Assert-T5CleanRepository
-  $repositorySha = Get-T5RepositorySha
+  $repositorySha = Assert-T5RepositoryIdentity
   $image = Get-T5ImageIdentity
   if ($image.revision -ne $repositorySha) {
     throw "Knowledge image provenance does not match the clean repository HEAD."
