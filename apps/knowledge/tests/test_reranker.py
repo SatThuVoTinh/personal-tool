@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import numpy as np
 
@@ -87,6 +90,97 @@ def _reranker(session: _Session) -> OnnxReranker:
     reranker._input_names = tuple(item.name for item in session.get_inputs())
     reranker._executor = ThreadPoolExecutor(max_workers=1)
     return reranker
+
+
+class RerankerConstructorTests(unittest.TestCase):
+    """F-312 (R7-E2-02): the constructor was executed by no test.
+
+    Every other case builds the object around its constructor, so the
+    manifest load, the contract check, the ARTIFACT DIGEST verification and
+    the session construction ordering were never run, and the negative
+    cases asserted only the shared exception type. These cases drive the
+    real constructor against a real artifact directory and each one asserts
+    its own failure code.
+    """
+
+    def _artifacts(self, root: Path) -> tuple[Path, Path]:
+        model = root / "model.int8.onnx"
+        model.write_bytes(b"not-a-real-onnx-graph")
+        tokenizer = root / "tokenizer.json"
+        tokenizer.write_bytes(b"{}")
+        digests = {
+            "model.int8.onnx": hashlib.sha256(model.read_bytes()).hexdigest(),
+            "tokenizer.json": hashlib.sha256(tokenizer.read_bytes()).hexdigest(),
+        }
+        manifest = {
+            "model_name": RERANKER_MODEL_NAME,
+            "revision": RERANKER_REVISION,
+            "source_model_sha256": SOURCE_MODEL_SHA256,
+            "tokenizer_sha256": ARTIFACT_SHA256_EXPECTED,
+            "files": digests,
+            "runtime_files": dict(digests),
+            "inputs": [],
+            "outputs": [],
+            "graph_contract": {},
+        }
+        manifest_path = root / "manifest.json"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        return model, manifest_path
+
+    def _construct(self, model: Path, manifest_path: Path) -> str:
+        try:
+            OnnxReranker(model, manifest_path, _Budget())
+        except RerankerUnavailableError as error:
+            code = str(error)
+            if code == "ONNX_RUNTIME_UNAVAILABLE":
+                self.skipTest("the ONNX runtime is not installed in this environment")
+            return code
+        self.fail("the fixture is not a real ONNX graph, so the session cannot open")
+
+    def test_the_constructor_passes_every_verification_step(self) -> None:
+        with TemporaryDirectory() as directory:
+            model, manifest_path = self._artifacts(Path(directory))
+
+            code = self._construct(model, manifest_path)
+
+            # The manifest, the provenance contract and the artifact digests
+            # all passed; the fixture is not a real ONNX graph, so the session
+            # is what fails.
+            self.assertEqual(code, "RERANKER_UNAVAILABLE")
+
+    def test_a_tampered_artifact_is_refused_with_its_own_code(self) -> None:
+        with TemporaryDirectory() as directory:
+            model, manifest_path = self._artifacts(Path(directory))
+            model.write_bytes(b"tampered")
+
+            self.assertEqual(self._construct(model, manifest_path), "RERANKER_ARTIFACT_MISMATCH")
+
+    def test_a_missing_artifact_is_refused_with_its_own_code(self) -> None:
+        with TemporaryDirectory() as directory:
+            model, manifest_path = self._artifacts(Path(directory))
+            model.unlink()
+
+            self.assertEqual(self._construct(model, manifest_path), "RERANKER_ARTIFACT_MISSING")
+
+    def test_a_wrong_provenance_is_refused_with_its_own_code(self) -> None:
+        with TemporaryDirectory() as directory:
+            model, manifest_path = self._artifacts(Path(directory))
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["revision"] = "main"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            self.assertEqual(
+                self._construct(model, manifest_path), "RERANKER_PROVENANCE_MISMATCH"
+            )
+
+    def test_a_malformed_manifest_is_refused_with_its_own_code(self) -> None:
+        with TemporaryDirectory() as directory:
+            model, manifest_path = self._artifacts(Path(directory))
+            manifest_path.write_text("{not json", encoding="utf-8")
+
+            self.assertEqual(
+                self._construct(model, manifest_path), "RERANKER_MANIFEST_INVALID"
+            )
 
 
 class RerankerTests(unittest.IsolatedAsyncioTestCase):
