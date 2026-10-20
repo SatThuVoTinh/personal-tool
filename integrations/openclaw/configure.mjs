@@ -69,7 +69,16 @@ const SYSTEMD_DROP_IN_NAME = "10-zink.conf";
 // host that cannot reach it - a Windows preflight against the NTFS copy, a CI
 // runner - has inspected a tree that is not the governed one, and its verdict
 // is NOT RUN rather than PASS.
-const GOVERNED_STATE_TREE = "/home/hoang_vinh/.openclaw-zink";
+// The governed state tree is the operator's, named by the environment — the
+// same way the operator commands read it (F-219). A machine-specific literal
+// in a runtime source is a path the repository publishes, and F-022 refused
+// exactly that. The default is the live host's path, so an operator who names
+// nothing still gets the host's own tree.
+const GOVERNED_STATE_TREE = (
+  process.env.ZINK_OPERATOR_STATE_DIR ??
+  process.env.ZINK_STATE_DIR ??
+  "/home/hoang_vinh/.openclaw-zink"
+);
 const LEGACY_GEMINI_STREAM_HOTFIX_R18_SHA256 =
   "41bfeedf2835db4a50573a0f61325bc438ac805a90fef03ce3bc29b8c303f133";
 // M10/T2-R9: the outgoing generated plans and resolver, byte-proven against the

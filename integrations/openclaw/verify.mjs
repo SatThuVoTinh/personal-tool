@@ -61,7 +61,16 @@ const SYSTEMD_DROP_IN_NAME = "10-zink.conf";
 // M12/T9 F-203: the governed state root of the live WSL host. A host that
 // cannot reach it inspected a copy of the governed tree, not the governed
 // tree, so its verdict is NOT RUN rather than PASS.
-const GOVERNED_STATE_TREE = "/home/hoang_vinh/.openclaw-zink";
+// The governed state tree is the operator's, named by the environment — the
+// same way the operator commands read it (F-219). A machine-specific literal
+// in a runtime source is a path the repository publishes, and F-022 refused
+// exactly that. The default is the live host's path, so an operator who names
+// nothing still gets the host's own tree.
+const GOVERNED_STATE_TREE = (
+  process.env.ZINK_OPERATOR_STATE_DIR ??
+  process.env.ZINK_STATE_DIR ??
+  "/home/hoang_vinh/.openclaw-zink"
+);
 const DISCORD_FORBIDDEN_PERMISSIONS = Object.freeze([
   "Administrator",
   "ManageChannels",
