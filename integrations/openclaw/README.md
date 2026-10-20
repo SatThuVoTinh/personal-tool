@@ -114,15 +114,18 @@ node integrations/openclaw/configure.mjs --dry-run \
   --discord-results-forum-id "$ZINK_DISCORD_RESULTS_FORUM_ID" \
   --discord-approvals-forum-id "$ZINK_DISCORD_APPROVALS_FORUM_ID" \
   --discord-incidents-forum-id "$ZINK_DISCORD_INCIDENTS_FORUM_ID"
+```
 
-node integrations/openclaw/configure.mjs --apply \
-  --state-dir "$ZINK_STATE_DIR" \
-  --discord-guild-id "$ZINK_DISCORD_GUILD_ID" \
-  --discord-owner-id "$ZINK_DISCORD_OWNER_ID" \
-  --discord-office-channel-id "$ZINK_DISCORD_OFFICE_CHANNEL_ID" \
-  --discord-results-forum-id "$ZINK_DISCORD_RESULTS_FORUM_ID" \
-  --discord-approvals-forum-id "$ZINK_DISCORD_APPROVALS_FORUM_ID" \
-  --discord-incidents-forum-id "$ZINK_DISCORD_INCIDENTS_FORUM_ID"
+**The deploy path is the operator driver, not the builder.** A bare
+`configure.mjs --apply` is refused with `APPLY_REQUIRES_TRANSACTION`: the apply
+must name the transaction whose snapshot is the rollback target, so a spent or
+unrelated transaction cannot be replayed. The driver takes the transaction
+snapshot itself, runs the builder's `--preflight` first, and issues the
+`--apply` with `--apply-transaction <id>`:
+
+```bash
+node integrations/openclaw/topology/fixtures/runtime-regression/operator-apply.mjs \
+  "$ZINK_STATE_DIR"
 ```
 
 The builder creates only regular owner-private state/config files, seven exact
@@ -143,7 +146,7 @@ over the new file.
 
 ```bash
 systemctl --user stop openclaw-gateway-zink.service
-# Run the exact configure.mjs --apply command above.
+# Run the exact operator-apply.mjs command above.
 systemctl --user start openclaw-gateway-zink.service
 ```
 
