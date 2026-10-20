@@ -12,6 +12,7 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot "knowledge-t5-common.ps1")
+. (Join-Path $PSScriptRoot "acceptance-common.ps1")
 
 if (-not $EnvironmentFile) { $EnvironmentFile = Join-Path $PSScriptRoot "..\env\.env" }
 
@@ -277,21 +278,26 @@ catch {
 finally {
   $evidence.finished_at = [DateTime]::UtcNow.ToString("o")
   $prefix = if ($Mode -eq "Fixture") { "fixture" } else { "realvault" }
-  $finalizationError = $null
-  try { Write-T5Evidence $prefix $runId $evidence | Out-Null } catch { $finalizationError = $_.Exception }
-  try {
+  # F-291 (R7-C4-04): the shared finalisation contract runs the cleanup, records
+  # every condition it raises in the evidence, and names them in the output.
+  # The finalisation failure is raised after the body, so the body's own
+  # failure is never replaced by a teardown complaint, and a teardown failure
+  # on a run whose body already failed is still reported.
+  Invoke-AcceptanceFinalization -Label "M4/T5" -RunId $runId -Evidence $evidence -EvidenceWriter { Write-T5Evidence $prefix $runId $evidence | Out-Null } -Cleanup {
+    Remove-Item Env:KNOWLEDGE_T5_RUN_ID -ErrorAction SilentlyContinue
+    Remove-Item Env:KNOWLEDGE_ACCEPTANCE_VAULT_ROOT -ErrorAction SilentlyContinue
+    Remove-Item Env:KNOWLEDGE_IMAGE_REVISION -ErrorAction SilentlyContinue
+    if ($fixtureCopyRoot) { Remove-Item -LiteralPath $fixtureCopyRoot -Recurse -Force -ErrorAction SilentlyContinue }
     if ($started) {
       $previous = $ErrorActionPreference; $ErrorActionPreference = "Continue"
       try { Remove-T5TemporaryResources $runId } finally { $ErrorActionPreference = $previous }
     }
   }
-  catch {
-    if ($null -eq $finalizationError) { $finalizationError = $_.Exception }
-  }
-  Remove-Item Env:KNOWLEDGE_T5_RUN_ID -ErrorAction SilentlyContinue
-  Remove-Item Env:KNOWLEDGE_ACCEPTANCE_VAULT_ROOT -ErrorAction SilentlyContinue
-  Remove-Item Env:KNOWLEDGE_IMAGE_REVISION -ErrorAction SilentlyContinue
-  if ($fixtureCopyRoot) { Remove-Item -LiteralPath $fixtureCopyRoot -Recurse -Force -ErrorAction SilentlyContinue }
-  if ($null -ne $finalizationError -and -not $script:bodyFailed) { throw "M4/T5 evidence finalization or temporary-resource cleanup failed." }
+  $finalizationError = $evidence["finalization"].error
 }
+
+if ($null -ne $finalizationError -and -not $script:bodyFailed) {
+  throw "M4/T5 evidence finalization or temporary-resource cleanup failed: $finalizationError"
+}
+
 Write-Output "M4/T5 $Mode acceptance passed."

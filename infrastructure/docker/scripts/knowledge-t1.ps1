@@ -5,6 +5,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot "acceptance-common.ps1")
 
 # F-290 (R7-C4-03): everything a run owns is derived from a per-run
 # identifier: the compose project (and with it the network, the volumes and
@@ -16,9 +17,12 @@ $projectName = "personal-tool-m3-t1-$runId"
 $scriptDirectory = Split-Path -Parent $PSCommandPath
 $dockerDirectory = Split-Path -Parent $scriptDirectory
 $composeFile = Join-Path $dockerDirectory "compose\compose.core.yml"
-$indexId = "11111111-1111-1111-1111-111111111111"
-$interruptedIndexId = "22222222-2222-2222-2222-222222222222"
-$interruptedRunId = "33333333-3333-3333-3333-333333333333"
+$acceptanceComposeFile = Join-Path $dockerDirectory "compose\compose.m3-t1.acceptance.yml"
+$indexId = New-AcceptanceFixtureUuid "$runId-active-index"
+$interruptedIndexId = New-AcceptanceFixtureUuid "$runId-interrupted-index"
+$interruptedRunId = New-AcceptanceFixtureUuid "$runId-interrupted-run"
+$duplicateIndexId = New-AcceptanceFixtureUuid "$runId-duplicate-index"
+$script:nginxPort = 0
 
 function Invoke-Compose {
   param([string[]]$Arguments)
@@ -27,6 +31,7 @@ function Invoke-Compose {
     --project-name $projectName `
     --env-file $EnvironmentFile `
     -f $composeFile `
+    -f $acceptanceComposeFile `
     @Arguments
 
   if ($LASTEXITCODE -ne 0) {
@@ -79,6 +84,7 @@ function Assert-SqlFailure {
       --project-name $projectName `
       --env-file $EnvironmentFile `
       -f $composeFile `
+      -f $acceptanceComposeFile `
       exec -T postgres psql --username=postgres --dbname=postgres --set=ON_ERROR_STOP=1 --set=model_digest=$ModelDigest --command $Command `
       2>&1 |
       Out-String
@@ -98,7 +104,7 @@ function Assert-SqlFailure {
   # database rejected this statement", and only the second one exercises the
   # one-ACTIVE-index invariant.
   if ($exitCode -ne 3) {
-    throw "Expected a database constraint violation (psql exit 3) but the client exited $exitCode: $output"
+    throw "Expected a database constraint violation (psql exit 3) but the client exited ${exitCode}: $output"
   }
   if (-not $output -or $output -notmatch [regex]::Escape($ExpectedSignature)) {
     throw "The statement failed for an unrelated reason; '$ExpectedSignature' was not reported: $output"
@@ -110,6 +116,18 @@ if (-not (Test-Path -LiteralPath $EnvironmentFile -PathType Leaf)) {
 }
 
 $started = $false
+$script:bodyFailed = $false
+$finalizationError = $null
+# F-291 (R7-C4-04): the run's evidence carries the finalisation record, so a
+# cleanup failure is never dropped and never replaces the body's own failure.
+$evidence = [ordered]@{
+  schema_version = 1
+  mode = "Acceptance"
+  result = "FAIL"
+  acceptance_run_id = $runId
+  compose_project = $projectName
+  started_at = [DateTime]::UtcNow.ToString("o")
+}
 
 try {
   Invoke-Compose @("build", "knowledge")
@@ -124,12 +142,18 @@ try {
     "nginx"
   )
 
-  $health = Get-HttpResponse "http://127.0.0.1:8080/knowledge/healthz"
+  $nginxAddress = (Invoke-Compose @("port", "nginx", "8080") | Select-Object -Last 1).Trim()
+  if ($nginxAddress -notmatch '^127\.0\.0\.1:(?<port>\d+)$') {
+    throw "Acceptance Nginx did not receive a loopback port."
+  }
+  $script:nginxPort = [int]$Matches.port
+
+  $health = Get-HttpResponse "http://127.0.0.1:$script:nginxPort/knowledge/healthz"
   if ($health.StatusCode -ne 200) {
     throw "Knowledge liveness endpoint did not return HTTP 200 through Nginx."
   }
 
-  $withoutIndex = Get-HttpResponse "http://127.0.0.1:8080/knowledge/readyz"
+  $withoutIndex = Get-HttpResponse "http://127.0.0.1:$script:nginxPort/knowledge/readyz"
   if ($withoutIndex.StatusCode -ne 503 -or $withoutIndex.Body -notmatch 'NO_ACTIVE_INDEX') {
     throw "Knowledge readiness did not reject the missing active index."
   }
@@ -197,7 +221,7 @@ INSERT INTO knowledge.indexes (
   embedding_dimensions,
   activated_at
 ) VALUES (
-  '44444444-4444-4444-4444-444444444444',
+  '$duplicateIndexId',
   'ACTIVE',
   'bge-m3:latest',
   :'model_digest',
@@ -207,7 +231,7 @@ INSERT INTO knowledge.indexes (
 "@
   Assert-SqlFailure -Command $duplicateActiveIndex -ExpectedSignature "knowledge_indexes_one_active_idx" -ModelDigest $model.digest
 
-  $ready = Get-HttpResponse "http://127.0.0.1:8080/knowledge/readyz"
+  $ready = Get-HttpResponse "http://127.0.0.1:$script:nginxPort/knowledge/readyz"
   if ($ready.StatusCode -ne 200 -or $ready.Body -notmatch '"status":"ready"') {
     throw "Knowledge readiness did not accept the matching resolved model digest."
   }
@@ -224,7 +248,7 @@ INSERT INTO knowledge.indexes (
     "UPDATE knowledge.indexes SET embedding_model_digest = repeat('0', 64) WHERE id = '$indexId';"
   )
 
-  $drift = Get-HttpResponse "http://127.0.0.1:8080/knowledge/readyz"
+  $drift = Get-HttpResponse "http://127.0.0.1:$script:nginxPort/knowledge/readyz"
   if ($drift.StatusCode -ne 503 -or $drift.Body -notmatch 'EMBEDDING_MODEL_DRIFT') {
     throw "Knowledge readiness did not reject embedding-model digest drift."
   }
@@ -265,35 +289,51 @@ VALUES ('$interruptedRunId', '$interruptedIndexId', 'FULL_REBUILD', 'RUNNING');
     --project-name $projectName `
     --env-file $EnvironmentFile `
     -f $composeFile `
+    -f $acceptanceComposeFile `
     exec -T postgres psql --username=postgres --dbname=postgres --tuples-only --no-align `
     --command "SELECT status || ':' || failure_code FROM knowledge.index_runs WHERE id = '$interruptedRunId';"
   if ($LASTEXITCODE -ne 0 -or (($interruptedStatus -join "").Trim() -ne "INTERRUPTED:PROCESS_RESTART")) {
     throw "Knowledge startup did not mark an orphan run as INTERRUPTED."
   }
 
-  Write-Output "M3/T1 Knowledge service validation passed."
+  $evidence.result = "PASS"
+}
+catch {
+  $script:bodyFailed = $true
+  $evidence.error = $_.Exception.Message
+  throw
 }
 finally {
-  if ($started) {
-    $previousErrorActionPreference = $ErrorActionPreference
-    $ErrorActionPreference = "Continue"
+  Invoke-AcceptanceFinalization -Label "M3/T1" -RunId $runId -Evidence $evidence -EvidenceName "acceptance-M3-T1-$runId.json" -Cleanup {
+    if ($started) {
+      $previousErrorActionPreference = $ErrorActionPreference
+      $ErrorActionPreference = "Continue"
 
-    try {
-      & docker compose `
-        --project-name $projectName `
-        --env-file $EnvironmentFile `
-        -f $composeFile `
-        down --volumes --remove-orphans `
-        2>&1 |
-        Out-Null
-      $cleanupExitCode = $LASTEXITCODE
-    }
-    finally {
-      $ErrorActionPreference = $previousErrorActionPreference
-    }
+      try {
+        & docker compose `
+          --project-name $projectName `
+          --env-file $EnvironmentFile `
+          -f $composeFile `
+          -f $acceptanceComposeFile `
+          down --volumes --remove-orphans `
+          2>&1 |
+          Out-Null
+        $cleanupExitCode = $LASTEXITCODE
+      }
+      finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+      }
 
-    if ($cleanupExitCode -ne 0) {
-      throw "M3/T1 acceptance project cleanup failed with exit code $cleanupExitCode."
+      if ($cleanupExitCode -ne 0) {
+        throw "M3/T1 acceptance project cleanup failed with exit code $cleanupExitCode."
+      }
     }
   }
+  $finalizationError = $evidence["finalization"].error
 }
+
+if ($null -ne $finalizationError -and -not $script:bodyFailed) {
+  throw "M3/T1 acceptance finalization failed: $finalizationError"
+}
+
+Write-Output "M3/T1 Knowledge service validation passed."

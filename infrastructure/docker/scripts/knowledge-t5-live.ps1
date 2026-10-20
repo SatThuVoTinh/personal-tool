@@ -12,6 +12,7 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot "knowledge-t5-common.ps1")
+. (Join-Path $PSScriptRoot "acceptance-common.ps1")
 
 if (-not $EnvironmentFile) { $EnvironmentFile = Join-Path $PSScriptRoot "..\env\.env" }
 if (-not $BackupBase) { $BackupBase = Join-Path $env:LOCALAPPDATA "ZinkKnowledge\recovery\m4" }
@@ -515,47 +516,55 @@ catch {
 }
 finally {
   $evidence.finished_at = [DateTime]::UtcNow.ToString("o")
-  $finalizationError = $null
-  # F-268 (R7-D13-05): the restore container is removed BEFORE the evidence is
-  # written, because a removal that fails has to be visible in the recorded
-  # result. The run used to swallow the removal's exit code and print its
-  # success line with the container still on the host. The container also
-  # carries the sweeper's third label now, so a leaked container is selected
-  # by the same filter set as every other temporary resource.
-  try {
-    if ($script:restoreContainerStarted) {
-      & docker rm -f $restoreContainer 2>$null | Out-Null
-      if ($LASTEXITCODE -ne 0) {
-        $evidence.result = "FAIL"
-        $evidence.error_code = "ACCEPTANCE_CONTAINER_LEAK"
-        throw "The disposable recovery container could not be removed: $restoreContainer"
+  # F-291 (R7-C4-04): the shared finalisation contract runs the cleanup,
+  # records every condition it raises in the evidence, and names them in the
+  # output. The finalisation failure is raised after the body, so the body's
+  # own failure is never replaced by a teardown complaint, and a teardown
+  # failure on a run whose body already failed is still reported.
+  Invoke-AcceptanceFinalization -Label "M4/T5 live" -RunId $runId -Evidence $evidence -EvidenceWriter { Write-T5Evidence "live" $runId $evidence | Out-Null } -Cleanup {
+    # F-268 (R7-D13-05): the restore container is removed BEFORE the evidence
+    # is written, because a removal that fails has to be visible in the
+    # recorded result. The run used to swallow the removal's exit code and
+    # print its success line with the container still on the host. The
+    # container also carries the sweeper's third label now, so a leaked
+    # container is selected by the same filter set as every other temporary
+    # resource.
+    $cleanupError = $null
+    try {
+      if ($script:restoreContainerStarted) {
+        & docker rm -f $restoreContainer 2>$null | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+          $evidence.result = "FAIL"
+          $evidence.error_code = "ACCEPTANCE_CONTAINER_LEAK"
+          throw "The disposable recovery container could not be removed: $restoreContainer"
+        }
       }
     }
-  }
-  catch {
-    if ($null -eq $finalizationError) { $finalizationError = $_.Exception }
-  }
-  try { Write-T5Evidence "live" $runId $evidence | Out-Null } catch { if ($null -eq $finalizationError) { $finalizationError = $_.Exception } }
-  try {
-    if ($evidence.result -ne "PASS" -and $script:knowledgeStarted) {
-      $previous = $ErrorActionPreference; $ErrorActionPreference = "Continue"
-      try { Invoke-LiveCompose @("stop", "knowledge") | Out-Null } finally { $ErrorActionPreference = $previous }
+    catch {
+      $cleanupError = $_.Exception.Message
     }
-  }
-  catch {
-    if ($null -eq $finalizationError) { $finalizationError = $_.Exception }
-  }
-  Remove-Item Env:KNOWLEDGE_VAULT_ROOT -ErrorAction SilentlyContinue
-  Remove-Item Env:KNOWLEDGE_T5_BACKUP_BARRIER_ROOT -ErrorAction SilentlyContinue
-  Remove-Item -LiteralPath $barrierRoot -Recurse -Force -ErrorAction SilentlyContinue
-  if ($null -eq $finalizationError -and $evidence.result -eq "PASS") {
-    try {
-      Initialize-T5PrivateEvidenceDirectory
-      if (Test-Path -LiteralPath $acceptedCandidatePath) { throw "Accepted candidate evidence is immutable and already exists." }
-      Write-T5AtomicJson $acceptedCandidatePath $acceptedCandidate
+    finally {
+      if ($evidence.result -ne "PASS" -and $script:knowledgeStarted) {
+        $previous = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+        try { Invoke-LiveCompose @("stop", "knowledge") | Out-Null } catch { if ($null -eq $cleanupError) { $cleanupError = $_.Exception.Message } } finally { $ErrorActionPreference = $previous }
+      }
+      Remove-Item Env:KNOWLEDGE_VAULT_ROOT -ErrorAction SilentlyContinue
+      Remove-Item Env:KNOWLEDGE_T5_BACKUP_BARRIER_ROOT -ErrorAction SilentlyContinue
+      Remove-Item -LiteralPath $barrierRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
-    catch { $finalizationError = $_.Exception }
+    if ($null -ne $cleanupError) { throw $cleanupError }
   }
-  if ($null -ne $finalizationError -and -not $script:bodyFailed) { throw "M4/T5 live evidence finalization or cleanup failed." }
+  $finalizationError = $evidence["finalization"].error
 }
+
+if ($null -ne $finalizationError -and -not $script:bodyFailed) {
+  throw "M4/T5 live evidence finalization or cleanup failed: $finalizationError"
+}
+
+if ($null -eq $finalizationError -and $evidence.result -eq "PASS") {
+  Initialize-T5PrivateEvidenceDirectory
+  if (Test-Path -LiteralPath $acceptedCandidatePath) { throw "Accepted candidate evidence is immutable and already exists." }
+  Write-T5AtomicJson $acceptedCandidatePath $acceptedCandidate
+}
+
 Write-Output "M4/T5 live acceptance passed."

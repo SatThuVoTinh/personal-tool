@@ -5,7 +5,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot "acceptance-common.ps1")
 
+$runId = New-AcceptanceRunId
 $projectName = "personal-tool-m3-t4"
 $scriptDirectory = Split-Path -Parent $PSCommandPath
 if (-not $EnvironmentFile) { $EnvironmentFile = Join-Path $scriptDirectory "..\env\.env" }
@@ -187,6 +189,18 @@ $beforePdfHash = (Get-FileHash -LiteralPath $pdfPath -Algorithm SHA256).Hash
 $beforeSidecarHash = (Get-FileHash -LiteralPath $sidecarPath -Algorithm SHA256).Hash
 $env:KNOWLEDGE_ACCEPTANCE_VAULT_ROOT = $vaultRoot
 $started = $false
+$script:bodyFailed = $false
+$finalizationError = $null
+# F-291 (R7-C4-04): the run's evidence carries the finalisation record, so a
+# cleanup failure is never dropped and never replaces the body's own failure.
+$evidence = [ordered]@{
+  schema_version = 1
+  mode = "Acceptance"
+  result = "FAIL"
+  acceptance_run_id = $runId
+  compose_project = $projectName
+  started_at = [DateTime]::UtcNow.ToString("o")
+}
 
 try {
   Invoke-Compose @("build", "knowledge")
@@ -257,13 +271,29 @@ ANALYZE knowledge.segments;
   $afterPdfHash = (Get-FileHash -LiteralPath $pdfPath -Algorithm SHA256).Hash
   $afterSidecarHash = (Get-FileHash -LiteralPath $sidecarPath -Algorithm SHA256).Hash
   if ($beforeHash -ne $afterHash -or $beforePdfHash -ne $afterPdfHash -or $beforeSidecarHash -ne $afterSidecarHash) { throw "M3/T4 wrote to the Vault." }
-  Write-Output "M3/T4 hybrid retrieval acceptance passed."
+  $evidence.result = "PASS"
+}
+catch {
+  $script:bodyFailed = $true
+  $evidence.error = $_.Exception.Message
+  throw
 }
 finally {
-  if ($started) {
-    $previous = $ErrorActionPreference; $ErrorActionPreference = "Continue"
-    try { Invoke-Compose @("down", "--volumes", "--remove-orphans") } finally { $ErrorActionPreference = $previous }
+  Invoke-AcceptanceFinalization -Label "M3/T4" -RunId $runId -Evidence $evidence -EvidenceName "acceptance-M3-T4-$runId.json" -Cleanup {
+    $cleanupError = $null
+    if ($started) {
+      $previous = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+      try { Invoke-Compose @("down", "--volumes", "--remove-orphans") } catch { $cleanupError = $_.Exception } finally { $ErrorActionPreference = $previous }
+    }
+    Remove-Item -LiteralPath $temporaryRoot -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item Env:KNOWLEDGE_ACCEPTANCE_VAULT_ROOT -ErrorAction SilentlyContinue
+    if ($null -ne $cleanupError) { throw $cleanupError }
   }
-  Remove-Item -LiteralPath $temporaryRoot -Recurse -Force -ErrorAction SilentlyContinue
-  Remove-Item Env:KNOWLEDGE_ACCEPTANCE_VAULT_ROOT -ErrorAction SilentlyContinue
+  $finalizationError = $evidence["finalization"].error
 }
+
+if ($null -ne $finalizationError -and -not $script:bodyFailed) {
+  throw "M3/T4 acceptance finalization failed: $finalizationError"
+}
+
+Write-Output "M3/T4 hybrid retrieval acceptance passed."

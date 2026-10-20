@@ -5,7 +5,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot "acceptance-common.ps1")
 
+$runId = New-AcceptanceRunId
 $scriptDirectory = Split-Path -Parent $PSCommandPath
 if (-not $EnvironmentFile) { $EnvironmentFile = Join-Path $scriptDirectory "..\env\.env" }
 $projectName = "personal-tool-m3-t3"
@@ -97,6 +99,18 @@ New-SyntheticPdf -Path $pdfPath -Text "PDF acceptance text"
 )
 $env:KNOWLEDGE_ACCEPTANCE_VAULT_ROOT = $vaultRoot
 $started = $false
+$script:bodyFailed = $false
+$finalizationError = $null
+# F-291 (R7-C4-04): the run's evidence carries the finalisation record, so a
+# cleanup failure is never dropped and never replaces the body's own failure.
+$evidence = [ordered]@{
+  schema_version = 1
+  mode = "Acceptance"
+  result = "FAIL"
+  acceptance_run_id = $runId
+  compose_project = $projectName
+  started_at = [DateTime]::UtcNow.ToString("o")
+}
 
 try {
   Invoke-Compose @("build", "knowledge")
@@ -168,14 +182,29 @@ VALUES ('$orphanRunId', '$orphanIndexId', 'FULL_REBUILD', 'RUNNING');
   Invoke-Compose @("up", "--detach", "--wait", "--wait-timeout", "120", "knowledge")
   $recoveryState = Invoke-Compose @("exec", "-T", "postgres", "psql", "--username=postgres", "--dbname=postgres", "--tuples-only", "--no-align", "--command", "SELECT (SELECT status FROM knowledge.index_runs WHERE id = '$orphanRunId') || ':' || (SELECT status FROM knowledge.indexes WHERE id = '$orphanIndexId') || ':' || (SELECT status FROM knowledge.indexes WHERE id = '$($fullRun.index_id)');")
   if (($recoveryState -join "").Trim() -ne "INTERRUPTED:FAILED:ACTIVE") { throw "Full rebuild restart recovery did not preserve the active index." }
-  Write-Output "M4/T3 index lifecycle acceptance passed."
+  $evidence.result = "PASS"
+}
+catch {
+  $script:bodyFailed = $true
+  $evidence.error = $_.Exception.Message
+  throw
 }
 finally {
-  if ($started) {
-    $previous = $ErrorActionPreference; $ErrorActionPreference = "Continue"
-    try { Invoke-Compose @("down", "--volumes", "--remove-orphans") } finally { $ErrorActionPreference = $previous }
+  Invoke-AcceptanceFinalization -Label "M4/T3" -RunId $runId -Evidence $evidence -EvidenceName "acceptance-M4-T3-$runId.json" -Cleanup {
+    $cleanupError = $null
+    if ($started) {
+      $previous = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+      try { Invoke-Compose @("down", "--volumes", "--remove-orphans") } catch { $cleanupError = $_.Exception } finally { $ErrorActionPreference = $previous }
+    }
+    if (Test-Path -LiteralPath $temporaryRoot) { Remove-Item -LiteralPath $temporaryRoot -Recurse -Force }
+    Remove-Item Env:KNOWLEDGE_ACCEPTANCE_VAULT_ROOT -ErrorAction SilentlyContinue
+    if ($null -ne $cleanupError) { throw $cleanupError }
   }
-  if (Test-Path -LiteralPath $temporaryRoot) { Remove-Item -LiteralPath $temporaryRoot -Recurse -Force }
-  Remove-Item Env:KNOWLEDGE_ACCEPTANCE_VAULT_ROOT -ErrorAction SilentlyContinue
-
+  $finalizationError = $evidence["finalization"].error
 }
+
+if ($null -ne $finalizationError -and -not $script:bodyFailed) {
+  throw "M4/T3 acceptance finalization failed: $finalizationError"
+}
+
+Write-Output "M4/T3 index lifecycle acceptance passed."
