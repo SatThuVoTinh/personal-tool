@@ -323,6 +323,11 @@ function Get-T5ModelIdentity {
 
   $model = @((Invoke-RestMethod -Uri "http://127.0.0.1:11434/api/tags" -Method Get).models | Where-Object { $_.name -eq $ModelName }) | Select-Object -First 1
   if (-not $model -or -not $model.digest) { throw "Embedding model $ModelName is unavailable." }
+  # F-293 (R7-C4-06): the provider's response is untrusted data, so the digest
+  # must have the shape the column's CHECK constraint accepts before it is
+  # used anywhere -- including in the acceptance statements, where it reaches
+  # the database as a psql variable rather than as an interpolated literal.
+  if ($model.digest -notmatch '^[0-9a-f]{64}$') { throw "Embedding model $ModelName digest does not have the documented shape." }
   $embedding = Invoke-RestMethod -Uri "http://127.0.0.1:11434/api/embed" -Method Post -ContentType "application/json" -Body "{`"model`":`"$ModelName`",`"input`":`"knowledge-t5-identity`"}"
   if (-not $embedding.embeddings -or $embedding.embeddings[0].Length -ne 1024) { throw "Embedding model identity has the wrong dimension." }
   return [ordered]@{ name = $ModelName; digest = $model.digest; dimension = 1024 }

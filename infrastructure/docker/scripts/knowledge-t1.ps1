@@ -59,19 +59,23 @@ function Get-HttpResponse {
 }
 
 function Assert-SqlFailure {
-  param([string]$Command)
+  param(
+    [string]$Command,
+    [string]$ExpectedSignature,
+    [string]$ModelDigest
+  )
 
   $previousErrorActionPreference = $ErrorActionPreference
   $ErrorActionPreference = "Continue"
 
   try {
-    & docker compose `
+    $output = & docker compose `
       --project-name $projectName `
       --env-file $EnvironmentFile `
       -f $composeFile `
-      exec -T postgres psql --username=postgres --dbname=postgres --set=ON_ERROR_STOP=1 --command $Command `
+      exec -T postgres psql --username=postgres --dbname=postgres --set=ON_ERROR_STOP=1 --set=model_digest=$ModelDigest --command $Command `
       2>&1 |
-      Out-Null
+      Out-String
     $exitCode = $LASTEXITCODE
   }
   finally {
@@ -80,6 +84,18 @@ function Assert-SqlFailure {
 
   if ($exitCode -eq 0) {
     throw "Expected SQL command to fail but it succeeded."
+  }
+  # F-289 (R7-C4-02): psql exits 3 when ON_ERROR_STOP turned a SQL error into
+  # a failed script. Every other nonzero exit code is a client, connection or
+  # command failure, and the error TEXT has to name the constraint the
+  # statement was supposed to violate: "the command failed" is not "the
+  # database rejected this statement", and only the second one exercises the
+  # one-ACTIVE-index invariant.
+  if ($exitCode -ne 3) {
+    throw "Expected a database constraint violation (psql exit 3) but the client exited $exitCode: $output"
+  }
+  if (-not $output -or $output -notmatch [regex]::Escape($ExpectedSignature)) {
+    throw "The statement failed for an unrelated reason; '$ExpectedSignature' was not reported: $output"
   }
 }
 
@@ -119,6 +135,13 @@ try {
   if (-not $model -or -not $model.digest) {
     throw "The required bge-m3:latest Ollama model is unavailable."
   }
+  # F-293 (R7-C4-06): the provider's response is untrusted data. Its digest is
+  # validated against the shape the column's CHECK constraint accepts, and it
+  # reaches the database as a psql VARIABLE, so a quote in the response cannot
+  # terminate the literal and start a second statement.
+  if ($model.digest -notmatch '^[0-9a-f]{64}$') {
+    throw "The bge-m3:latest model digest does not have the documented shape."
+  }
 
   $embedding = Invoke-RestMethod `
     -Uri "http://127.0.0.1:11434/api/embed" `
@@ -141,7 +164,7 @@ INSERT INTO knowledge.indexes (
   '$indexId',
   'ACTIVE',
   'bge-m3:latest',
-  '$($model.digest)',
+  :'model_digest',
   1024,
   now()
 );
@@ -154,11 +177,12 @@ INSERT INTO knowledge.indexes (
     "--username=postgres",
     "--dbname=postgres",
     "--set=ON_ERROR_STOP=1",
+    "--set=model_digest=$($model.digest)",
     "--command",
     $insertActiveIndex
   )
 
-  Assert-SqlFailure @"
+  $duplicateActiveIndex = @"
 INSERT INTO knowledge.indexes (
   id,
   status,
@@ -170,11 +194,12 @@ INSERT INTO knowledge.indexes (
   '44444444-4444-4444-4444-444444444444',
   'ACTIVE',
   'bge-m3:latest',
-  '$($model.digest)',
+  :'model_digest',
   1024,
   now()
 );
 "@
+  Assert-SqlFailure -Command $duplicateActiveIndex -ExpectedSignature "knowledge_indexes_one_active_idx" -ModelDigest $model.digest
 
   $ready = Get-HttpResponse "http://127.0.0.1:8080/knowledge/readyz"
   if ($ready.StatusCode -ne 200 -or $ready.Body -notmatch '"status":"ready"') {
@@ -209,7 +234,7 @@ INSERT INTO knowledge.indexes (
   '$interruptedIndexId',
   'BUILDING',
   'bge-m3:latest',
-  '$($model.digest)',
+  :'model_digest',
   1024
 );
 INSERT INTO knowledge.index_runs (id, index_id, kind, status)
@@ -223,6 +248,7 @@ VALUES ('$interruptedRunId', '$interruptedIndexId', 'FULL_REBUILD', 'RUNNING');
     "--username=postgres",
     "--dbname=postgres",
     "--set=ON_ERROR_STOP=1",
+    "--set=model_digest=$($model.digest)",
     "--command",
     $insertInterruptedRun
   )

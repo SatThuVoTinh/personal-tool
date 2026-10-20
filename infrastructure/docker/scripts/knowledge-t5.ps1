@@ -72,8 +72,16 @@ function Wait-T5Run {
 }
 
 function Invoke-T5Sql {
-  param([string]$Sql)
-  Invoke-T5Compose @("exec", "-T", "postgres", "psql", "--username=postgres", "--dbname=postgres", "--set=ON_ERROR_STOP=1", "--tuples-only", "--no-align", "--command", $Sql)
+  param([string]$Sql, [hashtable]$Variables = @{})
+  # F-293 (R7-C4-06): a provider-derived value reaches the database as a psql
+  # variable, never as an interpolated literal, so a quote in the response
+  # cannot terminate the literal and start a second statement.
+  $arguments = @("exec", "-T", "postgres", "psql", "--username=postgres", "--dbname=postgres", "--set=ON_ERROR_STOP=1", "--tuples-only", "--no-align")
+  foreach ($variableName in @($Variables.Keys | Sort-Object)) {
+    $arguments += "--set=$variableName=$($Variables[$variableName])"
+  }
+  $arguments += @("--command", $Sql)
+  Invoke-T5Compose @arguments
 }
 
 function Start-T5FullRebuild {
@@ -171,11 +179,11 @@ try {
   $orphanRunId = [guid]::NewGuid().ToString()
   $recoverySql = @"
 INSERT INTO knowledge.indexes (id, status, embedding_model_name, embedding_model_digest, embedding_dimensions)
-VALUES ('$orphanIndexId', 'BUILDING', '$($candidate.embedding.name)', '$($candidate.embedding.digest)', $($candidate.embedding.dimension));
+VALUES ('$orphanIndexId', 'BUILDING', '$($candidate.embedding.name)', :'model_digest', $($candidate.embedding.dimension));
 INSERT INTO knowledge.index_runs (id, index_id, kind, status)
 VALUES ('$orphanRunId', '$orphanIndexId', 'FULL_REBUILD', 'RUNNING');
 "@
-  Invoke-T5Sql $recoverySql | Out-Null
+  Invoke-T5Sql -Sql $recoverySql -Variables @{ model_digest = $candidate.embedding.digest } | Out-Null
   $recoveryRestartBefore = Get-T5CgroupSnapshot $knowledgeId
   Invoke-T5Compose @("restart", "knowledge")
   Wait-T5Ready
