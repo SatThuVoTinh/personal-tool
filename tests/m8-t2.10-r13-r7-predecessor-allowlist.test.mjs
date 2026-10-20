@@ -48,6 +48,9 @@ import {
   ROUTER_TEST_HOST,
   ROUTER_TEST_PORT,
 } from "./helpers/router-env.mjs";
+// M12/T9 F-111: the apply is bound to the transaction the apply orchestration
+// took; a lane that drives the builder directly takes the same one.
+import { takeApplyTransaction } from "./helpers/apply-transaction.mjs";
 
 const REPO = process.cwd();
 const CONFIGURE = path.join(REPO, "integrations", "openclaw", "configure.mjs");
@@ -378,21 +381,36 @@ function provisioned() {
     ZINK_ROUTER_PORT: ROUTER_TEST_PORT,
     ZINK_ROUTER_API_KEY: ROUTER_TEST_API_KEY,
   };
-  const run = (mode) => () =>
-    execFileSync(
-      process.execPath,
-      [
-        "--",
-        CONFIGURE,
-        mode,
-        "--state-dir",
-        stateDir,
-        "--systemd-user-dir",
-        systemdUserDir,
-        ...identifierArgs,
-      ],
-      { env, stdio: "pipe" },
-    );
+  const run = (mode) => () => {
+    const args = [
+      "--",
+      CONFIGURE,
+      mode,
+      "--state-dir",
+      stateDir,
+      "--systemd-user-dir",
+      systemdUserDir,
+      ...identifierArgs,
+    ];
+    // M12/T9 F-111: the builder's apply is reachable only through the apply
+    // orchestration, which takes the transaction snapshot first and hands the
+    // builder its attempt id. A lane that drives the builder directly takes
+    // the same transaction and passes the same id; the helper is the operator
+    // driver's own two-step, so the record the builder reads is the production
+    // one. A fresh transaction per call, because the builder marks the one it
+    // is given as SPENT.
+    if (mode === "--apply") {
+      args.push(
+        "--apply-transaction",
+        takeApplyTransaction({
+          stateDir,
+          runtimeRoot: path.join(root, "runtime"),
+          systemdRoot: systemdUserDir,
+        }),
+      );
+    }
+    return execFileSync(process.execPath, args, { env, stdio: "pipe" });
+  };
   run("--apply")();
   const asset = (rel) =>
     path.join(stateDir, "extensions", "zink-governance", ...rel.split("/"));
@@ -598,6 +616,18 @@ async function scratchGenerator(overrides) {
     cpSync(path.join(REPO, "integrations", "openclaw"), alt, {
       recursive: true,
     });
+    // M12/T9 F-115: the packaged build carries the Skill Store and Zink Tools
+    // runtime modules as well, and the generator reads them from the
+    // REPOSITORY ROOT relative to itself. A scratch tree that holds only
+    // `integrations/openclaw` is not shaped like the repository, so the
+    // generator cannot read them and the build cannot be produced at all.
+    // These are the CURRENT bodies, exactly like every other packaged asset
+    // this scratch build carries.
+    for (const root of ["zink-skill-store", "zink-tools"]) {
+      cpSync(path.join(REPO, root), path.join(scratch, root), {
+        recursive: true,
+      });
+    }
     // The R7 source for the entrypoint, and the R7 file for the boundary asset.
     for (const [rel, body] of overrides)
       writeFileSync(path.join(alt, rel), body, "utf8");
@@ -1690,6 +1720,21 @@ function logDecisionReason(seam, verdict, decision) {
     }`,
       `    )
       throw new Error("SCHEMA_INVALID");`,
+    ],
+    // M12/T9 F-371: the spawn label the boundary accepts is now the version-4
+    // UUID the canonical builder renders (the legacy 64-hex rendering still
+    // replays). The host-visible verdict is unchanged - an unusable label is
+    // still refused - so inverting this hunk keeps the derived R5 body equal
+    // to the packaged R5 digest exactly.
+    [
+      `          // M12/T9 F-371: the delegation id is a version-4 UUID rendered from
+          // the canonical digest, and the ledger may still carry the legacy
+          // 64-hex rendering. Both are legitimate identities of the same
+          // proposal, so the spawn label accepts both - and nothing else.
+          !/^([a-f0-9]{64}|[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/u.test(
+            decision.spawnLabel,
+          )`,
+      `          !/^[a-f0-9]{64}$/u.test(decision.spawnLabel)`,
     ],
   ];
   let derived = readFileSync(BOUNDARY, "utf8");

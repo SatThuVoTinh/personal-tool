@@ -32,6 +32,9 @@ import {
   ROUTER_TEST_HOST,
   ROUTER_TEST_PORT,
 } from "./helpers/router-env.mjs";
+// M12/T9 F-111: the apply is bound to the transaction the apply orchestration
+// took; a lane that drives the builder directly takes the same one.
+import { takeApplyTransaction } from "./helpers/apply-transaction.mjs";
 
 const REPO = process.cwd();
 const CONFIGURE = path.join(REPO, "integrations", "openclaw", "configure.mjs");
@@ -114,20 +117,35 @@ function provisioned() {
     ZINK_ROUTER_PORT: ROUTER_TEST_PORT,
     ZINK_ROUTER_API_KEY: ROUTER_TEST_API_KEY,
   };
-  const run = (mode) => () =>
-    execFileSync(
-      process.execPath,
-      [
-        CONFIGURE,
-        mode,
-        "--state-dir",
-        stateDir,
-        "--systemd-user-dir",
-        systemdUserDir,
-        ...identifierArgs,
-      ],
-      { env, stdio: "pipe" },
-    );
+  const run = (mode) => () => {
+    const args = [
+      CONFIGURE,
+      mode,
+      "--state-dir",
+      stateDir,
+      "--systemd-user-dir",
+      systemdUserDir,
+      ...identifierArgs,
+    ];
+    // M12/T9 F-111: the builder's apply is reachable only through the apply
+    // orchestration, which takes the transaction snapshot first and hands the
+    // builder its attempt id. A lane that drives the builder directly takes
+    // the same transaction and passes the same id; the helper is the operator
+    // driver's own two-step, so the record the builder reads is the production
+    // one. A fresh transaction per call, because the builder marks the one it
+    // is given as SPENT.
+    if (mode === "--apply") {
+      args.push(
+        "--apply-transaction",
+        takeApplyTransaction({
+          stateDir,
+          runtimeRoot: path.join(root, "runtime"),
+          systemdRoot: systemdUserDir,
+        }),
+      );
+    }
+    return execFileSync(process.execPath, args, { env, stdio: "pipe" });
+  };
   run("--apply")();
   const asset = (rel) =>
     path.join(stateDir, "extensions", "zink-governance", ...rel.split("/"));

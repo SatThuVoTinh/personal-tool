@@ -246,14 +246,40 @@ describe("R4 Finding 1 — native Discord outbound POC (offline)", () => {
       ),
       "utf8",
     );
+    // M12/T9 F-003: Discord DECOMMISSIONED the channel-scoped active-thread
+    // listing (`GET /channels/{id}/threads/active`) in API v10, so the dedupe
+    // read moved to the GUILD-scoped route
+    // (`GET /guilds/{guild.id}/threads/active`) and the guild is resolved from
+    // the channel itself. The channel-scoped sub-resource sites are therefore
+    // TWO now - the tag read and the thread post - and the listing is the
+    // guild-scoped one. The bound is unchanged: the module reaches Discord
+    // through exactly these three sites, and a fourth fails here.
+    const channelScopedSites =
+      tagsSource.match(
+        /https:\/\/discord\.com\/api\/v10\/channels\/\$\{channelId\}\/[a-z_]+/gu,
+      ) ?? [];
+    assert.equal(
+      channelScopedSites.length,
+      2,
+      "one tag read and one thread post, all bounded",
+    );
+    const guildScopedListings =
+      tagsSource.match(
+        /https:\/\/discord\.com\/api\/v10\/guilds\/\$\{guild\}\/threads\/active/gu,
+      ) ?? [];
+    assert.equal(
+      guildScopedListings.length,
+      1,
+      "exactly one active-thread listing, on the guild-scoped route F-003 moved it to",
+    );
     assert.equal(
       (
         tagsSource.match(
-          /https:\/\/discord\.com\/api\/v10\/channels\/\$\{channelId\}\/[a-z_]+/gu,
+          /https:\/\/discord\.com\/api\/v10\/channels\/\$\{channelId\}`/gu,
         ) ?? []
       ).length,
-      3,
-      "one thread post, one tag read and one active-thread list, all bounded",
+      2,
+      "the channel itself is read twice and no more: once for its tags, once for the guild id F-003 needs",
     );
     // M12/T2-R2: the post-verdict tag transition is the only other seam, and it is bounded to
     // the thread itself: read what it carries now, then PATCH only its applied_tags. A thread

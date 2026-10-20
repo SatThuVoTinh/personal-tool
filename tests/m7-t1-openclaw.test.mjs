@@ -56,6 +56,13 @@ import {
   ROUTER_TEST_PORT,
   applyRouterTestEnv,
 } from "./helpers/router-env.mjs";
+// M12/T9 F-111: the builder's apply is reachable ONLY through the apply
+// orchestration, which takes the transaction snapshot first and hands the
+// builder its attempt id. A lane that drives the builder directly takes the
+// same transaction and passes the same id; the helper is the operator driver's
+// own two-step (snapshot, then persist), so the record the builder reads is the
+// production one.
+import { takeApplyTransaction } from "./helpers/apply-transaction.mjs";
 
 // M10/T2-R9: the governed model provider resolves its endpoint and
 // credential from the environment at build time; supply non-routable
@@ -857,6 +864,7 @@ test("M7/T1 builder is dry-run safe and apply materializes no secrets", () => {
     const environment = environmentForTemporaryHome(root);
     const stateDir = path.join(root, ".openclaw-zink");
     const systemdUserDir = path.join(root, ".config", "systemd", "user");
+    const runtimeRoot = path.join(root, "runtime");
     const script = path.join(
       process.cwd(),
       "integrations",
@@ -876,10 +884,24 @@ test("M7/T1 builder is dry-run safe and apply materializes no secrets", () => {
       stdio: "pipe",
     });
     assert.equal(existsSync(stateDir), false);
-    execFileSync(process.execPath, ["--", ...baseArgs, "--apply"], {
-      env: environment,
-      stdio: "pipe",
-    });
+    execFileSync(
+      process.execPath,
+      [
+        "--",
+        ...baseArgs,
+        "--apply",
+        "--apply-transaction",
+        takeApplyTransaction({
+          stateDir,
+          runtimeRoot,
+          systemdRoot: systemdUserDir,
+        }),
+      ],
+      {
+        env: environment,
+        stdio: "pipe",
+      },
+    );
     const configText = readFileSync(
       path.join(stateDir, "openclaw.json"),
       "utf8",
@@ -1030,6 +1052,15 @@ test("M7/T1 builder upgrades only the exact R16 drop-in and rejects owned drift"
           systemdUserDir,
           ...discordIdentifierArguments,
           "--apply",
+          // F-111: every apply carries the transaction the orchestration took.
+          // A fresh one per call, because the builder marks the transaction it
+          // is given as SPENT.
+          "--apply-transaction",
+          takeApplyTransaction({
+            stateDir,
+            runtimeRoot: path.join(root, "runtime"),
+            systemdRoot: systemdUserDir,
+          }),
         ],
         { env: environment, stdio: "pipe" },
       );
@@ -1125,6 +1156,15 @@ test("M7/T1 builder converges a pre-R4 mention grammar and stays fail-closed oth
           systemdUserDir,
           ...discordIdentifierArguments,
           "--apply",
+          // F-111: every apply carries the transaction the orchestration took.
+          // A fresh one per call, because the builder marks the transaction it
+          // is given as SPENT.
+          "--apply-transaction",
+          takeApplyTransaction({
+            stateDir,
+            runtimeRoot: path.join(root, "runtime"),
+            systemdRoot: systemdUserDir,
+          }),
         ],
         { env: environment, stdio: "pipe" },
       );
@@ -1208,6 +1248,15 @@ test("M7/T1 builder recognizes the superseded WSL plugin build and still refuses
           systemdUserDir,
           ...discordIdentifierArguments,
           "--apply",
+          // F-111: every apply carries the transaction the orchestration took.
+          // A fresh one per call, because the builder marks the transaction it
+          // is given as SPENT.
+          "--apply-transaction",
+          takeApplyTransaction({
+            stateDir,
+            runtimeRoot: path.join(root, "runtime"),
+            systemdRoot: systemdUserDir,
+          }),
         ],
         { env: environment, stdio: "pipe" },
       );
@@ -1409,7 +1458,7 @@ test("M7/T1 builder refuses workspace drift without deleting it", () => {
       "openclaw",
       "configure.mjs",
     );
-    const args = [
+    const applyArgs = () => [
       script,
       "--apply",
       "--state-dir",
@@ -1417,14 +1466,24 @@ test("M7/T1 builder refuses workspace drift without deleting it", () => {
       "--systemd-user-dir",
       systemdUserDir,
       ...discordIdentifierArguments,
+      // F-111: a fresh transaction per invocation. The builder marks the
+      // transaction it is given as SPENT, so a second invocation must not
+      // reuse the first one - and the refusal this case proves must be the
+      // DRIFT refusal, not the spent-transaction refusal.
+      "--apply-transaction",
+      takeApplyTransaction({
+        stateDir,
+        runtimeRoot: path.join(root, "runtime"),
+        systemdRoot: systemdUserDir,
+      }),
     ];
-    execFileSync(process.execPath, ["--", ...args], {
+    execFileSync(process.execPath, ["--", ...applyArgs()], {
       env: environment,
       stdio: "pipe",
     });
     const unexpected = path.join(stateDir, "workspaces", "main", "drift.txt");
     writeFileSync(unexpected, "owner content\n", "utf8");
-    const result = spawnSync(process.execPath, ["--", ...args], {
+    const result = spawnSync(process.execPath, ["--", ...applyArgs()], {
       encoding: "utf8",
       env: environment,
     });
@@ -1462,6 +1521,13 @@ test("M7/T1 preflights workspace drift before writing owned files", () => {
         "--systemd-user-dir",
         systemdUserDir,
         ...discordIdentifierArguments,
+        // F-111: the apply carries the transaction the orchestration took.
+        "--apply-transaction",
+        takeApplyTransaction({
+          stateDir,
+          runtimeRoot: path.join(root, "runtime"),
+          systemdRoot: systemdUserDir,
+        }),
       ],
       { encoding: "utf8", env: environment },
     );
@@ -1509,6 +1575,13 @@ test("M7/T1 rejects a symlinked workspace parent before writing config", (t) => 
         "--systemd-user-dir",
         systemdUserDir,
         ...discordIdentifierArguments,
+        // F-111: the apply carries the transaction the orchestration took.
+        "--apply-transaction",
+        takeApplyTransaction({
+          stateDir,
+          runtimeRoot: path.join(root, "runtime"),
+          systemdRoot: systemdUserDir,
+        }),
       ],
       { encoding: "utf8", env: environment },
     );
@@ -1532,7 +1605,7 @@ test("M7/T1 builder refuses owned secret-plan drift without overwriting it", () 
       "openclaw",
       "configure.mjs",
     );
-    const args = [
+    const applyArgs = () => [
       script,
       "--apply",
       "--state-dir",
@@ -1540,14 +1613,22 @@ test("M7/T1 builder refuses owned secret-plan drift without overwriting it", () 
       "--systemd-user-dir",
       systemdUserDir,
       ...discordIdentifierArguments,
+      // F-111: a fresh transaction per invocation, so the refusal this case
+      // proves is the DRIFT refusal and not the spent-transaction refusal.
+      "--apply-transaction",
+      takeApplyTransaction({
+        stateDir,
+        runtimeRoot: path.join(root, "runtime"),
+        systemdRoot: systemdUserDir,
+      }),
     ];
-    execFileSync(process.execPath, ["--", ...args], {
+    execFileSync(process.execPath, ["--", ...applyArgs()], {
       env: environment,
       stdio: "pipe",
     });
     const planPath = path.join(stateDir, "zink-auth-secret-plan.json");
     writeFileSync(planPath, "not the owner plan\n", "utf8");
-    const result = spawnSync(process.execPath, ["--", ...args], {
+    const result = spawnSync(process.execPath, ["--", ...applyArgs()], {
       encoding: "utf8",
       env: environment,
     });
@@ -1571,7 +1652,7 @@ test("M7/T1 builder refuses owned auth-order drift without overwriting it", () =
       "openclaw",
       "configure.mjs",
     );
-    const args = [
+    const applyArgs = () => [
       script,
       "--apply",
       "--state-dir",
@@ -1579,14 +1660,22 @@ test("M7/T1 builder refuses owned auth-order drift without overwriting it", () =
       "--systemd-user-dir",
       systemdUserDir,
       ...discordIdentifierArguments,
+      // F-111: a fresh transaction per invocation, so the refusal this case
+      // proves is the DRIFT refusal and not the spent-transaction refusal.
+      "--apply-transaction",
+      takeApplyTransaction({
+        stateDir,
+        runtimeRoot: path.join(root, "runtime"),
+        systemdRoot: systemdUserDir,
+      }),
     ];
-    execFileSync(process.execPath, ["--", ...args], {
+    execFileSync(process.execPath, ["--", ...applyArgs()], {
       env: environment,
       stdio: "pipe",
     });
     const orderPlanPath = path.join(stateDir, "zink-auth-order-plan.json");
     writeFileSync(orderPlanPath, "not the owner order plan\n", "utf8");
-    const result = spawnSync(process.execPath, ["--", ...args], {
+    const result = spawnSync(process.execPath, ["--", ...applyArgs()], {
       encoding: "utf8",
       env: environment,
     });

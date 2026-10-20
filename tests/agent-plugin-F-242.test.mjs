@@ -314,7 +314,18 @@ test("F-242: a delegated live call WITH a consumed approval is authorized by the
         excelCall({ ...INPUT, approval_id: minted.approvalId }),
       );
     });
-    assert.equal(decision?.block, true, "the call must be refused");
+    // M12/T9 F-371: the delegation id the canonical builder produces is now a
+    // version-4 UUID, and the guard ACCEPTS it and validates it against the
+    // published envelope. So a delegated live call with a CONSUMED approval is
+    // AUTHORIZED - which is what this case's title has always said. The
+    // refusal it used to assert was the topology/tools owners' hand-off (the
+    // published envelope pinned the delegation id to a uuid v4 while the
+    // ledger derived it as a 64-hex digest), and that hand-off is closed.
+    assert.notEqual(
+      decision?.block,
+      true,
+      `the call must be authorized once a consumed approval backs it, got ${JSON.stringify(decision)}`,
+    );
     assert.doesNotMatch(
       diagnostics,
       /AUTH_APPROVAL_REQUIRED|AUTH_APPROVAL_INVALID/u,

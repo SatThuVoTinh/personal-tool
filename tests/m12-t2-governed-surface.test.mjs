@@ -36,6 +36,7 @@ import {
   createForumTagResolver,
 } from "../integrations/openclaw/lib/discord-forum-tags.mjs";
 import { governancePluginFiles } from "../integrations/openclaw/lib/policy.mjs";
+import { ACTIONS } from "../integrations/openclaw/lib/authority.mjs";
 import governancePlugin from "../integrations/openclaw/plugins/zink-governance/index.mjs";
 import {
   ensureLedger,
@@ -721,11 +722,31 @@ test("M12/T2-R2: one transition seam, fired after the verdict, never awaited by 
     "the transition lives in the one post-decision effect and runs before execution dispatch",
   );
   const wiring = pluginSource.slice(call, dispatch);
-  for (const literal of ['"APPROVE"', '"REJECT"', '"REQUEST_REVISION"'])
+  // M12/T9 F-085: the verdict vocabulary moved out of string literals and into
+  // the shared ACTIONS table, and the decision the transition receives comes
+  // from the ONE reviewed mapping (`resolveLedgerDecision`). The claim is
+  // unchanged - every owner verdict is mapped onto a tag value, and the
+  // mapping is the reviewed one - and it is now stated in the vocabulary the
+  // plugin actually uses.
+  assert.ok(
+    wiring.includes("resolveLedgerDecision(normAction)"),
+    "the transition must receive the reviewed ledger decision, not a private copy of the mapping",
+  );
+  const effectWiring = pluginSource.slice(effect, dispatch);
+  for (const literal of [
+    "ACTIONS.APPROVE",
+    "ACTIONS.REJECT_APPROVAL",
+    "ACTIONS.REQUEST_REVISION_APPROVAL",
+  ]) {
     assert.ok(
-      wiring.includes(literal),
+      effectWiring.includes(literal),
       `the ${literal} verdict must be mapped onto a tag value`,
     );
+  }
+  // The three names are the OWNER verdicts, and they are the shared ones.
+  assert.equal(ACTIONS.APPROVE, "APPROVE");
+  assert.equal(ACTIONS.REJECT_APPROVAL, "REJECT_APPROVAL");
+  assert.equal(ACTIONS.REQUEST_REVISION_APPROVAL, "REQUEST_REVISION_APPROVAL");
   assert.ok(
     wiring.includes("}).catch("),
     "a surface failure is recorded, never thrown into the verdict",

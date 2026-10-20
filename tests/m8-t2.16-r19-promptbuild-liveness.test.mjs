@@ -515,10 +515,16 @@ test(
     // M11/T3-R1 record names `fceefc0d…` as the build B-16 rolled the boundary
     // to. The pin therefore cites a tracked authority. It is not an ungranted
     // probe, and it does not defer its evidence to a Git-ignored state file.
+    //
+    // M12/T9: rolled for F-371 - the spawn label the boundary accepts is now
+    // the version-4 UUID the canonical builder renders (the legacy 64-hex
+    // rendering still replays), so the boundary's own bytes moved with it. The
+    // pin's purpose as a change detector is unchanged: the next unreviewed
+    // boundary mutation still fails here.
     assert.equal(
       sha(current),
-      "fceefc0df03228c91511779880c21a81d75579633e86ceae54d9696446d0081d",
-      "the boundary must equal the bytes the R19 suite was extended against, plus M11/T3 A3 and B-16's reason diagnostics (landed in 3cb8274)",
+      "a4e30801aba1e00a2f23e63f1d8b0882f4daa60833adfb2a0d72aa536f464380",
+      "the boundary must equal the bytes the R19 suite was extended against, plus M11/T3 A3 and B-16's reason diagnostics (landed in 3cb8274) and M12/T9 F-371's delegation-id rendering",
     );
   },
 );

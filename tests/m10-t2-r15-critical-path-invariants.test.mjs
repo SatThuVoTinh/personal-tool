@@ -42,6 +42,56 @@ const codeOccurrences = (needle) =>
 const above = (lineIndex, lines) =>
   LINES.slice(Math.max(0, lineIndex - lines), lineIndex).join("\n");
 
+/**
+ * Is the awaited send at `line` inside a try block that has a catch?
+ *
+ * M12/T9: this used to be answered by a fixed 14-line lookback window, which
+ * only works when the `try {` happens to sit close above the await. The
+ * control it proves is not "the try is near" but "the await is GUARDED": a
+ * delivery failure must not abort the handler. So the predicate is stated
+ * structurally instead, and it is STRICTER than the window it replaces:
+ *
+ *   1. the nearest preceding CODE line that opens a try owns the await;
+ *   2. that try is still OPEN at the await - no `} catch (` closed it above,
+ *      which the old window never checked;
+ *   3. the catch that closes it FOLLOWS the await.
+ *
+ * The band's plugin code passes this: every awaited send sits inside a try,
+ * and one of them (the pending-result control) sits inside a try whose block
+ * spans two dozen lines above it - which is exactly what the fixed window
+ * could not see. The predicate's own capability is proved by the case below,
+ * so the widening is not an assumption.
+ */
+function guardedAwait(lines, line) {
+  const isCode = (text) => {
+    const trimmed = text.trim();
+    return !trimmed.startsWith("//") && !trimmed.startsWith("*");
+  };
+  const opensTry = (text) => /^try \{/u.test(text.trim());
+  const closesTry = (text) => /^\} catch \(/u.test(text.trim());
+
+  let opener = -1;
+  for (let index = line - 1; index >= 0; index -= 1) {
+    if (!isCode(lines[index])) continue;
+    if (opensTry(lines[index])) {
+      opener = index;
+      break;
+    }
+  }
+  if (opener === -1) return false;
+  for (let index = opener + 1; index < line; index += 1) {
+    if (closesTry(lines[index])) return false;
+  }
+  for (
+    let index = line + 1;
+    index < Math.min(lines.length, line + 80);
+    index += 1
+  ) {
+    if (closesTry(lines[index])) return true;
+  }
+  return false;
+}
+
 test("R15-06: every awaited send is guarded and none gates a dispatch", () => {
   // `sendNativePayload` posts to Discord and can legitimately fail
   // (NATIVE_OUTBOUND_UNAVAILABLE when the host runtime config is unresolved).
@@ -53,21 +103,80 @@ test("R15-06: every awaited send is guarded and none gates a dispatch", () => {
   assert.ok(awaited.length >= 1, "expected the guarded sends to still exist");
 
   for (const line of awaited) {
-    const before = above(line, 14);
-    assert.match(
-      before,
-      /try \{[\s\S]*$/u,
+    assert.ok(
+      guardedAwait(LINES, line),
       `the awaited send at line ${
         line + 1
       } is not inside a try block; an unguarded await turns a delivery failure into an aborted handler`,
     );
-    const after = LINES.slice(line, line + 34).join("\n");
-    assert.match(
-      after,
-      /\} catch \(/u,
-      `the awaited send at line ${line + 1} has no catch in its try block`,
-    );
   }
+});
+
+test("R15-06 predicate: an awaited send outside a try is still refused", () => {
+  // The capability of the check above, proved on the shapes it must refuse.
+  // Without this, "the awaited send is guarded" could be a statement about
+  // the window rather than about the code.
+  const unguarded = [
+    "async function deliver() {",
+    "  await sendNativePayload({});",
+    "}",
+  ];
+  assert.equal(
+    guardedAwait(unguarded, 1),
+    false,
+    "an awaited send with no try above it must not pass",
+  );
+
+  const closedTry = [
+    "async function deliver() {",
+    "  try {",
+    "    work();",
+    "  } catch (error) {",
+    "    report(error);",
+    "  }",
+    "  await sendNativePayload({});",
+    "}",
+  ];
+  assert.equal(
+    guardedAwait(closedTry, 6),
+    false,
+    "an awaited send AFTER the try closed must not pass",
+  );
+
+  const guarded = [
+    "async function deliver() {",
+    "  try {",
+    "    await sendNativePayload({});",
+    "  } catch (error) {",
+    "    report(error);",
+    "  }",
+    "}",
+  ];
+  assert.equal(
+    guardedAwait(guarded, 2),
+    true,
+    "a guarded awaited send must pass",
+  );
+
+  const wideTry = [
+    "async function deliver() {",
+    "  try {",
+    "    const buttons = [",
+    "      {",
+    '        label: "Accept",',
+    "      },",
+    "    ];",
+    "    await sendNativePayload({ buttons });",
+    "  } catch (error) {",
+    "    report(error);",
+    "  }",
+    "}",
+  ];
+  assert.equal(
+    guardedAwait(wideTry, 7),
+    true,
+    "a guarded awaited send inside a WIDE try must pass",
+  );
 });
 
 test("R15-07: no governance dispatch is preceded by an unguarded ack", () => {

@@ -108,6 +108,26 @@ function buildRuntime() {
   writeFileSync(path.join(nativeR12, "manifest.json"), "{}\n");
   writeFileSync(path.join(nativeR12, "selection-DopzNY3I.js"), "// BASELINE\n");
 
+  // M12/T9 F-011: the Discord channel is an INSTALLED PLUGIN PACKAGE inside the
+  // state root, and the operator command resolves that root when it loads. A
+  // synthetic state root without the installed package is not shaped like the
+  // live one, and the command would refuse to load at all instead of reaching
+  // the gate these cases are about.
+  const channelPackage = path.join(
+    stateDir,
+    "npm",
+    "projects",
+    "openclaw-discord-r12",
+    "node_modules",
+    "@openclaw",
+    "discord",
+  );
+  mkdirSync(path.join(channelPackage, "dist"), { recursive: true });
+  writeFileSync(
+    path.join(channelPackage, "package.json"),
+    JSON.stringify({ name: "@openclaw/discord", version: "1.0.0" }),
+  );
+
   return {
     root,
     stateDir,
@@ -1063,15 +1083,23 @@ test("R12 H2: FALSIFICATION — without orphan detection the runtime is ambiguou
 
 // F-225: the command that OWNS this gate must stop when it refuses.
 //
-// `operator-rollback.mjs` hardcodes the live host's state and runtime roots, so
-// these cases drive a copy of the shipped file whose two root literals point at the
-// synthetic runtime above and whose relative imports are absolute file URLs. The
-// `systemctl` literal is replaced with a binary that cannot exist: the service
-// restart is not what a refusal is about, and no test lane may be able to restart a
-// real gateway if this file ever regresses again. Every substitution asserts it
-// landed exactly once, and the copy is checked for any remaining live-host path, so
-// a future edit that adds a third root fails here instead of mutating the operator's
-// machine.
+// `operator-rollback.mjs` drives the live host's state and runtime roots, so
+// these cases drive a copy of the shipped file whose relative imports are
+// absolute file URLs and whose runtime-root literal points at the synthetic
+// runtime above. The `systemctl` literal is replaced with a binary that cannot
+// exist: the service restart is not what a refusal is about, and no test lane
+// may be able to restart a real gateway if this file ever regresses again.
+// Every substitution asserts it landed exactly once, and the copy is checked
+// for any remaining live-host path, so a future edit that adds a third root
+// fails here instead of mutating the operator's machine.
+//
+// M12/T9 F-219: the machine-specific STATE root is not a literal in the
+// command any more - the operator names it, through `ZINK_OPERATOR_STATE_DIR`
+// (or the first argument), and the driver refuses to run without one. So the
+// copy under test is given its state root through the ENVIRONMENT, exactly as
+// the live command is, and the copy carries no live-host path at all. The
+// RUNTIME root is still a literal in the shipped file, so that substitution
+// stays.
 const ROLLBACK_CLI = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
@@ -1082,9 +1110,13 @@ const ROLLBACK_CLI = path.resolve(
   "runtime-regression",
   "operator-rollback.mjs",
 );
-const STATE_DIR_LITERAL = 'const stateDir = "/home/hoang_vinh/.openclaw-zink";';
 const RUNTIME_ROOT_LITERAL =
   'const runtimeRoot = "/home/hoang_vinh/.local/lib/node_modules/openclaw";';
+
+/** The environment the operator command is given: the state root is NAMED. */
+function rollbackEnvironment(rt) {
+  return { ...process.env, ZINK_OPERATOR_STATE_DIR: rt.stateDir };
+}
 
 function substituteOnce(src, needle, replacement, label) {
   const found = src.split(needle).length - 1;
@@ -1098,12 +1130,6 @@ function substituteOnce(src, needle, replacement, label) {
 
 function buildRollbackCommand(rt) {
   let src = readFileSync(ROLLBACK_CLI, "utf8");
-  src = substituteOnce(
-    src,
-    STATE_DIR_LITERAL,
-    `const stateDir = ${JSON.stringify(rt.stateDir)};`,
-    "stateDir literal",
-  );
   src = substituteOnce(
     src,
     RUNTIME_ROOT_LITERAL,
@@ -1155,7 +1181,7 @@ test("R12 I: a refused argument ends the command at once, reporting one refusal"
     const run = spawnSync(
       process.execPath,
       [buildRollbackCommand(rt), "--force"],
-      { encoding: "utf8" },
+      { encoding: "utf8", env: rollbackEnvironment(rt) },
     );
     const lines = refusalRecords(run.stdout);
     assert.equal(
@@ -1192,7 +1218,7 @@ test("R12 J: an unauthorized recovery ends at the authorization gate, not past i
         "--target=r12-t1-baseline",
         `--confirm=${RECOVERY_CONFIRMATION}`,
       ],
-      { encoding: "utf8" },
+      { encoding: "utf8", env: rollbackEnvironment(rt) },
     );
     const lines = refusalRecords(run.stdout);
     assert.equal(

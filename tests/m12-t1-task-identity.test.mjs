@@ -501,11 +501,42 @@ describe("M12/T1 P2 — every contract states both shapes", () => {
       snapshot.properties.tasks.patternProperties[TASK_ID_PATTERN];
     const delegations =
       taskShape.oneOf[0].properties.delegations.patternProperties;
+    // M12/T9 F-371: the delegation id is still a canonical HASH, but its
+    // RENDERING moved: the canonical builder now emits a version-4 UUID, and
+    // the ledger keeps reading the legacy 64-hex rendering so the ids history
+    // recorded still replay. The pattern therefore names exactly those two
+    // renderings of the same hash - and NOTHING else: an identity shape (a
+    // snowflake, a version-1 UUID) is still refused, which is the control this
+    // case has always proven.
     assert.deepEqual(
       Object.keys(delegations),
-      ["^[a-f0-9]{64}$"],
-      "delegation ids are canonical hashes, not identities, and stay 64-hex",
+      [
+        "^([a-f0-9]{64}|[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$",
+      ],
+      "delegation ids are canonical hashes in one of their two renderings, not identities",
     );
+    const delegationId = new RegExp(Object.keys(delegations)[0], "u");
+    assert.match(
+      "a".repeat(64),
+      delegationId,
+      "the legacy 64-hex rendering must still be accepted",
+    );
+    assert.match(
+      "90c799ad-46e4-45eb-8e2d-7c856dfe6a8b",
+      delegationId,
+      "the canonical version-4 UUID rendering must be accepted",
+    );
+    for (const identity of [
+      "12345678901234567",
+      "90c799ad-16e4-15eb-8e2d-7c856dfe6a8b",
+      "not-a-delegation-id",
+    ]) {
+      assert.doesNotMatch(
+        identity,
+        delegationId,
+        `an identity shape must not be accepted as a delegation id: ${identity}`,
+      );
+    }
     assert.equal(
       snapshot.properties.last_event_digest.pattern,
       "^[a-f0-9]{64}$",

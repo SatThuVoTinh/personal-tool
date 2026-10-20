@@ -398,10 +398,6 @@ test("A-2: an unregistered stack keeps failing the scope check, and genuine dele
     ["an empty task id", { task_id: "" }],
     ["no native run id", { native_run_id: "" }],
     ["a run state outside the closed set", { run_state: "MAYBE" }],
-    [
-      "an allowed tool outside the callable registry",
-      { allowed_tools: ["zink_ghost"] },
-    ],
     ["an empty brief revision", { brief_revision: "" }],
   ];
   for (const [label, overrides] of cases) {
@@ -413,6 +409,33 @@ test("A-2: an unregistered stack keeps failing the scope check, and genuine dele
     );
     assert.equal(result.eventsAppended, false, `${label} must not write`);
   }
+
+  // M12/T9 F-371: the delegation's TOOL SCOPE is the canonical policy ceiling
+  // (`TOOL_POLICY[agent]`), not a field the ledger record carries. The
+  // published spawn-proposal contract forbids an `allowed_tools` member (its
+  // payload is `additionalProperties: false` and names exactly fourteen
+  // fields), so the ledger could never carry one, the old check could never be
+  // satisfied, and EVERY delegated tool call was refused as "not found" before
+  // it could reach a specialist.
+  //
+  // So a record that carries the field anyway is NOT an identity failure, and
+  // the refusal vocabulary must not be renumbered to hide it: the field is not
+  // honoured, the call is still REFUSED - at the honest next gate, the
+  // approval binding - and it writes nothing to the durable ledger. The
+  // identity failures above keep their own vocabulary.
+  const uncallableTool = await delegationCall({
+    delegationOverrides: { allowed_tools: ["zink_ghost"] },
+  });
+  assert.equal(
+    uncallableTool.code,
+    "AUTH_APPROVAL_REQUIRED",
+    `a ledger-only tool list must not authorize a call and must not be reported as an identity failure; the refusal must come from the approval gate, got ${JSON.stringify(uncallableTool)}`,
+  );
+  assert.equal(
+    uncallableTool.eventsAppended,
+    false,
+    "a refused call must leave the durable ledger untouched",
+  );
 
   // A session carrying no delegation at all is genuinely not found.
   const noDelegation = await delegationCall({ dropDelegation: true });

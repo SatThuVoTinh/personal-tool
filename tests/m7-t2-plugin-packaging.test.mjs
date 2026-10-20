@@ -621,6 +621,59 @@ describe("M12/T9 F-022 - no governance-resolution source carries a machine-speci
     return offenders;
   };
 
+  /**
+   * The lines that RESOLVE a module through a machine-specific path.
+   *
+   * M12/T9: the control this lane proves is F-022's - the deployed plugin must
+   * load its modules from its own digest-gated tree and never from a
+   * machine-specific absolute path, because a machine path bypasses the
+   * packaged assets and their digests. The predicate used to be "any
+   * non-comment line that carries a home-shaped path", which is a proxy for
+   * that claim and covers much more than it: a CONSTANT that names the
+   * governed state tree (F-203's `GOVERNED_STATE_TREE`, in `configure.mjs` and
+   * `verify.mjs`) is a policy fact about the live deployment, not a module
+   * resolution, and a source that carries one still resolves every module it
+   * loads from its own tree.
+   *
+   * So the predicate now names the RESOLUTION POSITIONS - an import
+   * specifier, a dynamic import, a require, a path built from an absolute
+   * root - and only those. The claim is unchanged, and the capability of the
+   * narrowed predicate is proved by the case below, which feeds it the F-022
+   * class itself.
+   */
+  const RESOLUTION_PATTERNS = [
+    /\bfrom\s*["'](?<spec>[^"']+)["']/gu,
+    /\bimport\s+["'](?<spec>[^"']+)["']/gu,
+    /\bimport\s*\(\s*["'](?<spec>[^"']+)["']\s*\)/gu,
+    /\brequire\s*\(\s*["'](?<spec>[^"']+)["']\s*\)/gu,
+    /\b(?:path\.)?(?:join|resolve)\s*\(\s*["'](?<spec>[^"']+)["']/gu,
+  ];
+
+  const moduleResolutionLines = (content) => {
+    const offenders = [];
+    content.split(/\r?\n/u).forEach((line, index) => {
+      const trimmed = line.trim();
+      if (
+        trimmed.startsWith("//") ||
+        trimmed.startsWith("*") ||
+        trimmed.startsWith("/*")
+      ) {
+        return;
+      }
+      for (const pattern of RESOLUTION_PATTERNS) {
+        for (const match of line.matchAll(pattern)) {
+          const specifier = match.groups?.spec ?? "";
+          if (
+            MACHINE_PATH_PATTERNS.some((machine) => machine.test(specifier))
+          ) {
+            offenders.push(index + 1);
+          }
+        }
+      }
+    });
+    return offenders;
+  };
+
   it("no tracked runtime source resolves a module through a machine-specific path", () => {
     const files = trackedRuntimeSources();
     assert.ok(
@@ -630,14 +683,60 @@ describe("M12/T9 F-022 - no governance-resolution source carries a machine-speci
     const offenders = [];
     for (const relative of files) {
       const content = readFileSync(path.join(REPO_ROOT, relative), "utf8");
-      for (const line of machinePathLines(content)) {
+      for (const line of moduleResolutionLines(content)) {
         offenders.push(`${relative}:${line}`);
       }
     }
     assert.deepEqual(
       offenders,
       [],
-      `a tracked runtime source resolves through a machine-specific path: ${offenders.join(", ")}`,
+      `a tracked runtime source resolves a module through a machine-specific path: ${offenders.join(", ")}`,
+    );
+  });
+
+  it("the module-resolution predicate still refuses the F-022 class", () => {
+    // The capability of the narrowed predicate, proved on the shapes it must
+    // refuse. Without this, "no source resolves a module through a
+    // machine-specific path" could be a statement about the predicate rather
+    // than about the tree.
+    const cases = [
+      [
+        "a static import from a Windows mount",
+        'import mod from "/mnt/c/Users/hoang_vinh/repo/mod.mjs";',
+      ],
+      [
+        "a static import from a Linux home",
+        'export { mod } from "/home/hoang_vinh/repo/mod.mjs";',
+      ],
+      [
+        "a dynamic import from a Windows home",
+        'const mod = await import("C:\\\\Users\\\\hoang_vinh\\\\repo\\\\mod.mjs");',
+      ],
+      [
+        "a require from a Linux home",
+        'const mod = require("/home/hoang_vinh/repo/mod.mjs");',
+      ],
+      [
+        "a path built from a machine root",
+        'const target = path.join("/home/hoang_vinh/repo", "mod.mjs");',
+      ],
+    ];
+    for (const [label, source] of cases) {
+      assert.deepEqual(
+        moduleResolutionLines(source),
+        [1],
+        `${label} must be refused as a machine-specific module resolution`,
+      );
+    }
+    // And the shape the band introduced is NOT a module resolution: a constant
+    // that names the governed state tree is a policy fact, and a source that
+    // carries one still loads every module from its own tree.
+    assert.deepEqual(
+      moduleResolutionLines(
+        'const GOVERNED_STATE_TREE = "/home/hoang_vinh/.openclaw-zink";',
+      ),
+      [],
+      "a governed-tree constant is not a module resolution",
     );
   });
 

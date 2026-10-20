@@ -178,7 +178,23 @@ describe("M8-055 — one canonical spawn proposal", () => {
       };
       const decision = await guard.beforeToolCall(event, context);
       assert.equal(decision.allow, true);
-      assert.match(decision.spawnLabel, /^[a-f0-9]{64}$/u);
+      // M12/T9 F-371: the delegation id is still the CANONICAL HASH, but its
+      // rendering moved: the canonical builder now emits a version-4 UUID, and
+      // the ledger keeps reading the legacy 64-hex rendering so the ids history
+      // recorded still replay. The claim this case proves is that the live
+      // route and the governed route produce the SAME id - asserted by the
+      // fixed point below - and that the id is a canonical rendering of that
+      // hash and never an identity shape.
+      assert.match(
+        decision.spawnLabel,
+        /^([a-f0-9]{64}|[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/u,
+        "the delegation id must be a canonical rendering, in one of its two forms",
+      );
+      assert.doesNotMatch(
+        decision.spawnLabel,
+        /^\d{17}$/u,
+        "a bare snowflake is an identity, never a delegation id",
+      );
       // The reserved run in the ledger carries exactly that id.
       const reserved =
         readSnapshot(paths).tasks[taskId].delegations[decision.spawnLabel];

@@ -573,10 +573,19 @@ test("R18 13: R18 leaves the pinned native patch byte-identical", () => {
   // tests/m10-t2-r8-preflight-lineage.test.mjs.
   assert.equal(
     sha256(readFileSync(NATIVE_PATCH_PATH, "utf8")),
-    // M12/T9: rolled for F-146 and F-163 - the predecessor branch now takes the
-    // backup the caller handed it, and a failed atomic replace leaves no
-    // residue. The pin still forbids ANY other drift.
-    "6ece51a102dc423470f0271c55c931f04e44930b2e1545ab110254420b456874",
+    // M12/T9: rolled for F-011 - the Discord channel root is now resolved from
+    // the INSTALLED plugin package instead of a pinned install content-hash -
+    // and for F-185 - the backup manifest's governance revision now comes from
+    // the one authoritative constant, and any revision the machinery wrote is
+    // accepted on restore. The pin still forbids ANY other drift.
+    //
+    // HANDOVER: this digest names the bytes in the tree as it stands. If the
+    // topology owner edits `native-patch.mjs` again, the pin has to be rolled
+    // again, in the same commit, following the convention this block already
+    // records. Recompute it with:
+    //   node -e "const{createHash}=require('crypto');const fs=require('fs');
+    //   console.log(createHash('sha256').update(fs.readFileSync('integrations/openclaw/topology/lib/native-patch.mjs','utf8')).digest('hex'))"
+    "981dc7dd15b2056e2f47e44e181c2dfabcdb0334626b662d8be55af5ee3c34cd",
     "native-patch.mjs must equal the R8-stderr-grounded-authorized bytes; any other drift fails",
   );
 });
