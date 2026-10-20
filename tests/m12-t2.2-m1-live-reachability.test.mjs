@@ -26,7 +26,7 @@ process.env.ZINK_ROUTER_API_KEY ||= "test-router-key-not-a-credential";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -159,6 +159,35 @@ function listedEntrypointDigests() {
   return [...digests];
 }
 
+/** Every path the asset allowlist in configure.mjs names. */
+function allowlistedAssetPaths() {
+  const table = assetTable();
+  return [...table.matchAll(/^\s*"([^"]+)":\s*Object\.freeze\(\[/gmu)].map(
+    (match) => match[1],
+  );
+}
+
+/**
+ * F-148: the governed paths that cannot be read live from THIS platform, with
+ * the reason. A governed path is either READ live (and therefore asserted by
+ * the M1 4 sweep) or covered by a declaration here. A path that is neither is
+ * UNASSERTED, and the count of unasserted paths must be zero.
+ *
+ * The sweep's own coverage assertion tolerates one unread path
+ * (`read >= governed.length - 1`), so a governed path the deployed tree does
+ * not carry at all was invisible to every lane: no drift verdict, no
+ * declaration, nothing. The declaration below is a property of the PLATFORM,
+ * not of any single path, so it is recorded once.
+ */
+const LIVE_REACHABILITY_DECLARATIONS = Object.freeze([
+  Object.freeze({
+    environment: "live-tree-not-mountable",
+    reason:
+      "the deployed extension tree (/home/hoang_vinh/.openclaw-zink/extensions/zink-governance) is not mountable from this platform, so no governed path is live-reachable here; the WSL lane is the gate that reads it",
+    covers: (mountable) => !mountable,
+  }),
+]);
+
 test("M1 1: every digest M-1 admits is reproduced from its commit by the real generator", async () => {
   const byCommit = new Map();
   for (const { commit } of ADMITTED_LIVE_BUILDS) {
@@ -249,5 +278,55 @@ test("M1 4: every governed path the live runtime carries is current or admitted"
     unreachable,
     [],
     `these governed paths are neither the current build nor an admitted predecessor, so --preflight refuses the deployed extension:\n  ${unreachable.join("\n  ")}`,
+  );
+});
+
+test("M1 5: every governed path is asserted live or declared not-live-reachable", async () => {
+  // F-148: only three of the thirty-five governed paths carried any
+  // live-reachability assertion (R13 P1, R13 P2, R7 P1), so every other
+  // packaged asset could drift forward indefinitely with no gate noticing.
+  // This case proves the COVERAGE of the governed-path set on every platform:
+  // each path is read live (and therefore asserted by the sweep above) or it
+  // is covered by a declared reason, and the count of unasserted paths is
+  // zero. It never skips: the coverage property is decidable everywhere, and
+  // only the drift verdict needs the live tree.
+  const current = await currentBuild();
+  const governed = ["index.mjs", ...Object.keys(current.assets)];
+  assert.equal(
+    governed.length,
+    35,
+    `the governed-path set is the entrypoint plus the packaged assets, saw ${governed.length}`,
+  );
+
+  // A path the allowlist admits a predecessor for must be a governed path:
+  // otherwise the admitted digest would be accepted by `--preflight` while no
+  // sweep ever examines it.
+  const allowlisted = allowlistedAssetPaths();
+  for (const rel of allowlisted) {
+    assert.ok(
+      governed.includes(rel),
+      `configure.mjs admits a predecessor for ${rel}, which is not a governed path of the current build, so no live-reachability assertion ever examines it`,
+    );
+  }
+
+  const mountable = existsSync(LIVE_DIR);
+  const unasserted = [];
+  for (const rel of governed) {
+    try {
+      readFileSync(path.join(LIVE_DIR, ...rel.split("/")), "utf8");
+      continue; // Read live: the sweep asserts this path.
+    } catch {
+      // Not readable from this platform.
+    }
+    const declaration = LIVE_REACHABILITY_DECLARATIONS.find((entry) =>
+      entry.covers(mountable),
+    );
+    if (declaration) continue; // Declared not-live-reachable, with the reason.
+    unasserted.push(rel);
+  }
+  assert.equal(
+    unasserted.length,
+    0,
+    `these governed paths carry no live-reachability assertion and are not declared not-live-reachable, so they can drift with no gate noticing: ${unasserted.join(", ")}`,
   );
 });
