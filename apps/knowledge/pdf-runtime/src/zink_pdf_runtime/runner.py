@@ -5,10 +5,12 @@ from __future__ import annotations
 import hashlib
 import importlib.metadata
 import json
+import math
 import os
 import random
 import re
 import sys
+import time
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 
@@ -16,6 +18,12 @@ from .ocr import OcrRuntimeError
 
 PROTOCOL_VERSION = "zink:pdf-runtime-protocol:v1"
 MAX_REQUEST_BYTES = 64 * 1024
+# F-284 (R7-C3-03): the parent sends the budget it has left for this
+# extraction, and the child refuses a request that carries no budget. The
+# child's own worst case (four pages times thirty-two regions times ninety
+# seconds) is twelve times the parent's operation ceiling, so the composition
+# has to be bounded by the budget the parent sent.
+MAX_EXTRACTION_BUDGET_SECONDS = 3600.0
 _SAFE_ERRORS = {
     "PDF_DOCUMENT_INVALID",
     "PDF_DOCUMENT_ENCRYPTED",
@@ -109,6 +117,7 @@ def _extract_range(request: Mapping[str, Any]) -> Mapping[str, Any]:
         "page_start",
         "page_end",
         "expected_processing_identity_digest",
+        "deadline_budget_seconds",
     }:
         return _error("PDF_RUNTIME_OUTPUT_INVALID")
     start, end = request.get("page_start"), request.get("page_end")
@@ -121,6 +130,15 @@ def _extract_range(request: Mapping[str, Any]) -> Mapping[str, Any]:
         or end < start
     ):
         return _error("PDF_RUNTIME_OUTPUT_INVALID")
+    budget = request.get("deadline_budget_seconds")
+    if (
+        isinstance(budget, bool)
+        or not isinstance(budget, (int, float))
+        or not math.isfinite(float(budget))
+        or float(budget) <= 0
+        or float(budget) > MAX_EXTRACTION_BUDGET_SECONDS
+    ):
+        return _error("PDF_RUNTIME_OUTPUT_INVALID")
     probe = _probe({
         "protocol_version": PROTOCOL_VERSION,
         "operation": "probe",
@@ -128,9 +146,10 @@ def _extract_range(request: Mapping[str, Any]) -> Mapping[str, Any]:
     })
     if probe.get("status") != "ok":
         return probe
+    overall_deadline = time.monotonic() + float(budget)
     try:
         source = _safe_source_path(request.get("source_path"))
-        items = _docling_extract(source, start, end)
+        result = _docling_extract(source, start, end, overall_deadline)
     except OcrRuntimeError as error:
         # F-283 (R7-C3-02): the OCR deadline and the OCR output cap are the
         # parent's own classification inputs, so they must survive the child
@@ -142,13 +161,41 @@ def _extract_range(request: Mapping[str, Any]) -> Mapping[str, Any]:
         return _error("PDF_PAGE_RANGE_UNSUPPORTED")
     except Exception:
         return _error("PDF_RUNTIME_FAILED")
+    # F-282 (R7-C3-01): the conversion outcome is evidence. A conversion that
+    # did not fully succeed means a requested page may have been skipped, and
+    # a page that produced nothing used to disappear from the index while the
+    # build was marked complete. The child fails closed instead.
+    if not conversion_succeeded(result):
+        return _error("PDF_RUNTIME_FAILED")
+    items = _materialize_document_items(result.document, start, end)
+    covered_pages = sorted({int(item["page_start"]) for item in items})
+    blank_pages = sorted(set(range(start, end + 1)) - set(covered_pages))
     return {
         "protocol_version": PROTOCOL_VERSION,
         "status": "ok",
         "page_start": start,
         "page_end": end,
         "items": items,
+        # F-282 (R7-C3-01): the response names the pages it covered, and the
+        # pages the successful conversion proved empty, so the parent can
+        # refuse a batch that accounts for neither.
+        "covered_pages": covered_pages,
+        "blank_pages": blank_pages,
     }
+
+
+def conversion_succeeded(result: Any) -> bool:
+    """Whether the conversion outcome was fully successful.
+
+    F-282 (R7-C3-01): the conversion result carries its own status, and only
+    the fully successful one proves that every requested page was processed.
+    """
+
+    status = getattr(result, "status", None)
+    if status is None:
+        return False
+    value = getattr(status, "value", status)
+    return str(value).strip().lower() == "success"
 
 
 def _preflight(request: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -207,7 +254,9 @@ class _MultiPageItem(RuntimeError):
     pass
 
 
-def _docling_extract(source: Path, start: int, end: int) -> list[dict[str, Any]]:
+def _docling_extract(
+    source: Path, start: int, end: int, overall_deadline: float
+) -> Any:
     """Use the candidate's public range API and explicit Pdfium backend only.
 
     The integration test runs this exact path inside the Linux image and
@@ -221,7 +270,7 @@ def _docling_extract(source: Path, start: int, end: int) -> list[dict[str, Any]]
     from docling.datamodel.pipeline_options import PdfPipelineOptions
     from docling.document_converter import DocumentConverter, PdfFormatOption
 
-    from .docling_ocr import M4StandardPdfPipeline
+    from .docling_ocr import M4StandardPdfPipeline, set_extraction_deadline
 
     artifacts = Path(os.environ["ZINK_PDF_ARTIFACTS_ROOT"])
     if not artifacts.is_dir():
@@ -247,11 +296,17 @@ def _docling_extract(source: Path, start: int, end: int) -> list[dict[str, Any]]
             )
         },
     )
+    # F-284 (R7-C3-03): the deadline the parent sent bounds the WHOLE
+    # extraction, so every OCR region inside it is bounded by that deadline
+    # rather than by a fresh ninety seconds each.
+    set_extraction_deadline(overall_deadline)
     try:
         result = converter.convert(source, page_range=(start, end))
     except TypeError as error:
         raise _RangeUnsupported from error
-    return _materialize_document_items(result.document, start, end)
+    finally:
+        set_extraction_deadline(None)
+    return result
 
 
 def _materialize_document_items(

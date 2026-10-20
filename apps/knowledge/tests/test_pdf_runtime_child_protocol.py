@@ -34,6 +34,9 @@ EXTRACT_REQUEST = {
     "page_start": 1,
     "page_end": 2,
     "expected_processing_identity_digest": "a" * 64,
+    # F-284 (R7-C3-03): the request carries the budget the parent has left
+    # for this extraction.
+    "deadline_budget_seconds": 900,
 }
 
 PROBE_REQUEST = {

@@ -21,7 +21,20 @@ from docling.utils.ocr_utils import tesseract_box_to_bounding_rectangle
 from docling_core.types.doc import BoundingBox, CoordOrigin
 from docling_core.types.doc.page import TextCell
 
-from .ocr import OcrRuntimeError, run_tesseract
+from .ocr import OcrRuntimeError, region_deadline, require_deadline, run_tesseract
+
+# F-284 (R7-C3-03): the deadline the parent sent for this extraction. The
+# child runtime is a one-shot process that performs exactly one extraction,
+# so the deadline is a property of that extraction and not state shared
+# between concurrent requests.
+_EXTRACTION_DEADLINE: float | None = None
+
+
+def set_extraction_deadline(deadline: float | None) -> None:
+    """Bind (or clear) the deadline that bounds this extraction."""
+
+    global _EXTRACTION_DEADLINE
+    _EXTRACTION_DEADLINE = deadline
 
 
 class M4TesseractOcrModel(BaseOcrModel):
@@ -67,12 +80,15 @@ class M4TesseractOcrModel(BaseOcrModel):
             for rect in rects:
                 if rect.area() == 0:
                     continue
+                # F-284 (R7-C3-03): every region is bounded by the deadline the
+                # parent sent, not by a fresh ninety seconds.
+                overall_deadline = require_deadline(_EXTRACTION_DEADLINE)
                 image = page._backend.get_page_image(scale=self.scale, cropbox=rect)
                 with tempfile.TemporaryDirectory(dir=temp_root) as directory:
                     image_path = Path(directory) / "region.png"
                     image.save(image_path, format="png")
                     image_path.chmod(0o600)
-                    tsv = run_tesseract(image_path, deadline=time.monotonic() + 90)
+                    tsv = run_tesseract(image_path, deadline=region_deadline(overall_deadline))
                 cells.extend(_tsv_cells(tsv, rect, image.size, self.scale))
             self.post_process_cells(cells, page, conv_res)
             yield page

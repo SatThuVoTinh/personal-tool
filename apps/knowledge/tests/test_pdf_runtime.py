@@ -116,6 +116,10 @@ class ProtocolValidationTests(unittest.TestCase):
                 "page_end": 5,
                 "bbox": [0.1, 0.2, 0.3, 0.4],
             }],
+            # F-282 (R7-C3-01): the response names the pages it covered and
+            # the pages the successful conversion proved empty.
+            "covered_pages": [5],
+            "blank_pages": [6, 7, 8],
         })
         self.assertEqual(_validate_response(response, request)["status"], "ok")
 
@@ -155,6 +159,10 @@ class ProtocolValidationTests(unittest.TestCase):
                 "page_end": 4,
                 "bbox": None,
             }],
+            # F-282 (R7-C3-01): the coverage report is part of the response,
+            # so this case still exercises the ITEM validation.
+            "covered_pages": [4],
+            "blank_pages": [5, 6, 7, 8],
         }
         with self.assertRaisesRegex(PdfRuntimeError, "PDF_RUNTIME_OUTPUT_INVALID"):
             _validate_response(self.response(base), request)

@@ -252,6 +252,15 @@ class PdfRuntimeClient:
         ):
             raise PdfRuntimeError("PDF_RUNTIME_OUTPUT_INVALID")
         canonical = canonical_vault_path(self._settings.vault_root, source_path, require_pdf=True)
+        # F-284 (R7-C3-03): the child receives the budget this invocation has
+        # left. Its own worst case -- thirty-two regions on each of four pages,
+        # at ninety seconds each -- is twelve times the parent's operation
+        # ceiling, so without this budget the only real bound was the
+        # process-group kill, and a timeout said nothing about how far the
+        # extraction got.
+        budget = deadline - asyncio.get_running_loop().time()
+        if budget <= 0:
+            raise PdfRuntimeError("PDF_RUNTIME_TIMEOUT")
         return await self._invoke(
             {
                 "protocol_version": PROTOCOL_VERSION,
@@ -260,6 +269,7 @@ class PdfRuntimeClient:
                 "page_start": page_start,
                 "page_end": page_end,
                 "expected_processing_identity_digest": expected_processing_identity_digest,
+                "deadline_budget_seconds": budget,
             },
             deadline,
         )
@@ -577,14 +587,72 @@ def _validate_response(raw: bytes, request: Mapping[str, Any]) -> Mapping[str, A
         if isinstance(page_count, bool) or not isinstance(page_count, int) or page_count < 1:
             raise PdfRuntimeError("PDF_RUNTIME_OUTPUT_INVALID")
     if request["operation"] == "extract_range":
-        if set(response) != {"protocol_version", "status", "page_start", "page_end", "items"}:
+        if set(response) != {
+            "protocol_version",
+            "status",
+            "page_start",
+            "page_end",
+            "items",
+            "covered_pages",
+            "blank_pages",
+        }:
             raise PdfRuntimeError("PDF_RUNTIME_OUTPUT_INVALID")
         if response.get("page_start") != request["page_start"] or response.get("page_end") != request["page_end"]:
             raise PdfRuntimeError("PDF_RUNTIME_OUTPUT_INVALID")
         if not isinstance(response.get("items"), list):
             raise PdfRuntimeError("PDF_RUNTIME_OUTPUT_INVALID")
         _validate_items(response["items"], request["page_start"], request["page_end"])
+        # F-282 (R7-C3-01): a requested page must either be covered by the
+        # response or be proven blank by the conversion. A page that is
+        # neither is a page that would have disappeared from the index while
+        # the build was marked complete.
+        _validate_page_coverage(
+            response.get("covered_pages"),
+            response.get("blank_pages"),
+            request["page_start"],
+            request["page_end"],
+            response["items"],
+        )
     return response
+
+
+def _validate_page_coverage(
+    covered: Any,
+    blank: Any,
+    requested_start: int,
+    requested_end: int,
+    items: list[Any],
+) -> None:
+    """Every requested page must be covered or proven blank.
+
+    F-282 (R7-C3-01): the child names the pages its items came from and the
+    pages the successful conversion proved empty. A page in neither set was
+    never accounted for, so the batch is refused instead of losing the page.
+    """
+
+    requested = set(range(requested_start, requested_end + 1))
+    covered_pages = _validated_page_set(covered, requested)
+    blank_pages = _validated_page_set(blank, requested)
+    if covered_pages & blank_pages:
+        raise PdfRuntimeError("PDF_RUNTIME_OUTPUT_INVALID")
+    if covered_pages | blank_pages != requested:
+        raise PdfRuntimeError("PDF_RUNTIME_OUTPUT_INVALID")
+    item_pages = {int(item["page_start"]) for item in items}
+    if item_pages != covered_pages:
+        raise PdfRuntimeError("PDF_RUNTIME_OUTPUT_INVALID")
+
+
+def _validated_page_set(value: Any, requested: set[int]) -> set[int]:
+    if not isinstance(value, list):
+        raise PdfRuntimeError("PDF_RUNTIME_OUTPUT_INVALID")
+    pages: set[int] = set()
+    for entry in value:
+        if isinstance(entry, bool) or not isinstance(entry, int) or entry not in requested:
+            raise PdfRuntimeError("PDF_RUNTIME_OUTPUT_INVALID")
+        pages.add(entry)
+    if list(value) != sorted(value):
+        raise PdfRuntimeError("PDF_RUNTIME_OUTPUT_INVALID")
+    return pages
 
 
 def _validate_items(items: list[Any], requested_start: int, requested_end: int) -> None:

@@ -25,6 +25,33 @@ class OcrRuntimeError(RuntimeError):
         self.code = code
 
 
+def require_deadline(overall_deadline: float | None) -> float:
+    """The extraction deadline, or a refusal when there is none.
+
+    F-284 (R7-C3-03): the child could not compose the parent's operation
+    ceiling on its own -- its worst case was twelve times that ceiling -- so
+    an extraction without a deadline is refused instead of being bounded by a
+    per-region constant that overstates it.
+    """
+
+    if overall_deadline is None or time.monotonic() >= overall_deadline:
+        raise OcrRuntimeError("PDF_RUNTIME_TIMEOUT")
+    return overall_deadline
+
+
+def region_deadline(overall_deadline: float) -> float:
+    """The deadline one OCR region may run until.
+
+    F-284 (R7-C3-03): every region used to get its own fresh ninety
+    seconds, so thirty-two regions on each of four pages could take 11520
+    seconds against a 900 second ceiling. A region now stops at the
+    extraction deadline the parent sent, so the composition of the regions
+    cannot exceed the budget.
+    """
+
+    return min(time.monotonic() + OCR_TIMEOUT_SECONDS, overall_deadline)
+
+
 def run_tesseract(image: Path, *, deadline: float) -> str:
     """Extract one OCR region with fixed arguments and streaming output cap."""
 
