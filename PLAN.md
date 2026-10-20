@@ -230,7 +230,10 @@ Prior revision: M12/T2.1-R1 — the execution wave the owner authorized on 2026-
   literal into scope and removing that literal is `M12/T5` (§4.17) — that red is truth and must be recorded as
   a known-red, never repaired by narrowing the guard; **(written before execution: `4A.16(i)` was then withdrawn as
   unbacked by owner answer `I3-A` and declined again in Wave B, so the known-red never happened — see §4.17's
-  `R5-E13-05` row)**; (b) **five of the sixteen Vòng 5 sweep lanes are
+  `R5-E13-05` row; and as of 2026-10-20 the `/mnt/c/…` literal itself is gone from
+  `plugins/zink-governance/index.mjs`, so widening M7-063's file list to reach the
+  entrypoint would NOT turn the gate red today either — no tier may record a known-red
+  the tree cannot produce)**; (b) **five of the sixteen Vòng 5 sweep lanes are
   `NOT RUN`** (E08, E11, E14, E15, E16) and **all twelve Vòng 6 verification lanes are `NOT RUN`** — the
   harness returned a daily usage limit on five consecutive dispatch attempts — so no claim of full-repo
   coverage may be made, and the orchestrator's own re-derivation of ten claims is a **weaker** substitute
