@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
   closeSync,
   existsSync,
@@ -20,6 +20,7 @@ import { setTimeout, clearTimeout } from "node:timers";
 import {
   createGovernanceGuard,
   resolveN8nInvocation,
+  resolveAuthenticatedApproval,
   bindInvocationApproval,
   whenGovernanceDependenciesReady,
   loadSharedGovernanceModule,
@@ -43,6 +44,10 @@ import {
   AGENT_SPAWN_POLICY,
   AGENT_STACK_POLICY,
   ZINK_CAPABILITY_REGISTRY,
+  AUTHORIZATION_MODE_BY_TOOL,
+  OPERATION_POLICY,
+  deriveApprovalMaterialParameters,
+  deriveApprovalScopeDigest,
 } from "../../lib/policy.mjs";
 import {
   sanitizeDelegationText,
@@ -166,6 +171,8 @@ import {
   DecisionLedger,
   defaultDecisionLedger,
 } from "../../lib/decision-ledger.mjs";
+
+import { lockDirFor, withFileLockSync } from "../../lib/file-lock.mjs";
 
 export {
   formatForDiscord,
@@ -3600,6 +3607,130 @@ export function evaluateToolAccess(agentId, toolName, params = {}) {
     };
   }
   return { allowed: true, level: access.level };
+}
+
+/**
+ * M12/T9 F-242: the canonical operation of a governed tool call.
+ *
+ * The operation comes from the POLICY table and the tool's own contract, never
+ * from a field the model chose: `zink_python` executes, `zink_sql` queries,
+ * `zink_n8n` triggers, and the two workbook tools name their operation inside
+ * the input the published contract validates. An operation the policy does not
+ * know is a capability mismatch, not a free-form pass.
+ */
+export function governedOperationFor(toolName, input) {
+  if (toolName === "zink_python") return "execute";
+  if (toolName === "zink_sql") return "query";
+  if (toolName === "zink_n8n") return "trigger";
+  if (toolName === "zink_excel" || toolName === "zink_power_bi") {
+    const operation = input?.operation;
+    return typeof operation === "string" &&
+      OPERATION_POLICY[toolName]?.[operation]
+      ? operation
+      : null;
+  }
+  return null;
+}
+
+/**
+ * M12/T9 F-243: the durable minter for a tool-invocation approval record.
+ *
+ * `bindInvocationApproval` resolves its record from four stores - a
+ * process-global map, `approvals.json`, `approvals/<id>.json` and the task's
+ * own approvals map - and NOTHING in the shipped code wrote any of them: the
+ * only writers were test fixtures. The control therefore had no
+ * production-reachable pass path, and the only real behaviour was the refusal.
+ *
+ * This is the production writer. The record it writes is the PUBLISHED
+ * `GovernedInvocationApproval` shape of `approval-request.schema.json` - the
+ * same shape the guard's resolver validates - so the record the owner
+ * approves is exactly the record the guard reads back.
+ *
+ * The record is written UNDER THE LEDGER'S WRITER LOCK, because the guard
+ * reads the same store under that lock: an unlocked read could observe a
+ * half-written record and then consume a record the consumer never saw.
+ */
+export const INVOCATION_APPROVAL_TTL_MS = 60 * 60 * 1000;
+
+const UUID_V4_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+
+export function invocationApprovalRecordPath(paths, approvalId) {
+  if (!paths?.root || typeof paths.root !== "string") return null;
+  if (typeof approvalId !== "string" || !UUID_V4_PATTERN.test(approvalId))
+    return null;
+  return path.join(paths.root, "approvals", `${approvalId}.json`);
+}
+
+export function mintInvocationApprovalRecord({
+  paths,
+  taskId,
+  briefRevision,
+  toolId,
+  operation,
+  exactTarget,
+  input,
+  ownerPrincipalRef,
+  expiresAt = null,
+  ttlMs = INVOCATION_APPROVAL_TTL_MS,
+}) {
+  if (!paths?.root || typeof paths.root !== "string") {
+    throw new Error("APPROVAL_STORE_UNAVAILABLE: the ledger root is required");
+  }
+  if (typeof ownerPrincipalRef !== "string" || ownerPrincipalRef.length === 0) {
+    throw new Error(
+      "APPROVAL_PRINCIPAL_REQUIRED: an approval record must name its owner",
+    );
+  }
+  if (!OPERATION_POLICY[toolId]?.[operation]) {
+    throw new Error(
+      "APPROVAL_OPERATION_UNKNOWN: the policy declares no such operation",
+    );
+  }
+  const expiresIso =
+    typeof expiresAt === "string" && expiresAt
+      ? expiresAt
+      : new Date(Date.now() + ttlMs).toISOString();
+  const materialParameters = deriveApprovalMaterialParameters(
+    toolId,
+    operation,
+    input ?? {},
+  );
+  const approvalScopeDigest = deriveApprovalScopeDigest({
+    task_id: taskId,
+    brief_revision: Number(briefRevision),
+    tool_id: toolId,
+    operation,
+    exact_target: exactTarget,
+    material_parameters: materialParameters,
+    expires_at: expiresIso,
+  });
+  const approvalId = randomUUID();
+  const record = {
+    owner_principal_ref: ownerPrincipalRef,
+    task_id: taskId,
+    brief_revision: Number(briefRevision),
+    tool_id: toolId,
+    operation,
+    exact_target: exactTarget,
+    approval_scope_digest: approvalScopeDigest,
+    expires_at: expiresIso,
+  };
+  // The contract is authority, not decoration: a record that does not conform
+  // is never written, so the resolver can never find an unusable record.
+  validateContract("approval-request", record);
+  const recordPath = invocationApprovalRecordPath(paths, approvalId);
+  if (!recordPath) {
+    throw new Error("APPROVAL_STORE_UNAVAILABLE: no durable approval path");
+  }
+  // The guard reads this store under the ledger's writer lock, so the write
+  // takes the SAME lock: an unlocked write could be observed half-written by
+  // a reader that then consumes a record it never fully saw.
+  withFileLockSync(lockDirFor(paths.root, "writer.lock"), () => {
+    mkdirSync(path.dirname(recordPath), { recursive: true });
+    writeJsonAtomicSync(recordPath, record);
+  });
+  return { approvalId, record, path: recordPath };
 }
 
 // C10 & C11: Auto-load tool schemas from checked-in contracts in zink-tools/contracts/
@@ -7148,30 +7279,24 @@ export default {
             "zink_n8n",
           ].includes(event.toolName)
         ) {
-          const isSynthetic = Boolean(
-            event.params?.call_id &&
-            event.params?.specialist &&
-            event.params?.tool_id &&
-            event.params?.input,
-          );
-
-          if (isSynthetic) {
-            const decision = await guard.beforeToolCall(event, context, signal);
-            if (decision?.allow) {
-              const lKey = leaseKey(
-                { ...context, toolCallId: event.toolCallId },
-                event,
-              );
-              const pHash = canonicalHash(
-                "zink-native-call-v1",
-                event.params ?? {},
-              );
-              setLease(lKey, pHash);
-            }
-            return decision;
-          }
-
-          // Live OpenClaw agent tool call
+          // M12/T9 F-242: ONE governed path, chosen by POLICY and never by the
+          // shape of the model's own parameters.
+          //
+          // The branch used to be selected by `isSynthetic`: a call whose
+          // params happened to carry call_id/specialist/tool_id/input went
+          // through guard.beforeToolCall, and EVERY OTHER call - which is every
+          // live call the runtime actually makes - went through a capability
+          // lookup and a path check and was ALLOWED. A delegated operation the
+          // policy marks `requiresApproval` therefore executed with no
+          // approval record, no delegation binding and no
+          // AuthorizationDecisionContext, and a model could opt out of the
+          // governed path simply by shaping its arguments.
+          //
+          // The path is now ONE path, and it is the canonical one: the plugin
+          // builds the tool-call envelope from TRUSTED context - the ledger's
+          // delegation, the policy's operation table - and the guard decides.
+          // The model's parameters are DATA (the input), never the authority
+          // that selects the path.
           const access = evaluateToolAccess(context.agentId, event.toolName);
           if (!access.allowed) {
             api.logger?.warn?.(
@@ -7184,142 +7309,49 @@ export default {
             };
           }
 
-          // Path & Query Safety Validation (M7-005/M7-007: the live path
-          // calls the canonical validators — no second SQL/path policy)
-          if (event.toolName === "zink_excel") {
-            const filePath = event.params?.file_path;
-            if (!filePath || typeof filePath !== "string") {
-              return {
-                allow: false,
-                block: true,
-                reason: "SCHEMA_VALIDATION_FAILED",
-              };
-            }
-            const pathCheck = await validateLiveArtifactPath(filePath);
-            if (!pathCheck.ok) {
-              return {
-                allow: false,
-                block: true,
-                reason: pathCheck.reason,
-              };
-            }
-          } else if (event.toolName === "zink_sql") {
-            const query = event.params?.query || event.params?.sql;
-            if (!query || typeof query !== "string") {
-              return {
-                allow: false,
-                block: true,
-                reason: "SCHEMA_VALIDATION_FAILED",
-              };
-            }
-            const sqlCheck = await validateLiveSqlQuery(
-              query,
-              event.params?.parameters,
-            );
-            if (!sqlCheck.ok) {
-              return {
-                allow: false,
-                block: true,
-                reason: sqlCheck.reason,
-              };
-            }
-          } else if (event.toolName === "zink_n8n") {
-            // M7-006: the live n8n path uses the SAME canonical registry,
-            // delegation scope and approval binding as the guarded path. The
-            // live branch previously performed none of them, so any agent with
-            // static tool access could trigger any workflow id.
-            // The policy authority loads asynchronously; decide only against a
-            // loaded policy, never against an empty projection.
+          // The policy authority loads asynchronously; decide only against a
+          // loaded policy, never against an empty projection.
+          try {
+            await whenGovernanceDependenciesReady();
+          } catch {
+            return {
+              allow: false,
+              block: true,
+              reason: "GOVERNANCE_DEPENDENCY_MISSING",
+            };
+          }
+
+          // The live input is the model's DATA. The operation comes from the
+          // canonical policy tables, so a payload cannot rename the operation
+          // it is asking for.
+          //
+          // The approval id is a GOVERNMENT ENVELOPE field, never tool input:
+          // the published tool-call contract carries it beside the input, and
+          // the published tool input contracts forbid it. So it is lifted out
+          // of the payload here and never reaches the envelope's `input`.
+          const rawInput = event.params?.input ?? event.params ?? {};
+          const { approval_id: inlineApprovalId, ...liveInput } = rawInput;
+          const approvalId =
+            typeof inlineApprovalId === "string"
+              ? inlineApprovalId
+              : typeof event.params?.approval_id === "string"
+                ? event.params.approval_id
+                : null;
+          const operation = governedOperationFor(event.toolName, liveInput);
+          if (!operation) {
+            return {
+              allow: false,
+              block: true,
+              reason: "RUNTIME_CAPABILITY_MISMATCH",
+            };
+          }
+          if (event.toolName === "zink_n8n") {
+            // M7-006: the live n8n path resolves the workflow through the ONE
+            // canonical registry, so an unregistered workflow is a capability
+            // mismatch and an agent outside the workflow allowlist is denied -
+            // before any approval is considered.
             try {
-              await whenGovernanceDependenciesReady();
-            } catch {
-              return {
-                allow: false,
-                block: true,
-                reason: "GOVERNANCE_DEPENDENCY_MISSING",
-              };
-            }
-            let owner;
-            try {
-              owner = findSession(
-                readSnapshot(paths),
-                context.sessionKey,
-                context.runId,
-              );
-            } catch {
-              return {
-                allow: false,
-                block: true,
-                reason: "AUTH_DELEGATION_NOT_FOUND",
-              };
-            }
-            if (!owner?.delegation) {
-              return {
-                allow: false,
-                block: true,
-                reason: "AUTH_DELEGATION_NOT_FOUND",
-              };
-            }
-            const liveRun = owner.delegation;
-            // Delegation scope: the run must be live, the agent must own it,
-            // the run id must match, and the tool must be in the delegation's
-            // own allowlist. A root session has no delegation to scope to.
-            if (liveRun.run_state === "REVOKED") {
-              return {
-                allow: false,
-                block: true,
-                reason: "AUTH_DELEGATION_REVOKED",
-              };
-            }
-            if (liveRun.run_state !== "RUNNING") {
-              return {
-                allow: false,
-                block: true,
-                reason: "AUTH_DELEGATION_INACTIVE",
-              };
-            }
-            if (context.agentId !== liveRun.agent_id) {
-              return {
-                allow: false,
-                block: true,
-                reason: "AUTH_UNAUTHORIZED_TARGET",
-              };
-            }
-            if (context.runId !== liveRun.native_run_id) {
-              return {
-                allow: false,
-                block: true,
-                reason: "LINEAGE_MISMATCH",
-              };
-            }
-            if (
-              String(owner.task?.brief_revision) !==
-              String(liveRun.brief_revision)
-            ) {
-              return {
-                allow: false,
-                block: true,
-                reason: "REVISION_SUPERSEDED",
-              };
-            }
-            // The recorded delegation tool list, when present, may only NARROW
-            // the canonical ceiling that evaluateToolAccess already applied. It
-            // can never add authority the canonical policy withheld, and its
-            // absence is not a licence: the canonical projection stands alone.
-            if (
-              Array.isArray(liveRun.allowed_tools) &&
-              !liveRun.allowed_tools.includes("zink_n8n")
-            ) {
-              return {
-                allow: false,
-                block: true,
-                reason: "AUTH_POLICY_DENIED",
-              };
-            }
-            const liveInput = event.params?.input ?? event.params ?? {};
-            let invocation;
-            try {
-              invocation = resolveN8nInvocation({
+              resolveN8nInvocation({
                 workflowId: liveInput.workflow_id,
                 agentId: context.agentId,
               });
@@ -7330,91 +7362,131 @@ export default {
                 reason: registryErr?.message ?? "RUNTIME_CAPABILITY_MISMATCH",
               };
             }
-            if (invocation.requiresApproval) {
-              try {
-                bindInvocationApproval({
-                  paths,
-                  approvalId: event.params?.approval_id,
-                  taskId: owner.task_id,
-                  briefRevision: owner.task.brief_revision,
-                  originPrincipalRef:
-                    owner.task?.origin_principal_ref ??
-                    owner.task?.origin?.origin_principal_ref ??
-                    owner.task?.root_principal_ref,
-                  toolId: "zink_n8n",
-                  operationName: invocation.operationName,
-                  actualTarget: invocation.actualTarget,
-                  input: liveInput,
-                  runId: context.runId,
-                  currentTime: Date.now(),
-                });
-              } catch (approvalErr) {
-                return {
-                  allow: false,
-                  block: true,
-                  reason: approvalErr?.message ?? "AUTH_APPROVAL_INVALID",
-                };
-              }
-            }
+          }
 
-            // Dispatch through the ONE canonical governed seam. The guard
-            // issues the immutable AuthorizationDecisionContext and calls the
-            // real `invokeN8n`; this path adds no authorization of its own and
-            // never calls the adapter directly. The validated tool-result
-            // envelope it returns is the only truthful n8n outcome, so the
-            // model-visible tool reports exactly that instead of a fabricated
-            // ENGINE_NOT_IMPLEMENTED.
-            const canonicalN8nDecision = await guard.beforeToolCall(
-              {
-                toolName: "zink_n8n",
-                toolCallId: event.toolCallId,
-                turn:
-                  typeof event.turn === "number" && event.turn > 0
-                    ? event.turn
-                    : 1,
-                params: {
-                  call_id: event.params?.call_id ?? null,
-                  specialist: context.agentId,
-                  tool_id: "zink_n8n",
-                  input: liveInput,
-                },
-                batchToolNames: ["zink_n8n"],
-                assistantText: "",
-              },
-              context,
-              signal,
+          // The delegation is the authority for the call, and it is resolved
+          // from the LEDGER - never asserted by the caller.
+          let owner = null;
+          try {
+            owner = findSession(
+              readSnapshot(paths),
+              context.sessionKey,
+              context.runId,
             );
-            if (canonicalN8nDecision?.allow) {
-              return canonicalN8nDecision;
-            }
-            if (canonicalN8nDecision && canonicalN8nDecision.status) {
-              // The guard already produced a normalized tool-result envelope
-              // (success, error, or timeout). It is a real outcome and must be
-              // surfaced verbatim rather than replaced with a stub status.
-              return canonicalN8nDecision;
-            }
-            return (
-              canonicalN8nDecision ?? {
+          } catch {
+            owner = null;
+          }
+          const delegated =
+            AUTHORIZATION_MODE_BY_TOOL[event.toolName] === "delegated";
+          if (!owner || (delegated && !owner.delegation)) {
+            return {
+              allow: false,
+              block: true,
+              reason: "AUTH_DELEGATION_NOT_FOUND",
+            };
+          }
+
+          // The owner's approval is resolved through the guard's OWN resolver,
+          // so the live seam and the guarded seam can never disagree about
+          // which record backs a call. The record is CONSUMED by the guard
+          // below; this step only proves that a well-formed, unexpired record
+          // exists, and it NAMES the refusal when it does not.
+          if (
+            OPERATION_POLICY[event.toolName]?.[operation]?.requiresApproval ===
+            true
+          ) {
+            if (!approvalId) {
+              return {
                 allow: false,
                 block: true,
-                reason: "SPAWN_RESERVATION_FAILED",
-              }
-            );
-          } else if (event.toolName === "zink_python") {
-            if (event.params?.entrypoint) {
-              const pathCheck = await validateLiveArtifactPath(
-                String(event.params.entrypoint),
-              );
-              if (!pathCheck.ok) {
-                return {
-                  allow: false,
-                  block: true,
-                  reason: pathCheck.reason,
-                };
-              }
+                reason: "AUTH_APPROVAL_REQUIRED",
+              };
+            }
+            let approvalRecord = null;
+            try {
+              approvalRecord = resolveAuthenticatedApproval(paths, approvalId);
+            } catch (approvalErr) {
+              return {
+                allow: false,
+                block: true,
+                reason: approvalErr?.message ?? "AUTH_APPROVAL_INVALID",
+              };
+            }
+            if (!approvalRecord) {
+              return {
+                allow: false,
+                block: true,
+                reason: "AUTH_APPROVAL_INVALID",
+              };
+            }
+            const approvalExpiry = Date.parse(approvalRecord.expires_at);
+            if (
+              !Number.isFinite(approvalExpiry) ||
+              Date.now() > approvalExpiry
+            ) {
+              return {
+                allow: false,
+                block: true,
+                reason: "AUTH_APPROVAL_EXPIRED",
+              };
             }
           }
 
+          // The canonical tool-call envelope. Every field except `input` comes
+          // from trusted context: the identity, the delegation and the call
+          // id. `input` is the model's data, and the published tool-call
+          // contract is what validates it.
+          const canonicalParams = {
+            call_id: randomUUID(),
+            specialist: context.agentId,
+            tool_id: event.toolName,
+            input: liveInput,
+            constraints: { timeout_seconds: 300, max_memory_mb: 1024 },
+            ...(delegated
+              ? {
+                  provenance: {
+                    delegation_id:
+                      owner.delegation?.delegation_id ?? owner.delegation?.id,
+                    task_id: owner.task_id,
+                    session_key: context.sessionKey,
+                  },
+                }
+              : {
+                  provenance: {
+                    task_id: owner.task_id,
+                    session_key: context.sessionKey,
+                  },
+                }),
+            ...(approvalId ? { approval_id: approvalId } : {}),
+          };
+          const canonicalEvent = {
+            toolName: event.toolName,
+            toolCallId: event.toolCallId,
+            turn:
+              typeof event.turn === "number" && event.turn > 0 ? event.turn : 1,
+            params: canonicalParams,
+            batchToolNames: [event.toolName],
+            assistantText: "",
+          };
+
+          // The guard decides. It issues the immutable
+          // AuthorizationDecisionContext, resolves the delegation from the
+          // ledger, binds and CONSUMES the approval when the operation
+          // requires one, and throws on every refusal. A throw here IS the
+          // refusal: it is never swallowed into an allow.
+          const canonicalDecision = await guard.beforeToolCall(
+            canonicalEvent,
+            context,
+            signal,
+          );
+          if (event.toolName === "zink_n8n") {
+            // The n8n adapter ran INSIDE the guard, so its result is the
+            // truthful outcome of the call and is surfaced verbatim.
+            return canonicalDecision;
+          }
+          // The other governed tools execute in this plugin's own registered
+          // tool, so the guard's CONTRACT-SEAM result is not the tool's
+          // outcome: what matters here is that the guard AUTHORIZED the call.
           const lKey = leaseKey(
             { ...context, toolCallId: event.toolCallId },
             event,
