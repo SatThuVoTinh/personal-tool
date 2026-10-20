@@ -21,6 +21,7 @@ import {
   normalizeTagName,
   parseTagName,
   readActiveForumThreads,
+  FORUM_THREAD_MAX_PAGES,
   readForumTags,
   readForumThreadTags,
   resultStatusTag,
@@ -93,6 +94,9 @@ const TAG_SETS = {
   [INCIDENTS_CHANNEL]: INCIDENT_TAGS,
 };
 
+// F-003: the guild the three governed forums live in.
+const GUILD_ID = "900000000000000001";
+
 function fakeFetch({ fail = false, grouped = false } = {}) {
   const calls = [];
   const fetchImpl = async (url, init = {}) => {
@@ -101,14 +105,20 @@ function fakeFetch({ fail = false, grouped = false } = {}) {
     const channel = /\/channels\/([^/]+)$/.exec(url);
     if (channel) {
       const list = TAG_SETS[channel[1]] ?? [];
+      // F-003: the channel read is how the guild id is resolved when the
+      // caller does not name one, so the stub answers with one.
       if (grouped)
         return {
           ok: true,
-          json: async () => ({ id: channel[1] }),
+          json: async () => ({ id: channel[1], guild_id: GUILD_ID }),
         };
       return {
         ok: true,
-        json: async () => ({ available_tags: list.map((t) => ({ ...t })) }),
+        json: async () => ({
+          id: channel[1],
+          guild_id: GUILD_ID,
+          available_tags: list.map((t) => ({ ...t })),
+        }),
       };
     }
     if (url.endsWith("/tags")) {
@@ -123,15 +133,22 @@ function fakeFetch({ fail = false, grouped = false } = {}) {
         }),
       };
     }
-    if (url.endsWith("/threads/active")) {
-      const id = /\/channels\/([^/]+)\/threads\/active/.exec(url)[1];
+    // F-003: the listing is a GUILD route (`/guilds/{id}/threads/active`),
+    // and it spans every channel of the guild, so the reader filters it by
+    // `parent_id`. The stub answers with one thread of another parent too,
+    // so a reader that stopped filtering would see it.
+    if (/\/guilds\/[^/]+\/threads\/active$/.test(url)) {
       return {
         ok: true,
         json: async () => ({
-          threads:
-            id === INCIDENTS_CHANNEL
-              ? [{ id: "t1", name: "INCIDENT 12345678ABCD ALREADY OPEN" }]
-              : [],
+          threads: [
+            { id: "t-other", name: "OTHER PARENT", parent_id: RESULTS_CHANNEL },
+            {
+              id: "t1",
+              name: "INCIDENT 12345678ABCD ALREADY OPEN",
+              parent_id: INCIDENTS_CHANNEL,
+            },
+          ],
         }),
       };
     }
@@ -433,17 +450,18 @@ describe("M12/T9 F-016 - a truncated thread listing is reported, never treated a
   it("follows the cursor while Discord reports another page", async () => {
     const { fetchImpl, calls } = pagedFetch([
       {
-        threads: [{ id: "t1", name: "INCIDENT 11111111AAAA" }],
+        threads: [{ id: "t1", name: "INCIDENT 11111111AAAA", parent_id: INCIDENTS_CHANNEL }],
         has_more: true,
         next_cursor: "cursor-2",
       },
       {
-        threads: [{ id: "t2", name: "INCIDENT 22222222BBBB" }],
+        threads: [{ id: "t2", name: "INCIDENT 22222222BBBB", parent_id: INCIDENTS_CHANNEL }],
         has_more: false,
       },
     ]);
     const listing = await readActiveForumThreads({
       channelId: INCIDENTS_CHANNEL,
+      guildId: GUILD_ID,
       token: "t",
       fetchImpl,
       deadlineMs: 5000,
@@ -464,12 +482,13 @@ describe("M12/T9 F-016 - a truncated thread listing is reported, never treated a
   it("reports truncation when Discord says more exists but no cursor is offered", async () => {
     const { fetchImpl } = pagedFetch([
       {
-        threads: [{ id: "t1", name: "INCIDENT 11111111AAAA" }],
+        threads: [{ id: "t1", name: "INCIDENT 11111111AAAA", parent_id: INCIDENTS_CHANNEL }],
         has_more: true,
       },
     ]);
     const listing = await readActiveForumThreads({
       channelId: INCIDENTS_CHANNEL,
+      guildId: GUILD_ID,
       token: "t",
       fetchImpl,
       deadlineMs: 5000,
@@ -479,19 +498,29 @@ describe("M12/T9 F-016 - a truncated thread listing is reported, never treated a
       true,
       "a listing that cannot be completed is truncated",
     );
-    assert.equal(listing.threads.length, 1);
+    // F-003: the listing is a GUILD route now, and a guild listing
+    // paginates by the last thread id of the page — so a body that offers no
+    // cursor of its own is still paginated, and the reader's own page budget
+    // is what bounds it. The claim this case makes is that the listing is
+    // TRUNCATED, and that the reader stays inside its budget rather than
+    // accumulating without limit.
+    assert.ok(
+      listing.threads.length <= FORUM_THREAD_MAX_PAGES,
+      `the reader must stay inside its page budget, got ${listing.threads.length} threads`,
+    );
   });
 
   it("reports truncation when the page budget is exhausted", async () => {
     const { fetchImpl, calls } = pagedFetch([
       {
-        threads: [{ id: "t1", name: "INCIDENT 11111111AAAA" }],
+        threads: [{ id: "t1", name: "INCIDENT 11111111AAAA", parent_id: INCIDENTS_CHANNEL }],
         has_more: true,
         next_cursor: "cursor-loop",
       },
     ]);
     const listing = await readActiveForumThreads({
       channelId: INCIDENTS_CHANNEL,
+      guildId: GUILD_ID,
       token: "t",
       fetchImpl,
       deadlineMs: 5000,
@@ -506,12 +535,13 @@ describe("M12/T9 F-016 - a truncated thread listing is reported, never treated a
     // A partial listing must read as "unable to conclude", never as "not open yet".
     const { fetchImpl } = pagedFetch([
       {
-        threads: [{ id: "t1", name: "INCIDENT 99999999ZZZZ" }],
+        threads: [{ id: "t1", name: "INCIDENT 99999999ZZZZ", parent_id: INCIDENTS_CHANNEL }],
         has_more: true,
       },
     ]);
     const listing = await readActiveForumThreads({
       channelId: INCIDENTS_CHANNEL,
+      guildId: GUILD_ID,
       token: "t",
       fetchImpl,
       deadlineMs: 5000,
@@ -528,6 +558,7 @@ describe("M12/T9 F-016 - a truncated thread listing is reported, never treated a
   it("opens a thread only for a complete listing that does not carry the token", async () => {
     const complete = await readActiveForumThreads({
       channelId: INCIDENTS_CHANNEL,
+      guildId: GUILD_ID,
       token: "t",
       fetchImpl: fakeFetch().fetchImpl,
       deadlineMs: 5000,
