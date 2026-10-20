@@ -2821,7 +2821,7 @@ changes. Scoped as the next task after R12 closes.
 
 R9-C (root cause of "bot không phản hồi", FIXED and deployed txn-deafcdcf):
 the model fallback could never fire for a HUNG primary. Proven live
-2026-10-07 16:38:06 -> 16:44:20 on msg 1557326125670342669, runId
+2026-10-07 16:38:06 -> 16:44:20 on msg `REDACTED`, runId
 98aae218-ae57-447f-8a66-1150262e4f3b:
 
   16:38:06.917 model-fetch start model=execute
@@ -2856,7 +2856,7 @@ defects, both fixed together:
 The contrast that proved the diagnosis: turn 16:20 aborted at 120s and DID fail
 over, because that first attempt was classified an internal session and returned
 early before reaching either code path. Real Discord ingress reached both. Same
-defect as R9-A observed on 2026-10-06 (msg 1556853993278541867); R9-A's own
+defect as R9-A observed on 2026-10-06 (msg `REDACTED`); R9-A's own
 comment said "Until R9-C this denial is unchanged".
 
 R9-C test corrections (not weakening): four existing tests asserted the WRONG
@@ -2880,14 +2880,14 @@ installed one — that was wrong, and acting on it put a stale intermediate dige
 `sha256sum` of the file actually on disk (or by hashing the builder output), and
 never retype a digest copied from an earlier terminal state.
 
-R9-C PROVEN LIVE (2026-10-08 15:11-15:27, msg 1557666673157349417): the
+R9-C PROVEN LIVE (2026-10-08 15:11-15:27, msg `REDACTED`): the
 owner-reported "bị kẹt thinking" turn exercised the exact case R9-C was built
 for, and the fix held:
 
   15:17:36.251 [model-fallback/decision] candidate_failed
                   next=router/gemini/gemini-3.6-flash
   15:17:36.849 ingress re-entry admitted as model-fallback retry: agent=main
-                  msg=1557666673157349417 runId=68b7d19e-… task=ad70a7b89d0c…
+                  msg=`REDACTED` runId=68b7d19e-… task=ad70a7b89d0c…
 
 598ms after the fallback decision — the re-entry that was DUPLICATE_DISCORD_EVENT
 on 2026-10-06 and 2026-10-07 is now admitted. Ledger stayed correct: sequence
@@ -2972,7 +2972,7 @@ Task: `M10/T2-R10 - R10 = production policy-loading path fix only`
 R10 root cause (proven by evidence, not inference):
 
 1. Live block, exactly once: `beforeToolCall blocked: RUNTIME_CAPABILITY_MISMATCH`
-   for `session_status` (2026-10-06 23:16:07, msg 1557063140968104048).
+   for `session_status` (2026-10-06 23:16:07, msg `REDACTED`).
 2. Brute-force over every runId in the live snapshot × every params shape proves
    the deployed guard plus live state CANNOT produce this verdict when policy is
    loaded — only allow / POLICY_DENIED / EXECUTION_STATE_UNKNOWN / LINEAGE_MISMATCH.
@@ -3021,7 +3021,7 @@ R10 execution outcome (2026-10-07):
   (sha `482b4938…`). `config validate`: Config valid. Gateway active, 7/7
   providers, 0 timeouts. Resolver hand-restored to 29-id (R9-D) after the apply
   rewrote it to 8-id.
-- STEP 8: owner sent `@Quản Lý tạo giùm anh 1 file Excel` (msg 1557079622833668231,
+- STEP 8: owner sent `@Quản Lý tạo giùm anh 1 file Excel` (msg `REDACTED`,
   00:18:36). MAIN_DIRECTED, model-fetch via router/execute status 200, then
   `beforeToolCall blocked: AUTH_APPROVAL_REQUIRED` for sessions_spawn — the
   NORMAL governed path, NOT the empty-registry failure. R10's fix is proven live.
@@ -3075,7 +3075,7 @@ R9 evidence gathered read-only before planning (no assumption):
    event produced two different outcomes by session origin: an internal session
    (`session:agent:main:main`) DID call `model-fetch start
    gemini-flash-lite-latest`; the Discord-originated session
-   (`session:agent:main:discord:channel:1545425766161063937`) called no model
+   (`session:agent:main:discord:channel:`REDACTED``) called no model
    and was denied `DUPLICATE_DISCORD_EVENT` 545ms after the fallback decision,
    because `taskId = deriveTaskId({origin_message_id, agent_id})` has no
    attempt dimension. The ledger correctly holds exactly one
@@ -3343,13 +3343,13 @@ Phase 3 - trace per message (raw mentions, normalized mentions,
 stash write/read, message.id vs currentMessageId, admission, turn,
 thinking, execution, model, outbound); answer H1/H2 by evidence.
 Phase 3 RESULT: owner TEST A (structured @Main via autocomplete, msg
-1556249093729427459, 17:18:28 +07) is PROVEN AUTOCOMPLETE-picked. Live
+`REDACTED`, 17:18:28 +07) is PROVEN AUTOCOMPLETE-picked. Live
 verdicts: Main DENY `MISSING_MENTION mentions=0`, every specialist
 DENY `NON_MAIN_DIRECT_INGRESS mentions=0`, all on the SAME msg id.
 `msg=` present everywhere PROVES the seam receives currentMessageId
 => H2 (stash key miss) is DISPROVEN. Live `botUserId` identity proven
 from the gateway probe log (main client initialized as
-1545436878835163156), so the wrapper's `explicitlyMentioned` should have
+`REDACTED`), so the wrapper's `explicitlyMentioned` should have
 matched. The only remaining boundary that can zero both mentions and
 threadOwner while keeping the id is the STRUCTURED FIELD SOURCE at the
 seam, i.e. H1. Root cause (code-level, read-only): the R5 injection
@@ -3412,7 +3412,7 @@ txn-eb5f0044990cc37661dbcd897c4f624a149460b4d6e01d25bcb5bf5154b17f57,
 no rollback required. Post-deploy: service active (MainPID 346609, NRestarts
 0), preflight `d12961a2`, entrypoint `6a7968b7`, ledger `d794d99d` unchanged.
 The H1 repair is now both live AND verified by the deployment contract.
-Phase 3 RESULT (2nd live test, owner msg 1556288097241538573 at 19:53:24
+Phase 3 RESULT (2nd live test, owner msg `REDACTED` at 19:53:24
 +07): the union-sources repair did NOT recover the structured mention. All
 workers again reported `mentions=0 reply=false threadOwner=false` and Main was
 again DENY `MISSING_MENTION`. TEST B (untagged) produced NO bot behaviour at
@@ -5266,7 +5266,7 @@ Executed shape (what the six phases became):
   bypassed: the runtime-bounds gate now covers the new module's `fetchImpl` sites (each carries
   `DISCORD_REST_DEADLINE_MS`) and the native-outbound gate now requires **zero** `/threads` REST
   sites in the plugin while allowing exactly the three channel-read URLs in the lib. The
-  hardcoded `applied_tags: ["1545697161985921064"]` literals are gone; a source guard asserts no
+  hardcoded `applied_tags: ["`REDACTED`"]` literals are gone; a source guard asserts no
   snowflake-shaped `applied_tags` and no instance of that id survives anywhere.
 - **#approvals** (`index.mjs`, both card sites): trio `STATUS: WAITING` + RISK (highest
   `riskClass` reachable among the tools admitted by the brief, through `TOOL_POLICY` plus one
@@ -5330,7 +5330,7 @@ Owner decisions (2026-10-13, answering the three-question block issued after the
 **Q1 = A** scope covers #approvals, #results and #incidents; **Q2 = A** tag *names* are
 resolved to Discord snowflakes at runtime through the token resolver the plugin already uses,
 cached in memory, with **no hardcoded ids anywhere in the repository** — the existing
-`applied_tags: ["1545697161985921064"]` literals are removed, not extended; **Q3 = A** the
+`applied_tags: ["`REDACTED`"]` literals are removed, not extended; **Q3 = A** the
 approval RISK tag is derived from the `riskClass` of the tools in the admitted brief, taking
 the highest class present, because no risk field exists on the brief or the task record.
 He additionally required: audit before editing and reuse existing machinery (no second

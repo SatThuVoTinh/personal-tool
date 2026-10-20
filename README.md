@@ -41,15 +41,25 @@ Hệ thống OpenClaw quản trị cụm 7 agent vai trò cố định. Các age
 
 ### Bảng Tổng hợp Danh mục 7 Bot
 
-| Agent ID   | Tên hiển thị Discord | Snowflake ID          | Handle / Tag        | Nhiệm vụ chính                                                                                                            | Công cụ Zink được gọi                                                                                                  | Cấp bậc & Thẩm quyền             |
-| :--------- | :------------------- | :-------------------- | :------------------ | :------------------------------------------------------------------------------------------------------------------------ | :--------------------------------------------------------------------------------------------------------------------- | :------------------------------- |
-| `main`     | **Quản Lý**          | `1545436878835163156` | `@Quản Lý`          | Tiếp nhận yêu cầu, phân tích DAG, chỉ định Primary (`o1`/`o2`), điều phối phê duyệt, thông báo tổng kết                   | `sessions_spawn` (chỉ gọi `o1`/`o2`), `sessions_yield`, `session_status`, `zink_knowledge_search`, `zink_skill_search` | Giám sát Quản trị (Governance)   |
-| `o1`       | **Điều Phối 1 (O1)** | `1545437953197744248` | `@Điều Phối 1 (O1)` | Giám sát thực thi ETL & Bảng tính (điều phối `excel`, `sql`, `python`), đăng `#approvals`, hỏi `#office`, đăng `#results` | `sessions_spawn` (`excel`, `sql`, `python`), `session_status`, `zink_knowledge_search`, `zink_skill_search`            | Giám sát Thực thi (Execution O1) |
-| `o2`       | **Điều Phối 2 (O2)** | `1545438251966402661` | `@Điều Phối 2 (O2)` | Giám sát thực thi BI & Khoa học Dữ liệu (điều phối `power-bi`, `python`), đăng `#approvals`, hỏi `#office`, `#results`    | `sessions_spawn` (`power-bi`, `python`), `session_status`, `zink_n8n`, `zink_knowledge_search`, `zink_skill_search`    | Giám sát Thực thi (Execution O2) |
-| `excel`    | **Excel**            | `1545438637750227104` | `@Excel`            | Chuyên viên Bảng tính (Spreadsheet Specialist) — chạy ngầm dưới quyền O1, xuất bản workbook `.xlsx` và ảnh preview `.svg` | `session_status`, `zink_excel`, `zink_skill_search`, `zink_skill_propose`, `zink_knowledge_search`                     | Chuyên viên (Năng lực thuần túy) |
-| `power-bi` | **PowerBI**          | `1545439082019164271` | `@PowerBI`          | Chuyên viên Báo cáo BI (BI Specialist) — chạy ngầm dưới quyền O2, thiết kế dashboard và công thức DAX                     | `session_status`, `zink_power_bi`, `zink_skill_search`, `zink_skill_propose`, `zink_knowledge_search`                  | Chuyên viên (Năng lực thuần túy) |
-| `sql`      | **SQL**              | `1545438861356966010` | `@SQL`              | Chuyên viên Truy vấn Dữ liệu (SQL Specialist) — chạy ngầm dưới quyền O1, thực thi kịch bản trích xuất ETL                 | `session_status`, `zink_sql`, `zink_skill_search`, `zink_skill_propose`, `zink_knowledge_search`                       | Chuyên viên (Năng lực thuần túy) |
-| `python`   | **Python**           | `1545439279843508235` | `@Python`           | Chuyên viên Khoa học Dữ liệu (Data Science Specialist) — chạy ngầm dưới quyền O1 (ETL) hoặc O2 (Analytics/ML/Forecast)    | `session_status`, `zink_python`, `zink_n8n`, `zink_skill_search`, `zink_skill_propose`, `zink_knowledge_search`        | Chuyên viên (Năng lực thuần túy) |
+| Agent ID   | Tên hiển thị Discord | Snowflake ID               | Handle / Tag        | Nhiệm vụ chính                                                                                                            | Công cụ Zink được gọi                                                                                                  | Cấp bậc & Thẩm quyền             |
+| :--------- | :------------------- | :------------------------- | :------------------ | :------------------------------------------------------------------------------------------------------------------------ | :--------------------------------------------------------------------------------------------------------------------- | :------------------------------- |
+| `main`     | **Quản Lý**          | `DISCORD_BOT_IDS.main`     | `@Quản Lý`          | Tiếp nhận yêu cầu, phân tích DAG, chỉ định Primary (`o1`/`o2`), điều phối phê duyệt, thông báo tổng kết                   | `sessions_spawn` (chỉ gọi `o1`/`o2`), `sessions_yield`, `session_status`, `zink_knowledge_search`, `zink_skill_search` | Giám sát Quản trị (Governance)   |
+| `o1`       | **Điều Phối 1 (O1)** | `DISCORD_BOT_IDS.o1`       | `@Điều Phối 1 (O1)` | Giám sát thực thi ETL & Bảng tính (điều phối `excel`, `sql`, `python`), đăng `#approvals`, hỏi `#office`, đăng `#results` | `sessions_spawn` (`excel`, `sql`, `python`), `session_status`, `zink_knowledge_search`, `zink_skill_search`            | Giám sát Thực thi (Execution O1) |
+| `o2`       | **Điều Phối 2 (O2)** | `DISCORD_BOT_IDS.o2`       | `@Điều Phối 2 (O2)` | Giám sát thực thi BI & Khoa học Dữ liệu (điều phối `power-bi`, `python`), đăng `#approvals`, hỏi `#office`, `#results`    | `sessions_spawn` (`power-bi`, `python`), `session_status`, `zink_n8n`, `zink_knowledge_search`, `zink_skill_search`    | Giám sát Thực thi (Execution O2) |
+| `excel`    | **Excel**            | `DISCORD_BOT_IDS.excel`    | `@Excel`            | Chuyên viên Bảng tính (Spreadsheet Specialist) — chạy ngầm dưới quyền O1, xuất bản workbook `.xlsx` và ảnh preview `.svg` | `session_status`, `zink_excel`, `zink_skill_search`, `zink_skill_propose`, `zink_knowledge_search`                     | Chuyên viên (Năng lực thuần túy) |
+| `power-bi` | **PowerBI**          | `DISCORD_BOT_IDS.power-bi` | `@PowerBI`          | Chuyên viên Báo cáo BI (BI Specialist) — chạy ngầm dưới quyền O2, thiết kế dashboard và công thức DAX                     | `session_status`, `zink_power_bi`, `zink_skill_search`, `zink_skill_propose`, `zink_knowledge_search`                  | Chuyên viên (Năng lực thuần túy) |
+| `sql`      | **SQL**              | `DISCORD_BOT_IDS.sql`      | `@SQL`              | Chuyên viên Truy vấn Dữ liệu (SQL Specialist) — chạy ngầm dưới quyền O1, thực thi kịch bản trích xuất ETL                 | `session_status`, `zink_sql`, `zink_skill_search`, `zink_skill_propose`, `zink_knowledge_search`                       | Chuyên viên (Năng lực thuần túy) |
+| `python`   | **Python**           | `DISCORD_BOT_IDS.python`   | `@Python`           | Chuyên viên Khoa học Dữ liệu (Data Science Specialist) — chạy ngầm dưới quyền O1 (ETL) hoặc O2 (Analytics/ML/Forecast)    | `session_status`, `zink_python`, `zink_n8n`, `zink_skill_search`, `zink_skill_propose`, `zink_knowledge_search`        | Chuyên viên (Năng lực thuần túy) |
+
+> **Nguồn duy nhất của định danh Discord.** Bảng trên và các hồ sơ agent bên dưới không
+> mang snowflake thô. Toàn bộ bản đồ định danh (bot id, role id, id kênh/diễn đàn) chỉ
+> tồn tại ở `integrations/openclaw/lib/authority.mjs` (`DISCORD_BOT_IDS`,
+> `DISCORD_ROLE_IDS`, `DISCORD_CHANNEL_IDS`); các id kênh/diễn đàn ở runtime do cấu hình
+> triển khai cung cấp (`discordOfficeChannelId`, `discordResultsForumId`,
+> `discordApprovalsForumId`, `discordIncidentsForumId`). Kho lưu trữ này nằm trong một
+> thư mục đồng bộ của bên thứ ba và có thể đẩy lên remote, nên **không tài liệu nào được
+> theo dõi** được chứa một snowflake Discord thô — bản sao thứ hai là một bản sao có thể
+> lệch âm thầm và một bề mặt giả mạo mention.
 
 ---
 
@@ -57,7 +67,7 @@ Hệ thống OpenClaw quản trị cụm 7 agent vai trò cố định. Các age
 
 #### 1. Agent `main` — Quản Lý (Governance Supervisor)
 
-- **Discord Handle:** `@Quản Lý` (ID: `1545436878835163156`)
+- **Discord Handle:** `@Quản Lý` (ID: `DISCORD_BOT_IDS.main`)
 - **Chức năng chính:** Điểm tiếp nhận yêu cầu đầu tiên từ người vận hành trên kênh `#office` hoặc DM. Phân tích yêu cầu, phân loại bài toán (Work/Research), phân rã DAG và chỉ định duy nhất một Primary Coordinator (`o1` hoặc `o2`).
 - **Quyền hạn & Công cụ:**
   - Được phép sử dụng `sessions_spawn` để giao nhiệm vụ con **chỉ cho hai điều phối viên (`o1`, `o2`)** ở chế độ cô lập hoàn toàn (`context=isolated`, `mode=run`, `sandbox=require`).
@@ -71,7 +81,7 @@ Hệ thống OpenClaw quản trị cụm 7 agent vai trò cố định. Các age
 
 #### 2. Agent `o1` — Điều Phối 1 (Execution Supervisor — ETL & Spreadsheets)
 
-- **Discord Handle:** `@Điều Phối 1 (O1)` (ID: `1545437953197744248`)
+- **Discord Handle:** `@Điều Phối 1 (O1)` (ID: `DISCORD_BOT_IDS.o1`)
 - **Chức năng chính:** Giám sát thực thi toàn bộ các tác vụ trích xuất, chuyển đổi dữ liệu (ETL), truy vấn SQL và tạo lập bảng tính Excel.
 - **Cách trình bày thẻ phê duyệt (M12/T1-R1, chưa triển khai live):** thẻ chỉ gồm
   `Task ID` (mã 12 ký tự `ddmmyyyy` + 4 ký tự ngẫu nhiên — cũng chính là khóa trong ledger
@@ -92,7 +102,7 @@ Hệ thống OpenClaw quản trị cụm 7 agent vai trò cố định. Các age
 
 #### 3. Agent `o2` — Điều Phối 2 (Execution Supervisor — BI & Advanced Analytics)
 
-- **Discord Handle:** `@Điều Phối 2 (O2)` (ID: `1545438251966402661`)
+- **Discord Handle:** `@Điều Phối 2 (O2)` (ID: `DISCORD_BOT_IDS.o2`)
 - **Chức năng chính:** Giám sát thực thi các tác vụ trực quan hóa dữ liệu (Power BI Dashboard, DAX modeling), kịch bản khoa học dữ liệu, dự báo chuỗi thời gian (Forecasting), tối ưu hóa quy hoạch (Optimization) và tự động hóa n8n.
 - **Quyền hạn & Công cụ:**
   - Lập kế hoạch thực thi chi tiết và phát hành thẻ phê duyệt trên `#approvals`.
@@ -104,7 +114,7 @@ Hệ thống OpenClaw quản trị cụm 7 agent vai trò cố định. Các age
 
 #### 4. Agent `excel` — Chuyên viên Bảng tính (Spreadsheet Specialist)
 
-- **Discord Handle:** `@Excel` (ID: `1545438637750227104`)
+- **Discord Handle:** `@Excel` (ID: `DISCORD_BOT_IDS.excel`)
 - **Chức năng chính:** Chuyên trách xử lý, chuyển đổi dữ liệu và tạo lập bảng tính Excel (`.xlsx`), đồng thời sinh ảnh trực quan SVG preview cho các sheet đầu ra.
 - **Quyền hạn & Công cụ:**
   - Chạy ngầm dưới quyền điều phối trực tiếp của `o1`.
@@ -115,7 +125,7 @@ Hệ thống OpenClaw quản trị cụm 7 agent vai trò cố định. Các age
 
 #### 5. Agent `power-bi` — Chuyên viên Báo cáo BI (BI Specialist)
 
-- **Discord Handle:** `@PowerBI` (ID: `1545439082019164271`)
+- **Discord Handle:** `@PowerBI` (ID: `DISCORD_BOT_IDS.power-bi`)
 - **Chức năng chính:** Thiết kế mô hình dữ liệu quan hệ, viết công thức DAX và xuất bản báo cáo Power BI (`.pbix` / `.pbit`).
 - **Quyền hạn & Công cụ:**
   - Chạy ngầm dưới quyền điều phối trực tiếp của `o2`.
@@ -126,7 +136,7 @@ Hệ thống OpenClaw quản trị cụm 7 agent vai trò cố định. Các age
 
 #### 6. Agent `sql` — Chuyên viên Truy vấn Dữ liệu (SQL Specialist)
 
-- **Discord Handle:** `@SQL` (ID: `1545438861356966010`)
+- **Discord Handle:** `@SQL` (ID: `DISCORD_BOT_IDS.sql`)
 - **Chức năng chính:** Khảo sát, trích xuất và biến đổi dữ liệu phân tích thông qua các câu truy vấn SQL hiệu năng cao trên DuckDB, MotherDuck và BigQuery.
 - **Quyền hạn & Công cụ:**
   - Chạy ngầm dưới quyền điều phối trực tiếp của `o1`.
@@ -137,7 +147,7 @@ Hệ thống OpenClaw quản trị cụm 7 agent vai trò cố định. Các age
 
 #### 7. Agent `python` — Chuyên viên Khoa học Dữ liệu (Decision & Data Science)
 
-- **Discord Handle:** `@Python` (ID: `1545439279843508235`)
+- **Discord Handle:** `@Python` (ID: `DISCORD_BOT_IDS.python`)
 - **Chức năng chính:** Thực thi các bài toán khoa học quyết định phức tạp: phân tích thống kê, tối ưu hóa tuyến tính/phi tuyến, dự báo chuỗi thời gian, mô phỏng Monte Carlo và xử lý dữ liệu định lượng.
 - **Quyền hạn & Công cụ:**
   - Chạy ngầm dưới quyền điều phối của `o1` (khi phục vụ ETL/data processing) hoặc `o2` (khi phục vụ Data Science/ML/Analytics).
@@ -267,13 +277,13 @@ token hay nội dung cấu hình. Nếu bước 1 báo `Governance plugin asset`
 
 ### Danh mục Kênh Discord của Hệ thống
 
-| Kênh Discord            | Loại kênh                    | Snowflake ID          | Chức năng & Quy chuẩn                                                                                                                                                                                                                                                                                                                                                                                                   |
-| :---------------------- | :--------------------------- | :-------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **`#office`**           | Văn phòng chung (Text)       | `1545425766161063937` | Nơi tiếp nhận yêu cầu, giao việc và điều phối hoạt động chung. Hỗ trợ tag trực tiếp bot hoặc trao đổi với `@Quản Lý`. Bảo toàn mã `task_id` người dùng cung cấp.                                                                                                                                                                                                                                                        |
-| **`#results`**          | Kết quả phân tích (Forum)    | `1545696269010477056` | Diễn đàn đăng tải báo cáo, artifact và kết quả nghiệm thu của các task. Mọi bài viết là một Thread riêng biệt (`inheritParent: false` để fail-closed). Mỗi thread do hệ thống đăng bắt buộc mang đủ ba tag `STATUS` (`SUCCESS`/`FAILED`/`PARTIAL`), `TYPE`, `STACK`, phân giải theo tag thật của kênh này tại thời điểm đăng.                                                                                           |
-| **`#approvals`**        | Phê duyệt quyết định (Forum) | `1545696207316455527` | Nơi các agent gửi đề xuất giải quyết mâu thuẫn ngữ nghĩa (`BLOCKED_SEMANTIC_REVIEW`) và thẻ phê duyệt kế hoạch chờ chủ sở hữu quyết định. Mỗi thread mang đủ ba tag `STATUS` (`WAITING`), `RISK` (`LOW`/`MEDIUM`/`RED`), `STACK`; trạng thái không còn in trong nội dung thẻ. Khi anh quyết định thật sự, tag `STATUS` của thread chuyển theo: APPROVE → `APPROVED`, REJECT → `REJECTED`, REQUEST REVISION → `CHANGES`. |
-| **`#incidents`**        | Báo cáo sự cố (Forum)        | `1545696360018481182` | Kênh thông báo cảnh báo lỗi, vi phạm hợp đồng dữ liệu hoặc sự cố ranh giới an toàn. Mỗi thread mang đủ ba tag `STATUS` (`OPEN`), `SEVERITY` (`LOW`…`CRITICAL`), `STACK`. Lưu ý: tag `STATUS: ANALYTICS` hiện đặt sai nhóm (đúng ra là `STACK: ANALYTICS`) — chủ sở hữu cần đổi tên trong Discord, hệ thống không tự alias tên tag.                                                                                      |
-| **Tin nhắn riêng (DM)** | Direct Message               | N/A                   | Vô hiệu hóa (`channels.discord.directMessages.enabled: false`). Toàn bộ tương tác bắt buộc diễn ra trên các kênh máy chủ để đảm bảo tính minh bạch và lưu vết kiểm toán bền vững vào Ledger.                                                                                                                                                                                                                            |
+| Kênh Discord            | Loại kênh                    | Snowflake ID              | Chức năng & Quy chuẩn                                                                                                                                                                                                                                                                                                                                                                                                   |
+| :---------------------- | :--------------------------- | :------------------------ | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`#office`**           | Văn phòng chung (Text)       | `discordOfficeChannelId`  | Nơi tiếp nhận yêu cầu, giao việc và điều phối hoạt động chung. Hỗ trợ tag trực tiếp bot hoặc trao đổi với `@Quản Lý`. Bảo toàn mã `task_id` người dùng cung cấp.                                                                                                                                                                                                                                                        |
+| **`#results`**          | Kết quả phân tích (Forum)    | `discordResultsForumId`   | Diễn đàn đăng tải báo cáo, artifact và kết quả nghiệm thu của các task. Mọi bài viết là một Thread riêng biệt (`inheritParent: false` để fail-closed). Mỗi thread do hệ thống đăng bắt buộc mang đủ ba tag `STATUS` (`SUCCESS`/`FAILED`/`PARTIAL`), `TYPE`, `STACK`, phân giải theo tag thật của kênh này tại thời điểm đăng.                                                                                           |
+| **`#approvals`**        | Phê duyệt quyết định (Forum) | `discordApprovalsForumId` | Nơi các agent gửi đề xuất giải quyết mâu thuẫn ngữ nghĩa (`BLOCKED_SEMANTIC_REVIEW`) và thẻ phê duyệt kế hoạch chờ chủ sở hữu quyết định. Mỗi thread mang đủ ba tag `STATUS` (`WAITING`), `RISK` (`LOW`/`MEDIUM`/`RED`), `STACK`; trạng thái không còn in trong nội dung thẻ. Khi anh quyết định thật sự, tag `STATUS` của thread chuyển theo: APPROVE → `APPROVED`, REJECT → `REJECTED`, REQUEST REVISION → `CHANGES`. |
+| **`#incidents`**        | Báo cáo sự cố (Forum)        | `discordIncidentsForumId` | Kênh thông báo cảnh báo lỗi, vi phạm hợp đồng dữ liệu hoặc sự cố ranh giới an toàn. Mỗi thread mang đủ ba tag `STATUS` (`OPEN`), `SEVERITY` (`LOW`…`CRITICAL`), `STACK`. Lưu ý: tag `STATUS: ANALYTICS` hiện đặt sai nhóm (đúng ra là `STACK: ANALYTICS`) — chủ sở hữu cần đổi tên trong Discord, hệ thống không tự alias tên tag.                                                                                      |
+| **Tin nhắn riêng (DM)** | Direct Message               | N/A                       | Vô hiệu hóa (`channels.discord.directMessages.enabled: false`). Toàn bộ tương tác bắt buộc diễn ra trên các kênh máy chủ để đảm bảo tính minh bạch và lưu vết kiểm toán bền vững vào Ledger.                                                                                                                                                                                                                            |
 
 **Quy tắc chọn tag `STACK`** (áp dụng cho cả `#approvals`, `#results`, `#incidents`): tag này lấy từ Ledger (`target_stack` / `stack_id` của node), không bao giờ suy ra từ tên bot. Kế hoạch chạm nhiều tầng thì tag chỉ tên **nơi kết quả của kế hoạch nằm**, theo thứ tự `decision` > `intelligence` > `data_plant` > `semantic` > `infrastructure` — kế hoạch ETL thuần là `DATA`, kế hoạch vừa ETL vừa dựng biểu đồ là `ANALYTICS`, kế hoạch trả lời câu hỏi quyết định là `DECISION`. Nếu Ledger đã bind `current_stack` (chỉ xảy ra sau khi phê duyệt, lúc bắt đầu chạy) thì giá trị đó thắng vì nó là tầng đang thực sự chạy. Không có bằng chứng stack nào, hoặc chỉ có tên phần mềm (`excel`, `power_bi` — đó là agent, không phải stack), thì **không bịa tag**: hệ thống ghi `DISCORD_TAG_UNRESOLVED` và không đăng thread nào cả.
 

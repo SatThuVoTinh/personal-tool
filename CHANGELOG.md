@@ -108,7 +108,7 @@ started`, **zero** `MODULE_NOT_FOUND`, zero `UnhandledPromiseRejection`, zero `D
   is the single tagging system: it reads each forum's own `available_tags` (falling back to
   `/tags`) through the plugin's existing bot-token resolver, resolves the tag _names_ the
   owner requires to their snowflakes at runtime, caches them for 10 minutes, and never stores
-  an id in the repository — the two hardcoded `applied_tags: ["1545697161985921064"]` literals
+  an id in the repository — the two hardcoded `applied_tags: ["REDACTED"]` literals
   are gone. Categories are per-forum and are never assumed to be shared:
   #approvals `STATUS`+`RISK`+`STACK`, #results `STATUS`+`TYPE`+`STACK`,
   #incidents `STATUS`+`SEVERITY`+`STACK`. A required tag that cannot be resolved means **no
