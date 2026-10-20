@@ -63,6 +63,28 @@ export function buildTaskCode({ date, random }) {
   return code;
 }
 
+/**
+ * M12/T9 F-043: the CANONICAL form of a Discord thread id.
+ *
+ * A thread id travels with a transport prefix (`channel:<id>`) when it comes
+ * from a button interaction, and bare when it comes from the thread the card
+ * was created in. Both name the SAME thread, so the durable comparison of a
+ * decision against the thread the card was surfaced in must compare the
+ * canonical forms - otherwise a decision from the RIGHT thread is refused as a
+ * foreign one.
+ *
+ * The rule lives here, once, because the plugin and the reducer must not hold
+ * two copies of it: two copies of one rule are two rules.
+ *
+ * Returns null for anything that is not a non-empty thread id, so an ABSENT
+ * thread id can never satisfy a comparison by being absent.
+ */
+export function normalizeGovernanceThreadId(value) {
+  if (typeof value !== "string") return null;
+  const canonical = value.trim().replace(/^channel:/u, "").trim();
+  return canonical.length > 0 ? canonical : null;
+}
+
 export function normalizeTaskCodeDate(date) {
   if (date instanceof Date) {
     if (Number.isNaN(date.getTime()))

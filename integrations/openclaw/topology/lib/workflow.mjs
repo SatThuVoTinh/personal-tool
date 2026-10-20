@@ -4,6 +4,7 @@ import {
   deriveApprovalPlanDigest,
   deriveTaskId,
   isTaskCodeForm,
+  normalizeGovernanceThreadId,
   TASK_CODE_LENGTH,
   TASK_CODE_PATTERN,
   TASK_ID_PATTERN,
@@ -40,6 +41,10 @@ const terminal = new Set([
   "CANCELLED",
   "REJECTED",
 ]);
+// M12/T9 F-082: the terminal vocabulary, exported so the ledger's
+// reconciliation reader and the reducer can never disagree about which status
+// is terminal. One declaration, two readers.
+export const TERMINAL_WORKFLOW_STATUSES = terminal;
 // D05: BLOCKED is not an active run — blocked runs must not count as active
 // for prerequisite checks (would cause deadlock). BLOCKED requires recovery.
 const activeRun = new Set(["PENDING", "SPAWN_UNKNOWN", "RUNNING", "UNKNOWN"]);
@@ -931,6 +936,25 @@ export function applyWorkflowEvent(
       task.workflow_status === "ACTIVE" || task.workflow_status === "REVISING",
       "INVALID_STATE_TRANSITION",
     );
+    // M12/T9 F-043 (legacy R1-A07-04): the decision must come from the thread
+    // the card was surfaced in.
+    //
+    // The plugin already refuses a mismatch before it writes (index.mjs), but
+    // the REDUCER is the durable gate: a decision that reached the journal
+    // without naming the recorded thread produced a durable verdict for a card
+    // that was reposted, forwarded, or answered in an unrelated thread. An
+    // ABSENT thread id must not satisfy the comparison by being absent.
+    //
+    // The checks are keyed on data the DECISION carries, exactly like the
+    // plan-binding checks below (F-023): a decision produced by the current
+    // plugin always names its thread and its plan, and such a decision is
+    // bound to the recorded request and to the recorded thread. A decision
+    // that names none of them is the pre-F-023 shape, and it keeps replaying
+    // byte-identically - re-litigating it would make the live ledger
+    // unreadable, because an approval recorded before WORKFLOW_APPROVAL_REQUESTED
+    // and WORKFLOW_APPROVAL_SURFACED existed carries neither.
+    const boundDecision = Object.hasOwn(payload, "thread_id");
+    if (!replayAnchored && boundDecision) {
       // M12/T9 F-032 (legacy R2-B01-03): an APPROVE must bind to a RECORDED
       // approval request.
       //
@@ -1004,6 +1028,15 @@ export function applyWorkflowEvent(
     } else {
       task.workflow_status = "REVISING";
       task.revision_requested_at = eventTime;
+      // M12/T9 F-180 (legacy R1-A07-02): the REVISION cycle must RE-ARM the
+      // approval.
+      //
+      // `approval_thread_id` was set once and never cleared, so the thread
+      // that carried the plan the owner just sent back stayed bound to the
+      // task: the next WORKFLOW_APPROVAL_SURFACED was refused as "a different
+      // thread for one recorded request" and the re-presented plan could never
+      // get a card. Clearing it here lets the fresh plan open a fresh thread.
+      //
       // The REQUEST is re-armed for the same reason (and because F-032 binds an
       // APPROVE to a recorded request): the request the owner rejected is not
       // the request the re-presented plan needs, so the new plan must ask

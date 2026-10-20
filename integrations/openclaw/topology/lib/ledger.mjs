@@ -18,7 +18,7 @@ import {
 import { Buffer } from "node:buffer";
 import path from "node:path";
 import process from "node:process";
-import { applyWorkflowEvent } from "./workflow.mjs";
+import { applyWorkflowEvent, TERMINAL_WORKFLOW_STATUSES } from "./workflow.mjs";
 import { schemaFile, validateContract } from "./schema.mjs";
 import {
   withFileLockSync,
@@ -125,6 +125,40 @@ function isAuditOnlyEvent(type) {
 }
 
 /**
+ * M12/T9 F-082: the tasks whose projection is NOT terminal.
+ *
+ * The reducer sets a terminal `workflow_status` only when it applies a
+ * terminal event, so a task whose status is not terminal has no matching
+ * terminal record. The list is the reconciliation the ledger layer owes the
+ * operator: 56 opens against 4 closes is invisible in the projection itself.
+ */
+export function tasksWithoutTerminalRecord(snapshot) {
+  return Object.entries(snapshot?.tasks ?? {})
+    .filter(([, task]) => !TERMINAL_WORKFLOW_STATUSES.has(task?.workflow_status))
+    .map(([task_id]) => task_id)
+    .sort();
+}
+
+/**
+ * M12/T9 F-082: the reconciliation flag the replay carries.
+ *
+ * The flag is NON-ENUMERABLE on purpose. The returned object IS a ledger
+ * snapshot: the published snapshot contract forbids extra members, the
+ * digest chain covers the whole object, and the stale-snapshot check compares
+ * it byte for byte. A visible member would break all three, and the flag is
+ * a report about the read, never part of the state.
+ */
+function flagUnterminatedTasks(snapshot) {
+  const flagged = tasksWithoutTerminalRecord(snapshot);
+  if (flagged.length === 0) return snapshot;
+  Object.defineProperty(snapshot, "tasks_without_terminal_record", {
+    value: flagged,
+    enumerable: false,
+    writable: false,
+    configurable: false,
+  });
+  return snapshot;
+}
 
 export function ledgerPaths(stateDir) {
   const segments = path.resolve(stateDir).split(path.sep).filter(Boolean);
