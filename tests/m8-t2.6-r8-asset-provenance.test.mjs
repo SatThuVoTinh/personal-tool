@@ -39,524 +39,62 @@ const CONFIGURE_SOURCE = readFileSync(CONFIGURE, "utf8");
 const R5_NATIVE_BOUNDARY_SHA256 =
   "49352d47ac88798cc918c654875f84241a7efbb1d5a661c64b77e7efbacf3be9";
 
-// Every change this file's boundary has received SINCE the R5 build. The R5 body
-// is the current source with all of them reverted; the digest assertion below is
-// what proves the derivation is exact, so a missed hunk fails loudly rather than
-// silently weakening the allowlist test.
-const POST_R5_HUNKS = [
-  // M10/T2-R8: the Discord preflight seam reaches the canonical intake
-  // predicate through one published global.
-  [
-    `const registryKey = Symbol.for("zink.governance.native.r12");
-// M10/T2-R8: the Discord preflight seam reaches the canonical intake predicate
-// through this global. Published only while a guard is registered.
-const preflightIngressKey = Symbol.for(
-  "zink.governance.native.preflightIngress",
-);`,
-    `const registryKey = Symbol.for("zink.governance.native.r12");`,
-  ],
-  // M10/T2-R8: the pure preflight intake predicate on the registry entry.
-  [
-    `    beforeToolCall: guard.beforeToolCall.bind(guard),
-    beforeAnnounce: guard.beforeAnnounce.bind(guard),
-    // M10/T2-R8: the PURE direct-intake predicate, evaluated at the Discord
-    // preflight seam so a direct specialist mention never creates a host run at
-    // all. Side-effect free: it decides, it never writes the ledger.
-    beforePreflightIngress:
-      typeof guard.beforePreflightIngress === "function"
-        ? guard.beforePreflightIngress.bind(guard)
-        : undefined,`,
-    `    beforeToolCall: guard.beforeToolCall.bind(guard),
-    beforeAnnounce: guard.beforeAnnounce.bind(guard),`,
-  ],
-  // M10/T2-R8: publishing the seam, and its deliberate "absent is not a deny".
-  [
-    `  registry().set(scope, entry);
-  publishPreflightIngress(entry);
-  return () => {
-    if (registry().get(scope) === entry) registry().delete(scope);
-  };
-}
-
 /**
- * M10/T2-R8 — the global the Discord preflight injection calls.
+ * The R5-era SOURCE of lib/native-boundary.mjs, read from the commit that
+ * produced the packaged R5 asset.
  *
- * The preflight runs inside the host's channel bundle, which never imports this
- * module, so the seam is reached through one published global instead of a
- * duplicated import or a second copy of the policy. The caller passes the SAME
- * scope string \`resolveGovernance\` derives from the host config, so there is one
- * registry and one policy, not two.
- *
- * ABSENT PREDICATE IS NOT A DENY. If governance never registered — the plugin
- * has not loaded, or a build predates this seam — the preflight must not invent
- * an admission decision. It returns null and the late \`enterNativeRun\` gate
- * still governs the run, so enforcement is unchanged and only the timing is lost.
+ * The derivation used to REVERSE every post-R5 change out of the CURRENT
+ * source text, which froze the denial path's literal wording: propagating a
+ * decision reason through native-boundary.mjs - the fix the governance seam
+ * needs - reddened this provenance gate with no behavioural change at all.
+ * The historical commit is the authority for the packaged digest, and the
+ * current source is checked against it by SURFACE, never by text.
  */
-function publishPreflightIngress(entry) {
-  if (entry.beforePreflightIngress) {
-    globalThis[preflightIngressKey] = (input) =>
-      entry.beforePreflightIngress(input);
+const R5_SOURCE_COMMIT = "74325e4e638cc1f71811362d98d1cf618ed81791";
+const R5_SOURCE_RELATIVE =
+  "integrations/openclaw/topology/lib/native-boundary.mjs";
+// The packaging rewrite the deployer applies to a topology/lib module: the
+// installed plugin flattens the shared siblings into one lib/ tree.
+const PACKAGE_REWRITE_SEARCH = '"../../lib/';
+const PACKAGE_REWRITE_REPLACEMENT = '"./';
+
+/** Every symbol a module exports, by name. */
+const exportedSymbols = (source) => {
+  const names = new Set();
+  for (const match of String(source ?? "").matchAll(
+    /^export\s+(?:async\s+)?(?:function|const|let|class)\s+([A-Za-z_$][\w$]*)/gmu,
+  )) {
+    names.add(match[1]);
   }
-}`,
-    `  registry().set(scope, entry);
-  return () => {
-    if (registry().get(scope) === entry) registry().delete(scope);
-  };
-}`,
-  ],
-  // M10/T2-R8: the model-visible block reason is a refusal sentence, never a
-  // governance identifier. Proven live: the host copies a block decision's
-  // `reason` into the tool result the MODEL reads, the model repeated it, and
-  // the owner's Discord reply carried the internal code. Reverting this hunk
-  // restores the R6 body that leaked.
-  [
-    `
-/**
- * M10/T2-R8 — the ONLY text a blocked tool call may hand back to the host.
- *
- * The host maps a block decision's \`reason\` to \`blockReason\` and writes that
- * into the tool-result the model reads, so whatever sits here is model-visible
- * and, through the model's own answer, owner-visible. It is therefore a plain
- * refusal sentence and deliberately NOT a governance identifier: repeating it
- * back to the owner is truthful and harmless. The canonical reason code stays in
- * the diagnostic channel and in the ledger.
- */
-export const POLICY_REFUSAL_TEXT = "Action not permitted by workspace policy.";
-`,
-    ``,
-  ],
-  // M10/T2-R8: the single refusal helper, so every block site logs its canonical
-  // code and returns the same model-visible text.
-  [
-    `  const refuse = (canonical) => {
-    // R8: the host contract turns this return value into the BLOCKED TOOL
-    // RESULT the model reads — \`decision.reason\` becomes \`blockReason\`, which
-    // the host puts verbatim into the tool-result text. Proven live: a block
-    // reason reached the model, the model repeated it, and the owner's Discord
-    // reply carried the internal governance code.
-    //
-    // So the model-visible surface gets a deliberate, non-diagnostic refusal and
-    // never a governance identifier. The canonical code and its detail stay in
-    // the diagnostic channel and in the ledger, where a refusal must remain
-    // auditable. This is not a message filter: the code is never handed to the
-    // host in the first place, so it cannot be echoed by the model.
-    console.error(
-      "[zink-native-gate:error] beforeToolCall blocked:",
-      canonical,
-    );
-    return { block: true, reason: POLICY_REFUSAL_TEXT };
-  };
-`,
-    ``,
-  ],
-  // M10/T2-R8: the yield batch refusal keeps its canonical code in diagnostics.
-  [
-    `        return refuse("YIELD_BATCH_DENIED");`,
-    `        return { block: true, reason: "YIELD_BATCH_DENIED" };`,
-  ],
-  // M10/T2-R8: a guard denial records its canonical code instead of surfacing it.
-  [
-    `      if (decision?.allow !== true) {
-        // The canonical reason code is a fixed governance identifier, never
-        // caller data — but it is NOT safe to surface here, because this return
-        // value is model-visible. See \`refuse\` above. A guard-supplied reason is
-        // recorded as the diagnostic code; the model only ever sees the refusal.
-        const canonical =
-          typeof decision?.reason === "string" &&
-          /^[A-Z][A-Z0-9_]{0,63}$/u.test(decision.reason)
-            ? decision.reason
-            : "GOVERNANCE_DENIED";
-        return refuse(canonical);
-      }
-`,
-    `      if (decision?.allow !== true) {
-        // A blocked call keeps its canonical reason code when the guard
-        // supplied one. The code is a fixed governance identifier, never
-        // caller data, so surfacing it is safe and makes the refusal
-        // auditable instead of collapsing every denial into one opaque code.
-        const reason =
-          typeof decision?.reason === "string" &&
-          /^[A-Z][A-Z0-9_]{0,63}$/u.test(decision.reason)
-            ? decision.reason
-            : "GOVERNANCE_DENIED";
-        return { block: true, reason };
-      }
-`,
-  ],
-  // M10/T2-R8: the failure path keeps its detail in diagnostics only.
-  [
-    `    } catch (err) {
-      // Never return exception text: a provider/plugin error may contain input,
-      // and the reason is model-visible. The diagnostic keeps the detail; the
-      // model only ever sees the refusal.
-      return refuse(err?.message || String(err));
-    }
-`,
-    `    } catch (err) {
-      console.error(
-        "[zink-native-gate:error] beforeToolCall blocked:",
-        err?.message || err,
-      );
-      // Never return exception text: a provider/plugin error may contain input.
-      return { block: true, reason: "GOVERNANCE_UNAVAILABLE" };
-    }
-`,
-  ],
-  // R7 G2: cause preservation + diagnostic logging.
-  [
-    `  } catch (error) {
-    // R7 G2: the host-visible contract string is unchanged, but the original
-    // failure is preserved as the cause so a governance verdict and a genuine
-    // execution-state fault stay distinguishable. Only the fixed error message
-    // is logged: never the stack, the run context, or message content.
-    console.error(
-      "[zink-native-gate] enterNativeRun:",
-      error?.message ?? error,
-    );
-    throw new Error("GOVERNANCE_RUN_UNAVAILABLE", { cause: error });
-  }`,
-    `  } catch {
-    throw new Error("GOVERNANCE_RUN_UNAVAILABLE");
-  }`,
-  ],
-  // R10: the host-assigned heartbeat discriminator forwarded to the guard.
-  [
-    `        // R10: the host-assigned run discriminator and the canonical host
-        // heartbeat representation. Both are plain strings the host already
-        // holds at the injection anchor; neither is user content, a message
-        // object, or Discord-layer data.
-        trigger: context.trigger,
-        transcriptPrompt: context.transcriptPrompt,
-`,
-    ``,
-  ],
-  // R18: admission-time liveness recovery (module helpers). Inverted so the
-  // derived R5 body reproduces the packaged R5 digest exactly.
-  [
-    `// R18: the admission-time liveness discriminator, recovered at run-end.
-//
-// The host forwards \`trigger\` and \`transcriptPrompt\` to \`enterNativeRun\` but NOT
-// to \`finishNativeRun\` (its run-end call passes only agentId/sessionKey/runId).
-// Without them at run-end, \`isPureLivenessHeartbeat\` returns false there even
-// though admission recognised the same run as a pure liveness heartbeat, so the
-// run-end seam applied full governance and failed with
-// GOVERNANCE_COMPLETION_UNAVAILABLE. Threading them through the pinned selection
-// would change the installed selection and break the R7/R10 native lineage; this
-// records them per run at admission and recovers them at run-end so BOTH seams
-// classify a run with the single predicate. A run that never passed admission has
-// no record and therefore keeps the existing full-governance behaviour.
-//
-// Bounded so a run that dies before run-end cannot grow this without limit.
-const RUN_LIVENESS = new Map();
-const RUN_LIVENESS_LIMIT = 256;
-
-function rememberRunLiveness(runId, trigger, transcriptPrompt) {
-  if (typeof runId !== "string" || runId === "") return;
-  if (RUN_LIVENESS.size >= RUN_LIVENESS_LIMIT) {
-    const oldest = RUN_LIVENESS.keys().next().value;
-    RUN_LIVENESS.delete(oldest);
-  }
-  RUN_LIVENESS.set(runId, { trigger, transcriptPrompt });
-}
-
-function takeRunLiveness(runId) {
-  if (typeof runId !== "string" || runId === "") return undefined;
-  const record = RUN_LIVENESS.get(runId);
-  RUN_LIVENESS.delete(runId);
-  return record;
-}
-
-`,
-    ``,
-  ],
-  // R18: the per-run liveness record, created only for an accepted admission.
-  [
-    `    // R18: record the discriminator only for a run admission ACCEPTED, so the
-    // record means precisely "admission recognised this run". A denied or failed
-    // admission leaves no record and its run-end therefore keeps full governance.
-    rememberRunLiveness(
-      context.runId,
-      context.trigger,
-      context.transcriptPrompt,
-    );
-`,
-    ``,
-  ],
-  // R18: run-end prefers the admission record for this runId.
-  [
-    `  // R18: prefer anything the host passes at this seam, then fall back to the
-  // values recorded at admission for this runId, so admission and run-end apply
-  // the same predicate to the same execution.
-  const liveness = takeRunLiveness(context.runId);
-`,
-    ``,
-  ],
-  // R18: the run-end guard context carries the recovered discriminator.
-  [
-    `        trigger: context.trigger ?? liveness?.trigger,
-        transcriptPrompt:
-          context.transcriptPrompt ?? liveness?.transcriptPrompt,
-`,
-    ``,
-  ],
-  // M10/T2-R5: the registry read in enterNativeRun. ORDER MATTERS: this
-  // insertion sits between the R4 validation block and `const decision`,
-  // so it must be inverted BEFORE the R4 hunk below can match.
-  [
-    `    // M10/T2-R5: structured Discord inbound metadata, read by inbound
-    // message id from the preflight registry. Unknown/absent degrades to
-    // empty (deny preserved); malformed is normalized by the reader.
-    const ingress = readZinkIngressMetadata(context.currentMessageId);
-`,
-    ``,
-  ],
-  // M10/T2-R4: explicit inbound thread identity typing. Inverted so the
-  // derived R5 body reproduces the packaged R5 digest exactly.
-  [
-    `  try {
-    // M10/T2-R4: the inbound thread identity is typed explicitly. null means
-    // "not a threaded message" (the patch forwards \`?? null\`); anything else
-    // must be a Discord snowflake, otherwise the context is malformed and the
-    // run fails closed before any guard sees it. The original message is
-    // preserved as the cause and logged, while the host-visible contract
-    // string stays GOVERNANCE_RUN_UNAVAILABLE.
-    const threadId = context.threadId ?? null;
-    if (threadId !== null && !/^[1-9][0-9]{16,19}$/u.test(threadId)) {
-      throw new Error("GOVERNANCE_CONTEXT_MISSING");
-    }
-    const decision = await callGuard(`,
-    `  try {
-    const decision = await callGuard(`,
-  ],
-  // M10/T2-R4: the frozen admission-context threadId field.
-  [
-    `        isBot: context.isBot,
-        threadId,
-`,
-    `        isBot: context.isBot,
-`,
-  ],
-  // M10/T2-R5: the preflight-registry reader block. Inverted so the
-  // derived R5 body reproduces the packaged R5 digest exactly.
-  [
-    `const INGRESS_METADATA_KEY = "__zink_ingress_metadata_r5";
-const DISCORD_SNOWFLAKE_RE = /^[1-9][0-9]{16,19}$/u;
-
-const emptyIngressMetadata = () =>
-  Object.freeze({
-    mentionedUserIds: Object.freeze([]),
-    mentionedRoleIds: Object.freeze([]),
-    replyReferenceMessageId: null,
-    replyReferenceAuthorId: null,
-    threadOwnerId: null,
-    authorIsBot: false,
-  });
-
-/**
- * M10/T2-R5: read the deterministic Discord inbound metadata the preflight
- * patch recorded for this inbound message id. The write sits on the same
- * causal inbound path (a turn exists only after its message's preflight
- * completes), so no ordering assumption is involved. Unknown, malformed or
- * evicted records normalize to empty (deny preserved). Re-validated here
- * even though the writer validates too: the registry crosses a bundle
- * boundary, so neither side trusts the other's bytes.
- */
-export function readZinkIngressMetadata(messageId) {
-  let record;
-  try {
-    const registry = globalThis[INGRESS_METADATA_KEY];
-    record =
-      typeof messageId === "string" && registry instanceof Map
-        ? registry.get(messageId)
-        : undefined;
-  } catch {
-    return emptyIngressMetadata();
-  }
-  if (!record || typeof record !== "object") return emptyIngressMetadata();
-  const snowflake = (value) =>
-    typeof value === "string" && DISCORD_SNOWFLAKE_RE.test(value)
-      ? value
-      : null;
-  const idList = (entries) => {
-    if (!Array.isArray(entries)) return [];
-    const ids = [];
-    for (const entry of entries) {
-      const id = snowflake(typeof entry === "string" ? entry : entry?.id);
-      if (id) ids.push(id);
-    }
-    return ids;
-  };
-  return Object.freeze({
-    mentionedUserIds: Object.freeze(idList(record.mentionedUserIds)),
-    mentionedRoleIds: Object.freeze(idList(record.mentionedRoleIds)),
-    replyReferenceMessageId: snowflake(record.replyReferenceMessageId),
-    replyReferenceAuthorId: snowflake(record.replyReferenceAuthorId),
-    threadOwnerId: snowflake(record.threadOwnerId),
-    authorIsBot: record.authorIsBot === true,
-  });
-}
-
-`,
-    ``,
-  ],
-  // M10/T2-R5: structured inbound metadata in the frozen admission context
-  // (read by message id from the preflight registry). Inverted so the
-  // derived R5 body reproduces the packaged R5 digest exactly.
-  [
-    `        mentionedUserIds: ingress.mentionedUserIds,
-        mentionedRoleIds: ingress.mentionedRoleIds,
-        replyReferenceMessageId: ingress.replyReferenceMessageId,
-        replyReferenceAuthorId: ingress.replyReferenceAuthorId,
-        threadOwnerId: ingress.threadOwnerId,
-        authorIsBot: context.isBot === true || ingress.authorIsBot,
-`,
-    ``,
-  ],
-  // M10/T2-R12: resolveGovernance exported as a read-only test seam. Inverted
-  // so the derived R5 body reproduces the packaged R5 digest exactly.
-  [
-    `// M10/T2-R12: exported as a test seam so suites can drive the registered
-// guard hooks exactly as production does. Read-only accessor; no behavior.
-export function resolveGovernance(config) {`,
-    `function resolveGovernance(config) {`,
-  ],
-  // M11/T3 A3: the three seams gained cause-preserving message-only diagnostics.
-  // The host-visible codes and verdicts are unchanged, so inverting them here
-  // keeps the derived R5 body equal to the packaged R5 digest exactly.
-  [
-    `  } catch (error) {
-    // M11/T3 A3: the host-visible verdict is unchanged, but a block with no
-    // diagnostic was unattributable. Message only — never stack or content.
-    console.error(
-      "[zink-native-gate] gateNativeAnnounce:",
-      error?.message ?? error,
-    );
-    return { governed: true, action: "block" };
-  }`,
-    `  } catch {
-    return { governed: true, action: "block" };
-  }`,
-  ],
-  [
-    `  } catch (error) {
-    // M11/T3 A3: same standard as \`enterNativeRun\` — the host-visible contract
-    // string is unchanged, but the guard fault is preserved as the cause so a
-    // policy denial, an unregistered guard and a disk fault stay separable.
-    console.error(
-      "[zink-native-gate] finishNativeRun:",
-      error?.message ?? error,
-    );
-    throw new Error("GOVERNANCE_COMPLETION_UNAVAILABLE", { cause: error });
-  }`,
-    `  } catch {
-    throw new Error("GOVERNANCE_COMPLETION_UNAVAILABLE");
-  }`,
-  ],
-  [
-    `  } catch (error) {
-    // M11/T3 A3: cause-preserving sibling of \`enterNativeRun\` at this seam.
-    console.error(
-      "[zink-native-gate] sanitizeNativePrompt:",
-      error?.message ?? error,
-    );
-    throw new Error("GOVERNANCE_INGRESS_UNAVAILABLE", { cause: error });
-  }`,
-    `  } catch {
-    throw new Error("GOVERNANCE_INGRESS_UNAVAILABLE");
-  }`,
-  ],
-  // M12/T2.2 B-16: the four seams now name the guard's reason in the diagnostic
-  // channel. Every host-visible code, verdict and return shape is unchanged, so
-  // inverting these reproduces the R5 body exactly. The reason is only echoed
-  // when it matches the closed governance-code grammar, so no caller text can
-  // reach the log.
-  [
-    `// B-16: a guard verdict that denies carries a canonical reason code, and this
-// boundary used to drop it, so every policy denial reached the operator as the
-// bare class name. The reason is written to the diagnostic channel only when it
-// matches the closed governance-code grammar the tool-gate seam already applies
-// to the same field, which keeps message text, paths and credentials out of the
-// log. Nothing here moves a host-visible code, verdict, or return shape.
-function logDecisionReason(seam, verdict, decision) {
-  const reason =
-    typeof decision?.reason === "string" &&
-    /^[A-Z][A-Z0-9_]{0,63}$/u.test(decision.reason)
-      ? decision.reason
-      : "REASON_UNDECLARED";
-  console.error(\`[zink-native-gate] \${seam} \${verdict}: reason=\${reason}\`);
-}
-
-`,
-    ``,
-  ],
-  [
-    `    if (decision?.allow !== true) {
-      logDecisionReason("enterNativeRun", "denied", decision);
-      throw new Error("GOVERNANCE_DENIED");
-    }`,
-    `    if (decision?.allow !== true) throw new Error("GOVERNANCE_DENIED");`,
-  ],
-  [
-    `    if (decision?.action === "discard") {
-      logDecisionReason("gateNativeAnnounce", "discarded", decision);
-      return { governed: true, action: "discard" };
-    }`,
-    `    if (decision?.action === "discard")
-      return { governed: true, action: "discard" };`,
-  ],
-  [
-    `    ) {
-      logDecisionReason("gateNativeAnnounce", "refused", decision);
-      throw new Error("GOVERNANCE_RECEIPT_INVALID");
-    }`,
-    `    )
-      throw new Error("GOVERNANCE_RECEIPT_INVALID");`,
-  ],
-  [
-    `    if (decision?.allow !== true) {
-      logDecisionReason("finishNativeRun", "denied", decision);
-      throw new Error("GOVERNANCE_DENIED");
-    }`,
-    `    if (decision?.allow !== true) throw new Error("GOVERNANCE_DENIED");`,
-  ],
-  [
-    `    ) {
-      logDecisionReason("sanitizeNativePrompt", "refused", decision);
-      throw new Error("SCHEMA_INVALID");
-    }`,
-    `    )
-      throw new Error("SCHEMA_INVALID");`,
-  ],
-];
+  return names;
+};
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 
 const r5NativeBoundaryBody = () => {
-  const current = readFileSync(
-    path.join(
-      REPO,
-      "integrations",
-      "openclaw",
-      "topology",
-      "lib",
-      "native-boundary.mjs",
-    ),
-    "utf8",
+  // The R5-era source is read from the recorded commit, so this gate never
+  // depends on the CURRENT wording of the denial path.
+  const source = execFileSync(
+    "git",
+    [
+      "-c",
+      `safe.directory=${REPO}`,
+      "cat-file",
+      "blob",
+      `${R5_SOURCE_COMMIT}:${R5_SOURCE_RELATIVE}`,
+    ],
+    { cwd: REPO, maxBuffer: 16 * 1024 * 1024 },
+  ).toString("utf8");
+  const packaged = source.replaceAll(
+    PACKAGE_REWRITE_SEARCH,
+    PACKAGE_REWRITE_REPLACEMENT,
   );
-  let derived = current;
-  for (const [after, before] of POST_R5_HUNKS) {
-    assert.ok(
-      derived.includes(after),
-      "every post-R5 hunk must still be present for the R5 body to be derivable",
-    );
-    derived = derived.replace(after, before);
-  }
   assert.equal(
-    sha256(derived),
+    sha256(packaged),
     R5_NATIVE_BOUNDARY_SHA256,
-    "derived R5 body must reproduce the packaged R5 digest exactly",
+    "the R5-era source at the recorded commit must reproduce the packaged R5 digest exactly",
   );
-  return derived;
+  return packaged;
 };
 
 const identifiers = Object.freeze({
@@ -624,6 +162,32 @@ function provisioned() {
 
 test("R8: the R5 body is derivable and hashes to the packaged R5 digest", () => {
   assert.equal(sha256(r5NativeBoundaryBody()), R5_NATIVE_BOUNDARY_SHA256);
+});
+
+test("R8: the current boundary still exposes the whole R5-era surface", () => {
+  // The R5 asset is an accepted predecessor of the CURRENT build, so the
+  // current build must still expose everything the R5 build exposed. The
+  // check is by SURFACE, not by text: a reworded comment or a reformatted
+  // denial path must not fail it, and a removed export must.
+  const current = readFileSync(
+    path.join(
+      REPO,
+      "integrations",
+      "openclaw",
+      "topology",
+      "lib",
+      "native-boundary.mjs",
+    ),
+    "utf8",
+  );
+  const missing = [...exportedSymbols(r5NativeBoundaryBody().toString("utf8"))]
+    .filter((name) => !exportedSymbols(current).has(name))
+    .sort();
+  assert.deepEqual(
+    missing,
+    [],
+    "the current boundary must still expose every R5-era export",
+  );
 });
 
 test("R8: the verified R5 predecessor digest is allowlisted for its exact path", () => {
