@@ -14,7 +14,7 @@ agents use the exact pinned effective-tool matrix: coordinators receive only
 their required status/spawn/yield surface and specialists receive native
 `session_status`. The harmless specialist re-allow avoids the exact-version
 empty-tool model failure observed on OpenClaw `2026.6.34`. Model policy still limits
-session overrides to the two approved Google aliases. Every agent
+session overrides to the router's five governed model ids. Every agent
 uses a separate non-repository workspace and agent state directory plus a Docker
 sandbox with no network, read-only root, all capabilities dropped and no binds.
 This does not put the Gateway, channel plugin or internal routing inside the
@@ -22,11 +22,11 @@ sandbox; gateway loopback/auth, plugin inventory and Discord access gates remain
 separate controls.
 
 Plugin discovery is fail-closed with `plugins.bundledDiscovery="allowlist"` and
-`plugins.allow=["google","discord","zink-governance"]`. Google remains the
-only model provider plugin and Discord is the only channel plugin; the local
-governance plugin is model-invisible, has no network capability and is not a
-Zink Tools adapter. Browser, OpenAI, ACP and all other bundled or external
-plugins are ineligible to load. The implicit memory slot is explicitly disabled.
+`plugins.allow=["discord","zink-governance"]`. The `router` is the only model
+provider and Discord is the only channel plugin; the local governance plugin is
+model-invisible, has no network capability and is not a Zink Tools adapter.
+Browser, OpenAI, ACP and all other bundled or external plugins are ineligible to
+load. The implicit memory slot is explicitly disabled.
 
 The operator ledger lives outside every model workspace at
 `~/.openclaw-zink/operator/m7-t2/ledger/` and uses append-only JSONL plus an
@@ -58,23 +58,25 @@ invented key and the runtime has no join/onboarding post behavior to enable.
 Supplemental history, quote, and thread context is filtered to the owner
 allowlist.
 
-Only these moving Google aliases are permitted:
+Only these router model ids are permitted, in this order:
 
 ```text
-google/gemini-flash-latest
-google/gemini-flash-lite-latest
+gemini/gemini-3.8-flash
+gemini/gemini-3.7-flash
+muse-spark-1.3-contributor-free
+gemini/gemini-3.6-flash
+gemini/gemini-3.5-flash-lite
 ```
 
-Fallback stays within Google. A failure of both aliases is closed; no OpenAI,
-Codex or another provider is configured. The exact profiles
-`google:zink-01` through `google:zink-21` each use one structured `exec`
-SecretRef, never an inline value. The keys are partitioned without sharing:
-three consecutive profiles per agent in roster order. The resolver can read
-only those 21 Gemini entries, seven account-specific Discord entries and the
-Gateway entry from the encrypted `pass` password store.
+Fallback stays within the `router` provider. A failure of every id is closed;
+no OpenAI, Codex or another provider is configured. The router holds **one**
+credential, `ZINK_ROUTER_API_KEY`, and there is no per-agent auth order: the
+policy's own auth-order plan is empty by design, because one router credential
+serves every agent. The resolver can read only the seven account-specific
+Discord entries and the Gateway entry from the encrypted `pass` password store.
 
 The builder persists `agents.defaults.thinkingDefault="low"`. For the approved
-Flash aliases this avoids the unsupported Gemini `MINIMAL` request level and
+Flash ids this avoids the unsupported Gemini `MINIMAL` request level and
 keeps the provider payload deterministic at `LOW` unless a later approved task
 changes the policy.
 
@@ -193,14 +195,12 @@ gpg --batch --pinentry-mode loopback --passphrase '' \
 pass init 'Zink OpenClaw Service'
 ```
 
-Insert all 21 Gemini values, seven Discord bot tokens and the Gateway token
-interactively. Secret values must be entered only at the `pass` prompts; never
-put them in these commands or shell history.
+Insert the seven Discord bot tokens and the Gateway token interactively, plus
+the router's own key through the environment the service reads. Secret values
+must be entered only at the `pass` prompts; never put them in these commands or
+shell history.
 
 ```bash
-for index in $(seq -w 1 21); do
-  pass insert "zink/openclaw/GEMINI_API_KEY_${index}"
-done
 for agent in main o1 o2 excel power-bi sql python; do
   entry="${agent^^}"
   entry="${entry//-/_}"
@@ -215,7 +215,7 @@ unreadable, or expired credentials fail closed; do not weaken GPG or store
 permissions as a workaround.
 
 Then let OpenClaw, not this repository, write exactly three agent-local auth
-records per agent from the generated 21-target ref-only plan:
+records per agent from the generated ref-only plan:
 
 ```bash
 export OPENCLAW_PROFILE=zink
@@ -229,26 +229,11 @@ openclaw secrets apply \
   --allow-exec
 ```
 
-OpenClaw natively reads the default agent's auth store through secondary-agent
-runtime views. Lock each stored per-agent order to its own three profiles so
-that inherited main profiles remain ineligible:
-
-```bash
-openclaw models auth order set --agent main --provider google \
-  google:zink-01 google:zink-02 google:zink-03
-openclaw models auth order set --agent o1 --provider google \
-  google:zink-04 google:zink-05 google:zink-06
-openclaw models auth order set --agent o2 --provider google \
-  google:zink-07 google:zink-08 google:zink-09
-openclaw models auth order set --agent excel --provider google \
-  google:zink-10 google:zink-11 google:zink-12
-openclaw models auth order set --agent power-bi --provider google \
-  google:zink-13 google:zink-14 google:zink-15
-openclaw models auth order set --agent sql --provider google \
-  google:zink-16 google:zink-17 google:zink-18
-openclaw models auth order set --agent python --provider google \
-  google:zink-19 google:zink-20 google:zink-21
-```
+**There is no per-agent auth order to set.** The build emits one model
+provider — the `router` — and one router credential serves every agent, so the
+policy's auth-order plan is empty by design and no `openclaw models auth order
+set` command is printed here. Setting one would name a provider the build does
+not emit.
 
 The generated order plan is the comparison source for verification. A missing,
 extra or reordered profile is a failure; never clear these overrides while the
