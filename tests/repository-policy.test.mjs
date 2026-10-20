@@ -1545,3 +1545,55 @@ test("F-348: a deleted execution contract must have an archived copy of its Plan
 });
 
 // ---------------------------------------------------------------------------
+// F-089 — the authorization header an agent must resolve is near the top
+//
+// `PLAN.md` is read whole before any write, and it is far larger than one
+// read pass. The fields an authorization check needs must therefore be
+// reachable without reading the whole file: the header may not sink below
+// the first read pass, or a cold start resolves it from a partial read.
+// ---------------------------------------------------------------------------
+test("F-089: the PLAN.md authorization header is reachable in one bounded read", () => {
+  const lines = readFileSync(path.join(REPO_ROOT, "PLAN.md"), "utf8").split(
+    "\n",
+  );
+  const headerFields = [
+    "Milestone:",
+    "Task:",
+    "Plan Revision:",
+    "Planning Readiness:",
+    "Execution Authorization:",
+    "Execution Contract:",
+  ];
+
+  // The header may live in the dedicated "## Active task" section or in the
+  // front of the file; what must not happen is that the six fields are
+  // spread so far apart that no single read resolves the authorization.
+  const sectionStarts = lines
+    .map((line, index) => (/^## Active task\b/u.test(line) ? index : -1))
+    .filter((index) => index >= 0);
+  const regions = [];
+  if (sectionStarts.length > 0) {
+    const start = sectionStarts[sectionStarts.length - 1];
+    const end = lines.findIndex(
+      (line, index) => index > start && /^## /u.test(line),
+    );
+    regions.push({
+      name: "## Active task section",
+      lines: lines.slice(start, end < 0 ? undefined : end),
+    });
+  }
+  regions.push({ name: "first read pass", lines: lines.slice(0, 2000) });
+
+  const missing = [];
+  for (const field of headerFields) {
+    const found = regions.some((region) =>
+      region.lines.some((line) => line.startsWith(field)),
+    );
+    if (!found) missing.push(field);
+  }
+  assert.deepEqual(
+    missing,
+    [],
+    `the authorization header must be resolvable from one bounded read: ${missing.join(", ")}`,
+  );
+});
