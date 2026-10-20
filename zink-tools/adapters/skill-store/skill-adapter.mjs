@@ -187,6 +187,62 @@ async function loadVerifiedRecord(skillsDir, targetSkillId) {
   const digest = createHash("sha256").update(content, "utf8").digest("hex");
   return { record: { manifest: record.manifest }, content, digest };
 }
+
+/**
+ * F-028 (R1-A04-03): the served skill is BOUND to the namespace the caller
+ * gated on.
+ *
+ * Measured at HEAD: `loadVerifiedRecord(skillsDir, targetSkillId)` took no
+ * namespace at all, so the served skill was decided by the caller's
+ * `skill_id` alone while the gated `namespace` was echoed back and never
+ * compared. A caller that asked for the `research` namespace could therefore
+ * be served the `excel` stack's approved skill bytes — the namespace the
+ * authorization gate was asked about was not the namespace the answer came
+ * from.
+ *
+ * This adapter does not own the per-agent apply scope (that is the OpenClaw
+ * governance layer's `lib/policy.mjs`), and it must not: it is a thin
+ * adapter-contract boundary. What it DOES own is the binding between the
+ * namespace the caller gated on and the skill the caller is served, so the
+ * answer can never come from another namespace than the one that was asked
+ * for.
+ *
+ * A request that names no namespace, or names `all`, does not narrow
+ * anything and is therefore not constrained here; a request that names a
+ * namespace is served only a skill that belongs to it. Both sides are
+ * compared in their CANONICAL spelling (the shared alias registry), so
+ * `bi` and `power-bi` name the same namespace and an alias is not a way to
+ * smuggle a different one past the binding.
+ *
+ * @param {unknown} servedNamespace - the namespace(s) of the served record
+ * @param {unknown} requestedNamespace - the namespace the caller gated on
+ * @param {string} skillId - the id that was asked for (for the message)
+ */
+function assertNamespaceBinding(servedNamespace, requestedNamespace, skillId) {
+  const asList = (value) =>
+    (Array.isArray(value) ? value : [value])
+      .filter((entry) => typeof entry === "string" && entry.trim())
+      .map((entry) => entry.trim());
+  const canonical = (namespace) => NAMESPACE_ALIAS_MAP[namespace] ?? namespace;
+
+  const requested = asList(requestedNamespace).filter(
+    (namespace) => namespace !== "all",
+  );
+  if (requested.length === 0) return;
+
+  const served = asList(servedNamespace);
+  const requestedCanonical = new Set(requested.map(canonical));
+  const servedCanonical = served.map(canonical);
+  if (servedCanonical.some((namespace) => requestedCanonical.has(namespace))) {
+    return;
+  }
+  throw new SkillAdapterError(
+    `SKILL_NAMESPACE_MISMATCH: '${skillId}' belongs to namespace(s) ${
+      served.length > 0 ? served.join(", ") : "(none)"
+    }, which the requested namespace ${requested.join(", ")} does not select; refusing to serve it`,
+    "SKILL_NAMESPACE_MISMATCH",
+  );
+}
 /**
  * Atomically persists one JSON record: temp file, write, fsync, rename.
  * A partially written file is never treated as a valid proposal.
@@ -421,6 +477,12 @@ export class SkillAdapter {
           );
         }
 
+        // F-028 (R1-A04-03): the record served is the record the gated
+        // namespace selects. Without this the namespace was echoed and never
+        // compared, so a caller that gated on one namespace could be served
+        // another stack's skill bytes.
+        assertNamespaceBinding(storedSkill.namespace, namespace, skill_id);
+
         if (storedSkill.lifecycle_state !== "ACTIVE") {
           throw new SkillAdapterError(
             `Skill ${skill_id} is not ACTIVE`,
@@ -490,6 +552,11 @@ export class SkillAdapter {
             "SKILL_NOT_FOUND",
           );
         }
+
+        // F-028 (R1-A04-03): `apply` is the action that hands an agent a
+        // procedure to execute, so the served skill must be the one the gated
+        // namespace selects — not any skill whose id the caller named.
+        assertNamespaceBinding(storedSkill.namespace, namespace, skill_id);
 
         return {
           action,
