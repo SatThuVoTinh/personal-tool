@@ -11,6 +11,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 
+import { proveEveryRenameIsFollowedByADirectoryFsync } from "./helpers/directory-fsync.mjs";
+
 const SOURCE = readFileSync(
   new URL(
     "../integrations/openclaw/plugins/zink-governance/index.mjs",
@@ -155,11 +157,17 @@ test("R15-11: every governance durability writer fsyncs its directory", () => {
   // comment states the intent, but `decision-ledger.mjs` and
   // `artifact-validator.mjs` did not — so the guarantee was declared in one place
   // and not implemented in the others.
-  const read = (rel) =>
-    readFileSync(
-      new URL(`../integrations/openclaw/${rel}`, import.meta.url),
-      "utf8",
-    );
+  //
+  // F-296 (R7-C5-04): the check that used to live here sliced each file from
+  // its LAST `renameSync` and asserted that the remaining text mentioned an
+  // fsync. It never named a directory handle and never bound an fsync to a
+  // rename, so ANY mention of `fsyncSync` after that rename satisfied it:
+  // retargeting the directory fsync onto the already-durable file handle left
+  // this lane green while the rename stopped being crash-durable. The
+  // predicate below proves the property per SITE — every rename is followed by
+  // a directory fsync bound to a handle opened on the parent directory, in the
+  // same block — and its failure message names the site (`file:line`) and the
+  // handle, so the failure can be acted on.
   const writes = [
     "topology/lib/ledger.mjs",
     "lib/queue-manager.mjs",
@@ -167,14 +175,7 @@ test("R15-11: every governance durability writer fsyncs its directory", () => {
     "lib/artifact-validator.mjs",
   ];
   for (const rel of writes) {
-    const src = read(rel);
-    assert.match(src, /renameSync/u, `${rel} must publish via rename`);
-    const after = src.slice(src.lastIndexOf("renameSync"));
-    assert.match(
-      after,
-      /fsyncSync/u,
-      `${rel} must fsync the parent directory after renameSync, otherwise a crash can lose the rename`,
-    );
+    proveEveryRenameIsFollowedByADirectoryFsync(`integrations/openclaw/${rel}`);
   }
 });
 

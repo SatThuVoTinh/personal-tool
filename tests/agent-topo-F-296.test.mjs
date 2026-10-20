@@ -41,6 +41,10 @@ const PROVEN_WRITERS = [
   "integrations/openclaw/topology/lib/native-patch.mjs",
   "integrations/openclaw/topology/lib/runtime-backup.mjs",
   "integrations/openclaw/templates/openclaw-gemini-stream-hotfix.mjs",
+  // F-296: the Zink Tools agent made the Skill Store proposal writer durable
+  // (the rename is now followed by a directory fsync), so it is proved here
+  // instead of being carried as an unproven writer.
+  "zink-tools/adapters/skill-store/skill-adapter.mjs",
 ];
 
 // Writers this lane does NOT prove yet, because their file is owned by another
@@ -51,15 +55,14 @@ const KNOWN_UNPROVEN_WRITERS = [
     file: "integrations/openclaw/plugins/zink-governance/index.mjs",
     owner: "fix-openclaw-governance-plugin",
   },
-  {
-    file: "zink-tools/adapters/skill-store/skill-adapter.mjs",
-    owner: "fix-tools",
-  },
 ];
 
 const RENAME = /\brenameSync\s*\(/gu;
+// A handle opened with the READ flag. On every platform this repository
+// supports, that is how a directory is opened for an fsync. The `fs.` prefix
+// is accepted because the Skill Store writer calls `fs.openSync` directly.
 const OPEN_READ_HANDLE =
-  /([A-Za-z_$][\w$]*)\s*=\s*openSync\(\s*([^,]+?)\s*,\s*["']r["']\s*\)/gu;
+  /([A-Za-z_$][\w$]*)\s*=\s*(?:fs\.)?openSync\(\s*([^,]+?)\s*,\s*["']r["']\s*\)/gu;
 const FSYNC = /\bfsyncSync\s*\(\s*([A-Za-z_$][\w$]*)\s*\)/gu;
 
 function escapeRegExp(value) {
@@ -167,6 +170,12 @@ test("F-296: every tracked rename writer is classified by this lane", () => {
 });
 
 test("F-296: each rename site is followed by a bound directory fsync", () => {
+  // The per-site predicate: after EVERY rename, a handle opened with the READ
+  // flag is fsynced, the fsync is bound to that handle (and not to the
+  // already-durable file handle the temporary file was fsynced through), and a
+  // rename whose directory fsync is delegated to a local helper is accepted
+  // when that helper's own body binds the fsync. A mutation that re-targets
+  // or removes any one of these directory fsyncs reddens this lane.
   for (const relative of PROVEN_WRITERS) {
     const source = sourceOf(relative);
     const helpers = directorySyncHelpers(source);
