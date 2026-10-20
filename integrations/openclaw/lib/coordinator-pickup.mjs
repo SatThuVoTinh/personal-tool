@@ -408,7 +408,24 @@ export function createPickupScheduler({
     if (stopped || inFlight) return;
     inFlight = true;
     try {
-      await runOnce();
+      const outcome = await runOnce();
+      // F-068: a refusal is a RESULT, not a throw. `runOnce` reports
+      // {ok:false, error} for every named refusal (PICKUP_CLAIM_FAILED,
+      // PICKUP_ALREADY_CLAIMED, LEDGER_CLAIM_RECORD_FAILED,
+      // COORDINATOR_RUNTIME_SEAM_UNAVAILABLE), so discarding it made a
+      // permanently blocked queue silent. Every refusal now reaches the
+      // error channel, once per tick.
+      if (outcome && typeof outcome === "object" && outcome.ok === false) {
+        try {
+          onError?.(
+            new Error(
+              `PICKUP_REFUSED: ${String(outcome.error ?? "UNKNOWN_REFUSAL")}`,
+            ),
+          );
+        } catch {
+          // An onError handler must never break the loop or throw outward.
+        }
+      }
     } catch (err) {
       try {
         onError?.(err);
