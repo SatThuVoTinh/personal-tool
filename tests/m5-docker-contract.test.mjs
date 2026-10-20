@@ -22,6 +22,7 @@ const knowledgeComposeText = read(
 const start = read("infrastructure", "docker", "scripts", "start.ps1");
 const stop = read("infrastructure", "docker", "scripts", "stop.ps1");
 const preflight = read("infrastructure", "docker", "scripts", "preflight.ps1");
+const backup = read("infrastructure", "docker", "scripts", "backup.ps1");
 const nginx = read("infrastructure", "nginx", "conf.d", "default.conf");
 
 function compose() {
@@ -138,4 +139,26 @@ test("M5/T1-R2 validates only environment variables used by each profile", () =>
     preflight,
     /if \(\$usesKnowledge\) \{[\s\S]*"KNOWLEDGE_VAULT_ROOT", "OLLAMA_SMOKE_MODEL"/,
   );
+});
+
+// The backup driver is the one script the operator runbook tells the owner to
+// run that NO verify stage read: it is not in a prettier glob, not in an
+// eslint target and not in the npm script set, so the repository could not see
+// it change. The contract it has to keep is asserted here.
+test("M5/T1-R2 the backup driver keeps its safety contract", () => {
+  // The manifest declares that no plaintext secret is carried.
+  assert.match(backup, /secrets_included = \$false/);
+  // The backup directory must be empty, so a backup never overwrites another.
+  assert.match(backup, /BackupDirectory must be empty to prevent overwrite/);
+  // A zero-length database dump is a failed backup, not a backup.
+  assert.match(backup, /PostgreSQL logical backup failed for database/);
+  assert.match(backup, /\.Length -eq 0/);
+  // The n8n home archive must not carry the credentials file.
+  assert.match(backup, /--exclude=config/);
+  // Every archived file is recorded with its digest, so the backup is
+  // verifiable after the fact.
+  assert.match(backup, /Get-FileHash[^\n]*-Algorithm SHA256/);
+  assert.match(backup, /sha256 = /);
+  // The manifest is written without a byte-order mark.
+  assert.match(backup, /New-Object System\.Text\.UTF8Encoding\(\$false\)/);
 });

@@ -1293,6 +1293,115 @@ export function checkGitWhitespace(repositoryRoot) {
   return failures;
 }
 
+/**
+ * Every script a doc or a runbook tells a human to run must be covered by a
+ * verify stage.
+ *
+ * The operator entry points live where the Docker work put them
+ * (`infrastructure/docker/scripts/`), not under `scripts/`, so no prettier
+ * glob and no eslint target ever saw them: the runbook told the owner to run
+ * `backup.ps1` and no lane in this repository could execute, lint or even
+ * read it. The rule here is that a cited script is READ by at least one file
+ * the `npm test` gate runs, and that the cited path exists at all - a doc that
+ * points at a script nothing carries is the same defect with a shorter path.
+ */
+const OPERATOR_SCRIPT_CITATION =
+  /(?:infrastructure\/docker\/scripts\/[\w.-]+\.(?:ps1|sh)|scripts\/[\w./-]+\.(?:mjs|sh|bash))/gu;
+
+export function checkDocumentedScriptsAreCovered(
+  repositoryRoot,
+  packageJson,
+  trackedFiles,
+) {
+  const failures = [];
+  const command = packageJson?.scripts?.test;
+  if (typeof command !== "string") {
+    return [
+      "npm script test must be a string so the covered scripts can be reconciled.",
+    ];
+  }
+  const gateFiles = [
+    ...new Set(
+      command.split(/\s+/u).filter((token) => TEST_FILE_ARGUMENT.test(token)),
+    ),
+  ];
+  const gateSources = new Map();
+  for (const gateFile of gateFiles) {
+    // The checker must not cover itself: this suite names script paths as
+    // synthetic fixtures, and a fixture is not coverage.
+    if (gateFile === "tests/repository-policy.test.mjs") continue;
+    const gatePath = resolveTrackedPath(repositoryRoot, gateFile);
+    if (!existsSync(gatePath)) continue;
+    gateSources.set(gateFile, readFileSync(gatePath, "utf8"));
+  }
+
+  const docFiles = trackedFiles.filter(
+    (repositoryPath) =>
+      repositoryPath === "README.md" ||
+      (repositoryPath.startsWith("docs/runbooks/") &&
+        repositoryPath.endsWith(".md")),
+  );
+  const cited = new Map();
+  for (const docFile of docFiles) {
+    const docPath = resolveTrackedPath(repositoryRoot, docFile);
+    if (!existsSync(docPath)) continue;
+    const contents = readFileSync(docPath, "utf8");
+    for (const match of contents.matchAll(OPERATOR_SCRIPT_CITATION)) {
+      const scriptPath = match[0];
+      if (!cited.has(scriptPath)) cited.set(scriptPath, new Set());
+      cited.get(scriptPath).add(docFile);
+    }
+  }
+
+  for (const [scriptPath, docFiles_] of [...cited].sort()) {
+    if (!trackedFiles.includes(scriptPath)) {
+      failures.push(
+        `A tracked document tells the operator to run a script that is not tracked: ${scriptPath} (cited by ${[...docFiles_].sort().join(", ")}).`,
+      );
+      continue;
+    }
+    // A gate file names the script by its file name (the tests assemble the
+    // path from parts), so the file name is the coverage token.
+    const scriptName = path.posix.basename(scriptPath);
+    const covered = [...gateSources.entries()].filter(([, source]) =>
+      source.includes(scriptName),
+    );
+    if (!covered.length) {
+      failures.push(
+        `A tracked document tells the operator to run a script that no verify stage reads: ${scriptPath} (cited by ${[...docFiles_].sort().join(", ")}).`,
+      );
+    }
+  }
+
+  return failures;
+}
+
+/**
+ * An advertised `scripts/` category directory must carry tracked content.
+ *
+ * The four category directories under `scripts/` were empty on disk and
+ * untrackable by git, so a fresh clone had none of them and the repository
+ * advertised four script families it does not ship.
+ */
+export function checkNoEmptyScriptCategory(repositoryRoot, trackedFiles) {
+  const failures = [];
+  const scriptsRoot = path.join(repositoryRoot, "scripts");
+  if (!existsSync(scriptsRoot)) return failures;
+  for (const name of readdirSync(scriptsRoot, { withFileTypes: true })) {
+    if (!name.isDirectory()) continue;
+    const prefix = `scripts/${name.name}/`;
+    const tracked = trackedFiles.filter((repositoryPath) =>
+      repositoryPath.startsWith(prefix),
+    );
+    if (!tracked.length) {
+      failures.push(
+        `The scripts category directory scripts/${name.name} carries no tracked file. Remove it, or add the scripts it advertises.`,
+      );
+    }
+  }
+  return failures;
+}
+
 export function collectRepositoryFailures(repositoryRoot) {
   const failures = checkRequiredFiles(repositoryRoot);
   failures.push(...checkWorkflowDefinitions(repositoryRoot));
@@ -1345,7 +1454,17 @@ export function collectRepositoryFailures(repositoryRoot) {
         .map((name) => `tests/${name}`);
       failures.push(...checkTestListReconciliation(packageJson, testFiles));
     }
+
+    failures.push(
+      ...checkDocumentedScriptsAreCovered(
+        repositoryRoot,
+        packageJson,
+        trackedFiles,
+      ),
+    );
   }
+
+  failures.push(...checkNoEmptyScriptCategory(repositoryRoot, trackedFiles));
 
   return failures;
 }

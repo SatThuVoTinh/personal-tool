@@ -15,11 +15,13 @@ import { fileURLToPath } from "node:url";
 
 import {
   checkCommandDefinitions,
+  checkDocumentedScriptsAreCovered,
   checkFindingsRegister,
   checkFormatGlobQuoting,
   checkGateRegistry,
   checkGitWhitespace,
   checkNestedGeneratedTreesIgnored,
+  checkNoEmptyScriptCategory,
   checkRegisterCitations,
   checkRequiredFiles,
   checkSecretScanAllowlist,
@@ -1162,6 +1164,91 @@ test("the trailing-whitespace gate defers to the editor-facing .editorconfig", (
       "a file class the editorconfig does not exempt is still checked",
     );
   });
+});
+
+// =========================================================================
+// M12/T9 F-223 — the operator scripts the runbook tells the owner to run
+// lived outside every verify stage, and the repository advertised four script
+// categories it does not ship.
+//
+// The coverage rule is that a script a doc or a runbook cites is READ by at
+// least one file the `npm test` gate runs, and that the cited path exists.
+// The second rule is that a `scripts/` category directory carries tracked
+// content, so an empty advertised category cannot survive.
+// =========================================================================
+test("F-223: every script a document tells the operator to run is covered", () => {
+  const packageJson = JSON.parse(
+    readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"),
+  );
+  const failures = checkDocumentedScriptsAreCovered(
+    REPO_ROOT,
+    packageJson,
+    listTrackedFiles(REPO_ROOT),
+  );
+  assert.deepEqual(failures, [], failures.join(" | "));
+});
+
+test("F-223: a cited script that no verify stage reads must fail the check", () => {
+  withTemporaryRepository((repositoryRoot) => {
+    writeTrackedFile(
+      repositoryRoot,
+      "infrastructure/docker/scripts/backup.ps1",
+      "Write-Output 'backup'\n",
+    );
+    writeTrackedFile(
+      repositoryRoot,
+      "docs/runbooks/knowledge-platform.md",
+      "Run `infrastructure/docker/scripts/backup.ps1` first.\n",
+    );
+    const failures = checkDocumentedScriptsAreCovered(
+      repositoryRoot,
+      { scripts: { test: "node --test tests/a.test.mjs" } },
+      [
+        "infrastructure/docker/scripts/backup.ps1",
+        "docs/runbooks/knowledge-platform.md",
+      ],
+    );
+    assert.equal(failures.length, 1, failures.join(" | "));
+    assert.match(failures[0], /no verify stage reads/u);
+  });
+});
+
+test("F-223: a cited script that is not tracked must fail the check", () => {
+  withTemporaryRepository((repositoryRoot) => {
+    writeTrackedFile(
+      repositoryRoot,
+      "docs/runbooks/knowledge-platform.md",
+      "Run `infrastructure/docker/scripts/phantom.ps1` first.\n",
+    );
+    const failures = checkDocumentedScriptsAreCovered(
+      repositoryRoot,
+      { scripts: { test: "node --test tests/a.test.mjs" } },
+      ["docs/runbooks/knowledge-platform.md"],
+    );
+    assert.equal(failures.length, 1, failures.join(" | "));
+    assert.match(failures[0], /not tracked/u);
+  });
+});
+
+test("F-223: an empty scripts category directory must fail the check", () => {
+  withTemporaryRepository((repositoryRoot) => {
+    mkdirSync(path.join(repositoryRoot, "scripts", "verification"), {
+      recursive: true,
+    });
+    const failures = checkNoEmptyScriptCategory(repositoryRoot, [
+      "scripts/repository-check.mjs",
+    ]);
+    assert.equal(failures.length, 1, failures.join(" | "));
+    assert.match(failures[0], /carries no tracked file/u);
+  });
+});
+
+test("F-223: the shipped scripts tree carries no empty category", () => {
+  assert.deepEqual(
+    checkNoEmptyScriptCategory(REPO_ROOT, listTrackedFiles(REPO_ROOT)),
+    [],
+    "every advertised scripts/ category must carry tracked content",
+  );
 });
 
 // =========================================================================
