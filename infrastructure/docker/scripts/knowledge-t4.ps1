@@ -17,6 +17,14 @@ $fixtureRoot = Join-Path $repositoryRoot "apps\knowledge\tests\fixtures\vault"
 $temporaryRoot = Join-Path ([IO.Path]::GetTempPath()) "personal-tool-m3-t4-$([guid]::NewGuid().ToString('N'))"
 $vaultRoot = Join-Path $temporaryRoot "vault"
 $script:nginxPort = 0
+# F-267 (R7-D13-04): the documented Knowledge memory ceiling and the fraction
+# of it the acceptance gate allows the cgroup peak to reach. The gate reads
+# the limit the container was actually given and fails when that limit is not
+# the documented one, so a lowered limit cannot make the gate lenient while
+# the run still reports PASS. The sibling t5 harness asserts the same ceiling
+# (knowledge-t5-common.ps1: HostConfig.Memory == 4294967296).
+$knowledgeMemoryLimitBytes = 4294967296
+$knowledgeMemoryLimitFraction = 0.8
 
 function Invoke-Compose {
   param([string[]]$Arguments)
@@ -91,6 +99,10 @@ COMMIT;
 function Assert-KnowledgeMemory {
   $containerId = (Invoke-Compose @("ps", "-q", "knowledge")).Trim()
   if (-not $containerId) { throw "Knowledge container id is unavailable." }
+  $memoryLimit = [int64]((& docker inspect --format "{{.HostConfig.Memory}}" $containerId | Select-Object -First 1).Trim())
+  if ($memoryLimit -ne $knowledgeMemoryLimitBytes) {
+    throw "Knowledge container memory limit is $memoryLimit bytes; the documented ceiling is $knowledgeMemoryLimitBytes bytes."
+  }
   & docker exec $containerId test -f /sys/fs/cgroup/memory.peak | Out-Null
   if ($LASTEXITCODE -eq 0) {
     $peakOutput = @(& docker exec $containerId cat /sys/fs/cgroup/memory.peak)
@@ -113,7 +125,8 @@ function Assert-KnowledgeMemory {
     }
   }
   $peak = [int64](($peakOutput -join "").Trim())
-  if ($peak -ge 3435973837) { throw "Knowledge cgroup peak memory exceeded 80% of its 4 GiB ceiling: $peak bytes." }
+  $peakCeiling = [int64][Math]::Ceiling($memoryLimit * $knowledgeMemoryLimitFraction)
+  if ($peak -ge $peakCeiling) { throw "Knowledge cgroup peak memory exceeded 80% of its $memoryLimit byte ceiling: $peak bytes." }
 }
 
 function Wait-Run {
