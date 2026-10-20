@@ -328,23 +328,15 @@ test("F-242: a delegated live call WITH a consumed approval is authorized by the
     );
     assert.doesNotMatch(
       diagnostics,
-      /AUTH_APPROVAL_REQUIRED|AUTH_APPROVAL_INVALID/u,
-      "the approval must no longer be the refusal once a record backs the call",
+      /AUTH_APPROVAL_REQUIRED|AUTH_APPROVAL_INVALID|AUTH_DELEGATION_NOT_FOUND|SCHEMA_VALIDATION_FAILED/u,
+      `an authorized call must report no governance refusal, diagnostics: ${diagnostics}`,
     );
-    // The refusal that remains is the PUBLISHED tool-call contract, not the
-    // plugin: `delegated_provenance.delegation_id` is pinned to a uuid v4 while
-    // the ledger derives the delegation id as a 64-hex digest
-    // (`deriveDelegationId`). That mismatch is the topology/tools owners'
-    // hand-off; it is recorded here so the plugin half is not blamed for it.
-    assert.match(
-      diagnostics,
-      /SCHEMA_VALIDATION_FAILED/u,
-      `the canonical envelope must be judged by the published contract; diagnostics: ${diagnostics}`,
-    );
+    // And the owner's approval was CONSUMED by the authorized call: a
+    // one-time approval cannot be spent twice.
     assert.equal(
       existsSync(path.join(paths.root, "consumed-approvals.json")),
-      false,
-      "a refused call must not consume the owner's approval",
+      true,
+      "an authorized call must consume the owner's approval",
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
