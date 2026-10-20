@@ -6,6 +6,19 @@ import path from "node:path";
 import { setTimeout } from "node:timers/promises";
 import { QueueManager } from "../integrations/openclaw/lib/queue-manager.mjs";
 import { consumeApprovalAtomically } from "../integrations/openclaw/topology/lib/guard.mjs";
+import { derivePrincipalRef } from "../integrations/openclaw/topology/lib/canonical.mjs";
+
+// M12/T9 F-026: completion is bound to the AUTHORITATIVE owner, and the owner
+// is a ledger PRINCIPAL REF - the HMAC the ledger derives from the identity key
+// and the Discord snowflake (`derivePrincipalRef`). A bare snowflake is not a
+// principal: it is the public identity the ref exists to hide, so a lane that
+// enqueues one would be pinning the wrong vocabulary. The queue compares the
+// projected owner against the presented principal, so the lane presents the
+// SAME value it enqueued.
+const IDENTITY_KEY = "c".repeat(64);
+const OWNER_SNOWFLAKE = "32345678901234567";
+const OWNER_PRINCIPAL = derivePrincipalRef(IDENTITY_KEY, OWNER_SNOWFLAKE);
+const OTHER_PRINCIPAL = derivePrincipalRef(IDENTITY_KEY, "22345678901234567");
 
 function freshQueue() {
   const dir = mkdtempSync(path.join(tmpdir(), "lane-c-"));
@@ -18,6 +31,10 @@ function enqueue(qm, taskId, overrides = {}) {
     primaryCoordinator: "o1",
     requiredCapabilities: [],
     payload: {},
+    // F-026: every enqueued task carries the authoritative owner, so a
+    // completion can be VERIFIED against it instead of accepted from whoever
+    // presents a non-empty string.
+    ownerPrincipalRef: OWNER_PRINCIPAL,
     ...overrides,
   });
 }
@@ -143,15 +160,34 @@ describe("Lane C — queue projection & lease authority", () => {
         qm.completeTask({
           taskId: "t1",
           userConfirmationRef: "x",
-          userPrincipalRef: "user-1",
+          userPrincipalRef: OWNER_PRINCIPAL,
           resultDigest: "e".repeat(64),
         }),
       { message: /RESULT_MISMATCH/ },
     );
+    // M12/T9 F-026: the AUTHORITATIVE owner is the only principal that closes
+    // the task. A different - equally well-formed, equally non-empty -
+    // principal is refused, because the queue verifies the owner instead of
+    // recording whoever spoke.
+    assert.throws(
+      () =>
+        qm.completeTask({
+          taskId: "t1",
+          userConfirmationRef: "x",
+          userPrincipalRef: OTHER_PRINCIPAL,
+          resultDigest: "d".repeat(64),
+        }),
+      { message: /USER_PRINCIPAL_MISMATCH/ },
+    );
+    assert.equal(
+      qm.getTask("t1").status,
+      "RESULT_PENDING_REVIEW",
+      "a refused completion must leave the task pending review",
+    );
     const done = qm.completeTask({
       taskId: "t1",
       userConfirmationRef: "user-button-accept",
-      userPrincipalRef: "user-1",
+      userPrincipalRef: OWNER_PRINCIPAL,
       resultDigest: "d".repeat(64),
     });
     assert.equal(done.status, "COMPLETE");
@@ -297,7 +333,7 @@ describe("Lane C — queue projection & lease authority", () => {
     qm.completeTask({
       taskId: "a-done",
       userConfirmationRef: "ref",
-      userPrincipalRef: "user-1",
+      userPrincipalRef: OWNER_PRINCIPAL,
       resultDigest: df.resultDigest,
     });
     enqueue(qm, "a-rej");

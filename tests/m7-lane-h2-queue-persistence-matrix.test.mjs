@@ -18,7 +18,10 @@ import {
   readSnapshot,
   recordWorkflowEvent,
 } from "../integrations/openclaw/topology/lib/ledger.mjs";
-import { deriveTaskId } from "../integrations/openclaw/topology/lib/canonical.mjs";
+import {
+  deriveTaskId,
+  derivePrincipalRef,
+} from "../integrations/openclaw/topology/lib/canonical.mjs";
 import { handleExecutionFinished } from "../integrations/openclaw/plugins/zink-governance/index.mjs";
 
 function fixture() {
@@ -29,7 +32,16 @@ function makeQueue(dir, name = "queue.json") {
   return new QueueManager({ storagePath: path.join(dir, name) });
 }
 
-const OWNER_PRINCIPAL = "123456789012345678";
+// M12/T9 F-026: the authoritative owner is a ledger PRINCIPAL REF - the HMAC
+// the ledger derives from the identity key and the Discord snowflake
+// (`derivePrincipalRef`). A bare snowflake is not a principal: it is the
+// public identity the ref exists to hide. The queue compares the projected
+// owner against the presented principal, so every task in this lane is
+// enqueued WITH the owner and completed by presenting the SAME value.
+const OWNER_PRINCIPAL = derivePrincipalRef(
+  "d".repeat(64),
+  "123456789012345678",
+);
 const REF = "f".repeat(64);
 
 function governedTask(root) {
@@ -71,7 +83,14 @@ describe("Lane H2 — queue lifecycle matrix", () => {
     const dir = fixture();
     try {
       const qm = makeQueue(dir);
-      qm.enqueueTask({ taskId: "life-1", primaryCoordinator: "o1" });
+      // F-026: the task carries the authoritative owner, so the completion
+      // below is verified against it instead of accepted from whoever presents
+      // a non-empty string.
+      qm.enqueueTask({
+        taskId: "life-1",
+        primaryCoordinator: "o1",
+        ownerPrincipalRef: OWNER_PRINCIPAL,
+      });
       assert.equal(qm.getTask("life-1").status, TASK_STATES.QUEUED);
       const { leaseId, task } = qm.claimTaskById({
         taskId: "life-1",
@@ -155,7 +174,11 @@ describe("Lane H2 — queue lifecycle matrix", () => {
         {
           label: "result-pending without a user decision",
           run: () => {
-            qm.enqueueTask({ taskId: "short-2", primaryCoordinator: "o1" });
+            qm.enqueueTask({
+              taskId: "short-2",
+              primaryCoordinator: "o1",
+              ownerPrincipalRef: OWNER_PRINCIPAL,
+            });
             const { leaseId, task } = qm.claimTaskById({
               taskId: "short-2",
               agentId: "o1",
@@ -181,7 +204,11 @@ describe("Lane H2 — queue lifecycle matrix", () => {
         {
           label: "resurrect a terminal task",
           run: () => {
-            qm.enqueueTask({ taskId: "short-3", primaryCoordinator: "o1" });
+            qm.enqueueTask({
+              taskId: "short-3",
+              primaryCoordinator: "o1",
+              ownerPrincipalRef: OWNER_PRINCIPAL,
+            });
             const { leaseId, task } = qm.claimTaskById({
               taskId: "short-3",
               agentId: "o1",

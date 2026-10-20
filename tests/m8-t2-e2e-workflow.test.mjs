@@ -34,6 +34,15 @@ import {
   handleExecutionFinished,
 } from "../integrations/openclaw/plugins/zink-governance/index.mjs";
 
+import { derivePrincipalRef } from "../integrations/openclaw/topology/lib/canonical.mjs";
+
+// M12/T9 F-026: the completion below is bound to the AUTHORITATIVE owner, and
+// the owner is a ledger PRINCIPAL REF - the HMAC the ledger derives from the
+// identity key and the Discord snowflake. The happy path therefore enqueues
+// the owner and presents the SAME value; a bare snowflake is the public
+// identity the ref exists to hide, and is not a principal.
+const OWNER_PRINCIPAL = derivePrincipalRef("e".repeat(64), "32345678901234567");
+
 describe("M8/T2 Mandatory E2E Workflow & Failure Injection Suite", () => {
   // =========================================================================
   // Happy Path: End-to-End Canonical Flow
@@ -80,6 +89,9 @@ describe("M8/T2 Mandatory E2E Workflow & Failure Injection Suite", () => {
         taskId,
         primaryCoordinator: "o1",
         requiredCapabilities: ["python", "sql"],
+        // M12/T9 F-026: the task carries the authoritative owner, so the
+        // completion at step 10 is verified against it.
+        ownerPrincipalRef: OWNER_PRINCIPAL,
       });
       assert.equal(queuedItem.status, TASK_STATES.QUEUED);
 
@@ -138,7 +150,7 @@ describe("M8/T2 Mandatory E2E Workflow & Failure Injection Suite", () => {
       const completedQueue = qm.completeTask({
         taskId,
         userConfirmationRef: "user-click-accept",
-        userPrincipalRef: "user-1",
+        userPrincipalRef: OWNER_PRINCIPAL,
         resultDigest: qm.getTask(taskId)?.resultDigest,
       });
       assert.equal(completedQueue.status, TASK_STATES.COMPLETE);
