@@ -330,17 +330,51 @@ test("R15 6-7, 21: a completed attempt does not block a second attempt", async (
   }
 });
 
-test("R15 22: repeated attempts cause no ledger mutation", () => {
+test("R15 22: repeated attempts cause no ledger mutation", async () => {
   const rt = buildRuntime();
   try {
-    // The governance ledger is not part of the transaction snapshot's restore set
-    // and no apply path here touches it; assert the snapshot never claims it.
+    // The governance ledger is a durable governance file under the state root.
+    // The invariant is that repeated applies never touch it, so the file has
+    // to be PRESENT: the previous version of this case ran no apply at all and
+    // asserted only a property of the snapshot builder, which cannot fail when
+    // a restore rewrites a ledger path.
+    const ledgerPath = path.join(
+      rt.stateDir,
+      "operator",
+      "m7-t2",
+      "ledger",
+      "events.jsonl",
+    );
+    mkdirSync(path.dirname(ledgerPath), { recursive: true });
+    const ledgerBytes = Buffer.from(
+      '{"event":"WORKFLOW_OPENED","sequence":1}\n',
+      "utf8",
+    );
+    writeFileSync(ledgerPath, ledgerBytes);
+
+    // Secondary: the snapshot must not claim the ledger as a preimage.
     const snapshot = createTransactionSnapshot(rt);
     assert.equal(
       Object.keys(snapshot.files).some((rel) => rel.includes("ledger")),
       false,
       "the ledger is never a transaction preimage target",
     );
+
+    // The evidence: two applies against a tree that contains a ledger file,
+    // with the ledger bytes compared before and after each attempt.
+    for (const attempt of [1, 2]) {
+      const report = await applyRuntime(harness(rt).deps);
+      assert.equal(
+        report.status,
+        "PASS",
+        `attempt ${attempt} must complete: ${report.reason ?? ""}`,
+      );
+      assert.equal(
+        readFileSync(ledgerPath).equals(ledgerBytes),
+        true,
+        `attempt ${attempt} must not mutate the governance ledger`,
+      );
+    }
   } finally {
     rt.dispose();
   }
