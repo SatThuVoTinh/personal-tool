@@ -5,7 +5,18 @@ import path from "node:path";
 import process from "node:process";
 import { resolveGatewayToken } from "../../../verify.mjs";
 
-const stateDir = "/home/hoang_vinh/.openclaw-zink";
+// F-219: the machine-specific state root is NOT a literal. The probe takes
+// it from the environment or the first argument and refuses to run without
+// one, exactly like live-governance-probe.mjs: a probe that silently points
+// at one operator's machine root says nothing about any other, and the
+// literal is what made this file drift silently.
+const stateDir = process.env.ZINK_PROBE_STATE_DIR ?? process.argv[2] ?? null;
+if (!stateDir) {
+  process.stdout.write(
+    `${JSON.stringify({ resolver: "FAIL", code: "PROBE_STATE_DIR_NOT_NAMED" })}\n`,
+  );
+  process.exit(2);
+}
 const environment = {
   ...process.env,
   PATH: "/home/hoang_vinh/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",

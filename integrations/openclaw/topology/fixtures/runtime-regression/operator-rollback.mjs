@@ -46,7 +46,16 @@ import {
   parseIdentifiers,
 } from "../../../lib/policy.mjs";
 
-const stateDir = "/home/hoang_vinh/.openclaw-zink";
+// F-219: the machine-specific state root is NOT a literal. The operator
+// names it (ZINK_OPERATOR_STATE_DIR or the first argument) and the driver
+// refuses to run without one, exactly like live-governance-probe.mjs: a
+// driver that silently points at one operator's machine root says nothing
+// about any other, and a hardcoded root is what let these files drift.
+const stateDir = process.env.ZINK_OPERATOR_STATE_DIR ?? process.argv[2] ?? null;
+if (!stateDir) {
+  process.stderr.write("STATE_DIR_NOT_NAMED\n");
+  process.exit(2);
+}
 const runtimeRoot = "/home/hoang_vinh/.local/lib/node_modules/openclaw";
 // M10/T2-R8: restore must resolve the SAME governed roots that produced the
 // patch, including the installed Discord channel package, or the ingress repair

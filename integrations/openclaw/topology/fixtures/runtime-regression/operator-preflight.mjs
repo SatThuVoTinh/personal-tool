@@ -15,7 +15,16 @@ import {
   refusalOutput,
 } from "./refusal-classifier.mjs";
 
-const stateDir = "/home/hoang_vinh/.openclaw-zink";
+// F-219: the machine-specific state root is NOT a literal. The operator
+// names it (ZINK_OPERATOR_STATE_DIR or the first argument) and the driver
+// refuses to run without one, exactly like live-governance-probe.mjs: a
+// driver that silently points at one operator's machine root says nothing
+// about any other, and a hardcoded root is what let these files drift.
+const stateDir = process.env.ZINK_OPERATOR_STATE_DIR ?? process.argv[2] ?? null;
+if (!stateDir) {
+  process.stderr.write("STATE_DIR_NOT_NAMED\n");
+  process.exit(2);
+}
 const input = path.join(stateDir, "operator/m7-t2/discord-identifiers.json");
 let stage = "identifiers";
 try {
