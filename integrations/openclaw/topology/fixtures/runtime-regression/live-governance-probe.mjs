@@ -1,7 +1,7 @@
 // Trusted operator probe. Never prints prompts, raw RPC results, IDs or auth.
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
@@ -34,6 +34,26 @@ import { validateContract } from "../../lib/schema.mjs";
 //   2. a target that IS the production root additionally needs an explicit
 //      acknowledgement, because that is the only case where the probe's own
 //      fixtures land in the live governance history.
+//
+// F-033: the acknowledgement was never enough. The probe FORGES origin
+// provenance - a synthetic `origin_principal_ref`, a synthetic
+// `origin_message_id` and a task id derived from them - and it journals that
+// origin into the state root it inspects. A forged row in a live ledger is
+// indistinguishable from real intake except by its message-id range, and the
+// synthetic ids never collide, so the duplicate guard stays unexercisable in
+// exactly the ledger where it matters.
+//
+// So the state root must be DISPOSABLE, and NO acknowledgement can buy a
+// production write any more:
+//   3. the state root must not BE the production root, and must not lie
+//      INSIDE it (a path-segment comparison, so a sibling directory with the
+//      production root as a prefix is not mistaken for it);
+//   4. the state root must not already hold a real governance ledger - a
+//      non-empty journal, or a snapshot with a non-zero sequence or any task.
+//
+// The acknowledgement therefore no longer BUYS a write: it only changes WHICH
+// refusal the operator is shown. A disposable root is the only root this probe
+// will write to.
 const PRODUCTION_STATE_DIR = "/home/hoang_vinh/.openclaw-zink";
 const PRODUCTION_WRITE_ACK = "--acknowledge-production-ledger-write";
 const stateDir = process.env.ZINK_PROBE_STATE_DIR ?? process.argv[2] ?? null;
@@ -43,11 +63,59 @@ if (!stateDir) {
   );
   process.exit(2);
 }
+/** True when `child` is `parent` or lies inside it, compared by path segment. */
+function isInside(child, parent) {
+  const childParts = path.resolve(child).split(path.sep).filter(Boolean);
+  const parentParts = path.resolve(parent).split(path.sep).filter(Boolean);
+  if (childParts.length < parentParts.length) return false;
+  return parentParts.every((part, index) => childParts[index] === part);
+}
+/**
+ * Whether the state root already holds a real governance ledger. A disposable
+ * root is empty, or holds the empty ledger the probe itself created.
+ */
+function holdsGovernanceHistory(root) {
+  const ledgerRoot = path.join(root, "operator", "m7-t2", "ledger");
+  const events = path.join(ledgerRoot, "events.jsonl");
+  if (existsSync(events) && readFileSync(events, "utf8").trim() !== "")
+    return true;
+  const snapshot = path.join(ledgerRoot, "snapshot.json");
+  if (!existsSync(snapshot)) return false;
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(snapshot, "utf8"));
+  } catch {
+    // An unreadable snapshot is not a disposable root: the probe cannot prove
+    // the tree is scratch, so it refuses rather than writes.
+    return true;
+  }
+  return (
+    (Number(parsed?.sequence) || 0) > 0 ||
+    Object.keys(parsed?.tasks ?? {}).length > 0
+  );
+}
+const resolvedStateDir = path.resolve(stateDir);
+const productionRoot = path.resolve(PRODUCTION_STATE_DIR);
 const writesProductionLedger =
-  path.resolve(stateDir) === path.resolve(PRODUCTION_STATE_DIR);
+  resolvedStateDir === productionRoot ||
+  isInside(resolvedStateDir, productionRoot);
 if (writesProductionLedger && !process.argv.includes(PRODUCTION_WRITE_ACK)) {
   process.stdout.write(
     `${JSON.stringify({ stage: "preflight", status: "FAIL", reason: "PRODUCTION_LEDGER_WRITE_NOT_ACKNOWLEDGED" })}\n`,
+  );
+  process.exit(2);
+}
+if (writesProductionLedger) {
+  // The acknowledgement no longer unlocks a production write: the probe's
+  // forged provenance must never reach the live governance history.
+  process.stdout.write(
+    `${JSON.stringify({ stage: "preflight", status: "FAIL", reason: "PROBE_STATE_DIR_IS_PRODUCTION_ROOT" })}\n`,
+  );
+  process.exit(2);
+}
+if (holdsGovernanceHistory(resolvedStateDir)) {
+  process.stdout.write(
+    `${JSON.stringify({ stage: "preflight", status: "FAIL", reason: "PROBE_STATE_DIR_NOT_DISPOSABLE" })}\n`,
   );
   process.exit(2);
 }
@@ -55,7 +123,7 @@ if (writesProductionLedger && !process.argv.includes(PRODUCTION_WRITE_ACK)) {
 // so the record can never be read as evidence about a real ingress path.
 const PRECONDITION = {
   ledger_precondition: "PROBE_WRITTEN",
-  ledger_target: writesProductionLedger ? "production" : "scratch",
+  ledger_target: "disposable",
 };
 const runtimeRoot = "/home/hoang_vinh/.local/lib/node_modules/openclaw";
 const executable = "/home/hoang_vinh/.local/bin/openclaw";
