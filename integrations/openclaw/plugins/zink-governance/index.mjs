@@ -99,6 +99,7 @@ import {
   renderGovernedExpectedResult,
   renderGovernedPlanSteps,
   renderGovernedResultBody,
+  sanitizeDiscordText,
   specialistSoftwareLabel,
   SPECIALIST_SOFTWARE_LABELS,
 } from "../../lib/discord-formatter.mjs";
@@ -3385,6 +3386,56 @@ export function canonicalAgentPrimaryStack(agentId) {
   const permitted = AGENT_STACK_POLICY[agentId];
   if (!Array.isArray(permitted) || !permitted.includes(primary)) return null;
   return primary;
+}
+
+/**
+ * M12/T9 F-302 (legacy R7-C6-02): the expected-result preview's table inputs
+ * had no producer, so every generated image was the placeholder layout even
+ * though the plan that would fill it was in scope.
+ *
+ * The table is built from the ADMITTED plan (the task's own recorded nodes) and
+ * never from invented data: one column per declared attribute, one row per
+ * planned step. A task whose snapshot declares no node keeps the placeholder,
+ * because then nothing is declared.
+ */
+export function buildExpectedResultPreviewInputs(
+  governedTask,
+  spawnInputs = "",
+) {
+  const nodes = Array.isArray(governedTask?.nodes) ? governedTask.nodes : [];
+  const notes = String(spawnInputs ?? "")
+    .trim()
+    .slice(0, 120);
+  if (nodes.length === 0) {
+    return { columns: [], rows: [], notes };
+  }
+  const columns = ["Bước", "Phần mềm", "Thao tác", "Nghiệm thu"];
+  const rows = nodes.slice(0, 8).map((node, index) => [
+    String(node?.node_id ?? `node-${index + 1}`),
+    specialistSoftwareLabel(node?.agent_id),
+    String(node?.inputs ?? "")
+      .trim()
+      .slice(0, 60) || "—",
+    String(node?.validation_criteria ?? "")
+      .trim()
+      .slice(0, 60) || "—",
+  ]);
+  return { columns, rows, notes };
+}
+
+/**
+ * M12/T9 F-305 (legacy R7-C6-06): the preview rasteriser performs no redaction
+ * of its own, unlike every other Discord-visible surface. The seam therefore
+ * guarantees the invariant the rasteriser relies on: a string that is not
+ * already sanitised is refused at the seam and never reaches the image.
+ *
+ * Only the BANNED-PATTERN removal is compared - whitespace normalisation is
+ * not a redaction, so ordinary spacing never refuses a render.
+ */
+export function previewInputIsSanitised(value) {
+  if (typeof value !== "string") return true;
+  const normalise = (text) => text.replace(/\s+/gu, " ").trim();
+  return normalise(sanitizeDiscordText(value)) === normalise(value);
 }
 
 /**
@@ -7472,19 +7523,49 @@ export default {
           let previewPath = null;
           const previewRoot = resolveAgentSandboxDir("main", context);
           if (previewRoot) {
-            try {
-              previewPath = renderExpectedResultPreview({
-                target: targetAgentId,
-                title: `TASK ${displayTaskToken(taskId)}`,
-                notes: String(spawnInputs ?? "").slice(0, 120),
-                outputDirectory: previewRoot,
-              });
-            } catch (previewError) {
-              // The card is still worth approving without a picture; the reason is
-              // recorded so an owner asking "where is the image?" has an answer.
+            // M12/T9 F-302 (legacy R7-C6-02): the expected-result preview had NO
+            // producer for its table inputs, so every generated image was the
+            // placeholder layout while the plan that would fill it was in
+            // scope. The table is now built from the ADMITTED plan - the task's
+            // own nodes - and never from invented data.
+            const previewInputs = buildExpectedResultPreviewInputs(
+              governedTask,
+              spawnInputs,
+            );
+            // M12/T9 F-305 (legacy R7-C6-06): the rasteriser performs no
+            // redaction of its own, so the seam guarantees the invariant: a
+            // string that is not already sanitised is REFUSED here and never
+            // reaches the image.
+            const previewStrings = [
+              ...previewInputs.columns,
+              ...previewInputs.rows.flat(),
+              previewInputs.notes,
+            ];
+            const unsanitised = previewStrings.filter(
+              (value) =>
+                typeof value === "string" && !previewInputIsSanitised(value),
+            );
+            if (unsanitised.length > 0) {
               api.logger?.warn?.(
-                `[zink-governance] expected-result preview not rendered: ${previewError?.message}`,
+                "[zink-governance] expected-result preview refused: the declared plan text is not sanitised for a Discord-visible surface",
               );
+            } else {
+              try {
+                previewPath = renderExpectedResultPreview({
+                  target: targetAgentId,
+                  title: `TASK ${displayTaskToken(taskId)}`,
+                  columns: previewInputs.columns,
+                  rows: previewInputs.rows,
+                  notes: previewInputs.notes,
+                  outputDirectory: previewRoot,
+                });
+              } catch (previewError) {
+                // The card is still worth approving without a picture; the reason is
+                // recorded so an owner asking "where is the image?" has an answer.
+                api.logger?.warn?.(
+                  `[zink-governance] expected-result preview not rendered: ${previewError?.message}`,
+                );
+              }
             }
           } else {
             api.logger?.warn?.(
