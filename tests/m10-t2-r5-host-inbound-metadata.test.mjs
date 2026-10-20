@@ -282,14 +282,83 @@ test("R5 X4: absent message writes nothing and throws nothing", () => {
 });
 
 test("R5 X5: the registry is bounded and evicts oldest-first", () => {
-  for (let i = 0; i < 300; i += 1) {
-    const id = `154543000000${String(100000 + i).padStart(6, "0")}`;
-    runPreflightInjection({ message: discordMessage({ id }) });
-  }
-  const first = readZinkIngressMetadata("154543000000100000");
-  assert.deepEqual(first.mentionedUserIds, []);
-  const store = globalThis[ZINK_INGRESS_METADATA_KEY];
-  assert.ok(store.size <= 256, `bounded, saw ${store.size}`);
+  // F-295 (R7-C5-03): the old assertion here checked that the EVICTED id read
+  // an empty mention list, which is the very value an ABSENT id produces (the
+  // same file proves that eleven lines later, in the unknown-id case). The
+  // fixture never populated a mention list, so the assertion could not fail:
+  // evicting the NEWEST key instead of the oldest kept the store at 256, kept
+  // the probed id, and the lane stayed green. Wholesale removal of the
+  // eviction was caught only by the size bound.
+  //
+  // The fixture now writes a DISTINCT, NON-EMPTY mention list per record, so
+  // a RETAINED record reads its own list and the empty shape means the record
+  // is GONE. The evicted id is read BEFORE the overflow as well, so the test
+  // distinguishes "written, then evicted" from "never written" — which is the
+  // distinction the absent-id case cannot make.
+  const store =
+    globalThis[ZINK_INGRESS_METADATA_KEY] ??
+    (globalThis[ZINK_INGRESS_METADATA_KEY] = new Map());
+  // The boundary is exact only from a known state, and the registry is the
+  // per-process in-memory cache this file's own fixtures own.
+  store.clear();
+
+  const capacity = 256;
+  const id = (index) =>
+    `154543000000${String(100000 + index).padStart(6, "0")}`;
+  const mention = (index) =>
+    `154544000000${String(200000 + index).padStart(6, "0")}`;
+  const insert = (index) => {
+    runPreflightInjection({
+      message: discordMessage({
+        id: id(index),
+        mentionedUsers: [{ id: mention(index) }],
+      }),
+    });
+  };
+
+  // AT CAPACITY: nothing has been evicted yet, and the oldest record is still
+  // retained WITH its content.
+  for (let index = 0; index < capacity; index += 1) insert(index);
+  assert.equal(
+    store.size,
+    capacity,
+    `the store must hold exactly its capacity, saw ${store.size}`,
+  );
+  assert.deepEqual(
+    readZinkIngressMetadata(id(0)).mentionedUserIds,
+    [mention(0)],
+    "the oldest record must still be retained at capacity, with its own mention list",
+  );
+  assert.deepEqual(
+    readZinkIngressMetadata(id(capacity - 1)).mentionedUserIds,
+    [mention(capacity - 1)],
+    "the newest record must read back its own mention list",
+  );
+
+  // CAPACITY PLUS ONE: the oldest record is evicted. It read a non-empty list
+  // a moment ago, so the empty reading below is an EVICTION and not an
+  // absence — and inverting the eviction order reddens this case.
+  insert(capacity);
+  assert.equal(
+    store.size,
+    capacity,
+    `the store must stay bounded, saw ${store.size}`,
+  );
+  assert.deepEqual(
+    readZinkIngressMetadata(id(0)).mentionedUserIds,
+    [],
+    "the oldest record must be evicted at capacity plus one",
+  );
+  assert.deepEqual(
+    readZinkIngressMetadata(id(capacity)).mentionedUserIds,
+    [mention(capacity)],
+    "the record that caused the overflow must be retained, with its own mention list",
+  );
+  assert.deepEqual(
+    readZinkIngressMetadata("1545430000000000777").mentionedUserIds,
+    [],
+    "an id that was never written reads the empty shape",
+  );
 });
 
 // ---------------------------------------------------------------------------
