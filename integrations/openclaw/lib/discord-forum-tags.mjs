@@ -151,8 +151,53 @@ export const FORUM_THREAD_MAX_PAGES = 20;
  * reports `has_more` without offering a cursor is therefore reported as truncated
  * rather than silently treated as complete.
  */
+/**
+ * M12/T9 F-003: the guild that owns the forum.
+ *
+ * Discord's active-thread listing is GUILD-scoped: the channel-scoped route
+ * `GET /channels/{id}/threads/active` was DECOMMISSIONED in API v10 in favour
+ * of `GET /guilds/{guild.id}/threads/active`. The dedupe read used the
+ * decommissioned route, so every call answered 404, the read threw, and every
+ * incident was skipped BEFORE any POST - #incidents never received a
+ * governance containment at all, while the plan credits it with a first
+ * publish path.
+ *
+ * The guild id is the caller's when it has one, and otherwise read from the
+ * channel itself (`GET /channels/{id}` carries `guild_id`). A channel that
+ * names no guild is a NAMED REFUSAL - never a guess, and never a fallback to
+ * the decommissioned route.
+ */
+async function resolveForumGuildId({
+  channelId,
+  guildId,
+  token,
+  fetchImpl,
+  deadlineMs,
+}) {
+  if (typeof guildId === "string" && guildId.trim().length > 0)
+    return guildId.trim();
+  const response = await fetchImpl(
+    `https://discord.com/api/v10/channels/${channelId}`,
+    {
+      headers: {
+        Authorization: `Bot ${token}`,
+        "Content-Type": "application/json",
+      },
+      signal: AbortSignal.timeout(deadlineMs),
+    },
+  );
+  if (!response.ok)
+    throw new Error(`DISCORD_CHANNEL_READ_FAILED_${response.status}`);
+  const channel = await response.json();
+  const resolved =
+    typeof channel?.guild_id === "string" ? channel.guild_id.trim() : "";
+  if (!resolved) throw new Error("FORUM_TAG_GUILD_REQUIRED");
+  return resolved;
+}
+
 export async function readActiveForumThreads({
   channelId,
+  guildId = null,
   token,
   fetchImpl = globalThis.fetch,
   deadlineMs,
@@ -161,11 +206,18 @@ export async function readActiveForumThreads({
   if (!channelId) throw new Error("FORUM_TAG_CHANNEL_REQUIRED");
   if (!token) throw new Error("FORUM_TAG_TOKEN_REQUIRED");
   assertTagDeadline(deadlineMs);
+  const guild = await resolveForumGuildId({
+    channelId,
+    guildId,
+    token,
+    fetchImpl,
+    deadlineMs,
+  });
   const threads = [];
   let cursor = null;
   for (let page = 0; page < maxPages; page += 1) {
     const url = new URL(
-      `https://discord.com/api/v10/channels/${channelId}/threads/active`,
+      `https://discord.com/api/v10/guilds/${guild}/threads/active`,
     );
     if (cursor) url.searchParams.set("before", cursor);
     const response = await fetchImpl(url.href, {
@@ -178,16 +230,26 @@ export async function readActiveForumThreads({
     if (!response.ok)
       throw new Error(`DISCORD_THREAD_LIST_FAILED_${response.status}`);
     const body = await response.json();
-    for (const thread of Array.isArray(body?.threads) ? body.threads : [])
+    const pageThreads = Array.isArray(body?.threads) ? body.threads : [];
+    for (const thread of pageThreads) {
+      // The guild listing spans every channel of the guild, so only the
+      // threads parented by THIS forum are the forum's own.
+      if (thread?.parent_id !== channelId) continue;
       threads.push({
         id: thread?.id,
         name: thread?.name ?? "",
         normalized: normalizeTagName(thread?.name ?? ""),
       });
+    }
     if (body?.has_more !== true) return { threads, truncated: false };
     const next = String(body?.next_cursor ?? body?.before ?? "").trim();
-    if (!next) return { threads, truncated: true };
-    cursor = next;
+    // The guild-scoped listing paginates by the LAST THREAD ID of the page, so
+    // a body that offers no cursor of its own is still paginated.
+    const lastId = pageThreads[pageThreads.length - 1]?.id;
+    const nextCursor =
+      next || (typeof lastId === "string" ? lastId.trim() : "");
+    if (!nextCursor) return { threads, truncated: true };
+    cursor = nextCursor;
   }
   return { threads, truncated: true };
 }
