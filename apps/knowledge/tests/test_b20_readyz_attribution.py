@@ -15,8 +15,10 @@ shapes. Every mapped branch is asserted to keep its exact code, and the 200 body
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import os
+import re
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -44,6 +46,24 @@ from app.reranker import RerankerUnavailableError
 EMBEDDING = ResolvedEmbeddingModel("bge-m3:latest", "a" * 64, 1024)
 ACTIVE = ActiveIndex("index-1", "bge-m3:latest", "a" * 64, 1024)
 DETAIL_TEXT = "upstream body that must not become the response: <!doctype html> 502"
+
+# F-314 (R7-E2-05): the case table was a literal list of five fixtures, so
+# the branches the route gained -- the unavailable database, the opt-out
+# parameter, the PDF runtime's own codes -- were invisible while the file
+# claimed they were covered. The route's own source is the case list now:
+# `test_the_case_matrix_covers_every_code_the_route_emits` compares the
+# codes the route can emit with the codes this file executes.
+COVERED_READYZ_CODES = frozenset(
+    {
+        "DATABASE_UNAVAILABLE",
+        "NO_ACTIVE_INDEX",
+        "RERANKER_UNAVAILABLE",
+        "EMBEDDING_MODEL_UNAVAILABLE",
+        "EMBEDDING_MODEL_DRIFT",
+        "INTERNAL_ERROR",
+        "PDF_RUNTIME_UNAVAILABLE",
+    }
+)
 
 
 class ReadyzAttributionTests(unittest.IsolatedAsyncioTestCase):
@@ -336,6 +356,74 @@ class ReadyzAttributionTests(unittest.IsolatedAsyncioTestCase):
             _reranker_error_code(RerankerUnavailableError("a free-text failure")),
             "RERANKER_UNAVAILABLE",
         )
+
+    def _emitted_codes(self) -> set[str]:
+        """The codes the readiness route itself can answer with."""
+
+        route = next(
+            item for item in self.app.routes if getattr(item, "path", None) == "/readyz"
+        )
+        source = inspect.getsource(route.endpoint)
+        return set(re.findall(r'"([A-Z][A-Z0-9_]{3,})"', source))
+
+    async def test_the_case_matrix_covers_every_code_the_route_emits(self) -> None:
+        """F-314 (R7-E2-05): the case list is the route's, not a literal five.
+
+        A branch the route gained used to be invisible: the case table was
+        a hand-copied list, so nothing compared it with the code the route
+        can actually answer. The comparison is made here, so a new mapped
+        branch reddens this file until it has an executed case.
+        """
+
+        self.assertEqual(self._emitted_codes(), set(COVERED_READYZ_CODES))
+
+    async def test_the_unavailable_database_branch_answers_the_startup_code(self) -> None:
+        """F-314 (R7-E2-05): the pre-try branch had no executed case.
+
+        The branch runs before the route's try block and echoes the startup
+        code the boot recorded, or a default when it recorded none.
+        """
+
+        self.app.state.database._pool = None
+        self.app.state.database.startup_error_code = "MIGRATION_FAILED"
+        try:
+            response = await self.readyz()
+        finally:
+            self.app.state.database._pool = object()
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["code"], "MIGRATION_FAILED")
+
+        self.app.state.database._pool = None
+        self.app.state.database.startup_error_code = None
+        try:
+            response = await self.readyz()
+        finally:
+            self.app.state.database._pool = object()
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["code"], "DATABASE_UNAVAILABLE")
+
+    async def test_a_missing_pdf_artifact_answers_its_own_code(self) -> None:
+        """F-314 (R7-E2-05): the PDF runtime's missing-artifact branch.
+
+        The identity hashes the parent lock, the runtime lock, the manifest
+        and the tokenizer; a missing artifact is an unavailable PDF runtime,
+        not a fault to hide behind a 500.
+        """
+
+        app = self.pdf_enabled_app()
+        try:
+            with patch(
+                "app.main.processing_identity_for_runtime",
+                side_effect=OSError("artifact missing"),
+            ):
+                response = await self.readyz(app)
+        finally:
+            await app.state.model_probe.close()
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["code"], "PDF_RUNTIME_UNAVAILABLE")
 
 
 if __name__ == "__main__":
