@@ -5,13 +5,69 @@ import {
   validateSqlFileContent,
 } from "../zink-tools/sql/validator.mjs";
 import { validateLiveSqlQuery } from "../integrations/openclaw/plugins/zink-governance/index.mjs";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const VALIDATOR_REL = "zink-tools/sql/validator.mjs";
+
+/**
+ * Materialises the validator as a SECOND artefact on disk - the copy an
+ * installed extension carries - and imports it.
+ *
+ * @param {(source: string) => string} [mutate] - optional mutation of the copy
+ * @returns {Promise<{module: object, cleanup: () => Promise<void>}>}
+ */
+async function materialiseValidatorCopy(mutate) {
+  const dir = await mkdtemp(path.join(tmpdir(), "zink-sql-copy-"));
+  const target = path.join(dir, VALIDATOR_REL);
+  await mkdir(path.dirname(target), { recursive: true });
+  const source = await readFile(path.join(REPO, VALIDATOR_REL), "utf8");
+  await writeFile(target, mutate ? mutate(source) : source, "utf8");
+  const module = await import(pathToFileURL(target).href);
+  return {
+    module,
+    cleanup: () => rm(dir, { recursive: true, force: true }),
+  };
+}
+
+/**
+ * The verdict of ONE validator artefact for one query: null when the query
+ * is admitted, otherwise the reason code it refused with.
+ *
+ * @param {(query: string, parameters: unknown[]) => void} validate
+ * @param {string} query
+ * @returns {string|null}
+ */
+function verdictOf(validate, query) {
+  try {
+    validate(query, []);
+    return null;
+  } catch (err) {
+    return err?.message ?? String(err);
+  }
+}
 
 /**
  * Lane H4 — the SQL safety matrix. The canonical contract is a deliberately
  * narrow read-only subset: a single SELECT ... FROM with optional WHERE, ORDER
  * BY, LIMIT and OFFSET, no comments, no semicolons, no positional parameters.
  * Every case below is asserted against BOTH the canonical validator and the
- * live plugin seam, so the two can never diverge.
+ * live plugin seam.
+ *
+ * F-321 (R7-E4-04): the sentence this header used to end with - "so the two
+ * can never diverge" - was FALSE as stated. The live seam lazily loads the
+ * SAME repository module this file imports, so the agreement step compared
+ * the module with a wrapper around itself: it could only redden if the
+ * wrapper's own mapping broke, never because the two artefacts had drifted.
+ *
+ * The agreement step now compares artefacts that CAN differ: the canonical
+ * validator and a MATERIALISED COPY of it - the installed extension's copy,
+ * a real second file on disk. The lane also proves the comparison is not
+ * vacuous: a copy whose reason code was changed MUST be reported as a
+ * divergence, and the lane asserts that it is.
  */
 
 /** The read-only subset the canonical contract admits. */
@@ -215,5 +271,60 @@ describe("Lane H4 — SQL safety matrix", () => {
     assert.throws(() => validateSqlFileContent(null), {
       message: "SQL_CONTENT_INVALID: content must be a string",
     });
+  });
+});
+
+/**
+ * F-321 (R7-E4-04): the agreement step compares two artefacts that CAN
+ * differ, and the comparison is proved able to see a difference.
+ */
+describe("Lane H4 - the agreement step compares artefacts that can differ", () => {
+  it("the canonical validator and a materialised installed copy agree on every case", async () => {
+    const copy = await materialiseValidatorCopy();
+    try {
+      for (const [label, query] of ALLOWED) {
+        assert.equal(
+          verdictOf(copy.module.validateSqlQuery, query),
+          null,
+          `${label}: the installed copy must admit what the canonical admits`,
+        );
+      }
+      for (const [label, query, expected] of REFUSED) {
+        assert.equal(
+          verdictOf(copy.module.validateSqlQuery, query),
+          expected,
+          `${label}: the installed copy must refuse with the canonical reason`,
+        );
+      }
+    } finally {
+      await copy.cleanup();
+    }
+  });
+
+  it("a divergent installed copy is DETECTED, so the agreement step is not vacuous", async () => {
+    // The copy answers a mutation with a different reason code. A comparison
+    // that could not see a difference would pass this case silently - which
+    // is exactly what the old "the two can never diverge" claim amounted to.
+    const copy = await materialiseValidatorCopy((source) =>
+      source.replaceAll("SQL_MUTATION_NOT_PERMITTED", "SQL_MUTATION_ALLOWED"),
+    );
+    try {
+      const mutation = REFUSED.find(
+        ([, , reason]) => reason === "SQL_MUTATION_NOT_PERMITTED",
+      );
+      assert.ok(mutation, "the matrix must carry a mutation case");
+      const [, query, expected] = mutation;
+      const canonical = verdictOf(validateSqlQuery, query);
+      const divergent = verdictOf(copy.module.validateSqlQuery, query);
+      assert.equal(canonical, expected);
+      assert.equal(divergent, "SQL_MUTATION_ALLOWED");
+      assert.notEqual(
+        divergent,
+        canonical,
+        "the divergence between the two artefacts must be visible",
+      );
+    } finally {
+      await copy.cleanup();
+    }
   });
 });
