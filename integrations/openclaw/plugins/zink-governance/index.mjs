@@ -2462,6 +2462,42 @@ export function handleDiscordAction({
 }
 
 /**
+ * M12/T9 F-066: the artifacts a runtime "the execution finished" event
+ * delivered.
+ *
+ * The runtime's event shape is not the governance contract, so every field is
+ * read defensively and NOTHING is invented: an event that names no artifact
+ * yields an empty set, and the caller then records no result rather than a
+ * result with no evidence.
+ */
+export function readExecutionArtifacts(event) {
+  const candidates = [
+    event?.artifacts,
+    event?.artifactPaths,
+    event?.artifact_paths,
+    event?.result?.artifacts,
+    event?.output?.artifacts,
+  ];
+  for (const candidate of candidates) {
+    if (!Array.isArray(candidate)) continue;
+    return candidate
+      .map((entry) =>
+        typeof entry === "string"
+          ? entry
+          : (entry?.logical_path ?? entry?.path ?? entry?.file_path ?? null),
+      )
+      .filter((entry) => typeof entry === "string" && entry.length > 0);
+  }
+  const single =
+    event?.artifactPath ??
+    event?.artifact_path ??
+    event?.result?.artifactPath ??
+    event?.result?.artifact_path ??
+    null;
+  return typeof single === "string" && single.length > 0 ? [single] : [];
+}
+
+/**
  * Handles execution finished event with multi-tier validation.
  * Implements ACTIVE.md Section 6, 16, 17:
  * EXECUTION_FINISHED is an event, NOT task completion.
@@ -9003,6 +9039,108 @@ export default {
         });
       }
       return { allow: true, governanceState: "RECORDED" };
+    });
+    /**
+     * M12/T9 F-066: the EXECUTION_FINISHED seam.
+     *
+     * `handleExecutionFinished`, `queueManager.finishExecution` and
+     * `formatGovernedResultCard` all existed, but NOTHING registered the
+     * runtime event that drives them. The only producer able to make a
+     * pending result visible was the ACCEPT path itself, so a finished
+     * execution had no live edge to RESULT_PENDING_REVIEW, the queue never
+     * left EXECUTING, and the operator documentation described a lifecycle
+     * the build did not have.
+     *
+     * This handler is that edge. The runtime says "the execution finished";
+     * the plugin finishes the queue item, records the result in the ledger,
+     * and announces the pending result on #results BEFORE the owner's verdict
+     * - never after it.
+     *
+     * Identity comes from the LEDGER and from the QUEUE's own claim, never
+     * from the event payload: an event that names a task the ledger does not
+     * own, or an attempt the queue never leased, records nothing.
+     */
+    api.on("execution_finished", (event, context = {}) => {
+      const sessionKey = context.sessionKey ?? event?.sessionKey ?? null;
+      const runId = context.runId ?? event?.runId ?? null;
+      const agentId = context.agentId ?? event?.agentId ?? null;
+      if (typeof sessionKey !== "string" || typeof runId !== "string") {
+        api.logger?.info?.(
+          "[zink-governance] execution_finished carries no governed run identity; no result recorded",
+        );
+        return { allow: true, governanceState: "UNGOVERNED_RUN" };
+      }
+      // The owning task is resolved from the LEDGER's own coordinator
+      // binding - the same binding the pickup loop and the run-end seam use -
+      // and never from the event payload.
+      const coordinated = resolveCoordinatorRun(sessionKey, runId, agentId, {
+        requireBinding: true,
+      });
+      if (!coordinated) {
+        api.logger?.info?.(
+          `[zink-governance] execution_finished for an unbound run ${runId}; no result recorded`,
+        );
+        return { allow: true, governanceState: "UNGOVERNED_RUN" };
+      }
+      const taskId = coordinated.taskId;
+      const task = readSnapshot(paths)?.tasks?.[taskId] ?? {};
+      // A result the owner must judge has to be VISIBLE to him. The root
+      // completion-claim path records its own result, so this seam only has
+      // to announce what is already pending - and that announcement is
+      // idempotent on the recorded thread.
+      if (task.workflow_status === "RESULT_PENDING_REVIEW") {
+        announcePendingResult(taskId);
+        return { allow: true, governanceState: "RESULT_PENDING_REVIEW" };
+      }
+      const queueItem = coordinated.queueItem ?? null;
+      if (!queueItem) {
+        api.logger?.warn?.(
+          `[zink-governance] execution_finished for task ${taskId} has no queue claim; no result recorded`,
+        );
+        return { allow: true, governanceState: "NO_QUEUE_CLAIM" };
+      }
+      const sandboxRoot = resolveAgentSandboxDir(
+        queueItem.claimedBy ?? context.agentId ?? "main",
+        context,
+      );
+      const artifacts = readExecutionArtifacts(event)
+        .map((entry) =>
+          path.isAbsolute(entry) || !sandboxRoot
+            ? entry
+            : path.join(sandboxRoot, entry),
+        )
+        .filter(Boolean);
+      if (artifacts.length === 0) {
+        api.logger?.warn?.(
+          `[zink-governance] execution_finished for task ${taskId} carried no artifact; no result recorded`,
+        );
+        return { allow: true, governanceState: "NO_ARTIFACT" };
+      }
+      const outcome = handleExecutionFinished({
+        taskId,
+        agentId: queueItem.claimedBy ?? null,
+        leaseId:
+          typeof queueItem.leaseId === "string" ? queueItem.leaseId : null,
+        attempt: Number.isSafeInteger(queueItem.attempt)
+          ? queueItem.attempt
+          : null,
+        artifacts,
+        artifactPath: artifacts[0],
+        sandboxDir: sandboxRoot,
+        paths,
+        queueManager: defaultQueueManager,
+      });
+      if (outcome?.status !== "READY_FOR_REVIEW") {
+        api.logger?.warn?.(
+          `[zink-governance] execution_finished for task ${taskId} did not produce a reviewable result: ${outcome?.status ?? "UNKNOWN"}${outcome?.error ? ` (${outcome.error})` : ""}`,
+        );
+        return {
+          allow: true,
+          governanceState: outcome?.status ?? "NOT_RECORDED",
+        };
+      }
+      announcePendingResult(taskId);
+      return { allow: true, governanceState: "RESULT_PENDING_REVIEW" };
     });
     // Canonical Discord surface channel IDs (E18)
     const CANONICAL_DISCORD_SURFACE_IDS = new Set();
