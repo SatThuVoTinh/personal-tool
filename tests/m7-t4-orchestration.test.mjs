@@ -791,3 +791,115 @@ describe("M12/T9 - F-059: a refused admission preserves the original cause", () 
     );
   });
 });
+
+// ===========================================================================
+// M12/T9 - F-062 / F-127 / F-157 / F-159 / F-182 / F-220
+// ===========================================================================
+describe("M12/T9 - F-062: the admission liveness is consumed once and re-recorded by the next admission", () => {
+  // MEASURED, and the reason this row is not a topology fix.
+  //
+  // The native boundary records the admission liveness per run id and CONSUMES
+  // it at the run-end (the R18 contract: a record is read once and cannot be
+  // replayed). The premise of F-062 was that a model-fallback re-entry under
+  // an already-consumed run id therefore loses its liveness and is judged by
+  // the full completion predicate instead of the liveness one.
+  //
+  // Measured at HEAD: the ADMISSION re-records the liveness for the run id
+  // (`rememberRunLiveness` runs on every accepted admission, and the native
+  // patch injects that admission at the start of every run attempt). So a
+  // fallback RE-ENTRY does resolve the admission liveness - the fallback
+  // attempt is judged by the same predicate as the primary - while a second
+  // run-end with no new admission is correctly NOT a heartbeat.
+  //
+  // The half that is still broken lives in the plugin entrypoint, whose
+  // `forgetAdmissionLiveness` deletes the record at the run-end while the
+  // fallback path does not re-admit: that file is outside this agent's write
+  // scope. These two cases pin the measured behaviour so the claim stays
+  // checkable.
+  async function drive(runIds) {
+    const { enterNativeRun, finishNativeRun, registerNativeGuard } =
+      await import("../integrations/openclaw/topology/lib/native-boundary.mjs");
+    const scope = fs.mkdtempSync(path.join(os.tmpdir(), "zink-f062-"));
+    const seen = [];
+    const unregister = registerNativeGuard(scope, {
+      beforeToolCall: () => ({ allow: true }),
+      beforeAnnounce: () => ({ action: "deliver", receipt: "receipt" }),
+      beforeRun: () => ({ allow: true }),
+      beforeRunEnd: (_event, context) => {
+        seen.push({
+          trigger: context.trigger,
+          transcriptPrompt: context.transcriptPrompt,
+        });
+        return { allow: true };
+      },
+      beforeIngress: () => ({ prompt: "prompt" }),
+      recordQuota: () => ({ recorded: true }),
+      selfQuotaReceipt: () => ({ receipt: "quota" }),
+      resolveRunModel: () => ({ model: "fixture-model" }),
+    });
+    const config = {
+      plugins: {
+        entries: {
+          "zink-governance": {
+            enabled: true,
+            config: { ledgerRoot: scope },
+          },
+        },
+      },
+    };
+    try {
+      for (const action of runIds) {
+        if (action === "admit")
+          await enterNativeRun(
+            config,
+            {
+              agentId: "main",
+              sessionKey: "session-1",
+              runId: "run-1",
+              trigger: "heartbeat",
+              transcriptPrompt: "transcript-1",
+            },
+            undefined,
+          );
+        else
+          await finishNativeRun(
+            config,
+            { runId: "run-1", outcome: "ok" },
+            { agentId: "main", sessionKey: "session-1", runId: "run-1" },
+          );
+      }
+      return seen;
+    } finally {
+      unregister();
+      fs.rmSync(scope, { recursive: true, force: true });
+    }
+  }
+
+  test("F-062: a fallback RE-ENTRY is judged by the same predicate as the primary attempt", async () => {
+    const seen = await drive(["admit", "end", "admit", "end"]);
+    assert.equal(seen.length, 2);
+    assert.deepEqual(seen[0], {
+      trigger: "heartbeat",
+      transcriptPrompt: "transcript-1",
+    });
+    assert.deepEqual(
+      seen[1],
+      { trigger: "heartbeat", transcriptPrompt: "transcript-1" },
+      "the re-admitted fallback attempt must be judged by the same predicate as the primary",
+    );
+  });
+
+  test("F-062: a second run-end with NO new admission is not a heartbeat (the consume-once contract)", async () => {
+    const seen = await drive(["admit", "end", "end"]);
+    assert.equal(seen.length, 2);
+    assert.deepEqual(seen[0], {
+      trigger: "heartbeat",
+      transcriptPrompt: "transcript-1",
+    });
+    assert.equal(
+      seen[1].trigger,
+      undefined,
+      "the liveness record is read once and cannot be replayed",
+    );
+  });
+});
