@@ -87,10 +87,30 @@ test("F-086: the packaged assets are the documented categories", () => {
       : "<root>";
     categories.set(category, (categories.get(category) ?? 0) + 1);
   }
+  // M12/T9: the band shipped the Skill Store runtime modules
+  // (`zink-skill-store/src/*`) and the Zink Tools runtime modules
+  // (`zink-tools/*`) as PACKAGED assets, so the packaged set holds two more
+  // roots than it did. The claim is unchanged - the packaged set holds exactly
+  // the DOCUMENTED categories, and nothing else - and the documented set now
+  // includes the two new roots.
   assert.deepEqual(
     [...categories.keys()].sort(),
-    ["<root>", "contracts", "lib", "policy"],
+    ["<root>", "contracts", "lib", "policy", "zink-skill-store", "zink-tools"],
     `the packaged asset categories changed: ${JSON.stringify(Object.fromEntries(categories))}`,
+  );
+  // The composition, not only the category names: this is the ONE denominator
+  // the packaged set has, and it is read here the way the deployer reads it.
+  assert.deepEqual(
+    Object.fromEntries([...categories.entries()].sort()),
+    {
+      "<root>": 1,
+      contracts: 12,
+      lib: 20,
+      policy: 2,
+      "zink-skill-store": 2,
+      "zink-tools": 7,
+    },
+    `the packaged asset composition changed: ${JSON.stringify(Object.fromEntries(categories))}`,
   );
   assert.equal(
     categories.get("<root>"),
