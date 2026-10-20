@@ -54,7 +54,7 @@ platforms/knowledge-platform/
 Để tiến trình lập chỉ mục hoạt động chính xác, thư mục gốc của Vault (`KNOWLEDGE_VAULT_ROOT`) phải tuân thủ quy tắc tổ chức:
 
 - **`01. Knowledge/`:** Chứa các ghi chú cá nhân định dạng Markdown UTF-8 (`.md`).
-  - Mỗi ghi chú cần có ít nhất một thẻ phân loại dạng chữ thường (vd: `#inventory`, `#supply-chain`, `#forecast`).
+  - Mỗi ghi chú cần có ít nhất một thẻ phân loại dạng chữ thường (vd: `#supplychain`, `#logistics`, `#ai`. Tập thẻ hợp lệ được khai báo trong `apps/knowledge/app/markdown_adapter.py` (`TOPIC_TAGS` cho các chủ đề gốc, `CANONICAL_SLUG_TO_TOPIC` cho các bí danh); ghi chú không mang thẻ hợp lệ sẽ bị từ chối với mã `REQUIRED_TOPIC_TAG_MISSING`.).
 - **`02. Books/`:** Chứa sách chuyên khảo dạng PDF kèm theo một tệp Markdown "sidecar" cùng tên hoặc chứa cú pháp nhúng Obsidian: `![[Ten_Sach.pdf]]`.
 - **`03. Papers/`:** Chứa các bài báo khoa học dạng PDF kèm tệp sidecar ghi rõ tác giả, năm xuất bản và tóm tắt (abstract).
 
@@ -151,5 +151,5 @@ Agent `o1` (Knowledge Specialist) là tác nhân duy nhất được giao tiếp
 | Lỗi HTTP 503 tại `/readyz`            | Dịch vụ Ollama chưa bật hoặc chưa kéo mô hình `bge-m3:latest`             | Kiểm tra terminal Ollama: chạy `ollama serve` và `ollama pull bge-m3:latest`.                                               |
 | Lỗi HTTP 409 khi gọi `/v1/index-runs` | Đang có một tiến trình lập chỉ mục khác đang chạy dở dang                 | Đợi tiến trình hiện tại hoàn tất hoặc kiểm tra log tại cổng Dozzle `http://127.0.0.1:9999`.                                 |
 | Không tìm thấy tệp trong Vault        | Đường dẫn `KNOWLEDGE_VAULT_ROOT` trong `.env` bị sai                      | Kiểm tra tệp `infrastructure/docker/env/.env` và cập nhật đúng đường dẫn tuyệt đối của Obsidian Vault trên máy chủ Windows. |
-| Kết quả tìm kiếm trả về rỗng          | Chưa thực hiện lập chỉ mục hoặc Vault chưa có tệp Markdown nào có thẻ tag | Thêm ít nhất 1 ghi chú có thẻ `#tag` vào thư mục `01. Knowledge/` và chạy lại lệnh ở Bước 2.                                |
+| Kết quả tìm kiếm trả về rỗng          | Chưa thực hiện lập chỉ mục hoặc Vault chưa có tệp Markdown nào có thẻ tag | Thêm ít nhất 1 ghi chú có thẻ `#supplychain` vào thư mục `01. Knowledge/` và chạy lại lệnh ở Bước 2.                                |
 | Không kết nối được tới cổng `8080`    | Container Nginx chưa được khởi động                                       | Chạy lệnh khởi động hệ thống: `powershell ./infrastructure/docker/scripts/start.ps1 -Profile knowledge`.                    |
