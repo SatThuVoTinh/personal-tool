@@ -105,6 +105,125 @@ function requireQuotaDep() {
 let depsLoaded = false;
 let depsPromise = null;
 
+/**
+ * M12/T9 F-051: the PATH-SHAPED INPUT FIELDS of every governed tool.
+ *
+ * The old check was keyed by tool id (`candidateToolId === "zink_excel"`,
+ * `=== "zink_python"`), so a path-shaped field on ANY other governed tool was
+ * never examined and the block was skipped SILENTLY rather than failing
+ * closed. The published tool-call envelope names every governed tool and
+ * `$ref`s that tool's `$defs.input`, so the field set of every governed tool
+ * is derivable from the contract the call was already validated against - and
+ * the path-shaped subset of it is declared HERE, once.
+ *
+ * Only a field that names a FILESYSTEM path belongs in this set. A knowledge
+ * `path_prefix` is a filter over ingested documents, and a power-bi
+ * `datasource` is a model binding: neither is a filesystem path, and running
+ * either through the logical-path validator would refuse a legitimate call.
+ *
+ * Every governed tool MUST have an entry, even an empty one: a tool that is
+ * added to the envelope without a declaration fails closed at runtime, which
+ * is the point - the check can no longer be skipped by adding a tool.
+ */
+export const PATH_SHAPED_INPUT_FIELDS = Object.freeze({
+  zink_excel: Object.freeze(["file_path", "template_path"]),
+  zink_python: Object.freeze(["entrypoint"]),
+  zink_sql: Object.freeze([]),
+  zink_n8n: Object.freeze([]),
+  zink_power_bi: Object.freeze([]),
+  zink_skill_search: Object.freeze([]),
+  zink_knowledge_search: Object.freeze([]),
+  zink_skill_propose: Object.freeze([]),
+});
+
+let pathShapedInputFieldCache = null;
+
+/**
+ * Every property name an input schema declares, across its branches.
+ *
+ * A tool's input is often a `oneOf` over the operation variants (the excel
+ * contract declares one per operation), so the field set is the UNION of the
+ * branches: a field is path-shaped for that tool if ANY variant carries it.
+ */
+function collectSchemaPropertyNames(node, names = new Set(), depth = 0) {
+  if (!node || typeof node !== "object" || depth > 12) return names;
+  if (Array.isArray(node)) {
+    for (const item of node) collectSchemaPropertyNames(item, names, depth + 1);
+    return names;
+  }
+  if (node.properties && typeof node.properties === "object")
+    for (const key of Object.keys(node.properties)) names.add(key);
+  for (const keyword of ["oneOf", "anyOf", "allOf"])
+    if (node[keyword])
+      collectSchemaPropertyNames(node[keyword], names, depth + 1);
+  return names;
+}
+
+/**
+ * Resolve a `$ref` of the form `file.schema.json#/$defs/input` against the
+ * published contracts. The file part names a canonical tool contract, the
+ * pointer part names the member inside it.
+ */
+function resolveContractRef(ref) {
+  const [file, pointer] = String(ref).split("#");
+  if (!file || !pointer) return null;
+  const schema = loadContractSchema(file);
+  if (!schema) return null;
+  let cursor = schema;
+  for (const segment of pointer.split("/").filter(Boolean)) {
+    if (!cursor || typeof cursor !== "object") return null;
+    cursor = cursor[segment];
+  }
+  return cursor ?? null;
+}
+
+/**
+ * The path-shaped input fields of every governed tool, DERIVED from the
+ * published contracts and CROSS-CHECKED against the declaration above.
+ *
+ * It fails closed - by throwing, which the caller turns into a refusal - when
+ * the field set cannot be enumerated: an envelope without branches, a branch
+ * without a tool id or an input `$ref`, a contract that does not resolve, a
+ * governed tool with no declaration, or a declaration naming a field the
+ * contract does not declare.
+ */
+function pathShapedInputFields() {
+  if (pathShapedInputFieldCache) return pathShapedInputFieldCache;
+  const envelope = loadContractSchema("tool-call");
+  const branches = envelope?.oneOf;
+  if (!Array.isArray(branches) || branches.length === 0)
+    throw new Error("GOVERNANCE_PATH_SCOPE_UNENUMERABLE");
+  const derived = new Map();
+  for (const branch of branches) {
+    const toolId = branch?.properties?.tool_id?.const;
+    const ref = branch?.properties?.input?.$ref;
+    if (typeof toolId !== "string" || typeof ref !== "string")
+      throw new Error("GOVERNANCE_PATH_SCOPE_UNENUMERABLE");
+    const input = resolveContractRef(ref);
+    if (!input) throw new Error("GOVERNANCE_PATH_SCOPE_UNENUMERABLE");
+    const declared = PATH_SHAPED_INPUT_FIELDS[toolId];
+    if (!Array.isArray(declared))
+      throw new Error("GOVERNANCE_PATH_SCOPE_UNDECLARED");
+    const available = collectSchemaPropertyNames(input);
+    for (const field of declared)
+      if (!available.has(field))
+        throw new Error("GOVERNANCE_PATH_SCOPE_UNDECLARED");
+    derived.set(toolId, Object.freeze([...declared]));
+  }
+  pathShapedInputFieldCache = derived;
+  return derived;
+}
+
+/**
+ * The path-shaped input fields of ONE governed tool. A tool the envelope does
+ * not name is not a governed tool and has no scope.
+ */
+function pathShapedInputFieldsFor(toolId) {
+  const scope = pathShapedInputFields().get(toolId);
+  if (!scope) throw new Error("GOVERNANCE_PATH_SCOPE_UNDECLARED");
+  return scope;
+}
+
 async function ensureDependencies() {
   if (depsLoaded) return;
   if (!depsPromise) {
@@ -1701,26 +1820,26 @@ export function createGovernanceGuard({
       }
 
       // 6. Logical Artifact Path Validation
-      if (
-        candidateToolId === "zink_excel" &&
-        validatedParams.input?.file_path
-      ) {
-        requireDep(depsPathSafetyLoaded);
-        try {
-          validateArtifactLogicalPath(validatedParams.input.file_path);
-        } catch {
-          fail("SCHEMA_VALIDATION_FAILED");
-        }
-      }
-      if (
-        candidateToolId === "zink_python" &&
-        validatedParams.input?.entrypoint
-      ) {
-        requireDep(depsPathSafetyLoaded);
-        try {
-          validateArtifactLogicalPath(validatedParams.input.entrypoint);
-        } catch {
-          fail("SCHEMA_VALIDATION_FAILED");
+      //
+      // M12/T9 F-051: the check is SCHEMA-DRIVEN, not keyed by tool id. The
+      // published tool-call envelope names every governed tool and `$ref`s that
+      // tool's `$defs.input`, so the field set of every governed tool is
+      // derivable from the contract the call was already validated against. The
+      // path-shaped subset of those fields is declared once, below, and is
+      // cross-checked against the contracts at runtime: a governed tool with no
+      // declaration, or a declaration naming a field the contract does not
+      // declare, FAILS CLOSED instead of skipping the check.
+      {
+        const pathFields = pathShapedInputFieldsFor(candidateToolId);
+        for (const field of pathFields) {
+          const value = validatedParams.input?.[field];
+          if (value === undefined || value === null) continue;
+          requireDep(depsPathSafetyLoaded);
+          try {
+            validateArtifactLogicalPath(value);
+          } catch {
+            fail("SCHEMA_VALIDATION_FAILED");
+          }
         }
       }
 
