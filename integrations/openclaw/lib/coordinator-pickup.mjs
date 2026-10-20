@@ -655,12 +655,23 @@ export function createCoordinatorRuntimeStart({ api } = {}) {
         taskId,
         attempt,
       });
-      if (
-        !Array.isArray(requiredCapabilities) ||
-        requiredCapabilities.length === 0
-      ) {
+      // M12/T9 F-112: an EMPTY capability set is legitimate and must not be
+      // refused here.
+      //
+      // The capability set is the projection of the task's DAG with the
+      // coordinator itself removed (`projectGovernedCapabilities` in
+      // `lib/policy.mjs`): a DAG whose nodes are all coordinators has NO
+      // specialist to spawn, because the coordinator executes it itself. That is
+      // exactly the DAG the live spawn gate commits - a root agent may only
+      // name the agents it may spawn, and no coordinator may spawn another
+      // coordinator. This seam used to refuse an empty set, so the task was
+      // claimed and then never started: the claim succeeded, the start threw,
+      // and the task was stranded with no run to complete it.
+      //
+      // Only a MALFORMED capability set is refused, and it is refused by name.
+      if (!Array.isArray(requiredCapabilities)) {
         throw new Error(
-          "COORDINATOR_CAPABILITIES_INVALID: requiredCapabilities must be non-empty",
+          "COORDINATOR_CAPABILITIES_INVALID: requiredCapabilities must be an array",
         );
       }
       if (!hasSeam()) {
