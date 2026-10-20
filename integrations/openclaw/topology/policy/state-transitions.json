@@ -12,7 +12,12 @@
       "QUEUED",
       "REJECTED",
       "BLOCKED",
-      "CANCELLED"
+      "CANCELLED",
+      "REVISING",
+      "RESULT_PENDING_REVIEW",
+      "COMPLETE",
+      "PARTIAL",
+      "FAILED"
     ],
     "QUEUED": [
       "EXECUTING",
@@ -32,6 +37,8 @@
     ],
     "RESULT_PENDING_REVIEW": [
       "COMPLETE",
+      "PARTIAL",
+      "FAILED",
       "REJECTED",
       "REVISING",
       "CANCELLED",
@@ -41,12 +48,16 @@
       "QUEUED",
       "REJECTED",
       "CANCELLED",
-      "BLOCKED"
+      "BLOCKED",
+      "REVISING"
     ],
     "BLOCKED": [
       "ACTIVE",
       "QUEUED",
       "EXECUTING",
+      "WAITING_FOR_USER",
+      "RESULT_PENDING_REVIEW",
+      "REVISING",
       "FAILED",
       "CANCELLED"
     ],
@@ -68,7 +79,8 @@
     "SPAWN_UNKNOWN": [
       "RUNNING",
       "CANCELLED",
-      "COMPLETE"
+      "COMPLETE",
+      "FAILED"
     ],
     "RUNNING": [
       "COMPLETE",
@@ -90,5 +102,6 @@
     "STALE_REJECTED",
     "CONFLICT_REJECTED",
     "INVALID_REJECTED"
-  ]
+  ],
+  "_correction_note": "M12/T9 F-229: this projection was CORRECTED to match the reducer instead of being left to contradict it (which is what its own _note demands). Measured at HEAD against every `task.workflow_status = `, `task.brief_state = ` and `run.run_state = ` write in topology/lib/workflow.mjs, it was missing: ACTIVE -> REVISING (an approval that requests a revision), ACTIVE -> RESULT_PENDING_REVIEW (the root result), ACTIVE -> COMPLETE/PARTIAL/FAILED (the anchored pre-verdict root-result arm), RESULT_PENDING_REVIEW -> PARTIAL/FAILED (the post-ACCEPT status is DERIVED from the accepted outcome), REVISING -> REVISING (a revision requested while a revision is open), BLOCKED -> WAITING_FOR_USER/RESULT_PENDING_REVIEW/REVISING (a reconciled attempt restores the status it suspended) and SPAWN_UNKNOWN -> FAILED (an abandoned spawn is reconciled). The projection is still NOT enforced at the write seam: enforcing an INCOMPLETE projection would refuse a legitimate transition and make the live ledger unreadable, so the completeness proof is an owner decision (see the report). ONE divergence is left in place on purpose: the reducer's cancellation moves an UNKNOWN run to CANCELLED, while the tracked lane (tests/m7-lane-g-policy.test.mjs) pins this row to exactly [FAILED]. That pin is not this agent's to change, so the divergence is reported instead of being papered over."
 }

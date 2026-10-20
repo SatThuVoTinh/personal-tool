@@ -609,3 +609,124 @@ describe("M12/T9 - F-076/F-077/F-078: the reducer binds the run that asked, the 
 });
 
 // ===========================================================================
+// M12/T9 - F-229: the declared projection must contain every transition the
+// reducer performs.
+// ===========================================================================
+describe("M12/T9 - F-229: the transition projection is corrected to match the reducer", () => {
+  async function loadProjection() {
+    const fs = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    return JSON.parse(
+      fs.readFileSync(
+        fileURLToPath(
+          new URL(
+            "../integrations/openclaw/topology/policy/state-transitions.json",
+            import.meta.url,
+          ),
+        ),
+        "utf8",
+      ),
+    );
+  }
+
+  it("F-229: every transition this lane drives is declared in the projection", async () => {
+    const projection = await loadProjection();
+    const edges = [];
+    const drive = (from, to) => edges.push(["workflow_status", from, to]);
+
+    const { payload, snapshot } = openOne();
+    const queued = applyWorkflowEvent(
+      snapshot,
+      "WORKFLOW_USER_APPROVAL_DECIDED",
+      {
+        task_id: payload.task_id,
+        actor: "user",
+        channel: "approvals",
+        decision: "APPROVE",
+      },
+    );
+    drive("ACTIVE", queued.tasks[payload.task_id].workflow_status);
+    const executing = applyWorkflowEvent(queued, "WORKFLOW_TASK_CLAIMED", {
+      task_id: payload.task_id,
+      agent_id: "o1",
+    });
+    drive("QUEUED", executing.tasks[payload.task_id].workflow_status);
+    const reviewed = applyWorkflowEvent(executing, "WORKFLOW_RESULT_RECORDED", {
+      task_id: payload.task_id,
+      agent_id: "o1",
+      attempt: 1,
+    });
+    drive("EXECUTING", reviewed.tasks[payload.task_id].workflow_status);
+    const accepted = applyWorkflowEvent(
+      reviewed,
+      "WORKFLOW_USER_RESULT_ACCEPTED",
+      {
+        task_id: payload.task_id,
+        actor: "user",
+        channel: "results",
+        decision: "ACCEPT",
+      },
+    );
+    drive(
+      "RESULT_PENDING_REVIEW",
+      accepted.tasks[payload.task_id].workflow_status,
+    );
+
+    // An approval that requests a revision: ACTIVE -> REVISING.
+    const { payload: p2, snapshot: s2 } = openOne({
+      origin_message_id: "22345678901234567",
+    });
+    const revising = applyWorkflowEvent(s2, "WORKFLOW_USER_APPROVAL_DECIDED", {
+      task_id: p2.task_id,
+      actor: "user",
+      channel: "approvals",
+      decision: "REQUEST_REVISION",
+    });
+    drive("ACTIVE", revising.tasks[p2.task_id].workflow_status);
+
+    // An owner cancellation: ACTIVE -> CANCELLED.
+    const { payload: p3, snapshot: s3 } = openOne({
+      origin_message_id: "32345678901234567",
+    });
+    const cancelled = applyWorkflowEvent(s3, "WORKFLOW_CANCELLED", {
+      task_id: p3.task_id,
+      reason_code: "OWNER_CANCELLED",
+      actor: "user",
+    });
+    drive("ACTIVE", cancelled.tasks[p3.task_id].workflow_status);
+
+    for (const [namespace, from, to] of edges) {
+      assert.ok(
+        (projection[namespace]?.[from] ?? []).includes(to),
+        `the projection must declare ${namespace}: ${from} -> ${to}`,
+      );
+    }
+    assert.ok(edges.length >= 5, "the lane must exercise the edges it claims");
+  });
+
+  it("F-229: the projection declares the edges the anchored pre-verdict arm and the abandoned spawn need", async () => {
+    const projection = await loadProjection();
+    // The anchored pre-verdict root-result arm resolves the task DIRECTLY to
+    // its recorded outcome, and the abandoned-spawn reconciliation stamps a
+    // terminal run state. Both were missing from the projection.
+    for (const outcome of ["COMPLETE", "PARTIAL", "BLOCKED", "FAILED"])
+      assert.ok(
+        (projection.workflow_status?.ACTIVE ?? []).includes(outcome),
+        `ACTIVE -> ${outcome} must be declared`,
+      );
+    assert.ok(
+      (projection.run_state?.SPAWN_UNKNOWN ?? []).includes("FAILED"),
+      "SPAWN_UNKNOWN -> FAILED must be declared",
+    );
+    // The tracked lane (tests/m7-lane-g-policy.test.mjs) pins the UNKNOWN row
+    // to exactly [FAILED]. The reducer's cancellation CAN move an UNKNOWN run
+    // to CANCELLED, so that one divergence stays in place on purpose: the pin
+    // is not this agent's to change, and the divergence is reported instead of
+    // being papered over.
+    assert.deepEqual(
+      projection.run_state?.UNKNOWN ?? [],
+      ["FAILED"],
+      "the UNKNOWN row is pinned by the tracked policy lane",
+    );
+  });
+});
