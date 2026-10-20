@@ -66,11 +66,10 @@ const SYSTEMD_DROP_IN_NAME = "10-zink.conf";
 // in a runtime source is a path the repository publishes, and F-022 refused
 // exactly that. The default is the live host's path, so an operator who names
 // nothing still gets the host's own tree.
-const GOVERNED_STATE_TREE = (
+const GOVERNED_STATE_TREE =
   process.env.ZINK_OPERATOR_STATE_DIR ??
   process.env.ZINK_STATE_DIR ??
-  "/home/hoang_vinh/.openclaw-zink"
-);
+  "/home/hoang_vinh/.openclaw-zink";
 const DISCORD_FORBIDDEN_PERMISSIONS = Object.freeze([
   "Administrator",
   "ManageChannels",

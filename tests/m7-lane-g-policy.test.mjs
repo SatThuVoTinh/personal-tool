@@ -437,9 +437,8 @@ describe("Lane G — policy & lifecycle contract reconciliation", () => {
       NATIVE_RUNTIME_PINS,
       NATIVE_SUPPORTED_RUNTIME_VERSIONS,
     } = await import("../integrations/openclaw/topology/lib/native-patch.mjs");
-    const { GOVERNANCE_VERSION } = await import(
-      "../integrations/openclaw/topology/lib/canonical.mjs",
-    );
+    const { GOVERNANCE_VERSION } =
+      await import("../integrations/openclaw/topology/lib/canonical.mjs");
     // The manifest must be declared in exactly ONE place. The defect was two
     // declarations with divergent fields, so a second literal is the regression.
     const moduleSource = readFileSync(
@@ -453,7 +452,9 @@ describe("Lane G — policy & lifecycle contract reconciliation", () => {
     // UNCHANGED: the manifest must be declared exactly once, in the shared
     // builder. It is now pinned against the authoritative constant, so a
     // SECOND declaration of the version is still the regression it catches.
-    const manifestLiterals = moduleSource.match(/version: GOVERNANCE_VERSION/gu);
+    const manifestLiterals = moduleSource.match(
+      /version: GOVERNANCE_VERSION/gu,
+    );
     assert.equal(
       manifestLiterals.length,
       1,

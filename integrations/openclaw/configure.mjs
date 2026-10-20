@@ -74,11 +74,10 @@ const SYSTEMD_DROP_IN_NAME = "10-zink.conf";
 // in a runtime source is a path the repository publishes, and F-022 refused
 // exactly that. The default is the live host's path, so an operator who names
 // nothing still gets the host's own tree.
-const GOVERNED_STATE_TREE = (
+const GOVERNED_STATE_TREE =
   process.env.ZINK_OPERATOR_STATE_DIR ??
   process.env.ZINK_STATE_DIR ??
-  "/home/hoang_vinh/.openclaw-zink"
-);
+  "/home/hoang_vinh/.openclaw-zink";
 const LEGACY_GEMINI_STREAM_HOTFIX_R18_SHA256 =
   "41bfeedf2835db4a50573a0f61325bc438ac805a90fef03ce3bc29b8c303f133";
 // M10/T2-R9: the outgoing generated plans and resolver, byte-proven against the
@@ -827,7 +826,6 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // the deployed extension. The digest this build produces is deliberately
     // NOT listed: it is the current build and is accepted by content
     // comparison.
-
   ]),
   "lib/runtime.mjs": Object.freeze([
     // M10/T2-R15: the outgoing build currently deployed, byte-proven by

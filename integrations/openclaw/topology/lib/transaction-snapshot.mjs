@@ -741,7 +741,10 @@ export function persistTransactionSnapshot(
   // did not exist left the directory missing and `syncDirectory` below opened a
   // directory that was not there — a FIRST apply against an empty state root
   // could not take a transaction at all, which is the live fresh-install path.
-  mkdirSync(path.join(directory, PREIMAGE_DIR), { recursive: true, mode: 0o700 });
+  mkdirSync(path.join(directory, PREIMAGE_DIR), {
+    recursive: true,
+    mode: 0o700,
+  });
 
   const files = {};
   for (const [relative, entry] of Object.entries(snapshot.files)) {
