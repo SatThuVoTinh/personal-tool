@@ -5,6 +5,7 @@ import {
   createRuntimeBackup,
   runtimeBackupPath,
 } from "./topology/lib/runtime-backup.mjs";
+import { assertStateRootFileModes } from "./topology/lib/state-root-modes.mjs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -1245,6 +1246,12 @@ async function main() {
     process.stdout.write(`${stableJson(output)}`);
     return;
   }
+
+  // M12/T9 F-035: the state root is enumerated before anything is written and
+  // before any of it is read as trusted state. A credential-derived file that
+  // is group- or other-accessible is a leak no named-path check covers, so
+  // the preflight and the apply both refuse it.
+  assertStateRootFileModes(stateDir);
 
   for (const target of [
     stateDir,
