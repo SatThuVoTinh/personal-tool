@@ -1490,3 +1490,58 @@ test("F-344: the register states the direction its traceability promise actually
 });
 
 // ---------------------------------------------------------------------------
+// F-348 — the execution contract may only be deleted after it is archived
+//
+// `docs/contracts/execution/README.md` requires the contract to be copied
+// into `archive/` before the live file is deleted: the archived copy is the
+// only durable record of what was authorized. Nothing could notice a
+// delete-before-archive because the deleted file is Git-ignored.
+// ---------------------------------------------------------------------------
+function planRevisionOf(text) {
+  return /Plan Revision:[ ]*([A-Za-z0-9./-]+)/u.exec(text)?.[1] ?? null;
+}
+
+test("F-348: a deleted execution contract must have an archived copy of its Plan Revision", () => {
+  const plan = readFileSync(path.join(REPO_ROOT, "PLAN.md"), "utf8");
+  const liveContract = path.join(
+    REPO_ROOT,
+    "docs",
+    "contracts",
+    "execution",
+    "ACTIVE.md",
+  );
+  const archiveDirectory = path.join(
+    REPO_ROOT,
+    "docs",
+    "contracts",
+    "execution",
+    "archive",
+  );
+  const archived = existsSync(archiveDirectory)
+    ? readdirSync(archiveDirectory).filter((name) => name.endsWith(".md"))
+    : [];
+
+  if (existsSync(liveContract)) {
+    // The contract is live; its deletion is a future event and the archive
+    // rule applies to that event.
+    assert.ok(
+      archived.length > 0,
+      "the execution-contract archive must hold the contracts already closed",
+    );
+    return;
+  }
+
+  const revision = planRevisionOf(plan);
+  assert.ok(
+    revision,
+    "PLAN.md must name the Plan Revision so the archived contract can be located",
+  );
+  const taskId = revision.split(/-R\d+$/u)[0];
+  const archivedTaskId = taskId.replaceAll("/", "-");
+  assert.ok(
+    archived.some((name) => name.includes(archivedTaskId)),
+    `the execution contract of Plan Revision ${revision} was deleted without an archived copy under docs/contracts/execution/archive/`,
+  );
+});
+
+// ---------------------------------------------------------------------------
