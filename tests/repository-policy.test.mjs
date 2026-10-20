@@ -1602,6 +1602,23 @@ test("F-348: a deleted execution contract must have an archived copy of its Plan
 });
 
 // ---------------------------------------------------------------------------
+// F-353 — the nested `AGENTS.md` layer is conditional
+//
+// The bootstrap order tells every agent to read the nearest applicable
+// nested `AGENTS.md`. The repository has never contained one, so the step
+// is only safe while it stays conditional: an unconditional instruction
+// would make every cold start look for a file that cannot be found.
+// ---------------------------------------------------------------------------
+test("F-353: the nested AGENTS.md bootstrap step is conditional", () => {
+  const agents = readFileSync(path.join(REPO_ROOT, "AGENTS.md"), "utf8");
+  assert.match(
+    agents,
+    /nearest[^\n]*applicable[^\n]*nested[^\n]*AGENTS\.md/iu,
+    "the bootstrap step must state that the nested AGENTS.md layer applies only where one exists",
+  );
+});
+
+// ---------------------------------------------------------------------------
 // F-089 — the authorization header an agent must resolve is near the top
 //
 // `PLAN.md` is read whole before any write, and it is far larger than one
