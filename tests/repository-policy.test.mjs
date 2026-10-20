@@ -1405,3 +1405,88 @@ test("F-038: no credential literal exists in the local scratch directory", () =>
 });
 
 // ---------------------------------------------------------------------------
+// F-344 — an archive-cited legacy id that resolves to nothing
+//
+// The register keeps a `Legacy register id` so a row can be traced back to
+// the plan and the archived contracts. The other direction — an id an
+// archived contract cites, resolved against the live rows and the closure
+// table — is what keeps a closed row from drifting away from the record.
+// ---------------------------------------------------------------------------
+const LEGACY_REGISTER_ID = /R[0-9]+-[A-Z0-9]+-[0-9]+/gu;
+
+function registerLegacyIds(register) {
+  const ids = new Set();
+  for (const match of register.matchAll(
+    /^- Legacy register id:[ ]*`?([^`\n]+)`?/gmu,
+  )) {
+    for (const id of match[1].match(LEGACY_REGISTER_ID) ?? []) ids.add(id);
+  }
+  return ids;
+}
+
+function registerClosureIds(register) {
+  const section = register.split(/^## 2\./mu)[1] ?? "";
+  const ids = new Set();
+  for (const match of section.matchAll(/^\|\s*`([^`]+)`/gmu)) {
+    for (const id of match[1].match(LEGACY_REGISTER_ID) ?? []) ids.add(id);
+  }
+  return ids;
+}
+
+test("F-344: every legacy id an archived contract cites resolves to a register row, a closure entry, or a PLAN.md anchor", () => {
+  const register = readFileSync(
+    path.join(REPO_ROOT, "docs", "execution", "findings.md"),
+    "utf8",
+  );
+  const plan = readFileSync(path.join(REPO_ROOT, "PLAN.md"), "utf8");
+  const live = registerLegacyIds(register);
+  const closed = registerClosureIds(register);
+  const archiveDirectory = path.join(
+    REPO_ROOT,
+    "docs",
+    "contracts",
+    "execution",
+    "archive",
+  );
+  assert.ok(
+    existsSync(archiveDirectory),
+    "the execution-contract archive must exist",
+  );
+
+  const dangling = [];
+  for (const name of readdirSync(archiveDirectory)) {
+    if (!name.endsWith(".md")) continue;
+    const contents = readFileSync(path.join(archiveDirectory, name), "utf8");
+    for (const id of new Set(contents.match(LEGACY_REGISTER_ID) ?? [])) {
+      if (live.has(id) || closed.has(id) || plan.includes(id)) continue;
+      dangling.push(
+        `${id} (cited by docs/contracts/execution/archive/${name})`,
+      );
+    }
+  }
+  assert.deepEqual(
+    dangling,
+    [],
+    `an archived contract cites a legacy id that resolves to no register row, no closure entry and no PLAN.md anchor: ${dangling.join(", ")}`,
+  );
+});
+
+test("F-344: the register states the direction its traceability promise actually holds", () => {
+  const register = readFileSync(
+    path.join(REPO_ROOT, "docs", "execution", "findings.md"),
+    "utf8",
+  );
+  const section1 = register.split(/^## 1\./mu)[1]?.split(/^## 2\./mu)[0] ?? "";
+  assert.match(
+    section1,
+    /Legacy register id/u,
+    "section 1 must state which field carries the legacy id",
+  );
+  assert.match(
+    section1,
+    /PLAN\.md/u,
+    "section 1 must name the durable records a row is traced back through",
+  );
+});
+
+// ---------------------------------------------------------------------------
