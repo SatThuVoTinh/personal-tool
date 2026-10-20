@@ -11,6 +11,7 @@
 // imported from there. A repository-layout test would pass both before and after
 // the fix and would prove nothing.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { describe, it } from "node:test";
 import {
   existsSync,
@@ -560,5 +561,126 @@ describe("M12/T9 F-201 - the deployed entrypoint's module graph resolves", () =>
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M12/T9 F-022 / F-162 - the deployed plugin resolves its modules from its own
+// digest-gated tree, never from a machine-specific absolute path
+// ---------------------------------------------------------------------------
+
+describe("M12/T9 F-022 - no governance-resolution source carries a machine-specific path", () => {
+  // A Windows home mounted into WSL, a Windows home, a Linux home.
+  const MACHINE_PATH_PATTERNS = [
+    /\/mnt\/[a-z]\/Users\//iu,
+    /[A-Za-z]:\\+Users\\+/u,
+    /\/home\/[a-z_][a-z0-9_-]*\//iu,
+  ];
+
+  const trackedRuntimeSources = () =>
+    execFileSync(
+      "git",
+      [
+        "-c",
+        `safe.directory=${REPO_ROOT}`,
+        "ls-files",
+        "-z",
+        "integrations/openclaw",
+      ],
+      {
+        cwd: REPO_ROOT,
+        encoding: "utf8",
+        maxBuffer: 32 * 1024 * 1024,
+        windowsHide: true,
+      },
+    )
+      .split("\0")
+      .filter(Boolean)
+      .filter((relative) => relative.endsWith(".mjs"))
+      // The operator fixtures under topology/fixtures run ON the live host and
+      // name it on purpose; they are not runtime resolution sources.
+      .filter((relative) => !relative.includes("/fixtures/"));
+
+  /** The lines of a source that carry a machine-specific path. */
+  const machinePathLines = (content) => {
+    const offenders = [];
+    content.split(/\r?\n/u).forEach((line, index) => {
+      const trimmed = line.trim();
+      // A comment that NAMES the live path is documentation, not a resolution.
+      if (
+        trimmed.startsWith("//") ||
+        trimmed.startsWith("*") ||
+        trimmed.startsWith("/*")
+      ) {
+        return;
+      }
+      for (const pattern of MACHINE_PATH_PATTERNS) {
+        if (pattern.test(line)) offenders.push(index + 1);
+      }
+    });
+    return offenders;
+  };
+
+  it("no tracked runtime source resolves a module through a machine-specific path", () => {
+    const files = trackedRuntimeSources();
+    assert.ok(
+      files.length > 10,
+      `the tracked tree must actually be walked, got ${files.length} files`,
+    );
+    const offenders = [];
+    for (const relative of files) {
+      const content = readFileSync(path.join(REPO_ROOT, relative), "utf8");
+      for (const line of machinePathLines(content)) {
+        offenders.push(`${relative}:${line}`);
+      }
+    }
+    assert.deepEqual(
+      offenders,
+      [],
+      `a tracked runtime source resolves through a machine-specific path: ${offenders.join(", ")}`,
+    );
+  });
+
+  it("the deployed entrypoint carries no machine-specific path", () => {
+    const { entrypoint } = governancePluginFiles();
+    assert.deepEqual(
+      machinePathLines(entrypoint),
+      [],
+      "the deployed entrypoint must not resolve through a machine-specific path",
+    );
+  });
+});
+
+describe("M12/T9 F-162 - the excel writer that executes is the one whose digest was admitted", () => {
+  it("the deployed entrypoint loads the excel writer from its own packaged asset", () => {
+    const { assets, entrypoint } = governancePluginFiles();
+    assert.ok(
+      assets["lib/excel-writer.mjs"],
+      "the excel writer must travel with the packaged build",
+    );
+    const specifiers = [
+      ...entrypoint.matchAll(/["']([^"']*excel-writer\.mjs)["']/gu),
+    ].map((match) => match[1]);
+    assert.ok(
+      specifiers.length > 0,
+      "the entrypoint must load the excel writer at all",
+    );
+    for (const specifier of specifiers) {
+      assert.ok(
+        specifier.startsWith("./lib/"),
+        `the excel writer must come from the packaged tree, got ${specifier}`,
+      );
+    }
+  });
+
+  it("no working-tree override of the excel writer remains", () => {
+    const source = repoFile(
+      "integrations/openclaw/plugins/zink-governance/index.mjs",
+    );
+    assert.equal(
+      source.includes("integrations/openclaw/lib/excel-writer.mjs"),
+      false,
+      "the excel writer must not be loaded from an arbitrary working-tree path",
+    );
   });
 });

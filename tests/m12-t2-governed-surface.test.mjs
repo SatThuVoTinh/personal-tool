@@ -25,6 +25,9 @@ import {
   incidentIdentityFor,
   incidentTagSelectionsFor,
   readGovernanceManifests,
+  readPickupLedgerTasks,
+  resolveAnnouncePublishDecision,
+  resolveGovernedAnnouncementAccount,
   resultSoftwareLabelFor,
   resultTagSelectionsFor,
 } from "../integrations/openclaw/plugins/zink-governance/index.mjs";
@@ -1218,4 +1221,266 @@ describe("M12/T9 F-244 — a verdict is recorded only where it was observed", ()
       rmSync(root, { recursive: true, force: true });
     }
   });
+});
+
+// ---------------------------------------------------------------------------
+// M12/T9 F-104 / F-107 / F-109 - the approval card is published by the ledger's
+// account, is recorded only for a card the owner can act on, and a publish
+// that fails is a named refusal instead of a silent delivery
+// ---------------------------------------------------------------------------
+
+/** The body of one function, by brace matching. */
+function functionBody(source, marker) {
+  const start = source.indexOf(marker);
+  assert.ok(start > -1, `${marker} must exist`);
+  const open = source.indexOf("{", start);
+  let depth = 0;
+  for (let index = open; index < source.length; index += 1) {
+    if (source[index] === "{") depth += 1;
+    else if (source[index] === "}") {
+      depth -= 1;
+      if (depth === 0) return source.slice(start, index + 1);
+    }
+  }
+  throw new Error(`${marker}: unbalanced body`);
+}
+
+test("M12/T9 F-104: the account that opens an approvals thread is the ledger's", () => {
+  const owner = {
+    delegation: { agent_id: "o1" },
+    task: { root_agent_id: "main" },
+  };
+  assert.deepEqual(
+    resolveGovernedAnnouncementAccount({ owner, eventAgentId: "o1" }),
+    { status: "COORDINATOR", agentId: "o1" },
+    "the ledger's account may be selected when the event agrees with it",
+  );
+  assert.deepEqual(
+    resolveGovernedAnnouncementAccount({ owner, eventAgentId: "o2" }),
+    { status: "BLOCKED", error: "UNAUTHORIZED_TARGET" },
+    "an event that claims another account is refused, never re-routed",
+  );
+  assert.deepEqual(
+    resolveGovernedAnnouncementAccount({ owner: null, eventAgentId: "o1" }),
+    { status: "BLOCKED", error: "EXACT_TASK_CORRELATION_REQUIRED" },
+    "an announce the ledger does not own is refused",
+  );
+  assert.deepEqual(
+    resolveGovernedAnnouncementAccount({
+      owner: { delegation: { agent_id: "excel" }, task: {} },
+      eventAgentId: "excel",
+    }),
+    { status: "NOT_APPLICABLE", agentId: "excel" },
+    "a specialist announce carries no approval card",
+  );
+  // A bound coordinator run names its coordinator, not the root agent.
+  assert.deepEqual(
+    resolveGovernedAnnouncementAccount({
+      owner: {
+        coordinatorRun: { coordinator: "o2" },
+        task: { root_agent_id: "main" },
+      },
+      eventAgentId: "o2",
+    }),
+    { status: "COORDINATOR", agentId: "o2" },
+  );
+});
+
+test("M12/T9 F-107: the durable surface record follows the interactive delivery", () => {
+  const body = functionBody(
+    pluginSource,
+    "async function maybePublishDiscordCard",
+  );
+  const surface = body.indexOf('"WORKFLOW_APPROVAL_SURFACED"');
+  const delivery = body.indexOf("await sendNativePayload(");
+  assert.ok(surface > -1, "the surface record must exist");
+  assert.ok(delivery > -1, "the interactive delivery must exist");
+  assert.ok(
+    delivery < surface,
+    "the card is recorded as SURFACED only after its interactive component was delivered",
+  );
+  // The posting account is the ledger's, never the event's session key.
+  assert.ok(
+    body.includes("resolveGovernedAnnouncementAccount("),
+    "the card's account is resolved from the ledger",
+  );
+  assert.ok(
+    body.includes("resolveDiscordBotToken(agentId)"),
+    "the token is the ledger-resolved account's token",
+  );
+});
+
+test("M12/T9 F-109: every publish path yields a verdict, and a blocked one is never a delivery", () => {
+  // The card body must not have a single silent `return;`: every path answers
+  // with a verdict the announce seam can read.
+  const body = functionBody(
+    pluginSource,
+    "async function maybePublishDiscordCard",
+  );
+  assert.equal(
+    /\breturn;/u.test(body),
+    false,
+    "every publish path must return a verdict, never end silently",
+  );
+  // The seam reads the verdict.
+  const seam = functionBody(
+    pluginSource,
+    "async beforeAnnounce(event, context, signal)",
+  );
+  assert.ok(
+    seam.includes("resolveAnnouncePublishDecision("),
+    "the announce seam must read the publish verdict",
+  );
+  assert.ok(
+    seam.includes("await maybePublishDiscordCard(event)"),
+    "the seam must take the verdict the publish returns",
+  );
+
+  // The decision the seam returns for each verdict.
+  const delivered = { action: "deliver", receipt: "receipt" };
+  assert.deepEqual(
+    resolveAnnouncePublishDecision({
+      decision: delivered,
+      verdict: { status: "PUBLISHED" },
+    }),
+    delivered,
+    "a published card leaves the guard's decision alone",
+  );
+  assert.deepEqual(
+    resolveAnnouncePublishDecision({
+      decision: delivered,
+      verdict: { status: "NOT_APPLICABLE", agentId: "excel" },
+    }),
+    delivered,
+    "an announce that was never a card leaves the guard's decision alone",
+  );
+  assert.deepEqual(
+    resolveAnnouncePublishDecision({
+      decision: delivered,
+      verdict: { status: "BLOCKED", error: "ANNOUNCE_DELIVERY_FAILED" },
+    }),
+    { action: "discard", reason: "ANNOUNCE_DELIVERY_FAILED" },
+    "a card that was never published is never reported as delivered",
+  );
+  assert.deepEqual(
+    resolveAnnouncePublishDecision({
+      decision: delivered,
+      verdict: { status: "BLOCKED", error: "UNAUTHORIZED_TARGET" },
+    }),
+    { action: "discard", reason: "UNAUTHORIZED_TARGET" },
+    "the refusal names its own cause",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// M12/T9 F-021 / F-075 / F-079 - the coordinator pickup lane and the
+// pre-admitted spawn branch
+// ---------------------------------------------------------------------------
+
+test("M12/T9 F-021: the pickup lane's eligibility is decided when work could be claimed", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "m12t9-pickup-"));
+  const paths = ledgerPaths(root);
+  try {
+    // No snapshot yet: the lane is not eligible and it claims nothing.
+    assert.deepEqual(
+      readPickupLedgerTasks({ paths }),
+      {},
+      "an absent snapshot must refuse to claim anything",
+    );
+    ensureLedger(paths);
+    const seed = origin(1, "run-m12t9-f021");
+    const taskId = deriveTaskId(seed);
+    recordWorkflowEvent(paths, "WORKFLOW_OPENED", { ...seed, task_id: taskId });
+    // The snapshot exists NOW - after the plugin would have loaded. The lane
+    // must become eligible without a restart.
+    const tasks = readPickupLedgerTasks({ paths });
+    assert.deepEqual(
+      Object.keys(tasks),
+      [taskId],
+      "a snapshot created after the load makes the lane eligible",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+  // The one-shot gate at register() time is gone.
+  assert.equal(
+    pluginSource.includes("ledgerSnapshotPresent"),
+    false,
+    "the eligibility must not be decided once, at register() time",
+  );
+  // The loop reads the ledger through the per-tick reader, so a snapshot that
+  // appears later is picked up without a restart.
+  assert.ok(
+    pluginSource.includes("readPickupLedgerTasks({ paths })"),
+    "the pickup loop must read the ledger through the per-tick reader",
+  );
+});
+
+test("M12/T9 F-079: the pre-admitted spawn branch never skips the approval surface", () => {
+  // The branch is entered when the model's proposal names a node the task
+  // already declares. Its verdict comes from the canonical guard, but the
+  // guard's AUTH_APPROVAL_REQUIRED refusal must be answered with the SAME
+  // first-approval surface the canonical path creates - otherwise a
+  // model-supplied node id can leave the task waiting for an approval nobody
+  // was ever asked for.
+  const branch = functionBody(pluginSource, "if (isPreAdmittedFixture) {");
+  assert.ok(
+    branch.includes('gateError?.message === "AUTH_APPROVAL_REQUIRED"'),
+    "the branch must recognise the approval refusal",
+  );
+  assert.ok(
+    branch.includes("requestFirstSpawnApproval("),
+    "the branch must create the same first-approval surface the canonical path creates",
+  );
+  assert.ok(
+    branch.includes("throw gateError"),
+    "the refusal stays the refusal: creating the request never authorizes the spawn",
+  );
+});
+
+test("M12/T9 F-075: one process runs exactly one coordinator pickup loop", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "m12t9-pickup-loop-"));
+  const paths = ledgerPaths(root);
+  ensureLedger(paths);
+  const logs = [];
+  const register = () => {
+    const hooks = new Map();
+    governancePlugin.register({
+      pluginConfig: {
+        ledgerRoot: paths.root,
+        ownerDiscordId: "123456789012345678",
+        enabled: true,
+      },
+      on: (name, handler) => hooks.set(name, handler),
+      registerTool: () => {},
+      logger: {
+        warn: (m) => logs.push(String(m)),
+        info: (m) => logs.push(String(m)),
+        error: (m) => logs.push(String(m)),
+      },
+    });
+    return hooks;
+  };
+  const first = register();
+  const second = register();
+  try {
+    const started = logs.filter((line) =>
+      line.includes("coordinator pickup loop started"),
+    );
+    assert.equal(
+      started.length,
+      1,
+      `exactly one pickup loop per process, got ${started.length}`,
+    );
+    assert.ok(
+      logs.some((line) =>
+        line.includes("coordinator pickup loop already running"),
+      ),
+      "a second registration must attach to the running loop, not start another",
+    );
+  } finally {
+    first.get("gateway_stop")?.();
+    second.get("gateway_stop")?.();
+    rmSync(root, { recursive: true, force: true });
+  }
 });

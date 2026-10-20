@@ -538,28 +538,52 @@ function resolveDefaultOllamaUrl() {
   return configured || null;
 }
 
+/**
+ * M12/T9 F-022: the deployed plugin must never resolve a module through a
+ * MACHINE-SPECIFIC absolute path.
+ *
+ * The candidate list used to carry this workstation's Windows mount
+ * (`/mnt/c/Users/<operator>/...`) as a literal. On a host where that mount
+ * exists, the deployed plugin loaded LIVE REPOSITORY SOURCE instead of its
+ * own digest-gated packaged assets, so a branch switch or an uncommitted edit
+ * changed governed behaviour with no redeploy and no digest change - and the
+ * one gate that looked for machine-specific paths never inspected the
+ * entrypoint that carried the literal.
+ *
+ * The resolution is now machine-independent: the configured root, the module's
+ * own tree, the working directory, and the nearest ANCESTOR of this module
+ * that carries the repository layout. Nothing in it names a machine.
+ */
 function findRepoRoot() {
+  const marker = path.join(
+    "zink-tools",
+    "adapters",
+    "skill-store",
+    "skill-adapter.mjs",
+  );
+  const carriesRepository = (root) => {
+    if (!root) return false;
+    try {
+      return existsSync(path.join(root, marker));
+    } catch {
+      return false;
+    }
+  };
   const candidates = [
     process.env.ZINK_REPO_ROOT,
-    "/mnt/c/Users/HOANG VINH/OneDrive/Documents/personal-tool",
     path.resolve(fileURLToPath(import.meta.url), "../../../.."),
     process.cwd(),
   ];
-  for (const c of candidates) {
-    if (
-      c &&
-      existsSync(
-        path.join(
-          c,
-          "zink-tools",
-          "adapters",
-          "skill-store",
-          "skill-adapter.mjs",
-        ),
-      )
-    ) {
-      return c;
-    }
+  for (const candidate of candidates) {
+    if (carriesRepository(candidate)) return candidate;
+  }
+  // The nearest ancestor of this module that carries the repository layout.
+  let current = path.dirname(fileURLToPath(import.meta.url));
+  for (let depth = 0; depth < 8; depth += 1) {
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    if (carriesRepository(parent)) return parent;
+    current = parent;
   }
   return null;
 }
@@ -763,6 +787,146 @@ export function evaluateSpecialistProvenance({
 // Tool payload may carry business metadata, never authority identity.
 export function deriveTrustedRequester(_id) {
   return _id?.agent ?? _id?.agentId ?? "unknown";
+}
+
+// M12/T9 F-041: the memory/skill tools' correlation identity is the TRUSTED
+// runtime context, never the tool payload.
+//
+// The registered schemas advertised `session_key`, `run_id` and `task_id` as
+// model-fillable, and the executors read the payload FIRST (the payload's
+// session key won over the trusted one), so a model could name the run its
+// own retrieval was scoped to. The identity now comes from the trusted
+// context alone, and a payload that carries a correlation key has it REFUSED:
+// the key is dropped before the adapter sees the input, the refusal is named
+// (the field only - never the value), and the trusted correlation always
+// reaches the adapter.
+const TRUSTED_IDENTITY_FIELDS = Object.freeze([
+  "session_key",
+  "run_id",
+  "task_id",
+]);
+
+export function deriveTrustedToolIdentity(_id, params = null) {
+  const input = { ...(params ?? {}) };
+  const refused = [];
+  for (const field of TRUSTED_IDENTITY_FIELDS) {
+    if (!Object.hasOwn(input, field)) continue;
+    refused.push(field);
+    delete input[field];
+  }
+  return {
+    input,
+    refused,
+    context: {
+      sessionKey: _id?.sessionKey || "unbound-session",
+      runId: _id?.runId || "unbound-run",
+      taskId: _id?.taskId || "unbound-task",
+      requestingAgent: deriveTrustedRequester(_id),
+    },
+  };
+}
+
+// M12/T9 F-227: the owner-visible task code IS the task identity, so it is
+// minted from a cryptographic byte source. The ambient PRNG is not a source of
+// authority: it is not unpredictable and it is not reproducible for a forensic
+// re-derivation, which is exactly what `topology/lib/canonical.mjs` documents
+// as forbidden for an identity.
+//
+// The alphabet has 21 symbols, so a plain byte modulo 21 would bias the first
+// five values. Rejection sampling removes the bias: a byte at or above the
+// largest multiple of 21 is discarded and another one is drawn.
+export function createTaskCodeRandomSource() {
+  const limit = 256 - (256 % TASK_CODE_ALPHABET.length);
+  return () => {
+    for (;;) {
+      const byte = randomBytes(1)[0];
+      if (byte < limit) return byte % TASK_CODE_ALPHABET.length;
+    }
+  };
+}
+
+// M12/T9 F-109: the announce seam READS the publish verdict.
+//
+// The seam used to await the publish and throw its verdict away, so a card
+// that was never published was indistinguishable from one that was: the host
+// was told the announcement was delivered when it never left the process, and
+// an unparsable payload dropped with no log line at all.
+//
+// The verdict is the ONE source of truth for the publish outcome:
+//   - `PUBLISHED`     - the card is in the owner's forum; the host's decision
+//                       (the guard's) stands.
+//   - `NOT_APPLICABLE`- this announce was never a governed approval card; the
+//                       host's decision stands.
+//   - `BLOCKED`       - a governed card was expected and could not be
+//                       published. The announce is DISCARDED with the declared
+//                       runtime reason, so the host is never told a card it
+//                       cannot act on was delivered.
+export function resolveAnnouncePublishDecision({ decision, verdict } = {}) {
+  if (verdict?.status === "BLOCKED") {
+    return { action: "discard", reason: verdict.error };
+  }
+  return decision;
+}
+
+// M12/T9 F-104: the account that opens an #approvals thread is the one the
+// LEDGER assigned to the task.
+//
+// The posting account used to be parsed out of the event's child session key
+// (`/^agent:([^:]+)/`), so an announce could name an account the ledger never
+// assigned to that task and the card was re-routed to another bot's token.
+// The ledger's own owning run is the authority: a coordinator run names its
+// coordinator, a delegation names its agent, and the root run names the root
+// agent. The event's claim is only ever a CLAIM: it may select an agent when
+// it agrees with the ledger, and a disagreement is refused.
+//
+// The refusals use DECLARED runtime reason codes (see
+// `topology/policy/reason-code-matrix.json`): EXACT_TASK_CORRELATION_REQUIRED
+// when the ledger owns no run for this announce, UNAUTHORIZED_TARGET when the
+// event claims an account the ledger did not assign.
+const GOVERNED_COORDINATOR_ACCOUNTS = Object.freeze(["o1", "o2"]);
+
+export function resolveGovernedAnnouncementAccount({
+  owner,
+  eventAgentId = null,
+} = {}) {
+  const ledgerAgentId =
+    owner?.coordinatorRun?.coordinator ??
+    owner?.delegation?.agent_id ??
+    owner?.task?.root_agent_id ??
+    null;
+  if (!ledgerAgentId) {
+    return { status: "BLOCKED", error: "EXACT_TASK_CORRELATION_REQUIRED" };
+  }
+  if (eventAgentId && eventAgentId !== ledgerAgentId) {
+    return { status: "BLOCKED", error: "UNAUTHORIZED_TARGET" };
+  }
+  if (!GOVERNED_COORDINATOR_ACCOUNTS.includes(ledgerAgentId)) {
+    return { status: "NOT_APPLICABLE", agentId: ledgerAgentId };
+  }
+  return { status: "COORDINATOR", agentId: ledgerAgentId };
+}
+
+/**
+ * M12/T9 F-021: the pickup lane's eligibility is decided WHEN work could be
+ * claimed, not once at `register()` time.
+ *
+ * The loop used to be started only when the ledger snapshot already existed at
+ * registration, so a snapshot created afterwards (a first install, or a
+ * guarded lock/snapshot recovery - exactly the state the owner's recovery
+ * procedures leave behind) left the coordinator lane dark until a restart.
+ *
+ * The reader answers "no tasks" while the snapshot is absent, so an absent
+ * snapshot still refuses to claim anything, and a snapshot that appears later
+ * makes the lane eligible on the next tick - no restart, no second scheduler.
+ */
+export function readPickupLedgerTasks({ paths } = {}) {
+  try {
+    if (!paths?.snapshot || !existsSync(paths.snapshot)) return {};
+    return readSnapshot(paths).tasks ?? {};
+  } catch {
+    // An unreadable ledger is never a claim: the lane stays idle.
+    return {};
+  }
 }
 
 // M7-071/M8-062: missing-backend envelope — explicit unavailable/blocked,
@@ -2537,6 +2701,18 @@ export function handleExecutionFinished({
 }
 
 let excelWriterModule = null;
+/**
+ * M12/T9 F-162: the excel writer that EXECUTES is the one whose digest was
+ * admitted.
+ *
+ * The first two candidates are the plugin's own tree: in the deployed layout
+ * they are the PACKAGED asset (`./lib/excel-writer.mjs`, after the packaging
+ * rewrite), and in the repository layout they are the file that is packaged
+ * from. The third candidate used to be an arbitrary WORKING-TREE path
+ * (`findRepoRoot() || process.cwd()`), so a tree edit could change the
+ * artifact writer with no digest change at all. That override is gone: the
+ * writer is either the plugin's own asset or it is unavailable.
+ */
 async function getExcelWriter() {
   if (!excelWriterModule) {
     try {
@@ -2545,16 +2721,9 @@ async function getExcelWriter() {
       try {
         excelWriterModule = await import("../../lib/excel-writer.mjs");
       } catch {
-        try {
-          const repoRoot = findRepoRoot() || process.cwd();
-          excelWriterModule = await import(
-            pathToFileURL(
-              path.join(repoRoot, "integrations/openclaw/lib/excel-writer.mjs"),
-            ).href
-          );
-        } catch (e) {
-          console.error("[zink-governance] Failed to import excel writer:", e);
-        }
+        console.error(
+          "[zink-governance] Failed to import excel writer: the governed asset is unavailable",
+        );
       }
     }
   }
@@ -3454,15 +3623,9 @@ export function registerTools(api, options = {}) {
                 ?.capability || { type: "string" },
               namespace: toolContracts.zink_skill_search.parameters.properties
                 ?.namespace || { type: "string" },
-              task_id: {
-                type: "string",
-                description: "Governed task correlation ID",
-              },
-              session_key: {
-                type: "string",
-                description: "Runtime session key",
-              },
-              run_id: { type: "string", description: "Runtime execution ID" },
+              // M12/T9 F-041: `task_id`, `session_key` and `run_id` are the
+              // trusted runtime context's correlation identity, never
+              // model-fillable fields.
             },
             required: ["query", "namespace"],
           }
@@ -3490,10 +3653,8 @@ export function registerTools(api, options = {}) {
                 type: "string",
                 description: "Governed Skill Store namespace",
               },
-              task_id: {
-                type: "string",
-                description: "Governed task correlation ID",
-              },
+              // M12/T9 F-041: `task_id` is the trusted runtime context's
+              // correlation identity, never a model-fillable field.
             },
             required: ["query", "namespace"],
           },
@@ -3502,18 +3663,22 @@ export function registerTools(api, options = {}) {
         // context only. Tool payload never impersonates another agent.
         const mod = await getSkillAdapter();
         // O09: Pass context with task/agent/session identity
-        const ctx = {
-          sessionKey:
-            params?.session_key || _id?.sessionKey || "unbound-session",
-          runId: params?.run_id || _id?.runId || "unbound-run",
-          taskId: params?.task_id || _id?.taskId || "unbound-task",
-          requestingAgent: deriveTrustedRequester(_id),
-        };
+        // M12/T9 F-041: a payload correlation key is refused, never honoured.
+        const { input, refused, context } = deriveTrustedToolIdentity(
+          _id,
+          params,
+        );
+        for (const field of refused) {
+          api.logger?.warn?.(
+            `[zink-governance] memory tool payload correlation refused: field=${field}`,
+          );
+        }
+        const ctx = context;
         if (mod?.executeGovernedSkillQuery) {
           const res = await mod.executeGovernedSkillQuery(
             {
               action: "search",
-              ...params,
+              ...input,
             },
             ctx,
             { ollamaUrl: resolveDefaultOllamaUrl() },
@@ -3562,15 +3727,9 @@ export function registerTools(api, options = {}) {
                 type: "boolean",
                 description: "Optional deep cross-encoder reranking",
               },
-              task_id: {
-                type: "string",
-                description: "Governed task correlation ID",
-              },
-              session_key: {
-                type: "string",
-                description: "Runtime session key",
-              },
-              run_id: { type: "string", description: "Runtime execution ID" },
+              // M12/T9 F-041: `task_id`, `session_key` and `run_id` are the
+              // trusted runtime context's correlation identity, never
+              // model-fillable fields.
             },
             required: ["query", "namespace"],
           }
@@ -3602,29 +3761,31 @@ export function registerTools(api, options = {}) {
                 type: "boolean",
                 description: "Optional deep cross-encoder reranking",
               },
-              task_id: {
-                type: "string",
-                description: "Governed task correlation ID",
-              },
+              // M12/T9 F-041: `task_id` is the trusted runtime context's
+              // correlation identity, never a model-fillable field.
             },
             required: ["query", "namespace"],
           },
       async execute(_id, params) {
         const mod = await getKnowledgeAdapter();
         // O10: Pass context with task/agent/session identity (M8-061:
-        // trusted context only — payload never impersonates)
-        const ctx = {
-          sessionKey:
-            params?.session_key || _id?.sessionKey || "unbound-session",
-          runId: params?.run_id || _id?.runId || "unbound-run",
-          taskId: params?.task_id || _id?.taskId || "unbound-task",
-          requestingAgent: deriveTrustedRequester(_id),
-        };
+        // trusted context only - payload never impersonates)
+        // M12/T9 F-041: a payload correlation key is refused, never honoured.
+        const { input, refused, context } = deriveTrustedToolIdentity(
+          _id,
+          params,
+        );
+        for (const field of refused) {
+          api.logger?.warn?.(
+            `[zink-governance] memory tool payload correlation refused: field=${field}`,
+          );
+        }
+        const ctx = context;
         if (mod?.executeGovernedKnowledgeQuery) {
           const res = await mod.executeGovernedKnowledgeQuery(
             {
               action: "search",
-              ...params,
+              ...input,
             },
             ctx,
             {
@@ -3680,15 +3841,9 @@ export function registerTools(api, options = {}) {
                 type: "string",
                 description: "Justification for this new/updated skill",
               },
-              task_id: {
-                type: "string",
-                description: "Governed task correlation ID",
-              },
-              session_key: {
-                type: "string",
-                description: "Runtime session key",
-              },
-              run_id: { type: "string", description: "Runtime execution ID" },
+              // M12/T9 F-041: `task_id`, `session_key` and `run_id` are the
+              // trusted runtime context's correlation identity, never
+              // model-fillable fields.
             },
             required: [
               "namespace",
@@ -3723,10 +3878,8 @@ export function registerTools(api, options = {}) {
                 type: "string",
                 description: "Justification for this new/updated skill",
               },
-              task_id: {
-                type: "string",
-                description: "Governed task correlation ID",
-              },
+              // M12/T9 F-041: `task_id` is the trusted runtime context's
+              // correlation identity, never a model-fillable field.
             },
             required: [
               "namespace",
@@ -3739,19 +3892,23 @@ export function registerTools(api, options = {}) {
       async execute(_id, params) {
         const mod = await getSkillAdapter();
         // O11: Pass context with requesting agent and correlation identity
-        // (M8-061: trusted context only — payload never impersonates)
-        const ctx = {
-          sessionKey:
-            params?.session_key || _id?.sessionKey || "unbound-session",
-          runId: params?.run_id || _id?.runId || "unbound-run",
-          taskId: params?.task_id || _id?.taskId || "unbound-task",
-          requestingAgent: deriveTrustedRequester(_id),
-        };
+        // (M8-061: trusted context only - payload never impersonates)
+        // M12/T9 F-041: a payload correlation key is refused, never honoured.
+        const { input, refused, context } = deriveTrustedToolIdentity(
+          _id,
+          params,
+        );
+        for (const field of refused) {
+          api.logger?.warn?.(
+            `[zink-governance] memory tool payload correlation refused: field=${field}`,
+          );
+        }
+        const ctx = context;
         if (mod?.executeGovernedSkillQuery) {
           const res = await mod.executeGovernedSkillQuery(
             {
               action: "propose",
-              ...params,
+              ...input,
             },
             ctx,
             {
@@ -5445,9 +5602,38 @@ export default {
 
     async function maybePublishDiscordCard(event) {
       const childSessionKey = event.childSessionKey || "";
-      const agentIdMatch = childSessionKey.match(/^agent:([^:]+)/);
-      const agentId = agentIdMatch ? agentIdMatch[1] : null;
-      if (!["o1", "o2"].includes(agentId)) return;
+      // M12/T9 F-104: the account that opens an #approvals thread is the one
+      // the LEDGER assigned to this task. The event's child session key only
+      // ever CLAIMS an account; a claim that disagrees with the ledger is
+      // refused instead of silently re-routing the card to another bot.
+      const eventAgentId = childSessionKey.match(/^agent:([^:]+)/)?.[1] ?? null;
+      let ledgerOwner;
+      try {
+        ledgerOwner = findSession(
+          readSnapshot(paths),
+          childSessionKey,
+          event.childRunId,
+          true,
+        );
+      } catch {
+        ledgerOwner = null;
+      }
+      const account = resolveGovernedAnnouncementAccount({
+        owner: ledgerOwner,
+        eventAgentId,
+      });
+      if (account.status === "BLOCKED") {
+        api.logger?.warn?.(
+          `[zink-governance] approval card blocked: reason=${account.error}`,
+        );
+        return { status: "BLOCKED", error: account.error };
+      }
+      if (account.status === "NOT_APPLICABLE") {
+        // Not a coordinator announce: this seam has no approval card to
+        // publish, so the host's delivery decision is untouched.
+        return { status: "NOT_APPLICABLE", agentId: account.agentId };
+      }
+      const agentId = account.agentId;
 
       let findingsText = (event.findings || "").trim();
       if (findingsText.startsWith("```json")) {
@@ -5465,12 +5651,27 @@ export default {
       try {
         payload = JSON.parse(findingsText);
       } catch {
-        return;
+        // M12/T9 F-109: a governed card was expected and the payload could not
+        // be read, so the publish attempt ends in a NAMED refusal, never in
+        // silence.
+        api.logger?.warn?.(
+          "[zink-governance] approval card not published: the announce payload is not readable JSON",
+        );
+        return { status: "BLOCKED", error: "ANNOUNCE_DELIVERY_FAILED" };
       }
-      if (!payload?.output) return;
+      if (!payload?.output) {
+        api.logger?.warn?.(
+          "[zink-governance] approval card not published: the announce carries no governed output",
+        );
+        return { status: "BLOCKED", error: "ANNOUNCE_DELIVERY_FAILED" };
+      }
 
       const card = extractApprovalCard(payload.output);
-      if (!card) return;
+      if (!card) {
+        // The announce is not an approval card at all: the host's delivery
+        // decision stays the guard's.
+        return { status: "NOT_APPLICABLE", agentId };
+      }
 
       const approvalsForumId = resolveDiscordDestination(
         config,
@@ -5483,9 +5684,20 @@ export default {
         api.logger?.error?.(
           "[zink-governance] approval card not posted: no configured approvals forum",
         );
-        return;
+        return { status: "BLOCKED", error: "GOVERNANCE_DEPENDENCY_MISSING" };
       }
-      const token = resolveDiscordBotToken(agentId);
+      let token;
+      try {
+        token = resolveDiscordBotToken(agentId);
+      } catch {
+        // M12/T9 F-109: the account's credential is unavailable, so no card can
+        // be published. The refusal is named; the announce is not reported as
+        // delivered.
+        api.logger?.error?.(
+          "[zink-governance] approval card not posted: the account credential is unavailable",
+        );
+        return { status: "BLOCKED", error: "ANNOUNCE_DELIVERY_FAILED" };
+      }
 
       let bodyContent = card.content;
       if (!bodyContent.includes("[APPROVE]")) {
@@ -5591,7 +5803,14 @@ export default {
           api.logger?.info?.(
             `[zink-governance] approval already surfaced for task ${requestTaskId} in thread ${before.approval_thread_id}; no duplicate card`,
           );
-          return;
+          // The card IS published (an earlier attempt delivered it), so the
+          // verdict says so; the re-drive gate is what stops a second card.
+          return {
+            status: "PUBLISHED",
+            agentId,
+            taskId: requestTaskId,
+            threadId: before.approval_thread_id,
+          };
         }
         recordWorkflowEvent(paths, "WORKFLOW_APPROVAL_REQUESTED", {
           task_id: requestTaskId,
@@ -5610,7 +5829,7 @@ export default {
         api.logger?.warn?.(
           `[zink-governance] approval request NOT recorded; card suppressed: ${requestError?.message}`,
         );
-        return;
+        return { status: "BLOCKED", error: "ANNOUNCE_DELIVERY_FAILED" };
       }
 
       let surfaced;
@@ -5627,7 +5846,7 @@ export default {
         api.logger?.warn?.(
           `[zink-governance] Discord approval post exception: ${postError?.message}`,
         );
-        return;
+        return { status: "BLOCKED", error: "ANNOUNCE_DELIVERY_FAILED" };
       }
       if (!surfaced.posted) {
         // Nothing was advertised and the recorded request stands untouched: the owner gets
@@ -5636,26 +5855,21 @@ export default {
         api.logger?.warn?.(
           `[zink-governance] approval card not posted for task ${taskId}: ${surfaced.code}`,
         );
-        return;
+        return { status: "BLOCKED", error: "ANNOUNCE_DELIVERY_FAILED" };
       }
       const thread = { id: surfaced.threadId };
-      // M12/T2-R1: the thread exists, so the ledger must know. Without this record a
-      // retry cannot tell "already surfaced" from "never surfaced", and would either lose
-      // the card or open a second one for the same request.
-      try {
-        recordWorkflowEvent(paths, "WORKFLOW_APPROVAL_SURFACED", {
-          task_id: taskId,
-          channel: "approvals",
-          thread_id: thread.id,
-        });
-      } catch (surfaceError) {
-        api.logger?.error?.(
-          `[zink-governance] APPROVAL_SURFACE_UNRECORDED task=${taskId} thread=${thread.id} cause=${surfaceError?.message}`,
-        );
-      }
       // Native outbound: components travel through the official
       // OpenClaw 2026.6.34 Discord adapter. Only forum-thread
       // creation above remains raw REST (no verified native seam).
+      //
+      // M12/T9 F-107 + F-180: the DURABLE "surfaced" record is written only for
+      // a card the owner can ACT on. The interactive component IS the actionable
+      // part; if its delivery fails, the thread carries text the owner cannot
+      // approve, and a recorded `approval_thread_id` would refuse every later
+      // re-drive forever. So the record comes AFTER the component is delivered:
+      // a task whose component never arrived keeps `approval_thread_id` unset
+      // and the next attempt surfaces an actionable card.
+      let receipt;
       try {
         const buttonSpecs = components[0].components.map((button) => ({
           customId: button.custom_id,
@@ -5663,7 +5877,7 @@ export default {
           style: button.style,
           emoji: button.emoji,
         }));
-        const receipt = await sendNativePayload({
+        receipt = await sendNativePayload({
           api,
           to: thread.id,
           threadId: thread.id,
@@ -5684,7 +5898,26 @@ export default {
         api.logger?.error?.(
           `[zink-governance] Discord approval component delivery failed: ${deliveryErr?.message}`,
         );
+        // The thread exists but carries no actionable component, so the task
+        // stays re-drivable: nothing is recorded as SURFACED.
+        return { status: "BLOCKED", error: "ANNOUNCE_DELIVERY_FAILED" };
       }
+      // M12/T2-R1: the thread exists and the owner can act on it, so the ledger
+      // must know. Without this record a retry cannot tell "already surfaced"
+      // from "never surfaced", and would either lose the card or open a second
+      // one for the same request.
+      try {
+        recordWorkflowEvent(paths, "WORKFLOW_APPROVAL_SURFACED", {
+          task_id: taskId,
+          channel: "approvals",
+          thread_id: thread.id,
+        });
+      } catch (surfaceError) {
+        api.logger?.error?.(
+          `[zink-governance] APPROVAL_SURFACE_UNRECORDED task=${taskId} thread=${thread.id} cause=${surfaceError?.message}`,
+        );
+      }
+      return { status: "PUBLISHED", agentId, taskId, threadId: thread.id };
     }
 
     /**
@@ -6254,49 +6487,72 @@ export default {
     }
 
     /**
-     * M10/T2: production coordinator pickup loop. Exactly one scheduler
-     * instance per plugin registration: it scans authoritative ledger/queue
-     * state every PICKUP_SCAN_INTERVAL_MS, claims as the designated
-     * coordinator, records the ledger claim, starts the real coordinator turn
-     * through api.runtime.subagent.run, and then records the ledger binding.
-     * Started once below; stopped on gateway_stop. Never started when the
-     * ledger snapshot is absent, so a broken ledger cannot produce claims.
+     * M10/T2: production coordinator pickup loop. It scans authoritative
+     * ledger/queue state every PICKUP_SCAN_INTERVAL_MS, claims as the
+     * designated coordinator, records the ledger claim, starts the real
+     * coordinator turn through api.runtime.subagent.run, and then records the
+     * ledger binding. Stopped on gateway_stop.
+     *
+     * M12/T9 F-021 + F-075: TWO defects, one hub.
+     *
+     * F-075: the loop was created per `register()` with no process-level latch,
+     * so four loops were observed in ONE live process, all of them claiming
+     * against the same `defaultQueueManager` singleton. The loop is now latched
+     * per ledger scope in one process-global map: a second registration ATTACHES
+     * to the running loop instead of starting another, and the loop stops only
+     * when the LAST registration for that scope stops.
+     *
+     * F-021: the eligibility was a ONE-SHOT `existsSync(snapshot)` evaluated at
+     * `register()` time, so a snapshot created after the plugin loaded (a
+     * first install, or a guarded lock/snapshot recovery - exactly the state
+     * the owner's recovery procedures leave behind) left the coordinator lane
+     * permanently dark until a restart. The eligibility is now decided when
+     * work could be claimed: the reader answers "no tasks" while the snapshot
+     * is absent, so an absent snapshot still refuses to claim anything, and a
+     * snapshot that appears later starts the lane without a restart.
      */
     const coordinatorRuntime = createCoordinatorRuntimeStart({ api });
-    let coordinatorPickupLoop = null;
-    const ledgerSnapshotPresent = (() => {
-      try {
-        return existsSync(paths.snapshot);
-      } catch {
-        return false;
-      }
-    })();
-    if (ledgerSnapshotPresent) {
-      coordinatorPickupLoop = startCoordinatorPickupLoop({
-        queueManager: defaultQueueManager,
-        getLedgerTasks: () => readSnapshot(paths).tasks ?? {},
-        deriveTarget: deriveGovernedDispatchTarget,
-        recordClaimed: async ({ taskId: claimedTaskId, agentId }) => {
-          recordWorkflowEvent(paths, "WORKFLOW_TASK_CLAIMED", {
-            task_id: claimedTaskId,
-            agent_id: agentId,
-          });
-        },
-        recordBound: async (event) => {
-          recordWorkflowEvent(paths, "WORKFLOW_COORDINATOR_RUN_BOUND", event);
-        },
-        startCoordinatorRun: coordinatorRuntime.startCoordinatorRun,
-        isRuntimeStartAvailable: coordinatorRuntime.isRuntimeStartAvailable,
-        intervalMs: PICKUP_SCAN_INTERVAL_MS,
-        logger: api.logger,
-      });
-      coordinatorPickupLoop.start();
-      api.logger?.info?.("[zink-governance] coordinator pickup loop started");
-    } else {
-      api.logger?.error?.(
-        "[zink-governance] coordinator pickup not started: ledger snapshot missing",
-      );
+    const pickupLoopsKey = Symbol.for(
+      "zink.governance.coordinator.pickup.loops",
+    );
+    if (!globalThis[pickupLoopsKey]) {
+      Object.defineProperty(globalThis, pickupLoopsKey, { value: new Map() });
     }
+    const pickupLoops = globalThis[pickupLoopsKey];
+    const pickupScope = path.resolve(String(config.ledgerRoot ?? ""));
+    let pickupEntry = pickupLoops.get(pickupScope);
+    if (!pickupEntry) {
+      pickupEntry = {
+        registrations: 0,
+        loop: startCoordinatorPickupLoop({
+          queueManager: defaultQueueManager,
+          getLedgerTasks: () => readPickupLedgerTasks({ paths }),
+          deriveTarget: deriveGovernedDispatchTarget,
+          recordClaimed: async ({ taskId: claimedTaskId, agentId }) => {
+            recordWorkflowEvent(paths, "WORKFLOW_TASK_CLAIMED", {
+              task_id: claimedTaskId,
+              agent_id: agentId,
+            });
+          },
+          recordBound: async (event) => {
+            recordWorkflowEvent(paths, "WORKFLOW_COORDINATOR_RUN_BOUND", event);
+          },
+          startCoordinatorRun: coordinatorRuntime.startCoordinatorRun,
+          isRuntimeStartAvailable: coordinatorRuntime.isRuntimeStartAvailable,
+          intervalMs: PICKUP_SCAN_INTERVAL_MS,
+          logger: api.logger,
+        }),
+      };
+      pickupLoops.set(pickupScope, pickupEntry);
+    }
+    pickupEntry.registrations += 1;
+    const coordinatorPickupLoop = pickupEntry.loop;
+    coordinatorPickupLoop.start();
+    api.logger?.info?.(
+      pickupEntry.registrations === 1
+        ? "[zink-governance] coordinator pickup loop started"
+        : "[zink-governance] coordinator pickup loop already running for this ledger scope; attached",
+    );
 
     const unregister = registerNativeGuard(paths.root, {
       // M10/T2-R8: the PURE direct-intake predicate, evaluated at the Discord
@@ -7046,16 +7302,17 @@ export default {
           }
 
           let isPreAdmittedFixture = false;
+          let fixtureOwner = null;
           if (parsedProposal?.node_id && parsedProposal?.inputs) {
             try {
               const currentSnapshot = readSnapshot(paths);
-              const testOwner = findSession(
+              fixtureOwner = findSession(
                 currentSnapshot,
                 context.sessionKey,
                 context.runId,
               );
               if (
-                testOwner?.task?.nodes?.some(
+                fixtureOwner?.task?.nodes?.some(
                   (n) =>
                     n.node_id === parsedProposal.node_id &&
                     n.agent_id === event.params?.agentId,
@@ -7064,12 +7321,39 @@ export default {
                 isPreAdmittedFixture = true;
               }
             } catch {
+              // M12/T9 F-079: an unreadable ledger is not a fixture: the branch
+              // is skipped and the canonical path decides. The refusal is
+              // never swallowed into "this is a fixture".
               isPreAdmittedFixture = false;
+              fixtureOwner = null;
             }
           }
 
           if (isPreAdmittedFixture) {
-            const decision = await guard.beforeToolCall(event, context, signal);
+            let decision;
+            try {
+              decision = await guard.beforeToolCall(event, context, signal);
+            } catch (gateError) {
+              // M12/T9 F-079: this branch must never be a DEAD END. The guard
+              // refuses with AUTH_APPROVAL_REQUIRED when the owner still has to
+              // approve; the canonical path answers that refusal with the
+              // first-approval surface (the request plus the card), so this
+              // branch answers it the SAME way. Otherwise a model-supplied
+              // node id could skip the approval surface entirely and the task
+              // would wait for an approval nobody was ever asked for.
+              if (gateError?.message === "AUTH_APPROVAL_REQUIRED") {
+                await requestFirstSpawnApproval({
+                  ownerTaskId: fixtureOwner?.task_id,
+                  briefRevision: fixtureOwner?.task?.brief_revision ?? 1,
+                  targetAgentId: event.params?.agentId,
+                  spawnInputs: sanitizeDelegationText(
+                    parsedProposal?.inputs ?? "",
+                  ),
+                  spawnNodeId: parsedProposal?.node_id,
+                });
+              }
+              throw gateError;
+            }
             if (decision?.allow) {
               const params = decision.spawnLabel
                 ? {
@@ -7413,13 +7697,29 @@ export default {
       async beforeAnnounce(event, context, signal) {
         const decision = await guard.beforeAnnounce(event, context, signal);
         if (decision?.action === "deliver") {
+          // M12/T9 F-109: the publish verdict is READ, never discarded. Every
+          // path in which a governed approval card was not published yields a
+          // verdict, the verdict is recorded, and the host is never told the
+          // announcement was delivered when the card never left the process.
+          let verdict;
           try {
-            await maybePublishDiscordCard(event);
+            verdict = await maybePublishDiscordCard(event);
           } catch (pubErr) {
             api.logger?.warn?.(
               `[zink-governance] Discord card publish warning: ${pubErr?.message}`,
             );
+            verdict = { status: "BLOCKED", error: "ANNOUNCE_DELIVERY_FAILED" };
           }
+          if (verdict?.status === "BLOCKED") {
+            api.logger?.warn?.(
+              `[zink-governance] approval card not published: reason=${verdict.error}`,
+            );
+          } else if (verdict && verdict.status !== "PUBLISHED") {
+            api.logger?.info?.(
+              `[zink-governance] no governed approval card in this announce (status=${verdict.status})`,
+            );
+          }
+          return resolveAnnouncePublishDecision({ decision, verdict });
         }
         return decision;
       },
@@ -7611,13 +7911,21 @@ export default {
       for (const check of [...startingRuns]) check(true);
       // M12/T9 F-042: only this registration's leases are revoked.
       clearScopeLeases();
-      try {
-        coordinatorPickupLoop?.stop();
-      } catch {
-        // Shutdown must not throw: the loop holds no authority and the queue
-        // persists independently.
+      // M12/T9 F-075: the pickup loop is shared by every registration for this
+      // ledger scope, so it stops only when the LAST one stops. One
+      // registration's shutdown must not silence another's lane.
+      if (pickupEntry) {
+        pickupEntry.registrations = Math.max(0, pickupEntry.registrations - 1);
+        if (pickupEntry.registrations === 0) {
+          try {
+            pickupEntry.loop?.stop();
+          } catch {
+            // Shutdown must not throw: the loop holds no authority and the queue
+            // persists independently.
+          }
+          pickupLoops.delete(pickupScope);
+        }
       }
-      coordinatorPickupLoop = null;
       unregister();
     });
     api.on("before_tool_call", (event, context = {}) => {
@@ -7811,7 +8119,9 @@ export default {
         replayedTaskId ??
         mintTaskId({
           date: new Date(),
-          random: () => Math.floor(Math.random() * TASK_CODE_ALPHABET.length),
+          // M12/T9 F-227: the code IS the identity, so it is minted from a
+          // cryptographic byte source, never from the ambient PRNG.
+          random: createTaskCodeRandomSource(),
           isTaken: (candidate) =>
             Object.hasOwn(currentSnapshot?.tasks ?? {}, candidate) ||
             Object.values(currentSnapshot?.tasks ?? {}).some(

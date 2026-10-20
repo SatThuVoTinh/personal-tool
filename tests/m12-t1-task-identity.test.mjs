@@ -35,9 +35,12 @@ import {
   loadReasonPolicy,
 } from "../integrations/openclaw/topology/lib/runtime.mjs";
 import {
+  createTaskCodeRandomSource,
   deriveGovernedDispatchTarget,
+  deriveTrustedToolIdentity,
   findTaskByOriginBinding,
   mintUserPrincipalRef,
+  registerTools,
 } from "../integrations/openclaw/plugins/zink-governance/index.mjs";
 import { derivePrincipalRef } from "../integrations/openclaw/topology/lib/canonical.mjs";
 import { ledgerPaths } from "../integrations/openclaw/topology/lib/ledger.mjs";
@@ -1031,6 +1034,152 @@ describe("M12/T9 - F-108: the parent agent is declared once", () => {
         }),
       { code: "SCHEMA_VALIDATION_FAILED" },
       "a specialist has no spawn targets and can never be a parent",
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M12/T9 F-041 - a memory tool never takes its correlation identity from the payload
+// ---------------------------------------------------------------------------
+
+describe("M12/T9 F-041: a memory tool never takes its correlation identity from the payload", () => {
+  const pluginSource = () =>
+    readFileSync(
+      new URL(
+        "../integrations/openclaw/plugins/zink-governance/index.mjs",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+
+  it("keeps the trusted identity and refuses the payload's correlation keys", () => {
+    const { input, refused, context } = deriveTrustedToolIdentity(
+      {
+        sessionKey: "agent:excel:trusted-session",
+        runId: "trusted-run",
+        taskId: "trusted-task",
+        agentId: "excel",
+      },
+      {
+        query: "quarterly revenue",
+        namespace: "finance",
+        session_key: "impostor-session",
+        run_id: "impostor-run",
+        task_id: "impostor-task",
+      },
+    );
+    assert.equal(context.sessionKey, "agent:excel:trusted-session");
+    assert.equal(context.runId, "trusted-run");
+    assert.equal(context.taskId, "trusted-task");
+    assert.equal(context.requestingAgent, "excel");
+    assert.deepEqual(
+      Object.keys(input).sort(),
+      ["namespace", "query"],
+      "the payload's correlation keys never reach the adapter input",
+    );
+    assert.deepEqual(
+      [...refused].sort(),
+      ["run_id", "session_key", "task_id"],
+      "every refused correlation key is named",
+    );
+  });
+
+  it("never advertises a model-fillable correlation field", () => {
+    const tools = [];
+    registerTools({
+      registerTool: (definition) => tools.push(definition),
+      pluginConfig: {},
+      logger: {},
+    });
+    for (const name of [
+      "zink_skill_search",
+      "zink_knowledge_search",
+      "zink_skill_propose",
+    ]) {
+      const tool = tools.find((entry) => entry.name === name);
+      assert.ok(tool, `${name} is registered`);
+      const properties = tool.parameters?.properties ?? {};
+      for (const field of ["session_key", "run_id", "task_id"]) {
+        assert.equal(
+          Object.hasOwn(properties, field),
+          false,
+          `${name} must not advertise ${field}: the identity is the trusted context`,
+        );
+      }
+    }
+  });
+
+  it("never reads a correlation key out of the tool payload", () => {
+    const source = pluginSource();
+    // The three memory/skill executors live between the first and the fourth
+    // tool definition; the correlation rule is scoped to them.
+    const memoryTools = source.slice(
+      source.indexOf("zink_skill_search: {"),
+      source.indexOf("zink_excel: {"),
+    );
+    assert.ok(memoryTools.length > 0, "the memory-tool region must exist");
+    for (const pattern of [
+      /params\?\.session_key/u,
+      /params\?\.run_id/u,
+      /params\?\.task_id/u,
+    ]) {
+      assert.equal(
+        pattern.test(memoryTools),
+        false,
+        `the plugin must not read a correlation key from the payload (${pattern})`,
+      );
+    }
+    // Every memory-tool executor derives its identity through the ONE helper,
+    // so a fourth executor cannot reintroduce a second rule.
+    assert.equal(
+      (source.match(/deriveTrustedToolIdentity\(/gu) || []).length,
+      4,
+      "one definition and one call per memory-tool executor",
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M12/T9 F-227 - the owner-visible task code is minted from a cryptographic source
+// ---------------------------------------------------------------------------
+
+describe("M12/T9 F-227: the owner-visible task code is minted from a cryptographic source", () => {
+  it("does not use the ambient PRNG, even when it is pinned to a constant", () => {
+    const original = Math.random;
+    Math.random = () => 0.5;
+    try {
+      const source = createTaskCodeRandomSource();
+      const picks = new Set();
+      for (let index = 0; index < 64; index += 1) picks.add(source(index));
+      assert.ok(
+        picks.size > 1,
+        "a pinned Math.random must not be able to freeze the task code",
+      );
+      for (const pick of picks) {
+        assert.ok(
+          Number.isInteger(pick) &&
+            pick >= 0 &&
+            pick < TASK_CODE_ALPHABET.length,
+          `the pick must stay inside the alphabet: ${pick}`,
+        );
+      }
+    } finally {
+      Math.random = original;
+    }
+  });
+
+  it("never mints a task code from Math.random", () => {
+    const source = readFileSync(
+      new URL(
+        "../integrations/openclaw/plugins/zink-governance/index.mjs",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    assert.equal(
+      /Math\.random\(\)/u.test(source),
+      false,
+      "a governance identity must not come from a non-cryptographic PRNG",
     );
   });
 });
