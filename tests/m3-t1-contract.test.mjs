@@ -183,7 +183,12 @@ test("M3/T1 recovers orphan runs and holds an advisory lock for background work"
 test("M3/T1 acceptance validates readiness and cleans only its isolated project", () => {
   const script = readFileSync(validationPath, "utf8");
 
-  assert.match(script, /\$projectName = "personal-tool-m3-t1"/);
+  // F-290 (R7-C4-03): the acceptance project is namespaced per run, so two
+  // invocations cannot share a volume and a rerun cannot meet the state an
+  // earlier run left behind.
+  assert.match(script, /\$projectName = "personal-tool-m3-t1-\$runId"/);
+  assert.match(script, /New-AcceptanceRunId/);
+  assert.match(script, /New-AcceptanceFixtureUuid/);
   assert.match(script, /"build", "knowledge"/);
   assert.match(script, /"knowledge",\s*"nginx"/);
   assert.match(script, /NO_ACTIVE_INDEX/);

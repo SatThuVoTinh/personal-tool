@@ -6,7 +6,13 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-$projectName = "personal-tool-m3-t1"
+# F-290 (R7-C4-03): everything a run owns is derived from a per-run
+# identifier: the compose project (and with it the network, the volumes and
+# the container names), the fixture row identities, and the host port the
+# acceptance stack binds. A rerun therefore cannot meet the state an earlier
+# run left behind, and two overlapping runs cannot share a volume.
+$runId = New-AcceptanceRunId
+$projectName = "personal-tool-m3-t1-$runId"
 $scriptDirectory = Split-Path -Parent $PSCommandPath
 $dockerDirectory = Split-Path -Parent $scriptDirectory
 $composeFile = Join-Path $dockerDirectory "compose\compose.core.yml"
