@@ -1019,6 +1019,51 @@ describe("M12/T9 - F-159: one refusal classifier for both operator drivers", () 
   });
 });
 
+describe("M12/T9 - F-182: the apply reloads the unit and verifies the LOADED definition", () => {
+  const repoFile = (relative) =>
+    fileURLToPath(new URL(`../${relative}`, import.meta.url));
+
+  test("F-182: the reload happens before the restart and the loaded unit is verified", () => {
+    const source = fs.readFileSync(
+      repoFile(
+        "integrations/openclaw/topology/fixtures/runtime-regression/operator-apply.mjs",
+      ),
+      "utf8",
+    );
+    const reload = source.indexOf('"daemon-reload"');
+    const restart = source.indexOf('"restart", service');
+    assert.ok(
+      reload !== -1,
+      "the apply must reload the unit manager before it restarts the unit",
+    );
+    assert.ok(restart !== -1);
+    assert.ok(
+      reload < restart,
+      "the reload must happen BEFORE the restart, or the restart keeps the old definition",
+    );
+    assert.ok(
+      source.includes('"--property=MemoryMax"'),
+      "the post-apply check must read the LOADED unit, not only the on-disk bytes",
+    );
+    assert.ok(
+      source.includes("GATEWAY_UNIT_NOT_RELOADED"),
+      "a unit that is not the loaded definition must be named",
+    );
+  });
+
+  test("F-182: the refusal is named by the shared classifier", async () => {
+    const { classifyRefusal } =
+      await import("../integrations/openclaw/topology/fixtures/runtime-regression/refusal-classifier.mjs");
+    assert.equal(
+      classifyRefusal(
+        { stderr: "GATEWAY_UNIT_NOT_RELOADED", message: "", code: "" },
+        "PREFLIGHT_REJECTED",
+      ),
+      "GATEWAY_UNIT_NOT_RELOADED",
+    );
+  });
+});
+
 describe("M12/T9 - F-157: one derivation per concept", () => {
   const repoFile = (relative) =>
     fileURLToPath(new URL(`../${relative}`, import.meta.url));
