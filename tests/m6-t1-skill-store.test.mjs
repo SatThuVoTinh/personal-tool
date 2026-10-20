@@ -589,18 +589,39 @@ test(
   },
 );
 
-test(
-  "treats a Windows junction as a separately covered rejected link",
-  { skip: process.platform !== "win32" },
-  async () => {
-    await temporaryStore(async (root) => {
-      const target = path.join(root, "target");
-      mkdirSync(target);
-      symlinkSync(target, path.join(root, "supply-chain"), "junction");
-      assert.notEqual((await catalog(root)).errors.length, 0);
-    });
-  },
-);
+// This scenario used to be Windows-only (`{ skip: process.platform !== "win32" }`),
+// which meant no enforced lane ever executed it: the CI lane runs on ubuntu,
+// where the case was reported as a skip. The link this case exercises is a
+// symlinked skill directory, and the catalog refuses one through `lstat`
+// (`isSymbolicLink()`), which is the same check on every platform — so the
+// scenario is expressible everywhere with the platform's directory-link type.
+// Running it on every lane is the lane-independent equivalent the finding
+// asks for: the ubuntu CI lane now executes the case instead of skipping it.
+test("treats a symlinked skill directory as a separately covered rejected link", async () => {
+  await temporaryStore(async (root) => {
+    const target = mkdtempSync(path.join(tmpdir(), "zink-skill-target-"));
+    try {
+      // The link points at a VALID skill tree, so the same tree copied in
+      // place would be accepted and the only reason for a refusal is the
+      // link itself. A refusal that any invalid directory also produces
+      // would prove nothing about link coverage.
+      writeSkill(target, {});
+      symlinkSync(
+        path.join(target, "supply-chain"),
+        path.join(root, "supply-chain"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+      const errors = (await catalog(root)).errors;
+      assert.notEqual(errors.length, 0);
+      assert.ok(
+        errors.some((error) => error.path.endsWith("supply-chain")),
+        `the refusal must name the symlinked entry, got: ${JSON.stringify(errors)}`,
+      );
+    } finally {
+      rmSync(target, { force: true, recursive: true });
+    }
+  });
+});
 
 test("fails closed when another catalog record is invalid", async () => {
   await temporaryStore(async (root) => {
