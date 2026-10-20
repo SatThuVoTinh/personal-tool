@@ -476,6 +476,39 @@ export function skillApprovalFilePath(proposalStorageDir, proposalId) {
   return `${proposalFile}.approval.json`;
 }
 
+/**
+ * M12/T9 F-296: flush a directory's own entries.
+ *
+ * A rename is only durable once the PARENT DIRECTORY's entry for the new name
+ * has been flushed. The renamed file's own fsync does not do that: it makes
+ * the file's CONTENT durable, while the directory entry that makes the name
+ * visible survives a crash only if the directory itself was synced. The
+ * publication path below therefore fsyncs the file, renames it, and then
+ * fsyncs the parent directory - and it does so at EVERY rename site, because
+ * a rename without the directory flush can leave a durable file that no
+ * directory points at.
+ *
+ * The pattern is the one `topology/lib/runtime-backup.mjs` already uses.
+ * Windows cannot fsync a directory handle, so the platform error is swallowed
+ * there; every other error is re-thrown, because a publication that cannot
+ * guarantee its own durability must fail loudly rather than pretend.
+ */
+function syncDirectory(directory) {
+  let fd;
+  try {
+    fd = openSync(directory, "r");
+    fsyncSync(fd);
+  } catch (error) {
+    if (
+      process.platform !== "win32" ||
+      !["EPERM", "EISDIR", "EINVAL", "ENOTSUP"].includes(error.code)
+    )
+      throw error;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
 function writeJsonAtomicSync(filePath, value) {
   mkdirSync(path.dirname(filePath), { recursive: true });
   const tmp = `${filePath}.tmp-${process.pid}-${Date.now()}-${randomBytes(4).toString("hex")}`;
@@ -487,6 +520,10 @@ function writeJsonAtomicSync(filePath, value) {
     closeSync(fd);
   }
   renameSync(tmp, filePath);
+  // F-296: the rename is not crash-durable until the parent directory entry
+  // is flushed. Every rename site in this file goes through this helper, so
+  // there is exactly one place where the durability step can be removed.
+  syncDirectory(path.dirname(filePath));
 }
 
 function readJsonStrictSync(filePath) {
