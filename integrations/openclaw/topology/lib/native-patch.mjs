@@ -16,6 +16,11 @@ import {
 import path from "node:path";
 import process from "node:process";
 import { URL } from "node:url";
+// M12/T9 F-185: the backup manifest's governance revision comes from the one
+// authoritative source, and the revision a manifest may carry is the SAME
+// rule the runtime-backup manifest uses - one declaration, two manifests.
+import { GOVERNANCE_VERSION } from "./canonical.mjs";
+import { isWrittenGovernanceVersion } from "./runtime-backup.mjs";
 
 // The OpenClaw releases this patch is verified against, keyed BY VERSION.
 //
@@ -1080,7 +1085,9 @@ export function checkNativePatch(input) {
 export function nativeBackupManifest(input) {
   const roots = nativeRoots(input);
   return {
-    version: "m7-t2-r12",
+    // M12/T9 F-185: the revision that captured these bytes, from the one
+    // authoritative source - never a frozen literal.
+    version: GOVERNANCE_VERSION,
     runtime_root: path.resolve(roots.runtimeRoot),
     // The Discord channel package root the backup was taken from, or null when
     // the caller patched runtime artifacts only. A restore must resolve the SAME
@@ -1133,7 +1140,9 @@ function ensureNativeBackup(backupRoot, roots, inspection, version) {
     : null;
   if (
     manifest &&
-    (manifest.version !== "m7-t2-r12" ||
+    // M12/T9 F-185: any revision the machinery wrote is accepted, so a
+    // manifest written under an earlier revision still extends and restores.
+    (!isWrittenGovernanceVersion(manifest.version) ||
       manifest.runtime_root !== path.resolve(roots.runtimeRoot) ||
       manifest.runtime_version !== version)
   )
@@ -1286,7 +1295,9 @@ export function restoreNativePatch(input, backupRoot) {
     readFileSync(path.join(backupRoot, "manifest.json"), "utf8"),
   );
   if (
-    manifest.version !== "m7-t2-r12" ||
+    // M12/T9 F-185: any revision the machinery wrote is accepted, so a
+    // manifest written before the constant moved on still restores.
+    !isWrittenGovernanceVersion(manifest.version) ||
     manifest.runtime_root !== path.resolve(root) ||
     (manifest.discord_channel_root ?? null) !==
       (roots.discordChannelRoot

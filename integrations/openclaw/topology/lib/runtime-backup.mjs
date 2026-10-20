@@ -20,9 +20,12 @@ import process from "node:process";
 import {
   AGENT_IDS,
   buildConfig,
+  governancePluginFiles,
   stableJson,
   validateConfig,
 } from "../../lib/policy.mjs";
+import { GOVERNANCE_VERSION } from "./canonical.mjs";
+import { SUPPORTED_GOVERNANCE_VERSIONS } from "./ledger.mjs";
 
 const T1_SHA = "997b6ce221072eea06a969218a8e2e49ebee1dcc";
 const T1_POLICY_SHA256 =
@@ -71,25 +74,122 @@ function writeNew(file, body) {
   }
   syncDirectory(path.dirname(file));
 }
+/**
+ * M12/T9 F-185: the governance revisions a backup manifest may carry.
+ *
+ * The revision a manifest RECORDS is the authoritative constant
+ * (`GOVERNANCE_VERSION`, `topology/lib/canonical.mjs`): it is the revision the
+ * machinery that captured those bytes was running, so the restore evidence
+ * attributes the bytes to the revision that produced them.
+ *
+ * The revisions a manifest may CARRY are every revision the machinery
+ * actually wrote: the published lineage (`SUPPORTED_GOVERNANCE_VERSIONS`,
+ * derived from the ledger-event contract - the one declaration of the
+ * governance versions this repository publishes) plus the current
+ * authoritative revision. So a manifest written under an earlier revision
+ * still restores, and bumping the constant never retroactively invalidates a
+ * real written manifest - which is exactly what a frozen literal did.
+ */
+export function isWrittenGovernanceVersion(value) {
+  return (
+    typeof value === "string" &&
+    (value === GOVERNANCE_VERSION ||
+      SUPPORTED_GOVERNANCE_VERSIONS.includes(value))
+  );
+}
+
+/**
+ * M12/T9 F-369: the pre-apply ceremony refuses a NESTED governance root.
+ *
+ * A caller that passed the ledger root as the state root minted a second,
+ * empty, permission-valid governance root INSIDE the real one
+ * (`<state>/operator/m7-t2/ledger/operator/m7-t2/ledger/`). The live host
+ * still carries that artifact, and nothing in the apply ceremony noticed: the
+ * real ledger reads intact while a second root sits beside it, and every
+ * reader of the state root has to decide which one is the truth.
+ *
+ * The ledger's own `LEDGER_ROOT_ALREADY_JOINED` guard refuses a state root
+ * that already ends with the ledger suffix, but it runs in the plugin, at
+ * runtime - after the ceremony has already shaped the tree. This refusal runs
+ * in the ceremony itself, before any write: a nested ledger root inside the
+ * real one is an operator decision (the artifact is live state; removing it is
+ * not this ceremony's to do), so the ceremony fails closed and names it.
+ */
+function assertNoNestedLedgerRoot(stateDir) {
+  const nested = path.join(
+    stateDir,
+    "operator",
+    "m7-t2",
+    "ledger",
+    "operator",
+    "m7-t2",
+    "ledger",
+  );
+  if (!existsSync(nested)) return;
+  const holdsLedger =
+    existsSync(path.join(nested, "events.jsonl")) ||
+    existsSync(path.join(nested, "snapshot.json"));
+  if (!holdsLedger) return;
+  throw new Error(`BACKUP_NESTED_LEDGER_ROOT_PRESENT: ${nested}`);
+}
+
+/**
+ * M12/T9 F-131: the deployed asset set, DERIVED from the packager.
+ *
+ * The enumerator used to carry its own hand-written list of what a plugin
+ * tree may contain - four root files and a name pattern per directory - while
+ * the packager (`governancePluginFiles()`) ships a different, larger set. Every
+ * governed asset the enumerator did not know was therefore an unexplained
+ * hard failure of `configure.mjs --apply` and of the rollback in
+ * `restoreT1RuntimeFiles`, and the rollback guard fired before the quarantine
+ * move, so the tree could not even be rolled back.
+ *
+ * The list is now the packager's own: the files it deploys, the three files
+ * it writes beside them, and the directories those files live in. Adding a
+ * governed asset - a new `lib/` module, a runtime module that travels in
+ * `zink-skill-store/` or `zink-tools/`, a contract - can no longer fail the
+ * enumerator, because the enumerator asks the packager what it ships.
+ *
+ * Symlinks are still refused, and anything OUTSIDE the deployed set is still
+ * refused - the refusal now names the offending relative path, so an operator
+ * sees which file to act on instead of a bare code.
+ */
+let governedAssetSet = null;
+function governedPluginAssets() {
+  if (governedAssetSet) return governedAssetSet;
+  const { assets } = governancePluginFiles();
+  const files = new Set([
+    ...Object.keys(assets),
+    // The three files the packager writes beside the assets it materializes.
+    "index.mjs",
+    "openclaw.plugin.json",
+    "package.json",
+  ]);
+  const directories = new Set();
+  for (const file of files) {
+    const parts = file.split("/");
+    for (let index = 1; index < parts.length; index += 1)
+      directories.add(parts.slice(0, index).join("/"));
+  }
+  governedAssetSet = { files, directories };
+  return governedAssetSet;
+}
 function pluginFiles(root, relative = "") {
   if (!existsSync(root)) return [];
   noLinks(root);
+  const { files, directories } = governedPluginAssets();
   return readdirSync(path.join(root, relative), { withFileTypes: true })
     .flatMap((entry) => {
       const name = relative ? `${relative}/${entry.name}` : entry.name;
-      if (entry.isSymbolicLink()) throw new Error("BACKUP_SYMLINK_DENIED");
+      if (entry.isSymbolicLink())
+        throw new Error(`BACKUP_SYMLINK_DENIED: ${name}`);
       if (entry.isDirectory()) {
-        if (!["lib", "contracts", "policy"].includes(name))
-          throw new Error("BACKUP_UNEXPECTED_PLUGIN_CONTENT");
+        if (!directories.has(name))
+          throw new Error(`BACKUP_UNEXPECTED_PLUGIN_CONTENT: ${name}`);
         return pluginFiles(root, name);
       }
-      if (
-        !entry.isFile() ||
-        !/^(?:index\.mjs|package\.json|openclaw\.plugin\.json|governance-manifests\.json|lib\/[a-z-]+\.mjs|contracts\/[a-z-]+\.schema\.json|policy\/[a-z-]+\.json)$/u.test(
-          name,
-        )
-      )
-        throw new Error("BACKUP_UNEXPECTED_PLUGIN_CONTENT");
+      if (!entry.isFile() || !files.has(name))
+        throw new Error(`BACKUP_UNEXPECTED_PLUGIN_CONTENT: ${name}`);
       return [name];
     })
     .sort();
@@ -181,6 +281,9 @@ export function runtimeBackupPath(stateDir) {
 export async function createRuntimeBackup({ stateDir, identifiers }) {
   if (!path.isAbsolute(stateDir))
     throw new Error("BACKUP_ABSOLUTE_PATH_REQUIRED");
+  // M12/T9 F-369: the ceremony refuses a nested governance root BEFORE it
+  // shapes or writes anything.
+  assertNoNestedLedgerRoot(stateDir);
   const root = runtimeBackupPath(stateDir);
   noLinks(root);
   if (existsSync(root)) {
@@ -258,7 +361,9 @@ export async function createRuntimeBackup({ stateDir, identifiers }) {
       writeNew(path.join(root, "preimages", entry.relative), entry.body);
   const manifest = {
     schema_version: "1.0.0",
-    governance_version: "m7-t2-r12",
+    // M12/T9 F-185: the revision that captured these bytes, from the one
+    // authoritative source - never a frozen literal.
+    governance_version: GOVERNANCE_VERSION,
     t1_sha: T1_SHA,
     t1_policy_source_digest: T1_POLICY_SHA256,
     t1_config_digest: digest(stableJson(fallback)),
@@ -303,7 +408,10 @@ export async function verifyRuntimeBackup({ stateDir, identifiers }) {
   noLinks(manifestPath);
   const manifest = parseJson(readFileSync(manifestPath, "utf8"));
   if (
-    manifest.governance_version !== "m7-t2-r12" ||
+    // M12/T9 F-185: the manifest may carry ANY revision the machinery wrote,
+    // so a manifest written under an earlier revision still restores and
+    // bumping the authoritative constant never invalidates real evidence.
+    !isWrittenGovernanceVersion(manifest.governance_version) ||
     manifest.t1_sha !== T1_SHA ||
     manifest.t1_policy_source_digest !== T1_POLICY_SHA256 ||
     !Array.isArray(manifest.files)
@@ -323,13 +431,18 @@ export async function verifyRuntimeBackup({ stateDir, identifiers }) {
     stateDir,
     identifiers,
   });
+  // M12/T9 F-131: the manifest may only name the files the packager deploys
+  // (plus the config and the workspace instructions), derived from the same
+  // source the enumerator uses.
+  const pluginPrefix = "extensions/zink-governance/";
+  const { files: governedFiles } = governedPluginAssets();
   for (const entry of manifest.files) {
-    if (
-      !/^(?:openclaw\.json|workspaces\/(?:main|o1|o2|excel|power-bi|sql|python)\/AGENTS\.md|extensions\/zink-governance\/(?:index\.mjs|package\.json|openclaw\.plugin\.json|governance-manifests\.json|lib\/[a-z-]+\.mjs|contracts\/[a-z-]+\.schema\.json|policy\/[a-z-]+\.json))$/u.test(
-        entry.relative,
-      )
-    )
-      throw new Error("BACKUP_TARGET_DENIED");
+    const governed =
+      entry.relative === "openclaw.json" ||
+      AGENT_IDS.some((id) => entry.relative === `workspaces/${id}/AGENTS.md`) ||
+      (entry.relative.startsWith(pluginPrefix) &&
+        governedFiles.has(entry.relative.slice(pluginPrefix.length)));
+    if (!governed) throw new Error(`BACKUP_TARGET_DENIED: ${entry.relative}`);
     if (!entry.existed) continue;
     const file = path.join(root, "preimages", entry.relative);
     noLinks(file);
