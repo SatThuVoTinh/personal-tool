@@ -244,7 +244,40 @@ function assertNamespaceBinding(servedNamespace, requestedNamespace, skillId) {
   );
 }
 /**
- * Atomically persists one JSON record: temp file, write, fsync, rename.
+ * F-296 (R7-C5-04): fsync the PARENT DIRECTORY after a rename.
+ *
+ * A rename is only durable once the directory entry that carries it is
+ * flushed. The file's own fsync flushes the BYTES; the directory entry that
+ * names them is a separate record, so a crash right after the rename can
+ * still revert the publication to the pre-rename file. For this writer that
+ * reverted file is the owner's recorded decision about a governed skill.
+ *
+ * The sibling writers in this repository (`topology/lib/ledger.mjs`,
+ * `lib/queue-manager.mjs`, `lib/decision-ledger.mjs`,
+ * `lib/artifact-validator.mjs`) all fsync the parent directory for exactly
+ * this reason. Windows cannot fsync a directory handle, so the platform error
+ * is tolerated there and only there, exactly as the sibling writers do.
+ */
+function syncDirectory(directory) {
+  let directoryFd;
+  try {
+    directoryFd = fs.openSync(directory, "r");
+    fs.fsyncSync(directoryFd);
+  } catch (error) {
+    if (
+      process.platform !== "win32" ||
+      !["EPERM", "EISDIR", "EINVAL", "ENOTSUP"].includes(error?.code)
+    ) {
+      throw error;
+    }
+  } finally {
+    if (directoryFd !== undefined) fs.closeSync(directoryFd);
+  }
+}
+
+/**
+ * Atomically persists one JSON record: temp file, write, fsync, rename,
+ * parent-directory fsync.
  * A partially written file is never treated as a valid proposal.
  */
 function writeJsonAtomicSync(filePath, value) {
@@ -258,6 +291,10 @@ function writeJsonAtomicSync(filePath, value) {
     fs.closeSync(fd);
   }
   fs.renameSync(tmp, filePath);
+  // The rename is atomic, not durable: without this the directory entry can
+  // still be lost on a crash and the publication reverts to the previous
+  // proposal record.
+  syncDirectory(path.dirname(filePath));
 }
 
 function readProposalRecordSync(filePath) {
