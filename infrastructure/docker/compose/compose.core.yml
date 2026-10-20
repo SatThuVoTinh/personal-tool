@@ -206,6 +206,10 @@ services:
       - platform
 
 networks:
+  # The shared platform network, declared in
+  # infrastructure/networking/networks.yml and consumed here by that shared
+  # name. The Docker network is project scoped (<project>_platform), so the
+  # acceptance stacks stay isolated from the live stack.
   platform:
     driver: bridge
 

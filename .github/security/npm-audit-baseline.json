@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-10-19",
+  "recorded_from": "npm audit --audit-level=high",
+  "vulnerabilities": {
+    "info": 0,
+    "low": 3,
+    "moderate": 1,
+    "high": 5,
+    "critical": 0,
+    "total": 9
+  },
+  "note": "The counts are the repository's own recorded audit result: 9 vulnerabilities (3 low, 1 moderate, 5 high). The dependency-audit gate is green while these counts hold and red the moment any count grows, so a branch that adds a high-severity dependency is no longer indistinguishable from the baseline that already exists. A count that falls is an improvement and stays green."
+}

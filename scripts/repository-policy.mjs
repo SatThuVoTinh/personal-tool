@@ -1,7 +1,10 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { parseDocument } from "yaml";
+
+import { AUDIT_BASELINE_PATH, readAuditBaseline } from "./audit-baseline.mjs";
 
 const REQUIRED_FILES = [
   ".editorconfig",
@@ -98,6 +101,9 @@ const SECRET_SCAN_ALLOWED_SCOPES = [
   "integrations/openclaw/orchestration/README.md",
 ];
 const SECRET_SCAN_SUPPRESSED_CEILING = 200;
+
+// The workflow step that compares the live audit with the recorded baseline.
+const AUDIT_BASELINE_SCRIPT = "scripts/audit-baseline.mjs";
 
 const WORKFLOW_PATHS = {
   ci: ".github/workflows/ci.yml",
@@ -1294,6 +1300,192 @@ export function checkGitWhitespace(repositoryRoot) {
 }
 
 /**
+ * F-241 (R7-D7-01): the shared network declaration must declare a network the
+ * compose files consume.
+ *
+ * The file used to be a placeholder whose own premise was already false: it
+ * said the shared definitions "will be added with the Compose implementation"
+ * while the Compose implementation existed and nothing read the file. The
+ * declaration is now real, and the compose files consume it by the shared
+ * name, so the two must not drift apart. A declared network that no compose
+ * file consumes is the same placeholder wearing a different name.
+ */
+export function compareSharedNetworks(sharedNetworks, composeNetworks) {
+  const failures = [];
+  const shared = sharedNetworks ?? {};
+  const compose = composeNetworks ?? {};
+  const consumed = new Set();
+
+  for (const [file, declared] of Object.entries(compose)) {
+    for (const [name, definition] of Object.entries(declared ?? {})) {
+      if (!Object.hasOwn(shared, name)) continue;
+      consumed.add(name);
+      const sharedDriver = shared[name]?.driver;
+      const declaredDriver = definition?.driver;
+      if (sharedDriver && declaredDriver && sharedDriver !== declaredDriver) {
+        failures.push(
+          `The compose file ${file} declares the shared network ${name} with driver ${declaredDriver}, while the shared declaration says ${sharedDriver}.`,
+        );
+      }
+    }
+  }
+
+  for (const name of Object.keys(shared)) {
+    if (!consumed.has(name)) {
+      failures.push(
+        `The shared network declaration defines ${name}, which no compose file consumes.`,
+      );
+    }
+  }
+  return failures;
+}
+
+/**
+ * The shared network declaration, the compose files that consume it and the
+ * documented creation step, checked together.
+ */
+export function checkSharedNetworkDeclaration(repositoryRoot) {
+  const failures = [];
+  const declarationPath = path.join(
+    repositoryRoot,
+    "infrastructure",
+    "networking",
+    "networks.yml",
+  );
+  if (!existsSync(declarationPath)) {
+    failures.push(
+      "The shared network declaration is missing: infrastructure/networking/networks.yml",
+    );
+    return failures;
+  }
+
+  let shared;
+  try {
+    const document = parseDocument(readFileSync(declarationPath, "utf8"), {
+      uniqueKeys: true,
+    });
+    if (document.errors.length > 0) {
+      failures.push(
+        `The shared network declaration is not valid YAML: ${document.errors[0].message}`,
+      );
+      return failures;
+    }
+    shared = document.toJS()?.networks;
+  } catch (error) {
+    failures.push(
+      `The shared network declaration is unreadable: ${error.message}`,
+    );
+    return failures;
+  }
+  if (!shared || typeof shared !== "object" || !Object.keys(shared).length) {
+    failures.push(
+      "The shared network declaration carries no network, so it declares nothing.",
+    );
+    return failures;
+  }
+
+  const composeDirectory = path.join(
+    repositoryRoot,
+    "infrastructure",
+    "docker",
+    "compose",
+  );
+  const composeNetworks = {};
+  for (const name of existsSync(composeDirectory)
+    ? readdirSync(composeDirectory).sort()
+    : []) {
+    if (!name.endsWith(".yml") && !name.endsWith(".yaml")) continue;
+    const filePath = path.join(composeDirectory, name);
+    try {
+      const document = parseDocument(readFileSync(filePath, "utf8"), {
+        uniqueKeys: true,
+      });
+      if (document.errors.length > 0) continue;
+      composeNetworks[name] = document.toJS()?.networks ?? {};
+    } catch {
+      composeNetworks[name] = {};
+    }
+  }
+  failures.push(...compareSharedNetworks(shared, composeNetworks));
+
+  const runbookDirectory = path.join(repositoryRoot, "docs", "runbooks");
+  const documented = existsSync(runbookDirectory)
+    ? readdirSync(runbookDirectory).some((name) => {
+        if (!name.endsWith(".md")) return false;
+        const text = readFileSync(path.join(runbookDirectory, name), "utf8");
+        return (
+          text.includes("infrastructure/networking/networks.yml") &&
+          text.includes("docker network create")
+        );
+      })
+    : false;
+  if (!documented) {
+    failures.push(
+      "No tracked runbook documents the shared network declaration and the step that creates it.",
+    );
+  }
+
+  return failures;
+}
+
+/**
+ * F-261 (R7-D12B-01): the working tree is the only authority, so exactly one
+ * worktree may be registered.
+ *
+ * A stale registered worktree inside the repository carries its own PLAN.md
+ * and AGENTS.md, and those documents declare themselves the durable source of
+ * truth. Every gate skips that tree - it is gitignored, so it is outside the
+ * tracked file set - while a cold resume that globs for those names reads a
+ * second, contradictory authority. The charter's "working tree is
+ * authoritative" rule is therefore enforced mechanically here: one registered
+ * worktree, and it is this one.
+ */
+export function evaluateWorktreeRegistry(porcelainOutput, repositoryRoot) {
+  const failures = [];
+  const entries = String(porcelainOutput ?? "")
+    .split(/\r?\n/u)
+    .filter((line) => line.startsWith("worktree "))
+    .map((line) => line.slice("worktree ".length).trim())
+    .filter(Boolean);
+
+  if (entries.length === 0) {
+    failures.push(
+      "Git reports no registered worktree, so the authoritative working tree cannot be established.",
+    );
+    return failures;
+  }
+  if (entries.length > 1) {
+    failures.push(
+      `Git reports ${entries.length} registered worktrees; only the primary working tree may be registered: ${entries.join(", ")}.`,
+    );
+  }
+
+  const primary = path.resolve(repositoryRoot);
+  for (const entry of entries) {
+    const resolved = path.resolve(entry);
+    const same =
+      process.platform === "win32"
+        ? resolved.toLowerCase() === primary.toLowerCase()
+        : resolved === primary;
+    if (!same) {
+      failures.push(
+        `A registered worktree is not the primary working tree: ${entry} (expected ${primary}).`,
+      );
+    }
+  }
+  return failures;
+}
+
+export function checkWorktreeRegistry(repositoryRoot) {
+  const result = runGit(repositoryRoot, ["worktree", "list", "--porcelain"]);
+  if (result.status !== 0) {
+    const details = `${result.stdout}${result.stderr}`.trim();
+    return [`Git worktree list failed: ${details}`];
+  }
+  return evaluateWorktreeRegistry(result.stdout, repositoryRoot);
+}
+
+/**
  * Every script a doc or a runbook tells a human to run must be covered by a
  * verify stage.
  *
@@ -1402,6 +1594,126 @@ export function checkNoEmptyScriptCategory(repositoryRoot, trackedFiles) {
   return failures;
 }
 
+/**
+ * F-188 (R5-E09-06): the shipped dependency-audit job must compare the live
+ * audit with the recorded baseline.
+ *
+ * A bare `npm audit --audit-level=high` returns the same non-zero exit for
+ * the recorded 5-high baseline and for a newly added high-severity
+ * dependency, so the job cannot say which one happened. The comparison step
+ * is the gate: green while the baseline holds, red the moment a count grows.
+ * The bare audit step therefore must not block the job before the comparison
+ * has run, and the comparison itself must block.
+ */
+export function checkAuditBaselineWorkflow(repositoryRoot) {
+  const failures = [];
+  const workflowPath = WORKFLOW_PATHS.security;
+  const filePath = path.join(repositoryRoot, workflowPath);
+  if (!existsSync(filePath)) {
+    failures.push(
+      formatWorkflowFailure(workflowPath, "required workflow file is missing."),
+    );
+    return failures;
+  }
+
+  const document = parseDocument(readFileSync(filePath, "utf8"), {
+    uniqueKeys: true,
+    version: "1.2",
+  });
+  if (document.errors.length > 0) {
+    failures.push(
+      formatWorkflowFailure(
+        workflowPath,
+        `YAML is invalid: ${document.errors[0].message}`,
+      ),
+    );
+    return failures;
+  }
+
+  const steps = document.toJS()?.jobs?.["dependency-audit"]?.steps;
+  if (!Array.isArray(steps)) {
+    failures.push(
+      formatWorkflowFailure(
+        workflowPath,
+        "job dependency-audit must define steps.",
+      ),
+    );
+    return failures;
+  }
+
+  const auditIndex = runStepIndex(steps, "npm audit --audit-level=high");
+  const comparisonIndex = steps.findIndex(
+    (step) =>
+      isObject(step) &&
+      typeof step.run === "string" &&
+      step.run.includes(AUDIT_BASELINE_SCRIPT),
+  );
+  if (comparisonIndex < 0) {
+    failures.push(
+      formatWorkflowFailure(
+        workflowPath,
+        `job dependency-audit must compare the audit against the recorded baseline by running ${AUDIT_BASELINE_SCRIPT}.`,
+      ),
+    );
+    return failures;
+  }
+  if (steps[comparisonIndex]["continue-on-error"] === true) {
+    failures.push(
+      formatWorkflowFailure(
+        workflowPath,
+        "job dependency-audit must block on the baseline comparison.",
+      ),
+    );
+  }
+  if (auditIndex >= 0) {
+    if (steps[auditIndex]["continue-on-error"] !== true) {
+      failures.push(
+        formatWorkflowFailure(
+          workflowPath,
+          "job dependency-audit must mark the bare audit step continue-on-error so the recorded baseline does not block the job before the comparison runs.",
+        ),
+      );
+    }
+    if (comparisonIndex <= auditIndex) {
+      failures.push(
+        formatWorkflowFailure(
+          workflowPath,
+          "job dependency-audit must run the baseline comparison after the audit it compares.",
+        ),
+      );
+    }
+  }
+  return failures;
+}
+
+/**
+ * The recorded audit baseline must exist, be tracked and carry the six counts
+ * the comparison reads. A baseline that is not tracked is a threshold nobody
+ * reviews, and a missing one turns the comparison into a gate that cannot
+ * answer anything.
+ */
+export function checkAuditBaseline(repositoryRoot, trackedFiles) {
+  const failures = [];
+  const filePath = path.join(repositoryRoot, AUDIT_BASELINE_PATH);
+  if (!existsSync(filePath)) {
+    failures.push(
+      `The npm audit baseline file is missing: ${AUDIT_BASELINE_PATH}`,
+    );
+    return failures;
+  }
+  if (!trackedFiles.includes(AUDIT_BASELINE_PATH)) {
+    failures.push(
+      `The npm audit baseline file is not tracked: ${AUDIT_BASELINE_PATH}`,
+    );
+  }
+  try {
+    readAuditBaseline(repositoryRoot);
+  } catch (error) {
+    failures.push(error.message);
+  }
+  return failures;
+}
+
 export function collectRepositoryFailures(repositoryRoot) {
   const failures = checkRequiredFiles(repositoryRoot);
   failures.push(...checkWorkflowDefinitions(repositoryRoot));
@@ -1410,6 +1722,9 @@ export function collectRepositoryFailures(repositoryRoot) {
   failures.push(...checkTrackedFilePolicies(trackedFiles));
   failures.push(...checkWorkingTreeTextPolicy(repositoryRoot, trackedFiles));
   failures.push(...checkGitWhitespace(repositoryRoot));
+  failures.push(...checkWorktreeRegistry(repositoryRoot));
+  failures.push(...checkSharedNetworkDeclaration(repositoryRoot));
+  failures.push(...checkRecoveryArchiveProvenance(repositoryRoot));
 
   // The register is the queue every band reads, so it must be tracked: an
   // untracked register gives every row edit no commit, no author and no diff.
@@ -1425,6 +1740,8 @@ export function collectRepositoryFailures(repositoryRoot) {
   failures.push(...checkRegisterCitations(repositoryRoot, trackedFiles));
   failures.push(...checkSecretScanAllowlist(repositoryRoot, trackedFiles));
   failures.push(...checkNestedGeneratedTreesIgnored(repositoryRoot));
+  failures.push(...checkAuditBaseline(repositoryRoot, trackedFiles));
+  failures.push(...checkAuditBaselineWorkflow(repositoryRoot));
 
   const packagePath = path.join(repositoryRoot, "package.json");
   const makefilePath = path.join(repositoryRoot, "Makefile");

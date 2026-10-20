@@ -42,7 +42,13 @@ jobs:
           test "$(node --version)" = "v24.15.0"
           test "$(npm --version)" = "12.0.2"
       - name: Audit dependencies
+        # The recorded baseline is known-red, so this step reports and the
+        # comparison below decides. A bare audit returns the same answer for
+        # the recorded baseline and for a new high-severity dependency.
+        continue-on-error: true
         run: npm audit --audit-level=high
+      - name: Compare the audit against the recorded baseline
+        run: node scripts/audit-baseline.mjs
   secret-scan:
     name: secret-scan
     runs-on: ubuntu-24.04
