@@ -931,6 +931,33 @@ export function applyWorkflowEvent(
       task.workflow_status === "ACTIVE" || task.workflow_status === "REVISING",
       "INVALID_STATE_TRANSITION",
     );
+      // M12/T9 F-032 (legacy R2-B01-03): an APPROVE must bind to a RECORDED
+      // approval request.
+      //
+      // WORKFLOW_OPENED sets workflow_status to ACTIVE, so "approvable" used to
+      // be inferable from any open task: the durable reducer admitted an
+      // owner's APPROVE for a plan that was never requested and never
+      // surfaced, and the owner's consent was recorded against a task whose
+      // plan the owner never saw. Only WORKFLOW_APPROVAL_REQUESTED may create
+      // an approval opportunity - the same rule the plugin's own
+      // APPROVAL_PENDING derivation already applies (index.mjs).
+      requireCondition(
+        Boolean(task.approval_requested_at),
+        "INVALID_STATE_TRANSITION",
+      );
+      if (task.approval_thread_id) {
+        const recordedThreadId = normalizeGovernanceThreadId(
+          task.approval_thread_id,
+        );
+        const decisionThreadId = normalizeGovernanceThreadId(payload.thread_id);
+        requireCondition(
+          recordedThreadId !== null &&
+            decisionThreadId !== null &&
+            decisionThreadId === recordedThreadId,
+          "INVALID_STATE_TRANSITION",
+        );
+      }
+    }
     if (payload.decision === "APPROVE") {
       // F-023: the owner's APPROVE is bound to the PLAN it approved, not to
       // the task id alone.
@@ -977,6 +1004,16 @@ export function applyWorkflowEvent(
     } else {
       task.workflow_status = "REVISING";
       task.revision_requested_at = eventTime;
+      // The REQUEST is re-armed for the same reason (and because F-032 binds an
+      // APPROVE to a recorded request): the request the owner rejected is not
+      // the request the re-presented plan needs, so the new plan must ask
+      // again. The slots are DELETED, not nulled - the published snapshot
+      // contract declares them as optional strings, so an absent slot is the
+      // only shape that validates.
+      delete task.approval_thread_id;
+      delete task.approval_requested_at;
+      delete task.approval_requested_by;
+      delete task.approval_requested_run_id;
     }
     return next;
   }

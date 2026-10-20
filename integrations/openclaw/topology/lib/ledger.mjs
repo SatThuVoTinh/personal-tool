@@ -99,6 +99,33 @@ export const SUPPORTED_GOVERNANCE_VERSIONS = Object.freeze(
 // a trailing separator or platform separator cannot smuggle it through.
 const LEDGER_ROOT_SUFFIX = Object.freeze(["operator", "m7-t2", "ledger"]);
 
+// M12/T9 F-100: the two event types the published ledger-event CONTRACT
+// accepts but the reducer never projects.
+//
+// `TASK_CREATED` and `DELEGATION_RESERVED` carry no declared payload shape
+// (the contract states them as free-form objects) and no reducer branch, so
+// they are AUDIT records: they say that something happened, and they change
+// no projection. Before this rule the behaviour was defined in ONE region and
+// fatal in the other - the anchored region ignored them by accident of the
+// `WORKFLOW_` prefix test, and the tail region threw "unreconciled event
+// after snapshot", which relabelled to EXECUTION_STATE_UNKNOWN and made every
+// later read of the ledger fail forever. A crash between the fsync of an
+// event and the write of the snapshot leaves exactly such an event in the
+// tail, so the position was reachable, not hypothetical.
+//
+// The behaviour is now DEFINED and IDENTICAL in both regions: an audit record
+// advances the journal and changes no projection.
+const AUDIT_ONLY_EVENT_TYPES = Object.freeze([
+  "TASK_CREATED",
+  "DELEGATION_RESERVED",
+]);
+
+function isAuditOnlyEvent(type) {
+  return AUDIT_ONLY_EVENT_TYPES.includes(type);
+}
+
+/**
+
 export function ledgerPaths(stateDir) {
   const segments = path.resolve(stateDir).split(path.sep).filter(Boolean);
   const tail = segments.slice(-LEDGER_ROOT_SUFFIX.length);
@@ -493,7 +520,12 @@ function readSnapshotLocked(paths, repairSnapshot = true) {
         )
           throw new Error("journal budget mismatch");
       }
-      if (event.type.startsWith("WORKFLOW_"))
+      // M12/T9 F-100: the audit-only types are recognised EXPLICITLY here, so
+      // the anchored region has the same defined behaviour as the tail: an
+      // audit record changes no projection.
+      if (isAuditOnlyEvent(event.type)) {
+        // nothing to project
+      } else if (event.type.startsWith("WORKFLOW_"))
         journalBudget = applyWorkflowEvent(
           journalBudget,
           event.type,
@@ -563,8 +595,21 @@ function readSnapshotLocked(paths, repairSnapshot = true) {
         };
         continue;
       }
-      if (event.type !== "BUDGET_RESERVED")
-        throw new Error("unreconciled event after snapshot");
+      if (event.type !== "BUDGET_RESERVED") {
+        // M12/T9 F-100: the audit-only types are RECONCILED here, exactly as
+        // the anchored region reconciles them. They advance the journal and
+        // change no projection, so a crash between the fsync of an event and
+        // the write of the snapshot no longer bricks every later read.
+        if (!isAuditOnlyEvent(event.type))
+          throw new Error("unreconciled event after snapshot");
+        snapshot = {
+          ...snapshot,
+          sequence: event.sequence,
+          last_event_digest: event.event_digest,
+          updated_at: event.created_at,
+        };
+        continue;
+      }
       const { task_id, kind, amount, counters } = event.payload;
       const recovered = reserveBudget(snapshot, task_id, kind, amount);
       if (
@@ -580,7 +625,7 @@ function readSnapshotLocked(paths, repairSnapshot = true) {
       };
     }
     if (tail.length > 0 && repairSnapshot) writeSnapshotAtomic(paths, snapshot);
-    return snapshot;
+    return flagUnterminatedTasks(snapshot);
   } catch (error) {
     // M11/T3 B3: the fault class must survive. Relabelling every replay fault as
     // corruption with no cause left the operator unable to separate a genuine
@@ -848,8 +893,28 @@ export function recordWorkflowEvent(paths, type, payload) {
     if (
       canonicalHash("zink-ledger-event-v1", current) ===
       canonicalHash("zink-ledger-event-v1", projected)
-    )
-      return current;
+    ) {
+      // M12/T9 F-081: the receipt ARRIVED and was IGNORED.
+      //
+      // The writer used to return the unchanged snapshot as SUCCESS, so the
+      // ledger could not tell "arrived and was ignored" from "never happened",
+      // and the event-count reconciliation the terminal forensics need was
+      // impossible. The caller now gets an explicit `discarded: true`.
+      //
+      // The flag is NON-ENUMERABLE on purpose: the returned object IS a
+      // ledger snapshot, and it must stay byte-identical to the one the
+      // ledger holds - the published snapshot contract forbids extra members,
+      // the digest chain covers the whole object, and the stale-snapshot check
+      // compares it. A visible member would break all three.
+      const discarded = { ...current };
+      Object.defineProperty(discarded, "discarded", {
+        value: true,
+        enumerable: false,
+        writable: false,
+        configurable: false,
+      });
+      return discarded;
+    }
     return appendEventLocked(paths, projected, type, payload, createdAt);
   });
 }
