@@ -168,6 +168,14 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // produces is deliberately NOT listed: it is the current build and is
     // accepted by content comparison.
     "cc5d1b11608e43a32db502c24b742563919bb81b9b0655f6e8b32e4dea8e0179",
+    // M12/T9 F-371: the outgoing build of this asset, before the
+    // delegation id changed its form (the same digest, now rendered as a
+    // version-4 UUID) and before the guard resolved the delegation's tool
+    // scope from the canonical policy. Without this entry --preflight refuses
+    // the deployed extension. The digest this build produces is deliberately
+    // NOT listed: it is the current build and is accepted by content
+    // comparison.
+    "36a4dd470dfa095c77c16cc1046bc12b6008257d88d79df693f9c3b4bd59b227",
   ]),
   "contracts/delegation-proposal.schema.json": Object.freeze([
     "efd4371cacf396dc618cc84c8663a114f06b034c13737937b48aa0b895b2d6e0",
@@ -227,6 +235,14 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // produces is deliberately NOT listed: it is the current build and is
     // accepted by content comparison.
     "9620e91773ef86c829fcff0dc264c38d7b2983f2456f62f8d6c787cb1ba5b13f",
+    // M12/T9 F-371: the outgoing build of this asset, before the
+    // delegation id changed its form (the same digest, now rendered as a
+    // version-4 UUID) and before the guard resolved the delegation's tool
+    // scope from the canonical policy. Without this entry --preflight refuses
+    // the deployed extension. The digest this build produces is deliberately
+    // NOT listed: it is the current build and is accepted by content
+    // comparison.
+    "044392c5b70f102762eb397c314503c2357fc68ab8df1414d7d39f40c0f33120",
   ]),
   "contracts/ledger-snapshot.schema.json": Object.freeze([
     "3cde5162ae845a9b7066a623a9c4c8896f1fc6b77f2b5983ad506a9dfcbc0151",
@@ -244,6 +260,14 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // produces is deliberately NOT listed: it is the current build and is
     // accepted by content comparison.
     "1c0872bab446af4b31237eb8244f4b5bb6140b9828f261e66f3b38f37526299f",
+    // M12/T9 F-371: the outgoing build of this asset, before the
+    // delegation id changed its form (the same digest, now rendered as a
+    // version-4 UUID) and before the guard resolved the delegation's tool
+    // scope from the canonical policy. Without this entry --preflight refuses
+    // the deployed extension. The digest this build produces is deliberately
+    // NOT listed: it is the current build and is accepted by content
+    // comparison.
+    "d46089816a38c500fa95458ab4304977776bff9ff23b3820eef37448b5e50b4e",
   ]),
   "contracts/result.schema.json": Object.freeze([
     "9440dfb87b3daf358b11dc7b59b62586c68786235d99d717daf9783b9a6e4540",
@@ -262,6 +286,14 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // produces is deliberately NOT listed: it is the current build and is
     // accepted by content comparison.
     "09cabcb1a1f7805eaea0bdf42a7fd0504c6efdd22b18e99959523e9e3cb17eb5",
+    // M12/T9 F-371: the outgoing build of this asset, before the
+    // delegation id changed its form (the same digest, now rendered as a
+    // version-4 UUID) and before the guard resolved the delegation's tool
+    // scope from the canonical policy. Without this entry --preflight refuses
+    // the deployed extension. The digest this build produces is deliberately
+    // NOT listed: it is the current build and is accepted by content
+    // comparison.
+    "4d8a7403452031f38b84dd5d7033b997b30d74fd4a253adb2124484b86021846",
   ]),
   "governance-manifests.json": Object.freeze([
     "5026959d41a76c531f37caa6297b3b0b010ee17cedd7bdd3806447600c98a18d",
@@ -368,6 +400,14 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // produces is deliberately NOT listed: it is the current build and is
     // accepted by content comparison.
     "63adeee5c5ced229aa4a5c98df1c506987f5058fa538f9d27b105b11133d6f65",
+    // M12/T9 F-371: the outgoing build of this asset, before the
+    // delegation id changed its form (the same digest, now rendered as a
+    // version-4 UUID) and before the guard resolved the delegation's tool
+    // scope from the canonical policy. Without this entry --preflight refuses
+    // the deployed extension. The digest this build produces is deliberately
+    // NOT listed: it is the current build and is accepted by content
+    // comparison.
+    "917f44bd8f7462277ca68e53983ceaddf6422bb8bc623d82b9c1a14a00990f59",
   ]),
   "lib/decision-ledger.mjs": Object.freeze([
     // M10/T2-R17: the outgoing build currently deployed, byte-proven by
@@ -538,6 +578,14 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // from `ea84a5a` through `governancePluginFiles()` — the construction R2 P1 uses — not
     // transcribed. The new digest is the current build and is deliberately not listed.
     "b3222229b760c0456b0c9a8f947971450d065c22f33af59c62a443f0e2d409b4",
+    // M12/T9 F-371: the outgoing build of this asset, before the
+    // delegation id changed its form (the same digest, now rendered as a
+    // version-4 UUID) and before the guard resolved the delegation's tool
+    // scope from the canonical policy. Without this entry --preflight refuses
+    // the deployed extension. The digest this build produces is deliberately
+    // NOT listed: it is the current build and is accepted by content
+    // comparison.
+    "3d8bd7331005c71f71ff394d0e0e319b6ffe93ad0de57708792f61f3373e7e6d",
   ]),
   "lib/excel-writer.mjs": Object.freeze([
     // M10/T2-R19: the FIRST predecessor entry for this asset (it had none,
@@ -647,6 +695,14 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // nine governed paths ended up neither current nor admitted and --preflight
     // refused the deployed extension. The current build stays unlisted.
     "263d72c426e4c29c13f1749e94ce6cadcf0340b59bcbf91bd982763c8c5d3a26",
+    // M12/T9 F-371: the outgoing build of this asset, before the
+    // delegation id changed its form (the same digest, now rendered as a
+    // version-4 UUID) and before the guard resolved the delegation's tool
+    // scope from the canonical policy. Without this entry --preflight refuses
+    // the deployed extension. The digest this build produces is deliberately
+    // NOT listed: it is the current build and is accepted by content
+    // comparison.
+    "120e75a4e4e80a77bf16e55f83247bc680841bb6ecc433be3f0b6f7aa9be6933",
   ]),
   "lib/native-boundary.mjs": Object.freeze([
     "4b77356f2a843f26040a7cd3312c896469aff33cc472bc6c02fdd5c472bd1234",
@@ -735,6 +791,14 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // extension and the B-16 build is unreachable. The B-16 digest is deliberately
     // NOT listed: it is the current build and is accepted by content comparison.
     "5966d446258259407ccd4a349b1d6df75dccc2a75c651a149caa92d4fa8393d0",
+    // M12/T9 F-371: the outgoing build of this asset, before the
+    // delegation id changed its form (the same digest, now rendered as a
+    // version-4 UUID) and before the guard resolved the delegation's tool
+    // scope from the canonical policy. Without this entry --preflight refuses
+    // the deployed extension. The digest this build produces is deliberately
+    // NOT listed: it is the current build and is accepted by content
+    // comparison.
+    "fceefc0df03228c91511779880c21a81d75579633e86ceae54d9696446d0081d",
   ]),
   "lib/runtime.mjs": Object.freeze([
     // M10/T2-R15: the outgoing build currently deployed, byte-proven by
@@ -751,6 +815,14 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // construction R2 P1 uses — not transcribed from a host file. The new digest is
     // deliberately NOT listed: it is the current build, accepted by content comparison.
     "aac887187f9f6074d340d6dd43868b082ff10b95a0bb126ce3331245c51c4915",
+    // M12/T9 F-371: the outgoing build of this asset, before the
+    // delegation id changed its form (the same digest, now rendered as a
+    // version-4 UUID) and before the guard resolved the delegation's tool
+    // scope from the canonical policy. Without this entry --preflight refuses
+    // the deployed extension. The digest this build produces is deliberately
+    // NOT listed: it is the current build and is accepted by content
+    // comparison.
+    "416460a78866315151ff7c70a85cbcc5c26189acf3d6ccbf52d13ab0750d2456",
   ]),
   "lib/ledger.mjs": Object.freeze([
     "d7f406e9dfa8f45d117f555bed18d2bf4c63ed966c3dd0588d221a54b9e87255",
@@ -792,6 +864,14 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // M12/T2.2-R2 M-1: the build the live runtime carries, reproduced by packaging
     // commit c680a28. See the lib/guard.mjs entry for why nine paths drifted.
     "2009e9fe06b6cc01b95bcb1db3c8ff1b0a69e220123166f21a863178e0623695",
+    // M12/T9 F-371: the outgoing build of this asset, before the
+    // delegation id changed its form (the same digest, now rendered as a
+    // version-4 UUID) and before the guard resolved the delegation's tool
+    // scope from the canonical policy. Without this entry --preflight refuses
+    // the deployed extension. The digest this build produces is deliberately
+    // NOT listed: it is the current build and is accepted by content
+    // comparison.
+    "377b0bf5d6472e4158e6bc12a083c5ff2f95b1d0c1ca99059ec24135620f90ab",
   ]),
   "policy/reason-code-matrix.json": Object.freeze([
     "982896fe4fcc856728f8348058f19b69d89eabd9974bdaf4311c4afa510fc200",

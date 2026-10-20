@@ -260,7 +260,13 @@ export function installNativeToolGate(agent, config, context) {
       if (decision.spawnLabel !== undefined) {
         if (
           event.toolCall.name !== "sessions_spawn" ||
-          !/^[a-f0-9]{64}$/u.test(decision.spawnLabel)
+          // M12/T9 F-371: the delegation id is a version-4 UUID rendered from
+          // the canonical digest, and the ledger may still carry the legacy
+          // 64-hex rendering. Both are legitimate identities of the same
+          // proposal, so the spawn label accepts both - and nothing else.
+          !/^([a-f0-9]{64}|[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/u.test(
+            decision.spawnLabel,
+          )
         )
           throw new Error("GOVERNANCE_DECISION_INVALID");
         event.args.label = decision.spawnLabel;

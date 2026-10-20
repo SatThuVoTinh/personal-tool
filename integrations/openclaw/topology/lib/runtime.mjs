@@ -1,5 +1,6 @@
 import {
   canonicalHash,
+  deriveLegacyDelegationId,
   deriveDelegationId,
   utcNow,
   GOVERNANCE_VERSION,
@@ -227,8 +228,12 @@ export function createTrustedResultEnvelope({
   if (runState !== "COMPLETE") throw new Error("INVALID_STATE_TRANSITION");
   if (
     !lineage?.native_run_id ||
+    // M12/T9 F-371: the delegation id has two renderings - the current
+    // version-4 UUID and the legacy 64-hex digest the operational ledger
+    // already carries - and both are identities of the same proposal.
     (lineage.delegation_id &&
-      lineage.delegation_id !== deriveDelegationId(lineage))
+      lineage.delegation_id !== deriveDelegationId(lineage) &&
+      lineage.delegation_id !== deriveLegacyDelegationId(lineage))
   )
     throw new Error("LINEAGE_MISMATCH");
   const { outcome: acceptedOutcome, reason: acceptedReason } =

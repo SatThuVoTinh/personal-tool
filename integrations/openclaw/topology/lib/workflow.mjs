@@ -2,6 +2,7 @@ import {
   buildSpawnProposal,
   canonicalHash,
   deriveApprovalPlanDigest,
+  deriveLegacyDelegationId,
   deriveTaskId,
   isTaskCodeForm,
   normalizeGovernanceThreadId,
@@ -2226,9 +2227,18 @@ function applySpawnReserved(next, task, payload, replayAnchored = false) {
   // event digest plus the hash chain already bind those bytes against
   // tampering, and re-litigating an evolved serialization can only reject
   // legitimate history. New writes and tail replay stay exact.
+  //
+  // M12/T9 F-371: the delegation id changed its FORM - the same digest, now
+  // rendered as a version-4 UUID, because the published tool-call envelope
+  // and the guard both require that shape. Both renderings are therefore
+  // legitimate identities of the same proposal, and the ledger already holds
+  // reserves under the 64-hex one: accepting only the new form would make
+  // the operational history unreadable, and accepting only the old one
+  // would refuse every new reserve.
   const rederived = buildSpawnProposal(payload);
   requireCondition(
-    rederived.delegation_id === payload.delegation_id &&
+    (rederived.delegation_id === payload.delegation_id ||
+      deriveLegacyDelegationId(payload) === payload.delegation_id) &&
       (replayAnchored || rederived.request_digest === payload.request_digest) &&
       !task.delegations[payload.delegation_id],
     "LINEAGE_MISMATCH",

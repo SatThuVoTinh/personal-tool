@@ -529,9 +529,15 @@ export function generateSchemaManifest() {
  * publishes instead of "unknown" for all of them, and F-030's pinning of the
  * WORKFLOW_CANCELLED payload moved the ledger-event bytes. The value below is
  * the checksum of THAT state.
+ *
+ * M12/T9 F-371: the delegation id changed its FORM - the same digest, now
+ * rendered as a version-4 UUID - so `ledger-event.schema.json`,
+ * `ledger-snapshot.schema.json`, `delegation-envelope.schema.json` and
+ * `trusted-result-envelope.schema.json` accept BOTH renderings and publish
+ * version 1.1.0. The value below is the checksum of THAT state.
  */
 export const PINNED_SCHEMA_MANIFEST_CHECKSUM =
-  "c17e873191fadcad18a8e70cf48838a514621467098611a31a21614ef38ff691";
+  "f776e3c9ac68436f905e013c31a89e3a58c7f0ff0a97fdc19103765a35be0c71";
 
 export function verifySchemaManifestChecksums(manifest = null) {
   if (manifest === null) {

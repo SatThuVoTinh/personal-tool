@@ -892,6 +892,53 @@ export function consumeApprovalAtomically(paths, approvalId, claimScope) {
   }
 }
 
+/**
+ * M12/T9 F-114: evaluate a PROSPECTIVE root task.
+ *
+ * The claim is the caller's own statement of the task it is about to open. It
+ * is accepted only when it names the run that is being admitted - the same
+ * agent, the same session, the same run - and when it is a brief that may be
+ * entered at all (`brief_state: "ACTIVE"`). A claim that names another
+ * identity is refused with LINEAGE_MISMATCH, and the refusal keeps the
+ * original findSession failure as its cause.
+ *
+ * Nothing is written: the task is opened by the caller AFTER this verdict, so
+ * a refused admission leaves the ledger's sequence and task count untouched.
+ */
+function evaluateProspectiveTask(task, context, cause) {
+  const refuse = (code) => {
+    const error = new Error(code);
+    if (cause instanceof Error && error.cause === undefined)
+      error.cause = cause;
+    throw error;
+  };
+  if (!task || typeof task !== "object") refuse("LINEAGE_MISMATCH");
+  if (typeof task.task_id !== "string" || task.task_id.length === 0)
+    refuse("LINEAGE_MISMATCH");
+  if (task.brief_state !== "ACTIVE") refuse("INVALID_STATE_TRANSITION");
+  if (!Number.isSafeInteger(task.brief_revision) || task.brief_revision < 1)
+    refuse("INVALID_STATE_TRANSITION");
+  if (task.root_agent_id !== context.agentId) refuse("INVALID_STATE_TRANSITION");
+  if (task.root_session_key !== context.sessionKey) refuse("LINEAGE_MISMATCH");
+  if (task.root_run_id !== context.runId) refuse("LINEAGE_MISMATCH");
+  return {
+    task_id: task.task_id,
+    task: {
+      task_id: task.task_id,
+      workflow_status: "ACTIVE",
+      brief_state: "ACTIVE",
+      brief_revision: task.brief_revision,
+      root_agent_id: task.root_agent_id,
+      root_session_key: task.root_session_key,
+      root_run_id: task.root_run_id,
+      nodes: [],
+      delegations: {},
+      continuations: {},
+    },
+    delegation: null,
+  };
+}
+
 export function createGovernanceGuard({
   paths,
   manifestFor,
@@ -1320,68 +1367,102 @@ export function createGovernanceGuard({
       return { allow: true };
     },
 
-    beforeRun(_event, context) {
+    /**
+     * M12/T9 F-114: run admission with a PROSPECTIVE root task.
+     *
+     * `options.prospectiveTask` is the root task the caller is about to open:
+     * `{ task_id, brief_revision, brief_state, root_agent_id,
+     * root_session_key, root_run_id }`. It is evaluated ONLY when the ledger
+     * cannot resolve the run - the ledger is authoritative whenever it holds
+     * the task - and it is evaluated WITHOUT writing anything, so a refused
+     * admission leaves the sequence and the task count untouched.
+     *
+     * The options may be passed as the fourth argument or, when the third
+     * argument is not an abort signal, as the third.
+     */
+    beforeRun(_event, context, signalOrOptions, runOptions = {}) {
+      const prospectiveTask =
+        runOptions?.prospectiveTask ??
+        (signalOrOptions &&
+        typeof signalOrOptions === "object" &&
+        "prospectiveTask" in signalOrOptions
+          ? signalOrOptions.prospectiveTask
+          : null);
       const snapshot = getSnapshot();
       let owner;
       try {
         owner = findSession(snapshot, context.sessionKey, context.runId);
       } catch (findErr) {
-        // M10/T2: a gateway-started coordinator run owns no root or delegation
-        // session, so findSession cannot resolve it. The ledger binding recorded
-        // at pickup time is the only legitimate alternative identity: it must
-        // match session, run AND agent exactly, otherwise the original failure
-        // stands and admission stays refused.
-        const bound = findBoundCoordinatorRun(
-          snapshot,
-          context.sessionKey,
-          context.runId,
-          context.agentId,
-        );
-        if (bound) {
-          owner = bound;
+        // M12/T9 F-114: the prospective root task is the admission of a run
+        // whose task has NOT been opened yet. The plugin used to open the task
+        // INSIDE the admission predicate, so a refused admission left a task
+        // whose whole event history was one WORKFLOW_OPENED. The task is now
+        // opened after this verdict, and the verdict is taken against the
+        // claim the caller makes here - which is checked against the run's own
+        // identity, so a claim that names another session, run or agent is
+        // refused rather than admitted.
+        const prospective = prospectiveTask
+          ? evaluateProspectiveTask(prospectiveTask, context, findErr)
+          : null;
+        if (prospective) {
+          owner = prospective;
         } else {
-          const candidates = Object.entries(snapshot.tasks).filter(
-            ([, task]) => {
-              const entry = task.continuations?.[context.runId];
-              return (
-                entry &&
-                !entry.started &&
-                entry.session_key === context.sessionKey
-              );
-            },
+          // M10/T2: a gateway-started coordinator run owns no root or delegation
+          // session, so findSession cannot resolve it. The ledger binding recorded
+          // at pickup time is the only legitimate alternative identity: it must
+          // match session, run AND agent exactly, otherwise the original failure
+          // stands and admission stays refused.
+          const bound = findBoundCoordinatorRun(
+            snapshot,
+            context.sessionKey,
+            context.runId,
+            context.agentId,
           );
-          // F-059: the original findSession failure is the CAUSE of this
-          // refusal, and it used to be discarded (`void findErr`), so the
-          // operator saw a bare code with no reason attached. The refusal code
-          // names the symptom; the cause names the reason.
-          try {
-            assert(candidates.length === 1, "EXECUTION_STATE_UNKNOWN");
-            const [task_id, task] = candidates[0];
-            const entry = task.continuations?.[context.runId];
-            assert(
-              entry &&
-                context.inputProvenance?.kind === "inter_session" &&
-                context.inputProvenance.sourceTool === "subagent_announce" &&
-                context.inputProvenance.sourceSessionKey ===
-                  entry.source_session_key,
-              "LINEAGE_MISMATCH",
+          if (bound) {
+            owner = bound;
+          } else {
+            const candidates = Object.entries(snapshot.tasks).filter(
+              ([, task]) => {
+                const entry = task.continuations?.[context.runId];
+                return (
+                  entry &&
+                  !entry.started &&
+                  entry.session_key === context.sessionKey
+                );
+              },
             );
-            // E13: Cryptographically bind inter-session trust to the trigger sender event & accepted payload digest
-            const trigger = Object.values(task.delegations || {}).find(
-              (run) => run.native_run_id === entry.trigger_run_id,
-            );
-            if (entry.trigger_run_id !== entry.previous_run_id) {
+            // F-059: the original findSession failure is the CAUSE of this
+            // refusal, and it used to be discarded (`void findErr`), so the
+            // operator saw a bare code with no reason attached. The refusal code
+            // names the symptom; the cause names the reason.
+            try {
+              assert(candidates.length === 1, "EXECUTION_STATE_UNKNOWN");
+              const [task_id, task] = candidates[0];
+              const entry = task.continuations?.[context.runId];
               assert(
-                trigger && trigger.accepted_payload_digest,
+                entry &&
+                  context.inputProvenance?.kind === "inter_session" &&
+                  context.inputProvenance.sourceTool === "subagent_announce" &&
+                  context.inputProvenance.sourceSessionKey ===
+                    entry.source_session_key,
                 "LINEAGE_MISMATCH",
               );
-              if (context.inputProvenance.senderDigest) {
+              // E13: Cryptographically bind inter-session trust to the trigger sender event & accepted payload digest
+              const trigger = Object.values(task.delegations || {}).find(
+                (run) => run.native_run_id === entry.trigger_run_id,
+              );
+              if (entry.trigger_run_id !== entry.previous_run_id) {
                 assert(
-                  context.inputProvenance.senderDigest ===
-                    trigger.accepted_payload_digest,
+                  trigger && trigger.accepted_payload_digest,
                   "LINEAGE_MISMATCH",
                 );
-              }
+                if (context.inputProvenance.senderDigest) {
+                  assert(
+                    context.inputProvenance.senderDigest ===
+                      trigger.accepted_payload_digest,
+                    "LINEAGE_MISMATCH",
+                  );
+                }
             }
             const next = recordWorkflowEvent(
               paths,
@@ -1403,6 +1484,7 @@ export function createGovernanceGuard({
             if (cause instanceof Error && cause.cause === undefined)
               cause.cause = findErr;
             throw cause;
+          }
           }
         }
       }
@@ -1970,10 +2052,23 @@ export function createGovernanceGuard({
           typeof delStackId === "string" && STACK_IDS.includes(delStackId),
           "AUTH_SCOPE_MISMATCH",
         );
+        // M12/T9 F-371: the delegation's TOOL SCOPE comes from the canonical
+        // policy ceiling, not from a field the ledger never records. The
+        // published spawn-proposal contract forbids an `allowed_tools` member
+        // (its payload is `additionalProperties: false` and names exactly
+        // fourteen fields), so the ledger's delegation record could never carry
+        // one: the check could never be satisfied and EVERY delegated tool call
+        // was refused with AUTH_DELEGATION_NOT_FOUND before it could reach a
+        // specialist. The delegation says WHICH agent may run the call; the
+        // policy's TOOL_POLICY is the canonical upper authorization ceiling and
+        // says WHICH tools that agent may run, and the capability matrix (step
+        // 7) says at which level. The scope is therefore narrower than before,
+        // never wider: the ceiling and the matrix both still apply.
+        const delegationTools = policy.TOOL_POLICY?.[del.agent_id] ?? [];
         assert(
-          Array.isArray(del.allowed_tools) &&
-            new Set(del.allowed_tools).size === del.allowed_tools.length &&
-            del.allowed_tools.every(
+          Array.isArray(delegationTools) &&
+            new Set(delegationTools).size === delegationTools.length &&
+            delegationTools.every(
               (id) => typeof id === "string" && id in CALLABLE_TOOL_REGISTRY,
             ),
           "AUTH_DELEGATION_NOT_FOUND",
@@ -2022,7 +2117,7 @@ export function createGovernanceGuard({
         );
         assert(runId === delRunId, "LINEAGE_MISMATCH");
         assert(
-          del.allowed_tools.includes(candidateToolId),
+          delegationTools.includes(candidateToolId),
           "AUTH_POLICY_DENIED",
         );
 

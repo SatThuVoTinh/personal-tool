@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { createHash, createHmac } from "node:crypto";
 
 // The governance version doubles as the WRITER-SEMANTICS discriminator, so it
@@ -340,7 +341,29 @@ export function deriveTaskId({
   });
 }
 
-export function deriveDelegationId({
+/**
+ * M12/T9 F-371: the delegation id is a UUIDv4-SHAPED string.
+ *
+ * The id was a bare 64-hex sha256 digest, while the published tool-call
+ * envelope (`zink-tools/contracts/tool-call.schema.json`,
+ * `$defs/delegated_provenance.delegation_id`) requires a uuid v4 and the guard
+ * asserts one before it resolves a delegation
+ * (`guard.mjs`, `isUuidV4(delId)`). A 64-hex string satisfies neither, so
+ * EVERY delegated tool call was refused with AUTH_DELEGATION_NOT_FOUND before
+ * it could reach a specialist, while the ledger keyed the delegation under the
+ * very same 64-hex value: the ledger and the guard disagreed about one id.
+ *
+ * The derivation is UNCHANGED - the same domain tag over the same inputs -
+ * and only the RENDERING changed: the digest is formatted as a version-4
+ * UUID. The id therefore stays reproducible from the spawn proposal, and it
+ * now satisfies the published contract and the guard at the same time.
+ *
+ * The legacy 64-hex rendering is kept as `deriveLegacyDelegationId` so the
+ * reducer can still re-derive the ids the operational ledger already
+ * recorded: the identity derivation changed its FORM, and history written
+ * under the old form must keep replaying.
+ */
+export function deriveLegacyDelegationId({
   task_id,
   brief_revision,
   node_id,
@@ -354,6 +377,30 @@ export function deriveDelegationId({
     agent_id,
     attempt,
   });
+}
+
+/**
+ * Format a hex digest as a version-4 UUID: the version nibble and the
+ * RFC 4122 variant bits are set on the digest's own bytes, so the result is
+ * a function of the digest alone and never of ambient randomness.
+ */
+function formatUuidV4(digestHex) {
+  const bytes = Buffer.from(digestHex.slice(0, 32), "hex");
+  if (bytes.length !== 16) throw new TypeError("DELEGATION_ID_DIGEST_INVALID");
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    hex.slice(12, 16),
+    hex.slice(16, 20),
+    hex.slice(20, 32),
+  ].join("-");
+}
+
+export function deriveDelegationId(fields) {
+  return formatUuidV4(deriveLegacyDelegationId(fields));
 }
 
 export const SPAWN_PROPOSAL_KEYS = Object.freeze([
