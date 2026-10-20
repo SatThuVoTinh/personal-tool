@@ -1236,3 +1236,117 @@ describe("M12/T9 - F-127: one declaration owns the outcome vocabulary", () => {
 });
 
 // ===========================================================================
+// M12/T9 - F-220: the reserved fixture directories carry real vectors and a
+// loader that compares them against the production behaviour.
+// ===========================================================================
+describe("M12/T9 - F-220: the fixture directories carry vectors, not reservation notes", () => {
+  const repoFile = (relative) =>
+    fileURLToPath(new URL(`../${relative}`, import.meta.url));
+  const fixture = (relative) =>
+    JSON.parse(
+      fs.readFileSync(
+        repoFile(`integrations/openclaw/topology/fixtures/${relative}`),
+        "utf8",
+      ),
+    );
+
+  test("F-220: every canonicalization vector produces its pinned digest", async () => {
+    const { canonicalHash } =
+      await import("../integrations/openclaw/topology/lib/canonical.mjs");
+    const vectors = fixture("canonical-hash/vectors.json");
+    assert.ok(
+      vectors.vectors.length >= 4,
+      "the canonicalization vectors must exist",
+    );
+    for (const vector of vectors.vectors) {
+      assert.equal(
+        canonicalHash(vector.domain, vector.value),
+        vector.expected_sha256,
+        `canonicalization vector: ${vector.name}`,
+      );
+    }
+  });
+
+  test("F-220: every lifecycle scenario reaches the state the vector states", async () => {
+    const { applyWorkflowEvent } =
+      await import("../integrations/openclaw/topology/lib/workflow.mjs");
+    const { deriveTaskId } =
+      await import("../integrations/openclaw/topology/lib/canonical.mjs");
+    const scenarios = fixture("lifecycle/vectors.json");
+    assert.ok(
+      scenarios.scenarios.length >= 3,
+      "the lifecycle vectors must exist",
+    );
+    for (const scenario of scenarios.scenarios) {
+      const task_id = deriveTaskId(scenario.origin);
+      let snapshot = { tasks: {}, sequence: 0 };
+      const apply = (type, payload) => {
+        const body =
+          type === "WORKFLOW_OPENED"
+            ? { ...scenario.origin, ...(payload ?? {}) }
+            : (payload ?? {});
+        snapshot = applyWorkflowEvent(snapshot, type, { task_id, ...body });
+      };
+      for (const event of scenario.events) apply(event.type, event.payload);
+      const task = snapshot.tasks[task_id];
+      assert.equal(
+        task.workflow_status,
+        scenario.expected.workflow_status,
+        `lifecycle vector: ${scenario.name}`,
+      );
+      assert.equal(
+        task.brief_state,
+        scenario.expected.brief_state,
+        `lifecycle vector: ${scenario.name}`,
+      );
+      for (const event of scenario.then ?? []) {
+        apply(event.type, event.payload);
+        const after = snapshot.tasks[task_id];
+        assert.equal(
+          after.workflow_status,
+          scenario.expected_after_then.workflow_status,
+          `lifecycle vector (after the verdict): ${scenario.name}`,
+        );
+        assert.equal(
+          after.brief_state,
+          scenario.expected_after_then.brief_state,
+          `lifecycle vector (after the verdict): ${scenario.name}`,
+        );
+      }
+    }
+  });
+
+  test("F-220: every routing vector states the production edge", async () => {
+    const { AGENT_SPAWN_POLICY } =
+      await import("../integrations/openclaw/lib/policy.mjs");
+    const vectors = fixture("routing/vectors.json");
+    assert.ok(vectors.vectors.length >= 15, "the routing vectors must exist");
+    for (const vector of vectors.vectors) {
+      const allowed = (AGENT_SPAWN_POLICY[vector.parent] ?? []).includes(
+        vector.target,
+      );
+      assert.equal(
+        allowed,
+        vector.allowed,
+        `routing vector: ${vector.parent} -> ${vector.target}`,
+      );
+    }
+  });
+
+  test("F-220: no tracked fixture directory contains only a reservation note", () => {
+    const root = repoFile("integrations/openclaw/topology/fixtures");
+    const walk = (directory) => {
+      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const child = path.join(directory, entry.name);
+        const files = fs.readdirSync(child);
+        assert.ok(
+          files.some((file) => !file.toLowerCase().endsWith("readme.md")),
+          `the fixture directory ${entry.name} must carry real content, not only a reservation note`,
+        );
+        walk(child);
+      }
+    };
+    walk(root);
+  });
+});

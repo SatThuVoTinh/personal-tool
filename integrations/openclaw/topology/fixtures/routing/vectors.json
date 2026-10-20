@@ -1,0 +1,24 @@
+{
+  "description": "Synthetic admission and DAG routing vectors. The production topology is: main coordinates only through o1 and o2; o1 owns the ETL layer (excel, sql, python); o2 owns the analytics layer (power-bi, python); a specialist spawns nothing; and no coordinator crosses into the other coordinator's layer. Every vector below states one edge and whether it is allowed, so a topology change that widens or narrows the graph reddens the lane.",
+  "vectors": [
+    { "parent": "main", "target": "o1", "allowed": true },
+    { "parent": "main", "target": "o2", "allowed": true },
+    { "parent": "main", "target": "excel", "allowed": false },
+    { "parent": "main", "target": "sql", "allowed": false },
+    { "parent": "main", "target": "python", "allowed": false },
+    { "parent": "main", "target": "power-bi", "allowed": false },
+    { "parent": "o1", "target": "excel", "allowed": true },
+    { "parent": "o1", "target": "sql", "allowed": true },
+    { "parent": "o1", "target": "python", "allowed": true },
+    { "parent": "o1", "target": "o2", "allowed": false },
+    { "parent": "o1", "target": "main", "allowed": false },
+    { "parent": "o2", "target": "power-bi", "allowed": true },
+    { "parent": "o2", "target": "python", "allowed": true },
+    { "parent": "o2", "target": "o1", "allowed": false },
+    { "parent": "o2", "target": "main", "allowed": false },
+    { "parent": "excel", "target": "sql", "allowed": false },
+    { "parent": "sql", "target": "excel", "allowed": false },
+    { "parent": "python", "target": "excel", "allowed": false },
+    { "parent": "power-bi", "target": "python", "allowed": false }
+  ]
+}

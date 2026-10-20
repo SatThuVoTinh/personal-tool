@@ -1,0 +1,134 @@
+{
+  "description": "Synthetic workflow, brief, run and result-acceptance vectors. Each scenario is a sequence of governed events and the state the task must be in after them. The expected state is written HERE, by hand, from the published lifecycle - it is never derived by the lane that reads it.",
+  "scenarios": [
+    {
+      "name": "an approval queues the task and a claim executes it",
+      "origin": {
+        "origin": "discord",
+        "origin_principal_ref": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "origin_message_id": "12345678901234567",
+        "root_agent_id": "main",
+        "root_session_key": "agent:main:sess-fixture-1",
+        "root_run_id": "run-fixture-1"
+      },
+      "events": [
+        { "type": "WORKFLOW_OPENED" },
+        {
+          "type": "WORKFLOW_USER_APPROVAL_DECIDED",
+          "payload": {
+            "actor": "user",
+            "channel": "approvals",
+            "decision": "APPROVE"
+          }
+        },
+        { "type": "WORKFLOW_TASK_CLAIMED", "payload": { "agent_id": "o1" } }
+      ],
+      "expected": { "workflow_status": "EXECUTING", "brief_state": "ACTIVE" }
+    },
+    {
+      "name": "a governed question suspends the task for the user",
+      "origin": {
+        "origin": "discord",
+        "origin_principal_ref": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "origin_message_id": "22345678901234567",
+        "root_agent_id": "main",
+        "root_session_key": "agent:main:sess-fixture-2",
+        "root_run_id": "run-fixture-2"
+      },
+      "events": [
+        { "type": "WORKFLOW_OPENED" },
+        {
+          "type": "WORKFLOW_USER_APPROVAL_DECIDED",
+          "payload": {
+            "actor": "user",
+            "channel": "approvals",
+            "decision": "APPROVE"
+          }
+        },
+        { "type": "WORKFLOW_TASK_CLAIMED", "payload": { "agent_id": "o1" } },
+        {
+          "type": "WORKFLOW_USER_QUESTION_RECORDED",
+          "payload": {
+            "agent_id": "main",
+            "question": "which table?",
+            "session_key": "agent:main:sess-fixture-2",
+            "run_id": "run-fixture-2"
+          }
+        }
+      ],
+      "expected": {
+        "workflow_status": "WAITING_FOR_USER",
+        "brief_state": "ACTIVE"
+      }
+    },
+    {
+      "name": "a task-level result enters review and one verdict closes it",
+      "origin": {
+        "origin": "discord",
+        "origin_principal_ref": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "origin_message_id": "32345678901234567",
+        "root_agent_id": "main",
+        "root_session_key": "agent:main:sess-fixture-3",
+        "root_run_id": "run-fixture-3"
+      },
+      "events": [
+        { "type": "WORKFLOW_OPENED" },
+        {
+          "type": "WORKFLOW_USER_APPROVAL_DECIDED",
+          "payload": {
+            "actor": "user",
+            "channel": "approvals",
+            "decision": "APPROVE"
+          }
+        },
+        { "type": "WORKFLOW_TASK_CLAIMED", "payload": { "agent_id": "o1" } },
+        {
+          "type": "WORKFLOW_RESULT_RECORDED",
+          "payload": {
+            "agent_id": "o1",
+            "attempt": 1,
+            "technical_status": "PASS",
+            "business_status": "PASS"
+          }
+        }
+      ],
+      "expected": {
+        "workflow_status": "RESULT_PENDING_REVIEW",
+        "brief_state": "ACTIVE"
+      },
+      "then": [
+        {
+          "type": "WORKFLOW_USER_RESULT_ACCEPTED",
+          "payload": {
+            "actor": "user",
+            "channel": "results",
+            "decision": "ACCEPT"
+          }
+        }
+      ],
+      "expected_after_then": {
+        "workflow_status": "COMPLETE",
+        "brief_state": "CLOSED"
+      }
+    },
+    {
+      "name": "an owner cancellation closes the task",
+      "origin": {
+        "origin": "discord",
+        "origin_principal_ref": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "origin_message_id": "42345678901234567",
+        "root_agent_id": "main",
+        "root_session_key": "agent:main:sess-fixture-4",
+        "root_run_id": "run-fixture-4"
+      },
+      "events": [
+        { "type": "WORKFLOW_OPENED" },
+        {
+          "type": "WORKFLOW_CANCELLED",
+          "payload": { "reason_code": "OWNER_CANCELLED", "actor": "user" }
+        }
+      ],
+      "expected": { "workflow_status": "CANCELLED", "brief_state": "CLOSED" }
+    }
+  ]
+}
