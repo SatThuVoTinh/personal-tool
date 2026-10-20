@@ -137,6 +137,12 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
   ]),
   "contracts/agent-result-payload.schema.json": Object.freeze([
     "48bcbf6b64daae63a3d7a917ac8f17790ba1468b4ed78182df5d1de59cd34717",
+    // M12/T9 F-252: the contract now carries its own `x-zink-contract-version`,
+    // so its bytes differ from the proven live build (ea84a5a). The outgoing
+    // digest is admitted so the deployed tree stays upgradable; the new digest
+    // is deliberately NOT listed: it is the current build and is accepted by
+    // content comparison.
+    "29e3a454293b2e1e9849509b5506ff34158601c72d1ad6932cc66c2c96dee350",
   ]),
   "contracts/approval-request.schema.json": Object.freeze([
     "a4866a323a17e7e4e0243afb4f771e2d3db2116034a7bd6a615501b0ae3d2e54",
@@ -164,6 +170,9 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
   ]),
   "contracts/delegation-proposal.schema.json": Object.freeze([
     "efd4371cacf396dc618cc84c8663a114f06b034c13737937b48aa0b895b2d6e0",
+    // M12/T9 F-252: the outgoing digest of the proven live build (ea84a5a).
+    // See the agent-result-payload entry for why.
+    "72eec9f8935c2c4da67c5460c0fba15f268f2928235a04e5bdd00af83c1f8a38",
   ]),
   "contracts/execution-brief.schema.json": Object.freeze([
     "514001e3edfd31a128b82f2c3944761214fd5d2ef7439d8033d914180410f5e4",
@@ -176,6 +185,9 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
   ]),
   "contracts/governance-manifest.schema.json": Object.freeze([
     "f980bfd5474c8d057be92fee136779490ba93ed944295e4d173c54d7082e24c5",
+    // M12/T9 F-252: the outgoing digest of the proven live build (ea84a5a).
+    // See the agent-result-payload entry for why.
+    "cc0878e7fb476eace236e1aa66f081faff44e45d349ae677998a170fc4732884",
   ]),
   "contracts/governed-reference.schema.json": Object.freeze([
     "e3eabb880bd46b4fccdb7b7b3767ad4be42a6d8ec4894c72959cfbf8a572c02e",

@@ -523,12 +523,15 @@ export function generateSchemaManifest() {
  * change): run
  *   node -e "import('./integrations/openclaw/topology/lib/schema.mjs').then(m => console.log(m.generateSchemaManifest().manifestChecksum))"
  * and put the printed value below.
+ *
+ * M12/T9 F-252: the twelve topology contracts now each carry their own
+ * `x-zink-contract-version`, so the manifest reports the version each contract
  * publishes instead of "unknown" for all of them, and F-030's pinning of the
  * WORKFLOW_CANCELLED payload moved the ledger-event bytes. The value below is
  * the checksum of THAT state.
  */
 export const PINNED_SCHEMA_MANIFEST_CHECKSUM =
-  "f35473a9fa0ceb6f10bfb3a6280022515abca21fe8c7dee7093711a33fbb5d0b";
+  "c17e873191fadcad18a8e70cf48838a514621467098611a31a21614ef38ff691";
 
 export function verifySchemaManifestChecksums(manifest = null) {
   if (manifest === null) {

@@ -281,6 +281,14 @@ test(
         // M12/T2-R1 then widened the same set: the forum-tag module is new (no
         // installed predecessor), the two ledger contracts gain the surfaced events,
         // and the entrypoint/formatter/policy/canonical/workflow move with them.
+        // M12/T9 F-252: the twelve topology contracts now each carry their own
+        // `x-zink-contract-version`, so three contracts that the proven live
+        // build (ea84a5a) still carries byte-for-byte now differ. Their
+        // outgoing digests are admitted in configure.mjs, so the deployed tree
+        // stays upgradable.
+        "contracts/agent-result-payload.schema.json",
+        "contracts/delegation-proposal.schema.json",
+        "contracts/governance-manifest.schema.json",
         "contracts/approval-request.schema.json",
         "contracts/delegation-envelope.schema.json",
         "contracts/execution-brief.schema.json",
