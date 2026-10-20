@@ -41,6 +41,10 @@ import {
   upgradeEmptyLegacyLedger,
 } from "./topology/lib/ledger.mjs";
 import { canonicalJson } from "./topology/lib/canonical.mjs";
+import {
+  assertBuilderApplyAvailable,
+  markBuilderApplyConsumed,
+} from "./topology/lib/transaction-snapshot.mjs";
 
 const REPOSITORY_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -808,6 +812,10 @@ function parseArguments(argv) {
     "discord-results-forum-id",
     "discord-approvals-forum-id",
     "discord-incidents-forum-id",
+    // F-111: the transaction the apply orchestration took. The builder refuses
+    // to apply without one, so a bare `--apply` cannot skip the snapshot, the
+    // native patch, the byte verification and the gateway restart.
+    "apply-transaction",
   ]);
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
@@ -839,6 +847,16 @@ function parseArguments(argv) {
   }
   if (!options.mode) {
     throw new Error("Select exactly one of --dry-run, --preflight or --apply");
+  }
+  // F-111: the builder apply is reachable ONLY through the apply
+  // orchestration, which takes the transaction snapshot first and runs the
+  // native patch, the byte verification and the gateway restart after it. A
+  // bare `--apply` had no such binding, so the documented deploy path could
+  // bypass every one of those stages.
+  if (options.mode === "apply" && !options["apply-transaction"]) {
+    throw new Error(
+      "APPLY_REQUIRES_TRANSACTION: --apply requires --apply-transaction <id>, the transaction the apply orchestration took",
+    );
   }
   return options;
 }
@@ -1589,6 +1607,10 @@ async function main() {
     );
     return;
   }
+  // F-111: the apply is bound to the transaction the orchestration took, and
+  // that transaction may be spent only once.
+  const applyTransaction = options["apply-transaction"];
+  assertBuilderApplyAvailable(stateDir, applyTransaction);
   ensurePrivateDirectory(stateDir);
   ensurePrivateDirectory(output.ledgerDirectory);
   await createRuntimeBackup({ stateDir, identifiers });
@@ -1858,6 +1880,9 @@ async function main() {
     0o600,
     [renderLegacySystemdDropInR16(stateDir)],
   );
+  // F-111: the transaction is spent by the apply that used it, so a second
+  // `--apply` against the same transaction is refused.
+  markBuilderApplyConsumed(stateDir, applyTransaction);
   process.stdout.write(`${stableJson(output)}`);
 }
 

@@ -82,6 +82,10 @@ function configArgs(mode, identifiers) {
     "--state-dir",
     stateDir,
   ];
+  // F-111: the apply carries the transaction the orchestration took, so the
+  // builder can refuse a bare apply and can refuse a spent transaction.
+  if (mode === "--apply" && applyTransaction)
+    args.push("--apply-transaction", applyTransaction);
   for (const [name, value] of Object.entries(identifiers))
     args.push(
       `--${name.replace(/[A-Z]/gu, (letter) => `-${letter.toLowerCase()}`)}`,
@@ -90,13 +94,17 @@ function configArgs(mode, identifiers) {
   return args;
 }
 
-function runBuilder(mode, identifiers) {
-  execFileSync(process.execPath, configArgs(mode, identifiers), {
-    cwd: repository,
-    stdio: ["ignore", "pipe", "pipe"],
-    timeout: 60000,
-    maxBuffer: 65536,
-  });
+function runBuilder(mode, identifiers, applyTransaction = null) {
+  execFileSync(
+    process.execPath,
+    configArgs(mode, identifiers, applyTransaction),
+    {
+      cwd: repository,
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 60000,
+      maxBuffer: 65536,
+    },
+  );
 }
 
 function restartScopedGateway() {

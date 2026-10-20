@@ -180,7 +180,10 @@ export async function applyRuntime(deps) {
 
     stage = "builder-apply";
     mutationStarted = true;
-    deps.runBuilder("--apply", identifiers);
+    // F-111: the builder is bound to the transaction this orchestration took,
+    // so the apply cannot run without its rollback target and it cannot run
+    // twice against the same transaction.
+    deps.runBuilder("--apply", identifiers, transaction?.attemptId ?? null);
 
     stage = "quarantine-prune";
     deps.pruneQuarantine();

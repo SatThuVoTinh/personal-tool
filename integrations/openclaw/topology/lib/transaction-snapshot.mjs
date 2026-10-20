@@ -825,3 +825,54 @@ export function findOrphanedTransaction(stateDir) {
     left.attemptId.localeCompare(right.attemptId),
   );
 }
+
+/**
+ * M12/T9 F-111: the ONE builder apply per transaction.
+ *
+ * The builder (`configure.mjs --apply`) could be invoked on its own: nothing tied
+ * it to the transaction snapshot the apply orchestration takes, so the rollback
+ * target, the native patch, the byte verification and the gateway restart could
+ * all be skipped, and the "exactly one apply per grant" rule had no tool
+ * support at all.
+ *
+ * The transaction attempt is the GRANT. The builder refuses to run without one,
+ * and the attempt is marked consumed by the apply that used it, so a second
+ * `--apply` against the same transaction is refused with a named code.
+ */
+const BUILDER_APPLY_RECEIPT = "builder-apply.consumed";
+
+export function builderApplyReceiptPath(stateDir, attemptId) {
+  if (!ATTEMPT_ID.test(attemptId) || path.basename(attemptId) !== attemptId)
+    throw new Error("TRANSACTION_ID_INVALID");
+  return path.join(transactionRoot(stateDir), attemptId, BUILDER_APPLY_RECEIPT);
+}
+
+/**
+ * The transaction must exist and must not have been spent.
+ */
+export function assertBuilderApplyAvailable(stateDir, attemptId) {
+  const receipt = builderApplyReceiptPath(stateDir, attemptId);
+  if (existsSync(receipt))
+    throw new Error(
+      "APPLY_ALREADY_SPENT: this transaction already ran the builder apply",
+    );
+  const record = path.join(transactionRoot(stateDir), attemptId, RECORD_NAME);
+  if (!existsSync(record))
+    throw new Error(
+      "TRANSACTION_NOT_FOUND: the apply orchestration took no such transaction",
+    );
+  return receipt;
+}
+
+/**
+ * Mark the transaction spent. The receipt is written EXCLUSIVELY, so two applies
+ * racing on the same transaction cannot both believe they own it.
+ */
+export function markBuilderApplyConsumed(stateDir, attemptId) {
+  const receipt = builderApplyReceiptPath(stateDir, attemptId);
+  writeExclusiveFile(
+    receipt,
+    `${JSON.stringify({ consumedAt: new Date().toISOString() })}\n`,
+  );
+  return receipt;
+}
