@@ -2616,3 +2616,30 @@ không nộp lại một premise đã bị bác hoặc một việc chủ đã g
 - Reproduction: read-only: print the `id` field of every `~/.openclaw-zink/extensions/*/openclaw.plugin.json` (three identical ids) and count the warning lines in the unit's journal. Which copy would execute if the config selection were removed is not proven — flipping that selection is a live-runtime mutation, so it was not run in this pass.
 - Acceptance criteria: the deploy and rollback ceremonies move a displaced tree outside every scanned directory (or rename its manifest id) as one transaction, a gate asserts exactly one manifest per plugin id under the extensions root, and the quarantine convention the live host actually uses is named in a runbook.
 - Related findings: F-369 (the same deployment record that does not describe this tree), F-147 (restore quarantines instead of restoring), F-022 · nguồn: R8-M1 live-runtime measurement
+
+### F-371 — the canonical delegation id is a 64-hex digest while the published envelope and the guard both require a UUIDv4, so every delegated tool call is refused with AUTH_DELEGATION_NOT_FOUND before it can reach a specialist
+
+- Category: F4 — Integration & Contract Violations
+- Legacy register id: — (new in M12/T9; no legacy id)
+- Affected modules: OpenClaw runtime libs, OpenClaw integration, Zink Tools
+- Severity: Critical
+- Status: OPEN — found while fixing another row in the M12/T9 band; filed here per §0.2.8 and not fixed in passing
+- Root cause: the id a delegation is filed under is derived by one module and checked by another: `deriveDelegationId` (`integrations/openclaw/topology/lib/canonical.mjs`) returns `canonicalHash("zink-delegation-id-v1", …)` — a sha256 hex digest — while the published envelope `zink-tools/contracts/tool-call.schema.json` `$defs/delegated_provenance.delegation_id` is `{"$ref": "#/$defs/uuid_v4"}` and `integrations/openclaw/topology/lib/guard.mjs:1820-1823` asserts `isUuidV4(delId)` before it resolves the delegation. A 64-hex string satisfies neither, so the check can never pass.
+- Evidence: Where: `integrations/openclaw/topology/lib/canonical.mjs` `deriveDelegationId` · Where: `integrations/openclaw/topology/lib/guard.mjs:1818-1823` — `const delId = del.delegation_id ?? del.id; assert(typeof delId === "string" && isUuidV4(delId), "AUTH_DELEGATION_NOT_FOUND")` · Where: `zink-tools/contracts/tool-call.schema.json` `$defs/delegated_provenance.delegation_id` · Evidence: the ledger keys `task.delegations[payload.delegation_id]` (`topology/lib/workflow.mjs:1349`, `:2257`) by the id the canonical builder produced, so the ledger and the guard disagree about the same value.
+- Reproduction: Static proof chain: `canonicalHash` returns `createHash("sha256").update(...).digest("hex")` (64 hex characters, no dashes); `isUuidV4` tests `/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i`; no 64-hex string matches it. Executed by the plugin agent's F-242 lane, which asserts the refusal honestly instead of papering over it.
+- Acceptance criteria: a delegation that the canonical builder produced is accepted by the guard and validates against the published envelope: the id is still derived deterministically from the same inputs, but in the form the contract and the guard already require, and a lane proves that a real delegation resolves instead of being refused.
+- Related findings: F-242 (the live governed tool-call seam that surfaced it), F-157 (the approval-scope digest family), F-249 (the same class of contract-versus-reducer disagreement) · nguồn: M12/T9 band 3, found while fixing F-242
+
+### F-372 — `applications/` is a third untracked, ownerless top-level tree — two empty directories that no canonical document names and no tracked file occupies
+
+- Category: F7 — Testing & Verification Gaps
+- Legacy register id: — (new in M12/T9; no legacy id)
+- Affected modules: Legacy top-level tree, Repository hygiene
+- Severity: Low
+- Status: OPEN — found while fixing another row in the M12/T9 band; filed here per §0.2.8 and not fixed in passing
+- Root cause: the repository has three logical modules and a set of legacy trees; `models/` and `shared/` were the two ownerless top-level trees the F-137 gate found, and they were moved aside. `applications/` — `applications/document-manager` and `applications/knowledge-platform-web` — is a third one, still on disk, empty, untracked, and named by no architecture document.
+- Evidence: Where: `applications/document-manager/` and `applications/knowledge-platform-web/` (both empty) · Where: `docs/architecture/repository-topology.md` — the owner map for every tracked top-level tree, which names `applications/` nowhere · Evidence: `git ls-files applications/` returns 0 paths; the F-137 gate (`tests/repository-policy.test.mjs`) refuses a top-level tree whose name or child names duplicate a Zink Tools capability path, and `applications/` does not trip it — so nothing in the tree refuses this one.
+- Reproduction: Static: `git ls-files applications/` is empty and `Get-ChildItem applications -Recurse -Force` lists two directories and no file. The F-137 gate's own rule (any new top-level tree whose name or child names duplicate a `zink-tools/` capability path) does not fire for `applications/`, so the cleanliness the row names is not enforced anywhere.
+- Acceptance criteria: the working tree has no untracked, ownerless top-level tree: `applications/` is either moved aside with the other legacy scaffolding (`models/`, `shared/`, which now live under `scratch/legacy-empty-trees/`) or named with an owner in `docs/architecture/repository-topology.md`, and a lane asserts that the set of top-level trees on disk matches the set the owner map names.
+- Related findings: F-121 (every top-level module path maps to a documented owner), F-137 (the ownerless-tree gate) · nguồn: M12/T9 band 3, found while fixing F-137
+
