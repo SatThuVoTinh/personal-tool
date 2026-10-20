@@ -17,6 +17,7 @@ Keep this file compact: authority and invariants live here; procedures live in
 | nearest nested `AGENTS.md` | narrower directory-specific rules |
 | `docs/architecture/` | canonical architecture and ownership |
 | `docs/contracts/` | persistent behavioral/runtime/API/data contracts plus execution-contract protocol |
+| `docs/development/` | development conventions and the gate registry (`docs/development/conventions.md`) — the single checkable list of required npm gates |
 | `docs/runbooks/` | operator procedures |
 | `README.md` | current user/operator-facing description |
 | `CHANGELOG.md` | validated completed history |
@@ -197,6 +198,8 @@ For RED:
 4. obtain owner decision;
 5. revise `PLAN.md`/contracts before execution resumes when required.
 
+The Owner Decision Protocol template is owned by `.agents/skills/planning/SKILL.md`; use it verbatim.
+
 Silence is not approval.
 
 ## 8. Engineering invariants
@@ -258,6 +261,8 @@ Repository-wide rules:
 - Target directory trees are architecture, not implementation evidence.
 - The accepted `apps/knowledge/` implementation remains the current Knowledgebase runtime until a separately approved migration; structural migration requires its own task and regression gate.
 - `zink-skill-store/` and `zink-tools/` are canonical peer-module paths; do not nest them under the Knowledgebase or legacy agent-system integration paths.
+- `integrations/openclaw/` is the **hosting boundary** for the Zink Tools adapter-contract surface, not a fourth module: OpenClaw owns agent orchestration, model-tool execution behavior and the workflow state it persists there (n8n owns deterministic workflow execution). A change under that path is routed to the OpenClaw owner, and the three logical modules above are unchanged by it.
+- `platforms/` is a canonical **target-architecture specification**, not a runtime and not a module: it documents the intended future shape and owns no runtime state. The accepted runtime stays under `apps/knowledge/` until a separately approved migration.
 
 ## 10. Safety invariants
 

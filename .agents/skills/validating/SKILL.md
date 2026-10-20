@@ -1,3 +1,5 @@
+# Validating
+
 ## Secrets, supply chain, and untrusted input
 
 Never inspect, print, copy, serialize, summarize, commit, or expose real:
@@ -77,6 +79,10 @@ NOT RUN
 
 A required unavailable gate remains `NOT RUN`.
 
+The list of required gates is the gate registry in `docs/development/conventions.md`; it is
+the single checkable enumeration of every npm gate, and `scripts/repository-policy.mjs`
+fails when that table and `package.json.scripts` diverge in either direction.
+
 Passing tests does not create:
 
 * execution authorization;
@@ -95,6 +101,8 @@ They may support validation but never substitute for the valid `ACTIVE.md`, the
 complete final diff, or independently rerun evidence. The defect register at
 `docs/execution/findings.md` is **not** transient state: it is tracked, permanent,
 and its §0 block owns the rules for closing a row.
+
+**State is historical:** `PLAN.md` wins without comparison — a state file is working memory, never a second source to reconcile against.
 
 ## Final Quality Gate
 

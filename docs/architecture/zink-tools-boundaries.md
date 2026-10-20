@@ -74,8 +74,10 @@ OpenClaw safely decoupled from provider details that genuinely vary.
 
 ## OpenClaw boundary
 
-OpenClaw owns orchestration, `work | research` classification, specialist
-routing, sandbox/execution permissions and tool invocation policy.
+OpenClaw owns orchestration, specialist routing, sandbox/execution permissions and
+tool invocation policy. The work/research task-mode classification is not implemented
+today: no schema or runtime carries it, so it is recorded only as a proposal in
+`work-research-routing.md` and is not a boundary this document delegates.
 
 Baseline execution specialists are exactly:
 

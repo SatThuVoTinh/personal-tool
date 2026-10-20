@@ -1,4 +1,4 @@
-### Planning
+# Planning
 
 Codex must inspect the actual repository before designing a plan.
 
@@ -207,8 +207,9 @@ They must never redefine the approved implementation details.
 ## Transient state use
 
 Planning authority lives in `PLAN.md`; approved implementation details live only
-in the matching valid `docs/contracts/execution/ACTIVE.md`. Do not create or use
-`.agents/states/active-task.md`.
+in the matching valid `docs/contracts/execution/ACTIVE.md`. The state protocol
+defines exactly two files, `context.md` and `handoff.md`; no other state file is
+part of it.
 
 Transient state is optional working memory only:
 
@@ -217,6 +218,11 @@ Transient state is optional working memory only:
 - `docs/execution/findings.md` belongs to review/remediation, not planning authority;
 - `.agents/states/handoff.md` belongs to execution/review handoff, not planning
   authority.
+
+**State is historical:** `PLAN.md` wins without comparison — a state file is working memory, never a second source to reconcile against.
+
+**Accountable writer:** Codex review/remediation.
+**Serialization:** one row, one writer — a second lane that finds the same `F-xxx` block already being edited does not edit it and hands the conflict to the orchestrator.
 
 No state file may authorize execution, redefine scope, or duplicate the frozen
 implementation body from `ACTIVE.md`.

@@ -1,3 +1,5 @@
+# Debugging
+
 ## Karpathy execution loop
 
 Every implementation step follows an evidence-driven loop.
@@ -38,6 +40,8 @@ Inspect:
 * the relevant entry in `docs/execution/findings.md` when present;
 * `.agents/states/handoff.md` when it helps reproduce the reported behavior;
 * current failure/evidence.
+
+**State is historical:** `PLAN.md` wins without comparison — a state file is working memory, never a second source to reconcile against.
 
 ### 2. Understand
 

@@ -24,8 +24,16 @@ Hệ thống bao gồm đúng 3 module logic ngang hàng (peer modules):
 personal-tool/
 ├── apps/knowledge/        # Zink Knowledgebase: ingestion, index, retrieval và trích dẫn Knowledge Vault
 ├── zink-skill-store/      # Zink Skill Store: lưu trữ skill được quản trị và template Excel/Power BI
-└── zink-tools/            # Zink Tools: ranh giới mỏng cho 5 công cụ callable và các adapter hạ tầng
+├── zink-tools/            # Zink Tools: ranh giới mỏng cho 5 công cụ callable và các adapter hạ tầng
+├── integrations/openclaw/ # Host runtime của OpenClaw: orchestration, workflow state, ledger (KHÔNG phải module thứ 4)
+└── platforms/             # Đặc tả kiến trúc mục tiêu (KHÔNG phải runtime, KHÔNG phải module)
 ```
+
+Ba module logic ở trên là **toàn bộ** module của hệ thống. `integrations/openclaw/` là **hosting boundary**
+của OpenClaw — nơi chứa orchestration, workflow state và ledger của runtime, được OpenClaw sở hữu theo
+`AGENTS.md` §9; nó không phải module logic thứ tư. `platforms/` là đặc tả kiến trúc mục tiêu: không phải
+runtime, không sở hữu state, và runtime hiện hành vẫn là `apps/knowledge/`. Bản đồ sở hữu đầy đủ cho
+mọi cây top-level nằm ở `docs/architecture/repository-topology.md`.
 
 - **Zink Knowledgebase:** Chịu trách nhiệm quản lý tài liệu tham khảo, ingestion PDF/Markdown từ Obsidian Vault của con người (mount ở chế độ chỉ đọc `read-only`), lập chỉ mục HNSW/FTS và cung cấp API truy xuất.
 - **Zink Skill Store:** Lưu trữ các kỹ năng và template phân tích đã được chuẩn hóa, hoàn toàn tách biệt với chỉ mục nghiên cứu của Knowledgebase.
@@ -261,9 +269,11 @@ sha256sum ~/.openclaw-zink/extensions/zink-governance/lib/discord-forum-tags.mjs
 
 Giá trị kỳ vọng sau bản remediation STACK (M12/T2-R3): `index.mjs` vẫn là
 `513beb15c3d7624c0a928c4c1556dc44d4c4cff4f1e00980f24b298a25751c0d` (bản này không đổi entrypoint),
-còn `lib/discord-forum-tags.mjs` phải chuyển từ `e0a755bb9c6add431c9306fd8bc2895318a868c3c6b8e84326d94fb95526fff5`
-(sản phẩm đang chạy, là nguồn gây kẹt thẻ) sang
-`18fbb0774c18d013f599f562810932cfb80c4071c0614376d16f46c30fc256b3`. Nếu digest thứ hai vẫn là
+còn `lib/discord-forum-tags.mjs` phải là `18fbb0774c18d013f599f562810932cfb80c4071c0614376d16f46c30fc256b3` —
+đây chính là build đã được cài trên gateway WSL bởi Deployment B ngày 2026-10-14. Bản
+`e0a755bb9c6add431c9306fd8bc2895318a868c3c6b8e84326d94fb95526fff5` trước đó là sản phẩm đang chạy và là nguồn
+gây kẹt thẻ; sau Deployment B nó chỉ còn là bản tiền-sửa. Nếu digest của
+`lib/discord-forum-tags.mjs` vẫn là
 `e0a755bb…` thì bản sửa chưa vào, đừng báo thẻ đã hoạt động.
 
 Báo cáo in ra là JSON đã rút gọn (chỉ trạng thái, lý do, kích thước), không chứa danh tính kênh,

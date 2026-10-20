@@ -72,3 +72,19 @@ review PASS
 
 `PLAN.md` cites the archived file by name for any claim that would otherwise rest on a
 deleted contract.
+
+## How a citation inside an archived contract resolves
+
+Two citations appear in the archived contracts and must not be read as live pointers.
+
+- **The defect register.** The archived contracts name the register's former path
+  `.agents/states/findings.md`, because they were written before the register moved. The
+  owner moved it on **2026-10-17** ("chuyển sang docs/execution đi"); the live register is
+  `docs/execution/findings.md`, which is Git-tracked. A citation of the former path in an
+  archived contract is a historical pointer to that move.
+- **A re-application order.** The archived contracts that order a re-application from a
+  `.agents/states/*-pending-admission.md` file are frozen history: those diffs were
+  written for a tree that no longer exists. The live rule is in
+  `.agents/states/README.md` — a pending-admission file must not be offered to an
+  executor unless a recorded check proves its diff is still absent from the tracked
+  tree, and a diff that is already applied is annotated `ALREADY LANDED via <commit>`.

@@ -24,6 +24,8 @@ discarded.
 
 ## Files
 
+The protocol defines exactly two state files:
+
 | File         | Purpose                                                            | Typical writer           |
 | ------------ | ------------------------------------------------------------------ | ------------------------ |
 | `context.md` | verified task-specific facts that would otherwise need rediscovery | any active agent         |
@@ -77,9 +79,14 @@ that file defines. Do not keep a parallel queue here, and do not re-grade
 `Severity`/`Category` without evidence. That file's §0 block is the authority for
 the status vocabulary and for the conditions required before a row is removed.
 
+**Accountable writer:** Codex review/remediation.
+**Serialization:** one row, one writer — a second lane that finds the same `F-xxx` block already being edited does not edit it and hands the conflict to the orchestrator.
+
 A finding is closed only after the relevant validation passes. Do not delete an
 open finding merely because another agent cannot reproduce it; update evidence
 and status.
+
+A `*-pending-admission.md` file must not be offered to an executor unless a recorded check proves its diff is still absent from the tracked tree; a diff that is already applied is annotated `ALREADY LANDED via <commit>` and is never re-applied.
 
 ## `handoff.md`
 
@@ -140,8 +147,9 @@ After technical completion:
 4. do not convert state into `CHANGELOG.md` unless validated completion rules are
    independently satisfied.
 
-After the task is fully accepted/closed, delete or clear the two mutable local
-state files before the next unrelated task.
+After the task is fully accepted/closed, delete or clear the two mutable local state files before the next unrelated task; nobody keeps them across an unrelated task.
+
+**State is historical:** `PLAN.md` wins without comparison — a state file is working memory, never a second source to reconcile against.
 
 ## Version-control policy
 

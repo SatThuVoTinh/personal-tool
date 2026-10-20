@@ -1,4 +1,4 @@
-### Review
+# Code Review
 
 Codex reviews:
 
@@ -82,6 +82,8 @@ actual validation evidence
 
 `ACTIVE.md` is the sole source of truth for approved implementation details. `context.md`, `handoff.md`, and `findings.md` are navigation/working-memory aids only; they are never authority and never define the review boundary.
 
+**State is historical:** `PLAN.md` wins without comparison — a state file is working memory, never a second source to reconcile against.
+
 Codex must check both:
 
 ```text
@@ -108,7 +110,7 @@ Codex may fix it directly.
 
 Any fix must:
 
-* create/update `docs/execution/findings.md` for actionable review findings when useful;
+* create/update `docs/execution/findings.md` for every actionable review, debug or validation finding;
 * update `context.md` or `handoff.md` only when they materially improve continuity;
 * rerun affected gates;
 * remain within current authority.
@@ -125,6 +127,9 @@ block is the authority for the status vocabulary (`OPEN`, `LATENT`, `HYPOTHESIS`
 `PARTIAL`, `BLOCKED`, `EXCLUDED`, `REFUTED`), for the one-bug-one-commit rule, and for the
 three conditions required before a row is deleted. `.agents/states/README.md` no longer
 defines a finding status set.
+
+**Accountable writer:** Codex review/remediation.
+**Serialization:** one row, one writer — a second lane that finds the same `F-xxx` block already being edited does not edit it and hands the conflict to the orchestrator.
 
 A finding that needs an owner decision stays `OPEN` (or becomes `EXCLUDED` once the owner
 rules it out of scope); the register never records acceptance on the owner's behalf.
