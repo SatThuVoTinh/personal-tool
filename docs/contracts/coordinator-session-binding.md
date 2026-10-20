@@ -230,7 +230,7 @@ attached to a queue claim — never as something it is not.
 `{ task_id, task, coordinatorRun }` with deliberately NO `delegation` object.
 Every existing consumer assumes the two-shape model (`owner.delegation?.X ??
 task.root_Y`), under which a bound coordinator would silently inherit
-Main/root-agent semantics. All 24 `findSession` consumers must be audited in the
+Main/root-agent semantics. All 25 `findSession` consumers must be audited in the
 implementation task; the count is derived, not remembered (re-derive it with
 `git grep -n 'findSession(' -- '*.mjs' ':!tests'`, which also matches the
 definition in `integrations/openclaw/topology/lib/workflow.mjs`; the consumers
@@ -341,7 +341,7 @@ A future implementation task, if authorized, covers ONLY:
 1. add WORKFLOW_COORDINATOR_RUN_BOUND
 2. update workflow reducer
 3. update findSession identity resolution
-4. audit all 24 `findSession` consumers (the count is derived, not remembered)
+4. audit all 25 `findSession` consumers (the count is derived, not remembered)
 5. add bound-coordinator spawn rule using existing AGENT_SPAWN_POLICY
 6. update beforeRun / beforeRunEnd / subagent_ended consumers as required
 7. wire existing coordinator-pickup runtime seam
