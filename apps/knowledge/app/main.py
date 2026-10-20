@@ -49,6 +49,7 @@ from .retrieval import (
     fuse_candidates,
     normalize_filters,
     normalize_source_types,
+    refuse_unhonourable_scope,
     render_citation,
     render_pdf_citation,
 )
@@ -103,11 +104,18 @@ class SearchRequest(BaseModel):
     path_prefix: str | None = None
     source_types: list[Literal["MARKDOWN", "PDF"]] | None = None
     rerank: bool = True
+    min_score: float | None = None
+    # F-116 (R5-E02-01): these four were DECLARED, accepted under
+    # `extra="forbid"` and then ignored by every query, so an answer scoped
+    # to a namespace was really corpus-wide. `namespace` and
+    # `secondary_topics` are now honoured as scopes over the corpus's own
+    # canonical topics. `subtopic` and `capability` name dimensions this
+    # service does not have, so they are refused instead of silently
+    # answered with the whole corpus.
     namespace: str | None = None
     subtopic: str | None = None
     secondary_topics: list[str] | None = None
     capability: str | None = None
-    min_score: float | None = None
 
 
 DATABASE_ERRORS = (
@@ -467,7 +475,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise HTTPException(status_code=422, detail={"code": "INVALID_SEARCH_REQUEST"})
             if token_budget.count(query) > QUERY_MAX_TOKENS:
                 raise HTTPException(status_code=422, detail={"code": "QUERY_TOKEN_LIMIT_EXCEEDED"})
-            filters = normalize_filters(request.primary_topic, request.tags_all, request.path_prefix)
+            filters = normalize_filters(
+                request.primary_topic,
+                request.tags_all,
+                request.path_prefix,
+                request.namespace,
+                request.secondary_topics,
+            )
+            # F-116 (R5-E02-01): a scope this service cannot honour is
+            # refused, not answered with the whole corpus.
+            refuse_unhonourable_scope(request.subtopic, request.capability)
             source_types = normalize_source_types(request.source_types)
             segment_types = tuple(
                 segment_type
@@ -508,6 +525,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         filters.tags_all,
                         filters.path_prefix,
                         segment_types,
+                        # F-116 (R5-E02-01): the scope the caller asked for
+                        # reaches the query, so a namespace-scoped answer is
+                        # scoped instead of corpus-wide.
+                        filters.namespace_topic,
+                        filters.canonical_topics_all,
                     )
                 except ActiveIndexChangedError as error:
                     if attempt == 0:

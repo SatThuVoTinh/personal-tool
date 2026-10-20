@@ -31,8 +31,13 @@ from tempfile import TemporaryDirectory
 from unittest.mock import AsyncMock, patch
 from uuid import UUID, uuid4
 
+import asyncpg
+from asyncpg.exceptions import DuplicateTableError
+
 from app.database import AcceptedIndexRun, KnowledgeDatabase
 from app.database import PdfPublicationSegment
+from app.database import StateTransitionError
+from app.index_runner import IndexRunCoordinator
 from app.markdown_adapter import (
     MarkdownSegment,
     MarkdownSource,
@@ -127,13 +132,35 @@ FAILED_INDEX_CONTENT = (
     "DELETE FROM knowledge.sources WHERE index_id = ANY($1::uuid[])",
 )
 
+# F-093 (R5-E03-04): the content build carries the whole extracted text and
+# its provenance jsonb, and no cascade reaches it, so a build whose last
+# published source detail is gone was pure retention. The statement is
+# separate from the per-index deletes because it is keyed by BUILD id, not by
+# index id: it must never reclaim a build another index still publishes.
+RETIRED_PDF_BUILD_STATEMENT = (
+    "DELETE FROM knowledge.pdf_content_builds b WHERE b.id = ANY($1::uuid[]) "
+    "AND NOT EXISTS (SELECT 1 FROM knowledge.pdf_source_details d WHERE d.build_id = b.id)"
+)
+
+
+def index_deletes(connection: FakeConnection) -> list[tuple[str, tuple[object, ...]]]:
+    """The per-index deletes, without the build retirement."""
+
+    return [
+        (statement, args)
+        for (statement, args) in deletes(connection)
+        if statement != RETIRED_PDF_BUILD_STATEMENT
+    ]
+
 
 class FailedIndexGarbageCollectionTests(unittest.IsolatedAsyncioTestCase):
     async def test_fail_run_purges_the_failed_index_content(self) -> None:
         run = running_run()
+        build_id = uuid4()
         connection = FakeConnection(
             fetchrows=[run_row(run)],
             fetchvals=["BUILDING", uuid4(), uuid4()],
+            fetches=[[{"build_id": build_id}]],
         )
         database = database_with(connection)
 
@@ -148,10 +175,18 @@ class FailedIndexGarbageCollectionTests(unittest.IsolatedAsyncioTestCase):
             for (called, statement, _) in connection.calls
             if called in {"execute", "fetchval"}
         ]
-        content = deletes(connection)
+        content = index_deletes(connection)
         self.assertEqual([statement for statement, _ in content], list(FAILED_INDEX_CONTENT))
         for _, args in content:
             self.assertEqual(args, ([UUID(run.index_id)],))
+        # F-093 (R5-E03-04): the content build the failed index published is
+        # reclaimed with its extracted text, and it is keyed by build id.
+        retired = [
+            args
+            for (statement, args) in deletes(connection)
+            if statement == RETIRED_PDF_BUILD_STATEMENT
+        ]
+        self.assertEqual(retired, [([build_id],)])
         # The forensic row and the run history must survive the purge.
         self.assertNotIn("DELETE FROM knowledge.indexes", ordered)
         self.assertNotIn("DELETE FROM knowledge.index_runs", ordered)
@@ -192,16 +227,27 @@ class FailedIndexGarbageCollectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(empty.calls, [])
 
         index_id = uuid4()
-        connection = FakeConnection()
+        build_id = uuid4()
+        connection = FakeConnection(fetches=[[{"build_id": build_id}], [{"build_id": build_id}]])
         for _ in range(2):
             await KnowledgeDatabase._purge_index_content(connection, [index_id])
         self.assertEqual(
-            statements(connection), list(FAILED_INDEX_CONTENT) * 2
+            [statement for statement, _ in index_deletes(connection)],
+            list(FAILED_INDEX_CONTENT) * 2,
         )
+        retired = [
+            args
+            for (statement, args) in deletes(connection)
+            if statement == RETIRED_PDF_BUILD_STATEMENT
+        ]
+        self.assertEqual(retired, [([build_id],), ([build_id],)])
 
     async def test_cleanup_sweep_prunes_failed_content_without_superseded_ids(self) -> None:
         stale = uuid4()
-        connection = FakeConnection(fetches=[[{"id": stale}]])
+        build_id = uuid4()
+        connection = FakeConnection(
+            fetches=[[{"id": stale}], [{"build_id": build_id}]]
+        )
         database = database_with(connection)
 
         await database.cleanup_superseded([])
@@ -212,17 +258,48 @@ class FailedIndexGarbageCollectionTests(unittest.IsolatedAsyncioTestCase):
             if "WHERE status = 'FAILED'" in statement
         ]
         self.assertTrue(sweep)
-        content = deletes(connection)
+        content = index_deletes(connection)
         self.assertEqual([statement for statement, _ in content], list(FAILED_INDEX_CONTENT))
         for _, args in content:
             self.assertEqual(args, ([stale],))
 
+    async def test_a_publish_reclaims_the_retired_content_build(self) -> None:
+        """F-093 (R5-E03-04): the retired build kept its whole extracted text.
+
+        A PDF that was edited or removed leaves the previous content build
+        behind: its row carries every extracted segment and its provenance
+        jsonb, and the foreign key from `pdf_source_details` forbids any
+        cascade from reaching it. The publish that supersedes the old index
+        is where that build is released, and the delete is guarded so a build
+        another index still publishes is never reclaimed.
+        """
+
+        superseded = uuid4()
+        build_id = uuid4()
+        connection = FakeConnection(fetches=[[{"build_id": build_id}], []])
+        database = database_with(connection)
+
+        await database.cleanup_superseded([str(superseded)])
+
+        retired = [
+            (statement, args)
+            for (statement, args) in deletes(connection)
+            if statement == RETIRED_PDF_BUILD_STATEMENT
+        ]
+        self.assertEqual(retired, [(RETIRED_PDF_BUILD_STATEMENT, ([build_id],))])
+        # The guard is the whole safety of the delete: a build that another
+        # index still publishes must survive the reclamation of this one.
+        self.assertIn("NOT EXISTS", RETIRED_PDF_BUILD_STATEMENT)
+        self.assertIn("knowledge.pdf_source_details", RETIRED_PDF_BUILD_STATEMENT)
+
     async def test_startup_recovery_prunes_content_of_interrupted_shadows(self) -> None:
         index_id = uuid4()
+        build_id = uuid4()
         connection = FakeConnection(
             fetches=[
                 [{"id": uuid4(), "index_id": index_id, "kind": "FULL_REBUILD"}],
                 [{"id": index_id}],
+                [{"build_id": build_id}],
             ]
         )
         database = database_with(connection)
@@ -230,10 +307,165 @@ class FailedIndexGarbageCollectionTests(unittest.IsolatedAsyncioTestCase):
         recovered = await database.recover_interrupted_runs()
 
         self.assertEqual(recovered, 1)
-        content = deletes(connection)
+        content = index_deletes(connection)
         self.assertEqual([statement for statement, _ in content], list(FAILED_INDEX_CONTENT))
         for _, args in content:
             self.assertEqual(args, ([index_id],))
+
+
+class OwnerGenerationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_a_stale_run_cannot_write_inside_a_newer_owners_session(self) -> None:
+        """F-255 (R7-D10A-03): the owner slot is mutable.
+
+        Every lifecycle mutation resolved the owner connection from
+        `self._owner_connection` at CALL time, so a run whose own owner had
+        been released opened its transaction on the connection a NEWER
+        generation had bound and interleaved its writes with that
+        generation's. The run is now pinned to the connection it was
+        scheduled with, and a run whose owner is no longer the bound one
+        refuses before it executes a single statement.
+        """
+
+        database = KnowledgeDatabase(
+            "localhost", 5432, "knowledge", "zink", "secret", Path("migrations")
+        )
+        database._pool = FakePool(FakeConnection())  # type: ignore[assignment]
+        first = FakeConnection()
+        second = FakeConnection()
+        coordinator = IndexRunCoordinator(database, 7)
+        database.bind_owner_connection(first)
+        coordinator._reservation = first  # type: ignore[assignment]
+
+        started = asyncio.Event()
+        release = asyncio.Event()
+        failures: list[BaseException] = []
+
+        async def work() -> list[str]:
+            started.set()
+            await release.wait()
+            try:
+                await database.set_discovered(str(uuid4()), 1)
+            except BaseException as error:  # noqa: BLE001 - the outcome is asserted
+                failures.append(error)
+            return []
+
+        async def cleanup(_: list[str]) -> None:
+            return None
+
+        await coordinator.schedule(work, cleanup)
+        await asyncio.wait_for(started.wait(), timeout=1)
+        # A newer generation reserves the lock and binds its own connection
+        # while the older run is still scheduled.
+        database.unbind_owner_connection(first)
+        database.bind_owner_connection(second)
+        release.set()
+        for task in list(coordinator._run_tasks):
+            await asyncio.wait_for(asyncio.shield(task), timeout=1)
+
+        self.assertEqual(len(failures), 1)
+        self.assertIsInstance(failures[0], StateTransitionError)
+        self.assertEqual(str(failures[0]), "Index ownership connection was lost.")
+        # Nothing was written on either connection: the refusal happens
+        # before the first statement. The only statement the first
+        # connection sees is the advisory unlock the coordinator issues when
+        # the run ends.
+        writes = [
+            call for call in first.calls if call[1] != "SELECT pg_advisory_unlock($1)"
+        ]
+        self.assertEqual(writes, [])
+        self.assertEqual(second.calls, [])
+        await coordinator.stop()
+
+
+class ReplayMigrationConnection:
+    """A connection whose migration execution fails with duplicate_table.
+
+    F-166 (R5-E03-01): the catalog answers the existence questions the
+    runner asks with the `existing` set, so the case under test is the
+    replay of a migration the catalog already owns.
+    """
+
+    def __init__(self, existing: set[str]) -> None:
+        self.existing = existing
+        self.calls: list[tuple[str, str, tuple[object, ...]]] = []
+        self.versions: list[str] = []
+
+    def is_closed(self) -> bool:
+        return False
+
+    def transaction(self) -> _Transaction:
+        return _Transaction()
+
+    async def execute(self, sql: str, *args: object) -> None:
+        normalized = " ".join(sql.split())
+        self.calls.append(("execute", normalized, args))
+        if normalized.startswith("INSERT INTO knowledge.schema_migrations"):
+            self.versions.append(str(args[0]))
+            return
+        if normalized.startswith("CREATE SCHEMA") or "knowledge.schema_migrations (" in normalized:
+            return
+        raise DuplicateTableError("relation already exists")
+
+    async def fetchval(self, sql: str, *args: object) -> object:
+        normalized = " ".join(sql.split())
+        self.calls.append(("fetchval", normalized, args))
+        if "knowledge.schema_migrations WHERE version" in normalized:
+            return False
+        return str(args[-1]) in self.existing
+
+
+class MigrationReplayTests(unittest.IsolatedAsyncioTestCase):
+    MIGRATION = (
+        "CREATE TABLE knowledge.widgets (id uuid PRIMARY KEY);\n"
+        "CREATE UNIQUE INDEX knowledge_widgets_idx ON knowledge.widgets (id);\n"
+    )
+
+    def database(self, directory: str) -> KnowledgeDatabase:
+        database = KnowledgeDatabase(
+            "localhost", 5432, "knowledge", "zink", "secret", Path(directory)
+        )
+        database._pool = object()  # type: ignore[assignment]
+        return database
+
+    async def test_a_replayed_migration_is_recorded_instead_of_aborting_the_boot(self) -> None:
+        """F-166 (R5-E03-01): the replay aborted on duplicate_table.
+
+        The `schema_migrations` row is the only record that a migration ran,
+        so a repaired version row, a dump that excluded the table or a
+        renamed file replayed the set against a catalog that already owned
+        its objects. `002` creates its tables and indexes without
+        `IF NOT EXISTS`, the whole migration transaction rolled back and the
+        boot reported DATABASE_UNAVAILABLE. The listed migration files may
+        not be edited in place, so the RUNNER recognises the replay.
+        """
+
+        with TemporaryDirectory() as directory:
+            Path(directory, "001_widgets.sql").write_text(self.MIGRATION, encoding="utf-8")
+            database = self.database(directory)
+            connection = ReplayMigrationConnection({"widgets", "knowledge_widgets_idx"})
+
+            await database._apply_migrations(owner_connection=connection)  # type: ignore[arg-type]
+
+            self.assertEqual(connection.versions, ["001_widgets.sql"])
+
+    async def test_a_migration_whose_objects_are_missing_still_aborts_the_boot(self) -> None:
+        """F-166 (R5-E03-01): a partial catalog is a fault, not a replay.
+
+        The replay is only recognised when EVERY object the file creates is
+        already in the catalog. A schema that owns one of the two objects
+        is drifted, and swallowing that would leave the boot claiming a
+        migration ran when it did not.
+        """
+
+        with TemporaryDirectory() as directory:
+            Path(directory, "001_widgets.sql").write_text(self.MIGRATION, encoding="utf-8")
+            database = self.database(directory)
+            connection = ReplayMigrationConnection({"widgets"})
+
+            with self.assertRaises(asyncpg.PostgresError):
+                await database._apply_migrations(owner_connection=connection)  # type: ignore[arg-type]
+
+            self.assertEqual(connection.versions, [])
 
 
 class FakePool:
@@ -275,16 +507,24 @@ class StartupSweepAndLockTests(unittest.IsolatedAsyncioTestCase):
         """
 
         ids = [uuid4() for _ in range(1200)]
-        connection = FakeConnection()
+        connection = FakeConnection(
+            fetches=[[{"build_id": uuid4()}] for _ in range(3)]
+        )
 
         await KnowledgeDatabase._purge_index_content(connection, ids)
 
-        content = deletes(connection)
+        content = index_deletes(connection)
         self.assertEqual(len(content), 9)
         for statement, args in content:
             self.assertLessEqual(len(args[0]), 500)
         covered = {value for _, args in content for value in args[0]}
         self.assertEqual(covered, set(ids))
+        retired = [
+            args
+            for (statement, args) in deletes(connection)
+            if statement == RETIRED_PDF_BUILD_STATEMENT
+        ]
+        self.assertEqual(len(retired), 3)
 
     async def test_the_schema_is_applied_under_the_advisory_lock(self) -> None:
         """F-149 (R5-E03-02): the DDL used to run unserialized.

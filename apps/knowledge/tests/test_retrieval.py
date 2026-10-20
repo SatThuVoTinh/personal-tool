@@ -6,11 +6,15 @@ import unittest
 from app.database import SearchCandidate
 from app.reranker import stable_sigmoid
 from app.retrieval import (
+    NO_MATCH_TOPIC,
     SearchCapacityLimiter,
     SearchValidationError,
     fuse_candidates,
     normalize_filters,
+    normalize_namespace,
+    normalize_secondary_topics,
     normalize_source_types,
+    refuse_unhonourable_scope,
     render_citation,
     render_pdf_citation,
 )
@@ -126,3 +130,58 @@ class RetrievalTests(unittest.IsolatedAsyncioTestCase):
     def test_sigmoid_is_finite_at_extremes(self) -> None:
         self.assertGreater(stable_sigmoid(1000), 0.999)
         self.assertLess(stable_sigmoid(-1000), 0.001)
+
+    def test_a_namespace_scope_names_a_corpus_topic(self) -> None:
+        """F-116 (R5-E02-01): a scope that is accepted and ignored is a lie.
+
+        The namespace the caller asks for is a scope, so it is resolved
+        against the corpus's own canonical topics. A namespace that names no
+        topic of the corpus matches NOTHING: fail closed, so a scope can
+        never widen into the whole corpus.
+        """
+
+        self.assertIsNone(normalize_namespace(None))
+        self.assertIsNone(normalize_namespace(""))
+        # `core` is the Zink Tools knowledge-tool contract's default
+        # namespace and means the default, unscoped corpus.
+        self.assertIsNone(normalize_namespace("core"))
+        self.assertIsNone(normalize_namespace("CORE"))
+        self.assertEqual(normalize_namespace("supply-chain"), "Supply Chain")
+        self.assertEqual(normalize_namespace("supply_chain"), "Supply Chain")
+        self.assertEqual(normalize_namespace("Supply Chain"), "Supply Chain")
+        self.assertEqual(normalize_namespace("machine-learning"), "Machine Learning")
+        # A namespace the corpus does not carry matches nothing.
+        self.assertEqual(normalize_namespace("research"), NO_MATCH_TOPIC)
+        self.assertEqual(normalize_namespace("sql"), NO_MATCH_TOPIC)
+
+    def test_secondary_topics_are_canonical_topics(self) -> None:
+        """F-116 (R5-E02-01): the secondary topics are a scope too."""
+
+        self.assertEqual(normalize_secondary_topics(None), ())
+        self.assertEqual(normalize_secondary_topics([]), ())
+        self.assertEqual(normalize_secondary_topics(["data"]), ("Data",))
+        self.assertEqual(
+            normalize_secondary_topics(["supply-chain", "Data"]),
+            ("Supply Chain", "Data"),
+        )
+        # A topic the corpus does not carry matches nothing.
+        self.assertEqual(normalize_secondary_topics(["research"]), (NO_MATCH_TOPIC,))
+        with self.assertRaises(SearchValidationError):
+            normalize_secondary_topics(["  "])
+
+    def test_a_scope_the_service_cannot_honour_is_refused(self) -> None:
+        """F-116 (R5-E02-01): `subtopic` and `capability` have no dimension."""
+
+        refuse_unhonourable_scope(None, None)
+        refuse_unhonourable_scope("", "")
+        with self.assertRaises(SearchValidationError):
+            refuse_unhonourable_scope("literature-and-provenance", None)
+        with self.assertRaises(SearchValidationError):
+            refuse_unhonourable_scope(None, "python")
+
+    def test_the_filters_carry_the_scope(self) -> None:
+        filters = normalize_filters(
+            "Data", ["#Tag"], "foo", "supply-chain", ["logistics"]
+        )
+        self.assertEqual(filters.namespace_topic, "Supply Chain")
+        self.assertEqual(filters.canonical_topics_all, ("Logistics",))

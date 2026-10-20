@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable
 
 import asyncpg
 
-from .database import KnowledgeDatabase
+from .database import KnowledgeDatabase, _CURRENT_OWNER_CONNECTION
 
 
 class IndexRunAlreadyActiveError(RuntimeError):
@@ -112,11 +112,16 @@ class IndexRunCoordinator:
         remove_listener = getattr(connection, "remove_termination_listener", None)
         if callable(add_listener):
             add_listener(on_termination)
+        # F-255 (R7-D10A-03): the run is pinned to the connection it was
+        # scheduled with, so a later owner generation cannot take its
+        # mutations.
+        token = _CURRENT_OWNER_CONNECTION.set(connection)
         try:
             cleanup_ids = await work()
             if cleanup_ids:
                 await cleanup(cleanup_ids)
         finally:
+            _CURRENT_OWNER_CONNECTION.reset(token)
             if callable(remove_listener):
                 remove_listener(on_termination)
             self._database.unbind_owner_connection(connection)

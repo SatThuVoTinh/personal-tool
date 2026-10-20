@@ -58,6 +58,7 @@ from app.main import (
 )
 from app.markdown_adapter import QUERY_BUDGET_FIXTURE, QUERY_MAX_TOKENS
 from app.model_probe import ResolvedEmbeddingModel
+from app.retrieval import NO_MATCH_TOPIC
 from app.run_errors import SafeRunError, serialize_errors
 
 EMBEDDING = ResolvedEmbeddingModel("bge-m3:latest", "a" * 64, 1024)
@@ -461,6 +462,116 @@ class ApiAttributionTests(unittest.IsolatedAsyncioTestCase):
         body = response.json()
         self.assertEqual(body["total_count"], 2)
         self.assertFalse(body["has_more"])
+
+    async def test_a_namespace_scope_reaches_the_query(self) -> None:
+        """F-116 (R5-E02-01): an answer scoped to a namespace was corpus-wide.
+
+        The four scope fields were declared on the request, accepted under
+        `extra="forbid"` and then ignored by every query, so the owner cited
+        content from another namespace believing it was governed. The scope
+        now reaches the query, expressed in the corpus's own canonical
+        topics.
+        """
+
+        self.app.state.database.get_active_index = AsyncMock(return_value=ACTIVE)
+        self.app.state.database.search_candidates = AsyncMock(
+            return_value=([candidate("a")], [])
+        )
+
+        response = await self.request(
+            "POST",
+            "/v1/search",
+            json={"query": "topic", "rerank": False, "namespace": "supply-chain"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        arguments = self.app.state.database.search_candidates.await_args.args
+        # The scope is the eighth argument of `search_candidates`.
+        self.assertEqual(arguments[7], "Supply Chain")
+
+    async def test_the_default_namespace_is_the_unscoped_corpus(self) -> None:
+        """F-116 (R5-E02-01): `core` is the contract's default namespace."""
+
+        self.app.state.database.get_active_index = AsyncMock(return_value=ACTIVE)
+        self.app.state.database.search_candidates = AsyncMock(
+            return_value=([candidate("a")], [])
+        )
+
+        response = await self.request(
+            "POST",
+            "/v1/search",
+            json={"query": "topic", "rerank": False, "namespace": "core"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        arguments = self.app.state.database.search_candidates.await_args.args
+        self.assertIsNone(arguments[7])
+
+    async def test_a_namespace_the_corpus_does_not_carry_matches_nothing(self) -> None:
+        """F-116 (R5-E02-01): a scope can never widen into the whole corpus."""
+
+        self.app.state.database.get_active_index = AsyncMock(return_value=ACTIVE)
+        self.app.state.database.search_candidates = AsyncMock(
+            return_value=([candidate("a")], [])
+        )
+
+        response = await self.request(
+            "POST",
+            "/v1/search",
+            json={"query": "topic", "rerank": False, "namespace": "research"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        arguments = self.app.state.database.search_candidates.await_args.args
+        self.assertEqual(arguments[7], NO_MATCH_TOPIC)
+
+    async def test_secondary_topics_reach_the_query(self) -> None:
+        """F-116 (R5-E02-01): the secondary topics are a scope too."""
+
+        self.app.state.database.get_active_index = AsyncMock(return_value=ACTIVE)
+        self.app.state.database.search_candidates = AsyncMock(
+            return_value=([candidate("a")], [])
+        )
+
+        response = await self.request(
+            "POST",
+            "/v1/search",
+            json={
+                "query": "topic",
+                "rerank": False,
+                "secondary_topics": ["data", "logistics"],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        arguments = self.app.state.database.search_candidates.await_args.args
+        self.assertEqual(arguments[8], ("Data", "Logistics"))
+
+    async def test_a_scope_the_service_cannot_honour_is_refused(self) -> None:
+        """F-116 (R5-E02-01): `subtopic` and `capability` have no dimension.
+
+        The corpus is partitioned by canonical topic, not by a topic
+        subdivision and not by a skill capability, so a request for one is
+        refused instead of answered with the whole corpus.
+        """
+
+        self.app.state.database.get_active_index = AsyncMock(return_value=ACTIVE)
+        self.app.state.database.search_candidates = AsyncMock(
+            return_value=([candidate("a")], [])
+        )
+
+        for field in ("subtopic", "capability"):
+            response = await self.request(
+                "POST",
+                "/v1/search",
+                json={"query": "topic", "rerank": False, field: "python"},
+            )
+
+            self.assertEqual(response.status_code, 422)
+            self.assertEqual(
+                response.json()["detail"]["code"], "INVALID_SEARCH_REQUEST"
+            )
+        self.app.state.database.search_candidates.assert_not_awaited()
 
     async def test_a_refused_search_carries_a_retry_after(self) -> None:
         """F-165 (R5-E02-06): the caller must be able to back off."""

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -16,6 +17,10 @@ import asyncpg
 
 from .markdown_adapter import MarkdownSource
 from .run_errors import SafeRunError, serialize_errors
+
+_CURRENT_OWNER_CONNECTION: contextvars.ContextVar["asyncpg.Connection | None"] = contextvars.ContextVar(
+    "current_owner_connection", default=None
+)
 
 # F-101 (R5-E01-05): the module had no logging facility at all, so a
 # failure that nothing else recorded left no attributable record.
@@ -67,6 +72,39 @@ _PDF_SEGMENT_TYPES = {
     "PDF_FIGURE_TEXT",
 }
 _SEARCHABLE_SEGMENT_TYPES = {"MARKDOWN_PASSAGE", *_PDF_SEGMENT_TYPES}
+# F-166 (R5-E03-01): the PostgreSQL SQLSTATEs that mean "the object this
+# statement creates is already there". A migration replayed against a schema
+# that already owns its objects raises one of these; anything else is a real
+# fault and must abort the boot.
+_MIGRATION_DUPLICATE_SQLSTATES = frozenset(
+    {
+        "42P06",  # duplicate_schema
+        "42P07",  # duplicate_table
+        "42701",  # duplicate_column
+        "42710",  # duplicate_object
+    }
+)
+# F-166 (R5-E03-01): every object a migration file creates, read from the
+# file itself so a new migration needs no second list to keep in step.
+_MIGRATION_OBJECT_PATTERN = re.compile(
+    r"CREATE\s+(?P<kind>UNIQUE\s+INDEX|INDEX|TABLE|TYPE|SCHEMA|EXTENSION)\s+"
+    r"(?:IF\s+NOT\s+EXISTS\s+)?"
+    r"(?:(?P<schema>[a-z_][a-z0-9_]*)\.)?(?P<name>[a-z_][a-z0-9_]*)",
+    re.IGNORECASE,
+)
+
+
+def _migration_objects(sql: str) -> list[tuple[str | None, str, str]]:
+    """The (schema, name, kind) of every object a migration file creates."""
+
+    objects: list[tuple[str | None, str, str]] = []
+    for match in _MIGRATION_OBJECT_PATTERN.finditer(sql):
+        kind = " ".join(match.group("kind").upper().split())
+        if kind == "UNIQUE INDEX":
+            kind = "INDEX"
+        schema = match.group("schema")
+        objects.append((schema, match.group("name"), kind))
+    return objects
 
 
 @dataclass(frozen=True)
@@ -579,13 +617,23 @@ class KnowledgeDatabase:
 
         if self._pool is None:
             raise RuntimeError("Database pool is unavailable.")
-        connection = self._owner_connection
-        if connection is None:
+        # F-255 (R7-D10A-03): the owner slot is MUTABLE, so resolving it at
+        # call time let a run whose own owner had been released open its
+        # transaction on the connection a newer generation had bound. The
+        # run is pinned to the connection it was scheduled with, and a run
+        # whose owner is no longer the bound one refuses before it executes
+        # a single statement.
+        run_owner = _CURRENT_OWNER_CONNECTION.get()
+        if run_owner is None:
+            run_owner = self._owner_connection
+        if run_owner is None:
             raise StateTransitionError("Index ownership connection is not bound.")
-        if connection.is_closed():
+        if run_owner is not self._owner_connection:
             raise StateTransitionError("Index ownership connection was lost.")
-        async with connection.transaction():
-            yield connection
+        if run_owner.is_closed():
+            raise StateTransitionError("Index ownership connection was lost.")
+        async with run_owner.transaction():
+            yield run_owner
 
     async def assert_pdf_content_identity_schema(self) -> None:
         """Reject schema drift; T2 must never repair migration 002 at runtime."""
@@ -1155,6 +1203,22 @@ class KnowledgeDatabase:
             )
             await connection.execute(
                 """
+                INSERT INTO knowledge.source_sidecars
+                  (index_id, source_id, sidecar_path, relation_type, created_at)
+                SELECT $1, staged.id, live.sidecar_path, live.relation_type, live.created_at
+                FROM knowledge.source_sidecars live
+                JOIN knowledge.sources original
+                  ON original.id = live.source_id AND original.index_id = live.index_id
+                JOIN knowledge.sources staged
+                  ON staged.index_id = $1 AND staged.source_path = original.source_path
+                WHERE live.index_id = $3
+                """,
+                index_id,
+                run_id,
+                active_id,
+            )
+            await connection.execute(
+                """
                 INSERT INTO knowledge.pdf_source_details (index_id, source_id, build_id)
                 SELECT $1, staged.id, live.build_id
                 FROM knowledge.pdf_source_details live
@@ -1225,8 +1289,16 @@ class KnowledgeDatabase:
         tags_all: tuple[str, ...],
         path_prefix: str | None,
         segment_types: tuple[str, ...] = ("MARKDOWN_PASSAGE",),
+        namespace_topic: str | None = None,
+        canonical_topics_all: tuple[str, ...] = (),
     ) -> tuple[list[SearchCandidate], list[SearchCandidate]]:
-        """Read both branches from one repeatable-read ACTIVE-index snapshot."""
+        """Read both branches from one repeatable-read ACTIVE-index snapshot.
+
+        F-116 (R5-E02-01): `namespace_topic` and `canonical_topics_all` are
+        the scope the caller asked for, expressed in the corpus's own
+        canonical topics. A NULL parameter means "no scope"; the empty topic
+        means "a scope the corpus does not carry", which matches nothing.
+        """
         if self._pool is None:
             raise RuntimeError("Database pool is unavailable.")
         vector = "[" + ",".join(format(value, ".17g") for value in query_embedding) + "]"
@@ -1251,6 +1323,10 @@ class KnowledgeDatabase:
                     AND ($4::text[] IS NULL OR tags @> $4::text[])
                     AND ($5::text IS NULL OR source_path = $5
                          OR left(source_path, char_length($5) + 1) = $5 || '/')
+                    AND ($7::text IS NULL OR canonical_topics @> ARRAY[$7::text])
+                    AND ($8::text[] IS NULL
+                         OR (cardinality($8::text[]) > 0
+                             AND canonical_topics @> $8::text[]))
                 """
                 # The inner query intentionally has only the pgvector distance
                 # operator in ascending order plus LIMIT, which permits HNSW.
@@ -1269,6 +1345,8 @@ class KnowledgeDatabase:
                     SELECT * FROM ann ORDER BY dense_distance ASC, id ASC
                     """,
                     UUID(index_id), vector, primary_topic, tags, path_prefix, list(segment_types),
+                    namespace_topic,
+                    list(canonical_topics_all) if canonical_topics_all else None,
                 )
                 fts_rows = await connection.fetch(
                     f"""
@@ -1286,6 +1364,8 @@ class KnowledgeDatabase:
                     LIMIT 40
                     """,
                     UUID(index_id), query, primary_topic, tags, path_prefix, list(segment_types),
+                    namespace_topic,
+                    list(canonical_topics_all) if canonical_topics_all else None,
                 )
                 # F-072 (R5-E02-02): the immutable source identity is read in
                 # ONE extra statement, inside the same snapshot, instead of a
@@ -1823,6 +1903,16 @@ class KnowledgeDatabase:
             return
         async with self._mutation_transaction() as connection:
             if index_ids:
+                superseded = [UUID(index_id) for index_id in index_ids]
+                # F-093 (R5-E03-04): the builds the superseded index published
+                # are read before its sources go, so the content they carry can
+                # be reclaimed once nothing references them any more. This is
+                # the path an edited or removed PDF takes: the retired build
+                # keeps its whole extracted text until the publish that
+                # supersedes the index releases it.
+                retired_builds = await self._pdf_build_ids_for_indexes(
+                    connection, superseded
+                )
                 await connection.execute(
                     """
                     DELETE FROM knowledge.sources
@@ -1833,8 +1923,9 @@ class KnowledgeDatabase:
                           AND knowledge.indexes.status = 'SUPERSEDED'
                       )
                     """,
-                    [UUID(index_id) for index_id in index_ids],
+                    superseded,
                 )
+                await self._retire_pdf_content_builds(connection, retired_builds)
             # M11/T1-R1 3.1: sweep FAILED indexes that were published before
             # this garbage collection existed, so a first post-upgrade startup
             # leaves zero content rows behind for them.
@@ -2024,6 +2115,13 @@ class KnowledgeDatabase:
         ids = list(index_ids)
         for offset in range(0, len(ids), PURGE_CHUNK_SIZE):
             chunk = ids[offset : offset + PURGE_CHUNK_SIZE]
+            # F-093 (R5-E03-04): the content builds this index backed are read
+            # BEFORE the source details go, because the delete that reclaims
+            # them runs after it and the foreign key refuses a build that is
+            # still referenced.
+            retired_builds = await KnowledgeDatabase._pdf_build_ids_for_indexes(
+                connection, chunk
+            )
             for statement in (
                 "DELETE FROM knowledge.segments WHERE index_id = ANY($1::uuid[])",
                 "DELETE FROM knowledge.pdf_source_details WHERE index_id = ANY($1::uuid[])",
@@ -2031,6 +2129,52 @@ class KnowledgeDatabase:
                 "DELETE FROM knowledge.sources WHERE index_id = ANY($1::uuid[])",
             ):
                 await connection.execute(statement, chunk)
+            # F-093: a build nothing references any more keeps its whole
+            # extracted text and provenance forever, so an edited or removed
+            # PDF grew the corpus and every backup with a second copy of
+            # itself. Only the builds THIS index backed are candidates: a
+            # build that is ready but not published yet belongs to a run in
+            # flight and must never be reclaimed by another index's purge.
+            await KnowledgeDatabase._retire_pdf_content_builds(
+                connection, retired_builds
+            )
+
+    @staticmethod
+    async def _pdf_build_ids_for_indexes(
+        connection: asyncpg.Connection, index_ids: Sequence[UUID]
+    ) -> list[UUID]:
+        """The content builds the given indexes published, if any."""
+
+        if not index_ids:
+            return []
+        rows = await connection.fetch(
+            "SELECT DISTINCT build_id FROM knowledge.pdf_source_details "
+            "WHERE index_id = ANY($1::uuid[])",
+            list(index_ids),
+        )
+        return [row["build_id"] for row in rows]
+
+    @staticmethod
+    async def _retire_pdf_content_builds(
+        connection: asyncpg.Connection, build_ids: Sequence[UUID]
+    ) -> None:
+        """Delete the named content builds that nothing references any more.
+
+        F-093 (R5-E03-04): the build row carries the whole extracted text
+        (`pdf_content_segments`) and its provenance jsonb, and the FK from
+        `pdf_source_details` forbids any cascade from reaching it. A build
+        whose last published source detail is gone is therefore pure
+        retention, and the delete cascades to its batches and segments.
+        """
+
+        if not build_ids:
+            return
+        await connection.execute(
+            "DELETE FROM knowledge.pdf_content_builds b "
+            "WHERE b.id = ANY($1::uuid[]) AND NOT EXISTS ("
+            "SELECT 1 FROM knowledge.pdf_source_details d WHERE d.build_id = b.id)",
+            list(build_ids),
+        )
 
     @staticmethod
     def _validate_pdf_batch_topology(
@@ -2113,13 +2257,116 @@ class KnowledgeDatabase:
                     "SELECT EXISTS(SELECT 1 FROM knowledge.schema_migrations WHERE version = $1)", version
                 ):
                     continue
-                async with connection.transaction():
-                    await connection.execute(migration_path.read_text(encoding="utf-8"))
-                    await connection.execute(
-                        "INSERT INTO knowledge.schema_migrations (version) VALUES ($1)", version
-                    )
+                sql = migration_path.read_text(encoding="utf-8")
+                try:
+                    async with connection.transaction():
+                        await connection.execute(sql)
+                except asyncpg.PostgresError as error:
+                    # F-166 (R5-E03-01): a migration is replayed whenever the
+                    # `schema_migrations` row is missing -- a repaired version
+                    # row, a dump that excluded the table, a renamed file.
+                    # The listed migration files may not be edited in place
+                    # (the digest manifest forbids it), and `002` creates its
+                    # tables and indexes without `IF NOT EXISTS`, so the
+                    # replay aborted on duplicate_table, the whole migration
+                    # transaction rolled back and the boot reported
+                    # DATABASE_UNAVAILABLE. The runner recognises a migration
+                    # whose objects are ALL already in the catalog and records
+                    # it as applied; anything else re-raises.
+                    if not await self._migration_is_already_applied(
+                        connection, migration_path, sql, error
+                    ):
+                        raise
+                await connection.execute(
+                    "INSERT INTO knowledge.schema_migrations (version) VALUES ($1)", version
+                )
         if owner_connection is not None:
             await apply(owner_connection)
         else:
             async with self._pool.acquire() as connection:
                 await apply(connection)
+
+    @staticmethod
+    async def _migration_is_already_applied(
+        connection: asyncpg.Connection,
+        migration_path: Path,
+        sql: str,
+        error: asyncpg.PostgresError,
+    ) -> bool:
+        """Is this a replay of a migration the catalog already owns?
+
+        F-166 (R5-E03-01): the answer is only true when the failure is a
+        duplicate-object failure AND every object the file creates is already
+        in the catalog. A partial catalog therefore still aborts the boot,
+        which is the behaviour a drifted schema needs.
+        """
+
+        if getattr(error, "sqlstate", None) not in _MIGRATION_DUPLICATE_SQLSTATES:
+            return False
+        objects = _migration_objects(sql)
+        if not objects:
+            return False
+        for schema, name, kind in objects:
+            if not await KnowledgeDatabase._migration_object_exists(
+                connection, schema, name, kind
+            ):
+                return False
+        logger.info(
+            "knowledge.migration_replay_ignored file=%s", migration_path.name
+        )
+        return True
+
+    @staticmethod
+    async def _migration_object_exists(
+        connection: asyncpg.Connection, schema: str | None, name: str, kind: str
+    ) -> bool:
+        """Does the catalog already own this object?"""
+
+        if kind == "EXTENSION":
+            return bool(
+                await connection.fetchval(
+                    "SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = $1)",
+                    name,
+                )
+            )
+        if kind == "SCHEMA":
+            return bool(
+                await connection.fetchval(
+                    "SELECT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname = $1)",
+                    name,
+                )
+            )
+        if kind == "TYPE":
+            if schema:
+                return bool(
+                    await connection.fetchval(
+                        "SELECT EXISTS(SELECT 1 FROM pg_type t "
+                        "JOIN pg_namespace n ON n.oid = t.typnamespace "
+                        "WHERE n.nspname = $1 AND t.typname = $2)",
+                        schema,
+                        name,
+                    )
+                )
+            return bool(
+                await connection.fetchval(
+                    "SELECT EXISTS(SELECT 1 FROM pg_type WHERE typname = $1)", name
+                )
+            )
+        # A table and an index are both relations.
+        if schema:
+            return bool(
+                await connection.fetchval(
+                    "SELECT EXISTS(SELECT 1 FROM pg_class c "
+                    "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                    "WHERE n.nspname = $1 AND c.relname = $2)",
+                    schema,
+                    name,
+                )
+            )
+        # An unqualified index is created in the schema of its table, so the
+        # name is looked up in every schema.
+        return bool(
+            await connection.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM pg_class WHERE relname = $1)", name
+            )
+        )
