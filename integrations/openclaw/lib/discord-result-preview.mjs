@@ -22,6 +22,11 @@ import path from "node:path";
 import { mkdirSync, writeFileSync } from "node:fs";
 
 import { generatePureNodePng } from "./excel-writer.mjs";
+// F-305: the preview renderer sanitises every inbound string itself. The
+// plugin's seam gate refuses an unsanitised string before it reaches the
+// renderer, but a renderer that depends on its caller to have done the
+// sanitising is a contract every caller has to remember.
+import { sanitizeDiscordText } from "./discord-formatter.mjs";
 
 export const RESULT_PREVIEW_BRANDS = Object.freeze({
   excel: Object.freeze({
@@ -70,7 +75,7 @@ function sanitizeTarget(target) {
  */
 export function buildPreviewTable({ columns = [], rows = [], notes = "" }) {
   const headerRow = (Array.isArray(columns) ? columns : [])
-    .map((column) => String(column ?? "").trim())
+    .map((column) => sanitizeDiscordText(String(column ?? "")).trim())
     .filter((column) => column.length > 0)
     .slice(0, 7);
   const headers = headerRow.length > 0 ? headerRow : [UNKNOWN_COLUMN];
@@ -83,10 +88,10 @@ export function buildPreviewTable({ columns = [], rows = [], notes = "" }) {
             : String(row ?? ""),
         ];
     return headers.map((_header, index) =>
-      String(cells[index] ?? "").slice(0, 40),
+      sanitizeDiscordText(String(cells[index] ?? "")).slice(0, 40),
     );
   });
-  const note = String(notes ?? "").trim();
+  const note = sanitizeDiscordText(String(notes ?? "")).trim();
   if (dataRows.length === 0) {
     dataRows.push(
       headers.map((_header, index) =>
@@ -125,7 +130,8 @@ export function renderExpectedResultPreview({
   if (normalized !== outputDirectory || normalized.split("..").length > 1) {
     throw new Error("RESULT_PREVIEW_OUTPUT_DIR_UNSAFE");
   }
-  const sheetTitle = String(title ?? "").trim() || `expected ${target} result`;
+  const sheetTitle =
+    sanitizeDiscordText(String(title ?? "")).trim() || `expected ${target} result`;
   const { headers, rows: tableRows } = buildPreviewTable({
     columns,
     rows,
