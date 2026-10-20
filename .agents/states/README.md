@@ -26,10 +26,10 @@ discarded.
 
 The protocol defines exactly two state files:
 
-| File         | Purpose                                                            | Typical writer           |
-| ------------ | ------------------------------------------------------------------ | ------------------------ |
-| `context.md` | verified task-specific facts that would otherwise need rediscovery | any active agent         |
-| `handoff.md` | compact transfer from one agent/role to another                    | agent handing off work   |
+| File         | Purpose                                                            | Typical writer         |
+| ------------ | ------------------------------------------------------------------ | ---------------------- |
+| `context.md` | verified task-specific facts that would otherwise need rediscovery | any active agent       |
+| `handoff.md` | compact transfer from one agent/role to another                    | agent handing off work |
 
 Do not create extra state files unless a repeated need cannot fit these two without
 mixing responsibilities.

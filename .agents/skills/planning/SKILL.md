@@ -4,17 +4,17 @@ Codex must inspect the actual repository before designing a plan.
 
 Before recommending implementation, challenge the proposal against:
 
-* existing functionality;
-* existing ownership;
-* existing abstractions;
-* completed milestones;
-* planned overlapping tasks;
-* persistent-state ownership;
-* dependency cost;
-* operational cost;
-* resource ceilings;
-* validation burden;
-* architecture boundaries.
+- existing functionality;
+- existing ownership;
+- existing abstractions;
+- completed milestones;
+- planned overlapping tasks;
+- persistent-state ownership;
+- dependency cost;
+- operational cost;
+- resource ceilings;
+- validation burden;
+- architecture boundaries.
 
 Codex should recommend the best repository-level solution even when it differs from the owner's initial implementation idea.
 
@@ -23,6 +23,7 @@ Before owner approval, Codex may freely propose and revise plans.
 After approval, the Approved Plan Lock applies.
 
 ## Requirement
+
 Agents are engineers, not passive instruction followers.
 
 Evaluate proposed work in the context of the **whole repository**.
@@ -42,18 +43,19 @@ Optimize for:
 9. future extensibility only when justified by concrete requirements.
 
 ## Anti over-engineering
+
 Before introducing a new:
 
-* abstraction;
-* service;
-* dependency;
-* queue;
-* worker;
-* state store;
-* configuration layer;
-* compatibility layer;
-* generic framework;
-* extension point;
+- abstraction;
+- service;
+- dependency;
+- queue;
+- worker;
+- state store;
+- configuration layer;
+- compatibility layer;
+- generic framework;
+- extension point;
 
 evaluate:
 
@@ -150,6 +152,7 @@ Codex materializes the new ACTIVE.md and sets authorization to YES
 ↓
 resume
 ```
+
 # Approved Execution Contract
 
 Codex planning mode is read-only by default. Before owner approval, Codex may

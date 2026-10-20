@@ -45,38 +45,38 @@ test("F-355: each skill's leading heading is its own declared name", () => {
   );
 });
 
-// The lane half of this row's acceptance criterion is owned by the gate
-// tooling: `package.json` (format/format:check/lint targets) and
-// `.markdownlint-cli2.mjs` (globs) are outside this lane's write scope. The
-// control is stated here so it is not lost, and it stays `NOT RUN` until the
-// tooling owner adds the glob — it is deliberately not weakened into a pass.
-test(
-  "F-355: the governance layer is inside an enforced lane",
-  {
-    skip: "NOT RUN — owned by the gate tooling: add `.agents/**/*.md` to the `format`/`format:check` globs in package.json (and to the markdownlint globs in .markdownlint-cli2.mjs only after the MD004/MD022/MD025/MD031 findings there are fixed). Outside this lane's write scope.",
-  },
-  () => {
-    const packageJson = JSON.parse(
-      readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"),
-    );
-    const scripts = packageJson.scripts;
-    const enforced = [
-      scripts.format,
-      scripts["format:check"],
-      scripts.lint,
-      scripts.test,
-    ].join("\n");
-    const markdownlintConfig = readFileSync(
-      path.join(REPO_ROOT, ".markdownlint-cli2.mjs"),
-      "utf8",
-    );
-    const covered =
-      enforced.includes(".agents") || markdownlintConfig.includes(".agents");
-    assert.ok(
-      covered,
-      "the governance layer is routed as authority by AGENTS.md §5 but is not a " +
-        "member of any enforced lane: no format/lint/test target and no " +
-        "markdownlint glob names .agents/**",
-    );
-  },
-);
+// The lane half of this row's acceptance criterion: the governance layer is
+// now inside the FORMAT lane. `package.json` carries `.agents/**/*.md` in
+// both the `format` and the `format:check` globs, and the seven routed files
+// are prettier-clean, so a broken or mis-formatted procedure is caught.
+//
+// The markdownlint half is NOT RUN and stays NOT RUN: its globs still do not
+// name `.agents/**`, because the routed files carry MD004 (list style), MD022
+// (headings surrounded by blank lines), MD025 (more than one level-one
+// heading per file - `execution/SKILL.md` opens with `# Execution` and
+// `# Mandatory preflight`) and MD031 (fenced code blocks surrounded by blank
+// lines). Adding that glob is the owner's call, not this lane's.
+test("F-355: the governance layer is inside an enforced lane", () => {
+  const packageJson = JSON.parse(
+    readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"),
+  );
+  const scripts = packageJson.scripts;
+  const enforced = [
+    scripts.format,
+    scripts["format:check"],
+    scripts.lint,
+    scripts.test,
+  ].join("\n");
+  const markdownlintConfig = readFileSync(
+    path.join(REPO_ROOT, ".markdownlint-cli2.mjs"),
+    "utf8",
+  );
+  const covered =
+    enforced.includes(".agents") || markdownlintConfig.includes(".agents");
+  assert.ok(
+    covered,
+    "the governance layer is routed as authority by AGENTS.md §5 but is not a " +
+      "member of any enforced lane: no format/lint/test target and no " +
+      "markdownlint glob names .agents/**",
+  );
+});

@@ -32,14 +32,14 @@ More explicitly:
 
 Inspect:
 
-* current implementation;
-* surrounding code;
-* tests;
-* contracts;
-* `.agents/states/context.md` when present;
-* the relevant entry in `docs/execution/findings.md` when present;
-* `.agents/states/handoff.md` when it helps reproduce the reported behavior;
-* current failure/evidence.
+- current implementation;
+- surrounding code;
+- tests;
+- contracts;
+- `.agents/states/context.md` when present;
+- the relevant entry in `docs/execution/findings.md` when present;
+- `.agents/states/handoff.md` when it helps reproduce the reported behavior;
+- current failure/evidence.
 
 **State is historical:** `PLAN.md` wins without comparison — a state file is working memory, never a second source to reconcile against.
 
@@ -47,11 +47,11 @@ Inspect:
 
 Determine:
 
-* expected behavior;
-* existing ownership;
-* existing repository pattern;
-* likely root cause;
-* smallest coherent change.
+- expected behavior;
+- existing ownership;
+- existing repository pattern;
+- likely root cause;
+- smallest coherent change.
 
 Do not start by writing code.
 
@@ -84,21 +84,21 @@ Do not accept a PASS blindly.
 
 Inspect:
 
-* output;
-* diff;
-* error behavior;
-* side effects;
-* unexpected state;
-* new complexity.
+- output;
+- diff;
+- error behavior;
+- side effects;
+- unexpected state;
+- new complexity.
 
 ### 7. Compare
 
 Compare actual result with:
 
-* valid `docs/contracts/execution/ACTIVE.md`;
-* applicable persistent contracts and architecture;
-* expected behavior;
-* resource/safety constraints.
+- valid `docs/contracts/execution/ACTIVE.md`;
+- applicable persistent contracts and architecture;
+- expected behavior;
+- resource/safety constraints.
 
 ### 8. Correct
 
@@ -116,9 +116,9 @@ Rerun affected validation.
 
 Only after the current approved step is verified:
 
-* update the relevant `findings.md` entry only after evidence supports the new status;
-* update `context.md` when new working context is useful;
-* proceed to the next bounded step or return to full code review.
+- update the relevant `findings.md` entry only after evidence supports the new status;
+- update `context.md` when new working context is useful;
+- proceed to the next bounded step or return to full code review.
 
 Repeat until:
 

@@ -78,11 +78,11 @@ Reuse existing patterns before creating alternatives.
 
 Do not perform:
 
-* unrelated cleanup;
-* opportunistic refactoring;
-* mass formatting;
-* speculative future-proofing;
-* unrelated bug fixing.
+- unrelated cleanup;
+- opportunistic refactoring;
+- mass formatting;
+- speculative future-proofing;
+- unrelated bug fixing.
 
 Do not create placeholder production code and claim completion.
 
@@ -90,15 +90,15 @@ Do not materially change a Change Impact surface marked `NONE`.
 
 Do not silently alter:
 
-* public API;
-* schema/migration semantics;
-* persistent identifiers;
-* storage ownership;
-* network exposure;
-* security boundaries;
-* resource ceilings;
-* runtime topology;
-* compatibility guarantees.
+- public API;
+- schema/migration semantics;
+- persistent identifiers;
+- storage ownership;
+- network exposure;
+- security boundaries;
+- resource ceilings;
+- runtime topology;
+- compatibility guarantees.
 
 Do not add/remove/upgrade/re-resolve dependencies unless authorized by the task.
 
@@ -112,16 +112,16 @@ Do not hand-edit generated artifacts when an authoritative generator exists.
 Supported operator environments include Windows PowerShell and POSIX shells
 where repository equivalents exist.
 
-* Use UTF-8 and LF.
-* Follow `.editorconfig` and `.gitattributes`.
-* Prefer repository-relative portable paths.
-* Quote paths and arguments.
-* Do not assume drive letters, shell syntax, case sensitivity, executable
+- Use UTF-8 and LF.
+- Follow `.editorconfig` and `.gitattributes`.
+- Prefer repository-relative portable paths.
+- Quote paths and arguments.
+- Do not assume drive letters, shell syntax, case sensitivity, executable
   suffixes, current directory, or symlink behavior.
-* Prefer checked-in Node/Python logic over complex shell logic.
-* Do not alter host/global configuration merely to make a task pass.
-* Do not remove resource ceilings merely because a workload exceeds them.
-* Retries must be bounded and diagnostic.
+- Prefer checked-in Node/Python logic over complex shell logic.
+- Do not alter host/global configuration merely to make a task pass.
+- Do not remove resource ceilings merely because a workload exceeds them.
+- Retries must be bounded and diagnostic.
 
 Host-facing V1 HTTP entry points remain loopback-only unless an owner-approved
 contract changes that model.
