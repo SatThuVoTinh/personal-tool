@@ -33,6 +33,7 @@ from app.pdf_runtime import (
     PdfRuntimeClient,
     PdfRuntimeError,
     PdfRuntimeSettings,
+    _OutputCapExceeded,
     _read_capped,
     _validate_response,
 )
@@ -132,7 +133,10 @@ class ReaderCapTests(unittest.IsolatedAsyncioTestCase):
         reader.feed_eof()
         with self.assertRaises(Exception) as caught:
             await _read_capped(reader, 1024)
-        self.assertEqual(type(caught.exception).__name__, "_OutputCapExceeded")
+        # F-218: the assertion is behavioural, not textual. The exception
+        # CLASS is imported, so renaming it, re-parenting it or wrapping it
+        # can no longer turn this suite green while the behaviour changed.
+        self.assertIsInstance(caught.exception, _OutputCapExceeded)
 
     async def test_diagnostic_stream_drains_and_bounds_instead(self) -> None:
         reader = asyncio.StreamReader()

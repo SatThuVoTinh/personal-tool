@@ -14,6 +14,7 @@ response bodies are untouched, and no new diagnostic channel is introduced.
 
 from __future__ import annotations
 
+import ast
 import os
 import tempfile
 import unittest
@@ -60,14 +61,32 @@ def _settings(vault_root: Path) -> Settings:
 
 class CauseErasureIsGoneTests(unittest.TestCase):
     def test_neither_file_suppresses_its_cause_anymore(self) -> None:
+        # F-218: the assertion is behavioural, not textual. A `raise ... from
+        # None` erases the cause whatever the statement is called, so the
+        # check parses the module and refuses any raise that SUPPRESSES its
+        # cause — a comment reword or an import-line edit can no longer turn
+        # this suite red without changing behaviour, and a rewording that
+        # hides a `from None` can no longer turn it green.
+        #
+        # A bare `raise X` is NOT a suppression: it keeps the active
+        # exception as `__context__`. Only an explicit `from None` sets the
+        # cause to None, and that is the `ast.Constant` case below.
         app_directory = Path(__file__).resolve().parents[1] / "app"
         for name in ("main.py", "model_probe.py"):
-            body = (app_directory / name).read_text(encoding="utf8")
-            self.assertNotIn(
-                "from None",
-                body,
-                f"{name} still erases the cause of a governed failure",
-            )
+            tree = ast.parse((app_directory / name).read_text(encoding="utf8"))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Raise):
+                    continue
+                cause = node.cause
+                if (
+                    cause is not None
+                    and isinstance(cause, ast.Constant)
+                    and cause.value is None
+                ):
+                    self.fail(
+                        f"{name}:{node.lineno} raises `from None`, which erases "
+                        "the cause of a governed failure"
+                    )
 
 
 class SearchRouteAttributionTests(unittest.IsolatedAsyncioTestCase):
