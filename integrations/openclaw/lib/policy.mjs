@@ -2363,23 +2363,40 @@ export const TOOL_RESULT_ERROR_CODES = Object.freeze([
   "N8N_CONFIGURATION_INVALID",
 ]);
 
+/**
+ * M12/T9 F-271: the material scope of a governed tool call.
+ *
+ * The material parameters are the part of the call an approval is bound to:
+ * two calls that differ only in these keys must NOT share one
+ * `approval_scope_digest`. The reader therefore reads the keys the PUBLISHED
+ * input branch declares - and only those.
+ *
+ * It used to read two keys the contracts forbid. The `zink_power_bi` bind
+ * branch declares `operation`, `model`, `datasource` and `tables`, and the
+ * `zink_excel` generate branch declares `operation`, `file_path` and
+ * `specification`; `source_table`/`target_table` and `prompt`/`template` are
+ * not declared, and every validated call has already passed the closed schema,
+ * so those keys were undefined by construction. The derived material set was
+ * therefore always empty, and an owner who approved a bind against one
+ * datasource authorized a bind against any datasource in the same model.
+ *
+ * `file_path` is deliberately NOT part of the excel material set: it is the
+ * call's `exact_target`, which the digest already binds (`tests/m7-t3-tools-contract.test.mjs`
+ * pins that `exact_target (file_path)` is not a material parameter).
+ */
 export function deriveApprovalMaterialParameters(toolId, operation, input) {
   if (toolId === "zink_excel") {
     if (operation === "populate") return { data: input.data };
     if (operation === "generate") {
-      const res = { prompt: input.prompt };
-      if (input.template !== undefined) res.template = input.template;
-      return res;
+      return { specification: input.specification };
     }
     return {};
   }
   if (toolId === "zink_power_bi") {
     if (operation === "bind") {
       const res = {};
-      if (input.source_table !== undefined)
-        res.source_table = input.source_table;
-      if (input.target_table !== undefined)
-        res.target_table = input.target_table;
+      if (input.datasource !== undefined) res.datasource = input.datasource;
+      if (input.tables !== undefined) res.tables = input.tables;
       return res;
     }
     if (operation === "update") return { changes: input.changes };
