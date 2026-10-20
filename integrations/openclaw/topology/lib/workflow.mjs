@@ -699,8 +699,28 @@ export function applyWorkflowEvent(
         workflowAggregate(nodes) === "COMPLETE",
         "MISSING_PREREQUISITE",
       );
+    // M12/T9 F-061: a CLAIMED task must be able to reach review.
+    //
+    // The claim (WORKFLOW_TASK_CLAIMED) moves the task to EXECUTING, and the
+    // reducer accepted a root result ONLY from ACTIVE. So the moment a
+    // coordinator picked the task up, the task's own result could no longer
+    // be recorded at all: the first successful pickup created a task that
+    // nothing could close, and the queue and the ledger diverged for ever.
+    //
+    // The exit is the ROOT agent's completion, which is a production path:
+    // the governance guard records WORKFLOW_ROOT_RESULT_RECORDED when the root
+    // run ends (topology/lib/guard.mjs), and the guard's own admission rule
+    // already admits a root result from ACTIVE, QUEUED or EXECUTING. The
+    // published projection agrees: `state-transitions.json` declares
+    // EXECUTING -> RESULT_PENDING_REVIEW a legal edge.
+    //
+    // QUEUED stays refused on purpose: a task that nobody has claimed yet
+    // must not be able to skip the claim, and the projection does not declare
+    // that edge. The pre-verdict (anchored legacy) resolution below keeps its
+    // own ACTIVE-only rule, so the read-back of an already-written legacy
+    // journal stays byte-identical.
     requireCondition(
-      task.workflow_status === "ACTIVE",
+      ["ACTIVE", "EXECUTING"].includes(task.workflow_status),
       "INVALID_STATE_TRANSITION",
     );
     // Pre-verdict-model resolution for anchored history (see the
@@ -713,6 +733,14 @@ export function applyWorkflowEvent(
     // under the current verdict model, which is what the current writer
     // produces and what the read-back must reproduce.
     if (replayAnchored && preVerdictRootResult) {
+      // F-061: the legacy resolution keeps its ACTIVE-only rule. A pre-R4
+      // journal was written by a reducer that refused a root result from any
+      // other state, so it can never contain the state this lane now admits,
+      // and the read-back of an already-written journal stays byte-identical.
+      requireCondition(
+        task.workflow_status === "ACTIVE",
+        "INVALID_STATE_TRANSITION",
+      );
       task.root_result = { ...payload };
       task.workflow_status = payload.outcome_status;
       task.reason_code = payload.reason_code;
