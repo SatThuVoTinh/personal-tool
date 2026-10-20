@@ -116,9 +116,84 @@ const readDigest = (file) => sha256(readFileSync(file, "utf8"));
 
 // The rehearsal only runs inside the mount namespace the driver creates. Outside
 // it these tests would touch the live runtime, which is the one thing R16 forbids.
-const skip = REHEARSAL
-  ? false
-  : "requires the R16 rehearsal mount namespace (run r16-rehearsal.mjs)";
+//
+// F-208 (R1-A13-07): the skip used to be an ad-hoc string derived from an
+// absent environment variable, so the lane was permanently skipped in every
+// lane that does not set one, and a "skipped" count was free to read as green
+// in a gate total. The skip state is DECLARED per environment below, with the
+// reason, and the case at the end of this file proves that the suite's own
+// skip IS that declaration, that a skipped rehearsal says NOT RUN, and that
+// the number of rehearsal-gated cases is known.
+const REHEARSAL_ENVIRONMENTS = Object.freeze({
+  "rehearsal-namespace": Object.freeze({
+    runs: true,
+    reason: null,
+    gatedCases: 0,
+  }),
+  "no-rehearsal-namespace": Object.freeze({
+    runs: false,
+    reason:
+      "NOT RUN — the R16 apply rehearsal runs only inside the private mount namespace the rehearsal driver creates (r16-rehearsal.mjs), and this platform has no live runtime to clone. The lane is NOT RUN here, so its cases are never counted as passes.",
+    gatedCases: 9,
+  }),
+});
+
+const REHEARSAL_ENVIRONMENT = REHEARSAL
+  ? "rehearsal-namespace"
+  : "no-rehearsal-namespace";
+const REHEARSAL_STATUS = REHEARSAL_ENVIRONMENTS[REHEARSAL_ENVIRONMENT];
+// The suite's own skip IS the declared reason, so the two cannot drift apart.
+const skip = REHEARSAL_STATUS.runs ? false : REHEARSAL_STATUS.reason;
+
+// F-208: the skip state is declared, and a permanently skipped rehearsal
+// reads as NOT RUN rather than as a green count. This case never skips: the
+// declaration is decidable on every platform, and only the rehearsal itself
+// needs the mount namespace.
+test("R16-GATE: the rehearsal's skip state is declared per environment", () => {
+  assert.ok(
+    Object.hasOwn(REHEARSAL_ENVIRONMENTS, REHEARSAL_ENVIRONMENT),
+    `no declared status for the environment ${REHEARSAL_ENVIRONMENT}`,
+  );
+  if (REHEARSAL_STATUS.runs) {
+    assert.equal(
+      REHEARSAL_STATUS.reason,
+      null,
+      "an environment that runs the rehearsal declares no skip reason",
+    );
+    assert.equal(
+      skip,
+      false,
+      "the suite must not skip when the rehearsal namespace is present",
+    );
+  } else {
+    assert.equal(
+      typeof REHEARSAL_STATUS.reason,
+      "string",
+      "a skipped environment must declare a reason",
+    );
+    assert.match(
+      REHEARSAL_STATUS.reason,
+      /NOT RUN/u,
+      "a permanently skipped gate must state that it is NOT RUN, never read as green",
+    );
+    assert.equal(
+      skip,
+      REHEARSAL_STATUS.reason,
+      "the suite's skip must BE the declared reason, so the reason in the counts is the recorded one",
+    );
+  }
+  // The number of rehearsal-gated cases is declared, so a run whose skipped
+  // count differs from the declaration is visible. The count is read from
+  // this file's own source: adding a rehearsal-gated case without declaring
+  // it reddens this case rather than silently changing the skip total.
+  const source = readFileSync(fileURLToPath(import.meta.url), "utf8");
+  const gated = (source.match(/\{\s*skip\s*\}/gu) ?? []).length;
+  assert.equal(
+    gated,
+    REHEARSAL_STATUS.gatedCases,
+    `the number of rehearsal-gated cases must be declared for the ${REHEARSAL_ENVIRONMENT} environment (found ${gated})`,
+  );
+});
 
 // ---------------------------------------------------------------------------
 // Overlay lifecycle
