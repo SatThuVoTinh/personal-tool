@@ -369,6 +369,47 @@ const EXCEL_VALIDATION_RULES = Object.freeze({
   }),
 });
 
+/**
+ * F-044: resolve a path THROUGH the filesystem, not through the string.
+ *
+ * `path.resolve` normalises `..` away, so the lexical containment test above
+ * cannot see a directory JUNCTION inside the workspace: the junction's own
+ * path is inside the base, but the bytes it points at are not. The read side
+ * of this tool already resolved its path for real; the write side did not.
+ *
+ * `realpathOf` walks to the deepest EXISTING ancestor of the target and
+ * resolves that, then re-appends the segments that do not exist yet — the
+ * path a write will create, seen through the filesystem as it is.
+ */
+function realpathOf(target) {
+  let current = path.resolve(target);
+  const trailing = [];
+  for (;;) {
+    try {
+      const real = fs.realpathSync(current);
+      return trailing.length ? path.join(real, ...trailing.reverse()) : real;
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return path.resolve(target);
+      trailing.push(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+/**
+ * F-044: the target must stay inside the base AFTER both are resolved
+ * through the filesystem.
+ */
+function assertInsideWorkspace(base, target, message) {
+  const realBase = realpathOf(base);
+  const realTarget = realpathOf(target);
+  const rel = path.relative(realBase, realTarget);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+    throw new Error(message);
+  }
+}
+
 function evaluateExcelRules(rules, ctx) {
   const ruleResults = [];
   for (const rule of rules) {
@@ -553,6 +594,13 @@ export function executeExcelOperation(params, baseDir = null) {
         `ARTIFACT_PATH_ESCAPE: file_path must stay inside the workspace`,
       );
     }
+    // F-044: the lexical test above cannot see a junction inside the
+    // workspace, so the containment is checked again through the filesystem.
+    assertInsideWorkspace(
+      effectiveBase,
+      targetPath,
+      `ARTIFACT_PATH_ESCAPE: file_path must stay inside the workspace`,
+    );
   }
   const publicFileName = path.basename(targetPath);
 
@@ -686,6 +734,12 @@ export function executeExcelOperation(params, baseDir = null) {
           `ARTIFACT_PATH_ESCAPE: template_path must stay inside the workspace`,
         );
       }
+      // F-044: the same filesystem-resolved containment as the write target.
+      assertInsideWorkspace(
+        effectiveBase,
+        templateTarget,
+        `ARTIFACT_PATH_ESCAPE: template_path must stay inside the workspace`,
+      );
     }
     if (!fs.existsSync(templateTarget)) {
       throw new Error(
