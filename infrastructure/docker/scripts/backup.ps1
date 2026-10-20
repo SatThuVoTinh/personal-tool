@@ -4,7 +4,12 @@ param(
   [string]$BackupDirectory,
   [string]$EnvironmentFile = (Join-Path $PSScriptRoot "..\env\.env"),
   [string]$ProjectName = "personal-tool",
-  [string[]]$Databases = @("n8n")
+  # F-238 (R7-D3-01): the Knowledge schema lives in the `postgres` database
+  # (compose.core.yml: POSTGRES_DB and KNOWLEDGE_DATABASE_NAME). The list
+  # defaulted to `n8n` alone, so the operator command the runbook documents --
+  # the one that omits -Databases -- produced an artifact with no indexed
+  # source, no segment and no provenance row in it.
+  [string[]]$Databases = @("n8n", "postgres")
 )
 
 $ErrorActionPreference = "Stop"
