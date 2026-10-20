@@ -48,6 +48,7 @@ import {
   OPERATION_POLICY,
   deriveApprovalMaterialParameters,
   deriveApprovalScopeDigest,
+  configureGovernedStoreRoot,
 } from "../../lib/policy.mjs";
 import {
   sanitizeDelegationText,
@@ -5444,6 +5445,13 @@ export default {
       !/^[1-9][0-9]{16,19}$/u.test(config.ownerDiscordId ?? "")
     )
       throw new Error("GOVERNANCE_CONFIGURATION_INVALID");
+    // F-002: the ONE configured governance store root. The queue projection
+    // and the decision ledger live under it, and an unconfigured store
+    // refuses by name (GOVERNANCE_STORE_ROOT_UNCONFIGURED) instead of
+    // guessing a home-directory path. This must run before the first
+    // queue or decision read, so the plugin's own stores resolve to the
+    // configured root rather than refusing.
+    configureGovernedStoreRoot(config.ledgerRoot);
     const paths = {
       root: config.ledgerRoot,
       events: path.join(config.ledgerRoot, "events.jsonl"),
