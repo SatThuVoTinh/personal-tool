@@ -1781,12 +1781,11 @@ async function main() {
       "36ed858c74dd09423d0afc74ff2fc8eb589843f163fb8ffccf8bcc912f097ce9",
       "0940eb77d5796f29d819331e92a7c00c4f9230eb1185dce3de7b524a37e2f7c2",
       "4a957b246533ab8e55f88172daa3667ae06cda10dc1d1e8c0858a18e31895663",
-      // M10/T2-R9-A: the outgoing entrypoint currently deployed, byte-proven
-      // against the live runtime at this exact path on 2026-10-06, listed here as
-      // well as in the preflight gate above for the same per-mode-duplication
-      // reason R13 documents: admitting the predecessor in one mode and not the
-      // other would let --preflight PASS and then --apply refuse.
-      "f4ed9d9c54ccf486a30425b98a549cab5aebbbe8e9ee7f2d32bfc6795598c4a3",
+      // F-317: the R9-A entrypoint is admitted ONCE here, exactly as the
+      // --preflight window above admits it. The list used to carry it twice, so
+      // the two per-mode windows were not the same list and a per-window
+      // comparison could not be trusted. The admitted SET is unchanged: the
+      // digest is still admitted by this window.
       // M10/T2-R12: the R9-A entrypoint, mirrors the preflight-mode entry
       // verbatim so the two modes cannot diverge.
       "c2ef436327242b4fb6f4f65409c80634c4096824a372db02ecc65860cc00cdd3",
