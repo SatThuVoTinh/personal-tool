@@ -1772,6 +1772,65 @@ export function buildSkillProposalCard(proposal) {
 }
 
 /**
+ * M12/T9 F-124: the Discord body ceiling and the mention syntax.
+ *
+ * Discord refuses a message body over 2000 characters, and `PLAN_TRUNCATION_MARK`
+ * is the marker `renderGovernedApprovalBody` uses when it cuts one. The marker
+ * is repeated here so the seam that publishes a body it did not render still
+ * marks its cut instead of losing the tail silently. The drift between the two
+ * copies is checked by a gate, not by a reader.
+ */
+const DISCORD_BODY_LIMIT = 2000;
+const PLAN_TRUNCATION_MARK = "…(xem toàn bộ kế hoạch trong phiên)";
+
+/**
+ * M12/T9 F-124: Discord mention syntax never reaches an approval surface.
+ *
+ * `sanitizeDiscordIdentifier` strips mentions but also every newline, so it
+ * cannot be used on a body: the body keeps its structure and loses only the
+ * mention tokens.
+ */
+const DISCORD_MENTION_TOKENS = Object.freeze([
+  /(?<![A-Za-z0-9_])@everyone/giu,
+  /(?<![A-Za-z0-9_])@here/giu,
+  /<@[!&]?\d+>/gu,
+  /<#\d+>/gu,
+]);
+
+export function sanitizeApprovalBody(body) {
+  if (typeof body !== "string") return "";
+  let sanitized = body;
+  for (const token of DISCORD_MENTION_TOKENS) {
+    sanitized = sanitized.replace(token, "");
+  }
+  return sanitized;
+}
+
+/**
+ * M12/T9 F-124: the short, ledger-derived line the buttons message carries.
+ *
+ * The body itself is published once, in the thread. This message carries the
+ * buttons and a pointer, so the owner never reads the same body twice.
+ */
+export function buildApprovalActionLine(taskId) {
+  const token = sanitizeApprovalBody(
+    String(displayTaskToken(taskId) ?? ""),
+  ).trim();
+  return `⏳ **Chờ anh phê duyệt** — Task \`${token}\``;
+}
+
+/**
+ * M12/T9 F-124: a body that does not fit is cut with an EXPLICIT marker.
+ */
+export function boundApprovalBody(bodyContent) {
+  const body = typeof bodyContent === "string" ? bodyContent : "";
+  if (body.length <= DISCORD_BODY_LIMIT) return body;
+  // The marker and the newline it sits on are part of the ceiling.
+  const budget = DISCORD_BODY_LIMIT - PLAN_TRUNCATION_MARK.length - 1;
+  return `${body.slice(0, budget).trimEnd()}\n${PLAN_TRUNCATION_MARK}`;
+}
+
+/**
  * M10/T2-R12: first-approval card content builder for a fresh Main
  * `sessions_spawn`. Pure: no I/O, no network. The transporter posts what this
  * returns; tests assert the contract here.
@@ -1820,17 +1879,22 @@ export function buildFirstSpawnApprovalCard({
     );
   }
   const commandToken = taskCode ?? taskId;
-  const bodyContent = renderGovernedApprovalBody({
-    title,
-    taskId,
-    planSteps: steps,
-    expectedResult: renderGovernedExpectedResult({
-      nodes: planNodes,
-      outcome: spawnInputs,
-      previewImage,
+  // M12/T9 F-124: the body is ledger-derived, but the plan text it renders can
+  // still carry a Discord mention from the spawn payload, so the seam makes it
+  // mention-safe before it is published.
+  const bodyContent = sanitizeApprovalBody(
+    renderGovernedApprovalBody({
+      title,
+      taskId,
+      planSteps: steps,
+      expectedResult: renderGovernedExpectedResult({
+        nodes: planNodes,
+        outcome: spawnInputs,
+        previewImage,
+      }),
+      commandToken,
     }),
-    commandToken,
-  });
+  );
   return {
     title,
     bodyContent,
@@ -1928,7 +1992,9 @@ export function isGovernanceMachinePayload(text) {
  */
 export function buildApprovalButtonsMessage(bodyContent, buttons) {
   return {
-    content: bodyContent.slice(0, 2000),
+    // M12/T9 F-124: a body over Discord's ceiling is cut with an explicit
+    // marker, never silently.
+    content: boundApprovalBody(bodyContent),
     components: [
       {
         type: 1,
@@ -2295,11 +2361,11 @@ export function handleDiscordAction({
           actor: normalizeActor(actor),
           channel: normalizeChannel(channel),
           decision:
-    // F-085: the ONE reviewed mapping from the authority action to the
-    // ledger decision vocabulary. The plugin does not carry its own
-    // ternary: the ledger's `decision` value and the authority gate's
-    // verdict come from one mapping, so they cannot disagree.
-    resolveLedgerDecision(normAction) ?? normAction,
+            // F-085: the ONE reviewed mapping from the authority action to the
+            // ledger decision vocabulary. The plugin does not carry its own
+            // ternary: the ledger's `decision` value and the authority gate's
+            // verdict come from one mapping, so they cannot disagree.
+            resolveLedgerDecision(normAction) ?? normAction,
           message_id: data.messageId ?? data.origin_message_id ?? null,
           thread_id: data.threadId ?? null,
           scope_digest: authoritativePlanDigest,
@@ -2548,6 +2614,90 @@ export function readExecutionArtifacts(event) {
  */
 export const MAX_ARTIFACTS_PER_RESULT = 10;
 
+/**
+ * M12/T9 F-040: the boundary an artifact has to be inside.
+ *
+ * The declared sandbox is the boundary when the caller names one. When it
+ * names none, the seam still has ONE root it can prove from the durable state
+ * it was handed: the governed store root that owns the task queue (the queue
+ * file lives at `<store>/operator/m7-t2/queue.json`, so the store root is
+ * three levels above it). An artifact outside that root is out of the
+ * sandbox by definition, and the seam refuses it BEFORE its bytes are read.
+ */
+export function resolveArtifactBoundary({
+  sandboxDir = null,
+  queueManager = null,
+} = {}) {
+  if (typeof sandboxDir === "string" && sandboxDir.trim().length > 0) {
+    return { root: path.resolve(sandboxDir), source: "DECLARED_SANDBOX" };
+  }
+  const storagePath = queueStoragePath(queueManager);
+  if (!storagePath) return null;
+  return {
+    root: governedStoreRootFromQueuePath(storagePath),
+    source: "GOVERNED_STORE_ROOT",
+  };
+}
+
+function queueStoragePath(queueManager) {
+  try {
+    const storagePath = queueManager?.storagePath;
+    return typeof storagePath === "string" && storagePath.trim().length > 0
+      ? storagePath
+      : null;
+  } catch {
+    // An unconfigured store has no path to prove, and the seam refuses
+    // rather than guessing one.
+    return null;
+  }
+}
+
+function governedStoreRootFromQueuePath(storagePath) {
+  const resolved = path.resolve(storagePath);
+  const segments = resolved.split(path.sep).filter(Boolean);
+  const governed =
+    segments.length >= 4 &&
+    segments[segments.length - 3] === "operator" &&
+    segments[segments.length - 2] === "m7-t2";
+  if (governed) return path.dirname(path.dirname(path.dirname(resolved)));
+  return path.dirname(resolved);
+}
+
+/**
+ * M12/T9 F-040: refuse an artifact the seam cannot prove is inside the
+ * boundary.
+ *
+ * The refusal carries a named code and is returned as the error of a FAILED
+ * result, so no hash of an uncontained file is ever produced or recorded.
+ */
+export function artifactContainmentFailure(artifactPath, boundary) {
+  if (!boundary) {
+    return "ARTIFACT_SANDBOX_UNSPECIFIED: no containment boundary could be established for the artifact";
+  }
+  if (typeof artifactPath !== "string" || !path.isAbsolute(artifactPath)) {
+    // The artifact layer owns a non-absolute path; it names it itself.
+    return null;
+  }
+  let artifact;
+  let root;
+  try {
+    artifact = realpathSync(artifactPath);
+    root = realpathSync(boundary.root);
+  } catch {
+    artifact = path.resolve(artifactPath);
+    root = path.resolve(boundary.root);
+  }
+  const relative = path.relative(root, artifact);
+  if (
+    relative.length === 0 ||
+    relative.startsWith("..") ||
+    path.isAbsolute(relative)
+  ) {
+    return `ARTIFACT_OUTSIDE_SANDBOX: the artifact is outside the governed ${boundary.source}`;
+  }
+  return null;
+}
+
 export function handleExecutionFinished({
   taskId,
   agentId,
@@ -2638,6 +2788,17 @@ export function handleExecutionFinished({
   // singular artifactPath may not stand in for a delivered multi-artifact
   // result, and an unreadable member is a hard delivery failure rather than
   // a technical-validation verdict.
+  //
+  // M12/T9 F-040: the containment boundary is established BEFORE the first
+  // byte is read. `artifact-validator.mjs` puts both its symlink-escape check
+  // and its sandbox-containment check behind `if (sandboxDir)`, so a caller
+  // that names no sandbox had its artifact bytes read, hashed and recorded
+  // with no containment proven at all.
+  const effectiveSandbox = sandboxDir || technicalConfig.sandboxDir || null;
+  const artifactBoundary = resolveArtifactBoundary({
+    sandboxDir: effectiveSandbox,
+    queueManager,
+  });
   const artifactSet = [];
   for (const candidate of allArtifacts) {
     const logicalPath =
@@ -2655,6 +2816,15 @@ export function handleExecutionFinished({
         status: "FAILED",
         error: `ARTIFACT_MISSING: ${path.basename(logicalPath)}`,
       };
+    }
+    // The refusal happens BEFORE the read and the hash, so an out-of-sandbox
+    // artifact never has its bytes touched.
+    const containment = artifactContainmentFailure(
+      logicalPath,
+      artifactBoundary,
+    );
+    if (containment) {
+      return { status: "FAILED", error: containment };
     }
     let sha256;
     try {
@@ -2703,7 +2873,6 @@ export function handleExecutionFinished({
     }
   }
 
-  const effectiveSandbox = sandboxDir || technicalConfig.sandboxDir || null;
   const gateResult = evaluateResultGate({
     artifactPath: artifactPath ?? artifactSet[0]?.logical_path,
     artifactSet: artifactSet.map((artifact) => artifact.logical_path),
@@ -6734,11 +6903,11 @@ export default {
         transitionApprovalTag({
           taskId,
           decision:
-    // F-085: the ONE reviewed mapping from the authority action to the
-    // ledger decision vocabulary. The plugin does not carry its own
-    // ternary: the ledger's `decision` value and the authority gate's
-    // verdict come from one mapping, so they cannot disagree.
-    resolveLedgerDecision(normAction) ?? normAction,
+            // F-085: the ONE reviewed mapping from the authority action to the
+            // ledger decision vocabulary. The plugin does not carry its own
+            // ternary: the ledger's `decision` value and the authority gate's
+            // verdict come from one mapping, so they cannot disagree.
+            resolveLedgerDecision(normAction) ?? normAction,
         }).catch((tagErr) => {
           api.logger?.warn?.(
             `[zink-governance] approval tag not transitioned for task ${taskId}: ${tagErr?.message}`,
@@ -7773,6 +7942,11 @@ export default {
           // native adapter cannot deliver from this hook context (proven live
           // twice); this /messages post is the sole permitted exception, marked
           // and test-enforced. See buildApprovalButtonsMessage.
+          // M12/T9 F-124: the body is published ONCE - in the thread above.
+          // This message carries the buttons and a short ledger-derived
+          // pointer, so the owner's approval surface never shows the same
+          // body twice.
+          const approvalActionLine = buildApprovalActionLine(taskId);
           try {
             const msgRes = await fetch(
               `https://discord.com/api/v10/channels/${thread.id}/messages`,
@@ -7783,7 +7957,7 @@ export default {
                   "Content-Type": "application/json",
                 },
                 body: JSON.stringify(
-                  buildApprovalButtonsMessage(bodyContent, buttons),
+                  buildApprovalButtonsMessage(approvalActionLine, buttons),
                 ),
                 signal: AbortSignal.timeout(DISCORD_REST_DEADLINE_MS),
               },
