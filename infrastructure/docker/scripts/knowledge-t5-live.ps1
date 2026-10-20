@@ -22,8 +22,14 @@ $knowledgeComposeFile = Join-Path $script:T5DockerDirectory "compose\compose.kno
 $liveComposeFile = Join-Path $script:T5DockerDirectory "compose\compose.m4-t5.live.yml"
 $barrierRoot = Join-Path ([IO.Path]::GetTempPath()) "knowledge-t5-backup-barrier-$runId"
 $backupRoot = Join-Path $BackupBase $runId
-$dumpPath = Join-Path $backupRoot "m4-recovery-$runId.dump"
-$manifestPath = Join-Path $backupRoot "m4-recovery-$runId.manifest.json"
+# F-365 (R7-IG-05): this driver owns the recovery-archive name. The tree
+# already held archives named knowledge.dump that no tracked file produced;
+# the manifest is written beside the archive, so a run's pointer never lives
+# only in ignored scratch. The retention that expires an archive is stated in
+# docs/runbooks/backups-and-recovery-archives.md and in the tracked ledger
+# docs/runbooks/recovery-archive-ledger.json.
+$dumpPath = Join-Path $backupRoot "knowledge.dump"
+$manifestPath = Join-Path $backupRoot "knowledge.manifest.json"
 $evidence = [ordered]@{ schema_version = 2; mode = "Live"; result = "FAIL"; acceptance_run_id = $runId; started_at = [DateTime]::UtcNow.ToString("o") }
 $restoreContainer = "knowledge-t5-restore-$runId"
 $script:restoreContainerStarted = $false
@@ -268,8 +274,8 @@ function Assert-BackupAndRestore {
   param([string]$PostgresId, [object]$Snapshot, [string]$CatalogBefore)
 
   New-PrivateBackupRoot
-  $containerDump = "/tmp/m4-recovery-$runId.dump"
-  $temporaryDump = Join-Path $backupRoot "m4-recovery-$runId.dump.tmp"
+  $containerDump = "/tmp/knowledge-$runId.dump"
+  $temporaryDump = Join-Path $backupRoot "knowledge.dump.tmp"
   try {
     $toolVersion = (& docker exec $PostgresId pg_dump --version).Trim()
     $restoreToolVersion = (& docker exec $PostgresId pg_restore --version).Trim()
@@ -328,7 +334,7 @@ function Assert-BackupAndRestore {
     $sequenceRows = @(Invoke-LiveSnapshotSql $sequenceSql $Snapshot.snapshot_id | Where-Object { $_ -and $_ -notin @("BEGIN", "SET", "COMMIT") })
 
     $restoreImage = "pgvector/pgvector:0.8.1-pg17@sha256:3e8b3adfd27b5707128f60956f62a793c3c9326ea8cfaf0eab7adccb5d700b21"
-    & docker run --detach --name $restoreContainer --network none --memory 1g --pids-limit 256 --security-opt no-new-privileges:true --read-only --tmpfs /tmp:rw,nosuid,nodev,noexec,size=2048m --tmpfs /var/lib/postgresql/data:rw,nosuid,nodev,size=1536m --tmpfs /var/run/postgresql:rw,nosuid,nodev,size=32m --env POSTGRES_HOST_AUTH_METHOD=trust --label com.personal-tool.acceptance=t5 --label com.personal-tool.acceptance-run=$runId $restoreImage | Out-Null
+    & docker run --detach --name $restoreContainer --network none --memory 1g --pids-limit 256 --security-opt no-new-privileges:true --read-only --tmpfs /tmp:rw,nosuid,nodev,noexec,size=2048m --tmpfs /var/lib/postgresql/data:rw,nosuid,nodev,size=1536m --tmpfs /var/run/postgresql:rw,nosuid,nodev,size=32m --env POSTGRES_HOST_AUTH_METHOD=trust --label com.personal-tool.acceptance=t5 --label com.personal-tool.acceptance-run=$runId --label com.personal-tool.persistence=temporary $restoreImage | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Disposable recovery database failed to start." }
     $script:restoreContainerStarted = $true
     for ($attempt = 0; $attempt -lt 120; $attempt++) {

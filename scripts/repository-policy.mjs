@@ -62,6 +62,10 @@ const MAKE_TARGETS = {
 // The findings register is the one queue every remediation band reads. It is
 // tracked, so every row edit carries a commit, an author and a diff.
 const FINDINGS_REGISTER_PATH = "docs/execution/findings.md";
+// The tracked ledger that records every recovery archive the tree holds, with
+// its digest, its provenance and its retention.
+const RECOVERY_ARCHIVE_LEDGER_PATH =
+  "docs/runbooks/recovery-archive-ledger.json";
 // The register moved out of the Git-ignored states tree on 2026-10-17. A
 // tracked file that still cites the retired path without naming the current
 // one sends a reader to a file that does not exist.
@@ -1297,6 +1301,124 @@ export function checkGitWhitespace(repositoryRoot) {
     }
   }
   return failures;
+}
+
+/**
+ * F-365 (R7-IG-05): every recovery archive under backups/ must be recorded,
+ * with its digest, in a tracked ledger.
+ *
+ * The tree held three PostgreSQL dumps of the knowledge schema under
+ * backups/knowledge-t5/ with no tracked producer, no recorded digest and no
+ * expiry, and the only pointer that tied a directory to a run lived in
+ * ignored scratch. The tracked T5 driver now owns the archive name and
+ * writes the run's manifest beside the archive; the archives that predate it
+ * are recorded in the ledger, so their provenance, digest and expiry are
+ * defined too.
+ */
+export function compareArchiveLedger(recorded, present) {
+  const failures = [];
+  const recordedByPath = new Map(
+    (recorded ?? []).map((entry) => [entry.path, entry]),
+  );
+
+  for (const archive of present ?? []) {
+    const entry = recordedByPath.get(archive.path);
+    if (!entry) {
+      failures.push(
+        `The recovery archive ${archive.path} is not recorded in the tracked ledger, so it has no provenance, digest or expiry.`,
+      );
+      continue;
+    }
+    if (entry.sha256 !== archive.sha256) {
+      failures.push(
+        `The recovery archive ${archive.path} does not match the recorded digest (${entry.sha256} recorded, ${archive.sha256} on disk).`,
+      );
+    }
+    if (entry.bytes !== archive.bytes) {
+      failures.push(
+        `The recovery archive ${archive.path} does not match the recorded size (${entry.bytes} recorded, ${archive.bytes} on disk).`,
+      );
+    }
+  }
+
+  for (const entry of recorded ?? []) {
+    if (entry.status === "recovery-archive" && !(entry.bytes > 0)) {
+      failures.push(
+        `The recorded recovery archive ${entry.path} is zero-length, so it restores nothing.`,
+      );
+    }
+    if (typeof entry.retention !== "string" || !entry.retention.length) {
+      failures.push(
+        `The recorded recovery archive ${entry.path} states no retention.`,
+      );
+    }
+  }
+
+  return failures;
+}
+
+/**
+ * The tracked ledger of recovery archives, and the archives the tree actually
+ * holds, checked together.
+ */
+export function checkRecoveryArchiveProvenance(repositoryRoot) {
+  const failures = [];
+  const ledgerPath = path.join(repositoryRoot, RECOVERY_ARCHIVE_LEDGER_PATH);
+  if (!existsSync(ledgerPath)) {
+    failures.push(
+      `The recovery archive ledger is missing: ${RECOVERY_ARCHIVE_LEDGER_PATH}`,
+    );
+    return failures;
+  }
+
+  let ledger;
+  try {
+    ledger = JSON.parse(readFileSync(ledgerPath, "utf8"));
+  } catch (error) {
+    failures.push(
+      `The recovery archive ledger is unreadable: ${error.message}`,
+    );
+    return failures;
+  }
+  if (!Array.isArray(ledger?.archives)) {
+    failures.push(
+      `The recovery archive ledger carries no archives: ${RECOVERY_ARCHIVE_LEDGER_PATH}`,
+    );
+    return failures;
+  }
+
+  failures.push(
+    ...compareArchiveLedger(
+      ledger.archives,
+      listRecoveryArchives(
+        repositoryRoot,
+        path.join(repositoryRoot, "backups"),
+      ),
+    ),
+  );
+  return failures;
+}
+
+function listRecoveryArchives(repositoryRoot, directory) {
+  const archives = [];
+  if (!existsSync(directory)) return archives;
+  const walk = (current) => {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+        continue;
+      }
+      if (!entry.name.endsWith(".dump")) continue;
+      archives.push({
+        path: path.relative(repositoryRoot, full).replaceAll("\\", "/"),
+        bytes: statSync(full).size,
+        sha256: createHash("sha256").update(readFileSync(full)).digest("hex"),
+      });
+    }
+  };
+  walk(directory);
+  return archives;
 }
 
 /**
