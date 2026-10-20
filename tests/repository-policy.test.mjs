@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -1287,3 +1288,120 @@ test("F-138: every shipped Zink Tools adapter is declared in the boundary docume
     );
   }
 });
+
+// =========================================================================
+// M12/T9 — the governance layer and the working tree.
+//
+// The cases below are controls the findings asked for and that no lane
+// enforced yet. They read tracked files and the working tree, they never
+// write, and a case that flags a file reports the PATH and never the bytes
+// it found there.
+// =========================================================================
+
+// ---------------------------------------------------------------------------
+// F-038 — a credential literal in a repository-adjacent file
+//
+// A credential pasted into a script is a credential in source position: it
+// reaches every reader of the file, every `git add -A` of a directory that
+// happens to be ignored today, and every clone of a tree the script was
+// copied into. The shapes below are the Discord token and webhook forms.
+// ---------------------------------------------------------------------------
+const CREDENTIAL_LITERAL_SHAPES = [
+  {
+    name: "discord bot token",
+    pattern: /[0-9]{17,20}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{25,}/u,
+  },
+  {
+    name: "discord webhook url",
+    pattern: /discord(?:app)?\.com\/api\/webhooks\/[0-9]+\/[A-Za-z0-9_-]{25,}/u,
+  },
+];
+
+// Directories that carry no authored source: a credential literal cannot live
+// in a compiled artefact, and walking a virtualenv on every gate run costs
+// minutes for nothing.
+const CREDENTIAL_SCAN_SKIP_DIRECTORIES = new Set([
+  ".git",
+  ".venv",
+  "__pycache__",
+  "node_modules",
+]);
+
+const CREDENTIAL_SCAN_MAX_BYTES = 2 * 1024 * 1024;
+
+function collectCredentialLiteralFiles(files) {
+  const hits = [];
+  for (const filePath of files) {
+    let stats;
+    try {
+      stats = statSync(filePath);
+    } catch {
+      continue;
+    }
+    if (!stats.isFile() || stats.size > CREDENTIAL_SCAN_MAX_BYTES) continue;
+    let contents;
+    try {
+      contents = readFileSync(filePath);
+    } catch {
+      continue;
+    }
+    // A NUL byte means the file is not text; the shapes cannot appear in it.
+    if (contents.includes(0)) continue;
+    const text = contents.toString("utf8");
+    for (const shape of CREDENTIAL_LITERAL_SHAPES) {
+      if (shape.pattern.test(text)) {
+        hits.push(`${path.relative(REPO_ROOT, filePath)} (${shape.name})`);
+        break;
+      }
+    }
+  }
+  return hits;
+}
+
+function collectScannedFiles(rootDirectory) {
+  const files = [];
+  const walk = (directory) => {
+    let entries;
+    try {
+      entries = readdirSync(directory, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (CREDENTIAL_SCAN_SKIP_DIRECTORIES.has(entry.name)) continue;
+      const full = path.join(directory, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.isFile()) files.push(full);
+    }
+  };
+  walk(rootDirectory);
+  return files;
+}
+
+test("F-038: no credential literal exists in any tracked file", () => {
+  const tracked = listTrackedFiles(REPO_ROOT).map((relativePath) =>
+    path.join(REPO_ROOT, relativePath),
+  );
+  const hits = collectCredentialLiteralFiles(tracked);
+  assert.deepEqual(
+    hits,
+    [],
+    `a credential literal in source position is reachable by every reader of the file; remove it and rotate the credential: ${hits.join(", ")}`,
+  );
+});
+
+test("F-038: no credential literal exists in the local scratch directory", () => {
+  const scratch = path.join(REPO_ROOT, "scratch");
+  if (!existsSync(scratch)) {
+    return;
+  }
+  const hits = collectCredentialLiteralFiles(collectScannedFiles(scratch));
+  assert.deepEqual(
+    hits,
+    [],
+    `the scratch directory is repository-adjacent: a credential literal there is one ` +
+      `forced add away from history. Remove it and rotate the credential: ${hits.join(", ")}`,
+  );
+});
+
+// ---------------------------------------------------------------------------
