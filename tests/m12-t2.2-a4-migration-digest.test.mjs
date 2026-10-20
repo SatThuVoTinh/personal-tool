@@ -20,13 +20,23 @@
 // (read-only, per §3 of the contract).
 //
 // Assertion taxonomy (real files vs. temporary fixtures):
-// - REAL: the manifest structure, and the digest equality of every migration
+// - REAL: the manifest structure, the digest equality of every migration
 //   listed in docs/contracts/knowledgebase-migration-digests.json against the
-//   actual bytes in apps/knowledge/migrations/. This is the gate that bites in
-//   CI; the failure-mode tests below only prove the check is not vacuous.
+//   actual bytes in apps/knowledge/migrations/, AND the reverse direction:
+//   every migration file on disk must be named by the manifest. This is the
+//   gate that bites in CI.
 // - FIXTURE: mutated-copy detection, missing-file detection, and the
-//   "new unlisted file stays green" rule run the same digest logic over a
-//   temporary directory under os.tmpdir(), never inside the repository.
+//   "new unlisted file reddens the guard" rule run the same digest logic over
+//   a temporary directory under os.tmpdir(), never inside the repository.
+//
+// F-315 (R7-E3-03): the guard used to walk the manifest only, so it could
+// detect a LISTED file changing but never noticed a migration file that is
+// absent from the manifest, and the fixture below pinned that blindness green
+// as "the forward-migration allowance". The guard now reconciles in BOTH
+// directions, and a new file enters the manifest by being NAMED in it with
+// its digest — the owner decision that rule rests on is escalated with the
+// row, because the manifest's own `purpose` text still describes the old
+// one-directional rule.
 
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -55,9 +65,10 @@ function sha256OfFile(filePath) {
 }
 
 // The shared guard logic, so the fixture tests exercise the same code path the
-// real-file gate runs. `migrationsDir` is a directory holding *.sql files
-// (files NOT listed in the manifest are ignored — they are forward migrations,
-// the allowed path); `manifest` is the parsed manifest object.
+// real-file gate runs. `migrationsDir` is a directory holding *.sql files;
+// `manifest` is the parsed manifest object. The guard reconciles in BOTH
+// directions: every entry the manifest names must match the bytes on disk,
+// and every migration file on disk must be named by the manifest.
 // Returns an array of human-readable failure messages; empty means pass.
 function checkMigrationDigests(migrationsDir, manifest) {
   const failures = [];
@@ -83,7 +94,29 @@ function checkMigrationDigests(migrationsDir, manifest) {
       );
     }
   }
+  // The reverse direction. A migration file that the manifest does not name
+  // carries no digest at all, so nothing can prove it was never edited in
+  // place after it was adopted: the one-directional guard was blind to it.
+  const listed = new Set(manifest.migrations.map((entry) => entry.file));
+  for (const file of migrationFilesIn(migrationsDir)) {
+    if (listed.has(file)) continue;
+    failures.push(
+      `Migration ${file} exists in ${migrationsDir} but is NOT named in ` +
+        `docs/contracts/knowledgebase-migration-digests.json. Every tracked migration must enter the ` +
+        `manifest with its sha256 digest in the SAME commit that adds the file: the digest is what ` +
+        `proves the file was never edited in place after it was adopted, and an unnamed file has no ` +
+        `such proof.`,
+    );
+  }
   return failures;
+}
+
+/** The migration files in a directory, in a stable order. */
+function migrationFilesIn(migrationsDir) {
+  return fs
+    .readdirSync(migrationsDir)
+    .filter((name) => name.endsWith(".sql"))
+    .sort();
 }
 
 // --- REAL manifest + REAL migration files: the gate that runs in CI. ---
@@ -128,6 +161,23 @@ test("A-4 REAL: every tracked migration's bytes still match its recorded digest"
     [],
     `Applied migrations are immutable once adopted by filename; the forward-migration rule is the only ` +
       `allowed path. Failures:\n${failures.join("\n")}`,
+  );
+});
+
+test("A-4 REAL: every tracked migration is named by the manifest", () => {
+  // F-315: the second clause of the guard. A migration file the manifest does
+  // not name carries no digest, so nothing can prove it was never edited in
+  // place after adoption — and the guard used to say nothing about it at all.
+  const manifest = JSON.parse(fs.readFileSync(MANIFEST_FILE, "utf8"));
+  const listed = new Set(manifest.migrations.map((entry) => entry.file));
+  const unlisted = migrationFilesIn(MIGRATIONS_DIR).filter(
+    (file) => !listed.has(file),
+  );
+  assert.deepEqual(
+    unlisted,
+    [],
+    `these tracked migrations are not named by docs/contracts/knowledgebase-migration-digests.json, ` +
+      `so their bytes are unpinned: ${unlisted.join(", ")}`,
   );
 });
 
@@ -198,16 +248,31 @@ test("A-4 FIXTURE: deleting a manifest-listed migration reddens the guard", () =
   );
 });
 
-test("A-4 FIXTURE: a NEW unlisted migration file does not redden the guard (forward migration is the allowed path)", () => {
+test("A-4 FIXTURE: a NEW unlisted migration file reddens the guard (a new file enters the manifest by being named in it)", () => {
+  // F-315: this case used to assert the OPPOSITE — that a migration file
+  // absent from the manifest stays green — which pinned the one-directional
+  // guard green as "the forward-migration allowance". The allowance is now an
+  // explicit rule: the file is named in the manifest, with its digest, in the
+  // same commit that adds it.
   const failures = runGuardOnFixture(["001_initial.sql"], (dir) => {
     fs.writeFileSync(
       path.join(dir, "004_forward_example.sql"),
       "-- a brand-new forward migration\n",
     );
   });
-  assert.deepEqual(
-    failures,
-    [],
-    "A migration file absent from the manifest is a forward migration and must stay green.",
+  assert.equal(
+    failures.length,
+    1,
+    "A migration file absent from the manifest must produce exactly one failure.",
+  );
+  assert.match(
+    failures[0],
+    /is NOT named in\s+docs\/contracts\/knowledgebase-migration-digests\.json/u,
+    `Failure message must name the manifest the file has to enter, got: ${failures[0]}`,
+  );
+  assert.match(
+    failures[0],
+    /SAME commit/u,
+    `Failure message must say how a new file enters the manifest, got: ${failures[0]}`,
   );
 });
