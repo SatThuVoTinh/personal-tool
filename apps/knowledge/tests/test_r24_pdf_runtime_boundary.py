@@ -51,10 +51,11 @@ DIGEST = "a" * 64
 
 
 def probe_response() -> dict:
+    # F-286 (R7-C3-05): the child no longer echoes the processing identity
+    # it was sent, so the response carries only what the child recomputed.
     return {
         "protocol_version": PROTOCOL_VERSION,
         "status": "ok",
-        "processing_identity_digest": DIGEST,
         "pdf_runtime_lock_digest": "b" * 64,
         "distributions": {},
         "artifact_digests": {},
@@ -178,7 +179,10 @@ class StderrDoesNotKillAHealthyChildTests(unittest.IsolatedAsyncioTestCase):
             response = await client()._invoke(PROBE_REQUEST, deadline)
 
         self.assertEqual(response["status"], "ok")
-        self.assertEqual(response["processing_identity_digest"], DIGEST)
+        # F-286 (R7-C3-05): the response carries the evidence the child
+        # recomputed, and no echoed identity to compare back.
+        self.assertNotIn("processing_identity_digest", response)
+        self.assertEqual(response["runner_code_digest"], "c" * 64)
 
     async def test_a_genuinely_oversized_response_is_still_rejected(self) -> None:
         # The other direction: draining stderr must not weaken the response cap.

@@ -12,6 +12,8 @@ import sys
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 
+from .ocr import OcrRuntimeError
+
 PROTOCOL_VERSION = "zink:pdf-runtime-protocol:v1"
 MAX_REQUEST_BYTES = 64 * 1024
 _SAFE_ERRORS = {
@@ -25,6 +27,14 @@ _SAFE_ERRORS = {
     "PDF_RUNTIME_OUTPUT_INVALID",
     "PDF_RUNTIME_FAILED",
     "PDF_PAGE_RANGE_UNSUPPORTED",
+    # F-283 (R7-C3-02): the OCR module raises these two codes for the
+    # deadline it exceeded and the output cap it breached, and the safe-code
+    # list did not admit them, so the catch-all turned a slow region and a
+    # genuine crash into the same generic failure before the response left
+    # the process. The parent's whitelist admits both, and its timeout
+    # branch is reachable again.
+    "PDF_RUNTIME_TIMEOUT",
+    "PDF_RUNTIME_OUTPUT_LIMIT",
 }
 _THREAD_POLICY_CONFIGURED = False
 
@@ -78,10 +88,12 @@ def _probe(request: Mapping[str, Any]) -> Mapping[str, Any]:
     return {
         "protocol_version": PROTOCOL_VERSION,
         "status": "ok",
-        # Parent owns the full processing identity because it includes its M3
-        # tokenizer/retrieval/embedding identities.  This echo is safe only
-        # after the independently recomputed child evidence below succeeds.
-        "processing_identity_digest": expected,
+        # F-286 (R7-C3-05): the processing identity is owned by the PARENT,
+        # and the child used to echo the value it was sent, which the parent
+        # then compared back. That comparison could not fail: it verified
+        # nothing. The child reports only what it recomputed -- the lock
+        # digest, the distribution versions, the artifact digests and its own
+        # code digest -- and those are the checks that measure.
         "pdf_runtime_lock_digest": actual["pdf_runtime_lock_digest"],
         "distributions": actual["distributions"],
         "artifact_digests": actual["artifact_digests"],
@@ -119,6 +131,11 @@ def _extract_range(request: Mapping[str, Any]) -> Mapping[str, Any]:
     try:
         source = _safe_source_path(request.get("source_path"))
         items = _docling_extract(source, start, end)
+    except OcrRuntimeError as error:
+        # F-283 (R7-C3-02): the OCR deadline and the OCR output cap are the
+        # parent's own classification inputs, so they must survive the child
+        # boundary instead of collapsing into the generic failure code.
+        return _error(error.code)
     except _MultiPageItem:
         return _error("PDF_MULTI_PAGE_ITEM_UNSUPPORTED")
     except _RangeUnsupported:

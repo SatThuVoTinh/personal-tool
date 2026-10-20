@@ -7,6 +7,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import signal
 import sys
 from dataclasses import dataclass
@@ -117,18 +118,85 @@ def processing_identity_for_runtime(
 
 
 def verify_runtime_probe(
-    manifest_path: Path, runtime_lock_path: Path, probe: Mapping[str, Any], expected_digest: str
+    manifest_path: Path, runtime_lock_path: Path, probe: Mapping[str, Any]
 ) -> None:
-    """Compare child recomputation with parent-owned manifest and lock evidence."""
+    """Compare child recomputation with parent-owned manifest and lock evidence.
+
+    F-286 (R7-C3-05): the child used to echo the processing identity it
+    was sent and the parent compared that echo back, which could not fail.
+    The identity claim is dropped here: what is verified is the evidence the
+    child RECOMPUTED -- the lock digest, the distribution versions, the
+    artifact digests and the runner code digest.
+
+    F-306 (R7-E1-01): the two supply-chain fields were demanded to exist
+    and were never recomputed, so a stale artifact tree paired with edited
+    revision strings still yielded a fresh processing identity and a passing
+    probe. The locked distribution hashes are now checked against the
+    versions the child actually reports, and the hashed requirements digest
+    is recomputed from the file the lock names.
+    """
     manifest = load_pdf_runtime_manifest(manifest_path)
     if (
-        probe.get("processing_identity_digest") != expected_digest
-        or probe.get("pdf_runtime_lock_digest") != _sha256_file(runtime_lock_path)
+        probe.get("pdf_runtime_lock_digest") != _sha256_file(runtime_lock_path)
         or probe.get("distributions") != manifest["distribution_versions"]
         or probe.get("artifact_digests") != manifest["artifact_digests"]
         or probe.get("runner_code_digest") != manifest["runner_code_digest"]
     ):
         raise PdfRuntimeError("PDF_RUNTIME_MISMATCH")
+    _verify_locked_distributions(manifest, probe)
+    _verify_hashed_requirements(manifest, runtime_lock_path)
+
+
+def _verify_locked_distributions(
+    manifest: Mapping[str, Any], probe: Mapping[str, Any]
+) -> None:
+    """Every locked distribution must be installed at the locked version.
+
+    F-306 (R7-E1-01): the manifest recorded the lock's hashes and the
+    child reported its installed versions, and nothing compared them. The
+    comparison runs in the direction that cannot be satisfied by a renamed
+    or downgraded distribution: every package the lock pins is present, at
+    the version the lock pins.
+    """
+
+    locked = manifest.get("locked_distribution_hashes")
+    distributions = manifest.get("distribution_versions")
+    if (
+        not isinstance(locked, dict)
+        or not locked
+        or not isinstance(distributions, dict)
+        or probe.get("distributions") != distributions
+    ):
+        raise PdfRuntimeError("PDF_RUNTIME_MISMATCH")
+    for key, hashes in locked.items():
+        name, separator, version = str(key).partition("==")
+        if not separator or not name or not version or not hashes:
+            raise PdfRuntimeError("PDF_RUNTIME_MISMATCH")
+        installed = distributions.get(_normalise_distribution_name(name))
+        if installed is None or installed != version:
+            raise PdfRuntimeError("PDF_RUNTIME_MISMATCH")
+
+
+def _verify_hashed_requirements(
+    manifest: Mapping[str, Any], runtime_lock_path: Path
+) -> None:
+    """Recompute the hashed requirements digest the manifest declares.
+
+    F-306 (R7-E1-01): the digest was demanded to exist and never
+    recomputed, so the file the lock names could be edited after the
+    manifest was written.
+    """
+
+    expected = manifest.get("hashed_requirements_digest")
+    if not isinstance(expected, str) or len(expected) != 64:
+        raise PdfRuntimeError("PDF_RUNTIME_MISMATCH")
+    requirements = runtime_lock_path.parent / "requirements.txt"
+    if _sha256_file(requirements) != expected:
+        raise PdfRuntimeError("PDF_RUNTIME_MISMATCH")
+
+
+def _normalise_distribution_name(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).casefold()
 
 
 @dataclass(frozen=True)
@@ -165,7 +233,6 @@ class PdfRuntimeClient:
             self._settings.manifest_path,
             self._settings.lock_path,
             response,
-            expected_processing_identity_digest,
         )
         return response
 
@@ -489,16 +556,15 @@ def _validate_response(raw: bytes, request: Mapping[str, Any]) -> Mapping[str, A
         if set(response) != {
             "protocol_version",
             "status",
-            "processing_identity_digest",
             "pdf_runtime_lock_digest",
             "distributions",
             "artifact_digests",
             "runner_code_digest",
         }:
             raise PdfRuntimeError("PDF_RUNTIME_OUTPUT_INVALID")
-        if response.get("processing_identity_digest") != request.get("expected_processing_identity_digest"):
-            raise PdfRuntimeError("PDF_RUNTIME_MISMATCH")
-        for digest_key in ("processing_identity_digest", "pdf_runtime_lock_digest", "runner_code_digest"):
+        # F-286 (R7-C3-05): the response carries no processing identity, so
+        # there is nothing here that could be compared back to the request.
+        for digest_key in ("pdf_runtime_lock_digest", "runner_code_digest"):
             value = response.get(digest_key)
             if not isinstance(value, str) or len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
                 raise PdfRuntimeError("PDF_RUNTIME_OUTPUT_INVALID")

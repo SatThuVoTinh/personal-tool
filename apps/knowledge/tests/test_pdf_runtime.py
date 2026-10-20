@@ -348,13 +348,17 @@ class RuntimeIdentityTests(unittest.TestCase):
             runtime_lock = root / "runtime.lock"
             parent_lock.write_text("parent", encoding="utf-8")
             runtime_lock.write_text("runtime", encoding="utf-8")
+            requirements = root / "requirements.txt"
+            requirements.write_text("docling==2.121.0\n", encoding="utf-8")
             manifest = {
                 "artifact_digests": {"layout/model.bin": "a" * 64},
                 "distribution_versions": {"docling": "2.121.0", "transformers": "5.15.1"},
                 "locked_distribution_hashes": {
                     "docling==2.121.0": ["sha256:" + "e" * 64],
                 },
-                "hashed_requirements_digest": "f" * 64,
+                "hashed_requirements_digest": hashlib.sha256(
+                    requirements.read_bytes()
+                ).hexdigest(),
                 "model_artifact_revisions": {
                     "docling-project/docling-layout-heron": "d" * 40,
                 },
@@ -372,17 +376,116 @@ class RuntimeIdentityTests(unittest.TestCase):
                 manifest_path,
                 {"tokenizer_identity": "c" * 64, "embedding_identity": "m3"},
             )
+            # The parent still owns the processing identity; the child no
+            # longer echoes it back (F-286).
+            self.assertEqual(len(expected), 64)
             probe = {
-                "processing_identity_digest": expected,
+                # F-286 (R7-C3-05): the child recomputes its evidence; it does
+                # not echo the processing identity it was sent.
                 "pdf_runtime_lock_digest": manifest["pdf_runtime_lock_digest"],
                 "distributions": manifest["distribution_versions"],
                 "artifact_digests": manifest["artifact_digests"],
                 "runner_code_digest": manifest["runner_code_digest"],
             }
-            verify_runtime_probe(manifest_path, runtime_lock, probe, expected)
+            verify_runtime_probe(manifest_path, runtime_lock, probe)
             probe["artifact_digests"] = {}
             with self.assertRaisesRegex(PdfRuntimeError, "PDF_RUNTIME_MISMATCH"):
-                verify_runtime_probe(manifest_path, runtime_lock, probe, expected)
+                verify_runtime_probe(manifest_path, runtime_lock, probe)
+
+    def test_the_locked_distribution_hashes_are_verified(self) -> None:
+        """F-306 (R7-E1-01): the supply-chain fields were presence-only.
+
+        The manifest recorded the lock's hashes and the child reported its
+        installed versions, and nothing compared them: a distribution
+        installed at a version the lock does not pin passed the probe.
+        """
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime_lock = root / "runtime.lock"
+            runtime_lock.write_text("runtime", encoding="utf-8")
+            requirements = root / "requirements.txt"
+            requirements.write_text("docling==2.121.0\n", encoding="utf-8")
+            manifest = {
+                "artifact_digests": {"layout/model.bin": "a" * 64},
+                "distribution_versions": {"docling": "2.121.0"},
+                "locked_distribution_hashes": {
+                    "docling==2.121.0": ["sha256:" + "e" * 64],
+                },
+                "hashed_requirements_digest": hashlib.sha256(
+                    requirements.read_bytes()
+                ).hexdigest(),
+                "model_artifact_revisions": {},
+                "pdf_runtime_lock_digest": hashlib.sha256(b"runtime").hexdigest(),
+                "protocol_version": PROTOCOL_VERSION,
+                "runner_code_digest": "b" * 64,
+                "tesseract_version": "tesseract 5.3.0",
+                "tessdata_source_revision": {"tesseract-ocr": "5.3.0-2"},
+            }
+            manifest_path = root / "manifest.json"
+            manifest_path.write_bytes(json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+            probe = {
+                "pdf_runtime_lock_digest": manifest["pdf_runtime_lock_digest"],
+                "distributions": manifest["distribution_versions"],
+                "artifact_digests": manifest["artifact_digests"],
+                "runner_code_digest": manifest["runner_code_digest"],
+            }
+
+            verify_runtime_probe(manifest_path, runtime_lock, probe)
+
+            # The installed distribution is not the one the lock pins.
+            manifest["distribution_versions"] = {"docling": "2.120.0"}
+            manifest_path.write_bytes(
+                json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            )
+            probe["distributions"] = manifest["distribution_versions"]
+            with self.assertRaisesRegex(PdfRuntimeError, "PDF_RUNTIME_MISMATCH"):
+                verify_runtime_probe(manifest_path, runtime_lock, probe)
+
+    def test_the_hashed_requirements_digest_is_recomputed(self) -> None:
+        """F-306 (R7-E1-01): the digest was demanded to exist, never read.
+
+        The file the lock names could be edited after the manifest was
+        written and the probe still passed, because nothing recomputed the
+        digest.
+        """
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime_lock = root / "runtime.lock"
+            runtime_lock.write_text("runtime", encoding="utf-8")
+            requirements = root / "requirements.txt"
+            requirements.write_text("docling==2.121.0\n", encoding="utf-8")
+            manifest = {
+                "artifact_digests": {"layout/model.bin": "a" * 64},
+                "distribution_versions": {"docling": "2.121.0"},
+                "locked_distribution_hashes": {
+                    "docling==2.121.0": ["sha256:" + "e" * 64],
+                },
+                "hashed_requirements_digest": hashlib.sha256(
+                    requirements.read_bytes()
+                ).hexdigest(),
+                "model_artifact_revisions": {},
+                "pdf_runtime_lock_digest": hashlib.sha256(b"runtime").hexdigest(),
+                "protocol_version": PROTOCOL_VERSION,
+                "runner_code_digest": "b" * 64,
+                "tesseract_version": "tesseract 5.3.0",
+                "tessdata_source_revision": {"tesseract-ocr": "5.3.0-2"},
+            }
+            manifest_path = root / "manifest.json"
+            manifest_path.write_bytes(json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+            probe = {
+                "pdf_runtime_lock_digest": manifest["pdf_runtime_lock_digest"],
+                "distributions": manifest["distribution_versions"],
+                "artifact_digests": manifest["artifact_digests"],
+                "runner_code_digest": manifest["runner_code_digest"],
+            }
+
+            verify_runtime_probe(manifest_path, runtime_lock, probe)
+
+            requirements.write_text("docling==2.120.0\n", encoding="utf-8")
+            with self.assertRaisesRegex(PdfRuntimeError, "PDF_RUNTIME_MISMATCH"):
+                verify_runtime_probe(manifest_path, runtime_lock, probe)
 
 
 if __name__ == "__main__":
