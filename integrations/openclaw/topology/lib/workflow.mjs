@@ -50,7 +50,7 @@ const CANCELLATION_REASON_CODES = Object.freeze(
 );
 // M8-056: the documented transient-failure class. Only these reasons justify a
 // retry; every other failure class has no automatic or operator retry path.
-const TRANSIENT_FAILURE_CLASS = new Set([
+export const TRANSIENT_FAILURE_CLASS = new Set([
   "TRANSIENT_RUNTIME_FAILURE",
   "RUN_TIMEOUT",
 ]);
