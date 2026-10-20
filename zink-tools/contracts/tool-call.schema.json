@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://zink.local/contracts/tool-call.schema.json",
   "title": "Zink Tool Call Envelope Schema",
-  "x-zink-contract-version": "1.0.0",
+  "x-zink-contract-version": "1.1.0",
   "$defs": {
     "uuid_v4": {
       "type": "string",
@@ -67,7 +67,7 @@
         "call_id": { "$ref": "#/$defs/uuid_v4" },
         "specialist": {
           "type": "string",
-          "enum": ["main", "o1", "o2", "excel", "power-bi", "sql", "python"]
+          "enum": ["sql"]
         },
         "constraints": { "$ref": "#/$defs/constraints" },
         "tool_id": { "const": "zink_sql" },
@@ -83,7 +83,7 @@
         "call_id": { "$ref": "#/$defs/uuid_v4" },
         "specialist": {
           "type": "string",
-          "enum": ["main", "o1", "o2", "excel", "power-bi", "sql", "python"]
+          "enum": ["excel"]
         },
         "constraints": { "$ref": "#/$defs/constraints" },
         "tool_id": { "const": "zink_excel" },
@@ -100,7 +100,7 @@
         "call_id": { "$ref": "#/$defs/uuid_v4" },
         "specialist": {
           "type": "string",
-          "enum": ["main", "o1", "o2", "excel", "power-bi", "sql", "python"]
+          "enum": ["power-bi"]
         },
         "constraints": { "$ref": "#/$defs/constraints" },
         "tool_id": { "const": "zink_power_bi" },
@@ -117,7 +117,7 @@
         "call_id": { "$ref": "#/$defs/uuid_v4" },
         "specialist": {
           "type": "string",
-          "enum": ["main", "o1", "o2", "excel", "power-bi", "sql", "python"]
+          "enum": ["python"]
         },
         "constraints": { "$ref": "#/$defs/constraints" },
         "tool_id": { "const": "zink_python" },
@@ -134,13 +134,61 @@
         "call_id": { "$ref": "#/$defs/uuid_v4" },
         "specialist": {
           "type": "string",
-          "enum": ["main", "o1", "o2", "excel", "power-bi", "sql", "python"]
+          "enum": ["o2", "python"]
         },
         "constraints": { "$ref": "#/$defs/constraints" },
         "tool_id": { "const": "zink_n8n" },
         "input": { "$ref": "tools/zink-n8n.schema.json#/$defs/input" },
         "provenance": { "$ref": "#/$defs/delegated_provenance" },
         "approval_id": { "$ref": "#/$defs/uuid_v4" }
+      },
+      "required": ["call_id", "specialist", "constraints", "tool_id", "input", "provenance"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "call_id": { "$ref": "#/$defs/uuid_v4" },
+        "specialist": {
+          "type": "string",
+          "enum": ["main", "o1", "o2", "excel", "power-bi", "sql", "python"]
+        },
+        "constraints": { "$ref": "#/$defs/constraints" },
+        "tool_id": { "const": "zink_skill_search" },
+        "input": { "$ref": "tools/zink-skill.schema.json#/$defs/input" },
+        "provenance": { "$ref": "#/$defs/sql_provenance" }
+      },
+      "required": ["call_id", "specialist", "constraints", "tool_id", "input", "provenance"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "call_id": { "$ref": "#/$defs/uuid_v4" },
+        "specialist": {
+          "type": "string",
+          "enum": ["main", "o1", "o2", "excel", "power-bi", "sql", "python"]
+        },
+        "constraints": { "$ref": "#/$defs/constraints" },
+        "tool_id": { "const": "zink_knowledge_search" },
+        "input": { "$ref": "tools/zink-knowledge.schema.json#/$defs/input" },
+        "provenance": { "$ref": "#/$defs/sql_provenance" }
+      },
+      "required": ["call_id", "specialist", "constraints", "tool_id", "input", "provenance"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "call_id": { "$ref": "#/$defs/uuid_v4" },
+        "specialist": {
+          "type": "string",
+          "enum": ["excel", "power-bi", "sql", "python"]
+        },
+        "constraints": { "$ref": "#/$defs/constraints" },
+        "tool_id": { "const": "zink_skill_propose" },
+        "input": { "$ref": "tools/zink-skill.schema.json#/$defs/input" },
+        "provenance": { "$ref": "#/$defs/delegated_provenance" }
       },
       "required": ["call_id", "specialist", "constraints", "tool_id", "input", "provenance"],
       "additionalProperties": false
