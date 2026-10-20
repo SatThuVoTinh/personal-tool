@@ -44,6 +44,7 @@ import path from "node:path";
 import process from "node:process";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { runInNewContext } from "node:vm";
 
 import {
   APPLY_NOT_VERIFIED,
@@ -1207,6 +1208,104 @@ test("R16-08: the operator preflight names every known refusal class and leaks n
     /reason:\s*(error|output)\./.test(source),
     false,
     "a raw error message could quote config content or identifiers",
+  );
+});
+
+// Load one top-level function declaration out of a probe source file and
+// evaluate it on its own. The probe is a script, not an importable module: it
+// writes fixtures and exits when it runs. Its failure classification is a pure
+// function of the error, so extracting it is what lets this lane assert the
+// behaviour instead of the spelling of the source.
+function loadProbeFunction(source, name) {
+  const match = new RegExp(
+    `function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}`,
+    "u",
+  ).exec(source);
+  assert.ok(match, `the probe must declare ${name}`);
+  const loaded = runInNewContext(`${match[0]}\n${name};`);
+  assert.equal(typeof loaded, "function", `${name} must be callable`);
+  return loaded;
+}
+
+test("F-209: the live governance probe names the check that failed", () => {
+  // F-209 (R2-B03-03): the probe's classifier built ONE detail string out of
+  // the error code or the error message, matched it against a fixed list of
+  // RPC/runtime classes and fell back to a single catch-all. An AssertionError
+  // carries no class of its own, so a completion or lineage regression in the
+  // state the probe reads and an unknown harness fault produced the SAME
+  // line: LIVE_GATE_REJECTED. The nested matrix carried one stage label for
+  // six delegated children, so the failing child was never named either.
+  const source = readFileSync(
+    path.join(
+      REPO,
+      "integrations",
+      "openclaw",
+      "topology",
+      "fixtures",
+      "runtime-regression",
+      "live-governance-probe.mjs",
+    ),
+    "utf8",
+  );
+
+  const classify = loadProbeFunction(source, "classifyProbeFailure");
+
+  // An assertion failure is a state regression, and it must say so.
+  assert.equal(
+    classify({
+      name: "AssertionError",
+      code: "ERR_ASSERTION",
+      message:
+        "Expected values to be strictly equal:\n\n'ACTIVE' !== 'COMPLETE'",
+    }),
+    "STATE_ASSERTION_FAILED",
+    "a completion regression must not be reported as a generic gate refusal",
+  );
+  assert.equal(classify({ code: "ERR_ASSERTION" }), "STATE_ASSERTION_FAILED");
+  assert.equal(
+    classify({ name: "AssertionError", message: "boom" }),
+    "STATE_ASSERTION_FAILED",
+  );
+
+  // The enumerated RPC/runtime classes keep their own names.
+  assert.equal(
+    classify({ message: "GOVERNANCE_COMPLETION_UNAVAILABLE" }),
+    "GOVERNANCE_COMPLETION_UNAVAILABLE",
+  );
+  assert.equal(classify({ code: "ETIMEDOUT" }), "ETIMEDOUT");
+  assert.equal(
+    classify({ message: "INVENTORY_SHAPE_MISMATCH" }),
+    "INVENTORY_SHAPE_MISMATCH",
+  );
+  assert.equal(classify({ message: "LINEAGE_MISMATCH" }), "LINEAGE_MISMATCH");
+
+  // An unrecognised fault keeps the catch-all, and only the catch-all.
+  assert.equal(classify({ message: "spawn ENOENT" }), "LIVE_GATE_REJECTED");
+  assert.equal(classify({}), "LIVE_GATE_REJECTED");
+
+  // The collapsing detail expression is the defect itself: one string matched
+  // against one list, with no way to tell an assertion from a runtime refusal.
+  assert.doesNotMatch(
+    source,
+    /error\?\.code \?\? error\?\.message/u,
+    "the classifier must not collapse the code and the message into one detail",
+  );
+
+  // The nested matrix must name the child that failed.
+  const childStage = loadProbeFunction(source, "nestedChildStage");
+  assert.equal(
+    childStage("nested-seven-role-matrix", "python"),
+    "nested-seven-role-matrix/child:python",
+  );
+  assert.match(
+    source,
+    /stage = nestedChildStage\(\s*NESTED_MATRIX_STAGE,\s*run\.agent_id\s*\)/u,
+    "the delegation loop must record the failing child in the stage",
+  );
+  assert.match(
+    source,
+    /stage:\s*NESTED_MATRIX_STAGE/u,
+    "the matrix PASS record must still name the matrix itself",
   );
 });
 

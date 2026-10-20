@@ -72,6 +72,56 @@ const environment = {
 };
 const paths = ledgerPaths(stateDir);
 let stage = "native-patch";
+
+// F-209 (R2-B03-03): a FAIL record has to name the check that failed.
+//
+// The classifier used to build ONE detail string out of the error code or the
+// error message, match it against a fixed list of RPC and runtime classes, and
+// fall back to a single catch-all. An AssertionError carries no class of its
+// own, so a completion or lineage regression in the state this probe reads and
+// an unknown harness fault produced the SAME line: LIVE_GATE_REJECTED.
+//
+// The classes are separated here: a specific whitelisted class always wins, an
+// assertion failure is reported as the state failure it is, and only an
+// unrecognised fault keeps the catch-all.
+function classifyProbeFailure(error) {
+  const code = String(error?.code ?? "");
+  const message = String(error?.message ?? "");
+  const rpcRuntimeClasses = [
+    "GOVERNANCE_COMPLETION_UNAVAILABLE",
+    "GOVERNANCE_INGRESS_UNAVAILABLE",
+    "EXECUTION_STATE_UNKNOWN",
+    "LINEAGE_MISMATCH",
+    "GOVERNANCE_HASH_MISMATCH",
+    "RUNTIME_CAPABILITY_MISMATCH",
+    "VALIDATION_FAILED",
+    "SCHEMA_INVALID",
+    "POLICY_DENIED",
+    "ETIMEDOUT",
+    "INVENTORY_SHAPE_MISMATCH",
+  ];
+  const matched = rpcRuntimeClasses.find(
+    (value) => code.includes(value) || message.includes(value),
+  );
+  if (matched) {
+    return matched;
+  }
+  if (error?.name === "AssertionError" || code === "ERR_ASSERTION") {
+    return "STATE_ASSERTION_FAILED";
+  }
+  return "LIVE_GATE_REJECTED";
+}
+
+// F-209 (R2-B03-03): the nested matrix asserts six delegated children in turn,
+// so a single stage label for the whole matrix turns a real completion
+// regression in one child into an unattributable FAIL line. The stage names
+// the child that failed.
+const NESTED_MATRIX_STAGE = "nested-seven-role-matrix";
+
+function nestedChildStage(matrixStage, agentId) {
+  return `${matrixStage}/child:${agentId}`;
+}
+
 try {
   checkNativePatch({
     runtimeRoot,
@@ -188,7 +238,7 @@ try {
     await delay(6000);
   }
   await delay(60000);
-  stage = "nested-seven-role-matrix";
+  stage = NESTED_MATRIX_STAGE;
   const fixture = openFixture("main");
   const leafInput = "Synthetic leaf execution. Return COMPLETE outcome.";
   const constraints = "Synthetic only; no external access";
@@ -277,32 +327,20 @@ Never directly spawn any specialist. Use the frozen native fields and semantic p
   assert.equal(task.delegated_runs_used, 6);
   assert.equal(task.transitions_used, 1);
   for (const run of Object.values(task.delegations)) {
+    // F-209 (R2-B03-03): the FAIL record names the child that failed, so a
+    // regression in one delegated child is not reported against the matrix.
+    stage = nestedChildStage(NESTED_MATRIX_STAGE, run.agent_id);
     assert.equal(run.accepted_outcome_status, "COMPLETE");
     assert.ok(run.accepted_payload_digest);
     await checkTools(run.agent_id, run.child_session_key);
   }
   process.stdout.write(
-    `${JSON.stringify({ stage, status: "PASS", accepted_children: 6, ...PRECONDITION })}\n`,
+    `${JSON.stringify({ stage: NESTED_MATRIX_STAGE, status: "PASS", accepted_children: 6, ...PRECONDITION })}\n`,
   );
 } catch (error) {
   // Never emit model output, RPC arguments, raw response or stderr. Preserve a
   // small static classification so operators can repair a gate safely.
-  const detail = String(error?.code ?? error?.message ?? "");
-  const known = [
-    "GOVERNANCE_COMPLETION_UNAVAILABLE",
-    "GOVERNANCE_INGRESS_UNAVAILABLE",
-    "EXECUTION_STATE_UNKNOWN",
-    "LINEAGE_MISMATCH",
-    "GOVERNANCE_HASH_MISMATCH",
-    "RUNTIME_CAPABILITY_MISMATCH",
-    "VALIDATION_FAILED",
-    "SCHEMA_INVALID",
-    "POLICY_DENIED",
-    "ETIMEDOUT",
-    "INVENTORY_SHAPE_MISMATCH",
-  ];
-  const reason =
-    known.find((value) => detail.includes(value)) ?? "LIVE_GATE_REJECTED";
+  const reason = classifyProbeFailure(error);
   process.stdout.write(
     `${JSON.stringify({ stage, status: "FAIL", reason })}\n`,
   );
