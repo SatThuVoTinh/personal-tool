@@ -343,7 +343,13 @@ class PdfContentBuilder:
                 raise PdfBuildError("PDF_RUNTIME_OUTPUT_INVALID")
             content = _normalize_content(item["content"])
             if not content:
-                continue
+                # F-287 (R7-C3-06): the item was accepted because its raw
+                # content was non-empty, and it then normalised away. The
+                # skip that used to swallow it left no count and no code, so
+                # a page could contribute nothing and the build still
+                # finished READY. The sibling case (a wholly empty result)
+                # fails closed; this one now does too.
+                raise PdfBuildError("PDF_RUNTIME_OUTPUT_INVALID")
             if item["kind"] == "table":
                 pieces = self._split_table(title, content)
                 segment_type = "PDF_TABLE"

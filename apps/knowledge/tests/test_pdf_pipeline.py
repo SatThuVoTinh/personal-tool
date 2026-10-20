@@ -203,6 +203,30 @@ class PdfSegmentationTests(unittest.TestCase):
                 self.batch(),
             )
 
+    def test_an_item_that_normalises_to_empty_fails_closed(self) -> None:
+        """F-287 (R7-C3-06): a dropped item left no count and no code.
+
+        The boundary guarantees non-empty RAW content, and the normaliser
+        can still empty it (three spaces, a newline and a tab, a
+        non-breaking space). The item used to be skipped, so a page could
+        contribute nothing while the build still finished READY. The
+        sibling case -- a wholly empty result -- fails closed, and this one
+        does too.
+        """
+
+        for content in ("   ", "\n\t", "\u00a0"):
+            with self.subTest(content=repr(content)):
+                with self.assertRaises(PdfBuildError) as caught:
+                    self.builder()._segment_batch(
+                        "T",
+                        [{
+                            "kind": "text", "ordinal": 0, "content": content,
+                            "page_start": 1, "page_end": 1, "bbox": None,
+                        }],
+                        self.batch(),
+                    )
+                self.assertEqual(caught.exception.code, "PDF_RUNTIME_OUTPUT_INVALID")
+
     def test_large_token_split_uses_bounded_binary_search(self) -> None:
         builder = self.builder(40)
         pieces = builder._split_prose("T", "界" * 4000)
@@ -576,8 +600,16 @@ class PdfBuildLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(database.failures[0][1], "PDF_RUNTIME_TIMEOUT")
 
     async def test_cumulative_timeout_after_commit_fails_running_batch_and_build(self) -> None:
-        database, runtime = _Database(), _Runtime(5, delay=0.2)
-        with patch("app.pdf_pipeline.BUILD_TIMEOUT_SECONDS", 0.1):
+        # The budget and the delay are wide apart on purpose. The budget
+        # covers the phase BEFORE the commit point (the snapshot hop, the
+        # preflight and the build row), and the delay has to outlast it, so
+        # the timeout still fires after the commit point. The old 0.1 s
+        # budget sat inside the pre-commit phase on a loaded host -- the
+        # first thread hop alone measured 43 ms here and the whole body
+        # 145 ms -- so the case failed on the environment, not on the
+        # behaviour it names. The assertions are unchanged.
+        database, runtime = _Database(), _Runtime(5, delay=1.0)
+        with patch("app.pdf_pipeline.BUILD_TIMEOUT_SECONDS", 0.5):
             with self.assertRaisesRegex(PdfBuildError, "PDF_BUILD_TIMEOUT"):
                 await self.builder(database, runtime).build(self.sidecar, "a" * 64)
         self.assertTrue(database.created)
