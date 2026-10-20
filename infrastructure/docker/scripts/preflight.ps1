@@ -19,7 +19,12 @@ if ($usesAutomation) {
   $requiredVariables += @("N8N_POSTGRES_PASSWORD", "N8N_ENCRYPTION_KEY")
 }
 if ($usesKnowledge) {
-  $requiredVariables += @("KNOWLEDGE_VAULT_ROOT", "OLLAMA_SMOKE_MODEL")
+  # F-266 (R7-D13-03): the service reads KNOWLEDGE_EMBEDDING_MODEL
+  # (apps/knowledge/app/config.py), so that is the variable this preflight has
+  # to prove. OLLAMA_SMOKE_MODEL names a different model and nothing compared
+  # the two, so an operator who changed one got a green preflight and a
+  # knowledge readiness failure at index/embed time.
+  $requiredVariables += @("KNOWLEDGE_VAULT_ROOT", "OLLAMA_SMOKE_MODEL", "KNOWLEDGE_EMBEDDING_MODEL")
 }
 
 function Read-EnvironmentFile {
@@ -78,9 +83,13 @@ if ($usesKnowledge) {
   }
   $ollama = Get-OllamaExecutable
   if (-not $ollama) { throw "Ollama executable was not found." }
+  $embeddingModel = $values.KNOWLEDGE_EMBEDDING_MODEL
+  if ($values.ContainsKey("OLLAMA_SMOKE_MODEL") -and $values.OLLAMA_SMOKE_MODEL -ne $embeddingModel) {
+    throw "OLLAMA_SMOKE_MODEL and KNOWLEDGE_EMBEDDING_MODEL name different models: '$($values.OLLAMA_SMOKE_MODEL)' and '$embeddingModel'. The service embeds with KNOWLEDGE_EMBEDDING_MODEL, so the two variables must agree."
+  }
   $models = Invoke-RestMethod -Uri "http://127.0.0.1:11434/api/tags" -Method Get
-  if (-not @($models.models | Where-Object { $_.name -eq $values.OLLAMA_SMOKE_MODEL })) {
-    throw "Configured Ollama smoke model is not installed."
+  if (-not @($models.models | Where-Object { $_.name -eq $values.KNOWLEDGE_EMBEDDING_MODEL })) {
+    throw "Configured embedding model '$embeddingModel' is not installed."
   }
 }
 
@@ -95,4 +104,9 @@ $composeArguments += @("--profile", $Profile, "config", "--quiet")
 & docker compose @composeArguments
 if ($LASTEXITCODE -ne 0) { throw "Docker Compose configuration is invalid." }
 
-Write-Output "Static preflight passed for Docker profile '$Profile'."
+if ($usesKnowledge) {
+  Write-Output "Static preflight passed for Docker profile '$Profile' with embedding model '$embeddingModel'."
+}
+else {
+  Write-Output "Static preflight passed for Docker profile '$Profile'."
+}
