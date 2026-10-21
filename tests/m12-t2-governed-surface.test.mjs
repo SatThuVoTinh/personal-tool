@@ -822,12 +822,168 @@ test("M12/T2-R3: a live multi-stack approval request resolves all three tags", (
 // ---------------------------------------------------------------------------
 
 const FORUM_TAGS_ASSET_REL = "lib/discord-forum-tags.mjs";
-
-/** The digest the live WSL runtime carries, measured by the operator apply post-check. */
-const DEPLOYED_FORUM_TAGS_SHA256 =
-  "e0a755bb9c6add431c9306fd8bc2895318a868c3c6b8e84326d94fb95526fff5";
+const FORUM_TAGS_ASSET_PATH = `integrations/openclaw/${FORUM_TAGS_ASSET_REL}`;
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
+
+// M12/T9 F-217: the digest pin is RE-BASED.
+//
+// The pin used to freeze ONE historical digest, the commit that produced it and
+// an EXACT occurrence count, so admitting the next legitimate build of this
+// asset forced an edit to this file - the freeze cost the finding names. The
+// admitted set is now READ from the allowlist table in
+// `integrations/openclaw/configure.mjs` - the table the deployment itself
+// consults - and every admitted digest is checked against the asset's OWN
+// committed history. A second predecessor is therefore admitted, and PROVEN,
+// without an edit here.
+//
+// The safety property is unchanged, and it is the point of the lane: the digest
+// THIS build produces must never appear in the allowlist, because the current
+// build is accepted by content comparison.
+
+/** The allowlist table of `configure.mjs`, as source text. */
+function governanceAssetAllowlist(configureSource) {
+  const start = configureSource.indexOf(
+    "const ALLOWED_GOVERNANCE_ASSET_SHA256",
+  );
+  assert.notEqual(start, -1, "the asset allowlist must exist");
+  const tableEnd = configureSource.indexOf("\n});", start);
+  assert.notEqual(
+    tableEnd,
+    -1,
+    "the asset allowlist must be terminated, or the slice below silently " +
+      "reads past the table and drops the file's last character",
+  );
+  return configureSource.slice(start, tableEnd);
+}
+
+/**
+ * The digests admitted for one asset path, in table order.
+ *
+ * The table's comments are stripped first: a comment may name a digest - the
+ * live-build note does - and a digest named in prose is not an admission.
+ */
+function admittedAssetDigests(configureSource, rel) {
+  const table = governanceAssetAllowlist(configureSource).replace(
+    /\/\/[^\n]*/gu,
+    "",
+  );
+  const key = table.indexOf(`"${rel}": Object.freeze([`);
+  if (key === -1) return [];
+  const open = table.indexOf("[", key);
+  const close = table.indexOf("]", open);
+  assert.ok(
+    open > -1 && close > open,
+    `the entry for ${rel} must be a closed list of digests`,
+  );
+  return [
+    ...table.slice(open + 1, close).matchAll(/["']([0-9a-f]{64})["']/gu),
+  ].map((match) => match[1]);
+}
+
+/** The committed history of each governed asset, derived once per lane. */
+const ASSET_HISTORY = new Map();
+
+/**
+ * Every digest the asset's own committed history produced, with the commit
+ * that produced it. The provenance of an admitted digest is therefore DERIVED:
+ * a digest no commit reproduces is not a predecessor of this asset, it is a
+ * transcription nobody can check.
+ */
+function committedAssetDigests(rel) {
+  if (ASSET_HISTORY.has(rel)) return ASSET_HISTORY.get(rel);
+  const assetPath = `integrations/openclaw/${rel}`;
+  const commits = execFileSync(
+    "git",
+    [
+      "-c",
+      `safe.directory=${REPO_ROOT}`,
+      "log",
+      "--format=%H",
+      "--",
+      assetPath,
+    ],
+    {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      maxBuffer: 32 * 1024 * 1024,
+      windowsHide: true,
+    },
+  )
+    .split("\n")
+    .filter(Boolean);
+  const digests = new Map();
+  for (const commit of commits) {
+    const content = execFileSync(
+      "git",
+      ["-c", `safe.directory=${REPO_ROOT}`, "show", `${commit}:${assetPath}`],
+      {
+        cwd: REPO_ROOT,
+        encoding: "utf8",
+        maxBuffer: 32 * 1024 * 1024,
+        windowsHide: true,
+      },
+    );
+    digests.set(sha256(content), commit);
+  }
+  ASSET_HISTORY.set(rel, digests);
+  return digests;
+}
+
+/**
+ * The verdict the pin reaches for one governed asset: the admitted set, and
+ * every problem with it.
+ *
+ * `history` maps each digest the asset's committed history produced to the
+ * commit that produced it. Nothing here is pinned to one digest, one commit or
+ * one occurrence count, so the same verdict can be reached for any table.
+ */
+function assessAssetAdmission({
+  configureSource,
+  rel,
+  currentDigest,
+  history,
+}) {
+  const problems = [];
+  const admitted = admittedAssetDigests(configureSource, rel);
+  if (admitted.length === 0) {
+    problems.push(
+      `${rel} admits no predecessor digest, so the deployed extension is unreachable`,
+    );
+  }
+  for (const digest of admitted) {
+    if (admitted.filter((entry) => entry === digest).length > 1) {
+      problems.push(
+        `${rel} lists the digest ${digest.slice(0, 12)}... more than once`,
+      );
+    }
+    if (!history.has(digest)) {
+      problems.push(
+        `${rel} admits ${digest.slice(0, 12)}..., which no commit in the asset's history produced`,
+      );
+    }
+    if (digest === currentDigest) {
+      problems.push(
+        `${rel} admits the digest the current build produces, which is accepted by content comparison`,
+      );
+    }
+    // The occurrence count is relaxed from EXACTLY once to AT LEAST once: a
+    // digest may now be named in prose beside the table. The duplicate
+    // protection moves to the list itself, which is where a duplicated
+    // admission would actually be.
+    if (configureSource.split(digest).length - 1 < 1) {
+      problems.push(
+        `${rel} admits ${digest.slice(0, 12)}..., which the file does not carry`,
+      );
+    }
+  }
+  if (configureSource.includes(currentDigest)) {
+    problems.push(
+      `the digest the current build produces must not be allowlisted (${rel})`,
+    );
+  }
+  return { admitted, problems };
+}
 
 function leaseHarness(tag) {
   const root = mkdtempSync(path.join(os.tmpdir(), `m12t9-lease-${tag}-`));
@@ -1101,72 +1257,108 @@ test("M12/T9 F-158: a missing or unparseable governance manifest is a canonical 
 
 test("M12/T2-R3: the deployed forum-tag asset digest is admitted under its own path", () => {
   // Provenance first: the admitted digest is not an operator-measured number taken on faith,
-  // it is what the repository's own committed source packages to.
-  const deployedSource = execFileSync(
-    "git",
-    ["show", "b6d04e8:integrations/openclaw/lib/discord-forum-tags.mjs"],
-    { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
-  );
-  assert.equal(
-    sha256(deployedSource),
-    DEPLOYED_FORUM_TAGS_SHA256,
-    "the admitted digest must reproduce from the commit Deployment A installed",
-  );
-  const packaged = governancePluginFiles().assets[FORUM_TAGS_ASSET_REL];
-  assert.equal(
-    packaged,
-    readFileSync("integrations/openclaw/lib/discord-forum-tags.mjs", "utf8"),
-    "packaging must not rewrite this asset's bytes",
-  );
-  assert.notEqual(
-    sha256(packaged),
-    DEPLOYED_FORUM_TAGS_SHA256,
-    "this revision changes the asset, which is why a predecessor entry is needed at all",
-  );
+  // it is what the repository's own committed source packages to. The admitted SET is read
+  // from the allowlist table the deployment itself consults, and every digest in it is
+  // checked against the asset's OWN committed history - so the next legitimate build of
+  // this asset is admitted, and proven, without an edit to this file.
   const configureSource = readFileSync(
     "integrations/openclaw/configure.mjs",
     "utf8",
   );
-  const start = configureSource.indexOf(
-    "const ALLOWED_GOVERNANCE_ASSET_SHA256",
-  );
-  assert.notEqual(start, -1, "the asset allowlist must exist");
-  const tableEnd = configureSource.indexOf("\n});", start);
-  assert.notEqual(
-    tableEnd,
-    -1,
-    "the asset allowlist must be terminated, or the slice below silently " +
-      "reads past the table and drops the file's last character",
-  );
-  const table = configureSource.slice(start, tableEnd);
-  const key = table.indexOf(`"${FORUM_TAGS_ASSET_REL}": Object.freeze([`);
-  assert.notEqual(
-    key,
-    -1,
-    "the asset must have its own key in the allowlist table",
-  );
-  const blockEnd = table.indexOf("]),", key);
-  assert.notEqual(
-    blockEnd,
-    -1,
-    "the asset entry must be closed, or the block below is truncated to " +
-      "whatever precedes the missing terminator",
-  );
-  const block = table.slice(key, blockEnd);
-  assert.ok(
-    block.includes(DEPLOYED_FORUM_TAGS_SHA256),
-    "the deployed digest must be listed under lib/discord-forum-tags.mjs",
-  );
+  const packaged = governancePluginFiles().assets[FORUM_TAGS_ASSET_REL];
   assert.equal(
-    configureSource.split(DEPLOYED_FORUM_TAGS_SHA256).length - 1,
-    1,
-    "the deployed digest must appear exactly once in the file",
+    packaged,
+    readFileSync(FORUM_TAGS_ASSET_PATH, "utf8"),
+    "packaging must not rewrite this asset's bytes",
+  );
+  const currentDigest = sha256(packaged);
+  const { admitted, problems } = assessAssetAdmission({
+    configureSource,
+    rel: FORUM_TAGS_ASSET_REL,
+    currentDigest,
+    history: committedAssetDigests(FORUM_TAGS_ASSET_REL),
+  });
+  assert.deepEqual(problems, [], problems.join("\n"));
+  assert.ok(
+    admitted.length >= 1,
+    "the deployed asset must keep at least one admitted predecessor digest",
   );
   // The current build is accepted by content comparison, never by admission.
   assert.equal(
-    configureSource.includes(sha256(packaged)),
+    configureSource.includes(currentDigest),
     false,
     "the current build digest must not be allowlisted",
+  );
+});
+
+test("M12/T9 F-217: the pin names no digest and no revision of its own", () => {
+  // The pin this replaces named ONE digest, ONE commit and an EXACT occurrence
+  // count, so admitting the next legitimate build of this asset forced an edit
+  // to this file - the freeze cost the finding names. A pin that carries
+  // neither a digest nor a revision of its own can be re-based by the
+  // allowlist table alone, which is what the deployment itself consults.
+  const pinSource = readFileSync(fileURLToPath(import.meta.url), "utf8");
+  const pinnedDigests = [
+    ...pinSource.matchAll(/["'`]([0-9a-f]{64})["'`]/giu),
+  ].map((match) => match[1]);
+  assert.deepEqual(
+    pinnedDigests,
+    [],
+    "the pin must not name a digest of its own; it must read the admitted set from the allowlist table",
+  );
+  const pinnedRevisions = [
+    ...pinSource.matchAll(/["'`]([0-9a-f]{7,40}):integrations\//giu),
+  ].map((match) => match[1]);
+  assert.deepEqual(
+    pinnedRevisions,
+    [],
+    "the pin must not name a revision of its own; it must derive the commit from the asset's own history",
+  );
+});
+
+test("M12/T9 F-217: a newly admitted forum-tag digest is admissible without an edit to this pin", () => {
+  // The next legitimate change to this asset admits one more predecessor: the
+  // digest of the build the live runtime carries. The pin must reach the same
+  // verdict on that table, from the table alone - no digest, no commit and no
+  // occurrence count of its own.
+  const configureSource = readFileSync(
+    "integrations/openclaw/configure.mjs",
+    "utf8",
+  );
+  const packaged = governancePluginFiles().assets[FORUM_TAGS_ASSET_REL];
+  const currentDigest = sha256(packaged);
+  const history = committedAssetDigests(FORUM_TAGS_ASSET_REL);
+  const admitted = admittedAssetDigests(configureSource, FORUM_TAGS_ASSET_REL);
+  // A real predecessor of this asset, taken from its own committed history -
+  // the same shape as the sibling asset `lib/discord-formatter.mjs`, which
+  // carries two admitted digests.
+  const next = [...history.keys()].find(
+    (digest) => digest !== currentDigest && !admitted.includes(digest),
+  );
+  assert.ok(
+    next,
+    "the asset's committed history must hold a predecessor that is neither the current build nor the admitted one",
+  );
+  const simulated = configureSource.replace(
+    `"${FORUM_TAGS_ASSET_REL}": Object.freeze([`,
+    `"${FORUM_TAGS_ASSET_REL}": Object.freeze([\n    "${next}",`,
+  );
+  assert.notEqual(
+    simulated,
+    configureSource,
+    "the simulation must change the allowlist table",
+  );
+  const verdict = assessAssetAdmission({
+    configureSource: simulated,
+    rel: FORUM_TAGS_ASSET_REL,
+    currentDigest,
+    history,
+  });
+  assert.deepEqual(verdict.problems, [], verdict.problems.join("\n"));
+  assert.equal(
+    verdict.admitted.length,
+    admitted.length + 1,
+    "the newly admitted predecessor must be admitted",
   );
 });
 
