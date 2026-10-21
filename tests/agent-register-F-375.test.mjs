@@ -52,13 +52,28 @@ const DEPLOY_BLOCKER_CLOSED_ROWS = 2;
  * build of the governed asset is admissible without editing the test.
  */
 const BAND_E_CLOSED_ROWS = 1;
+/**
+ * The rows the deploy blocker's second round closed: the live config, the
+ * deployed extension's assets, its manifest, the resolver on the host, and
+ * the remaining state files of the deployed build were all refused by the
+ * builder, so the deployment could not complete.
+ */
+const DEPLOY_BLOCKER_ROUND_TWO_CLOSED_ROWS = 5;
+/**
+ * The rows band C closed: the Skill Store owns its own schema and its own
+ * governed retirement, so the `skills.*` DDL no longer lives under the
+ * Knowledgebase and a wrong skill can be withdrawn through a supported path.
+ */
+const BAND_C_CLOSED_ROWS = 2;
 /** Every closed row the register's §2 carried, in the changelog now. */
 const CLOSED_ROW_COUNT =
   CLOSURE_TABLE_ROWS +
   EVIDENCE_TABLE_ROWS +
   THIRD_BAND_CLOSED_ROWS +
   DEPLOY_BLOCKER_CLOSED_ROWS +
-  BAND_E_CLOSED_ROWS;
+  BAND_E_CLOSED_ROWS +
+  DEPLOY_BLOCKER_ROUND_TWO_CLOSED_ROWS +
+  BAND_C_CLOSED_ROWS;
 
 /** Every closed row: "<row id> <commit token>". */
 const CLOSED_ROWS = [
@@ -450,6 +465,15 @@ const CLOSED_ROWS = [
   // Band E (2026-10-22): the digest pin is re-based, so the next legitimate
   // build of the governed asset is admissible without editing the test.
   ["R5-E10-06", "`51766eb`"],
+  // The deploy blocker's second round (2026-10-22): the builder refused the
+  // live config, the deployed extension's assets, its manifest, the resolver
+  // on the host and the remaining state files of the deployed build, so the
+  // deployment could not complete.
+  ["F-378", "`b1a0a08`"],
+  ["F-379", "`40c7c6b`"],
+  ["F-380", "`9c64935`"],
+  ["F-381", "`8b29531`"],
+  ["F-382", "`7ab281d`"],
 ];
 
 /** Every row the register holds, transcribed at HEAD. */
@@ -463,8 +487,6 @@ const REGISTER_ROW_IDS = [
   "F-074",
   "F-084",
   "F-090",
-  "F-094",
-  "F-095",
   "F-119",
   "F-133",
   "F-134",
@@ -519,6 +541,8 @@ const CLOSED_RELEASED_ROWS = {
   "F-097": { decision: "H10", commit: "11f82b2", legacy: "R5-E14-07" },
   "F-196": { decision: "H1", commit: "ddc19be", legacy: "R5-E09-01" },
   "F-198": { decision: "H1", commit: "ddc19be", legacy: "R5-E09-08" },
+  "F-094": { decision: "H5", commit: "7fe9b60", legacy: "R5-E03-07" },
+  "F-095": { decision: "H8", commit: "7fe9b60", legacy: "R5-E04-05" },
 };
 
 /** The rows that are not fixed and therefore stay parked. */

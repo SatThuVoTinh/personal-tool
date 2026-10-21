@@ -7768,3 +7768,60 @@ of the allowlist, because the current build is accepted by content comparison.
 needs no production change. The row is fixed and proven, so it leaves the
 register (the owner's `H10`) and its history lives in `CHANGELOG.md` under
 `R5-E10-06`.
+
+**The deploy blocker, second round (2026-10-22), found on the live host and
+closed.** After the ledger blocker was closed, the owner's deploy still
+refused — this time with `Policy drift` at the builder's preflight. Measured
+on the live host, READ-ONLY, the live `~/.openclaw-zink/openclaw.json`
+differs from the config the current build generates in exactly three paths:
+the two coordinators' display names and the router credential. Five separate
+defects sat behind that one refusal, and each is closed by its own commit:
+
+| Row   | What refused the deployment                                                               | Commit    |
+| ----- | ----------------------------------------------------------------------------------------- | --------- |
+| F-378 | the coordinators' display names were not converged, so the config was refused             | `b1a0a08` |
+| F-379 | the admission list did not name every asset of the deployed build (15 of 34 were missing) | `40c7c6b` |
+| F-380 | the plugin manifest had no admission list at all                                          | `9c64935` |
+| F-381 | the resolver on the host was not admitted — the note said it was "no longer on disk"      | `8b29531` |
+| F-382 | the deployed build's hotfix, entrypoint, auth plans and systemd drop-in were not admitted | `7ab281d` |
+
+Every digest in those admissions is DERIVED from the repository — the asset's
+own bytes at the commit that produced them, packaged as the builder packages
+them — and never transcribed; the systemd drop-in is admitted by RENDERING
+the previous variant, because its bytes carry the machine's state root. An
+admission only ever permits OVERWRITING the file with the current build's own
+bytes; an unrecognised digest still fails closed.
+
+**Verified on the live host, read-only:** the operator preflight now reports
+`{"identifiers":"VALID","builder_preflight":"PASS","installed_mutation":false}`
+— the runbook's expected line for BƯỚC 1. The apply (BƯỚC 2) was NOT run: the
+execution contract forbids a deployment, so the ceremony remains the owner's
+step.
+
+**Band C — the Skill Store owns its schema, and a wrong skill can be
+withdrawn (2026-10-22).** Two rows the owner released on 2026-10-21 are fixed
+and proven, so they leave the register (`H10`) with their history in
+`CHANGELOG.md`:
+
+- `F-094` (legacy `R5-E03-07`, answer `H5`) — the `skills.*` DDL, the runner
+  that applied it and the ledger that recorded it lived under
+  `apps/knowledge/migrations/`, so the Knowledgebase's boot mutated a peer
+  module's persistence. They move into `zink-skill-store/`: the ledger is
+  `skills.schema_migrations`, the Skill Store's own table in its own schema,
+  and the Knowledgebase's ledger is never read and never written from there.
+  `003_skills_vector_schema.sql` moved with its bytes unchanged, so the move
+  is a relocation and not an edit.
+- `F-095` (legacy `R5-E04-05`, answer `H8`) — the owner could not withdraw a
+  wrong skill through any supported path; the first ACTIVE version froze a
+  capability permanently and the only route was out-of-band tree editing.
+  `retireSkill` is a governed write now, published through the store's public
+  door and refused without the store's writer lock, and the retirement is
+  RECORDED in the derived index (`status = 'DEPRECATED'`,
+  `sync_status = 'TOMBSTONED'`) by the forward migration
+  `004_skill_retirement_state.sql` instead of only deleted from it.
+
+Commit `7fe9b60` closes both rows: they share one surface (the store's
+public door, its CLI, its README and its contract), and the retirement's
+schema change lands in the Skill Store's own migration set — it cannot exist
+without the move. The owner's "one commit per finding" is therefore bent
+once here, and the deviation is recorded rather than hidden.
