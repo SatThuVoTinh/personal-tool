@@ -7705,13 +7705,13 @@ costs less than its row claims (a two-line test change needs no decision).
 
 Task: M12/T9 — Remediate all actionable findings in docs/execution/findings.md
 Milestone: M12 — Governed Discord interaction lifecycle and governed presentation
-Plan Revision: M12/T9-R1
-Planning Readiness: APPROVED — owner approved via "được, làm đi, chạy 1 lần xong hết luôn" (2026-10-19).
-Execution Authorization: YES — bounded to docs/contracts/execution/ACTIVE.md §3 rules and §2 ownership; AGENTS.md §12 terms (local commits, validation, closeout commit, push of non-main task branch). No deployment, no live Discord, no --apply.
+Plan Revision: M12/T9-R3
+Planning Readiness: APPROVED — owner approved via "được, làm đi, chạy 1 lần xong hết luôn" (2026-10-19) and answered all ten open decisions on 2026-10-21 (the record above).
+Execution Authorization: YES — bounded to docs/contracts/execution/ACTIVE.md (the third band's contract) §1–§8; AGENTS.md §12 terms (local commits, validation, closeout commit, push of non-main task branch). No deployment, no live Discord, no --apply.
 Execution Contract: docs/contracts/execution/ACTIVE.md
-Task Status: COMPLETE
-Evidence Level: LOCAL-VERIFIED
-Review Convergence Gate: PASS
-Final Quality Gate: PASS
+Task Status: IN PROGRESS — the third band (the owner's ten answers) is executing. The second band's contract is archived at `docs/contracts/execution/archive/2026-10-21-M12-T9-R1.md`.
+Evidence Level: LOCAL-VERIFIED for the second band; the third band is in flight.
+Review Convergence Gate: PASS (the second band)
+Final Quality Gate: PASS (the second band)
 
-Closed 2026-10-19 — see the Record below.
+Prior band: M12/T9-R1 — CLOSED 2026-10-21 — see the Record below.
