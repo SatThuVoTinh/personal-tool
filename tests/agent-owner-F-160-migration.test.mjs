@@ -24,6 +24,14 @@
 //   2. the preflight does not refuse a STALE DERIVATION. A snapshot that
 //      disagrees with its journal is not a broken record, and a preflight
 //      that refuses it makes the migration unreachable.
+//
+// M12/T9 F-377 adds the third property, the one the migration could not do
+// before: a stored snapshot that does not have the CURRENT SHAPE is repaired
+// too. The snapshot contract itself changes (F-247 removed a member from it),
+// so a snapshot an older build wrote does not satisfy the current contract -
+// and the reader refused it at the contract check, before the comparison even
+// ran, so the migration could not repair the very artefact it exists to
+// repair.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -160,6 +168,31 @@ function sealAcceptedHistory(paths) {
     "utf8",
   );
   return { taskId, projection };
+}
+
+/**
+ * Make the stored snapshot an OLD SHAPE: a derivation the current contract
+ * refuses.
+ *
+ * The live host's snapshot was written by an older build, so its tasks do not
+ * carry the fields the current contract requires. The reader refused it at the
+ * CONTRACT check - before the comparison, before the migration could recompute
+ * it - so the deploy could not complete: the preflight said "Ledger
+ * corruption" and the apply died with SCHEMA_VALIDATION_FAILED.
+ *
+ * The journal - the RECORD - is untouched by this: only the derived cache
+ * wears the old shape.
+ */
+function oldShapeSnapshot(paths) {
+  const snapshot = JSON.parse(readFileSync(paths.snapshot, "utf8"));
+  const [taskId] = Object.keys(snapshot.tasks);
+  delete snapshot.tasks[taskId].brief_state;
+  writeFileSync(
+    paths.snapshot,
+    `${JSON.stringify(snapshot, null, 2)}\n`,
+    "utf8",
+  );
+  return taskId;
 }
 
 /** Make the stored snapshot a stale DERIVATION of an intact record. */
@@ -399,6 +432,85 @@ test("F-160: a record that does not verify still refuses the preflight", () => {
       () => inspectLedgerUpgrade(paths),
       (err) => /Ledger corruption/u.test(err.message),
       "a broken record must still refuse the deployment",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("F-160/F-377: a snapshot in an OLD shape is recomputed from the journal", () => {
+  // The live host's shape: an older build wrote the derived cache, so the
+  // cache does not have the current shape. The reader refuses it at the
+  // CONTRACT check - before the comparison - so the migration could not repair
+  // it and the deploy could not complete.
+  const root = fixture();
+  try {
+    const paths = seed(root);
+    const journalBefore = readFileSync(paths.events, "utf8");
+    const taskId = oldShapeSnapshot(paths);
+
+    // The reader still refuses it: the old shape is not the current contract.
+    assert.throws(
+      () => readSnapshot(paths),
+      (err) => /Ledger corruption/u.test(err.message),
+      "the reader must refuse a snapshot that does not have the current shape",
+    );
+
+    // The migration recomputes the derived state from the record.
+    const report = migrateLedgerProjection(paths);
+    assert.equal(
+      report.changed,
+      true,
+      "the old-shaped snapshot must be recomputed",
+    );
+
+    // The RECORD is untouched - byte for byte.
+    assert.equal(
+      sha256(readFileSync(paths.events, "utf8")),
+      sha256(journalBefore),
+      "the migration must never write to the journal",
+    );
+
+    // The recomputed snapshot carries the CURRENT shape again.
+    const migrated = JSON.parse(readFileSync(paths.snapshot, "utf8"));
+    assert.equal(
+      migrated.tasks[taskId].brief_state,
+      "ACTIVE",
+      "the recomputed snapshot must have the current shape",
+    );
+
+    // And the ledger reads again.
+    const read = readSnapshot(paths);
+    assert.equal(
+      read.tasks[taskId].workflow_status,
+      "ACTIVE",
+      "the ledger must read again after the migration",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("F-160/F-377: the preflight does not refuse a snapshot in an OLD shape", () => {
+  // An older build's derivation is a STALE DERIVATION, not a broken record:
+  // the journal still verifies and the apply recomputes the cache from it. A
+  // preflight that refuses it makes the migration unreachable - the deploy can
+  // never complete.
+  const root = fixture();
+  try {
+    const paths = ledgerPaths(root);
+    ensureLedger(paths);
+    sealAcceptedHistory(paths);
+
+    // A healthy ledger is CURRENT, exactly as before.
+    assert.equal(inspectLedgerUpgrade(paths), "CURRENT");
+
+    oldShapeSnapshot(paths);
+
+    assert.equal(
+      inspectLedgerUpgrade(paths),
+      "CURRENT_STALE",
+      "an old-shaped derivation must be reported, not refused",
     );
   } finally {
     rmSync(root, { recursive: true, force: true });

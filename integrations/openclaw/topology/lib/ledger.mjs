@@ -714,7 +714,13 @@ export function inspectLedgerUpgrade(paths, options = null) {
       // deployment, exactly as before.
       if (!isStaleProjection(error)) throw error;
       const report = {};
-      readSnapshotLocked(paths, false, report, { recompute: true });
+      try {
+        readSnapshotLocked(paths, false, report, { recompute: true });
+      } catch {
+        // The RECORD does not verify: the deployment is refused, and the
+        // operator sees the fault the reader reported.
+        throw error;
+      }
       return report.projectionStale === true ? "CURRENT_STALE" : "CURRENT";
     }
   }
@@ -743,9 +749,18 @@ export function inspectLedgerUpgrade(paths, options = null) {
  *
  * The reader refuses a stored snapshot that disagrees with its journal with
  * "snapshot workflow mismatch" or "snapshot budget mismatch", and wraps every
- * fault as "Ledger corruption". Only those two are a stale derivation; every
- * other fault (the chain, the digests, the contract, the budget of the
- * journal itself) is corruption, and it still refuses the deployment.
+ * fault as "Ledger corruption". Those two are a stale derivation; every other
+ * fault (the chain, the digests, the budget of the journal itself) is
+ * corruption, and it still refuses the deployment.
+ *
+ * The CONTRACT fault belongs to the stale derivation too, and only for the
+ * STORED snapshot: an older build wrote it, so it does not have the current
+ * shape - a different derivation is a different shape, and the migration
+ * could not repair it.
+ *
+ * The contract fault on a JOURNAL EVENT is a different thing - the record
+ * itself does not verify - and the recompute mode re-verifies the record, so
+ * that case still refuses the deployment.
  */
 function isStaleProjection(error) {
   let cause = error;
@@ -756,6 +771,7 @@ function isStaleProjection(error) {
       message === "snapshot budget mismatch"
     )
       return true;
+    if (cause?.code === "SCHEMA_VALIDATION_FAILED") return true;
     cause = cause?.cause;
   }
   return false;
@@ -976,7 +992,31 @@ function readSnapshotLocked(
   else validateLedgerPaths(paths);
   try {
     let snapshot = JSON.parse(readFileSync(paths.snapshot, "utf8"));
-    validateContract("ledger-snapshot", snapshot, Number.MAX_SAFE_INTEGER);
+    // M12/T9 F-377: the STALENESS verdict, decided in one place.
+    let projectionStale = false;
+    // M12/T9 F-160: in the recompute mode the STORED snapshot is NOT
+    // validated against the current contract. It is the DERIVATION an older
+    // build wrote, and a different derivation is a different SHAPE.
+    //
+    // M12/T9 F-377: that difference is reachable. The snapshot contract
+    // itself changes (F-247 removed a member from it), so a snapshot an
+    // older build wrote does not have the current shape - and the reader
+    // refused it at the contract check, before the comparison even ran, so
+    // the migration could not repair the very artefact it exists to repair
+    // and the deploy could not complete.
+    //
+    // The RECORD is what must verify, and the record is the journal; the
+    // current shape is what this replay produces.
+    //
+    // The verdict still says whether the stored one was stale: a snapshot that
+    // does not have the current shape IS a stale derivation, and the report
+    // says so.
+    try {
+      validateContract("ledger-snapshot", snapshot, Number.MAX_SAFE_INTEGER);
+    } catch (error) {
+      if (!recompute) throw error;
+      projectionStale = true;
+    }
     const supportedVersions = new Set(SUPPORTED_GOVERNANCE_VERSIONS);
     if (
       !snapshot ||
@@ -1221,7 +1261,6 @@ function readSnapshotLocked(
     // M12/T9 F-160: in the recompute mode a disagreement is not a fault, it is
     // the FINDING: the stored snapshot is a stale DERIVATION of a record that
     // verifies. The normal mode still refuses it.
-    let projectionStale = false;
     if (recompute) {
       // A task the journal does not describe is NOT a stale derivation: it is
       // governance history the record lost. Recomputing it away would destroy
@@ -1262,7 +1301,31 @@ function readSnapshotLocked(
     // still describes the same anchor, so the reader's next read reproduces
     // it instead of disagreeing with it.
     if (recompute) {
-      snapshot = { ...snapshot, tasks: anchoredBudget };
+      // M12/T9 F-377: the derived snapshot is a CURRENT-shaped artefact. The
+      // stored one is an older build's derivation, so its shape is not carried
+      // forward - but its ANCHOR is: the derived snapshot still describes the
+      // same head, so the reader's next read reproduces it instead of
+      // disagreeing with it.
+      //
+      // The anchor's own fields are carried forward only when they are
+      // well-typed, so a derived artefact cannot inherit a value the current
+      // contract would refuse.
+      snapshot = {
+        ...emptySnapshot(),
+        ingress_ids: Array.isArray(snapshot.ingress_ids)
+          ? snapshot.ingress_ids
+          : [],
+        sequence: snapshot.sequence,
+        last_event_digest:
+          typeof snapshot.last_event_digest === "string"
+            ? snapshot.last_event_digest
+            : null,
+        updated_at:
+          typeof snapshot.updated_at === "string"
+            ? snapshot.updated_at
+            : utcNow(),
+        tasks: anchoredBudget,
+      };
     }
     // Recover only transitions whose complete state delta is in the journal.
     // Unknown event kinds must reconcile with the operator, never be skipped.
