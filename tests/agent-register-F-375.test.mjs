@@ -65,6 +65,11 @@ const DEPLOY_BLOCKER_ROUND_TWO_CLOSED_ROWS = 5;
  * Knowledgebase and a wrong skill can be withdrawn through a supported path.
  */
 const BAND_C_CLOSED_ROWS = 2;
+/**
+ * The row band A3 closed: the per-family skip expectation, so a gate tier
+ * cannot go inert while the job's conclusion is still SUCCESS.
+ */
+const BAND_A3_CLOSED_ROWS = 1;
 /** Every closed row the register's §2 carried, in the changelog now. */
 const CLOSED_ROW_COUNT =
   CLOSURE_TABLE_ROWS +
@@ -73,7 +78,8 @@ const CLOSED_ROW_COUNT =
   DEPLOY_BLOCKER_CLOSED_ROWS +
   BAND_E_CLOSED_ROWS +
   DEPLOY_BLOCKER_ROUND_TWO_CLOSED_ROWS +
-  BAND_C_CLOSED_ROWS;
+  BAND_C_CLOSED_ROWS +
+  BAND_A3_CLOSED_ROWS;
 
 /** Every closed row: "<row id> <commit token>". */
 const CLOSED_ROWS = [
@@ -499,7 +505,6 @@ const REGISTER_ROW_IDS = [
   "F-171",
   "F-177",
   "F-181",
-  "F-197",
   "F-200",
   "F-206",
   "F-211",
@@ -542,6 +547,7 @@ const CLOSED_RELEASED_ROWS = {
   "F-196": { decision: "H1", commit: "ddc19be", legacy: "R5-E09-01" },
   "F-198": { decision: "H1", commit: "ddc19be", legacy: "R5-E09-08" },
   "F-094": { decision: "H5", commit: "7fe9b60", legacy: "R5-E03-07" },
+  "F-197": { decision: "H3", commit: "507901a", legacy: "R5-E09-03" },
   "F-095": { decision: "H8", commit: "7fe9b60", legacy: "R5-E04-05" },
 };
 

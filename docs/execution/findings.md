@@ -71,12 +71,12 @@ findings, lịch sử lưu vào changelog"_. Hàng đã fix xong **và đã ch�
 band không ở trạng thái `NOT RUN`, dòng `Acceptance criteria:` thỏa đúng nghĩa) thì **xóa** khỏi file này;
 lịch sử của nó (id + dòng lỗi một dòng + commit đã đóng + bằng chứng) ghi vào `CHANGELOG.md`. Hàng **chưa fix**
 thì ở lại: `REFUTED` (premise đo thật là chết — không có gì để fix) và `EXCLUDED` (đang chờ một quyết định
-của chủ) không nằm trong quy tắc này. Bảng đóng ở §2 đã bị gỡ khỏi file này: **383** hàng đã đóng nằm ở
+của chủ) không nằm trong quy tắc này. Bảng đóng ở §2 đã bị gỡ khỏi file này: **384** hàng đã đóng nằm ở
 `CHANGELOG.md`, mỗi hàng giữ id và commit đã đóng nó.
 
 ## 1. hiện trạng queue
 
-Tổng **32** hàng còn nằm trong file, chia theo nhóm. **1 hàng đang mở** (từ `EXCLUDED` trở lại `OPEN` sau khi chủ trả lời `H3` ngày 2026-10-21; các câu trả lời `H1`/`H2`/`H6`/`H10` đã được sửa xong, đã chứng minh và đã xoá khỏi file này theo §0.5), 28 hàng `REFUTED` (premise đo thật là đã chết ở HEAD, kèm bằng chứng đo được trong chính dòng `Status:`) và 3 hàng `EXCLUDED` (quyết định của chủ, hoặc dòng chỉ để đo). **383** hàng đã đóng không nằm ở đây nữa: lịch sử của chúng (id + dòng lỗi một dòng + commit đã đóng) nằm ở `CHANGELOG.md`.
+Tổng **31** hàng còn nằm trong file, chia theo nhóm. **0 hàng đang mở** (mọi câu trả lời của chủ — `H1`/`H2`/`H3`/`H5`/`H6`/`H8`/`H10` — đã được sửa xong, đã chứng minh và đã xoá khỏi file này theo §0.5), 28 hàng `REFUTED` (premise đo thật là đã chết ở HEAD, kèm bằng chứng đo được trong chính dòng `Status:`) và 3 hàng `EXCLUDED` (quyết định của chủ, hoặc dòng chỉ để đo). **383** hàng đã đóng không nằm ở đây nữa: lịch sử của chúng (id + dòng lỗi một dòng + commit đã đóng) nằm ở `CHANGELOG.md`.
 
 | Nhóm     | Nội dung                                                              | Bug    | Critical | High | Medium | Low | Ungraded |
 | -------- | --------------------------------------------------------------------- | ------ | -------- | ---- | ------ | --- | -------- |
@@ -86,14 +86,14 @@ Tổng **32** hàng còn nằm trong file, chia theo nhóm. **1 hàng đang mở
 | F4       | Integration & Contract Violations — Lỗi tích hợp và vi phạm hợp đồng  | 5      | 0        | 1    | 2      | 2   | 0        |
 | F5       | Data Integrity & Result Correctness — Lỗi toàn vẹn dữ liệu và kết quả | 7      | 1        | 1    | 4      | 1   | 0        |
 | F6       | Reliability & Performance — Lỗi độ tin cậy và hiệu năng               | 1      | 0        | 1    | 0      | 0   | 0        |
-| F7       | Testing & Verification Gaps — Thiếu kiểm thử và xác minh              | 7      | 0        | 2    | 4      | 1   | 0        |
-| **Tổng** |                                                                       | **32** | 1        | 8    | 16     | 6   | 1        |
+| F7       | Testing & Verification Gaps — Thiếu kiểm thử và xác minh              | 6      | 0        | 1    | 4      | 1   | 0        |
+| **Tổng** |                                                                       | **31** | 1        | 7    | 16     | 6   | 1        |
 
-Theo trạng thái: OPEN 1 · EXCLUDED 3 · LATENT 0 · REFUTED 28 · PARTIAL 0 · HYPOTHESIS 0.
+Theo trạng thái: OPEN 0 · EXCLUDED 3 · LATENT 0 · REFUTED 28 · PARTIAL 0 · HYPOTHESIS 0.
 
-Các hàng đã đóng không nằm ở đây nữa: **383** hàng (134 hàng M12/T9 đóng ngày 2026-10-19, 47 hàng lượt đóng đầu của band thứ hai, 120 hàng lượt đóng cuối của band thứ hai, 16 hàng chủ đã phán ngày 2026-10-21, 51 hàng của các band `M12/T2.x` trước đó, 5 hàng của band thứ ba đóng ngày 2026-10-21, 2 hàng của blocker triển khai đóng ngày 2026-10-21, và 1 hàng của band E đóng ngày 2026-10-22, 2 hàng của band C đóng ngày 2026-10-22, 5 hàng của blocker triển khai lần hai đóng ngày 2026-10-22) đã chuyển sang `CHANGELOG.md`, mỗi hàng kèm commit đã đóng nó. Ở M12/T9 mỗi hàng có commit riêng trỏ `F-xxx` và legacy id; ba hàng bị gộp chung một commit vì chúng sửa cùng một file và các hunk của chúng phụ thuộc nhau — tách ra sẽ tạo ra một commit không parse được (`F-055`+`F-101`+`F-240`, đo bằng cách dựng lại từng tiền tố của chuỗi commit và kiểm tra `node --check`).
+Các hàng đã đóng không nằm ở đây nữa: **384** hàng (134 hàng M12/T9 đóng ngày 2026-10-19, 47 hàng lượt đóng đầu của band thứ hai, 120 hàng lượt đóng cuối của band thứ hai, 16 hàng chủ đã phán ngày 2026-10-21, 51 hàng của các band `M12/T2.x` trước đó, 5 hàng của band thứ ba đóng ngày 2026-10-21, 2 hàng của blocker triển khai đóng ngày 2026-10-21, và 1 hàng của band E đóng ngày 2026-10-22, 1 hàng của band A3 đóng ngày 2026-10-22, 2 hàng của band C đóng ngày 2026-10-22, 5 hàng của blocker triển khai lần hai đóng ngày 2026-10-22) đã chuyển sang `CHANGELOG.md`, mỗi hàng kèm commit đã đóng nó. Ở M12/T9 mỗi hàng có commit riêng trỏ `F-xxx` và legacy id; ba hàng bị gộp chung một commit vì chúng sửa cùng một file và các hunk của chúng phụ thuộc nhau — tách ra sẽ tạo ra một commit không parse được (`F-055`+`F-101`+`F-240`, đo bằng cách dựng lại từng tiền tố của chuỗi commit và kiểm tra `node --check`).
 
-Theo field: đo lại 2026-10-21 trên cả **32** hàng còn lại với predicate "field trống, là placeholder, hoặc ngắn dưới 40 ký tự" — **0** hàng thiếu `Reproduction`, **0** hàng thiếu `Acceptance criteria`, và 0 hàng có một trong hai field ngắn dưới 40 ký tự. Chữ "không tái hiện được" trong hai field đó ở `F-015`, `F-017`, `F-020` là ghi chú verdict của hàng REFUTED, không phải placeholder.
+Theo field: đo lại 2026-10-21 trên cả **31** hàng còn lại với predicate "field trống, là placeholder, hoặc ngắn dưới 40 ký tự" — **0** hàng thiếu `Reproduction`, **0** hàng thiếu `Acceptance criteria`, và 0 hàng có một trong hai field ngắn dưới 40 ký tự. Chữ "không tái hiện được" trong hai field đó ở `F-015`, `F-017`, `F-020` là ghi chú verdict của hàng REFUTED, không phải placeholder.
 
 Một hàng còn `Severity: Ungraded`: `F-020` (đã REFUTED nên grade không còn hệ quả). `F-021`, `F-103` và `F-104` đã đóng trong M12/T9 nên không còn nằm ở đây.
 
@@ -385,19 +385,6 @@ fix xong và đã chứng minh, nên hai loại hàng này ở lại. Dọn chú
 - Reproduction: node -e "console.log(require('fs').existsSync('/home/hoang_vinh/.openclaw-zink'))" on Windows, and ls -la /c/home/hoang_vinh — read-only.
 - Acceptance criteria: r16-rehearsal.mjs refuses to run on a non-WSL host for a stated reason that does not depend on whether a directory happens to exist, and no repository code creates C:\home\….
 - Related findings: disposition: the platform-first refusal CLOSED by `703fec4` (DRIVER-05 pins it); the writer of `C:\home\hoang_vinh\.openclaw-zink\operator` is still unidentified. · nguồn: Disposition of the register entries M12/T2.1-R3 executed…
-
-### F-197 — an entire gate tier can go inert and CI still prints green — the SQL statement gate and every WSL-dependent control never executed in the runs PLAN.md cites
-
-- Category: F7 — Testing & Verification Gaps
-- Legacy register id: `R5-E09-03`
-- Affected modules: Gates + CI, Governance records
-- Severity: High
-- Status: OPEN — RELEASED 2026-10-21: the owner's answer to `H3` is "đặt kỳ vọng" (set an expectation) — a PER-FAMILY skip expectation, not one global number — so this row is open work again; band `A3` carries it. (was: EXCLUDED — excluded pending decision `H3` (skip policy — needs a per-family expectation, not a global number)).
-- Root cause: an entire gate tier can go inert and CI still prints green — the SQL statement gate and every WSL-dependent control never executed in the runs PLAN.md cites. AGENTS.md §11 requires an unavailable required gate to remain NOT RUN; here it is folded into "fail 0".
-- Evidence: Where: ci.yml:42-43 + tests/m11-t1-postgres-sql-gate.test.mjs:43, :100, :130 · Evidence: - run: npm run verify; the Postgres gate does t.skip(docker container ${CONTAINER} unavailable). Its header comment claims the skip "is never converted into a pass", but node --test exits 0 with skips, so the job conclusion is SUCCESS. CI evidence records skipped 51 (PLAN.md:245) against 45 skipped on Windows (PLAN.md:40) and no gate names those 51.
-- Reproduction: Runnable mechanism demo: `node --test tests/m8-t2.13-r16-apply-rehearsal.test.mjs` prints `tests 22 / pass 6 / fail 0 / skipped 16` and exits 0 (measured), and identically on any host without the `personal-tool-postgres-1` container - including the ubuntu-24.04 runner pinned at `.github/workflows/ci.yml:20` - `tests/m11-t1-postgres-sql-gate.test.mjs` reaches `t.skip` at `:43`/`:100`/`:130` and exits 0 while `ci.yml:42-43` prints SUCCESS; the red test belongs in `tests/repository-policy.test.mjs` beside its existing ci.yml/gate-registry parsing idiom (cases at `:285` and `:395`) as a case asserting the quality-gate lane declares a per-family skip expectation, which fails today because no gate consumes skip counts - the expectation's shape is owned by the pending `H3` decision.
-- Acceptance criteria: fail CI on an unexplained increase in the skip tier, or run the Postgres container as a service so the gate is executable there. (The second is a CI-infrastructure change, so it is a gate change under §7 → owner decision.)
-- Related findings: quyết định chủ: H3 · disposition: excluded pending decision `H3` (skip policy — needs a per-family expectation, not a global number). · nguồn: E09 — CI: the gate tier that can print green without…
 
 ### F-200 — I recorded what I had just measured instead of grepping the register first, which is the exact step AGENTS.md §4 and the audit's own anti-duplication rule require
 

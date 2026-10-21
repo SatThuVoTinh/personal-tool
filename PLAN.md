@@ -7825,3 +7825,28 @@ public door, its CLI, its README and its contract), and the retirement's
 schema change lands in the Skill Store's own migration set — it cannot exist
 without the move. The owner's "one commit per finding" is therefore bent
 once here, and the deviation is recorded rather than hidden.
+
+**Band A3 — the per-family skip expectation (2026-10-22).** `F-197` (legacy
+`R5-E09-03`, answer `H3`) is fixed and proven, so it leaves the register
+(`H10`) with its history in `CHANGELOG.md`.
+
+CI printed green while whole families of tests were skipped: the SQL
+statement gate and every WSL-dependent control never executed, and the job's
+conclusion was SUCCESS. The owner's answer is to SET AN EXPECTATION, and the
+measurement says the expectation must be PER-FAMILY — one global number
+would fire on ~40 legitimate host-capability skips.
+
+- the declared table lives in `docs/contracts/ci-skip-expectations.json`: the
+  families, how many skips each may have on the CI runner, and the reason;
+- the family-to-lane map is DERIVED from the repository's own lane list — a
+  lane that may skip declares its family with a `// SKIP-FAMILY:` marker — so
+  the table never becomes a second, hand-written copy of the test names;
+- `scripts/skip-expectation-gate.mjs` reads the run's OWN report and refuses a
+  family that skips more than declared, a family that is expected to run and
+  was skipped entirely, and a skipped lane that declares no family. It never
+  lowers a declared expectation to make a run pass;
+- the npm `test` script now writes that report and runs the gate, so the
+  quality-gate lane CONSUMES the skip counts instead of a number somebody
+  typed.
+
+Commit `507901a`.
