@@ -56,6 +56,18 @@
       "expectation": "may-skip",
       "maxSkips": 32,
       "reason": "the Docker contract lanes need a Docker daemon, and the CI runner has none, so their cases report NOT RUN instead of a pass"
+    },
+    {
+      "id": "powershell-helpers",
+      "expectation": "may-skip",
+      "maxSkips": 12,
+      "reason": "the setup lanes drive their inspection helpers through PowerShell, and the CI runner has no PowerShell, so those cases report NOT RUN instead of a pass"
+    },
+    {
+      "id": "uv-toolchain",
+      "expectation": "may-skip",
+      "maxSkips": 1,
+      "reason": "the export-equivalence case runs the Python toolchain through uv, and the quality-gate runner installs no Python toolchain, so the case reports NOT RUN instead of a pass"
     }
   ]
 }

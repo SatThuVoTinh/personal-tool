@@ -1,3 +1,11 @@
+//
+// SKIP-FAMILY: powershell-helpers
+//
+// M12/T9 F-197 (R5-E09-03) / H3: this lane may skip, and it declares WHICH
+// family it belongs to, so the skip-expectation gate can tell an explained
+// skip from an unexplained one. The family-to-lane map is derived from the
+// repository's own lane list; the expectation lives in
+// `docs/contracts/ci-skip-expectations.json`.
 // F-290 (R7-C4-03) - the M3/T1 acceptance driver fixes its compose project
 // name and its fixture identifiers, so a second run meets the state an
 // earlier run left behind and two overlapping runs share one volume.
