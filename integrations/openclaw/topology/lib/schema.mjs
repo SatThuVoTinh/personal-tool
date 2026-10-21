@@ -535,6 +535,9 @@ export function generateSchemaManifest() {
  * `ledger-snapshot.schema.json`, `delegation-envelope.schema.json` and
  * `trusted-result-envelope.schema.json` accept BOTH renderings and publish
  * version 1.1.0. The value below is the checksum of THAT state.
+ * M12/T9 F-249: `result_id` was withdrawn from the four verdict payload
+ * branches of `ledger-event.schema.json`, so the contract bytes changed again.
+ * The value below is the checksum of THAT state.
  */
 export const PINNED_SCHEMA_MANIFEST_CHECKSUM =
   "f776e3c9ac68436f905e013c31a89e3a58c7f0ff0a97fdc19103765a35be0c71";

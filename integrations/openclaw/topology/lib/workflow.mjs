@@ -2205,13 +2205,20 @@ function reducerMintedResultDigest(task) {
   // (RESULT_PENDING_REVIEW) and the digest comparison when a digest IS
   // supplied both still apply, and new verdicts stay fully bound.
   if (replayAnchored) return;
-  if (payload.result_id === undefined) {
-    requireCondition(
-      task.root_result === undefined &&
-        task.execution_payload_digest === reducerMintedResultDigest(task),
-      "RESULT_MISMATCH",
-    );
-    return;
+  // M12/T9 F-249: the id-only verdict is WITHDRAWN.
+  //
+  // The digest is the ONE binding. The branch that compared `payload.result_id`
+  // against `task.root_result.result_id` is gone: `root_result` is stored as
+  // `{...payload}` under a CLOSED contract that declares no `result_id`, so
+  // the compared value could never exist and every id-only verdict failed
+  // with RESULT_MISMATCH. The published contract no longer admits `result_id`
+  // in a verdict payload, and the live producer no longer sends it.
+  //
+  // A verdict that names only a result id binds to nothing, so it is REFUSED
+  // with the same code the comparison used to raise — never silently
+  // accepted, and never bound to a field the contract forbids.
+  if (payload.result_id !== undefined) {
+    fail("RESULT_MISMATCH");
   }
   requireCondition(
     task.root_result === undefined &&

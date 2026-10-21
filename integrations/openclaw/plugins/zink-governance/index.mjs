@@ -2389,7 +2389,9 @@ export function handleDiscordAction({
           actor: normalizeActor(actor),
           channel: normalizeChannel(channel),
           decision: "ACCEPT",
-          result_id: resultId,
+          // M12/T9 F-249: the verdict binds by DIGEST. The result id is not
+          // sent any more: the reducer compared it against a root-result field
+          // the published contract does not declare, so it could never bind.
           // The verdict binds to the digest the LEDGER recorded. A component
           // carrying its own digest is bound to that instead, so a card issued
           // for an earlier result is refused rather than applied to whatever is
@@ -2415,7 +2417,8 @@ export function handleDiscordAction({
           actor: normalizeActor(actor),
           channel: normalizeChannel(channel),
           reason: safeReason,
-          result_id: resultId,
+          // M12/T9 F-249: the verdict binds by DIGEST; the result id is not
+          // sent any more (the reducer could never bind it).
           result_digest: data.resultDigest ?? authoritativeResultDigest,
           message_id: data.messageId ?? data.origin_message_id ?? null,
           thread_id: data.threadId ?? null,
@@ -2426,7 +2429,8 @@ export function handleDiscordAction({
           actor: normalizeActor(actor),
           channel: "results",
           feedback: safeFeedback,
-          result_id: data.resultId ?? taskId,
+          // M12/T9 F-249: the verdict binds by DIGEST; the result id is not
+          // sent any more (the reducer could never bind it).
           result_digest: data.resultDigest ?? authoritativeResultDigest,
         });
       } else if (normAction === ACTIONS.ASK_USER) {
