@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   symlinkSync,
@@ -776,8 +777,11 @@ test("the documented error names and the documented output match the shipped cod
   const shipped = [
     "../zink-skill-store/src/catalog.mjs",
     "../zink-skill-store/src/vector-sync.mjs",
+    "../zink-skill-store/src/migrations.mjs",
+    "../zink-skill-store/index.mjs",
     "../zink-skill-store/bin/skill-store.mjs",
   ]
+
     .map((rel) => readFileSync(new URL(rel, import.meta.url), "utf8"))
     .join("\n");
 
@@ -887,4 +891,136 @@ test("enforces CLI exit codes and output channels", async () => {
       );
     });
   });
+});
+
+// ---------------------------------------------------------------------------
+// M12/T9 F-094 (R5-E03-07) / H5 - the Skill Store owns its `skills.*` schema
+// ---------------------------------------------------------------------------
+//
+// The Skill-Store vector schema was filed under apps/knowledge/migrations/ for
+// convenience, so the Knowledgebase's migration runner applied a PEER module's
+// DDL on every boot. This case pins the ownership the owner's decision `H5`
+// asked for: the Knowledgebase's migration set creates `knowledge.*` objects
+// only, and the Skill Store owns its `skills.*` DDL, its migration runner and
+// its own migration ledger.
+const REPO_ROOT = path.resolve(import.meta.dirname, "..");
+const KNOWLEDGE_MIGRATIONS_DIR = path.join(
+  REPO_ROOT,
+  "apps",
+  "knowledge",
+  "migrations",
+);
+const SKILL_STORE_MIGRATIONS_DIR = path.join(
+  REPO_ROOT,
+  "zink-skill-store",
+  "migrations",
+);
+// Every `CREATE <kind> [schema.]name` a migration file carries.
+const CREATED_OBJECT =
+  /CREATE\s+(?:UNIQUE\s+INDEX|INDEX|TABLE|TYPE|SCHEMA)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:([a-z_][a-z0-9_]*)\.)?([a-z_][a-z0-9_]*)/giu;
+
+test("F-094: the Knowledgebase applies zero statements against skills.* and the Skill Store owns the DDL, the runner and the ledger", async () => {
+  // (1) The Knowledgebase's migration set may only create `knowledge.*`
+  // objects. The runner applies exactly the files in its own directory, so
+  // this IS the set of statements a Knowledgebase deployment issues.
+  const knowledgeMigrations = readdirSync(KNOWLEDGE_MIGRATIONS_DIR)
+    .filter((name) => name.endsWith(".sql"))
+    .sort();
+  assert.ok(
+    knowledgeMigrations.length > 0,
+    "the Knowledgebase keeps its own migrations",
+  );
+  for (const name of knowledgeMigrations) {
+    const sql = readFileSync(path.join(KNOWLEDGE_MIGRATIONS_DIR, name), "utf8");
+    for (const match of sql.matchAll(CREATED_OBJECT)) {
+      const schema = match[1] ?? null;
+      assert.ok(
+        schema === null || schema === "knowledge",
+        `the Knowledgebase migration ${name} creates an object outside the knowledge schema: ${match[0].trim()}`,
+      );
+    }
+  }
+  assert.ok(
+    !knowledgeMigrations.includes("003_skills_vector_schema.sql"),
+    "the skills.* DDL must not live in the Knowledgebase's migration set",
+  );
+
+  // (2) The Skill Store owns the `skills.*` DDL.
+  const skillStoreMigrations = readdirSync(SKILL_STORE_MIGRATIONS_DIR)
+    .filter((name) => name.endsWith(".sql"))
+    .sort();
+  assert.ok(
+    skillStoreMigrations.includes("003_skills_vector_schema.sql"),
+    "the Skill Store must own the skills.* DDL",
+  );
+  const ddl = readFileSync(
+    path.join(SKILL_STORE_MIGRATIONS_DIR, "003_skills_vector_schema.sql"),
+    "utf8",
+  );
+  assert.match(ddl, /CREATE SCHEMA IF NOT EXISTS skills;/u);
+  assert.match(ddl, /CREATE TABLE IF NOT EXISTS skills\.catalog_index \(/u);
+  assert.match(ddl, /CREATE TABLE IF NOT EXISTS skills\.segments \(/u);
+
+  // (3) The Skill Store owns the migration runner and its own ledger.
+  const { applySkillStoreMigrations, SKILL_STORE_LEDGER } =
+    await import("../zink-skill-store/src/migrations.mjs");
+  assert.equal(SKILL_STORE_LEDGER, "skills.schema_migrations");
+
+  const ledger = new Map();
+  const statements = [];
+  const dbExecutor = async (sql) => {
+    statements.push(sql);
+    const selected = sql.match(
+      /SELECT sha256 FROM skills\.schema_migrations WHERE version = '([^']+)'/u,
+    );
+    if (selected) return ledger.get(selected[1]) ?? "";
+    const inserted = sql.match(
+      /INSERT INTO skills\.schema_migrations \(version, sha256\) VALUES \('([^']+)', '([0-9a-f]{64})'\)/u,
+    );
+    if (inserted) {
+      ledger.set(inserted[1], inserted[2]);
+      return "";
+    }
+    return "";
+  };
+
+  const applied = await applySkillStoreMigrations({ dbExecutor });
+  assert.deepEqual(
+    applied.applied,
+    skillStoreMigrations,
+    "every migration applies",
+  );
+  assert.deepEqual(applied.skipped, []);
+  assert.deepEqual(
+    [...ledger.keys()],
+    skillStoreMigrations,
+    "every applied migration is recorded in the Skill Store's OWN ledger",
+  );
+  assert.ok(
+    statements.every((sql) => !sql.includes("knowledge.schema_migrations")),
+    "the Skill Store must never write the Knowledgebase's ledger",
+  );
+
+  // A second run applies nothing: the runner is idempotent.
+  const second = await applySkillStoreMigrations({ dbExecutor });
+  assert.deepEqual(second.applied, []);
+  assert.deepEqual(second.skipped, skillStoreMigrations);
+
+  // An applied migration whose bytes changed is refused, never re-applied.
+  const tampered = new Map(ledger);
+  tampered.set("004_skill_retirement_state.sql", "0".repeat(64));
+  await assert.rejects(
+    () =>
+      applySkillStoreMigrations({
+        dbExecutor: async (sql) => {
+          const selected = sql.match(
+            /SELECT sha256 FROM skills\.schema_migrations WHERE version = '([^']+)'/u,
+          );
+          if (selected) return tampered.get(selected[1]) ?? "";
+          return "";
+        },
+      }),
+    (error) => error.code === "SKILL_STORE_MIGRATION_DIGEST_MISMATCH",
+    "an edited applied migration must be refused, not silently re-applied",
+  );
 });

@@ -33,6 +33,11 @@ const CATALOG_PATH = path.join(
   import.meta.dirname,
   "../zink-skill-store/src/catalog.mjs",
 );
+const STORE_DOOR_PATH = path.join(
+  import.meta.dirname,
+  "../zink-skill-store/index.mjs",
+);
+
 const VECTOR_SYNC_PATH = path.join(
   import.meta.dirname,
   "../zink-skill-store/src/vector-sync.mjs",
@@ -53,6 +58,8 @@ const {
   skillStoreWriterLockDir,
   scanCatalog,
 } = await import(pathToFile(CATALOG_PATH));
+const STORE_DOOR = await import(pathToFile(STORE_DOOR_PATH));
+
 const { SkillAdapter } = await import(pathToFile(ADAPTER_PATH));
 const { handleOwnerSkillApproval, handleOwnerSkillRejection } = await import(
   pathToFile(PLUGIN_PATH)
@@ -715,6 +722,189 @@ test("F-064: read/apply/validate resolve the ACTIVE version when a superseded on
         `${action} must serve the ACTIVE version's bytes`,
       );
     }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// M12/T9 F-095 (R5-E04-05) / H8 - the governed DEPRECATED retirement
+// ---------------------------------------------------------------------------
+//
+// The owner could not withdraw a wrong skill through ANY supported path: the
+// first ACTIVE version froze the capability forever, and the only route was
+// out-of-band tree editing - precisely the path the audit forbids.
+//
+// This case pins the governed route: an owner-confirmed retirement, taken
+// under the store-wide writer lock through the store's public door, appends
+// the third lifecycle event (`CANDIDATE,ACTIVE,DEPRECATED` - the sequence
+// `scanCatalog` already accepts) and lets the successor version promote.
+test("F-095: the governed retirement withdraws the wrong version and the successor promotes", async () => {
+  const { root, skillsRoot } = await freshRoots();
+  try {
+    await promoteApprovedSkill({
+      skillsRoot,
+      namespace: ["office"],
+      capability: "wrong-skill",
+      version: "1.0.0",
+      content: "# Wrong\n\nthe wrong bytes\n",
+      requestingActor: "excel",
+      decisionRef: "PLAN:M11/T1-R1",
+    });
+
+    // While the wrong version is ACTIVE, its successor is refused.
+    await assert.rejects(
+      () =>
+        promoteApprovedSkill({
+          skillsRoot,
+          namespace: ["office"],
+          capability: "wrong-skill",
+          version: "2.0.0",
+          content: "# Right\n\nthe right bytes\n",
+          requestingActor: "excel",
+          decisionRef: "PLAN:M11/T1-R1",
+        }),
+      (error) => error.code === "SKILL_ACTIVE_CONFLICT",
+    );
+
+    // The governed retirement: an owner decision, inside the store writer lock.
+    const retired = await withSkillStoreWriterLock(skillsRoot, () =>
+      STORE_DOOR.retireSkill({
+        skillsRoot,
+        namespace: ["office"],
+        capability: "wrong-skill",
+        version: "1.0.0",
+        decisionRef: "PLAN:M12/T9-R3",
+      }),
+    );
+    assert.equal(retired.status, "DEPRECATED");
+
+    // The durable record carries CANDIDATE, ACTIVE, DEPRECATED, and the
+    // catalog accepts the retired record.
+    const scan = await scanCatalog(skillsRoot);
+    assert.deepEqual(
+      scan.errors,
+      [],
+      "a retired record must stay a valid catalog record",
+    );
+    const record = scan.records.find(
+      (entry) => entry.manifest.identity.version === "1.0.0",
+    );
+    assert.deepEqual(
+      record.manifest.lifecycle.map((event) => event.status),
+      ["CANDIDATE", "ACTIVE", "DEPRECATED"],
+    );
+    assert.equal(
+      record.manifest.lifecycle.at(-1).decision_ref,
+      "PLAN:M12/T9-R3",
+      "the retirement must cite the decision that authorized it",
+    );
+
+    // The successor promotes now.
+    const promoted = await promoteApprovedSkill({
+      skillsRoot,
+      namespace: ["office"],
+      capability: "wrong-skill",
+      version: "2.0.0",
+      content: "# Right\n\nthe right bytes\n",
+      requestingActor: "excel",
+      decisionRef: "PLAN:M11/T1-R1",
+    });
+    assert.equal(promoted.status, "ACTIVE");
+    const after = await scanCatalog(skillsRoot);
+    assert.deepEqual(after.errors, []);
+    assert.equal(after.records.length, 2);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("F-095: the retirement refuses an unlocked call, an unknown version and a version that is not ACTIVE", async () => {
+  const { root, skillsRoot } = await freshRoots();
+  try {
+    await promoteApprovedSkill({
+      skillsRoot,
+      namespace: ["office"],
+      capability: "guarded-skill",
+      version: "1.0.0",
+      content: "# Guarded\n\nbytes\n",
+      requestingActor: "excel",
+      decisionRef: "PLAN:M11/T1-R1",
+    });
+
+    // The public door refuses an unlocked retirement, exactly like the
+    // promotion: the retirement is a canonical write and needs the lock.
+    await assert.rejects(
+      () =>
+        STORE_DOOR.retireSkill({
+          skillsRoot,
+          namespace: ["office"],
+          capability: "guarded-skill",
+          version: "1.0.0",
+          decisionRef: "PLAN:M12/T9-R3",
+        }),
+      (error) => error.code === "SKILL_STORE_WRITER_LOCK_REQUIRED",
+    );
+
+    await withSkillStoreWriterLock(skillsRoot, async () => {
+      // An unknown version is refused.
+      await assert.rejects(
+        () =>
+          STORE_DOOR.retireSkill({
+            skillsRoot,
+            namespace: ["office"],
+            capability: "guarded-skill",
+            version: "9.9.9",
+            decisionRef: "PLAN:M12/T9-R3",
+          }),
+        (error) => error.code === "SKILL_VERSION_NOT_FOUND",
+      );
+
+      // An ungoverned decision is refused: a retirement without a decision
+      // reference is not a governed act.
+      await assert.rejects(
+        () =>
+          STORE_DOOR.retireSkill({
+            skillsRoot,
+            namespace: ["office"],
+            capability: "guarded-skill",
+            version: "1.0.0",
+            decisionRef: "because",
+          }),
+        (error) => error.code === "DECISION_REF_INVALID",
+      );
+
+      // The first retirement succeeds ...
+      const retired = await STORE_DOOR.retireSkill({
+        skillsRoot,
+        namespace: ["office"],
+        capability: "guarded-skill",
+        version: "1.0.0",
+        decisionRef: "PLAN:M12/T9-R3",
+      });
+      assert.equal(retired.status, "DEPRECATED");
+
+      // ... and a second one is refused: a retired version is not ACTIVE.
+      await assert.rejects(
+        () =>
+          STORE_DOOR.retireSkill({
+            skillsRoot,
+            namespace: ["office"],
+            capability: "guarded-skill",
+            version: "1.0.0",
+            decisionRef: "PLAN:M12/T9-R3",
+          }),
+        (error) => error.code === "SKILL_NOT_ACTIVE",
+      );
+    });
+
+    // The record carries exactly one DEPRECATED event.
+    const scan = await scanCatalog(skillsRoot);
+    assert.deepEqual(scan.errors, []);
+    assert.deepEqual(
+      scan.records[0].manifest.lifecycle.map((event) => event.status),
+      ["CANDIDATE", "ACTIVE", "DEPRECATED"],
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -25,18 +25,67 @@ JSON and binds that identity to the directory and to the SHA-256 of the exact
 raw Markdown bytes. The catalog is fail-closed: a malformed record prevents all
 normal retrieval, including retrieval of otherwise valid records.
 
-The read-only interface is the **operator CLI** (`zink-skill-store/bin/skill-store.mjs`),
-not a model tool:
+The operator CLI (`zink-skill-store/bin/skill-store.mjs`) is the operator
+surface, not a model tool:
 
 ```text
 skill-store validate
 skill-store get --namespace <slash-separated namespace> --capability <slug>
+skill-store deprecate --namespace <ns> --capability <slug> --version <semver> --decision-ref <PLAN:M../T..-R..> [--actor <name>]
+skill-store migrate
 ```
 
 `get` returns only the exact `ACTIVE` version after validation of the complete
 catalog. The lifecycle histories are `[CANDIDATE]`, `[CANDIDATE, ACTIVE]`,
 `[CANDIDATE, ACTIVE, DEPRECATED]`, and `[CANDIDATE, REJECTED]`; current state is
 the final event. At most one version per namespace/capability is ACTIVE.
+
+## Schema ownership
+
+The Skill Store owns its durable schema, its migration set and its migration
+ledger. The `skills.*` DDL lives in `zink-skill-store/migrations/`, is applied
+by the Skill Store's own runner (`zink-skill-store/src/migrations.mjs`), and is
+recorded in the Skill Store's own ledger (`skills.schema_migrations`).
+
+The Knowledgebase's migration set keeps its own tables and applies **zero**
+statements against `skills.*`: the Knowledgebase's startup path never mutates a
+peer module's persistence.
+
+An applied migration is keyed by filename and pinned by its SHA-256
+(`docs/contracts/skill-store/skill-store-migration-digests.json`). Editing an
+applied migration in place is a silent no-op on every database that adopted
+it; the only correct action is a NEW forward migration. The runner refuses an
+applied migration whose bytes changed (`SKILL_STORE_MIGRATION_DIGEST_MISMATCH`).
+
+## The governed DEPRECATED retirement
+
+A promoted skill is retired through the governed API, never by editing the
+tree. The retirement appends the third lifecycle event, so the durable record
+(`manifest.json`) carries `CANDIDATE, ACTIVE, DEPRECATED` — a history
+`scanCatalog` accepts — and the successor version of the same capability can
+then be promoted.
+
+The retirement is a canonical write, so it carries the promotion's discipline:
+it runs inside the store-wide writer lock (`withSkillStoreWriterLock`), it
+requires the governed decision reference (`PLAN:M../T..-R..`), it refuses a
+version that is not `ACTIVE`, and it re-reads the catalog afterwards, rolling
+the retirement back if it would break the store. The retired version keeps its
+`SKILL.md` bytes and its place in the tree; only its state changed.
+
+`REJECTED` keeps its own writer: the retirement path never writes `REJECTED`
+and never overwrites a rejected record.
+
+In the derived index the retirement is RECORDED, not merely deleted: the
+derived row moves to `status = 'DEPRECATED'`, `sync_status = 'TOMBSTONED'`,
+and the vectors of the retired skill are dropped. That state is admitted by
+the Skill Store's forward migration
+`zink-skill-store/migrations/004_skill_retirement_state.sql`; the applied
+`003_skills_vector_schema.sql` is never edited.
+
+The retirement is never model-visible: the Zink Tools `SkillAdapter` still
+refuses the `deprecate` action, and only an owner-confirmed governed action
+reaches the store's public door (`retireSkill`).
+===
 
 This contract intentionally has no `work` or `research` manifest field.
 Operational routing policy remains the responsibility of M7/OpenClaw.

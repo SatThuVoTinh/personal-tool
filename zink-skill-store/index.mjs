@@ -9,10 +9,11 @@
  * internal it liked. The architecture says OpenClaw reaches the Skill Store
  * only through a governed boundary; nothing made that boundary real.
  *
- * This module IS that boundary. It publishes exactly three entry points, and
+ * This module IS that boundary. It publishes exactly four entry points, and
  * nothing else:
  *
  *   promoteApprovedSkill(...)      the canonical promotion
+ *   retireSkill(...)               the governed DEPRECATED retirement
  *   withSkillStoreWriterLock(...)  the store-wide writer lock
  *   syncSkillsToVectorStore(...)   the derived pgvector index sync
  *
@@ -30,13 +31,25 @@
  * section could overwrite a rejection another process committed while the
  * approval was in flight. The door refuses an unlocked promotion with
  * `SKILL_STORE_WRITER_LOCK_REQUIRED` instead of writing one.
+ *
+ * M12/T9 F-095 (R5-E04-05) / H8: `retireSkill` is the governed retirement —
+ * the route the owner needs to withdraw a wrong skill without editing the
+ * tree. It is a canonical write like the promotion, so it carries the SAME
+ * discipline: it runs inside the store's writer lock and the door refuses an
+ * unlocked retirement.
+ *
+ * `applySkillStoreMigrations` is the Skill Store's OWN migration runner
+ * (M12/T9 F-094 / H5): the `skills.*` DDL and the runner that applies it
+ * live in this module, not in the Knowledgebase's migration set.
  */
 import {
   promoteApprovedSkillUnlocked,
+  retireSkillUnlocked,
   withSkillStoreWriterLock,
   isSkillStoreWriterLockHeld,
 } from "./src/catalog.mjs";
 import { syncSkillsToVectorStore } from "./src/vector-sync.mjs";
+import { applySkillStoreMigrations } from "./src/migrations.mjs";
 
 /**
  * The canonical promotion, to be called INSIDE the store's writer lock.
@@ -56,4 +69,27 @@ export async function promoteApprovedSkill(params) {
   return promoteApprovedSkillUnlocked(params);
 }
 
-export { withSkillStoreWriterLock, syncSkillsToVectorStore };
+/**
+ * The governed DEPRECATED retirement, to be called INSIDE the store's writer
+ * lock.
+ *
+ * @param {object} params the retirement parameters (identity, the actor and
+ *   the governed decision reference).
+ * @returns {Promise<object>} the retirement result.
+ */
+export async function retireSkill(params) {
+  if (!isSkillStoreWriterLockHeld(params?.skillsRoot)) {
+    const error = new Error(
+      "SKILL_STORE_WRITER_LOCK_REQUIRED: the governed retirement must run inside the store's writer lock",
+    );
+    error.code = "SKILL_STORE_WRITER_LOCK_REQUIRED";
+    throw error;
+  }
+  return retireSkillUnlocked(params);
+}
+
+export {
+  withSkillStoreWriterLock,
+  syncSkillsToVectorStore,
+  applySkillStoreMigrations,
+};

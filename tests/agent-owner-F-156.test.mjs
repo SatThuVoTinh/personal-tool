@@ -140,12 +140,21 @@ test("F-156: the plugin loads the Skill Store's public door, not its internals",
 // ---------------------------------------------------------------------------
 // 2. The public surface
 // ---------------------------------------------------------------------------
-test("F-156: the public module exports exactly the three governed entry points", async () => {
+test("F-156: the public module exports exactly the governed entry points", async () => {
   const door = await import(pathToFileURL(DOOR_PATH).href);
   assert.deepEqual(
     Object.keys(door).sort(),
     [
+      // M12/T9 F-094 (R5-E03-07) / H5: the Skill Store's OWN migration runner.
+      // The `skills.*` DDL moved into this module, so the runner that applies
+      // it is published through the same public door — and it is a trusted
+      // internal seam, never a model-visible action.
+      "applySkillStoreMigrations",
       "promoteApprovedSkill",
+      // M12/T9 F-095 (R5-E04-05) / H8: the governed DEPRECATED retirement —
+      // the route the owner needs to withdraw a wrong skill without editing
+      // the tree.
+      "retireSkill",
       "syncSkillsToVectorStore",
       "withSkillStoreWriterLock",
     ],

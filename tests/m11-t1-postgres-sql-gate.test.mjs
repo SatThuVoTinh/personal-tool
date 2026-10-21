@@ -19,12 +19,26 @@ import os from "node:os";
 
 import { syncSkillsToVectorStore } from "../zink-skill-store/src/vector-sync.mjs";
 import { skillStoreIdentityPath } from "../zink-skill-store/src/catalog.mjs";
+import {
+  retireSkill,
+  withSkillStoreWriterLock,
+} from "../zink-skill-store/index.mjs";
 
 const REPO_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
 );
 const MIGRATIONS_DIR = path.join(REPO_ROOT, "apps", "knowledge", "migrations");
+// M12/T9 F-094 (R5-E03-07) / H5: the `skills.*` schema moved to the module
+// that owns it, so this gate applies the Skill Store's own migration set too.
+// The statements under test read and write `skills.*`, so the gate MUST
+// create that schema - from its owner, not from the Knowledgebase.
+const SKILL_STORE_MIGRATIONS_DIR = path.join(
+  REPO_ROOT,
+  "zink-skill-store",
+  "migrations",
+);
+
 const CONTAINER = process.env.POSTGRES_CONTAINER || "personal-tool-postgres-1";
 const EXPECTED_DIMENSIONS = 1024;
 // The migration that creates the `skills` schema the gate's statements read.
@@ -49,6 +63,27 @@ function trackedMigrations() {
     .filter((name) => name.endsWith(".sql"))
     .sort()
     .map((name) => ({ name, path: path.join(MIGRATIONS_DIR, name) }));
+}
+
+/**
+ * The Skill Store's own migration set, in the order its runner applies it.
+ */
+function skillStoreMigrations() {
+  return readdirSync(SKILL_STORE_MIGRATIONS_DIR)
+    .filter((name) => name.endsWith(".sql"))
+    .sort()
+    .map((name) => ({
+      name,
+      path: path.join(SKILL_STORE_MIGRATIONS_DIR, name),
+    }));
+}
+
+/**
+ * Every tracked migration of the repository, in the order they are applied:
+ * the Knowledgebase's set first, then the Skill Store's own set.
+ */
+function everyTrackedMigration() {
+  return [...trackedMigrations(), ...skillStoreMigrations()];
 }
 
 /**
@@ -78,7 +113,7 @@ function applyTrackedMigrations(dbName) {
     );
   }
   const applied = [];
-  for (const migration of trackedMigrations()) {
+  for (const migration of everyTrackedMigration()) {
     const sql = readFileSync(migration.path, "utf8");
     const res = dockerExec(
       [
@@ -205,7 +240,7 @@ test("M11-06: generated statements execute against real PostgreSQL (scratch DB)"
     );
     assert.deepEqual(
       appliedMigrations,
-      trackedMigrations().map((migration) => migration.name),
+      everyTrackedMigration().map((migration) => migration.name),
       "the gate must apply EVERY tracked migration, in order",
     );
 
@@ -403,11 +438,12 @@ test("R3-12: the failure statement runs on real PostgreSQL and clears the segmen
     );
     assert.deepEqual(
       appliedMigrations,
-      trackedMigrations().map((migration) => migration.name),
+      everyTrackedMigration().map((migration) => migration.name),
       "the gate must apply EVERY tracked migration, in order",
     );
 
     const root = await mkdtemp(path.join(os.tmpdir(), "m12-r3-12-"));
+
     try {
       const content =
         "# Failure lane\n\n" +
@@ -462,6 +498,159 @@ test("R3-12: the failure statement runs on real PostgreSQL and clears the segmen
         runSql("SELECT count(*) FROM skills.segments;"),
         "0",
         "no segment row may survive under a catalog row that is not READY",
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  } finally {
+    admin(`DROP DATABASE IF EXISTS ${dbName}`);
+  }
+});
+
+// ===========================================================================
+// M12/T9 F-095 (R5-E04-05) / H8 - the governed retirement against real
+// PostgreSQL.
+//
+// The retirement's derived-index statement is a data-modifying CTE: it drops
+// the segments of the retired skill and marks its derived row
+// `DEPRECATED`/`TOMBSTONED` in ONE statement. `003`'s CHECK constraints could
+// not admit that state, so the Skill Store's own forward migration
+// (`004_skill_retirement_state.sql`) widened them. This case executes the
+// whole path against a real PostgreSQL: promote, sync, retire through the
+// governed writer, sync again, and read the derived row back.
+// ===========================================================================
+test("F-095: the governed retirement is recorded in the derived index (real PostgreSQL)", async (t) => {
+  if (!containerAvailable(t)) return;
+
+  const dbName = `m12_t9_f095_${createHash("sha256")
+    .update(String(Math.random()))
+    .digest("hex")
+    .slice(0, 10)}`;
+  const admin = (statement) =>
+    dockerExec([
+      "psql",
+      "-U",
+      "postgres",
+      "-d",
+      "postgres",
+      "--set=ON_ERROR_STOP=1",
+      "-t",
+      "-A",
+      "-c",
+      statement,
+    ]);
+
+  const created = admin(`CREATE DATABASE ${dbName}`);
+  if (created.status !== 0) {
+    t.skip(
+      `could not create scratch database: ${created.stderr?.slice(0, 200)}`,
+    );
+    return;
+  }
+
+  try {
+    const runSql = (sql) => {
+      const res = dockerExec(
+        [
+          "psql",
+          "-U",
+          "postgres",
+          "-d",
+          dbName,
+          "--set=ON_ERROR_STOP=1",
+          "-t",
+          "-A",
+          "-f",
+          "-",
+        ],
+        sql,
+      );
+      if (res.status !== 0) {
+        throw new Error(
+          `psql rejected SQL (code ${res.status}): ${(res.stderr || res.stdout || "").slice(0, 400)}`,
+        );
+      }
+      return (res.stdout || "").trim();
+    };
+
+    let appliedMigrations;
+    try {
+      appliedMigrations = applyTrackedMigrations(dbName);
+    } catch (error) {
+      if (error?.migration === VECTOR_SCHEMA_MIGRATION) {
+        t.skip(
+          `pgvector/migration unavailable in container: ${String(error?.message ?? error).slice(0, 300)}`,
+        );
+        return;
+      }
+      throw error;
+    }
+    t.diagnostic(
+      `tracked migrations applied: ${appliedMigrations.join(", ") || "(none)"}`,
+    );
+
+    const root = await mkdtemp(path.join(os.tmpdir(), "m12-t9-f095-"));
+    try {
+      const content =
+        "# Retirable\n\n" + "A body long enough to be a segment. ".repeat(200);
+      await seedActiveSkill(root, content);
+      const dbExecutor = async (sql) => runSql(sql);
+
+      const ready = await syncSkillsToVectorStore({
+        skillsRoot: root,
+        embedFn: async (texts) =>
+          texts.map(() => new Array(EXPECTED_DIMENSIONS).fill(0.01)),
+        dbExecutor,
+      });
+      assert.equal(
+        ready.status,
+        "READY",
+        `the first sync must reach READY; got ${JSON.stringify(ready).slice(0, 600)}`,
+      );
+      assert.equal(
+        runSql(
+          "SELECT status || '|' || sync_status FROM skills.catalog_index;",
+        ),
+        "ACTIVE|READY",
+      );
+
+      assert.ok(
+        Number(runSql("SELECT count(*) FROM skills.segments;")) >= 1,
+        "the synced skill must own its segment vectors",
+      );
+
+      // The governed retirement, through the store's public door and under
+      // the store-wide writer lock.
+      const retired = await withSkillStoreWriterLock(root, () =>
+        retireSkill({
+          skillsRoot: root,
+          namespace: ["office"],
+          capability: "gate-skill",
+          version: "1.0.0",
+          decisionRef: "PLAN:M12/T9-R3",
+        }),
+      );
+      assert.equal(retired.status, "DEPRECATED");
+
+      // The next sync records the retirement in the derived index.
+      const resync = await syncSkillsToVectorStore({
+        skillsRoot: root,
+        embedFn: async (texts) =>
+          texts.map(() => new Array(EXPECTED_DIMENSIONS).fill(0.01)),
+        dbExecutor,
+      });
+      assert.equal(resync.status, "READY");
+      assert.equal(
+        runSql(
+          "SELECT status || '|' || sync_status FROM skills.catalog_index;",
+        ),
+        "DEPRECATED|TOMBSTONED",
+        "the derived row must carry the retirement instead of vanishing",
+      );
+      assert.equal(
+        runSql("SELECT count(*) FROM skills.segments;"),
+        "0",
+        "the vectors of a retired skill must not survive its retirement",
       );
     } finally {
       await rm(root, { recursive: true, force: true });

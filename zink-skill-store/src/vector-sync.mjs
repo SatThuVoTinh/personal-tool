@@ -765,6 +765,55 @@ export async function syncSkillsToVectorStore(options = {}) {
     skills: [],
   };
 
+  // M12/T9 F-095 (R5-E04-05) / H8 — the governed retirement is RECORDED in
+  // the derived index, not only deleted from it.
+  //
+  // `003_skills_vector_schema.sql` could only admit `status = 'ACTIVE'` and
+  // `sync_status IN ('PENDING','READY','FAILED')`, so a retired skill had
+  // exactly ONE representation in the derived index: the row was DELETED, and
+  // the index could not say WHY the skill was gone. The Skill Store's own
+  // forward migration (`zink-skill-store/migrations/004_skill_retirement_state.sql`)
+  // widened the two CHECK constraints, so the retirement is now WRITTEN:
+  // `status = 'DEPRECATED'`, `sync_status = 'TOMBSTONED'`.
+  //
+  // The segments are dropped in the SAME statement: the foreign key cascades
+  // on a DELETE of the parent row, and this statement UPDATES the parent, so
+  // the vectors of a retired skill would otherwise survive their retirement.
+  //
+  // The canonical lifecycle truth stays in the catalog's manifest; the derived
+  // row now carries the retirement as well, and the consumers that filter on
+  // `status = 'ACTIVE' AND sync_status = 'READY'` keep serving exactly what
+  // they served before.
+  if (retiredKeys.length > 0) {
+    const retirementMarkerSql = `
+      WITH retired AS (
+        SELECT id FROM skills.catalog_index
+        WHERE status = 'ACTIVE'
+        AND (${TOMBSTONE_KEY_SQL_EXPRESSION}) IN (
+          SELECT unnest(${escapeSqlLiteral(
+            toPostgresArrayLiteral(retiredKeys),
+          )}::text[])
+        )
+      ), dropped AS (
+        DELETE FROM skills.segments WHERE skill_id IN (SELECT id FROM retired)
+      )
+      UPDATE skills.catalog_index
+      SET status = 'DEPRECATED', sync_status = 'TOMBSTONED'
+      WHERE id IN (SELECT id FROM retired);
+    `;
+    try {
+      await executePostgresQuery(retirementMarkerSql, options);
+    } catch (error) {
+      syncReport.status = "FAILED";
+      syncReport.error_code = "VECTOR_RETIREMENT_MARK_FAILED";
+      syncReport.error = String(
+        error?.message || "Retirement marking failed",
+      ).slice(0, MAX_FAILURE_REASON_LENGTH);
+      syncReport.failed_count = 1;
+      return syncReport;
+    }
+  }
+
   if (catalogErrors.length > 0) {
     // F-152: the tombstone used to be skipped entirely whenever the scan
     // reported anything, so ONE invalid file anywhere left every previously

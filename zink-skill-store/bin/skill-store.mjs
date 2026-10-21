@@ -4,6 +4,8 @@ import { fileURLToPath } from "node:url";
 import { URL } from "node:url";
 
 import { catalogError, getActiveSkill, scanCatalog } from "../src/catalog.mjs";
+import { applySkillStoreMigrations } from "../src/migrations.mjs";
+import { retireSkill, withSkillStoreWriterLock } from "../index.mjs";
 
 const canonicalSkillsRoot = fileURLToPath(
   new URL("../skills/", import.meta.url),
@@ -89,6 +91,57 @@ function parseGet(args) {
   return { namespace, capability };
 }
 
+/**
+ * The `deprecate` arguments.
+ *
+ * M12/T9 F-095 (R5-E04-05) / H8: the governed retirement needs the identity of
+ * the version to withdraw, the decision that authorized the withdrawal and
+ * the actor that carried it out. The decision reference is NOT checked here:
+ * the governed writer owns that grammar and answers `DECISION_REF_INVALID`,
+ * so the CLI never invents a second rule for it.
+ */
+function parseDeprecate(args) {
+  const flags = new Set([
+    "--namespace",
+    "--capability",
+    "--version",
+    "--decision-ref",
+    "--actor",
+  ]);
+  const values = new Map();
+  for (let index = 0; index < args.length; index += 2) {
+    const flag = args[index];
+    const value = args[index + 1];
+    if (
+      !flags.has(flag) ||
+      values.has(flag) ||
+      !value ||
+      value.startsWith("--")
+    )
+      return null;
+    values.set(flag, value);
+  }
+  const namespace = values.get("--namespace");
+  const capability = values.get("--capability");
+  const version = values.get("--version");
+  const decisionRef = values.get("--decision-ref");
+  const actor = values.get("--actor") ?? "owner";
+  const slug = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+  if (
+    !namespace ||
+    !capability ||
+    !version ||
+    !decisionRef ||
+    !actor ||
+    namespace.split("/").length > 8 ||
+    !namespace.split("/").every((segment) => slug.test(segment)) ||
+    !slug.test(capability) ||
+    !/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(version)
+  )
+    return null;
+  return { namespace, capability, version, decisionRef, actor };
+}
+
 export async function executeCli(args, skillsRoot = canonicalSkillsRoot) {
   try {
     if (args.length === 1 && args[0] === "validate") {
@@ -130,6 +183,53 @@ export async function executeCli(args, skillsRoot = canonicalSkillsRoot) {
             manifest: result.skill.manifest,
             markdown: result.skill.markdown,
           },
+        },
+        "stdout",
+      );
+    }
+    // M12/T9 F-095 (R5-E04-05) / H8: the governed retirement. The owner
+    // withdraws a wrong skill through this command instead of editing the
+    // tree, and the state transition is recorded in the durable record.
+    if (args[0] === "deprecate") {
+      const options = parseDeprecate(args.slice(1));
+      if (!options) return cliError("Invalid skill-store deprecate arguments.");
+      const retired = await withSkillStoreWriterLock(skillsRoot, () =>
+        retireSkill({
+          skillsRoot,
+          namespace: options.namespace.split("/"),
+          capability: options.capability,
+          version: options.version,
+          ownerActor: options.actor,
+          decisionRef: options.decisionRef,
+        }),
+      );
+      return response(
+        0,
+        {
+          status: retired.status,
+          skill: {
+            namespace: retired.namespace,
+            capability: retired.capability,
+            version: retired.version,
+            retired_at: retired.retired_at,
+            decision_ref: retired.decision_ref,
+          },
+        },
+        "stdout",
+      );
+    }
+    // M12/T9 F-094 (R5-E03-07) / H5: the Skill Store applies its OWN schema.
+    // The Knowledgebase's migration runner no longer owns the `skills.*` DDL,
+    // so the store's schema is applied here, against the store's own ledger.
+    if (args[0] === "migrate") {
+      const applied = await applySkillStoreMigrations({});
+      return response(
+        0,
+        {
+          status: applied.status,
+          applied: applied.applied,
+          skipped: applied.skipped,
+          ledger: applied.ledger,
         },
         "stdout",
       );

@@ -1,0 +1,14 @@
+{
+  "purpose": "Tracks the SHA-256 digest of every applied Skill Store migration in zink-skill-store/migrations/. The Skill Store owns its skills.* schema and its own migration ledger (skills.schema_migrations), so this manifest is the Skill Store's counterpart of docs/contracts/knowledgebase-migration-digests.json. Adoption is keyed on filename (the runner records skills.schema_migrations.version = filename) and pinned by digest, so editing an already-applied .sql in place is a silent no-op on every database that adopted it; tests/m12-t2.2-a4-migration-digest.test.mjs reddens when a listed file's bytes change, and the correct action is to add a NEW forward migration, never to edit a listed one. 003_skills_vector_schema.sql was applied by the Knowledgebase's runner before the schema moved to its owning module (owner decision H5, M12/T9): its BYTES are unchanged and its digest is the one the Knowledgebase manifest already pinned, so the move is a relocation and not an edit. A file NOT listed here is treated as a forward migration and stays green, which is deliberate: when a new migration is released and begins being adopted, append it with its digest, because from that moment editing it in place becomes the same silent no-op.",
+  "digestAlgorithm": "sha256",
+  "migrations": [
+    {
+      "file": "003_skills_vector_schema.sql",
+      "sha256": "8706a55397e8040a28f78fe6dbefcbed8e53baefb344dd370b62d2cdeff25ffe"
+    },
+    {
+      "file": "004_skill_retirement_state.sql",
+      "sha256": "3a487ee9799439722d46602e312a00194e83fde97cd5a6f3033982f7f5708d97"
+    }
+  ]
+}

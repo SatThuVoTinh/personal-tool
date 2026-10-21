@@ -1748,6 +1748,12 @@ export const PACKAGED_RUNTIME_MODULES = Object.freeze([
   "zink-skill-store/index.mjs",
   "zink-skill-store/src/catalog.mjs",
   "zink-skill-store/src/vector-sync.mjs",
+  // M12/T9 F-094 (R5-E03-07) / H5: the Skill Store's own migration runner
+  // travels with the build, because the store's public door publishes it and
+  // the deployed tree must be self-sufficient: a module the door imports and
+  // the packaged set does not carry would break every relative import in the
+  // deployed shape.
+  "zink-skill-store/src/migrations.mjs",
   "zink-tools/adapters/knowledge/knowledge-adapter.mjs",
   "zink-tools/adapters/skill-store/skill-adapter.mjs",
   "zink-tools/common/path-safety.mjs",

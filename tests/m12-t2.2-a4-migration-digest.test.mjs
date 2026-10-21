@@ -57,6 +57,23 @@ const MANIFEST_FILE = path.join(
   "knowledgebase-migration-digests.json",
 );
 
+// M12/T9 F-094 (R5-E03-07) / H5: the repository has TWO migration sets and
+// TWO manifests. The `skills.*` schema moved to the module that owns it, so
+// the Skill Store pins its own migrations in its own manifest, and the
+// Knowledgebase's set keeps its own tables.
+const SKILL_STORE_MIGRATIONS_DIR = path.join(
+  REPO_ROOT,
+  "zink-skill-store",
+  "migrations",
+);
+const SKILL_STORE_MANIFEST_FILE = path.join(
+  REPO_ROOT,
+  "docs",
+  "contracts",
+  "skill-store",
+  "skill-store-migration-digests.json",
+);
+
 function sha256OfFile(filePath) {
   return crypto
     .createHash("sha256")
@@ -70,11 +87,25 @@ function sha256OfFile(filePath) {
 // directions: every entry the manifest names must match the bytes on disk,
 // and every migration file on disk must be named by the manifest.
 // Returns an array of human-readable failure messages; empty means pass.
-function checkMigrationDigests(migrationsDir, manifest) {
+function checkMigrationDigests(migrationsDir, manifest, movedResolver = null) {
   const failures = [];
   for (const entry of manifest.migrations) {
     const migrationPath = path.join(migrationsDir, entry.file);
     if (!fs.existsSync(migrationPath)) {
+      // M12/T9 F-094 (R5-E03-07) / H5: a migration that MOVED to the module
+      // that owns it is not a deleted migration. The bytes are still pinned -
+      // by the owning module's own manifest - so the immutability guarantee
+      // this guard exists for still holds.
+      const moved = movedResolver ? movedResolver(entry) : null;
+      if (moved && moved.digest === entry.sha256) continue;
+      if (moved) {
+        failures.push(
+          `Migration ${entry.file} moved to ${moved.dir} but its bytes changed ` +
+            `(expected sha256 ${entry.sha256}, observed ${moved.digest}). An applied migration is ` +
+            `immutable: restore the original bytes, or add a NEW forward migration.`,
+        );
+        continue;
+      }
       failures.push(
         `Migration ${entry.file} is listed in docs/contracts/knowledgebase-migration-digests.json ` +
           `but no longer exists in ${migrationsDir}. Deleting an applied migration changes nothing on ` +
@@ -83,6 +114,7 @@ function checkMigrationDigests(migrationsDir, manifest) {
       );
       continue;
     }
+
     const actual = sha256OfFile(migrationPath);
     if (actual !== entry.sha256) {
       failures.push(
@@ -155,12 +187,124 @@ test("A-4 REAL: the digest manifest is well-formed", () => {
 
 test("A-4 REAL: every tracked migration's bytes still match its recorded digest", () => {
   const manifest = JSON.parse(fs.readFileSync(MANIFEST_FILE, "utf8"));
-  const failures = checkMigrationDigests(MIGRATIONS_DIR, manifest);
+  const failures = checkMigrationDigests(MIGRATIONS_DIR, manifest, movedEntry);
   assert.deepEqual(
     failures,
     [],
     `Applied migrations are immutable once adopted by filename; the forward-migration rule is the only ` +
       `allowed path. Failures:\n${failures.join("\n")}`,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// M12/T9 F-094 (R5-E03-07) / H5 - the Skill Store's own migration set
+// ---------------------------------------------------------------------------
+
+/**
+ * Where a listed migration went, when it is no longer in the set that names
+ * it.
+ *
+ * A migration that moved to the module that owns it is still an APPLIED
+ * migration: the bytes are pinned there by that module's own manifest. The
+ * resolver reports the owning set and the digest the owner pins, so the guard
+ * can tell a relocation (allowed) from an edit (refused).
+ */
+function movedEntry(entry) {
+  for (const [dir, manifestFile] of [
+    [SKILL_STORE_MIGRATIONS_DIR, SKILL_STORE_MANIFEST_FILE],
+  ]) {
+    const owner = JSON.parse(fs.readFileSync(manifestFile, "utf8"));
+    const named = owner.migrations.find((item) => item.file === entry.file);
+    if (!named) continue;
+    const movedPath = path.join(dir, entry.file);
+    if (!fs.existsSync(movedPath)) continue;
+    return { dir, digest: sha256OfFile(movedPath) };
+  }
+  return null;
+}
+
+test("A-4 REAL: the Skill Store's manifest is well-formed", () => {
+  const manifest = JSON.parse(
+    fs.readFileSync(SKILL_STORE_MANIFEST_FILE, "utf8"),
+  );
+  assert.equal(manifest.digestAlgorithm, "sha256");
+  assert.ok(
+    typeof manifest.purpose === "string" && manifest.purpose.length > 0,
+    "The Skill Store manifest must carry a one-line statement of what it is for.",
+  );
+  assert.ok(Array.isArray(manifest.migrations));
+  const seen = new Set();
+  for (const entry of manifest.migrations) {
+    assert.match(
+      entry.file,
+      /^\d{3}_[a-z0-9_]+\.sql$/,
+      `Manifest entry ${JSON.stringify(entry.file)} must name a Skill Store migration file.`,
+    );
+    assert.ok(!seen.has(entry.file), "Manifest lists the same file twice.");
+    seen.add(entry.file);
+    assert.match(entry.sha256, /^[0-9a-f]{64}$/);
+  }
+});
+
+test("A-4 REAL: every tracked Skill Store migration's bytes still match its recorded digest", () => {
+  const manifest = JSON.parse(
+    fs.readFileSync(SKILL_STORE_MANIFEST_FILE, "utf8"),
+  );
+  const failures = checkMigrationDigests(SKILL_STORE_MIGRATIONS_DIR, manifest);
+  assert.deepEqual(
+    failures,
+    [],
+    `The Skill Store's applied migrations are immutable too. Failures:\n${failures.join("\n")}`,
+  );
+});
+
+test("A-4 REAL: every tracked Skill Store migration is named by the Skill Store's manifest", () => {
+  const manifest = JSON.parse(
+    fs.readFileSync(SKILL_STORE_MANIFEST_FILE, "utf8"),
+  );
+  const listed = new Set(manifest.migrations.map((entry) => entry.file));
+  const unlisted = migrationFilesIn(SKILL_STORE_MIGRATIONS_DIR).filter(
+    (file) => !listed.has(file),
+  );
+  assert.deepEqual(
+    unlisted,
+    [],
+    `these tracked Skill Store migrations are not named by the Skill Store's manifest, ` +
+      `so their bytes are unpinned: ${unlisted.join(", ")}`,
+  );
+});
+
+test("A-4 REAL: the migrated skills schema is pinned by BOTH manifests, with the same bytes", () => {
+  // The `skills.*` DDL was applied by the Knowledgebase's runner before it
+  // moved to the module that owns it. The move must not have changed a byte:
+  // the digest the Knowledgebase's manifest already pinned is the digest the
+  // Skill Store's manifest pins now.
+  const knowledgebase = JSON.parse(fs.readFileSync(MANIFEST_FILE, "utf8"));
+  const skillStore = JSON.parse(
+    fs.readFileSync(SKILL_STORE_MANIFEST_FILE, "utf8"),
+  );
+  const migrated = "003_skills_vector_schema.sql";
+  const before = knowledgebase.migrations.find(
+    (entry) => entry.file === migrated,
+  );
+  assert.ok(
+    before,
+    "the Knowledgebase manifest must still name the migrated file",
+  );
+  const after = skillStore.migrations.find((entry) => entry.file === migrated);
+  assert.ok(after, "the Skill Store manifest must name the migrated file");
+  assert.equal(
+    after.sha256,
+    before.sha256,
+    "the migration moved, so its bytes must be identical",
+  );
+  assert.equal(
+    sha256OfFile(path.join(SKILL_STORE_MIGRATIONS_DIR, migrated)),
+    before.sha256,
+  );
+  assert.ok(
+    !fs.existsSync(path.join(MIGRATIONS_DIR, migrated)),
+    "the skills.* DDL must not stay in the Knowledgebase's migration set",
   );
 });
 

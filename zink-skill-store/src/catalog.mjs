@@ -1723,3 +1723,205 @@ export async function promoteApprovedSkillUnlocked({
     version,
   };
 }
+
+/**
+ * M12/T9 F-095 (R5-E04-05) / H8 — the governed DEPRECATED retirement.
+ *
+ * The owner could not withdraw a wrong skill through ANY supported path: the
+ * first ACTIVE version froze the capability forever, the catalog's own
+ * conflict message told the caller to "deprecate it before promoting", and
+ * the only route left was out-of-band tree editing — precisely the path the
+ * audit forbids. The catalog grammar already admitted
+ * `CANDIDATE,ACTIVE,DEPRECATED`; nothing ever WROTE it.
+ *
+ * This is that writer. It is the counterpart of `promoteApprovedSkill`: the
+ * same discipline, the same refusals, the same re-validation.
+ *
+ * Semantics:
+ * - only an ACTIVE version can be retired. A CANDIDATE, a REJECTED and an
+ *   already DEPRECATED version are refused, so the terminal states stay
+ *   terminal and `REJECTED` keeps its own writer;
+ * - the retirement is a GOVERNED act: it carries the decision that authorized
+ *   it, exactly like the promotion's `decision_ref`;
+ * - the state transition is recorded in the durable record — the canonical
+ *   `manifest.json` — and the catalog re-reads it afterwards, so a retirement
+ *   that would break the catalog is rolled back;
+ * - the retirement never touches `SKILL.md`: the bytes of a retired version
+ *   stay exactly as they were published.
+ *
+ * The caller must hold the store-wide writer lock: `retireSkillUnlocked` is
+ * the internal writer, and the store's public door (`zink-skill-store/
+ * index.mjs`) is the only supported way in.
+ */
+export async function retireSkillUnlocked({
+  skillsRoot,
+  namespace,
+  capability,
+  version,
+  ownerActor = "owner",
+  decisionRef,
+  at = null,
+}) {
+  const nsArray = Array.isArray(namespace) ? namespace : [namespace];
+  if (
+    !Array.isArray(nsArray) ||
+    nsArray.length < 1 ||
+    nsArray.length > 8 ||
+    !nsArray.every(
+      (segment) => typeof segment === "string" && SLUG.test(segment),
+    ) ||
+    typeof capability !== "string" ||
+    !SLUG.test(capability) ||
+    typeof version !== "string" ||
+    !VERSION.test(version)
+  ) {
+    writerError(
+      "SKILL_IDENTITY_INVALID",
+      "namespace/capability/version do not satisfy catalog grammar.",
+      ["IDENTITY_GRAMMAR"],
+    );
+  }
+  if (typeof decisionRef !== "string" || !DECISION.test(decisionRef)) {
+    writerError(
+      "DECISION_REF_INVALID",
+      "decision_ref must be a governed PLAN:M../T..-R.. reference.",
+    );
+  }
+  if (!nonEmpty(ownerActor)) {
+    writerError(
+      "SKILL_IDENTITY_INVALID",
+      "lifecycle actors must be non-empty.",
+      ["LIFECYCLE_ACTOR_EMPTY"],
+    );
+  }
+
+  const versionDir = path.join(skillsRoot, ...nsArray, capability, version);
+  const manifestPath = path.join(versionDir, "manifest.json");
+  let manifestBytes;
+  try {
+    manifestBytes = await readFile(manifestPath);
+  } catch {
+    writerError(
+      "SKILL_VERSION_NOT_FOUND",
+      "no such skill version exists in the store.",
+    );
+  }
+
+  // The strict parser, exactly like the promotion's replay probe: a manifest
+  // with a duplicate key is a forged record, and a lax parse would accept it.
+  let manifest;
+  try {
+    manifest = new JsonParser(textDecoder.decode(manifestBytes)).parse();
+  } catch {
+    writerError(
+      "SKILL_VERSION_CONFLICT",
+      "the stored manifest is unreadable; the retirement is refused.",
+    );
+  }
+  const identity = manifest?.identity;
+  if (
+    !isObject(identity) ||
+    !Array.isArray(identity.namespace) ||
+    identity.namespace.join("/") !== nsArray.join("/") ||
+    identity.capability !== capability ||
+    identity.version !== version
+  ) {
+    writerError(
+      "SKILL_VERSION_CONFLICT",
+      "the stored identity does not match the requested one.",
+    );
+  }
+  const lifecycle = manifest?.lifecycle;
+  if (!Array.isArray(lifecycle) || lifecycle.length < 1) {
+    writerError(
+      "SKILL_VERSION_CONFLICT",
+      "the stored manifest carries no lifecycle.",
+    );
+  }
+  const lastStatus = lifecycle.at(-1)?.status ?? null;
+  if (lastStatus !== "ACTIVE") {
+    writerError(
+      "SKILL_NOT_ACTIVE",
+      `only an ACTIVE version can be retired (this one is ${lastStatus ?? "UNKNOWN"}).`,
+    );
+  }
+
+  const stamp =
+    typeof at === "string" && validTimestamp(at) ? at : canonicalTimestamp();
+  const retiredManifest = {
+    ...manifest,
+    lifecycle: [
+      ...lifecycle,
+      {
+        status: "DEPRECATED",
+        at: stamp,
+        actor: String(ownerActor),
+        decision_ref: decisionRef,
+      },
+    ],
+  };
+
+  // The retired record is validated against the catalog grammar BEFORE it is
+  // written: a retirement that the scanner would reject is never published.
+  const errors = [];
+  validateManifest(
+    retiredManifest,
+    { namespace: nsArray, capability, version },
+    skillPath([...nsArray, capability, version]),
+    errors,
+  );
+  if (errors.length > 0) {
+    writerError(
+      "CATALOG_INVALID",
+      `the retired record failed validation: ${errors[0]?.code ?? "unknown"}.`,
+      [
+        "RETIREMENT_VALIDATION_FAILED",
+        ...errors.map((entry) => entry?.code ?? "UNKNOWN"),
+      ],
+    );
+  }
+
+  try {
+    await writeFileAtomic(
+      manifestPath,
+      Buffer.from(`${JSON.stringify(retiredManifest, null, 2)}\n`, "utf8"),
+    );
+  } catch (error) {
+    writerError(
+      "SKILL_PUBLISH_FAILED",
+      `the retirement could not be written: ${error?.message ?? error}`,
+    );
+  }
+
+  // The whole catalog is re-read: a retirement that breaks a NEIGHBOUR record
+  // is rolled back, so the store is never left in a state the scanner
+  // refuses.
+  const catalog = await scanCatalog(skillsRoot);
+  if (catalog.errors.length > 0) {
+    try {
+      await writeFileAtomic(manifestPath, manifestBytes);
+    } catch {
+      /* the rollback is best-effort; the refusal below names the cause */
+    }
+    writerError(
+      "CATALOG_INVALID",
+      `the retired record failed re-validation: ${
+        catalog.errors[0]?.code ?? "unknown"
+      }; the retirement was rolled back.`,
+      [
+        "RETIREMENT_REVALIDATION_FAILED",
+        ...catalog.errors.map((entry) => entry?.code ?? "UNKNOWN"),
+      ],
+    );
+  }
+
+  return {
+    status: "DEPRECATED",
+    content_sha256: manifest?.content?.sha256 ?? null,
+    namespace: nsArray,
+    capability,
+    version,
+    retired_at: stamp,
+    decision_ref: decisionRef,
+  };
+}

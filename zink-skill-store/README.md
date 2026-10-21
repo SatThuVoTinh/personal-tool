@@ -25,12 +25,17 @@ Toàn bộ kho kỹ năng tuân thủ nghiêm ngặt cấu trúc phân cấp chu
 
 ```text
 zink-skill-store/
-├── index.mjs                        # CỬA CHÍNH THỨC (public door) của kho: 3 entry point công khai
+├── index.mjs                        # CỬA CHÍNH THỨC (public door) của kho: entry point công khai
 ├── bin/
-│   └── skill-store.mjs             # CLI kiểm tra (validate) và truy xuất (get)
+│   └── skill-store.mjs             # CLI kiểm tra (validate), truy xuất (get), rút lui (deprecate) và migrate schema (migrate)
+├── migrations/                      # Bộ migration RIÊNG của kho (DDL skills.* + ledger schema_migrations của kho)
+│   ├── 003_skills_vector_schema.sql # DDL lược đồ vector của kho (đã áp dụng, băm cố định — không sửa tại chỗ)
+│   └── 004_skill_retirement_state.sql # Migration TIẾN LÊN: cho phép trạng thái DEPRECATED/TOMBSTONED trong chỉ mục dẫn xuất
 ├── src/
-│   ├── catalog.mjs                 # Logic quét catalog, kiểm tra schema, băm SHA-256 và promotion chuẩn tắc nội bộ
+│   ├── catalog.mjs                 # Logic quét catalog, kiểm tra schema, băm SHA-256, promotion và rút lui (DEPRECATED) chuẩn tắc nội bộ
+│   ├── migrations.mjs              # Bộ chạy migration RIÊNG của kho và ledger skills.schema_migrations
 │   └── vector-sync.mjs             # Đồng bộ dẫn xuất Git -> PostgreSQL vector (chỉ skill ACTIVE)
+
 ├── skills/                         # Thư mục gốc chứa các kỹ năng đã được chuẩn hóa
 │   └── <namespace...>/             # Phân cấp danh mục (tối đa 8 cấp, vd: supply-chain/inventory)
 │       └── <capability>/           # Tên kỹ năng cụ thể (vd: safety-stock)
@@ -272,12 +277,14 @@ không module nào khác được phép chạm vào phần lõi của kho: các 
 `src/` là chi tiết cài đặt nội bộ, dành cho test, bin và các reader của chính
 kho.
 
-Cửa công khai đúng ba hàm, không hơn:
+Cửa công khai đúng năm hàm, không hơn:
 
 ```text
 promoteApprovedSkill(...)      # promotion chuẩn tắc (canonical promotion)
+retireSkill(...)               # rút lui chuẩn tắc (governed DEPRECATED retirement)
 withSkillStoreWriterLock(...)  # writer lock toàn kho
 syncSkillsToVectorStore(...)   # đồng bộ chỉ mục vector dẫn xuất (pgvector)
+applySkillStoreMigrations(...) # áp dụng bộ migration RIÊNG của kho
 ```
 
 `promoteApprovedSkill` **phải** được gọi bên trong
@@ -285,6 +292,10 @@ syncSkillsToVectorStore(...)   # đồng bộ chỉ mục vector dẫn xuất (p
 kiểm tra trạng thái từ chối, promote rồi ghi trạng thái đề xuất — tất cả trong
 một phần giao dịch. Gọi promotion ngoài writer lock sẽ bị từ chối bằng mã
 tên rõ ràng, không ghi gì.
+
+`retireSkill` (rút lui `DEPRECATED`) là một ghi chuẩn tắc giống hệt promotion,
+nên nó **cũng phải** chạy bên trong `withSkillStoreWriterLock` và cũng bị từ
+chối bằng mã `SKILL_STORE_WRITER_LOCK_REQUIRED` nếu gọi ngoài lock.
 
 ### 9.2. Bắt buộc ghi tên kho trước khi sync hoặc tombstone
 
@@ -329,3 +340,64 @@ bằng cờ `allowUnnamedEmptyTombstone`.
 Lưu ý: tên của kho là **cấu hình vận hành**, không phải hằng số trong mã
 nguồn. Bản triển khai khai báo tên kho mà nó dự kiến sync; nếu cấu hình đó
 lệch với tên kho mang theo, lệnh sync bị từ chối và không xoá gì cả.
+
+---
+
+## 10. Rút lui kỹ năng (`deprecate`) và quyền sở hữu lược đồ của kho (`migrate`)
+
+### 10.1. Rút lui một kỹ năng sai (governed DEPRECATED retirement)
+
+Trước đây, phiên bản `ACTIVE` đầu tiên **đóng băng** vĩnh viễn một capability:
+không có đường được hỗ trợ nào để rút lại, nên cách duy nhất là sửa cây
+`skills/` bằng tay — đúng con đường mà audit cấm. Nay kho có một lệnh CLI
+chính thức:
+
+```powershell
+node zink-skill-store/bin/skill-store.mjs deprecate --namespace supply-chain/inventory --capability safety-stock --version 1.0.0 --decision-ref PLAN:M12/T9-R3
+```
+
+Cờ bắt buộc: `--namespace`, `--capability`, `--version`, `--decision-ref`.
+Cờ tuỳ chọn: `--actor` (mặc định `owner`).
+
+Lệnh này ghi thêm sự kiện lifecycle thứ ba `{ "status": "DEPRECATED", ... }` vào
+`manifest.json` — bản ghi bền vững của kỹ năng — nên lịch sử trở thành
+`CANDIDATE,ACTIVE,DEPRECATED`, đúng chuỗi mà `scanCatalog` chấp nhận. Phiên bản
+đã rút lui vẫn nằm trong cây (lịch sử được giữ), nhưng nó không còn là
+`ACTIVE`, nên `get` và các đường đọc/áp dụng chỉ phục vụ phiên bản kế tiếp.
+
+Quy tắc từ chối (mã trả về trong `stderr` dưới `error.code`, thoát mã `1`):
+
+| Mã                        | Khi nào                                                                                 |
+| ------------------------- | --------------------------------------------------------------------------------------- |
+| `CLI_INPUT_INVALID`       | Thiếu cờ, cờ lặp, hoặc giá trị không đúng dạng slug / SemVer (thoát mã `4`)             |
+| `SKILL_VERSION_NOT_FOUND` | Không có phiên bản nào ở đường dẫn đó trong kho                                         |
+| `SKILL_NOT_ACTIVE`        | Phiên bản đó không ở trạng thái `ACTIVE` (đã `DEPRECATED`, `CANDIDATE` hoặc `REJECTED`) |
+| `DECISION_REF_INVALID`    | `--decision-ref` không phải tham chiếu quyết định hợp lệ (`PLAN:M../T..-R..`)           |
+
+`REJECTED` giữ nguyên writer riêng của nó: lệnh `deprecate` **không** ghi
+`REJECTED` và cũng không ghi đè một bản ghi đã bị từ chối.
+
+Trong chỉ mục vector dẫn xuất, kỹ năng đã rút lui được **ghi lại** chứ không
+bị xoá im lặng: dòng dẫn xuất chuyển sang `status = 'DEPRECATED'` và
+`sync_status = 'TOMBSTONED'`, còn các vector của nó bị xoá. Việc này cần
+migration tiến lên `004_skill_retirement_state.sql` trong bộ migration của kho.
+
+### 10.2. Kho sở hữu lược đồ của chính nó (`migrate`)
+
+Bộ migration của Knowledgebase chỉ còn chứa bảng của chính nó (`knowledge.*`):
+triển khai Knowledgebase **không** chạy câu lệnh nào lên `skills.*` nữa. Lược
+đồ `skills.*` và bộ chạy migration nằm trong `zink-skill-store/migrations/`, với
+ledger riêng `skills.schema_migrations` của kho.
+
+Áp dụng lược đồ của kho (bước vận hành, chạy một lần cho mỗi lần triển khai
+lược đồ mới):
+
+```powershell
+node zink-skill-store/bin/skill-store.mjs migrate
+```
+
+Kết quả in ra các file đã áp dụng (`applied`), các file đã có trong ledger
+(`skipped`) và tên ledger. Lệnh là idempotent: chạy lại không áp dụng lại file
+nào. Một file đã áp dụng mà byte đã đổi sẽ bị từ chối bằng mã
+`SKILL_STORE_MIGRATION_DIGEST_MISMATCH` — đúng luật "chỉ thêm migration tiến
+lên, không sửa tại chỗ file đã áp dụng".
