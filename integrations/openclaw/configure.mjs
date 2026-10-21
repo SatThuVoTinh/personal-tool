@@ -114,6 +114,23 @@ const LEGACY_GOVERNANCE_MANIFEST_R11_SHA256 = Object.freeze([
   // under the same owner authorization as the asset list.
   "5026959d41a76c531f37caa6297b3b0b010ee17cedd7bdd3806447600c98a18d",
 ]);
+// M12/T9 F-380: the DEPLOYED build's plugin manifest. The deployed extension is
+// the build at `0b55dfa4` (measured on the live host on 2026-10-22), and its
+// manifest is the file as of `01489aa9` — the commit that last changed it
+// before that build. The current build's manifest adds two config-schema
+// properties (`discordGuildId`, `skillApprovalDecisionRef`), so the deployed
+// bytes were neither the current bytes nor the legacy R11 manifest, and the
+// manifest check had NO admission list at all: it refused the extension the
+// apply was supposed to replace.
+//
+// Provenance: `git show 01489aa9:integrations/openclaw/plugins/zink-governance/
+// openclaw.plugin.json` reproduces the deployed bytes. The manifest is read
+// verbatim (packaging does not rewrite it), so the digest is the file's own.
+// The current build's manifest is deliberately NOT listed: it is the current
+// build and is accepted by content comparison.
+const ALLOWED_GOVERNANCE_MANIFEST_SHA256 = Object.freeze([
+  "8be6690cc9036ae32dce13b17282f1cf8c3d817509ca9e4ac40924bed7d4a634",
+]);
 // Digests of prior audited plugin builds that the current build may overwrite.
 //
 // The 2026-09-30 group is the plugin tree that was live on the WSL gateway
@@ -1434,13 +1451,18 @@ function assertOwnedFileMatchesOrMissing(
   }
 }
 
-function assertGovernanceManifestMatchesOrMissing(filePath, contents) {
+function assertGovernanceManifestMatchesOrMissing(
+  filePath,
+  contents,
+  allowedPreviousSha256 = [],
+) {
   assertRegularOrMissing(filePath);
   if (!existsSync(filePath)) return;
+  const existing = readFileSync(filePath, "utf8");
   let actual;
   let expected;
   try {
-    actual = JSON.parse(readFileSync(filePath, "utf8"));
+    actual = JSON.parse(existing);
     expected = JSON.parse(contents);
   } catch {
     throw new Error(`Governance plugin manifest drift detected: ${filePath}`);
@@ -1449,7 +1471,12 @@ function assertGovernanceManifestMatchesOrMissing(filePath, contents) {
   delete previous.configSchema.properties.ownerDiscordId;
   if (
     canonicalJson(actual) !== canonicalJson(expected) &&
-    canonicalJson(actual) !== canonicalJson(previous)
+    canonicalJson(actual) !== canonicalJson(previous) &&
+    // M12/T9 F-380: a manifest from a PREVIOUS build is recognised by its
+    // digest, exactly like the plugin's assets. The bytes are never trusted:
+    // an entry only permits the apply to OVERWRITE this file with the current
+    // build's manifest, and an unrecognised digest still fails closed.
+    !allowedPreviousSha256.includes(sha256(existing))
   ) {
     throw new Error(`Governance plugin manifest drift detected: ${filePath}`);
   }
@@ -1622,6 +1649,7 @@ async function main() {
   assertGovernanceManifestMatchesOrMissing(
     output.governancePluginManifestPath,
     pluginFiles.manifest,
+    ALLOWED_GOVERNANCE_MANIFEST_SHA256,
   );
   assertOwnedFileMatchesOrMissing(
     output.governancePluginPackagePath,
@@ -1986,7 +2014,10 @@ async function main() {
     "Governance plugin manifest",
     0o600,
     [],
-    LEGACY_GOVERNANCE_MANIFEST_R11_SHA256,
+    [
+      ...LEGACY_GOVERNANCE_MANIFEST_R11_SHA256,
+      ...ALLOWED_GOVERNANCE_MANIFEST_SHA256,
+    ],
   );
   materializeOwnedFile(
     output.governancePluginPackagePath,
