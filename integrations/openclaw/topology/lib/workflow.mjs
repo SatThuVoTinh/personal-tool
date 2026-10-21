@@ -2251,15 +2251,16 @@ function reducerMintedResultDigest(task) {
   //
   // The digest is the ONE binding. The branch that compared `payload.result_id`
   // against `task.root_result.result_id` is gone: `root_result` is stored as
-  // `{...payload}` under a CLOSED contract that declares no `result_id`, so
-  // the compared value could never exist and every id-only verdict failed
-  // with RESULT_MISMATCH. The published contract no longer admits `result_id`
-  // in a verdict payload, and the live producer no longer sends it.
+  // `{...payload}` under a CLOSED contract, so the compared value could never
+  // exist and every id-only verdict failed with RESULT_MISMATCH.
   //
-  // A verdict that names only a result id binds to nothing, so it is REFUSED
-  // with the same code the comparison used to raise — never silently
-  // accepted, and never bound to a field the contract forbids.
-  if (payload.result_id !== undefined) {
+  // M12/T9 F-376: the published contract admits `result_id` again as an
+  // OPTIONAL LEGACY member, so a verdict the older build already wrote stays
+  // readable. The verdict still binds by `result_digest`: a verdict that names
+  // ONLY a result id binds to nothing and is refused with the same code the
+  // comparison used to raise — never silently accepted, and never bound to a
+  // field the contract forbids.
+  if (payload.result_id !== undefined && payload.result_digest == null) {
     fail("RESULT_MISMATCH");
   }
   requireCondition(

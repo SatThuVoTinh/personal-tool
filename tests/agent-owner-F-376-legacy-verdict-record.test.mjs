@@ -306,3 +306,101 @@ test("F-376: the reducer still refuses an id-ONLY verdict, and the producer neve
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+const VERDICT_TYPES = Object.freeze([
+  ["WORKFLOW_USER_RESULT_ACCEPTED", { decision: "ACCEPT" }],
+  [
+    "WORKFLOW_USER_RESULT_REJECTED",
+    { reason: "the owner rejected the result" },
+  ],
+  [
+    "WORKFLOW_USER_RESULT_BLOCKED",
+    { decision: "BLOCK", reason: "the owner blocked the result" },
+  ],
+]);
+
+test("F-376: every verdict branch admits the legacy member, and only that member", () => {
+  const root = fixture();
+  try {
+    const paths = ledgerPaths(root);
+    ensureLedger(paths);
+    const taskId = deriveTaskId(OPENED("x"));
+    recordWorkflowEvent(paths, "WORKFLOW_OPENED", OPENED(taskId));
+    const lines = readFileSync(paths.events, "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+    const opened = lines.find((event) => event.type === "WORKFLOW_OPENED");
+    assert.ok(opened, "the fixture must journal an opener");
+
+    for (const [type, members] of VERDICT_TYPES) {
+      const legacy = {
+        ...opened,
+        sequence: opened.sequence + 1,
+        type,
+        payload: {
+          task_id: taskId,
+          actor: "user",
+          channel: "results",
+          ...members,
+          result_digest: ROOT_DIGEST,
+          result_id: LEGACY_RESULT_ID,
+        },
+        previous_event_digest: opened.event_digest,
+        event_digest: "3".repeat(64),
+      };
+      validateContract("ledger-event", legacy);
+
+      // An UNKNOWN member is still refused in every branch: only the named
+      // legacy member is admitted, the gate is not weakened.
+      assert.throws(
+        () =>
+          validateContract("ledger-event", {
+            ...legacy,
+            payload: { ...legacy.payload, unknown_member: "x" },
+          }),
+        { code: "SCHEMA_VALIDATION_FAILED" },
+        `${type} must still refuse a member the contract does not declare`,
+      );
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("F-376: the reducer ACCEPTS a legacy verdict that carries the digest", () => {
+  const root = fixture();
+  try {
+    const paths = ledgerPaths(root);
+    ensureLedger(paths);
+    const taskId = deriveTaskId(OPENED("x"));
+    recordWorkflowEvent(paths, "WORKFLOW_OPENED", OPENED(taskId));
+    recordWorkflowEvent(
+      paths,
+      "WORKFLOW_ROOT_RESULT_RECORDED",
+      ROOT_RESULT(taskId),
+    );
+    const state = readSnapshot(paths);
+
+    // The verdict that binds is the DIGEST one: it names the legacy id beside
+    // the digest, exactly as the older build wrote it. The reducer accepts it —
+    // the record stays readable, which is the whole point of F-376.
+    const reduced = applyWorkflowEvent(
+      state,
+      "WORKFLOW_USER_RESULT_ACCEPTED",
+      ACCEPT(taskId, {
+        result_digest: ROOT_DIGEST,
+        result_id: LEGACY_RESULT_ID,
+      }),
+      "2026-10-01T00:02:00.000Z",
+      { replayAnchored: false, preVerdictRootResult: false },
+    );
+    assert.equal(
+      reduced.tasks[taskId].workflow_status,
+      "COMPLETE",
+      "a legacy verdict that carries the digest must be accepted",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

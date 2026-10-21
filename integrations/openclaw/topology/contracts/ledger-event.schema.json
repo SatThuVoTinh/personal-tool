@@ -892,6 +892,11 @@
                 "type": ["string", "null"],
                 "pattern": "^[a-f0-9]{64}$"
               },
+              "result_id": {
+                "description": "F-376: the LEGACY result id. Optional and never required, and the current producer does not send it. It is admitted only so a verdict the older build already wrote stays readable — the verdict binds by `result_digest`, and an id-only verdict is refused by the reducer.",
+                "type": ["string", "null"],
+                "maxLength": 128
+              },
               "message_id": {
                 "type": ["string", "null"],
                 "pattern": "^[1-9][0-9]{16,19}$"
