@@ -30,6 +30,7 @@ import {
   materializeWorkspace,
   parseIdentifiers,
   passResolverContents,
+  renderDeployedSystemdDropIn,
   renderLegacySystemdDropInR16,
   renderSystemdDropIn,
   stableJson,
@@ -80,6 +81,22 @@ const GOVERNED_STATE_TREE =
   "/home/hoang_vinh/.openclaw-zink";
 const LEGACY_GEMINI_STREAM_HOTFIX_R18_SHA256 =
   "41bfeedf2835db4a50573a0f61325bc438ac805a90fef03ce3bc29b8c303f133";
+// M12/T9 F-382: the hotfix the live host carries. The deployed extension is the
+// build at `0b55dfa4` (measured on the live host on 2026-10-22), and its
+// hotfix is the repository's own template as of `7b5edc51` — the commit that
+// last changed it before that build. Without this entry --preflight refuses
+// the file with `Gemini stream hotfix utility`, so the apply cannot reach the
+// extension it is supposed to replace.
+//
+// Provenance: `git show 7b5edc51:integrations/openclaw/templates/
+// openclaw-gemini-stream-hotfix.mjs` reproduces the deployed bytes. An
+// admission only permits OVERWRITING the file with the current build's own
+// bytes; the old content is not trusted, and an unrecognised digest still
+// fails closed.
+const ADMITTED_GEMINI_STREAM_HOTFIX_SHA256 = Object.freeze([
+  LEGACY_GEMINI_STREAM_HOTFIX_R18_SHA256,
+  "812cadc62eedbfc718366046e97c4f1f2a50642174769a611006dde1dc5746e9",
+]);
 // M10/T2-R9: the outgoing generated plans and resolver, byte-proven against the
 // live state directory on 2026-10-06 immediately before the provider swap. The
 // plans enumerated the 21 google auth-profile key targets and the per-agent
@@ -94,6 +111,22 @@ const PREVIOUS_AUTH_SECRET_PLAN_SHA256 =
   "393b465d3bd2b8dd78d18662be7391e81d542e363c9be1c91580cd2913c8f2ea";
 const PREVIOUS_AUTH_ORDER_PLAN_SHA256 =
   "bdee1964f39e8c703988b3fb3a9fd690ef70cb7f6657cfb0479f734af932f221";
+// M12/T9 F-382: the two auth plans the live host carries. They carry the same
+// content as the current build's plans — no target, no agent — but the writer
+// that put them there pretty-printed them, and the current build writes them
+// compactly, so the bytes differ and the preflight refused them.
+//
+// Provenance: the plans are the policy's OWN generators, pretty-printed the
+// way the deployed writer wrote them (`JSON.stringify(plan, null, 2) + "\n"`),
+// and the rebuilt bytes match the host's byte for byte.
+const ADMITTED_AUTH_SECRET_PLAN_SHA256 = Object.freeze([
+  PREVIOUS_AUTH_SECRET_PLAN_SHA256,
+  "5e830e89b3edabef460eea674bb6e48564703f5073cc1cf5bb38b7604ef46af3",
+]);
+const ADMITTED_AUTH_ORDER_PLAN_SHA256 = Object.freeze([
+  PREVIOUS_AUTH_ORDER_PLAN_SHA256,
+  "ed4e152be17a5147ecbf0a3c6d3f87383a4b497d2527e332ebaf0f5adf38b45d",
+]);
 // The resolver digests of previous builds that the current build may overwrite.
 //
 // The first entry is the 29-id build (the Gemini pool plus the Discord and
@@ -1649,7 +1682,7 @@ async function main() {
     "Auth SecretRef plan",
     0o600,
     [],
-    [PREVIOUS_AUTH_SECRET_PLAN_SHA256],
+    ADMITTED_AUTH_SECRET_PLAN_SHA256,
   );
   const pluginFiles = governancePluginFiles();
   for (const [relative, contents] of Object.entries(pluginFiles.assets)) {
@@ -1924,6 +1957,17 @@ async function main() {
       // and they must stay identical. The new digest is deliberately NOT listed:
       // it is the current build, accepted by content comparison.
       "513beb15c3d7624c0a928c4c1556dc44d4c4cff4f1e00980f24b298a25751c0d",
+      // M12/T9 F-382: the DEPLOYED build's entrypoint. The deployed
+      // extension is the build at `0b55dfa4` (measured on the live host on
+      // 2026-10-22), and its entrypoint is the plugin's own `index.mjs` as of
+      // `b6d04e80` — the commit that last changed it before that build —
+      // packaged exactly as the builder packages it. Without this entry
+      // --preflight refuses the deployed extension with `Governance plugin
+      // entrypoint`, so the apply cannot reach the extension it is supposed
+      // to replace. The digest this build produces is deliberately NOT listed:
+      // it is the current build and is accepted by content comparison. Listed
+      // in BOTH per-mode lists so the two modes cannot diverge.
+      "513beb15c3d7624c0a928c4c1556dc44d4c4cff4f1e00980f24b298a25751c0d",
     ],
   );
   assertRegularOrMissing(output.identityKeyPath);
@@ -1938,7 +1982,7 @@ async function main() {
     "Auth order plan",
     0o600,
     [],
-    [PREVIOUS_AUTH_ORDER_PLAN_SHA256],
+    ADMITTED_AUTH_ORDER_PLAN_SHA256,
   );
   assertOwnedFileMatchesOrMissing(
     output.passResolverPath,
@@ -1954,14 +1998,17 @@ async function main() {
     "Gemini stream hotfix utility",
     0o700,
     [],
-    [LEGACY_GEMINI_STREAM_HOTFIX_R18_SHA256],
+    ADMITTED_GEMINI_STREAM_HOTFIX_SHA256,
   );
   assertOwnedFileMatchesOrMissing(
     output.systemdDropInPath,
     renderSystemdDropIn(stateDir),
     "Systemd drop-in",
     0o600,
-    [renderLegacySystemdDropInR16(stateDir)],
+    [
+      renderLegacySystemdDropInR16(stateDir),
+      renderDeployedSystemdDropIn(stateDir),
+    ],
   );
   // M12/T9 F-202: the ceiling is enforced against the EFFECTIVE drop-in set.
   // This gate runs in preflight mode and in apply mode (it stands above the
@@ -2011,7 +2058,7 @@ async function main() {
     "Auth SecretRef plan",
     0o600,
     [],
-    [PREVIOUS_AUTH_SECRET_PLAN_SHA256],
+    ADMITTED_AUTH_SECRET_PLAN_SHA256,
   );
   ensurePrivateDirectory(output.governancePluginDirectory);
   for (const [relative, contents] of Object.entries(pluginFiles.assets)) {
@@ -2213,6 +2260,17 @@ async function main() {
       // new digest is deliberately NOT listed: it is the current build and is
       // accepted by content comparison.
       "513beb15c3d7624c0a928c4c1556dc44d4c4cff4f1e00980f24b298a25751c0d",
+      // M12/T9 F-382: the DEPLOYED build's entrypoint. The deployed
+      // extension is the build at `0b55dfa4` (measured on the live host on
+      // 2026-10-22), and its entrypoint is the plugin's own `index.mjs` as of
+      // `b6d04e80` — the commit that last changed it before that build —
+      // packaged exactly as the builder packages it. Without this entry
+      // --preflight refuses the deployed extension with `Governance plugin
+      // entrypoint`, so the apply cannot reach the extension it is supposed
+      // to replace. The digest this build produces is deliberately NOT listed:
+      // it is the current build and is accepted by content comparison. Listed
+      // in BOTH per-mode lists so the two modes cannot diverge.
+      "513beb15c3d7624c0a928c4c1556dc44d4c4cff4f1e00980f24b298a25751c0d",
     ],
   );
   if (!existsSync(output.identityKeyPath))
@@ -2228,7 +2286,7 @@ async function main() {
     "Auth order plan",
     0o600,
     [],
-    [PREVIOUS_AUTH_ORDER_PLAN_SHA256],
+    ADMITTED_AUTH_ORDER_PLAN_SHA256,
   );
   ensurePrivateDirectory(path.dirname(output.passResolverPath));
   // Mirrors the preflight gate above: the outgoing resolver still allowlists the
@@ -2248,7 +2306,7 @@ async function main() {
     "Gemini stream hotfix utility",
     0o700,
     [],
-    [LEGACY_GEMINI_STREAM_HOTFIX_R18_SHA256],
+    ADMITTED_GEMINI_STREAM_HOTFIX_SHA256,
   );
   ensurePrivateDirectory(path.dirname(output.passStoreDirectory));
   ensurePrivateDirectory(output.passStoreDirectory);
@@ -2259,7 +2317,10 @@ async function main() {
     renderSystemdDropIn(stateDir),
     "Systemd drop-in",
     0o600,
-    [renderLegacySystemdDropInR16(stateDir)],
+    [
+      renderLegacySystemdDropInR16(stateDir),
+      renderDeployedSystemdDropIn(stateDir),
+    ],
   );
   // M12/T9 F-202: the apply re-checks the EFFECTIVE drop-in set after it
   // wrote its own fragment, so a sibling that appeared while the apply ran

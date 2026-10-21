@@ -1980,6 +1980,33 @@ export function renderLegacySystemdDropInR16(stateDir) {
   return `[Service]\nEnvironment=OPENCLAW_PROFILE=${PROFILE}\nEnvironment=OPENCLAW_STATE_DIR=${stateDir}\nEnvironment=PASSWORD_STORE_DIR=${passStore}\nEnvironment=GNUPGHOME=${gpgHome}\nEnvironment=PATH=${userBin}:/usr/local/bin:/usr/bin:/bin\nMemoryMax=768M\n`;
 }
 
+/**
+ * M12/T9 F-382: the systemd drop-in as the DEPLOYED build rendered it.
+ *
+ * The live host's drop-in was written by the build at `0b55dfa4` (measured
+ * READ-ONLY on 2026-10-22), and that build ran the hotfix with `--check`.
+ * F-179 changed the boot step to `--ensure` (a failing release must not lock
+ * the unit out), so the current rendering differs from the deployed one by
+ * that one flag — and the preflight refused the file with `Systemd drop-in`,
+ * so the apply could not reach the extension it was supposed to replace.
+ *
+ * The previous rendering is RENDERED, not admitted as a digest: a digest of
+ * the drop-in would pin the machine's state root into the repository, and the
+ * drop-in is a machine artifact. Rendering the previous variant keeps the
+ * admission path-independent, exactly like `renderLegacySystemdDropInR16`.
+ */
+export function renderDeployedSystemdDropIn(stateDir) {
+  const hotfix = path.join(
+    stateDir,
+    "bin",
+    "openclaw-gemini-stream-hotfix.mjs",
+  );
+  return renderSystemdDropIn(stateDir).replace(
+    `${hotfix} --ensure`,
+    `${hotfix} --check`,
+  );
+}
+
 export function geminiStreamHotfixContents() {
   const template = readFileSync(GEMINI_STREAM_HOTFIX_TEMPLATE, "utf8");
   if (/__ZINK_[A-Z0-9_]+__/u.test(template)) {
