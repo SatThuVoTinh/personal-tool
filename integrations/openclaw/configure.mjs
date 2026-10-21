@@ -1971,17 +1971,6 @@ async function main() {
       // and they must stay identical. The new digest is deliberately NOT listed:
       // it is the current build, accepted by content comparison.
       "513beb15c3d7624c0a928c4c1556dc44d4c4cff4f1e00980f24b298a25751c0d",
-      // M12/T9 F-382: the DEPLOYED build's entrypoint. The deployed
-      // extension is the build at `0b55dfa4` (measured on the live host on
-      // 2026-10-22), and its entrypoint is the plugin's own `index.mjs` as of
-      // `b6d04e80` — the commit that last changed it before that build —
-      // packaged exactly as the builder packages it. Without this entry
-      // --preflight refuses the deployed extension with `Governance plugin
-      // entrypoint`, so the apply cannot reach the extension it is supposed
-      // to replace. The digest this build produces is deliberately NOT listed:
-      // it is the current build and is accepted by content comparison. Listed
-      // in BOTH per-mode lists so the two modes cannot diverge.
-      "513beb15c3d7624c0a928c4c1556dc44d4c4cff4f1e00980f24b298a25751c0d",
     ],
   );
   assertRegularOrMissing(output.identityKeyPath);

@@ -260,6 +260,19 @@ export async function applyRuntime(deps) {
       transactionStatus: TRANSACTION_STATUS.COMPLETE,
     };
   } catch (error) {
+    const reason = deps.classifyReason(error);
+    if (reason === "APPLY_REJECTED") {
+      // M12/T9 F-383: the classifier names every refusal it knows, and an
+      // UNCLASSIFIED refusal is the one case the operator cannot act on: the
+      // report says "APPLY_REJECTED" and nothing else. The detail goes to the
+      // operator's stderr — the trusted channel — and never into the report,
+      // which is the record that may be read anywhere.
+      process.stderr.write(
+        `[zink-operator] the refusal was not classified; the builder said: ${String(
+          error?.stderr ?? error?.message ?? "",
+        ).slice(0, 600)}\n`,
+      );
+    }
     // Only a failure at or after the mutation boundary may restore anything.
     const rollbackRequired = mutationStarted;
     const report = {
@@ -269,7 +282,7 @@ export async function applyRuntime(deps) {
       rollbackRequired,
       rollbackAttempted: false,
       rollbackSucceeded: false,
-      reason: deps.classifyReason(error),
+      reason,
       orphanedTransactionIds: null,
       // R11: a restore failure and a restore-VALIDATION failure are distinct
       // facts and are never collapsed into one another.
