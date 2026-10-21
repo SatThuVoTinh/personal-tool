@@ -7551,7 +7551,53 @@ compensating control. The builder refuses a bare `--apply`
 (`APPLY_REQUIRES_TRANSACTION`): the apply is reachable only through the apply
 orchestration, which takes the transaction snapshot first.
 
+### Record — the owner's decisions of 2026-10-21 (M12/T9, second band)
+
+The owner ruled on the sixteen rows the band had escalated. Each decision, and
+where it landed:
+
+| Row     | The owner's ruling                                                                                     | What shipped                                                                                                                                                                                                                                                                         |
+| ------- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `F-060` | main @Quản Lý điều phối chính; phần data chia cho @O1 (etl, labeling) và @O2 (visualize, storytelling) | the reducer DERIVES the coordinator from the canonical spawn and stack tables — never a default; no unique owner leaves the field unset and the dispatch refuses `COORDINATOR_NOT_EXECUTABLE`                                                                                        |
+| `F-156` | Mở một cửa chính thức                                                                                  | `zink-skill-store/index.mjs` publishes `promoteApprovedSkill`, `withSkillStoreWriterLock` and `syncSkillsToVectorStore`; the plugin loads THAT, never `src/*`                                                                                                                        |
+| `F-176` | Bắt buộc ghi tên kho                                                                                   | the sync names the store it talks to; a store with a different identity is refused and nothing is deleted; an unnamed EMPTY store is refused instead of tombstoned                                                                                                                   |
+| `F-123` | Thẻ hết hạn sau 24h kể từ lúc bot đưa thông báo; không bấm duyệt = không phê duyệt                     | the card carries `STATUS: EXPIRED` after 24h and a decision against it is refused with `AUTH_APPROVAL_EXPIRED`; the task does NOT leave its pending state (the owner accepted that half)                                                                                             |
+| `F-151` | ghi nhận                                                                                               | the cost is ACCEPTED: a promotion re-embeds every segment of every skill                                                                                                                                                                                                             |
+| `F-175` | ghi nhận (sau khi hỏi vì sao)                                                                          | the cost is ACCEPTED: publishing re-hashes every sidecar, because no digest is stored beside a file, so "did it change?" can only be answered by reading the bytes. A digest index (a table plus the migration-digest contract re-pinned) would fix it and was not approved          |
+| `F-190` | ghi nhận                                                                                               | the cost is ACCEPTED: a tag-filtered search heap-filters the whole index                                                                                                                                                                                                             |
+| `F-288` | cho phép                                                                                               | the DEPLOYED nginx carries the same `/ollama/api/*` allowlist as the acceptance overlay, and the deployed `KNOWLEDGE_OLLAMA_URL` points at it, so the isolation proof runs on the real shape                                                                                         |
+| `F-049` | lưu dạng mã băm                                                                                        | every third-party Discord identity is stored as `[PRINCIPAL:<64-hex>]`; the owner's own identity keeps its historical handling                                                                                                                                                       |
+| `F-099` | cho thêm tệp điểm mốc                                                                                  | the ledger root carries a `checkpoint.json` (0600, atomic) with the anchored prefix's sequence, digest, era flag, byte offset and prefix digest; the reader seeks past the anchored prefix instead of re-reducing the whole journal                                                  |
 | `F-247` | bỏ ô                                                                                                   | `task.accepted_reference_digests` is gone from the published contract and from every reader                                                                                                                                                                                          |
+| `F-249` | bỏ nhánh                                                                                               | the id-only verdict comparison is withdrawn and `result_id` is no longer admitted by the verdict payloads                                                                                                                                                                            |
+| `F-105` | như đề xuất                                                                                            | `integrations/openclaw/orchestration/patterns/index.mjs` is DELETED (the owner authorised the deletion), the suite that covered it is rewritten as direct adapter lanes, and a gate proves no tracked module stitches landing→silver→gold, syncs a model registry, or sequences them |
+| `F-160` | như đề xuất                                                                                            | the ambiguous `m8-t2.2-r4` stamp is a VERDICT stamp, decided per event, so one event's semantics no longer depend on which other events sit in the same file                                                                                                                         |
+| `F-338` | như đề xuất                                                                                            | ONE canonical `uv`: `0.12.0` (the image and the Windows driver already pinned it); CI was corrected, and a lane compares the three pins                                                                                                                                              |
+| `F-340` | như đề xuất                                                                                            | the requirements artefact is regenerated with its index URL and both digest readers are re-pinned                                                                                                                                                                                    |
+
+**One deployment consequence, stated rather than hidden.** `F-160` and `F-060`
+change how the ledger RE-DERIVES a task's state, so a snapshot written by the
+DEPLOYED build no longer agrees with its own journal: the live task `6d4f96cc`
+(seq 25 `m7-t5-r13`, seq 26 `m8-t2.2-r4`) is the shape. The live read refuses
+with `snapshot workflow mismatch` until the DERIVED snapshot is recomputed from
+the journal — the journal itself is never rewritten, and the recomputation is
+deterministic, so this is a forward migration of derived state, not a repair of
+history. **It needs the owner's nod before it runs against the live ledger, and
+the band deploys nothing.**
+
+**The twelve EXCLUDED rows, measured.** The owner asked whether they were
+excluded because the root cause was too complicated. **None of them was.**
+Ten are parked on a decision only the owner can make (`H1` CI triggers ×2,
+`H2` branch protection, `H3` the skip policy, `H5` where the `skills.*` schema
+lives, `H6` the router key's indirection, `H8` the governed DEPRECATED
+retirement, `H10` the register's durability, and one row with no number yet);
+one waits for a scheduled band (`M12/T5`); and the measurements changed three of
+them: `F-097`'s register half is refuted (the register is tracked and survives
+`git clean -fdx`), `F-196`/`F-198` are half-dead (the branch tip now has an
+automatic `push`-triggered run — and it is RED), `F-167` is parked behind the
+wrong question (its own read-only probe was never run), and `F-217`'s freeze
+costs less than its row claims (a two-line test change needs no decision).
+
 ## Active task — M12/T9 (owner order: sửa hết findings)
 
 Task: M12/T9 — Remediate all actionable findings in docs/execution/findings.md

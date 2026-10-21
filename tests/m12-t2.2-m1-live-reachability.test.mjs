@@ -295,7 +295,8 @@ test("M1 5: every governed path is asserted live or declared not-live-reachable"
   // M12/T9: the packaged set grew from 34 assets to 44 - the band shipped the
   // Skill Store runtime modules (`zink-skill-store/src/*`) and the Zink Tools
   // runtime modules (`zink-tools/*`) as PACKAGED assets, so the governed-path
-  // set is the entrypoint plus 44 assets = 45 paths. The denominator is
+  // set is the entrypoint plus 45 assets = 46 paths (the Skill Store's
+  // public door joined the packaged set in M12/T9 F-156). The denominator is
   // restated, not dropped: it is still the number a reader has to reconcile
   // with the packaged build, and a path added or removed without this being
   // restated fails here.

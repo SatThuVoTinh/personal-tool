@@ -143,7 +143,7 @@ const HYGIENE_ASSET_PREDECESSORS = Object.freeze({
 // `configure.mjs`. The digest below is deliberately NOT listed there: it is the current
 // build, accepted by content comparison.
 const CURRENT_ENTRYPOINT_SHA256 =
-  "9c1b6e1e94e1bff06509f166c98b671f85716e2f4d511eed578916420e9174ed";
+  "82056fe114f138e63139eb7e59ca71ce9dbc45a16427e325e13b02cba2f687b1";
 
 const identifiers = Object.freeze({
   discordGuildId: "123456789012345678",

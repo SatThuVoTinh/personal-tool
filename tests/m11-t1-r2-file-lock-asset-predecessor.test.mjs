@@ -319,6 +319,9 @@ test(
         "lib/workflow.mjs",
         "policy/reason-code-matrix.json",
         "policy/workflow-policy.json",
+        // M12/T9 F-156: the Skill Store's public door joined the packaged
+        // set, so it differs from the proven live build as well.
+        "zink-skill-store/index.mjs",
         "zink-skill-store/src/catalog.mjs",
         "zink-skill-store/src/vector-sync.mjs",
         "zink-tools/adapters/knowledge/knowledge-adapter.mjs",
