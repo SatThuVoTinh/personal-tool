@@ -1942,6 +1942,19 @@ passed.`; `python-quality` SUCCESS — 188 passed, 27 subtests) and Security run
 - **`R7-OA-03`** — `pdf-runtime/requirements.txt` is a hash-pinned pip artifact that
   cannot install two of its own pins — closed by `db7773a`.
 
+#### M12/T9 - the third band (2026-10-21) (5 rows)
+
+- **`R5-E09-01`** — the CI workflow filtered its triggers to `main`, so a push to the task branch was never gated — closed by `ddc19be` (the owner's answer `H1`).
+  Row `F-196`. Evidence: the triggers carry no branch filter on either `pull_request` or `push`; the policy lane refuses a narrowed trigger (a mutation probe re-narrows either one and the lane goes red).
+- **`R5-E09-08`** — the branch tip carrying the M11/M12 work had never been gated by CI and no gate could refuse a merge into main — closed by `ddc19be` (the owner's answer `H1`).
+  Row `F-198`. Evidence: the triggers are widened (see `R5-E09-01`) and the in-repo merge blocker of `R5-E09-02` refuses a tip without a successful `quality-gate` run at that exact SHA.
+- **`R5-E09-02`** — AGENTS.md section 11 treats gates as blocking, but no check was required, so a red pipeline of any kind merges into main — closed by `65c91c8` (the owner's answer `H2`).
+  Row `F-034`. Evidence: `scripts/merge-gate.mjs` refuses without a successful `quality-gate` run at the exact SHA and fails closed when the run state cannot be read; the `merge-gate-detector` job runs the same gate against the merged commit's own SHA on `main`.
+- **`R5-E13-02`** — the router credential was baked into the generated config, so every copy of it carried the secret — closed by `5f1467b` (the owner's answer `H6`).
+  Row `F-036`. Evidence: the generated config carries a reference and the password-store resolver serves it; the operator inserts the key once, interactively, with the other eight.
+- **`R5-E14-07`** — the audit evidence could be destroyed by one untracked working file, and the register grew past four thousand lines — closed by `11f82b2` (the owner's answer `H10`).
+  Row `F-097`. Evidence: the register is the OPEN queue and a closed row's history lives in the changelog; 368 rows moved here with their id, defect, commit and evidence.
+
 ## Changelog Rules
 
 ### Completed Changes Only

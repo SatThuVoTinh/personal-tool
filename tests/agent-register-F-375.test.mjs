@@ -36,8 +36,14 @@ const CHANGELOG_TEXT = readFileSync(path.join(REPO, "CHANGELOG.md"), "utf8");
 const CLOSURE_TABLE_ROWS = 317;
 /** The register's §2 evidence table held this many rows at HEAD. */
 const EVIDENCE_TABLE_ROWS = 51;
+/**
+ * The rows the third band's own answers closed: they left the register with
+ * their history in the changelog, so they are counted with the rest.
+ */
+const THIRD_BAND_CLOSED_ROWS = 5;
 /** Every closed row the register's §2 carried, in the changelog now. */
-const CLOSED_ROW_COUNT = CLOSURE_TABLE_ROWS + EVIDENCE_TABLE_ROWS;
+const CLOSED_ROW_COUNT =
+  CLOSURE_TABLE_ROWS + EVIDENCE_TABLE_ROWS + THIRD_BAND_CLOSED_ROWS;
 
 /** Every closed row: "<row id> <commit token>". */
 const CLOSED_ROWS = [
@@ -413,6 +419,14 @@ const CLOSED_ROWS = [
   ["R5-E07-06", "`e7aee21`"],
   ["R5-E07-07", "`04e128f`"],
   ["R7-D4-01", "`cb5b83b`"],
+  // The third band's own answers (2026-10-21): the rows they released and the
+  // band then fixed and proved. They left the register with their history
+  // here.
+  ["R5-E09-01", "`ddc19be`"],
+  ["R5-E09-08", "`ddc19be`"],
+  ["R5-E09-02", "`65c91c8`"],
+  ["R5-E13-02", "`5f1467b`"],
+  ["R5-E14-07", "`11f82b2`"],
 ];
 
 /** Every row the register holds, transcribed at HEAD. */
@@ -421,8 +435,6 @@ const REGISTER_ROW_IDS = [
   "F-015",
   "F-017",
   "F-020",
-  "F-034",
-  "F-036",
   "F-045",
   "F-069",
   "F-074",
@@ -430,7 +442,6 @@ const REGISTER_ROW_IDS = [
   "F-090",
   "F-094",
   "F-095",
-  "F-097",
   "F-119",
   "F-133",
   "F-134",
@@ -443,9 +454,7 @@ const REGISTER_ROW_IDS = [
   "F-171",
   "F-177",
   "F-181",
-  "F-196",
   "F-197",
-  "F-198",
   "F-200",
   "F-206",
   "F-211",
@@ -459,7 +468,13 @@ const REGISTER_ROW_IDS = [
   "F-342",
 ];
 
-/** The rows this band's own answers release, and the answer each one waited on. */
+/**
+ * The rows this band's own answers release, and the answer each one waited on.
+ *
+ * A released row is OPEN WORK again: it stays in the register while it is
+ * still to do, and it LEAVES the register (with its history in the changelog,
+ * per the owner's `H10`) once it is fixed AND proven.
+ */
 const RELEASED_ROWS = {
   "F-034": "H2",
   "F-036": "H6",
@@ -469,6 +484,19 @@ const RELEASED_ROWS = {
   "F-196": "H1",
   "F-197": "H3",
   "F-198": "H1",
+};
+
+/**
+ * The released rows that are FIXED and PROVEN: they are deleted from the
+ * register and their history lives in the changelog (the owner's `H10`), so
+ * the lane asserts the deletion and the history instead of an OPEN status.
+ */
+const CLOSED_RELEASED_ROWS = {
+  "F-034": { decision: "H2", commit: "65c91c8", legacy: "R5-E09-02" },
+  "F-036": { decision: "H6", commit: "5f1467b", legacy: "R5-E13-02" },
+  "F-097": { decision: "H10", commit: "11f82b2", legacy: "R5-E14-07" },
+  "F-196": { decision: "H1", commit: "ddc19be", legacy: "R5-E09-01" },
+  "F-198": { decision: "H1", commit: "ddc19be", legacy: "R5-E09-08" },
 };
 
 /** The rows that are not fixed and therefore stay parked. */
@@ -594,6 +622,7 @@ test("the register's preamble states the rule and names CHANGELOG.md", () => {
 test("the rows this band's answers release are OPEN again, with the answer recorded", () => {
   const rows = new Map(registerRows(REGISTER_TEXT).map((row) => [row.id, row]));
   for (const [id, decision] of Object.entries(RELEASED_ROWS)) {
+    if (CLOSED_RELEASED_ROWS[id]) continue; // fixed and proven: deleted
     const row = rows.get(id);
     assert.ok(
       row,
@@ -612,6 +641,37 @@ test("the rows this band's answers release are OPEN again, with the answer recor
     assert.match(
       row.status ?? "",
       new RegExp(`\`${decision}\``, "u"),
+      `${id} must name the owner's answer (${decision}) it was released by`,
+    );
+  }
+});
+
+test("a released row that is fixed and proven leaves the register, and its history is in the changelog", () => {
+  const rows = new Map(registerRows(REGISTER_TEXT).map((row) => [row.id, row]));
+  const entries = closureEntries(CHANGELOG_TEXT);
+  for (const [id, { decision, commit, legacy }] of Object.entries(
+    CLOSED_RELEASED_ROWS,
+  )) {
+    assert.equal(
+      rows.has(id),
+      false,
+      `${id} is fixed and proven, so the owner's H10 deletes it from the register`,
+    );
+    const entry = entries.find((candidate) => candidate.id === legacy);
+    assert.ok(
+      entry,
+      `${id} must carry its history in the changelog under its legacy id (${legacy})`,
+    );
+    assert.ok(
+      entry.text.includes(id),
+      `${id} must be named in the changelog's closure history`,
+    );
+    assert.ok(
+      entry.text.includes(commit),
+      `${id} must name the commit that closed it (${commit})`,
+    );
+    assert.ok(
+      entry.text.includes(decision),
       `${id} must name the owner's answer (${decision}) it was released by`,
     );
   }
