@@ -78,6 +78,17 @@ const NEVER_INSTALLED_SHA256 =
 const M11_T3_OUTGOING_FILE_LOCK_SHA256 =
   "22d7411a1a4613bc70379b405c922b560fd15cf41e81d0ff52db7231c409e6ff";
 
+/**
+ * M12/T9 F-379: the DEPLOYED build's file-lock asset — the bytes the live WSL
+ * runtime carries, measured read-only on 2026-10-22. Provenance: the asset's
+ * own bytes at commit `6b0ea0ad` (the commit that last changed it before the
+ * deployed build `0b55dfa4`), packaged exactly as the builder packages them.
+ * It is admitted so the preflight accepts the extension that is installed
+ * today.
+ */
+const DEPLOYED_BUILD_FILE_LOCK_SHA256 =
+  "bcd65de81c9f6df088dd9ec269cc4dd3969fd80657f9c582e34e06554e64cf7b";
+
 /** The CURRENT build's file-lock asset — accepted by content, never listed. */
 const CURRENT_FILE_LOCK_SHA256 =
   "e9cac11dea2ebca6fd57f55e1aca6a7c0a6959fb4ff6a6dabf0811533a9bde06";
@@ -394,11 +405,12 @@ test("R2 0: the file-lock block holds exactly the three proven predecessors, eac
     R18_FILE_LOCK_SHA256,
     LIVE_FILE_LOCK_SHA256,
     M11_T3_OUTGOING_FILE_LOCK_SHA256,
+    DEPLOYED_BUILD_FILE_LOCK_SHA256,
   ];
   assert.deepEqual(
     listedDigests(block).sort(),
     admitted.slice().sort(),
-    "the block must carry the R18 predecessor, the R2 live predecessor and the M11/T3 outgoing build, nothing else",
+    "the block must carry the R18 predecessor, the R2 live predecessor, the M11/T3 outgoing build and the DEPLOYED build (F-379), nothing else",
   );
   for (const digest of admitted) {
     assert.equal(
