@@ -965,6 +965,32 @@ function readSnapshotLocked(paths, repairSnapshot = true, report = null) {
           continue;
         }
       }
+      // M12/T9 F-063 with F-099: a fork AT THE ANCHOR. The checkpoint's byte
+      // offset skips the anchored prefix, so the anchor's twin - a tail event
+      // carrying the anchor's OWN sequence - is the only visible half of the
+      // pair. The anchor the snapshot sealed is the survivor; the twin is the
+      // branch the journal did not continue on, so it is DISCARDED and
+      // REPORTED, exactly like any other branch. Without this the reader
+      // meets a sequence it already verified and refuses with a bare
+      // "event chain mismatch".
+      if (
+        checkpointed &&
+        event.sequence === snapshot.sequence &&
+        typeof snapshot.last_event_digest === "string" &&
+        event.event_digest !== snapshot.last_event_digest
+      ) {
+        discardedBranches.push({
+          sequence: event.sequence,
+          event_digest,
+          type: event.type,
+          created_at: event.created_at,
+        });
+        console.error(
+          "[zink-ledger] forked branch discarded:",
+          `LEDGER_FORK_DISCARDED count=1 sequences=[${event.sequence}]`,
+        );
+        continue;
+      }
       if (
         event.schema_version !== SCHEMA_VERSION ||
         !supportedVersions.has(event.governance_version) ||
