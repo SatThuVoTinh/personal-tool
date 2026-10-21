@@ -1,3 +1,10 @@
+// SKIP-FAMILY: symlink
+//
+// M12/T9 F-197 (R5-E09-03) / H3: this lane may skip, and it declares WHICH
+// family it belongs to, so the skip-expectation gate can tell an explained
+// skip from an unexplained one. The family-to-lane map is derived from the
+// repository's own lane list; the expectation lives in
+// `docs/contracts/ci-skip-expectations.json`.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import {
@@ -317,14 +324,8 @@ test("rejects path mismatch, digest mismatch, and multiple active versions", asy
       (error) => error.code === "MULTIPLE_ACTIVE_VERSIONS",
     );
     assert.ok(clash, "the two ACTIVE versions must be diagnosed");
-//
-// SKIP-FAMILY: symlink
-//
-// M12/T9 F-197 (R5-E09-03) / H3: this lane may skip, and it declares WHICH
-// family it belongs to, so the skip-expectation gate can tell an explained
-// skip from an unexplained one. The family-to-lane map is derived from the
-// repository's own lane list; the expectation lives in
-// `docs/contracts/ci-skip-expectations.json`.
+    //
+    //
     // F-222: the diagnostic must name BOTH offending records, and the healthy
     // records must survive instead of the whole catalog collapsing to `[]`.
     assert.match(

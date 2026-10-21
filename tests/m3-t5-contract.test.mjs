@@ -1,3 +1,10 @@
+// SKIP-FAMILY: docker
+//
+// M12/T9 F-197 (R5-E09-03) / H3: this lane may skip, and it declares WHICH
+// family it belongs to, so the skip-expectation gate can tell an explained
+// skip from an unexplained one. The family-to-lane map is derived from the
+// repository's own lane list; the expectation lives in
+// `docs/contracts/ci-skip-expectations.json`.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -82,13 +89,7 @@ test("M4/T5 freezes portable Git path and blob candidate identities", () => {
   assert.match(common, /persistence = \$Persistence/);
   assert.match(common, /function Get-T5CandidatePathManifest/);
   //
-  // SKIP-FAMILY: docker
   //
-  // M12/T9 F-197 (R5-E09-03) / H3: this lane may skip, and it declares WHICH
-  // family it belongs to, so the skip-expectation gate can tell an explained
-  // skip from an unexplained one. The family-to-lane map is derived from the
-  // repository's own lane list; the expectation lives in
-  // `docs/contracts/ci-skip-expectations.json`.
   // F-292 (R7-C4-05): the candidate path set is enumerated from the
   // script's own tree, not from the invocation directory.
   assert.match(
