@@ -47,12 +47,18 @@ const THIRD_BAND_CLOSED_ROWS = 5;
  * changed. Both left the register with their history in the changelog.
  */
 const DEPLOY_BLOCKER_CLOSED_ROWS = 2;
+/**
+ * The rows band E closed: the digest pin is re-based, so the next legitimate
+ * build of the governed asset is admissible without editing the test.
+ */
+const BAND_E_CLOSED_ROWS = 1;
 /** Every closed row the register's §2 carried, in the changelog now. */
 const CLOSED_ROW_COUNT =
   CLOSURE_TABLE_ROWS +
   EVIDENCE_TABLE_ROWS +
   THIRD_BAND_CLOSED_ROWS +
-  DEPLOY_BLOCKER_CLOSED_ROWS;
+  DEPLOY_BLOCKER_CLOSED_ROWS +
+  BAND_E_CLOSED_ROWS;
 
 /** Every closed row: "<row id> <commit token>". */
 const CLOSED_ROWS = [
@@ -441,6 +447,9 @@ const CLOSED_ROWS = [
   // changed.
   ["F-376", "`42e23f5`"],
   ["F-377", "`a534adc`"],
+  // Band E (2026-10-22): the digest pin is re-based, so the next legitimate
+  // build of the governed asset is admissible without editing the test.
+  ["R5-E10-06", "`51766eb`"],
 ];
 
 /** Every row the register holds, transcribed at HEAD. */
@@ -473,7 +482,6 @@ const REGISTER_ROW_IDS = [
   "F-206",
   "F-211",
   "F-214",
-  "F-217",
   "F-224",
   "F-248",
   "F-293",
@@ -514,7 +522,7 @@ const CLOSED_RELEASED_ROWS = {
 };
 
 /** The rows that are not fixed and therefore stay parked. */
-const PARKED_ROWS = ["F-045", "F-133", "F-217"];
+const PARKED_ROWS = ["F-045", "F-133"];
 
 /** Every `### F-xxx` block of the register, with its Status line. */
 function registerRows(markdown) {
@@ -715,13 +723,30 @@ test("the rows that are not fixed stay parked, and the refuted rows keep their m
   }
 });
 
-test("F-217 records the owner's answer and stays its own task", () => {
+test("F-217 leaves the register, and its history is in the changelog", () => {
+  // The row was parked as EXCLUDED (the owner's "ok" on 2026-10-21: band E
+  // re-bases the frozen digest as its own objective). Band E fixed it and
+  // proved it, so the owner's H10 deletes it from the register and its
+  // history moves to the changelog.
   const rows = new Map(registerRows(REGISTER_TEXT).map((row) => [row.id, row]));
-  const row = rows.get("F-217");
-  assert.ok(row, "F-217 must stay in the register");
-  assert.match(
-    row.status ?? "",
-    /"ok"|“ok”/u,
-    `F-217 must record the owner's "ok" (2026-10-21): ${row.status}`,
+  assert.equal(
+    rows.has("F-217"),
+    false,
+    "F-217 is fixed and proven, so the owner's H10 deletes it from the register",
+  );
+  const entry = closureEntries(CHANGELOG_TEXT).find(
+    (candidate) => candidate.id === "R5-E10-06",
+  );
+  assert.ok(
+    entry,
+    "F-217 must carry its history in the changelog under its legacy id (R5-E10-06)",
+  );
+  assert.ok(
+    entry.text.includes("F-217"),
+    "F-217 must be named in the changelog's closure history",
+  );
+  assert.ok(
+    entry.text.includes("51766eb"),
+    "F-217 must name the commit that closed it (51766eb)",
   );
 });

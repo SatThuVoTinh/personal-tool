@@ -7750,3 +7750,21 @@ the history intact (10 `COMPLETE`, 2 `BLOCKED`, 5 `RESULT_PENDING_REVIEW`, 39
 `ACTIVE`). The journal is byte-identical before and after. The commits are
 `42e23f5` (the contract) and `a534adc` (the migration); the history lives in
 `CHANGELOG.md` under `F-376` and `F-377`.
+
+**Band E — the digest-pin re-base (`F-217`, legacy `R5-E10-06`), 2026-10-22.**
+The owner's answer on 2026-10-21 ("ok") parked the row as its own objective:
+the gate froze ONE historical digest, the commit that produced it, an EXACT
+occurrence count and the absence of the current build's digest, so admitting
+the next legitimate `lib/discord-forum-tags.mjs` build forced an edit to the
+test. The pin is re-based (commit `51766eb`): the admitted SET is read from
+the allowlist table in `integrations/openclaw/configure.mjs` — the table the
+deployment itself consults — and every admitted digest is checked against the
+asset's OWN committed history, so the producing commit is derived rather than
+pinned, the duplicate protection moves to the list itself, and the next
+legitimate change to that asset is admissible without editing the test. The
+safety property is unchanged: the digest the CURRENT build produces stays out
+of the allowlist, because the current build is accepted by content comparison.
+`integrations/openclaw/configure.mjs` is byte-identical to HEAD — the re-base
+needs no production change. The row is fixed and proven, so it leaves the
+register (the owner's `H10`) and its history lives in `CHANGELOG.md` under
+`R5-E10-06`.

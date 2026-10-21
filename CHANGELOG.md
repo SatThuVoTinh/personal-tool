@@ -1962,6 +1962,11 @@ passed.`; `python-quality` SUCCESS — 188 passed, 27 subtests) and Security run
 - **`F-377`** — the forward migration could not repair the very artefact it exists to repair: a stored snapshot that does not have the current shape was refused at the contract check, before the recompute could run — closed by `a534adc`.
   Row `F-377`. The snapshot contract itself changes (F-247 removed a member from it), so a snapshot an older build wrote does not satisfy the current contract. The recompute mode now treats the stored snapshot as the derivation an older build wrote and derives the CURRENT shape from the record, carrying the anchor forward so the reader's next read reproduces it; the record is still verified event by event, and a journal that does not verify still refuses the deployment with the fault the reader reported. The normal reader is unchanged: it still refuses a snapshot that does not have the current shape.
 
+#### M12/T9 — band E, the digest-pin re-base (2026-10-22) (1 row)
+
+- **`R5-E10-06`** — the gate froze one historical digest, the commit that produced it, its occurrence count and the absence of the current build's digest from the allowlist, so the next legitimate `lib/discord-forum-tags.mjs` change could not be admitted without editing the test — closed by `51766eb`.
+  Row `F-217`. The pin is re-based: the admitted SET is read from the allowlist table in `integrations/openclaw/configure.mjs` (the table the deployment itself consults) and every admitted digest is checked against the asset's OWN committed history, so the producing commit is derived rather than pinned and the next legitimate change to that asset is admissible without an edit to the test. The safety property is unchanged — the digest the current build produces stays out of the allowlist, because the current build is accepted by content comparison. Evidence: lane 31 tests / 31 pass / 0 fail / 0 skipped; six mutation probes each turn the lane red on exactly the control they break; `integrations/openclaw/configure.mjs` is byte-identical to HEAD, because the re-base needs no production change.
+
 ## Changelog Rules
 
 ### Completed Changes Only
