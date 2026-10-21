@@ -1070,6 +1070,28 @@ function existingConfigMatches(configPath, context) {
       for (const [index, agent] of liveAgents.entries()) {
         const expectedAgent = expectedConfig.agents.list[index];
         const expectedAllow = expectedAgent.tools.alsoAllow ?? [];
+        // M12/T9 F-378: the two coordinators' DISPLAY names changed when the
+        // retired L&SC Data Plant branding was dropped — "ETL Coordinator" and
+        // "Analytics Coordinator" became the stack-neutral "Coordinator O1" and
+        // "Coordinator O2" (`AGENT_DEFINITIONS` in
+        // `integrations/openclaw/lib/authority.mjs` is the canonical roster, and
+        // `AGENTS.md` §9 forbids the retired name for a runtime role). The
+        // names are GENERATED data, exactly like the mention grammar and the
+        // `alsoAllow` list below, so a config written by the previous build
+        // differs in exactly this field and converges the same way: the label
+        // is regenerated from the canonical roster, and the agent's identity
+        // is its `id`, not its label, so nothing that routes is renamed.
+        //
+        // Measured on the live host (2026-10-22, READ-ONLY): the live
+        // `openclaw.json` carried the two retired names and a baked-in router
+        // credential, and the builder refused the deployment with
+        // `Policy drift` — the credential was already converged by the
+        // `models` subtree replacement below, but these two names were not, so
+        // the deployment could not complete.
+        if (agent.name !== expectedAgent.name) {
+          agent.name = expectedAgent.name;
+          converged = true;
+        }
         if (
           agent.groupChat &&
           JSON.stringify(agent.groupChat.mentionPatterns) !==
