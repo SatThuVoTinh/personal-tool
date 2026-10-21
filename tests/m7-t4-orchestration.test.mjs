@@ -1,5 +1,6 @@
 import test, { describe } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -26,21 +27,23 @@ import {
   DagsHubAdapter,
   HuggingFaceAdapter,
   StreamlitAdapter,
+  SkillAdapter,
 } from "../zink-tools/adapters/index.mjs";
 
-import {
-  executePattern1_N8nToR2Landing,
-  executePattern2_R2LandingToCleanSilver,
-  executePattern3_SemanticAmbiguityResolution,
-  executePattern4_SilverToMotherDuckGold,
-  executePattern5_GoldToDeliverySurfaces,
-  executePattern6_GoldToExternalComputeFeatures,
-  executePattern7_ComputeToMLflowLocalToDagsHub,
-  executePattern8_EvaluateCandidateModel,
-  executePattern9_ApprovedModelPredictionToMotherDuck,
-  executePattern10_SyntheticComposition,
-} from "../integrations/openclaw/orchestration/patterns/index.mjs";
-
+// ===========================================================================
+// F-105 - the legacy orchestration patterns module is gone, and the provider
+// adapters keep their own lanes.
+// ===========================================================================
+// The deleted module stitched landing -> silver -> gold tiers and synced a
+// model registry between MLflow and DagsHub: the retired L&SC Data Plant and
+// a second orchestrator, green-tested by this very suite. The owner
+// authorised deleting the tracked module, and the coverage that mattered -
+// the provider adapters, which nothing else in the repository exercises - is
+// rewritten here as DIRECT adapter lanes.
+//
+// Every lane below calls the adapter itself. No lane composes the tiers and
+// no lane sequences a model-registry sync: that composition is exactly what
+// the architecture forbids.
 describe("M7/T4 External Infrastructure & Governed Orchestration (G0 - G20)", () => {
   const context = Object.freeze({
     task_id: "task-m7-t4-01",
@@ -110,18 +113,6 @@ describe("M7/T4 External Infrastructure & Governed Orchestration (G0 - G20)", ()
     assert.ok(TOOL_POLICY.o2.includes("zink_n8n"));
   });
 
-  test("Gate G3: n8n Localhost Boundary & Lifecycle Invariants", async () => {
-    // n8n trigger is strictly localhost-bound
-    const p1 = await executePattern1_N8nToR2Landing({
-      context: { ...context, agent_id: "o2" },
-      workflow_id: "wf-test-lifecycle",
-      payload: { test_key: "test_val" },
-      r2Adapter: adapters.r2,
-    });
-    assert.equal(p1.pattern, "P1");
-    assert.equal(p1.landing_artifact.bucket, "landing");
-  });
-
   test(
     "Gate G4 & G5: Governed DuckDB Bridge Authorization & Escape Denial",
     { skip: duckDbSkip() },
@@ -147,175 +138,353 @@ describe("M7/T4 External Infrastructure & Governed Orchestration (G0 - G20)", ()
       );
     },
   );
-
-  test("Gate G6: Orchestration Pattern P1 & P2", async () => {
-    // P1: Ingest to Landing
-    const p1 = await executePattern1_N8nToR2Landing({
-      context: { ...context, agent_id: "o2" },
-      workflow_id: "wf-ingest-crm",
-      payload: { records: [{ id: 101, name: "Customer Alpha" }] },
-      r2Adapter: adapters.r2,
+  test("Gate G3 & G6 (F-105): the R2 storage adapter governs the landing and the silver zones", async () => {
+    const r2 = new R2StorageAdapter();
+    const payload = JSON.stringify({
+      records: [{ id: 101, name: "Customer Alpha" }],
     });
-    assert.equal(p1.operation, "WRITE");
-    assert.equal(p1.idempotency, "IDEMPOTENT");
 
-    // Landing immutability: Re-writing exact artifact throws error
+    // Landing: written once, addressed by its logical id.
+    const landing = await r2.putLandingArtifact({
+      task_id: context.task_id,
+      run_id: context.run_id,
+      artifact_id: "landing-orders",
+      data: payload,
+      content_type: "application/json",
+    });
+    assert.equal(landing.bucket, "landing");
+    assert.equal(landing.artifact_id, "landing-orders");
+    assert.equal(
+      landing.checksum,
+      createHash("sha256").update(payload).digest("hex"),
+    );
+    assert.equal(landing.artifact_ref.logical_path, "landing/landing-orders");
+    assert.equal(landing.artifact_ref.size_bytes, Buffer.byteLength(payload));
+
+    // Landing immutability: the same logical id cannot be written twice.
     await assert.rejects(
       async () => {
-        await adapters.r2.putLandingArtifact({
+        await r2.putLandingArtifact({
           task_id: context.task_id,
           run_id: "run-dup",
-          artifact_id: p1.landing_artifact.artifact_id,
+          artifact_id: "landing-orders",
           data: "duplicate",
         });
       },
       (err) => err.code === "R2_LANDING_IMMUTABLE_VIOLATION",
     );
 
-    // P2: Clean to Silver
-    const p2 = await executePattern2_R2LandingToCleanSilver({
-      context: { ...context, agent_id: "python" },
-      artifact_id: p1.landing_artifact.artifact_id,
-      r2Adapter: adapters.r2,
-      cleanerFn: (raw) => ({
-        cleaned_records: raw.records,
+    // Silver: promoted with an explicit version, and one version is minted
+    // once.
+    const silver = await r2.promoteToSilver({
+      task_id: context.task_id,
+      run_id: context.run_id,
+      artifact_id: "landing-orders",
+      version: 1,
+      data: JSON.stringify({
+        records: [{ id: 101, name: "Customer Alpha" }],
         status: "VALIDATED",
       }),
     });
-    assert.equal(p2.silver_artifact.bucket, "silver");
-    assert.equal(p2.silver_artifact.version, 1);
-  });
+    assert.equal(silver.bucket, "silver");
+    assert.equal(silver.version, 1);
+    assert.equal(silver.artifact_ref.logical_path, "silver/landing-orders/v1");
 
-  test("Gate G7: Orchestration Pattern P3 Semantic Ambiguity Boundary", async () => {
-    // Reasoning != approval; remains BLOCKED_SEMANTIC_REVIEW until explicitly approved
-    const unapproved = await executePattern3_SemanticAmbiguityResolution({
-      context,
-      ambiguity_evidence:
-        "Conflicting revenue column definitions in CRM vs ERP",
-      proposed_resolution: "Standardize on ERP net_revenue_usd",
-    });
-    assert.equal(unapproved.status, "BLOCKED_SEMANTIC_REVIEW");
-    assert.ok(unapproved.action_required);
-
-    // Approved resolution with matching proposal_id
-    const approved = await executePattern3_SemanticAmbiguityResolution({
-      context,
-      ambiguity_evidence: "Conflicting definitions",
-      proposed_resolution: "Standardize on ERP net_revenue_usd",
-      proposal_id: unapproved.proposal.proposal_id,
-      owner_approval: {
-        approved: true,
-        proposal_id: unapproved.proposal.proposal_id,
+    await assert.rejects(
+      async () => {
+        await r2.promoteToSilver({
+          task_id: context.task_id,
+          run_id: context.run_id,
+          artifact_id: "landing-orders",
+          version: 1,
+          data: "duplicate",
+        });
       },
-    });
-    assert.equal(approved.status, "APPROVED");
+      (err) => err.code === "R2_SILVER_VERSION_COLLISION",
+    );
+
+    // Both zones are read back through the governed key space.
+    const storedLanding = await r2.getArtifact("landing", "landing-orders");
+    assert.equal(storedLanding.checksum, landing.checksum);
+    const storedSilver = await r2.getArtifact("silver", "landing-orders", 1);
+    assert.equal(storedSilver.version, 1);
+
+    // An unknown zone fails closed instead of silently answering with another.
+    await assert.rejects(
+      async () => r2.getArtifact("gold", "landing-orders"),
+      (err) => err.code === "R2_INVALID_BUCKET",
+    );
+    // A traversal identifier cannot address an object in another zone.
+    await assert.rejects(
+      async () => r2.getArtifact("landing", "../../silver/orders"),
+      (err) => err.code === "R2_INVALID_ARTIFACT_ID",
+    );
   });
 
-  test("Gate G8: Orchestration Patterns P4 & P5", async () => {
-    // P4: Silver to MotherDuck Gold
-    const p4 = await executePattern4_SilverToMotherDuckGold({
-      context: { ...context, agent_id: "sql" },
-      silver_artifact_id: "silver-landing-test.json",
-      version: 1,
-      r2Adapter: {
-        getArtifact: async () => ({
-          artifact_id: "silver-landing-test.json",
-          data: "{}",
+  test("Gate G7 (F-105): a proposal is not an approval - the governed Skill Store surface proposes and never approves", async () => {
+    const skillStore = new SkillAdapter();
+
+    // The published tool surface can create a proposal...
+    const schema = JSON.parse(
+      fs.readFileSync(
+        path.resolve(
+          import.meta.dirname,
+          "..",
+          "zink-tools",
+          "contracts",
+          "tools",
+          "zink-skill.schema.json",
+        ),
+        "utf8",
+      ),
+    );
+    const actions = schema.$defs.input.properties.action.enum;
+    assert.ok(actions.includes("propose"), "the governed surface must propose");
+    for (const forbidden of ["approve", "accept", "promote", "publish"]) {
+      assert.equal(
+        actions.includes(forbidden),
+        false,
+        `the governed surface must not expose '${forbidden}'`,
+      );
+    }
+
+    // ...and it cannot approve one: the approval is the owner's path, not a
+    // tool action.
+    await assert.rejects(
+      async () => skillStore.querySkillStore({ action: "approve" }),
+      (err) => err.code === "SKILL_ACTION_INVALID",
+    );
+    await assert.rejects(
+      async () => skillStore.querySkillStore({ action: "publish" }),
+      (err) => err.code === "SKILL_ACTION_FORBIDDEN",
+    );
+  });
+
+  test("Gate G8 (F-105): the analytical adapters answer a governed read and refuse a mutation", async () => {
+    const motherduck = new MotherDuckAdapter();
+    const result = await motherduck.executeQuery(
+      { agent_id: "sql" },
+      { query: "SELECT id, name FROM knowledge", target_database: "knowledge" },
+    );
+    assert.equal(result.provider, "motherduck");
+    assert.equal(result.execution_state, "FIXTURE_CONTRACT_EXECUTED");
+    assert.equal(result.target_database, "knowledge");
+    assert.ok(result.row_count >= 1);
+    assert.ok(result.columns.includes("metric_id"));
+
+    const bigquery = new BigQueryAdapter();
+    const analytics = await bigquery.executeQuery(
+      { agent_id: "sql" },
+      { query: "SELECT id, name FROM knowledge", target_database: "knowledge" },
+    );
+    assert.equal(analytics.provider, "bigquery");
+    assert.equal(analytics.execution_state, "FIXTURE_CONTRACT_EXECUTED");
+    assert.equal(analytics.dataset, "knowledge");
+
+    // A mutation is refused by the shared statement gate.
+    await assert.rejects(
+      async () => {
+        await bigquery.executeQuery(
+          { agent_id: "sql" },
+          {
+            query:
+              "MERGE INTO knowledge t USING source s ON t.id = s.id WHEN MATCHED THEN UPDATE SET t.name = s.name",
+            target_database: "knowledge",
+          },
+        );
+      },
+      (err) => err.code === "BIGQUERY_MUTATION_NOT_PERMITTED",
+    );
+  });
+
+  test("Gate G8 (F-105): the Streamlit adapter publishes a localhost-only view", async () => {
+    const streamlit = new StreamlitAdapter();
+    const delivery = await streamlit.exportGoldViewForStreamlit({
+      task_id: context.task_id,
+      gold_dataset_id: "gold_analytics_layer",
+      view_name: "view_gold_analytics_layer",
+      columns: ["metric_id", "gold_value", "updated_at"],
+      row_count: 2,
+    });
+    assert.equal(delivery.status, "READY");
+    assert.equal(delivery.provider, "streamlit");
+    assert.equal(delivery.execution_state, "FIXTURE_CONTRACT_EXECUTED");
+    assert.equal(
+      delivery.endpoint,
+      "http://127.0.0.1:8501/views/view_gold_analytics_layer",
+    );
+    assert.deepEqual(
+      [...delivery.columns],
+      ["metric_id", "gold_value", "updated_at"],
+    );
+
+    await assert.rejects(
+      async () =>
+        streamlit.exportGoldViewForStreamlit({ task_id: context.task_id }),
+      (err) => err.code === "STREAMLIT_INVALID_PARAMS",
+    );
+  });
+  test("Gate G9 (F-105): the compute adapters trigger a bounded job and refuse an unbounded one", async () => {
+    const kaggle = new KaggleComputeAdapter();
+    await assert.rejects(
+      async () =>
+        kaggle.triggerJob(
+          { agent_id: "python" },
+          { kernel_slug: "gold-feature-model-train" },
+        ),
+      (err) => err.code === "KAGGLE_MISSING_CONTEXT",
+    );
+    await assert.rejects(
+      async () =>
+        kaggle.triggerJob({ agent_id: "python", task_id: context.task_id }, {}),
+      (err) => err.code === "KAGGLE_INVALID_PARAMS",
+    );
+    const kaggleJob = await kaggle.triggerJob(
+      { agent_id: "python", task_id: context.task_id },
+      {
+        kernel_slug: "gold-feature-model-train",
+        dataset_sources: ["gold_features_r2"],
+      },
+    );
+    assert.equal(kaggleJob.provider, "kaggle");
+    assert.equal(kaggleJob.status, "COMPLETED");
+    assert.equal(kaggleJob.execution_state, "FIXTURE_CONTRACT_EXECUTED");
+    assert.equal(kaggleJob.output_artifacts.length, 1);
+
+    const databricks = new DatabricksComputeAdapter();
+    await assert.rejects(
+      async () =>
+        databricks.triggerJob(
+          { agent_id: "python", task_id: context.task_id },
+          {},
+        ),
+      (err) => err.code === "DATABRICKS_INVALID_PARAMS",
+    );
+    const databricksJob = await databricks.triggerJob(
+      { agent_id: "python", task_id: context.task_id },
+      { job_id: 1042, notebook_path: "/Shared/FeatureETL" },
+    );
+    assert.equal(databricksJob.provider, "databricks");
+    assert.equal(databricksJob.status, "TERMINATED");
+    assert.equal(databricksJob.execution_state, "FIXTURE_CONTRACT_EXECUTED");
+    assert.equal(databricksJob.run_id.startsWith("dbr-run-"), true);
+  });
+
+  test("Gate G9 (F-105): the MLflow adapter hands out snapshots, not views of its store", async () => {
+    const mlflow = new MLflowLocalAdapter();
+    const run = await mlflow.createRun({ experiment_name: "exp-01" });
+    assert.equal(run.status, "RUNNING");
+    await mlflow.logParameters(run.run_id, { alpha: 0.1 });
+    await mlflow.logMetrics(run.run_id, { accuracy: 0.9 });
+    await mlflow.logArtifact(run.run_id, {
+      artifact_name: "model",
+      artifact_path: "artifacts/model",
+      checksum: "a".repeat(64),
+    });
+    const ended = await mlflow.endRun(run.run_id, "FINISHED");
+    assert.equal(ended.status, "FINISHED");
+    assert.equal(ended.params.alpha, 0.1);
+    assert.equal(ended.metrics.accuracy.length, 1);
+    assert.equal(ended.artifacts.length, 1);
+
+    // The returned record is a snapshot: a caller cannot push a forged entry
+    // into the tracking store through it.
+    ended.artifacts.push({ artifact_name: "forged" });
+    ended.metrics.accuracy.push({ value: 99, step: 1 });
+    const reread = await mlflow.getRun(run.run_id);
+    assert.equal(
+      reread.artifacts.length,
+      1,
+      "a caller must not push into the store through a returned record",
+    );
+    assert.equal(
+      reread.metrics.accuracy.length,
+      1,
+      "a caller must not extend a metric history through a returned record",
+    );
+  });
+
+  test("Gate G9 (F-105): the DagsHub adapter syncs only explicitly selected runs", async () => {
+    const dagshub = new DagsHubAdapter();
+    await assert.rejects(
+      async () =>
+        dagshub.syncSelectedRuns({
+          repo_owner: "vinh-owner",
+          repo_name: "personal-tool-experiments",
+          selected_run_ids: [],
         }),
-      },
-      motherDuckAdapter: adapters.motherduck,
-    });
-    assert.equal(p4.operation, "UPSERT");
-    assert.equal(p4.gold_target, "gold_analytics_layer");
+      (err) => err.code === "DAGSHUB_EMPTY_SELECTION",
+    );
+    await assert.rejects(
+      async () =>
+        dagshub.syncSelectedRuns({
+          repo_owner: "vinh-owner",
+          repo_name: "personal-tool-experiments",
+          selected_run_ids: ["*"],
+        }),
+      (err) => err.code === "DAGSHUB_WILDCARD_SELECTION",
+    );
 
-    // P5: Gold to Streamlit & Excel
-    const p5Streamlit = await executePattern5_GoldToDeliverySurfaces({
-      context: { ...context, agent_id: "python" },
-      gold_dataset_id: "gold_analytics_layer",
-      surface: "streamlit",
-      streamlitAdapter: adapters.streamlit,
+    // A configured repository cannot be pointed at another one.
+    const configured = new DagsHubAdapter({
+      repoOwner: "vinh-owner",
+      repoName: "personal-tool-experiments",
     });
-    assert.equal(p5Streamlit.surface, "streamlit");
-    assert.equal(p5Streamlit.delivery.status, "READY");
+    await assert.rejects(
+      async () =>
+        configured.syncSelectedRuns({
+          repo_owner: "other-owner",
+          repo_name: "personal-tool-experiments",
+          selected_run_ids: ["mlf-1"],
+        }),
+      (err) => err.code === "DAGSHUB_REPOSITORY_MISMATCH",
+    );
 
-    const p5Excel = await executePattern5_GoldToDeliverySurfaces({
-      context: { ...context, agent_id: "excel" },
-      gold_dataset_id: "gold_analytics_layer",
-      surface: "excel",
+    const sync = await dagshub.syncSelectedRuns({
+      repo_owner: "vinh-owner",
+      repo_name: "personal-tool-experiments",
+      selected_run_ids: ["mlf-1"],
     });
-    assert.equal(p5Excel.delivery.format, "xlsx");
+    assert.equal(sync.status, "SYNC_COMPLETED");
+    assert.equal(sync.provider, "dagshub");
+    assert.equal(sync.execution_state, "FIXTURE_CONTRACT_EXECUTED");
+    assert.deepEqual([...sync.synced_run_ids], ["mlf-1"]);
   });
 
-  test("Gate G9: Orchestration Patterns P6, P7, P8, P9", async () => {
-    // P6: Gold to Kaggle Compute Features (Idempotency key required)
+  test("Gate G9 (F-105): the Hugging Face adapter evaluates a candidate without promoting it", async () => {
+    const huggingface = new HuggingFaceAdapter();
     await assert.rejects(
-      async () => {
-        await executePattern6_GoldToExternalComputeFeatures({
-          context: { ...context, agent_id: "python" },
-          compute_target: "kaggle",
-          kaggleAdapter: adapters.kaggle,
-        });
-      },
-      (err) => err.code === "P6_IDEMPOTENCY_KEY_REQUIRED",
+      async () =>
+        huggingface.evaluateCandidateModel({
+          evaluation_dataset: "eval-validation-split",
+        }),
+      (err) => err.code === "HUGGINGFACE_INVALID_REPO",
     );
-
-    const p6 = await executePattern6_GoldToExternalComputeFeatures({
-      context: { ...context, agent_id: "python" },
-      compute_target: "kaggle",
-      idempotency_key: "idem-key-p6-01",
-      kaggleAdapter: adapters.kaggle,
-    });
-    assert.equal(p6.compute_target, "kaggle");
-    assert.equal(p6.job.status, "COMPLETED");
-
-    // P7: MLflow Local to DagsHub (Empty selection forbidden)
     await assert.rejects(
-      async () => {
-        await executePattern7_ComputeToMLflowLocalToDagsHub({
-          context: { ...context, agent_id: "python" },
-          experiment_name: "exp-01",
-          selected_runs: [],
-          mlflowAdapter: adapters.mlflow,
-          dagshubAdapter: adapters.dagshub,
-        });
-      },
-      (err) => err.code === "P7_EMPTY_SELECTION",
+      async () =>
+        huggingface.evaluateCandidateModel({
+          repo_id: "zink-research/candidate-llm-v1",
+        }),
+      (err) => err.code === "HUGGINGFACE_MISSING_DATASET",
     );
-
-    const run = await adapters.mlflow.createRun({ experiment_name: "exp-01" });
-    const p7 = await executePattern7_ComputeToMLflowLocalToDagsHub({
-      context: { ...context, agent_id: "python" },
-      experiment_name: "exp-01",
-      selected_runs: [run.run_id],
-      mlflowAdapter: adapters.mlflow,
-      dagshubAdapter: adapters.dagshub,
-    });
-    assert.equal(p7.sync.status, "SYNC_COMPLETED");
-
-    // P8: Hugging Face candidate evaluation (Non-promotion invariant)
-    const p8 = await executePattern8_EvaluateCandidateModel({
-      context,
+    const candidate = await huggingface.evaluateCandidateModel({
       repo_id: "zink-research/candidate-llm-v1",
+      revision: "main",
       evaluation_dataset: "eval-validation-split",
-      huggingFaceAdapter: adapters.huggingface,
     });
-    assert.equal(p8.candidate.candidate_status, "EVALUATED_NOT_PROMOTED");
-    assert.equal(p8.candidate.provenance.untrusted_input, true);
-
-    // P9: Prediction Delivery to MotherDuck
-    const p9 = await executePattern9_ApprovedModelPredictionToMotherDuck({
-      context: { ...context, agent_id: "sql" },
-      approved_model_id: "model-verified-v1",
-      motherDuckAdapter: adapters.motherduck,
-    });
-    assert.equal(p9.delivery_table, "gold_predictions");
+    assert.equal(candidate.candidate_status, "EVALUATED_NOT_PROMOTED");
+    assert.equal(candidate.provenance.untrusted_input, true);
+    assert.equal(candidate.execution_state, "FIXTURE_CONTRACT_EXECUTED");
+    assert.equal(candidate.repo_id, "zink-research/candidate-llm-v1");
   });
 
-  test("Gate G10: Synthetic Integration Composition (P10)", async () => {
-    const p10 = await executePattern10_SyntheticComposition(context, adapters);
-    assert.equal(p10.pattern, "P10");
-    assert.equal(p10.status, "COMPLETED");
-    assert.equal(p10.steps_count, 8); // P1, P2, P3, P4, P6, P7, P9, P5
+  test("Gate G10 (F-105): the legacy composition module is gone and cannot be imported", async () => {
+    await assert.rejects(
+      async () =>
+        import("../integrations/openclaw/orchestration/patterns/index.mjs"),
+      /Cannot find module|ERR_MODULE_NOT_FOUND/u,
+      "the legacy orchestration patterns module must not be importable",
+    );
   });
 
   test("Gate G13: No Silent Provider Fallback Invariant", async () => {
@@ -330,7 +499,6 @@ describe("M7/T4 External Infrastructure & Governed Orchestration (G0 - G20)", ()
       (err) => err.code === "MOTHERDUCK_UNAUTHORIZED_CALLER",
     );
   });
-
   test("Gate G18: Provider Evidence Matrix Verification", () => {
     // The published matrix and the adapters' own headers are the two sources of
     // truth here. Restating either as a literal would assert a copy, which is how
