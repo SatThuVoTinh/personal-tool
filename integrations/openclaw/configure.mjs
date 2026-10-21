@@ -1006,6 +1006,14 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // the deployed extension. The digest this build produces is deliberately
     // NOT listed: it is the current build and is accepted by content
     // comparison.
+    // M12/T9 F-371: the native-boundary build from before the delegation
+    // id changed its form and the guard resolved the delegation's tool scope
+    // from the canonical policy. Without this entry --preflight refuses a
+    // deployment that carries that build. Provenance: the asset's own bytes
+    // at the parent of the F-371 commit, packaged as the builder packages
+    // it. The digest this build produces is deliberately NOT listed: it is
+    // the current build and is accepted by content comparison.
+    "fceefc0df03228c91511779880c21a81d75579633e86ceae54d9696446d0081d",
   ]),
   "lib/runtime.mjs": Object.freeze([
     // M10/T2-R15: the outgoing build currently deployed, byte-proven by
@@ -1247,8 +1255,14 @@ function existingConfigMatches(configPath, context) {
       ? migrated.agents.list
       : null;
     if (liveAgents && liveAgents.length === expectedConfig.agents.list.length)
-      for (const [index, agent] of liveAgents.entries()) {
-        const expectedAgent = expectedConfig.agents.list[index];
+      for (const agent of liveAgents) {
+        // The agent's IDENTITY is its `id`, not its position: the display
+        // name is regenerated for the agent with the same id, so a roster
+        // whose order changed does not get another agent's label.
+        const expectedAgent = expectedConfig.agents.list.find(
+          (candidate) => candidate.id === agent.id,
+        );
+        if (!expectedAgent) continue;
         const expectedAllow = expectedAgent.tools.alsoAllow ?? [];
         // M12/T9 F-378: the two coordinators' DISPLAY names changed when the
         // retired L&SC Data Plant branding was dropped — "ETL Coordinator" and
