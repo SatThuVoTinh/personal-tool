@@ -139,6 +139,13 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
   // comparison.
   "lib/discord-forum-tags.mjs": Object.freeze([
     "e0a755bb9c6add431c9306fd8bc2895318a868c3c6b8e84326d94fb95526fff5",
+    // M12/T9 F-379: the DEPLOYED build's bytes for this asset, as of
+    // `0b55dfa` — the commit that last changed it before the deployed build
+    // (`0b55dfa`, measured on the live host on 2026-10-22). The admission list did
+    // not name them, so --preflight refused the deployed extension. Provenance:
+    // `git show 0b55dfa:integrations/openclaw/lib/discord-forum-tags.mjs` reproduces the deployed bytes. The digest this build produces is deliberately NOT listed: it is
+    // the current build and is accepted by content comparison.
+    "18fbb0774c18d013f599f562810932cfb80c4071c0614376d16f46c30fc256b3",
   ]),
   // M12/T1-R1: this asset had no predecessor entry before now, because every
   // earlier revision was also the current build. M12/T1 changes it, so the digest
@@ -161,6 +168,20 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // M12/T2.2-R2 M-1: the build the live runtime carries, reproduced by packaging
     // commit c1ad4b3. See the lib/guard.mjs entry for why nine paths drifted.
     "4d36d8abd83084f83cf65c56da9a190bec3fde5d481ea939665a13a522e8f457",
+  ]),
+
+  // M12/T9 F-379: this asset had no predecessor entry before now, because every
+  // earlier revision was also the current build. The deployed build's bytes are
+  // admitted so --preflight accepts the extension that is installed today.
+  "lib/discord-result-preview.mjs": Object.freeze([
+    // M12/T9 F-379: the DEPLOYED build's bytes for this asset, as of
+    // `c1ad4b3` — the commit that last changed it before the deployed build
+    // (`0b55dfa`, measured on the live host on 2026-10-22). The admission list did
+    // not name them, so --preflight refused the deployed extension. Provenance:
+    // `git show c1ad4b3:integrations/openclaw/lib/discord-result-preview.mjs` reproduces the deployed bytes. The digest this build produces is deliberately NOT listed: it is
+    // the current build and is accepted by content comparison.
+
+    "9970139525c5a288b43f89fb8f7fb8875f53b3555fa6ebeed1b7c3b8f2c149ee",
   ]),
   "contracts/agent-result-payload.schema.json": Object.freeze([
     "48bcbf6b64daae63a3d7a917ac8f17790ba1468b4ed78182df5d1de59cd34717",
@@ -185,6 +206,13 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // produces is deliberately NOT listed: it is the current build and is
     // accepted by content comparison.
     "9523f8e9d4d7eadde744db355f1fb23bae9dfb6726936fd9533c80f0aed5f66b",
+    // M12/T9 F-379: the DEPLOYED build's bytes for this asset, as of
+    // `c1ad4b3` — the commit that last changed it before the deployed build
+    // (`0b55dfa`, measured on the live host on 2026-10-22). The admission list did
+    // not name them, so --preflight refused the deployed extension. Provenance:
+    // `git show c1ad4b3:integrations/openclaw/topology/contracts/approval-request.schema.json` reproduces the deployed bytes. The digest this build produces is deliberately NOT listed: it is
+    // the current build and is accepted by content comparison.
+    "6f750df83ddec2a7398f42753b60b61c539b3f29011ce5a4d09e6538d62de81d",
   ]),
   "contracts/delegation-envelope.schema.json": Object.freeze([
     "cc5023418300cd616b9ced2bff752c2903a07ef2a3e2e0e29c16968e7e90af97",
@@ -202,6 +230,13 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // NOT listed: it is the current build and is accepted by content
     // comparison.
     "36a4dd470dfa095c77c16cc1046bc12b6008257d88d79df693f9c3b4bd59b227",
+    // M12/T9 F-379: the DEPLOYED build's bytes for this asset, as of
+    // `c1ad4b3` — the commit that last changed it before the deployed build
+    // (`0b55dfa`, measured on the live host on 2026-10-22). The admission list did
+    // not name them, so --preflight refused the deployed extension. Provenance:
+    // `git show c1ad4b3:integrations/openclaw/topology/contracts/delegation-envelope.schema.json` reproduces the deployed bytes. The digest this build produces is deliberately NOT listed: it is
+    // the current build and is accepted by content comparison.
+    "4f2777f49b2ef6956d6cb89cd12838d05b0a1dd89a1e671ad5db37d22ef8d836",
   ]),
   "contracts/delegation-proposal.schema.json": Object.freeze([
     "efd4371cacf396dc618cc84c8663a114f06b034c13737937b48aa0b895b2d6e0",
@@ -217,6 +252,13 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // produces is deliberately NOT listed: it is the current build and is
     // accepted by content comparison.
     "2edaf5209a2462fa347309ad4cb9858af5b1ae4a286f6f002e2e71c7a1a3975e",
+    // M12/T9 F-379: the DEPLOYED build's bytes for this asset, as of
+    // `c1ad4b3` — the commit that last changed it before the deployed build
+    // (`0b55dfa`, measured on the live host on 2026-10-22). The admission list did
+    // not name them, so --preflight refused the deployed extension. Provenance:
+    // `git show c1ad4b3:integrations/openclaw/topology/contracts/execution-brief.schema.json` reproduces the deployed bytes. The digest this build produces is deliberately NOT listed: it is
+    // the current build and is accepted by content comparison.
+    "455b4014c8e6fa65416770cc2a45d0f85e63f81a0ccb0c67d6099be87c953303",
   ]),
   "contracts/governance-manifest.schema.json": Object.freeze([
     "f980bfd5474c8d057be92fee136779490ba93ed944295e4d173c54d7082e24c5",
@@ -232,6 +274,13 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // produces is deliberately NOT listed: it is the current build and is
     // accepted by content comparison.
     "4717f7e2edc5b7164513ae70a26c4c6cb04e6b010ead135a731d3bd36f197a0c",
+    // M12/T9 F-379: the DEPLOYED build's bytes for this asset, as of
+    // `c1ad4b3` — the commit that last changed it before the deployed build
+    // (`0b55dfa`, measured on the live host on 2026-10-22). The admission list did
+    // not name them, so --preflight refused the deployed extension. Provenance:
+    // `git show c1ad4b3:integrations/openclaw/topology/contracts/governed-reference.schema.json` reproduces the deployed bytes. The digest this build produces is deliberately NOT listed: it is
+    // the current build and is accepted by content comparison.
+    "edf80f07c5555ce367f3138f085b846e713a6626f181e8d15041e8e9e87a608d",
   ]),
   "contracts/incident.schema.json": Object.freeze([
     "9d70678804bfc3059f3a2218babda4f4c1b55486bde5c6da5ef8c4f114fcc242",
@@ -241,6 +290,13 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // produces is deliberately NOT listed: it is the current build and is
     // accepted by content comparison.
     "351ba083c5ed1ed102ba9ea2b47fa1a873c7e4ccc1e5e834ecc9d1e42b95cf4c",
+    // M12/T9 F-379: the DEPLOYED build's bytes for this asset, as of
+    // `c1ad4b3` — the commit that last changed it before the deployed build
+    // (`0b55dfa`, measured on the live host on 2026-10-22). The admission list did
+    // not name them, so --preflight refused the deployed extension. Provenance:
+    // `git show c1ad4b3:integrations/openclaw/topology/contracts/incident.schema.json` reproduces the deployed bytes. The digest this build produces is deliberately NOT listed: it is
+    // the current build and is accepted by content comparison.
+    "dc115b4a54af81c1cb726c2764892d809903c13e35e0f04ca3daf2d3f7599c47",
   ]),
   "contracts/ledger-event.schema.json": Object.freeze([
     "e636b2452916ad8d1391a90844c0eaa3bc1c84e4aef8ede1361e3cee70143f15",
@@ -269,6 +325,13 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // NOT listed: it is the current build and is accepted by content
     // comparison.
     "044392c5b70f102762eb397c314503c2357fc68ab8df1414d7d39f40c0f33120",
+    // M12/T9 F-379: the DEPLOYED build's bytes for this asset, as of
+    // `c680a28` — the commit that last changed it before the deployed build
+    // (`0b55dfa`, measured on the live host on 2026-10-22). The admission list did
+    // not name them, so --preflight refused the deployed extension. Provenance:
+    // `git show c680a28:integrations/openclaw/topology/contracts/ledger-event.schema.json` reproduces the deployed bytes. The digest this build produces is deliberately NOT listed: it is
+    // the current build and is accepted by content comparison.
+    "cc4ec33374aca06e577693646e526a926fc00c4e30c9da17748f06aa69667b55",
   ]),
   "contracts/ledger-snapshot.schema.json": Object.freeze([
     "3cde5162ae845a9b7066a623a9c4c8896f1fc6b77f2b5983ad506a9dfcbc0151",
@@ -294,6 +357,13 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // NOT listed: it is the current build and is accepted by content
     // comparison.
     "d46089816a38c500fa95458ab4304977776bff9ff23b3820eef37448b5e50b4e",
+    // M12/T9 F-379: the DEPLOYED build's bytes for this asset, as of
+    // `c680a28` — the commit that last changed it before the deployed build
+    // (`0b55dfa`, measured on the live host on 2026-10-22). The admission list did
+    // not name them, so --preflight refused the deployed extension. Provenance:
+    // `git show c680a28:integrations/openclaw/topology/contracts/ledger-snapshot.schema.json` reproduces the deployed bytes. The digest this build produces is deliberately NOT listed: it is
+    // the current build and is accepted by content comparison.
+    "ecc54480920d04757a4345f91a05acbcf77213d8a032f3521677418836b19cc1",
   ]),
   "contracts/result.schema.json": Object.freeze([
     "9440dfb87b3daf358b11dc7b59b62586c68786235d99d717daf9783b9a6e4540",
@@ -303,6 +373,13 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // produces is deliberately NOT listed: it is the current build and is
     // accepted by content comparison.
     "b1ebc7279504d42f262002aea10dc50f265510bbf2c90b21dcba26ea9d8f807a",
+    // M12/T9 F-379: the DEPLOYED build's bytes for this asset, as of
+    // `c1ad4b3` — the commit that last changed it before the deployed build
+    // (`0b55dfa`, measured on the live host on 2026-10-22). The admission list did
+    // not name them, so --preflight refused the deployed extension. Provenance:
+    // `git show c1ad4b3:integrations/openclaw/topology/contracts/result.schema.json` reproduces the deployed bytes. The digest this build produces is deliberately NOT listed: it is
+    // the current build and is accepted by content comparison.
+    "f6a12e827c5c537323e00f7283ea816f516cac9412e2a45c61f610a8d3eafe73",
   ]),
   "contracts/trusted-result-envelope.schema.json": Object.freeze([
     "5d40c23152bba749826797eb0271c47a20f3aab910bcad2852428618ad9f0ec9",
@@ -320,6 +397,13 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // NOT listed: it is the current build and is accepted by content
     // comparison.
     "4d8a7403452031f38b84dd5d7033b997b30d74fd4a253adb2124484b86021846",
+    // M12/T9 F-379: the DEPLOYED build's bytes for this asset, as of
+    // `c1ad4b3` — the commit that last changed it before the deployed build
+    // (`0b55dfa`, measured on the live host on 2026-10-22). The admission list did
+    // not name them, so --preflight refused the deployed extension. Provenance:
+    // `git show c1ad4b3:integrations/openclaw/topology/contracts/trusted-result-envelope.schema.json` reproduces the deployed bytes. The digest this build produces is deliberately NOT listed: it is
+    // the current build and is accepted by content comparison.
+    "c136bbf764f3c7e681a93e1a2be4fc8e8ad2d3722930cd722ae935cd90d1a0e6",
   ]),
   "governance-manifests.json": Object.freeze([
     "5026959d41a76c531f37caa6297b3b0b010ee17cedd7bdd3806447600c98a18d",
@@ -338,6 +422,13 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // governance-manifests.json because its governance_hash covers policy.mjs. Both
     // must stay admitted or --preflight refuses the upgrade.
     "9c465c36afd4ea8a33dcb7d82fad486cb44e48af6791d75842cd8acdda7be6e7",
+    // M12/T9 F-379: the DEPLOYED build's bytes for this asset, as of
+    // `0b55dfa` — the commit that last changed it before the deployed build
+    // (`0b55dfa`, measured on the live host on 2026-10-22). The admission list did
+    // not name them, so --preflight refused the deployed extension. Provenance:
+    // the build at `0b55dfa` generates these manifests, and its own bytes reproduce the deployed file. The digest this build produces is deliberately NOT listed: it is
+    // the current build and is accepted by content comparison.
+    "28fa9603bde16aa655050df03f8697decf95f97a89ca24be95c50a61abd336b9",
   ]),
   "lib/artifact-validator.mjs": Object.freeze([
     // M10/T2-R17: the outgoing build currently deployed, byte-proven by
@@ -434,6 +525,13 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // NOT listed: it is the current build and is accepted by content
     // comparison.
     "917f44bd8f7462277ca68e53983ceaddf6422bb8bc623d82b9c1a14a00990f59",
+    // M12/T9 F-379: the DEPLOYED build's bytes for this asset, as of
+    // `c1ad4b3` — the commit that last changed it before the deployed build
+    // (`0b55dfa`, measured on the live host on 2026-10-22). The admission list did
+    // not name them, so --preflight refused the deployed extension. Provenance:
+    // `git show c1ad4b3:integrations/openclaw/topology/lib/canonical.mjs` reproduces the deployed bytes. The digest this build produces is deliberately NOT listed: it is
+    // the current build and is accepted by content comparison.
+    "5437225523b9d83ce79d095a5f4145e1ef5d1773b6e61be6bcac31652f77668c",
   ]),
   "lib/decision-ledger.mjs": Object.freeze([
     // M10/T2-R17: the outgoing build currently deployed, byte-proven by
@@ -628,6 +726,13 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // produces is deliberately NOT listed: it is the current build and is
     // accepted by content comparison.
     "5681f6438b3a9adc50f4d6ffbb0ad405d1ff1c8d12463b6f28295ad2cf3bca53",
+    // M12/T9 F-379: the DEPLOYED build's bytes for this asset, as of
+    // `c1ad4b3` — the commit that last changed it before the deployed build
+    // (`0b55dfa`, measured on the live host on 2026-10-22). The admission list did
+    // not name them, so --preflight refused the deployed extension. Provenance:
+    // `git show c1ad4b3:integrations/openclaw/lib/excel-writer.mjs` reproduces the deployed bytes. The digest this build produces is deliberately NOT listed: it is
+    // the current build and is accepted by content comparison.
+    "c1755901e5ce03ae8fa50d9b5d81ea53b1bb29d1918e648df410ca0f00e660f1",
   ]),
   "lib/coordinator-pickup.mjs": Object.freeze([
     // M10/T2-R19: the FIRST predecessor entry for this asset. This revision
@@ -670,6 +775,13 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // deployed extension. The new digest is deliberately NOT listed: it is the
     // current build, accepted by content comparison.
     "22d7411a1a4613bc70379b405c922b560fd15cf41e81d0ff52db7231c409e6ff",
+    // M12/T9 F-379: the DEPLOYED build's bytes for this asset, as of
+    // `6b0ea0a` — the commit that last changed it before the deployed build
+    // (`0b55dfa`, measured on the live host on 2026-10-22). The admission list did
+    // not name them, so --preflight refused the deployed extension. Provenance:
+    // `git show 6b0ea0a:integrations/openclaw/topology/lib/file-lock.mjs` reproduces the deployed bytes. The digest this build produces is deliberately NOT listed: it is
+    // the current build and is accepted by content comparison.
+    "bcd65de81c9f6df088dd9ec269cc4dd3969fd80657f9c582e34e06554e64cf7b",
   ]),
   "lib/guard.mjs": Object.freeze([
     // M10/T2-R14: the outgoing R12/R13 build currently deployed, byte-proven by
