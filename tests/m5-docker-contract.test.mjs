@@ -141,6 +141,14 @@ test("M5/T1-R2 validates only environment variables used by each profile", () =>
   );
 });
 
+//
+// SKIP-FAMILY: docker
+//
+// M12/T9 F-197 (R5-E09-03) / H3: this lane may skip, and it declares WHICH
+// family it belongs to, so the skip-expectation gate can tell an explained
+// skip from an unexplained one. The family-to-lane map is derived from the
+// repository's own lane list; the expectation lives in
+// `docs/contracts/ci-skip-expectations.json`.
 // The backup driver is the one script the operator runbook tells the owner to
 // run that NO verify stage read: it is not in a prettier glob, not in an
 // eslint target and not in the npm script set, so the repository could not see

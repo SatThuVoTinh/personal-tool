@@ -32,6 +32,10 @@
 /experiments/**/results/**
 *.log
 
+# The Node suite's own JUnit report: the skip-expectation gate reads it, and
+# it is a per-run artefact, never a committed file.
+.skip-expectation.xml
+
 # Python development and test output
 __pycache__/
 *.py[cod]

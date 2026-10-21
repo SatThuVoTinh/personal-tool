@@ -136,6 +136,14 @@ test("M3/T1 migration scopes sources and segments by index identity", () => {
 test("M3/T1 readiness verifies the active index embedding digest and dimensions", () => {
   const service = readFileSync(servicePath, "utf8");
 
+  //
+  // SKIP-FAMILY: docker
+  //
+  // M12/T9 F-197 (R5-E09-03) / H3: this lane may skip, and it declares WHICH
+  // family it belongs to, so the skip-expectation gate can tell an explained
+  // skip from an unexplained one. The family-to-lane map is derived from the
+  // repository's own lane list; the expectation lives in
+  // `docs/contracts/ci-skip-expectations.json`.
   // `/healthz` returns `JSONResponse | dict[...]`, which the pinned
   // FastAPI/Pydantic pair rejects during route registration unless response
   // model generation is disabled. Pin the exact bootable form so the route

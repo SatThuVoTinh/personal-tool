@@ -1,3 +1,11 @@
+//
+// SKIP-FAMILY: symlink
+//
+// M12/T9 F-197 (R5-E09-03) / H3: this lane may skip, and it declares WHICH
+// family it belongs to, so the skip-expectation gate can tell an explained
+// skip from an unexplained one. The family-to-lane map is derived from the
+// repository's own lane list; the expectation lives in
+// `docs/contracts/ci-skip-expectations.json`.
 // M11/T3 Phase 2 — durable-state integrity.
 //
 // Cluster B is the set of verified defects that let durable governance state

@@ -1934,3 +1934,28 @@ test("F-110: the OpenClaw README documents only what the build emits", async () 
     );
   }
 });
+
+test("F-197: the quality-gate lane consumes the skip counts", () => {
+  // The skip-expectation gate is the half that keeps a gate tier from going
+  // INERT: the npm `test` script must produce the run's own report and run
+  // the gate over it, and the expectation table must be committed.
+  const packageJson = JSON.parse(
+    readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"),
+  );
+  assert.match(
+    packageJson.scripts.test,
+    /skip-expectation-gate\.mjs/u,
+    "the npm test script must run the skip-expectation gate",
+  );
+  assert.match(
+    packageJson.scripts.test,
+    /--test-reporter=junit/u,
+    "the npm test script must write the run's own report for the gate to read",
+  );
+  assert.ok(
+    existsSync(
+      path.join(REPO_ROOT, "docs", "contracts", "ci-skip-expectations.json"),
+    ),
+    "the skip-expectation table must exist: a gate without an expectation is not a gate",
+  );
+});

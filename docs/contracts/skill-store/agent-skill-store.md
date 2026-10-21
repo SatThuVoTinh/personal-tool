@@ -85,7 +85,6 @@ the Skill Store's forward migration
 The retirement is never model-visible: the Zink Tools `SkillAdapter` still
 refuses the `deprecate` action, and only an owner-confirmed governed action
 reaches the store's public door (`retireSkill`).
-===
 
 This contract intentionally has no `work` or `research` manifest field.
 Operational routing policy remains the responsibility of M7/OpenClaw.

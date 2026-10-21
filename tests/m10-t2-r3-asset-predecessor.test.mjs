@@ -1,3 +1,11 @@
+//
+// SKIP-FAMILY: live-runtime
+//
+// M12/T9 F-197 (R5-E09-03) / H3: this lane may skip, and it declares WHICH
+// family it belongs to, so the skip-expectation gate can tell an explained
+// skip from an unexplained one. The family-to-lane map is derived from the
+// repository's own lane list; the expectation lives in
+// `docs/contracts/ci-skip-expectations.json`.
 // M10/T2-R3 — proven governance-asset predecessor admission.
 //
 // The M10/T2-R2 candidate is repository-complete, but the single authorized

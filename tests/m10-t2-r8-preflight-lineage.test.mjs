@@ -1,3 +1,11 @@
+//
+// SKIP-FAMILY: live-channel
+//
+// M12/T9 F-197 (R5-E09-03) / H3: this lane may skip, and it declares WHICH
+// family it belongs to, so the skip-expectation gate can tell an explained
+// skip from an unexplained one. The family-to-lane map is derived from the
+// repository's own lane list; the expectation lives in
+// `docs/contracts/ci-skip-expectations.json`.
 // M10/T2-R8 — Discord preflight lineage: proof that the executed preflight is
 // the file this patch writes, and that the retired lineage is retired rather
 // than rewritten to match a deploy.

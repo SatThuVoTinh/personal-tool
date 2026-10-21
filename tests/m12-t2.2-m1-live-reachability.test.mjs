@@ -1,3 +1,11 @@
+//
+// SKIP-FAMILY: live-tree
+//
+// M12/T9 F-197 (R5-E09-03) / H3: this lane may skip, and it declares WHICH
+// family it belongs to, so the skip-expectation gate can tell an explained
+// skip from an unexplained one. The family-to-lane map is derived from the
+// repository's own lane list; the expectation lives in
+// `docs/contracts/ci-skip-expectations.json`.
 // M12/T2.2-R2 M-1 — nothing may be deployed that `--preflight` refuses.
 //
 // `configure.mjs` accepts only `--preflight`, `--apply` and `--dry-run`; there is
@@ -292,17 +300,18 @@ test("M1 5: every governed path is asserted live or declared not-live-reachable"
   // only the drift verdict needs the live tree.
   const current = await currentBuild();
   const governed = ["index.mjs", ...Object.keys(current.assets)];
-  // M12/T9: the packaged set grew from 34 assets to 44 - the band shipped the
+  // M12/T9: the packaged set grew from 34 assets to 45 - the band shipped the
   // Skill Store runtime modules (`zink-skill-store/src/*`) and the Zink Tools
   // runtime modules (`zink-tools/*`) as PACKAGED assets, so the governed-path
-  // set is the entrypoint plus 45 assets = 46 paths (the Skill Store's
-  // public door joined the packaged set in M12/T9 F-156). The denominator is
-  // restated, not dropped: it is still the number a reader has to reconcile
-  // with the packaged build, and a path added or removed without this being
-  // restated fails here.
+  // set is the entrypoint plus 46 assets = 47 paths (the Skill Store's
+  // public door joined the packaged set in M12/T9 F-156, and the Skill Store's
+  // own migration runner in M12/T9 F-094 / H5). The denominator is restated,
+  // not dropped: it is still the number a reader has to reconcile with the
+  // packaged build, and a path added or removed without this being restated
+  // fails here.
   assert.equal(
     governed.length,
-    46,
+    47,
     `the governed-path set is the entrypoint plus the packaged assets, saw ${governed.length}`,
   );
 

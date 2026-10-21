@@ -1,3 +1,11 @@
+//
+// SKIP-FAMILY: symlink
+//
+// M12/T9 F-197 (R5-E09-03) / H3: this lane may skip, and it declares WHICH
+// family it belongs to, so the skip-expectation gate can tell an explained
+// skip from an unexplained one. The family-to-lane map is derived from the
+// repository's own lane list; the expectation lives in
+// `docs/contracts/ci-skip-expectations.json`.
 // M12/T2-R4 (owner decision C1, 2026-10-14) — orphaned ledger writer lock recovery.
 //
 // `file-lock.mjs` states the rule in its own header: a crashed holder leaves the lock

@@ -1,3 +1,11 @@
+//
+// SKIP-FAMILY: live-runtime
+//
+// M12/T9 F-197 (R5-E09-03) / H3: this lane may skip, and it declares WHICH
+// family it belongs to, so the skip-expectation gate can tell an explained
+// skip from an unexplained one. The family-to-lane map is derived from the
+// repository's own lane list; the expectation lives in
+// `docs/contracts/ci-skip-expectations.json`.
 // M11/T1-R2 — admit the one live `lib/file-lock.mjs` asset predecessor.
 //
 // M11/T1-R1 closed with `Deployment Authorized: NO`, so its build was never
@@ -334,7 +342,12 @@ test(
         // set, so it differs from the proven live build as well.
         "zink-skill-store/index.mjs",
         "zink-skill-store/src/catalog.mjs",
+        // M12/T9 F-094 (R5-E03-07) / H5: the Skill Store's own migration
+        // runner joined the packaged set, so it differs from the proven live
+        // build as well.
+        "zink-skill-store/src/migrations.mjs",
         "zink-skill-store/src/vector-sync.mjs",
+
         "zink-tools/adapters/knowledge/knowledge-adapter.mjs",
         "zink-tools/adapters/skill-store/skill-adapter.mjs",
         "zink-tools/common/path-safety.mjs",
