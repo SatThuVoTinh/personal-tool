@@ -575,6 +575,25 @@ asset drift detected` (`installed_mutation: false`) because ten live
 
 ### Fixed
 
+- **F-160 - the forward migration of the derived snapshot replayed the ACCEPTED
+  history under the strict rules, so it died with `AUTH_APPROVAL_REQUIRED` on a
+  healthy ledger - and the preflight refused the stale derivation the migration
+  exists to repair, so the deploy was unreachable.** The migration carried its
+  own copy of the projection rules, and the copy had drifted from the reader's:
+  it replayed the anchored (operator-accepted) history WITHOUT the reader's
+  anchored rule, so the reducer demanded a post-approval state that the
+  accepted history never had, and the deploy died at `requirePostApprovalState`.
+  Separately, the preflight read the stored snapshot with the reader, and the
+  reader refuses a snapshot that disagrees with its journal - so the preflight
+  reported `Ledger corruption` and the apply that would have repaired it never
+  ran. There is now ONE projection (`projectLedgerEvent`) that the reader and
+  the migration share, the migration derives the snapshot with the reader's own
+  anchored rule, and the preflight verifies the RECORD and reports a stale
+  derivation as `CURRENT_STALE` instead of refusing it. A record that does not
+  verify still refuses, and the migration still never drops a task the journal
+  does not describe. `tests/agent-owner-F-160-migration.test.mjs` pins all of
+  it: the accepted history the strict rules refuse, the preflight's verdict on
+  a stale derivation, and the refusal of a broken record.
 - **F-373 — the operator's documented deploy path did not name the state root, so
   the deploy deployed nothing.** F-219 made the machine-specific state root an
   OPERATOR INPUT: the operator drivers read `ZINK_OPERATOR_STATE_DIR` or their

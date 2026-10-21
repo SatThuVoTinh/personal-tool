@@ -618,74 +618,46 @@ export function migrateLedgerProjection(paths) {
   if (lines.length === 0) {
     return { changed: false, sequence: 0, tasks: 0 };
   }
-  // A FULL read: the whole journal is replayed with the current rules, so the
-  // derived state is the one the current build produces.
+  // A FULL read, in the recompute mode: the whole journal is replayed with the
+  // current rules, so the derived state is the one the current build produces.
+  // It is the READER's own replay - the same code, the same anchored rule - so
+  // the two cannot drift apart. It used to be a second, independent copy of
+  // the rules, and the copy diverged: it replayed the accepted history under
+  // the strict rules, so the reducer demanded a post-approval state that
+  // history never had and the migration died with AUTH_APPROVAL_REQUIRED.
   const before = readFileSync(paths.snapshot, "utf8");
-  const replayed = replayLedgerForMigration(paths, lines);
-  const after = `${JSON.stringify(replayed, null, 2)}\n`;
+  const derived = deriveLedgerProjection(paths);
+  const after = `${JSON.stringify(derived, null, 2)}\n`;
   if (after === before) {
     return {
       changed: false,
-      sequence: replayed.sequence,
-      tasks: Object.keys(replayed.tasks).length,
+      sequence: derived.sequence,
+      tasks: Object.keys(derived.tasks).length,
     };
   }
-  writeSnapshotAtomic(paths, replayed);
+  writeSnapshotAtomic(paths, derived);
   return {
     changed: true,
-    sequence: replayed.sequence,
-    tasks: Object.keys(replayed.tasks).length,
+    sequence: derived.sequence,
+    tasks: Object.keys(derived.tasks).length,
   };
 }
 
 /**
- * Replay the whole journal with the current rules and return the derived
- * snapshot. Every event is verified: the chain, the digest and the budget.
+ * M12/T9 F-160: derive the snapshot from the journal, with the reader's own
+ * replay.
+ *
+ * The reader wraps every fault as "Ledger corruption", which is right for the
+ * operator and wrong here: the migration must name the CAUSE (the chain
+ * mismatch, the budget mismatch), so the operator knows what is wrong with the
+ * record instead of being told the trusted state cannot be verified.
  */
-function replayLedgerForMigration(paths, lines) {
-  const supportedVersions = new Set(SUPPORTED_GOVERNANCE_VERSIONS);
-  const parsed = parseJournalEvents(lines, false);
-  const events = parsed.events;
-  if (events.length === 0) throw new Error("journal is empty");
-  let previous = null;
-  let lastSequence = 0;
-  let state = emptySnapshot();
-  for (const event of events) {
-    validateContract("ledger-event", event);
-    const { event_digest, ...unsigned } = event;
-    if (
-      event.schema_version !== SCHEMA_VERSION ||
-      !supportedVersions.has(event.governance_version) ||
-      event.sequence !== lastSequence + 1 ||
-      event.previous_event_digest !== previous ||
-      canonicalHash("zink-ledger-event-v1", unsigned) !== event_digest
-    )
-      throw new Error("event chain mismatch");
-    previous = event_digest;
-    lastSequence = event.sequence;
-    if (isAuditOnlyEvent(event.type)) {
-      state = {
-        ...state,
-        sequence: event.sequence,
-        last_event_digest: event.event_digest,
-        updated_at: event.created_at,
-      };
-      continue;
-    }
-    state = applyWorkflowEvent(
-      state,
-      event.type,
-      event.payload,
-      event.created_at,
-    );
-    state = {
-      ...state,
-      sequence: event.sequence,
-      last_event_digest: event.event_digest,
-      updated_at: event.created_at,
-    };
+function deriveLedgerProjection(paths) {
+  try {
+    return readSnapshotLocked(paths, false, null, { recompute: true });
+  } catch (error) {
+    throw error?.cause ?? error;
   }
-  return state;
 }
 
 export function readSnapshot(paths) {
@@ -730,8 +702,21 @@ export function inspectLedgerUpgrade(paths, options = null) {
   }
   const supportedVersions = new Set(SUPPORTED_GOVERNANCE_VERSIONS);
   if (supportedVersions.has(snapshot?.governance_version)) {
-    readSnapshotLocked(paths, false);
-    return "CURRENT";
+    try {
+      readSnapshotLocked(paths, false);
+      return "CURRENT";
+    } catch (error) {
+      // M12/T9 F-160: the stored snapshot disagrees with the journal it is
+      // derived from. That is a STALE DERIVATION, not corruption: the record
+      // still verifies, and the apply recomputes the cache from it. So the
+      // preflight recomputes the projection (read-only) and reports the
+      // staleness; a record that does not verify still refuses the
+      // deployment, exactly as before.
+      if (!isStaleProjection(error)) throw error;
+      const report = {};
+      readSnapshotLocked(paths, false, report, { recompute: true });
+      return report.projectionStale === true ? "CURRENT_STALE" : "CURRENT";
+    }
   }
   const expectedKeys = Object.keys(emptySnapshot()).sort();
   if (
@@ -751,6 +736,29 @@ export function inspectLedgerUpgrade(paths, options = null) {
   )
     throw new Error("EXECUTION_STATE_UNKNOWN");
   return "EMPTY_R11";
+}
+
+/**
+ * M12/T9 F-160: is this fault a stale DERIVATION rather than a broken record?
+ *
+ * The reader refuses a stored snapshot that disagrees with its journal with
+ * "snapshot workflow mismatch" or "snapshot budget mismatch", and wraps every
+ * fault as "Ledger corruption". Only those two are a stale derivation; every
+ * other fault (the chain, the digests, the contract, the budget of the
+ * journal itself) is corruption, and it still refuses the deployment.
+ */
+function isStaleProjection(error) {
+  let cause = error;
+  for (let depth = 0; cause && depth < 4; depth += 1) {
+    const message = String(cause?.message ?? "");
+    if (
+      message === "snapshot workflow mismatch" ||
+      message === "snapshot budget mismatch"
+    )
+      return true;
+    cause = cause?.cause;
+  }
+  return false;
 }
 
 export function upgradeEmptyLegacyLedger(paths) {
@@ -895,7 +903,75 @@ function resolveForkSurvivors(events, snapshot) {
   return { bySequence, survivors };
 }
 
-function readSnapshotLocked(paths, repairSnapshot = true, report = null) {
+/**
+ * M12/T9 F-160: the ONE per-event projection.
+ *
+ * The reader and the forward migration both project the journal, and they used
+ * to do it with two independent copies of the same rules. The copies drifted:
+ * the migration replayed the ANCHORED history under the CURRENT rules, so the
+ * reducer demanded a post-approval state the accepted history never had, and
+ * the migration died with AUTH_APPROVAL_REQUIRED on a healthy ledger - the
+ * drift was only visible on a live host.
+ *
+ * One function, two callers: the reader and the migration cannot disagree
+ * about what an event means.
+ *
+ * `anchored` marks an event at or below the snapshot's head: operator-accepted
+ * history, whose ADMISSION the replay trusts (its structure, its effects and
+ * the end-state comparison still verify everything checkable). A tail event is
+ * unaccepted and stays fully strict.
+ */
+function projectLedgerEvent(state, event, options = null) {
+  const anchored = options?.anchored === true;
+  if (event.type === "BUDGET_RESERVED") {
+    const { task_id, kind, amount, counters } = event.payload;
+    const budgeted = reserveBudget(state, task_id, kind, amount);
+    if (
+      BUDGET_FIELDS.some(
+        (field) => counters?.[field] !== budgeted.tasks[task_id][field],
+      )
+    )
+      throw new Error("journal budget mismatch");
+    return budgeted;
+  }
+  // M12/T9 F-100: the audit-only types project nothing, so the anchored
+  // region has the same defined behaviour as the tail.
+  if (isAuditOnlyEvent(event.type)) return state;
+  if (!event.type.startsWith("WORKFLOW_")) return state;
+  return applyWorkflowEvent(
+    state,
+    event.type,
+    event.payload,
+    event.created_at,
+    anchored
+      ? {
+          replayAnchored: true,
+          preVerdictRootResult: options?.preVerdictRootResult === true,
+        }
+      : undefined,
+  );
+}
+
+/**
+ * M12/T9 F-160: the RECOMPUTE mode.
+ *
+ * The reader normally VERIFIES the stored snapshot against the journal and
+ * refuses when the two disagree. The recompute mode instead DERIVES the
+ * snapshot from the journal - the record is the authority, the snapshot is a
+ * cache of it - and reports whether the stored one was stale.
+ *
+ * It is the mode the forward migration and the preflight use: a stale
+ * DERIVATION is not corruption, and refusing it would make a ledger that is
+ * perfectly readable after the recompute unreachable. A record that does not
+ * verify still refuses, in this mode exactly as in the normal one.
+ */
+function readSnapshotLocked(
+  paths,
+  repairSnapshot = true,
+  report = null,
+  options = null,
+) {
+  const recompute = options?.recompute === true;
   if (repairSnapshot) ensureLedger(paths);
   else validateLedgerPaths(paths);
   try {
@@ -920,7 +996,10 @@ function readSnapshotLocked(paths, repairSnapshot = true, report = null) {
     // tail instead of with the whole history. A checkpoint that does not
     // describe this snapshot, or that no longer matches the journal, is stale:
     // the full read below runs and the checkpoint is rewritten.
-    const checkpoint = readCheckpoint(paths);
+    // M12/T9 F-160: the recompute mode replays the WHOLE journal - the
+    // anchored prefix included - because the anchored projection is exactly what
+    // it recomputes. A checkpoint skips that prefix, so it is not read here.
+    const checkpoint = recompute ? null : readCheckpoint(paths);
     const checkpointed =
       checkpoint &&
       checkpoint.sequence === snapshot.sequence &&
@@ -1100,43 +1179,20 @@ function readSnapshotLocked(paths, repairSnapshot = true, report = null) {
         throw new Error("event chain mismatch");
       previous = event_digest;
       lastSequence = event.sequence;
-      if (event.type === "BUDGET_RESERVED") {
-        const { task_id, kind, amount, counters } = event.payload;
-        journalBudget = reserveBudget(journalBudget, task_id, kind, amount);
-        if (
-          BUDGET_FIELDS.some(
-            (field) =>
-              counters?.[field] !== journalBudget.tasks[task_id][field],
-          )
-        )
-          throw new Error("journal budget mismatch");
-      }
-      // M12/T9 F-100: the audit-only types are recognised EXPLICITLY here, so
-      // the anchored region has the same defined behaviour as the tail: an
-      // audit record changes no projection.
-      if (isAuditOnlyEvent(event.type)) {
-        // nothing to project
-      } else if (event.type.startsWith("WORKFLOW_"))
-        journalBudget = applyWorkflowEvent(
-          journalBudget,
-          event.type,
-          event.payload,
-          event.created_at,
-          // Option (b) migration 2026-09-29: events at or below the snapshot
-          // head are operator-accepted history — replay trusts their admission
-          // (structure, effects, and the end-state hash compare below still
-          // verify everything checkable) and reproduces the transitions the
-          // deployed build performed. Events beyond the head are unaccepted
-          // tail and stay fully strict. The flag MUST never be set for tail:
-          // admission policy is enforced at write time, and re-reads must not
-          // re-litigate it.
-          hasAnchoredHead && event.sequence <= snapshot.sequence
-            ? {
-                replayAnchored: true,
-                preVerdictRootResult: preVerdictForEvent(event),
-              }
-            : undefined,
-        );
+      // M12/T9 F-160: the projection is the SHARED one, so the reader and the
+      // forward migration cannot drift apart.
+      //
+      // Option (b) migration 2026-09-29: events at or below the snapshot
+      // head are operator-accepted history - replay trusts their admission
+      // (structure, effects, and the end-state hash compare below still
+      // verify everything checkable) and reproduces the transitions the
+      // deployed build performed. Events beyond the head are unaccepted tail
+      // and stay fully strict. The flag MUST never be set for tail: admission
+      // policy is enforced at write time, and re-reads must not re-litigate it.
+      journalBudget = projectLedgerEvent(journalBudget, event, {
+        anchored: hasAnchoredHead && event.sequence <= snapshot.sequence,
+        preVerdictRootResult: preVerdictForEvent(event),
+      });
       if (event.sequence <= snapshot.sequence)
         anchoredBudget = journalBudget.tasks;
       if (
@@ -1162,6 +1218,20 @@ function readSnapshotLocked(paths, repairSnapshot = true, report = null) {
       (snapshot.sequence === 0 && snapshot.last_event_digest !== null)
     )
       throw new Error("snapshot/event sequence mismatch");
+    // M12/T9 F-160: in the recompute mode a disagreement is not a fault, it is
+    // the FINDING: the stored snapshot is a stale DERIVATION of a record that
+    // verifies. The normal mode still refuses it.
+    let projectionStale = false;
+    if (recompute) {
+      // A task the journal does not describe is NOT a stale derivation: it is
+      // governance history the record lost. Recomputing it away would destroy
+      // it, so the recompute refuses instead of repairing it.
+      const lost = Object.keys(snapshot.tasks).filter(
+        (taskId) => !anchoredBudget[taskId],
+      );
+      if (lost.length > 0)
+        throw new Error("snapshot task missing from journal");
+    }
     for (const taskId of new Set([
       ...Object.keys(anchoredBudget),
       ...Object.keys(snapshot.tasks),
@@ -1171,14 +1241,28 @@ function readSnapshotLocked(paths, repairSnapshot = true, report = null) {
         BUDGET_FIELDS.some(
           (field) => snapshot.tasks[taskId]?.[field] !== expected[field],
         )
-      )
-        throw new Error("snapshot budget mismatch");
+      ) {
+        if (!recompute) throw new Error("snapshot budget mismatch");
+        projectionStale = true;
+      }
       if (
         expected.workflow_status &&
         canonicalHash("zink-ledger-event-v1", expected) !==
           canonicalHash("zink-ledger-event-v1", snapshot.tasks[taskId])
-      )
-        throw new Error("snapshot workflow mismatch");
+      ) {
+        if (!recompute) throw new Error("snapshot workflow mismatch");
+        projectionStale = true;
+      }
+    }
+    if (report) report.projectionStale = projectionStale;
+    // M12/T9 F-160: the recompute mode replaces the STORED anchored
+    // projection with the REPLAYED one - that is the whole point of it - and
+    // the tail is then applied to it exactly as the reader applies the tail to
+    // the stored snapshot. The ANCHOR does not move: the derived snapshot
+    // still describes the same anchor, so the reader's next read reproduces
+    // it instead of disagreeing with it.
+    if (recompute) {
+      snapshot = { ...snapshot, tasks: anchoredBudget };
     }
     // Recover only transitions whose complete state delta is in the journal.
     // Unknown event kinds must reconcile with the operator, never be skipped.
@@ -1226,7 +1310,8 @@ function readSnapshotLocked(paths, repairSnapshot = true, report = null) {
         updated_at: event.created_at,
       };
     }
-    if (tail.length > 0 && repairSnapshot) writeSnapshotAtomic(paths, snapshot);
+    if (tail.length > 0 && repairSnapshot && !recompute)
+      writeSnapshotAtomic(paths, snapshot);
     // M12/T9 F-099: the checkpoint for the anchor the snapshot describes.
     //
     // The chain covers the ANCHORED PREFIX only, so a checkpoint always
@@ -1241,7 +1326,7 @@ function readSnapshotLocked(paths, repairSnapshot = true, report = null) {
       events.some((event) =>
         PRE_VERDICT_VERSIONS.has(event.governance_version),
       );
-    if (!checkpointed || (tail.length > 0 && repairSnapshot)) {
+    if (!recompute && (!checkpointed || (tail.length > 0 && repairSnapshot))) {
       // The anchored prefix's bytes, and the offset where they end.
       const buffer = readFileSync(paths.events);
       const anchoredCount = Math.min(journalLines.length, snapshot.sequence);
