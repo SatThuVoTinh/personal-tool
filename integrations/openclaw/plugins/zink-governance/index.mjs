@@ -54,6 +54,16 @@ import {
   isIdentityKey,
   tokenizeDiscordPrincipalReferences,
   tokenizePayloadPrincipalReferences,
+  // M12/T9 F-049/H7: the policy for an UNKNOWN Discord identity — an identity
+  // that is neither the owner nor a member of the roster. The owner's decision
+  // of 2026-10-21 (`H7`) is "record it and flag it": recorded hashed (as
+  // F-049 decided), marked as unknown, and surfaced to the owner.
+  UNKNOWN_PRINCIPAL_CATEGORY,
+  PRINCIPAL_TOKEN_PREFIX,
+  PRINCIPAL_TOKEN_SUFFIX,
+  PROSE_PAYLOAD_FIELDS,
+  rosterPrincipalReferences,
+  unknownPrincipalReferencesInPayload,
 } from "../../lib/policy.mjs";
 import {
   sanitizeDelegationText,
@@ -5654,13 +5664,230 @@ export function resolveIdentityKey(paths) {
  * payload whose prose carries none is written exactly as it was.
  */
 export function recordWorkflowEvent(paths, type, payload) {
-  return writeWorkflowEvent(
+  const identityKey = resolveIdentityKey(paths);
+  const written = writeWorkflowEvent(
     paths,
     type,
     tokenizePayloadPrincipalReferences(payload, {
-      identityKey: resolveIdentityKey(paths),
+      identityKey,
     }),
   );
+  // M12/T9 F-049/H7: the event is RECORDED first and marked afterwards. The
+  // owner's answer is "record it and flag it", never "refuse it": a marking
+  // that fails must not undo the record that is already durable.
+  markUnknownPrincipals(paths, type, payload, { identityKey });
+  return written;
+}
+
+/**
+ * M12/T9 F-049/H7 — the durable MARKING of an unknown Discord identity.
+ *
+ * F-049 decided that a third party's identity is stored as a hash. This decides
+ * what the system does when the identity it hashed is one it cannot account
+ * for: neither the owner nor a member of the roster. The owner's answer
+ * (2026-10-21, `H7`) is "record it and flag it" — so the fact is recorded in a
+ * durable record of its own, and the owner is told.
+ *
+ * The record lives beside the ledger's other plugin-owned durable state
+ * (`<ledgerRoot>/…`), one file per unknown identity, and it names the identity
+ * ONLY by the hashed reference F-049 already writes. The raw id is never
+ * written, never logged and never committed.
+ *
+ * The record is deliberately NOT a ledger event: the ledger's event vocabulary
+ * is closed (the published contract forbids extra payload members and the
+ * reducer refuses any payload key it does not declare), so a marking field
+ * could only be added by changing the reducer's key lists — a change this
+ * band does not own. A separate durable record is therefore the smallest
+ * sound place for the fact, and it leaves the event itself untouched.
+ */
+export const UNKNOWN_PRINCIPAL_STORE_DIRECTORY = "unknown-principals";
+
+/** The durable record's path for one unknown identity. */
+export function unknownPrincipalRecordPath(paths, principalRef) {
+  if (!paths?.root || typeof paths.root !== "string") return null;
+  if (
+    typeof principalRef !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(principalRef)
+  ) {
+    return null;
+  }
+  return path.join(
+    paths.root,
+    UNKNOWN_PRINCIPAL_STORE_DIRECTORY,
+    `${principalRef}.json`,
+  );
+}
+
+/** The durable record of one unknown identity, or null when there is none. */
+export function readUnknownPrincipalRecord(paths, principalRef) {
+  const file = unknownPrincipalRecordPath(paths, principalRef);
+  if (!file) return null;
+  try {
+    const record = readJsonStrictSync(file);
+    if (!record || record.principal_ref !== principalRef) return null;
+    return record;
+  } catch {
+    // A partially written or corrupt record is never a valid record.
+    return null;
+  }
+}
+
+/**
+ * Record one occurrence of an unknown identity, durably.
+ *
+ * The record accumulates the occurrences so the owner can see that the SAME
+ * unknown identity appears again — which is exactly what the hashed reference
+ * makes recognisable (F-049's third property).
+ */
+export function recordUnknownPrincipalOccurrence(
+  paths,
+  principalRef,
+  { taskId = null, eventType = null, at = null } = {},
+) {
+  const file = unknownPrincipalRecordPath(paths, principalRef);
+  if (!file) return null;
+  const observedAt = typeof at === "string" && at.length > 0 ? at : null;
+  const previous = readUnknownPrincipalRecord(paths, principalRef);
+  const occurrences = Array.isArray(previous?.occurrences)
+    ? previous.occurrences.filter(
+        (entry) =>
+          entry &&
+          typeof entry === "object" &&
+          typeof entry.task_id === "string",
+      )
+    : [];
+  const sameOccurrence = occurrences.some(
+    (entry) =>
+      entry.task_id === taskId &&
+      entry.event_type === eventType &&
+      entry.observed_at === observedAt,
+  );
+  if (!sameOccurrence) {
+    occurrences.push({
+      task_id: taskId,
+      event_type: eventType,
+      observed_at: observedAt,
+    });
+  }
+  const record = {
+    schema: "zink-unknown-principal-v1",
+    category: UNKNOWN_PRINCIPAL_CATEGORY,
+    // The hashed reference — never the raw account id.
+    principal_ref: principalRef,
+    principal_token: `${PRINCIPAL_TOKEN_PREFIX}${principalRef}${PRINCIPAL_TOKEN_SUFFIX}`,
+    known_to_the_roster: false,
+    owner_action_required: true,
+    first_seen_at: previous?.first_seen_at ?? observedAt,
+    last_seen_at: observedAt ?? previous?.last_seen_at ?? null,
+    occurrences,
+  };
+  writeJsonAtomicSync(file, record);
+  return record;
+}
+
+/**
+ * The identities in one durable event that the system does not know.
+ *
+ * The KNOWN set is the task's own recorded origin principal — the ledger's
+ * durable record of who opened the task, which is the owner — plus the
+ * roster's own identities. The owner's own identity handling is therefore
+ * unchanged: the owner is never marked unknown.
+ */
+export function unknownPrincipalsForEvent(
+  paths,
+  payload,
+  { identityKey = null } = {},
+) {
+  if (!isIdentityKey(identityKey)) return [];
+  // The write path is hot: an event whose payload carries no prose cannot
+  // carry an identity, so it must not pay for a snapshot read.
+  const carriesProse = PROSE_PAYLOAD_FIELDS.some(
+    (field) =>
+      typeof payload?.[field] === "string" && payload[field].length > 0,
+  );
+  if (!carriesProse) return [];
+  const taskId =
+    typeof payload?.task_id === "string" && payload.task_id.length > 0
+      ? payload.task_id
+      : null;
+  let originPrincipalRef = null;
+  if (taskId) {
+    try {
+      originPrincipalRef =
+        readSnapshot(paths)?.tasks?.[taskId]?.origin_principal_ref ?? null;
+    } catch {
+      originPrincipalRef = null;
+    }
+  }
+  const knownPrincipalRefs = [
+    ...rosterPrincipalReferences(identityKey),
+    ...(typeof originPrincipalRef === "string" ? [originPrincipalRef] : []),
+  ];
+  return unknownPrincipalReferencesInPayload(payload, {
+    identityKey,
+    knownPrincipalRefs,
+  });
+}
+
+/**
+ * The observer the plugin's own setup registers to SURFACE a marked identity.
+ *
+ * The marking is durable on its own; the surfacing is the governed #incidents
+ * path, which lives inside the plugin's setup (it needs the Discord
+ * destination, the bot token and the forum tag resolver). The seam therefore
+ * hands the record to whoever registered, and nothing else.
+ */
+let UNKNOWN_PRINCIPAL_OBSERVER = null;
+
+export function setUnknownPrincipalObserver(observer) {
+  UNKNOWN_PRINCIPAL_OBSERVER = typeof observer === "function" ? observer : null;
+}
+
+/**
+ * Mark every unknown identity an event carries, and surface it.
+ *
+ * A marking failure is REPORTED and never turned into a refusal: the event is
+ * already durable, and the owner's decision is "record", not "refuse".
+ */
+function markUnknownPrincipals(paths, type, payload, { identityKey = null }) {
+  try {
+    const references = unknownPrincipalsForEvent(paths, payload, {
+      identityKey,
+    });
+    if (references.length === 0) return [];
+    const marked = [];
+    for (const principalRef of references) {
+      const record = recordUnknownPrincipalOccurrence(paths, principalRef, {
+        taskId: payload?.task_id ?? null,
+        eventType: type,
+        at: new Date().toISOString(),
+      });
+      if (!record) continue;
+      marked.push(record);
+      const observer = UNKNOWN_PRINCIPAL_OBSERVER;
+      if (!observer) continue;
+      try {
+        const surfaced = observer(record);
+        if (surfaced && typeof surfaced.catch === "function") {
+          surfaced.catch((error) => {
+            console.error(
+              `[zink-governance] unknown principal surface failed: ${error?.message ?? error}`,
+            );
+          });
+        }
+      } catch (error) {
+        console.error(
+          `[zink-governance] unknown principal surface failed: ${error?.message ?? error}`,
+        );
+      }
+    }
+    return marked;
+  } catch (error) {
+    console.error(
+      `[zink-governance] unknown principal marking failed: ${error?.message ?? error}`,
+    );
+    return [];
+  }
 }
 
 /**
@@ -6328,6 +6555,11 @@ export default {
      * runs, and a surface failure is logged rather than folded into the verdict — the block
      * stands either way (requirement 5). If the forum's current threads cannot be read, no
      * thread is opened, because a blind post is how a duplicate incident gets made.
+     *
+     * M12/T9 F-049/H7: the card's own text may be supplied by the caller, so the
+     * SAME governed path — the same forum, the same dedupe rule, the same card
+     * and the same tags — can carry a fact that is not a run containment. The
+     * containment text is the default and is unchanged.
      */
     async function surfaceGovernanceIncident({
       reason,
@@ -6336,6 +6568,7 @@ export default {
       scope,
       taskIds,
       ledgerError,
+      card = null,
     }) {
       const incidentsForumId = resolveDiscordDestination(
         config,
@@ -6422,12 +6655,17 @@ export default {
           taskId: taskIds[0] ?? null,
           state: "OPEN",
           severity: severity || "MEDIUM",
-          observed: `Một run không thể đối chiếu (${reason}, phạm vi ${scope}) đã bị tạm dừng: ${taskIds.join(", ") || "không xác định tác vụ"}.`,
+          observed:
+            card?.observed ??
+            `Một run không thể đối chiếu (${reason}, phạm vi ${scope}) đã bị tạm dừng: ${taskIds.join(", ") || "không xác định tác vụ"}.`,
           expected:
+            card?.expected ??
             "Mọi run kết thúc đều được ghi vào sổ cái governance trước khi hệ thống tiếp tục.",
-          action: ledgerError
-            ? `Sổ cái KHÔNG ghi được (${ledgerError}) — cần operator đối chiếu trước khi chạy lại.`
-            : "Run đã bị chặn cho tới khi operator đối chiếu; chưa có kết quả nào được ghi nhận.",
+          action:
+            card?.action ??
+            (ledgerError
+              ? `Sổ cái KHÔNG ghi được (${ledgerError}) — cần operator đối chiếu trước khi chạy lại.`
+              : "Run đã bị chặn cho tới khi operator đối chiếu; chưa có kết quả nào được ghi nhận."),
         }),
         selections,
       });
@@ -6442,6 +6680,59 @@ export default {
       );
       return surfaced.threadId;
     }
+
+    /**
+     * M12/T9 F-049/H7: surface a MARKED unknown identity to the owner.
+     *
+     * The owner's answer (2026-10-21, `H7`) is "record it and flag it": an
+     * identity that is neither the owner nor a member of the roster is
+     * recorded (hashed) and the owner is told. The telling uses the EXISTING
+     * governed incident path — the same #incidents forum, the same dedupe
+     * rule, the same card and the same tags — so no new outbound path is
+     * introduced.
+     *
+     * One thread per unknown identity: the incident's own reason carries the
+     * hashed reference, so the forum's listing can tell two identities apart
+     * and a retry is recognised instead of duplicated.
+     */
+    function surfaceUnknownPrincipal(record) {
+      const principalRef = record?.principal_ref;
+      if (typeof principalRef !== "string" || principalRef.length === 0) {
+        return null;
+      }
+      const occurrences = Array.isArray(record?.occurrences)
+        ? record.occurrences
+        : [];
+      const taskIds = [
+        ...new Set(
+          occurrences
+            .map((entry) => entry?.task_id)
+            .filter(
+              (taskId) => typeof taskId === "string" && taskId.length > 0,
+            ),
+        ),
+      ];
+      return surfaceGovernanceIncident({
+        reason: `${UNKNOWN_PRINCIPAL_CATEGORY}:${principalRef}`,
+        runId: null,
+        childSessionKey: null,
+        scope: "UNKNOWN_PRINCIPAL",
+        taskIds,
+        ledgerError: null,
+        card: {
+          observed: `Một định danh Discord KHÔNG thuộc roster và KHÔNG phải của owner đã xuất hiện trong sự kiện bền vững: ${record.principal_token ?? principalRef}.`,
+          expected:
+            "Mọi định danh Discord ghi vào sổ cái governance đều thuộc owner hoặc roster đã công nhận.",
+          action:
+            "Đã ghi lại dưới dạng băm (không có id gốc trong sổ cái). Owner xem lại nội dung sự kiện để quyết định có tiếp tục hay không.",
+        },
+      });
+    }
+
+    // The seam that marks an unknown identity is module level; the governed
+    // #incidents path needs this setup's destination, token and tag resolver.
+    // The observer is how the two meet — and nothing else crosses.
+    setUnknownPrincipalObserver((record) => surfaceUnknownPrincipal(record));
 
     function credentialUnavailable(agentId) {
       const error = new Error("CREDENTIAL_UNAVAILABLE");

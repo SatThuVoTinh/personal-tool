@@ -575,6 +575,24 @@ asset drift detected` (`installed_mutation: false`) because ten live
 
 ### Fixed
 
+- **F-049 - an identity the system has never seen was recorded and then
+  forgotten.** A third party's Discord id is stored as a HASHED reference
+  (F-049's own rule), but nothing marked the identity as unknown, so a
+  reference that belonged to neither the owner nor a roster member looked
+  exactly like one that did. The owner's answer to `H7` (2026-10-21) is (b):
+  RECORD it, MARK it, and TELL the owner - never refuse, never stay silent.
+  The write seam now records the occurrence first and marks it afterwards, so
+  a marking failure can never turn a record into a refusal. The mark is a
+  durable, plugin-owned record under
+  `<ledgerRoot>/unknown-principals/<64-hex>.json`, naming the identity only by
+  its hashed reference, with `known_to_the_roster: false`,
+  `owner_action_required: true` and the occurrences (task, event type, time).
+  The surfacing reuses the EXISTING governed incident path - the `#incidents`
+  forum, the same card, the same dedupe rule - with one thread per identity
+  and the hashed reference in the incident reason. No new outbound path was
+  opened. The owner's own identity and every roster member are untouched.
+  `tests/agent-gov-F-049-H7.test.mjs` pins the record, the mark, the owner's
+  exemption, the roster's exemption and the reuse of the existing surface.
 - **F-036 - the router credential was baked into the generated config, so every
   copy of it carried the secret and rotating it meant a re-apply of the whole
   tree.** Every other secret in the tree already travelled the
