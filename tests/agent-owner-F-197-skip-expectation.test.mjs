@@ -286,3 +286,51 @@ the table declares",
     "the gate must be tracked",
   );
 });
+
+test("F-197: the gate reads a REAL Node JUnit report", () => {
+  // The crafted reports above prove what the gate must refuse; this case
+  // proves the gate can READ what Node actually writes. The report is
+  // produced by the real reporter, not by hand.
+  const root = mkdtempSync(path.join(tmpdir(), "zink-f197-real-"));
+  try {
+    const lane = "real-lane.test.mjs";
+    writeFileSync(
+      path.join(root, lane),
+      `import test from "node:test";
+test("a case that passed", () => {});
+test("a case that skipped", { skip: "crafted" }, () => {});
+`,
+      "utf8",
+    );
+    const report = path.join(root, "report.xml");
+    // The child must NOT look like a test file of THIS run: node isolates a
+    // child that carries the test context, and an isolated child writes no
+    // report of its own.
+    const environment = { ...process.env };
+    delete environment.NODE_TEST_CONTEXT;
+    execFileSync(
+      process.execPath,
+      [
+        "--test",
+        "--test-reporter=junit",
+        "--test-reporter-destination=report.xml",
+        lane,
+      ],
+      { cwd: root, encoding: "utf8", stdio: "pipe", env: environment },
+    );
+    const xml = readFileSync(report, "utf8");
+    assert.match(xml, /<testcase\b/u, "the real report must carry test cases");
+    assert.match(
+      xml,
+      /file="[^"]*real-lane\.test\.mjs"/u,
+      "the real report must name the lane",
+    );
+    assert.match(
+      xml,
+      /<skipped\b/u,
+      "the real report must mark the skipped case",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

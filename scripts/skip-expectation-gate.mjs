@@ -198,6 +198,21 @@ skip family: the skip is unexplained`,
     }
   }
 
+  // A lane that declares a family the TABLE does not know is just as
+  // unexplained: its skips would be counted against no family, and the gate
+  // would print PASS — the very "a whole tier went inert and CI stayed
+  // green" defect this gate exists to close.
+  const declared = new Set(families.map((family) => family.id));
+  for (const [lane, entry] of perLane) {
+    if (!entry.family) continue;
+    if (!declared.has(entry.family)) {
+      failures.push(
+        `the lane \`${lane}\` declares the family \`${entry.family}\`, which the \
+expectation table does not: its skips are counted against nothing`,
+      );
+    }
+  }
+
   for (const family of families) {
     const members = [...perLane.entries()].filter(
       ([, entry]) => entry.family === family.id,
