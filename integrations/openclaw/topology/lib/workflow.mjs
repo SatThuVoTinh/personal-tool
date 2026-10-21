@@ -2213,8 +2213,10 @@ function reducerMintedResultDigest(task) {
  * M7-062: the ONE result-identity binding. A user verdict (accept, reject, or
  * request a revision) must name the exact result it applies to, otherwise a
  * verdict recorded against result A could be replayed against result B. The
- * digest is authoritative; the legacy result id is accepted only when the
- * digest is absent, and an unbound verdict is refused.
+ * digest is authoritative, and a verdict that binds to nothing is refused.
+ * M12/T9 F-249 withdrew the id-only binding and M12/T9 F-376 re-admitted the
+ * legacy result id as an OPTIONAL member without weakening that: a verdict
+ * that names only a result id is still refused (see below).
  *
  * M12/T9 F-077: the ONE exception, and it is narrow. A task-level result
  * (WORKFLOW_RESULT_RECORDED, the coordinator's own result) whose caller
