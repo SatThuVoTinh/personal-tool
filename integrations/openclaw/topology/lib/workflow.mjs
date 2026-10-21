@@ -18,6 +18,7 @@ import {
   OUTCOME_STATUSES,
 } from "./runtime.mjs";
 import { AGENT_STACK_POLICY } from "../../lib/authority.mjs";
+import { AGENT_SPAWN_POLICY } from "../../lib/policy.mjs";
 // B-7: the ceilings are declared once, in the ledger's canonical `BUDGETS`. `ledger.mjs:18`
 // imports this module in turn, so the cycle is real and safe only because every read below
 // happens inside a function body, after both modules have finished evaluating.
@@ -42,6 +43,164 @@ const terminal = new Set([
   "CANCELLED",
   "REJECTED",
 ]);
+
+// M12/T9 F-060: the coordinator-selection rule.
+//
+// The owner's ruling (2026-10-21): "Khi 1 việc được giao, main @Quản Lý làm
+// điều phối chính, riêng phần data sẽ chia nhỏ việc, main giao việc cho @O1
+// Điều phối 1 và @O2 Điều Phối 2. @O2 phụ trách điều phối và làm việc với các
+// agent chuyên môn liên quan đến data visualize, storytelling, @O1 phụ trách
+// điều phối và làm việc với các agent chuyên môn liên quan đến data etl,
+// data labeling".
+//
+// The rule is expressed over the CANONICAL tables, which are read and never
+// changed:
+//
+//   AGENT_SPAWN_POLICY  main: [o1, o2]
+//                       o1: [excel, sql, python]
+//                       o2: [power-bi, python]
+//   AGENT_STACK_POLICY  main: [infrastructure, data_plant, semantic,
+//                              intelligence, decision]
+//                       o1: [infrastructure, data_plant]
+//                       o2: [semantic, intelligence, decision]
+//
+// THREE questions, THREE answers:
+//
+//   root    - WHO COORDINATES the task: the most specific member of the
+//             canonical spawn policy that can reach every REQUIRED node's
+//             agent_id. `main` is the answer whenever the work spans both
+//             coordinators, because main is the only agent that can spawn both
+//             o1 and o2.
+//   owners  - WHICH COORDINATOR OWNS EACH NODE: derived from the node's
+//             stack_id against the canonical stack policy. o1 owns the ETL and
+//             labeling stacks (data_plant), o2 owns the visualize and
+//             storytelling stacks (semantic, intelligence, decision). The STACK
+//             decides for `python`, which BOTH o1 and o2 may spawn: python
+//             under data_plant is o1's, python under intelligence is o2's.
+//   primary - the coordinator that EXECUTES the task: the unique OWNER of the
+//             required nodes. More than one owner (a brief that spans both
+//             domains) or no owner at all (a stack no coordinator owns) leaves
+//             the field UNSET and the dispatch refuses the task with
+//             COORDINATOR_NOT_EXECUTABLE. The field is never defaulted, and it
+//             is never "main": main coordinates, it does not execute.
+//
+// The canonical spawn table is read here - not the local `roles` mirror above -
+// so the derivation can never disagree with the containment check the dispatch
+// derivation performs (lib/policy.mjs reads the same table).
+const EXECUTABLE_COORDINATORS = Object.freeze(["o1", "o2"]);
+
+/** The agents one agent can reach through the canonical spawn policy. */
+function spawnClosure(agentId) {
+  const seen = new Set();
+  const pending = [...(AGENT_SPAWN_POLICY[agentId] ?? [])];
+  while (pending.length > 0) {
+    const child = pending.pop();
+    if (seen.has(child)) continue;
+    seen.add(child);
+    pending.push(...(AGENT_SPAWN_POLICY[child] ?? []));
+  }
+  return seen;
+}
+
+const SPAWN_CLOSURES = Object.freeze(
+  Object.fromEntries(
+    Object.keys(AGENT_SPAWN_POLICY).map((agentId) => [
+      agentId,
+      Object.freeze([...spawnClosure(agentId)]),
+    ]),
+  ),
+);
+
+/**
+ * The coordinator that owns a stack, per the canonical stack policy.
+ *
+ * The two executable coordinators' stack sets are disjoint, so a canonical
+ * stack has exactly one owner. A stack no coordinator owns has NO owner: the
+ * caller fails closed rather than guessing.
+ */
+function coordinatorForStack(stackId) {
+  const owners = EXECUTABLE_COORDINATORS.filter((coordinator) =>
+    (AGENT_STACK_POLICY[coordinator] ?? []).includes(stackId),
+  );
+  return owners.length === 1 ? owners[0] : null;
+}
+
+/**
+ * M12/T9 F-060: the coordinator-selection rule, applied to a task's nodes.
+ *
+ * Returns `{ root, primary, owners }`:
+ *
+ *   - `owners`  - the per-node owner (the canonical stack policy), in the
+ *     order of the REQUIRED nodes. `null` for a node whose stack no
+ *     coordinator owns.
+ *   - `root`    - the coordinator that coordinates the task, or `null` when
+ *     the answer is not unique.
+ *   - `primary` - the coordinator that EXECUTES the task: the unique owner of
+ *     the required nodes, otherwise `null`. `null` means the field stays unset
+ *     and the dispatch refuses the task; it never means "main" and it never
+ *     means a default.
+ */
+export function deriveTaskCoordinators(nodes) {
+  const required = (Array.isArray(nodes) ? nodes : []).filter(
+    (node) => node?.required === true,
+  );
+  const owners = required.map((node) => coordinatorForStack(node?.stack_id));
+  const requiredAgentIds = [
+    ...new Set(
+      required
+        .map((node) => node?.agent_id)
+        .filter((agentId) => typeof agentId === "string" && agentId.length > 0),
+    ),
+  ];
+  if (requiredAgentIds.length === 0) {
+    return { root: null, primary: null, owners };
+  }
+  // The candidates: the COORDINATING agents - the members of the canonical
+  // spawn policy that can spawn at all (main, o1 and o2; the specialists have
+  // an empty spawn set and coordinate nothing) - that can reach EVERY
+  // required node. An agent reaches itself, so a required node that IS a
+  // coordinator names its owner.
+  const candidates = Object.keys(AGENT_SPAWN_POLICY).filter(
+    (agentId) =>
+      (AGENT_SPAWN_POLICY[agentId] ?? []).length > 0 &&
+      requiredAgentIds.every(
+        (requiredAgentId) =>
+          agentId === requiredAgentId ||
+          SPAWN_CLOSURES[agentId].includes(requiredAgentId),
+      ),
+  );
+  // The most specific candidate: a candidate that can reach ANOTHER candidate
+  // is the more general one (main reaches o1 and o2), so it is not the root.
+  const specific = candidates.filter(
+    (candidate) =>
+      !candidates.some(
+        (other) =>
+          other !== candidate && SPAWN_CLOSURES[candidate].includes(other),
+      ),
+  );
+  let root = null;
+  if (specific.length === 1) {
+    root = specific[0];
+  } else if (specific.length > 1) {
+    // The STACK decides the tie: `python` is spawnable by BOTH o1 and o2, so
+    // the domain the node belongs to decides who owns it.
+    const distinctOwners = [...new Set(owners.filter(Boolean))];
+    if (distinctOwners.length === 1 && specific.includes(distinctOwners[0])) {
+      root = distinctOwners[0];
+    }
+  }
+  // The EXECUTING coordinator: the unique owner of the required nodes, derived
+  // from the canonical stack policy. More than one owner (a brief that spans
+  // both domains) or no owner at all (a stack no coordinator owns) leaves the
+  // field UNSET, and the dispatch then refuses the task. The field is never
+  // defaulted and never "main": main coordinates, it does not execute.
+  const distinctOwners = [...new Set(owners)];
+  const primary =
+    distinctOwners.length === 1 && distinctOwners[0] !== null
+      ? distinctOwners[0]
+      : null;
+  return { root, primary, owners };
+}
 // M12/T9 F-082: the terminal vocabulary, exported so the ledger's
 // reconciliation reader and the reducer can never disagree about which status
 // is terminal. One declaration, two readers.
@@ -1823,6 +1982,29 @@ export function applyWorkflowEvent(
     }
     task.brief_revision = payload.brief_revision;
     task.nodes = payload.nodes;
+    // M12/T9 F-060: the coordinator that owns this task's execution is
+    // DERIVED here, from the activated brief's own nodes, and never defaulted.
+    //
+    // The field was DECLARED (the published ledger-event and ledger-snapshot
+    // contracts carry it, and the dispatch derivation reads it) but nothing
+    // ever wrote it, so every task failed the dispatch with
+    // COORDINATOR_NOT_EXECUTABLE and the live pickup loop could never claim
+    // anything.
+    //
+    // The derivation is re-run on every brief activation, because a brief
+    // revision can change the nodes and therefore the owner. When the
+    // derivation finds no coordinator, or more than one, the field is left
+    // UNSET: the dispatch then refuses the task with
+    // COORDINATOR_NOT_EXECUTABLE, which is the fail-closed answer. The key is
+    // DELETED rather than set to undefined - the contract validator sees
+    // own-properties regardless of value, so an undefined-valued key would
+    // fail additionalProperties.
+    const coordinators = deriveTaskCoordinators(task.nodes);
+    if (coordinators.primary === null) {
+      delete task.primary_coordinator;
+    } else {
+      task.primary_coordinator = coordinators.primary;
+    }
     // M7-016: the task mirrors the activated brief's semantic contract status,
     // so the guard authorizes a specialist against recorded task state rather
     // than a caller-supplied brief document. Pre-R4 briefs carry no status:
@@ -2032,8 +2214,8 @@ function reducerMintedResultDigest(task) {
     return;
   }
   requireCondition(
-    task.root_result?.result_id !== undefined &&
-      payload.result_id === task.root_result.result_id,
+    task.root_result === undefined &&
+      task.execution_payload_digest === reducerMintedResultDigest(task),
     "RESULT_MISMATCH",
   );
 }
