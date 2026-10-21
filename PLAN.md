@@ -7575,15 +7575,24 @@ where it landed:
 | `F-338` | như đề xuất                                                                                            | ONE canonical `uv`: `0.12.0` (the image and the Windows driver already pinned it); CI was corrected, and a lane compares the three pins                                                                                                                                              |
 | `F-340` | như đề xuất                                                                                            | the requirements artefact is regenerated with its index URL and both digest readers are re-pinned                                                                                                                                                                                    |
 
-**One deployment consequence, stated rather than hidden.** `F-160` and `F-060`
-change how the ledger RE-DERIVES a task's state, so a snapshot written by the
-DEPLOYED build no longer agrees with its own journal: the live task `6d4f96cc`
-(seq 25 `m7-t5-r13`, seq 26 `m8-t2.2-r4`) is the shape. The live read refuses
-with `snapshot workflow mismatch` until the DERIVED snapshot is recomputed from
-the journal — the journal itself is never rewritten, and the recomputation is
-deterministic, so this is a forward migration of derived state, not a repair of
-history. **It needs the owner's nod before it runs against the live ledger, and
-the band deploys nothing.**
+**One deployment consequence, stated rather than hidden — and it needs no
+operator step.** `F-160` and `F-060` change how the ledger RE-DERIVES a task's
+state, so a snapshot written by the DEPLOYED build no longer agrees with its own
+journal: the live task `6d4f96cc` (seq 25 `m7-t5-r13`, seq 26 `m8-t2.2-r4`) is
+the shape, and the live read would refuse with `snapshot workflow mismatch`.
+
+The owner approved the forward migration (2026-10-21). The journal is the
+RECORD and the snapshot is DERIVED from it, so the migration recomputes the
+derived artefact and never writes to the record:
+`topology/lib/ledger.mjs` exports `migrateLedgerProjection(paths)`, which
+verifies every event first (a journal that does not verify is refused and
+nothing is written), re-derives the task states with the current rules and
+writes the snapshot atomically. **The deploy ceremony calls it** — the operator
+runs the deploy as usual, and the ceremony prints the recompute line when it
+happened. The operator-facing note is
+`docs/runbooks/deploying-the-m12-t9-build.md`; the ONE manual step in it is the
+stale `0644` backup copy in the state root, which the new `F-035` check refuses
+on purpose.
 
 **The twelve EXCLUDED rows, measured.** The owner asked whether they were
 excluded because the root cause was too complicated. **None of them was.**
