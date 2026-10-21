@@ -7551,6 +7551,7 @@ compensating control. The builder refuses a bare `--apply`
 (`APPLY_REQUIRES_TRANSACTION`): the apply is reachable only through the apply
 orchestration, which takes the transaction snapshot first.
 
+| `F-247` | bỏ ô                                                                                                   | `task.accepted_reference_digests` is gone from the published contract and from every reader                                                                                                                                                                                          |
 ## Active task — M12/T9 (owner order: sửa hết findings)
 
 Task: M12/T9 — Remediate all actionable findings in docs/execution/findings.md

@@ -1253,9 +1253,19 @@ describe("M12/T9 - F-157: one derivation per concept", () => {
       !guard.includes('canonicalHash("zink-reference-v1"'),
       "the guard must call the single reference derivation instead of re-inlining the domain tag",
     );
+    // M12/T9 F-247: the owner ruled ("bỏ ô") that the unwritten
+    // reference-digest slot is removed from the contract and from every
+    // reader, so the guard no longer derives a reference digest at all - the
+    // reference is validated by the PUBLISHED delegation-envelope contract.
+    // The claim this lane exists for is UNCHANGED: there is exactly ONE
+    // reference derivation, and it is not inlined a second time anywhere.
     assert.ok(
-      guard.includes("deriveReferenceId(ref)"),
-      "the guard must call the single reference derivation",
+      !guard.includes("deriveReferenceId("),
+      "the guard must not derive a reference digest: the unwritten slot is gone (F-247)",
+    );
+    assert.ok(
+      /export function deriveReferenceId\(/u.test(canonical),
+      "the canonical module must still declare the ONE reference derivation",
     );
   });
 
