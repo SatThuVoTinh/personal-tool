@@ -624,7 +624,11 @@ export function migrateLedgerProjection(paths) {
   const replayed = replayLedgerForMigration(paths, lines);
   const after = `${JSON.stringify(replayed, null, 2)}\n`;
   if (after === before) {
-    return { changed: false, sequence: replayed.sequence, tasks: Object.keys(replayed.tasks).length };
+    return {
+      changed: false,
+      sequence: replayed.sequence,
+      tasks: Object.keys(replayed.tasks).length,
+    };
   }
   writeSnapshotAtomic(paths, replayed);
   return {

@@ -1069,7 +1069,8 @@ test("F-065: the supported governance versions come from the contract enum", asy
   // set that names the current version - so the count grows with the readers
   // and the ONE declaration stays the only place the list is written.
   assert.ok(
-    (source.match(/new Set\(SUPPORTED_GOVERNANCE_VERSIONS\)/gu) ?? []).length >= 2,
+    (source.match(/new Set\(SUPPORTED_GOVERNANCE_VERSIONS\)/gu) ?? []).length >=
+      2,
     "every reader must derive its set from the one declaration",
   );
 });

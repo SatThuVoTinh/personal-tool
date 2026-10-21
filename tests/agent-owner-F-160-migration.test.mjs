@@ -64,18 +64,27 @@ test("F-160/F-060: a snapshot that disagrees with its journal is recomputed from
     const snapshot = JSON.parse(readFileSync(paths.snapshot, "utf8"));
     const [taskId] = Object.keys(snapshot.tasks);
     snapshot.tasks[taskId].workflow_status = "REJECTED";
-    writeFileSync(paths.snapshot, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
+    writeFileSync(
+      paths.snapshot,
+      `${JSON.stringify(snapshot, null, 2)}\n`,
+      "utf8",
+    );
 
     // The reader refuses: the stored snapshot and the replay disagree.
     assert.throws(
       () => readSnapshot(paths),
-      (err) => /snapshot workflow mismatch|Ledger corruption/u.test(err.message),
+      (err) =>
+        /snapshot workflow mismatch|Ledger corruption/u.test(err.message),
       "the reader must refuse a snapshot that disagrees with its journal",
     );
 
     // The migration recomputes the derived state from the record.
     const report = migrateLedgerProjection(paths);
-    assert.equal(report.changed, true, "the migration must report the recompute");
+    assert.equal(
+      report.changed,
+      true,
+      "the migration must report the recompute",
+    );
 
     // The RECORD is untouched - byte for byte.
     assert.equal(
@@ -102,7 +111,9 @@ test("F-160/F-060: a journal that does not verify is refused and NOTHING is writ
     const paths = seed(root);
     const snapshotBefore = readFileSync(paths.snapshot, "utf8");
     // A corrupted event: the chain no longer verifies.
-    const lines = readFileSync(paths.events, "utf8").split("\n").filter(Boolean);
+    const lines = readFileSync(paths.events, "utf8")
+      .split("\n")
+      .filter(Boolean);
     const corrupted = JSON.parse(lines[0]);
     corrupted.payload.root_agent_id = "excel";
     writeFileSync(paths.events, `${JSON.stringify(corrupted)}\n`, "utf8");
@@ -128,7 +139,11 @@ test("F-160/F-060: a ledger that already agrees with its journal is left alone",
     const paths = seed(root);
     const before = readFileSync(paths.snapshot, "utf8");
     const report = migrateLedgerProjection(paths);
-    assert.equal(report.changed, false, "a current ledger must not be rewritten");
+    assert.equal(
+      report.changed,
+      false,
+      "a current ledger must not be rewritten",
+    );
     assert.equal(
       readFileSync(paths.snapshot, "utf8"),
       before,
