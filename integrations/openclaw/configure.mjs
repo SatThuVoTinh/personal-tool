@@ -94,14 +94,32 @@ const PREVIOUS_AUTH_SECRET_PLAN_SHA256 =
   "393b465d3bd2b8dd78d18662be7391e81d542e363c9be1c91580cd2913c8f2ea";
 const PREVIOUS_AUTH_ORDER_PLAN_SHA256 =
   "bdee1964f39e8c703988b3fb3a9fd690ef70cb7f6657cfb0479f734af932f221";
-const PREVIOUS_PASS_RESOLVER_SHA256 =
-  "46cf5df77462a0e6b16a004278617115597801a7032aa186b8db54d2fef49e48";
-// A narrower 8-id resolver (`ddf1a079…`) was written to the live state by a
-// diagnostic `configure.mjs --apply` that bypassed the transaction wrapper, and
-// was then reverted to the 29-id build above. It is deliberately NOT listed: it
-// is no longer on disk, and admitting a resolver artifact that nothing needs
-// would widen the allowlist for no reachable transition. The incident is
-// recorded in PLAN.md.
+// The resolver digests of previous builds that the current build may overwrite.
+//
+// The first entry is the 29-id build (the Gemini pool plus the Discord and
+// gateway ids). The second is the narrower 8-id resolver (`ddf1a079…`) that a
+// diagnostic `configure.mjs --apply` wrote to the live state by bypassing the
+// transaction wrapper.
+//
+// M12/T9 F-381: the note that stood here said the 8-id resolver "is no longer
+// on disk, and admitting a resolver artifact that nothing needs would widen
+// the allowlist for no reachable transition". Measured on the live host on
+// 2026-10-22, READ-ONLY, that premise is DEAD: the file IS on the host
+// (`~/.openclaw-zink/bin/openclaw-pass-resolver`), and the preflight refuses
+// it with `Password-store resolver`, so the apply cannot reach the extension
+// it is supposed to replace. The transition is reachable, and the entry only
+// permits OVERWRITING the file with the current build's own bytes: the old
+// content is not trusted, and an unrecognised digest still fails closed.
+//
+// The digest is derived, not transcribed: the deployed bytes are the
+// repository's own template with the eight ids it carries — the seven Discord
+// bot tokens and the gateway token — and
+// `tests/agent-owner-F-381-resolver-admission.test.mjs` rebuilds them from the
+// policy's canonical tables and compares.
+const PREVIOUS_PASS_RESOLVER_SHA256 = Object.freeze([
+  "46cf5df77462a0e6b16a004278617115597801a7032aa186b8db54d2fef49e48",
+  "ddf1a079e136795cd6323d76d362c2a35fe938d967b867d3efe49052cc862ad7",
+]);
 const LEGACY_GOVERNANCE_ENTRYPOINT_R11_SHA256 =
   "c71cf9d6fe9965eaa0ff789d611a55ee0ea2fc98d8023b3c7526495aaa60f559";
 const STARTING_GOVERNANCE_ENTRYPOINT_SHA256 =
@@ -1928,7 +1946,7 @@ async function main() {
     "Password-store resolver",
     0o700,
     [],
-    [PREVIOUS_PASS_RESOLVER_SHA256],
+    PREVIOUS_PASS_RESOLVER_SHA256,
   );
   assertOwnedFileMatchesOrMissing(
     output.geminiStreamHotfixPath,
@@ -2222,7 +2240,7 @@ async function main() {
     "Password-store resolver",
     0o700,
     [],
-    [PREVIOUS_PASS_RESOLVER_SHA256],
+    PREVIOUS_PASS_RESOLVER_SHA256,
   );
   materializeOwnedFile(
     output.geminiStreamHotfixPath,
