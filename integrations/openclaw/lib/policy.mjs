@@ -51,6 +51,179 @@ import {
   validateContextVisibilityForThread,
 } from "./authority.mjs";
 
+/**
+ * M12/T9 F-049 — the ONE referential scheme for Discord identities.
+ *
+ * The owner's ruling (2026-10-21) is "lưu dạng mã băm": a third party's
+ * Discord identity must be stored as a HASH, never in the clear. A durable,
+ * long-lived event and a prompt transcript are exactly the surfaces that keep
+ * a third party's account id, and §10 treats that as content that must not be
+ * exposed.
+ *
+ * The scheme is deliberately tiny and lives here, once:
+ *
+ *   - the OWNER's account id becomes `[OWNER_PRINCIPAL]` — byte-for-byte the
+ *     substitution the ingress seam has always made, so the owner's own
+ *     identity handling is unchanged;
+ *   - EVERY other Discord identity token (a `<@id>` / `<@!id>` mention, or a
+ *     bare snowflake) becomes `[PRINCIPAL:<64 hex>]`, where the hex is the
+ *     principal derivation the ledger already uses for `origin_principal_ref`
+ *     and `user_principal_ref`. The same person therefore always resolves to
+ *     the same reference, which is what makes "the same identity, seen again"
+ *     recognisable, and the identity secret is what makes the reference
+ *     un-enumerable.
+ *
+ * A Discord account id is a snowflake: 17-20 digits with no leading zero. A
+ * Discord MESSAGE id and a THREAD id are snowflakes too, but they identify a
+ * surface and not a person, and the published contracts pin them to the raw
+ * form. They are therefore never rewritten: only PROSE is tokenised, and the
+ * prose fields of the published event contract are listed once, below.
+ */
+
+/** The owner's own principal token — the ingress seam's historical marker. */
+export const OWNER_PRINCIPAL_TOKEN = "[OWNER_PRINCIPAL]";
+
+/** The prefix of a hashed third-party reference. */
+export const PRINCIPAL_TOKEN_PREFIX = "[PRINCIPAL:";
+
+/** The suffix of a hashed third-party reference. */
+export const PRINCIPAL_TOKEN_SUFFIX = "]";
+
+const SNOWFLAKE_SOURCE = "[1-9][0-9]{16,19}";
+
+/**
+ * One pass over the text: a mention (with or without the `!` nickname
+ * marker) or a bare snowflake. A single alternation matters — two passes
+ * would let the second pass re-tokenise a digit run inside the 64 hex
+ * characters of a reference it had just written.
+ */
+const IDENTITY_TOKEN = new RegExp(
+  `<@!?(${SNOWFLAKE_SOURCE})>|(${SNOWFLAKE_SOURCE})`,
+  "gu",
+);
+
+/** The same probe without the global flag, so `lastIndex` never leaks. */
+const IDENTITY_PROBE = new RegExp(
+  `<@!?(${SNOWFLAKE_SOURCE})>|(${SNOWFLAKE_SOURCE})`,
+  "u",
+);
+
+/** An already-written reference is protected from a second tokenisation. */
+const WRITTEN_REFERENCE = /(\[PRINCIPAL:[a-f0-9]{64}\])/g;
+
+/**
+ * The PROSE fields of the published event contract. Only these are rewritten:
+ * they are the only payload fields that carry human text, and they are the
+ * only place a third party's account id can be pasted into durable state.
+ *
+ * Structural fields are deliberately NOT listed: `message_id`, `thread_id` and
+ * `origin_message_id` identify a Discord surface (and the published contract
+ * pins them to the raw snowflake form), and `session_key` embeds a channel id
+ * the session binding is computed from. Rewriting any of them would break a
+ * binding rather than protect a person.
+ */
+export const PROSE_PAYLOAD_FIELDS = Object.freeze([
+  "answer",
+  "feedback",
+  "question",
+  "reason",
+]);
+
+/** The identity secret's shape: 64 lower-case hex characters. */
+export function isIdentityKey(value) {
+  return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
+}
+
+/** A Discord account id's shape: a snowflake. */
+export function isDiscordAccountId(value) {
+  return (
+    typeof value === "string" &&
+    new RegExp(`^${SNOWFLAKE_SOURCE}$`, "u").test(value)
+  );
+}
+
+/** The hashed reference of one Discord account id. */
+export function principalReferenceToken(identityKey, discordId) {
+  if (!isIdentityKey(identityKey)) {
+    throw new Error("IDENTITY_KEY_UNAVAILABLE");
+  }
+  return (
+    PRINCIPAL_TOKEN_PREFIX +
+    derivePrincipalRef(identityKey, discordId) +
+    PRINCIPAL_TOKEN_SUFFIX
+  );
+}
+
+/** Does this text carry a Discord identity that must not stay in the clear? */
+export function containsDiscordIdentity(text) {
+  return typeof text === "string" && IDENTITY_PROBE.test(text);
+}
+
+/**
+ * Rewrite every Discord identity in `text` into a referential token.
+ *
+ * The owner's own account id is substituted FIRST and exactly as the ingress
+ * seam has always substituted it, so the owner's handling is unchanged and
+ * the owner never becomes a hashed third party.
+ *
+ * The identity secret is required only when there is something left to hide:
+ * text that carries no identity comes back unchanged, and text that carries
+ * only the owner's id comes back with `[OWNER_PRINCIPAL]`.
+ */
+export function tokenizeDiscordPrincipalReferences(
+  text,
+  { identityKey = null, ownerDiscordId = null } = {},
+) {
+  if (typeof text !== "string" || text.length === 0) {
+    return typeof text === "string" ? text : "";
+  }
+  const owned = isDiscordAccountId(ownerDiscordId)
+    ? text.split(ownerDiscordId).join(OWNER_PRINCIPAL_TOKEN)
+    : text;
+  if (!containsDiscordIdentity(owned)) return owned;
+  if (!isIdentityKey(identityKey)) {
+    throw new Error("IDENTITY_KEY_UNAVAILABLE");
+  }
+  return owned
+    .split(WRITTEN_REFERENCE)
+    .map((part) =>
+      part.startsWith(PRINCIPAL_TOKEN_PREFIX)
+        ? part
+        : part.replace(IDENTITY_TOKEN, (_match, mentionId, bareId) =>
+            principalReferenceToken(identityKey, mentionId ?? bareId),
+          ),
+    )
+    .join("");
+}
+
+/**
+ * Rewrite the prose of one ledger payload. The payload object itself is
+ * returned untouched when there is nothing to hide, so the common case costs
+ * no allocation and no change.
+ */
+export function tokenizePayloadPrincipalReferences(
+  payload,
+  { identityKey = null, ownerDiscordId = null } = {},
+) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return payload;
+  }
+  let next = null;
+  for (const field of PROSE_PAYLOAD_FIELDS) {
+    const value = payload[field];
+    if (typeof value !== "string" || value.length === 0) continue;
+    if (!containsDiscordIdentity(value)) continue;
+    const tokenised = tokenizeDiscordPrincipalReferences(value, {
+      identityKey,
+      ownerDiscordId,
+    });
+    if (tokenised === value) continue;
+    if (next === null) next = { ...payload };
+    next[field] = tokenised;
+  }
+  return next ?? payload;
+}
+
 export const PROFILE = "zink";
 export const STATE_DIRECTORY_NAME = ".openclaw-zink";
 export const OPENCLAW_RELEASE = "2026.6.34";

@@ -48,6 +48,12 @@ import {
   deriveApprovalMaterialParameters,
   deriveApprovalScopeDigest,
   configureGovernedStoreRoot,
+  // M12/T9 F-049: the ONE referential scheme for Discord identities. The
+  // owner's ruling was "lưu dạng mã băm" — a third party's account id is
+  // stored as a hashed reference, never in the clear.
+  isIdentityKey,
+  tokenizeDiscordPrincipalReferences,
+  tokenizePayloadPrincipalReferences,
 } from "../../lib/policy.mjs";
 import {
   sanitizeDelegationText,
@@ -63,7 +69,7 @@ import {
 import {
   BUDGETS,
   readSnapshot,
-  recordWorkflowEvent,
+  recordWorkflowEvent as writeWorkflowEvent,
 } from "../../topology/lib/ledger.mjs";
 import {
   findSession,
@@ -150,11 +156,13 @@ import {
 import { renderExpectedResultPreview } from "../../lib/discord-result-preview.mjs";
 // M12/T2-R1: one tagging system for all three governed forums.
 import {
+  approvalCardExpiresAt,
   approvalRiskTag,
   approvalStatusTag,
   buildSurfaceSelections,
   createForumTagResolver,
   incidentSeverityTag,
+  isApprovalCardExpired,
   incidentStatusTag,
   openGovernedForumThread,
   readActiveForumThreads,
@@ -5566,6 +5574,69 @@ export function mintUserPrincipalRef(paths, userPrincipal) {
 }
 
 /**
+ * M12/T9 F-049: the ledger's identity secret — READ, and created on first use.
+ *
+ * This is the ONLY writer of the identity key, so two paths can never mint
+ * two different keys for one ledger: the key file is created EXCLUSIVELY and
+ * then re-read, so a concurrent creation cannot overwrite a key another writer
+ * has already published. A key that cannot be read is not a weaker key: it is
+ * no key at all, and every caller fails closed on it.
+ *
+ * The key never enters a prompt or a log.
+ */
+export function resolveIdentityKey(paths) {
+  if (!paths?.root || typeof paths.root !== "string") return null;
+  const identityPath =
+    paths.identityKey || path.resolve(paths.root, "../identity.key");
+  noLinks(identityPath);
+  try {
+    if (!existsSync(identityPath)) {
+      mkdirSync(path.dirname(identityPath), { recursive: true });
+      try {
+        writeFileSync(identityPath, `${randomBytes(32).toString("hex")}\n`, {
+          mode: 0o600,
+          flag: "wx",
+        });
+      } catch (err) {
+        // Another writer won the race: ITS key is the ledger's key.
+        if (err?.code !== "EEXIST") return null;
+      }
+    }
+    const key = readFileSync(identityPath, "utf8").trim();
+    return isIdentityKey(key) ? key : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * M12/T9 F-049: the ONE ledger write seam of this plugin.
+ *
+ * Every durable event this plugin writes passes through here, so the
+ * referential scheme is applied at ONE place: the PROSE of a payload can never
+ * carry a third party's Discord account id in the clear. The same third party
+ * always resolves to the same hashed reference, so the system still
+ * recognises the identity when it sees it again.
+ *
+ * Only prose is rewritten. `message_id`, `thread_id`, `origin_message_id` and
+ * `session_key` are STRUCTURAL: they identify a Discord surface, the
+ * published contract pins them to their raw form, and rewriting them would
+ * break a binding rather than protect a person.
+ *
+ * The identity secret is needed only when there is an identity to hide: a
+ * payload whose prose carries none is written exactly as it was.
+ */
+export function recordWorkflowEvent(paths, type, payload) {
+  return writeWorkflowEvent(
+    paths,
+    type,
+    tokenizePayloadPrincipalReferences(payload, {
+      identityKey: resolveIdentityKey(paths),
+    }),
+  );
+}
+
+/**
  * M12/T9 F-083: can the host's Discord component SDK be reached from the running
  * entrypoint? The answer decides whether a button this plugin posts can ever be
  * answered, so it is computed once at load and named in the capability line.
@@ -7432,10 +7503,20 @@ export default {
         return { allow: true };
       },
       beforeIngress(event) {
+        // M12/T9 F-049: the prompt transcript is durable and long-lived, so it
+        // must not carry a third party's account id in the clear. The OWNER's
+        // own id is still substituted exactly as it always was — the owner's
+        // identity handling is unchanged — and every OTHER Discord identity
+        // (a mention, or a bare snowflake the owner pasted) becomes a hashed
+        // reference.
         return {
-          prompt: sanitizeDelegationText(event.prompt)
-            .split(config.ownerDiscordId)
-            .join("[OWNER_PRINCIPAL]"),
+          prompt: tokenizeDiscordPrincipalReferences(
+            sanitizeDelegationText(event.prompt),
+            {
+              identityKey: resolveIdentityKey(paths),
+              ownerDiscordId: config.ownerDiscordId,
+            },
+          ),
         };
       },
       async beforeRun(event, context, signal) {
@@ -8943,19 +9024,11 @@ export default {
         // duplicate check, so a duplicate never claims an admission.
         admissionSignal = `${MAIN_DIRECTED}: agent=main via mention msg=${msgId}`;
       }
-      const identityPath =
-        paths.identityKey || path.resolve(paths.root, "../identity.key");
-      noLinks(identityPath);
-      if (!existsSync(identityPath)) {
-        mkdirSync(path.dirname(identityPath), { recursive: true });
-        writeFileSync(identityPath, `${randomBytes(32).toString("hex")}\n`, {
-          mode: 0o600,
-        });
-      }
-      // Trusted HMAC use only; the key never enters prompts or logs.
-      const key = readFileSync(identityPath, "utf8").trim();
-      if (!/^[a-f0-9]{64}$/u.test(key))
-        throw new Error("EXECUTION_STATE_UNKNOWN");
+      // Trusted HMAC use only; the key never enters prompts or logs. The key
+      // is created by the ONE writer (`resolveIdentityKey`), so two paths can
+      // never publish two different keys for one ledger.
+      const key = resolveIdentityKey(paths);
+      if (!key) throw new Error("EXECUTION_STATE_UNKNOWN");
       const origin = {
         origin: "discord",
         origin_principal_ref: derivePrincipalRef(
