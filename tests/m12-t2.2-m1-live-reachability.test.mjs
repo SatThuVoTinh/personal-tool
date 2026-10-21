@@ -301,7 +301,7 @@ test("M1 5: every governed path is asserted live or declared not-live-reachable"
   // restated fails here.
   assert.equal(
     governed.length,
-    45,
+    46,
     `the governed-path set is the entrypoint plus the packaged assets, saw ${governed.length}`,
   );
 
