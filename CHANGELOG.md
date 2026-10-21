@@ -575,6 +575,25 @@ asset drift detected` (`installed_mutation: false`) because ten live
 
 ### Fixed
 
+- **F-036 - the router credential was baked into the generated config, so every
+  copy of it carried the secret and rotating it meant a re-apply of the whole
+  tree.** Every other secret in the tree already travelled the
+  `secrets.providers` indirection; the router key alone was read from the
+  environment at BUILD time and written into `openclaw.json` as a literal. The
+  owner's answer to `H6` (2026-10-21) is to route it like every other secret.
+  The generated config now carries a REFERENCE
+  (`{source: "exec", provider: <pass>, id: "zink/openclaw/ZINK_ROUTER_API_KEY"}`),
+  the id follows the repository's own `zink/openclaw/<NAME>` convention, and the
+  password-store resolver's strict allowlist serves it - nine entries now, not
+  eight. The credential's VALUE is no longer written into any generated file,
+  and the builder no longer needs it in its environment. The operator inserts it
+  once, interactively, like the other eight:
+  `pass insert zink/openclaw/ZINK_ROUTER_API_KEY`. The live reachability probe
+  in `verify.mjs` still performs a real HTTP call and still needs the value, so
+  it keeps reading the environment - it is an operator-side probe, never a
+  generator. `tests/agent-gov-F-036.test.mjs` pins the reference, the absence of
+  the credential's bytes, the plan/config agreement and the fail-closed drift
+  check.
 - **F-034 - nothing stopped a red pipeline from merging into `main`.** `AGENTS.md` §11
   treats the gates as blocking, but no check was required: the repository had no
   merge blocker of any kind. GitHub branch protection is not enableable on this

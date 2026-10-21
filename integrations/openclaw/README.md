@@ -73,7 +73,8 @@ no OpenAI, Codex or another provider is configured. The router holds **one**
 credential, `ZINK_ROUTER_API_KEY`, and there is no per-agent auth order: the
 policy's own auth-order plan is empty by design, because one router credential
 serves every agent. The resolver can read only the seven account-specific
-Discord entries and the Gateway entry from the encrypted `pass` password store.
+Discord entries, the Gateway entry and the router entry from the encrypted
+`pass` password store.
 
 The builder persists `agents.defaults.thinkingDefault="low"`. For the approved
 Flash ids this avoids the unsupported Gemini `MINIMAL` request level and
@@ -195,10 +196,9 @@ gpg --batch --pinentry-mode loopback --passphrase '' \
 pass init 'Zink OpenClaw Service'
 ```
 
-Insert the seven Discord bot tokens and the Gateway token interactively, plus
-the router's own key through the environment the service reads. Secret values
-must be entered only at the `pass` prompts; never put them in these commands or
-shell history.
+Insert the seven Discord bot tokens, the Gateway token and the router's own key
+interactively. Secret values must be entered only at the `pass` prompts; never
+put them in these commands or shell history.
 
 ```bash
 for agent in main o1 o2 excel power-bi sql python; do
@@ -207,6 +207,7 @@ for agent in main o1 o2 excel power-bi sql python; do
   pass insert "zink/openclaw/DISCORD_BOT_TOKEN_${entry}"
 done
 pass insert zink/openclaw/ZINK_OPENCLAW_GATEWAY_TOKEN
+pass insert zink/openclaw/ZINK_ROUTER_API_KEY
 ```
 
 The setup must pass a non-interactive resolver probe under the same

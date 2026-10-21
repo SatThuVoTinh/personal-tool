@@ -74,9 +74,13 @@ job — the driver never guesses a machine path.
 ```bash
 cd "/mnt/c/Users/HOANG VINH/OneDrive/Documents/personal-tool"
 
-# BƯỚC 0 — nạp biến môi trường router. `configure.mjs` đọc `ZINK_ROUTER_HOST`,
-# `ZINK_ROUTER_PORT`, `ZINK_ROUTER_API_KEY` từ môi trường để dựng config; thiếu một trong ba
-# thì builder chết ngay với `ROUTER_..._UNAVAILABLE` và preflight báo FAIL mà không sửa gì.
+# BƯỚC 0 — nạp biến môi trường router. `configure.mjs` đọc `ZINK_ROUTER_HOST` và
+# `ZINK_ROUTER_PORT` từ môi trường để dựng config; thiếu một trong hai thì builder
+# chết ngay với `ROUTER_HOST_UNAVAILABLE`/`ROUTER_PORT_UNAVAILABLE` và preflight báo
+# FAIL mà không sửa gì. KHOÁA ROUTER KHÔNG CÒN Ở ĐÂY NỮA (F-036, quyết định H6
+# của chủ): config chỉ mang một THAM CHIẾU, khoá nằm trong kho `pass` và được
+# resolver giải lúc chạy. Nhập khoá một lần (nhập tay, không gõ giá trị vào lệnh):
+#   pass insert zink/openclaw/ZINK_ROUTER_API_KEY
 set -a; . "$HOME/.openclaw-zink/router.env"; set +a
 
 # BƯỚC 0b — CHỈ ĐỊNH THƯ MỤC TRẠNG THÁI. Không có dòng này thì cả hai driver

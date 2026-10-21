@@ -225,6 +225,99 @@ export function tokenizePayloadPrincipalReferences(
   return next ?? payload;
 }
 
+/**
+ * M12/T9 F-049/H7 — an identity the system does NOT know.
+ *
+ * F-049 decided how a third party's Discord identity is STORED (a hash). The
+ * owner's decision of 2026-10-21 (`H7`, "record it and flag it") decided what
+ * happens to an identity that is neither the owner nor a member of the roster:
+ * it is recorded (hashed, as F-049 decided), MARKED as unknown, and surfaced —
+ * never refused, never silent.
+ *
+ * "The roster" is this repository's own: the seven governed bot identities plus
+ * the owner. An identity outside both is UNKNOWN, and an unknown identity is
+ * worth telling the owner about, because the owner's own durable record now
+ * carries a reference to a person the governance layer cannot account for.
+ *
+ * The KNOWN set is supplied by the caller rather than read from a second copy
+ * of the owner id: the owner is known by the ledger's own record of who opened
+ * the task (`origin_principal_ref`), and the roster is known here.
+ */
+export const UNKNOWN_PRINCIPAL_CATEGORY = "UNKNOWN_PRINCIPAL";
+
+/** The roster's own identities: the seven governed bots. */
+export const ROSTER_DISCORD_IDS = Object.freeze(Object.values(DISCORD_BOT_IDS));
+
+/**
+ * The hashed references of the roster's identities.
+ *
+ * A roster identity that the owner mentions in prose is hashed like any other
+ * identity (F-049), but it is NOT unknown: the system knows who it is. This is
+ * what keeps a mention of a governed bot from raising an incident.
+ */
+export function rosterPrincipalReferences(identityKey) {
+  if (!isIdentityKey(identityKey)) return [];
+  return ROSTER_DISCORD_IDS.map((discordId) =>
+    derivePrincipalRef(identityKey, discordId),
+  );
+}
+
+/**
+ * The hashed references of the identities in `text` that the system does NOT
+ * know: neither the owner nor a member of the roster.
+ *
+ * The raw id never leaves this function: what comes back is the same 64-hex
+ * reference F-049 writes, so the marking and the record name the same person.
+ */
+export function unknownPrincipalReferences(
+  text,
+  { identityKey = null, knownPrincipalRefs = [] } = {},
+) {
+  if (typeof text !== "string" || text.length === 0) return [];
+  if (!isIdentityKey(identityKey)) {
+    throw new Error("IDENTITY_KEY_UNAVAILABLE");
+  }
+  const known = new Set(
+    knownPrincipalRefs.filter((reference) => typeof reference === "string"),
+  );
+  const found = new Set();
+  for (const match of text.matchAll(IDENTITY_TOKEN)) {
+    const discordId = match[1] ?? match[2];
+    if (!isDiscordAccountId(discordId)) continue;
+    const reference = derivePrincipalRef(identityKey, discordId);
+    if (known.has(reference)) continue;
+    found.add(reference);
+  }
+  return [...found].sort();
+}
+
+/**
+ * The unknown identities carried by one durable payload.
+ *
+ * Only the PROSE fields are scanned, for the same reason F-049 rewrites only
+ * those: they are the only fields a human identity can be pasted into.
+ */
+export function unknownPrincipalReferencesInPayload(
+  payload,
+  { identityKey = null, knownPrincipalRefs = [] } = {},
+) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return [];
+  }
+  const found = new Set();
+  for (const field of PROSE_PAYLOAD_FIELDS) {
+    const value = payload[field];
+    if (typeof value !== "string" || value.length === 0) continue;
+    for (const reference of unknownPrincipalReferences(value, {
+      identityKey,
+      knownPrincipalRefs,
+    })) {
+      found.add(reference);
+    }
+  }
+  return [...found].sort();
+}
+
 export const PROFILE = "zink";
 export const STATE_DIRECTORY_NAME = ".openclaw-zink";
 export const OPENCLAW_RELEASE = "2026.6.34";
@@ -913,6 +1006,13 @@ export const PASS_ENTRY_IDS = Object.freeze({
     ),
   ),
   gateway: "zink/openclaw/ZINK_OPENCLAW_GATEWAY_TOKEN",
+  // M12/T9 F-036 (legacy R5-E13-02; owner decision 2026-10-21, `H6`): the
+  // router credential joins the bot tokens and the gateway token on the SAME
+  // indirection, so the generated config carries a reference and the key can
+  // be rotated without a re-apply of the whole tree. The id follows the
+  // repository's own convention — `zink/openclaw/<NAME>` — and is the only
+  // new id the password-store resolver is allowed to serve.
+  router: "zink/openclaw/ZINK_ROUTER_API_KEY",
 });
 // M10/T2-R12 (owner decision 2026-10-08): the governed set is the owner's
 // ordered five-model chain, addressed directly. Order is priority order; the
@@ -945,6 +1045,13 @@ export const SECRET_REFS = Object.freeze({
     source: "exec",
     provider: PASS_PROVIDER_ID,
     id: PASS_ENTRY_IDS.gateway,
+  },
+  // M12/T9 F-036: the router credential is a reference like every other
+  // secret, not a literal baked into the generated config.
+  router: {
+    source: "exec",
+    provider: PASS_PROVIDER_ID,
+    id: PASS_ENTRY_IDS.router,
   },
 });
 
@@ -1314,7 +1421,14 @@ export function buildConfig({ stateDir, identifiers }) {
           baseUrl: resolveRouterBaseUrl(),
           api: "openai-completions",
           auth: "api-key",
-          apiKey: resolveRouterApiKey(),
+          // M12/T9 F-036 (owner decision 2026-10-21, `H6`): the router
+          // credential is a REFERENCE now, resolved at RUNTIME through the
+          // `secrets.providers` block below — the same indirection the seven
+          // Discord bot tokens and the gateway token use. The generated
+          // config therefore carries no credential at all, and rotating the
+          // key is a password-store change rather than a re-apply of the
+          // whole tree.
+          apiKey: SECRET_REFS.router,
           // M10/T2-R13 (owner decision 2026-10-09): per-attempt ceiling for one
           // model request. Proven live 2026-10-09 12:04:46 — a `3.8-flash` turn
           // started 09:28:31 was still waiting on the router 9,374,777 ms
@@ -1788,9 +1902,17 @@ export function resolveRouterBaseUrl() {
   return `http://${resolveRouterHost()}:${port.trim()}/v1`;
 }
 
-// The credential is supplied by the environment at apply time and written into
-// the generated openclaw.json. It is never committed: the repository carries no
-// router secret, and tests supply their own placeholder value.
+// The credential is NO LONGER read at build time and baked into the generated
+// openclaw.json. M12/T9 F-036 (owner decision 2026-10-21, `H6`) routed it
+// through the `secrets.providers` indirection like every other secret, so the
+// generated config carries a reference (`SECRET_REFS.router`) and the runtime
+// resolves it.
+//
+// This resolver remains for the OPERATOR side only: `verify.mjs`'s live router
+// reachability probe performs a real HTTP call against the router and needs
+// the credential's VALUE to do it. It is never written into a generated file,
+// never logged and never committed; the repository carries no router secret,
+// and tests supply their own placeholder value.
 export function resolveRouterApiKey() {
   const key = process.env.ZINK_ROUTER_API_KEY;
   if (typeof key !== "string" || key.trim() === "")
@@ -1804,6 +1926,15 @@ export function buildSecretsPlan() {
   // `secrets.providers` at their own config paths. The 21 auth-profile key
   // targets are gone because the profiles are gone, so this plan is empty by
   // design rather than by omission.
+  //
+  // M12/T9 F-036: the router key is NOT a target here either, and that is the
+  // same design, not an omission. A plan target is an AUTH-PROFILE target
+  // (`openclaw secrets apply` writes an agent-local auth record from it), and
+  // there are no auth profiles any more: there is one router credential and
+  // the router rotates upstream itself. The router key is carried the way the
+  // seven bot tokens and the gateway token are carried — as a reference in the
+  // generated config, resolved at runtime — so the plan stays empty and the
+  // plan and the config agree: neither of them carries a credential.
   return {
     version: 1,
     protocolVersion: 1,
@@ -1870,8 +2001,12 @@ export function passResolverContents() {
         // M10/T2-R9: the 21 GEMINI_API_KEY_NN ids are removed from the
         // resolver allowlist. The resolver is a strict allowlist, so leaving
         // them would keep 21 now-unreferenced pass ids resolvable.
+        // M12/T9 F-036: the router key joins them here — the config names it
+        // as a reference, and a reference the resolver may not serve would
+        // leave the runtime unable to resolve the credential at all.
         ...Object.values(PASS_ENTRY_IDS.discord),
         PASS_ENTRY_IDS.gateway,
+        PASS_ENTRY_IDS.router,
       ],
       null,
       2,

@@ -1,10 +1,12 @@
 // Shared test environment for the governed model provider (M10/T2-R9).
 //
-// The router endpoint and credential are resolved from the environment at
-// BUILD time and baked into the generated openclaw.json, because the installed
-// OpenClaw has no `${ENV}` config templating (proven against the runtime).
-// That makes `buildConfig()` fail closed when the environment is absent, which
-// is correct for an apply and inconvenient for a unit test.
+// The router ENDPOINT is resolved from the environment at BUILD time and baked
+// into the generated openclaw.json, because the installed OpenClaw has no
+// `${ENV}` config templating (proven against the runtime). The router
+// CREDENTIAL is not: M12/T9 F-036 (owner decision 2026-10-21, `H6`) moved it
+// onto the password-store indirection, so the generated config carries a
+// REFERENCE (`SECRET_REFS.router`) and the key is resolved at RUNTIME by the
+// installed resolver.
 //
 // This helper supplies obviously-fake, non-routable placeholder values so the
 // CONFIG SHAPE can be asserted without a live router. It deliberately does NOT

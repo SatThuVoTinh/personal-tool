@@ -1914,6 +1914,10 @@ test("F-110: the OpenClaw README documents only what the build emits", async () 
   const entries = new Set([
     ...Object.values(policy.PASS_ENTRY_IDS.discord),
     policy.PASS_ENTRY_IDS.gateway,
+    // M12/T9 F-036 (owner decision 2026-10-21, `H6`): the router credential
+    // is a password-store entry like every other secret, and the README names
+    // it so the operator can insert it.
+    policy.PASS_ENTRY_IDS.router,
   ]);
   for (const match of readme.matchAll(/zink\/openclaw\/[A-Za-z0-9_${}]+/gu)) {
     const documented = match[0];

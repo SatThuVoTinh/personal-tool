@@ -51,7 +51,6 @@ import {
 } from "../integrations/openclaw/templates/openclaw-gemini-stream-hotfix.mjs";
 import { isExpectedDiscordCapability } from "../integrations/openclaw/verify.mjs";
 import {
-  ROUTER_TEST_API_KEY,
   ROUTER_TEST_HOST,
   ROUTER_TEST_PORT,
   applyRouterTestEnv,
@@ -490,7 +489,7 @@ test("M7/T1 builds the exact minimal-tool, zero-command foundation", () => {
     baseUrl: `http://${ROUTER_TEST_HOST}:${ROUTER_TEST_PORT}/v1`,
     api: "openai-completions",
     auth: "api-key",
-    apiKey: ROUTER_TEST_API_KEY,
+    apiKey: SECRET_REFS.router,
     // M10/T2-R13 (owner decision 2026-10-09): the per-attempt ceiling. Proven
     // live: without it one request waited 9,374,777 ms and the owner received
     // nothing. `timeoutSeconds` on the PROVIDER is the only layer the installed
@@ -771,7 +770,7 @@ test("M7/T1 rejects configuration drift on restricted surfaces", () => {
   );
 });
 
-test("M7/T1 password-store resolver is a fail-closed 8-entry boundary", () => {
+test("M7/T1 password-store resolver is a fail-closed 9-entry boundary", () => {
   const root = temporaryDirectory();
   try {
     const resolver = path.join(root, "openclaw-pass-resolver");
@@ -779,12 +778,16 @@ test("M7/T1 password-store resolver is a fail-closed 8-entry boundary", () => {
     // M10/T2-R9: the 21 GEMINI_API_KEY_NN ids are removed. The resolver is a
     // strict allowlist, so leaving them would keep 21 now-unreferenced pass ids
     // resolvable. What remains is 7 Discord bot tokens plus the gateway token.
+    // M12/T9 F-036 (owner decision 2026-10-21, `H6`): the router credential
+    // joins them, so the generated config carries a REFERENCE and the key can
+    // be rotated without a re-apply of the whole tree.
     const allowedIds = [
       ...Object.values(PASS_ENTRY_IDS.discord),
       PASS_ENTRY_IDS.gateway,
+      PASS_ENTRY_IDS.router,
     ];
-    assert.equal(allowedIds.length, 8);
-    assert.equal(new Set(allowedIds).size, 8);
+    assert.equal(allowedIds.length, 9);
+    assert.equal(new Set(allowedIds).size, 9);
     assert.doesNotMatch(resolverSource, /__ZINK_ALLOWED_IDS__/u);
     assert.doesNotMatch(resolverSource, /spawnSync/u);
     assert.match(resolverSource, /Promise\.all/u);
