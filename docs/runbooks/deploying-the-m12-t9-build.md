@@ -79,7 +79,10 @@ cd "/mnt/c/Users/HOANG VINH/OneDrive/Documents/personal-tool"
 # chết ngay với `ROUTER_HOST_UNAVAILABLE`/`ROUTER_PORT_UNAVAILABLE` và preflight báo
 # FAIL mà không sửa gì. KHOÁA ROUTER KHÔNG CÒN Ở ĐÂY NỮA (F-036, quyết định H6
 # của chủ): config chỉ mang một THAM CHIẾU, khoá nằm trong kho `pass` và được
-# resolver giải lúc chạy. Nhập khoá một lần (nhập tay, không gõ giá trị vào lệnh):
+# resolver giải lúc chạy. Nhập khoá MỘT LẦN (giá trị chỉ gõ ở prompt của `pass`,
+# không gõ vào lệnh, không để vào history):
+#   export PASSWORD_STORE_DIR="$HOME/.openclaw-zink/secrets/password-store"
+#   export GNUPGHOME="$HOME/.openclaw-zink/secrets/gnupg"
 #   pass insert zink/openclaw/ZINK_ROUTER_API_KEY
 set -a; . "$HOME/.openclaw-zink/router.env"; set +a
 
