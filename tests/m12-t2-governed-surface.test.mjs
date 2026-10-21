@@ -971,11 +971,11 @@ function assessAssetAdmission({
     // digest may now be named in prose beside the table. The duplicate
     // protection moves to the list itself, which is where a duplicated
     // admission would actually be.
-    if (configureSource.split(digest).length - 1 < 1) {
-      problems.push(
-        `${rel} admits ${digest.slice(0, 12)}..., which the file does not carry`,
-      );
-    }
+    //
+    // M12/T9 F-217 (review): the "the file does not carry the digest" check
+    // that stood here could never fire — the digest was parsed out of this
+    // very source, so the file always carried it. A control that cannot fail is
+    // not a control; the duplicate check above is the one that holds.
   }
   if (configureSource.includes(currentDigest)) {
     problems.push(
