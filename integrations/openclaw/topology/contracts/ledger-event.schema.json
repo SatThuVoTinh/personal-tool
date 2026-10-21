@@ -749,7 +749,7 @@
         "properties": {
           "payload": {
             "type": "object",
-            "description": "F-249: the verdict binds by `result_digest`. `result_id` is withdrawn: the reducer compared it against a root-result field this contract does not declare, so an id-only verdict could never bind, and the published contract no longer admits it.",
+            "description": "F-249: the verdict binds by `result_digest` and an id-only verdict is REFUSED (RESULT_MISMATCH) — the reducer compared `result_id` against a root-result field this contract does not declare, so an id-only verdict could never bind. F-376: `result_id` is admitted again as an OPTIONAL LEGACY member: the record may carry it (the live journal holds two such verdicts, written by the `m8-t2.2-r4` build), and a contract that refuses its own record makes the ledger unreadable. It is never required, the current producer does not send it, and any member this contract does not declare is still refused.",
             "additionalProperties": false,
             "required": ["task_id", "actor", "channel", "decision"],
             "properties": {
@@ -776,6 +776,11 @@
                 "type": ["string", "null"],
                 "pattern": "^[a-f0-9]{64}$"
               },
+              "result_id": {
+                "description": "F-376: the LEGACY result id. Optional and never required, and the current producer does not send it. It is admitted only so a verdict the older build already wrote stays readable — the verdict binds by `result_digest`, and an id-only verdict is refused by the reducer.",
+                "type": ["string", "null"],
+                "maxLength": 128
+              },
               "message_id": {
                 "type": ["string", "null"],
                 "pattern": "^[1-9][0-9]{16,19}$"
@@ -801,7 +806,7 @@
         "properties": {
           "payload": {
             "type": "object",
-            "description": "F-249: the verdict binds by `result_digest`. `result_id` is withdrawn: the reducer compared it against a root-result field this contract does not declare, so an id-only verdict could never bind, and the published contract no longer admits it.",
+            "description": "F-249: the verdict binds by `result_digest` and an id-only verdict is REFUSED (RESULT_MISMATCH) — the reducer compared `result_id` against a root-result field this contract does not declare, so an id-only verdict could never bind. F-376: `result_id` is admitted again as an OPTIONAL LEGACY member: the record may carry it (the live journal holds two such verdicts, written by the `m8-t2.2-r4` build), and a contract that refuses its own record makes the ledger unreadable. It is never required, the current producer does not send it, and any member this contract does not declare is still refused.",
             "additionalProperties": false,
             "required": ["task_id", "actor", "channel", "reason"],
             "properties": {
@@ -824,6 +829,11 @@
               "result_digest": {
                 "type": ["string", "null"],
                 "pattern": "^[a-f0-9]{64}$"
+              },
+              "result_id": {
+                "description": "F-376: the LEGACY result id. Optional and never required, and the current producer does not send it. It is admitted only so a verdict the older build already wrote stays readable — the verdict binds by `result_digest`, and an id-only verdict is refused by the reducer.",
+                "type": ["string", "null"],
+                "maxLength": 128
               },
               "message_id": {
                 "type": ["string", "null"],
@@ -850,7 +860,7 @@
         "properties": {
           "payload": {
             "type": "object",
-            "description": "Owner verdict: the owner reviewed the result and accepted BLOCKED as the authoritative final outcome. This is NOT an execution or reconciliation event; an execution event that merely produces a blocked condition (WORKFLOW_NATIVE_ENDED, a duplicate root result, a conflicting delegated result) must not be expressed as this verdict. F-249: the verdict binds by `result_digest`; `result_id` is withdrawn, because the reducer compared it against a root-result field this contract does not declare.",
+            "description": "Owner verdict: the owner reviewed the result and accepted BLOCKED as the authoritative final outcome. This is NOT an execution or reconciliation event; an execution event that merely produces a blocked condition (WORKFLOW_NATIVE_ENDED, a duplicate root result, a conflicting delegated result) must not be expressed as this verdict. F-249: the verdict binds by `result_digest` and an id-only verdict is REFUSED (RESULT_MISMATCH). F-376: `result_id` is admitted again as an OPTIONAL LEGACY member: the record may carry it (the live journal holds two such verdicts, written by the `m8-t2.2-r4` build), and a contract that refuses its own record makes the ledger unreadable. It is never required, the current producer does not send it, and any member this contract does not declare is still refused.",
             "additionalProperties": false,
             "required": ["task_id", "actor", "channel", "decision", "reason"],
             "properties": {
@@ -907,7 +917,7 @@
         "properties": {
           "payload": {
             "type": "object",
-            "description": "F-249: the verdict binds by `result_digest`. `result_id` is withdrawn: the reducer compared it against a root-result field this contract does not declare, so an id-only verdict could never bind, and the published contract no longer admits it.",
+            "description": "F-249: the verdict binds by `result_digest` and an id-only verdict is REFUSED (RESULT_MISMATCH) — the reducer compared `result_id` against a root-result field this contract does not declare, so an id-only verdict could never bind. F-376: `result_id` is admitted again as an OPTIONAL LEGACY member: the record may carry it (the live journal holds two such verdicts, written by the `m8-t2.2-r4` build), and a contract that refuses its own record makes the ledger unreadable. It is never required, the current producer does not send it, and any member this contract does not declare is still refused.",
             "additionalProperties": false,
             "required": ["task_id", "actor", "channel", "feedback"],
             "properties": {
@@ -930,6 +940,11 @@
               "result_digest": {
                 "type": ["string", "null"],
                 "pattern": "^[a-f0-9]{64}$"
+              },
+              "result_id": {
+                "description": "F-376: the LEGACY result id. Optional and never required, and the current producer does not send it. It is admitted only so a verdict the older build already wrote stays readable — the verdict binds by `result_digest`, and an id-only verdict is refused by the reducer.",
+                "type": ["string", "null"],
+                "maxLength": 128
               }
             }
           }

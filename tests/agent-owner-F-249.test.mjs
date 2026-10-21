@@ -17,7 +17,9 @@
  *     forbids);
  *   - an id-only verdict is REFUSED, never silently accepted;
  *   - the digest-only path still works;
- *   - the published contract no longer admits `result_id` in a verdict payload;
+ *   - the published contract admits the LEGACY result id as an optional
+ *     member (F-376: a contract that refuses its own record makes the ledger
+ *     unreadable) and still refuses every member it does not declare;
  *   - the live producer no longer sends `result_id`.
  */
 import assert from "node:assert/strict";
@@ -165,7 +167,16 @@ describe("F-249 — the id-only verdict is withdrawn", () => {
     }
   });
 
-  it("the published contract no longer admits result_id in a verdict payload", () => {
+  it("the published contract admits the LEGACY result id, and only that one", () => {
+    // F-249 withdrew `result_id` from the verdict payload branches. That made
+    // the contract refuse the live journal: two verdicts the older build
+    // wrote carry it, so the ledger became unreadable and the deploy could
+    // not complete.
+    //
+    // F-376 re-admits it as an OPTIONAL LEGACY member, so the record stays
+    // readable. The gate is not weakened: the member is optional, the
+    // producer does not send it, and a member the contract does not declare
+    // is still refused.
     const root = fixture("contract");
     try {
       const { paths, taskId } = pendingTask(root);
@@ -186,16 +197,22 @@ describe("F-249 — the id-only verdict is withdrawn", () => {
         previous_event_digest: opened.event_digest,
         event_digest: "2".repeat(64),
       };
-      // The envelope is well formed, so the ONLY thing the contract can
-      // refuse here is the payload member.
-      validateContract("ledger-event", {
-        ...verdict,
-        payload: ACCEPT(taskId),
-      });
+      // The envelope is well formed and the legacy member is admitted, so the
+      // contract validates it.
+      validateContract("ledger-event", verdict);
+      // A member the contract does NOT declare is still refused: only the
+      // named legacy member is admitted.
       assert.throws(
-        () => validateContract("ledger-event", verdict),
+        () =>
+          validateContract("ledger-event", {
+            ...verdict,
+            payload: ACCEPT(taskId, {
+              result_id: "res-1",
+              unknown_member: "x",
+            }),
+          }),
         { code: "SCHEMA_VALIDATION_FAILED" },
-        "the contract must stop admitting what the reducer cannot bind",
+        "the contract must still refuse what it does not declare",
       );
     } finally {
       rmSync(root, { recursive: true, force: true });

@@ -543,9 +543,15 @@ export function generateSchemaManifest() {
  * M12/T9 F-249: `result_id` was withdrawn from the four verdict payload
  * branches of `ledger-event.schema.json`, so the contract bytes changed again.
  * The value below is the checksum of THAT state.
+ *
+ * M12/T9 F-376: `result_id` was admitted AGAIN in those four branches as an
+ * optional LEGACY member - the live journal holds two verdicts that carry it,
+ * and a contract that refuses its own record makes the ledger unreadable - so
+ * the contract bytes changed once more. The value below is the checksum of THAT
+ * state.
  */
 export const PINNED_SCHEMA_MANIFEST_CHECKSUM =
-  "605fe421a5e0ed7f863fa709f529b4e92ca87d64e51cb6a295d0bdf8e7bc883c";
+  "44a38df6b39dd771af815823f60d9146b336ee13f3d3743b0658a24608d34c1b";
 
 export function verifySchemaManifestChecksums(manifest = null) {
   if (manifest === null) {
