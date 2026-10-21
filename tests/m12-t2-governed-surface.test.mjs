@@ -645,8 +645,16 @@ test("M12/T2 P2: every governed surface publishes through one path and records i
     1,
     "one call site only: postGovernedThread is the single publish path",
   );
+  // M12/T9 F-123: the SURFACED event is now READ as well as written — the
+  // card's own 24-hour clock is counted from the moment it was posted — so
+  // the count that matters is the number of WRITE sites: the two approval
+  // paths that open a card. A read is not a write.
   assert.equal(
-    (pluginSource.match(/"WORKFLOW_APPROVAL_SURFACED"/g) || []).length,
+    (
+      pluginSource.match(
+        /recordWorkflowEvent\(paths, "WORKFLOW_APPROVAL_SURFACED"/g,
+      ) || []
+    ).length,
     2,
     "both approval sites must record the thread they opened",
   );
@@ -704,10 +712,15 @@ test("M12/T2-R2: one transition seam, fired after the verdict, never awaited by 
     1,
     "the plugin must move tags through the shared lib, not its own REST call",
   );
+  // M12/T9 F-123: the EXPIRY projection is a second, separately named call
+  // site of the same seam — an expired card must be able to say so on the
+  // surface — but the VERDICT transition still has exactly ONE call site,
+  // inside the one post-verdict effect. The count is therefore three: the
+  // definition, the verdict call and the expiry call, and no more.
   assert.equal(
     (pluginSource.match(/transitionApprovalTag\(\{/g) || []).length,
-    2,
-    "one definition and one call site",
+    3,
+    "one definition and two call sites: the verdict path and the expiry projection",
   );
   assert.equal(
     pluginSource.includes("await transitionApprovalTag("),
@@ -720,6 +733,27 @@ test("M12/T2-R2: one transition seam, fired after the verdict, never awaited by 
   assert.ok(
     effect > -1 && call > effect && call < dispatch,
     "the transition lives in the one post-decision effect and runs before execution dispatch",
+  );
+  assert.equal(
+    (
+      pluginSource
+        .slice(effect, dispatch)
+        .match(/transitionApprovalTag\(\{/g) || []
+    ).length,
+    1,
+    "the verdict transition still has exactly one call site inside the post-verdict effect",
+  );
+  const expiryProjection = pluginSource.indexOf(
+    "function projectExpiredApprovalTag(",
+  );
+  assert.ok(
+    expiryProjection > -1,
+    "the expiry projection must be one named seam, so the two owner paths cannot drift",
+  );
+  assert.equal(
+    pluginSource.includes("await projectExpiredApprovalTag("),
+    false,
+    "no owner decision path may block on the expiry projection",
   );
   const wiring = pluginSource.slice(call, dispatch);
   // M12/T9 F-085: the verdict vocabulary moved out of string literals and into

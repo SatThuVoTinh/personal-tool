@@ -272,6 +272,48 @@ export function governedTaskAgents(task, targetAgentId) {
 }
 
 /**
+ * M12/T9 F-123: the moment the approval card was POSTED.
+ *
+ * The durable fact is the `WORKFLOW_APPROVAL_SURFACED` event — the record OF
+ * the surfaced card — and its `created_at` is the moment the card was posted.
+ * The 24 hours are counted from there: not from the moment the request was
+ * written, and not from the moment a decision arrives.
+ *
+ * The journal is append-only and its last line can be torn, so an unparsable
+ * line is skipped rather than fatal. The caller has already verified the
+ * journal's digest chain through `readSnapshot`, so what this reads is the
+ * verified history.
+ */
+export function readSurfacedApprovalPostedAt(paths, taskId) {
+  const eventsPath = paths?.events;
+  if (typeof eventsPath !== "string" || eventsPath.length === 0) return null;
+  if (typeof taskId !== "string" || taskId.length === 0) return null;
+  let raw;
+  try {
+    raw = readFileSync(eventsPath, "utf8");
+  } catch {
+    return null;
+  }
+  let postedAt = null;
+  for (const line of raw.split("\n")) {
+    if (line.trim().length === 0) continue;
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (event?.type !== "WORKFLOW_APPROVAL_SURFACED") continue;
+    if (event?.payload?.task_id !== taskId) continue;
+    const at = Date.parse(event.created_at);
+    if (!Number.isFinite(at)) continue;
+    // The LAST surface is the card the owner is looking at now.
+    if (postedAt === null || at >= postedAt) postedAt = at;
+  }
+  return postedAt;
+}
+
+/**
  * The approvals trio: the state the card asks about, its risk, its stack. `decision` is only
  * supplied by the post-verdict tag transition (M12/T2-R2); every publish path leaves it out, so
  * an opened thread is always `STATUS: WAITING`.
@@ -582,7 +624,7 @@ const AGENT_DISPLAY_NAMES = {
 
 let skillAdapterModule = null;
 let knowledgeAdapterModule = null;
-let vectorSyncModule = null;
+let skillStoreModule = null;
 let duckDbBridgeModule = null;
 
 function resolveDefaultOllamaUrl() {
@@ -2133,6 +2175,11 @@ export function handleDiscordAction({
   data = {},
   paths = null,
   readOnly = false,
+  // M12/T9 F-123: the clock the approval card's 24-hour window is measured
+  // against. It is injected for the same reason the guard injects
+  // `currentTime`: a caller that owns a clock (a test, a replay) must be able
+  // to move it without the governance path reading the wall clock itself.
+  currentTime = null,
 }) {
   // 1. Check attempt token fencing (BUG-M8T2-07 / G03)
   // G03: if requireAttemptFencing=true, BOTH tokens must be present; missing pair fails closed.
@@ -2311,6 +2358,30 @@ export function handleDiscordAction({
         normAction === ACTIONS.REJECT_APPROVAL ||
         normAction === ACTIONS.REQUEST_REVISION_APPROVAL
       ) {
+        // M12/T9 F-123: the card's own 24-hour clock.
+        //
+        // The owner's ruling is that a card expires 24 hours after the bot
+        // posts it, and that an expired card is not approved. The clock is
+        // read from the DURABLE record of the surfaced card, so it survives a
+        // restart and cannot be re-derived from a moment that is not the
+        // card's own. The refusal carries the same code the guard's own
+        // approval seam already uses for an expired approval.
+        const approvalExpiresAt = approvalCardExpiresAt(
+          readSurfacedApprovalPostedAt(paths, taskId),
+        );
+        if (
+          approvalExpiresAt !== null &&
+          isApprovalCardExpired({
+            expiresAt: approvalExpiresAt,
+            now: currentTime,
+          })
+        ) {
+          return {
+            allowed: false,
+            reason: "AUTH_APPROVAL_EXPIRED",
+            status: "DENIED",
+          };
+        }
         // M12/T9 F-043 (legacy R1-A07-04): the verdict must come from the
         // thread the card was surfaced in. The recorded `thread_id` was never
         // compared with the task's own `approval_thread_id`, so a reposted,
@@ -5871,7 +5942,15 @@ export default {
         );
         return { applied: false, code: "CREDENTIAL_UNAVAILABLE" };
       }
-      const status = approvalStatusTag(decision);
+      // M12/T9 F-123: the card's own 24-hour clock. An untouched card whose
+      // 24 hours are up is EXPIRED, not WAITING — the owner's ruling is that
+      // an unanswered card is not approved. The expiry comes from the durable
+      // record of the surfaced card.
+      const status = approvalStatusTag(decision, {
+        expiresAt: approvalCardExpiresAt(
+          readSurfacedApprovalPostedAt(paths, taskId),
+        ),
+      });
       if (!status) {
         api.logger?.warn?.(
           `[zink-governance] DISCORD_TAG_TRANSITION_SKIPPED channel=approvals task=${taskId} reason=DECISION_UNKNOWN`,
@@ -5888,6 +5967,26 @@ export default {
         fetchImpl: globalThis.fetch,
         deadlineMs: DISCORD_REST_DEADLINE_MS,
         logger: api.logger,
+      });
+    }
+
+    /**
+     * M12/T9 F-123: project the expiry onto the card.
+     *
+     * The owner's ruling is that an expired card is not approved, and the card
+     * must say so: its STATUS tag becomes EXPIRED. The transition is
+     * fire-and-forget, exactly like the verdict transition — a decision path
+     * never blocks on a Discord round-trip, and a surface failure is a log
+     * line, never a verdict.
+     *
+     * This is the ONLY place besides the post-verdict effect that moves the
+     * approvals tag, so the two owner paths (button and text) cannot drift.
+     */
+    function projectExpiredApprovalTag(taskId) {
+      transitionApprovalTag({ taskId, decision: null }).catch((tagErr) => {
+        api.logger?.warn?.(
+          `[zink-governance] expired approval tag not transitioned for task ${taskId}: ${tagErr?.message}`,
+        );
       });
     }
 
@@ -9889,6 +9988,13 @@ export default {
                 threadId,
               });
             } else {
+              // M12/T9 F-123: a decision against an expired card is refused,
+              // and the card then says so: its STATUS tag becomes EXPIRED. The
+              // refusal is already answered to the owner; the tag is the
+              // projection of it, and a failure to project is only a log line.
+              if (res.reason === "AUTH_APPROVAL_EXPIRED") {
+                projectExpiredApprovalTag(parsed.taskId);
+              }
               const errMsg = `⚠️ Không thể thực hiện: ${res.reason || "Lỗi xử lý"}`;
               if (typeof ctx.respond?.followUp === "function") {
                 await ctx.respond.followUp({ text: errMsg, ephemeral: true });
@@ -10088,6 +10194,10 @@ export default {
             userConfirmationRef: "user-text-accept",
             threadId,
           });
+        } else if (res.reason === "AUTH_APPROVAL_EXPIRED") {
+          // M12/T9 F-123: the text path projects the same refusal onto the
+          // card's tag as the button path does.
+          projectExpiredApprovalTag(pendingTask.task_id);
         }
       } catch (mErr) {
         api.logger?.warn?.(

@@ -606,11 +606,60 @@ export function incidentStatusTag() {
 }
 
 /**
+ * M12/T9 F-123: the owner's ruling — an approval card expires 24 hours after
+ * the bot posts it.
+ *
+ * "Thẻ của anh hết hạn sau 24h kể từ lúc bot đưa thông báo, không bấm duyệt =
+ * không phê duyệt, thẻ hết hạn = không phê duyệt."
+ *
+ * The 24 hours are counted from the moment the bot POSTS the card. The card's
+ * own record carries that moment, so the expiry is a durable fact and never a
+ * re-derived one; and an untouched card is not a pending state: once its 24
+ * hours are up it is EXPIRED, which is not approved.
+ *
+ * The owner ALSO ruled that the task does not leave its pending state in the
+ * ledger: no durable terminal `EXPIRED` workflow status is introduced, and no
+ * sweeper is added. That is the owner's decision, not an omission — the
+ * expiry is enforced where a decision is presented, and shown on the surface.
+ */
+
+/** The owner's window: 24 hours from the moment the card is posted. */
+export const APPROVAL_CARD_TTL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The moment an approval card stops being answerable, derived from the moment
+ * it was posted. `null` when the posting moment is unknown — an unknown
+ * moment is not an expired card.
+ */
+export function approvalCardExpiresAt(postedAt) {
+  const posted =
+    typeof postedAt === "number" ? postedAt : Date.parse(postedAt ?? "");
+  if (!Number.isFinite(posted)) return null;
+  return posted + APPROVAL_CARD_TTL_MS;
+}
+
+/**
+ * Has the card's own 24-hour clock run out? An unknown expiry is never
+ * expired: the card stays answerable until its own record says otherwise.
+ */
+export function isApprovalCardExpired({ expiresAt = null, now = null } = {}) {
+  const expiry =
+    typeof expiresAt === "number" ? expiresAt : Date.parse(expiresAt ?? "");
+  if (!Number.isFinite(expiry)) return false;
+  const at = typeof now === "number" ? now : Date.now();
+  return at > expiry;
+}
+
+/**
  * The approvals STATUS value for a state the owner is being asked about. Creation always asks,
  * so no decision means `WAITING`. M12/T2-R2: once he actually decides, the same tag carries his
  * answer. An unrecognised decision returns `null` so the caller refuses to transition instead of
- * inventing a state — and `EXPIRED` is deliberately absent, because nothing here expires a card:
- * that would need a sweeper, and the host's own component ttl is not a governance verdict.
+ * inventing a state.
+ *
+ * M12/T9 F-123: an UNTOUCHED card whose 24 hours have passed is `EXPIRED`,
+ * not `WAITING` — the owner's ruling is that an unanswered card is not
+ * approved. A card that WAS answered keeps the owner's answer: a decision
+ * taken inside the window is not undone by the clock.
  */
 export const APPROVAL_STATUS_OF_DECISION = Object.freeze({
   APPROVE: "APPROVED",
@@ -618,9 +667,16 @@ export const APPROVAL_STATUS_OF_DECISION = Object.freeze({
   REQUEST_REVISION: "CHANGES",
 });
 
-export function approvalStatusTag(decision = null) {
-  if (decision === null || decision === undefined || decision === "REQUEST")
+export function approvalStatusTag(
+  decision = null,
+  { expiresAt = null, now = null } = {},
+) {
+  if (decision === null || decision === undefined || decision === "REQUEST") {
+    if (isApprovalCardExpired({ expiresAt, now })) {
+      return { category: "STATUS", value: "EXPIRED" };
+    }
     return { category: "STATUS", value: "WAITING" };
+  }
   const value = APPROVAL_STATUS_OF_DECISION[decision];
   return value ? { category: "STATUS", value } : null;
 }
