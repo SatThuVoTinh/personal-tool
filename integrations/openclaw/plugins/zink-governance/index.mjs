@@ -1467,13 +1467,22 @@ export async function handleOwnerSkillApproval({
   // pgvector is derived from canonical ACTIVE state, never the reverse. A
   // sync failure keeps the canonical record authoritative and is reported
   // as a derived-index failure; it never rolls the canonical write back.
+  // M12/T9 F-176: the derived-index sync must be told WHICH store it is
+  // talking to. The identity is operator configuration - the store carries its
+  // own identity beside its root, and the deployment names the store it
+  // expects - and it is never a constant in the source. An unconfigured
+  // deployment syncs without naming the store, and the sync then refuses the
+  // zero-row tombstone instead of guessing which store it holds.
+  const expectedStoreId =
+    typeof options.expectedStoreId === "string" &&
+    options.expectedStoreId.trim() !== ""
+      ? options.expectedStoreId.trim()
+      : (process.env.ZINK_SKILL_STORE_ID ?? "").trim() || undefined;
   let vectorSync;
   try {
     const report = options.vectorSyncFn
       ? await options.vectorSyncFn({ skillsRoot, proposal: stored })
-      : await (
-          await getVectorSyncModule()
-        ).syncSkillsToVectorStore({ skillsRoot, ...options });
+      : await syncSkillsThroughDoor(skillsRoot, options, expectedStoreId);
     vectorSync = {
       status: report?.status ?? "UNKNOWN",
       synced_count: report?.synced_count ?? 0,
@@ -1764,8 +1773,8 @@ export async function handleOwnerSkillRejection({
       "PROPOSAL_STORE_UNAVAILABLE: durable proposal store is not configured",
     );
   }
-  const catalogMod = await loadRepoModule("zink-skill-store/src/catalog.mjs");
-  const underWriterLock = catalogMod?.withSkillStoreWriterLock;
+  const skillStore = await getSkillStoreModule();
+  const underWriterLock = skillStore?.withSkillStoreWriterLock;
   if (typeof underWriterLock !== "function") {
     throw new Error(
       "APPROVAL_PROMOTE_UNAVAILABLE: canonical Skill Store writer is unavailable",

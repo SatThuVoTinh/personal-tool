@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { URL } from "node:url";
-import { scanCatalog } from "./catalog.mjs";
+import { readSkillStoreIdentity, scanCatalog } from "./catalog.mjs";
 import {
   deriveSemanticMetadata,
   renderEmbeddingEnvelope,
@@ -698,6 +698,39 @@ export async function syncSkillsToVectorStore(options = {}) {
     options.syncGenerationId ||
     `sync_${Date.now()}_${createHash("sha256").update(String(Math.random())).digest("hex").slice(0, 8)}`;
 
+  // M12/T9 F-176: the sync must be told WHICH store it is talking to.
+  //
+  // The store carries its own identity beside its root, and the caller may
+  // name the store it expects. A caller that names one and the store that
+  // does not carry it is REFUSED HERE, before any statement runs: nothing is
+  // synced and nothing is deleted. The refusal is a named code, not a prose
+  // error, so the operator can tell "the wrong root" from "the index is
+  // broken".
+  const expectedStoreId =
+    typeof options.expectedStoreId === "string" &&
+    options.expectedStoreId.trim() !== ""
+      ? options.expectedStoreId.trim()
+      : null;
+  const storeIdentity = await readSkillStoreIdentity(skillsRoot);
+  if (expectedStoreId !== null && storeIdentity !== expectedStoreId) {
+    return {
+      status: "FAILED",
+      error_code: "SKILL_STORE_IDENTITY_MISMATCH",
+      error:
+        "the Skill Store does not carry the expected store identity; nothing was synced and nothing was deleted",
+      expected_store_id: expectedStoreId,
+      actual_store_id: storeIdentity,
+      tombstone_status: "REFUSED",
+      tombstone_error_code: "SKILL_STORE_IDENTITY_MISMATCH",
+      sync_generation_id: syncGenerationId,
+      scanned_count: 0,
+      active_count: 0,
+      synced_count: 0,
+      failed_count: 0,
+      skills: [],
+    };
+  }
+
   // 1. Scan and validate canonical catalog (Phase 5, §8)
   const catalog = await scanCatalog(skillsRoot);
   const catalogErrors = catalog.errors ?? [];
@@ -806,19 +839,41 @@ export async function syncSkillsToVectorStore(options = {}) {
     return tombstoneKey(id);
   });
 
-  try {
-    // M11/T1: two independent defects made this statement never reach a
-    // successful execution against real PostgreSQL. (1) `unnest(ARRAY[{...}]
-    // ::text[])` is a syntax error — a brace array literal is only legal as a
-    // quoted string constant, so the literal now goes through
-    // escapeSqlLiteral. (2) The pre-fix UPDATE wrote status='DEPRECATED' and
-    // sync_status='TOMBSTONED', which migration 003 CHECK constraints do not
-    // admit (status is ACTIVE-only; sync_status is PENDING/READY/FAILED).
-    // The tombstone now DELETES the derived row (segments cascade via FK):
-    // pgvector state is derived-only, canonical lifecycle truth stays in the
-    // catalog, and every consumer already filters status='ACTIVE' AND
-    // sync_status='READY', so removal is consumer-visible-identical.
-    const tombstoneSql = `
+  // M12/T9 F-176: the zero-row tombstone is the destructive one.
+  //
+  // With no ACTIVE skill the key set is empty, so the statement below removes
+  // EVERY active derived row the index holds. That is correct for a store the
+  // owner emptied, and catastrophic for a `skillsRoot` that points at a
+  // DIFFERENT empty store: the sync would delete the intended store's whole
+  // derived index while believing it had synced an empty catalog.
+  //
+  // So the statement runs only when the store is CONFIRMED: the caller named
+  // the store and the store carries that identity. An unnamed store keeps the
+  // ordinary behaviour when it holds skills (the existing behaviour the owner
+  // kept), and an EMPTY store is tombstoned only under the explicit opt-in.
+  const storeIsEmpty = catalog.records.length === 0;
+  const storeIsConfirmed =
+    expectedStoreId !== null && storeIdentity === expectedStoreId;
+  const tombstoneAllowed =
+    !storeIsEmpty ||
+    storeIsConfirmed ||
+    options.allowUnnamedEmptyTombstone === true;
+
+  if (tombstoneAllowed) {
+    syncReport.tombstone_status = "APPLIED";
+    try {
+      // M11/T1: two independent defects made this statement never reach a
+      // successful execution against real PostgreSQL. (1) `unnest(ARRAY[{...}]
+      // ::text[])` is a syntax error — a brace array literal is only legal as a
+      // quoted string constant, so the literal now goes through
+      // escapeSqlLiteral. (2) The pre-fix UPDATE wrote status='DEPRECATED' and
+      // sync_status='TOMBSTONED', which migration 003 CHECK constraints do not
+      // admit (status is ACTIVE-only; sync_status is PENDING/READY/FAILED).
+      // The tombstone now DELETES the derived row (segments cascade via FK):
+      // pgvector state is derived-only, canonical lifecycle truth stays in the
+      // catalog, and every consumer already filters status='ACTIVE' AND
+      // sync_status='READY', so removal is consumer-visible-identical.
+      const tombstoneSql = `
       DELETE FROM skills.catalog_index
       WHERE status = 'ACTIVE'
       AND (${TOMBSTONE_KEY_SQL_EXPRESSION}) NOT IN (
@@ -827,15 +882,23 @@ export async function syncSkillsToVectorStore(options = {}) {
         )}::text[])
       );
     `;
-    await executePostgresQuery(tombstoneSql, options);
-  } catch (error) {
-    syncReport.status = "FAILED";
-    syncReport.error_code = "VECTOR_TOMBSTONE_SYNC_FAILED";
-    syncReport.error = String(
-      error?.message || "Tombstone synchronization failed",
-    ).slice(0, MAX_FAILURE_REASON_LENGTH);
-    syncReport.failed_count = 1;
-    return syncReport;
+      await executePostgresQuery(tombstoneSql, options);
+    } catch (error) {
+      syncReport.status = "FAILED";
+      syncReport.error_code = "VECTOR_TOMBSTONE_SYNC_FAILED";
+      syncReport.error = String(
+        error?.message || "Tombstone synchronization failed",
+      ).slice(0, MAX_FAILURE_REASON_LENGTH);
+      syncReport.failed_count = 1;
+      return syncReport;
+    }
+  } else {
+    // The refusal is named, and the report says so: a sync that skipped the
+    // tombstone must never read as "the index matches the catalog".
+    syncReport.tombstone_status = "REFUSED";
+    syncReport.tombstone_error_code = "SKILL_STORE_IDENTITY_UNNAMED";
+    syncReport.tombstone_error =
+      "the store carries no confirmed identity, so the zero-row tombstone was not run";
   }
 
   // 4. Ingest and vectorize active records.

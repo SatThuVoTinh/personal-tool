@@ -1050,7 +1050,102 @@ export function skillStoreWriterLockDir(skillsRoot) {
 const heldWriterLocks = new Map();
 
 export async function withSkillStoreWriterLock(skillsRoot, fn, options = {}) {
-  return withFileLock(skillStoreWriterLockDir(skillsRoot), fn, options);
+  const lockDir = skillStoreWriterLockDir(skillsRoot);
+  heldWriterLocks.set(lockDir, (heldWriterLocks.get(lockDir) ?? 0) + 1);
+  try {
+    return await withFileLock(lockDir, fn, options);
+  } finally {
+    const remaining = (heldWriterLocks.get(lockDir) ?? 1) - 1;
+    if (remaining > 0) heldWriterLocks.set(lockDir, remaining);
+    else heldWriterLocks.delete(lockDir);
+  }
+}
+
+/**
+ * Whether THIS process currently holds the writer lock of `skillsRoot`.
+ *
+ * The answer is about this process only: the lock is a cross-process mutex, so
+ * a lock held elsewhere is not observable from here. It exists so the public
+ * door can refuse an unlocked canonical promotion; it is never a substitute
+ * for the lock itself.
+ */
+export function isSkillStoreWriterLockHeld(skillsRoot) {
+  if (typeof skillsRoot !== "string" || skillsRoot.trim() === "") return false;
+  const resolved = path.resolve(skillsRoot);
+  return heldWriterLocks.has(
+    lockDirFor(
+      path.dirname(resolved),
+      `${path.basename(resolved)}.writer.lock`,
+    ),
+  );
+}
+
+/**
+ * The store's OWN identity: the name the store answers to.
+ *
+ * M12/T9 F-176: the sync used to have no idea WHICH store it was talking to.
+ * A `skillsRoot` that pointed at a different EMPTY store still issued the
+ * zero-row tombstone, which deletes every derived row the index holds - the
+ * system could not tell "the store I am supposed to sync" from "somebody
+ * else's empty store".
+ *
+ * The identity lives in a small file BESIDE the store root, exactly like the
+ * writer lock (`<root>.writer.lock`): a file INSIDE the scanned root would
+ * poison the catalog grammar (`scanCatalog` admits only `README.md` and slug
+ * directories at the root), so the identity could never be read back from
+ * inside the tree it describes. Beside the root, the identity travels with
+ * the store directory and never enters the catalog.
+ *
+ * The value is an operator-chosen id, not a digest of the tree: the tree
+ * changes with every promotion, and an identity that changed with the content
+ * could never be named by a caller that means "the store I deployed".
+ */
+export const SKILL_STORE_IDENTITY_SUFFIX = ".store-identity.json";
+
+/** The id grammar: kebab-case, like every other name the store owns. */
+const STORE_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/** The identity file of `skillsRoot`, beside the root it identifies. */
+export function skillStoreIdentityPath(skillsRoot) {
+  if (typeof skillsRoot !== "string" || skillsRoot.trim() === "") {
+    writerError(
+      "SKILLS_ROOT_REQUIRED",
+      "a canonical skillsRoot is required to address the store identity.",
+    );
+  }
+  const resolved = path.resolve(skillsRoot);
+  return path.join(
+    path.dirname(resolved),
+    `${path.basename(resolved)}${SKILL_STORE_IDENTITY_SUFFIX}`,
+  );
+}
+
+/**
+ * The identity the store carries, or `null` when it carries none.
+ *
+ * A missing file, an unreadable file, a malformed document and an id outside
+ * the grammar all answer `null`: the store then carries NO identity, which is
+ * the fail-closed direction. A caller that names an expected identity is
+ * refused (the store does not carry it), and an unnamed empty store is not
+ * tombstoned. Nothing here ever invents an identity.
+ */
+export async function readSkillStoreIdentity(skillsRoot) {
+  let text;
+  try {
+    text = await readFile(skillStoreIdentityPath(skillsRoot), "utf8");
+  } catch {
+    return null;
+  }
+  let document;
+  try {
+    document = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!isObject(document)) return null;
+  const storeId = document.store_id;
+  if (typeof storeId !== "string" || !STORE_ID.test(storeId)) return null;
+  return storeId;
 }
 
 /**

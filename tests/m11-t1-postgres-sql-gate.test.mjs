@@ -18,6 +18,7 @@ import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
 
 import { syncSkillsToVectorStore } from "../zink-skill-store/src/vector-sync.mjs";
+import { skillStoreIdentityPath } from "../zink-skill-store/src/catalog.mjs";
 
 const REPO_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -31,6 +32,8 @@ const EXPECTED_DIMENSIONS = 1024;
 // lane; every OTHER tracked migration failing is a real defect and must be
 // red, not a skip.
 const VECTOR_SCHEMA_MIGRATION = "003_skills_vector_schema.sql";
+// M12/T9 F-176: the identity this gate's scratch store carries.
+const GATE_STORE_ID = "m11-postgres-gate-store";
 
 /**
  * Every tracked migration, in the order the runtime applies them.
@@ -231,6 +234,17 @@ test("M11-06: generated statements execute against real PostgreSQL (scratch DB)"
     };
 
     const root = await mkdtemp(path.join(os.tmpdir(), "m11-gate-"));
+    // M12/T9 F-176: the store is NAMED before it is synced. The scratch store
+    // carries its identity beside its root and the sync is told which store it
+    // is talking to, because the empty-catalog tombstone below removes EVERY
+    // derived row - a tombstone that must never run against a store nobody
+    // named.
+    const identityFile = skillStoreIdentityPath(root);
+    await writeFile(
+      identityFile,
+      `${JSON.stringify({ schema_version: 1, store_id: GATE_STORE_ID }, null, 2)}\n`,
+      "utf8",
+    );
     try {
       const content =
         "# Owner's \"weird\" rule\n\nBody with quote ' and backslash \\ and a second heading.\n\n## Sub 'section'\n\nMore body.";
@@ -238,6 +252,7 @@ test("M11-06: generated statements execute against real PostgreSQL (scratch DB)"
 
       const report = await syncSkillsToVectorStore({
         skillsRoot: root,
+        expectedStoreId: GATE_STORE_ID,
         embedFn: async (texts) =>
           texts.map(() => new Array(EXPECTED_DIMENSIONS).fill(0.01)),
         dbExecutor: async (sql) => runSql(sql),
@@ -273,6 +288,7 @@ test("M11-06: generated statements execute against real PostgreSQL (scratch DB)"
       await rm(path.join(root, "office"), { recursive: true, force: true });
       const resync = await syncSkillsToVectorStore({
         skillsRoot: root,
+        expectedStoreId: GATE_STORE_ID,
         embedFn: async (texts) =>
           texts.map(() => new Array(EXPECTED_DIMENSIONS).fill(0.01)),
         dbExecutor: async (sql) => runSql(sql),
@@ -286,6 +302,7 @@ test("M11-06: generated statements execute against real PostgreSQL (scratch DB)"
       );
     } finally {
       await rm(root, { recursive: true, force: true });
+      await rm(identityFile, { force: true });
     }
   } finally {
     dockerExec([

@@ -25,6 +25,7 @@ Toàn bộ kho kỹ năng tuân thủ nghiêm ngặt cấu trúc phân cấp chu
 
 ```text
 zink-skill-store/
+├── index.mjs                        # CỬA CHÍNH THỨC (public door) của kho: 3 entry point công khai
 ├── bin/
 │   └── skill-store.mjs             # CLI kiểm tra (validate) và truy xuất (get)
 ├── src/
@@ -36,6 +37,7 @@ zink-skill-store/
 │           └── <version>/          # Phiên bản SemVer (vd: 1.0.0)
 │               ├── manifest.json   # Tệp đặc tả cấu hình, metadata và băm SHA-256
 │               └── SKILL.md        # Tệp hướng dẫn thực thi kỹ năng (Markdown UTF-8, đúng tên file)
+├── skills.store-identity.json      # Tên của kho (identity) — file nằm CẠNH cây skills/, không nằm trong nó
 └── templates/                      # Kho lưu trữ template báo cáo chuẩn do chủ sở hữu phê duyệt
     ├── excel/                      # Template bảng tính Excel (.xlsx)
     └── power-bi/                   # Template báo cáo Power BI (.pbix)
@@ -258,3 +260,72 @@ node zink-skill-store/bin/skill-store-lock-recovery.mjs --root <đường-dẫn>
 Các trường hợp bị **từ chối** (không xoá gì): holder còn đang chạy, bản ghi
 owner không đọc được hoặc sai dạng, thư mục lock có mục lạ, hoặc thiếu xác
 nhận. Đây là các quy tắc giống hệt công cụ khôi phục lock của ledger.
+
+---
+
+## 9. Cửa chính thức của kho (public door) và tên của kho (store identity)
+
+### 9.1. Cửa chính thức
+
+`zink-skill-store/index.mjs` là **cửa chính thức** của kho. Ngoài module này,
+không module nào khác được phép chạm vào phần lõi của kho: các module trong
+`src/` là chi tiết cài đặt nội bộ, dành cho test, bin và các reader của chính
+kho.
+
+Cửa công khai đúng ba hàm, không hơn:
+
+```text
+promoteApprovedSkill(...)      # promotion chuẩn tắc (canonical promotion)
+withSkillStoreWriterLock(...)  # writer lock toàn kho
+syncSkillsToVectorStore(...)   # đồng bộ chỉ mục vector dẫn xuất (pgvector)
+```
+
+`promoteApprovedSkill` **phải** được gọi bên trong
+`withSkillStoreWriterLock`: giao dịch phê duyệt đọc lại bản ghi đề xuất,
+kiểm tra trạng thái từ chối, promote rồi ghi trạng thái đề xuất — tất cả trong
+một phần giao dịch. Gọi promotion ngoài writer lock sẽ bị từ chối bằng mã
+tên rõ ràng, không ghi gì.
+
+### 9.2. Bắt buộc ghi tên kho trước khi sync hoặc tombstone
+
+Kho phải **có tên** trước khi nó được đồng bộ hoặc bị tombstone. Tên của kho
+nằm trong một file JSON nhỏ đặt **cạnh** cây `skills/` (không phải bên trong
+nó — mọi mục bên trong cây `skills/` đều phải là thư mục slug, nên một file
+lạ ở đó sẽ làm hỏng catalog):
+
+```text
+<thư mục cha của skills>/<tên thư mục skills>.store-identity.json
+```
+
+Nội dung:
+
+```json
+{
+  "schema_version": 1,
+  "store_id": "zink-canonical-skill-store"
+}
+```
+
+`store_id` dùng đúng dạng kebab-case như mọi tên khác của kho
+(`^[a-z0-9]+(?:-[a-z0-9]+)*$`). Kho chuẩn của repository này đã được đặt tên
+trong `zink-skill-store/skills.store-identity.json`.
+
+Lệnh đồng bộ nhận thêm một tham số tuỳ chọn `expectedStoreId`: tên của kho mà
+caller đang định sync. Ba trạng thái:
+
+| Caller nói tên | Kho có mang tên đó không  | Kết quả                                                                                                                                                |
+| -------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Có             | Có, **khớp**              | Sync bình thường; tombstone toàn kho vẫn được phép.                                                                                                    |
+| Có             | Có, **khác**              | Từ chối `SKILL_STORE_IDENTITY_MISMATCH`; **không** câu lệnh nào chạy, không xoá gì.                                                                    |
+| Có             | Không có (hoặc file hỏng) | Từ chối `SKILL_STORE_IDENTITY_MISMATCH`; **không** câu lệnh nào chạy, không xoá gì.                                                                    |
+| Không          | —                         | Hành vi cũ giữ nguyên, **trừ** kho rỗng: tombstone của kho rỗng bị từ chối `SKILL_STORE_IDENTITY_UNNAMED` (báo cáo ghi `tombstone_status: "REFUSED"`). |
+
+Vì sao phải vậy: khi kho rỗng, câu tombstone xoá **mọi** dòng ACTIVE trong
+chỉ mục dẫn xuất. Một `skillsRoot` chỉ vào nhầm một kho rỗng khác sẽ xoá sạch
+chỉ mục của kho đang cần sync, mà không hề có tín hiệu nào báo đã xoá. Muốn
+tombstone một kho rỗng mà không có tên xác nhận, caller phải **tự opt-in**
+bằng cờ `allowUnnamedEmptyTombstone`.
+
+Lưu ý: tên của kho là **cấu hình vận hành**, không phải hằng số trong mã
+nguồn. Bản triển khai khai báo tên kho mà nó dự kiến sync; nếu cấu hình đó
+lệch với tên kho mang theo, lệnh sync bị từ chối và không xoá gì cả.
