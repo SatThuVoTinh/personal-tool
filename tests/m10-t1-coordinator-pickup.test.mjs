@@ -1062,10 +1062,15 @@ test("F-065: the supported governance versions come from the contract enum", asy
       `the ledger must not restate the supported versions as a literal: ${set}`,
     );
   }
-  assert.equal(
-    (source.match(/new Set\(SUPPORTED_GOVERNANCE_VERSIONS\)/gu) ?? []).length,
-    2,
-    "both readers must derive their set from the one declaration",
+  // M12/T9: the migration is a THIRD reader of the supported set (the replay
+  // reader, the checkpoint's era declaration and the forward migration), and it
+  // derives its set from the same one declaration. The claim this case makes is
+  // that NO reader restates the list - the check above refuses every literal
+  // set that names the current version - so the count grows with the readers
+  // and the ONE declaration stays the only place the list is written.
+  assert.ok(
+    (source.match(/new Set\(SUPPORTED_GOVERNANCE_VERSIONS\)/gu) ?? []).length >= 2,
+    "every reader must derive its set from the one declaration",
   );
 });
 
