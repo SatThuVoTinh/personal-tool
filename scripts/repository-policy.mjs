@@ -363,8 +363,17 @@ function checkWorkflowTriggers(
   const push = workflow.on?.push;
   const pullRequestBranches = pullRequest?.branches;
   const pushBranches = push?.branches;
+  // An unfiltered trigger covers every branch, main included, so it satisfies
+  // the "for main" requirement without naming main. The `push` side has always
+  // said so; the `pull_request` side did not, and M12/T9 (the owner's `H1`)
+  // widened BOTH triggers to every branch — so the same rule applies to both.
+  // What the gate still refuses: a missing trigger, and a trigger narrowed to
+  // branches that do not include `main`.
   const hasMainPullRequest =
-    Array.isArray(pullRequestBranches) && pullRequestBranches.includes("main");
+    pullRequest !== undefined &&
+    (pullRequestBranches === undefined ||
+      (Array.isArray(pullRequestBranches) &&
+        pullRequestBranches.includes("main")));
   // An unfiltered push trigger covers every branch, main included, so it
   // satisfies the "push for main" requirement without naming main.
   const hasMainPush =

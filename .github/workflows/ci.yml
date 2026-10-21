@@ -1,10 +1,13 @@
 name: CI
 
 on:
+  # No branch filter on either trigger: the quality gate must run for a push to
+  # ANY branch and for a pull request to ANY branch, not only for `main`.
+  # Narrowing them to `main` left a task branch ungated - the lane ran only when
+  # a human re-dispatched it by hand - so a commit could reach `main` through a
+  # merge without the gate ever having looked at it.
   pull_request:
-    branches: [main]
   push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
