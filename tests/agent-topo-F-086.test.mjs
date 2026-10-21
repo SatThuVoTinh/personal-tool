@@ -107,7 +107,7 @@ test("F-086: the packaged assets are the documented categories", () => {
       contracts: 12,
       lib: 20,
       policy: 2,
-      "zink-skill-store": 2,
+      "zink-skill-store": 3,
       "zink-tools": 7,
     },
     `the packaged asset composition changed: ${JSON.stringify(Object.fromEntries(categories))}`,
