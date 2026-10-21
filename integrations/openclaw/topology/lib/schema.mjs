@@ -535,12 +535,17 @@ export function generateSchemaManifest() {
  * `ledger-snapshot.schema.json`, `delegation-envelope.schema.json` and
  * `trusted-result-envelope.schema.json` accept BOTH renderings and publish
  * version 1.1.0. The value below is the checksum of THAT state.
+ *
+ * M12/T9 F-247: the unwritten task reference-digest slot was removed from
+ * `ledger-snapshot.schema.json`, so the contract bytes changed. The value
+ * below is the checksum of THAT state.
+ *
  * M12/T9 F-249: `result_id` was withdrawn from the four verdict payload
  * branches of `ledger-event.schema.json`, so the contract bytes changed again.
  * The value below is the checksum of THAT state.
  */
 export const PINNED_SCHEMA_MANIFEST_CHECKSUM =
-  "f776e3c9ac68436f905e013c31a89e3a58c7f0ff0a97fdc19103765a35be0c71";
+  "605fe421a5e0ed7f863fa709f529b4e92ca87d64e51cb6a295d0bdf8e7bc883c";
 
 export function verifySchemaManifestChecksums(manifest = null) {
   if (manifest === null) {

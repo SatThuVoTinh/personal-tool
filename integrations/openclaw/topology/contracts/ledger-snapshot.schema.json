@@ -495,14 +495,7 @@
                 "semantic_contract_status": {
                   "$ref": "ledger-event.schema.json#/$defs/semantic_contract_status"
                 },
-                "accepted_reference_digests": {
-                  "type": "object",
-                  "maxProperties": 72,
-                  "additionalProperties": {
-                    "type": "string",
-                    "pattern": "^[a-f0-9]{64}$"
-                  }
-                },
+
                 "approvals": {
                   "type": "object",
                   "maxProperties": 16

@@ -10,7 +10,6 @@ const _moduleDir = path.dirname(fileURLToPath(import.meta.url));
 import {
   buildSpawnProposal,
   canonicalHash,
-  deriveReferenceId,
   GOVERNANCE_VERSION,
   SCHEMA_VERSION,
 } from "./canonical.mjs";
@@ -1792,15 +1791,22 @@ export function createGovernanceGuard({
               node.validation_digest,
           "LINEAGE_MISMATCH",
         );
-        for (const ref of handoff.input_refs)
-          assert(
-            // M12/T9 F-157: the ONE derivation of a reference id. The check
-            // used to re-inline the reference hash under its own domain tag,
-            // so the tag lived in two places and the two could disagree.
-            task.accepted_reference_digests?.[ref.ref_id] ===
-              deriveReferenceId(ref),
-            "REFERENCE_INVALID",
-          );
+        // M12/T9 F-247: the task's reference-digest slot is GONE.
+        //
+        // The slot was declared by the published snapshot contract and read
+        // here, but NO event type carried reference digests and NO reducer
+        // branch wrote it, so the comparison was always
+        // `undefined === <hex>`: every handoff that carried an `input_refs`
+        // entry was refused with REFERENCE_INVALID, forever. The owner ruled
+        // on 2026-10-21 ("bỏ ô" - drop the field) that the unwritten slot is
+        // removed from the contract and from every reader, rather than a new
+        // event type and reducer branch being invented for it.
+        //
+        // The reference itself is still validated: the handoff is checked
+        // against the PUBLISHED `delegation-envelope` contract above, whose
+        // `input_refs` items are `$ref`s to `governed-reference.schema.json`.
+        // What is gone is only the comparison against a slot that no writer
+        // could ever fill.
         // M8-055: this governed route and the live adapter route both build
         // the reservation through the same canonical builder, so the
         // delegation id and request digest cannot diverge between them.
