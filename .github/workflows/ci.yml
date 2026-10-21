@@ -59,7 +59,7 @@ jobs:
         with:
           python-version: "3.13"
       - name: Install uv
-        run: pip install --disable-pip-version-check "uv==0.12.5"
+        run: pip install --disable-pip-version-check "uv==0.12.0"
       - name: Verify Python version
         run: python -c "import sys; assert sys.version_info[:2] == (3, 13), sys.version"
       # The suite is invoked through `npm run test:knowledge`, and package.json
