@@ -1033,3 +1033,31 @@ test("F-094: the Knowledgebase applies zero statements against skills.* and the 
     "an edited applied migration must be refused, not silently re-applied",
   );
 });
+
+test("F-094: the plugin applies the Skill Store's own migrations before it syncs", () => {
+  // The `skills.*` schema moved into the Skill Store, so a deployment that
+  // never applied the store's migrations has no schema to sync into. The
+  // plugin's sync call site therefore applies them through the same public
+  // door, and the runner is idempotent.
+  const source = readFileSync(
+    new URL(
+      "../integrations/openclaw/plugins/zink-governance/index.mjs",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const sync = source.slice(
+    source.indexOf("async function syncSkillsThroughDoor"),
+    source.indexOf("async function getDuckDbBridge"),
+  );
+  assert.match(
+    sync,
+    /applySkillStoreMigrations/u,
+    "the plugin's sync must apply the Skill Store's migrations",
+  );
+  assert.ok(
+    sync.indexOf("await skillStore.applySkillStoreMigrations") <
+      sync.indexOf("return skillStore.syncSkillsToVectorStore"),
+    "the migrations must be applied BEFORE the derived index is synced",
+  );
+});

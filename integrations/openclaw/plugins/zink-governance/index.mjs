@@ -1162,6 +1162,18 @@ async function syncSkillsThroughDoor(skillsRoot, options, expectedStoreId) {
       "SKILL_STORE_PUBLIC_MODULE_UNAVAILABLE: the Skill Store public module is unavailable",
     );
   }
+  // M12/T9 F-094 (R5-E03-07) / H5: the `skills.*` schema belongs to the
+  // Skill Store now, so the store's OWN migrations are applied through the
+  // same door before the derived index is synced. A deployment that never
+  // applied them has no schema to sync into, and the sync would fail on the
+  // missing table instead of on a missing migration step.
+  //
+  // The runner is idempotent: it applies only the files its own ledger does
+  // not name yet, and it refuses a file whose bytes changed after it was
+  // applied.
+  if (typeof skillStore.applySkillStoreMigrations === "function") {
+    await skillStore.applySkillStoreMigrations(options);
+  }
   return skillStore.syncSkillsToVectorStore({
     skillsRoot,
     ...options,
