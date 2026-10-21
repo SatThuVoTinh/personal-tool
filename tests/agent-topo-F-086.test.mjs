@@ -107,7 +107,10 @@ test("F-086: the packaged assets are the documented categories", () => {
       contracts: 12,
       lib: 20,
       policy: 2,
-      "zink-skill-store": 3,
+      // M12/T9 F-094 (R5-E03-07) / H5: the Skill Store's own migration runner
+      // travels with the build, because the store's public door publishes it
+      // and the deployed tree must be self-sufficient.
+      "zink-skill-store": 4,
       "zink-tools": 7,
     },
     `the packaged asset composition changed: ${JSON.stringify(Object.fromEntries(categories))}`,
