@@ -68,6 +68,12 @@
       "expectation": "may-skip",
       "maxSkips": 1,
       "reason": "the export-equivalence case runs the Python toolchain through uv, and the quality-gate runner installs no Python toolchain, so the case reports NOT RUN instead of a pass"
+    },
+    {
+      "id": "duckdb",
+      "expectation": "may-skip",
+      "maxSkips": 10,
+      "reason": "the DuckDB gates are REAL execution gates that need the DuckDB engine, and the CI runner installs no engine, so their cases report NOT RUN instead of a pass"
     }
   ]
 }

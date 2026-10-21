@@ -1,3 +1,9 @@
+//
+// SKIP-FAMILY: duckdb
+//
+// M12/T9 F-384: these cases need the DuckDB ENGINE, and a host without it
+// reports NOT RUN instead of a pass. The capability is its own family, so the
+// CI runner's expectation is declared once and every host agrees on it.
 import test, { describe } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
