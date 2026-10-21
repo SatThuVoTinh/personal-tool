@@ -107,9 +107,12 @@ test("F-247: no tracked code reads or writes the field any more", () => {
     .split(/\r?\n/)
     .filter(Boolean);
   // This row's own history: the findings register names the field in its
-  // evidence line, and this lane names it because it proves the removal.
+  // evidence line, PLAN.md records the owner's ruling, and this lane names it
+  // because it proves the removal. Those three are the field's HISTORY; no
+  // other tracked file may carry it, and in particular no CODE may.
   const ownHistory = new Set([
     "docs/execution/findings.md",
+    "PLAN.md",
     "tests/agent-owner-F-247.test.mjs",
   ]);
   const offenders = tracked
