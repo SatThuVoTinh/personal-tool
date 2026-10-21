@@ -63,9 +63,9 @@ function admittedManifestDigests(configureSource) {
 previous build can be recognised instead of refused",
   );
   const block = configureSource.slice(start);
-  return [
-    ...block.matchAll(/["']([0-9a-f]{64})["']/gu),
-  ].map((match) => match[1]);
+  return [...block.matchAll(/["']([0-9a-f]{64})["']/gu)].map(
+    (match) => match[1],
+  );
 }
 
 test("M12/T9 F-380: the deployed manifest is derived from its commit and admitted", () => {
@@ -82,7 +82,9 @@ the builder's manifest list, or --preflight refuses the deployed extension`,
   );
   // The current build's manifest is accepted by content comparison, so it must
   // NOT be listed: a list entry is a statement about a PREVIOUS build.
-  const current = sha256(readFileSync(path.join(REPO, MANIFEST_SOURCE), "utf8"));
+  const current = sha256(
+    readFileSync(path.join(REPO, MANIFEST_SOURCE), "utf8"),
+  );
   assert.notEqual(
     current,
     deployed,

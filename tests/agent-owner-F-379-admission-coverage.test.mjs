@@ -167,7 +167,14 @@ test("M12/T9 F-379: the deployed build is the build the live host carries", () =
   );
   const show = execFileSync(
     "git",
-    ["-c", `safe.directory=${REPO}`, "show", "-s", "--format=%ci", DEPLOYED_BUILD],
+    [
+      "-c",
+      `safe.directory=${REPO}`,
+      "show",
+      "-s",
+      "--format=%ci",
+      DEPLOYED_BUILD,
+    ],
     { cwd: REPO, encoding: "utf8" },
   ).trim();
   assert.match(

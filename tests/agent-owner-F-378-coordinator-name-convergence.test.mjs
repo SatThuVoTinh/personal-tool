@@ -78,7 +78,9 @@ function canonicalName(agentId) {
 
 /** The agent entry with this id, in a config's roster. */
 function agentById(config, agentId) {
-  const agent = config.agents.list.find((candidate) => candidate.id === agentId);
+  const agent = config.agents.list.find(
+    (candidate) => candidate.id === agentId,
+  );
   assert.ok(agent, `the config must carry the agent ${agentId}`);
   return agent;
 }

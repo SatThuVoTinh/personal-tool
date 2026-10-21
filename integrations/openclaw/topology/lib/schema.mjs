@@ -549,9 +549,12 @@ export function generateSchemaManifest() {
  * and a contract that refuses its own record makes the ledger unreadable - so
  * the contract bytes changed once more. The value below is the checksum of THAT
  * state.
+ *
+ * M12/T9 F-376 (completion): the BLOCKED branch admitted the legacy member
+ * too, so the contract bytes changed once more and the pin follows.
  */
 export const PINNED_SCHEMA_MANIFEST_CHECKSUM =
-  "44a38df6b39dd771af815823f60d9146b336ee13f3d3743b0658a24608d34c1b";
+  "9ab8c31181b79f134a911d8878ac0edbff62af851be0e6f146940cef0c14311c";
 
 export function verifySchemaManifestChecksums(manifest = null) {
   if (manifest === null) {

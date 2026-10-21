@@ -44,7 +44,10 @@ const sha256 = (value) => createHash("sha256").update(value).digest("hex");
  */
 function deployedResolverBytes() {
   const template = readFileSync(TEMPLATE, "utf8");
-  const ids = [...Object.values(PASS_ENTRY_IDS.discord), PASS_ENTRY_IDS.gateway];
+  const ids = [
+    ...Object.values(PASS_ENTRY_IDS.discord),
+    PASS_ENTRY_IDS.gateway,
+  ];
   const rebuilt = template.replace(
     "__ZINK_ALLOWED_IDS__",
     JSON.stringify(ids, null, 2),
