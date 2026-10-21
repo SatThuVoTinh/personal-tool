@@ -7368,6 +7368,13 @@ a tier assignment in `ACTIVE.md` §5.3 is not an approval.** Two rows have since
 | **H10** | Whether `.agents/states/findings.md` becomes tracked, and where an archived `ACTIVE.md` should live                                                                                                                                                                     | **register half ANSWERED 2026-10-17** by "chuyển sang docs/execution đi": the queue moved to **`docs/execution/findings.md`** and is Git-tracked from this head, so the cost `M12/T4-R1` `T4-3` exposed — 31 status rewrites, 11 dated refresh lines and one new entry landing with **no commit at all** — cannot recur. Being tracked also put it inside the `docs/**/*.md` prettier and markdownlint globs, which is why each row now carries one fixed field shape — the owner's nine fields plus the `Legacy register id` his `l1` answer added, ten lines per row. **The size policy this row asked for is still not set**: the register entered Git at **3 244 lines / ~457 KB** holding **236** queued bugs (**4 010 lines / ~718 KB and 292 queued bugs at the 2026-10-18 head, read from the file itself**, and §2 now carries 50 closure entries rather than 48), after 48 rows left it (43 closed with commit + executed-test evidence, 4 duplicates, 1 resolved blocker) into the file's own §2 closure table and a concurrent owner session appended 17 `R7-D*` rows, and no trimming rule was approved. The archive half was already settled in practice — six closed contracts now live under `docs/contracts/execution/archive/`, and the scrub rule ran on the latest                                                                                                                                                                                                                                                                                                                        | this section's own history, `R5-E14-07`, `Record — M12/T4-R1 closed`                                                                                             |
 | **H11** | **NEW, owner-proposed 2026-10-15: the O1/O2 working relationship.** His words: _"2 điều phối O1 và O2 nên chia đôi task, thảo luận với nhau trong sandbox để khi làm xong, các task mà O1 và O2 cho executor chuyên biệt làm xong, ghép lại phải đúng yêu cầu của anh"_ | this is **not** option A or B of the routing question — it is a third answer, and it changes canonical architecture, so it is RED and recorded rather than built. What it contradicts today: `five-stack.md:15-17` ("Main is the only authority that changes execution between coordinators… **O1 and O2 return a transition request to Main instead of invoking one another**") and `:20-23` (missing prerequisites are BLOCKED "rather than a hidden A2A edge"); `policy.mjs:1166` Coordinator Core says the same; `AGENT_SPAWN_POLICY` gives `main → [o1, o2]` and **no** `o1 ↔ o2` edge, which the guard enforces. Sessions also run `context: isolated, sandbox: require, thread: false`, so "a sandbox they discuss in" is a **new shared durable surface**, and `R5-E16-01/02` already proves whole-file rewrites under one lock lose updates when several loops run concurrently. Three shapes are offered below; the recommended order exists because **the execution lane itself has never run end to end**, and its first named prerequisite is **already landed**: `R1-A04-01` closed at `M12/T2.2-R1` `A-1` (`ccf2ad7`) — the guard now validates each node against `AGENT_STACK_POLICY` (`guard.mjs:849` at this head) — and `R1-A04-05` closed at `A-2` (`09aa698`). What would still refuse the split mid-flight is a different defect, proved while `A-1` ran: `main` owns the `decision` node but appears in nobody's spawn list, so Main's merge has no admissible node. That, not the guard/policy drift, is the prerequisite left; it is documented in the `A-1` consequence block below | `docs/architecture/five-stack.md`, `policy.mjs:555-563, 1166-1174`, `guard.mjs:842-853, 865-870`, `R1-A04-01` (closed `ccf2ad7`), `R1-A04-05` (closed `09aa698`) |
 
+**All ten were ANSWERED on 2026-10-21.** `H1`, `H2`, `H3`, `H5`, `H6`, `H7`, `H8`,
+`H9`, `H10` and the unnumbered `F-217` question — the owner's answers, and the
+bands they create, are in **Record — the owner's answers to the ten open
+decisions (2026-10-21)** below. `H4` was de-escalated (the state-root
+permission gate landed in this band) and `H11` was decided on 2026-10-15 and
+scheduled to `M12/T3`.
+
 **H11, the three shapes (ranked; the owner picks one before any contract is written):**
 
 1. **Main-mediated split — smallest.** Main divides one request into an O1 half and an O2 half **inside a single
@@ -7610,6 +7617,57 @@ coordinators' stack sets (they now carry the owner's rule), and two cases used
 "o1 on the semantic stack" as their example of an INVALID pairing — that pairing
 is valid now, so the claim is carried by a pairing the table refuses under both
 the old and the new table. No assertion was weakened and no gate was widened.
+
+### Record — the owner's answers to the ten open decisions (2026-10-21)
+
+The owner answered every decision §11 left open, in one message, while running
+the deploy note. His answers, and what each one binds:
+
+| #       | The question                                                       | The owner's answer                                                                                                   | What it binds                                                                                                                             |
+| ------- | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `H1`    | widen the CI triggers so a push to the task branch is gated        | **bật** (turn it on)                                                                                                 | the CI `quality-gate` runs on a task-branch push and on a PR to any branch, not only on `main` and not only by hand                       |
+| `H2`    | branch protection is not enableable on this plan                   | **(a)** an in-repo merge blocker                                                                                     | the repo stays private; the gates stay advisory where GitHub cannot enforce them, and a repository-owned blocker refuses an ungated merge |
+| `H3`    | a skip policy for CI                                               | **đặt kỳ vọng** (set an expectation)                                                                                 | a PER-FAMILY skip expectation, not one global number: the 40 legitimate host-capability skips must not fire it, the SQL/WSL families must |
+| `H5`    | where the `skills.*` schema lives                                  | **(a)** move it                                                                                                      | the DDL and the migration runner move into `zink-skill-store/`, the module that owns the Skill Store's persistence                        |
+| `H6`    | route the router key through the SecretRef indirection             | **làm** (do it)                                                                                                      | the router API key stops being baked into the generated secrets plan and goes through `secrets.providers` like every other secret         |
+| `H7`    | the policy for UNKNOWN Discord identities in durable events        | **(b)** record it and flag it                                                                                        | an unknown identity is recorded (hashed, as `F-049` decided), marked as unknown and surfaced to the owner — not refused, not silent       |
+| `H8`    | a governed `DEPRECATED` retirement transition for the Skill Store  | **duyệt** (approve)                                                                                                  | the Skill Store gains a governed retirement path, as a FORWARD migration (the applied migrations are digest-pinned by filename)           |
+| `H9`    | whether unreclaimable PDF text copies get a reclamation path       | **cho phép dọn** (allow the reclamation)                                                                             | the derived text copies may be reclaimed; the PDF itself stays                                                                            |
+| `H10`   | whether the register becomes tracked, and what size policy applies | **lỗi nào fix xong và chứng minh được là đã fix thì được phép xóa lỗi đó trong findings, lịch sử lưu vào changelog** | `findings.md` is the OPEN queue only: a fixed and PROVEN row is DELETED from it, and its history goes to `CHANGELOG.md`                   |
+| `F-217` | the frozen digest pin of `lib/discord-forum-tags.mjs`              | **ok**                                                                                                               | a separate task re-bases the frozen digest; it does not ride along with anything else                                                     |
+
+**Two facts the answers change about the register itself.** `H10`'s answer is a
+convention change, not a size rule: the register stops being a ledger of
+everything that ever happened and becomes the queue of what is still open. The
+rows that are fixed and proven leave it, and the history lands in
+`CHANGELOG.md` — which is where `AGENTS.md` §12 already puts validated completed
+history. The rows that are **not** fixed stay: the `REFUTED` ones (the premise
+was measured dead — nothing was fixed) and the `EXCLUDED` ones (parked on a
+decision that is now ANSWERED, so they become open work again).
+
+**What is NOT granted by these answers.** `AGENTS.md` §2 and §7: an answer is
+the owner's decision, and each answer needs its own bounded task before code
+runs. The answers are recorded here as the authority; the work is scheduled
+below, in bands, each with its own gates.
+
+### The bands these answers create (M12/T9, third band)
+
+| Band  | Decisions      | What it does                                                                              | Why this order                                                                                              |
+| ----- | -------------- | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| **F** | —              | the operator's documented deploy path names the state root (`F-373`)                      | it is what the owner hit while running the deploy note; it blocks every deploy                              |
+| **A** | `H1` `H2` `H3` | the CI trigger widening, the in-repo merge blocker, and the per-family skip expectation   | these are the owner's protection: a gate that runs, a merge that cannot be ungated, a skip that cannot hide |
+| **B** | `H10`          | the register becomes the open queue; the fixed and proven rows move to `CHANGELOG.md`     | it changes how every later row is recorded, so it lands before the bands below                              |
+| **C** | `H5` `H8` `H9` | the Skill Store's schema ownership, its governed retirement, and the PDF-text reclamation | they are one module and one migration story; `H5` also unblocks the Knowledgebase bands                     |
+| **D** | `H6` `H7`      | the router key through SecretRef, and the policy for an unknown Discord identity          | both touch the live secrets and the durable identity vocabulary                                             |
+| **E** | `F-217`        | the digest-pin re-base                                                                    | it is its own objective and rides alone                                                                     |
+
+**One deployment consequence of band F, stated rather than hidden.** The owner
+ran the deploy note and it stopped with `STATE_DIR_NOT_NAMED` twice: the
+operator drivers take the state root as an INPUT (F-219) and the README's
+command block had not been updated since. **Nothing was deployed** — the
+preflight and the apply both refused before touching anything. The README and
+the runbook now name the state root, and `tests/agent-setup-F-373.test.mjs`
+pins that they keep naming it.
 
 **One deployment consequence, stated rather than hidden — and it needs no
 operator step.** `F-160` and `F-060` change how the ledger RE-DERIVES a task's
