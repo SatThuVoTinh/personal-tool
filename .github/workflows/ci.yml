@@ -101,3 +101,43 @@ jobs:
         env:
           KNOWLEDGE_TOKENIZER_PATH: ${{ runner.temp }}/knowledge-artifacts/tokenizer.json
         run: npm run test:knowledge
+
+  # F-034 (legacy `R5-E09-02`) — H2: the POST-MERGE half of the in-repo
+  # merge blocker.
+  #
+  # `scripts/merge-gate.mjs` is the PRE-MERGE half: the operator runs it
+  # before merging and it refuses unless the tip carries a successful
+  # `quality-gate` run at that exact SHA. This job is the POST-MERGE half: it
+  # runs the SAME gate against the merged commit's own SHA, so a merge that
+  # landed without a successful gate is a loud red check on `main` instead of
+  # a silent one.
+  #
+  # It runs AFTER the gate, so the verdict is about a CONCLUDED run: a gated
+  # merge is green, and a merge whose own SHA carries no successful
+  # `quality-gate` run is red. It reads the run metadata, so it needs
+  # `actions: read` on top of the repository's `contents: read`; it cannot
+  # write to the repository and it uses only the workflow's own token.
+  merge-gate-detector:
+    name: merge-gate-detector
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: quality-gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "24.15.0"
+          package-manager-cache: false
+      - name: Detect a merge that was not gated
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_GATE_SHA: ${{ github.sha }}
+        run: node scripts/merge-gate.mjs --sha "$MERGE_GATE_SHA"

@@ -575,6 +575,23 @@ asset drift detected` (`installed_mutation: false`) because ten live
 
 ### Fixed
 
+- **F-034 - nothing stopped a red pipeline from merging into `main`.** `AGENTS.md` §11
+  treats the gates as blocking, but no check was required: the repository had no
+  merge blocker of any kind. GitHub branch protection is not enableable on this
+  plan (the API answers `403 "Upgrade to GitHub Pro or make this repository
+public to enable this feature."`), and the owner's answer to `H2` (2026-10-21)
+  is (a): an IN-REPO merge blocker, with the repository staying private.
+  `scripts/merge-gate.mjs` is the pre-merge half: it refuses (a non-zero exit)
+  unless the tip being merged carries a successful `quality-gate` run at that
+  EXACT SHA, and it fails closed whenever the run state cannot be determined
+  (no token, no network, no such commit, no run, an unreadable answer). It is a
+  GATE, not an action: the only commands it can run are read-only ones, and it
+  never edits a branch, pushes, merges, comments or opens an issue. The
+  post-merge half is the `merge-gate-detector` job in
+  `.github/workflows/ci.yml`: it runs the same gate against the merged commit's
+  own SHA, so a merge that landed without a successful gate is a loud red check
+  on `main`. `tests/agent-ci-F-034.test.mjs` pins the rule, the fail-closed
+  branches, the token's handling and the workflow's shape.
 - **F-160 - the forward migration of the derived snapshot replayed the ACCEPTED
   history under the strict rules, so it died with `AUTH_APPROVAL_REQUIRED` on a
   healthy ledger - and the preflight refused the stale derivation the migration
