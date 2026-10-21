@@ -13,6 +13,14 @@ from pathlib import Path
 
 from .download_models import MODEL_REVISIONS
 
+# F-340 (R7-OA-03): the hashed requirements artifact is re-pinned. The
+# committed file now carries the index its own `+cpu` pins need, so its
+# digest changed with it; the image refuses to publish a manifest over an
+# artifact that is not the pinned one.
+EXPECTED_HASHED_REQUIREMENTS_SHA256 = (
+    "9ec325c8142e1dcae25dd510daa604454526ad9b364f505b9914aed3505f8556"
+)
+
 
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -32,7 +40,7 @@ def main() -> None:
         "distribution_versions": _installed_distribution_versions(),
         "model_artifact_revisions": dict(sorted(MODEL_REVISIONS.items())),
         "locked_distribution_hashes": _locked_distribution_hashes(args.lock),
-        "hashed_requirements_digest": _sha256(args.lock.parent / "requirements.txt"),
+        "hashed_requirements_digest": _requirements_digest(args.lock),
         "pdf_runtime_lock_digest": _sha256(args.lock),
         "protocol_version": "zink:pdf-runtime-protocol:v1",
         "runner_code_digest": _tree_digest(Path(__file__).parent),
@@ -44,6 +52,23 @@ def main() -> None:
         json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
         encoding="utf-8",
     )
+
+
+def _requirements_digest(lock_path: Path) -> str:
+    """The digest of the hashed requirements artifact, pinned to the committed bytes.
+
+    F-340 (R7-OA-03): the artifact carries the index its `+cpu` pins need, so
+    the manifest must record the digest of THAT artifact - and the image must
+    refuse to build when the artifact is not the pinned one, instead of
+    digesting whatever happens to be there and shipping it.
+    """
+
+    digest = _sha256(lock_path.parent / "requirements.txt")
+    if digest != EXPECTED_HASHED_REQUIREMENTS_SHA256:
+        raise ValueError(
+            "the hashed requirements artifact does not match its pinned digest"
+        )
+    return digest
 
 
 def _tree_digests(root: Path) -> dict[str, str]:

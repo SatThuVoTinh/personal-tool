@@ -6,6 +6,8 @@ import importlib.util
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -64,6 +66,14 @@ class ParentIsolationTests(unittest.TestCase):
 
 
 class IsolatedLockContractTests(unittest.TestCase):
+    # F-340 (R7-OA-03): the hashed requirements artifact now carries the index
+    # its own `+cpu` pins need, so its digest is re-pinned here. The image-side
+    # reader (pdf-runtime/src/zink_pdf_runtime/manifest.py) pins the same
+    # bytes, so the two ends of the supply chain cannot drift apart.
+    EXPECTED_PDF_RUNTIME_REQUIREMENTS_SHA256 = (
+        "9ec325c8142e1dcae25dd510daa604454526ad9b364f505b9914aed3505f8556"
+    )
+
     def test_candidate_is_exact_cpu_only_and_models_use_immutable_revisions(self) -> None:
         root = Path(__file__).resolve().parents[1] / "pdf-runtime"
         project = (root / "pyproject.toml").read_text(encoding="utf-8")
@@ -90,6 +100,64 @@ class IsolatedLockContractTests(unittest.TestCase):
             self.assertRegex(requirements, rf"(?m)^{re.escape(package)}==[^\s]+.*\\$")
         revisions = re.findall(r'"[^"]+/[^"]+": "([0-9a-f]{40})"', downloader)
         self.assertEqual(len(revisions), 3)
+
+    def test_the_hashed_requirements_artifact_is_pinned_and_carries_its_index(self) -> None:
+        """F-340 (R7-OA-03): the artifact must be the pinned one, with its index."""
+
+        root = Path(__file__).resolve().parents[1] / "pdf-runtime"
+        artifact = (root / "requirements.txt").read_bytes()
+        self.assertEqual(
+            hashlib.sha256(artifact).hexdigest(),
+            self.EXPECTED_PDF_RUNTIME_REQUIREMENTS_SHA256,
+            "the committed requirements artifact must be the pinned one",
+        )
+        text = artifact.decode("utf-8")
+        self.assertIn("--index-url https://pypi.org/simple", text)
+        self.assertIn(
+            "--extra-index-url https://download.pytorch.org/whl/cpu",
+            text,
+            "the artifact must declare the index its +cpu pins need",
+        )
+        for package in ("torch==2.13.0+cpu", "torchvision==0.28.0+cpu"):
+            self.assertIn(package, text)
+
+    def test_the_committed_artifact_is_byte_identical_to_the_export(self) -> None:
+        """F-340 (R7-OA-03): the artifact must equal what `uv export` produces.
+
+        The image proves the same equivalence with `cmp`; this lane proves it
+        on every CI run, in the job that installs the canonical uv.
+        """
+
+        root = Path(__file__).resolve().parents[1] / "pdf-runtime"
+        uv = shutil.which("uv")
+        if uv is None:
+            self.skipTest("uv is not installed in this environment")
+        completed = subprocess.run(
+            [
+                uv,
+                "export",
+                "--frozen",
+                "--no-dev",
+                "--no-emit-project",
+                "--no-header",
+                "--format",
+                "requirements.txt",
+                "--emit-index-url",
+            ],
+            cwd=root,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stderr.decode("utf-8", "replace"),
+        )
+        self.assertEqual(
+            completed.stdout,
+            (root / "requirements.txt").read_bytes(),
+            "the committed artifact must be byte-identical to the export",
+        )
 
 
 class ProtocolValidationTests(unittest.TestCase):

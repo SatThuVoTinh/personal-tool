@@ -19,7 +19,8 @@ RUN uv sync --locked --no-dev --no-install-project
 COPY pdf-runtime/pyproject.toml pdf-runtime/uv.lock pdf-runtime/requirements.txt /opt/pdf-runtime/
 WORKDIR /opt/pdf-runtime
 RUN uv export --frozen --no-dev --no-emit-project --no-header \
-      --format requirements.txt --output-file /tmp/pdf-requirements.lock.txt && \
+      --format requirements.txt --emit-index-url \
+      --output-file /tmp/pdf-requirements.lock.txt && \
     cmp /tmp/pdf-requirements.lock.txt requirements.txt && \
     uv sync --locked --no-dev --no-install-project && \
     chmod -R g+rX,o-rwx,a-w /opt/pdf-runtime
