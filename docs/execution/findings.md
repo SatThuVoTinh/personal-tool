@@ -71,12 +71,12 @@ findings, lịch sử lưu vào changelog"_. Hàng đã fix xong **và đã ch�
 band không ở trạng thái `NOT RUN`, dòng `Acceptance criteria:` thỏa đúng nghĩa) thì **xóa** khỏi file này;
 lịch sử của nó (id + dòng lỗi một dòng + commit đã đóng + bằng chứng) ghi vào `CHANGELOG.md`. Hàng **chưa fix**
 thì ở lại: `REFUTED` (premise đo thật là chết — không có gì để fix) và `EXCLUDED` (đang chờ một quyết định
-của chủ) không nằm trong quy tắc này. Bảng đóng ở §2 đã bị gỡ khỏi file này: **373** hàng đã đóng nằm ở
+của chủ) không nằm trong quy tắc này. Bảng đóng ở §2 đã bị gỡ khỏi file này: **375** hàng đã đóng nằm ở
 `CHANGELOG.md`, mỗi hàng giữ id và commit đã đóng nó.
 
 ## 1. hiện trạng queue
 
-Tổng **35** hàng còn nằm trong file, chia theo nhóm. **3 hàng đang mở** (từ `EXCLUDED` trở lại `OPEN` sau khi chủ trả lời `H3`/`H5`/`H8` ngày 2026-10-21; các câu trả lời `H1`/`H2`/`H6`/`H10` đã được sửa xong, đã chứng minh và đã xoá khỏi file này theo §0.5), 28 hàng `REFUTED` (premise đo thật là đã chết ở HEAD, kèm bằng chứng đo được trong chính dòng `Status:`) và 4 hàng `EXCLUDED` (quyết định của chủ, hoặc dòng chỉ để đo). **373** hàng đã đóng không nằm ở đây nữa: lịch sử của chúng (id + dòng lỗi một dòng + commit đã đóng) nằm ở `CHANGELOG.md`.
+Tổng **35** hàng còn nằm trong file, chia theo nhóm. **3 hàng đang mở** (từ `EXCLUDED` trở lại `OPEN` sau khi chủ trả lời `H3`/`H5`/`H8` ngày 2026-10-21; các câu trả lời `H1`/`H2`/`H6`/`H10` đã được sửa xong, đã chứng minh và đã xoá khỏi file này theo §0.5), 28 hàng `REFUTED` (premise đo thật là đã chết ở HEAD, kèm bằng chứng đo được trong chính dòng `Status:`) và 4 hàng `EXCLUDED` (quyết định của chủ, hoặc dòng chỉ để đo). **375** hàng đã đóng không nằm ở đây nữa: lịch sử của chúng (id + dòng lỗi một dòng + commit đã đóng) nằm ở `CHANGELOG.md`.
 
 | Nhóm     | Nội dung                                                              | Bug    | Critical | High | Medium | Low | Ungraded |
 | -------- | --------------------------------------------------------------------- | ------ | -------- | ---- | ------ | --- | -------- |
@@ -91,7 +91,7 @@ Tổng **35** hàng còn nằm trong file, chia theo nhóm. **3 hàng đang mở
 
 Theo trạng thái: OPEN 3 · EXCLUDED 4 · LATENT 0 · REFUTED 28 · PARTIAL 0 · HYPOTHESIS 0.
 
-Các hàng đã đóng không nằm ở đây nữa: **373** hàng (134 hàng M12/T9 đóng ngày 2026-10-19, 47 hàng lượt đóng đầu của band thứ hai, 120 hàng lượt đóng cuối của band thứ hai, 16 hàng chủ đã phán ngày 2026-10-21, 51 hàng của các band `M12/T2.x` trước đó, và 5 hàng của band thứ ba đóng ngày 2026-10-21) đã chuyển sang `CHANGELOG.md`, mỗi hàng kèm commit đã đóng nó. Ở M12/T9 mỗi hàng có commit riêng trỏ `F-xxx` và legacy id; ba hàng bị gộp chung một commit vì chúng sửa cùng một file và các hunk của chúng phụ thuộc nhau — tách ra sẽ tạo ra một commit không parse được (`F-055`+`F-101`+`F-240`, đo bằng cách dựng lại từng tiền tố của chuỗi commit và kiểm tra `node --check`).
+Các hàng đã đóng không nằm ở đây nữa: **375** hàng (134 hàng M12/T9 đóng ngày 2026-10-19, 47 hàng lượt đóng đầu của band thứ hai, 120 hàng lượt đóng cuối của band thứ hai, 16 hàng chủ đã phán ngày 2026-10-21, 51 hàng của các band `M12/T2.x` trước đó, 5 hàng của band thứ ba đóng ngày 2026-10-21, và 2 hàng của blocker triển khai đóng ngày 2026-10-21) đã chuyển sang `CHANGELOG.md`, mỗi hàng kèm commit đã đóng nó. Ở M12/T9 mỗi hàng có commit riêng trỏ `F-xxx` và legacy id; ba hàng bị gộp chung một commit vì chúng sửa cùng một file và các hunk của chúng phụ thuộc nhau — tách ra sẽ tạo ra một commit không parse được (`F-055`+`F-101`+`F-240`, đo bằng cách dựng lại từng tiền tố của chuỗi commit và kiểm tra `node --check`).
 
 Theo field: đo lại 2026-10-21 trên cả **35** hàng còn lại với predicate "field trống, là placeholder, hoặc ngắn dưới 40 ký tự" — **0** hàng thiếu `Reproduction`, **0** hàng thiếu `Acceptance criteria`, và 0 hàng có một trong hai field ngắn dưới 40 ký tự. Chữ "không tái hiện được" trong hai field đó ở `F-015`, `F-017`, `F-020` là ghi chú verdict của hàng REFUTED, không phải placeholder.
 

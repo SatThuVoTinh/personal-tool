@@ -1955,6 +1955,13 @@ passed.`; `python-quality` SUCCESS — 188 passed, 27 subtests) and Security run
 - **`R5-E14-07`** — the audit evidence could be destroyed by one untracked working file, and the register grew past four thousand lines — closed by `11f82b2` (the owner's answer `H10`).
   Row `F-097`. Evidence: the register is the OPEN queue and a closed row's history lives in the changelog; 368 rows moved here with their id, defect, commit and evidence.
 
+#### M12/T9 — the deploy blocker (20261021) (2 rows)
+
+- **`F-376`** — the contract refused the owner's own journal: `result_id` was withdrawn from the four verdict payload branches, and the two verdicts the live `m8-t2.2-r4` build wrote still carry it — closed by `42e23f5`.
+  Row `F-376`. Measured on the live host, read-only: 144 journal events, exactly two refused by the current contract (sequences 66 and 83, both `WORKFLOW_USER_RESULT_ACCEPTED`, payload members `actor, channel, decision, message_id, result_digest, result_id, task_id, thread_id`). The journal is the record and is never rewritten, so the contract admits the legacy rendering again as an OPTIONAL member; F-249's ruling is untouched (the verdict still binds by `result_digest`, an id-only verdict is still refused with `RESULT_MISMATCH`, and the live producer still never sends the member), and a member the contract does not declare is still refused. Verified against a COPY of the live ledger: the preflight moves from `Ledger corruption` to `CURRENT_STALE`, the migration recomputes the derived snapshot (sequence 144, 56 tasks), the preflight then reports `CURRENT`, and the ledger reads again with the history intact.
+- **`F-377`** — the forward migration could not repair the very artefact it exists to repair: a stored snapshot that does not have the current shape was refused at the contract check, before the recompute could run — closed by `a534adc`.
+  Row `F-377`. The snapshot contract itself changes (F-247 removed a member from it), so a snapshot an older build wrote does not satisfy the current contract. The recompute mode now treats the stored snapshot as the derivation an older build wrote and derives the CURRENT shape from the record, carrying the anchor forward so the reader's next read reproduces it; the record is still verified event by event, and a journal that does not verify still refuses the deployment with the fault the reader reported. The normal reader is unchanged: it still refuses a snapshot that does not have the current shape.
+
 ## Changelog Rules
 
 ### Completed Changes Only

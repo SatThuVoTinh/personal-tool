@@ -7715,3 +7715,38 @@ Review Convergence Gate: PASS (the second band)
 Final Quality Gate: PASS (the second band)
 
 Prior band: M12/T9-R1 — CLOSED 2026-10-21 — see the Record below.
+
+**The deploy blocker (2026-10-21), found on the live host and closed.** The owner's
+deploy failed twice — the preflight reported `Ledger corruption` and the apply
+died with `SCHEMA_INVALID: SCHEMA_VALIDATION_FAILED`. Measured on the live host,
+READ-ONLY: the journal holds 144 events and exactly TWO of them are refused by
+the current contract — sequences 66 and 83, both `WORKFLOW_USER_RESULT_ACCEPTED`,
+written by the `m8-t2.2-r4` build, each carrying the legacy `result_id` beside
+its `result_digest`. `F-249` (commit `093439f`, 2026-10-21) withdrew that member
+from the four verdict payload branches and stopped the producer sending it, so
+the contract refused the owner's own record: the journal is the RECORD and is
+never rewritten, so a contract that refuses it makes the ledger unreadable.
+
+**The owner's decision (recorded here because it is a contract change).** The
+contract admits the legacy rendering again, as an OPTIONAL member of the four
+verdict branches — never required, never sent by the current producer, and
+every member the contract does not declare is still refused. `F-249`'s ruling is
+untouched: the verdict still binds by `result_digest`, an id-only verdict is
+still refused with `RESULT_MISMATCH`, and the producer still never sends the
+member. This is the same shape as `F-371` (the contracts accept BOTH renderings
+of the delegation id), and it is the only way to keep a record that already
+exists readable without rewriting it.
+
+`F-377` closes the second half of the same class: the forward migration could
+not repair a stored snapshot whose SHAPE had changed, because the reader
+validated it against the current contract before the recompute could run — the
+migration refused the very artefact it exists to repair.
+
+**Verified against a COPY of the live ledger, never the live one:** the
+preflight verdict moves from `Ledger corruption` to `CURRENT_STALE`, the
+migration recomputes the derived snapshot from the journal (sequence 144, 56
+tasks), the preflight then reports `CURRENT`, and the ledger reads again with
+the history intact (10 `COMPLETE`, 2 `BLOCKED`, 5 `RESULT_PENDING_REVIEW`, 39
+`ACTIVE`). The journal is byte-identical before and after. The commits are
+`42e23f5` (the contract) and `a534adc` (the migration); the history lives in
+`CHANGELOG.md` under `F-376` and `F-377`.

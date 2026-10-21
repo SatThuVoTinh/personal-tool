@@ -41,9 +41,18 @@ const EVIDENCE_TABLE_ROWS = 51;
  * their history in the changelog, so they are counted with the rest.
  */
 const THIRD_BAND_CLOSED_ROWS = 5;
+/**
+ * The rows the deploy blocker closed: the contract refused the owner's own
+ * journal, and the migration could not repair a snapshot whose shape had
+ * changed. Both left the register with their history in the changelog.
+ */
+const DEPLOY_BLOCKER_CLOSED_ROWS = 2;
 /** Every closed row the register's §2 carried, in the changelog now. */
 const CLOSED_ROW_COUNT =
-  CLOSURE_TABLE_ROWS + EVIDENCE_TABLE_ROWS + THIRD_BAND_CLOSED_ROWS;
+  CLOSURE_TABLE_ROWS +
+  EVIDENCE_TABLE_ROWS +
+  THIRD_BAND_CLOSED_ROWS +
+  DEPLOY_BLOCKER_CLOSED_ROWS;
 
 /** Every closed row: "<row id> <commit token>". */
 const CLOSED_ROWS = [
@@ -427,6 +436,11 @@ const CLOSED_ROWS = [
   ["R5-E09-02", "`65c91c8`"],
   ["R5-E13-02", "`5f1467b`"],
   ["R5-E14-07", "`11f82b2`"],
+  // The deploy blocker (2026-10-21): the contract refused the owner's own
+  // journal, and the migration could not repair a snapshot whose shape had
+  // changed.
+  ["F-376", "`42e23f5`"],
+  ["F-377", "`a534adc`"],
 ];
 
 /** Every row the register holds, transcribed at HEAD. */
