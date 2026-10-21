@@ -575,6 +575,17 @@ asset drift detected` (`installed_mutation: false`) because ten live
 
 ### Fixed
 
+- **F-373 — the operator's documented deploy path did not name the state root, so
+  the deploy deployed nothing.** F-219 made the machine-specific state root an
+  OPERATOR INPUT: the operator drivers read `ZINK_OPERATOR_STATE_DIR` or their
+  first argument and refuse without one (`STATE_DIR_NOT_NAMED`). The README's
+  deploy block was never updated to match, so the commands the owner is told to
+  run stopped with that refusal — the preflight never ran, the apply never ran,
+  and the operator was left reading `STATE_DIR_NOT_NAMED` twice with nothing
+  deployed. The README and the deploy runbook now export
+  `ZINK_OPERATOR_STATE_DIR` before the first driver invocation and pass it to
+  every driver; `tests/agent-setup-F-373.test.mjs` pins that they keep naming
+  it and that the driver still refuses without one.
 - M12/T2-R3 (2026-10-14): the owner's deployment of the STACK remediation failed as
   `{"status":"FAIL","stage":"builder-apply","reason":"APPLY_REJECTED","rollbackSucceeded":true}` and
   the truth was that `configure.mjs --apply` had refused at its **last** step,

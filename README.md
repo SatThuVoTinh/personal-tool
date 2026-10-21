@@ -238,9 +238,15 @@ cd "/mnt/c/Users/HOANG VINH/OneDrive/Documents/personal-tool"
 # thì builder chết ngay với `ROUTER_..._UNAVAILABLE` và preflight báo FAIL mà không sửa gì.
 set -a; . "$HOME/.openclaw-zink/router.env"; set +a
 
+# BƯỚC 0b — CHỈ ĐỊNH THƯ MỤC TRẠNG THÁI (F-219). Các driver vận hành từ chối
+# chạy nếu không được nói thư mục trạng thái: `ZINK_OPERATOR_STATE_DIR` hoặc đối
+# số đầu tiên. Không có thì chúng dừng lại với `STATE_DIR_NOT_NAMED` — đó là TỪ
+# CHỐI có chủ đích, KHÔNG phải lỗi. Đặt đúng đường dẫn rồi mới chạy tiếp.
+export ZINK_OPERATOR_STATE_DIR="$HOME/.openclaw-zink"
+
 # BƯỚC 1 — chỉ đọc, không sửa gì. Dòng kỳ vọng:
 # {"identifiers":"VALID","builder_preflight":"PASS","installed_mutation":false}
-node integrations/openclaw/topology/fixtures/runtime-regression/operator-preflight.mjs
+node integrations/openclaw/topology/fixtures/runtime-regression/operator-preflight.mjs "$ZINK_OPERATOR_STATE_DIR"
 
 # BƯỚC 1b — CHỈ khi apply báo `Ledger writer unavailable [EXECUTION_STATE_UNKNOWN]`.
 # Khoá ghi Ledger có thể bị bỏ lại ("mồ côi") khi gateway chết giữa lúc đang ghi; hệ thống
@@ -259,7 +265,7 @@ node integrations/openclaw/topology/fixtures/runtime-regression/operator-lock-re
 # BƯỚC 2 — CHỈ chạy khi bước 1 in ra PASS. Đây là lần apply duy nhất: script tự snapshot
 # trạng thái live trước khi sửa, apply, vá runtime, khởi động lại unit rồi đối chiếu từng byte;
 # nếu không khớp nó tự rollback và in báo cáo FAIL kèm lý do.
-node integrations/openclaw/topology/fixtures/runtime-regression/operator-apply.mjs
+node integrations/openclaw/topology/fixtures/runtime-regression/operator-apply.mjs "$ZINK_OPERATOR_STATE_DIR"
 
 # BƯỚC 3 — kiểm tra sau triển khai
 systemctl --user show openclaw-gateway-zink.service -p ActiveState -p MainPID -p NRestarts
