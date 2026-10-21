@@ -1108,37 +1108,55 @@ export async function validateLiveArtifactPath(logicalPath) {
   }
 }
 
-async function getVectorSyncModule() {
-  if (!vectorSyncModule) {
-    const root = findRepoRoot();
-    if (root) {
-      try {
-        const p = path.join(root, "zink-skill-store/src/vector-sync.mjs");
-        vectorSyncModule = await import(pathToFileURL(p).href);
-      } catch (err) {
-        console.error("[zink-governance] Failed to import vector sync:", err);
-      }
-    }
-    if (!vectorSyncModule) {
-      try {
-        vectorSyncModule = await import(
-          new URL(
-            "../../../../zink-skill-store/src/vector-sync.mjs",
-            import.meta.url,
-          ).href
-        );
-      } catch {
-        try {
-          vectorSyncModule = await import(
-            path.resolve(process.cwd(), "zink-skill-store/src/vector-sync.mjs")
-          );
-        } catch {
-          // Module not accessible in isolated test directory
-        }
-      }
+/**
+ * M12/T9 F-156: the Skill Store's PUBLIC DOOR.
+ *
+ * The plugin used to load the store's internals (the catalog and the
+ * vector-sync modules under the store's own `src/` tree) by relative path,
+ * with its own three-candidate fallback chain. That welded
+ * the plugin to the store's private file layout: the OpenClaw tree had no
+ * governed Skill Store boundary at all, and a rename inside `src/` broke the
+ * plugin.
+ *
+ * The store now publishes ONE public module - `zink-skill-store/index.mjs` -
+ * which exports exactly the three entry points a caller needs (the canonical
+ * promotion, the store-wide writer lock and the derived pgvector sync). The
+ * plugin loads THAT module, through the ONE shared-module resolver, so the
+ * repository layout and the packaged tree resolve it the same way.
+ */
+async function getSkillStoreModule() {
+  if (!skillStoreModule) {
+    skillStoreModule = await loadRepoModule("zink-skill-store/index.mjs");
+    if (!skillStoreModule) {
+      console.error(
+        "[zink-governance] Skill Store public module is unavailable",
+      );
     }
   }
-  return vectorSyncModule;
+  return skillStoreModule;
+}
+
+/**
+ * M12/T9 F-156/F-176: the derived-index sync, through the Skill Store's public
+ * door.
+ *
+ * `expectedStoreId` is the identity of the store this deployment means to
+ * sync. It is operator configuration, never a constant: an unconfigured
+ * deployment syncs without naming the store, and the sync then refuses the
+ * zero-row tombstone instead of guessing.
+ */
+async function syncSkillsThroughDoor(skillsRoot, options, expectedStoreId) {
+  const skillStore = await getSkillStoreModule();
+  if (!skillStore || typeof skillStore.syncSkillsToVectorStore !== "function") {
+    throw new Error(
+      "SKILL_STORE_PUBLIC_MODULE_UNAVAILABLE: the Skill Store public module is unavailable",
+    );
+  }
+  return skillStore.syncSkillsToVectorStore({
+    skillsRoot,
+    ...options,
+    expectedStoreId,
+  });
 }
 
 async function getDuckDbBridge() {
@@ -1368,11 +1386,11 @@ export async function handleOwnerSkillApproval({
 
   // Canonical Skill Store write is the source-of-truth commit point.
   // Trusted internal promotion only: agents propose, governance promotes.
-  const catalogMod = await loadRepoModule("zink-skill-store/src/catalog.mjs");
-  const promoteUnlocked = catalogMod?.promoteApprovedSkillUnlocked;
-  const underWriterLock = catalogMod?.withSkillStoreWriterLock;
+  const skillStore = await getSkillStoreModule();
+  const promoteApproved = skillStore?.promoteApprovedSkill;
+  const underWriterLock = skillStore?.withSkillStoreWriterLock;
   if (
-    typeof promoteUnlocked !== "function" ||
+    typeof promoteApproved !== "function" ||
     typeof underWriterLock !== "function"
   ) {
     throw new Error(
@@ -1400,7 +1418,7 @@ export async function handleOwnerSkillApproval({
     }
     let promoted;
     try {
-      promoted = await promoteUnlocked({
+      promoted = await promoteApproved({
         skillsRoot,
         namespace: nsArray,
         capability,

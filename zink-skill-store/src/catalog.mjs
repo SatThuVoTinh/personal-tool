@@ -1032,6 +1032,23 @@ export function skillStoreWriterLockDir(skillsRoot) {
   );
 }
 
+/**
+ * The writer locks THIS process holds, keyed by the lock directory.
+ *
+ * M12/T9 F-156: the store's public door (`zink-skill-store/index.mjs`)
+ * publishes the canonical promotion, and the promotion is only safe INSIDE the
+ * store-wide writer lock: the governed approval transaction re-reads the
+ * durable proposal, promotes, and writes the proposal status as one critical
+ * section, so an unlocked promotion could overwrite a rejection another
+ * process committed while the approval was in flight.
+ *
+ * The registry is what lets the door REFUSE an unlocked promotion by name
+ * instead of writing one. It is a count, not a flag: two sections on the same
+ * root in one process are serialized by the lock itself, and the first one's
+ * release must not clear the second one's hold.
+ */
+const heldWriterLocks = new Map();
+
 export async function withSkillStoreWriterLock(skillsRoot, fn, options = {}) {
   return withFileLock(skillStoreWriterLockDir(skillsRoot), fn, options);
 }

@@ -14,6 +14,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   canonicalHash,
+  derivePrincipalRef,
   GOVERNANCE_VERSION,
   SCHEMA_VERSION,
 } from "../topology/lib/canonical.mjs";
@@ -1621,8 +1622,16 @@ function instructionBody(agentId, identifiers = null) {
  * own readiness gate loads the n8n adapter. A module missing from this list
  * cannot be loaded from the deployed tree at all, so the list IS the
  * packaging's contract for the runtime dependency set.
+ *
+ * M12/T9 F-156: the Skill Store's PUBLIC DOOR travels with the build too. The
+ * governance plugin loads `zink-skill-store/index.mjs` - the one public
+ * module of the store - and never a store internal; the door's own relative
+ * imports (`./src/catalog.mjs`, `./src/vector-sync.mjs`) resolve in the
+ * deployed tree because the store's modules keep their repository-relative
+ * layout there, which is why both are in this list.
  */
 export const PACKAGED_RUNTIME_MODULES = Object.freeze([
+  "zink-skill-store/index.mjs",
   "zink-skill-store/src/catalog.mjs",
   "zink-skill-store/src/vector-sync.mjs",
   "zink-tools/adapters/knowledge/knowledge-adapter.mjs",
