@@ -59,6 +59,12 @@ function droppedIdentities() {
         path.join(root, "docs", "execution", "findings.md"),
         "utf8",
       ).matchAll(LEGACY_ID),
+      // H10 (the owner's decision of 2026-10-21): the register is the OPEN
+      // queue and a closed row's history lives in the changelog, so a row that
+      // left the register is still RECORDED - it is not a dropped identity.
+      ...readFileSync(path.join(root, "CHANGELOG.md"), "utf8").matchAll(
+        LEGACY_ID,
+      ),
     ].map((match) => match[1]),
   );
   const union = new Set();

@@ -19,6 +19,10 @@ const STATES_DIRECTORY = path.join(REPO_ROOT, ".agents", "states");
 const STATES_PROTOCOL = read(".agents", "states", "README.md");
 const PLAN = read("PLAN.md");
 const REGISTER = read("docs", "execution", "findings.md");
+// H10 (the owner's decision of 2026-10-21): the register is the OPEN queue and
+// a closed row's history lives in the changelog, so the recorded closures are
+// read from there.
+const CHANGELOG = read("CHANGELOG.md");
 
 const REQUIRED_KEYS = [
   "Task:",
@@ -45,8 +49,8 @@ function registerIds() {
   )) {
     for (const id of match[1].match(LEGACY_ID) ?? []) ids.add(id);
   }
-  const closure = REGISTER.split(/^## 2\./mu)[1] ?? "";
-  for (const match of closure.matchAll(/^\|\s*`([^`]+)`/gmu)) {
+  // The closed rows' history, as the changelog records it.
+  for (const match of CHANGELOG.matchAll(/^-\s+\*\*`([^`]+)`\*\*/gmu)) {
     for (const id of match[1].match(LEGACY_ID) ?? []) ids.add(id);
   }
   return ids;

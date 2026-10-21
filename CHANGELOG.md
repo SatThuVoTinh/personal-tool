@@ -891,6 +891,984 @@ passed.`; `python-quality` SUCCESS — 188 passed, 27 subtests) and Security run
 
 ---
 
+#### The register's closure history — moved out of `docs/execution/findings.md` §2 (2026-10-21)
+
+- The owner's decision `H10` (2026-10-21) — _"lỗi nào fix xong và chứng minh được là đã
+  fix thì được phép xóa lỗi đó trong findings, lịch sử lưu vào changelog"_ — makes
+  `docs/execution/findings.md` the OPEN queue: a row that is FIXED and PROVEN is deleted
+  from it, and its history lives here.
+
+- The **368** closed rows the register's §2 closure tables carried are below, grouped by
+  the band that closed them. Each entry carries the row's own id, its own one-line
+  defect, the commit that closed it and its evidence. For the 317 rows the register
+  closed with one commit each, the commit IS the evidence (`findings.md` §0.2 rule 3);
+  for the 51 rows it closed with an evidence line, that line is carried verbatim.
+
+- The register keeps the rows that are still open, the rows whose premise was measured
+  dead (`REFUTED`) and the rows parked on a decision (`EXCLUDED`); the closure tables
+  are gone from it, and `docs/execution/findings.md` §0.5 states the rule.
+
+#### M12/T2.1 — the high-risk tier (8 rows)
+
+- **`R1-A14-01`** — a failed snapshot write clears its temp file and names its errno —
+  closed by `b3affc2`. Evidence: M12/T2.1 T2.1-6 (b3affc2) — B7-1/B7-2/B7-3.
+- **`R1-A14-02`** — a failed snapshot write clears its temp file and names its errno —
+  closed by `b3affc2`. Evidence: M12/T2.1 T2.1-6 (b3affc2) — B7-1/B7-2/B7-3.
+- **`R5-E02-05`** — a citation omits a line location its row does not have — closed by
+  `b7497ca`. Evidence: M12/T2.1 T2.1-7 (b7497ca) — test\_retrieval.py, PDF row with a
+  NULL page pair.
+- **`R5-E04-03`** — a rolled-back promotion says whether canonical state is clean —
+  closed by `2e7da50`. Evidence: M12/T2.1 T2.1-2 (2e7da50) — R22-08/R22-09, stat-based.
+- **`R5-E06-03`** — a Knowledge service failure forwards no response bytes — closed by
+  `c4833e6`. Evidence: M12/T2.1 T2.1-3 (c4833e6) — stub HTTP service + marker scan;
+  acceptance divergence recorded in PLAN.md §8.
+- **`R5-E06-04`** — a DuckDB engine failure forwards structured fields, not stderr —
+  closed by `710f650`. Evidence: M12/T2.1 T2.1-4 (710f650) — real engine, marker scan,
+  ETIMEDOUT shape observed.
+- **`R5-E06-07`** — a proposal record that cannot be read blocks the write — closed by
+  `96a6dd2`. Evidence: M12/T2.1 T2.1-1 (96a6dd2) — B6-4 + mutation probe.
+- **`R5-E08-02`** — put the R16 rehearsal behind an operator gate, out of a test: name —
+  closed by `ba5ff08`. Evidence: M12/T2.1 T2.1-8 (ba5ff08) — four driver gates; the
+  residual host-evidence half stays open as R6-I01-03.
+
+#### M12/T2.1-R3 — the owner-answer round (3 rows)
+
+- **`R5-E13-06`** — the lock recovery report states presence, never a nonce fragment —
+  closed by `91d788d`. Evidence: M12/T2.1-R3 owner answer A (91d788d) — the recovery
+  report now states presence only; verified in tree at
+  integrations/openclaw/topology/fixtures/runtime-regression/operator-lock-recovery.mjs:147.
+- **`R6-I01-01`** — importing app.main no longer requires the pinned tokenizer — closed
+  by `ad4a8d6`. Evidence: M12/T2.1-R3 (ad4a8d6) — the skip that this defect caused now
+  runs; Python lane 142 passed / 6 skipped.
+- **`R6-I01-02`** — the lock recovery report states presence, never a nonce fragment —
+  closed by `91d788d`. Evidence: M12/T2.1-R3 owner answer A (91d788d) — assertion
+  re-valued to a presence constant; disabling the omission reddens it.
+
+#### M12/T2.2-R1 — Wave A (4 rows)
+
+- **`R1-A04-01`** — read the coordinator stack rule from one table, before the write —
+  closed by `ccf2ad7`. Evidence: M12/T2.2-R1 A-1 (ccf2ad7) — test-first 9/9, adjacent
+  66/66, WSL lane run.
+- **`R1-A04-05`** — one stack registry, and stop reporting a stack refusal as a missing
+  delegation — closed by `09aa698`. Evidence: M12/T2.2-R1 A-2 (09aa698).
+- **`R5-E16-01`** — serialize the coordinator-notification queue write, and roll the
+  build digest forward — closed by `d1378ba` and `f93068e`. Evidence: M12/T2.2-R1 A-3
+  (d1378ba) + M12/T2.2-R2 B-12 (f93068e) — new lock/temp test file 203 lines.
+- **`R5-E16-02`** — serialize the coordinator-notification queue write, and roll the
+  build digest forward — closed by `d1378ba` and `f93068e`. Evidence: M12/T2.2-R1 A-3
+  (d1378ba) + M12/T2.2-R2 B-12 (f93068e).
+
+#### M12/T2.2-R2 — Wave B (18 rows)
+
+- **`R1-A04-06`** — name a broken reason-policy load, and stop accepting an undeclared
+  reason code — closed by `a21c610`. Evidence: M12/T2.2-R2 B-8 (a21c610).
+- **`R1-A05-01`** — a component build throw must degrade to text, not lose the card —
+  closed by `46852f3`. Evidence: M12/T2.2-R2 B-10 (46852f3).
+- **`R1-A02-04`** — a component build throw must degrade to text, not lose the card —
+  closed by `46852f3`. Evidence: M12/T2.2-R2 B-10 (46852f3) — same defect as
+  `R1-A05-01`, filed twice; closed by the shipped test 'delivers the card as text when
+  the component build itself throws' (re-run 2026-10-17: suite 12 pass / 0 fail).
+- **`R1-A09-01`** — a component build throw must degrade to text, not lose the card —
+  closed by `46852f3`. Evidence: M12/T2.2-R2 B-10 (46852f3) — the by-elimination
+  confirmation of `R1-A05-01`; same commit, same test, re-run green 2026-10-17.
+- **`R1-A13-03`** — the boundary seams now say which guard reason denied them — closed
+  by `5c156d4`. Evidence: M12/T2.2-R2 B-16 (5c156d4) — that commit message names
+  `R1-A13-03`; tests/m12-t2.2-b16-denial-reason re-run 2026-10-17, combined with the
+  registry suite: 19 tests / 19 pass / 0 fail.
+- **`R1-A08-08`** — stop the workflow from retyping the ceilings it is meant to enforce
+  — closed by `6f3c970`. Evidence: M12/T2.2-R2 B-7 (6f3c970).
+- **`R1-A12-07`** — the boundary seams now say which guard reason denied them — closed
+  by `5c156d4`. Evidence: M12/T2.2-R2 B-16 (5c156d4) — red-before 6/7, green-after 7/7,
+  three mutation probes.
+- **`R5-E01-03`** — bound the search query before it costs a slot and a tokenization —
+  closed by `7bc3e5d`. Evidence: M12/T2.2-R2 B-13 (7bc3e5d).
+- **`R5-E07-02`** — one relevance rule, with the conservative default — closed by
+  `3701804`. Evidence: M12/T2.2-R2 B-6 (3701804).
+- **`R5-E07-03`** — make the reference-id predicate mean resolvable, not well-formed —
+  closed by `b7d9d36`. Evidence: M12/T2.2-R2 B-5 (b7d9d36).
+- **`R5-E08-01`** — let prettier expand its own globs, so CI stops checking 4 files —
+  closed by `c449cd0`. Evidence: M12/T2.2-R2 B-2 (c449cd0).
+- **`R5-E08-03`** — make repo:check refuse a test file that npm test never names —
+  closed by `a108cde`. Evidence: M12/T2.2-R2 B-1 (a108cde).
+- **`R5-E08-04`** — stop verify.mjs asserting POSIX modes on a host that cannot express
+  them — closed by `d34c666`. Evidence: M12/T2.2-R2 B-3 (d34c666).
+- **`R5-E10-03`** — make the asset-table assertion refuse an unterminated table — closed
+  by `0dddea4`. Evidence: M12/T2.2-R2 B-17 (0dddea4).
+- **`R5-E14-05`** — make the two identical acceptance compose files a gated relationship
+  — closed by `7aebc39`. Evidence: M12/T2.2-R2 B-15 (7aebc39).
+- **`R5-E16-03`** — stop walking to the filesystem root six times per ensureLedger —
+  closed by `937521c`. Evidence: M12/T2.2-R2 B-11 (937521c).
+- **`R7-GATE-01`** — the file-lock gate must measure liveness, not tick rate — closed by
+  `9fa6505`. Evidence: M12/T2.2-R2 B-19 (9fa6505) — gate now asserts heartbeats >= 1
+  (liveness) instead of tick rate; verified in tree.
+- **`R1-A12-07-BLOCK`** — the boundary seams now say which guard reason denied them —
+  closed by `5c156d4`. Evidence: narrative blocker for R1-A12-07; resolved when B-16
+  landed (5c156d4).
+
+#### M12/T2.3-R1 — Wave C (9 rows)
+
+- **`R5-E05-06`** — the sync report says which version it means — closed by `8bde65f`.
+  Evidence: M12/T2.3-R1 C-9 (8bde65f, re-scoped) — red-before, 2/2 after, WSL lane 2/2.
+- **`R5-E11-02`** — the boundary claim describes both paths that really exist — closed
+  by `e47e660`. Evidence: M12/T2.3-R1 C-3 (e47e660, narrowed scope).
+- **`R5-E11-03`** — the model-visible list names only the two model tools — closed by
+  `3685548`. Evidence: M12/T2.3-R1 C-1 (3685548).
+- **`R5-E11-04`** — the provider matrix must answer to the adapters — closed by
+  `68fe25b` and `cd1b541`. Evidence: M12/T2.3-R1 C-4 (68fe25b + review fix cd1b541) —
+  three mutation probes, WSL 12/12 twice.
+- **`R5-E11-05`** — RC-09 promises the execution states the bridge actually returns —
+  closed by `0ccdd81`. Evidence: M12/T2.3-R1 C-5 (0ccdd81).
+- **`R5-E11-06`** — the boundaries diagram says what it is, and the exports are listed —
+  closed by `5e798aa`. Evidence: M12/T2.3-R1 C-6 (5e798aa).
+- **`R5-E11-07`** — the decision ledger stops calling itself the fourth module — closed
+  by `3248f60`. Evidence: M12/T2.3-R1 C-2 (3248f60).
+- **`R5-E12-04`** — the gate registry is enumerated, and the enumeration is enforced —
+  closed by `d9e1bcc`. Evidence: M12/T2.3-R1 C-13 (d9e1bcc) — 35/35 policy tests + two
+  real-tree probes.
+- **`R5-E14-01`** — the accepted Knowledgebase runtime is apps/knowledge/, not
+  platforms/ — closed by `a4ed77d`. Evidence: M12/T2.3-R1 C-7 (a4ed77d, re-scoped by
+  location).
+
+#### M12/T2.2-R3 — the Skill Store lifecycle (4 rows)
+
+- **`R5-E04-02`** — heal a version directory that is missing either member — closed by
+  `812b8ec`. Evidence: M12/T2.2-R3 R3-2 (812b8ec) — that commit says 'Closes R5-E04-02';
+  tests/m8-t3-governed-memory-learning re-run 2026-10-17 → 47 tests / 47 pass / 0 fail
+  incl. T2h.
+- **`R5-E05-04`** — make a failed sync stop describing the last good one — closed by
+  `1bab75d`. Evidence: M12/T2.2-R3 R3-7 (1bab75d) — shape test + scratch real-PostgreSQL
+  run; two of its clauses were refuted at the pre-freeze read.
+- **`R5-E07-06`** — return the normalized logical path the README promises — closed by
+  `e7aee21`. Evidence: CLOSED by `M12/T2.2-R3` `R3-10` (`e7aee21`) — red-before measured
+  2026-10-18 by replaying `git show e7aee21^:zink-tools/common/path-safety.mjs`: the
+  pre-fix validator returned `data\sub\f.csv` verbatim where the shipped assertion
+  demands `data/sub/f.csv`, and the `segments.length === 0` branch was unreachable.
+  Green at HEAD: `tests/m7-t3-tools-contract.test.mjs` case `AC 36` passed on the re-run
+  of 2026-10-18 (32 tests / 0 fail / 0 skipped), and `zink-tools/common/README.md:74-75`
+  now documents the normalized return for both backslash forms, which is exactly this
+  row's `Acceptance criteria`..
+- **`R5-E07-07`** — stop the embedding envelope from inventing its own taxonomy — closed
+  by `04e128f`. Evidence: CLOSED by `M12/T2.2-R3` `R3-9` (`04e128f`, owner grant `q1`) —
+  red-before measured 2026-10-18 by replaying
+  `git show 04e128f^:zink-tools/common/semantic-contract.mjs`: a taxonomy-less
+  `renderEmbeddingEnvelope` call did NOT throw and rendered `Domain: general` /
+  `Primary Topic: general`; at HEAD the same call raises
+  `EMBEDDING_ENVELOPE_METADATA_REQUIRED`. Green at HEAD:
+  `tests/m8-t1-skill-vector-memory.test.mjs` case `R3-9` passed on the re-run of
+  2026-10-18 (15 tests / 0 fail / 0 skipped). Stated limit of the closure: an EXPLICIT
+  `domain: "general"` still renders, because what the fix removed was the invented
+  default, not the value..
+
+#### the rows the register removed as duplicates of a canonical row (4 rows)
+
+- **`R5-E01-01`** — duplicate of R5-E02-01 (canonical row kept as the R5-E02-01
+  successor) — closed by `ddcc0b9` (the canonical row's commit).
+- **`R1-A13-05`** — duplicate of R1-A12-03 (canonical row kept) — closed by `ba9bb19`
+  (the canonical row's commit).
+- **`R1-A16-04`** — duplicate of R1-A09-02 and R1-A05-01 — closed by `c4295ff` and
+  `46852f3` (the canonical rows' commits).
+- **`R6-CFG-03`** — duplicate of `R1-A04-01` (closed by A-1 ccf2ad7;
+  tests/m12-t2.2-a1-stack-authority re-run 2026-10-17 → 9 pass / 0 fail) — closed by
+  `ccf2ad7`.
+
+#### the F-225 fix (2026-10-18) (1 row)
+
+- **`R7-D4-01`** — a refused historical recovery now stops instead of continuing into
+  the restore — closed by `cb5b83b`. Evidence: CLOSED by the F-225 fix (`cb5b83b`) —
+  `refuse()` now throws a private `RecoveryRefused` that the single catch recognises, so
+  every refusal ends the command before the first mutating call. Red-before 28/30 (the
+  two new tests `R12 I`/`R12 J` fail), green-after 30/30, mutation probe (remove the
+  `throw`) re-reddens exactly those two, full gate 1608 tests / 1559 pass / 0 fail / 49
+  skipped at `VERIFY_EXIT=0`. The live gateway was never restarted by any of this: the
+  lane runs a copy whose `systemctl` literal is replaced by a binary that cannot exist..
+
+#### M12/T9 — the first band (2026-10-19) (134 rows)
+
+- **`R2-B01-02`** — if (context.agentId) reqHeaders["X-Agent-Id"]
+  (knowledge-adapter.mjs:261) is always false on the live path while X-Task-Id (:260) is
+  payload-populated → the internal service gets attacker-chosen correlation and no
+  identity — closed by `ad397d4`.
+- **`R7-OB-05`** — the outage runbook points the operator at a symlink validator for the
+  writer lock it says to recover — closed by `61a60ac`.
+- **`R7-OB-04`** — a durable contract counts the code it audits, and both counts are now
+  wrong — closed by `2741094`.
+- **`R7-F1-09`** — the ingress diagnostics case titled "before the logger call" records
+  two independent captures and never compares their order — closed by `8201723`.
+- **`R7-F1-08`** — the task-code lane's header justifies the display alias with an
+  alphabet size the same file pins at a different value — closed by `8340ccc`.
+- **`R7-F1-07`** — the case that forces a failing lock release never asserts that the
+  release failed, and the file's own comment records that the first version passed
+  vacuously — closed by `0a70780`.
+- **`R7-F1-06`** — an assertion that promises to scan the boundary source for retired
+  codes actually scans a 41-character refusal constant — closed by `ea8571c`.
+- **`R7-F1-05`** — the case that claims to test ids outside both reference registries
+  reads only one of them, and its surviving assertion is sensitive to data it never
+  names — closed by `7a28ec7`.
+- **`R7-E4-01`** — the heartbeat exemption case passes the hook's arguments to a map
+  lookup, so the handler is never invoked and both assertions are structural — closed by
+  `661aa9c`.
+- **`R7-C2-06`** — declared ceilings bind nothing in the analytics adapters: an exported
+  timeout constant has no reader, and the row bound omits the sibling's lower clamp so a
+  negative request reports a successful zero-row result — closed by `1855416`.
+- **`R7-D11B-05`** — the reason-code reader consults only two of the three matrix
+  sections, and the reducer's suspension write consults none — closed by `5820c42`.
+- **`R5-E04-06`** — the invariant's code is dead vocabulary for sanctioned writers,
+  while the state it guards can only be created by editing files outside the lock — with
+  no digest recompute, no decision binding and no tooling. The owner gets no signal
+  from… — closed by `2cbb462`.
+- **`R5-E14-06`** — the runtime-backup/snapshot machinery writing under a module path
+  (e.g — closed by `faec89e`.
+- **`R1-A03-05`** — two different owner-snowflake validators and two owner sources —
+  closed by `10a3da2`.
+- **`R5-E01-02`** — the digest is computed once per process and nothing in its key can
+  change at runtime, so after a PDF runtime/manifest/tokenizer change a long-lived
+  /readyz probes forever against a stale expectation — permanent false not\_ready
+  (replica… — closed by `c876539`.
+- **`R5-E15-04`** — static — no validation of containerName exists between :239 and :253
+  — closed by `131c768`.
+- **`R1-A03-06`** — the knowledge adapter's SSRF allowlist has a blanket off switch —
+  closed by `81b7e3c`.
+- **`R6-R3-NEW-02`** — a $ inside a bounded error message truncates the failure-path
+  SQL block — closed by `ac4577c`.
+- **`R5-E14-04`** — an operator believes an editable workspace template exists on disk
+  and edits a directory nothing reads — closed by `cb6c07d`.
+- **`R2-B07-02`** — incident dedupe ignores Discord's truncation flag — closed by
+  `f7d949a`.
+- **`R7-OC2-03`** — the module READMEs document contract vocabularies, error names and a
+  validation call that no schema or code defines — closed by `a239911`.
+- **`R7-OC2-02`** — both operator walkthroughs read index/search response fields the
+  service never returns — closed by `45aec4c`.
+- **`R7-OB-03`** — the decision-ledger contract declares one deterministic id rule and
+  the store enforces another — closed by `9588009`.
+- **`R7-H1-01`** — the historical-recovery gate accepts an authorization record of any
+  age and never binds it to the runtime it is about to dismantle — closed by `9f50fd6`.
+- **`R7-F2-02`** — three distinct parent-side PDF build failures are folded into the
+  generic runtime-failure code, and the test that names the specific case pins the
+  generic one — closed by `7eb840c`.
+- **`R7-F2-01`** — the PDF content-identity digest test derives its expected value from
+  the production domain constant, so the persisted lookup key has no independent pin —
+  closed by `9097917`.
+- **`R7-F1-04`** — the e2e workflow lane names scenarios its bodies never run, compares
+  a production constant to its own literal, and cites an execution contract that is not
+  in the repository — closed by `7035b37`.
+- **`R7-F1-03`** — the preflight-ingress lane never awaits the async harness it built,
+  so the denial branch its own docstring advertises is unobservable in every case —
+  closed by `53890b7`.
+- **`R7-F1-02`** — the lane that proves each run resolves its own task pins the approved
+  half only as absence of one code, so the stale-task symptoms it exists to disprove
+  pass — closed by `949a8c3`.
+- **`R7-F1-01`** — the heartbeat sentinel's second context field is production-reachable
+  but no test ever supplies it, so deleting that disjunct keeps every lane green —
+  closed by `61edc9b`.
+- **`R7-E1-05`** — the vault scanner's link and junction gate reports "no link" when it
+  cannot read metadata, so an unreadable component is indexed rather than refused —
+  closed by `5e918e4`.
+- **`R7-E5-02`** — the contract byte-integrity lane regenerates the manifest it is
+  comparing, so editing any tool contract reddens nothing — closed by `5b92415`.
+- **`R7-E4-03`** — six differently named n8n refusals are all proven by one flattened
+  constant, so no case shows its titled rule firing — closed by `08833c0`.
+- **`R7-E4-02`** — the cross-agent quota-leak assertion searches a JSON string for a
+  quoted number, a form the payload can never contain — closed by `cf64d69`.
+- **`R7-E3-04`** — the specialist-provenance rule's claimed-active allow branch is
+  exercised only as a denial, so deleting the branch changes nothing — closed by
+  `2d2ce4e`.
+- **`R7-E2-04`** — one tests directory is run by two incompatible runners, and the image
+  lane runs it without pytest installed — closed by `3c870a4`.
+- **`R7-E1-06`** — the Knowledgebase start-up flattens every reranker failure into one
+  string, stores it in a field nothing reads, and readiness re-emits that same string
+  rather than reading the field — closed by `cf9db8b`.
+- **`R7-E1-02`** — the run-error payload counts errors after deduplication and
+  redaction, so `total_error_count` is not the number of errors — closed by `5572ab7`.
+- **`R7-C5-02`** — the DuckDB timeout gate drives a test-supplied failure flag, and the
+  only path that exercises the real bound sits behind a skip and inside a conditional
+  assertion — closed by `f37b0a4`.
+- **`R7-C2-05`** — the analytics adapters echo a target database of their own invention
+  and never call the shared resource allowlist that the bridge enforces — closed by
+  `8ff610d`.
+- **`R7-C2-04`** — the simulation adapters emit no fidelity field, so canned provider
+  results are structurally identical to real ones even though the shared bridge requires
+  consumers to refuse them — closed by `84aaeb4`.
+- **`R7-C2-03`** — the MLflow adapter returns shallow-frozen aliases of its live store,
+  so a consumer can rewrite artifact lists and metric history it was told is immutable —
+  closed by `8687dea`.
+- **`R7-C2-02`** — the DagsHub adapter ignores its configured repository, accepts a
+  wildcard selection, and enforces only the comment that forbids it — closed by
+  `a372805`.
+- **`R7-C2-01`** — the BigQuery read-only guard is a private seven-keyword regex instead
+  of the shared SQL validator, so it admits statements the canonical gate refuses and
+  rejects reads that contain none — closed by `0fd4883`.
+- **`R7-C1-03`** — the envelope's artifact vocabulary has no producer anywhere in the
+  repository, so results must ship an empty artifacts array — closed by `52a2d3d`.
+- **`R7-D10B-01`** — each `/v1/search` pays three provider round-trips because identity
+  verification resolves the model with a real embedding call, twice — closed by
+  `71ca3a7`.
+- **`R7-D11A-03`** — a directory-fsync failure after a committed rename rolls the
+  in-memory ledger back, so the next successful save erases the owner's decision —
+  closed by `5c027aa`.
+- **`R7-D10A-05`** — the PDF publish path inserts one statement per segment while its
+  markdown sibling uses `executemany`, so a large build aborts inside its own
+  transaction — closed by `12b04ab`.
+- **`R7-D8-04`** — `bindInvocationApproval` drops the owner-principal equality check
+  whenever the task carries no principal reference — closed by `25dfe6b`.
+- **`R7-D5-02`** — `python-validator.mjs` enforces no invariant yet README and CHANGELOG
+  publish it as the AST safety gate for `zink_python` — closed by `5e20022`.
+- **`R7-D4-06`** — the transaction preimage hashes raw bytes but stores and re-hashes
+  them as UTF-8 text, so one non-UTF-8 asset makes capture throw — closed by `b6e9c0f`.
+- **`R5-E10-05`** — assertions on a process-global singleton owned by the imported
+  plugin, with no reset and no captured baseline — closed by `1c4dacd`.
+- **`R5-E10-04`** — one boolean conflates "unreadable" with "readable but drifted" —
+  closed by `22eb734`.
+- **`R5-E10-01`** — three suites require historical git objects and the external tar
+  binary — closed by `879613e`.
+- **`R5-E09-04`** — the recorded evidence is a bare pass count (188 passed, 27 subtests,
+  PLAN.md:246) with no skipped or deselected count, so a shrinking collected set reads
+  as an unchanged green — closed by `3c50428`.
+- **`R1-A10-07`** — the zink-tools/ lint/format gap hides four real defects, not style
+  noise — closed by `64f40c4`.
+- **`R5-E16-04`** — up to ten blocking file operations per second for ten minutes run on
+  the same event loop that serves /search — closed by `bf4f665`.
+- **`R5-E06-08`** — an absent, unmounted or unreadable skills root is reported as a
+  successful discovery of zero skills — closed by `8e6ca1e`.
+- **`R5-E06-06`** — the ceiling is a post-hoc .slice() on an already materialized full
+  result with no LIMIT pushed to the engine and no maxBuffer set, so the only real bound
+  is Node's 1 MiB default stdio buffer — closed by `ad64be5`.
+- **`R1-A14-07`** — the knowledge adapter deadline is per-attempt, not per-call: 3 × 120
+  s + backoff exceeds runTimeoutSeconds: 300, and transport errors get no retry — closed
+  by `218bc8a`.
+- **`R5-E06-02`** — the declared 50 MB ceiling admits up to ~150 MB UTF-8 for
+  Vietnamese/CJK text, and any multi-byte character straddling a chunk boundary is
+  silently replaced by U+FFFD — corrupted retrieved evidence is then formatted and
+  counted as… — closed by `610714f`.
+- **`R5-E04-04`** — the promotion probe compares content, decision and provenance but
+  never actors, and its provenance equality is key-order-sensitive — closed by
+  `099a1d2`.
+- **`R5-E02-06`** — two slow embedding responses hold both slots for up to 90 s, so the
+  third and every later caller is refused outright — closed by `75f7af5`.
+- **`R5-E01-04`** — in the ordinary "Postgres starts later" race, boot failure becomes a
+  sticky flag: no pool, no \_apply\_migrations, and both recovery calls skipped for the
+  process lifetime — so interrupted RUNNING index runs and their shadow BUILDING… —
+  closed by `b1676c8`.
+- **`R2-B08-02`** — fixed-name exclusive-create temp files are never cleaned, so one
+  interrupted apply/restore permanently blocks retries — closed by `2406013`.
+- **`R5-E12-02`** — LATENT is neither OPEN nor FIXED, so the code-review:128 "zero OPEN"
+  precondition is satisfiable by re-labelling confirmed High findings, and
+  CLOSED/Duplicate records bypass README:83's "FIXED requires validation" rule. The
+  per-round… — closed by `5f57b2a`.
+- **`R5-E02-04`** — total\_count reports the page length, so a 20-candidate pool cut to
+  limit=5 reads as "only 5 matches exist" — closed by `301e1f9`.
+- **`R1-A15-08`** — stale comments and cited config keys that assert rules the build no
+  longer follows — closed by `46181c3`.
+- **`R1-A11-05`** — the published contract version is fabricated, and schema files
+  resolve through process.cwd() — closed by `23a41fc`.
+- **`R1-A10-05`** — zink\_excel implements less than its contract: template\_path
+  ignored, extra sheets dropped, validate is an existence check — closed by `6db8d8f`.
+- **`R1-A10-03`** — memory-tool output contracts are declared but validated nowhere, and
+  the adapters already emit out-of-contract values — closed by `8fa4ad1`.
+- **`R6-C-NEW-01`** — a skill manifest lifecycle event cannot cite the repository's own
+  dotted task ids — closed by `846a2bb`.
+- **`R5-E04-08`** — the caller branches on error.code (index.mjs:1123-1125 recognizes
+  only SKILL\_ACTIVE\_CONFLICT/SKILL\_VERSION\_CONFLICT), so "your input is invalid"
+  (retryable) and "the tree is poisoned" (needs an operator) share one code — a proposal
+  can be… — closed by `c759246`.
+- **`R5-E03-03`** — bounded, retryable recovery / an unbatched bulk delete under a 30 s
+  command\_timeout sitting on the only path that makes the service ready — closed by
+  `3115fc0`.
+- **`R1-A14-05`** — event.yielded === true grants run-end approval before the success
+  assertion, so a failed run passes with no terminal record — closed by `4dc7a52`.
+- **`R1-A14-04`** — tool-call lease verification deletes the lease before checking it;
+  three distinct denials collapse to POLICY\_DENIED and leak identity values into the
+  log — closed by `2c2c5fe`.
+- **`R1-A09-07`** — silent capability loss at load: no host-compatibility assertion and
+  no interactive-surface self-check — closed by `063d27f`.
+- **`R1-A07-06`** — handleDiscordAction's authoritative-state resolution and its ledger
+  write are both optional (paths-gated) — closed by `c968a26`.
+- **`R5-E15-02`** — putLandingArtifact({ artifact\_id: "../silver/x" }) is accepted
+  today — closed by `7656ccc`.
+- **`R5-E09-07`** — a credential committed to the task branch can reach main unscanned,
+  and the "zero leaks" claim in PLAN.md cannot be re-inspected because no artifact
+  exists — closed by `2977bd0`.
+- **`R5-E05-05`** — the 1024-d vectors in skills.segments — and therefore which skill an
+  agent retrieves — can come from a swapped or unversioned model while the sync reports
+  READY — closed by `2c75a86`.
+- **`R1-A06-07`** — invocation leases and run-start waiters share one process-global
+  registry keyed without the governance scope — closed by `502c9c6`.
+- **`R1-A03-01`** — media-root containment on the native send path is lexical, not
+  symlink-safe — closed by `ac13e8d`.
+- **`R5-E07-04`** — one corpus split by spelling — a document tagged research indexes
+  with primary\_topic domain-research while kb/knowledge-base/literature (which do reach
+  the alias) index as kb-ingestion, and neither the filter nor the envelope can… —
+  closed by `a9310c1`.
+- **`R5-E02-03`** — a caller that disables rerank for latency gets an unfiltered page
+  whose "scores" are meaningless against any 0-1 threshold, and cannot distinguish
+  low-confidence hits from filtered ones — closed by `83a6aa5`.
+- **`R1-A16-08`** — skill-loop actor identity is re-derived a third way; the durable
+  proposal records a constant, not the agent — closed by `481c848`.
+- **`R1-A13-02`** — 0b55dfa silently changed #incidents tag semantics without touching
+  index.mjs; the call-site comment still states the reverted rule — closed by `daeeda7`.
+- **`R1-A10-06`** — two declared skill-search filters can never match: secondary\_topics
+  is always empty and the primary\_topic check is a no-op — closed by `d299b9e`.
+- **`R7-IG-04`** — a tracked test comment denies the owner's grant for the very
+  assertion the same test pins — closed by `a5bb3e5`.
+- **`R7-E2-01`** — the atomic-index test's fake connection records no transaction event,
+  so the swap can stop being atomic and the suite stays green — closed by `8cb52ae`.
+- **`R7-E1-03`** — the markdown topic derivation silently discards every alias tag the
+  module itself recognises, and the code it reserves for that case is never raised —
+  closed by `1e2cbf1`.
+- **`R7-C6-04`** — the availability probe folds every failure into "engine not
+  installed", so a hanging or broken DuckDB retires six SQL gates that still report
+  success — closed by `acbd5f5`.
+- **`R7-C6-03`** — the two tool envelopes resolve only through repo-relative and
+  working-directory paths that packaging does not ship, and the failure is swallowed as
+  a generic schema error — closed by `ff3191e`.
+- **`R7-C6-01`** — the approval card tells the owner the result preview is attached, and
+  no outbound path in the integration can attach a file — closed by `7ef4808`.
+- **`R7-C1-02`** — the result envelope is validated with a 64 KiB caller default while
+  the reachable n8n path publishes budgets an order of magnitude larger, so a successful
+  side-effected call is destroyed after the fact — closed by `66dd9f3`.
+- **`R7-D11A-02`** — the result card sanitizes every sibling field but emits `preview`
+  raw, so untrusted file bytes reach Discord unredacted — closed by `2f169e1`.
+- **`R7-D11A-01`** — artifact "validation" is extension plus size plus substring: the
+  excel branch checks nothing structural and the ZIP helper is not a ZIP parser — closed
+  by `78082ee`.
+- **`R7-D10A-02`** — `acquire_advisory_lock` leaks a pooled connection whenever the lock
+  query raises, and four leaks make the whole service report a database outage — closed
+  by `88bff38`.
+- **`R7-D10A-01`** — cancelling an index run leaves a permanent `RUNNING` row, and the
+  unique-running constraint turns that into a self-block reported as a database outage —
+  closed by `3e43a1b`.
+- **`R7-D11B-04`** — the event contract accepts artifact objects the snapshot contract
+  rejects, and the event is fsynced before the projection is validated — closed by
+  `1812803`.
+- **`R7-D8-03`** — the free-text approval ingress fabricates the channel and actor it
+  then validates, so "approval must occur in #approvals" can never fail — closed by
+  `731e6f2`.
+- **`R7-D5-01`** — `zink_n8n` reports tool success the moment a workflow is accepted, so
+  a queued run reads as completed work — closed by `6afc10f`.
+- **`R7-D4-02`** — an owner ACCEPT stamps `workflow_status: COMPLETE` without reading
+  the outcome it accepted — closed by `2fadb40`.
+- **`R1-A12-08`** — the live-rehearsal probe writes the PRODUCTION ledger and seeds its
+  own precondition, so its PASS says nothing about ingress or delivery — closed by
+  `26f4e29`.
+- **`R1-A12-04`** — the failing production seam for approval buttons has no test, and
+  the try-block conflates "post failed" with "registration failed" — closed by
+  `5ec731c`.
+- **`R1-A12-01`** — the live-runtime digest cross-checks report PASS (not skip) when the
+  live tree is unreachable, contradicting their own stated contract — closed by
+  `3730ee5`.
+- **`R1-A05-03`** — preflight installs an ExecStartPre boot dependency it never checks,
+  so apply-then-start can leave the gateway permanently failed — closed by `9d6eb3e`.
+- **`R5-E05-02`** — one malformed SKILL.md anywhere pins every previously READY row,
+  including rows for deprecated skills — retirement stops taking effect — closed by
+  `768253f`.
+- **`R5-E04-01`** — one killed promotion of 2.0.0 makes skill-store get/validate,
+  getActiveSkill, syncSkillsToVectorStore and every later promotion fail closed
+  store-wide — because the contract says a malformed record prevents all normal
+  retrieval — until a human finds a hidden directory — closed by `2319878`.
+- **`R5-E03-02`** — the lock was introduced for the M4 acceptance-backup flow and the
+  default startup branch was left outside it — closed by `c58653c`.
+- **`R2-B08-01`** — the native-patch lineage-upgrade branch takes no backup and has no
+  rollback — and it is the branch the live host version would use — closed by `416b0f0`.
+- **`R1-A14-08`** — a knowledge-service failure returns a success-shaped envelope, and
+  fabricated placeholder provenance is counted as evidence under governed\_status:
+  "SUCCESS" — closed by `7cacb65`.
+- **`R1-A08-01`** — one crash/ENOSPC/drvfs-EIO mid-append makes every readSnapshot,
+  appendEvent and recordWorkflowEvent fail gateway-wide, forever — closed by `99c4168`.
+- **`R5-E11-01`** — any routing or ownership decision made from the canonical document
+  dispatches ETL work to O2, which the guard denies — closed by `26c4db9`.
+- **`R5-E06-05`** — every contract-valid parameterized zink\_sql call fails at the
+  engine, while the traversal/escape scan over parameter values protects data that never
+  reaches SQL — closed by `dfe21cc`.
+- **`R1-A11-01`** — parent\_agent\_id is declared twice with contradictory value sets —
+  closed by `3fc27be`.
+- **`R5-E06-01`** — an upstream-supplied Retry-After: 86400 sleeps unbounded with the
+  permit held, freezing both slots of the process-wide sharedSearchSemaphore(2) — closed
+  by `04847c9`.
+- **`R5-E02-02`** — identity is a mutable text path plus an index-run UUID — closed by
+  `0351044`.
+- **`R1-A16-07`** — the Knowledgebase citation/provenance round trip breaks at the
+  adapter: three advertised actions have no server route, and index identity is dropped
+  — closed by `2f7bb8e`.
+- **`R1-A13-04`** — the operator lock recovery covers 1 of at least 4 governed lock
+  roots, while M11/T3 widened the unprotected one — closed by `a9636c1`.
+- **`R1-A11-06`** — version governance: two duplicated supported-version lists,
+  unconditional refusal, and cross-record era inference on replay — closed by `0223c5f`.
+- **`R1-A05-08`** — admission loses the original cause and the inter-session digest
+  binding is optional, so a resumed continuation can be minted started without
+  comparison — closed by `496f18a`.
+- **`R5-E15-03`** — model-authored SQL can reach a host file read whose contents return
+  as result rows that the model — and then the Discord card — read — closed by
+  `b0b8dbc`.
+- **`R2-B01-01`** — user\_principal\_ref for ANSWER\_USER is minted with a hardcoded
+  HMAC key — closed by `ab4333a`.
+- **`R1-A10-04`** — model-supplied action, api\_key and timeout reach the adapters and
+  override governance decisions — closed by `d5086e7`.
+- **`R1-A02-02`** — two resolvers for the same governance dependencies disagree; the
+  live one points at an incomplete hand-seeded directory — closed by `93c2aa1`.
+- **`R1-A09-05`** — two plugin config keys are read but unreachable by configuration,
+  killing skill approval and the guild gate — closed by `8b41897`.
+- **`R1-A16-01`** — post-approval execution is unreachable: nothing ever writes
+  task.primary\_coordinator — closed by `e45ba43`.
+- **`R1-A06-01`** — the queue lease lifecycle has no runtime driver — a crashed claim
+  never returns — closed by `dd7f6ac`.
+- **`R1-A01-05`** — Zink Tools provider adapters exceed the declared tool-ownership set
+  — closed by `86a9a4b`.
+- **`R5-E15-05`** — the vault path that gets validated is a different path object from
+  the one that gets opened — closed by `13a69c9`.
+- **`R5-E01-05, F-240 R7-D6-01`** — entangled in one source file — closed by `263096d`.
+- **`R1-A10-02`** — every successful zink\_excel and zink\_sql result is rejected by its
+  own output contract — success is punished, failure passes — closed by `c865bcd`.
+- **`R1-A07-01`** — the owner's APPROVE is bound to a task id only — no plan,
+  brief-revision or digest binding — closed by `048c438`.
+
+#### M12/T9 — the second band, first close (2026-10-20) (47 rows)
+
+- **`R2-B02-01`** — pickup-loop eligibility is a one-shot existsSync at register() time
+  (index.mjs:6095-6101), so a snapshot created after load (first install, or after a
+  guarded lock/snapshot recovery) leaves the coordinator lane permanently dark until… —
+  closed by `c4295ff`.
+- **`R1-A02-01`** — the deployed plugin loads live repository source through a hardcoded
+  Windows mount path, bypassing the digest-gated packaged assets — closed by `c4295ff`.
+- **`R1-A04-03`** — Skill Store scoping is namespace-blind and the per-agent apply scope
+  strings are decorative — closed by `eb1518c`.
+- **`R1-A04-08`** — the memory-tool executors trust model-supplied session_key / run_id
+  / task_id over the trusted context — closed by `c4295ff`.
+- **`R1-A06-04`** — runId is reused across fallback re-entries while liveness is
+  runId-keyed and consumed destructively — closed by `0514732`.
+- **`R1-A10-01`** — skill read/validate/apply cannot reach the ACTIVE version once any
+  superseded version exists — closed by `0786790`.
+- **`R1-A15-04`** — preflight PASS is structurally blind to the orphaned writer lock
+  that has twice killed an apply — closed by `1512d0a`.
+- **`R1-A02-08`** — the coordinator pickup loop is started per register() with no
+  process-level latch — four loops observed in one live process — closed by `c4295ff`.
+- **`R1-A06-05`** — ASK_USER attributes a governed question to a run that did not ask it
+  — closed by `832f082`.
+- **`R1-A06-06`** — the reducer admits a digest-less result into review, then every
+  verdict requires a digest — closed by `832f082`.
+- **`R1-A06-08`** — a spawn reservation stuck in SPAWN_UNKNOWN has no timeout, no
+  terminal event and no reconciler — closed by `832f082`.
+- **`R1-A07-05`** — isPreAdmittedFixture is a fixture-named admission branch fully
+  reachable in production — closed by `c4295ff`.
+- **`R5-E03-04`** — read-only SELECT count(*) FROM knowledge.pdf_content_builds b WHERE
+  NOT EXISTS (SELECT 1 FROM knowledge.pdf_source_details d WHERE d.build_id=b.id) —
+  closed by `ddcc0b9`.
+- **`R5-E03-08`** — a green contract test that pins dead schema (assert on the table's
+  existence, not its behaviour) is a re-base cost the next refactor cannot remove
+  without appearing to break a gate — and if anything ever does write a sidecar, the
+  next… — closed by `072e225`.
+- **`R2-B01-05`** — the bot token that opens a production #approvals thread is chosen
+  from event-supplied childSessionKey, not from the ledger — closed by `c4295ff`.
+- **`R1-A09-02`** — a card is durably recorded SURFACED while its interactive part never
+  arrived, and is then un-re-drivable forever — closed by `c4295ff`.
+- **`R1-A14-03`** — the announce seam discards the card-publish verdict and still
+  returns deliver; an unparseable payload drops with no log line at all — closed by
+  `c4295ff`.
+- **`R5-E02-01`** — an answer scoped to a namespace is really corpus-wide — the owner
+  cites content from another namespace believing it was governed, and no error ever
+  surfaces — closed by `ddcc0b9`.
+- **`R1-A11-03`** — outcome_status is copied six times and the reason-code matrix
+  declares an outcome no schema can express — closed by `832f082`.
+- **`R1-A15-07`** — governance docs no longer describe reality: executor role,
+  validation vocabulary, branch discipline — closed by `21ce708`.
+- **`R1-A02-05`** — one concept, two implementations: deriveApprovalScopeDigest exists
+  twice with different payload shapes, plus dead duplicates and three canonicalizers —
+  closed by `832f082`.
+- **`R1-A05-07`** — apply-mode diagnostics carry 11 reason classes against
+  preflight-mode's 27, so identical refusals degrade to APPLY_REJECTED — closed by
+  `364bf22`.
+- **`R2-B04-02`** — excel-writer.mjs is digest-pinned _and_ overridden from the working
+  tree — closed by `c4295ff`.
+- **`R5-E03-01`** — read-only SELECT typname FROM pg_type t JOIN pg_namespace n ON
+  n.oid=t.typnamespace WHERE n.nspname='knowledge' — closed by `ddcc0b9`.
+- **`R1-A05-05`** — the apply sequence restarts the unit without daemon-reload and never
+  verifies the loaded unit — closed by `bbfccac`.
+- **`R1-A12-05`** — the only apply-rehearsal instrument is skipped by an env var in all
+  three lanes and its isolation proof is blind to the governed Discord channel root —
+  closed by `e7f84b5`.
+- **`R1-A12-09`** — the verdict-matrix suite counts any thrown error as the specified
+  policy DENY, and three cases require no diagnostic at all — closed by `ee9a803`.
+- **`R2-B06-01`** — the digest-derivation pins freeze the denial path's literal source
+  text, penalising the very fix K01 needs — closed by `aaa0394`.
+- **`R5-E14-03`** — a speculative target tree committed ahead of implementation —
+  AGENTS.md §8 forbids exactly this — closed by `ea94a1f`.
+- **`R6-R3-NEW-01`** — the real-PostgreSQL SQL gate exercises only one of the three
+  tracked migrations — closed by `b3c9168`.
+- **`R5-E08-06`** — npm run verify says nothing about the PowerShell the runbooks tell
+  the owner to execute, including a backup script — closed by `45effbd`.
+- **`R7-D4-03`** — the 12-character task code is minted from `Math.random()` over a 21^4
+  space and is now the ledger identity the approval is keyed to — closed by `c4295ff`.
+- **`R7-D4-05`** — the declared transition projection omits the state the replay arm
+  writes, and its only checker has zero call sites — closed by `d0de7ee`.
+- **`R7-D1-04`** — the enforced Knowledge input schema is a hand-built registry object,
+  so the published `$defs.input` never gates a call — closed by `4a8ee68`.
+- **`R7-D2-01`** — the `pdf-runtime` child package and its only test suite are executed
+  by no lane: CI, the Docker build and the .mjs contracts all stop at the parent —
+  closed by `301b492`.
+- **`R7-D6-01`** — three remediation assertions can only be reddened by editing a
+  literal, never by breaking the behaviour they claim to cover — closed by `a9c9f80`.
+- **`R7-D10A-03`** — mutation transactions resolve the owner connection from a mutable
+  global slot, so a stale run can write inside a newer session's ownership — closed by
+  `ddcc0b9`.
+- **`R7-C1-05`** — the four schema-only capability contracts declare an open parameters
+  object that contradicts their own directory rule, and no gate validates a payload
+  against them — closed by `5fc0a85`.
+- **`R7-C3-02`** — the child rewrites every OCR timeout and output-cap breach into a
+  generic runtime failure, so the parent's timeout handling is unreachable for the case
+  it was written for — closed by `d4d7c44`.
+- **`R7-C3-05`** — the processing-identity probe is an echo: the child returns the value
+  it was sent and two parent sites compare it back — closed by `d4d7c44`.
+- **`R7-C3-06`** — the segment builder drops runtime items whose content normalises to
+  empty with no counter, unlike its own fail-closed sibling for a wholly empty result —
+  closed by `c031ed6`.
+- **`R7-C5-05`** — the snapshot-target test wraps its assertions in the condition that
+  is itself under test, so reclassifying one scope silences the check without failing it
+  — closed by `f355d81`.
+- **`R7-C5B-C`** — the test that repeated attempts must not mutate the ledger runs no
+  attempt and asserts only a property of the snapshot builder — closed by `c6f9ddf`.
+- **`R7-E1-01`** — the PDF runtime manifest stamps model provenance copied from the
+  downloader's own constant, and two supply-chain fields are checked for presence only —
+  closed by `d4d7c44`.
+- **`R7-E2-02`** — every reranker test constructs the object around its constructor, so
+  the artifact-digest verification is executed by no test and eight failure codes are
+  asserted as one — closed by `88ca6ec`.
+- **`R7-E2-05`** — the readiness attribution test hand-copies five cases and cannot see
+  three mapped branches the route actually emits — closed by `764f52d`.
+- **`R7-E4-04`** — the canonical-versus-live SQL agreement matrix compares the validator
+  against itself, because the live seam is a wrapper around the same module — closed by
+  `a13d675`.
+
+#### M12/T9 — the second band, final close (2026-10-21) (120 rows)
+
+- **`R1-A02-07`** — two decision/queue stores with two roots, and a load-once in-memory
+  singleton used as live authority — closed by `6a31150`.
+- **`R1-A09-03`** — #incidents can never post: the dedupe read uses a Discord endpoint
+  that does not exist — closed by `bcd1013`.
+- **`R1-A13-01`** — M12/T2-R1's "one honest tag per category" rule caused the live
+  approval outage; R3 reverted it for STACK only — the same rule still sits at the
+  RISK/TYPE/STATUS siblings — closed by `5a2b536`.
+- **`R2-B08-04`** — the Discord channel plugin path is pinned by a hardcoded install
+  content-hash — closed by `bcd1013`.
+- **`R1-A03-02`** — the execution-approval card renders model-authored plan text, so the
+  owner's APPROVE is not bound to the plan that executes — closed by `15c1779`.
+- **`R1-A03-04`** — completeTask verifies no principal and self-satisfies its own result
+  digest — closed by `37a17a1`.
+- **`R1-A04-02`** — the KB_ACCESS_MATRIX L1 (DISCOVER) tier is never enforced at the
+  retrieval seam — closed by `15c1779`.
+- **`R1-A11-04`** — WORKFLOW_CANCELLED channel/message provenance is unconstrained in
+  schema and unchecked at runtime — closed by `4f9ef4b`.
+- **`R2-B01-03`** — the durable reducer admits APPROVE for a plan that was never
+  requested or surfaced — closed by `43999a7`.
+- **`R2-B03-01`** — the probe forges origin: discord provenance into live durable state
+  — closed by `b912a6b`.
+- **`R5-E13-01`** — find /home/hoang_vinh/.openclaw-zink -maxdepth 1 -type f ! -perm 600
+  — prints modes and names, no bodies — closed by `6c0f814`.
+- **`R6-HUNT-01`** — a gitignored scratch worktree embeds a live Discord bot token and
+  sends real messages outside governance — closed by `6ca68d7`.
+- **`R1-A03-03`** — handleExecutionFinished reads and hashes an artifact path with only
+  optional containment — closed by `5309439`.
+- **`R1-A07-04`** — the verdict path never checks that the interaction happened in the
+  recorded approval thread — closed by `43999a7`.
+- **`R1-A10-08`** — Excel write-side containment is lexical while the read side is
+  realpath — the weaker twin remains on the last write path — closed by `65ee430`.
+- **`R5-E13-03`** — the repository — which lives under OneDrive, a synced third-party
+  store, and is pushable to a remote — contains the complete server-scoped
+  bot/role/channel identity map, enabling targeted impersonation of an agent mention
+  surface, and the… — closed by `c89974e`.
+- **`R5-E13-05`** — M7-063 is decorative: the only tracked occurrence sits outside its
+  scope — closed by `0984b47`.
+- **`R5-E15-01`** — dispatch a non-excel governed tool call carrying ../ in a
+  path-shaped input through guard.beforeToolCall and observe that no
+  SCHEMA_VALIDATION_FAILED is produced — closed by `fc13406`.
+- **`R1-A02-03`** — the Skill Store imports the plugin's internal file-lock.mjs by
+  relative path, creating two lock instances per process — a structural cause of the
+  recurring orphan lock — closed by `b7d307e`.
+- **`R1-A06-03`** — once a coordinator task reaches EXECUTING the state machine has no
+  exit at all — closed by `0308434`.
+- **`R1-A08-02`** — read-only duplicate-sequence check on the live journal (grep -o
+  '"sequence":[0-9]*' then sort/uniq -d) — closed by `99ed7fa`.
+- **`R1-A12-03`** — the documented EXECUTION_FINISHED result chain is unreachable in
+  production while two suites keep it green — closed by `ba9bb19`.
+- **`R1-A14-06`** — the coordinator pickup loop reports failures as return values that
+  no one reads, so a permanently blocked queue logs nothing — closed by `ae52716`.
+- **`R1-A08-03`** — terminal forensics for the known 4-NATIVE_ENDED/144-events gap is
+  unresolvable from the ledger alone, and event-count reconciliation is impossible —
+  closed by `357b933`.
+- **`R1-A08-04`** — read-only — list snapshot tasks whose workflow_status is
+  non-terminal and which have no matching terminal event — closed by `43999a7`.
+- **`R1-A11-02`** — the owner-verdict enum: schema permits 6 values, the reducer accepts
+  3, authority uses different names — closed by `bcd1013`.
+- **`R1-A13-06`** — two "byte-equal" deployment post-checks report different
+  denominators (35 vs 37) for a packaged set that did not change — closed by `ae9be15`.
+- **`R1-A15-05`** — PLAN.md is 377 KB / 5,054 lines with a 1,203-word single table cell,
+  while the documented process requires reading it whole — closed by `bc29715`.
+- **`R1-A08-07`** — schema-accepted events should be uniformly replayable vs these two
+  are invisible before the snapshot head and brick the read after it — closed by
+  `357b933`.
+- **`R1-A05-02`** — apply mutates surfaces the transaction preimage never captures, yet
+  rollbackSucceeded is licensed by those bytes alone — and one apply stage deletes
+  irreversibly — closed by `aa5b7bc`.
+- **`R1-A15-01`** — integrations/openclaw/README.md still documents the retired
+  Google-provider deployment end to end — closed by `b00c188`.
+- **`R1-A15-02`** — the only documented deploy path bypasses the apply orchestration;
+  "one apply per grant" has no tool support — closed by `bcd1013`.
+- **`R1-A16-02`** — a second dead end in the same hop: dispatch capabilities include the
+  coordinator, spawn policy never does — closed by `c4087c2`.
+- **`R1-A16-03`** — no producer ever surfaces a pending result to #results; the accept
+  path has nothing to accept — closed by `15c1779`.
+- **`R1-A16-06`** — Discord root tasks are opened durably inside the admission predicate
+  and never closed — on success or denial — closed by `f8ecbd5`.
+- **`R2-B04-01`** — packaging cannot express the runtime dependency set, so A02-01's own
+  acceptance criterion is unreachable — closed by `bcd1013`.
+- **`R6-V05-04`** — this is the single outcome the owner was promised for Cluster D —
+  closed by `4d41fde`.
+- **`R1-A01-03`** — platforms/knowledge-platform/ names a fourth module that no
+  canonical architecture doc owns — closed by `0449fed`.
+- **`R1-A04-04`** — silent data_plant stack defaults substitute for a denial in four
+  places — closed by `15c1779`.
+- **`R1-A09-04`** — the announce approval card publishes model-authored prose, twice,
+  unsanitised and silently truncated — closed by `5309439`.
+- **`R2-B08-05`** — the runtime-backup plugin enumerator hard-fails --apply on any
+  plugin-tree content it has never seen — closed by `d9bbae2`.
+- **`R5-E12-06`** — no attributable writer discipline for the only finding register, no
+  serialization (see R5-E12-03), and a "must" any agent can satisfy by declining to
+  write — closed by `0449fed`.
+- **`R1-A01-04`** — empty untracked models/ and shared/ are ownerless legacy scaffolding
+  duplicating Zink Tools — closed by `d78c6de`.
+- **`R2-B08-03`** — restoreT1RuntimeFiles never installs the preimages it captured — it
+  only quarantines current content — closed by `6138c9e`.
+- **`R2-B16-02`** — only 3 of 35 governed paths carry any live-reachability assertion
+  (R13 P1, R13 P2, R7 P1) — closed by `770a097`.
+- **`R5-E12-01`** — AGENTS.md §11 forbids committing implementation until the
+  review-convergence and Final Quality Gate are PASS — and neither token has ever been
+  recorded in any tracked artifact — closed by `0449fed`.
+- **`R6-A03-01`** — the queue manager's durable writer does not lock itself, and one
+  shipped caller relies on it — closed by `eb110cb`.
+- **`R1-A15-06`** — PLAN.md cites 18 sections of a file that is Git-ignored and deleted
+  at closeout, so durable evidence is unrecoverable — closed by `0449fed`.
+- **`R5-E12-05`** — AGENTS.md §5 routes architecture/ownership/overengineering review to
+  this artifact, which states expired milestone facts and gives nothing executable —
+  closed by `db63c88`.
+- **`R5-E12-07`** — the "no extra state files" rule is unverifiable as written (a set of
+  three described as four), and a retired artifact stays referenced as if live — closed
+  by `0449fed`.
+- **`R1-A07-02`** — approval_thread_id is set once and never cleared — no re-drive after
+  a failed component delivery, and none after REQUEST_REVISION — closed by `43999a7`.
+- **`R1-A09-06`** — Discord native adapter sends are unbounded — REST got deadlines, the
+  announce seam did not — closed by `bcd1013`.
+- **`R2-B07-01`** — every runtime backup and native-patch manifest stamps a frozen
+  governance_version literal that no longer exists, and validation demands that same
+  literal — closed by `fda385b`.
+- **`R5-E09-06`** — a permanently red gate cannot say "and this branch added one" — it
+  returns the same word for the recorded 5-high baseline as for a new high-severity
+  dependency — closed by `7725107`.
+- **`R1-A02-06`** — the packaging whitelist and its rewrite engine have no completeness
+  gate; the deployed entrypoint's module graph is never imported by any test — closed by
+  `759a038`.
+- **`R1-A05-04`** — the MemoryMax ceiling is asserted against one filename; any sibling
+  drop-in overrides it and no gate notices — closed by `f210a1f`.
+- **`R1-A05-06`** — Windows and WSL entrypoints disagree on permission assertions and on
+  which state tree they inspect — closed by `3defcde`.
+- **`R1-A12-02`** — a "test that cannot fail on Windows": the platform guard returns
+  from the test body instead of skipping — closed by `5587bae`.
+- **`R1-A13-07`** — deferred/OPEN historical defects are still present at HEAD, and the
+  R16 rehearsal gate is permanently self-skipping — closed by `f04c32e`.
+- **`R2-B03-03`** — the probe's failure classifier cannot attribute a state/assertion
+  failure — closed by `0a5a6c2`.
+- **`R5-E10-08`** — a comment reword, an import-line edit, or a units rename turns
+  suites red while nothing behavioural changed — and the converse is worse: a code
+  change can keep the comment, drop the enforcement, and stay green. The real guarantee
+  ("the… — closed by `41d7dbf`.
+- **`R5-E14-02`** — undetected drift, plus a false premise for later lanes — six tracked
+  executables read like supported probes but can never fail in CI — closed by `3defcde`.
+- **`R7-D4-04`** — `workflow-policy.json` and `role-capability-manifest.json` are read
+  by no runtime code; every governed value exists as a duplicate literal — closed by
+  `a328342`.
+- **`R7-D3-01`** — the operator backup never dumps the Knowledge database while the
+  runbook advertises a PostgreSQL backup — closed by `d211dd4`.
+- **`R7-D3-02`** — `compose.m4-t5.live.yml` carries the only writable host bind and the
+  live privilege block, and no gate parses it — closed by `51cf325`.
+- **`R7-D7-01`** — `infrastructure/networking/networks.yml` is a placeholder whose own
+  premise is already false and which nothing reads — closed by `7725107`.
+- **`R7-D8-01`** — the live tool-call branch is selected by model-supplied parameter
+  shape, and for `zink_excel`/`zink_power_bi` it never consumes the approval those
+  operations require — closed by `accdef5`.
+- **`R7-D8-02`** — no production code ever mints a tool-invocation approval record, so
+  `bindInvocationApproval` is an inert control that only tests can satisfy — closed by
+  `1b111cd`.
+- **`R7-D11B-06`** — three canonical contracts are hash-pinned but never applied, and a
+  contract edit reports no version change — closed by `f8ecbd5`.
+- **`R7-D12B-01`** — a stale git worktree inside `scratch/` carries its own AGENTS.md
+  and PLAN.md that assert owner-level authority, and every gate excludes it — closed by
+  `7725107`.
+- **`R7-D12B-02`** — no tracked lane parses `compose.m4-t5.live.yml`; the operator
+  script that hands it to Docker is its only reader — closed by `957199d`.
+- **`R7-D13-01`** — the n8n Postgres role password is passed on the `psql` command line,
+  where it is visible in the process list — closed by `c629945`.
+- **`R7-D13-02`** — the backup manifest asserts `secrets_included = $false` as a
+  constant over an archive it never inspects — closed by `4307f19`.
+- **`R7-D13-03`** — preflight validates an embedding model variable that no runtime
+  component consumes — closed by `9f476d0`.
+- **`R7-D13-04`** — the memory acceptance gate compares against a hardcoded 80% of 4 GiB
+  without reading the container's real ceiling — closed by `0e20e6f`.
+- **`R7-D13-05`** — the live acceptance restore container escapes the label sweeper and
+  its removal exit code is unchecked, so a leak still reports PASS — closed by
+  `4ec16cb`.
+- **`R7-D12A-01`** — repository policy hardcodes that the pdf-runtime suite stays NOT
+  RUN inside the only Python job CI admits, so F-237's fix needs a new job rather than a
+  step — closed by _(accepted cost — no code change)_.
+- **`R7-C1-01`** — the approval scope digest for `zink_power_bi bind` is derived from
+  input keys its own closed contract forbids, so the approved datasource is not bound —
+  closed by `9009dc4`.
+- **`R7-C1-04`** — the call and result envelopes admit only five of the eight
+  contract-registered tools, and their specialist rules disagree with each other —
+  closed by `6756e2c`.
+- **`R7-C3-01`** — the PDF extraction path reports success without reading the
+  conversion result's status or proving that every requested page contributed content —
+  closed by `21cc532`.
+- **`R7-C3-03`** — the child's worst-case OCR budget is twelve times the parent's
+  operation ceiling and the request schema carries no deadline, so the only real bound
+  is a process-group kill — closed by `21cc532`.
+- **`R7-C3-04`** — the child's only OCR runner test replaces the subprocess and the
+  output reader, so the deadline, the output cap and the child reaping are asserted by
+  nothing — closed by `21cc532`.
+- **`R7-C4-02`** — the acceptance helper treats any nonzero exit as proof that the
+  database rejected the statement, so the one-ACTIVE-index invariant can go unexercised
+  while the lane prints passed — closed by `88cdf31`.
+- **`R7-C4-03`** — the acceptance script fixes its compose project name and its fixture
+  identifiers and resets nothing at entry, so a second run fails with an unrelated error
+  and two overlapping runs destroy each other's database — closed by `990f2bc`.
+- **`R7-C4-04`** — acceptance finalisation throws from inside the finally block in four
+  drivers, so a cleanup failure replaces the real defect, and the two t5 drivers drop
+  the resource-leak error whenever the body already failed — closed by `13c9e33`.
+- **`R7-C4-05`** — the acceptance driver resolves the repository through git calls with
+  no working-directory argument, so its attestation can describe a different tree than
+  the files it packaged — closed by `6ad2310`.
+- **`R7-C5-03`** — the ingress-registry eviction test compares an empty record against
+  the shape an absent record also produces, so presence and eviction are
+  indistinguishable — closed by `bff1967`.
+- **`R7-C5-04`** — the durability gate is a text search after the only rename in each
+  file, so any of the four writers can retarget its directory fsync onto the
+  already-durable file handle and stay green — closed by `2718aa1`.
+- **`R7-C5B-A`** — the lane that names the retry rule never attempts a retry, so
+  widening the transient-failure class in production leaves it green — closed by
+  `e99dbcb`.
+- **`R7-C6-02`** — the preview renderer's table inputs have no producer, so every
+  generated image is the placeholder layout while the plan data that would fill it is in
+  scope — closed by `b3fa7e6`.
+- **`R7-C6-06`** — the preview rasteriser performs no redaction of its own, unlike every
+  other Discord-visible surface — closed by `255bb3c`.
+- **`R7-E1-04`** — the reranker validates a graph contract the exporter wrote about
+  itself, and the measured evidence that could contradict it is not shipped or loadable
+  — closed by `77a34ca`.
+- **`R7-E3-03`** — the migration-digest guard reconciles only manifest-to-disk, and its
+  own fixture test mandates the blind direction — closed by `69bc955`.
+- **`R7-E3-06`** — a file-wide occurrence count is asserted as per-list membership, with
+  a failure message describing a condition the assertion cannot evaluate — closed by
+  `f115d4b`.
+- **`R7-E5-04`** — the byte-identical acceptance pair is pinned only against each other,
+  and one driver pins the embedding model while the other inherits the operator's —
+  closed by `068e41a`.
+- **`R7-OA-02`** — the secret-scan allowlist suppresses 150 tracked paths by an
+  unanchored regex and no policy check reads it — closed by `189e906`.
+- **`R7-OA-04`** — the T5 acceptance nginx overlay defines the same location as
+  `default.conf` without its three proxy timeouts — closed by `a28bfba`.
+- **`R7-OB-01`** — the `work \| research` task mode has a normative architecture
+  document, a cross-reference, and no implementation — closed by `0449fed`.
+- **`R7-OB-02`** — nine legacy ids cited by archived execution contracts resolve to no
+  register row — closed by `ec8dac2`.
+- **`R7-OC1-01`** — the routed closeout procedure deletes `ACTIVE.md` while the protocol
+  it defers to forbids deleting before archiving — closed by `5c3954d`.
+- **`R7-OC1-02`** — the routed validation procedure demands "every required gate" while
+  naming none, and the gate registry is unreachable from the authority chain — closed by
+  `0449fed`.
+- **`R7-OC1-03`** — PLAN uses a `Task Status` value its own §2 vocabulary does not admit
+  — closed by `0449fed`.
+- **`R7-OC1-04`** — the Active Task block carries two task identities and two
+  `Task Status` lines, so the authorization check has no single answer — closed by
+  `0449fed`.
+- **`R7-OC1-05`** — the release-gate table has no M9 row although M9 owns a tracked
+  suite, and its rows are out of milestone order — closed by `0449fed`.
+- **`R7-OC1-06`** — the bootstrap order tells every agent to read a "nearest nested
+  `AGENTS.md`" that the repository has never contained — closed by `6701075`.
+- **`R7-OC1-07`** — the Owner Decision Protocol exists in full in two skills and one has
+  already drifted from the other — closed by `0449fed`.
+- **`R7-OC1-08`** — the six routed `SKILL.md` files and the state protocol live outside
+  every enforced lane — closed by `20373dc`.
+- **`R7-OC2-01`** — the operator-facing Vault rule documents three topic tags, none of
+  which the ingest path accepts — closed by `b012b7c`.
+- **`R7-X1-01`** — the published module inventory names no owner for the 68 tracked
+  files that hold workflow state — closed by `0449fed`.
+- **`R7-IG-01`** — two ignored state files contradict the owner's recorded deployment
+  and disposition decisions, and the bootstrap order puts them on the read path — closed
+  by `0449fed`.
+- **`R7-IG-02`** — a tracked archive orders re-application of three held diffs whose
+  content is already in the tree — closed by `0449fed`.
+- **`R7-IG-03`** — 25 tracked lines still cite `.agents/states/findings.md`, a path that
+  no longer exists and is Git-ignored — closed by `0449fed`.
+- **`R7-IG-05`** — three PostgreSQL archives sit under `backups/knowledge-t5/` with no
+  tracked producer, one of them empty — closed by `613c1e5`.
+- **`R7-IG-06`** — `backups/` holds the audit record's snapshots and database dumps with
+  no tracked owner, retention rule, or ignore coverage for nested paths — closed by
+  `613c1e5`.
+- **`R7-IG-07`** — the audit record is recoverable only from the unowned ignored
+  snapshot directory for everything before 2026-10-17T22:57 — closed by `613c1e5`.
+- **`R7-IG-08`** — four of six state files carry none of the six required freshness
+  keys, so the documented resume check cannot run and closeout never deleted them —
+  closed by `0449fed`.
+- **`R8-M1-01`** — the runtime the gateway loads is six days behind HEAD and no lane
+  compares them, so the state-root guard closed in the repo is absent from the tree that
+  still mints nested ledger roots — closed by `d9bbae2`.
+- **`R8-M1-02`** — two quarantined copies of the governance plugin stay inside the live
+  discovery path carrying the same manifest id, so the correct governed code survives
+  only by config precedence — closed by `6138c9e`.
+- **`— (new in M12/T9; no legacy id)`** — the canonical delegation id is a 64-hex digest
+  while the published envelope and the guard both require a UUIDv4, so every delegated
+  tool call is refused with AUTH_DELEGATION_NOT_FOUND before it can reach a specialist —
+  closed by `bcd1013`.
+- **`— (new in M12/T9; no legacy id)`** — `applications/` is a third untracked,
+  ownerless top-level tree — two empty directories that no canonical document names and
+  no tracked file occupies — closed by `ed069a3`.
+
+#### the owner's sixteen rulings (2026-10-21) (16 rows)
+
+- **`R1-A06-02`** — primary_coordinator is a phantom ledger field, so the live pickup
+  loop can never claim anything — closed by `273522a`.
+- **`R1-A01-02`** — the governance plugin mutates the Skill Store canonical store and
+  vector index through direct src/ imports, bypassing the Zink Tools boundary — closed
+  by `021403e`.
+- **`R6-A05-01`** — a valid skillsRoot that points at a different empty store still
+  tombstones the intended store — closed by `38ba2c2`.
+- **`R1-A07-03`** — STATUS: EXPIRED is not producible for a workflow approval; an
+  unanswered approval never expires — closed by `9935149`.
+- **`R5-E05-01`** — cost grows with total catalog × every promotion (index.mjs:1158-1162
+  runs the FULL sync per approved skill) — closed by _(accepted cost — no code change)_.
+- **`R5-E16-05`** — cost scales with total accumulated knowledge history rather than the
+  incremental batch — a growing publish/verify stall — closed by
+  _(accepted cost — no code change)_.
+- **`R5-E03-06`** — every tag-filtered or PDF/MARKDOWN-mixed search heap-filters the
+  entire index's segments — closed by _(accepted cost — no code change)_.
+- **`R7-C4-01`** — the acceptance overlay proves egress isolation on a topology the
+  deployed stack does not implement, so its boundary evidence transfers to nothing that
+  ships — closed by `0d14a07`.
+- **`R5-E13-04`** — third-party Discord identities accumulate verbatim in durable,
+  long-lived events and prompt transcripts, which §10 treats as content that must not be
+  exposed — closed by `6311298`.
+- **`R1-A08-06`** — lock-hold time grows linearly with the ledger, which worsens the
+  FILE_LOCK_BUSY / orphan-lock class (known item) and gateway latency — closed by
+  `bd1398c`.
+- **`R7-D11B-01`** — `task.accepted_reference_digests` is declared and read but has no
+  writer, so any delegation carrying `input_refs` is refused forever — closed by
+  `f2f4d15`.
+- **`R7-D11B-03`** — the verdict binds `result_id` against a field the contract forbids,
+  so id-only verdicts always fail — closed by `093439f`.
+- **`R1-A01-01`** — integrations/openclaw/orchestration/patterns re-creates the retired
+  L&SC Data Plant and a second orchestrator — closed by `b18d6f0`.
+- **`R1-A08-05`** — any future maintenance operation on the journal can irreversibly
+  corrupt or mis-derive the governance history — closed by `dd4dc29`.
+- **`R7-OA-01`** — the same `uv` is pinned at three places with two different versions,
+  and no lane ever compares them — closed by `0d79cf4`.
+- **`R7-OA-03`** — `pdf-runtime/requirements.txt` is a hash-pinned pip artifact that
+  cannot install two of its own pins — closed by `db7773a`.
+
 ## Changelog Rules
 
 ### Completed Changes Only

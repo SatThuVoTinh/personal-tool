@@ -1561,8 +1561,15 @@ test("F-137: no ownerless top-level tree duplicates a Zink Tools capability name
 //
 // The register keeps a `Legacy register id` so a row can be traced back to
 // the plan and the archived contracts. The other direction — an id an
-// archived contract cites, resolved against the live rows and the closure
-// table — is what keeps a closed row from drifting away from the record.
+// archived contract cites, resolved against the live rows and the CLOSED
+// rows' history — is what keeps a closed row from drifting away from the
+// record.
+//
+// H10 (the owner's decision of 2026-10-21): the register is the OPEN queue,
+// and a closed row's history lives in `CHANGELOG.md`. The closure record
+// therefore moved with it, and the resolution below follows it there. The
+// promise is unchanged: every cited id must still resolve to a recorded
+// closure.
 // ---------------------------------------------------------------------------
 const LEGACY_REGISTER_ID = /R[0-9]+-[A-Z0-9]+-[0-9]+/gu;
 
@@ -1576,23 +1583,23 @@ function registerLegacyIds(register) {
   return ids;
 }
 
-function registerClosureIds(register) {
-  const section = register.split(/^## 2\./mu)[1] ?? "";
+function recordedClosureIds(changelog) {
   const ids = new Set();
-  for (const match of section.matchAll(/^\|\s*`([^`]+)`/gmu)) {
+  for (const match of changelog.matchAll(/^-\s+\*\*`([^`]+)`\*\*/gmu)) {
     for (const id of match[1].match(LEGACY_REGISTER_ID) ?? []) ids.add(id);
   }
   return ids;
 }
 
-test("F-344: every legacy id an archived contract cites resolves to a register row, a closure entry, or a PLAN.md anchor", () => {
+test("F-344: every legacy id an archived contract cites resolves to a register row, a recorded closure, or a PLAN.md anchor", () => {
   const register = readFileSync(
     path.join(REPO_ROOT, "docs", "execution", "findings.md"),
     "utf8",
   );
+  const changelog = readFileSync(path.join(REPO_ROOT, "CHANGELOG.md"), "utf8");
   const plan = readFileSync(path.join(REPO_ROOT, "PLAN.md"), "utf8");
   const live = registerLegacyIds(register);
-  const closed = registerClosureIds(register);
+  const closed = recordedClosureIds(changelog);
   const archiveDirectory = path.join(
     REPO_ROOT,
     "docs",
@@ -1619,7 +1626,7 @@ test("F-344: every legacy id an archived contract cites resolves to a register r
   assert.deepEqual(
     dangling,
     [],
-    `an archived contract cites a legacy id that resolves to no register row, no closure entry and no PLAN.md anchor: ${dangling.join(", ")}`,
+    `an archived contract cites a legacy id that resolves to no register row, no recorded closure and no PLAN.md anchor: ${dangling.join(", ")}`,
   );
 });
 
