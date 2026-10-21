@@ -589,6 +589,101 @@ export function ensureLedger(paths) {
   chmodSync(paths.snapshot, 0o600);
 }
 
+/**
+ * M12/T9 (the owner's ruling of 2026-10-21): recompute the DERIVED snapshot
+ * from the authoritative journal.
+ *
+ * F-160 changed how a task's state is re-derived from its events, and F-060
+ * changed what a task carries. A snapshot written by an older build therefore
+ * no longer agrees with its own journal, and the reader refuses with
+ * `snapshot workflow mismatch` - the ledger becomes unreadable even though the
+ * record it is derived from is intact.
+ *
+ * The journal is the record. The snapshot is derived from it. So the forward
+ * migration recomputes the derived artefact:
+ *
+ *   1. EVERY event is verified first - the chain, the digests and the budget.
+ *      A journal that does not verify is refused and NOTHING is written.
+ *   2. the task states are re-derived with the CURRENT rules;
+ *   3. the snapshot is written atomically, beside the journal.
+ *
+ * The journal is never written, and no state is invented: a snapshot that was
+ * edited by hand is REPAIRED from the journal rather than reported, because
+ * the journal is the record and the snapshot is a cache of it.
+ */
+export function migrateLedgerProjection(paths) {
+  ensureLedger(paths);
+  const buffer = readFileSync(paths.events);
+  const { lines } = splitJournalLines(buffer);
+  if (lines.length === 0) {
+    return { changed: false, sequence: 0, tasks: 0 };
+  }
+  // A FULL read: the whole journal is replayed with the current rules, so the
+  // derived state is the one the current build produces.
+  const before = readFileSync(paths.snapshot, "utf8");
+  const replayed = replayLedgerForMigration(paths, lines);
+  const after = `${JSON.stringify(replayed, null, 2)}\n`;
+  if (after === before) {
+    return { changed: false, sequence: replayed.sequence, tasks: Object.keys(replayed.tasks).length };
+  }
+  writeSnapshotAtomic(paths, replayed);
+  return {
+    changed: true,
+    sequence: replayed.sequence,
+    tasks: Object.keys(replayed.tasks).length,
+  };
+}
+
+/**
+ * Replay the whole journal with the current rules and return the derived
+ * snapshot. Every event is verified: the chain, the digest and the budget.
+ */
+function replayLedgerForMigration(paths, lines) {
+  const supportedVersions = new Set(SUPPORTED_GOVERNANCE_VERSIONS);
+  const parsed = parseJournalEvents(lines, false);
+  const events = parsed.events;
+  if (events.length === 0) throw new Error("journal is empty");
+  let previous = null;
+  let lastSequence = 0;
+  let state = emptySnapshot();
+  for (const event of events) {
+    validateContract("ledger-event", event);
+    const { event_digest, ...unsigned } = event;
+    if (
+      event.schema_version !== SCHEMA_VERSION ||
+      !supportedVersions.has(event.governance_version) ||
+      event.sequence !== lastSequence + 1 ||
+      event.previous_event_digest !== previous ||
+      canonicalHash("zink-ledger-event-v1", unsigned) !== event_digest
+    )
+      throw new Error("event chain mismatch");
+    previous = event_digest;
+    lastSequence = event.sequence;
+    if (isAuditOnlyEvent(event.type)) {
+      state = {
+        ...state,
+        sequence: event.sequence,
+        last_event_digest: event.event_digest,
+        updated_at: event.created_at,
+      };
+      continue;
+    }
+    state = applyWorkflowEvent(
+      state,
+      event.type,
+      event.payload,
+      event.created_at,
+    );
+    state = {
+      ...state,
+      sequence: event.sequence,
+      last_event_digest: event.event_digest,
+      updated_at: event.created_at,
+    };
+  }
+  return state;
+}
+
 export function readSnapshot(paths) {
   return withWriterLock(paths, () => readSnapshotLocked(paths));
 }

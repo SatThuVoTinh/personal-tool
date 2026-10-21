@@ -35,6 +35,7 @@ import {
   verifyLiveRestore,
   verifyTransactionSnapshot,
 } from "../../lib/transaction-snapshot.mjs";
+import { ledgerPaths, migrateLedgerProjection } from "../../lib/ledger.mjs";
 import { applyRuntime, classifyApplyReason } from "./apply-orchestration.mjs";
 
 // F-219: the machine-specific state root is NOT a literal. The operator
@@ -227,6 +228,18 @@ const oldQuarantine = path.join(
   "r12",
   "quarantined-t2",
 );
+
+// M12/T9 (the owner's ruling of 2026-10-21): the ledger's DERIVED snapshot
+// is recomputed from its authoritative journal BEFORE the apply, so the Gateway
+// that comes up reads a state that agrees with the record. The journal is never
+// written; only the derived cache is. Nothing is asked of the operator: the
+// deploy ceremony does it, and it says so in its own output.
+const ledgerMigration = migrateLedgerProjection(ledgerPaths(stateDir));
+if (ledgerMigration.changed) {
+  console.log(
+    `[zink-operator] the derived ledger snapshot was recomputed from the journal: sequence=${ledgerMigration.sequence} tasks=${ledgerMigration.tasks}`,
+  );
+}
 
 const report = await applyRuntime({
   readIdentifiers,
