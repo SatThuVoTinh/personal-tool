@@ -713,6 +713,21 @@ export const ZINK_TOOLS_ACCESS_MATRIX = Object.freeze({
   }),
 });
 
+// M12/T9 F-060 (the owner's ruling of 2026-10-21): EVERY work step that works
+// WITH DATA belongs to @O1, EXCEPT the dashboard and the data-visualization
+// work, which belongs to @O2.
+//
+// Over the owner's own stack definitions this is exact. `infrastructure` (the
+// machine software that runs tasks), `data_plant` (ETL) and `semantic` (the
+// layer where meaning is added - KPI, metric, schema meaning, business rules
+// and constraints) are DATA WORK, so they are @O1's. `intelligence` (ANALYTICS:
+// charts and dashboards) and `decision` (the decision report the bot analyses)
+// are the DASHBOARD side, so they are @O2's.
+//
+// This table is the ONE ownership statement: the coordinator derivation reads
+// it (`topology/lib/workflow.mjs`), the published manifest carries it
+// (`lib/policy.mjs`), and `docs/architecture/five-stack.md` is derived from it
+// and gated against it (M12/T9 F-118).
 export const AGENT_STACK_POLICY = Object.freeze({
   main: [
     "infrastructure",
@@ -721,8 +736,8 @@ export const AGENT_STACK_POLICY = Object.freeze({
     "intelligence",
     "decision",
   ],
-  o1: ["infrastructure", "data_plant"],
-  o2: ["semantic", "intelligence", "decision"],
+  o1: ["infrastructure", "data_plant", "semantic"],
+  o2: ["intelligence", "decision"],
   excel: ["data_plant", "semantic", "decision"],
   "power-bi": ["semantic", "intelligence", "decision"],
   sql: ["data_plant", "semantic", "decision"],
@@ -738,6 +753,19 @@ export const AGENT_IDS = Object.freeze([
   "sql",
   "python",
 ]);
+
+/**
+ * M12/T9 F-060: the DASHBOARD is recognised by its CRAFT as well as by its
+ * stack.
+ *
+ * The owner's rule names the dashboard as @O2's work, and the `power-bi`
+ * specialist's craft IS the dashboard. A plan that puts the dashboard on the
+ * `semantic` stack (the KPI and metric meaning behind the report) still has
+ * @O2 doing it, because @O1 cannot spawn `power-bi` at all. The craft is a
+ * FACT about the specialist, not a label on the plan, so it overrides the
+ * stack's owner where the stack's owner is @O1.
+ */
+export const DASHBOARD_CRAFT_AGENTS = Object.freeze(["power-bi"]);
 
 export const AGENT_DEFINITIONS = Object.freeze([
   Object.freeze({ id: "main", name: "Main" }),

@@ -166,6 +166,12 @@ async function admit(nodes, rootAgentId) {
       );
     } catch (error) {
       code = error?.code ?? error?.message ?? "UNKNOWN";
+      if (process.env.ZINK_DEBUG_A1)
+        console.error(
+          "DEBUG",
+          code,
+          error?.stack?.split("\n").slice(0, 6).join("\n"),
+        );
     }
     const snapshot = readSnapshot(fixture.paths);
     return {
@@ -242,17 +248,25 @@ test("A-1: a node whose agent does not own its stack is refused with the ledger 
 // The mixed plan the deferred M12/T3 split-and-merge needs
 // ===========================================================================
 
-test("A-1 mixed plan: a main-authored brief spanning o1/data_plant and o2/semantic is admitted", async () => {
+test("A-1 mixed plan: a main-authored brief spanning o1/data_plant and o2/intelligence is admitted", async () => {
+  // M12/T9 F-060 (the owner's restatement of 2026-10-21): every work step that
+  // works WITH DATA belongs to @O1 - so the `semantic` stack (the meaning
+  // layer) is @O1's - and the dashboard work (`intelligence`, `decision`) is
+  // @O2's. The plan therefore spans @O1's `data_plant` and @O2's
+  // `intelligence`, and the semantic layer enters it the way the guard
+  // requires: the meaning node a `data_plant` node depends on. Every node
+  // still owns its own stack, which is the claim this case makes.
   const result = await admit(
     [
-      nodeDef("n-sem", "o2", "semantic"),
+      nodeDef("n-sem", "o1", "semantic"),
       nodeDef("n-dp", "o1", "data_plant", ["n-sem"]),
+      nodeDef("n-int", "o2", "intelligence", ["n-dp"]),
     ],
     "main",
   );
   assert.deepEqual(
     result.activated,
-    ["o2/semantic", "o1/data_plant"],
+    ["o1/semantic", "o1/data_plant", "o2/intelligence"],
     `a plan may span stacks when each node owns its own, got ${JSON.stringify(result)}`,
   );
 });
@@ -264,9 +278,12 @@ test("A-1: the KEPT spawn-target rule still refuses a main-owned node in a first
   // node unreachable through admitInitialBrief, so the "split-and-merge in one
   // brief" shape the owner deferred to M12/T3 cannot carry its merge node here.
   // A-1 does not touch either rule, so this is escalated as a contract conflict.
+  // (M12/T9 F-060: the `semantic` node here is @O1's - the meaning layer is
+  // DATA work - so the refusal this case measures is the decision-node rule and
+  // not the stack rule.)
   const result = await admit(
     [
-      nodeDef("n-sem", "o2", "semantic"),
+      nodeDef("n-sem", "o1", "semantic"),
       nodeDef("n-dp", "o1", "data_plant", ["n-sem"]),
       nodeDef("n-dec", "main", "decision", ["n-dp"]),
     ],

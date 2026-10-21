@@ -1760,9 +1760,14 @@ describe("M8/T2.1 Hardening & Regression Suite (A-Series, H-Series, C-Series, D-
       });
       const node = {
         node_id: "node1",
-        // o1 cannot be on semantic stack — that belongs to o2
-        agent_id: "o1",
-        stack_id: "semantic",
+        // o2 cannot be on the data_plant stack — that belongs to o1.
+        // M12/T9 F-060 (the owner's restatement of 2026-10-21) moved the
+        // `semantic` stack to @O1 - the meaning layer is DATA work - so the
+        // pairing this case used ("o1 on semantic") is admitted now and the
+        // case's claim is carried by a pairing the canonical table refuses
+        // under both the old and the new table.
+        agent_id: "o2",
+        stack_id: "data_plant",
         dependencies: [],
         required: true,
         input_digest: "a".repeat(64),
@@ -1778,7 +1783,7 @@ describe("M8/T2.1 Hardening & Regression Suite (A-Series, H-Series, C-Series, D-
             nodes: [node],
           }),
         /UNAUTHORIZED_TARGET/,
-        "D10: o1 on semantic stack must be rejected",
+        "D10: o2 on the data_plant stack must be rejected",
       );
     });
 
@@ -2625,19 +2630,30 @@ describe("M8/T2.1 Hardening & Regression Suite (A-Series, H-Series, C-Series, D-
       assert.equal(del.native_run_id, "o1-run-2");
     });
 
-    // D14 & D15: AGENT_STACK_POLICY O1 ETL / O2 Analytics alignment
-    test("D14 & D15: AGENT_STACK_POLICY assigns ETL stacks to O1 and Analytics stacks to O2", async () => {
+    // D14 & D15: AGENT_STACK_POLICY O1 data work / O2 dashboard alignment.
+    //
+    // M12/T9 F-060 (the owner's restatement of 2026-10-21): EVERY work step
+    // that works WITH DATA belongs to @O1, EXCEPT the dashboard and the
+    // data-visualization work, which belongs to @O2. Over the owner's own stack
+    // definitions the `semantic` stack (the layer where meaning is added - KPI,
+    // metric, schema meaning, business rules) is DATA work, so it is @O1's;
+    // `intelligence` (ANALYTICS: charts and dashboards) and `decision` (the
+    // decision report) are the dashboard side, so they are @O2's.
+    //
+    // The table is the ONE ownership statement, so this lane pins the owner's
+    // rule and the derivation reads the same table.
+    test("D14 & D15: AGENT_STACK_POLICY assigns the data work to O1 and the dashboard work to O2", async () => {
       const { AGENT_STACK_POLICY } =
         await import("../integrations/openclaw/lib/authority.mjs");
       assert.deepEqual(
         [...AGENT_STACK_POLICY.o1],
-        ["infrastructure", "data_plant"],
-        "D14: O1 must be assigned ETL stacks (infrastructure, data_plant)",
+        ["infrastructure", "data_plant", "semantic"],
+        "D14: O1 must be assigned the data work (infrastructure, data_plant, semantic)",
       );
       assert.deepEqual(
         [...AGENT_STACK_POLICY.o2],
-        ["semantic", "intelligence", "decision"],
-        "D15: O2 must be assigned Analytics stacks (semantic, intelligence, decision)",
+        ["intelligence", "decision"],
+        "D15: O2 must be assigned the dashboard work (intelligence, decision)",
       );
     });
 

@@ -58,7 +58,7 @@ const HYGIENE_AUTHORITY_SHA256 =
  * outgoing predecessor is admitted.
  */
 const CANDIDATE_AUTHORITY_SHA256 =
-  "eb925f0025ea469d1ddcd72393f51d857beca647a3c1e9a944d19492227d3516";
+  "d825482af489dbd73877136ca16d11ff67b7ce7d9e9b9ea49a8b25349be8a295";
 
 /**
  * M12/T1-R1: the authority asset the live WSL runtime actually carries, measured

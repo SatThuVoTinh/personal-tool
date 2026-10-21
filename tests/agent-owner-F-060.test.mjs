@@ -91,10 +91,29 @@ describe("F-060 — the coordinator-selection rule", () => {
   });
 
   it("a task whose required node is power-bi is owned by o2", () => {
+    // The DASHBOARD is recognised by its CRAFT: `power-bi` builds it wherever
+    // the plan puts it - here on the `semantic` stack, the KPI and metric
+    // meaning behind the report - and @O1 cannot spawn `power-bi` at all, so
+    // the step is @O2's whatever the stack label says.
     const derived = deriveTaskCoordinators([node("power-bi", "semantic")]);
     assert.equal(derived.root, "o2");
     assert.equal(derived.primary, "o2");
     assert.deepEqual(derived.owners, ["o2"]);
+  });
+
+  it("the SEMANTIC layer is data work, so a semantic step is owned by o1", () => {
+    // The owner's restatement (2026-10-21): EVERY work step that works WITH
+    // DATA belongs to @O1, EXCEPT the dashboard and the data-visualization
+    // work. `semantic` is the layer where meaning is added (KPI, metric,
+    // business rules) - data work, so it is @O1's. Before the restatement the
+    // `semantic` stack belonged to @O2, so Excel's and SQL's semantic steps
+    // were refused (the owner @O2 cannot spawn Excel or SQL).
+    for (const agentId of ["excel", "sql"]) {
+      const derived = deriveTaskCoordinators([node(agentId, "semantic")]);
+      assert.equal(derived.root, "o1", `${agentId}/semantic is @O1's work`);
+      assert.equal(derived.primary, "o1");
+      assert.deepEqual(derived.owners, ["o1"]);
+    }
   });
 
   it("a task with BOTH is owned by main, and has no executing coordinator", () => {
@@ -156,6 +175,20 @@ describe("F-060 — the coordinator-selection rule", () => {
       const dispatch = deriveGovernedDispatchTarget(task);
       assert.equal(dispatch.ok, true, JSON.stringify(dispatch));
       assert.equal(dispatch.coordinator, "o2");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("a semantic data-work step reaches its specialist through o1", () => {
+    const root = fixture("semantic");
+    try {
+      const { task } = activatedTask(root, [node("excel", "semantic")]);
+      assert.equal(task.primary_coordinator, "o1");
+      const dispatch = deriveGovernedDispatchTarget(task);
+      assert.equal(dispatch.ok, true, JSON.stringify(dispatch));
+      assert.equal(dispatch.coordinator, "o1");
+      assert.deepEqual(dispatch.requiredCapabilities, ["excel"]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

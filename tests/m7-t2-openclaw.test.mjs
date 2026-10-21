@@ -352,10 +352,14 @@ test("Main transitions consume task-global budget before spawn receipts and neve
       root_session_key: "main-session",
       root_run_id: "main-run",
     });
+    // M12/T9 F-060 (the owner's restatement of 2026-10-21): the `semantic`
+    // stack is @O1's - the meaning layer is DATA work - so a node may not pair
+    // it with @O2 any more. This lane measures the BUDGET, not the ownership,
+    // so the fixture uses the pairs the canonical table admits.
     const nodes = Array.from({ length: 12 }, (_, index) => ({
       node_id: `node_${index}`,
       stack_id: index % 2 ? "semantic" : "data_plant",
-      agent_id: index % 2 ? "o2" : "o1",
+      agent_id: "o1",
       dependencies: [],
       required: true,
       input_digest: "b".repeat(64),

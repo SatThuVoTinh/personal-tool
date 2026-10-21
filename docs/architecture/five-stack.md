@@ -20,7 +20,7 @@ permanent agent processes. Stable protocol IDs are `infrastructure`,
 | -------------- | ----------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
 | Infrastructure | Main, O1    | none admitted, no specialist holds `infrastructure` | External runtime, storage, compute, network and monitoring; T2 grants no infrastructure execution capability. |
 | Data Plant     | O1          | Excel, SQL, Python                                  | Extract, clean, validate, transform and publish governed datasets.                                            |
-| Semantic       | O2          | Power BI                                            | KPI, metric, schema meaning, business rules and constraints.                                                  |
+| Semantic       | O1          | Excel, SQL                                          | KPI, metric, schema meaning, business rules and constraints.                                                  |
 | Intelligence   | O2          | Power BI, Python                                    | Statistics, forecast, ML, risk, OR, optimization and simulation.                                              |
 | Decision       | Main, O2    | Power BI, Python                                    | Final evidence synthesis, assumptions, constraints, trade-offs and owner-facing decision response.            |
 
@@ -40,7 +40,10 @@ coordinator dispatches ONTO that stack: O1 dispatches `excel`, `sql` and
 stack its row does not list (Excel and SQL are admitted on `semantic` and
 `decision`; Python is admitted on `data_plant` and `decision`) is dispatched
 by its own coordinator, so a row is not the whole specialist population of a
-stack.
+stack. `power-bi` is admitted on `semantic` and is dispatched by its own
+coordinator (@O2), because @O1 cannot spawn it: the DASHBOARD is @O2's work
+wherever the plan puts it, while the meaning layer behind it (KPI, metric,
+business rules) is @O1's data work (M12/T9 F-060).
 
 **Still open for M12/T3 (not decided here).** A brief node whose `stack_id` is
 `decision` must be `main`-owned (`integrations/openclaw/topology/lib/guard.mjs`),

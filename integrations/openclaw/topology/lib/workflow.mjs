@@ -17,7 +17,10 @@ import {
   workflowAggregate,
   OUTCOME_STATUSES,
 } from "./runtime.mjs";
-import { AGENT_STACK_POLICY } from "../../lib/authority.mjs";
+import {
+  AGENT_STACK_POLICY,
+  DASHBOARD_CRAFT_AGENTS,
+} from "../../lib/authority.mjs";
 import { AGENT_SPAWN_POLICY } from "../../lib/policy.mjs";
 // B-7: the ceilings are declared once, in the ledger's canonical `BUDGETS`. `ledger.mjs:18`
 // imports this module in turn, so the cycle is real and safe only because every read below
@@ -53,16 +56,23 @@ const terminal = new Set([
 // điều phối và làm việc với các agent chuyên môn liên quan đến data etl,
 // data labeling".
 //
-// The rule is expressed over the CANONICAL tables, which are read and never
-// changed:
+// The owner RESTATED the rule the same day (2026-10-21): "tất cả những
+// công đoạn làm việc với dữ liệu ngoại trừ lập dashboard
+// và liên quan data visualization đều giao cho O1 vì dashboard + data
+// visualization thuộc O2" - EVERY work step that works WITH DATA belongs to
+// @O1, EXCEPT the dashboard and the data-visualization work, which belongs to
+// @O2.
+//
+// The rule is expressed over the CANONICAL tables, which are read here and
+// changed only by the owner's ruling:
 //
 //   AGENT_SPAWN_POLICY  main: [o1, o2]
 //                       o1: [excel, sql, python]
 //                       o2: [power-bi, python]
 //   AGENT_STACK_POLICY  main: [infrastructure, data_plant, semantic,
 //                              intelligence, decision]
-//                       o1: [infrastructure, data_plant]
-//                       o2: [semantic, intelligence, decision]
+//                       o1: [infrastructure, data_plant, semantic]
+//                       o2: [intelligence, decision]
 //
 // THREE questions, THREE answers:
 //
@@ -72,11 +82,18 @@ const terminal = new Set([
 //             coordinators, because main is the only agent that can spawn both
 //             o1 and o2.
 //   owners  - WHICH COORDINATOR OWNS EACH NODE: derived from the node's
-//             stack_id against the canonical stack policy. o1 owns the ETL and
-//             labeling stacks (data_plant), o2 owns the visualize and
-//             storytelling stacks (semantic, intelligence, decision). The STACK
-//             decides for `python`, which BOTH o1 and o2 may spawn: python
-//             under data_plant is o1's, python under intelligence is o2's.
+//             stack_id against the canonical stack policy, which the owner
+//             RESTATED on 2026-10-21. EVERY work step that works WITH DATA
+//             belongs to @O1 - the platform (infrastructure), the ETL and the
+//             labeling (data_plant) and the meaning layer (semantic: KPI,
+//             metric, schema meaning, business rules) - EXCEPT the dashboard
+//             and the data-visualization work, which belongs to @O2
+//             (intelligence: charts and dashboards; decision: the decision
+//             report). The STACK decides for `python`, which BOTH o1 and o2
+//             may spawn: python under data_plant is o1's, python under
+//             intelligence is o2's. And the DASHBOARD is recognised by its
+//             CRAFT: `power-bi` builds it wherever the plan puts it, so a
+//             `power-bi` step is o2's even on a stack o1 owns.
 //   primary - the coordinator that EXECUTES the task: the unique OWNER of the
 //             required nodes. More than one owner (a brief that spans both
 //             domains) or no owner at all (a stack no coordinator owns) leaves
@@ -126,6 +143,31 @@ function coordinatorForStack(stackId) {
 }
 
 /**
+ * The coordinator that owns a WORK STEP.
+ *
+ * The stack decides, from the ONE canonical table: the data work is @O1's and
+ * the dashboard and the data-visualization work is @O2's (M12/T9 F-060, the
+ * owner's restatement of 2026-10-21).
+ *
+ * One exception, and it is the owner's own rule rather than a guess: the
+ * DASHBOARD is recognised by its CRAFT as well as by its stack. `power-bi`
+ * builds the dashboard wherever the plan puts it - including on the `semantic`
+ * stack, the KPI and metric meaning behind the report - and @O1 cannot spawn
+ * `power-bi` at all, so a dashboard step is @O2's whatever the stack label
+ * says.
+ *
+ * A stack no coordinator owns has NO owner: the caller fails closed rather
+ * than guessing.
+ */
+function coordinatorForWorkStep(node) {
+  const stackOwner = coordinatorForStack(node?.stack_id);
+  if (stackOwner === null) return null;
+  if (stackOwner === "o1" && DASHBOARD_CRAFT_AGENTS.includes(node?.agent_id))
+    return "o2";
+  return stackOwner;
+}
+
+/**
  * M12/T9 F-060: the coordinator-selection rule, applied to a task's nodes.
  *
  * Returns `{ root, primary, owners }`:
@@ -144,7 +186,7 @@ export function deriveTaskCoordinators(nodes) {
   const required = (Array.isArray(nodes) ? nodes : []).filter(
     (node) => node?.required === true,
   );
-  const owners = required.map((node) => coordinatorForStack(node?.stack_id));
+  const owners = required.map((node) => coordinatorForWorkStep(node));
   const requiredAgentIds = [
     ...new Set(
       required

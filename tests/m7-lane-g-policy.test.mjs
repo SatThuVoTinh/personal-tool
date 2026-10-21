@@ -102,13 +102,18 @@ describe("Lane G — policy & lifecycle contract reconciliation", () => {
         assert.equal(next.tasks[p.task_id].nodes.length, 1);
       }
     }
+    // A pairing the canonical table does not admit is refused. M12/T9 F-060
+    // (the owner's restatement of 2026-10-21) moved the `semantic` stack to
+    // @O1 - the meaning layer is DATA work - so the pairing this case used
+    // ("o1 on semantic") is admitted now, and the claim is carried by a
+    // pairing the table refuses under both the old and the new one.
     assert.throws(
       () =>
         applyWorkflowEvent(snap, "WORKFLOW_BRIEF_ACTIVATED", {
           task_id: payload.task_id,
           brief_revision: 1,
           semantic_contract_status: "VALID",
-          nodes: [nodeFixture("o1", "semantic")],
+          nodes: [nodeFixture("o2", "data_plant")],
         }),
       { code: "UNAUTHORIZED_TARGET" },
     );
