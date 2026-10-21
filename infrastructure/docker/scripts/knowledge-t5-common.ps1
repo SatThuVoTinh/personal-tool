@@ -567,6 +567,27 @@ function Assert-T5NetworkBoundary {
   }
 }
 
+function Assert-T5ModelEgressAllowlist {
+  param([string]$KnowledgeContainerId)
+
+  # F-288 (R7-C4-01): the model-egress proof is shape-agnostic, so it runs
+  # against the DEPLOYED composition and not only against the acceptance
+  # overlay. The Knowledge container's model route must be the allowlisted
+  # gateway, and the gateway must refuse every model API the allowlist does
+  # not name - a generic forward proxy is not an allowlist.
+  $knowledge = @(& docker inspect $KnowledgeContainerId | ConvertFrom-Json)[0]
+  $modelRoute = @($knowledge.Config.Env | Where-Object { $_ -like "KNOWLEDGE_OLLAMA_URL=*" })[0]
+  if ($modelRoute -ne "KNOWLEDGE_OLLAMA_URL=http://nginx:8080/ollama") {
+    throw "Knowledge model egress must use the allowlisted gateway route."
+  }
+  & docker exec $KnowledgeContainerId python -c "from urllib.request import urlopen; r=urlopen('http://nginx:8080/ollama/api/tags',timeout=5); raise SystemExit(0 if r.status==200 else 1)"
+  if ($LASTEXITCODE -ne 0) { throw "Knowledge could not reach the model service through the allowlisted gateway." }
+  & docker exec $KnowledgeContainerId python -c "from urllib.request import urlopen;`ntry: urlopen('http://nginx:8080/https://example.com/', timeout=3)`nexcept Exception: raise SystemExit(0)`nraise SystemExit(1)"
+  if ($LASTEXITCODE -ne 0) { throw "The model gateway behaved like a generic forward proxy." }
+  & docker exec $KnowledgeContainerId python -c "from urllib.request import Request,urlopen;`ntry: urlopen(Request('http://nginx:8080/ollama/api/pull',data=b'{}',method='POST'),timeout=3)`nexcept Exception: raise SystemExit(0)`nraise SystemExit(1)"
+  if ($LASTEXITCODE -ne 0) { throw "The model gateway exposed a non-allowlisted Ollama API." }
+}
+
 function Assert-T5RuntimeIsolation {
   param([string]$KnowledgeContainerId, [string]$NginxContainerId)
 
@@ -585,12 +606,7 @@ function Assert-T5RuntimeIsolation {
   if ($LASTEXITCODE -ne 0) { throw "Knowledge external DNS transport was not denied." }
   & docker exec $KnowledgeContainerId python -c "import socket; s=socket.create_connection(('postgres',5432),3); s.close()"
   if ($LASTEXITCODE -ne 0) { throw "Knowledge could not reach approved local PostgreSQL." }
-  & docker exec $KnowledgeContainerId python -c "from urllib.request import urlopen; r=urlopen('http://nginx:8080/ollama/api/tags',timeout=5); raise SystemExit(0 if r.status==200 else 1)"
-  if ($LASTEXITCODE -ne 0) { throw "Knowledge could not reach approved local Ollama through the allowlisted gateway." }
-  & docker exec $KnowledgeContainerId python -c "from urllib.request import urlopen;`ntry: urlopen('http://nginx:8080/https://example.com/', timeout=3)`nexcept Exception: raise SystemExit(0)`nraise SystemExit(1)"
-  if ($LASTEXITCODE -ne 0) { throw "Acceptance gateway behaved like a generic forward proxy." }
-  & docker exec $KnowledgeContainerId python -c "from urllib.request import Request,urlopen;`ntry: urlopen(Request('http://nginx:8080/ollama/api/pull',data=b'{}',method='POST'),timeout=3)`nexcept Exception: raise SystemExit(0)`nraise SystemExit(1)"
-  if ($LASTEXITCODE -ne 0) { throw "Acceptance gateway exposed a non-allowlisted Ollama API." }
+  Assert-T5ModelEgressAllowlist $KnowledgeContainerId
 
   $nginx = @(& docker inspect $NginxContainerId | ConvertFrom-Json)[0]
   if (@($nginx.NetworkSettings.Networks.PSObject.Properties).Count -ne 2) {

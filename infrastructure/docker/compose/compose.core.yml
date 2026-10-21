@@ -110,6 +110,11 @@ services:
     profiles: ["knowledge", "all"]
     ports:
       - "127.0.0.1:8080:8080"
+    # F-288 (R7-C4-01): the deployed gateway proxies the model service on
+    # the host, so it needs the same host-gateway mapping the acceptance
+    # overlay gives it.
+    extra_hosts:
+      - host.docker.internal:host-gateway
     volumes:
       - type: bind
         source: ../../nginx/conf.d/default.conf
@@ -149,7 +154,10 @@ services:
       KNOWLEDGE_EMBEDDING_DIMENSIONS: "1024"
       KNOWLEDGE_EMBEDDING_MODEL: ${KNOWLEDGE_EMBEDDING_MODEL:-bge-m3:latest}
       KNOWLEDGE_INDEX_ADVISORY_LOCK_KEY: "741212391041002"
-      KNOWLEDGE_OLLAMA_URL: http://host.docker.internal:11434
+      # F-288 (R7-C4-01): the model calls go through the allowlisted
+      # gateway, so the deployed stack carries the same egress boundary the
+      # acceptance overlay proves.
+      KNOWLEDGE_OLLAMA_URL: http://nginx:8080/ollama
       KNOWLEDGE_RERANKER_MANIFEST_PATH: /app/artifacts/reranker-manifest.json
       KNOWLEDGE_RERANKER_MODEL_PATH: /app/artifacts/model.int8.onnx
       KNOWLEDGE_VAULT_ROOT: /vault

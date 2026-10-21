@@ -466,6 +466,10 @@ try {
   Assert-T5ReadOnlyMount $knowledgeId $runId
   Assert-T5NetworkBoundary $knowledgeId $nginxId
   Assert-T5PrivilegeBoundary $knowledgeId
+  # F-288 (R7-C4-01): the deployed stack now carries the model allowlist, so
+  # the egress proof runs against the DEPLOYED shape and not only against
+  # the acceptance overlay.
+  Assert-T5ModelEgressAllowlist $knowledgeId
   $ledgerAfterStart = @(Invoke-LiveSql "SELECT version FROM knowledge.schema_migrations ORDER BY version" | Where-Object { $_ })
   if (($ledgerAfterStart -join "`n") -cne "001_initial.sql`n002_pdf_ingestion_foundation.sql") { throw "M4 migration ledger is invalid after service start." }
   $catalogAfterStart = ((Invoke-LiveSql (Get-CatalogSql) | Where-Object { $_ }) -join "`n") + "`n"
