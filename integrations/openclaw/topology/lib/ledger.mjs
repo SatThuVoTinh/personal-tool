@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   appendFileSync,
   chmodSync,
@@ -11,6 +11,7 @@ import {
   readFileSync,
   readSync,
   renameSync,
+  statSync,
   unlinkSync,
   writeFileSync,
   lstatSync,
@@ -73,6 +74,26 @@ export const RUN_STATES = Object.freeze([
   "CANCELLED",
   "UNKNOWN",
 ]);
+
+/**
+ * The governance versions written by a PRE-VERDICT writer.
+ *
+ * An event stamped with one of these was written by a writer that resolved a
+ * root result DIRECTLY to its recorded outcome, so the anchored replay
+ * reproduces that resolution. The list is the reader's ONE declaration of the
+ * pre-verdict era, and the checkpoint carries the era it declares
+ * (M12/T9 F-099).
+ */
+const PRE_VERDICT_VERSIONS = new Set([
+  "m7-t2-r12",
+  "m7-t5-r13",
+  "m8-t2-r9",
+  "m8-t2.1-r3",
+]);
+
+/** The pre-verdict stamps as they appear in a journal line. */
+const PRE_VERDICT_STAMP_PATTERN =
+  /"governance_version":"(?:m7-t2-r12|m7-t5-r13|m8-t2-r9|m8-t2\.1-r3)"/u;
 
 /**
  * F-065: the ONE declaration of the governance versions this reader accepts.
@@ -181,6 +202,8 @@ export function ledgerPaths(stateDir) {
     root,
     events: path.join(root, "events.jsonl"),
     snapshot: path.join(root, "snapshot.json"),
+    // M12/T9 F-099: the replay checkpoint, beside the snapshot it describes.
+    checkpoint: path.join(root, "checkpoint.json"),
     identityKey: path.join(stateDir, "operator", "m7-t2", "identity.key"),
   });
 }
@@ -225,10 +248,19 @@ function validateLedgerPaths(paths, visited = null) {
     paths.snapshot !== path.join(paths.root, "snapshot.json")
   )
     throw new Error("EXECUTION_STATE_UNKNOWN");
+  // M12/T9 F-099: the checkpoint is a SIBLING of the snapshot, never a member
+  // of it. A caller that names its own path must name the canonical one; a
+  // caller that names none gets the canonical one (the plugin builds its
+  // ledger paths by hand, and the checkpoint must exist there too).
+  if (paths.checkpoint !== undefined) {
+    if (paths.checkpoint !== path.join(paths.root, "checkpoint.json"))
+      throw new Error("EXECUTION_STATE_UNKNOWN");
+  }
   for (const target of [
     paths.root,
     paths.events,
     paths.snapshot,
+    checkpointPath(paths),
     path.join(paths.root, "writer.lock"),
   ])
     assertNoLinks(target, visited);
@@ -241,6 +273,245 @@ function createIfMissing(target, contents) {
     if (error.code !== "EEXIST") throw error;
   }
   if (!lstatSync(target).isFile()) throw new Error("EXECUTION_STATE_UNKNOWN");
+}
+
+/**
+ * M12/T9 F-099: the replay checkpoint.
+ *
+ * The reader replayed the WHOLE event log on every operation: every line was
+ * re-parsed, re-validated against the contract, re-hashed and re-applied,
+ * including the anchored prefix the snapshot had already sealed. The cost is
+ * O(total history) per operation, and a read holds the WRITER LOCK for the
+ * whole of it, so the lock-hold time - and with it the FILE_LOCK_BUSY window
+ * - grew linearly with the ledger.
+ *
+ * The checkpoint is the replay's resume point. It is a small file in the
+ * ledger root, written with the snapshot, that records:
+ *
+ *   sequence               - the snapshot sequence the checkpoint describes
+ *   last_event_digest      - the digest that snapshot anchors
+ *   has_pre_verdict_stamp  - the journal's era, derived from the event stream
+ *   events_offset          - the byte offset where the anchored prefix ends
+ *   prefix_digest          - the chained digest over the anchored prefix
+ *
+ * The reader VERIFIES the anchored prefix's bytes against `prefix_digest` and
+ * then replays ONLY the tail beyond `events_offset`, starting the chain at
+ * the snapshot's own anchor. `prefix_digest` is not optional: without a
+ * digest over the anchored prefix's bytes, a corrupted ANCHORED event would
+ * no longer be detected, because the anchored prefix is no longer replayed.
+ *
+ * The digest is a CHAIN over the prefix's lines, so the writer can extend it
+ * with ONE line instead of re-hashing the whole prefix on every append, and
+ * the reader can still detect a change in ANY anchored byte.
+ *
+ * The checkpoint is DERIVED state: it can always be rebuilt from the journal
+ * and the snapshot, so its ABSENCE is a performance regression and never a
+ * corruption. A checkpoint that does not match the journal is stale, and the
+ * reader falls back to the full read and rewrites it.
+ */
+const CHECKPOINT_FILE = "checkpoint.json";
+
+/**
+ * The checkpoint's seal.
+ *
+ * It covers the anchored prefix's BYTES and the snapshot's anchored task
+ * states, because the checkpoint asserts BOTH of those things: that this
+ * prefix is the one the snapshot sealed, and that this snapshot is the
+ * projection of it.
+ *
+ * The bytes alone are not enough. The anchored prefix is no longer replayed,
+ * so a digest over the bytes alone would let a TAMPERED SNAPSHOT through -
+ * the reader would trust task states it never re-derived. Sealing the task
+ * states as well keeps the existing "snapshot workflow mismatch" refusal
+ * (tests/m8-t2.3-writer-semantics.test.mjs) exactly as strong as it was.
+ */
+export function checkpointDigest(prefixBytes, tasks) {
+  return canonicalHash("zink-ledger-checkpoint-v1", {
+    prefix: createHash("sha256").update(prefixBytes).digest("hex"),
+    tasks: canonicalHash("zink-ledger-checkpoint-v1", tasks),
+  });
+}
+
+/** The canonical checkpoint path for a ledger root. */
+function checkpointPath(paths) {
+  return paths.checkpoint ?? path.join(paths.root, CHECKPOINT_FILE);
+}
+
+/**
+ * The checkpoint's content, or null when there is none or it is not
+ * readable. A malformed checkpoint is never trusted: it is simply absent.
+ */
+function readCheckpoint(paths) {
+  const file = checkpointPath(paths);
+  if (!existsSync(file)) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+    return null;
+  const {
+    sequence,
+    last_event_digest,
+    has_pre_verdict_stamp,
+    events_offset,
+    prefix_digest,
+  } = parsed;
+  if (!Number.isSafeInteger(sequence) || sequence < 0) return null;
+  if (last_event_digest !== null && !/^[a-f0-9]{64}$/u.test(last_event_digest))
+    return null;
+  if (typeof has_pre_verdict_stamp !== "boolean") return null;
+  if (!Number.isSafeInteger(events_offset) || events_offset < 0) return null;
+  if (!/^[a-f0-9]{64}$/u.test(prefix_digest)) return null;
+  return {
+    sequence,
+    last_event_digest,
+    has_pre_verdict_stamp,
+    events_offset,
+    prefix_digest,
+  };
+}
+
+/**
+ * The checkpoint file, written atomically beside the snapshot.
+ *
+ * A fault here is never fatal to the caller: the snapshot is already written,
+ * and a checkpoint that is missing is a performance regression the next read
+ * repairs. The fault is REPORTED, never swallowed.
+ */
+function writeCheckpointAtomic(paths, checkpoint) {
+  const file = checkpointPath(paths);
+  const temp = `${file}.tmp-${process.pid}`;
+  try {
+    assertNoLinks(temp);
+    const fd = openSync(temp, "wx", 0o600);
+    let writeFault = null;
+    try {
+      writeFileSync(fd, `${JSON.stringify(checkpoint, null, 2)}\n`);
+      fsyncSync(fd);
+    } catch (error) {
+      writeFault = error;
+    } finally {
+      closeSync(fd);
+    }
+    if (writeFault) {
+      unlinkWriterResidue(temp);
+      throw writeFault;
+    }
+    chmodSync(temp, 0o600);
+    renameSync(temp, file);
+    // The rename is only durable once the PARENT DIRECTORY is fsynced: the
+    // file handle was fsynced through the temporary file, which the rename
+    // replaced. The directory fsync is bound to its own handle, opened with
+    // the READ flag, exactly as the snapshot's publisher does it.
+    try {
+      const directoryFd = openSync(paths.root, "r");
+      try {
+        fsyncSync(directoryFd);
+      } finally {
+        closeSync(directoryFd);
+      }
+    } catch (error) {
+      if (
+        process.platform !== "win32" ||
+        !/^(EPERM|EISDIR|EINVAL|ENOTSUP)$/u.test(error?.code ?? "")
+      )
+        throw error;
+    }
+  } catch (error) {
+    console.error(
+      "[zink-ledger] checkpoint write failed:",
+      String(error?.code ?? error?.name ?? "unknown"),
+    );
+  }
+}
+
+/**
+ * The journal's lines, split on the newline, with the byte offset of the end
+ * of each line. The offsets are BYTES, because the checkpoint's
+ * `events_offset` is a seek position in the file.
+ */
+function splitJournalLines(buffer) {
+  const lines = [];
+  const ends = [];
+  let start = 0;
+  for (let index = 0; index < buffer.length; index += 1) {
+    if (buffer[index] !== 0x0a) continue;
+    const line = buffer.subarray(start, index).toString("utf8").trim();
+    if (line.length > 0) {
+      lines.push(line);
+      ends.push(index + 1);
+    }
+    start = index + 1;
+  }
+  if (start < buffer.length) {
+    const line = buffer.subarray(start).toString("utf8").trim();
+    if (line.length > 0) {
+      lines.push(line);
+      ends.push(buffer.length);
+    }
+  }
+  return { lines, ends };
+}
+
+/** The size of a file, or 0 when it does not exist. */
+function journalFileSize(file) {
+  try {
+    return statSync(file).size;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * The events beyond the checkpoint's anchor, or null when the checkpoint does
+ * not describe this journal.
+ *
+ * The anchored prefix is VERIFIED, never replayed: its bytes must seal to the
+ * digest the checkpoint recorded, together with the snapshot's own task
+ * states. A checkpoint that does not match the journal - or a snapshot that
+ * was tampered with - is stale, and the caller falls back to the full read,
+ * which re-derives the anchored projection and refuses the mismatch.
+ */
+function readCheckpointedTail(paths, checkpoint, snapshot) {
+  let buffer;
+  try {
+    buffer = readFileSync(paths.events);
+  } catch {
+    return null;
+  }
+  if (buffer.length < checkpoint.events_offset) return null;
+  const prefix = buffer.subarray(0, checkpoint.events_offset);
+  if (checkpointDigest(prefix, snapshot.tasks) !== checkpoint.prefix_digest) {
+    return null;
+  }
+  const tail = splitJournalLines(buffer.subarray(checkpoint.events_offset));
+  return { lines: tail.lines, ends: tail.ends };
+}
+
+/**
+ * The events a journal's lines carry, with the torn-tail rule applied.
+ *
+ * A damaged FINAL line that the snapshot does not anchor is an interrupted
+ * append: it was never acknowledged, never projected, and can be dropped. A
+ * damaged line anywhere else is real corruption and still throws.
+ */
+function parseJournalEvents(lines, unanchoredTail) {
+  const events = [];
+  let tornTailBytes = 0;
+  for (const [index, line] of lines.entries()) {
+    try {
+      events.push(JSON.parse(line));
+    } catch (error) {
+      const isFinalLine = index === lines.length - 1;
+      if (!isFinalLine || !unanchoredTail) throw error;
+      tornTailBytes = Buffer.byteLength(line, "utf8");
+      break;
+    }
+  }
+  return { events, tornTailBytes };
 }
 
 export function emptySnapshot() {
@@ -273,11 +544,38 @@ export function ensureLedger(paths) {
     incomplete.code = "EXECUTION_STATE_UNKNOWN";
     throw incomplete;
   }
+  // M12/T9 F-099: the checkpoint is the THIRD file of the trio, and it may
+  // not outlive the state it describes: a checkpoint beside a ledger that does
+  // not exist is the residue of a half-committed write, and it is refused
+  // exactly like a half-present pair.
+  //
+  // The other direction is NOT an error: the checkpoint is DERIVED state, so a
+  // ledger that predates it (or one whose checkpoint was lost) still reads -
+  // the reader rebuilds the checkpoint from the journal and the snapshot.
+  const checkpointPresent = existsSync(checkpointPath(paths));
+  if (checkpointPresent && !(eventsPresent && snapshotPresent)) {
+    const incomplete = new Error("Ledger state incomplete");
+    incomplete.code = "EXECUTION_STATE_UNKNOWN";
+    throw incomplete;
+  }
   createIfMissing(paths.events, "");
   createIfMissing(
     paths.snapshot,
     `${JSON.stringify(emptySnapshot(), null, 2)}\n`,
   );
+  // The trio is created together: a ledger born without its checkpoint is a
+  // ledger whose first read has to hash the whole journal. A ledger that
+  // already exists keeps its checkpoint absent until the reader rebuilds it
+  // from the journal and the snapshot it describes.
+  if (!eventsPresent && !checkpointPresent) {
+    writeCheckpointAtomic(paths, {
+      sequence: 0,
+      last_event_digest: null,
+      has_pre_verdict_stamp: false,
+      events_offset: 0,
+      prefix_digest: checkpointDigest(Buffer.alloc(0), {}),
+    });
+  }
   if (paths.identityKey) {
     if (!existsSync(paths.identityKey)) {
       writeFileSync(paths.identityKey, `${randomBytes(32).toString("hex")}\n`, {
@@ -366,6 +664,15 @@ export function upgradeEmptyLegacyLedger(paths) {
         ...emptySnapshot(),
         governance_version: "m7-t2-r12",
       });
+    // M12/T9 F-099: the checkpoint of an empty ledger describes an empty
+    // anchored prefix.
+    writeCheckpointAtomic(paths, {
+      sequence: 0,
+      last_event_digest: null,
+      has_pre_verdict_stamp: false,
+      events_offset: 0,
+      prefix_digest: checkpointDigest(Buffer.alloc(0), {}),
+    });
     return readSnapshotLocked(paths);
   });
 }
@@ -507,10 +814,38 @@ function readSnapshotLocked(paths, repairSnapshot = true, report = null) {
       snapshot.sequence < 0
     )
       throw new Error("invalid snapshot");
-    const rawLines = readFileSync(paths.events, "utf8")
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
+    // M12/T9 F-099: the replay checkpoint. When it describes THIS snapshot and
+    // still matches the journal, the anchored prefix is verified (its bytes
+    // must chain to the digest the checkpoint recorded) and the replay starts
+    // at the snapshot's own anchor, so the work scales with the UNANCHORED
+    // tail instead of with the whole history. A checkpoint that does not
+    // describe this snapshot, or that no longer matches the journal, is stale:
+    // the full read below runs and the checkpoint is rewritten.
+    const checkpoint = readCheckpoint(paths);
+    const checkpointed =
+      checkpoint &&
+      checkpoint.sequence === snapshot.sequence &&
+      checkpoint.last_event_digest === snapshot.last_event_digest
+        ? readCheckpointedTail(paths, checkpoint, snapshot)
+        : null;
+    // The journal's lines, and the byte offset of the end of each one.
+    let journalLines = [];
+    let journalLineEnds = [];
+    let previous = null;
+    let lastSequence = 0;
+    let journalHasPreVerdictStamp = false;
+    if (checkpointed) {
+      journalLines = checkpointed.lines;
+      journalLineEnds = checkpointed.ends;
+      previous = snapshot.last_event_digest;
+      lastSequence = snapshot.sequence;
+      journalHasPreVerdictStamp = checkpoint.has_pre_verdict_stamp;
+    } else {
+      const buffer = readFileSync(paths.events);
+      const split = splitJournalLines(buffer);
+      journalLines = split.lines;
+      journalLineEnds = split.ends;
+    }
     // F-143: a torn tail. The writer appends AND fsyncs the event BEFORE the
     // snapshot that anchors it, so a partially written FINAL line provably has
     // no snapshot anchor: it was never acknowledged, never projected, and can
@@ -519,19 +854,15 @@ function readSnapshotLocked(paths, repairSnapshot = true, report = null) {
     // damaged FINAL line the snapshot DID anchor is real corruption too — the
     // snapshot proves the event existed, so dropping it would silently lose
     // acknowledged history.
-    const events = [];
-    let tornTailBytes = 0;
-    for (const [index, line] of rawLines.entries()) {
-      try {
-        events.push(JSON.parse(line));
-      } catch (error) {
-        const isFinalLine = index === rawLines.length - 1;
-        const isUnanchored = rawLines.length > snapshot.sequence;
-        if (!isFinalLine || !isUnanchored) throw error;
-        tornTailBytes = Buffer.byteLength(line, "utf8");
-        break;
-      }
-    }
+    //
+    // M12/T9 F-099: with the checkpoint in play the journal's lines are the
+    // TAIL only, and every one of them is beyond the anchor.
+    const parsed = parseJournalEvents(
+      journalLines,
+      checkpointed ? true : journalLines.length > snapshot.sequence,
+    );
+    const events = parsed.events;
+    const tornTailBytes = parsed.tornTailBytes;
     if (tornTailBytes > 0) {
       // The dropped remainder is REPORTED, never silently swallowed: the byte
       // count is a measurement, the content is untrusted ledger data and is
@@ -541,10 +872,14 @@ function readSnapshotLocked(paths, repairSnapshot = true, report = null) {
         `JOURNAL_TORN_TAIL bytes=${tornTailBytes}`,
       );
     }
-    let previous = null;
-    let lastSequence = 0;
     const tail = [];
-    let journalBudget = { tasks: {} };
+    // M12/T9 F-099: with the checkpoint in play the anchored projection is
+    // the SNAPSHOT's own tasks - the anchored prefix is not replayed, it is
+    // VERIFIED - so the budget counters and the workflow states of the
+    // anchored region are taken from the snapshot the checkpoint describes.
+    let journalBudget = checkpointed
+      ? { tasks: globalThis.structuredClone(snapshot.tasks) }
+      : { tasks: {} };
     let anchoredBudget = journalBudget.tasks;
     // M12/T9 F-063: the fork map is computed from the journal itself, so a
     // forked pair is recognised before the chain check refuses it.
@@ -767,6 +1102,36 @@ function readSnapshotLocked(paths, repairSnapshot = true, report = null) {
       };
     }
     if (tail.length > 0 && repairSnapshot) writeSnapshotAtomic(paths, snapshot);
+    // M12/T9 F-099: the checkpoint for the anchor the snapshot describes.
+    //
+    // The chain covers the ANCHORED PREFIX only, so a checkpoint always
+    // describes exactly the prefix the snapshot sealed. A checkpoint that did
+    // not describe this journal is rebuilt here; one that did is extended
+    // with the tail the replay just recovered. The era flag is derived from
+    // the event stream - the whole stream in a full read, the checkpoint's own
+    // declaration plus the tail in a checkpointed one - so the era a journal
+    // declares survives the anchored prefix it is no longer replayed from.
+    const eraFlag =
+      journalHasPreVerdictStamp ||
+      events.some((event) =>
+        PRE_VERDICT_VERSIONS.has(event.governance_version),
+      );
+    if (!checkpointed || (tail.length > 0 && repairSnapshot)) {
+      // The anchored prefix's bytes, and the offset where they end.
+      const buffer = readFileSync(paths.events);
+      const anchoredCount = Math.min(journalLines.length, snapshot.sequence);
+      const offset = anchoredCount > 0 ? journalLineEnds[anchoredCount - 1] : 0;
+      writeCheckpointAtomic(paths, {
+        sequence: snapshot.sequence,
+        last_event_digest: snapshot.last_event_digest,
+        has_pre_verdict_stamp: eraFlag,
+        events_offset: offset,
+        prefix_digest: checkpointDigest(
+          buffer.subarray(0, offset),
+          snapshot.tasks,
+        ),
+      });
+    }
     return flagUnterminatedTasks(snapshot);
   } catch (error) {
     // M11/T3 B3: the fault class must survive. Relabelling every replay fault as
@@ -900,6 +1265,21 @@ function appendEventLocked(
   validateContract("ledger-event", { ...event, event_digest });
   validateContract("ledger-snapshot", snapshot, Number.MAX_SAFE_INTEGER);
   const line = `${JSON.stringify({ ...event, event_digest })}\n`;
+  // M12/T9 F-099: the checkpoint for the anchor this append creates. The
+  // anchored prefix grows by exactly one line and the snapshot's task states
+  // change with it, so the seal is recomputed over the journal as it now
+  // stands. A checkpoint that does not describe the journal (a ledger that
+  // predates it, or one whose checkpoint was lost) is replaced by this one.
+  const preAppendSize = journalFileSize(paths.events);
+  const previousCheckpoint = readCheckpoint(paths);
+  let eraFlag = previousCheckpoint?.has_pre_verdict_stamp ?? false;
+  if (!previousCheckpoint) {
+    // The era of a journal that has no checkpoint: derived from the event
+    // stream, which is the only place it is declared.
+    eraFlag = splitJournalLines(readFileSync(paths.events)).lines.some(
+      (journalLine) => PRE_VERDICT_STAMP_PATTERN.test(journalLine),
+    );
+  }
   assertJournalAppendable(paths);
   const fd = openSync(paths.events, "a", 0o600);
   try {
@@ -915,6 +1295,17 @@ function appendEventLocked(
     updated_at: event.created_at,
   };
   writeSnapshotAtomic(paths, next);
+  // The checkpoint is written WITH the snapshot: the snapshot first, so a
+  // crash between the two leaves a checkpoint that is stale (and therefore
+  // ignored) rather than one that outlives its state.
+  const journalBytes = readFileSync(paths.events);
+  writeCheckpointAtomic(paths, {
+    sequence: next.sequence,
+    last_event_digest: next.last_event_digest,
+    has_pre_verdict_stamp: eraFlag,
+    events_offset: preAppendSize + Buffer.byteLength(line, "utf8"),
+    prefix_digest: checkpointDigest(journalBytes, next.tasks),
+  });
   return next;
 }
 
