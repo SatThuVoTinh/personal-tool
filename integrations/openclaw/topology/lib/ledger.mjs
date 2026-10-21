@@ -576,26 +576,32 @@ function readSnapshotLocked(paths, repairSnapshot = true, report = null) {
     // global: a new event lands inside the anchored prefix, so a journal-wide
     // flag re-resolved the current writer's own write into the pre-verdict
     // model and made a successful write unreadable.
-    const PRE_VERDICT_VERSIONS = new Set([
-      "m7-t2-r12",
-      "m7-t5-r13",
-      "m8-t2-r9",
-      "m8-t2.1-r3",
-    ]);
-    // Computed ONLY from the event stream: an ambiguous-era journal is one that
-    // carries any pre-verdict stamp. The snapshot under verification is never
-    // consulted, so this is not circular.
-    const journalHasPreVerdictStamp = events.some((event) =>
-      PRE_VERDICT_VERSIONS.has(event.governance_version),
-    );
-    // Resolve one event's writer semantics from its own stamp alone. The
-    // m8-t2.2-r4 stamp is the ambiguous one: it falls through to the
-    // compatibility heuristic, because it was emitted by both writers.
-    const preVerdictForEvent = (event) => {
-      if (event.governance_version === GOVERNANCE_VERSION) return false;
-      if (PRE_VERDICT_VERSIONS.has(event.governance_version)) return true;
-      return journalHasPreVerdictStamp;
-    };
+    // M12/T9 F-160: the pre-verdict stamps are declared ONCE, at the module
+    // level, so the reader and the checkpoint's era declaration cannot drift.
+    // M12/T9 F-160: the writer semantics are SEALED IN THE EVENT.
+    //
+    // Two stamps are unambiguous. A pre-verdict stamp names a pre-verdict
+    // writer, so the event is replayed under the pre-verdict model; the current
+    // stamp names the current writer, so the event is replayed under the
+    // verdict model. The third, `m8-t2.2-r4`, was emitted by BOTH writers, so
+    // the stamp alone cannot say which model wrote the event.
+    //
+    // It used to be resolved by the JOURNAL's scope: a journal carrying any
+    // pre-verdict stamp re-resolved EVERY r4 event as pre-verdict. That made
+    // the semantics of one event depend on which OTHER events happened to sit
+    // in the same file, so deleting one legacy line - compaction, tail surgery,
+    // a mixed backup restore - silently re-resolved the governance history of
+    // every other event, and the reader then died on `snapshot workflow
+    // mismatch` or re-resolved a root result.
+    //
+    // The owner's ruling (2026-10-21) is that the r4 stamp is a VERDICT
+    // stamp: an r4 event is classified as a verdict in EVERY path, so the
+    // classification of an event depends on that event alone. A journal that
+    // PREDATES the verdict model still resolves as pre-verdict, because its
+    // own events carry a pre-verdict stamp: the era is declared per event
+    // instead of per journal, and the journal-scope discriminator is gone.
+    const preVerdictForEvent = (event) =>
+      PRE_VERDICT_VERSIONS.has(event.governance_version);
     for (const event of events) {
       validateContract("ledger-event", event);
       const { event_digest, ...unsigned } = event;
