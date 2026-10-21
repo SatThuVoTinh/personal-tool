@@ -7850,3 +7850,32 @@ would fire on ~40 legitimate host-capability skips.
   typed.
 
 Commit `507901a`.
+
+**The review round (2026-10-22), the owner's "1 vòng review".** Three
+independent reviewers read the whole branch diff (`origin/codex/m11-t1-audit-remediation..HEAD`)
+for correctness, regressions and security. What they found, and what this
+branch did about it:
+
+| Found                                                                                                                       | Fixed                                                                                                             |
+| --------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| F-376 admitted the legacy `result_id` in TWO of the three verdict branches, and the reducer refused any verdict carrying it | `430e8de`: the BLOCKED branch admits it too, and the reducer refuses only an id-ONLY verdict (F-249's ruling)     |
+| the skip gate refused lanes that skip without a declared family — and the CI runner has five such lanes                     | `c896fc2`: the `powershell-helpers` and `uv-toolchain` families are declared and measured on the WSL (Linux) host |
+| the skip gate passed a lane that declares a family the table does not know                                                  | `f2ec844`: an unknown family is refused, like an unexplained skip                                                 |
+| the skip gate's lane exercised only CRAFTED reports                                                                         | `f2ec844`: a lane now runs Node's own JUnit reporter and reads that report                                        |
+| the coordinator names were regenerated per POSITION, not per agent id                                                       | `392b491`: the name is regenerated for the agent with the same id                                                 |
+| the plugin never applied the Skill Store's own migrations, so a fresh deployment had no `skills.*` schema                   | `156ea9d`: the plugin applies them through the same public door before the sync                                   |
+| the re-based digest pin held a control that could never fire                                                                | `d7ca2d9`: the dead check is gone; the duplicate-admission check holds                                            |
+| the admission table left the pre-F-371 native-boundary build unadmitted                                                     | `392b491`: the digest is derived from the asset's own history and listed under its comment                        |
+
+**Residuals, recorded rather than hidden** (they are not defects the branch
+introduced, and each is a decision the owner may want to take):
+
+- the retirement (F-095) validates its `decision_ref` against the grammar but
+  does not prove the decision exists — the model-facing tool path still
+  refuses the action, so only the owner or the operator can reach it;
+- the Skill Store's migration runner applies a file and records it in two
+  sessions, so a crash between them re-applies an idempotent file;
+- the F-378 convergence still overwrites a hand-edited display name (the
+  name is generated data, and the agent's identity is its `id`);
+- the skip expectation is enforced on the CI runner; on a developer machine
+  the gate reports the counts and refuses only an unexplained skip.
