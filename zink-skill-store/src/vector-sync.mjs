@@ -922,6 +922,12 @@ export async function syncSkillsToVectorStore(options = {}) {
       // pgvector state is derived-only, canonical lifecycle truth stays in the
       // catalog, and every consumer already filters status='ACTIVE' AND
       // sync_status='READY', so removal is consumer-visible-identical.
+      //
+      // M12/T9 F-386: that paragraph describes the TOMBSTONE path only. The
+      // RETIREMENT path above (the F-095 marker) writes those same two values,
+      // and migration 004 widened the CHECK constraints so the write is
+      // admitted: a retired skill is MARKED, and only the rows this tombstone
+      // can prove are still ACTIVE are deleted.
       const tombstoneSql = `
       DELETE FROM skills.catalog_index
       WHERE status = 'ACTIVE'
