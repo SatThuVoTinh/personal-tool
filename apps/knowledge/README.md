@@ -27,6 +27,7 @@ Tất cả các lệnh gọi API đều đi qua Nginx tại địa chỉ `http:/
 | `POST`      | `/v1/index-runs`          | Kích hoạt tiến trình lập chỉ mục           | `{ "kind": "INCREMENTAL" }` hoặc `{ "kind": "FULL_REBUILD" }` |
 | `GET`       | `/v1/index-runs/{run_id}` | Theo dõi tiến độ lập chỉ mục               | Truyền `run_id` trên đường dẫn                                |
 | `POST`      | `/v1/search`              | Thực hiện tìm kiếm ngữ nghĩa kèm trích dẫn | `{ "query": "...", "limit": 10 }`                             |
+| `POST`      | `/v1/pdf-content-reclamations` | Thu hồi bản trích xuất (bản sao dẫn xuất) của một tài liệu PDF; **file PDF gốc vẫn được giữ nguyên** | `{ "source_path": "02. Books/.../report.pdf" }`                |
 
 ---
 

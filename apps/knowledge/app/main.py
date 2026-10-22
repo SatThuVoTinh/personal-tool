@@ -21,6 +21,8 @@ from .database import (
     ActiveIndex,
     ActiveIndexChangedError,
     KnowledgeDatabase,
+    PdfContentNotFoundError,
+    PdfContentNotReclaimableError,
     SegmentRecord,
     StateTransitionError,
 )
@@ -70,6 +72,20 @@ class IndexRunAcceptedResponse(BaseModel):
     index_run_id: str
     index_id: str
     status: Literal["RUNNING"]
+
+
+class PdfContentReclamationRequest(BaseModel):
+    """The governed reclamation of one ingested PDF's derived text copy.
+
+    H9: the owner approved reclaiming the derived text copies; the PDF
+    itself stays. The document is named by the path the corpus already
+    publishes it under, so the action never has to guess which file the
+    caller means.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_path: str = Field(min_length=1, max_length=1024)
 
 
 # M12/T2.2-R2 B-13 (4A.14 / R5-E01-03): the token ceiling in `/v1/search` is the
@@ -967,6 +983,85 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "failure_code": run.failure_code,
             "failure": deserialize_errors(run.failure_detail),
             "source_counts": source_counts,
+        }
+
+    @app.post("/v1/pdf-content-reclamations")
+    async def create_pdf_content_reclamation(
+        request: PdfContentReclamationRequest,
+    ) -> dict[str, object]:
+        """Reclaim the derived text copy of one ingested PDF.
+
+        H9: this is a governed action, so the reclamation is never a hand
+        edit of the tree or of the database. It takes the store's OWN writer
+        -- the same advisory lock an index run takes -- so it can never race
+        a run, and the write itself happens inside that writer's transaction.
+
+        The PDF stays: the source row, its published segments and the file in
+        the vault are never touched. The action is idempotent: reclaiming an
+        already-reclaimed document writes nothing and reports so.
+        """
+
+        if not database.available:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": database.startup_error_code or "DATABASE_UNAVAILABLE"},
+            )
+        try:
+            await coordinator.reserve()
+        except IndexRunAlreadyActiveError as error:
+            raise HTTPException(
+                status_code=409, detail={"code": "INDEX_RUN_ALREADY_ACTIVE"}
+            ) from error
+        except StateTransitionError as error:
+            # The owner session is already bound: a run holds it. That is a
+            # CONFLICT, not an unavailable database.
+            raise HTTPException(
+                status_code=409, detail={"code": "INDEX_RUN_ALREADY_ACTIVE"}
+            ) from error
+        except DATABASE_RESERVATION_ERRORS as error:
+            raise HTTPException(
+                status_code=503, detail={"code": "DATABASE_UNAVAILABLE"}
+            ) from error
+        try:
+            reclamation = await database.reclaim_pdf_content(request.source_path)
+        except PdfContentNotFoundError as error:
+            raise HTTPException(
+                status_code=404, detail={"code": "PDF_SOURCE_NOT_FOUND"}
+            ) from error
+        except PdfContentNotReclaimableError as error:
+            raise HTTPException(
+                status_code=409, detail={"code": "PDF_CONTENT_NOT_RECLAIMABLE"}
+            ) from error
+        except StateTransitionError as error:
+            raise HTTPException(
+                status_code=409, detail={"code": "PDF_CONTENT_RECLAMATION_FAILED"}
+            ) from error
+        except DATABASE_ERRORS as error:
+            raise HTTPException(
+                status_code=503, detail={"code": "DATABASE_UNAVAILABLE"}
+            ) from error
+        except Exception as error:
+            # F-101: the record names the code and the document it is about.
+            # The path is caller-supplied, so it is logged escaped: a newline
+            # in it must not be able to forge a log line.
+            logger.error(
+                "knowledge.pdf_content_reclamation_failed code=%s source_path=%r",
+                "INTERNAL_ERROR",
+                request.source_path,
+                exc_info=True,
+            )
+            raise HTTPException(status_code=500, detail={"code": "INTERNAL_ERROR"}) from error
+        finally:
+            await coordinator.release_reservation()
+        return {
+            "reclamation_id": reclamation.build_id,
+            "source_path": reclamation.source_path,
+            "content_identity_digest": reclamation.content_identity_digest,
+            "pdf_digest": reclamation.pdf_digest,
+            "status": reclamation.status,
+            "segments_reclaimed": reclamation.segments_reclaimed,
+            "sources_released": reclamation.sources_released,
+            "reclaimed_at": reclamation.reclaimed_at,
         }
 
     return app

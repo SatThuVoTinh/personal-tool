@@ -50,6 +50,21 @@ class PdfSchemaContractError(RuntimeError):
     """The installed schema cannot support the frozen M4/T2 lifecycle."""
 
 
+class PdfContentNotFoundError(RuntimeError):
+    """The named document is not a published PDF of the live corpus."""
+
+
+class PdfContentNotReclaimableError(RuntimeError):
+    """The document holds no derived copy that could be reclaimed."""
+
+
+# H9: the owner approved reclaiming the DERIVED text copies of an ingested
+# PDF. The code is the vocabulary of the Knowledgebase's own lifecycle
+# records, so a reader can tell a reclamation from any other terminal state
+# of a content build.
+PDF_CONTENT_RECLAIMED = "PDF_CONTENT_RECLAIMED"
+
+
 _PDF_CONTENT_IDENTITY_INDEXES = {
     "knowledge_pdf_content_builds_one_building_idx",
     "knowledge_pdf_content_builds_one_ready_idx",
@@ -188,6 +203,27 @@ class IndexRunState:
     sources_failed: int
     failure_code: str | None
     failure_detail: str | None
+
+
+@dataclass(frozen=True)
+class PdfContentReclamation:
+    """The record of one reclaimed PDF content build.
+
+    H9: the reclamation is a durable record of WHAT was reclaimed (the build
+    and the content identity it carried) and WHEN (the build's terminal
+    timestamp), in the same shape as the other Knowledgebase lifecycle
+    records (`index_runs`, `pdf_content_builds`): an id, a status, timestamps
+    and a code.
+    """
+
+    build_id: str
+    source_path: str
+    content_identity_digest: str
+    pdf_digest: str
+    status: str
+    segments_reclaimed: int
+    sources_released: int
+    reclaimed_at: str
 
 
 @dataclass(frozen=True)
@@ -1055,6 +1091,148 @@ class KnowledgeDatabase:
         if not segments:
             raise StateTransitionError("READY PDF content build has no segments.")
         return segments
+
+    async def reclaim_pdf_content(self, source_path: str) -> PdfContentReclamation:
+        """Reclaim the DERIVED text copy of one ingested PDF. Idempotent.
+
+        H9: the owner approved a reclamation path for the derived text copies
+        that could not be reclaimed before. The PDF itself stays: the source
+        row, its published (searchable) segments and the file in the vault are
+        never touched. What goes is the DERIVED copy the ingestion produced --
+        the extracted text and its provenance (`pdf_content_segments`), the
+        extraction manifest (`pdf_content_batches`) and the link that tied the
+        published source to that build (`pdf_source_details`).
+
+        The reclamation runs under the store's OWN writer: the same advisory
+        lock owner and the same transaction the rest of the Knowledgebase's
+        writes use, so it can never race an index run.
+
+        The RECORD is the content build's own terminal lifecycle state, in the
+        shape the Knowledgebase already records lifecycle in (`status`,
+        `ready_at`/`finished_at`, `failure_code`): the build becomes
+        `CANCELLED` with `failure_code = 'PDF_CONTENT_RECLAIMED'`, so a
+        reader can see WHAT was reclaimed (the build and the content identity
+        it carried) and WHEN (its `finished_at`).
+
+        Reclaiming an already-reclaimed document changes nothing: the build is
+        already terminal, so the action reports `ALREADY_RECLAIMED` and writes
+        no statement at all.
+        """
+
+        if self._pool is None:
+            raise RuntimeError("Database pool is unavailable.")
+        if not source_path:
+            raise ValueError("PDF source path is invalid.")
+        async with self._mutation_transaction() as connection:
+                source = await connection.fetchrow(
+                    """
+                    SELECT s.sha256 AS content_identity_digest
+                    FROM knowledge.sources s
+                    JOIN knowledge.indexes i ON i.id = s.index_id
+                    WHERE s.source_path = $1 AND s.source_type = 'PDF'
+                      AND i.status = 'ACTIVE'
+                    """,
+                    source_path,
+                )
+                if source is None:
+                    raise PdfContentNotFoundError("PDF_SOURCE_NOT_FOUND")
+                digest = str(source["content_identity_digest"])
+                build = await connection.fetchrow(
+                    """
+                    SELECT id::text, pdf_digest
+                    FROM knowledge.pdf_content_builds
+                    WHERE content_identity_digest = $1
+                      AND status IN ('BUILDING', 'READY')
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    digest,
+                )
+                if build is None:
+                    # Nothing holds the derived copy any more. The terminal
+                    # build of the same identity is the record of the earlier
+                    # reclamation, so the answer is a no-op that says so.
+                    recorded = await connection.fetchrow(
+                        """
+                        SELECT id::text, pdf_digest, finished_at::text
+                        FROM knowledge.pdf_content_builds
+                        WHERE content_identity_digest = $1
+                          AND status = 'CANCELLED'
+                          AND failure_code = $2
+                        ORDER BY finished_at DESC
+                        LIMIT 1
+                        """,
+                        digest,
+                        PDF_CONTENT_RECLAIMED,
+                    )
+                    if recorded is None:
+                        raise PdfContentNotReclaimableError(
+                            "PDF_CONTENT_NOT_RECLAIMABLE"
+                        )
+                    return PdfContentReclamation(
+                        build_id=str(recorded["id"]),
+                        source_path=source_path,
+                        content_identity_digest=digest,
+                        pdf_digest=str(recorded["pdf_digest"]),
+                        status="ALREADY_RECLAIMED",
+                        segments_reclaimed=0,
+                        sources_released=0,
+                        reclaimed_at=str(recorded["finished_at"]),
+                    )
+                build_id = UUID(str(build["id"]))
+                segments = await connection.fetchval(
+                    "SELECT count(*) FROM knowledge.pdf_content_segments WHERE build_id = $1",
+                    build_id,
+                )
+                # The link goes FIRST: it pins the build's status to READY,
+                # and the reclaimed build leaves that state. The derived copy
+                # belongs to the CONTENT IDENTITY, so one build can carry more
+                # than one source link (the same PDF carried into another
+                # index); the count is reported, so a caller that names one
+                # path sees every link that went with it.
+                sources_released = await connection.fetchval(
+                    "SELECT count(*) FROM knowledge.pdf_source_details WHERE build_id = $1",
+                    build_id,
+                )
+                await connection.execute(
+                    "DELETE FROM knowledge.pdf_source_details WHERE build_id = $1",
+                    build_id,
+                )
+                # Each derived relation is deleted explicitly, so each one's
+                # cleanup is separately verifiable.
+                await connection.execute(
+                    "DELETE FROM knowledge.pdf_content_segments WHERE build_id = $1",
+                    build_id,
+                )
+                await connection.execute(
+                    "DELETE FROM knowledge.pdf_content_batches WHERE build_id = $1",
+                    build_id,
+                )
+                reclaimed = await connection.fetchrow(
+                    """
+                    UPDATE knowledge.pdf_content_builds
+                    SET status = 'CANCELLED', ready_at = NULL, finished_at = now(),
+                        failure_code = $2
+                    WHERE id = $1 AND status IN ('BUILDING', 'READY')
+                    RETURNING id::text, finished_at::text
+                    """,
+                    build_id,
+                    PDF_CONTENT_RECLAIMED,
+                )
+                if reclaimed is None:
+                    raise StateTransitionError(
+                        "PDF content build changed during reclamation."
+                    )
+                return PdfContentReclamation(
+                    build_id=str(reclaimed["id"]),
+                    source_path=source_path,
+                    content_identity_digest=digest,
+                    pdf_digest=str(build["pdf_digest"]),
+                    status="RECLAIMED",
+                    segments_reclaimed=int(segments or 0),
+                    sources_released=int(sources_released or 0),
+                    reclaimed_at=str(reclaimed["finished_at"]),
+                )
 
     async def get_active_index(self) -> ActiveIndex | None:
         return await self.get_index_by_status("ACTIVE")
