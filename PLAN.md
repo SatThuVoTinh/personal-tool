@@ -7900,6 +7900,15 @@ preflight driver's copy of it, makes the gate's message say what to do, and adds
 BƯỚC 1b to the runbook (move the artifact out of the state root, never delete
 it). `F-383` stays OPEN until an apply completes without an unnamed refusal.
 
+**Deployed (2026-10-22).** The owner moved the nested governance root out of the
+live ledger root (BƯỚC 1b) and ran BƯỚC 2: the report is
+`{"status":"PASS","stage":"applied","transactionStatus":"complete"}`. Measured
+read-only afterwards: the gateway is `active` with `NRestarts=0`, the deployed
+entrypoint's SHA-256 equals the build's packaged entrypoint, the two
+coordinators read `Coordinator O1` / `Coordinator O2`, and the router credential
+is the SecretRef object the build emits. `F-383` closes with that run and its
+history is in `CHANGELOG.md`; `F-391` is the band's only open row.
+
 **Band C's last item — `H9`, the PDF-derived-text reclamation
 (2026-10-22).** The owner's answer: "cho phép dọn" — allow the reclamation; the
 PDF itself stays. Before this, nothing reclaimed a PDF's derived text copy:

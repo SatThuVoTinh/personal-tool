@@ -76,7 +76,7 @@ của chủ) không nằm trong quy tắc này. Bảng đóng ở §2 đã bị 
 
 ## 1. hiện trạng queue
 
-Tổng **33** hàng còn nằm trong file, chia theo nhóm. **2 hàng đang mở** (mọi câu trả lời của chủ — `H1`/`H2`/`H3`/`H5`/`H6`/`H8`/`H9`/`H10` — đã được sửa xong, đã chứng minh và đã xoá khỏi file này theo §0.5), 28 hàng `REFUTED` (premise đo thật là đã chết ở HEAD, kèm bằng chứng đo được trong chính dòng `Status:`) và 3 hàng `EXCLUDED` (quyết định của chủ, hoặc dòng chỉ để đo). **385** hàng đã đóng không nằm ở đây nữa: lịch sử của chúng (id + dòng lỗi một dòng + commit đã đóng) nằm ở `CHANGELOG.md`.
+Tổng **32** hàng còn nằm trong file, chia theo nhóm. **1 hàng đang mở** (mọi câu trả lời của chủ — `H1`/`H2`/`H3`/`H5`/`H6`/`H8`/`H9`/`H10` — đã được sửa xong, đã chứng minh và đã xoá khỏi file này theo §0.5), 28 hàng `REFUTED` (premise đo thật là đã chết ở HEAD, kèm bằng chứng đo được trong chính dòng `Status:`) và 3 hàng `EXCLUDED` (quyết định của chủ, hoặc dòng chỉ để đo). **386** hàng đã đóng không nằm ở đây nữa: lịch sử của chúng (id + dòng lỗi một dòng + commit đã đóng) nằm ở `CHANGELOG.md`.
 
 | Nhóm     | Nội dung                                                              | Bug    | Critical | High | Medium | Low | Ungraded |
 | -------- | --------------------------------------------------------------------- | ------ | -------- | ---- | ------ | --- | -------- |
@@ -86,14 +86,14 @@ Tổng **33** hàng còn nằm trong file, chia theo nhóm. **2 hàng đang mở
 | F4       | Integration & Contract Violations — Lỗi tích hợp và vi phạm hợp đồng  | 5      | 0        | 1    | 2      | 2   | 0        |
 | F5       | Data Integrity & Result Correctness — Lỗi toàn vẹn dữ liệu và kết quả | 7      | 1        | 1    | 4      | 1   | 0        |
 | F6       | Reliability & Performance — Lỗi độ tin cậy và hiệu năng               | 1      | 0        | 1    | 0      | 0   | 0        |
-| F7       | Testing & Verification Gaps — Thiếu kiểm thử và xác minh              | 8      | 0        | 2    | 5      | 1   | 0        |
-| **Tổng** |                                                                       | **33** | 1        | 8    | 17     | 6   | 1        |
+| F7       | Testing & Verification Gaps — Thiếu kiểm thử và xác minh              | 7      | 0        | 1    | 5      | 1   | 0        |
+| **Tổng** |                                                                       | **32** | 1        | 7    | 17     | 6   | 1        |
 
-Theo trạng thái: OPEN 2 · EXCLUDED 3 · LATENT 0 · REFUTED 28 · PARTIAL 0 · HYPOTHESIS 0.
+Theo trạng thái: OPEN 1 · EXCLUDED 3 · LATENT 0 · REFUTED 28 · PARTIAL 0 · HYPOTHESIS 0.
 
-Các hàng đã đóng không nằm ở đây nữa: **391** hàng (134 hàng M12/T9 đóng ngày 2026-10-19, 47 hàng lượt đóng đầu của band thứ hai, 120 hàng lượt đóng cuối của band thứ hai, 16 hàng chủ đã phán ngày 2026-10-21, 51 hàng của các band `M12/T2.x` trước đó, 5 hàng của band thứ ba đóng ngày 2026-10-21, 2 hàng của blocker triển khai đóng ngày 2026-10-21, và 1 hàng của band E đóng ngày 2026-10-22, 1 hàng của band A3 đóng ngày 2026-10-22, 2 hàng của band C đóng ngày 2026-10-22, 5 hàng của blocker triển khai lần hai đóng ngày 2026-10-22, 5 hàng của vòng review đóng ngày 2026-10-22, 2 hàng chủ phán ngày 2026-10-22) đã chuyển sang `CHANGELOG.md`, mỗi hàng kèm commit đã đóng nó. Ở M12/T9 mỗi hàng có commit riêng trỏ `F-xxx` và legacy id; ba hàng bị gộp chung một commit vì chúng sửa cùng một file và các hunk của chúng phụ thuộc nhau — tách ra sẽ tạo ra một commit không parse được (`F-055`+`F-101`+`F-240`, đo bằng cách dựng lại từng tiền tố của chuỗi commit và kiểm tra `node --check`).
+Các hàng đã đóng không nằm ở đây nữa: **392** hàng (134 hàng M12/T9 đóng ngày 2026-10-19, 47 hàng lượt đóng đầu của band thứ hai, 120 hàng lượt đóng cuối của band thứ hai, 16 hàng chủ đã phán ngày 2026-10-21, 51 hàng của các band `M12/T2.x` trước đó, 5 hàng của band thứ ba đóng ngày 2026-10-21, 2 hàng của blocker triển khai đóng ngày 2026-10-21, và 1 hàng của band E đóng ngày 2026-10-22, 1 hàng của band A3 đóng ngày 2026-10-22, 2 hàng của band C đóng ngày 2026-10-22, 5 hàng của blocker triển khai lần hai đóng ngày 2026-10-22, 5 hàng của vòng review đóng ngày 2026-10-22, 2 hàng chủ phán ngày 2026-10-22, 1 hàng deploy hoàn tất ngày 2026-10-22) đã chuyển sang `CHANGELOG.md`, mỗi hàng kèm commit đã đóng nó. Ở M12/T9 mỗi hàng có commit riêng trỏ `F-xxx` và legacy id; ba hàng bị gộp chung một commit vì chúng sửa cùng một file và các hunk của chúng phụ thuộc nhau — tách ra sẽ tạo ra một commit không parse được (`F-055`+`F-101`+`F-240`, đo bằng cách dựng lại từng tiền tố của chuỗi commit và kiểm tra `node --check`).
 
-Theo field: đo lại 2026-10-22 trên cả **33** hàng còn lại với predicate "field trống, là placeholder, hoặc ngắn dưới 40 ký tự" — **0** hàng thiếu `Reproduction`, **0** hàng thiếu `Acceptance criteria`, và 0 hàng có một trong hai field ngắn dưới 40 ký tự. Chữ "không tái hiện được" trong hai field đó ở `F-015`, `F-017`, `F-020` là ghi chú verdict của hàng REFUTED, không phải placeholder.
+Theo field: đo lại 2026-10-22 trên cả **32** hàng còn lại với predicate "field trống, là placeholder, hoặc ngắn dưới 40 ký tự" — **0** hàng thiếu `Reproduction`, **0** hàng thiếu `Acceptance criteria`, và 0 hàng có một trong hai field ngắn dưới 40 ký tự. Chữ "không tái hiện được" trong hai field đó ở `F-015`, `F-017`, `F-020` là ghi chú verdict của hàng REFUTED, không phải placeholder.
 
 Một hàng còn `Severity: Ungraded`: `F-020` (đã REFUTED nên grade không còn hệ quả). `F-021`, `F-103` và `F-104` đã đóng trong M12/T9 nên không còn nằm ở đây.
 
@@ -502,19 +502,6 @@ fix xong và đã chứng minh, nên hai loại hàng này ở lại. Dọn chú
 - Reproduction: the measurement this row said it could not run was run: a sentinel exported for one of the three variables leaves the single suite at the same counts and never reaches the generated config, so the credential-into-fixture route is not reproducible today. The surviving measurement: assert at the head of each bypassing suite that the value it sees equals the documented placeholder, which is exactly what a host-exported router host would violate.
 - Acceptance criteria: one policy for all suites — either every lane that can build the deployed config calls the helper that forces placeholders, or the suites that keep the preserving form assert that the values they see are the documented placeholders; no lane may write a real credential into a fixture or print one.
 - Related findings: F-264, F-103, F-023 · nguồn: R7-E delta audit E5 — remaining orphan files
-
-### F-383 — the apply refused with a reason the classifier does not name, so the operator's report said "APPLY_REJECTED" and nothing else
-
-- Category: F7 — Testing & Verification Gaps
-- Legacy register id: — (new in M12/T9)
-- Affected modules: Gates + CI, OpenClaw governance plugin
-- Severity: High
-- Status: OPEN — both refusals the owner's apply actually produced are now NAMED (`Policy drift at agents`, and `BACKUP_NESTED_LEDGER_ROOT_PRESENT`, which the apply's report used to collapse to `APPLY_REJECTED`), and the second one is actionable in the runbook (BƯỚC 1b). The closure evidence left is the owner's successful apply: every refusal this build can still emit must arrive as a named reason, and only a real run proves the set covers them.
-- Root cause: the apply's classifier names every refusal it knows (`KNOWN_REFUSAL_REASONS`), and anything else degrades to the generic `APPLY_REJECTED`. The first refusal (`Policy drift at agents`, 2026-10-22 14:13) came from the builder's config gate and is now named; the second (`BACKUP_NESTED_LEDGER_ROOT_PRESENT`, the same day, after that gate was fixed) came from `createRuntimeBackup`'s nested-governance-root gate and had no class at all, so the report again said `APPLY_REJECTED` while the artifact's path lived only on stderr.
-- Evidence: Where: `integrations/openclaw/topology/fixtures/runtime-regression/refusal-classifier.mjs` (the class set), `operator-preflight.mjs` (its own copy of the set, asserted equal at load time), `integrations/openclaw/topology/lib/runtime-backup.mjs` (the gate and its message) · Evidence: the owner's `builder-apply` run printed `{"status":"FAIL","stage":"builder-apply","reason":"APPLY_REJECTED",...}` with `rollbackSucceeded:true`; the stderr line named `BACKUP_NESTED_LEDGER_ROOT_PRESENT: /home/hoang_vinh/.openclaw-zink/operator/m7-t2/ledger/operator/m7-t2/ledger`. The nested root is EMPTY (`events.jsonl` 0 bytes, `snapshot.json` sequence 0, its own identity key) — inert state, not data.
-- Reproduction: run the operator apply on the live host: `node integrations/openclaw/topology/fixtures/runtime-regression/operator-apply.mjs "$ZINK_OPERATOR_STATE_DIR"` — the report names the class, and the message names the directory to move out.
-- Acceptance criteria: the apply refuses with a reason the classifier names, or the operator's stderr names the step that refused; a refusal that neither names is a defect in the classification, not a fact the operator can use.
-- Related findings: bug mở: the deploy blocker of 2026-10-22 (the same finding's own row) · nguồn: M12/T9 — the deploy blocker family.
 
 ### F-391 — the reclamation's SQL never runs against a real PostgreSQL, so its foreign-key order is unproven
 

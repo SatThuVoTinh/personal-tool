@@ -82,6 +82,12 @@ const REVIEW_ROUND_CLOSED_ROWS = 5;
  * ANSWER, not on a code change, so their changelog token is the phrase below.
  */
 const OWNER_ANSWER_CLOSED_ROWS = 2;
+/**
+ * The row the completed deployment closed (2026-10-22): the apply finished with
+ * a report that names its stage and transaction, so the refusal path that
+ * collapsed to `APPLY_REJECTED` is proven end to end.
+ */
+const DEPLOY_COMPLETED_CLOSED_ROWS = 1;
 /** Every closed row the register's §2 carried, in the changelog now. */
 const CLOSED_ROW_COUNT =
   CLOSURE_TABLE_ROWS +
@@ -93,7 +99,8 @@ const CLOSED_ROW_COUNT =
   BAND_C_CLOSED_ROWS +
   BAND_A3_CLOSED_ROWS +
   REVIEW_ROUND_CLOSED_ROWS +
-  OWNER_ANSWER_CLOSED_ROWS;
+  OWNER_ANSWER_CLOSED_ROWS +
+  DEPLOY_COMPLETED_CLOSED_ROWS;
 
 /** Every closed row: "<row id> <commit token>". */
 const CLOSED_ROWS = [
@@ -508,6 +515,10 @@ const CLOSED_ROWS = [
   // instead, exactly like the "accepted cost" rows above.
   ["F-389", "_(owner's answer — no code change)_"],
   ["F-390", "_(owner's answer — no code change)_"],
+  // The deployment completed (2026-10-22): the last code change for the row is
+  // the commit that named the ceremony's own refusal; the closing evidence is
+  // the owner's apply, named in the same changelog entry.
+  ["F-383", "`d3f64ee`"],
 ];
 
 /** Every row the register holds, transcribed at HEAD. */
@@ -543,7 +554,6 @@ const REGISTER_ROW_IDS = [
   "F-299",
   "F-324",
   "F-342",
-  "F-383",
   "F-391",
 ];
 
