@@ -128,9 +128,14 @@ band that changes the packaged set, not an operator step.
 
 ## If the deploy refuses
 
-| The refusal says             | What it means                                                             | What to do                                                                 |
-| ---------------------------- | ------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `STATE_DIR_NOT_NAMED`        | the driver was not told the state root — **nothing was deployed**         | export `ZINK_OPERATOR_STATE_DIR` as above and run it again                 |
-| `STATE_ROOT_FILE_MODE_DRIFT` | a file in the state root is readable by another account                   | fix the permissions it names, then re-run                                  |
-| `snapshot workflow mismatch` | the derived snapshot still disagrees with the journal after the recompute | the journal itself changed shape: report it, do not hand-edit the snapshot |
-| `Ledger state incomplete`    | half of the ledger pair is missing                                        | an operator action on the host: report it                                  |
+| The refusal says             | What it means                                                                                                                           | What to do                                                                                                                                                                            |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `STATE_DIR_NOT_NAMED`        | the driver was not told the state root — **nothing was deployed**                                                                       | export `ZINK_OPERATOR_STATE_DIR` as above and run it again                                                                                                                            |
+| `STATE_ROOT_FILE_MODE_DRIFT` | a file in the state root is readable by another account                                                                                 | fix the permissions it names, then re-run                                                                                                                                             |
+| `snapshot workflow mismatch` | the derived snapshot still disagrees with the journal after the recompute                                                               | the journal itself changed shape: report it, do not hand-edit the snapshot                                                                                                            |
+| `Ledger state incomplete`    | half of the ledger pair is missing                                                                                                      | an operator action on the host: report it                                                                                                                                             |
+| `Policy drift at <section>`  | the live config carries a value this build cannot reconcile — the section is named (`agents`, `models`, …) and **nothing was deployed** | do NOT hand-edit the config: the builder converges only the fields it owns. Report the line; a section that still drifts after the current build is a defect, not an operator mistake |
+
+`Policy drift` is raised by the builder's own validation, before any write, so
+a deploy that stops here leaves the host exactly as it was. The message names
+the FIRST section that failed; that name is the fact worth reporting.
