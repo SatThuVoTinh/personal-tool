@@ -76,24 +76,24 @@ của chủ) không nằm trong quy tắc này. Bảng đóng ở §2 đã bị 
 
 ## 1. hiện trạng queue
 
-Tổng **35** hàng còn nằm trong file, chia theo nhóm. **4 hàng đang mở** (mọi câu trả lời của chủ — `H1`/`H2`/`H3`/`H5`/`H6`/`H8`/`H10` — đã được sửa xong, đã chứng minh và đã xoá khỏi file này theo §0.5), 28 hàng `REFUTED` (premise đo thật là đã chết ở HEAD, kèm bằng chứng đo được trong chính dòng `Status:`) và 3 hàng `EXCLUDED` (quyết định của chủ, hoặc dòng chỉ để đo). **383** hàng đã đóng không nằm ở đây nữa: lịch sử của chúng (id + dòng lỗi một dòng + commit đã đóng) nằm ở `CHANGELOG.md`.
+Tổng **33** hàng còn nằm trong file, chia theo nhóm. **2 hàng đang mở** (mọi câu trả lời của chủ — `H1`/`H2`/`H3`/`H5`/`H6`/`H8`/`H9`/`H10` — đã được sửa xong, đã chứng minh và đã xoá khỏi file này theo §0.5), 28 hàng `REFUTED` (premise đo thật là đã chết ở HEAD, kèm bằng chứng đo được trong chính dòng `Status:`) và 3 hàng `EXCLUDED` (quyết định của chủ, hoặc dòng chỉ để đo). **385** hàng đã đóng không nằm ở đây nữa: lịch sử của chúng (id + dòng lỗi một dòng + commit đã đóng) nằm ở `CHANGELOG.md`.
 
 | Nhóm     | Nội dung                                                              | Bug    | Critical | High | Medium | Low | Ungraded |
 | -------- | --------------------------------------------------------------------- | ------ | -------- | ---- | ------ | --- | -------- |
 | F1       | Logic & Functional Bugs — Lỗi logic, sai chức năng                    | 4      | 0        | 0    | 2      | 1   | 1        |
-| F2       | Security & Authorization — Lỗi bảo mật và phân quyền                  | 4      | 0        | 0    | 3      | 1   | 0        |
+| F2       | Security & Authorization — Lỗi bảo mật và phân quyền                  | 3      | 0        | 0    | 2      | 1   | 0        |
 | F3       | State & Lifecycle Integrity — Lỗi trạng thái và vòng đời              | 5      | 0        | 3    | 2      | 0   | 0        |
-| F4       | Integration & Contract Violations — Lỗi tích hợp và vi phạm hợp đồng  | 6      | 0        | 1    | 3      | 2   | 0        |
+| F4       | Integration & Contract Violations — Lỗi tích hợp và vi phạm hợp đồng  | 5      | 0        | 1    | 2      | 2   | 0        |
 | F5       | Data Integrity & Result Correctness — Lỗi toàn vẹn dữ liệu và kết quả | 7      | 1        | 1    | 4      | 1   | 0        |
 | F6       | Reliability & Performance — Lỗi độ tin cậy và hiệu năng               | 1      | 0        | 1    | 0      | 0   | 0        |
 | F7       | Testing & Verification Gaps — Thiếu kiểm thử và xác minh              | 8      | 0        | 2    | 5      | 1   | 0        |
-| **Tổng** |                                                                       | **35** | 1        | 8    | 19     | 6   | 1        |
+| **Tổng** |                                                                       | **33** | 1        | 8    | 17     | 6   | 1        |
 
-Theo trạng thái: OPEN 4 · EXCLUDED 3 · LATENT 0 · REFUTED 28 · PARTIAL 0 · HYPOTHESIS 0.
+Theo trạng thái: OPEN 2 · EXCLUDED 3 · LATENT 0 · REFUTED 28 · PARTIAL 0 · HYPOTHESIS 0.
 
-Các hàng đã đóng không nằm ở đây nữa: **389** hàng (134 hàng M12/T9 đóng ngày 2026-10-19, 47 hàng lượt đóng đầu của band thứ hai, 120 hàng lượt đóng cuối của band thứ hai, 16 hàng chủ đã phán ngày 2026-10-21, 51 hàng của các band `M12/T2.x` trước đó, 5 hàng của band thứ ba đóng ngày 2026-10-21, 2 hàng của blocker triển khai đóng ngày 2026-10-21, và 1 hàng của band E đóng ngày 2026-10-22, 1 hàng của band A3 đóng ngày 2026-10-22, 2 hàng của band C đóng ngày 2026-10-22, 5 hàng của blocker triển khai lần hai đóng ngày 2026-10-22, 5 hàng của vòng review đóng ngày 2026-10-22) đã chuyển sang `CHANGELOG.md`, mỗi hàng kèm commit đã đóng nó. Ở M12/T9 mỗi hàng có commit riêng trỏ `F-xxx` và legacy id; ba hàng bị gộp chung một commit vì chúng sửa cùng một file và các hunk của chúng phụ thuộc nhau — tách ra sẽ tạo ra một commit không parse được (`F-055`+`F-101`+`F-240`, đo bằng cách dựng lại từng tiền tố của chuỗi commit và kiểm tra `node --check`).
+Các hàng đã đóng không nằm ở đây nữa: **391** hàng (134 hàng M12/T9 đóng ngày 2026-10-19, 47 hàng lượt đóng đầu của band thứ hai, 120 hàng lượt đóng cuối của band thứ hai, 16 hàng chủ đã phán ngày 2026-10-21, 51 hàng của các band `M12/T2.x` trước đó, 5 hàng của band thứ ba đóng ngày 2026-10-21, 2 hàng của blocker triển khai đóng ngày 2026-10-21, và 1 hàng của band E đóng ngày 2026-10-22, 1 hàng của band A3 đóng ngày 2026-10-22, 2 hàng của band C đóng ngày 2026-10-22, 5 hàng của blocker triển khai lần hai đóng ngày 2026-10-22, 5 hàng của vòng review đóng ngày 2026-10-22, 2 hàng chủ phán ngày 2026-10-22) đã chuyển sang `CHANGELOG.md`, mỗi hàng kèm commit đã đóng nó. Ở M12/T9 mỗi hàng có commit riêng trỏ `F-xxx` và legacy id; ba hàng bị gộp chung một commit vì chúng sửa cùng một file và các hunk của chúng phụ thuộc nhau — tách ra sẽ tạo ra một commit không parse được (`F-055`+`F-101`+`F-240`, đo bằng cách dựng lại từng tiền tố của chuỗi commit và kiểm tra `node --check`).
 
-Theo field: đo lại 2026-10-22 trên cả **35** hàng còn lại với predicate "field trống, là placeholder, hoặc ngắn dưới 40 ký tự" — **0** hàng thiếu `Reproduction`, **0** hàng thiếu `Acceptance criteria`, và 0 hàng có một trong hai field ngắn dưới 40 ký tự. Chữ "không tái hiện được" trong hai field đó ở `F-015`, `F-017`, `F-020` là ghi chú verdict của hàng REFUTED, không phải placeholder.
+Theo field: đo lại 2026-10-22 trên cả **33** hàng còn lại với predicate "field trống, là placeholder, hoặc ngắn dưới 40 ký tự" — **0** hàng thiếu `Reproduction`, **0** hàng thiếu `Acceptance criteria`, và 0 hàng có một trong hai field ngắn dưới 40 ký tự. Chữ "không tái hiện được" trong hai field đó ở `F-015`, `F-017`, `F-020` là ghi chú verdict của hàng REFUTED, không phải placeholder.
 
 Một hàng còn `Severity: Ungraded`: `F-020` (đã REFUTED nên grade không còn hệ quả). `F-021`, `F-103` và `F-104` đã đóng trong M12/T9 nên không còn nằm ở đây.
 
@@ -509,38 +509,12 @@ fix xong và đã chứng minh, nên hai loại hàng này ở lại. Dọn chú
 - Legacy register id: — (new in M12/T9)
 - Affected modules: Gates + CI, OpenClaw governance plugin
 - Severity: High
-- Status: OPEN — the refusal is now DISCLOSABLE (the detail goes to the operator's stderr), but the reason itself is not yet known: the owner's apply on 2026-10-22 rolled back cleanly (`mutationStarted: true`, `rollbackSucceeded: true`, `transactionStatus: complete`) and the live state was restored, so the next apply will say which step refused and why.
-- Root cause: the apply's classifier names every refusal it knows (`KNOWN_REFUSAL_REASONS`), and anything else degrades to the generic `APPLY_REJECTED`. The apply's stage (`builder-apply`) was known, so the refusal was inside the builder's apply — but nothing said which check or which write refused, and the operator's report therefore carried no actionable fact.
-- Evidence: Where: `integrations/openclaw/topology/fixtures/runtime-regression/apply-orchestration.mjs` (the catch that classifies) and `integrations/openclaw/topology/fixtures/runtime-regression/refusal-classifier.mjs` (the known reasons) · Evidence: the owner's run printed `{"status":"FAIL","stage":"builder-apply","reason":"APPLY_REJECTED","rollbackSucceeded":true,...}`; the live state root shows the builder's own writes (the packaged extension at 06:21, the auth plans, the systemd drop-in) and the ledger's checkpoint untouched, so the refusal came after the extension was written and before the ledger's checkpoint.
-- Reproduction: run the operator apply on the live host with the current build: `node integrations/openclaw/topology/fixtures/runtime-regression/operator-apply.mjs "$ZINK_OPERATOR_STATE_DIR"` — the refusal's detail is now on the operator's stderr, so the next run names the step.
+- Status: OPEN — both refusals the owner's apply actually produced are now NAMED (`Policy drift at agents`, and `BACKUP_NESTED_LEDGER_ROOT_PRESENT`, which the apply's report used to collapse to `APPLY_REJECTED`), and the second one is actionable in the runbook (BƯỚC 1b). The closure evidence left is the owner's successful apply: every refusal this build can still emit must arrive as a named reason, and only a real run proves the set covers them.
+- Root cause: the apply's classifier names every refusal it knows (`KNOWN_REFUSAL_REASONS`), and anything else degrades to the generic `APPLY_REJECTED`. The first refusal (`Policy drift at agents`, 2026-10-22 14:13) came from the builder's config gate and is now named; the second (`BACKUP_NESTED_LEDGER_ROOT_PRESENT`, the same day, after that gate was fixed) came from `createRuntimeBackup`'s nested-governance-root gate and had no class at all, so the report again said `APPLY_REJECTED` while the artifact's path lived only on stderr.
+- Evidence: Where: `integrations/openclaw/topology/fixtures/runtime-regression/refusal-classifier.mjs` (the class set), `operator-preflight.mjs` (its own copy of the set, asserted equal at load time), `integrations/openclaw/topology/lib/runtime-backup.mjs` (the gate and its message) · Evidence: the owner's `builder-apply` run printed `{"status":"FAIL","stage":"builder-apply","reason":"APPLY_REJECTED",...}` with `rollbackSucceeded:true`; the stderr line named `BACKUP_NESTED_LEDGER_ROOT_PRESENT: /home/hoang_vinh/.openclaw-zink/operator/m7-t2/ledger/operator/m7-t2/ledger`. The nested root is EMPTY (`events.jsonl` 0 bytes, `snapshot.json` sequence 0, its own identity key) — inert state, not data.
+- Reproduction: run the operator apply on the live host: `node integrations/openclaw/topology/fixtures/runtime-regression/operator-apply.mjs "$ZINK_OPERATOR_STATE_DIR"` — the report names the class, and the message names the directory to move out.
 - Acceptance criteria: the apply refuses with a reason the classifier names, or the operator's stderr names the step that refused; a refusal that neither names is a defect in the classification, not a fact the operator can use.
 - Related findings: bug mở: the deploy blocker of 2026-10-22 (the same finding's own row) · nguồn: M12/T9 — the deploy blocker family.
-
-### F-389 — the reclamation's subject: the extraction's copy is reclaimed, the searchable copy is not, and only the owner can say which one `H9` meant
-
-- Category: F4 — Integration & Contract Violations
-- Legacy register id: — (new in M12/T9)
-- Affected modules: Zink Knowledgebase
-- Severity: Medium
-- Status: OPEN — the owner's decision is required (RED, `AGENTS.md` §7): the answer `H9` ("the derived text copies may be reclaimed; the PDF itself stays") does not say which copy it meant, and the two copies are not the same thing.
-- Root cause: the Knowledgebase holds TWO copies of a PDF's text. The extraction's copy is `knowledge.pdf_content_segments` (the extracted text with its page and bounding box), its provenance and its manifest; the published, searchable copy is `knowledge.segments.text`, which the owner asked the Knowledgebase to keep. The implemented path (band C, `H9`) reclaims the extraction's copy and leaves the published one — the published segments carry no build reference, so they survive by construction.
-- Evidence: Where: `apps/knowledge/app/database.py` (the reclamation), `apps/knowledge/migrations/001_initial.sql:98` (the published segments, which reference no content build) · Evidence: the deleted relations are `pdf_source_details`, `pdf_content_segments`, `pdf_content_batches`; the lane proves the published segments are untouched (`apps/knowledge/tests/test_m12_t9_pdf_content_reclamation.py`).
-- Reproduction: reclaim one PDF's derived copy, then count the rows: the extraction's rows are gone and the same text is still in `knowledge.segments`.
-- Acceptance criteria: the owner says which copy `H9` meant. If it meant the extraction's copy (what is implemented), the row closes with the answer. If it meant the searchable copy too, the published segments of that PDF must be reclaimed as well — that is a change to what the Knowledgebase keeps, so it needs its own approved step and its own durable record.
-- Related findings: quyết định chủ: `H9` · nguồn: M12/T9 — the review round of 2026-10-22.
-
-### F-390 — the reclamation route carries no authorization and records no caller
-
-- Category: F2 — Security & Authorization
-- Legacy register id: — (new in M12/T9)
-- Affected modules: Zink Knowledgebase
-- Severity: Medium
-- Status: OPEN — the owner's decision is required (RED, `AGENTS.md` §7): the Knowledgebase's API has no per-route authorization at all, and adding one is a change to the security boundary, which `docs/contracts/execution/ACTIVE.md` §1 does not authorize.
-- Root cause: `POST /v1/pdf-content-reclamations` is a destructive door: it deletes a PDF's derived text copy. No route of the Knowledgebase API carries a credential, the nginx proxy exposes `/knowledge/` without a `limit_except`, and the service sits on the shared `platform` network, so any process on the host and any container on that network can call it. Nothing records WHO reclaimed what: the durable record is the content build's terminal state (WHAT and WHEN), and the Skill Store's own governed retirement — the pattern this repository already uses for a governed destructive act — carries a decision reference and an actor, which this route does not ask for.
-- Evidence: Where: `apps/knowledge/app/main.py` (the route), `infrastructure/nginx/conf.d/default.conf` (the proxy), `zink-skill-store/src/catalog.mjs:1756` (the `decisionRef`/`ownerActor` pattern) · Evidence: the Knowledgebase's API has no `Depends`/token check on any of its ten routes; the blast radius is bounded (the published searchable segments survive; only the derived copy goes, and the PDF can be ingested again), but the door itself is open to anything that can reach the port.
-- Reproduction: POST `{"source_path": "02. Books/Authority/report.pdf"}` to `http://127.0.0.1:8080/knowledge/v1/pdf-content-reclamations` from any process on the host, or from any container on the `platform` network.
-- Acceptance criteria: the owner decides whether this door needs a credential (and which), and whether the record must carry the actor and the decision that authorized it. If the platform boundary is the trust boundary, the row closes with that answer; if a credential is wanted, the change needs its own approved step (a new configuration knob and a new durable record are both outside the current band).
-- Related findings: quyết định chủ: — · nguồn: M12/T9 — the review round of 2026-10-22.
 
 ### F-391 — the reclamation's SQL never runs against a real PostgreSQL, so its foreign-key order is unproven
 

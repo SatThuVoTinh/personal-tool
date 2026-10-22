@@ -76,6 +76,12 @@ const BAND_A3_CLOSED_ROWS = 1;
  * operator path, and two comments that contradicted the code beside them.
  */
 const REVIEW_ROUND_CLOSED_ROWS = 5;
+/**
+ * The rows the owner's own answers closed on 2026-10-22 (`H9`): which copy the
+ * reclamation meant, and whether its door needs a credential. Both close on the
+ * ANSWER, not on a code change, so their changelog token is the phrase below.
+ */
+const OWNER_ANSWER_CLOSED_ROWS = 2;
 /** Every closed row the register's §2 carried, in the changelog now. */
 const CLOSED_ROW_COUNT =
   CLOSURE_TABLE_ROWS +
@@ -86,7 +92,8 @@ const CLOSED_ROW_COUNT =
   DEPLOY_BLOCKER_ROUND_TWO_CLOSED_ROWS +
   BAND_C_CLOSED_ROWS +
   BAND_A3_CLOSED_ROWS +
-  REVIEW_ROUND_CLOSED_ROWS;
+  REVIEW_ROUND_CLOSED_ROWS +
+  OWNER_ANSWER_CLOSED_ROWS;
 
 /** Every closed row: "<row id> <commit token>". */
 const CLOSED_ROWS = [
@@ -496,6 +503,11 @@ const CLOSED_ROWS = [
   ["F-386", "`4a4374a`"],
   ["F-387", "`69847f2`"],
   ["F-388", "`0ae2e54`"],
+  // The owner's answers of 2026-10-22 (`H9`): both rows closed on the answer,
+  // so there is no code commit to name — the changelog entry carries the phrase
+  // instead, exactly like the "accepted cost" rows above.
+  ["F-389", "_(owner's answer — no code change)_"],
+  ["F-390", "_(owner's answer — no code change)_"],
 ];
 
 /** Every row the register holds, transcribed at HEAD. */
@@ -532,8 +544,6 @@ const REGISTER_ROW_IDS = [
   "F-324",
   "F-342",
   "F-383",
-  "F-389",
-  "F-390",
   "F-391",
 ];
 

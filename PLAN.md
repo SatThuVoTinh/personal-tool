@@ -7883,6 +7883,23 @@ stderr — the trusted channel — while the report stays the disclosable record
 digest once instead of twice (`c8ef018`). The row itself is `F-383`, OPEN in
 the register until the next apply names the step (`21fce9e`).
 
+**The third deploy blocker, continued: the next apply DID name the step — and
+the step was the ceremony's own gate.** BƯỚC 1 then passed on the live host
+(`builder_preflight: PASS`), and BƯỚC 2 refused with
+`BACKUP_NESTED_LEDGER_ROOT_PRESENT`: a previous ceremony run had passed the
+LEDGER root where the state root was expected, minting a second, EMPTY
+governance root inside the real one
+(`~/.openclaw-zink/operator/m7-t2/ledger/operator/m7-t2/ledger/`). The artifact
+is inert — `events.jsonl` 0 bytes, `snapshot.json` `sequence: 0`, its own
+identity key — and `createRuntimeBackup` refuses it by design (`F-369`: removing
+live state is the operator's decision). Two defects sat on top of that refusal:
+the apply's report collapsed it to `APPLY_REJECTED`, because the class set did
+not name the ceremony's own diagnostic, and no operator document said what to do
+with the directory. `d3f64ee` names the class in the shared set and in the
+preflight driver's copy of it, makes the gate's message say what to do, and adds
+BƯỚC 1b to the runbook (move the artifact out of the state root, never delete
+it). `F-383` stays OPEN until an apply completes without an unnamed refusal.
+
 **Band C's last item — `H9`, the PDF-derived-text reclamation
 (2026-10-22).** The owner's answer: "cho phép dọn" — allow the reclamation; the
 PDF itself stays. Before this, nothing reclaimed a PDF's derived text copy:
@@ -7903,11 +7920,19 @@ derived copy belongs to the CONTENT IDENTITY, so one build can carry more than
 one source link; the number of links the reclamation released is REPORTED.
 
 Commit `b5658de`. Evidence: the Knowledgebase suite 299 passed / 8 skipped /
-0 failed, including eleven cases of the new lane. Two questions the review
-raised are the OWNER's to answer and stay OPEN in the register: which copy
-`H9` meant — the extraction's copy (as implemented) or the searchable copy
-too (`F-389`) — and whether this destructive door needs a credential
-(`F-390`).
+0 failed, including eleven cases of the new lane.
+
+**The owner answered both review questions on 2026-10-22 — `A`, `A` — and both
+rows close.** `F-389`: `H9` meant the EXTRACTION's copy — the extracted text
+with its page and bounding box, its provenance and its manifest — which is
+exactly what the path reclaims; the published, searchable segments stay, and
+reclaiming them would be a different retention decision that needs its own
+approved step. `F-390`: the platform boundary IS the trust boundary — reaching
+the door is the authorization — so the route keeps no credential and records the
+content build's terminal state (WHAT and WHEN) instead of an actor; adding one
+would be a change to the security boundary and therefore its own task. Both
+histories are in `CHANGELOG.md`. `F-391` stays OPEN: the reclamation's statement
+order is still unproven against a real PostgreSQL.
 
 **The review round (2026-10-22) — three independent reviewers over the branch
 and the new work.** Their findings were fixed in their own commits, and the
