@@ -93,6 +93,7 @@ try {
     "Systemd drop-in",
     "Governance identity key",
     "T2 backup manifest",
+    "BACKUP_NESTED_LEDGER_ROOT_PRESENT",
     "ROUTER_HOST_UNAVAILABLE",
     "ROUTER_PORT_UNAVAILABLE",
     "ROUTER_API_KEY_UNAVAILABLE",

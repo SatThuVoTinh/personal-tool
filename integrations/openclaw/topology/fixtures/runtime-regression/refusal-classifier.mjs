@@ -39,6 +39,12 @@ export const KNOWN_REFUSAL_REASONS = Object.freeze([
   "Systemd drop-in",
   "Governance identity key",
   "T2 backup manifest",
+  // M12/T9 F-383: the pre-apply ceremony's own nested-governance-root gate
+  // (`createRuntimeBackup`). Measured on the live host on 2026-10-22: the
+  // builder refused with this literal and the operator's report said
+  // `APPLY_REJECTED`, so the one fact that names the artifact never reached
+  // the report.
+  "BACKUP_NESTED_LEDGER_ROOT_PRESENT",
   "ROUTER_HOST_UNAVAILABLE",
   "ROUTER_PORT_UNAVAILABLE",
   "ROUTER_API_KEY_UNAVAILABLE",

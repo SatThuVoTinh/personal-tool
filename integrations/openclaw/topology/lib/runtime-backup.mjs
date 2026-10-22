@@ -130,7 +130,9 @@ function assertNoNestedLedgerRoot(stateDir) {
     existsSync(path.join(nested, "events.jsonl")) ||
     existsSync(path.join(nested, "snapshot.json"));
   if (!holdsLedger) return;
-  throw new Error(`BACKUP_NESTED_LEDGER_ROOT_PRESENT: ${nested}`);
+  throw new Error(
+    `BACKUP_NESTED_LEDGER_ROOT_PRESENT: ${nested} (a second, empty governance root inside the real one; move that directory out of the state root — this ceremony never deletes live state)`,
+  );
 }
 
 /**

@@ -1191,6 +1191,49 @@ describe("M12/T9 - F-159: one refusal classifier for both operator drivers", () 
       "the preflight driver must assert that its class set is the shared one, in the same order",
     );
   });
+  test("F-383: the nested ledger root the ceremony refuses is named, not left as APPLY_REJECTED", async () => {
+    const { classifyRefusal, KNOWN_REFUSAL_REASONS } =
+      await import("../integrations/openclaw/topology/fixtures/runtime-regression/refusal-classifier.mjs");
+    const { classifyApplyReason } =
+      await import("../integrations/openclaw/topology/fixtures/runtime-regression/apply-orchestration.mjs");
+    // Measured on the live host on 2026-10-22: the builder's apply refused with
+    // exactly this literal (`createRuntimeBackup`'s nested-governance-root gate)
+    // and the operator's report carried `APPLY_REJECTED` — the one fact that
+    // names the artifact was on stderr only.
+    const diagnostic = "BACKUP_NESTED_LEDGER_ROOT_PRESENT";
+    const error = {
+      stderr: `${diagnostic}: /home/example/.openclaw-zink/operator/m7-t2/ledger/operator/m7-t2/ledger`,
+      message: "",
+      code: "",
+    };
+    assert.ok(
+      KNOWN_REFUSAL_REASONS.includes(diagnostic),
+      "the shared class set must name the ceremony's own refusal",
+    );
+    assert.equal(
+      classifyRefusal(error, "PREFLIGHT_REJECTED"),
+      diagnostic,
+      "the preflight must report the class, not its fallback",
+    );
+    assert.equal(
+      classifyApplyReason(error),
+      diagnostic,
+      "the apply must report the class, not APPLY_REJECTED",
+    );
+    // The preflight driver keeps its own statement of the set and asserts
+    // equality at load time; an entry it does not carry turns that assertion
+    // into a thrown error, so the refusal stops being reported as a report.
+    const source = fs.readFileSync(
+      repoFile(
+        "integrations/openclaw/topology/fixtures/runtime-regression/operator-preflight.mjs",
+      ),
+      "utf8",
+    );
+    assert.ok(
+      source.includes(`"${diagnostic}"`),
+      "the preflight driver's list must carry the class in the shared order",
+    );
+  });
 });
 
 describe("M12/T9 - F-182: the apply reloads the unit and verifies the LOADED definition", () => {
