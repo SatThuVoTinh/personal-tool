@@ -238,6 +238,17 @@ test("F-197: the gate passes a run that matches the declarations", () => {
       });
     }
   }
+  // Every lane of the repository contributes a case: a lane that did not run
+  // is a refusal of its own, so a report that leaves one out must not be
+  // able to claim to match the declarations.
+  for (const lane of laneList()) {
+    if (cases.some((entry) => entry.lane === lane)) continue;
+    cases.push({
+      lane,
+      name: "a case of a lane without a family",
+      skipped: false,
+    });
+  }
   const result = verdict(cases);
   assert.equal(
     result.code,
@@ -245,6 +256,38 @@ test("F-197: the gate passes a run that matches the declarations", () => {
     `a run that matches the declarations must pass: ${result.stdout}${result.stderr}`,
   );
   assert.match(result.stdout, /SKIP EXPECTATION GATE: PASS/u);
+});
+
+test("F-197: the gate refuses a lane that did not run at all", () => {
+  // A lane that contributed no case has no skip to count: its absence looks
+  // exactly like a lane with nothing to skip. A whole lane going inert would
+  // then leave the gate green, which is the defect this gate exists to close.
+  const cases = [];
+  for (const family of families) {
+    for (const lane of lanesOf(family)) {
+      cases.push({
+        lane,
+        name: `a case of ${family.id}`,
+        skipped: family.expectation === "may-skip",
+      });
+    }
+  }
+  const absent = laneList().find(
+    (lane) => !cases.some((entry) => entry.lane === lane),
+  );
+  assert.ok(absent, "the repository must own a lane that declares no family");
+
+  const result = verdict(cases);
+  assert.notEqual(
+    result.code,
+    0,
+    `the gate must refuse a lane that did not run: ${result.stdout}${result.stderr}`,
+  );
+  assert.match(
+    result.stderr,
+    /did not run/u,
+    `the refusal must say the lane did not run: ${result.stderr}`,
+  );
 });
 
 test("F-197: the npm test script consumes the skip counts", () => {

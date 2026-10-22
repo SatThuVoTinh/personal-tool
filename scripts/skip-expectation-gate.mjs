@@ -213,6 +213,22 @@ expectation table does not: its skips are counted against nothing`,
     }
   }
 
+  // A lane that contributed NO case at all did not run. Its skips are then
+  // counted against nothing, so a whole lane going inert would leave the gate
+  // green — the very defect this gate exists to close. The check runs where
+  // the expectations are enforced, so a local run of a subset is not judged
+  // against lanes it never meant to run.
+  if (process.env.CI) {
+    for (const [lane, entry] of perLane) {
+      if (entry.passes === 0 && entry.skips === 0) {
+        failures.push(
+          `the lane \`${lane}\` contributed no case at all: it did not run, so \
+its skips are counted against nothing`,
+        );
+      }
+    }
+  }
+
   for (const family of families) {
     const members = [...perLane.entries()].filter(
       ([, entry]) => entry.family === family.id,
