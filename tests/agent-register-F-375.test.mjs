@@ -88,6 +88,12 @@ const OWNER_ANSWER_CLOSED_ROWS = 2;
  * collapsed to `APPLY_REJECTED` is proven end to end.
  */
 const DEPLOY_COMPLETED_CLOSED_ROWS = 1;
+/**
+ * The row the real-PostgreSQL gate closed (2026-10-22): the reclamation's order
+ * now runs against the container, and the reverse order is required to be
+ * refused, so the proof no longer rests on a recording fake.
+ */
+const FINAL_VERIFICATION_CLOSED_ROWS = 1;
 /** Every closed row the register's §2 carried, in the changelog now. */
 const CLOSED_ROW_COUNT =
   CLOSURE_TABLE_ROWS +
@@ -100,7 +106,8 @@ const CLOSED_ROW_COUNT =
   BAND_A3_CLOSED_ROWS +
   REVIEW_ROUND_CLOSED_ROWS +
   OWNER_ANSWER_CLOSED_ROWS +
-  DEPLOY_COMPLETED_CLOSED_ROWS;
+  DEPLOY_COMPLETED_CLOSED_ROWS +
+  FINAL_VERIFICATION_CLOSED_ROWS;
 
 /** Every closed row: "<row id> <commit token>". */
 const CLOSED_ROWS = [
@@ -519,6 +526,8 @@ const CLOSED_ROWS = [
   // the commit that named the ceremony's own refusal; the closing evidence is
   // the owner's apply, named in the same changelog entry.
   ["F-383", "`d3f64ee`"],
+  // The real-PostgreSQL gate (2026-10-22) is the commit that closed the row.
+  ["F-391", "`ddbd303`"],
 ];
 
 /** Every row the register holds, transcribed at HEAD. */
@@ -554,7 +563,6 @@ const REGISTER_ROW_IDS = [
   "F-299",
   "F-324",
   "F-342",
-  "F-391",
 ];
 
 /**

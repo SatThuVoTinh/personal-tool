@@ -7907,7 +7907,17 @@ read-only afterwards: the gateway is `active` with `NRestarts=0`, the deployed
 entrypoint's SHA-256 equals the build's packaged entrypoint, the two
 coordinators read `Coordinator O1` / `Coordinator O2`, and the router credential
 is the SecretRef object the build emits. `F-383` closes with that run and its
-history is in `CHANGELOG.md`; `F-391` is the band's only open row.
+history is in `CHANGELOG.md`.
+
+**The band's last open row closed the same day.** `F-391` was the reclamation's
+missing proof: the writer's order rests on a foreign key (the link pins the
+build to `READY`), and the only lane that touched the writer used a recording
+fake. The real-PostgreSQL gate now reads the writer's own four statements out of
+`apps/knowledge/app/database.py`, runs them in that order in a scratch database,
+proves the published segment and the source row survive while the derived
+relations go, and then runs the reverse order and requires the database to
+refuse it (`ddbd303`). Register: `docs/execution/findings.md` holds **0** open
+rows.
 
 **Band C's last item — `H9`, the PDF-derived-text reclamation
 (2026-10-22).** The owner's answer: "cho phép dọn" — allow the reclamation; the
