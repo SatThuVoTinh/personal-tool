@@ -667,3 +667,267 @@ test("F-095: the governed retirement is recorded in the derived index (real Post
     admin(`DROP DATABASE IF EXISTS ${dbName}`);
   }
 });
+
+// M12/T9 F-391: the reclamation's statement ORDER is proven on real
+// PostgreSQL, not argued from a fake.
+//
+// `reclaim_pdf_content` deletes three derived relations and THEN moves the
+// content build out of `READY`. That order is not a style choice: the link row
+// (`knowledge.pdf_source_details`) carries `(build_id, build_status='READY')`
+// and holds a foreign key to the build's `(id, status)`, so while the link
+// exists the build CANNOT leave `READY` — PostgreSQL refuses the UPDATE.
+//
+// The Python lane exercises the same method against a fake connection that
+// records statements; a recorder cannot tell an accepted order from a refused
+// one. This case runs the writer's OWN statements — read out of its source, so
+// there is no second copy to drift — against the container, and then proves the
+// gate has teeth by running the reverse order and requiring the refusal.
+const RECLAMATION_WRITER = path.join(
+  REPO_ROOT,
+  "apps",
+  "knowledge",
+  "app",
+  "database.py",
+);
+
+function reclamationStatements() {
+  const source = readFileSync(RECLAMATION_WRITER, "utf8");
+  const start = source.indexOf("async def reclaim_pdf_content");
+  assert.notEqual(
+    start,
+    -1,
+    "apps/knowledge/app/database.py must declare reclaim_pdf_content",
+  );
+  const end = source.indexOf("\n    async def ", start + 1);
+  const body = source.slice(start, end === -1 ? undefined : end);
+  const call =
+    /await connection\.(?:execute|fetchrow|fetchval)\(\s*("""[\s\S]*?"""|"(?:[^"\\]|\\.)*")/gu;
+  const statements = [];
+  for (const match of body.matchAll(call)) {
+    // The capture keeps its delimiters: a triple-quoted block or a one-line
+    // Python string. Strip exactly the delimiters that were captured.
+    const literal = match[1];
+    const sql = (
+      literal.startsWith('"""') ? literal.slice(3, -3) : literal.slice(1, -1)
+    ).trim();
+    // The SELECTs count what is about to go; only the writes carry the order
+    // this case is about.
+    if (/^(?:DELETE|UPDATE)\b/u.test(sql)) statements.push(sql);
+  }
+  return statements;
+}
+
+function reclamationFixtureSql(prefix, identity, indexStatus = "ACTIVE") {
+  const source = `${prefix}03`;
+  return `
+INSERT INTO knowledge.indexes (id, status, embedding_model_name, embedding_model_digest, embedding_dimensions, activated_at, superseded_at)
+VALUES ('${prefix}01', '${indexStatus}', 'gate-embedding', '${"e".repeat(64)}', 1024, now(), ${indexStatus === "ACTIVE" ? "NULL" : "now()"});
+INSERT INTO knowledge.index_runs (id, index_id, kind, status, finished_at)
+VALUES ('${prefix}02', '${prefix}01', 'INCREMENTAL', 'SUCCEEDED', now());
+INSERT INTO knowledge.sources (id, index_id, source_type, source_path, sha256, mime_type, title, primary_topic, indexed_by_run_id)
+VALUES ('${source}', '${prefix}01', 'PDF', 'vault/gate-${prefix}.pdf', '${identity}', 'application/pdf', 'Gate PDF', 'gate', '${prefix}02');
+INSERT INTO knowledge.pdf_content_builds (id, content_identity_digest, pdf_digest, sidecar_digest, processing_identity_digest, status, ready_at, finished_at)
+VALUES ('${prefix}04', '${identity}', '${"b".repeat(64)}', '${"c".repeat(64)}', '${"d".repeat(64)}', 'READY', now(), now());
+INSERT INTO knowledge.pdf_content_batches (id, build_id, page_start, page_end, status, started_at, finished_at)
+VALUES ('${prefix}05', '${prefix}04', 1, 1, 'SUCCEEDED', now(), now());
+INSERT INTO knowledge.pdf_content_segments (id, build_id, batch_id, ordinal, segment_type, content, page_start, page_end, provenance)
+VALUES ('${prefix}06', '${prefix}04', '${prefix}05', 0, 'PDF_PASSAGE', 'derived text', 1, 1, '{"source":"gate"}');
+INSERT INTO knowledge.pdf_source_details (index_id, source_id, build_id)
+VALUES ('${prefix}01', '${source}', '${prefix}04');
+INSERT INTO knowledge.segments (id, index_id, source_id, segment_type, chunk_ordinal, source_path, title, primary_topic, text, indexed_by_run_id)
+VALUES ('${prefix}07', '${prefix}01', '${source}', 'PDF_PASSAGE', 0, 'vault/gate-${prefix}.pdf', 'Gate PDF', 'gate', 'published text', '${prefix}02');
+`;
+}
+
+test("M12/T9 F-391: the reclamation's order is accepted by real PostgreSQL, and the reverse is refused", async (t) => {
+  if (!containerAvailable(t)) return;
+
+  const statements = reclamationStatements();
+  assert.equal(
+    statements.length,
+    4,
+    `the writer must issue four writes; read: ${statements.map((sql) => sql.slice(0, 40)).join(" | ")}`,
+  );
+  assert.match(
+    statements[0],
+    /^DELETE FROM knowledge\.pdf_source_details\b/u,
+    "the link that pins the build to READY must go FIRST",
+  );
+  assert.match(
+    statements[statements.length - 1],
+    /^UPDATE knowledge\.pdf_content_builds\b/u,
+    "the build may leave READY only after the link is gone",
+  );
+
+  const dbName = `m12_t9_f391_${createHash("sha256")
+    .update(String(Math.random()))
+    .digest("hex")
+    .slice(0, 10)}`;
+  const admin = (statement) =>
+    dockerExec([
+      "psql",
+      "-U",
+      "postgres",
+      "-d",
+      "postgres",
+      "--set=ON_ERROR_STOP=1",
+      "-t",
+      "-A",
+      "-c",
+      statement,
+    ]);
+
+  const created = admin(`CREATE DATABASE ${dbName}`);
+  if (created.status !== 0) {
+    t.skip(
+      `could not create scratch database: ${created.stderr?.slice(0, 200)}`,
+    );
+    return;
+  }
+
+  try {
+    const run = (sql) =>
+      dockerExec(
+        [
+          "psql",
+          "-U",
+          "postgres",
+          "-d",
+          dbName,
+          "--set=ON_ERROR_STOP=1",
+          "-t",
+          "-A",
+          "-f",
+          "-",
+        ],
+        sql,
+      );
+    const runSql = (sql) => {
+      const res = run(sql);
+      if (res.status !== 0) {
+        throw new Error(
+          `psql rejected SQL (code ${res.status}): ${(res.stderr || res.stdout || "").slice(0, 400)}`,
+        );
+      }
+      return (res.stdout || "").trim();
+    };
+
+    let appliedMigrations;
+    try {
+      appliedMigrations = applyTrackedMigrations(dbName);
+    } catch (error) {
+      if (error?.migration === VECTOR_SCHEMA_MIGRATION) {
+        t.skip(
+          `pgvector/migration unavailable in container: ${String(error?.message ?? error).slice(0, 300)}`,
+        );
+        return;
+      }
+      throw error;
+    }
+    assert.deepEqual(
+      appliedMigrations,
+      everyTrackedMigration().map((migration) => migration.name),
+      "the gate must apply EVERY tracked migration, in order",
+    );
+
+    // The writer's statements bind $1 (the build) and, for the terminal state,
+    // $2 (the failure code). psql has no positional binding, so each runs as a
+    // PREPARE/EXECUTE with the same parameters the writer passes.
+    const runWriterStatement = (statement, index, buildId) => {
+      const name = `f391_stmt_${index}`;
+      const types = statement.includes("$2") ? "uuid, text" : "uuid";
+      const args = statement.includes("$2")
+        ? `'${buildId}', 'PDF_CONTENT_RECLAIMED'`
+        : `'${buildId}'`;
+      return runSql(
+        `PREPARE ${name}(${types}) AS ${statement};\nEXECUTE ${name}(${args});\nDEALLOCATE ${name};`,
+      );
+    };
+
+    // 1) The writer's own order must be ACCEPTED by real PostgreSQL.
+    const accepted = "11111111-1111-4111-8111-1111111111";
+    runSql(reclamationFixtureSql(accepted, "a".repeat(64)));
+    statements.forEach((statement, index) =>
+      runWriterStatement(statement, index, `${accepted}04`),
+    );
+    assert.equal(
+      runSql(
+        `SELECT count(*) FROM knowledge.pdf_source_details WHERE build_id = '${accepted}04';`,
+      ),
+      "0",
+      "no link may still pin the reclaimed build",
+    );
+    assert.equal(
+      runSql(
+        `SELECT count(*) FROM knowledge.pdf_content_segments WHERE build_id = '${accepted}04';`,
+      ),
+      "0",
+      "the extraction's segments are the copy that goes",
+    );
+    assert.equal(
+      runSql(
+        `SELECT count(*) FROM knowledge.pdf_content_batches WHERE build_id = '${accepted}04';`,
+      ),
+      "0",
+      "the extraction's manifest is the copy that goes",
+    );
+    assert.equal(
+      runSql(
+        `SELECT status || '|' || coalesce(failure_code, '') FROM knowledge.pdf_content_builds WHERE id = '${accepted}04';`,
+      ),
+      "CANCELLED|PDF_CONTENT_RECLAIMED",
+      "the build's terminal state is the record of the reclamation",
+    );
+    assert.equal(
+      runSql(
+        `SELECT count(*) FROM knowledge.segments WHERE source_id = '${accepted}03';`,
+      ),
+      "1",
+      "the PUBLISHED (searchable) copy must survive the reclamation",
+    );
+    assert.equal(
+      runSql(
+        `SELECT count(*) FROM knowledge.sources WHERE id = '${accepted}03';`,
+      ),
+      "1",
+      "the PDF's source row must survive the reclamation",
+    );
+
+    // 2) The reverse order must be REFUSED. This is the control that proves the
+    // FK really pins the build to READY: if PostgreSQL accepted this, the first
+    // half would prove nothing about order. The second fixture's index is
+    // SUPERSEDED only because the schema allows a single ACTIVE index; the
+    // control exercises the build/link foreign key, not index selection.
+    const refused = "22222222-2222-4222-8222-2222222222";
+    runSql(reclamationFixtureSql(refused, "f".repeat(64), "SUPERSEDED"));
+    const reversal = run(
+      `PREPARE f391_reversed(uuid, text) AS ${statements[statements.length - 1]};\nEXECUTE f391_reversed('${refused}04', 'PDF_CONTENT_RECLAIMED');`,
+    );
+    assert.notEqual(
+      reversal.status,
+      0,
+      "PostgreSQL must refuse to move a build whose link still pins it to READY",
+    );
+    assert.match(
+      `${reversal.stderr || ""}${reversal.stdout || ""}`,
+      /foreign key|violates/iu,
+      `the refusal must be the foreign key, not another error: ${(reversal.stderr || reversal.stdout || "").slice(0, 300)}`,
+    );
+    assert.equal(
+      runSql(
+        `SELECT status FROM knowledge.pdf_content_builds WHERE id = '${refused}04';`,
+      ),
+      "READY",
+      "a refused transition must leave the build exactly as it was",
+    );
+    assert.equal(
+      runSql(
+        `SELECT count(*) FROM knowledge.pdf_source_details WHERE build_id = '${refused}04';`,
+      ),
+      "1",
+      "a refused transition must leave the link exactly as it was",
+    );
+  } finally {
+    admin(`DROP DATABASE IF EXISTS ${dbName}`);
+  }
+});

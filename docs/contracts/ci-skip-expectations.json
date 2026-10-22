@@ -48,8 +48,8 @@
     {
       "id": "postgres",
       "expectation": "may-skip",
-      "maxSkips": 3,
-      "reason": "the SQL statement gate needs the PostgreSQL container, and the CI runner has no Docker daemon, so its three cases report NOT RUN instead of a pass"
+      "maxSkips": 4,
+      "reason": "the SQL statement gate needs the PostgreSQL container, and the CI runner has no Docker daemon, so its four cases report NOT RUN instead of a pass"
     },
     {
       "id": "docker",
