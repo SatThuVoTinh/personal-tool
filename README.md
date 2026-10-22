@@ -294,6 +294,27 @@ token hay nội dung cấu hình. Nếu bước 1 báo `Governance plugin asset`
 `Governance plugin entrypoint`, nghĩa là digest đang cài thật chưa được admit trong
 `configure.mjs`: dừng ở đó và báo cáo, **không** tự nới cổng tiêu thụ để cho qua.
 
+### 5. Chặn Merge Trong Repo (Merge Blocker — H2)
+
+GitHub không bật được branch protection cho repo private này (`403 Upgrade to
+GitHub Pro`), nên chặn merge nằm TRONG repo: một script chặn TRƯỚC khi merge
+và một job CI phát hiện SAU khi merge.
+
+```bash
+# BƯỚC A — chạy TRƯỚC khi merge vào `main`.
+# Script từ chối (fail-closed) nếu không tìm thấy một run `quality-gate` PASS
+# ở đúng SHA sắp merge; thiếu bằng chứng, mạng lỗi hay không đọc được trạng
+# thái đều = KHÔNG merge. Mặc định nó kiểm tra HEAD hiện tại.
+node scripts/merge-gate.mjs
+
+# Script chỉ ĐỌC: không sửa branch, không push, không merge, không mở issue.
+# Nó in ra URL của run để anh tự xem bằng chứng thay vì tin lời gate.
+```
+
+Job `merge-gate-detector` trong `.github/workflows/ci.yml` là nửa SAU khi merge:
+nó chạy CHÍNH script này trên SHA của commit vừa merge, nên một lần merge
+không qua gate sẽ đỏ rõ ràng trên `main` thay vì im lặng.
+
 ---
 
 ## 5. Quy chuẩn Kênh Giao tiếp và Hướng dẫn Tương tác Discord

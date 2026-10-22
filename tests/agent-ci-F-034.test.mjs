@@ -527,6 +527,25 @@ test("F-034: the detector job runs for a push to main and nowhere else", () => {
   );
 });
 
+test("F-034: the detector runs even when the quality gate failed", () => {
+  // The detector exists for the merge that landed WITHOUT a successful gate.
+  // A job that waits on the gate is SKIPPED when the gate fails, so without
+  // `always()` the one case the detector exists for would stay silent.
+  const workflow = readWorkflow();
+  const job = workflow.jobs?.[DETECTOR_JOB];
+  const condition = String(job?.if ?? "");
+  assert.match(
+    condition,
+    /always\(\)/u,
+    "the detector must run even when the quality-gate job it needs failed",
+  );
+  assert.match(
+    String(job?.needs ?? ""),
+    /quality-gate/u,
+    "the detector still waits for the gate's verdict, so it is about a concluded run",
+  );
+});
+
 test("F-034: the detector job cannot write to the repository", () => {
   const workflow = readWorkflow();
   const job = workflow.jobs?.[DETECTOR_JOB];

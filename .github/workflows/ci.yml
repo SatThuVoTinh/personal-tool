@@ -117,9 +117,14 @@ jobs:
   # `quality-gate` run is red. It reads the run metadata, so it needs
   # `actions: read` on top of the repository's `contents: read`; it cannot
   # write to the repository and it uses only the workflow's own token.
+  #
+  # M12/T9 F-388: the detector must ALSO run when the quality gate FAILED at
+  # that SHA. Without `always()` a failed gate SKIPS the detector, and the one
+  # merge the detector exists for — a merge that landed without a successful
+  # gate — would be exactly the case that stays silent.
   merge-gate-detector:
     name: merge-gate-detector
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: quality-gate
     runs-on: ubuntu-24.04
     timeout-minutes: 10
