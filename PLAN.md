@@ -7867,6 +7867,69 @@ branch did about it:
 | the re-based digest pin held a control that could never fire                                                                | `d7ca2d9`: the dead check is gone; the duplicate-admission check holds                                            |
 | the admission table left the pre-F-371 native-boundary build unadmitted                                                     | `392b491`: the digest is derived from the asset's own history and listed under its comment                        |
 
+**The third deploy blocker (2026-10-22) — the apply refused with a
+reason the classifier does not name.** The owner's BƯỚC 2 run rolled back
+cleanly (`mutationStarted: true`, `rollbackSucceeded: true`,
+`transactionStatus: complete`) and the live state was restored, but the report
+said only `APPLY_REJECTED`: the stage was known (`builder-apply`), the reason
+was not. The live state root shows the builder's own writes (the packaged
+extension, the auth plans, the systemd drop-in) and the ledger's checkpoint
+untouched, so the refusal came after the extension was written and before the
+checkpoint.
+
+Two changes, both committed: the refusal's detail now goes to the OPERATOR's
+stderr — the trusted channel — while the report stays the disclosable record
+(`c8ef018`), and the entrypoint's admission list names the deployed build's
+digest once instead of twice (`c8ef018`). The row itself is `F-383`, OPEN in
+the register until the next apply names the step (`21fce9e`).
+
+**Band C's last item — `H9`, the PDF-derived-text reclamation
+(2026-10-22).** The owner's answer: "cho phép dọn" — allow the reclamation; the
+PDF itself stays. Before this, nothing reclaimed a PDF's derived text copy:
+the extraction's segments, their provenance and the extraction manifest stayed
+for ever, and the only way to remove them was to edit the database by hand.
+(The orphan case was already covered: the existing retirement deletes a build
+that no source references.)
+
+The path is the store's OWN writer — the same advisory lock an index run takes,
+on the same transaction — so it can never race a run and can never be written
+outside it. The PDF stays: the source row, the published (searchable) segments
+and the file in the vault are never touched. The reclamation is RECORDED in the
+shape the Knowledgebase already records lifecycle in: the content build's own
+terminal state, `CANCELLED` with `failure_code = 'PDF_CONTENT_RECLAIMED'`. The
+action is idempotent, and the terminal build is read by its OWN failure code,
+so a cancellation that was not a reclamation is never reported as one. The
+derived copy belongs to the CONTENT IDENTITY, so one build can carry more than
+one source link; the number of links the reclamation released is REPORTED.
+
+Commit `b5658de`. Evidence: the Knowledgebase suite 299 passed / 8 skipped /
+0 failed, including eleven cases of the new lane. Two questions the review
+raised are the OWNER's to answer and stay OPEN in the register: which copy
+`H9` meant — the extraction's copy (as implemented) or the searchable copy
+too (`F-389`) — and whether this destructive door needs a credential
+(`F-390`).
+
+**The review round (2026-10-22) — three independent reviewers over the branch
+and the new work.** Their findings were fixed in their own commits, and the
+questions that are the owner's are recorded rather than answered:
+
+| what the review found                                                                                                                                               | how it was closed                                                                                                       |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| the skip gate read the DuckDB capability as an unexplained skip, so the CI runner's ten legitimate NOT RUN cases turned the quality gate red                        | `6cf8e0e`: the `duckdb` family is declared and its ceiling is measured (10 skips with the engine removed from PATH)     |
+| a lane that contributed no case at all was invisible to the skip gate                                                                                               | `6f3d5c6`: the gate refuses it where the expectations are enforced                                                      |
+| the merge blocker's pre-merge script was in no operator's path, and its post-merge half was skipped exactly when it was needed                                      | `0ae2e54`: the README carries the step and the detector runs with `always()`                                            |
+| the Skill Store's tombstone comment contradicted the retirement's own writes                                                                                        | `4a4374a`: the comment names the two paths                                                                              |
+| the result-identity docblock contradicted the code that refuses an id-only verdict                                                                                  | `69847f2`: the docblock matches the code                                                                                |
+| the reclamation's log carried a caller-supplied path unescaped, its conflict was mislabelled as an outage, and its terminal build was read without its failure code | `b5658de`: the path is logged escaped, a conflict is a conflict, and the terminal build is read by its own failure code |
+
+Recorded rather than hidden: the H9 SQL never runs against a real PostgreSQL,
+so its foreign-key order is unproven (`F-391`, OPEN — a case in the SQL
+statement gate); the moved `003_skills_vector_schema.sql` still names its old
+path in its header, and its bytes are digest-pinned, so the file cannot be
+edited and the note stays where the move is recorded; the skip expectation is
+enforced on the CI runner, and on a developer machine the gate reports the
+counts and refuses only an unexplained skip or a lane that did not run.
+
 **Residuals, recorded rather than hidden** (they are not defects the branch
 introduced, and each is a decision the owner may want to take):
 

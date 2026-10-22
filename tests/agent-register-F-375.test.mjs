@@ -70,6 +70,12 @@ const BAND_C_CLOSED_ROWS = 2;
  * cannot go inert while the job's conclusion is still SUCCESS.
  */
 const BAND_A3_CLOSED_ROWS = 1;
+/**
+ * The review round of 2026-10-22: the rows the review closed in their own
+ * commits — the DuckDB skip family, the gate's blind spot, the merge blocker's
+ * operator path, and two comments that contradicted the code beside them.
+ */
+const REVIEW_ROUND_CLOSED_ROWS = 5;
 /** Every closed row the register's §2 carried, in the changelog now. */
 const CLOSED_ROW_COUNT =
   CLOSURE_TABLE_ROWS +
@@ -79,7 +85,8 @@ const CLOSED_ROW_COUNT =
   BAND_E_CLOSED_ROWS +
   DEPLOY_BLOCKER_ROUND_TWO_CLOSED_ROWS +
   BAND_C_CLOSED_ROWS +
-  BAND_A3_CLOSED_ROWS;
+  BAND_A3_CLOSED_ROWS +
+  REVIEW_ROUND_CLOSED_ROWS;
 
 /** Every closed row: "<row id> <commit token>". */
 const CLOSED_ROWS = [
@@ -480,6 +487,15 @@ const CLOSED_ROWS = [
   ["F-380", "`9c64935`"],
   ["F-381", "`8b29531`"],
   ["F-382", "`7ab281d`"],
+  // The review round (2026-10-22): the DuckDB capability read as an
+  // unexplained skip, a lane that never ran was invisible to the skip gate,
+  // the merge blocker's script was in no operator's path, and two comments
+  // contradicted the code beside them.
+  ["F-384", "`6cf8e0e`"],
+  ["F-385", "`6f3d5c6`"],
+  ["F-386", "`4a4374a`"],
+  ["F-387", "`69847f2`"],
+  ["F-388", "`0ae2e54`"],
 ];
 
 /** Every row the register holds, transcribed at HEAD. */
@@ -516,6 +532,9 @@ const REGISTER_ROW_IDS = [
   "F-324",
   "F-342",
   "F-383",
+  "F-389",
+  "F-390",
+  "F-391",
 ];
 
 /**

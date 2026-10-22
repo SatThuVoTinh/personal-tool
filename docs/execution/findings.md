@@ -71,29 +71,29 @@ findings, lịch sử lưu vào changelog"_. Hàng đã fix xong **và đã ch�
 band không ở trạng thái `NOT RUN`, dòng `Acceptance criteria:` thỏa đúng nghĩa) thì **xóa** khỏi file này;
 lịch sử của nó (id + dòng lỗi một dòng + commit đã đóng + bằng chứng) ghi vào `CHANGELOG.md`. Hàng **chưa fix**
 thì ở lại: `REFUTED` (premise đo thật là chết — không có gì để fix) và `EXCLUDED` (đang chờ một quyết định
-của chủ) không nằm trong quy tắc này. Bảng đóng ở §2 đã bị gỡ khỏi file này: **384** hàng đã đóng nằm ở
+của chủ) không nằm trong quy tắc này. Bảng đóng ở §2 đã bị gỡ khỏi file này: **389** hàng đã đóng nằm ở
 `CHANGELOG.md`, mỗi hàng giữ id và commit đã đóng nó.
 
 ## 1. hiện trạng queue
 
-Tổng **32** hàng còn nằm trong file, chia theo nhóm. **1 hàng đang mở** (mọi câu trả lời của chủ — `H1`/`H2`/`H3`/`H5`/`H6`/`H8`/`H10` — đã được sửa xong, đã chứng minh và đã xoá khỏi file này theo §0.5), 28 hàng `REFUTED` (premise đo thật là đã chết ở HEAD, kèm bằng chứng đo được trong chính dòng `Status:`) và 3 hàng `EXCLUDED` (quyết định của chủ, hoặc dòng chỉ để đo). **383** hàng đã đóng không nằm ở đây nữa: lịch sử của chúng (id + dòng lỗi một dòng + commit đã đóng) nằm ở `CHANGELOG.md`.
+Tổng **35** hàng còn nằm trong file, chia theo nhóm. **4 hàng đang mở** (mọi câu trả lời của chủ — `H1`/`H2`/`H3`/`H5`/`H6`/`H8`/`H10` — đã được sửa xong, đã chứng minh và đã xoá khỏi file này theo §0.5), 28 hàng `REFUTED` (premise đo thật là đã chết ở HEAD, kèm bằng chứng đo được trong chính dòng `Status:`) và 3 hàng `EXCLUDED` (quyết định của chủ, hoặc dòng chỉ để đo). **383** hàng đã đóng không nằm ở đây nữa: lịch sử của chúng (id + dòng lỗi một dòng + commit đã đóng) nằm ở `CHANGELOG.md`.
 
 | Nhóm     | Nội dung                                                              | Bug    | Critical | High | Medium | Low | Ungraded |
 | -------- | --------------------------------------------------------------------- | ------ | -------- | ---- | ------ | --- | -------- |
 | F1       | Logic & Functional Bugs — Lỗi logic, sai chức năng                    | 4      | 0        | 0    | 2      | 1   | 1        |
-| F2       | Security & Authorization — Lỗi bảo mật và phân quyền                  | 3      | 0        | 0    | 2      | 1   | 0        |
+| F2       | Security & Authorization — Lỗi bảo mật và phân quyền                  | 4      | 0        | 0    | 3      | 1   | 0        |
 | F3       | State & Lifecycle Integrity — Lỗi trạng thái và vòng đời              | 5      | 0        | 3    | 2      | 0   | 0        |
-| F4       | Integration & Contract Violations — Lỗi tích hợp và vi phạm hợp đồng  | 5      | 0        | 1    | 2      | 2   | 0        |
+| F4       | Integration & Contract Violations — Lỗi tích hợp và vi phạm hợp đồng  | 6      | 0        | 1    | 3      | 2   | 0        |
 | F5       | Data Integrity & Result Correctness — Lỗi toàn vẹn dữ liệu và kết quả | 7      | 1        | 1    | 4      | 1   | 0        |
 | F6       | Reliability & Performance — Lỗi độ tin cậy và hiệu năng               | 1      | 0        | 1    | 0      | 0   | 0        |
-| F7       | Testing & Verification Gaps — Thiếu kiểm thử và xác minh              | 7      | 0        | 2    | 4      | 1   | 0        |
-| **Tổng** |                                                                       | **32** | 1        | 8    | 16     | 6   | 1        |
+| F7       | Testing & Verification Gaps — Thiếu kiểm thử và xác minh              | 8      | 0        | 2    | 5      | 1   | 0        |
+| **Tổng** |                                                                       | **35** | 1        | 8    | 19     | 6   | 1        |
 
-Theo trạng thái: OPEN 1 · EXCLUDED 3 · LATENT 0 · REFUTED 28 · PARTIAL 0 · HYPOTHESIS 0.
+Theo trạng thái: OPEN 4 · EXCLUDED 3 · LATENT 0 · REFUTED 28 · PARTIAL 0 · HYPOTHESIS 0.
 
-Các hàng đã đóng không nằm ở đây nữa: **384** hàng (134 hàng M12/T9 đóng ngày 2026-10-19, 47 hàng lượt đóng đầu của band thứ hai, 120 hàng lượt đóng cuối của band thứ hai, 16 hàng chủ đã phán ngày 2026-10-21, 51 hàng của các band `M12/T2.x` trước đó, 5 hàng của band thứ ba đóng ngày 2026-10-21, 2 hàng của blocker triển khai đóng ngày 2026-10-21, và 1 hàng của band E đóng ngày 2026-10-22, 1 hàng của band A3 đóng ngày 2026-10-22, 2 hàng của band C đóng ngày 2026-10-22, 5 hàng của blocker triển khai lần hai đóng ngày 2026-10-22) đã chuyển sang `CHANGELOG.md`, mỗi hàng kèm commit đã đóng nó. Ở M12/T9 mỗi hàng có commit riêng trỏ `F-xxx` và legacy id; ba hàng bị gộp chung một commit vì chúng sửa cùng một file và các hunk của chúng phụ thuộc nhau — tách ra sẽ tạo ra một commit không parse được (`F-055`+`F-101`+`F-240`, đo bằng cách dựng lại từng tiền tố của chuỗi commit và kiểm tra `node --check`).
+Các hàng đã đóng không nằm ở đây nữa: **389** hàng (134 hàng M12/T9 đóng ngày 2026-10-19, 47 hàng lượt đóng đầu của band thứ hai, 120 hàng lượt đóng cuối của band thứ hai, 16 hàng chủ đã phán ngày 2026-10-21, 51 hàng của các band `M12/T2.x` trước đó, 5 hàng của band thứ ba đóng ngày 2026-10-21, 2 hàng của blocker triển khai đóng ngày 2026-10-21, và 1 hàng của band E đóng ngày 2026-10-22, 1 hàng của band A3 đóng ngày 2026-10-22, 2 hàng của band C đóng ngày 2026-10-22, 5 hàng của blocker triển khai lần hai đóng ngày 2026-10-22, 5 hàng của vòng review đóng ngày 2026-10-22) đã chuyển sang `CHANGELOG.md`, mỗi hàng kèm commit đã đóng nó. Ở M12/T9 mỗi hàng có commit riêng trỏ `F-xxx` và legacy id; ba hàng bị gộp chung một commit vì chúng sửa cùng một file và các hunk của chúng phụ thuộc nhau — tách ra sẽ tạo ra một commit không parse được (`F-055`+`F-101`+`F-240`, đo bằng cách dựng lại từng tiền tố của chuỗi commit và kiểm tra `node --check`).
 
-Theo field: đo lại 2026-10-22 trên cả **32** hàng còn lại với predicate "field trống, là placeholder, hoặc ngắn dưới 40 ký tự" — **0** hàng thiếu `Reproduction`, **0** hàng thiếu `Acceptance criteria`, và 0 hàng có một trong hai field ngắn dưới 40 ký tự. Chữ "không tái hiện được" trong hai field đó ở `F-015`, `F-017`, `F-020` là ghi chú verdict của hàng REFUTED, không phải placeholder.
+Theo field: đo lại 2026-10-22 trên cả **35** hàng còn lại với predicate "field trống, là placeholder, hoặc ngắn dưới 40 ký tự" — **0** hàng thiếu `Reproduction`, **0** hàng thiếu `Acceptance criteria`, và 0 hàng có một trong hai field ngắn dưới 40 ký tự. Chữ "không tái hiện được" trong hai field đó ở `F-015`, `F-017`, `F-020` là ghi chú verdict của hàng REFUTED, không phải placeholder.
 
 Một hàng còn `Severity: Ungraded`: `F-020` (đã REFUTED nên grade không còn hệ quả). `F-021`, `F-103` và `F-104` đã đóng trong M12/T9 nên không còn nằm ở đây.
 
@@ -515,6 +515,45 @@ fix xong và đã chứng minh, nên hai loại hàng này ở lại. Dọn chú
 - Reproduction: run the operator apply on the live host with the current build: `node integrations/openclaw/topology/fixtures/runtime-regression/operator-apply.mjs "$ZINK_OPERATOR_STATE_DIR"` — the refusal's detail is now on the operator's stderr, so the next run names the step.
 - Acceptance criteria: the apply refuses with a reason the classifier names, or the operator's stderr names the step that refused; a refusal that neither names is a defect in the classification, not a fact the operator can use.
 - Related findings: bug mở: the deploy blocker of 2026-10-22 (the same finding's own row) · nguồn: M12/T9 — the deploy blocker family.
+
+### F-389 — the reclamation's subject: the extraction's copy is reclaimed, the searchable copy is not, and only the owner can say which one `H9` meant
+
+- Category: F4 — Integration & Contract Violations
+- Legacy register id: — (new in M12/T9)
+- Affected modules: Zink Knowledgebase
+- Severity: Medium
+- Status: OPEN — the owner's decision is required (RED, `AGENTS.md` §7): the answer `H9` ("the derived text copies may be reclaimed; the PDF itself stays") does not say which copy it meant, and the two copies are not the same thing.
+- Root cause: the Knowledgebase holds TWO copies of a PDF's text. The extraction's copy is `knowledge.pdf_content_segments` (the extracted text with its page and bounding box), its provenance and its manifest; the published, searchable copy is `knowledge.segments.text`, which the owner asked the Knowledgebase to keep. The implemented path (band C, `H9`) reclaims the extraction's copy and leaves the published one — the published segments carry no build reference, so they survive by construction.
+- Evidence: Where: `apps/knowledge/app/database.py` (the reclamation), `apps/knowledge/migrations/001_initial.sql:98` (the published segments, which reference no content build) · Evidence: the deleted relations are `pdf_source_details`, `pdf_content_segments`, `pdf_content_batches`; the lane proves the published segments are untouched (`apps/knowledge/tests/test_m12_t9_pdf_content_reclamation.py`).
+- Reproduction: reclaim one PDF's derived copy, then count the rows: the extraction's rows are gone and the same text is still in `knowledge.segments`.
+- Acceptance criteria: the owner says which copy `H9` meant. If it meant the extraction's copy (what is implemented), the row closes with the answer. If it meant the searchable copy too, the published segments of that PDF must be reclaimed as well — that is a change to what the Knowledgebase keeps, so it needs its own approved step and its own durable record.
+- Related findings: quyết định chủ: `H9` · nguồn: M12/T9 — the review round of 2026-10-22.
+
+### F-390 — the reclamation route carries no authorization and records no caller
+
+- Category: F2 — Security & Authorization
+- Legacy register id: — (new in M12/T9)
+- Affected modules: Zink Knowledgebase
+- Severity: Medium
+- Status: OPEN — the owner's decision is required (RED, `AGENTS.md` §7): the Knowledgebase's API has no per-route authorization at all, and adding one is a change to the security boundary, which `docs/contracts/execution/ACTIVE.md` §1 does not authorize.
+- Root cause: `POST /v1/pdf-content-reclamations` is a destructive door: it deletes a PDF's derived text copy. No route of the Knowledgebase API carries a credential, the nginx proxy exposes `/knowledge/` without a `limit_except`, and the service sits on the shared `platform` network, so any process on the host and any container on that network can call it. Nothing records WHO reclaimed what: the durable record is the content build's terminal state (WHAT and WHEN), and the Skill Store's own governed retirement — the pattern this repository already uses for a governed destructive act — carries a decision reference and an actor, which this route does not ask for.
+- Evidence: Where: `apps/knowledge/app/main.py` (the route), `infrastructure/nginx/conf.d/default.conf` (the proxy), `zink-skill-store/src/catalog.mjs:1756` (the `decisionRef`/`ownerActor` pattern) · Evidence: the Knowledgebase's API has no `Depends`/token check on any of its ten routes; the blast radius is bounded (the published searchable segments survive; only the derived copy goes, and the PDF can be ingested again), but the door itself is open to anything that can reach the port.
+- Reproduction: POST `{"source_path": "02. Books/Authority/report.pdf"}` to `http://127.0.0.1:8080/knowledge/v1/pdf-content-reclamations` from any process on the host, or from any container on the `platform` network.
+- Acceptance criteria: the owner decides whether this door needs a credential (and which), and whether the record must carry the actor and the decision that authorized it. If the platform boundary is the trust boundary, the row closes with that answer; if a credential is wanted, the change needs its own approved step (a new configuration knob and a new durable record are both outside the current band).
+- Related findings: quyết định chủ: — · nguồn: M12/T9 — the review round of 2026-10-22.
+
+### F-391 — the reclamation's SQL never runs against a real PostgreSQL, so its foreign-key order is unproven
+
+- Category: F7 — Testing & Verification Gaps
+- Legacy register id: — (new in M12/T9)
+- Affected modules: Zink Knowledgebase, Gates + CI
+- Severity: Medium
+- Status: OPEN — the gap is real and the fix is a case in the SQL statement gate, which needs the PostgreSQL container; it was not closed in this band.
+- Root cause: the reclamation's correctness rests on the ORDER of its statements: the link `knowledge.pdf_source_details` pins the build's status to `READY`, so the link must be deleted before the build leaves `READY`. The foreign key is `ON DELETE RESTRICT`, so the wrong order is refused by the database — but the Knowledgebase's own lane drives the writer against a recording fake, which enforces no constraint, and the real-PostgreSQL gate (`tests/m11-t1-postgres-sql-gate.test.mjs`) never runs these statements.
+- Evidence: Where: `apps/knowledge/app/database.py` (the writer), `apps/knowledge/migrations/002_pdf_ingestion_foundation.sql:71` (the link's foreign key) · Evidence: the Knowledgebase's lane uses a fake connection (`apps/knowledge/tests/test_m12_t9_pdf_content_reclamation.py`); the SQL statement gate applies the tracked migrations and runs the Skill Store's statements, but nothing from the reclamation.
+- Reproduction: run the reclamation's statements against a real PostgreSQL with the link still present and the build's status changed first — the foreign key refuses it.
+- Acceptance criteria: the SQL statement gate runs the reclamation's statements against a real PostgreSQL, in the writer's own order, and proves that the published segments and the source row survive while the derived relations go.
+- Related findings: quyết định chủ: `H9` · nguồn: M12/T9 — the review round of 2026-10-22.
 
 ### F-342 — `.editorconfig` and `repo:check` prescribe opposite trailing-whitespace rules for Markdown
 
