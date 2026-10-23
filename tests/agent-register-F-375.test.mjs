@@ -97,6 +97,12 @@ const DEPLOY_COMPLETED_CLOSED_ROWS = 1;
  * refused, so the proof no longer rests on a recording fake.
  */
 const FINAL_VERIFICATION_CLOSED_ROWS = 1;
+/**
+ * The row the R10 audit band closed by fixing this lane (2026-10-23): the gate
+ * pinned the register to one day's 31-row snapshot and refused four of §0.3's
+ * seven status words, so filing a defect was red by construction.
+ */
+const R10_GATE_CLOSED_ROWS = 1;
 /** Every closed row the register's §2 carried, in the changelog now. */
 const CLOSED_ROW_COUNT =
   CLOSURE_TABLE_ROWS +
@@ -110,7 +116,8 @@ const CLOSED_ROW_COUNT =
   REVIEW_ROUND_CLOSED_ROWS +
   OWNER_ANSWER_CLOSED_ROWS +
   DEPLOY_COMPLETED_CLOSED_ROWS +
-  FINAL_VERIFICATION_CLOSED_ROWS;
+  FINAL_VERIFICATION_CLOSED_ROWS +
+  R10_GATE_CLOSED_ROWS;
 
 /** Every closed row: "<row id> <commit token>". */
 const CLOSED_ROWS = [
@@ -531,6 +538,9 @@ const CLOSED_ROWS = [
   ["F-383", "`d3f64ee`"],
   // The real-PostgreSQL gate (2026-10-22) is the commit that closed the row.
   ["F-391", "`ddbd303`"],
+  // The R10 band's own row (2026-10-23): the closing commit IS this lane's
+  // change, because the defect was the gate pinning one day's queue snapshot.
+  ["F-584", "`6468e86`"],
 ];
 
 /** Every row the register holds, transcribed at HEAD. */
