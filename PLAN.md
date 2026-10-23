@@ -83,7 +83,7 @@ Historical Plan Revision: M12/T9-R1
 Historical Planning Readiness: APPROVED — owner approval recorded on 2026-10-19; retained as history.
 Historical Execution Authorization: YES — bounded to the archived R1 contract; retained as history.
 Historical Execution Contract: archived under `docs/contracts/execution/archive/`.
-Historical Task Status: CLOSED — retained as history; the live status is the `## Active task` block at the end of this file.
+Task Status: CLOSED — historical status for the closed bands; the live status is the `## Active task` block at the end of this file.
   (history) `M12/T4` — Governance-record integrity: re-inventory the orphaned findings, re-file them under live
   identifiers, and shrink the release-gate cell that duplicates §8.
   (history) `M12/T2.3` Wave C — **CLOSED 2026-10-17**; the three-wave remediation programme (`M12/T2.1` high,

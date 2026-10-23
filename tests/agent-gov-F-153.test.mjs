@@ -145,7 +145,9 @@ test("F-153: the live header blocks carry both gate tokens explicitly", () => {
   for (const field of ["Review Convergence Gate:", "Final Quality Gate:"]) {
     const line = block.find((entry) => entry.startsWith(field));
     assert.ok(line, `the Active task block must carry "${field}"`);
-    const value = strip(line.slice(field.length)).split(/\s/u)[0];
+    const value = strip(line.slice(field.length))
+      .split(/\s+[—(]/u)[0]
+      .trim();
     assert.ok(
       GATE_TOKENS.has(value),
       `the Active task block's "${field}" must carry one of ${[...GATE_TOKENS].join(", ")}, found "${value}"`,
