@@ -75,6 +75,32 @@ if mode == "probe":
         patch("zink_pdf_runtime.runner._runtime_identity", return_value=identity),
     ):
         response = _dispatch(request)
+elif mode == "materialize":
+    from zink_pdf_runtime.runner import _MultiPageItem
+
+    ok_probe = {
+        "protocol_version": PROTOCOL_VERSION,
+        "status": "ok",
+        "pdf_runtime_lock_digest": "b" * 64,
+        "distributions": {},
+        "artifact_digests": {},
+        "runner_code_digest": "c" * 64,
+    }
+
+    class Result:
+        status = "success"
+        document = object()
+
+    with (
+        patch("zink_pdf_runtime.runner._probe", return_value=ok_probe),
+        patch("zink_pdf_runtime.runner._safe_source_path", return_value="book.pdf"),
+        patch("zink_pdf_runtime.runner._docling_extract", return_value=Result()),
+        patch(
+            "zink_pdf_runtime.runner._materialize_document_items",
+            side_effect=_MultiPageItem(),
+        ),
+    ):
+        response = _dispatch(request)
 else:
     ok_probe = {
         "protocol_version": PROTOCOL_VERSION,
@@ -141,6 +167,18 @@ class ChildErrorCodeTests(unittest.TestCase):
         response = run_child(EXTRACT_REQUEST, "extract", "boom")
         self.assertEqual(response["status"], "error")
         self.assertEqual(response["code"], "PDF_RUNTIME_FAILED")
+
+    def test_a_materialisation_failure_returns_its_own_code(self) -> None:
+        """F-438 (R9-L09-2): a materialisation raise keeps its classification.
+
+        The conversion check and the document materialisation used to sit
+        outside the guarded region, so their raises escaped to the child's
+        blanket main handler and every one became PDF_RUNTIME_FAILED.
+        """
+
+        response = run_child(EXTRACT_REQUEST, "materialize")
+        self.assertEqual(response["status"], "error")
+        self.assertEqual(response["code"], "PDF_MULTI_PAGE_ITEM_UNSUPPORTED")
 
 
 class ChildIdentityTests(unittest.TestCase):

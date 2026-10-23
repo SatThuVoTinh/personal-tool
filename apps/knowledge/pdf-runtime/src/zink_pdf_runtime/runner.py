@@ -150,6 +150,18 @@ def _extract_range(request: Mapping[str, Any]) -> Mapping[str, Any]:
     try:
         source = _safe_source_path(request.get("source_path"))
         result = _docling_extract(source, start, end, overall_deadline)
+        # F-282 (R7-C3-01): the conversion outcome is evidence. A conversion
+        # that did not fully succeed means a requested page may have been
+        # skipped, and a page that produced nothing used to disappear from the
+        # index while the build was marked complete. The child fails closed
+        # instead.
+        if not conversion_succeeded(result):
+            return _error("PDF_RUNTIME_FAILED")
+        # F-438 (R9-L09-2): materialisation is part of the guarded region. Its
+        # own codes (_MultiPageItem, _RangeUnsupported, OcrRuntimeError) were
+        # flattened into PDF_RUNTIME_FAILED by the child's blanket main
+        # handler because the call used to sit outside this try.
+        items = _materialize_document_items(result.document, start, end)
     except OcrRuntimeError as error:
         # F-283 (R7-C3-02): the OCR deadline and the OCR output cap are the
         # parent's own classification inputs, so they must survive the child
@@ -161,13 +173,6 @@ def _extract_range(request: Mapping[str, Any]) -> Mapping[str, Any]:
         return _error("PDF_PAGE_RANGE_UNSUPPORTED")
     except Exception:
         return _error("PDF_RUNTIME_FAILED")
-    # F-282 (R7-C3-01): the conversion outcome is evidence. A conversion that
-    # did not fully succeed means a requested page may have been skipped, and
-    # a page that produced nothing used to disappear from the index while the
-    # build was marked complete. The child fails closed instead.
-    if not conversion_succeeded(result):
-        return _error("PDF_RUNTIME_FAILED")
-    items = _materialize_document_items(result.document, start, end)
     covered_pages = sorted({int(item["page_start"]) for item in items})
     blank_pages = sorted(set(range(start, end + 1)) - set(covered_pages))
     return {
