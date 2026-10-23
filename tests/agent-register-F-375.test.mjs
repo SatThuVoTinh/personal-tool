@@ -8,8 +8,11 @@
 //
 // The move is lossy in one direction, so this lane pins what it must not lose:
 //
-//   1. the register carries NO closure table any more, and every row it still
-//      holds is an OPEN / REFUTED / EXCLUDED row;
+//   1. the register carries NO closure table any more, every row it still holds
+//      carries one of the seven status words §0.3 publishes, and every row the
+//      register held at the move is STILL there — a loss check, not a sameness
+//      check, because §0.2 rule 8 orders every band that finds a defect to file
+//      a new row here;
 //   2. every closed row's id AND the commit that closed it are in
 //      `CHANGELOG.md`, in the SAME entry — the register's §2 table was the only
 //      record of that mapping;
@@ -615,6 +618,28 @@ function registerRows(markdown) {
     });
 }
 
+/**
+ * The seven status words §0.3 publishes. A row carrying anything else is a
+ * register defect, not a queue entry.
+ */
+const QUEUE_STATUSES =
+  /^(OPEN|LATENT|HYPOTHESIS|PARTIAL|BLOCKED|EXCLUDED|REFUTED)\b/u;
+
+/** Rows whose `Status:` is outside §0.3's vocabulary. */
+function statusViolations(rows) {
+  return rows.filter((row) => !QUEUE_STATUSES.test(row.status ?? ""));
+}
+
+/**
+ * Pinned ids the register no longer holds. This is a LOSS check, not a sameness
+ * check: the queue is expected to grow, because §0.2 rule 8 orders every band
+ * that finds a defect to file it here.
+ */
+function missingPinnedRows(rows) {
+  const held = new Set(rows.map((row) => row.id));
+  return REGISTER_ROW_IDS.filter((id) => !held.has(id));
+}
+
 /** The changelog's closure entries: one bullet per closed row. */
 function closureEntries(markdown) {
   const starts = [...markdown.matchAll(/^- \*\*`([^`]+)`\*\* — /gmu)];
@@ -650,25 +675,82 @@ column: ${commitHeaders.join(" ⏎ ")}`,
   );
 });
 
-test("every row the register still holds is an OPEN, REFUTED or EXCLUDED row", () => {
+test("every row the register still holds carries one of §0.3's seven status words", () => {
   const rows = registerRows(REGISTER_TEXT);
   assert.ok(rows.length > 0, "the register must still hold its queue");
-  for (const row of rows) {
-    assert.match(
-      row.status ?? "",
-      /^(OPEN|REFUTED|EXCLUDED)\b/u,
-      `register row ${row.id} carries a status outside the open queue's vocabulary: ${row.status}`,
-    );
-  }
+  const bad = statusViolations(rows);
+  assert.deepEqual(
+    bad.map((row) => `${row.id}: ${row.status}`),
+    [],
+    `these rows carry a Status: outside the vocabulary §0.3 publishes: ${bad
+      .map((row) => row.id)
+      .join(", ")}`,
+  );
 });
 
 test("the register still holds every row it held before the move", () => {
-  const rows = registerRows(REGISTER_TEXT);
-  const held = rows.map((row) => row.id).sort();
+  const missing = missingPinnedRows(registerRows(REGISTER_TEXT));
   assert.deepEqual(
-    held,
-    REGISTER_ROW_IDS,
-    "the move must not lose a queue row: the register's row set must be exactly the row set it held at HEAD",
+    missing,
+    [],
+    "the move must not lose a queue row: these ids the register held at the move are gone",
+  );
+});
+
+test("a queue that has grown since the move is not a queue that lost a row", () => {
+  const grown = REGISTER_ROW_IDS.map((id) => ({
+    id,
+    status: "OPEN — fixture: the row as it stood at the move",
+  })).concat([
+    { id: "F-9001", status: "OPEN — production-reachable: fixture" },
+    {
+      id: "F-9002",
+      status: "LATENT — code-proven, untriggerable at HEAD: fixture",
+    },
+    { id: "F-9003", status: "BLOCKED — missing external fact: fixture" },
+  ]);
+  assert.deepEqual(
+    missingPinnedRows(grown),
+    [],
+    "every band that files a defect grows this file; growth must not read as loss",
+  );
+});
+
+test("a pinned row the register no longer holds is still named by the loss check", () => {
+  const lost = REGISTER_ROW_IDS.map((id) => ({
+    id,
+    status: "OPEN — fixture: the row as it stood at the move",
+  })).filter((row) => row.id !== REGISTER_ROW_IDS[0]);
+  assert.deepEqual(
+    missingPinnedRows(lost),
+    [REGISTER_ROW_IDS[0]],
+    "relaxing sameness into loss must not blind the lane to a deleted queue row",
+  );
+});
+
+test("the status check takes §0.3's seven words and refuses an eighth", () => {
+  const seven = [
+    "OPEN — production-reachable: fixture",
+    "LATENT — code-proven, untriggerable at HEAD: fixture",
+    "HYPOTHESIS — fixture",
+    "PARTIAL — fixture",
+    "BLOCKED — missing external fact: fixture",
+    "EXCLUDED — fixture",
+    "REFUTED — premise measured false at HEAD: fixture",
+  ].map((status, at) => ({ id: `F-91${at}`, status }));
+  assert.deepEqual(
+    statusViolations(seven),
+    [],
+    "§0.3 publishes seven status words, so all seven must pass the check",
+  );
+  const bogus = statusViolations([
+    { id: "F-9200", status: "WATERTIGHT — invented status: fixture" },
+    { id: "F-9201", status: null },
+  ]);
+  assert.equal(
+    bogus.length,
+    2,
+    "a Status: outside §0.3's vocabulary, or missing, must still be refused",
   );
 });
 
