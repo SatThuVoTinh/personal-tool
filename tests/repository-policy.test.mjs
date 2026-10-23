@@ -1704,6 +1704,62 @@ test("F-348: a deleted execution contract must have an archived copy of its Plan
 });
 
 // ---------------------------------------------------------------------------
+// F-523 — PLAN.md must name one live Plan Revision
+//
+// The §4 header and the tail active-task block both carried live-looking
+// `Plan Revision:` fields with different values. Historical records stay in
+// the file, so the invariant is not "one occurrence"; it is "one *unlabeled*
+// occurrence", and it must be the one the live `## Active task` block names.
+// ---------------------------------------------------------------------------
+test("F-523: PLAN.md names one live Plan Revision and matches the live contract", () => {
+  const plan = readFileSync(path.join(REPO_ROOT, "PLAN.md"), "utf8");
+  const liveRevisions = [
+    ...plan.matchAll(/^Plan Revision:[ ]*([A-Za-z0-9./-]+)/gmu),
+  ].map((match) => match[1]);
+  assert.equal(
+    liveRevisions.length,
+    1,
+    "historical Plan Revision fields must be labeled; exactly one live field is allowed",
+  );
+
+  const activeSections = plan.split(/^## Active task\b/mu).slice(1);
+  assert.equal(
+    activeSections.length,
+    1,
+    "PLAN.md must have exactly one live Active task block",
+  );
+  const activeBlock = activeSections[0].split(/^## /mu)[0];
+  assert.match(
+    activeBlock,
+    /^Plan Revision:[ ]*([A-Za-z0-9./-]+)/mu,
+    "the live Active task block must carry the live Plan Revision",
+  );
+  const activeRevision = /^Plan Revision:[ ]*([A-Za-z0-9./-]+)/mu.exec(
+    activeBlock,
+  )?.[1];
+  assert.equal(activeRevision, liveRevisions[0]);
+
+  const contractPath = path.join(
+    REPO_ROOT,
+    "docs",
+    "contracts",
+    "execution",
+    "ACTIVE.md",
+  );
+  if (existsSync(contractPath)) {
+    const contractRevision =
+      /^Plan Revision:[ ]*([A-Za-z0-9./-]+)/mu.exec(
+        readFileSync(contractPath, "utf8"),
+      )?.[1] ?? null;
+    assert.equal(
+      contractRevision,
+      activeRevision,
+      "the live execution contract must match PLAN.md",
+    );
+  }
+});
+
+// ---------------------------------------------------------------------------
 // F-353 — the nested `AGENTS.md` layer is conditional
 //
 // The bootstrap order tells every agent to read the nearest applicable

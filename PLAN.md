@@ -76,13 +76,14 @@ operations research and simulation remain first-class capabilities.
 ```text
 Milestone: M12 — Governed Discord interaction lifecycle and governed presentation
 Task: M12/T9 — Remediate all actionable findings in `docs/execution/findings.md`.
-  The authoritative header for the live band is the `## Active task` block at the end of this file; everything
-  below this line is the closed `M12/T2.2-R3` band's record, retained as history.
-Plan Revision: M12/T9-R1
-Planning Readiness: APPROVED — the owner approved the band on 2026-10-19; the approval record is the `## Active task` block at the end of this file.
-Execution Authorization: YES — bounded to the live `docs/contracts/execution/ACTIVE.md`; the authorization record is the `## Active task` block at the end of this file.
-Execution Contract: docs/contracts/execution/ACTIVE.md
-Task Status: IN PROGRESS — the live band's status is the `## Active task` block at the end of this file.
+  The authoritative lifecycle header for the live band is the `## Active task` block at the end of this file.
+  The fields below are the historical record of the closed `M12/T9-R1` band and the bands before it; they are
+  not the live pointer. The live band is `M12/T9-R4`.
+Historical Plan Revision: M12/T9-R1
+Historical Planning Readiness: APPROVED — owner approval recorded on 2026-10-19; retained as history.
+Historical Execution Authorization: YES — bounded to the archived R1 contract; retained as history.
+Historical Execution Contract: archived under `docs/contracts/execution/archive/`.
+Historical Task Status: CLOSED — retained as history; the live status is the `## Active task` block at the end of this file.
   (history) `M12/T4` — Governance-record integrity: re-inventory the orphaned findings, re-file them under live
   identifiers, and shrink the release-gate cell that duplicates §8.
   (history) `M12/T2.3` Wave C — **CLOSED 2026-10-17**; the three-wave remediation programme (`M12/T2.1` high,
@@ -673,7 +674,7 @@ Task Status: COMPLETE — M12/T2-R3 — implemented, validated locally **and on 
   the STACK rule. See §8 M12/T2-R3.
 Planning Readiness: APPROVED (historical — the approved M12/T2-R2 contract is executed and closed;
   R3 is a bounded fix inside the verified finding, not a re-plan)
-Plan Revision: M12/T2-R4 (C1 DELIVERED; E **EXECUTED AND VERIFIED** — Deployment B installed the
+Historical Plan Revision: M12/T2-R4 (C1 DELIVERED; E **EXECUTED AND VERIFIED** — Deployment B installed the
 STACK remediation on the live host 2026-10-14, evidence in §8)
 Execution Authorization: NO
 Execution Contract: NONE (the M12/T2-R2 ACTIVE.md was deleted at closeout)
@@ -766,7 +767,7 @@ Task Status: CLOSED — all five contract phases implemented and validated 2026-
   implementation commit `c1ad4b3` on `codex/m11-t1-audit-remediation`, the execution
   contract deleted at this closeout, and the working tree left clean. Nothing is deployed.
 Planning Readiness: APPROVED (historical — the approved M12/T1-R1 contract is executed and closed)
-Plan Revision: M12/T1-R1 (CLOSED)
+Historical Plan Revision: M12/T1-R1 (CLOSED)
 Execution Authorization: NO
 Execution Contract: NONE (the M12/T1-R1 ACTIVE.md was deleted at closeout)
 Evidence Level: REMOTE-BACKED — CI run `38365272022` @ `219ac1d` on ubuntu-24.04:
@@ -814,7 +815,7 @@ Milestone: M11 — Cross-module audit remediation
 Task: M11/T3 — OpenClaw gateway runtime bounds + durable-state integrity remediation
 Task Status: CLOSED — both phases implemented, verified and committed 2026-10-13
 Planning Readiness: APPROVED (historical — the approved R1 contract is executed and closed)
-Plan Revision: M11/T3-R1 (CLOSED)
+Historical Plan Revision: M11/T3-R1 (CLOSED)
 Execution Authorization: NO
 Execution Contract: NONE (the M11/T3-R1 ACTIVE.md was deleted at closeout)
 Authorized Task: NONE — M11/T3-R1 delivered the ten verified HIGH-severity items frozen
@@ -2232,7 +2233,7 @@ Current scope:
 
 Status: `COMPLETE`
 Task: `M6/T1 — Git-native governed skill core`
-Plan Revision: `M6/T1-R4`
+Historical Plan Revision: `M6/T1-R4`
 Execution Authorization: `NO`
 Execution Contract: `NONE`
 Evidence: `REMOTE-BACKED`
@@ -2254,7 +2255,7 @@ remotely verified.
 Status: `IN PROGRESS`
 Task: `M7/T1 — OpenClaw foundation`
 Task Status: `COMPLETE`
-Plan Revision: `M7/T1-R19`
+Historical Plan Revision: `M7/T1-R19`
 Planning Readiness: `APPROVED`
 Execution Authorization: `NO`
 Execution Contract: `NONE`
@@ -2302,7 +2303,7 @@ Minimum scope:
 Status: `COMPLETE`
 Task: `M8/T1 — Governed Skill Vector Store, Semantic Search & Agent Proposal Pipeline`
 Task Status: `COMPLETE`
-Plan Revision: `M8/T1-R1`
+Historical Plan Revision: `M8/T1-R1`
 Planning Readiness: `APPROVED`
 Execution Authorization: `NO`
 Execution Contract: `NONE`
@@ -2337,7 +2338,7 @@ read-only semantic RAG pipeline for Zink Knowledgebase:
 
 Status: `IMPLEMENTED (local)`
 Task: `M8/T3 - make the Zink long-term memory / learning architecture work end-to-end`
-Plan Revision: `M8/T3-R1`
+Historical Plan Revision: `M8/T3-R1`
 Planning Readiness: `APPROVED`
 Execution Authorization: `YES` (explicit owner instruction, 2026-10-01 session)
 Execution Contract: `NONE` (`docs/contracts/execution/ACTIVE.md` R19 is retained
@@ -2397,7 +2398,7 @@ from this environment and are not claimed.
 
 Status: `IN PROGRESS`
 Task: `M10/T2 - bind a gateway-started coordinator run to its claimed queue attempt, and fence that binding to current execution authority`
-Plan Revision: `M10/T2-R9`
+Historical Plan Revision: `M10/T2-R9`
 Parent Revision: `M10/T2-R8` (closed live: zero-outbound proven, see `### M10/T2-R8` tail); R7 commits `97dfe54`/`ef9feb0`
 Planning Readiness: `APPROVED`
 Execution Authorization: `YES` (R9 per explicit owner authorization 2026-10-06: replace the 21 Google AI Studio API-key pool with a single external router pool shared by all 7 agents, plus the duplicate-path runId observability line; chain authorized as fix -> test -> deploy -> live verify -> commit)
@@ -4708,7 +4709,7 @@ the WSL/CI run of the env-gated Python `test:knowledge` files.
 Task: `M11/T1 — Skill-store vector SQL correctness, skill-store governance,
 knowledgebase index hygiene/attribution, OpenClaw outbound containment and
 cache/ledger safety`
-Plan Revision: `M11/T1-R1` · Planning Readiness: `APPROVED` · Execution
+Historical Plan Revision: `M11/T1-R1` · Planning Readiness: `APPROVED` · Execution
 Authorization: `NO` (consumed at closeout) · Execution Contract: `NONE` ·
 Evidence: `LOCAL-VERIFIED` ·
 Task Branch: `codex/m11-t1-audit-remediation`
@@ -7701,18 +7702,18 @@ automatic `push`-triggered run — and it is RED), `F-167` is parked behind the
 wrong question (its own read-only probe was never run), and `F-217`'s freeze
 costs less than its row claims (a two-line test change needs no decision).
 
-## Active task — M12/T9 (owner order: sửa hết findings)
+## Superseded band — M12/T9-R3 (history; archived 2026-10-23)
 
 Task: M12/T9 — Remediate all actionable findings in docs/execution/findings.md
 Milestone: M12 — Governed Discord interaction lifecycle and governed presentation
-Plan Revision: M12/T9-R3
-Planning Readiness: APPROVED — owner approved via "được, làm đi, chạy 1 lần xong hết luôn" (2026-10-19) and answered all ten open decisions on 2026-10-21 (the record above).
-Execution Authorization: YES — bounded to docs/contracts/execution/ACTIVE.md (the third band's contract) §1–§8; AGENTS.md §12 terms (local commits, validation, closeout commit, push of non-main task branch). No deployment, no live Discord, no --apply.
-Execution Contract: docs/contracts/execution/ACTIVE.md
-Task Status: IN PROGRESS — the third band (the owner's ten answers) is executing. The second band's contract is archived at `docs/contracts/execution/archive/2026-10-21-M12-T9-R1.md`.
-Evidence Level: LOCAL-VERIFIED for the second band; the third band is in flight.
-Review Convergence Gate: PASS (the second band)
-Final Quality Gate: PASS (the second band)
+Historical Plan Revision: M12/T9-R3
+Historical Planning Readiness: APPROVED — owner approved via "được, làm đi, chạy 1 lần xong hết luôn" (2026-10-19) and answered all ten open decisions on 2026-10-21 (the record above); retained as history.
+Historical Execution Authorization: YES — bounded to the archived R3 contract §1–§8; retained as history.
+Historical Execution Contract: archived at `docs/contracts/execution/archive/2026-10-21-M12-T9-R3.md`.
+Historical Task Status: SUPERSEDED 2026-10-23 — replaced by M12/T9-R4; not claimed complete.
+Historical Evidence Level: LOCAL-VERIFIED for the second band; R3's in-flight evidence is retained in the archive.
+Historical Review Convergence Gate: PASS (the second band); NOT RUN for R3.
+Historical Final Quality Gate: PASS (the second band); NOT RUN for R3.
 
 Prior band: M12/T9-R1 — CLOSED 2026-10-21 — see the Record below.
 
@@ -7986,3 +7987,105 @@ introduced, and each is a decision the owner may want to take):
   name is generated data, and the agent's identity is its `id`);
 - the skip expectation is enforced on the CI runner; on a developer machine
   the gate reports the counts and refuses only an unexplained skip.
+
+## Active task — M12/T9-R4 (owner order: sửa hết findings; 2026-10-23)
+
+Task: M12/T9 — Remediate all findings in `docs/execution/findings.md` (189 rows:
+152 OPEN + 37 LATENT).
+Milestone: M12 — Governed Discord interaction lifecycle and governed presentation
+Plan Revision: M12/T9-R4
+Planning Readiness: APPROVED — the owner approved when switching from plan to edit on 2026-10-23; the approval record is §1 of `docs/contracts/execution/ACTIVE.md`.
+Execution Authorization: YES — bounded to `docs/contracts/execution/ACTIVE.md` §1–§10; AGENTS.md §12 terms (local implementation/closeout commits and push of the current non-main task branch after closeout). No deployment, no live Discord, no `--apply`, no Vault writes, no dependency/lockfile changes.
+Execution Contract: docs/contracts/execution/ACTIVE.md
+Task Status: IN PROGRESS — Phase 0 (governance and evidence floor) is executing.
+Evidence Level: LOCAL-VERIFIED per band; `NOT RUN` stays `NOT RUN` and is never converted to `PASS`.
+Review Convergence Gate: NOT RUN — the first band has not been submitted for review.
+Final Quality Gate: NOT RUN — the task is not closed.
+
+### Owner decisions recorded 2026-10-23
+
+- Scope is 189 rows: 152 OPEN + 37 LATENT. `F-045` is authorized, `F-133` is
+  released, and `F-167` is reopened; all three are in scope.
+- The 32 REFUTED rows are retained. `F-400` and `F-534` remain BLOCKED until the
+  OpenClaw host fact is available; they are not counted in the 189.
+- Duplicate root causes may be merged when the merge is recorded and one commit
+  names every merged row. New rows are filed separately.
+- LATENT rows close only with a deterministic fault-injection or probe test;
+  otherwise they remain LATENT.
+- The RED queue is delegated to the lead: research options, choose the best
+  technical option, and record it. A material commitment change outside the
+  contract stops for the owner.
+- Parallel subagents have disjoint write ownership; the lead owns governance
+  files, integration, review convergence, closeout and the final push.
+- One row is one local implementation commit unless a recorded merge applies.
+  No deployment, `--apply`, live Discord/ledger/DB mutation, Vault write,
+  secret exposure, dependency change, direct `main` push, force-push,
+  PR/merge/release, or history rewrite.
+
+### Scope and bands
+
+| Band | Scope | Rows | C/H/M/L | O/L |
+| ---- | ----- | ---: | ------- | --- |
+| B1 | Approval, verdict, result and queue integrity | 24 | 1/9/8/6 | 20/4 |
+| B2 | Ledger, transaction and apply durability | 17 | 0/8/5/4 | 9/8 |
+| B3 | Operator ceremony, rollback, rehearsal and state root | 13 | 0/5/8/0 | 12/1 |
+| B4 | Artifact validation, Excel writer and preview/delivery | 15 | 0/7/4/4 | 13/2 |
+| B5 | Knowledgebase ingestion, retrieval and citation | 25 | 0/6/10/9 | 18/7 |
+| B6 | Skill Store catalog, vector, lock and migration | 21 | 0/5/12/4 | 16/5 |
+| B7 | Tool contracts, SQL/Python guards and error taxonomy | 24 | 0/6/12/6 | 21/3 |
+| B8 | Gate truth and CI enforcement | 30 | 0/5/16/9 | 30/0 |
+| B9 | Test-only assertions and docs consistency | 20 | 0/0/6/14 | 13/7 |
+| **Total** | | **189** | **1/51/81/56** | **152/37** |
+
+The full membership and ordering are frozen in `docs/contracts/execution/ACTIVE.md`
+§2–§3. `F-523` and the evidence floor (`F-474`, `F-481`, `F-492`, `F-467`,
+`F-567`) are Phase 0. The first product band is B1, starting with the Critical
+`F-533`, then `F-402` → `F-405` → `F-406` → `F-504`.
+
+### Execution topology
+
+- **Lead (Codex):** governance, `findings.md` disposition, `PLAN.md`,
+  `CHANGELOG.md`, `ACTIVE.md`, integration, review convergence, closeout and
+  push. The lead does not approve its own work.
+- **MS1:** lead + `fix-tests` — `F-523` and the evidence floor.
+- **MS2:** B1 OpenClaw, B5 Knowledgebase, B6 Skill Store and the B8 evidence
+  track. B5/B6/B8 are disjoint; B1 is one OpenClaw lane until its shared files
+  are clear.
+- **MS3:** B2, B3, B4, B7. B2/B3 stay ordered on the OpenClaw/operator surface;
+  B4 follows B1; B7 follows B5/B6.
+- **MS4:** B8 remainder and B9. **MS5:** independent review and
+  `review-chair` consolidation before any row is deleted.
+
+A subagent may not edit governance files, push, run `--apply`, or write outside
+its assigned paths. Shared surfaces have one writer at a time. The lead
+integrates and creates the validated implementation/closeout commits.
+
+### Gates and closeout
+
+Every band runs `npm run format:check`, `npm run lint`, the affected
+`node --test` suites, `npm run repo:check`, and `npm run verify`; the
+Knowledgebase additionally runs `npm run test:knowledge` and its Python/uv lane.
+PostgreSQL/Docker and WSL are required for the rows that need them. An
+unavailable lane is recorded as `NOT RUN`, never `PASS`.
+
+A row closes only when the premise is re-verified, a red test/probe was observed,
+the minimal fix is green, the affected gates and mutation probe are recorded, and
+the lead has independent review evidence. OPEN rows then leave
+`findings.md`; their history goes to `CHANGELOG.md` and `PLAN.md` §4.17/§8.
+LATENT rows need the deterministic fault-injection/probe. REFUTED and BLOCKED
+rows stay.
+
+Closeout archives `ACTIVE.md`, updates `PLAN.md` and the durable docs, sets
+`Execution Authorization: NO` / `Execution Contract: NONE`, deletes the live
+contract, leaves a clean tree, creates the local closeout commit, and pushes the
+current non-main task branch. No deployment, no direct `main` push, no
+force-push, no PR/merge/release.
+
+### Current checkpoint (2026-10-23)
+
+- R3 is archived at `docs/contracts/execution/archive/2026-10-21-M12-T9-R3.md`.
+- R4 is materialized at `docs/contracts/execution/ACTIVE.md`; this block is its
+  lifecycle pointer.
+- `F-523` is being fixed: the §4 header and the old R3 block are now explicitly
+  historical, so the only live `Plan Revision:` is this block.
+- The evidence floor is the next Phase 0 action. No product-code fix has started.
