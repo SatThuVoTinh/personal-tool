@@ -15,15 +15,23 @@ such.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import subprocess
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from app.pdf_foundation import canonical_json_bytes
 from app.pdf_runtime import PROTOCOL_VERSION as PARENT_PROTOCOL_VERSION
-from app.pdf_runtime import PdfRuntimeError, _validate_response
+from app.pdf_runtime import (
+    PdfRuntimeClient,
+    PdfRuntimeError,
+    PdfRuntimeSettings,
+    _validate_response,
+)
 
 CHILD_SRC = Path(__file__).resolve().parents[1] / "pdf-runtime" / "src"
 
@@ -160,6 +168,93 @@ class ChildIdentityTests(unittest.TestCase):
         with self.assertRaises(PdfRuntimeError) as caught:
             _validate_response(json.dumps(echoed, sort_keys=True).encode("utf-8"), PROBE_REQUEST)
         self.assertEqual(caught.exception.code, "PDF_RUNTIME_OUTPUT_INVALID")
+
+
+class ParentExtractRequestTests(unittest.IsolatedAsyncioTestCase):
+    """F-437 (R9-L09-1): the parent's remaining budget is identity-safe."""
+
+    @staticmethod
+    def client() -> PdfRuntimeClient:
+        return PdfRuntimeClient(
+            PdfRuntimeSettings(
+                python=Path("/opt/pdf-runtime/.venv/bin/python"),
+                module="zink_pdf_runtime",
+                vault_root=Path("/vault"),
+                artifacts_root=Path("/opt/pdf-artifacts"),
+                manifest_path=Path("/opt/pdf-artifacts/manifest.json"),
+                lock_path=Path("/opt/pdf-runtime/uv.lock"),
+                tesseract_binary=Path("/usr/bin/tesseract"),
+                tessdata_path=Path("/usr/share/tesseract-ocr/5/tessdata"),
+                temp_root=Path("/tmp/pdf-runtime"),
+            )
+        )
+
+    async def test_a_fractional_remaining_budget_reaches_the_spawn_as_an_integer(self) -> None:
+        """A float budget is refused by the canonical encoder before the spawn.
+
+        The request is serialised with the identity encoder, which admits no
+        floats. A remaining budget computed from the event-loop clock is
+        fractional in the general case, so the value that reaches the child
+        must be an integer that the child's own positive-budget validation
+        still accepts.
+        """
+
+        client = self.client()
+        seen: dict[str, object] = {}
+        spawns: list[tuple[object, ...]] = []
+        encoder = canonical_json_bytes
+
+        def recording_encoder(value: dict[str, object]) -> bytes:
+            seen["budget"] = value.get("deadline_budget_seconds")
+            return encoder(value)
+
+        async def spawn(*args: object, **kwargs: object) -> None:
+            spawns.append(args)
+            raise OSError("spawn reached")
+
+        with (
+            patch("app.pdf_runtime.canonical_vault_path", return_value="book.pdf"),
+            patch("app.pdf_runtime.canonical_json_bytes", side_effect=recording_encoder),
+            patch("app.pdf_runtime.asyncio.create_subprocess_exec", side_effect=spawn),
+        ):
+            deadline = asyncio.get_running_loop().time() + 119.999
+            with self.assertRaises(PdfRuntimeError) as caught:
+                await client.extract_range("book.pdf", 1, 1, "a" * 64, deadline)
+
+        # The encoder passed (otherwise it would have raised
+        # PDF_IDENTITY_INVALID) and the request reached the spawn, where the
+        # deliberately failing spawn becomes the runtime-unavailable code.
+        self.assertEqual(caught.exception.code, "PDF_RUNTIME_UNAVAILABLE")
+        self.assertEqual(len(spawns), 1)
+        self.assertIs(type(seen["budget"]), int)
+        self.assertGreater(seen["budget"], 0)
+
+    async def test_a_sub_second_remaining_budget_still_sends_a_positive_integer(self) -> None:
+        """A positive budget below one second must not truncate to zero."""
+
+        client = self.client()
+        seen: dict[str, object] = {}
+        encoder = canonical_json_bytes
+
+        def recording_encoder(value: dict[str, object]) -> bytes:
+            seen["budget"] = value.get("deadline_budget_seconds")
+            return encoder(value)
+
+        async def spawn(*args: object, **kwargs: object) -> None:
+            raise OSError("spawn reached")
+
+        with (
+            patch("app.pdf_runtime.canonical_vault_path", return_value="book.pdf"),
+            patch("app.pdf_runtime.canonical_json_bytes", side_effect=recording_encoder),
+            patch("app.pdf_runtime.asyncio.create_subprocess_exec", side_effect=spawn),
+        ):
+            deadline = asyncio.get_running_loop().time() + 0.5
+            with self.assertRaises(PdfRuntimeError) as caught:
+                await client.extract_range("book.pdf", 1, 1, "a" * 64, deadline)
+
+        self.assertEqual(caught.exception.code, "PDF_RUNTIME_UNAVAILABLE")
+        self.assertIs(type(seen["budget"]), int)
+        self.assertGreaterEqual(seen["budget"], 1)
 
 
 if __name__ == "__main__":

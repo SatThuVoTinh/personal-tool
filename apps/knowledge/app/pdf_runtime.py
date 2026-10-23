@@ -261,6 +261,12 @@ class PdfRuntimeClient:
         budget = deadline - asyncio.get_running_loop().time()
         if budget <= 0:
             raise PdfRuntimeError("PDF_RUNTIME_TIMEOUT")
+        # F-437 (R9-L09-1): the request is serialised with the canonical
+        # identity encoder, which refuses every float before the child is
+        # spawned. Round the remaining budget UP to the next whole second so
+        # every positive remainder (including a sub-second one) becomes a
+        # positive integer the child's own validation accepts. The parent's
+        # deadline still bounds the invocation.
         return await self._invoke(
             {
                 "protocol_version": PROTOCOL_VERSION,
@@ -269,7 +275,7 @@ class PdfRuntimeClient:
                 "page_start": page_start,
                 "page_end": page_end,
                 "expected_processing_identity_digest": expected_processing_identity_digest,
-                "deadline_budget_seconds": budget,
+                "deadline_budget_seconds": math.ceil(budget),
             },
             deadline,
         )
