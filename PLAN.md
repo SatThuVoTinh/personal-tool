@@ -8104,15 +8104,15 @@ force-push, no PR/merge/release.
 - R3 is archived at `docs/contracts/execution/archive/2026-10-21-M12-T9-R3.md`.
 - R4 is materialized at `docs/contracts/execution/ACTIVE.md`; this block is its
   lifecycle pointer.
-- 44 of the 179 scoped rows are closed with red/green and mutation evidence:
+- 48 of the 175 scoped rows are closed with red/green and mutation evidence:
   `F-523`, `F-524`, `F-437`, `F-438`, `F-408`, `F-414`, `F-464`, `F-465`,
   `F-466`, `F-473`, `F-442`, `F-444`, `F-533`, `F-427`, `F-428`, `F-429`,
   `F-450`, `F-455`, `F-451`, `F-452`, `F-453`, `F-511`, `F-467`, `F-474`,
   `F-567`, `F-517`, `F-518`, `F-441`, `F-440`, `F-439`, `F-487`, `F-491`,
   `F-415`, `F-410`, `F-512`, `F-573`, `F-412`, `F-413`, `F-513`, `F-458`,
-  `F-483`, `F-566`, `F-482`, `F-519`. The register
-  now carries 179 rows (112 OPEN + 30 LATENT in scope = 142, 32 REFUTED,
-  2 BLOCKED, 3 PARTIAL). The §1 census in the register
+  `F-483`, `F-566`, `F-482`, `F-519`, `F-509`, `F-574`, `F-133`, `F-544`. The
+  register now carries 175 rows (108 OPEN + 28 LATENT in scope = 136, 32
+  REFUTED, 2 BLOCKED, 5 PARTIAL). The §1 census in the register
   was stale by the 22 earlier closures and was corrected against the file rather
   than against its own header; its closure total also read 419 while its own
   item list summed to 427, and is now measured from the `CHANGELOG.md` bullets.
@@ -8181,10 +8181,25 @@ force-push, no PR/merge/release.
   (`d5a59ad`), `F-482` (`0e8e4df`) and `F-519` (`1e5e801`); the policy lane is
   75/75. Probes, each reverted: an empty `blockingCheckSurfaces` reddened 2
   cases; short-circuiting the execution-column claim test reddened 1;
-  restoring the two-prefix citation filter reddened 1; returning \`pass\` for an
+  restoring the two-prefix citation filter reddened 1; returning `pass` for an
   absent scan root reddened 1; dropping the recorded-fingerprint requirement
-  reddened 1. **\`F-485\` still stays OPEN**: none of these five rules covers a
-  \`mkdtemp\` lane with no removal API. The lane also capped at 150 turns.
+  reddened 1. **`F-485` still stays OPEN**: none of these five rules covers a
+  `mkdtemp` lane with no removal API. The lane also capped at 150 turns.
+- The skill-vector lane (`w1-skill-vector`) closed four rows and left two
+  `PARTIAL`: `F-509` (`d125879`), `F-574` (`ffcfda6`), `F-133` (`76c3ec0`) and
+  `F-544` (`b520fba`), with the Skill Store lane at 30/30 and the policy lane
+  still 75/75. Probes, each reverted in person: changing 005's status-domain
+  assertion to `%ACTIVE%` reddened the static case; shrinking the retention
+  window to `0 days` reddened its case; resetting the drift arm to `UNKNOWN`
+  reddened the per-skill case; gating the unnamed-store refusal off reddened
+  its case. The digest pin for migration 005 and the 30-day window text both
+  landed in `075d229` (lead-only paths). **`F-547` and `F-541` stay `PARTIAL`**:
+  the Skill Store runner now reads the published manifest and the migration
+  pair lint is non-skippable, but the Knowledgebase runner still records a
+  filename with no digest column, so the immutability rule is only half
+  enforced; owner decision needed between a digest column plus a
+  refuse-on-change forward migration, or re-scoping the manifest's `purpose`
+  text to a repo-gate-only guarantee.
 - The band that had already merged without its closeout (`F-464`/`F-465`/
   `F-466`/`F-473` from B4, `F-442`/`F-444` from B5) was re-measured at this HEAD
   before its rows were deleted: the artifact/Excel lane is 8/8, the knowledge

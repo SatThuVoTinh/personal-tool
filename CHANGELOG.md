@@ -2186,6 +2186,20 @@ passed.`; `python-quality` SUCCESS — 188 passed, 27 subtests) and Security run
 - **`F-519`** — the `.gitleaksignore` fingerprint half was validated only for tracked-ness while the sibling pattern half was anchored, recorded and capped — closed by `1e5e801`.
   Row `F-519` (`R10-L09-2`, Low). An entry outside every recorded scope must now match `SECRET_SCAN_RECORDED_FINGERPRINTS` on all four coordinates (commit, file, rule, line), and the entry count is capped at `SECRET_SCAN_FINGERPRINT_CEILING`. Regression: `F-519: a fingerprint outside every recorded scope must be recorded in full`. Probe: dropping the recorded-fingerprint requirement left tracked-ness alone and reddened the case; reverted.
 
+#### M12/T9-R4 — the Skill Store's derived-row lifecycle (2026-10-24) (4 rows, 4 commits)
+
+- **`F-509`** — migration 004 widened both CHECK constraints on `skills.catalog_index` but verified only the status one, so a surviving narrow `sync_status` CHECK stayed recorded as migrated and the `TOMBSTONED` state was unreachable — closed by `d125879`.
+  Row `F-509` (`R10-L05-2`, Medium). Forward migration `005_retirement_state_domain_verification.sql` asserts both widened domains by `contype`/`conrelid` and refuses any OTHER CHECK on `sync_status` that omits `TOMBSTONED`; the digest pin for 005 landed in `075d229`. Regression: the static, non-skippable `F-509: the retirement-state postcondition asserts both widened domains` plus the live arm in `tests/m11-t1-postgres-sql-gate.test.mjs`. Probe: changing 005's status-domain assertion to `%ACTIVE%` reddened the static case; reverted.
+
+- **`F-574`** — every retirement wrote one terminal derived row and no statement could ever reach that state again, so terminal rows and later-deleted canonical records accumulated forever, while the catalogErrors-branch DELETE was a provable no-op — closed by `ffcfda6`.
+  Row `F-574` (`R10-T10-5`, Medium). `syncSkillsToVectorStore` now issues one named reclamation of `DEPRECATED` rows whose key is absent from a COMPLETE scan and whose `synced_at` is older than `TERMINAL_DERIVED_ROW_RETENTION_DAYS` (30 days), under the same store-confirmation gate as the ACTIVE tombstone; the dead DELETE and its docblock are gone. The window is stated in `docs/contracts/skill-store/agent-skill-store.md` (`075d229`). Regression: two cases in `tests/m11-t1-skill-vector-sql.test.mjs` (the bounded prune and the incomplete-scan refusal). Probe: shrinking the interval to `0 days` reddened the window case; reverted.
+
+- **`F-133`** — the store-wide rollup stamped every skill in a run with the worst skill's verdict, so a skill retired mid-sync was reported as a failed sync rather than the terminal row it actually was — closed by `76c3ec0`.
+  Row `F-133` (`R5-E05-08`). Each per-skill entry now carries `catalog_row_status` and `catalog_sync_status`, defaulting to `UNKNOWN` and narrowed by the write each arm performed; the `SOURCE_LIFECYCLE_DRIFT` arm reports `DEPRECATED`/`TOMBSTONED`. Regression: `F-133: a retirement that lands mid-sync is reported as the terminal row it is`. Probe: resetting the drift arm to `UNKNOWN` reddened that case; reverted.
+
+- **`F-544`** — a store that declares an identity was never compared with anything on the ordinary unnamed path, so `skillsRoot` pointed at the wrong store ran the destructive statements against it — closed by `b520fba`.
+  Row `F-544` (`R10-T04-6`, Low). `syncSkillsToVectorStore` refuses a sync whose caller names no store when the store declares an identity (`SKILL_STORE_IDENTITY_UNNAMED`, nothing synced and nothing deleted); a store with no identity keeps the F-176 behaviour. Regression: two cases in `tests/m11-t1-skill-vector-sql.test.mjs`. Probe: gating the refusal off reddened the refusal case; reverted.
+
 ## Changelog Rules
 
 ### Completed Changes Only

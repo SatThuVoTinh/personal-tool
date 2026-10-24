@@ -107,7 +107,7 @@ const R10_GATE_CLOSED_ROWS = 1;
  * The M12/T9-R4 rows that have left the register with their history in the
  * changelog. Increment this when a validated R4 row is closed.
  */
-const R4_CLOSED_ROWS = 44;
+const R4_CLOSED_ROWS = 48;
 /** Every closed row the register's §2 carried, in the changelog now. */
 const CLOSED_ROW_COUNT =
   CLOSURE_TABLE_ROWS +
@@ -561,7 +561,6 @@ const REGISTER_ROW_IDS = [
   "F-084",
   "F-090",
   "F-119",
-  "F-133",
   "F-134",
   "F-140",
   "F-142",
@@ -624,7 +623,7 @@ const PARKED_ROWS = [];
  * The last EXCLUDED rows the owner released for M12/T9-R4 on 2026-10-23.
  * They are OPEN work now, not parked exclusions.
  */
-const R4_RELEASED_ROWS = ["F-045", "F-133", "F-167"];
+const R4_RELEASED_ROWS = ["F-045", "F-167"];
 
 /** Every `### F-xxx` block of the register, with its Status line. */
 function registerRows(markdown) {
