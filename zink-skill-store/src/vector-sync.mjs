@@ -3,7 +3,11 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { URL } from "node:url";
-import { readSkillStoreIdentity, scanCatalog } from "./catalog.mjs";
+import {
+  readSkillStoreIdentity,
+  scanCatalog,
+  withSkillStoreWriterLock,
+} from "./catalog.mjs";
 import {
   deriveSemanticMetadata,
   renderEmbeddingEnvelope,
@@ -771,6 +775,296 @@ export const TOMBSTONE_KEY_SQL_EXPRESSION =
   "array_to_string(namespace, '/') || '|' || capability || '|' || version";
 
 /**
+ * Run the derived-index sync under the store writer lock, so its scan, its
+ * tombstone prelude and its READY transaction all observe one catalog state
+ * (F-429). The door itself is process-reentrant — a retirement issued from
+ * inside the sync acquires the same lock again and is served, which the
+ * concurrency case in `tests/agent-skill-F-429.test.mjs` measures.
+ */
+async function withSyncStoreLock(skillsRoot, fn) {
+  return withSkillStoreWriterLock(skillsRoot, fn);
+}
+
+function buildRetirementMarkerSql(retiredKeys) {
+  return `
+      WITH retired AS (
+        SELECT id FROM skills.catalog_index
+        WHERE status = 'ACTIVE'
+        AND (${TOMBSTONE_KEY_SQL_EXPRESSION}) IN (
+          SELECT unnest(${escapeSqlLiteral(
+            toPostgresArrayLiteral(retiredKeys),
+          )}::text[])
+        )
+      ), dropped AS (
+        DELETE FROM skills.segments WHERE skill_id IN (SELECT id FROM retired)
+      )
+      UPDATE skills.catalog_index
+      SET status = 'DEPRECATED', sync_status = 'TOMBSTONED'
+      WHERE id IN (SELECT id FROM retired);
+    `;
+}
+
+async function readManifestLifecycleStatus(skillsRoot, identity) {
+  const manifestPath = path.join(
+    skillsRoot,
+    ...identity.namespace,
+    identity.capability,
+    identity.version,
+    "manifest.json",
+  );
+  try {
+    const document = JSON.parse(await readFile(manifestPath, "utf8"));
+    const lifecycle = document?.lifecycle;
+    return Array.isArray(lifecycle) ? (lifecycle.at(-1)?.status ?? null) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Scan and tombstone under the writer lock, then return the snapshot the
+ * embedding loop will use. The lock closes before any embedding call: the
+ * network round trips are long, and holding the canonical write lock across
+ * them would stall every promotion and retirement. The final READY write
+ * re-acquires the lock and re-reads the lifecycle, so a transition that lands
+ * after this snapshot cannot be silently undone.
+ */
+async function prepareSyncSnapshot({
+  skillsRoot,
+  options,
+  expectedStoreId,
+  storeIdentity,
+  syncGenerationId,
+}) {
+  return withSyncStoreLock(skillsRoot, async () => {
+    // 1. Scan and validate canonical catalog (Phase 5, §8)
+    const catalog = await scanCatalog(skillsRoot);
+    const catalogErrors = catalog.errors ?? [];
+
+    // 2. Filter strictly for ACTIVE skills (BUG-04). F-428: a record that carries
+    // a scan error or whose identity does not match its directory is not proof
+    // of anything, even when its lifecycle says ACTIVE or DEPRECATED.
+    const eligibleRecords = catalog.records.filter(
+      (record) =>
+        recordHasNoScanErrors(record, catalogErrors) &&
+        recordIdentityMatchesPath(record),
+    );
+    const activeRecords = eligibleRecords.filter((record) => {
+      const lifecycle = record.manifest?.lifecycle;
+      return Array.isArray(lifecycle) && lifecycle.at(-1)?.status === "ACTIVE";
+    });
+
+    // M12/T9-R1 F-152: the skills the catalog proves are RETIRED. Their derived
+    // rows must be removed even when an unrelated record is invalid, otherwise
+    // one bad file freezes every retirement in the store for the whole SLA
+    // window and the adapter keeps serving retired skills.
+    //
+    // Only a readable manifest counts: a skill whose manifest cannot be read
+    // is NOT provably retired, so its row is left alone rather than deleted on
+    // a guess.
+    const retiredKeys = eligibleRecords
+      .filter(
+        (record) => record.manifest?.lifecycle?.at(-1)?.status === "DEPRECATED",
+      )
+      .map((record) => tombstoneKey(record.manifest.identity));
+
+    const syncReport = {
+      status: "RUNNING",
+      sync_generation_id: syncGenerationId,
+      scanned_count: catalog.records.length,
+      active_count: activeRecords.length,
+      synced_count: 0,
+      failed_count: 0,
+      skills: [],
+    };
+
+    // M12/T9 F-095 (R5-E04-05) / H8 — the governed retirement is RECORDED in
+    // the derived index, not only deleted from it.
+    //
+    // `003_skills_vector_schema.sql` could only admit `status = 'ACTIVE'` and
+    // `sync_status IN ('PENDING','READY','FAILED')`, so a retired skill had
+    // exactly ONE representation in the derived index: the row was DELETED, and
+    // the index could not say WHY the skill was gone. The Skill Store's own
+    // forward migration (`zink-skill-store/migrations/004_skill_retirement_state.sql`)
+    // widened the two CHECK constraints, so the retirement is now WRITTEN:
+    // `status = 'DEPRECATED'`, `sync_status = 'TOMBSTONED'`.
+    //
+    // The segments are dropped in the SAME statement: the foreign key cascades
+    // on a DELETE of the parent row, and this statement UPDATES the parent, so
+    // the vectors of a retired skill would otherwise survive their retirement.
+    //
+    // The canonical lifecycle truth stays in the catalog's manifest; the derived
+    // row now carries the retirement as well, and the consumers that filter on
+    // `status = 'ACTIVE' AND sync_status = 'READY'` keep serving exactly what
+    // they served before.
+    if (retiredKeys.length > 0) {
+      try {
+        await executePostgresQuery(
+          buildRetirementMarkerSql(retiredKeys),
+          options,
+        );
+      } catch (error) {
+        syncReport.status = "FAILED";
+        syncReport.error_code = "VECTOR_RETIREMENT_MARK_FAILED";
+        syncReport.error = String(
+          error?.message || "Retirement marking failed",
+        ).slice(0, MAX_FAILURE_REASON_LENGTH);
+        syncReport.failed_count = 1;
+        return { earlyReturn: syncReport };
+      }
+    }
+
+    if (catalogErrors.length > 0) {
+      // F-152: the tombstone used to be skipped entirely whenever the scan
+      // reported anything, so ONE invalid file anywhere left every previously
+      // READY row in place — including the rows of skills the owner had
+      // retired — while the index still reported FRESH for up to the 7-day SLA
+      // and the adapter kept serving them.
+      //
+      // The narrow statement deletes ONLY the rows it can prove are retired.
+      // A row whose skill could not be read is left alone: the catalog is
+      // incomplete, so "not in the active set" would mean "not known", and
+      // deleting on that basis would destroy a live skill's vectors.
+      if (retiredKeys.length > 0) {
+        const retirementSql = `
+        DELETE FROM skills.catalog_index
+        WHERE status = 'ACTIVE'
+        AND (${TOMBSTONE_KEY_SQL_EXPRESSION}) IN (
+          SELECT unnest(${escapeSqlLiteral(
+            toPostgresArrayLiteral(retiredKeys),
+          )}::text[])
+        );
+      `;
+        try {
+          await executePostgresQuery(retirementSql, options);
+        } catch (error) {
+          return {
+            earlyReturn: {
+              status: "FAILED",
+              error_code: "VECTOR_TOMBSTONE_SYNC_FAILED",
+              error: String(
+                error?.message || "Tombstone synchronization failed",
+              ).slice(0, MAX_FAILURE_REASON_LENGTH),
+              details: catalogErrors,
+              sync_generation_id: syncGenerationId,
+              synced_count: 0,
+              failed_count: 1,
+            },
+          };
+        }
+      }
+      return {
+        earlyReturn: {
+          status: "FAILED",
+          error_code: "CATALOG_INVALID",
+          details: catalogErrors,
+          sync_generation_id: syncGenerationId,
+          synced_count: 0,
+          failed_count: 0,
+        },
+      };
+    }
+
+    // 3. Tombstone synchronization for removed or deprecated skills (K24)
+    const activeKeys = activeRecords.map((r) => {
+      const id = r.manifest.identity;
+      // M10/T2-R20: the composite key joined with U+0000. PostgreSQL `text` cannot
+      // store a NUL byte, so the tombstone statement aborted; and the skill
+      // identity rules forbid control characters in a skill path anyway
+      // (path-safety.mjs rejects /[\0\x01-\x1F\x7F]/). With any ACTIVE skill
+      // present every sync failed here with VECTOR_TOMBSTONE_SYNC_FAILED and
+      // ingestion was never reached.
+      //
+      // The SQL side was independently wrong too: it compared against
+      // `namespace::text || capability || version`, and `namespace::text`
+      // renders a text[] as `{a,b}` with braces and no separators, so the two
+      // sides could never be equal and the predicate would have DEPRECATED every
+      // ACTIVE row. It now uses `array_to_string(namespace,'/')`, which mirrors
+      // `namespace.join("/")`, with the same `|` separators.
+      //
+      // `|` is provably unambiguous: every component is a skill path segment
+      // restricted to /^[a-zA-Z0-9_.-]+$/u, so none of them can contain it.
+      //
+      // M12/T9-R1 F-240: both sides are now built from the shipped constants
+      // (`tombstoneKey` / `TOMBSTONE_KEY_SQL_EXPRESSION`) instead of from two
+      // copies of the same template literal, so the two sides can be compared by
+      // execution rather than by reading the source.
+      return tombstoneKey(id);
+    });
+
+    // M12/T9 F-176: the zero-row tombstone is the destructive one.
+    //
+    // With no ACTIVE skill the key set is empty, so the statement below removes
+    // EVERY active derived row the index holds. That is correct for a store the
+    // owner emptied, and catastrophic for a `skillsRoot` that points at a
+    // DIFFERENT empty store: the sync would delete the intended store's whole
+    // derived index while believing it had synced an empty catalog.
+    //
+    // So the statement runs only when the store is CONFIRMED: the caller named
+    // the store and the store carries that identity. An unnamed store keeps the
+    // ordinary behaviour when it holds skills (the existing behaviour the owner
+    // kept), and an EMPTY store is tombstoned only under the explicit opt-in.
+    const storeIsEmpty = catalog.records.length === 0;
+    const storeIsConfirmed =
+      expectedStoreId !== null && storeIdentity === expectedStoreId;
+    const tombstoneAllowed =
+      !storeIsEmpty ||
+      storeIsConfirmed ||
+      options.allowUnnamedEmptyTombstone === true;
+
+    if (tombstoneAllowed) {
+      syncReport.tombstone_status = "APPLIED";
+      try {
+        // M11/T1: two independent defects made this statement never reach a
+        // successful execution against real PostgreSQL. (1) `unnest(ARRAY[{...}]
+        // ::text[])` is a syntax error — a brace array literal is only legal as a
+        // quoted string constant, so the literal now goes through
+        // escapeSqlLiteral. (2) The pre-fix UPDATE wrote status='DEPRECATED' and
+        // sync_status='TOMBSTONED', which migration 003 CHECK constraints do not
+        // admit (status is ACTIVE-only; sync_status is PENDING/READY/FAILED).
+        // The tombstone now DELETES the derived row (segments cascade via FK):
+        // pgvector state is derived-only, canonical lifecycle truth stays in the
+        // catalog, and every consumer already filters status='ACTIVE' AND
+        // sync_status='READY', so removal is consumer-visible-identical.
+        //
+        // M12/T9 F-386: that paragraph describes the TOMBSTONE path only. The
+        // RETIREMENT path above (the F-095 marker) writes those same two values,
+        // and migration 004 widened the CHECK constraints so the write is
+        // admitted: a retired skill is MARKED, and only the rows this tombstone
+        // can prove are still ACTIVE are deleted.
+        const tombstoneSql = `
+      DELETE FROM skills.catalog_index
+      WHERE status = 'ACTIVE'
+      AND (${TOMBSTONE_KEY_SQL_EXPRESSION}) NOT IN (
+        SELECT unnest(${escapeSqlLiteral(
+          toPostgresArrayLiteral(activeKeys),
+        )}::text[])
+      );
+    `;
+        await executePostgresQuery(tombstoneSql, options);
+      } catch (error) {
+        syncReport.status = "FAILED";
+        syncReport.error_code = "VECTOR_TOMBSTONE_SYNC_FAILED";
+        syncReport.error = String(
+          error?.message || "Tombstone synchronization failed",
+        ).slice(0, MAX_FAILURE_REASON_LENGTH);
+        syncReport.failed_count = 1;
+        return { earlyReturn: syncReport };
+      }
+    } else {
+      // The refusal is named, and the report says so: a sync that skipped the
+      // tombstone must never read as "the index matches the catalog".
+      syncReport.tombstone_status = "REFUSED";
+      syncReport.tombstone_error_code = "SKILL_STORE_IDENTITY_UNNAMED";
+      syncReport.tombstone_error =
+        "the store carries no confirmed identity, so the zero-row tombstone was not run";
+    }
+
+    return { activeRecords, syncReport };
+  });
+}
+
+/**
  * Synchronizes canonical Git-native ACTIVE skills into derived PostgreSQL vector tables.
  * Implements K24, K25, L10-L20.
  */
@@ -817,237 +1111,15 @@ export async function syncSkillsToVectorStore(options = {}) {
     };
   }
 
-  // 1. Scan and validate canonical catalog (Phase 5, §8)
-  const catalog = await scanCatalog(skillsRoot);
-  const catalogErrors = catalog.errors ?? [];
-
-  // 2. Filter strictly for ACTIVE skills (BUG-04). F-428: a record that carries
-  // a scan error or whose identity does not match its directory is not proof
-  // of anything, even when its lifecycle says ACTIVE or DEPRECATED.
-  const eligibleRecords = catalog.records.filter(
-    (record) =>
-      recordHasNoScanErrors(record, catalogErrors) &&
-      recordIdentityMatchesPath(record),
-  );
-  const activeRecords = eligibleRecords.filter((record) => {
-    const lifecycle = record.manifest?.lifecycle;
-    return Array.isArray(lifecycle) && lifecycle.at(-1)?.status === "ACTIVE";
+  const snapshot = await prepareSyncSnapshot({
+    skillsRoot,
+    options,
+    expectedStoreId,
+    storeIdentity,
+    syncGenerationId,
   });
-
-  // M12/T9-R1 F-152: the skills the catalog proves are RETIRED. Their derived
-  // rows must be removed even when an unrelated record is invalid, otherwise
-  // one bad file freezes every retirement in the store for the whole SLA
-  // window and the adapter keeps serving retired skills.
-  //
-  // Only a readable manifest counts: a skill whose manifest cannot be read
-  // is NOT provably retired, so its row is left alone rather than deleted on
-  // a guess.
-  const retiredKeys = eligibleRecords
-    .filter(
-      (record) => record.manifest?.lifecycle?.at(-1)?.status === "DEPRECATED",
-    )
-    .map((record) => tombstoneKey(record.manifest.identity));
-
-  const syncReport = {
-    status: "RUNNING",
-    sync_generation_id: syncGenerationId,
-    scanned_count: catalog.records.length,
-    active_count: activeRecords.length,
-    synced_count: 0,
-    failed_count: 0,
-    skills: [],
-  };
-
-  // M12/T9 F-095 (R5-E04-05) / H8 — the governed retirement is RECORDED in
-  // the derived index, not only deleted from it.
-  //
-  // `003_skills_vector_schema.sql` could only admit `status = 'ACTIVE'` and
-  // `sync_status IN ('PENDING','READY','FAILED')`, so a retired skill had
-  // exactly ONE representation in the derived index: the row was DELETED, and
-  // the index could not say WHY the skill was gone. The Skill Store's own
-  // forward migration (`zink-skill-store/migrations/004_skill_retirement_state.sql`)
-  // widened the two CHECK constraints, so the retirement is now WRITTEN:
-  // `status = 'DEPRECATED'`, `sync_status = 'TOMBSTONED'`.
-  //
-  // The segments are dropped in the SAME statement: the foreign key cascades
-  // on a DELETE of the parent row, and this statement UPDATES the parent, so
-  // the vectors of a retired skill would otherwise survive their retirement.
-  //
-  // The canonical lifecycle truth stays in the catalog's manifest; the derived
-  // row now carries the retirement as well, and the consumers that filter on
-  // `status = 'ACTIVE' AND sync_status = 'READY'` keep serving exactly what
-  // they served before.
-  if (retiredKeys.length > 0) {
-    const retirementMarkerSql = `
-      WITH retired AS (
-        SELECT id FROM skills.catalog_index
-        WHERE status = 'ACTIVE'
-        AND (${TOMBSTONE_KEY_SQL_EXPRESSION}) IN (
-          SELECT unnest(${escapeSqlLiteral(
-            toPostgresArrayLiteral(retiredKeys),
-          )}::text[])
-        )
-      ), dropped AS (
-        DELETE FROM skills.segments WHERE skill_id IN (SELECT id FROM retired)
-      )
-      UPDATE skills.catalog_index
-      SET status = 'DEPRECATED', sync_status = 'TOMBSTONED'
-      WHERE id IN (SELECT id FROM retired);
-    `;
-    try {
-      await executePostgresQuery(retirementMarkerSql, options);
-    } catch (error) {
-      syncReport.status = "FAILED";
-      syncReport.error_code = "VECTOR_RETIREMENT_MARK_FAILED";
-      syncReport.error = String(
-        error?.message || "Retirement marking failed",
-      ).slice(0, MAX_FAILURE_REASON_LENGTH);
-      syncReport.failed_count = 1;
-      return syncReport;
-    }
-  }
-
-  if (catalogErrors.length > 0) {
-    // F-152: the tombstone used to be skipped entirely whenever the scan
-    // reported anything, so ONE invalid file anywhere left every previously
-    // READY row in place — including the rows of skills the owner had
-    // retired — while the index still reported FRESH for up to the 7-day SLA
-    // and the adapter kept serving them.
-    //
-    // The narrow statement deletes ONLY the rows it can prove are retired.
-    // A row whose skill could not be read is left alone: the catalog is
-    // incomplete, so "not in the active set" would mean "not known", and
-    // deleting on that basis would destroy a live skill's vectors.
-    if (retiredKeys.length > 0) {
-      const retirementSql = `
-        DELETE FROM skills.catalog_index
-        WHERE status = 'ACTIVE'
-        AND (${TOMBSTONE_KEY_SQL_EXPRESSION}) IN (
-          SELECT unnest(${escapeSqlLiteral(
-            toPostgresArrayLiteral(retiredKeys),
-          )}::text[])
-        );
-      `;
-      try {
-        await executePostgresQuery(retirementSql, options);
-      } catch (error) {
-        return {
-          status: "FAILED",
-          error_code: "VECTOR_TOMBSTONE_SYNC_FAILED",
-          error: String(
-            error?.message || "Tombstone synchronization failed",
-          ).slice(0, MAX_FAILURE_REASON_LENGTH),
-          details: catalogErrors,
-          sync_generation_id: syncGenerationId,
-          synced_count: 0,
-          failed_count: 1,
-        };
-      }
-    }
-    return {
-      status: "FAILED",
-      error_code: "CATALOG_INVALID",
-      details: catalogErrors,
-      sync_generation_id: syncGenerationId,
-      synced_count: 0,
-      failed_count: 0,
-    };
-  }
-
-  // 3. Tombstone synchronization for removed or deprecated skills (K24)
-  const activeKeys = activeRecords.map((r) => {
-    const id = r.manifest.identity;
-    // M10/T2-R20: the composite key joined with U+0000. PostgreSQL `text` cannot
-    // store a NUL byte, so the tombstone statement aborted; and the skill
-    // identity rules forbid control characters in a skill path anyway
-    // (path-safety.mjs rejects /[\0\x01-\x1F\x7F]/). With any ACTIVE skill
-    // present every sync failed here with VECTOR_TOMBSTONE_SYNC_FAILED and
-    // ingestion was never reached.
-    //
-    // The SQL side was independently wrong too: it compared against
-    // `namespace::text || capability || version`, and `namespace::text`
-    // renders a text[] as `{a,b}` with braces and no separators, so the two
-    // sides could never be equal and the predicate would have DEPRECATED every
-    // ACTIVE row. It now uses `array_to_string(namespace,'/')`, which mirrors
-    // `namespace.join("/")`, with the same `|` separators.
-    //
-    // `|` is provably unambiguous: every component is a skill path segment
-    // restricted to /^[a-zA-Z0-9_.-]+$/u, so none of them can contain it.
-    //
-    // M12/T9-R1 F-240: both sides are now built from the shipped constants
-    // (`tombstoneKey` / `TOMBSTONE_KEY_SQL_EXPRESSION`) instead of from two
-    // copies of the same template literal, so the two sides can be compared by
-    // execution rather than by reading the source.
-    return tombstoneKey(id);
-  });
-
-  // M12/T9 F-176: the zero-row tombstone is the destructive one.
-  //
-  // With no ACTIVE skill the key set is empty, so the statement below removes
-  // EVERY active derived row the index holds. That is correct for a store the
-  // owner emptied, and catastrophic for a `skillsRoot` that points at a
-  // DIFFERENT empty store: the sync would delete the intended store's whole
-  // derived index while believing it had synced an empty catalog.
-  //
-  // So the statement runs only when the store is CONFIRMED: the caller named
-  // the store and the store carries that identity. An unnamed store keeps the
-  // ordinary behaviour when it holds skills (the existing behaviour the owner
-  // kept), and an EMPTY store is tombstoned only under the explicit opt-in.
-  const storeIsEmpty = catalog.records.length === 0;
-  const storeIsConfirmed =
-    expectedStoreId !== null && storeIdentity === expectedStoreId;
-  const tombstoneAllowed =
-    !storeIsEmpty ||
-    storeIsConfirmed ||
-    options.allowUnnamedEmptyTombstone === true;
-
-  if (tombstoneAllowed) {
-    syncReport.tombstone_status = "APPLIED";
-    try {
-      // M11/T1: two independent defects made this statement never reach a
-      // successful execution against real PostgreSQL. (1) `unnest(ARRAY[{...}]
-      // ::text[])` is a syntax error — a brace array literal is only legal as a
-      // quoted string constant, so the literal now goes through
-      // escapeSqlLiteral. (2) The pre-fix UPDATE wrote status='DEPRECATED' and
-      // sync_status='TOMBSTONED', which migration 003 CHECK constraints do not
-      // admit (status is ACTIVE-only; sync_status is PENDING/READY/FAILED).
-      // The tombstone now DELETES the derived row (segments cascade via FK):
-      // pgvector state is derived-only, canonical lifecycle truth stays in the
-      // catalog, and every consumer already filters status='ACTIVE' AND
-      // sync_status='READY', so removal is consumer-visible-identical.
-      //
-      // M12/T9 F-386: that paragraph describes the TOMBSTONE path only. The
-      // RETIREMENT path above (the F-095 marker) writes those same two values,
-      // and migration 004 widened the CHECK constraints so the write is
-      // admitted: a retired skill is MARKED, and only the rows this tombstone
-      // can prove are still ACTIVE are deleted.
-      const tombstoneSql = `
-      DELETE FROM skills.catalog_index
-      WHERE status = 'ACTIVE'
-      AND (${TOMBSTONE_KEY_SQL_EXPRESSION}) NOT IN (
-        SELECT unnest(${escapeSqlLiteral(
-          toPostgresArrayLiteral(activeKeys),
-        )}::text[])
-      );
-    `;
-      await executePostgresQuery(tombstoneSql, options);
-    } catch (error) {
-      syncReport.status = "FAILED";
-      syncReport.error_code = "VECTOR_TOMBSTONE_SYNC_FAILED";
-      syncReport.error = String(
-        error?.message || "Tombstone synchronization failed",
-      ).slice(0, MAX_FAILURE_REASON_LENGTH);
-      syncReport.failed_count = 1;
-      return syncReport;
-    }
-  } else {
-    // The refusal is named, and the report says so: a sync that skipped the
-    // tombstone must never read as "the index matches the catalog".
-    syncReport.tombstone_status = "REFUSED";
-    syncReport.tombstone_error_code = "SKILL_STORE_IDENTITY_UNNAMED";
-    syncReport.tombstone_error =
-      "the store carries no confirmed identity, so the zero-row tombstone was not run";
-  }
+  if (snapshot.earlyReturn) return snapshot.earlyReturn;
+  const { activeRecords, syncReport } = snapshot;
 
   // 4. Ingest and vectorize active records.
   // M11/T1: each skill is written as ONE transaction in ONE psql invocation.
@@ -1138,22 +1210,60 @@ export async function syncSkillsToVectorStore(options = {}) {
         .update(envelopeHashes.join("\n"))
         .digest("hex");
 
-      await executePostgresQuery(
-        buildSkillSyncTransaction({
-          namespace,
-          capability,
-          version,
-          contentHash: assertHexDigest(currentHash, "source_sha256"),
-          skillEmbeddingHash: assertHexDigest(
-            skillEmbeddingHash,
-            "embedding_input_sha256",
-          ),
-          semanticMeta,
-          canonicalSecondaryTopics,
-          segmentRows,
-        }),
-        options,
-      );
+      await withSyncStoreLock(skillsRoot, async () => {
+        // F-429: content.sha256 is not lifecycle. A retirement can land after
+        // the snapshot while the embeddings are still in flight, and the READY
+        // upsert would otherwise re-mark the row ACTIVE. Re-read the manifest
+        // under the same lock that guards canonical writes, immediately before
+        // the READY transaction, and refuse to write it on any drift.
+        const lifecycleStatus = await readManifestLifecycleStatus(
+          skillsRoot,
+          record.manifest.identity,
+        );
+        if (lifecycleStatus !== "ACTIVE") {
+          let markerError = null;
+          if (lifecycleStatus === "DEPRECATED") {
+            try {
+              await executePostgresQuery(
+                buildRetirementMarkerSql([
+                  tombstoneKey(record.manifest.identity),
+                ]),
+                options,
+              );
+            } catch (error) {
+              markerError = error;
+            }
+          }
+          const markerNote = markerError
+            ? `; retirement marker failed: ${markerError.message}`
+            : "";
+          const drift = new Error(
+            `SOURCE_LIFECYCLE_DRIFT: lifecycle changed from ACTIVE to ${
+              lifecycleStatus ?? "UNKNOWN"
+            } during sync${markerNote}`,
+          );
+          drift.code = "SOURCE_LIFECYCLE_DRIFT";
+          if (markerError) drift.cause = markerError;
+          throw drift;
+        }
+
+        await executePostgresQuery(
+          buildSkillSyncTransaction({
+            namespace,
+            capability,
+            version,
+            contentHash: assertHexDigest(currentHash, "source_sha256"),
+            skillEmbeddingHash: assertHexDigest(
+              skillEmbeddingHash,
+              "embedding_input_sha256",
+            ),
+            semanticMeta,
+            canonicalSecondaryTopics,
+            segmentRows,
+          }),
+          options,
+        );
+      });
 
       syncReport.synced_count += 1;
       syncReport.skills.push({
@@ -1177,6 +1287,12 @@ export async function syncSkillsToVectorStore(options = {}) {
         sync_status: "FAILED",
         error: boundedReason,
       });
+
+      // A lifecycle drift is not a failed embedding: the canonical row is no
+      // longer ACTIVE, and the retirement marker above is the only derived
+      // write this record is allowed to make. Falling through to the failure
+      // upsert would re-create an ACTIVE row for a retired skill.
+      if (err?.code === "SOURCE_LIFECYCLE_DRIFT") continue;
 
       // Observable failure recording (BUG-08, L13). M11/T1: a failure to
       // persist the FAILED marker is itself escalated — the whole sync is
