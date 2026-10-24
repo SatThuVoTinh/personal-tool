@@ -160,17 +160,20 @@ test("F-105: the legacy orchestration patterns module stays deleted", () => {
     false,
     "the owner-authorised deletion of the legacy patterns module must hold",
   );
-  // The index entry is the orchestrator's `git rm` to complete: the file is
-  // gone from the working tree and the commit removes it from the tree. What
-  // this gate must catch is the module coming BACK - and a module that is
-  // tracked and present at the same time is exactly that.
+  // The index entry is the orchestrator's `git rm` to complete. F-526
+  // (R10-L11-2): this used to read `tracked.length === 0 || !existsSync(legacy)`,
+  // whose right operand is the assertion above — already required to hold — so
+  // the clause could not redden and the lane credited two guarantees where one
+  // existed. The two halves are now independent: the tree half is the assert
+  // above, and the index half refuses the module being tracked AT ALL, which is
+  // the state a `git rm` that stopped halfway leaves behind.
   const tracked = trackedFiles(
     "integrations/openclaw/orchestration/patterns/index.mjs",
   );
   assert.equal(
-    tracked.length === 0 || existsSync(legacy) === false,
+    tracked.length === 0,
     true,
-    "the legacy patterns module must not be tracked and present at the same time",
+    "the legacy patterns module must not be in the index at all",
   );
 });
 
