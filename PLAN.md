@@ -8022,6 +8022,24 @@ Final Quality Gate: NOT RUN — the task is not closed.
   secret exposure, dependency change, direct `main` push, force-push,
   PR/merge/release, or history rewrite.
 
+### Owner decisions recorded 2026-10-24
+
+- The integrity surface is lead-only. The owner authorized `ACTIVE.md` §4.2.1: an
+  agent may not edit `package.json`'s `npm test` enumeration, the contract-manifest
+  pin in `topology/lib/schema.mjs`, the per-mode predecessor lists in
+  `configure.mjs`, the packaged-entrypoint pins in the two asset-predecessor lanes,
+  `.github/workflows/ci.yml` or `docs/contracts/**`. It names the file and the new
+  digest in its report and stops; the lead rolls the pin, measures the live runtime,
+  and proves the admission from a named commit. A pin roll ships in the same commit
+  as the row that moves it, because `tests/agent-last-F-369.test.mjs` compares
+  packaged bytes against `git show HEAD:<path>`.
+- `F-481` stays OPEN. Its acceptance criteria re-grade
+  `docs/contracts/ci-skip-expectations.json`, which needs per-family pass and skip
+  tallies from a real CI runner; this host cannot produce them. Measured here: the
+  abandoned lane's gate change reddens the shipped F-197 case (7 passed / 1 failed,
+  naming `live-runtime` as a family that contributed no pass at all). No partial
+  gate change ships. The measurement is recorded in the row's own `Status:` line.
+
 ### Scope and bands
 
 | Band | Scope | Rows | C/H/M/L | O/L |
@@ -8086,28 +8104,52 @@ force-push, no PR/merge/release.
 - R3 is archived at `docs/contracts/execution/archive/2026-10-21-M12-T9-R3.md`.
 - R4 is materialized at `docs/contracts/execution/ACTIVE.md`; this block is its
   lifecycle pointer.
-- 13 of the 189 scoped rows are closed with red/green and mutation evidence:
+- 22 of the 189 scoped rows are closed with red/green and mutation evidence:
   `F-523`, `F-524`, `F-437`, `F-438`, `F-408`, `F-414`, `F-464`, `F-465`,
-  `F-466`, `F-473`, `F-442`, `F-444` and the Critical head of B1, `F-533`. The
-  register now carries 210 rows (142 OPEN + 34 LATENT in scope, 32 REFUTED, 2
-  BLOCKED).
+  `F-466`, `F-473`, `F-442`, `F-444`, `F-533`, `F-427`, `F-428`, `F-429`,
+  `F-450`, `F-455`, `F-451`, `F-452`, `F-453`, `F-511`. The register now carries
+  201 rows (133 OPEN + 34 LATENT in scope = 167, 32 REFUTED, 2 BLOCKED).
 - The band that had already merged without its closeout (`F-464`/`F-465`/
   `F-466`/`F-473` from B4, `F-442`/`F-444` from B5) was re-measured at this HEAD
   before its rows were deleted: the artifact/Excel lane is 8/8, the knowledge
   lane 212 passed / 17 skipped / 0 failed, and each control was
   mutation-probed in person with the probe reverted.
-- `repo:check` no longer reports an unenumerated test file. `tests/agent-owner-F-408.test.mjs`,
-  `tests/agent-owner-F-414.test.mjs` and `tests/agent-plugin-F-533.test.mjs` are
-  in the `npm test` script. Its only remaining failure is the single-worktree
-  rule, held red by the eight intentional lane worktrees; it stays a real
-  failure and is cleared as the lanes are integrated and removed.
-- `format:check`, `lint` and the register gate (12/12) pass. The shipped
-  `npm test` still cannot start on this Windows host (command-line length), so
-  the equivalent `node --test` lane is the evidence and `NOT RUN` is recorded as
-  `NOT RUN`.
-- Work in the lanes, not yet integrated: `m12-t9-r4-b7` (F-450, F-451, F-452,
-  F-453, F-455, F-511 — 168/168 green, uncommitted), `m12-t9-r4-b6` (F-427,
-  F-428, F-429 — 7/7 green, uncommitted) and `m12-t9-r4-evidence` (F-467 and the
-  rest of the evidence floor — 29/29 green, uncommitted). `m12-t9-r4-b3` is
-  parked with nothing done. The `red-probe` stash in the B7 worktree is a
-  mutation probe and must never be applied.
+- B6 and B7 were replayed from the abandoned lanes one row at a time, each with
+  red-before/green-after and a mutation probe measured here rather than borrowed
+  from a lane report. Three corrections rode along, and they are the shape of the
+  next wave's briefs: the b6 lane's tests sat in an untracked
+  `zink-skill-store/tests/` directory that no gate reads, so they moved to
+  `tests/` and were enumerated; the b7 lane's unattributed reformat of a published
+  contract JSON was dropped (`zink-tools/**/*.json` is outside `format:check`, so
+  it was not a formatter requirement); and the b6 lane's reentrancy short-circuit
+  was removed because the F-429 concurrency case disproves the comment that
+  justified it.
+- `eaad483` rolled the two committed expectations these rows moved: the contract
+  manifest checksum (`F-450`/`F-455` edited `$defs.parameter`) and the packaged
+  plugin entrypoint (`F-533` deleted the plugin-local derivation). The displaced
+  entrypoint digest is what the live WSL runtime carries — measured with
+  `sha256sum` on 2026-10-24 — so it became an admitted predecessor in both per-mode
+  lists of `configure.mjs`, and the new `R13 P7` case re-derives it from commit
+  `1b68586` through the real generator. Three probes confirmed the pins are live
+  controls; all were reverted.
+- `repo:check` no longer reports an unenumerated test file. Its only remaining
+  failure is the single-worktree rule: `git worktree list` registers 9 trees (this
+  one plus the 8 lane worktrees), and the gate clears when the last lane is
+  removed. It stays a real failure until then.
+- Full equivalent lane at this HEAD: **2548 tests / 2493 pass / 4 fail / 51
+  skipped**, all four environmental — `F-261` x2 (the worktree registry) and
+  `F-379` x2 (`tar -xf C:` cannot resolve under MSYS). `format:check`, `lint`, the
+  register gate (12/12) and the policy lane (68/68) pass. The shipped `npm test`
+  still cannot start on this Windows host (command-line length), so it stays
+  `NOT RUN` and the equivalent `node --test` lane is the evidence.
+- Lane inventory, verified: `m12-t9-r4-evidence` is the only lane holding work that
+  is not on HEAD (21 entries: 5 tracked files and 16 scratch ones) — reviewed as
+  NOT replayable as a set: F-474 and F-567 need only formatting and enumeration,
+  F-467 and F-492 are missing the test their own criteria demand, and F-481 is the
+  OPEN decision above. `m12-t9-r4-b6` and `m12-t9-r4-b7` still show their
+  working-tree entries, but their content is now identical to HEAD
+  (`git diff eaad483 -- zink-skill-store/src/vector-sync.mjs zink-tools/sql` is
+  empty), so nothing unique is lost by removing them; `m12-t9-r4-b7` also carries
+  the `red-probe` stash, a mutation probe that must never be applied.
+  `m12-t9-r4-b1b` is clean and integrated, `m12-t9-r4-b2a`/`b4`/`b5` were integrated
+  earlier, and `m12-t9-r4-b3` is parked with nothing done.
