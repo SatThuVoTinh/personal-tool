@@ -8112,8 +8112,8 @@ force-push, no PR/merge/release.
   `F-415`, `F-410`, `F-512`, `F-573`, `F-412`, `F-413`, `F-513`, `F-458`,
   `F-483`, `F-566`, `F-482`, `F-519`, `F-509`, `F-574`, `F-133`, `F-544`,
   `F-514`, `F-516`, `F-526`, `F-527`, `F-528`, `F-550`, `F-443`, `F-570`,
-  `F-547`, `F-541`, `F-496`. The register now carries 164 rows (100 OPEN + 27
-  LATENT in scope = 127, 32 REFUTED, 2 BLOCKED, 3 PARTIAL). The §1 census in the
+  `F-547`, `F-541`, `F-496`. The register now carries 164 rows (99 OPEN + 27
+  LATENT in scope = 126, 32 REFUTED, 3 BLOCKED, 3 PARTIAL). The §1 census in the
   register was stale by the 22 earlier closures and was corrected against the file rather
   than against its own header; its closure total also read 419 while its own
   item list summed to 427, and is now measured from the `CHANGELOG.md` bullets.
@@ -8233,6 +8233,23 @@ null;`) left the lane 3/3 green, so that path is unproven and the shipped
   records, not a defect. The §1 closure total also read **450** while its own band list summed
   to 452 and `CHANGELOG.md` carried 452 bullets; the prose now states the measured 453 with
   this row included.
+- `F-568` (`R10-T09-3`, Medium) is **held as `BLOCKED` on an owner grant**, and re-verify
+  step 0 is what caught it. Measured on this host against the live registry:
+  `npm audit --json` reports 6 vulnerabilities (3 low, 2 moderate, 1 high) over
+  `katex`, `markdown-it`, `markdownlint`, `markdownlint-cli2`,
+  `micromark-extension-math` and `smol-toml`, while
+  `.github/security/npm-audit-baseline.json` records 9 (3 low, 1 moderate, 5 high) from
+  2026-10-19 — so `node scripts/audit-baseline.mjs --audit-report <live report>` already
+  exits 1 on the `moderate` axis with no change to this row, and it has stayed unseen only
+  because no CI run has executed since. Every entry's `fixAvailable` names the same
+  upgrade (`markdownlint-cli2` 0.24.0, a semver-major of the tool that gates the docs
+  lanes). The row's own remedy cannot ship without writing which advisories the security
+  gate accepts, which is a security-boundary decision under `AGENTS.md` §7, so the lead
+  stopped there instead of re-recording the carrier. Its premise also stands as written:
+  `compareAuditToBaseline` reads six integers, and an npm audit report collapses a package's
+  several advisories into one count (the live `markdown-it` entry carries three advisories
+  at two severities and counts once), so an identity-set check is a strictly different
+  predicate than the count check.
 - The Knowledge HTTP lane (`w1-kb-api`) closed two rows and left two `PARTIAL`:
   `F-514` (`df2410f`) and `F-516` (`1ebfa51`), with the Knowledgebase lane at
   251 passed / 17 skipped / 31 subtests after integration. Probes, each
