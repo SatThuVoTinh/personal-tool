@@ -2147,6 +2147,11 @@ passed.`; `python-quality` SUCCESS — 188 passed, 27 subtests) and Security run
 - **`F-415`** — the durability predicate recognised only the sync API over a hand-typed register, so the async Skill Store writer (`zink-skill-store/src/catalog.mjs`) was invisible to the lane that proves durability — closed by `9df66fd`.
   Row `F-415` (`R9-T03-2`). The predicate reads `await rename`, `await handle.sync()` and `await open(..., "r")` beside the sync forms, and the population is derived from `git ls-files` plus a rename-usage scan instead of a literal; `tests/m12-t9-r4-durability-population.test.mjs` proves an async writer is accepted with its directory fsync and refused without it, that an empty or truncated enumeration throws rather than proving an empty population, and that the derived failures equal `REPORTED_UNDURABLE_WRITERS` exactly. **Recorded gap:** the criterion's residue-cleanup half lands for the writer the row names — `catalog.mjs`'s temp residue is unlinked on every failure path by `F-410` (`20760b8`, with its own assertion in `tests/agent-skill-F-410.test.mjs`) — but the durability lane does not add a residue assertion for every other derived writer.
 
+#### M12/T9-R4 — the atomic writer's own residue (2026-10-24) (1 row)
+
+- **`F-410`** — a failed Skill Store write left `manifest.json.tmp-*` residue that the exactly-two-entries validation read as store-wide corruption, and no shipped CLI repaired it — closed by `fe516c1`.
+  Row `F-410` (`R9-L06-3`). `writeFileAtomic` removes its temp file on every failure path (the original fault is still what the caller is told), the version-directory validation ignores only a name matching the writer's own `<target>.tmp-<pid>-<ms>-<hex>` grammar rather than any extra entry, and the scan reports that family as residue so the writer's sweep clears it under the store lock. Regression: `tests/agent-skill-F-410.test.mjs` 3/3. Mutation probe: deleting the `rm(tmp)` in the catch reddened the failed-write case (1 failed / 2 passed); reverted.
+
 ## Changelog Rules
 
 ### Completed Changes Only

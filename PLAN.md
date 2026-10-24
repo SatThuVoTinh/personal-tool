@@ -8104,15 +8104,16 @@ force-push, no PR/merge/release.
 - R3 is archived at `docs/contracts/execution/archive/2026-10-21-M12-T9-R3.md`.
 - R4 is materialized at `docs/contracts/execution/ACTIVE.md`; this block is its
   lifecycle pointer.
-- 33 of the 189 scoped rows are closed with red/green and mutation evidence:
+- 34 of the 189 scoped rows are closed with red/green and mutation evidence:
   `F-523`, `F-524`, `F-437`, `F-438`, `F-408`, `F-414`, `F-464`, `F-465`,
   `F-466`, `F-473`, `F-442`, `F-444`, `F-533`, `F-427`, `F-428`, `F-429`,
   `F-450`, `F-455`, `F-451`, `F-452`, `F-453`, `F-511`, `F-467`, `F-474`,
   `F-567`, `F-517`, `F-518`, `F-441`, `F-440`, `F-439`, `F-487`, `F-491`,
-  `F-415`. The register now carries 190 rows (121 OPEN + 34 LATENT in scope =
-  155, 32 REFUTED, 2 BLOCKED, 1 PARTIAL). The §1 census in the register was
-  stale by the 22 earlier closures and was corrected against the file rather
-  than against its own header.
+  `F-415`, `F-410`. The register now carries 189 rows (120 OPEN + 33 LATENT in
+  scope = 153, 32 REFUTED, 2 BLOCKED, 2 PARTIAL). The §1 census in the register
+  was stale by the 22 earlier closures and was corrected against the file rather
+  than against its own header; its closure total also read 419 while its own
+  item list summed to 427, and is now measured from the `CHANGELOG.md` bullets.
 - The evidence floor is dispositioned: `F-467` (`8de5340`), `F-474`+`F-567`
   (one recorded merge, `7c6571b`) and `F-492`'s failed/errored half (`7e13dcb`)
   are green with red-before and a mutation probe reverted in person. `F-492`
@@ -8149,6 +8150,16 @@ force-push, no PR/merge/release.
   for the other fourteen. The lane stopped at its 150-turn cap mid-edit, as did
   `w1-skill-vector`, `w1-skill-catalog` and `w1-gate-scripts`; their committed
   rows are integrated below, their uncommitted work is not.
+- The B6 skill-catalog lane (`w1-skill-catalog`) closed one row and left one
+  `PARTIAL`: `F-410` (`fe516c1`) has red/green and the lead's probe (deleting
+  the `rm(tmp)` in the catch reddened the failed-write case, 1 failed / 2
+  passed, reverted). **`F-580` stays `PARTIAL`** — its stranded-state half is
+  closed (`a7c8239`) and proved, but its acceptance criterion also demands a
+  shipped case that promotes a record failing re-validation *with the removal
+  forced to fail*; disabling the new quarantine branch (`const quarantined =
+  null;`) left the lane 3/3 green, so that path is unproven and the shipped
+  case builds the stranded directory directly instead. The missing case is
+  writable; no owner decision is needed.
 - The band that had already merged without its closeout (`F-464`/`F-465`/
   `F-466`/`F-473` from B4, `F-442`/`F-444` from B5) was re-measured at this HEAD
   before its rows were deleted: the artifact/Excel lane is 8/8, the knowledge
