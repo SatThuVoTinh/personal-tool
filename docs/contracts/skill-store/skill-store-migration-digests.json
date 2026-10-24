@@ -9,6 +9,10 @@
     {
       "file": "004_skill_retirement_state.sql",
       "sha256": "3a487ee9799439722d46602e312a00194e83fde97cd5a6f3033982f7f5708d97"
+    },
+    {
+      "file": "005_retirement_state_domain_verification.sql",
+      "sha256": "d0f4365a7111f56e40181b49b01830a120212f43a17ba21d5f369e68aba53663"
     }
   ]
 }

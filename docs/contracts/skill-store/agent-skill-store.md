@@ -86,6 +86,14 @@ The retirement is never model-visible: the Zink Tools `SkillAdapter` still
 refuses the `deprecate` action, and only an owner-confirmed governed action
 reaches the store's public door (`retireSkill`).
 
+A terminal derived row is reclaimed, not kept forever: after a COMPLETE scan
+proves its canonical record is gone, a `DEPRECATED` row older than the bounded
+retention window (`TERMINAL_DERIVED_ROW_RETENTION_DAYS`, 30 days, in
+`zink-skill-store/src/vector-sync.mjs`) is deleted from the derived index. The
+window keeps an incomplete or transient catalog read from pruning a live
+retirement, and the deletion runs only under the same store-confirmation gate
+that guards the `ACTIVE` tombstone.
+
 This contract intentionally has no `work` or `research` manifest field.
 Operational routing policy remains the responsibility of M7/OpenClaw.
 
