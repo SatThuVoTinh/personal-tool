@@ -2152,6 +2152,23 @@ passed.`; `python-quality` SUCCESS — 188 passed, 27 subtests) and Security run
 - **`F-410`** — a failed Skill Store write left `manifest.json.tmp-*` residue that the exactly-two-entries validation read as store-wide corruption, and no shipped CLI repaired it — closed by `fe516c1`.
   Row `F-410` (`R9-L06-3`). `writeFileAtomic` removes its temp file on every failure path (the original fault is still what the caller is told), the version-directory validation ignores only a name matching the writer's own `<target>.tmp-<pid>-<ms>-<hex>` grammar rather than any extra entry, and the scan reports that family as residue so the writer's sweep clears it under the store lock. Regression: `tests/agent-skill-F-410.test.mjs` 3/3. Mutation probe: deleting the `rm(tmp)` in the catch reddened the failed-write case (1 failed / 2 passed); reverted.
 
+#### M12/T9-R4 — the Knowledgebase boot path, the citation digest and index identity (2026-10-24) (5 rows, 5 commits)
+
+- **`F-512`** — every published `source_sha256` for a PDF was the composite content identity, not the digest of the file, so the re-hash the README tells an operator to perform could never match — closed by `b12a930`.
+  Row `F-512` (`R10-L07-1`, High). Both citation projections (`_source_digests` and `_candidate_from_row`) left-join `knowledge.pdf_content_builds` on the identity the source row already carries and publish the build's `pdf_digest`, falling back to `sources.sha256` for a non-PDF row; the join does not go through the publish link, so a reclaimed build's digest still resolves. Regression: `tests/test_m12_t9_b5_db_retrieval.py` (both PDF arms, both markdown arms, the empty-candidate case). Probe: reverting both projections to the one column reddened 3 cases; reverted.
+
+- **`F-573`** — `get_segment` served a citation with no indication which index it resolved against and no ordinal that survives a reindex, while an incremental run DELETEs the source whose cascade destroys the segment id — closed by `d1d21a1`.
+  Row `F-573` (`R10-T10-4`, Medium). The loader joins `knowledge.indexes` and returns `index_status` plus `chunk_ordinal`, so a caller can tell a superseded-index hit from the live one and re-derive the segment by (index, source digest, ordinal) after the surrogate id is destroyed. Regression: three cases in `tests/test_m12_t9_b5_db_retrieval.py`. Probe: forcing `index_status="ACTIVE"` and `chunk_ordinal=0` reddened 2 cases; reverted.
+
+- **`F-412`** — a boot that lost the advisory-lock race set `MIGRATION_LOCK_UNAVAILABLE` and aborted without starting the reconnect loop, answering 503 for the life of the process — closed by `de7d33f`.
+  Row `F-412` (`R9-L08-2`, Medium). The `MigrationLockError` arm now starts the same reconnect loop the generic arm starts, and the re-attempt re-acquires the same lock, so a transient race resolves without a restart. Regression: `tests/test_m11_index_hygiene.py::test_a_boot_that_loses_the_schema_lock_re_attempts` drives a first lock timeout and asserts a second lock attempt and a healthy code. Probe: deleting the call reddened that case (1 failed / 29 passed); reverted.
+
+- **`F-413`** — a failed startup recovery was logged and dropped, leaving the interrupted RUNNING row that the one-running index turns into a permanent 503 — closed by `dd15a97`.
+  Row `F-413` (`R9-L08-3`, Medium). The reconnect loop re-attempts the recovery sweep while it fails, naming `STARTUP_RECOVERY_INCOMPLETE` each time, instead of returning; the sweep is idempotent. Regression: `test_a_failed_recovery_is_retried_until_it_succeeds`. Probe: deleting the `continue` made the raised sweep error escape the task and reddened the case; reverted.
+
+- **`F-513`** — the reconnect loop re-applied migrations through the lock-and-migrate half only, so a retried boot migrated the live schema with no acceptance-barrier restore point and skipped the segment-domain assertion — closed by `faa1e4f`.
+  Row `F-513` (`R10-L07-2`, Medium). Both boot arms now call one `_apply_startup_schema`, so the barrier branch and `assert_searchable_segment_type_domain()` cannot diverge, and the retry re-publishes `MIGRATION_LOCK_UNAVAILABLE` instead of swallowing it. Regression: two cases in `tests/test_m11_index_hygiene.py` (the barrier-branch order and the named refusal). Probe: forcing `barrier_completed = True` reddened the barrier case (the statement order became `['migrations']`); reverted.
+
 ## Changelog Rules
 
 ### Completed Changes Only
