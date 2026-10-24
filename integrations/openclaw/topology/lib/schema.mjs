@@ -559,9 +559,20 @@ export function generateSchemaManifest() {
  * its five `oneOf` branches while `additionalProperties: false` refused them —
  * an unsatisfiable shape that made every governed parameterized SQL call
  * impossible to express. The contract bytes changed, so the pin follows.
+ *
+ * M12/T9-R4 F-570: `zink-tools/contracts/tools/zink-knowledge.schema.json`
+ * declares the provenance identity the Knowledgebase publishes — `source_id`,
+ * `source_sha256`, `line_start`, `line_end` — inside the closed metadata object,
+ * so an agent can re-verify a citation it was given. The contract bytes changed,
+ * so the pin follows. The roll landed apart from `fc7a399` because that commit
+ * shipped without it, which is the state the three lanes that read this constant
+ * (`agent-topo-F-371`, `agent-topo-F-322`, `m12-t2.2-b9-manifest-completeness`)
+ * were left to report as red. `zink-knowledge.schema.json` packages into no
+ * deployed asset set — no entry for either its old or its new digest exists in
+ * `ALLOWED_GOVERNANCE_ASSET_SHA256` — so this roll owes no per-mode admission.
  */
 export const PINNED_SCHEMA_MANIFEST_CHECKSUM =
-  "8f6db1a023baccc9a6c5c46aa2fc3bfbe1e4d58d7a3b9a81d6d1a102f94ad732";
+  "fe12b29f4f3354cc3f6026b4780e77087989c8403602cdd98dc7f1c605c4e723";
 
 export function verifySchemaManifestChecksums(manifest = null) {
   if (manifest === null) {
