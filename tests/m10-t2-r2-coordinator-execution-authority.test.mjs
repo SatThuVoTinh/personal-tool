@@ -12,6 +12,7 @@ import {
 import { createGovernanceGuard } from "../integrations/openclaw/topology/lib/guard.mjs";
 import {
   ensureLedger,
+  inspectLedgerWriterLock,
   ledgerPaths,
   readSnapshot,
   recordWorkflowEvent,
@@ -27,6 +28,7 @@ import {
 } from "../integrations/openclaw/lib/queue-manager.mjs";
 import {
   lockDirFor,
+  release,
   tryAcquire,
 } from "../integrations/openclaw/lib/file-lock.mjs";
 import governancePlugin from "../integrations/openclaw/plugins/zink-governance/index.mjs";
@@ -1125,12 +1127,180 @@ test("R2-J4: the lock ordering is queue-then-ledger, so the fence cannot deadloc
     /commitCoordinatorMutation\(|queueExecutionFence\(/g,
   );
   assert.equal(coordinatorCommits.length, 3);
-  assert.equal(
-    guardSource.includes(
-      "withExecutionFence(lockDir, () => readSnapshotLocked(paths))",
-    ),
-    false,
-    "the ledger must never take the queue lock",
-  );
-  assert.equal(taskIdOf.length > 0, true);
+  // F-484 (legacy `R9-L11a-1`): the two halves below this pin used to be
+  // unfalsifiable — `assert.equal(taskIdOf.length > 0, true)` compared a
+  // function's declared arity against a literal (true for any function), and the
+  // `includes(...) === false` pin named a call spelling whose second identifier
+  // (`readSnapshotLocked`) does not exist in `guard.mjs` at all, so the absence
+  // it claimed to police could never be violated. The ordering is now proved by
+  // execution in the next case, which takes both locks in both orders.
+});
+
+test("R2-J4: the commit takes the queue lock and then the ledger writer lock, and the reverse order is refused", async () => {
+  const root = tempRoot("zink-r2-order-");
+  try {
+    const { paths, taskId, inputs, queue, attempt1 } = liveBoundTask(root);
+    const queueLock = lockDirFor(
+      path.dirname(queue.storagePath),
+      `${path.basename(queue.storagePath)}.lock`,
+    );
+    const ledgerLock = lockDirFor(paths.root, "writer.lock");
+    const sqlSpawn = (toolCallId) => ({
+      ...spawnEvent("sql", spawnProposal(inputs, "node-sql")),
+      toolCallId,
+    });
+    assert.notEqual(
+      queueLock,
+      ledgerLock,
+      "the queue section and the ledger writer lock must be distinct critical sections",
+    );
+
+    // Every entry of the injected seam is recorded, so the ORDER the production
+    // commit takes is observed rather than asserted from source text.
+    const observed = [];
+    let holdLedgerInsideSection = false;
+    const guard = createGovernanceGuard({
+      paths,
+      manifestFor,
+      queueExecutionFence: (fence, operation) =>
+        queue.withExecutionFence(fence, () => {
+          observed.push({
+            step: "queue-entered",
+            held: tryAcquire(queueLock) === false,
+          });
+          const ledgerHeldByProbe = holdLedgerInsideSection
+            ? tryAcquire(ledgerLock)
+            : false;
+          let committed;
+          try {
+            committed = operation();
+            observed.push({ step: "commit-returned" });
+          } catch (error) {
+            observed.push({
+              step: "commit-refused",
+              code: error?.code,
+              message: error?.message ?? String(error),
+            });
+            throw error;
+          } finally {
+            if (ledgerHeldByProbe) release(ledgerLock);
+          }
+          return committed;
+        }),
+    });
+
+    // ---- [queue, ledger]: the production order ------------------------------
+    await guard.beforeToolCall(spawnEvent("excel", spawnProposal(inputs)), {
+      agentId: "o1",
+      sessionKey: attempt1.sessionKey,
+      runId: attempt1.runId,
+    });
+    assert.deepEqual(
+      observed.map((entry) => entry.step),
+      ["queue-entered", "commit-returned"],
+      "the ledger commit must run inside the queue critical section: an empty " +
+        "log means commitCoordinatorMutation no longer routes through the fence " +
+        "(guard.mjs:984/:989)",
+    );
+    assert.equal(
+      observed[0].held,
+      true,
+      "the queue lock must really be held while the commit runs",
+    );
+    assert.equal(
+      journalTypes(paths).filter((type) => type === "WORKFLOW_SPAWN_RESERVED")
+        .length,
+      1,
+      "the reservation must land while the queue lock is held",
+    );
+    // `taskIdOf` replaces the arity assertion: it is now an assertion against
+    // the ledger the harness actually wrote.
+    assert.equal(
+      taskIdOf(paths),
+      taskId,
+      "the durable ledger must hold exactly the task the queue claim names",
+    );
+    assert.equal(
+      inspectLedgerWriterLock(paths).state,
+      "ABSENT",
+      "the commit must release the ledger writer lock it took inside the section",
+    );
+
+    // ---- [ledger, queue]: the reverse edge must not exist in the path --------
+    // A holder that owns the ledger writer lock before the mutation is refused
+    // WITHOUT ever entering the queue critical section: the guard never carries
+    // the writer lock into the queue lock, so the ordering has no cycle. This is
+    // the falsifiable replacement for the old `readSnapshotLocked` absence pin.
+    observed.length = 0;
+    assert.equal(
+      tryAcquire(ledgerLock),
+      true,
+      "the ledger writer lock must be acquirable before the reverse-edge probe",
+    );
+    let reverseOutcome = null;
+    try {
+      const second = await guard.beforeToolCall(sqlSpawn("call-spawn-2"), {
+        agentId: "o1",
+        sessionKey: attempt1.sessionKey,
+        runId: attempt1.runId,
+      });
+      reverseOutcome = JSON.stringify(second);
+    } catch (error) {
+      reverseOutcome = `${error?.code ?? ""} ${error?.message ?? String(error)}`;
+    } finally {
+      release(ledgerLock);
+    }
+    assert.match(
+      reverseOutcome,
+      /Ledger writer unavailable|FILE_LOCK_BUSY/u,
+      `the reverse-edge probe must be refused by the locked-out ledger: ${reverseOutcome}`,
+    );
+    assert.deepEqual(
+      observed.map((entry) => entry.step),
+      [],
+      "the queue critical section must never be entered while the ledger writer " +
+        `lock is held by the caller: ${JSON.stringify(observed)}`,
+    );
+
+    // ---- inside the section: the commit IS the ledger writer lock -------------
+    // Pre-holding the writer lock inside the queue section must lock the commit
+    // out. That proves the ledger write happens inside the section (the nested
+    // order the pin claims), and it reddens if the commit is moved outside the
+    // fence: outside, my wrapper never runs, so nothing is held and the
+    // reservation lands anyway.
+    observed.length = 0;
+    holdLedgerInsideSection = true;
+    let nestedOutcome = null;
+    try {
+      const third = await guard.beforeToolCall(sqlSpawn("call-spawn-3"), {
+        agentId: "o1",
+        sessionKey: attempt1.sessionKey,
+        runId: attempt1.runId,
+      });
+      nestedOutcome = JSON.stringify(third);
+    } catch (error) {
+      nestedOutcome = `${error?.code ?? ""} ${error?.message ?? String(error)}`;
+    } finally {
+      holdLedgerInsideSection = false;
+    }
+    assert.deepEqual(
+      observed.map((entry) => entry.step),
+      ["queue-entered", "commit-refused"],
+      "the commit must be locked out by a writer lock held inside the queue " +
+        `section: ${nestedOutcome} ${JSON.stringify(observed)}`,
+    );
+    assert.match(
+      observed[1].message,
+      /Ledger writer unavailable|FILE_LOCK_BUSY/u,
+      `the refusal must name the ledger writer lock: ${nestedOutcome}`,
+    );
+    assert.equal(
+      journalTypes(paths).filter((type) => type === "WORKFLOW_SPAWN_RESERVED")
+        .length,
+      1,
+      "no reservation may land while the ledger writer lock is held inside the section",
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
