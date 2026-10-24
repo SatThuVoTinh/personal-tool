@@ -101,6 +101,8 @@ function stripSqlStringLiterals(sql) {
     i += 1;
     while (i < sql.length) {
       if (sql[i] === "'" && sql[i + 1] === "'") {
+        // Preserve the escape token, not the quoted character: the doubled
+        // quote is a delimiter, not data the mask may leak.
         out += "''";
         i += 2;
         continue;
@@ -110,7 +112,8 @@ function stripSqlStringLiterals(sql) {
         i += 1;
         break;
       }
-      out += sql[i];
+      // The literal interior is data. Emit the empty placeholder instead of
+      // copying it, so `FROM x(` inside a string cannot be read as syntax.
       i += 1;
     }
   }
