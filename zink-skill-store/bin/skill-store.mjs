@@ -3,7 +3,12 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { URL } from "node:url";
 
-import { catalogError, getActiveSkill, scanCatalog } from "../src/catalog.mjs";
+import {
+  catalogError,
+  getActiveSkill,
+  quarantineInvalidVersion,
+  scanCatalog,
+} from "../src/catalog.mjs";
 import { applySkillStoreMigrations } from "../src/migrations.mjs";
 import { retireSkill, withSkillStoreWriterLock } from "../index.mjs";
 
@@ -92,6 +97,42 @@ function parseGet(args) {
 }
 
 /**
+ * The `--flag value` pairs of one command line, or `null` when the shape is
+ * wrong: an unknown flag, a repeated flag, a missing value or a value that
+ * looks like the next flag.
+ */
+function parseFlagValues(args, flags) {
+  const values = new Map();
+  for (let index = 0; index < args.length; index += 2) {
+    const flag = args[index];
+    const value = args[index + 1];
+    if (
+      !flags.has(flag) ||
+      values.has(flag) ||
+      !value ||
+      value.startsWith("--")
+    )
+      return null;
+    values.set(flag, value);
+  }
+  return values;
+}
+
+/** namespace/capability/version share one grammar across the CLI commands. */
+function validIdentityFlags(namespace, capability, version) {
+  const slug = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+  return Boolean(
+    namespace &&
+    capability &&
+    version &&
+    namespace.split("/").length <= 8 &&
+    namespace.split("/").every((segment) => slug.test(segment)) &&
+    slug.test(capability) &&
+    /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(version),
+  );
+}
+
+/**
  * The `deprecate` arguments.
  *
  * M12/T9 F-095 (R5-E04-05) / H8: the governed retirement needs the identity of
@@ -108,38 +149,42 @@ function parseDeprecate(args) {
     "--decision-ref",
     "--actor",
   ]);
-  const values = new Map();
-  for (let index = 0; index < args.length; index += 2) {
-    const flag = args[index];
-    const value = args[index + 1];
-    if (
-      !flags.has(flag) ||
-      values.has(flag) ||
-      !value ||
-      value.startsWith("--")
-    )
-      return null;
-    values.set(flag, value);
-  }
+  const values = parseFlagValues(args, flags);
+  if (!values) return null;
   const namespace = values.get("--namespace");
   const capability = values.get("--capability");
   const version = values.get("--version");
   const decisionRef = values.get("--decision-ref");
   const actor = values.get("--actor") ?? "owner";
-  const slug = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
   if (
-    !namespace ||
-    !capability ||
-    !version ||
+    !validIdentityFlags(namespace, capability, version) ||
     !decisionRef ||
-    !actor ||
-    namespace.split("/").length > 8 ||
-    !namespace.split("/").every((segment) => slug.test(segment)) ||
-    !slug.test(capability) ||
-    !/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(version)
+    !actor
   )
     return null;
   return { namespace, capability, version, decisionRef, actor };
+}
+
+/**
+ * The `quarantine` arguments (M12/T9-R4 F-580).
+ *
+ * The repair names the one version directory to withdraw from canonical state.
+ * It carries no decision reference and no actor: it publishes no governed
+ * lifecycle transition and deletes nothing — it renames a directory the
+ * catalog already refuses into the residue grammar, where its bytes stay
+ * inspectable and the writer's sweep clears it.
+ */
+function parseQuarantine(args) {
+  const values = parseFlagValues(
+    args,
+    new Set(["--namespace", "--capability", "--version"]),
+  );
+  if (!values) return null;
+  const namespace = values.get("--namespace");
+  const capability = values.get("--capability");
+  const version = values.get("--version");
+  if (!validIdentityFlags(namespace, capability, version)) return null;
+  return { namespace, capability, version };
 }
 
 export async function executeCli(args, skillsRoot = canonicalSkillsRoot) {
@@ -213,6 +258,34 @@ export async function executeCli(args, skillsRoot = canonicalSkillsRoot) {
             version: retired.version,
             retired_at: retired.retired_at,
             decision_ref: retired.decision_ref,
+          },
+        },
+        "stdout",
+      );
+    }
+    // M12/T9-R4 F-580: the repair for a canonical directory the catalog
+    // refuses. Withdrawing it by rename into the residue grammar is what makes
+    // the store readable again; deleting it is never an option.
+    if (args[0] === "quarantine") {
+      const options = parseQuarantine(args.slice(1));
+      if (!options)
+        return cliError("Invalid skill-store quarantine arguments.");
+      const quarantined = await quarantineInvalidVersion({
+        skillsRoot,
+        namespace: options.namespace.split("/"),
+        capability: options.capability,
+        version: options.version,
+      });
+      return response(
+        0,
+        {
+          status: quarantined.status,
+          skill: {
+            namespace: quarantined.namespace,
+            capability: quarantined.capability,
+            version: quarantined.version,
+            quarantined_as: quarantined.quarantined_as,
+            reason_codes: quarantined.reason_codes,
           },
         },
         "stdout",

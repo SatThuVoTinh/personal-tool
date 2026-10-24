@@ -790,7 +790,7 @@ async function walk(directory, parts, errors, records, count, residue) {
     // recognizes only complete validated pairs — so it is reported as RESIDUE
     // (invisible to the record set and to the error list) and swept by the
     // writer under the store-wide lock.
-    if (isStagingResidue(entry.name)) {
+    if (isResidueDirectory(entry.name)) {
       residue.push({
         path: skillPath([...parts, entry.name]),
         parts: [...parts, entry.name],
@@ -1048,18 +1048,39 @@ function stagingName(version) {
 }
 
 /**
- * The grammar `stagingName()` produces, for any version. Writer residue is
- * identified by its own shape rather than by the promoting caller's version:
- * a killed publisher leaves `<semver>.pending-*` beside the real version
- * directories, and `walk` reports every such sibling as
- * `DIRECTORY_GRAMMAR_INVALID`, which nulls `records` for the whole store.
- * Names that do not carry the marker after a valid version are deliberately
- * left alone so a genuinely malformed directory still surfaces as an error.
+ * M12/T9-R4 F-580: the name a canonical version directory takes when it has to
+ * leave canonical state without being deleted.
+ *
+ * A promoted record that fails re-validation is deleted; when THAT removal
+ * fails the directory stays canonical-named and complete, which is a name no
+ * sweeper can match (it is not `*.pending-*`, it holds both members, and it is
+ * not empty). Quarantine renames it into this grammar instead, so the very
+ * name explains what happened and the same sweep clears it. The bytes are
+ * never destroyed: the record stays inspectable under the residue name.
  */
-function isStagingResidue(name) {
-  const marker = ".pending-";
-  const at = name.indexOf(marker);
-  return at > 0 && VERSION.test(name.slice(0, at));
+function strandedName(version) {
+  return `${version}.stranded-${process.pid}-${Date.now()}-${randomBytes(4).toString("hex")}`;
+}
+
+/**
+ * The residue grammar for a version-directory SIBLING, for any version.
+ *
+ * Writer residue is identified by its own shape rather than by the promoting
+ * caller's version: a killed publisher leaves `<semver>.pending-*` beside the
+ * real version directories, and `walk` reports every such sibling as
+ * `DIRECTORY_GRAMMAR_INVALID`, which nulls `records` for the whole store.
+ * F-580 adds `.stranded-*` — the quarantine name — so a directory this writer
+ * withdrew from canonical state can never outlive the sweep that clears it.
+ * Names that do not carry a marker after a valid version are deliberately left
+ * alone so a genuinely malformed directory still surfaces as an error.
+ */
+function isResidueDirectory(name) {
+  const markers = [".pending-", ".stranded-"];
+  for (const marker of markers) {
+    const at = name.indexOf(marker);
+    if (at > 0 && VERSION.test(name.slice(0, at))) return true;
+  }
+  return false;
 }
 
 /**
@@ -1269,19 +1290,20 @@ export async function describeVersionRollbackState(versionDir, removalError) {
 }
 
 /**
- * Removes writer residue: stale `<semver>.pending-*` staging directories under
- * the capability parent — any version's, not only the promoting caller's,
- * because one killed publisher otherwise blocks every other — and an
- * incomplete version directory that holds no manifest at all. Neither is ever
- * canonical: the catalog recognizes only complete validated pairs, so removing
- * them cannot destroy canonical truth.
+ * Removes writer residue: stale `<semver>.pending-*` staging directories and
+ * `<semver>.stranded-*` quarantined ones under the capability parent — any
+ * version's, not only the promoting caller's, because one killed publisher (or
+ * one rejected promotion whose removal failed) otherwise blocks every other —
+ * and an incomplete version directory that holds no manifest at all. None is
+ * ever canonical: the catalog recognizes only complete validated pairs, so
+ * removing them cannot destroy canonical truth.
  */
 async function healWriterResidue(skillsRoot, parentDir, versionDir) {
   try {
     const entries = await readdir(parentDir);
     let swept = false;
     for (const entry of entries) {
-      if (isStagingResidue(entry)) {
+      if (isResidueDirectory(entry)) {
         await rm(path.join(parentDir, entry), {
           recursive: true,
           force: true,
@@ -1354,6 +1376,128 @@ async function sweepWriterResidue(skillsRoot, residue) {
     await rm(target, { recursive: true, force: true });
     await pruneEmptyParents(path.dirname(target), skillsRoot);
   }
+}
+
+/**
+ * M12/T9-R4 F-580: withdraw a canonical version directory WITHOUT deleting it.
+ *
+ * Renaming into the residue grammar is the whole repair. The scanner recognizes
+ * only complete validated pairs, so a `*.stranded-*` directory is not a record
+ * — and because `walk` reports that grammar as residue rather than as a
+ * diagnostic, the store-wide error gate that one stranded pair used to trip
+ * (taking every read arm dark) no longer sees it. `sweepWriterResidue` clears
+ * it under the same writer lock on the next promotion.
+ *
+ * The caller must hold the store-wide writer lock; the promotion path already
+ * does, and `quarantineInvalidVersion` acquires it for the operator.
+ */
+async function quarantineVersionDirectory(parentDir, versionDir, version) {
+  const target = path.join(parentDir, strandedName(version));
+  try {
+    await rename(versionDir, target);
+    return target;
+  } catch {
+    return null; /* the caller reports the canonical state it actually left */
+  }
+}
+
+/**
+ * M12/T9-R4 F-580 — the operator repair for a canonical version directory the
+ * catalog refuses.
+ *
+ * A promotion whose re-validation failed AND whose removal failed leaves a
+ * complete, canonical-named pair behind. No other mechanism can match it: it
+ * carries a valid version name and both members, so it is neither staging
+ * residue nor an incomplete directory, and every later promotion is refused by
+ * `PREEXISTING_CATALOG_ERRORS` while every read arm answers
+ * `SKILL_CATALOG_INVALID` naming it. This command withdraws that one directory
+ * from canonical state by renaming it into the `*.stranded-*` residue grammar
+ * and leaves the bytes in place for inspection; the next promotion's sweep
+ * clears it.
+ *
+ * It runs under the store-wide writer lock (the quarantine is a canonical-tree
+ * rename, exactly like a promotion), refuses a directory that validates — a
+ * healthy record is not a repair target — and never deletes canonical bytes.
+ */
+export async function quarantineInvalidVersion({
+  skillsRoot,
+  namespace,
+  capability,
+  version,
+}) {
+  const nsArray = Array.isArray(namespace) ? namespace : [namespace];
+  if (
+    !Array.isArray(nsArray) ||
+    nsArray.length < 1 ||
+    nsArray.length > 8 ||
+    !nsArray.every(
+      (segment) => typeof segment === "string" && SLUG.test(segment),
+    ) ||
+    typeof capability !== "string" ||
+    !SLUG.test(capability) ||
+    typeof version !== "string" ||
+    !VERSION.test(version)
+  ) {
+    writerError(
+      "SKILL_IDENTITY_INVALID",
+      "namespace/capability/version do not satisfy catalog grammar.",
+      ["IDENTITY_GRAMMAR"],
+    );
+  }
+  return withSkillStoreWriterLock(skillsRoot, async () => {
+    const versionDir = path.join(skillsRoot, ...nsArray, capability, version);
+    const parentDir = path.join(skillsRoot, ...nsArray, capability);
+    let info;
+    try {
+      info = await lstat(versionDir);
+    } catch (error) {
+      if (error?.code === "ENOENT") {
+        writerError(
+          "SKILL_VERSION_NOT_FOUND",
+          "no such skill version exists in the store.",
+        );
+      }
+      throw error;
+    }
+    if (!info.isDirectory() || info.isSymbolicLink()) {
+      writerError(
+        "SKILL_VERSION_CONFLICT",
+        "version path is not a regular directory.",
+      );
+    }
+    const { errors } = await validateStagedVersion(versionDir, [
+      ...nsArray,
+      capability,
+      version,
+    ]);
+    if (errors.length === 0) {
+      writerError(
+        "CATALOG_INVALID",
+        "the version directory validates; there is nothing to quarantine.",
+        ["VERSION_NOT_STRANDED"],
+      );
+    }
+    const quarantined = await quarantineVersionDirectory(
+      parentDir,
+      versionDir,
+      version,
+    );
+    if (!quarantined) {
+      writerError(
+        "SKILL_PUBLISH_FAILED",
+        "the stranded version directory could not be quarantined.",
+        ["QUARANTINE_RENAME_FAILED"],
+      );
+    }
+    return {
+      status: "QUARANTINED",
+      namespace: nsArray,
+      capability,
+      version,
+      quarantined_as: path.basename(quarantined),
+      reason_codes: errors.map((entry) => entry?.code ?? "UNKNOWN"),
+    };
+  });
 }
 
 /**
@@ -1764,15 +1908,30 @@ export async function promoteApprovedSkillUnlocked({
     } catch (error) {
       removalError = error;
     }
+    // M12/T9-R4 F-580: the removal above is the only way this writer ever
+    // leaves a canonical directory behind. `rm` returns quietly for ENOENT and
+    // a host that reports EBUSY/EPERM/ESTALE for a just-written tree (the
+    // retryable set `file-lock.mjs` documents) therefore leaves a COMPLETE,
+    // canonical-named pair that the scanner refuses: `PREEXISTING_CATALOG_ERRORS`
+    // then blocks every later promotion and the Zink Tools read arms answer
+    // `SKILL_CATALOG_INVALID` for every skill. Quarantine is the fallback: the
+    // directory leaves canonical state by rename, into the residue grammar the
+    // sweeper already clears, and its bytes stay inspectable.
+    const quarantined = removalError
+      ? await quarantineVersionDirectory(parentDir, versionDir, version)
+      : null;
     const rollback = await describeVersionRollbackState(
       versionDir,
       removalError,
     );
+    const quarantineDetail = quarantined
+      ? `; quarantined as ${path.basename(quarantined)}`
+      : "";
     writerError(
       "CATALOG_INVALID",
       `promoted record failed re-validation: ${
         reverified.errors[0]?.code ?? "unknown"
-      }; rollback: ${rollback}.`,
+      }; rollback: ${rollback}${quarantineDetail}.`,
       [
         "PROMOTED_REVALIDATION_FAILED",
         ...reverified.errors.map((entry) => entry?.code ?? "UNKNOWN"),
