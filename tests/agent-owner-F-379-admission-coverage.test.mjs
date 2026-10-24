@@ -99,7 +99,13 @@ function deployedBuildDigests() {
     );
     const tree = path.join(root, "tree");
     mkdirSync(tree);
-    execFileSync("tar", ["-xf", archive, "-C", tree], {
+    // Relative names, run from the temp root: on a Windows host `tar` sees
+    // `C:\Users\…` and reads the `C:` as a remote host ("Cannot connect to C:
+    // resolve failed"), while `--force-local` then makes it treat the `-C`
+    // operand as a member name. No path on the command line can carry a colon
+    // to either parser.
+    execFileSync("tar", ["-xf", "deploy.tar", "-C", "tree"], {
+      cwd: root,
       encoding: "utf8",
       maxBuffer: 32 * 1024 * 1024,
     });
