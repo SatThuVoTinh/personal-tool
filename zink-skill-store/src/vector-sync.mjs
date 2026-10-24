@@ -652,6 +652,85 @@ function buildSkillSyncTransaction({
     `;
 }
 
+function isStringArray(value) {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((item) => typeof item === "string" && item.length > 0)
+  );
+}
+
+function isTombstoneIdentity(identity) {
+  return (
+    identity !== null &&
+    typeof identity === "object" &&
+    !Array.isArray(identity) &&
+    isStringArray(identity.namespace) &&
+    typeof identity.capability === "string" &&
+    identity.capability.length > 0 &&
+    typeof identity.version === "string" &&
+    identity.version.length > 0
+  );
+}
+
+/**
+ * The directory that holds a record's manifest, as the catalog reports it.
+ * `scanCatalog` records every diagnostic under that version directory (the
+ * manifest, the SKILL.md or the directory itself), so a prefix match is how a
+ * record is proven free of scan errors.
+ */
+function recordVersionDirectory(record) {
+  const manifestPath = record?.relativePath;
+  const suffix = "/manifest.json";
+  if (typeof manifestPath !== "string" || !manifestPath.endsWith(suffix)) {
+    return null;
+  }
+  return manifestPath.slice(0, -suffix.length);
+}
+
+function recordHasNoScanErrors(record, catalogErrors) {
+  const versionDirectory = recordVersionDirectory(record);
+  if (versionDirectory === null) return false;
+  return !catalogErrors.some((entry) => {
+    const errorPath = entry?.path;
+    return (
+      typeof errorPath === "string" &&
+      (errorPath === versionDirectory ||
+        errorPath.startsWith(`${versionDirectory}/`))
+    );
+  });
+}
+
+/**
+ * Whether a record's manifest identity is the one its directory declares.
+ *
+ * F-428 names this as the second condition a retirement key must satisfy, next
+ * to "no scan errors". It is exported so the predicate is provable by execution
+ * rather than by reading: at this HEAD every identity/path mismatch also
+ * carries an IDENTITY_PATH_MISMATCH diagnostic, so no catalog fixture can make
+ * it the deciding filter, and a guard on a destructive retirement must not ship
+ * as untested code.
+ */
+export function recordIdentityMatchesPath(record) {
+  const identity = record?.manifest?.identity;
+  const expected = record?.expected;
+  if (!isTombstoneIdentity(identity)) return false;
+  if (
+    expected === null ||
+    typeof expected !== "object" ||
+    !isStringArray(expected.namespace) ||
+    typeof expected.capability !== "string" ||
+    typeof expected.version !== "string"
+  ) {
+    return false;
+  }
+  return (
+    identity.namespace.join("/") === expected.namespace.join("/") &&
+    identity.capability === expected.capability &&
+    identity.version === expected.version
+  );
+}
+
 /**
  * The derived-index tombstone key, in ONE place.
  *
@@ -668,6 +747,13 @@ function buildSkillSyncTransaction({
  * for the same identity.
  */
 export function tombstoneKey(identity) {
+  if (!isTombstoneIdentity(identity)) {
+    const error = new Error(
+      "CATALOG_INVALID: tombstone key requires an identity with a namespace array and string capability/version",
+    );
+    error.code = "CATALOG_INVALID";
+    throw error;
+  }
   return `${identity.namespace.join("/")}|${identity.capability}|${identity.version}`;
 }
 
@@ -735,8 +821,15 @@ export async function syncSkillsToVectorStore(options = {}) {
   const catalog = await scanCatalog(skillsRoot);
   const catalogErrors = catalog.errors ?? [];
 
-  // 2. Filter strictly for ACTIVE skills (BUG-04)
-  const activeRecords = catalog.records.filter((record) => {
+  // 2. Filter strictly for ACTIVE skills (BUG-04). F-428: a record that carries
+  // a scan error or whose identity does not match its directory is not proof
+  // of anything, even when its lifecycle says ACTIVE or DEPRECATED.
+  const eligibleRecords = catalog.records.filter(
+    (record) =>
+      recordHasNoScanErrors(record, catalogErrors) &&
+      recordIdentityMatchesPath(record),
+  );
+  const activeRecords = eligibleRecords.filter((record) => {
     const lifecycle = record.manifest?.lifecycle;
     return Array.isArray(lifecycle) && lifecycle.at(-1)?.status === "ACTIVE";
   });
@@ -749,7 +842,7 @@ export async function syncSkillsToVectorStore(options = {}) {
   // Only a readable manifest counts: a skill whose manifest cannot be read
   // is NOT provably retired, so its row is left alone rather than deleted on
   // a guess.
-  const retiredKeys = catalog.records
+  const retiredKeys = eligibleRecords
     .filter(
       (record) => record.manifest?.lifecycle?.at(-1)?.status === "DEPRECATED",
     )
