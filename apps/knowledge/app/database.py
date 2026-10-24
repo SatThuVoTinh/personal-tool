@@ -332,6 +332,44 @@ class KnowledgeDatabase:
 
         self._recovery_callback = callback
 
+    async def _apply_startup_schema(self) -> None:
+        """Apply the schema the one way a boot may, for both start arms.
+
+        F-149 (R5-E03-02): the schema used to be applied on a plain pool
+        connection, so two replicas racing at boot ran CREATE EXTENSION /
+        CREATE TYPE against the same catalog and the loser raised
+        duplicate_object. The DDL now runs under the same advisory lock that
+        guards a run, and the loser WAITS for it instead of racing.
+
+        F-513 (R10-L07-2): the reconnect path was written as a copy of the
+        lock-and-migrate half only, so a retried boot skipped the acceptance
+        backup barrier -- migrating the live schema with no restore point --
+        and skipped the segment-type domain assertion. Both arms now run this
+        method, so the invariants cannot diverge again.
+        """
+
+        barrier_completed = self._acceptance_barrier_is_completed()
+        if self._acceptance_backup_barrier_dir is None or barrier_completed:
+            connection = await self.acquire_migration_lock(self._advisory_lock_key)
+            try:
+                await self._apply_migrations(connection)
+            finally:
+                await self.release_advisory_lock(connection, self._advisory_lock_key)
+        else:
+            connection = await self.acquire_advisory_lock(self._advisory_lock_key)
+            if connection is None:
+                raise RuntimeError("INDEX_RUN_ALREADY_ACTIVE")
+            self.bind_owner_connection(connection)
+            try:
+                await self._acceptance_backup_barrier(connection)
+                await self._apply_migrations(connection)
+                self._startup_owner_connection = connection
+            except Exception:
+                self.unbind_owner_connection(connection)
+                await self.release_advisory_lock(connection, self._advisory_lock_key)
+                raise
+        await self.assert_searchable_segment_type_domain()
+
     async def start(self) -> None:
         try:
             self._pool = await asyncpg.create_pool(
@@ -345,35 +383,7 @@ class KnowledgeDatabase:
                 timeout=10,
                 command_timeout=30,
             )
-            barrier_completed = self._acceptance_barrier_is_completed()
-            if self._acceptance_backup_barrier_dir is None or barrier_completed:
-                # F-149 (R5-E03-02): the schema used to be applied on a plain
-                # pool connection, so two replicas racing at boot ran
-                # CREATE EXTENSION / CREATE TYPE against the same catalog and
-                # the loser raised duplicate_object. The DDL now runs under
-                # the same advisory lock that guards a run, and the loser
-                # WAITS for it instead of racing.
-                connection = await self.acquire_migration_lock(self._advisory_lock_key)
-                try:
-                    await self._apply_migrations(connection)
-                finally:
-                    await self.release_advisory_lock(
-                        connection, self._advisory_lock_key
-                    )
-            else:
-                connection = await self.acquire_advisory_lock(self._advisory_lock_key)
-                if connection is None:
-                    raise RuntimeError("INDEX_RUN_ALREADY_ACTIVE")
-                self.bind_owner_connection(connection)
-                try:
-                    await self._acceptance_backup_barrier(connection)
-                    await self._apply_migrations(connection)
-                    self._startup_owner_connection = connection
-                except Exception:
-                    self.unbind_owner_connection(connection)
-                    await self.release_advisory_lock(connection, self._advisory_lock_key)
-                    raise
-            await self.assert_searchable_segment_type_domain()
+            await self._apply_startup_schema()
         except MigrationLockError:
             # F-149: a schema race is not "the database is down". The refusal
             # is named, so the operator can tell the two apart.
@@ -436,17 +446,18 @@ class KnowledgeDatabase:
                         timeout=10,
                         command_timeout=30,
                     )
-                    # F-149 (R5-E03-02): the re-applied schema takes the same
-                    # lock the first boot took.
-                    connection = await self.acquire_migration_lock(
-                        self._advisory_lock_key
-                    )
-                    try:
-                        await self._apply_migrations(connection)
-                    finally:
-                        await self.release_advisory_lock(
-                            connection, self._advisory_lock_key
-                        )
+                    # F-513 (R10-L07-2): the retry runs the whole boot path --
+                    # the barrier branch and the domain assertion included --
+                    # not the lock-and-migrate half the copy kept.
+                    await self._apply_startup_schema()
+                except MigrationLockError:
+                    # F-513: the named refusal must survive the retry instead
+                    # of being replaced by whatever failed first.
+                    self.startup_error_code = "MIGRATION_LOCK_UNAVAILABLE"
+                    if self._pool is not None:
+                        await self._pool.close()
+                        self._pool = None
+                    continue
                 except Exception:
                     # The database is still unreachable. The next attempt repeats
                     # the connect and the schema application.

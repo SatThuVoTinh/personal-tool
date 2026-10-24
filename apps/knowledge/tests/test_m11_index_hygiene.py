@@ -652,7 +652,7 @@ class StartupSweepAndLockTests(unittest.IsolatedAsyncioTestCase):
         process even after the lock (held for seconds) was released.
         """
 
-        connection = FakeConnection(fetchvals=[True, True])
+        connection = FakeConnection(fetchvals=[True, True], fetches=[[]])
         original_execute = connection.execute
         lock_attempts: list[int] = []
 
@@ -745,6 +745,137 @@ class StartupSweepAndLockTests(unittest.IsolatedAsyncioTestCase):
             "a failed sweep must be re-attempted, not logged and dropped",
         )
         self.assertTrue(was_available)
+        self.assertIsNone(error_code)
+
+    async def test_a_retried_boot_migrates_through_the_barrier_branch(self) -> None:
+        """F-513 (R10-L07-2): the retry migrated with no restore point.
+
+        `start()` exports the acceptance backup snapshot before it touches the
+        schema whenever the barrier is armed and uncompleted. The reconnect
+        loop copied only the lock-and-migrate half, so a retried boot migrated
+        the live schema with no restore point and skipped the segment-type
+        domain assertion that guards every later read.
+        """
+
+        connection = FakeConnection(fetchvals=[True, True], fetches=[[]])
+        pool = FakePool(connection)
+        database = KnowledgeDatabase(
+            "localhost",
+            5432,
+            "knowledge",
+            "zink",
+            "secret",
+            Path("migrations"),
+            acceptance_backup_barrier_dir=Path("/acceptance-backup-barrier"),
+        )
+        order: list[str] = []
+
+        async def barrier_shim(_connection: object) -> None:
+            order.append("barrier")
+
+        async def migrations_shim(_connection: object | None = None) -> None:
+            order.append("migrations")
+
+        database._acceptance_barrier_is_completed = lambda: False  # type: ignore[method-assign]
+        database._acceptance_backup_barrier = barrier_shim  # type: ignore[method-assign]
+        database._apply_migrations = migrations_shim  # type: ignore[method-assign]
+        attempts: list[int] = []
+
+        async def create_pool(*_args: object, **_kwargs: object) -> FakePool:
+            attempts.append(1)
+            if len(attempts) == 1:
+                raise RuntimeError("postgres is not up yet")
+            return pool
+
+        with patch(
+            "app.database.asyncpg.create_pool",
+            new=AsyncMock(side_effect=create_pool),
+        ), patch("app.database.RECONNECT_INTERVAL_SECONDS", 0.01):
+            await database.start()
+            self.assertEqual(database.startup_error_code, "DATABASE_UNAVAILABLE")
+            for _ in range(200):
+                if database.startup_error_code is None:
+                    break
+                await asyncio.sleep(0.02)
+            was_available = database.available
+            await database.stop()
+
+        self.assertEqual(
+            order,
+            ["barrier", "migrations"],
+            "the retry must take the restore point before it migrates",
+        )
+        self.assertTrue(
+            any(
+                "segments.segment_type" in statement
+                for statement in statements(connection, "fetch")
+            ),
+            "the retry must run the segment-type domain assertion",
+        )
+        self.assertTrue(was_available)
+
+    async def test_a_retried_migration_lock_timeout_republishes_its_code(
+        self,
+    ) -> None:
+        """F-513 (R10-L07-2): the retry swallowed the named lock refusal.
+
+        The boot arm publishes MIGRATION_LOCK_UNAVAILABLE so the operator can
+        tell a schema race from an outage; the loop's blanket handler replaced
+        it with the code of whatever failed first.
+        """
+
+        connection = FakeConnection(fetchvals=[True, True], fetches=[[]])
+        original_execute = connection.execute
+        lock_attempts: list[int] = []
+
+        async def failing_execute(sql: str, *args: object) -> None:
+            await original_execute(sql, *args)
+            if "pg_advisory_lock" in sql:
+                lock_attempts.append(1)
+                if len(lock_attempts) == 1:
+                    raise asyncio.TimeoutError()
+
+        connection.execute = failing_execute  # type: ignore[method-assign]
+        pool = FakePool(connection)
+        database = KnowledgeDatabase(
+            "localhost", 5432, "knowledge", "zink", "secret", Path("migrations")
+        )
+        codes_seen_by_the_retry: list[str | None] = []
+
+        async def migrations_shim(_connection: object | None = None) -> None:
+            codes_seen_by_the_retry.append(database.startup_error_code)
+
+        database._apply_migrations = migrations_shim  # type: ignore[method-assign]
+        attempts: list[int] = []
+
+        async def create_pool(*_args: object, **_kwargs: object) -> FakePool:
+            attempts.append(1)
+            if len(attempts) == 1:
+                raise RuntimeError("postgres is not up yet")
+            return pool
+
+        with patch(
+            "app.database.asyncpg.create_pool",
+            new=AsyncMock(side_effect=create_pool),
+        ), patch("app.database.RECONNECT_INTERVAL_SECONDS", 0.01):
+            await database.start()
+            for _ in range(200):
+                if codes_seen_by_the_retry:
+                    break
+                await asyncio.sleep(0.02)
+            for _ in range(200):
+                if database.startup_error_code is None:
+                    break
+                await asyncio.sleep(0.02)
+            error_code = database.startup_error_code
+            await database.stop()
+
+        self.assertEqual(len(lock_attempts), 2)
+        self.assertEqual(
+            codes_seen_by_the_retry,
+            ["MIGRATION_LOCK_UNAVAILABLE"],
+            "the lock refusal must stay named across the retry",
+        )
         self.assertIsNone(error_code)
 
     async def test_a_failed_lock_query_releases_the_connection(self) -> None:
