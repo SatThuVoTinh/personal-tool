@@ -925,12 +925,17 @@ export class QueueManager {
         item.resultAttempt = item.attempt;
         // M8-051: the ordered artifact set and its single digest are part of
         // the authoritative result record, not a singular path.
-        if (Array.isArray(artifactSet) && artifactSet.length > 0) {
-          item.resultArtifacts = artifactSet.map((artifact) => ({
-            ...artifact,
-          }));
-          item.artifactSetDigest = artifactSetDigest ?? null;
-        }
+        // F-504: every result generation FULLY REPLACES the prior record. The
+        // write used to sit inside an `artifactSet.length > 0` guard, so a
+        // finish with an empty or omitted set left the previous generation's
+        // artifacts and digest on the record — a stale generation readable as
+        // the current one.
+        const nextResultArtifacts = Array.isArray(artifactSet)
+          ? artifactSet.map((artifact) => ({ ...artifact }))
+          : [];
+        item.resultArtifacts = nextResultArtifacts;
+        item.artifactSetDigest =
+          nextResultArtifacts.length > 0 ? (artifactSetDigest ?? null) : null;
         // M8-054: the digest is part of the validated result record. When
         // the caller supplies no digest, bind a digest over the summary +
         // attempt so the record is never digest-less.
@@ -1268,10 +1273,28 @@ export class QueueManager {
           // Ledger authority overrides diverging queue projection (H03)
           if (existing.status !== mappedStatus) {
             existing.status = mappedStatus;
+            // F-504: when the override re-opens the entry for NEW work, the
+            // result record it carries belongs to a superseded generation and
+            // must not stay readable as the current one — the attempt fence in
+            // completeTask cannot fire here because this path never bumps
+            // `attempt`. Terminal and result-bearing states keep the record:
+            // there the result IS the thing being reconciled.
+            const reopensWork =
+              mappedStatus === TASK_STATES.QUEUED ||
+              mappedStatus === TASK_STATES.EXECUTING ||
+              mappedStatus === "REVISING";
+            if (reopensWork) {
+              existing.resultArtifacts = [];
+              existing.artifactSetDigest = null;
+              existing.resultDigest = null;
+              existing.resultSummary = "";
+              existing.resultAttempt = null;
+            }
             existing.history.push({
               status: mappedStatus,
               at: new Date().toISOString(),
               reason: "LEDGER_RECONCILIATION_OVERRIDE",
+              ...(reopensWork ? { resultRecordInvalidated: true } : {}),
             });
             updated++;
           }
