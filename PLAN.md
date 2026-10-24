@@ -8042,18 +8042,18 @@ Final Quality Gate: NOT RUN — the task is not closed.
 
 ### Scope and bands
 
-| Band | Scope | Rows | C/H/M/L | O/L |
-| ---- | ----- | ---: | ------- | --- |
-| B1 | Approval, verdict, result and queue integrity | 24 | 1/9/8/6 | 20/4 |
-| B2 | Ledger, transaction and apply durability | 17 | 0/8/5/4 | 9/8 |
-| B3 | Operator ceremony, rollback, rehearsal and state root | 13 | 0/5/8/0 | 12/1 |
-| B4 | Artifact validation, Excel writer and preview/delivery | 15 | 0/7/4/4 | 13/2 |
-| B5 | Knowledgebase ingestion, retrieval and citation | 25 | 0/6/10/9 | 18/7 |
-| B6 | Skill Store catalog, vector, lock and migration | 21 | 0/5/12/4 | 16/5 |
-| B7 | Tool contracts, SQL/Python guards and error taxonomy | 24 | 0/6/12/6 | 21/3 |
-| B8 | Gate truth and CI enforcement | 30 | 0/5/16/9 | 30/0 |
-| B9 | Test-only assertions and docs consistency | 20 | 0/0/6/14 | 13/7 |
-| **Total** | | **189** | **1/51/81/56** | **152/37** |
+| Band      | Scope                                                  |    Rows | C/H/M/L        | O/L        |
+| --------- | ------------------------------------------------------ | ------: | -------------- | ---------- |
+| B1        | Approval, verdict, result and queue integrity          |      24 | 1/9/8/6        | 20/4       |
+| B2        | Ledger, transaction and apply durability               |      17 | 0/8/5/4        | 9/8        |
+| B3        | Operator ceremony, rollback, rehearsal and state root  |      13 | 0/5/8/0        | 12/1       |
+| B4        | Artifact validation, Excel writer and preview/delivery |      15 | 0/7/4/4        | 13/2       |
+| B5        | Knowledgebase ingestion, retrieval and citation        |      25 | 0/6/10/9       | 18/7       |
+| B6        | Skill Store catalog, vector, lock and migration        |      21 | 0/5/12/4       | 16/5       |
+| B7        | Tool contracts, SQL/Python guards and error taxonomy   |      24 | 0/6/12/6       | 21/3       |
+| B8        | Gate truth and CI enforcement                          |      30 | 0/5/16/9       | 30/0       |
+| B9        | Test-only assertions and docs consistency              |      20 | 0/0/6/14       | 13/7       |
+| **Total** |                                                        | **189** | **1/51/81/56** | **152/37** |
 
 The full membership and ordering are frozen in `docs/contracts/execution/ACTIVE.md`
 §2–§3. `F-523` and the evidence floor (`F-474`, `F-481`, `F-492`, `F-467`,
@@ -8147,7 +8147,7 @@ force-push, no PR/merge/release.
   The lead re-ran the probe: forcing the parent-binding rule to accept
   everything reddened the shared predicate's fixture case (1 failed / 9 passed).
   **`F-485` stays OPEN**: its criterion needs all 16 `mkdtemp` lanes to remove
-  their trees *and* a `scripts/repository-policy.mjs` rule that fails a lane
+  their trees _and_ a `scripts/repository-policy.mjs` rule that fails a lane
   matching `mkdtemp` with no removal API; the lane cleaned the two lanes it
   owned (`3d6f09f`) and added no rule, so the residue path is still unguarded
   for the other fourteen. The lane stopped at its 150-turn cap mid-edit, as did
@@ -8158,9 +8158,9 @@ force-push, no PR/merge/release.
   the `rm(tmp)` in the catch reddened the failed-write case, 1 failed / 2
   passed, reverted). **`F-580` stays `PARTIAL`** — its stranded-state half is
   closed (`a7c8239`) and proved, but its acceptance criterion also demands a
-  shipped case that promotes a record failing re-validation *with the removal
-  forced to fail*; disabling the new quarantine branch (`const quarantined =
-  null;`) left the lane 3/3 green, so that path is unproven and the shipped
+  shipped case that promotes a record failing re-validation _with the removal
+  forced to fail_; disabling the new quarantine branch (`const quarantined =
+null;`) left the lane 3/3 green, so that path is unproven and the shipped
   case builds the stranded directory directly instead. The missing case is
   writable; no owner decision is needed.
 - The B5 database lane (`w1-kb-db`) closed five rows with red/green and probes
@@ -8215,6 +8215,23 @@ force-push, no PR/merge/release.
   owner decision. `F-516`'s named `/readyz` double call was replaced by a
   key-level replay of the same predicate; the change and that substitution are
   recorded in the changelog entry rather than claimed as the named test.
+- Wave 2 could not run: all seven delegated lanes (`w2-b1-plugin`,
+  `w2-b2-ledger`, `w2-b5-kb`, `w2-b6-skill`, `w2-b7-tools`, `w2-b8-gates`,
+  `w2-b9-tests`) died on the account's daily chat ceiling with 1–19 tool uses
+  each, and the isolation harness rolled their worktrees back — no lane commit
+  exists, and the six orphan directories under `.qoder/worktrees/` are stale
+  copies of an older HEAD, not work. The lead took one row directly: `F-550`
+  (`f24c48e`) now ships the durable run-error `cause` (bounded, scrubbed,
+  sharing the child's own limit), carries the child's detail through both
+  `PdfRuntimeError` arms and stops recording a `StateTransitionError` as
+  `PDF_RUNTIME_FAILED`; the Knowledgebase lane is 260 passed / 17 skipped. Its
+  probes, each reverted: dropping `cause` from the record reddened 3 cases,
+  dropping the batch-arm detail reddened the propagation case, renaming the
+  state arm back reddened the state case, removing the bound reddened the shape
+  case. **`F-550` stays `PARTIAL`** because its criterion also wants the cause
+  persisted on `knowledge.pdf_content_builds`, which has only a `failure_code`
+  column — a schema/migration change is RED under `AGENTS.md` §7 and is the
+  owner's call, and `main.py:449-452` still answers without the detail.
 - The band that had already merged without its closeout (`F-464`/`F-465`/
   `F-466`/`F-473` from B4, `F-442`/`F-444` from B5) was re-measured at this HEAD
   before its rows were deleted: the artifact/Excel lane is 8/8, the knowledge
