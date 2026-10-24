@@ -1407,3 +1407,77 @@ test("F-133: a retirement that lands mid-sync is reported as the terminal row it
     await rm(root, { recursive: true, force: true });
   }
 });
+
+// M12/T9-R4 F-544 (R10-T04-6) — the identity cross-check had no ACTIVE half.
+//
+// The store's identity lives in `<parent-of-root>/<basename>.store-identity.json`
+// and the repo SHIPS one beside the canonical store
+// (`zink-skill-store/skills.store-identity.json`, tracked). The refusal only
+// fired when the CALLER named a store, so the shipped identity was never
+// compared with anything: an un-named sync ran its destructive statements
+// against whichever store the root happened to point at.
+//
+// The store-side rule: a store that DECLARES an identity must be NAMED by the
+// caller before anything runs. A store that declares none keeps the F-176
+// behaviour (an unnamed store with rows still syncs).
+//
+// The deployment half — the governance plugin naming the store it means — is
+// not this lane's file.
+test("F-544: a store that declares an identity is refused when the caller names none", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "f544-named-"));
+  const identityPath = `${root}.store-identity.json`;
+  try {
+    await makeActiveSkill(root, ["office"], "named-skill", "# Named\n\nBody.");
+    await writeFile(
+      identityPath,
+      JSON.stringify({ schema_version: 1, store_id: "declared-store" }),
+      "utf8",
+    );
+    const statements = [];
+    const unnamed = await syncSkillsToVectorStore({
+      skillsRoot: root,
+      embedFn,
+      dbExecutor: async (sql) => {
+        statements.push(sql);
+        return "";
+      },
+    });
+    assert.equal(unnamed.status, "FAILED");
+    assert.equal(unnamed.error_code, "SKILL_STORE_IDENTITY_UNNAMED");
+    assert.equal(unnamed.actual_store_id, "declared-store");
+    assert.deepEqual(
+      statements,
+      [],
+      "a refused sync must not reach the database at all",
+    );
+
+    // The same store, named: the ordinary path, unchanged.
+    const named = await syncSkillsToVectorStore({
+      skillsRoot: root,
+      embedFn,
+      expectedStoreId: "declared-store",
+      dbExecutor: async () => "",
+    });
+    assert.equal(named.status, "READY");
+    assert.equal(named.tombstone_status, "APPLIED");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(identityPath, { force: true });
+  }
+});
+
+test("F-544: a store that declares no identity keeps the F-176 behaviour", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "f544-unnamed-"));
+  try {
+    await makeActiveSkill(root, ["office"], "plain-skill", "# Plain\n\nBody.");
+    const report = await syncSkillsToVectorStore({
+      skillsRoot: root,
+      embedFn,
+      dbExecutor: async () => "",
+    });
+    assert.equal(report.status, "READY");
+    assert.equal(report.tombstone_status, "APPLIED");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

@@ -1116,6 +1116,33 @@ export async function syncSkillsToVectorStore(options = {}) {
       ? options.expectedStoreId.trim()
       : null;
   const storeIdentity = await readSkillStoreIdentity(skillsRoot);
+
+  // M12/T9-R4 F-544 (R10-T04-6): the cross-check below only fires when the
+  // CALLER names a store, so a store that DECLARES an identity was never
+  // compared with anything on the ordinary (un-named) path. `skillsRoot` is a
+  // free parameter, and pointing it at the wrong store ran the destructive
+  // statements against whatever index that store's rows key into. A store that
+  // declares an identity must be named by the caller before anything runs; a
+  // store that declares none keeps the F-176 behaviour (an unnamed store with
+  // rows still syncs).
+  if (expectedStoreId === null && storeIdentity !== null) {
+    return {
+      status: "FAILED",
+      error_code: "SKILL_STORE_IDENTITY_UNNAMED",
+      error:
+        "the Skill Store declares an identity but the caller named none; nothing was synced and nothing was deleted",
+      actual_store_id: storeIdentity,
+      tombstone_status: "REFUSED",
+      tombstone_error_code: "SKILL_STORE_IDENTITY_UNNAMED",
+      sync_generation_id: syncGenerationId,
+      scanned_count: 0,
+      active_count: 0,
+      synced_count: 0,
+      failed_count: 0,
+      skills: [],
+    };
+  }
+
   if (expectedStoreId !== null && storeIdentity !== expectedStoreId) {
     return {
       status: "FAILED",
