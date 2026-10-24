@@ -13,7 +13,7 @@ import {
   validateCoordinatorRunEvidence,
   PICKUP_SCAN_INTERVAL_MS,
 } from "../integrations/openclaw/lib/coordinator-pickup.mjs";
-import { deriveGovernedDispatchTarget } from "../integrations/openclaw/plugins/zink-governance/index.mjs";
+import { deriveGovernedDispatchTarget } from "../integrations/openclaw/lib/policy.mjs";
 
 function freshQueue() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "zink-pickup-"));

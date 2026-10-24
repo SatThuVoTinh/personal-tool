@@ -132,7 +132,11 @@ test("A7: o1 may reach its canonical specialists", () => {
     }),
   );
   assert.equal(dispatch.ok, true);
-  assert.deepEqual(dispatch.requiredCapabilities, ["excel", "sql", "python"]);
+  // F-533: the projection is the canonical `projectGovernedCapabilities` order
+  // (the capability registry's order), not the brief's node order. The set is
+  // what routes work — order carries no meaning — so this pins the canonical
+  // owner's output rather than an incidental copy's.
+  assert.deepEqual(dispatch.requiredCapabilities, ["excel", "python", "sql"]);
 });
 
 test("A8: o2 may reach its canonical specialists", () => {

@@ -48,6 +48,9 @@ import {
   deriveApprovalMaterialParameters,
   deriveApprovalScopeDigest,
   configureGovernedStoreRoot,
+  // M12/T9 F-533: the ONE owner of the dispatch derivation. The plugin binds
+  // and re-exports this function instead of carrying a copy that can drift.
+  deriveGovernedDispatchTarget,
   // M12/T9 F-049: the ONE referential scheme for Discord identities. The
   // owner's ruling was "lưu dạng mã băm" — a third party's account id is
   // stored as a hashed reference, never in the clear.
@@ -145,16 +148,11 @@ import {
   MAIN_DIRECTED,
   MISSING_MENTION_REFUSAL,
   DISCORD_BOT_IDS,
-  AGENT_IDS,
   normalizeAuthorityAction,
   resolveLedgerDecision,
 } from "../../lib/authority.mjs";
 
-import {
-  QueueManager,
-  defaultQueueManager,
-  isExecutableCoordinator,
-} from "../../lib/queue-manager.mjs";
+import { QueueManager, defaultQueueManager } from "../../lib/queue-manager.mjs";
 
 import {
   buildNativeComponentPayload,
@@ -220,6 +218,9 @@ export {
   ZINK_MEMORY_TOOL_REGISTRY,
   effectiveMemoryTools,
   canAccessMemoryTool,
+  // F-533: re-exported for the pickup/dispatch callers and their tests; it is
+  // the SAME function object `lib/policy.mjs` owns, not a local definition.
+  deriveGovernedDispatchTarget,
 };
 
 const PENDING_PROPOSALS_KEY = Symbol.for(
@@ -3175,70 +3176,18 @@ async function getExcelWriter() {
 }
 
 /**
- * Derive the governed execution target for an approved task from the
- * AUTHORITATIVE task record.
+ * M12/T9 F-533: the governed execution target is DERIVED by the ONE canonical
+ * owner, `lib/policy.mjs`.
  *
- * Nothing here is a default. A missing or non-executable coordinator, an empty
- * DAG, a DAG naming an agent outside the canonical roster, and a DAG that asks a
- * coordinator for a specialist it may not spawn are all fail-closed BLOCKED
- * outcomes, because guessing would mean running work under an identity or a
- * topology the owner never approved. The coordinator is never assumed to be
- * "o1" and the specialist set is never assumed to be a fixed list: both come
- * from the task the owner actually approved, so the plugin cannot dispatch a
- * task to a capability that was never part of its plan.
- *
- * Containment is checked against the canonical AGENT_SPAWN_POLICY, which is the
- * same table `guard.beforeToolCall` enforces on the live `sessions_spawn` path.
- * A graph that is not reachable through canonical topology is a governance
- * error: the offending specialist is never silently dropped, the coordinator is
- * never silently replaced, and the task is never narrowed to the runnable
- * subset, because the owner approved the whole graph.
+ * This module used to carry its own copy, and the copy missed the F-112 rule:
+ * a node that names the coordinator itself is the assignment, not an
+ * unreachable specialist. Two definitions meant the queue, the live spawn gate
+ * and the post-approval dispatch could answer "what does this task require?"
+ * differently — and the copy that production bound answered it wrong, so every
+ * approved brief whose nodes name its coordinator was refused before the
+ * durable queue write. The function is imported from the library and
+ * re-exported here (same function object), never redefined.
  */
-export function deriveGovernedDispatchTarget(task) {
-  if (!task || typeof task !== "object") {
-    return {
-      ok: false,
-      error: "TASK_NOT_FOUND",
-    };
-  }
-  const coordinator = task.primary_coordinator;
-  if (!isExecutableCoordinator(coordinator)) {
-    return {
-      ok: false,
-      error: "COORDINATOR_NOT_EXECUTABLE",
-    };
-  }
-  const requiredCapabilities = (Array.isArray(task.nodes) ? task.nodes : [])
-    .map((node) => node?.agent_id)
-    .filter((agentId) => typeof agentId === "string" && agentId.length > 0);
-  // The roster is canonical, so a DAG naming an unknown agent is a governance
-  // defect and must not be narrowed into a runnable subset.
-  const unknown = requiredCapabilities.filter(
-    (agentId) => !AGENT_IDS.includes(agentId),
-  );
-  if (unknown.length > 0) {
-    return { ok: false, error: "UNKNOWN_SPECIALIST_IN_DAG" };
-  }
-  if (requiredCapabilities.length === 0) {
-    return { ok: false, error: "NO_EXECUTABLE_SPECIALIST" };
-  }
-  // Canonical topology containment. Read the table that the live spawn gate
-  // enforces rather than introducing a local copy, so a topology change can
-  // never be legal here and illegal there.
-  const spawnable = AGENT_SPAWN_POLICY[coordinator] ?? [];
-  const unreachable = requiredCapabilities.filter(
-    (agentId) => !spawnable.includes(agentId),
-  );
-  if (unreachable.length > 0) {
-    return {
-      ok: false,
-      error: "SPECIALIST_NOT_REACHABLE_FROM_COORDINATOR",
-      unreachable,
-      coordinator,
-    };
-  }
-  return { ok: true, coordinator, requiredCapabilities };
-}
 
 /**
  * Decide what a post-approval invocation must do, given the authoritative queue
