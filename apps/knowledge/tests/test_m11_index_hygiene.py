@@ -637,9 +637,65 @@ class StartupSweepAndLockTests(unittest.IsolatedAsyncioTestCase):
         )
         with patch("app.database.asyncpg.create_pool", new=AsyncMock(return_value=pool)):
             await database.start()
+            self.assertEqual(database.startup_error_code, "MIGRATION_LOCK_UNAVAILABLE")
+            self.assertNotEqual(database.startup_error_code, "DATABASE_UNAVAILABLE")
+            # F-412 (R9-L08-2): the lock arm now schedules a re-attempt, so the
+            # case must retire the task it started instead of leaking it.
+            await database.stop()
 
-        self.assertEqual(database.startup_error_code, "MIGRATION_LOCK_UNAVAILABLE")
-        self.assertNotEqual(database.startup_error_code, "DATABASE_UNAVAILABLE")
+    async def test_a_boot_that_loses_the_schema_lock_re_attempts(self) -> None:
+        """F-412 (R9-L08-2): the lock arm aborted without a re-attempt.
+
+        The generic arm started the reconnect loop; the `MigrationLockError`
+        arm only set its code and aborted, so a replica that lost the
+        advisory-lock race to an index run answered 503 for the life of the
+        process even after the lock (held for seconds) was released.
+        """
+
+        connection = FakeConnection(fetchvals=[True, True])
+        original_execute = connection.execute
+        lock_attempts: list[int] = []
+
+        async def failing_execute(sql: str, *args: object) -> None:
+            await original_execute(sql, *args)
+            if "pg_advisory_lock" in sql:
+                lock_attempts.append(1)
+                if len(lock_attempts) == 1:
+                    raise asyncio.TimeoutError()
+
+        connection.execute = failing_execute  # type: ignore[method-assign]
+        pool = FakePool(connection)
+        database = KnowledgeDatabase(
+            "localhost", 5432, "knowledge", "zink", "secret", Path("migrations")
+        )
+        pool_attempts: list[int] = []
+
+        async def create_pool(*_args: object, **_kwargs: object) -> FakePool:
+            pool_attempts.append(1)
+            return pool
+
+        with patch(
+            "app.database.asyncpg.create_pool",
+            new=AsyncMock(side_effect=create_pool),
+        ), patch("app.database.RECONNECT_INTERVAL_SECONDS", 0.01):
+            await database.start()
+            self.assertEqual(database.startup_error_code, "MIGRATION_LOCK_UNAVAILABLE")
+            for _ in range(100):
+                if database.startup_error_code is None:
+                    break
+                await asyncio.sleep(0.02)
+            was_available = database.available
+            error_code = database.startup_error_code
+            await database.stop()
+
+        self.assertGreaterEqual(
+            len(lock_attempts),
+            2,
+            "the lock arm must re-enter the schema lock the generic arm re-acquires",
+        )
+        self.assertGreaterEqual(len(pool_attempts), 2)
+        self.assertTrue(was_available)
+        self.assertIsNone(error_code)
 
     async def test_a_failed_lock_query_releases_the_connection(self) -> None:
         """F-254 (R7-D10A-02): four leaks exhausted the pool."""

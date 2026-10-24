@@ -379,6 +379,12 @@ class KnowledgeDatabase:
             # is named, so the operator can tell the two apart.
             self.startup_error_code = "MIGRATION_LOCK_UNAVAILABLE"
             await self._abort_startup()
+            # F-412 (R9-L08-2): the lock is transient by nature -- an index run
+            # holds it for seconds -- but this arm only aborted, so a replica
+            # that lost the race answered 503 for the life of the process while
+            # `readyz` stayed healthy. The re-attempt is the same one the
+            # generic arm starts, and it re-acquires this very lock (F-149).
+            self._start_reconnect_loop()
         except Exception:
             self.startup_error_code = "DATABASE_UNAVAILABLE"
             await self._abort_startup()
