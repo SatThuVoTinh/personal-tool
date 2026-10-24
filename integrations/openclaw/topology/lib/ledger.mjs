@@ -590,6 +590,23 @@ export function ensureLedger(paths) {
 }
 
 /**
+ * M12/T9 F-414 (R9-T03-1): drop the replay checkpoint after the migration has
+ * re-derived the projection.
+ *
+ * The checkpoint is DERIVED state, so its absence is only a performance
+ * regression the next read repairs. A failed removal is a real fault: the
+ * migration must not report success while leaving a possibly mis-anchored
+ * record beside the snapshot it just re-derived.
+ */
+function discardCheckpoint(paths) {
+  try {
+    unlinkSync(checkpointPath(paths));
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+}
+
+/**
  * M12/T9 (the owner's ruling of 2026-10-21): recompute the DERIVED snapshot
  * from the authoritative journal.
  *
@@ -627,6 +644,20 @@ export function migrateLedgerProjection(paths) {
   // history never had and the migration died with AUTH_APPROVAL_REQUIRED.
   const before = readFileSync(paths.snapshot, "utf8");
   const derived = deriveLedgerProjection(paths);
+  // M12/T9 F-414 (R9-T03-1): the migration just re-derived the projection
+  // from the whole journal, so the checkpoint that described the PREVIOUS
+  // derivation may not survive it. The reader's checkpoint writer is gated on
+  // `!recompute`, and the migration derives in the recompute mode, so a
+  // checkpoint that mis-anchors the journal (the F-408 shape) used to stay
+  // behind even when the migration reported `changed:false` - and the next
+  // read still sliced the journal mid-line. The checkpoint is DERIVED state
+  // (the reader rebuilds it), so discarding it after a verified replay is
+  // safe: the next read either resumes from a rebuilt one or replays whole.
+  //
+  // This runs on BOTH migration outcomes: `changed:false` reports that the
+  // snapshot bytes already agree with the journal, not that the anchor beside
+  // it does.
+  discardCheckpoint(paths);
   const after = `${JSON.stringify(derived, null, 2)}\n`;
   if (after === before) {
     return {
