@@ -771,8 +771,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             # makes a citation re-verifiable was unreachable
                             # one hop after this route published it. Both are
                             # nullable: a PDF row has pages and no lines.
-                            "line_end": candidate.line_end,
                             "line_start": candidate.line_start,
+                            "line_end": candidate.line_end,
                             "page_start": candidate.page_start,
                             "page_end": candidate.page_end,
                             "canonical_topics": list(candidate.canonical_topics),
@@ -791,9 +791,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 # re-verified by re-hashing the source.
                                 "source_id": candidate.source_id,
                                 "source_sha256": candidate.source_sha256,
-                                    "line_end": candidate.line_end,
                                 "line_start": candidate.line_start,
-                            "page_start": candidate.page_start,
+                                "line_end": candidate.line_end,
+                                "page_start": candidate.page_start,
                                 "page_end": candidate.page_end,
                                 "bbox": (
                                     list(candidate.bbox)
