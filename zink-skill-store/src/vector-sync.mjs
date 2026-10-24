@@ -1267,6 +1267,12 @@ export async function syncSkillsToVectorStore(options = {}) {
             } during sync${markerNote}`,
           );
           drift.code = "SOURCE_LIFECYCLE_DRIFT";
+          // M12/T9-R4 F-133: the derived row this drift leaves behind is a
+          // TERMINAL retirement, not a failed sync — the marker above wrote it
+          // and a FAILED row cannot be retried into existence. The catch arm
+          // reports the row's real state from these two fields.
+          drift.lifecycleStatus = lifecycleStatus ?? null;
+          drift.retirementMarked = markerError === null;
           if (markerError) drift.cause = markerError;
           throw drift;
         }
@@ -1290,6 +1296,13 @@ export async function syncSkillsToVectorStore(options = {}) {
       });
 
       syncReport.synced_count += 1;
+      // M12/T9-R4 F-133: the per-skill entry describes the DERIVED ROW as this
+      // sync leaves it, not only the call's outcome. The store-wide `status`
+      // is a rollup (`PARTIAL` when ANY skill failed), so a consumer that keys
+      // governance state off it alone stamps every skill in the run with the
+      // worst skill's verdict — the divergence this row measured. These two
+      // fields mirror the row's own columns, so the two can be compared
+      // per skill instead of inferred from an aggregate.
       syncReport.skills.push({
         namespace,
         capability,
@@ -1297,6 +1310,8 @@ export async function syncSkillsToVectorStore(options = {}) {
         semantic_record_key: semanticRecordKey,
         semantic_contract_version: SEMANTIC_CONTRACT_VERSION,
         sync_status: "READY",
+        catalog_row_status: "ACTIVE",
+        catalog_sync_status: "READY",
       });
     } catch (err) {
       syncReport.failed_count += 1;
@@ -1304,19 +1319,32 @@ export async function syncSkillsToVectorStore(options = {}) {
         0,
         MAX_FAILURE_REASON_LENGTH,
       );
-      syncReport.skills.push({
+      // M12/T9-R4 F-133: the row's state starts UNKNOWN and is narrowed by the
+      // write each arm actually performed. A consumer must be able to tell
+      // "the row says READY" from "nothing is known about the row" without
+      // reading the aggregate.
+      const failureEntry = {
         namespace,
         capability,
         version,
         sync_status: "FAILED",
         error: boundedReason,
-      });
+        catalog_row_status: "UNKNOWN",
+        catalog_sync_status: "UNKNOWN",
+      };
+      syncReport.skills.push(failureEntry);
 
       // A lifecycle drift is not a failed embedding: the canonical row is no
       // longer ACTIVE, and the retirement marker above is the only derived
       // write this record is allowed to make. Falling through to the failure
       // upsert would re-create an ACTIVE row for a retired skill.
-      if (err?.code === "SOURCE_LIFECYCLE_DRIFT") continue;
+      if (err?.code === "SOURCE_LIFECYCLE_DRIFT") {
+        if (err.lifecycleStatus === "DEPRECATED" && err.retirementMarked) {
+          failureEntry.catalog_row_status = "DEPRECATED";
+          failureEntry.catalog_sync_status = "TOMBSTONED";
+        }
+        continue;
+      }
 
       // Observable failure recording (BUG-08, L13). M11/T1: a failure to
       // persist the FAILED marker is itself escalated — the whole sync is
@@ -1386,6 +1414,8 @@ export async function syncSkillsToVectorStore(options = {}) {
           END ${failureTag};
         `;
         await executePostgresQuery(failSql, options);
+        failureEntry.catalog_row_status = "ACTIVE";
+        failureEntry.catalog_sync_status = "FAILED";
       } catch {
         secondaryWriteFailed = true;
       }

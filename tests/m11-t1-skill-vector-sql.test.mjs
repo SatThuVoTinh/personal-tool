@@ -1276,3 +1276,134 @@ test("F-574: an incomplete scan issues no reclamation at all", async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+// M12/T9-R4 F-133 (R5-E05-08) — the durable governance state disagreed with
+// the derived index in BOTH directions.
+//
+// The sync rolls up one store-wide `status` (`PARTIAL` when ANY skill failed)
+// while a governance consumer keys the proposal's state off that aggregate, so
+// an APPROVED, correctly-indexed skill was stamped `INDEX_FAILED` because some
+// OTHER skill in the same run failed — and a sync that left a row untouched
+// carried no per-skill evidence at all.
+//
+// The store half is that every per-skill entry states the DERIVED ROW's own
+// columns, so the two can be compared per skill instead of inferred from an
+// aggregate. The consumer half (reading it instead of the rollup) lives in the
+// governance plugin, which this lane does not own.
+test("F-133: a PARTIAL run still reports each skill's own catalog row state", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "f133-partial-"));
+  try {
+    await makeActiveSkill(root, ["office"], "good-skill", "# Good\n\nBody.");
+    await makeActiveSkill(root, ["office"], "bad-skill", "# Bad\n\nBody.");
+    const report = await syncSkillsToVectorStore({
+      skillsRoot: root,
+      // One skill's embedding fails; the other is indexed.
+      embedFn: async (texts) =>
+        texts.some((text) => text.includes("Bad"))
+          ? Promise.reject(new Error("EMBEDDING_UPSTREAM_FAILED"))
+          : texts.map(() => new Array(EXPECTED_DIMENSIONS).fill(0.01)),
+      dbExecutor: async () => "",
+    });
+    assert.equal(
+      report.status,
+      "PARTIAL",
+      "the rollup stays a rollup: one failure makes the RUN partial",
+    );
+    const good = report.skills.find((s) => s.capability === "good-skill");
+    const bad = report.skills.find((s) => s.capability === "bad-skill");
+    assert.deepEqual(
+      {
+        sync_status: good.sync_status,
+        catalog_row_status: good.catalog_row_status,
+        catalog_sync_status: good.catalog_sync_status,
+      },
+      {
+        sync_status: "READY",
+        catalog_row_status: "ACTIVE",
+        catalog_sync_status: "READY",
+      },
+      "the skill that WAS indexed must say so, whatever the run's rollup is",
+    );
+    assert.deepEqual(
+      {
+        sync_status: bad.sync_status,
+        catalog_row_status: bad.catalog_row_status,
+        catalog_sync_status: bad.catalog_sync_status,
+      },
+      {
+        sync_status: "FAILED",
+        catalog_row_status: "ACTIVE",
+        catalog_sync_status: "FAILED",
+      },
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("F-133: a retirement that lands mid-sync is reported as the terminal row it is", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "f133-drift-"));
+  try {
+    await makeActiveSkill(root, ["office"], "drift-skill", "# Drift\n\nBody.");
+    let flipped = false;
+    const report = await syncSkillsToVectorStore({
+      skillsRoot: root,
+      embedFn: async (texts) => {
+        if (!flipped) {
+          flipped = true;
+          // The canonical retirement lands after the scan and before the
+          // READY write: the row this sync may leave behind is terminal.
+          await writeFile(
+            path.join(root, "office", "drift-skill", "1.0.0", "manifest.json"),
+            JSON.stringify(
+              {
+                schema_version: 1,
+                identity: {
+                  namespace: ["office"],
+                  capability: "drift-skill",
+                  version: "1.0.0",
+                },
+                content: {
+                  path: "SKILL.md",
+                  sha256: createHash("sha256")
+                    .update("# Drift\n\nBody.", "utf8")
+                    .digest("hex"),
+                },
+                provenance: { source_type: "research", references: [] },
+                lifecycle: [
+                  {
+                    status: "ACTIVE",
+                    at: "2026-10-01T01:00:00Z",
+                    actor: "owner",
+                  },
+                  {
+                    status: "DEPRECATED",
+                    at: "2026-10-02T01:00:00Z",
+                    actor: "owner",
+                    decision_ref: "PLAN:M12/T9-R4",
+                  },
+                ],
+              },
+              null,
+              2,
+            ),
+            "utf8",
+          );
+        }
+        return texts.map(() => new Array(EXPECTED_DIMENSIONS).fill(0.01));
+      },
+      dbExecutor: async () => "",
+    });
+    assert.notEqual(report.status, "READY");
+    const entry = report.skills.at(-1);
+    assert.equal(entry.sync_status, "FAILED");
+    assert.equal(
+      entry.catalog_row_status,
+      "DEPRECATED",
+      `the row the drift leaves behind is terminal, not failed: ${JSON.stringify(entry)}`,
+    );
+    assert.equal(entry.catalog_sync_status, "TOMBSTONED");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
