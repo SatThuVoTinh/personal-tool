@@ -33,6 +33,13 @@
 // genuine pass. That limitation is recorded rather than guessed at.
 //
 // Usage: node scripts/skip-expectation-gate.mjs <junit-report> [--json]
+//
+// F-477 (legacy `R9-T10-1`): every refusal here is evaluated on EVERY host.
+// The must-run and inert-lane refusals used to be wrapped in a test of the CI
+// host variable, so the one host whose report actually carries a must-run skip
+// (the operator's) was told PASS, and the runner that can create symlinks was
+// told nothing. The expectation table's `may-skip` families are the declared
+// NOT RUN path; a host variable is not a declaration and decides nothing.
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -248,17 +255,20 @@ expectation table does not: its skips are counted against nothing`,
 
   // A lane that contributed NO case at all did not run. Its skips are then
   // counted against nothing, so a whole lane going inert would leave the gate
-  // green — the very defect this gate exists to close. The check runs where
-  // the expectations are enforced, so a local run of a subset is not judged
-  // against lanes it never meant to run.
-  if (process.env.CI) {
-    for (const [lane, entry] of perLane) {
-      if (entry.passes === 0 && entry.skips === 0 && entry.failures === 0) {
-        failures.push(
-          `the lane \`${lane}\` contributed no case at all: it did not run, so \
+  // green — the very defect this gate exists to close. This refusal is
+  // unconditional (F-477, legacy `R9-T10-1`): it used to sit behind a test of
+  // the CI host variable, which is a host fact, not a declaration, so the
+  // operator's host was never judged against the lanes it did not run and the
+  // control contributed zero executed assertions there. A run over a report
+  // that holds every lane the repository owns is exactly what this gate is for;
+  // a partial report must be refused, and the table's `may-skip` families are
+  // the only declared NOT RUN path.
+  for (const [lane, entry] of perLane) {
+    if (entry.passes === 0 && entry.skips === 0 && entry.failures === 0) {
+      failures.push(
+        `the lane \`${lane}\` contributed no case at all: it did not run, so \
 its skips are counted against nothing`,
-        );
-      }
+      );
     }
   }
 
@@ -290,24 +300,23 @@ expectation is stale`,
       );
       continue;
     }
-    if (!process.env.CI) continue;
     if (family.expectation === "must-run") {
       if (skips > 0) {
         failures.push(
-          `the family \`${family.id}\` is expected to RUN on the CI runner and \
-skipped ${skips} case(s): ${family.reason}`,
+          `the family \`${family.id}\` is expected to RUN and skipped ${skips} \
+case(s): ${family.reason}`,
         );
       }
       if (passes === 0) {
         failures.push(
-          `the family \`${family.id}\` is expected to RUN on the CI runner and \
-contributed no pass at all: it was skipped entirely`,
+          `the family \`${family.id}\` is expected to RUN and contributed no \
+pass at all: it was skipped entirely`,
         );
       }
     } else if (skips > (family.maxSkips ?? 0)) {
       failures.push(
         `the family \`${family.id}\` skipped ${skips} case(s) and may skip at \
-most ${family.maxSkips ?? 0} on the CI runner: ${family.reason}`,
+most ${family.maxSkips ?? 0}: ${family.reason}`,
       );
     }
   }

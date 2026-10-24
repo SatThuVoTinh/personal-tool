@@ -208,6 +208,76 @@ ${result.stdout}${result.stderr}`,
   );
 });
 
+// F-477 (legacy `R9-T10-1`): both refusals used to sit behind
+// `process.env.CI`, and CI is precisely the host where the must-run family does
+// not skip. On the operator's host the gate printed PASS over a report whose
+// must-run family skipped 5 cases, so the control contributed zero executed
+// assertions while still being counted green. The refusals below are the SAME
+// refusals on a report the same shape, with `CI` unset: a host must not be able
+// to buy a PASS by not exporting a variable.
+test("F-477: the must-run refusal evaluates when CI is unset", () => {
+  const lane = lanesOf(mustRunFamily)[0];
+  const result = verdict([{ lane, name: "a skipped case", skipped: true }], {
+    ci: false,
+  });
+  assert.notEqual(
+    result.code,
+    0,
+    `a local host must refuse a must-run family that skipped: ${result.stdout}${result.stderr}`,
+  );
+  assert.match(
+    result.stderr,
+    /expected to RUN/iu,
+    `the refusal must name the expectation on every host: ${result.stderr}`,
+  );
+});
+
+test("F-477: the inert-lane refusal evaluates when CI is unset", () => {
+  // Every declaration matches and one lane contributes no case at all: the
+  // absence is the only thing the gate can refuse, so a PASS here proves the
+  // refusal was skipped along with the host check.
+  const cases = matchingCases();
+  const absent = cases.find((entry) => familyOfLane(entry.lane) === null);
+  assert.ok(absent, "the repository must own a lane that declares no family");
+  const partial = cases.filter((entry) => entry !== absent);
+  const result = verdict(partial, { ci: false });
+  assert.notEqual(
+    result.code,
+    0,
+    `a local host must refuse a lane that did not run: ${result.stdout}${result.stderr}`,
+  );
+  assert.match(
+    result.stderr,
+    /did not run/u,
+    `the refusal must say the lane did not run on every host: ${result.stderr}`,
+  );
+});
+
+test("F-477: the verdict is decided by the declarations, not by the host", () => {
+  const clean = matchingCases();
+  const onCiRunner = verdict(clean, { ci: true });
+  const local = verdict(clean, { ci: false });
+  assert.equal(
+    local.code,
+    onCiRunner.code,
+    `the same report must not split verdicts by host: ci=${onCiRunner.code} local=${local.code}\n${onCiRunner.stderr}\n${local.stderr}`,
+  );
+  assert.equal(
+    local.code,
+    0,
+    `a matching report must pass here: ${local.stderr}`,
+  );
+
+  const breach = [
+    { lane: lanesOf(mustRunFamily)[0], name: "a skipped case", skipped: true },
+  ];
+  assert.equal(
+    verdict(breach, { ci: false }).code,
+    verdict(breach, { ci: true }).code,
+    "a must-run breach must refuse on both hosts",
+  );
+});
+
 test("F-197: the gate refuses a skipped lane that declares no family", () => {
   const lane = "tests/agent-owner-F-197-skip-expectation.test.mjs";
   assert.equal(
@@ -340,11 +410,16 @@ test("F-197: the npm test script consumes the skip counts", () => {
   );
   const source = readFileSync(GATE, "utf8");
   assert.match(source, /ci-skip-expectations\.json/u);
-  assert.match(
+  // F-477 (legacy `R9-T10-1`): the lane used to PIN the opposite — that the
+  // gate "must know whether it runs on the CI runner". That pin was the defect:
+  // it licensed `if (!process.env.CI) continue;` over the two refusals. The
+  // declarations in the table are the only thing that may decide a verdict, so
+  // the gate reads no host variable at all (proved behaviourally by the
+  // host-independence case above).
+  assert.doesNotMatch(
     source,
     /process\.env\.CI/u,
-    "the gate must know whether it runs on the CI runner, whose expectations \
-the table declares",
+    "no refusal may be gated on the host: the table's declarations decide",
   );
   assert.match(
     source,
