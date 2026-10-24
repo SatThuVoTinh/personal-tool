@@ -1391,9 +1391,22 @@ function readSnapshotLocked(
       );
     if (!recompute && (!checkpointed || (tail.length > 0 && repairSnapshot))) {
       // The anchored prefix's bytes, and the offset where they end.
+      //
+      // M12/T9 F-408 (R9-L02-4): `journalLineEnds` are byte offsets into the
+      // buffer they were split from. A checkpointed read splits the TAIL, so
+      // those ends are relative to `checkpoint.events_offset`; adding the
+      // checkpoint's own offset back makes the anchor absolute. The digest
+      // below then seals exactly the bytes up to that absolute offset - the
+      // same bytes `readCheckpointedTail` verifies on the next read. Storing
+      // the tail-relative end made the record self-consistent but sliced the
+      // journal mid-line on the next read.
       const buffer = readFileSync(paths.events);
+      const baseOffset = checkpointed ? checkpoint.events_offset : 0;
       const anchoredCount = Math.min(journalLines.length, snapshot.sequence);
-      const offset = anchoredCount > 0 ? journalLineEnds[anchoredCount - 1] : 0;
+      const offset =
+        anchoredCount > 0
+          ? baseOffset + journalLineEnds[anchoredCount - 1]
+          : baseOffset;
       writeCheckpointAtomic(paths, {
         sequence: snapshot.sequence,
         last_event_digest: snapshot.last_event_digest,
