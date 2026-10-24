@@ -16,7 +16,7 @@ from uuid import UUID, uuid4
 import asyncpg
 
 from .markdown_adapter import MarkdownSource
-from .run_errors import SafeRunError, serialize_errors
+from .run_errors import SafeRunError, sanitize_cause, serialize_errors
 
 _CURRENT_OWNER_CONNECTION: contextvars.ContextVar["asyncpg.Connection | None"] = contextvars.ContextVar(
     "current_owner_connection", default=None
@@ -1026,7 +1026,9 @@ class KnowledgeDatabase:
                 if updated is None:
                     raise StateTransitionError("PDF batch did not reach SUCCEEDED.")
 
-    async def fail_pdf_content_batch_and_build(self, batch: PdfContentBatch, code: str) -> None:
+    async def fail_pdf_content_batch_and_build(
+        self, batch: PdfContentBatch, code: str, cause: str | None = None
+    ) -> None:
         if self._pool is None:
             raise RuntimeError("Database pool is unavailable.")
         async with self._mutation_transaction() as connection:
@@ -1042,14 +1044,20 @@ class KnowledgeDatabase:
                 )
                 if failed_batch is None:
                     raise StateTransitionError("PDF batch did not reach FAILED.")
-                await self._fail_pdf_build_locked(connection, batch.build_id, code)
+                await self._fail_pdf_build_locked(
+                    connection, batch.build_id, code, cause
+                )
 
-    async def fail_pdf_content_build(self, build: PdfContentBuild, code: str) -> None:
+    async def fail_pdf_content_build(
+        self, build: PdfContentBuild, code: str, cause: str | None = None
+    ) -> None:
         if self._pool is None:
             raise RuntimeError("Database pool is unavailable.")
         async with self._mutation_transaction() as connection:
                 await self._require_pdf_building(connection, build.id)
-                await self._fail_pdf_build_locked(connection, build.id, code)
+                await self._fail_pdf_build_locked(
+                    connection, build.id, code, cause
+                )
 
     async def complete_pdf_content_build(self, build: PdfContentBuild) -> None:
         """Make a build READY only after every range and all output are present."""
@@ -2521,16 +2529,24 @@ class KnowledgeDatabase:
 
     @staticmethod
     async def _fail_pdf_build_locked(
-        connection: asyncpg.Connection, build_id: str, code: str
+        connection: asyncpg.Connection,
+        build_id: str,
+        code: str,
+        cause: str | None = None,
     ) -> None:
+        # F-550 (R10-T06-2): the cause rides into the row it belongs to, through
+        # the same bound and scrub the run-error record uses, so a build marked
+        # FAILED names WHY and not only WHICH class of failure.
         updated = await connection.fetchval(
             """
             UPDATE knowledge.pdf_content_builds
-            SET status = 'FAILED', failure_code = $2, finished_at = now()
+            SET status = 'FAILED', failure_code = $2, failure_cause = $3, finished_at = now()
             WHERE id = $1 AND status = 'BUILDING'
             RETURNING id
             """,
-            UUID(build_id), code,
+            UUID(build_id),
+            code,
+            sanitize_cause(cause),
         )
         if updated is None:
             raise StateTransitionError("PDF build did not reach FAILED.")

@@ -213,14 +213,22 @@ class PdfContentBuilder:
                     segment_count += len(segments)
                 except PdfRuntimeError as error:
                     code = timeout_code if error.code == "PDF_RUNTIME_TIMEOUT" else error.code
-                    await self._database.fail_pdf_content_batch_and_build(batch, code)
+                    # F-550 (R10-T06-2): the build row is marked FAILED in this
+                    # same breath, so the child's summary has to ride with it —
+                    # a code-only write left the store's own record as blind as
+                    # the run row was.
+                    await self._database.fail_pdf_content_batch_and_build(
+                        batch, code, error.detail
+                    )
                     raise PdfBuildError(code, error.detail) from error
                 except PdfBuildError as error:
-                    await self._database.fail_pdf_content_batch_and_build(batch, error.code)
+                    await self._database.fail_pdf_content_batch_and_build(
+                        batch, error.code, error.cause
+                    )
                     raise
                 except Exception as error:
                     await self._database.fail_pdf_content_batch_and_build(
-                        batch, "PDF_RUNTIME_FAILED"
+                        batch, "PDF_RUNTIME_FAILED", f"type={type(error).__name__}"
                     )
                     # F-550 (R10-T06-2): the cause channel carries the CHILD's
                     # bounded summary only. A parent-side fault is named by its
@@ -236,7 +244,7 @@ class PdfContentBuilder:
                 await asyncio.to_thread(self._final_snapshot, sidecar, baseline)
                 self._raise_if_cumulative_expired(cumulative_deadline)
             except PdfBuildError as error:
-                await self._database.fail_pdf_content_build(build, error.code)
+                await self._database.fail_pdf_content_build(build, error.code, error.cause)
                 raise
             if segment_count == 0:
                 await self._database.fail_pdf_content_build(build, "PDF_NO_EXTRACTABLE_CONTENT")
@@ -302,7 +310,7 @@ class PdfContentBuilder:
             self._assert_baseline(sidecar, baseline)
         except PdfBuildError as error:
             # This checkpoint is between batches, so every later range remains PENDING.
-            await self._database.fail_pdf_content_build(build, error.code)
+            await self._database.fail_pdf_content_build(build, error.code, error.cause)
             raise
 
     def _assert_baseline(self, sidecar: PdfSidecar, baseline: _SourceSnapshot) -> None:

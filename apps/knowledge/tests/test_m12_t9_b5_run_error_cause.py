@@ -20,12 +20,18 @@ the contract holds without Postgres, Ollama or a tokenizer artifact:
 
 from __future__ import annotations
 
+import re
 import unittest
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-from app.database import AcceptedIndexRun, ActiveIndex, StateTransitionError
+from app.database import (
+    AcceptedIndexRun,
+    ActiveIndex,
+    KnowledgeDatabase,
+    StateTransitionError,
+)
 from app.index_lifecycle import IndexLifecycle, LifecycleDependencies
 from app.markdown_adapter import MarkdownScanResult
 from app.model_probe import ResolvedEmbeddingModel
@@ -40,6 +46,7 @@ from app.run_errors import (
 )
 
 INDEX = ActiveIndex("index-1", "bge-m3:latest", "a" * 64, 1024)
+BUILD_ID = "00000000-0000-0000-0000-000000000099"
 SIDECAR_SOURCE = "02. Books/Authority/report.pdf"
 
 
@@ -244,6 +251,65 @@ class CauseShapeTests(unittest.TestCase):
 
 def _long(character: str) -> str:
     return character * (CHILD_DETAIL_LIMIT + 64)
+
+
+class BuildRowCauseTests(unittest.IsolatedAsyncioTestCase):
+    """F-550 (R10-T06-2): the build row the store marks FAILED names its cause.
+
+    `_fail_pdf_build_locked` is the only writer of that terminal state, and it
+    used to carry `failure_code` alone — the run row got a cause while the row
+    that actually owns the build stayed silent.
+    """
+
+    async def _fail(self, cause: str | None) -> tuple[str, tuple[object, ...]]:
+        recorded: list[tuple[str, tuple[object, ...]]] = []
+
+        class _Connection:
+            async def fetchval(self, sql: str, *args: object) -> object:
+                recorded.append((" ".join(sql.split()), args))
+                return BUILD_ID
+
+        await KnowledgeDatabase._fail_pdf_build_locked(
+            _Connection(), BUILD_ID, "PDF_RUNTIME_FAILED", cause
+        )
+        statement, args = recorded[-1]
+        self.assertIn("SET status = 'FAILED'", statement)
+        self.assertIn("failure_cause = $3", statement)
+        return statement, args
+
+    async def test_the_summary_is_bound_to_the_row_it_writes(self) -> None:
+        _statement, args = await self._fail("exit=-9; stderr=Killed")
+
+        self.assertEqual(args[1], "PDF_RUNTIME_FAILED")
+        self.assertEqual(args[2], "exit=-9; stderr=Killed")
+
+    async def test_a_cause_over_the_store_bound_is_cut_before_the_write(
+        self,
+    ) -> None:
+        _statement, args = await self._fail("x" * (CHILD_DETAIL_LIMIT + 64))
+
+        self.assertEqual(len(args[2]), CHILD_DETAIL_LIMIT)
+
+    async def test_control_characters_never_reach_the_stored_row(self) -> None:
+        _statement, args = await self._fail("killed\x00by\x1binit")
+
+        self.assertNotIn("\x00", args[2])
+        self.assertNotIn("\x1b", args[2])
+
+    async def test_the_migration_bound_is_the_number_the_app_uses(self) -> None:
+        """The CHECK in migration 004 and CHILD_DETAIL_LIMIT are one number."""
+
+        migration = (
+            Path(__file__).resolve().parents[1]
+            / "migrations"
+            / "004_pdf_build_failure_cause.sql"
+        )
+        match = re.search(
+            r"char_length\(failure_cause\) <= (\d+)", migration.read_text("utf8")
+        )
+
+        self.assertIsNotNone(match, "004 must bound the stored cause")
+        self.assertEqual(int(match.group(1)), CHILD_DETAIL_LIMIT)
 
 
 if __name__ == "__main__":

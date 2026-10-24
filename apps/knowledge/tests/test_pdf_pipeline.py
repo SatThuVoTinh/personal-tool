@@ -239,7 +239,7 @@ class _Database:
         self.created = False
         self.started: list[PdfContentBatch] = []
         self.completed: list[tuple[PdfContentBatch, tuple]] = []
-        self.failures: list[tuple[str, str]] = []
+        self.failures: list[tuple[str, str, str | None]] = []
         self.ready = False
         self.after_complete = None
         self.state: PdfContentBuildState | None = None
@@ -286,11 +286,11 @@ class _Database:
         if self.after_complete:
             self.after_complete()
 
-    async def fail_pdf_content_batch_and_build(self, batch, code: str) -> None:
-        self.failures.append((batch.id, code))
+    async def fail_pdf_content_batch_and_build(self, batch, code: str, cause=None) -> None:
+        self.failures.append((batch.id, code, cause))
 
-    async def fail_pdf_content_build(self, build, code: str) -> None:
-        self.failures.append((build.id, code))
+    async def fail_pdf_content_build(self, build, code: str, cause=None) -> None:
+        self.failures.append((build.id, code, cause))
 
     async def complete_pdf_content_build(self, build) -> None:
         self.ready = True
@@ -654,6 +654,10 @@ class PdfBuildLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(caught.exception.code, "PDF_RUNTIME_FAILED")
         self.assertEqual(caught.exception.cause, "exit=-9; stderr=Killed")
+        # F-550 (R10-T06-2): the same summary reaches the build row this arm
+        # writes, not only the exception the caller sees.
+        self.assertEqual(database.failures[0][1], "PDF_RUNTIME_FAILED")
+        self.assertEqual(database.failures[0][2], "exit=-9; stderr=Killed")
 
     async def test_a_preflight_death_keeps_its_cause_too(self) -> None:
         """F-550 (R10-T06-2): the preflight seam is the other place it was dropped."""
@@ -690,6 +694,7 @@ class PdfBuildLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(caught.exception.code, "PDF_RUNTIME_FAILED")
         self.assertEqual(caught.exception.cause, "type=KeyError")
+        self.assertEqual(database.failures[0][2], "type=KeyError")
         self.assertNotIn("internal-db", str(caught.exception.cause))
 
     async def test_hashing_is_offloaded_from_the_event_loop(self) -> None:

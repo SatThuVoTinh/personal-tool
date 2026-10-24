@@ -652,7 +652,12 @@ class StartupSweepAndLockTests(unittest.IsolatedAsyncioTestCase):
         process even after the lock (held for seconds) was released.
         """
 
-        connection = FakeConnection(fetchvals=[True, True], fetches=[[]])
+        # One "already applied" answer per migration file the boot reads, so a
+        # new forward migration cannot change what this case scripts.
+        connection = FakeConnection(
+            fetchvals=[True] * len(list(Path("migrations").glob("*.sql"))),
+            fetches=[[]],
+        )
         original_execute = connection.execute
         lock_attempts: list[int] = []
 
@@ -705,7 +710,12 @@ class StartupSweepAndLockTests(unittest.IsolatedAsyncioTestCase):
         healthy. The sweep is idempotent, so the loop repeats it.
         """
 
-        connection = FakeConnection(fetchvals=[True, True], fetches=[[]])
+        # One "already applied" answer per migration file the boot reads, so a
+        # new forward migration cannot change what this case scripts.
+        connection = FakeConnection(
+            fetchvals=[True] * len(list(Path("migrations").glob("*.sql"))),
+            fetches=[[]],
+        )
         pool = FakePool(connection)
         database = KnowledgeDatabase(
             "localhost", 5432, "knowledge", "zink", "secret", Path("migrations")

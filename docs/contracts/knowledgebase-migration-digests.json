@@ -13,6 +13,10 @@
     {
       "file": "003_skills_vector_schema.sql",
       "sha256": "8706a55397e8040a28f78fe6dbefcbed8e53baefb344dd370b62d2cdeff25ffe"
+    },
+    {
+      "file": "004_pdf_build_failure_cause.sql",
+      "sha256": "aadc513bed2a719a6acb85077586d0c6542234c8fefde4cd789aa70a49d7b67e"
     }
   ]
 }

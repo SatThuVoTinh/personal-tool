@@ -151,7 +151,7 @@ def deserialize_errors(detail: str | None) -> dict[str, Any]:
 def _sanitize_error(error: SafeRunError) -> tuple[str | None, str, str | None]:
     code = error.code if _is_safe_code(error.code) else "UNSAFE_ERROR_REDACTED"
     source_path = error.source_path if _is_safe_source_path(error.source_path) else None
-    cause = _sanitised_cause(error.cause)
+    cause = sanitize_cause(error.cause)
     return source_path, code, cause
 
 
@@ -169,7 +169,7 @@ def _is_safe_cause(value: object) -> bool:
     )
 
 
-def _sanitised_cause(value: str | None) -> str | None:
+def sanitize_cause(value: str | None) -> str | None:
     """Bound and scrub one cause, so it can never carry an unbounded child string.
 
     F-550 (R10-T06-2) reuses the shape rules `_is_safe_source_path` applies —
