@@ -34,6 +34,8 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { proveDurableWriterSource } from "./helpers/directory-fsync.mjs";
+
 // The repository root. The lane lives in `tests/` once it is admitted, so the
 // root is the parent of the test directory; while the lane is still staged
 // outside the tree the root is taken from ZINK_REPO.
@@ -286,6 +288,88 @@ function proveEveryRenameIsFollowedByADirectoryFsync(relative) {
 
 test("F-296: the Skill Store proposal writer fsyncs the parent directory after its rename", () => {
   proveEveryRenameIsFollowedByADirectoryFsync(SKILL_STORE_WRITER);
+});
+
+test("F-487: the predicate is proved against fixtures, not only real files", () => {
+  // F-487 (R9-L11b-1): the predicate captured the open expression and then
+  // never compared it with the rename destination's parent, asserting only that
+  // the handle's NAME matched /dir/iu, and it scanned raw source so a comment
+  // counted as evidence. A predicate that can only be pointed at the tree's real
+  // writers cannot be shown to fail, so it is pointed at known-bad fixtures
+  // here: each one reddens the rule it is named for, and none of them is the
+  // file the rule exists to protect.
+  const fixture = (body) => `
+import path from "node:path";
+import { closeSync, fsyncSync, openSync, renameSync } from "node:fs";
+function publish(paths, temp) {
+${body}
+}
+`;
+
+  // The positive control: a directory fsync opened on the destination's own
+  // parent. Without it a case that always throws would look like a pass.
+  assert.doesNotThrow(
+    () =>
+      proveDurableWriterSource({
+        label: "fixture:parent-directory",
+        source: fixture(`
+  const file = path.join(paths.root, "record.json");
+  renameSync(temp, file);
+  const directoryFd = openSync(paths.root, "r");
+  try {
+    fsyncSync(directoryFd);
+  } finally {
+    closeSync(directoryFd);
+  }`),
+      }),
+    "a rename fsynced against its own parent directory must be accepted",
+  );
+
+  assert.throws(
+    () =>
+      proveDurableWriterSource({
+        label: "fixture:wrong-directory",
+        source: fixture(`
+  const file = path.join(paths.identityDir, "record.json");
+  renameSync(temp, file);
+  const directoryFd = openSync(paths.otherDir, "r");
+  try {
+    fsyncSync(directoryFd);
+  } finally {
+    closeSync(directoryFd);
+  }`),
+      }),
+    /not the parent of the rename destination/u,
+    "a directory handle named like one but opened on another directory must be refused: the rename is not durable and the old name-only rule stayed green",
+  );
+
+  assert.throws(
+    () =>
+      proveDurableWriterSource({
+        label: "fixture:comment-only",
+        source: fixture(`
+  const file = path.join(paths.root, "record.json");
+  renameSync(temp, file);
+  // const directoryFd = openSync(paths.root, "r"); fsyncSync(directoryFd);`),
+      }),
+    /no such fsync follows this rename/u,
+    "a commented-out directory fsync is not a directory fsync",
+  );
+
+  assert.throws(
+    () =>
+      proveDurableWriterSource({
+        label: "fixture:file-handle-retarget",
+        source: fixture(`
+  const file = path.join(paths.root, "record.json");
+  const fd = openSync(temp, "wx", 0o600);
+  fsyncSync(fd);
+  renameSync(temp, file);
+  fsyncSync(fd);`),
+      }),
+    /no such fsync follows this rename|already-durable file handle/u,
+    "re-fsyncing the temporary file's own handle does not flush the directory entry the rename created",
+  );
 });
 
 test("F-296: every writer the register names fsyncs the parent directory after each rename", () => {
