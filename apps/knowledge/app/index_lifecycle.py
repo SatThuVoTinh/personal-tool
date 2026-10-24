@@ -288,6 +288,19 @@ class IndexLifecycle:
                     return []
                 for sidecar in pdf_sidecars:
                     try:
+                        # F-444 (R9-T06-2): the publish skip below compares a
+                        # content identity that embeds the digest of
+                        # app/pdf_runtime.py. A byte change to the deriving
+                        # code re-keys every PDF, so the owner's reclamation
+                        # record must be consulted by the stable source pair
+                        # BEFORE the build re-derives the reclaimed copy.
+                        if (
+                            run.kind == "INCREMENTAL"
+                            and await self._database.pdf_content_is_reclaimed(
+                                sidecar.pdf_digest, sidecar.sidecar_digest
+                            )
+                        ):
+                            continue
                         result = await self._pdf_builder.build(sidecar, pdf_processing_identity)
                         if existing.get(sidecar.source_path) == result.content_identity_digest:
                             continue

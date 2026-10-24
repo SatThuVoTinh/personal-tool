@@ -30,16 +30,22 @@ import os
 from pathlib import Path
 import unittest
 from tempfile import TemporaryDirectory
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 from uuid import UUID, uuid4
 
 from app.database import (
+    AcceptedIndexRun,
+    ActiveIndex,
     KnowledgeDatabase,
     PdfContentNotFoundError,
     PdfContentNotReclaimableError,
     PdfContentReclamation,
     StateTransitionError,
 )
+from app.index_lifecycle import IndexLifecycle, LifecycleDependencies
+from app.markdown_adapter import MarkdownScanResult
+from app.model_probe import ResolvedEmbeddingModel
+from app.pdf_foundation import PdfSidecar
 
 
 _TOKENIZER = os.environ.get("KNOWLEDGE_TOKENIZER_PATH")
@@ -304,6 +310,200 @@ class PdfContentReclamationTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaises(StateTransitionError):
             await database.reclaim_pdf_content(SOURCE_PATH)
+
+
+SIDECAR_DIGEST = "c" * 64
+OLD_CONTENT_IDENTITY = "d" * 64
+NEW_PROCESSING_IDENTITY = "e" * 64
+RETENTION_INDEX = ActiveIndex("index-1", "bge-m3:latest", "a" * 64, 1024)
+
+
+def retention_sidecar() -> PdfSidecar:
+    return PdfSidecar(
+        sidecar_path="02. Books/Authority/report.md",
+        source_path=SOURCE_PATH,
+        title="Report",
+        canonical_topics=("AI",),
+        tags=("ai",),
+        pdf_digest=PDF_DIGEST,
+        sidecar_digest=SIDECAR_DIGEST,
+    )
+
+
+class PdfRetentionLookupTests(unittest.IsolatedAsyncioTestCase):
+    """F-444 (R9-T06-2): the tombstone is keyed by the source pair."""
+
+    async def test_the_reclamation_record_is_found_by_the_source_pair(self) -> None:
+        connection = FakeConnection(fetchvals=[True])
+        database = database_with(connection)
+        database._pool = connection  # type: ignore[assignment]
+
+        reclaimed = await database.pdf_content_is_reclaimed(
+            PDF_DIGEST, SIDECAR_DIGEST
+        )
+
+        self.assertTrue(reclaimed)
+        called, statement, args = connection.calls[-1]
+        self.assertEqual(called, "fetchval")
+        self.assertIn("pdf_digest = $1", statement)
+        self.assertIn("sidecar_digest = $2", statement)
+        self.assertIn("status = 'CANCELLED'", statement)
+        self.assertIn("failure_code = $3", statement)
+        # The identity that embeds the deriving code must not be the key: a
+        # byte change to app/pdf_runtime.py re-keys every PDF.
+        self.assertNotIn("processing_identity_digest", statement)
+        self.assertNotIn("content_identity_digest", statement)
+        self.assertEqual(
+            args, (PDF_DIGEST, SIDECAR_DIGEST, "PDF_CONTENT_RECLAIMED")
+        )
+
+
+class _EmptyScanner:
+    def scan_vault(
+        self, _: Path, *, include_valid_sources_on_error: bool = False
+    ) -> MarkdownScanResult:
+        return MarkdownScanResult(True, 0, 0, (), ())
+
+
+class _UnusedProbe:
+    async def resolve(
+        self, _: str, expected_dimensions: int | None = None
+    ) -> ResolvedEmbeddingModel:
+        return ResolvedEmbeddingModel(
+            RETENTION_INDEX.embedding_model_name,
+            RETENTION_INDEX.embedding_model_digest,
+            RETENTION_INDEX.embedding_dimensions,
+        )
+
+    async def embed(self, *_: object, **__: object) -> object:
+        raise AssertionError("a reclaimed PDF must not be embedded")
+
+
+class _RetentionDatabase:
+    def __init__(self, reclaimed: bool) -> None:
+        self.reclaimed = reclaimed
+        self.existing = {SOURCE_PATH: OLD_CONTENT_IDENTITY}
+        self.checks: list[tuple[str, str]] = []
+        self.completed = False
+        self.failures: list[tuple[tuple[object, ...], dict[str, object]]] = []
+        self.replaced: list[dict[str, object]] = []
+
+    async def get_index(self, _: str) -> ActiveIndex:
+        return RETENTION_INDEX
+
+    async def set_discovered(self, _: str, __: int) -> None:
+        return None
+
+    async def source_hashes(self, _: str) -> dict[str, str]:
+        return self.existing
+
+    async def get_active_index(self) -> ActiveIndex:
+        return RETENTION_INDEX
+
+    async def source_count(self, _: str) -> int:
+        return len(self.existing)
+
+    async def pdf_content_is_reclaimed(
+        self, pdf_digest: str, sidecar_digest: str
+    ) -> bool:
+        self.checks.append((pdf_digest, sidecar_digest))
+        return self.reclaimed
+
+    async def complete_incremental(self, *_: object) -> list[str]:
+        self.completed = True
+        return []
+
+    async def publish_full_rebuild(self, *_: object) -> list[str]:
+        raise AssertionError("an incremental run must not publish a full rebuild")
+
+    async def fail_run(self, *args: object, **kwargs: object) -> None:
+        self.failures.append((args, kwargs))
+
+    async def cleanup_superseded(self, _: list[str]) -> None:
+        return None
+
+    async def replace_pdf_source(self, **kwargs: object) -> None:
+        self.replaced.append(kwargs)
+
+
+class _RecordingPdfBuilder:
+    def __init__(self) -> None:
+        self.calls: list[tuple[PdfSidecar, str]] = []
+
+    async def build(self, sidecar: PdfSidecar, identity: str) -> object:
+        self.calls.append((sidecar, identity))
+        raise AssertionError("the reclaimed source pair must not be re-derived")
+
+    async def revalidate_identity(self, *_: object) -> None:
+        raise AssertionError("the reclaimed source pair must not be revalidated")
+
+
+class PdfReclamationRetentionTests(unittest.IsolatedAsyncioTestCase):
+    """F-444 (R9-T06-2): the owner's reclamation survives a code-digest bump."""
+
+    def lifecycle(
+        self, database: _RetentionDatabase, builder: _RecordingPdfBuilder
+    ) -> IndexLifecycle:
+        return IndexLifecycle(
+            LifecycleDependencies(
+                database=database,  # type: ignore[arg-type]
+                model_probe=_UnusedProbe(),  # type: ignore[arg-type]
+                scanner=_EmptyScanner(),  # type: ignore[arg-type]
+                vault_root=Path("/vault"),
+                embedding_model=RETENTION_INDEX.embedding_model_name,
+                embedding_dimensions=RETENTION_INDEX.embedding_dimensions,
+                pdf_builder=builder,  # type: ignore[arg-type]
+                # The processing identity changed after the reclamation: the
+                # digest embeds the bytes of app/pdf_runtime.py.
+                pdf_processing_identity=lambda _: NEW_PROCESSING_IDENTITY,
+            )
+        )
+
+    async def test_a_bumped_processing_identity_does_not_re_publish_a_reclaimed_pdf(
+        self,
+    ) -> None:
+        database = _RetentionDatabase(reclaimed=True)
+        builder = _RecordingPdfBuilder()
+        instance = self.lifecycle(database, builder)
+
+        with patch(
+            "app.index_lifecycle.discover_pdf_sidecars",
+            return_value=(retention_sidecar(),),
+        ):
+            result = await instance.execute(
+                AcceptedIndexRun("run-1", RETENTION_INDEX.id, "INCREMENTAL", "RUNNING")
+            )
+
+        self.assertEqual(
+            database.checks, [(PDF_DIGEST, SIDECAR_DIGEST)]
+        )
+        self.assertEqual(builder.calls, [])
+        self.assertEqual(database.replaced, [])
+        self.assertEqual(database.failures, [])
+        self.assertTrue(database.completed)
+        self.assertEqual(result, [])
+
+    async def test_a_source_pair_without_a_reclamation_record_is_still_rebuilt(
+        self,
+    ) -> None:
+        database = _RetentionDatabase(reclaimed=False)
+        builder = _RecordingPdfBuilder()
+        instance = self.lifecycle(database, builder)
+
+        with patch(
+            "app.index_lifecycle.discover_pdf_sidecars",
+            return_value=(retention_sidecar(),),
+        ):
+            await instance.execute(
+                AcceptedIndexRun("run-1", RETENTION_INDEX.id, "INCREMENTAL", "RUNNING")
+            )
+
+        self.assertEqual(database.checks, [(PDF_DIGEST, SIDECAR_DIGEST)])
+        self.assertEqual(len(builder.calls), 1)
+        self.assertEqual(builder.calls[0][0].source_path, SOURCE_PATH)
+        # The recording builder refuses the rebuild, so the run keeps the
+        # source as a failure instead of silently skipping it.
+        self.assertEqual(len(database.failures), 1)
 
 
 @unittest.skipUnless(

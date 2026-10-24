@@ -1092,6 +1092,40 @@ class KnowledgeDatabase:
             raise StateTransitionError("READY PDF content build has no segments.")
         return segments
 
+    async def pdf_content_is_reclaimed(
+        self, pdf_digest: str, sidecar_digest: str
+    ) -> bool:
+        """Whether the owner's reclamation record covers this source pair.
+
+        F-444 (R9-T06-2): the only durable record of a reclamation is the
+        terminal build keyed by ``content_identity_digest``, and that identity
+        embeds the digest of ``app/pdf_runtime.py``.  Any byte change to the
+        deriving code therefore re-keys every PDF and the incremental skip no
+        longer sees the reclaimed copy.  The source pair -- the PDF bytes and
+        the sidecar bytes -- does not change when the deriving code changes,
+        so the retention decision is looked up by that pair instead.
+        """
+
+        if self._pool is None:
+            raise RuntimeError("Database pool is unavailable.")
+        return bool(
+            await self._pool.fetchval(
+                """
+                SELECT EXISTS (
+                  SELECT 1
+                  FROM knowledge.pdf_content_builds
+                  WHERE pdf_digest = $1
+                    AND sidecar_digest = $2
+                    AND status = 'CANCELLED'
+                    AND failure_code = $3
+                )
+                """,
+                pdf_digest,
+                sidecar_digest,
+                PDF_CONTENT_RECLAIMED,
+            )
+        )
+
     async def reclaim_pdf_content(self, source_path: str) -> PdfContentReclamation:
         """Reclaim the DERIVED text copy of one ingested PDF. Idempotent.
 
