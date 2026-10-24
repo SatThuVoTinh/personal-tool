@@ -268,13 +268,24 @@ test("R4 N3: exactly one selection predecessor slot, R10 -> R5", async () => {
     Object.keys(table).includes("selection-DopzNY3I.js"),
     "the selection artifact must have a predecessor slot",
   );
-  // Per-artifact invariant: no artifact may carry more than one slot, and no
-  // descriptor may claim two different successor revisions for the same
-  // artifact. Slots for other artifacts are legitimate (R8 preflight).
+  // Per-artifact invariant: no artifact file may carry more than one slot.
+  // F-527 (R10-L12-1): the line this replaces compared `Set(keys).size` with
+  // `keys.length` — unique by language semantics, so no edit to the table could
+  // ever redden it and the lane reported a guarantee it did not enforce. The
+  // falsifiable form groups the keys by the FILE each slot names (a second slot
+  // for one artifact can only arrive as a second key for the same file), and no
+  // two slots may supersede the same region.
+  const files = Object.keys(table).map((key) => key.split("#")[0]);
   assert.equal(
-    new Set(Object.keys(table)).size,
-    Object.keys(table).length,
-    "artifact keys must be unique",
+    new Set(files).size,
+    files.length,
+    "no artifact file may carry more than one predecessor slot",
+  );
+  const supersededRegions = Object.values(table).map((entry) => entry.supersedes);
+  assert.equal(
+    new Set(supersededRegions).size,
+    supersededRegions.length,
+    "no two predecessor slots may supersede the same region",
   );
   const descriptor = table["selection-DopzNY3I.js"];
   assert.equal(descriptor.revision, "R10");

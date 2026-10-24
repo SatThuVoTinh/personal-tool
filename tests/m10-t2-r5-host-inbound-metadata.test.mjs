@@ -769,9 +769,23 @@ test("R5 L1: exactly one selection predecessor slot, R10 -> R5", () => {
     descriptor.sourceDigest,
     "555f37dae8eec1fbbd35e25ae28222dc5e8d6965e383500695a93900e9d8ddf5",
   );
-  // One slot per artifact, structurally: keys are unique and every slot
-  // names the artifact it patches, so no artifact can carry two.
-  assert.equal(new Set(Object.keys(table)).size, Object.keys(table).length);
+  // One slot per artifact FILE. F-527 (R10-L12-1): this line used to compare
+  // `Set(keys).size` with `keys.length`, which holds for any object and so
+  // enforced nothing; the rule is now stated over the file each slot names, and
+  // the region-scoped count below stays exactly as it was (it is the falsifiable
+  // neighbour, not a duplicate of this one).
+  const slotFiles = Object.keys(table).map((key) => key.split("#")[0]);
+  assert.equal(
+    new Set(slotFiles).size,
+    slotFiles.length,
+    "no artifact file may carry more than one predecessor slot",
+  );
+  const slotRegions = Object.values(table).map((entry) => entry.supersedes);
+  assert.equal(
+    new Set(slotRegions).size,
+    slotRegions.length,
+    "no two predecessor slots may supersede the same region",
+  );
   for (const [artifact, entry] of Object.entries(table)) {
     assert.ok(
       typeof entry.sourceSignature === "string" &&
