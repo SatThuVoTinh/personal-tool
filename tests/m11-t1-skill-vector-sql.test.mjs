@@ -273,11 +273,17 @@ test("M11-04: failure escalation — a failed failSql is surfaced, not swallowed
     );
     // The exact SQL the failing executor received is asserted, so the refusal
     // is provably the failure write and the tombstone is provably untouched.
-    const tombstones = received.filter(isTombstoneStatement);
+    // M12/T9-R4 F-574: the derived index now has TWO deletion statements with
+    // different roles — the ACTIVE tombstone and the terminal-row reclamation
+    // — so the role this case pins is selected by its predicate, not by
+    // "any DELETE".
+    const tombstones = received.filter(
+      (sql) => isTombstoneStatement(sql) && /status = 'ACTIVE'/u.test(sql),
+    );
     assert.equal(
       tombstones.length,
       1,
-      "exactly one tombstone statement is issued",
+      "exactly one ACTIVE tombstone statement is issued",
     );
     assert.match(
       tombstones[0],
@@ -679,9 +685,12 @@ test("F-152: a retired skill is retired even when another record is invalid", as
       (report.details ?? []).some((e) => e.code === "INVALID_SKILL_CONTENT"),
       `the refusal must still name the byte-level diagnostic, got ${JSON.stringify(report.details)}`,
     );
-    // The retirement reached the database.
+    // The retirement reached the database. M12/T9-R4 F-574: it reaches it as
+    // the RECORDED retirement (the marker UPDATE), not as the second DELETE
+    // this branch used to issue — that DELETE could never match a row, because
+    // the marker had already moved the same keys out of `status = 'ACTIVE'`.
     const retirement = statements.find((s) =>
-      s.includes("DELETE FROM skills.catalog_index"),
+      s.includes("sync_status = 'TOMBSTONED'"),
     );
     assert.ok(
       retirement,
@@ -1159,5 +1168,111 @@ test("F-541: every CHECK a migration drops is re-added and re-verified by name",
         );
       }
     }
+  }
+});
+
+// M12/T9-R4 F-574 (R10-T10-5) — no statement in the Skill Store could reach a
+// DEPRECATED/TOMBSTONED derived row.
+//
+// Migration 004 widened the two CHECK constraints so a retirement is RECORDED,
+// which gave `skills.catalog_index` a lifecycle with no owner path: every
+// statement either filtered `status = 'ACTIVE'` or keyed on a fresh upsert id,
+// so a terminal row accumulated forever — including a row whose canonical
+// record had been deleted afterwards.
+//
+// Two changes close it: the terminal-row reclamation below (bounded by a stated
+// retention window, and only on a COMPLETE scan), and the removal of the
+// tombstone in the catalogErrors branch, which the retirement marker in
+// `prepareSyncSnapshot` had already made a provable no-op.
+test("F-574: terminal rows whose canonical record is gone are reclaimed within a stated window", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "f574-prune-"));
+  try {
+    await makeActiveSkill(root, ["office"], "live-skill", "# Live\n\nBody.");
+    const statements = [];
+    const report = await syncSkillsToVectorStore({
+      skillsRoot: root,
+      embedFn,
+      dbExecutor: async (sql) => {
+        statements.push(sql);
+        return "";
+      },
+    });
+    assert.equal(report.status, "READY");
+    const prune = statements.find((sql) =>
+      /DELETE FROM skills\.catalog_index/u.test(sql),
+    );
+    // The retirement marker is an UPDATE; a statement that DELETEs and carries
+    // the terminal status is the reclamation.
+    const terminal = statements.filter(
+      (sql) =>
+        /DELETE FROM skills\.catalog_index/u.test(sql) &&
+        /status = 'DEPRECATED'/u.test(sql),
+    );
+    assert.equal(
+      terminal.length,
+      1,
+      `exactly one statement must reclaim terminal rows: ${JSON.stringify(statements)}`,
+    );
+    assert.match(
+      terminal[0],
+      /sync_status = 'TOMBSTONED'|status = 'DEPRECATED'/u,
+      "the reclamation must target the recorded retirement state",
+    );
+    assert.match(
+      terminal[0],
+      /synced_at < now\(\) - interval '30 days'/u,
+      `the reclamation must be bounded by the stated retention window: ${terminal[0]}`,
+    );
+    assert.match(
+      terminal[0],
+      /NOT IN \(/u,
+      "only terminal rows whose canonical record is GONE may be reclaimed",
+    );
+    assert.ok(
+      !/status = 'ACTIVE'/u.test(terminal[0]),
+      `the reclamation must never target a live row: ${terminal[0]}`,
+    );
+    assert.ok(
+      terminal[0].indexOf("office|live-skill|1.0.0") >
+        terminal[0].indexOf("NOT IN"),
+      `the live skill's key must be in the EXCLUSION list, not the target set: ${terminal[0]}`,
+    );
+    assert.ok(prune, "the ordinary tombstone must still be issued");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("F-574: an incomplete scan issues no reclamation at all", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "f574-noprune-"));
+  try {
+    await makeRetiredSkill(root, ["office"], "retired-skill", "# Old\n\nBody.");
+    await makeActiveSkill(
+      root,
+      ["office"],
+      "poisoned-skill",
+      "# Poisoned\n\nbefore\u0000after",
+    );
+    const statements = [];
+    const report = await syncSkillsToVectorStore({
+      skillsRoot: root,
+      embedFn,
+      dbExecutor: async (sql) => {
+        statements.push(sql);
+        return "";
+      },
+    });
+    assert.equal(report.error_code, "CATALOG_INVALID");
+    assert.equal(
+      statements.filter(
+        (sql) =>
+          /DELETE FROM skills\.catalog_index/u.test(sql) &&
+          /status = 'DEPRECATED'/u.test(sql),
+      ).length,
+      0,
+      "an incomplete catalog cannot prove a record is GONE, so nothing may be reclaimed",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });

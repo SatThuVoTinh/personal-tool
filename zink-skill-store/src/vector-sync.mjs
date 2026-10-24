@@ -24,6 +24,18 @@ export const MAX_DB_BUFFER_BYTES = 10 * 1024 * 1024; // 10MB ceiling
 export const MAX_FAILURE_REASON_LENGTH = 500;
 export const DEFAULT_INDEX_FRESHNESS_SLA_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
+/**
+ * How long a terminal derived row is kept after its canonical record is gone.
+ *
+ * M12/T9-R4 F-574 (R10-T10-5): migration 004 made `DEPRECATED`/`TOMBSTONED`
+ * reachable, and no statement could reach that state again — so a retirement,
+ * and a later-deleted canonical record on top of it, accumulated forever. The
+ * reclamation deletes a terminal row only when its canonical record is GONE
+ * from a COMPLETE scan and it has been terminal for at least this window, so a
+ * transient catalog read can never prune a live retirement.
+ */
+export const TERMINAL_DERIVED_ROW_RETENTION_DAYS = 30;
+
 export function resolveDefaultOllamaUrl() {
   const configured = process.env.OLLAMA_URL?.trim();
   return configured || null;
@@ -921,38 +933,15 @@ async function prepareSyncSnapshot({
       // retired — while the index still reported FRESH for up to the 7-day SLA
       // and the adapter kept serving them.
       //
-      // The narrow statement deletes ONLY the rows it can prove are retired.
-      // A row whose skill could not be read is left alone: the catalog is
-      // incomplete, so "not in the active set" would mean "not known", and
-      // deleting on that basis would destroy a live skill's vectors.
-      if (retiredKeys.length > 0) {
-        const retirementSql = `
-        DELETE FROM skills.catalog_index
-        WHERE status = 'ACTIVE'
-        AND (${TOMBSTONE_KEY_SQL_EXPRESSION}) IN (
-          SELECT unnest(${escapeSqlLiteral(
-            toPostgresArrayLiteral(retiredKeys),
-          )}::text[])
-        );
-      `;
-        try {
-          await executePostgresQuery(retirementSql, options);
-        } catch (error) {
-          return {
-            earlyReturn: {
-              status: "FAILED",
-              error_code: "VECTOR_TOMBSTONE_SYNC_FAILED",
-              error: String(
-                error?.message || "Tombstone synchronization failed",
-              ).slice(0, MAX_FAILURE_REASON_LENGTH),
-              details: catalogErrors,
-              sync_generation_id: syncGenerationId,
-              synced_count: 0,
-              failed_count: 1,
-            },
-          };
-        }
-      }
+      // M12/T9-R4 F-574: that fix left a SECOND tombstone here, and the
+      // retirement marker above made it a provable no-op: the marker already
+      // moved every retired key out of `status = 'ACTIVE'`, so this DELETE
+      // could never match a row, while its comment claimed it deleted proven
+      // retirements. The marker IS the retirement on this path (it runs before
+      // this branch, unconditionally, and drops the segments in the same
+      // statement), so the dead DELETE is gone and adding nothing here is the
+      // honest shape: an incomplete catalog proves no retirement and no
+      // reclamation.
       return {
         earlyReturn: {
           status: "FAILED",
@@ -1058,6 +1047,41 @@ async function prepareSyncSnapshot({
       syncReport.tombstone_error_code = "SKILL_STORE_IDENTITY_UNNAMED";
       syncReport.tombstone_error =
         "the store carries no confirmed identity, so the zero-row tombstone was not run";
+    }
+
+    // M12/T9-R4 F-574: the terminal state 004 made reachable needs an OWNER
+    // path, or it is a lifecycle nothing can leave. A row is reclaimed only
+    // when (a) it is already terminal, (b) it has been terminal for the stated
+    // retention window, and (c) its canonical record is GONE: the key is in
+    // neither the active set nor the retired set the scan just proved. The
+    // scan reaching here is COMPLETE (`catalogErrors.length === 0`, checked
+    // above), so "not in the set" means "gone" rather than "not known", and
+    // the same store-confirmation gate that guards the ACTIVE tombstone guards
+    // this statement.
+    if (tombstoneAllowed) {
+      const presentKeys = [...activeKeys, ...retiredKeys];
+      const reclaimSql = `
+      DELETE FROM skills.catalog_index
+      WHERE status = 'DEPRECATED'
+      AND synced_at < now() - interval '${TERMINAL_DERIVED_ROW_RETENTION_DAYS} days'
+      AND (${TOMBSTONE_KEY_SQL_EXPRESSION}) NOT IN (
+        SELECT unnest(${escapeSqlLiteral(
+          toPostgresArrayLiteral(presentKeys),
+        )}::text[])
+      );
+    `;
+      try {
+        await executePostgresQuery(reclaimSql, options);
+        syncReport.terminal_reclamation_status = "APPLIED";
+      } catch (error) {
+        syncReport.status = "FAILED";
+        syncReport.error_code = "VECTOR_TERMINAL_RECLAMATION_FAILED";
+        syncReport.error = String(
+          error?.message || "Terminal-row reclamation failed",
+        ).slice(0, MAX_FAILURE_REASON_LENGTH);
+        syncReport.failed_count = 1;
+        return { earlyReturn: syncReport };
+      }
     }
 
     return { activeRecords, syncReport };
