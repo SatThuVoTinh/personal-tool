@@ -5,8 +5,10 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from app.pdf_foundation import (
+    MAX_PDF_BYTES,
     PDF_CONTENT_DOMAIN,
     PdfFoundationError,
     canonical_json_bytes,
@@ -15,6 +17,7 @@ from app.pdf_foundation import (
     parse_pdf_sidecar,
     processing_identity_digest,
 )
+from app.pdf_pipeline import MAX_PDF_BYTES as BUILD_PATH_PDF_CEILING
 
 # F-332 (R7-F2-01): the domain bytes and the digest they produce are pinned
 # HERE as DATA. The suite used to import the constant from the module under
@@ -94,6 +97,26 @@ class PdfFoundationTests(unittest.TestCase):
         self.write_sidecar(vault, "two.md", "02. Books/supply/book.pdf")
         with self.assertRaisesRegex(PdfFoundationError, "PDF_DUPLICATE_TARGET"):
             discover_pdf_sidecars(vault)
+
+    def test_an_oversized_pdf_is_refused_before_it_is_hashed(self) -> None:
+        """F-440 (R9-L09-4): the ceiling must bound the work, not follow it."""
+
+        temporary, vault = self.make_vault()
+        self.addCleanup(temporary.cleanup)
+        pdf = vault / "02. Books" / "supply" / "book.pdf"
+        pdf.write_bytes(b"%PDF-" + b"0" * 64)
+        self.write_sidecar(vault, "one.md", "02. Books/supply/book.pdf")
+        with patch("app.pdf_foundation.MAX_PDF_BYTES", 16), patch(
+            "app.pdf_foundation.sha256_file",
+            side_effect=AssertionError("the oversized PDF must not be hashed"),
+        ):
+            with self.assertRaisesRegex(PdfFoundationError, "PDF_FILE_TOO_LARGE"):
+                discover_pdf_sidecars(vault)
+
+    def test_the_discovery_ceiling_is_the_build_path_ceiling(self) -> None:
+        """F-440 (R9-L09-4): one ceiling, so discovery cannot drift from it."""
+
+        self.assertEqual(MAX_PDF_BYTES, BUILD_PATH_PDF_CEILING)
 
     def test_discovery_ignores_ordinary_markdown_without_visible_pdf_embed(self) -> None:
         temporary, vault = self.make_vault()

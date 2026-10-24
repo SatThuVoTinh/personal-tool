@@ -25,6 +25,11 @@ from .markdown_adapter import TAG_TO_TOPIC
 PDF_CONTENT_DOMAIN = b"zink:knowledge:pdf-content:v1"
 PROCESSING_IDENTITY_SCHEMA_VERSION = 1
 MAX_SIDECAR_BYTES = 64 * 1024
+# F-440 (R9-L09-4): the PDF ceiling is enforced where the file is READ, so
+# discovery stats before hashing instead of reading a whole oversized PDF and
+# meeting the build path's ceiling afterwards. The build path carries the same
+# value; `test_pdf_foundation` pins the two together.
+MAX_PDF_BYTES = 512 * 1024 * 1024
 _EMBED = re.compile(r"!\[\[([^\]]+)\]\]")
 _H1 = re.compile(r"^ {0,3}#(?!#)[ \t]+(.+?)[ \t]*$", re.MULTILINE)
 _TAG = re.compile(r"(?<![\\\w/])#([\w-]+)", re.UNICODE)
@@ -215,6 +220,11 @@ def parse_pdf_sidecar(
     if not basename_only and not source_path.startswith(("02. Books/", "03. Papers/", "Archives/")):
         raise PdfFoundationError("PDF_SIDECAR_EMBED_INVALID")
     source_file = validated_vault_regular_file(vault_root, source_path, require_pdf=True)
+    # F-440 (R9-L09-4): stat BEFORE hashing, exactly as the sidecar check
+    # above does. The only PDF ceiling used to live in the build path, so
+    # discovery read and digested an oversized file in full first.
+    if source_file.stat().st_size > MAX_PDF_BYTES:
+        raise PdfFoundationError("PDF_FILE_TOO_LARGE")
     raw_tags = tuple(f"#{tag}" for tag in _TAG.findall(visible_body))
     canonical_topics = tuple(dict.fromkeys(TAG_TO_TOPIC[tag] for tag in raw_tags if tag in TAG_TO_TOPIC))
     if not canonical_topics:
