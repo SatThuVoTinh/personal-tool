@@ -21,6 +21,8 @@ register row it pins:
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import unittest
 from pathlib import Path
@@ -33,9 +35,11 @@ import pytest
 
 os.environ.setdefault("KNOWLEDGE_DATABASE_PASSWORD", "unit-test-only")
 
+import app.main as main_module
+import app.pdf_runtime as pdf_runtime_module
 from app.config import Settings
 from app.database import ActiveIndex, SearchCandidate, SegmentRecord
-from app.main import create_app
+from app.main import ProcessingIdentityInputs, _file_content_evidence, create_app
 from app.model_probe import ModelProbeError, ResolvedEmbeddingModel
 from app.retrieval import MAX_RERANK_CANDIDATES
 
@@ -87,6 +91,32 @@ def _candidate(identifier: str, **overrides: Any) -> SearchCandidate:
     return SearchCandidate(**values)
 
 
+def _write_pdf_manifest(manifest: Path, lock: Path) -> None:
+    """A manifest the identity loader accepts, bound to `lock`'s bytes."""
+
+    manifest.write_text(
+        json.dumps(
+            {
+                "artifact_digests": {},
+                "distribution_versions": {},
+                "locked_distribution_hashes": {},
+                "hashed_requirements_digest": "0" * 64,
+                "model_artifact_revisions": {},
+                "pdf_runtime_lock_digest": hashlib.sha256(lock.read_bytes()).hexdigest(),
+                "protocol_version": "zink:pdf-runtime-protocol:v1",
+                "runner_code_digest": "0" * 64,
+                "tesseract_version": "5",
+                "tessdata_source_revision": "0" * 40,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ),
+        encoding="utf8",
+    )
+
+
 class KnowledgeHttpSurface(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.vault = TemporaryDirectory()
@@ -119,8 +149,10 @@ class KnowledgeHttpSurface(unittest.IsolatedAsyncioTestCase):
         await self.app.state.model_probe.close()
         self.vault.cleanup()
 
-    async def request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
-        transport = httpx.ASGITransport(app=self.app)
+    async def request(
+        self, method: str, url: str, app: Any = None, **kwargs: Any
+    ) -> httpx.Response:
+        transport = httpx.ASGITransport(app=app or self.app)
         async with httpx.AsyncClient(
             transport=transport, base_url="http://test"
         ) as client:
@@ -348,6 +380,154 @@ class PublishedProvenanceTests(KnowledgeHttpSurface):
                 self.assertEqual(row["source_sha256"], "a" * 64)
                 self.assertEqual(row["line_start"], 1)
                 self.assertEqual(row["line_end"], 2)
+
+
+class ReadyzIdentityMemoTests(KnowledgeHttpSurface):
+    """F-516 (R10-L07-5): the memo key must be the identity's own input set.
+
+    `/readyz` memoises the PDF processing identity so the probe does not rehash
+    the lock, the manifest and the tokenizer on every call. The identity also
+    hashes the PARENT `uv.lock` and `app/pdf_runtime.py`, and the memo key held
+    only the three files that happened to appear in it, so an in-place change to
+    either of the other two replayed the pre-change identity forever.
+    """
+
+    def pdf_app(self):
+        root = Path(self.vault.name)
+        lock = root / "pdf-runtime.lock"
+        manifest = root / "pdf-runtime-manifest.json"
+        tokenizer = root / "tokenizer.json"
+        lock.write_text("lock\n", encoding="utf8")
+        tokenizer.write_text("{}\n", encoding="utf8")
+        _write_pdf_manifest(manifest, lock)
+        with patch("app.main.TokenBudget", _Budget):
+            app = create_app(
+                Settings(
+                    database_host="unused",
+                    database_port=5432,
+                    database_name="unused",
+                    database_user="unused",
+                    database_password="unused",
+                    ollama_url="http://unused",
+                    embedding_model="bge-m3:latest",
+                    embedding_dimensions=1024,
+                    advisory_lock_key=1,
+                    migration_directory=Path("/app/migrations"),
+                    vault_root=root,
+                    tokenizer_path=tokenizer,
+                    pdf_runtime_enabled=True,
+                    pdf_runtime_lock_path=lock,
+                    pdf_runtime_manifest_path=manifest,
+                )
+            )
+        app.state.database._pool = object()  # type: ignore[assignment]
+        app.state.database.get_active_index = AsyncMock(return_value=ACTIVE)
+        app.state.model_probe.resolve = AsyncMock(return_value=EMBEDDING)
+        app.state.reranker = object()
+        app.state.pdf_runtime.probe = AsyncMock()
+        return app
+
+    async def test_the_memo_key_covers_every_file_the_identity_hashes(self) -> None:
+        app = self.pdf_app()
+        recorded: list[Path] = []
+        original = _file_content_evidence
+
+        def recording(path: Path) -> tuple[str, int, int]:
+            recorded.append(Path(path))
+            return original(path)
+
+        try:
+            with patch("app.main._file_content_evidence", recording):
+                response = await self.request("GET", "/readyz", app=app)
+        finally:
+            await app.state.model_probe.close()
+
+        self.assertEqual(response.status_code, 200)
+        evidence_paths = {path.resolve() for path in recorded}
+        # The identity hashes `Path(__file__).resolve().parents[1] / "uv.lock"`
+        # and `Path(app/pdf_runtime.py)`. A key that omits either replays a stale
+        # identity after an in-place change to it.
+        self.assertIn(
+            (Path(main_module.__file__).resolve().parents[1] / "uv.lock"),
+            evidence_paths,
+            "the memo key must carry evidence for the parent lock the identity hashes",
+        )
+        self.assertIn(
+            Path(pdf_runtime_module.__file__).resolve(),
+            evidence_paths,
+            "the memo key must carry evidence for the client code the identity hashes",
+        )
+
+
+class ProcessingIdentityInputsTests(unittest.IsolatedAsyncioTestCase):
+    """F-516 (R10-L07-5): the key is derived from the identity's input set."""
+
+    def setUp(self) -> None:
+        self.directory = TemporaryDirectory()
+        root = Path(self.directory.name)
+        self.lock = root / "pdf-runtime.lock"
+        self.manifest = root / "manifest.json"
+        self.tokenizer = root / "tokenizer.json"
+        self.parent_lock = root / "uv.lock"
+        self.client_code = root / "pdf_runtime.py"
+        for path in (self.lock, self.tokenizer, self.parent_lock, self.client_code):
+            path.write_text("initial\n", encoding="utf8")
+        _write_pdf_manifest(self.manifest, self.lock)
+        self.inputs = ProcessingIdentityInputs(
+            parent_lock_path=self.parent_lock,
+            runtime_lock_path=self.lock,
+            manifest_path=self.manifest,
+            tokenizer_path=self.tokenizer,
+            client_code_path=self.client_code,
+        )
+    def tearDown(self) -> None:
+        self.directory.cleanup()
+
+    async def test_every_input_the_identity_uses_is_evidence_in_the_key(self) -> None:
+        for path in self.inputs.paths:
+            with self.subTest(path=path.name):
+                before = self.inputs.evidence(ACTIVE)
+                # The same path, different bytes.
+                path.write_text("a shorter body\n", encoding="utf8")
+                self.assertNotEqual(
+                    self.inputs.evidence(ACTIVE),
+                    before,
+                    f"a rewrite of {path.name} must change the memo key",
+                )
+
+    async def test_the_key_moves_whenever_the_identity_value_moves(self) -> None:
+        """The parent lock is the input that replayed a stale identity."""
+
+        identity_before = self.inputs.identity(ACTIVE)
+        key_before = self.inputs.evidence(ACTIVE)
+        self.parent_lock.write_text("a shorter body\n", encoding="utf8")
+
+        self.assertNotEqual(self.inputs.identity(ACTIVE), identity_before)
+        self.assertNotEqual(self.inputs.evidence(ACTIVE), key_before)
+
+    async def test_the_client_code_input_is_the_module_the_identity_hashes(
+        self,
+    ) -> None:
+        # The default names `app/pdf_runtime.py`, which is what
+        # `processing_identity_for_runtime` hashes as `Path(__file__)`.
+        default_inputs = ProcessingIdentityInputs(
+            parent_lock_path=self.parent_lock,
+            runtime_lock_path=self.lock,
+            manifest_path=self.manifest,
+            tokenizer_path=self.tokenizer,
+        )
+
+        self.assertEqual(
+            default_inputs.client_code_path, Path(pdf_runtime_module.__file__).resolve()
+        )
+        self.assertIn(default_inputs.client_code_path, default_inputs.paths)
+
+    async def test_the_embedding_identity_is_still_part_of_the_key(self) -> None:
+        other = ActiveIndex("index-1", "bge-m3:latest", "b" * 64, 1024)
+
+        self.assertNotEqual(
+            self.inputs.evidence(ACTIVE), self.inputs.evidence(other)
+        )
 
 
 if __name__ == "__main__":

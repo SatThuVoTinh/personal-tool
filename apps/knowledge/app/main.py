@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 import logging
 from pathlib import Path
 import re
@@ -16,6 +17,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from .config import Settings
+from . import pdf_runtime as pdf_runtime_module
 from .database import (
     AcceptedIndexRun,
     ActiveIndex,
@@ -247,6 +249,74 @@ def _file_content_evidence(path: Path) -> tuple[str, int, int]:
     return (str(path), metadata.st_mtime_ns, metadata.st_size)
 
 
+@dataclass(frozen=True)
+class ProcessingIdentityInputs:
+    """The file set the PDF processing identity hashes, in one place.
+
+    F-516 (R10-L07-5): the `/readyz` memo was keyed on the three files the
+    identity happened to mention when F-091 added content evidence -- the
+    runtime lock, the manifest and the tokenizer -- while the identity also
+    hashes the parent `uv.lock` and the client module `app/pdf_runtime.py`. An
+    in-place change to either of those replayed the pre-change identity, so the
+    probe was checked against an identity the run path no longer computes.
+
+    The key is derived from `paths`, the SAME tuple `identity()` is built from,
+    so an input added to one is evidence in the other by construction instead
+    of by remembering.
+    """
+
+    parent_lock_path: Path
+    runtime_lock_path: Path
+    manifest_path: Path
+    tokenizer_path: Path
+    # The identity hashes the client module's OWN file
+    # (`_sha256_file(Path(__file__))` inside `processing_identity_for_runtime`),
+    # so this names that same file rather than a value a caller could point
+    # somewhere else. It is a field only so the memo key's input set is one
+    # inspectable object.
+    client_code_path: Path = field(
+        default_factory=lambda: Path(pdf_runtime_module.__file__).resolve()
+    )
+
+    @property
+    def paths(self) -> tuple[Path, ...]:
+        return (
+            self.parent_lock_path,
+            self.runtime_lock_path,
+            self.manifest_path,
+            self.tokenizer_path,
+            self.client_code_path,
+        )
+
+    def identity(self, expected: ActiveIndex) -> str:
+        return processing_identity_for_runtime(
+            self.parent_lock_path,
+            self.runtime_lock_path,
+            self.manifest_path,
+            {
+                "tokenizer_identity": sha256_file(self.tokenizer_path),
+                "retrieval_token_budget_version": 1,
+                "embedding_identity": {
+                    "name": expected.embedding_model_name,
+                    "digest": expected.embedding_model_digest,
+                    "dimensions": expected.embedding_dimensions,
+                },
+            },
+        )
+
+    def evidence(self, expected: ActiveIndex) -> tuple[object, ...]:
+        """The memo key: the embedding identity plus every hashed file's bytes."""
+
+        terms: list[object] = [
+            expected.embedding_model_name,
+            expected.embedding_model_digest,
+            expected.embedding_dimensions,
+        ]
+        for path in self.paths:
+            terms.extend(_file_content_evidence(path))
+        return tuple(terms)
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     configured_settings = settings or Settings.from_environment()
     database = KnowledgeDatabase(
@@ -286,21 +356,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         else None
     )
 
+    # F-516 (R10-L07-5): one object holds every file the processing identity
+    # hashes, so the run-side identity and the readiness memo key cannot drift
+    # apart. The parent lock and this module are the two inputs the memo used to
+    # omit.
+    identity_inputs = ProcessingIdentityInputs(
+        parent_lock_path=Path(__file__).resolve().parents[1] / "uv.lock",
+        runtime_lock_path=configured_settings.pdf_runtime_lock_path,
+        manifest_path=configured_settings.pdf_runtime_manifest_path,
+        tokenizer_path=configured_settings.tokenizer_path,
+    )
+
     def pdf_processing_identity(expected: ActiveIndex) -> str:
-        return processing_identity_for_runtime(
-            Path(__file__).resolve().parents[1] / "uv.lock",
-            configured_settings.pdf_runtime_lock_path,
-            configured_settings.pdf_runtime_manifest_path,
-            {
-                "tokenizer_identity": sha256_file(configured_settings.tokenizer_path),
-                "retrieval_token_budget_version": 1,
-                "embedding_identity": {
-                    "name": expected.embedding_model_name,
-                    "digest": expected.embedding_model_digest,
-                    "dimensions": expected.embedding_dimensions,
-                },
-            },
-        )
+        return identity_inputs.identity(expected)
 
     lifecycle = IndexLifecycle.from_settings(
         database,
@@ -487,14 +555,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # The drift check above already proved active_index, the configured
             # model and this probe agree, so the run-side identity helper can be
             # reused verbatim.
-            cache_key = (
-                active_index.embedding_model_name,
-                active_index.embedding_model_digest,
-                active_index.embedding_dimensions,
-                *_file_content_evidence(configured_settings.pdf_runtime_lock_path),
-                *_file_content_evidence(configured_settings.pdf_runtime_manifest_path),
-                *_file_content_evidence(configured_settings.tokenizer_path),
-            )
+            # F-516 (R10-L07-5): the key is the identity's own evidence for its
+            # own input set -- the embedding identity plus the content of every
+            # file `identity()` hashes.
+            cache_key = identity_inputs.evidence(active_index)
             try:
                 if readyz_pdf_identity is None or readyz_pdf_identity[0] != cache_key:
                     readyz_pdf_identity = (
