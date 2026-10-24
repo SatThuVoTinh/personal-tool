@@ -106,17 +106,24 @@ jobs:
   # merge blocker.
   #
   # `scripts/merge-gate.mjs` is the PRE-MERGE half: the operator runs it
-  # before merging and it refuses unless the tip carries a successful
-  # `quality-gate` run at that exact SHA. This job is the POST-MERGE half: it
-  # runs the SAME gate against the merged commit's own SHA, so a merge that
-  # landed without a successful gate is a loud red check on `main` instead of
-  # a silent one.
+  # before merging and it refuses unless the tip carries a successful blocking
+  # run at that exact SHA. This job is the POST-MERGE half.
   #
-  # It runs AFTER the gate, so the verdict is about a CONCLUDED run: a gated
-  # merge is green, and a merge whose own SHA carries no successful
-  # `quality-gate` run is red. It reads the run metadata, so it needs
-  # `actions: read` on top of the repository's `contents: read`; it cannot
-  # write to the repository and it uses only the workflow's own token.
+  # F-567 (legacy `R10-T09-2`): the detector must NOT judge `github.sha`. The
+  # run that hosts this job necessarily carries its own `quality-gate` job, so
+  # that SHA can never take the no-run refusal and a merge that landed an
+  # ungated branch tip would still read green. The detector instead asks git
+  # for the pushed commit's predecessor SHAs — the old `main` tip and, for a
+  # merge, the merged branch tip — and the gate refuses if any of them carries
+  # no successful blocking run. The full history is therefore required: the
+  # checkout below uses `fetch-depth: 0`, without which a shallow merge has no
+  # parents and the gate refuses rather than judging a truncated graph.
+  #
+  # It runs AFTER the gate, with `always()`, so the verdict is about a
+  # CONCLUDED run: a gated merge is green, and a merge whose merged tip was
+  # never gated is red. It reads the run metadata, so it needs `actions: read`
+  # on top of the repository's `contents: read`; it cannot write to the
+  # repository and it uses only the workflow's own token.
   #
   # M12/T9 F-388: the detector must ALSO run when the quality gate FAILED at
   # that SHA. Without `always()` a failed gate SKIPS the detector, and the one
@@ -135,6 +142,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
       - name: Set up Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
@@ -144,5 +152,15 @@ jobs:
       - name: Detect a merge that was not gated
         env:
           GH_TOKEN: ${{ github.token }}
-          MERGE_GATE_SHA: ${{ github.sha }}
-        run: node scripts/merge-gate.mjs --sha "$MERGE_GATE_SHA"
+        run: |
+          set -euo pipefail
+          predecessors="$(git rev-list --parents -n 1 HEAD | cut -d' ' -f2-)"
+          if [ -z "$predecessors" ]; then
+            echo "merge-gate: REFUSED — HEAD has no predecessor SHA to judge." >&2
+            exit 1
+          fi
+          arguments=()
+          for sha in $predecessors; do
+            arguments+=(--sha "$sha")
+          done
+          node scripts/merge-gate.mjs "${arguments[@]}"

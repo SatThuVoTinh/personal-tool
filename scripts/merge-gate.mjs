@@ -19,7 +19,9 @@
 //
 // The POST-MERGE half is the `merge-gate-detector` job in
 // `.github/workflows/ci.yml`. It runs THIS script against the merged commit's
-// own SHA, so both halves read one rule.
+// PREDECESSOR SHAs, never against the run's own SHA: the run that hosts the
+// detector necessarily contains its own `quality-gate` job, so judging that
+// SHA is circular (F-567, legacy `R10-T09-2`).
 //
 // HOW IT IS DRIVEN
 //
@@ -48,7 +50,12 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { pathToFileURL } from "node:url";
 
-export const GATE_JOB_NAME = "quality-gate";
+// F-474 (legacy `R9-L10-1`): the workflow declares more than one blocking
+// job. A green from `quality-gate` alone is not a green pipeline: the
+// Knowledgebase Python suite is its own blocking job, so both names are the
+// gate's operand and every one of them must have completed successfully at
+// the SHA being judged.
+export const GATE_JOB_NAMES = ["quality-gate", "python-quality"];
 export const DEFAULT_WORKFLOW_FILE = "ci.yml";
 export const STATE_SOURCE_VARIABLE = "MERGE_GATE_STATE_SOURCE";
 export const RUN_STATE_VARIABLE = "MERGE_GATE_RUN_STATE";
@@ -102,13 +109,14 @@ export function parseRunState(text, source) {
 }
 
 /**
- * The verdict on one commit: does a successful `quality-gate` run cover that
- * EXACT SHA?
+ * The verdict on one commit: has EVERY job the workflow declares blocking
+ * completed successfully at that EXACT SHA?
  *
- * A run counts only when it sits at that SHA and its `quality-gate` job
- * CONCLUDED with `success`. A run that is still going, a run that concluded
- * with anything else, a run at another SHA and a commit with no run at all
- * are all refusals.
+ * F-474 (legacy `R9-L10-1`): the pipeline is green only when every blocking
+ * job is green. A successful `quality-gate` no longer outranks a failed
+ * `python-quality`; a job that did not run, did not finish, or concluded
+ * non-success is named in the refusal. A run counts only when it sits at that
+ * SHA; a run at another SHA and a commit with no run at all are refusals.
  */
 export function evaluateGateState(document, sha) {
   const runs = (Array.isArray(document?.runs) ? document.runs : []).filter(
@@ -117,53 +125,61 @@ export function evaluateGateState(document, sha) {
   if (!runs.length) {
     return {
       ok: false,
-      reason: `no workflow run exists at ${sha}, so no successful ${GATE_JOB_NAME} run covers that commit.`,
+      reason: `no workflow run exists at ${sha}, so no successful ${GATE_JOB_NAMES.join(" / ")} run covers that commit.`,
     };
   }
 
-  const gateJobs = [];
+  const jobs = [];
   for (const run of runs) {
-    const jobs = Array.isArray(run.jobs) ? run.jobs : [];
-    for (const job of jobs) {
-      if (isObject(job) && job.name === GATE_JOB_NAME) {
-        gateJobs.push({ run, job });
+    const carried = Array.isArray(run.jobs) ? run.jobs : [];
+    for (const job of carried) {
+      if (isObject(job) && GATE_JOB_NAMES.includes(job.name)) {
+        jobs.push({ run, job });
       }
     }
   }
-  if (!gateJobs.length) {
+
+  let succeeded = null;
+  for (const name of GATE_JOB_NAMES) {
+    const candidates = jobs.filter(({ job }) => job.name === name);
+    if (!candidates.length) {
+      return {
+        ok: false,
+        reason: `no run at ${sha} carries a ${name} job, so nothing gated that commit.`,
+      };
+    }
+
+    const success = candidates.find(
+      ({ job }) => job.status === "completed" && job.conclusion === "success",
+    );
+    if (success) {
+      succeeded ??= success;
+      continue;
+    }
+
+    const failed = candidates.find(
+      ({ job }) => job.status === "completed" && job.conclusion !== "success",
+    );
+    if (failed) {
+      return {
+        ok: false,
+        reason: `the blocking job ${name} at ${sha} concluded ${failed.job.conclusion ?? "an unknown result"}.`,
+        url: failed.run.url ?? null,
+      };
+    }
+
+    const pending = candidates[0];
     return {
       ok: false,
-      reason: `no run at ${sha} carries a ${GATE_JOB_NAME} job, so nothing gated that commit.`,
+      reason: `the blocking job ${name} at ${sha} is still ${pending.job.status ?? "running"}.`,
+      url: pending.run.url ?? null,
     };
   }
 
-  const succeeded = gateJobs.find(
-    ({ job }) => job.status === "completed" && job.conclusion === "success",
-  );
-  if (succeeded) {
-    return {
-      ok: true,
-      reason: `the ${GATE_JOB_NAME} run at ${sha} succeeded.`,
-      url: succeeded.run.url ?? null,
-    };
-  }
-
-  const failed = gateJobs.find(
-    ({ job }) => job.status === "completed" && job.conclusion !== "success",
-  );
-  if (failed) {
-    return {
-      ok: false,
-      reason: `the ${GATE_JOB_NAME} run at ${sha} concluded ${failed.job.conclusion ?? "an unknown result"}.`,
-      url: failed.run.url ?? null,
-    };
-  }
-
-  const pending = gateJobs[0];
   return {
-    ok: false,
-    reason: `the ${GATE_JOB_NAME} run at ${sha} is still ${pending.job.status ?? "running"}.`,
-    url: pending.run.url ?? null,
+    ok: true,
+    reason: `the blocking jobs at ${sha} succeeded: ${GATE_JOB_NAMES.join(", ")}.`,
+    url: succeeded?.run.url ?? null,
   };
 }
 
@@ -446,6 +462,57 @@ export async function readStateFromRest(
   };
 }
 
+/**
+ * The predecessor SHAs of a commit: its parents.
+ *
+ * F-567 (legacy `R10-T09-2`): the post-merge detector must not judge the SHA
+ * of the run that hosts it. A push to `main` lands a commit whose parents are
+ * the commits that were already on `main` and, for a merge, the merged branch
+ * tip; the branch tip is the SHA the pre-merge gate was supposed to judge. The
+ * detector therefore asks git for the parents and checks each of them. A
+ * shallow checkout cannot answer this, so the workflow checks out with
+ * `fetch-depth: 0`; a git failure or an empty parent list is a refusal.
+ */
+export function readPredecessorShas(sha, cwd) {
+  const result = spawnSync("git", ["rev-list", "--parents", "-n", "1", sha], {
+    cwd,
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  if (result.error) {
+    return {
+      ok: false,
+      reason: `git could not be run to read the predecessors of ${sha}: ${result.error.message}`,
+    };
+  }
+  if (result.status !== 0) {
+    return {
+      ok: false,
+      reason: `git could not read the predecessors of ${sha} (exit ${result.status}): ${String(
+        result.stderr ?? "",
+      ).trim()}`,
+    };
+  }
+  const line =
+    String(result.stdout ?? "")
+      .trim()
+      .split(/\r?\n/u)[0] ?? "";
+  const [commit, ...parents] = line.split(/\s+/u).filter(Boolean);
+  if (!commit) {
+    return {
+      ok: false,
+      reason: `the commit ${sha} could not be resolved to a predecessor list.`,
+    };
+  }
+  if (!parents.length) {
+    return {
+      ok: false,
+      reason: `the commit ${commit} has no predecessor in this checkout: a shallow history cannot judge a merge.`,
+    };
+  }
+  return { ok: true, commit, shas: parents };
+}
+
 /** The commit the gate checks when the operator names none. */
 export function readHeadCommit(cwd) {
   const result = spawnSync("git", ["rev-parse", "HEAD"], {
@@ -486,7 +553,7 @@ export function ghAvailable(cwd, env) {
 }
 
 function parseArguments(argv) {
-  const options = { help: false };
+  const options = { help: false, shas: [] };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     const value = argv[index + 1];
@@ -500,8 +567,11 @@ function parseArguments(argv) {
         options.help = true;
         break;
       case "--sha":
-        options.sha = value;
+        options.shas.push(value);
         index += 1;
+        break;
+      case "--predecessors":
+        options.predecessors = true;
         break;
       case "--workflow":
         options.workflow = value;
@@ -529,7 +599,10 @@ function usage() {
     "",
     "Usage: node scripts/merge-gate.mjs [options]",
     "",
-    "  --sha <sha>          the commit to check (default: the current HEAD)",
+    "  --sha <sha>          a commit to check; repeat it to check several",
+    "                       (default: the current HEAD)",
+    "  --predecessors       check the commit's predecessor SHAs (its parents)",
+    "                       instead of the commit itself; needs full history",
     "  --workflow <file>    the workflow file that carries the gate",
     `                       (default: ${DEFAULT_WORKFLOW_FILE})`,
     "  --repo <owner/name>  the repository the runs are read from",
@@ -631,47 +704,70 @@ export async function runGate(argv, options = {}) {
     return 0;
   }
 
-  const sha = parsed.sha ?? readHeadCommit(cwd);
-  if (!sha) {
+  if (parsed.predecessors && parsed.shas.length > 1) {
     console.error(
-      "merge-gate: REFUSED — no commit to check: pass --sha <sha>, or run the gate inside a repository whose HEAD can be read.",
+      "merge-gate: REFUSED — --predecessors judges one commit's predecessors; pass at most one --sha.",
     );
     return 1;
+  }
+
+  let targets;
+  if (parsed.predecessors) {
+    const tip = parsed.shas[0] ?? "HEAD";
+    const predecessors = readPredecessorShas(tip, cwd);
+    if (!predecessors.ok) {
+      console.error(`merge-gate: REFUSED — ${predecessors.reason}`);
+      return 1;
+    }
+    targets = predecessors.shas;
+  } else {
+    targets = parsed.shas.length ? parsed.shas : [readHeadCommit(cwd)];
+    if (!targets[0]) {
+      console.error(
+        "merge-gate: REFUSED — no commit to check: pass --sha <sha>, or run the gate inside a repository whose HEAD can be read.",
+      );
+      return 1;
+    }
   }
 
   const workflow = parsed.workflow ?? DEFAULT_WORKFLOW_FILE;
   const repo = parsed.repo ?? readRepository(cwd, env);
 
-  const state = await resolveRunState({
-    sha,
-    workflow,
-    repo,
-    token,
-    source: parsed.source ?? env[STATE_SOURCE_VARIABLE],
-    cwd,
-    env,
-    apiUrl: env.GITHUB_API_URL ?? DEFAULT_API_URL,
-    getJson: readJson,
-    ghIsAvailable: options.ghIsAvailable ?? ghAvailable(cwd, env),
-  });
-  if (!state.ok) {
-    console.error(
-      `merge-gate: REFUSED — the run state for ${sha} could not be determined: ${redact(state.reason, token)}`,
-    );
-    return 1;
-  }
+  let exitCode = 0;
+  for (const sha of targets) {
+    const state = await resolveRunState({
+      sha,
+      workflow,
+      repo,
+      token,
+      source: parsed.source ?? env[STATE_SOURCE_VARIABLE],
+      cwd,
+      env,
+      apiUrl: env.GITHUB_API_URL ?? DEFAULT_API_URL,
+      getJson: readJson,
+      ghIsAvailable: options.ghIsAvailable ?? ghAvailable(cwd, env),
+    });
+    if (!state.ok) {
+      console.error(
+        `merge-gate: REFUSED — the run state for ${sha} could not be determined: ${redact(state.reason, token)}`,
+      );
+      exitCode = 1;
+      continue;
+    }
 
-  const verdict = evaluateGateState(state.document, sha);
-  if (!verdict.ok) {
-    console.error(`merge-gate: REFUSED — ${verdict.reason}`);
-    if (verdict.url) console.error(`merge-gate: run ${verdict.url}`);
-    return 1;
-  }
+    const verdict = evaluateGateState(state.document, sha);
+    if (!verdict.ok) {
+      console.error(`merge-gate: REFUSED — ${verdict.reason}`);
+      if (verdict.url) console.error(`merge-gate: run ${verdict.url}`);
+      exitCode = 1;
+      continue;
+    }
 
-  console.log(`merge-gate: ${verdict.reason}`);
-  if (verdict.url) console.log(`merge-gate: run ${verdict.url}`);
-  console.log(`merge-gate: read from ${state.source}.`);
-  return 0;
+    console.log(`merge-gate: ${verdict.reason}`);
+    if (verdict.url) console.log(`merge-gate: run ${verdict.url}`);
+    console.log(`merge-gate: read from ${state.source}.`);
+  }
+  return exitCode;
 }
 
 const invokedDirectly =

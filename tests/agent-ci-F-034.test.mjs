@@ -45,6 +45,8 @@ import { fileURLToPath } from "node:url";
 
 import { parseDocument } from "yaml";
 
+import { GATE_JOB_NAMES, evaluateGateState } from "../scripts/merge-gate.mjs";
+
 const REPO_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
@@ -58,11 +60,16 @@ const OTHER_SHA = "89abcdef0123456789abcdef0123456789abcdef";
 const RUN_URL =
   "https://github.com/SatThuVoTinh/personal-tool/actions/runs/4242";
 const GATE_JOB = "quality-gate";
+const PYTHON_JOB = "python-quality";
 const DETECTOR_JOB = "merge-gate-detector";
 
 /**
  * The run state the injected readers consume, and the shape both live
  * readers normalise to: the runs at a SHA, each with the jobs it carried.
+ *
+ * `GATE_JOB_NAMES` lists the jobs the workflow declares blocking. The default
+ * state carries both of them green; a case overrides one to craft the state it
+ * needs to judge.
  */
 function runState({
   headSha = SHA,
@@ -70,7 +77,27 @@ function runState({
   jobConclusion = "success",
   runUrl = RUN_URL,
   withGateJob = true,
+  withPythonJob = true,
+  gateJob = {},
+  pythonJob = {},
 } = {}) {
+  const jobs = [];
+  if (withGateJob) {
+    jobs.push({
+      name: GATE_JOB,
+      status: jobStatus,
+      conclusion: jobStatus === "completed" ? jobConclusion : null,
+      ...gateJob,
+    });
+  }
+  if (withPythonJob) {
+    jobs.push({
+      name: PYTHON_JOB,
+      status: jobStatus,
+      conclusion: jobStatus === "completed" ? jobConclusion : null,
+      ...pythonJob,
+    });
+  }
   return {
     sha: SHA,
     runs: [
@@ -81,15 +108,7 @@ function runState({
         status: "completed",
         conclusion: jobConclusion,
         url: runUrl,
-        jobs: withGateJob
-          ? [
-              {
-                name: GATE_JOB,
-                status: jobStatus,
-                conclusion: jobStatus === "completed" ? jobConclusion : null,
-              },
-            ]
-          : [],
+        jobs,
       },
     ],
   };
@@ -123,9 +142,9 @@ function gateEnvironment(env) {
   return childEnv;
 }
 
-function runGate(args, env = {}) {
-  return spawnSync(process.execPath, [SCRIPT_PATH, ...args], {
-    cwd: REPO_ROOT,
+function runGate(args, env = {}, cwd = REPO_ROOT) {
+  return spawnSync(process.execPath, [SCRIPT, ...args], {
+    cwd,
     encoding: "utf8",
     env: gateEnvironment(env),
   });
@@ -175,6 +194,93 @@ function withStateFile(state, callback) {
   } finally {
     rmSync(directory, { force: true, recursive: true });
   }
+}
+
+/** A run state carrying a green run with every blocking job at each SHA. */
+function stateAt(shas) {
+  return {
+    sha: shas[0],
+    runs: shas.map((headSha, index) => ({
+      id: 5000 + index,
+      workflow: "CI",
+      headSha,
+      status: "completed",
+      conclusion: "success",
+      url: `${RUN_URL}/${index}`,
+      jobs: GATE_JOB_NAMES.map((name) => ({
+        name,
+        status: "completed",
+        conclusion: "success",
+      })),
+    })),
+  };
+}
+
+/**
+ * A disposable repository whose HEAD is a real merge commit. F-567 needs the
+ * predecessor list to come from git's object graph, not from a hand-written
+ * array: the detector's operand is what git says the merge landed.
+ */
+function withMergeRepository(callback) {
+  const root = mkdtempSync(path.join(tmpdir(), "f567-merge-"));
+  const git = (args) =>
+    spawnSync("git", args, {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "F-567 lane",
+        GIT_AUTHOR_EMAIL: "f567@example.invalid",
+        GIT_COMMITTER_NAME: "F-567 lane",
+        GIT_COMMITTER_EMAIL: "f567@example.invalid",
+      },
+    });
+  try {
+    const init = git(["init", "-b", "main"]);
+    assert.equal(init.status, 0, init.stderr);
+    writeFileSync(path.join(root, "base.txt"), "base\n", "utf8");
+    assert.equal(git(["add", "."]).status, 0);
+    assert.equal(git(["commit", "-m", "base"]).status, 0);
+    assert.equal(git(["checkout", "-b", "side"]).status, 0);
+    writeFileSync(path.join(root, "side.txt"), "side\n", "utf8");
+    assert.equal(git(["add", "."]).status, 0);
+    assert.equal(git(["commit", "-m", "side"]).status, 0);
+    assert.equal(git(["checkout", "main"]).status, 0);
+    writeFileSync(path.join(root, "main.txt"), "main\n", "utf8");
+    assert.equal(git(["add", "."]).status, 0);
+    assert.equal(git(["commit", "-m", "main"]).status, 0);
+    const merge = git(["merge", "--no-ff", "side", "-m", "merge side"]);
+    assert.equal(merge.status, 0, merge.stderr);
+    const line = git(["rev-list", "--parents", "-n", "1", "HEAD"])
+      .stdout.trim()
+      .split(/\s+/u);
+    const [mergeSha, ...parents] = line;
+    assert.ok(
+      parents.length >= 2,
+      "the fixture HEAD must be a merge commit with two predecessors",
+    );
+    return callback({ root, mergeSha, parents });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+/** A run state carrying exactly the given jobs, for the aggregation cases. */
+function stateWithJobs(jobs) {
+  return {
+    sha: SHA,
+    runs: [
+      {
+        id: 4242,
+        workflow: "CI",
+        headSha: SHA,
+        status: "completed",
+        conclusion: "success",
+        url: RUN_URL,
+        jobs,
+      },
+    ],
+  };
 }
 
 function readWorkflow() {
@@ -260,6 +366,108 @@ test("F-034: the pre-merge gate refuses a commit whose quality-gate run failed",
       "the refusal must name the conclusion of the gate run",
     );
   });
+});
+
+test("F-474: a green quality-gate does not outrank a failed blocking python-quality", () => {
+  const state = runState({
+    gateJob: { status: "completed", conclusion: "success" },
+    pythonJob: { status: "completed", conclusion: "failure" },
+  });
+  const verdict = evaluateGateState(state, SHA);
+  assert.equal(
+    verdict.ok,
+    false,
+    "a failed Python tier must refuse the merge even when quality-gate is green",
+  );
+  assert.match(
+    verdict.reason,
+    /python-quality/u,
+    "the refusal must name the blocking job that failed",
+  );
+  assert.match(
+    verdict.reason,
+    /failure/u,
+    "the refusal must name its conclusion",
+  );
+
+  withStateFile(state, (filePath) => {
+    const result = runGate(["--sha", SHA], {
+      MERGE_GATE_RUN_STATE_FILE: filePath,
+    });
+    assert.notEqual(
+      result.status,
+      0,
+      "the operator-facing CLI must refuse the same state",
+    );
+    assert.match(
+      `${result.stdout}${result.stderr}`,
+      /python-quality/u,
+      "the CLI refusal must name the blocking job that failed",
+    );
+  });
+});
+
+test("F-474: a run that never carried the blocking python-quality job cannot gate the commit", () => {
+  const verdict = evaluateGateState(runState({ withPythonJob: false }), SHA);
+  assert.equal(
+    verdict.ok,
+    false,
+    "a commit whose run never carried the Python tier is ungated by it",
+  );
+  assert.match(
+    verdict.reason,
+    /python-quality/u,
+    "the refusal must name the blocking job that did not run",
+  );
+});
+
+test("F-474: the gate aggregates every job the workflow declares blocking", () => {
+  const workflow = readWorkflow();
+  const blocking = Object.entries(workflow.jobs ?? {})
+    .filter(
+      ([name, job]) =>
+        name !== DETECTOR_JOB && job?.["continue-on-error"] !== true,
+    )
+    .map(([name]) => name)
+    .sort();
+  assert.deepEqual(
+    [...GATE_JOB_NAMES].sort(),
+    blocking,
+    "the gate's job list must name exactly the workflow's blocking jobs",
+  );
+
+  const green = (name) => ({
+    name,
+    status: "completed",
+    conclusion: "success",
+  });
+  for (const name of blocking) {
+    const others = blocking.filter((other) => other !== name).map(green);
+    const cases = [
+      ["absent", others],
+      [
+        "not completed",
+        [...others, { name, status: "in_progress", conclusion: null }],
+      ],
+      [
+        "failed",
+        [...others, { name, status: "completed", conclusion: "failure" }],
+      ],
+    ];
+    for (const [label, jobs] of cases) {
+      const verdict = evaluateGateState(stateWithJobs(jobs), SHA);
+      assert.equal(
+        verdict.ok,
+        false,
+        `a ${label} ${name} job must refuse the merge`,
+      );
+      assert.match(
+        verdict.reason,
+        new RegExp(name, "u"),
+        `the refusal for a ${label} job must name ${name}`,
+      );
+    }
+  }
 });
 
 test("F-034: the pre-merge gate refuses a commit whose quality-gate run is still running", () => {
@@ -417,6 +625,12 @@ test("F-034: the pre-merge gate reads the REST API with the token in the header,
               conclusion: "success",
               html_url: `${RUN_URL}/job/1`,
             },
+            {
+              name: PYTHON_JOB,
+              status: "completed",
+              conclusion: "success",
+              html_url: `${RUN_URL}/job/2`,
+            },
           ],
         }),
       );
@@ -457,8 +671,9 @@ test("F-034: the pre-merge gate reads the REST API with the token in the header,
 });
 
 // ---------------------------------------------------------------------------
-// The post-merge detector: a job on `main` that fails loudly when the merged
-// commit has no successful `quality-gate` run at its own SHA.
+// The post-merge detector: a job on `main` that fails loudly when a commit
+// the merge landed carries no successful blocking run. F-567 moves its operand
+// off the run that hosts it and onto the merged commit's predecessors.
 // ---------------------------------------------------------------------------
 test("F-034: the CI workflow carries the post-merge detector job", () => {
   const workflow = readWorkflow();
@@ -485,30 +700,141 @@ test("F-034: the CI workflow carries the post-merge detector job", () => {
   }
 });
 
-test("F-034: the detector job checks the merged commit's own SHA", () => {
+test("F-567: the detector judges the merged commit's predecessors, not the run that hosts it", () => {
+  // F-567 (legacy `R10-T09-2`): the run that hosts the detector necessarily
+  // contains its own quality-gate job, so judging `github.sha` can never take
+  // the no-run refusal. The detector must derive the predecessors from git.
   const workflow = readWorkflow();
   const job = workflow.jobs?.[DETECTOR_JOB];
   const steps = Array.isArray(job?.steps) ? job.steps : [];
-  const environment = steps.flatMap((step) =>
-    step?.env && typeof step.env === "object" ? Object.values(step.env) : [],
-  );
+  const serialized = JSON.stringify(steps);
   assert.ok(
-    environment.includes("${{ github.sha }}"),
-    "the detector must read the merged commit's own SHA from `github.sha`",
+    !serialized.includes("${{ github.sha }}"),
+    "the detector must not be fed the SHA of the run that hosts it",
   );
+
+  const checkout = steps.find((step) =>
+    String(step?.uses ?? "").startsWith("actions/checkout"),
+  );
+  assert.equal(
+    checkout?.with?.["fetch-depth"],
+    0,
+    "the detector checkout must carry the full history the predecessor list needs",
+  );
+
   const commands = steps
     .map((step) => (typeof step?.run === "string" ? step.run : ""))
     .join("\n");
   assert.match(
     commands,
-    /scripts\/merge-gate\.mjs/u,
-    "the detector must read the run state with the same gate the operator runs",
+    /git rev-list --parents -n 1 HEAD/u,
+    "the detector must ask git for the merged commit's predecessor SHAs",
   );
   assert.match(
     commands,
-    /--sha/u,
-    "the detector must ask the gate about the merged commit's SHA",
+    /--sha "\$sha"/u,
+    "every derived predecessor must be an operand of the gate",
   );
+  assert.match(
+    commands,
+    /scripts\/merge-gate\.mjs/u,
+    "the detector must read the run state with the same gate the operator runs",
+  );
+});
+
+test("F-567: a run state that omits one merged SHA takes the no-run refusal", () => {
+  // The predecessor sweep is only honest if a missing record reddens. This is
+  // the `:117` refusal the register measured as unreachable from CI.
+  withStateFile(stateAt([SHA]), (filePath) => {
+    const result = runGate(["--sha", SHA, "--sha", OTHER_SHA], {
+      MERGE_GATE_RUN_STATE_FILE: filePath,
+    });
+    assert.notEqual(
+      result.status,
+      0,
+      "a predecessor with no run at its SHA must refuse the detector",
+    );
+    assert.match(
+      `${result.stdout}${result.stderr}`,
+      new RegExp(OTHER_SHA, "u"),
+      "the refusal must name the SHA that carries no gate record",
+    );
+    assert.match(
+      `${result.stdout}${result.stderr}`,
+      /no workflow run exists/u,
+      "the refusal must say no run covers that SHA",
+    );
+  });
+});
+
+test("F-567: every predecessor carrying a green blocking run passes", () => {
+  withStateFile(stateAt([SHA, OTHER_SHA]), (filePath) => {
+    const result = runGate(["--sha", SHA, "--sha", OTHER_SHA], {
+      MERGE_GATE_RUN_STATE_FILE: filePath,
+    });
+    assert.equal(
+      result.status,
+      0,
+      `a sweep where every predecessor is green must pass: ${result.stderr}`,
+    );
+  });
+});
+
+test("F-567: --predecessors reads the merge parents from git and refuses an ungated one", () => {
+  withMergeRepository(({ root, mergeSha, parents }) => {
+    withStateFile(stateAt(parents), (filePath) => {
+      const result = runGate(
+        ["--predecessors", "--sha", mergeSha],
+        {
+          MERGE_GATE_RUN_STATE_FILE: filePath,
+        },
+        root,
+      );
+      assert.equal(
+        result.status,
+        0,
+        `a merge whose predecessors are both gated must pass: ${result.stdout}${result.stderr}`,
+      );
+    });
+
+    // One merged SHA is missing: the branch tip never carried a run.
+    withStateFile(stateAt([parents[0]]), (filePath) => {
+      const result = runGate(
+        ["--predecessors", "--sha", mergeSha],
+        {
+          MERGE_GATE_RUN_STATE_FILE: filePath,
+        },
+        root,
+      );
+      assert.notEqual(
+        result.status,
+        0,
+        "a merge whose branch tip carries no gate record must refuse",
+      );
+      assert.match(
+        `${result.stdout}${result.stderr}`,
+        new RegExp(parents[1], "u"),
+        "the refusal must name the predecessor that was not gated",
+      );
+    });
+
+    // The run's own SHA is present and green, and that is exactly the state
+    // the old detector accepted. It must not satisfy the predecessor sweep.
+    withStateFile(stateAt([mergeSha]), (filePath) => {
+      const result = runGate(
+        ["--predecessors", "--sha", mergeSha],
+        {
+          MERGE_GATE_RUN_STATE_FILE: filePath,
+        },
+        root,
+      );
+      assert.notEqual(
+        result.status,
+        0,
+        "a green run at the run's own SHA must not stand in for its predecessors",
+      );
+    });
+  });
 });
 
 test("F-034: the detector job runs for a push to main and nowhere else", () => {
