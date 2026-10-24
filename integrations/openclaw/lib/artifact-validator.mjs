@@ -911,23 +911,26 @@ export function validateTechnicalArtifact({
       );
     } else {
       // J03: Inspect internal Power BI structures.
-      // M12/T9 F-258: the structure check now reads the archive's own central
+      // M12/T9 F-258: the structure check now reads the container's own central
       // directory, so a keyword inside arbitrary payload bytes no longer
       // counts as an entry.
-      const hasPbixStructure = inspectZipContainsEntries(filePath, [
-        "DataModel",
-        "DataMashup",
-        "DiagramLayout",
-        "Report/Layout",
-        "[Content_Types].xml",
-        "Version",
-        "Settings",
-      ]);
+      // F-503 / R10-L02-2: the gate was an ANY-of over a list that carried
+      // "[Content_Types].xml", a part the OPC spec mandates for EVERY Office
+      // document, so a renamed xlsx/docx/pptx satisfied it and reached the
+      // result gate as a valid Power BI artifact. Power BI is now identified
+      // conjunctively by its own distinguishing parts: the report layout plus
+      // its data half (DataMashup or DataModel).
+      const hasPbixStructure =
+        inspectZipContainsAllEntries(filePath, [
+          "Report/Layout",
+          "DataMashup",
+        ]) ||
+        inspectZipContainsAllEntries(filePath, ["Report/Layout", "DataModel"]);
       result.checks.powerbiStructureValid = hasPbixStructure;
       if (!hasPbixStructure) {
         result.status = VALIDATION_STATUS.FAIL;
         result.errors.push(
-          "INVALID_POWERBI_STRUCTURE: ZIP archive does not contain recognizable Power BI structures (DataModel, DataMashup, Report/Layout, Version)",
+          "INVALID_POWERBI_STRUCTURE: ZIP archive does not contain recognizable Power BI structures (Report/Layout with DataModel or DataMashup)",
         );
       }
     }

@@ -864,6 +864,137 @@ describe("Data File Format Handler Enrichment — multi-format validation & prev
     }
   });
 
+  // -------------------------------------------------------------------------
+  // F-503 / R10-L02-2 — the power-bi structural gate must not be satisfied by
+  // the OPC container shared by every Office document. [Content_Types].xml is
+  // mandated by the OPC spec for xlsx/docx/pptx, so an ANY-of list carrying it
+  // let any renamed OOXML package record powerbiStructureValid: true.
+  // -------------------------------------------------------------------------
+  test("Power BI: a zip holding only [Content_Types].xml is refused as Power BI", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "zink-f503-opconly-"));
+    try {
+      const file = path.join(tempDir, "bare.pbix");
+      await writeFile(file, buildZip([["[Content_Types].xml", "<Types/>"]]));
+      const result = validateTechnicalArtifact({ filePath: file });
+      assert.equal(result.checks.inferredType, "powerbi");
+      assert.equal(result.checks.magicBytesValid, true);
+      assert.equal(result.checks.powerbiStructureValid, false);
+      assert.equal(result.status, VALIDATION_STATUS.FAIL);
+      assert.ok(
+        result.errors.some((e) => e.includes("INVALID_POWERBI_STRUCTURE")),
+        `expected INVALID_POWERBI_STRUCTURE, got ${JSON.stringify(result.errors)}`,
+      );
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("Power BI: a renamed xlsx-shaped OPC package is refused as Power BI", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "zink-f503-opc-"));
+    try {
+      const file = path.join(tempDir, "renamed.pbix");
+      const buf = buildZip([
+        ["[Content_Types].xml", "<Types/>"],
+        ["_rels/.rels", "<Relationships/>"],
+        ["xl/workbook.xml", "<workbook/>"],
+        ["xl/worksheets/sheet1.xml", "<worksheet/>"],
+      ]);
+      await writeFile(file, buf);
+      const result = validateTechnicalArtifact({ filePath: file });
+      assert.equal(result.checks.magicBytesValid, true);
+      assert.equal(result.checks.powerbiStructureValid, false);
+      assert.equal(result.status, VALIDATION_STATUS.FAIL);
+      assert.ok(
+        result.errors.some((e) => e.includes("INVALID_POWERBI_STRUCTURE")),
+        `expected INVALID_POWERBI_STRUCTURE, got ${JSON.stringify(result.errors)}`,
+      );
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("Power BI: the repository's own generated workbook is refused as Power BI", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "zink-f503-ownxlsx-"));
+    try {
+      const xlsx = buildMultiSheetWorkbookBuffer([
+        { name: "Sheet1", rows: [["Region", "Amount"], ["North", 10]] },
+      ]);
+      const file = path.join(tempDir, "own-workbook.pbix");
+      await writeFile(file, xlsx);
+      const result = validateTechnicalArtifact({ filePath: file });
+      assert.equal(result.checks.magicBytesValid, true);
+      assert.equal(
+        result.checks.powerbiStructureValid,
+        false,
+        "the repository's own workbook must not be accepted as a Power BI artifact",
+      );
+      assert.equal(result.status, VALIDATION_STATUS.FAIL);
+      // The same bytes are still a legitimate Excel artifact.
+      const asExcel = path.join(tempDir, "own-workbook.xlsx");
+      await writeFile(asExcel, xlsx);
+      const excelResult = validateTechnicalArtifact({ filePath: asExcel });
+      assert.equal(excelResult.status, VALIDATION_STATUS.PASS);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("Power BI: a PBIX-shaped archive with Report/Layout and DataMashup passes", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "zink-f503-pbix-"));
+    try {
+      const file = path.join(tempDir, "shaped.pbix");
+      const buf = buildZip([
+        ["[Content_Types].xml", "<Types/>"],
+        ["Report/Layout", "layout-json"],
+        ["DataMashup", "mashup-bytes"],
+        ["Version", "1"],
+      ]);
+      await writeFile(file, buf);
+      const result = validateTechnicalArtifact({ filePath: file });
+      assert.equal(result.checks.powerbiStructureValid, true);
+      assert.equal(result.status, VALIDATION_STATUS.PASS);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  // The conjunction, not just the part list, is the control: an ANY-of over the
+  // distinguishing parts still accepts a package that carries only one of them.
+  test("Power BI: Report/Layout without a data half is refused (conjunction is load-bearing)", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "zink-f503-layoutonly-"));
+    try {
+      const file = path.join(tempDir, "layout-only.pbix");
+      const buf = buildZip([
+        ["[Content_Types].xml", "<Types/>"],
+        ["Report/Layout", "layout-json"],
+      ]);
+      await writeFile(file, buf);
+      const result = validateTechnicalArtifact({ filePath: file });
+      assert.equal(result.checks.powerbiStructureValid, false);
+      assert.equal(result.status, VALIDATION_STATUS.FAIL);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("Power BI: a data half without Report/Layout is refused (conjunction is load-bearing)", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "zink-f503-dataonly-"));
+    try {
+      const file = path.join(tempDir, "data-only.pbix");
+      const buf = buildZip([
+        ["[Content_Types].xml", "<Types/>"],
+        ["DataMashup", "mashup-bytes"],
+        ["Version", "1"],
+      ]);
+      await writeFile(file, buf);
+      const result = validateTechnicalArtifact({ filePath: file });
+      assert.equal(result.checks.powerbiStructureValid, false);
+      assert.equal(result.status, VALIDATION_STATUS.FAIL);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   test("Power BI: validateTechnicalArtifact fails for corrupt file", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "zink-fmt-pbixbad-"));
     try {
