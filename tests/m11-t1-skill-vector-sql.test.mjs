@@ -10,7 +10,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import {
+  copyFile,
+  mkdtemp,
+  mkdir,
+  readFile,
+  writeFile,
+  rm,
+} from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import os from "node:os";
 
@@ -27,6 +34,11 @@ import {
   EXPECTED_MODEL_DIGEST,
   MAX_EMBEDDING_PAYLOAD_BYTES,
 } from "../zink-skill-store/src/vector-sync.mjs";
+import {
+  applySkillStoreMigrations,
+  SKILL_STORE_MIGRATIONS_DIR,
+  SKILL_STORE_DIGEST_MANIFEST,
+} from "../zink-skill-store/src/migrations.mjs";
 
 const embedFn = async (texts) =>
   texts.map(() => new Array(EXPECTED_DIMENSIONS).fill(0.01));
@@ -899,5 +911,100 @@ test("R3-6: a control-byte body is refused by the scan before any SQL runs", asy
     );
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+// M12/T9-R4 F-547 (R10-T05-4) — the published migration-digest store had ZERO
+// runtime readers: the runner compared each file against the digest it had
+// inserted on its own first run, so a fresh database adopted an edited
+// migration silently, and `docs/contracts/skill-store/skill-store-migration-
+// digests.json` was trust-on-first-use over an unpinned pin file.
+//
+// The pin is now the apply seam's own input: a file the published store names
+// must hash to the published digest before it is applied, and a store the
+// runner cannot read is a refusal, not a skipped check.
+//
+// Both cases are pure filesystem + a fake executor: no Postgres, no Docker.
+const emptyLedgerExecutor = async () => "";
+
+async function copyPublishedMigrations(directory) {
+  const published = JSON.parse(
+    readFileSync(SKILL_STORE_DIGEST_MANIFEST, "utf8"),
+  );
+  for (const entry of published.migrations) {
+    await copyFile(
+      path.join(SKILL_STORE_MIGRATIONS_DIR, entry.file),
+      path.join(directory, entry.file),
+    );
+  }
+  return published;
+}
+
+test("F-547: the exact published bytes still apply", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "f547-pin-ok-"));
+  try {
+    const published = await copyPublishedMigrations(dir);
+    const result = await applySkillStoreMigrations({
+      migrationsDir: dir,
+      dbExecutor: emptyLedgerExecutor,
+    });
+    assert.deepEqual(
+      result.applied,
+      published.migrations.map((entry) => entry.file),
+      "the published bytes are the bytes the runner must accept",
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("F-547: an edited migration is refused by the PUBLISHED digest, not only by the ledger", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "f547-pin-bad-"));
+  try {
+    const published = await copyPublishedMigrations(dir);
+    const target = published.migrations.at(-1).file;
+    // A fresh database has an EMPTY ledger, so the recorded-digest check
+    // cannot fire: this edit is exactly the case that used to be adopted.
+    const original = await readFile(path.join(dir, target), "utf8");
+    await writeFile(
+      path.join(dir, target),
+      `${original}\n-- an in-place edit no database would ever see\n`,
+      "utf8",
+    );
+    await assert.rejects(
+      () =>
+        applySkillStoreMigrations({
+          migrationsDir: dir,
+          dbExecutor: emptyLedgerExecutor,
+        }),
+      (error) => {
+        assert.equal(error.code, "SKILL_STORE_MIGRATION_DIGEST_UNPUBLISHED");
+        assert.ok(
+          error.message.includes(target),
+          "the refusal must name the migration it is about",
+        );
+        return true;
+      },
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("F-547: an unreadable published digest store refuses the apply instead of skipping the pin", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "f547-pin-missing-"));
+  try {
+    await copyPublishedMigrations(dir);
+    await assert.rejects(
+      () =>
+        applySkillStoreMigrations({
+          migrationsDir: dir,
+          digestManifestPath: path.join(dir, "no-such-manifest.json"),
+          dbExecutor: emptyLedgerExecutor,
+        }),
+      (error) => error.code === "SKILL_STORE_MIGRATION_MANIFEST_UNREADABLE",
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
   }
 });

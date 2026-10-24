@@ -41,6 +41,30 @@ export const SKILL_STORE_MIGRATIONS_DIR = fileURLToPath(
 );
 
 /**
+ * The PUBLISHED digest store of the applied migration set.
+ *
+ * M12/T9-R4 F-547 (R10-T05-4): the runner used to compare each file only
+ * against the digest its OWN ledger recorded on its first run. That pin is
+ * trust-on-first-use: a fresh database (or any database that never recorded
+ * the row) applies whatever bytes the checkout carries, so editing a tracked
+ * migration in place is adopted silently, and the published expectation is
+ * read by a test and by nothing at runtime.
+ *
+ * The published store is therefore the apply seam's own input: a file it names
+ * must hash to the digest it names BEFORE that file is applied. A file it does
+ * not name is a forward migration, which the published store admits by design
+ * (its own `purpose` text): the same-commit rule that puts a new migration into
+ * the store is enforced by
+ * `tests/m12-t2.2-a4-migration-digest.test.mjs`, not by this runner.
+ */
+export const SKILL_STORE_DIGEST_MANIFEST = fileURLToPath(
+  new URL(
+    "../../docs/contracts/skill-store/skill-store-migration-digests.json",
+    import.meta.url,
+  ),
+);
+
+/**
  * The Skill Store's own migration ledger.
  *
  * A table in the Skill Store's own schema, keyed by the migration's filename.
@@ -95,6 +119,56 @@ export async function listSkillStoreMigrations(
 }
 
 /**
+ * The digests the published store pins, keyed by migration filename.
+ *
+ * Fail-closed: an absent, unreadable or malformed store is a REFUSAL, because
+ * a runner that silently drops its pin is exactly the state F-547 measured.
+ */
+async function readPublishedDigests(manifestPath) {
+  let text;
+  try {
+    text = await readFile(manifestPath, "utf8");
+  } catch (error) {
+    throw migrationError(
+      "SKILL_STORE_MIGRATION_MANIFEST_UNREADABLE",
+      `the published migration digest store ${manifestPath} could not be read ` +
+        `(${error?.message ?? "unknown error"}). The applied migration set is pinned ` +
+        `by that store; a runner without it would adopt an edited migration silently.`,
+    );
+  }
+  let document;
+  try {
+    document = JSON.parse(text);
+  } catch (error) {
+    throw migrationError(
+      "SKILL_STORE_MIGRATION_MANIFEST_UNREADABLE",
+      `the published migration digest store ${manifestPath} is not valid JSON ` +
+        `(${error?.message ?? "unknown error"}).`,
+    );
+  }
+  const entries = document?.migrations;
+  if (!Array.isArray(entries)) {
+    throw migrationError(
+      "SKILL_STORE_MIGRATION_MANIFEST_UNREADABLE",
+      `the published migration digest store ${manifestPath} declares no migrations array.`,
+    );
+  }
+  const published = new Map();
+  for (const entry of entries) {
+    const file = entry?.file;
+    const sha256 = entry?.sha256;
+    if (typeof file !== "string" || typeof sha256 !== "string") {
+      throw migrationError(
+        "SKILL_STORE_MIGRATION_MANIFEST_UNREADABLE",
+        `the published migration digest store ${manifestPath} carries an entry without file/sha256.`,
+      );
+    }
+    published.set(file, sha256);
+  }
+  return published;
+}
+
+/**
  * Applies the Skill Store's own migration set.
  *
  * Every file that the ledger does not name yet is applied inside one
@@ -103,9 +177,15 @@ export async function listSkillStoreMigrations(
  * set is keyed by filename, so an edited file would be a silent no-op on every
  * database that already adopted it.
  *
+ * M12/T9-R4 F-547: before either rule runs, a file the PUBLISHED digest store
+ * names must match the digest the store names. The ledger rule can only speak
+ * for a database that has already recorded the row; the published rule speaks
+ * for every database, including a fresh one.
+ *
  * @param {object} options the runner options. `dbExecutor` runs the
  *   statements (the same seam the vector sync uses); `migrationsDir` overrides
- *   the migration set.
+ *   the migration set; `digestManifestPath` overrides the published digest
+ *   store.
  * @returns {Promise<object>} the applied and skipped file names.
  */
 export async function applySkillStoreMigrations(options = {}) {
@@ -118,13 +198,32 @@ export async function applySkillStoreMigrations(options = {}) {
     );
   }
 
+  const manifestPath =
+    options.digestManifestPath ?? SKILL_STORE_DIGEST_MANIFEST;
+  const publishedDigests = await readPublishedDigests(manifestPath);
+
   await executePostgresQuery(LEDGER_DDL, options);
 
   const applied = [];
   const skipped = [];
   for (const file of files) {
-    const sql = await readFile(path.join(directory, file), "utf8");
-    const digest = createHash("sha256").update(sql, "utf8").digest("hex");
+    // The digest is over the file's BYTES, like the published store's own
+    // gate (`tests/m12-t2.2-a4-migration-digest.test.mjs`): a text-level hash
+    // would disagree with every non-ASCII migration the moment one existed.
+    const bytes = await readFile(path.join(directory, file));
+    const sql = bytes.toString("utf8");
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    const publishedDigest = publishedDigests.get(file);
+    if (publishedDigest !== undefined && publishedDigest !== digest) {
+      throw migrationError(
+        "SKILL_STORE_MIGRATION_DIGEST_UNPUBLISHED",
+        `the migration ${file} is published with digest ${publishedDigest} but its ` +
+          `bytes hash to ${digest}. The published store is what every database — ` +
+          `including a fresh one with an empty ledger — adopts, so this file would ` +
+          `apply different DDL than the pin says: add a NEW forward migration instead.`,
+        [file],
+      );
+    }
     const recorded = await executePostgresQuery(
       `SELECT sha256 FROM ${SKILL_STORE_LEDGER} WHERE version = ${escapeSqlLiteral(file)};`,
       options,
