@@ -8104,16 +8104,16 @@ force-push, no PR/merge/release.
 - R3 is archived at `docs/contracts/execution/archive/2026-10-21-M12-T9-R3.md`.
 - R4 is materialized at `docs/contracts/execution/ACTIVE.md`; this block is its
   lifecycle pointer.
-- 53 of the 170 scoped rows are closed with red/green and mutation evidence:
+- 54 of the 169 scoped rows are closed with red/green and mutation evidence:
   `F-523`, `F-524`, `F-437`, `F-438`, `F-408`, `F-414`, `F-464`, `F-465`,
   `F-466`, `F-473`, `F-442`, `F-444`, `F-533`, `F-427`, `F-428`, `F-429`,
   `F-450`, `F-455`, `F-451`, `F-452`, `F-453`, `F-511`, `F-467`, `F-474`,
   `F-567`, `F-517`, `F-518`, `F-441`, `F-440`, `F-439`, `F-487`, `F-491`,
   `F-415`, `F-410`, `F-512`, `F-573`, `F-412`, `F-413`, `F-513`, `F-458`,
   `F-483`, `F-566`, `F-482`, `F-519`, `F-509`, `F-574`, `F-133`, `F-544`,
-  `F-514`, `F-516`, `F-526`, `F-527`, `F-528`. The
-  register now carries 170 rows (101 OPEN + 27 LATENT in scope = 128, 32
-  REFUTED, 2 BLOCKED, 8 PARTIAL). The §1 census in the register
+  `F-514`, `F-516`, `F-526`, `F-527`, `F-528`, `F-550`. The
+  register now carries 169 rows (101 OPEN + 27 LATENT in scope = 128, 32
+  REFUTED, 2 BLOCKED, 7 PARTIAL). The §1 census in the register
   was stale by the 22 earlier closures and was corrected against the file rather
   than against its own header; its closure total also read 419 while its own
   item list summed to 427, and is now measured from the `CHANGELOG.md` bullets.
@@ -8228,10 +8228,17 @@ null;`) left the lane 3/3 green, so that path is unproven and the shipped
   probes, each reverted: dropping `cause` from the record reddened 3 cases,
   dropping the batch-arm detail reddened the propagation case, renaming the
   state arm back reddened the state case, removing the bound reddened the shape
-  case. **`F-550` stays `PARTIAL`** because its criterion also wants the cause
-  persisted on `knowledge.pdf_content_builds`, which has only a `failure_code`
-  column — a schema/migration change is RED under `AGENTS.md` §7 and is the
-  owner's call, and `main.py:449-452` still answers without the detail.
+  case. The owner granted the schema half the same day (`1. cho`), so
+  `5d5446e` adds forward migration `004_pdf_build_failure_cause.sql` —
+  `failure_cause` on `knowledge.pdf_content_builds`, CHECK-bounded to the same
+  512 the app uses — writes it from `_fail_pdf_build_locked`, and threads the
+  diagnosis through the three pipeline arms that mark a build FAILED; the A-4
+  lane pins 004's digest. Probes: dropping the `$3` write and drifting the
+  migration bound reddened 4 cases (40 passed); the Knowledgebase lane is 264
+  passed / 17 skipped and the real PostgreSQL gate 5/5. **`F-550` is CLOSED.**
+  `main.py:449-452` still answers `{code}` without the detail — the criterion
+  never named that site, so it is left as the next HTTP-surface question rather
+  than folded into this row.
 - The lead took the test-validity band directly (`5b317d2`, `7031a37`,
   `53a5036`): `F-526`, `F-527` and `F-528` were assertions that could not
   redden, and each now has the falsifiable form its acceptance criterion names,
