@@ -88,6 +88,19 @@ if mode == "coverage":
         patch("zink_pdf_runtime.runner._materialize_document_items", return_value=items),
     ):
         response = runner._dispatch(request)
+elif mode == "trailing_blank":
+    # F-518 (R10-L08-4): the last requested page (8) produces no item. The
+    # original coverage mode covered page 8, so `range(start, end)` and
+    # `range(start, end + 1)` derived the same blank set and the trailing
+    # boundary could not fail.
+    items = [item(5), item(6), item(7)]
+    with (
+        patch("zink_pdf_runtime.runner._probe", return_value=ok_probe),
+        patch("zink_pdf_runtime.runner._safe_source_path", return_value="book.pdf"),
+        patch("zink_pdf_runtime.runner._docling_extract", return_value=Result("success")),
+        patch("zink_pdf_runtime.runner._materialize_document_items", return_value=items),
+    ):
+        response = runner._dispatch(request)
 elif mode == "partial":
     with (
         patch("zink_pdf_runtime.runner._probe", return_value=ok_probe),
@@ -169,6 +182,15 @@ class ChildCoverageTests(unittest.TestCase):
         self.assertEqual(response["status"], "ok")
         self.assertEqual(response["covered_pages"], [5, 6, 8])
         self.assertEqual(response["blank_pages"], [7])
+
+    def test_the_trailing_requested_page_is_blank_when_it_produced_no_item(self) -> None:
+        """F-518 (R10-L08-4): the blank set must include the last page."""
+
+        response = run_child(REQUEST, "trailing_blank")
+
+        self.assertEqual(response["status"], "ok")
+        self.assertEqual(response["covered_pages"], [5, 6, 7])
+        self.assertEqual(response["blank_pages"], [8])
 
     def test_a_conversion_that_did_not_succeed_fails_closed(self) -> None:
         response = run_child(REQUEST, "partial")
