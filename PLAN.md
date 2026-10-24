@@ -8104,16 +8104,16 @@ force-push, no PR/merge/release.
 - R3 is archived at `docs/contracts/execution/archive/2026-10-21-M12-T9-R3.md`.
 - R4 is materialized at `docs/contracts/execution/ACTIVE.md`; this block is its
   lifecycle pointer.
-- 54 of the 169 scoped rows are closed with red/green and mutation evidence:
+- 55 of the 168 scoped rows are closed with red/green and mutation evidence:
   `F-523`, `F-524`, `F-437`, `F-438`, `F-408`, `F-414`, `F-464`, `F-465`,
   `F-466`, `F-473`, `F-442`, `F-444`, `F-533`, `F-427`, `F-428`, `F-429`,
   `F-450`, `F-455`, `F-451`, `F-452`, `F-453`, `F-511`, `F-467`, `F-474`,
   `F-567`, `F-517`, `F-518`, `F-441`, `F-440`, `F-439`, `F-487`, `F-491`,
   `F-415`, `F-410`, `F-512`, `F-573`, `F-412`, `F-413`, `F-513`, `F-458`,
   `F-483`, `F-566`, `F-482`, `F-519`, `F-509`, `F-574`, `F-133`, `F-544`,
-  `F-514`, `F-516`, `F-526`, `F-527`, `F-528`, `F-550`. The
-  register now carries 169 rows (101 OPEN + 27 LATENT in scope = 128, 32
-  REFUTED, 2 BLOCKED, 7 PARTIAL). The §1 census in the register
+  `F-514`, `F-516`, `F-526`, `F-527`, `F-528`, `F-550`, `F-443`. The
+  register now carries 168 rows (101 OPEN + 27 LATENT in scope = 128, 32
+  REFUTED, 2 BLOCKED, 6 PARTIAL). The §1 census in the register
   was stale by the 22 earlier closures and was corrected against the file rather
   than against its own header; its closure total also read 419 while its own
   item list summed to 427, and is now measured from the `CHANGELOG.md` bullets.
@@ -8250,6 +8250,19 @@ null;`) left the lane 3/3 green, so that path is unproven and the shipped
   0 fail) where the old whole-file pattern reported true. `F-497`'s register text
   was amended in the same closeout because it had credited the dead `:149-174`
   block as a shipped guarantee.
+- The owner's `4,5. cái nào tốt hơn thì làm` was read as "ship the named proof,
+  not a substitution", so `F-443` is CLOSED: `62575eb` adds a real-PostgreSQL
+  case to the `m11-t1-postgres-sql-gate` lane that runs the sweep's own DELETE,
+  read out of `database.py`, over an accumulation the schema permits (the
+  content-identity uniqueness is partial over `('BUILDING','READY')`), and
+  asserts the residue and its batches go while the READY build, its searchable
+  copy and the CANCELLED reclamation record survive a second sweep. Probes:
+  naming `BUILDING` instead of `FAILED` reddened the residue assertion, and
+  widening the sweep to take `CANCELLED` reddened the reclamation-record control
+  (5 pass / 1 fail each); the gate is 6/6. `F-492` was read the other way: its
+  zero-assertion state is byte-identical to a pass in the report the gate can
+  read, so naming a signal means changing what the runner emits — a CI-surface
+  decision that stays `PARTIAL` rather than being approximated.
 - The band that had already merged without its closeout (`F-464`/`F-465`/
   `F-466`/`F-473` from B4, `F-442`/`F-444` from B5) was re-measured at this HEAD
   before its rows were deleted: the artifact/Excel lane is 8/8, the knowledge

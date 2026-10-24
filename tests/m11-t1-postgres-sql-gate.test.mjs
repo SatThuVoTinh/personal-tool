@@ -1090,12 +1090,21 @@ test("M12/T9 F-443: two incremental passes over one PDF leave no build-and-batch
     // Pass 2 over the SAME identity ends FAILED. PostgreSQL accepts it because
     // the identity uniqueness is partial over ('BUILDING','READY') — this is
     // the accumulation the sweep exists for.
-    runSql(residueSql(RESIDUE_BUILD, RESIDUE_BATCH, PDF_IDENTITY, "exit=-9; stderr=Killed"));
+    runSql(
+      residueSql(
+        RESIDUE_BUILD,
+        RESIDUE_BATCH,
+        PDF_IDENTITY,
+        "exit=-9; stderr=Killed",
+      ),
+    );
     // An owner reclamation, which is terminal AND unlinkable, and must survive.
     runSql(reclaimedSql(RECLAIMED_BUILD, RECLAIMED_BATCH, "9".repeat(64)));
 
     assert.equal(
-      runSql(`SELECT count(*) FROM knowledge.pdf_content_builds WHERE status = 'FAILED';`),
+      runSql(
+        `SELECT count(*) FROM knowledge.pdf_content_builds WHERE status = 'FAILED';`,
+      ),
       "1",
       "the second pass must have left exactly one FAILED build",
     );
@@ -1103,7 +1112,9 @@ test("M12/T9 F-443: two incremental passes over one PDF leave no build-and-batch
     runSql(`${sweep};`);
 
     assert.equal(
-      runSql(`SELECT count(*) FROM knowledge.pdf_content_builds WHERE status = 'FAILED';`),
+      runSql(
+        `SELECT count(*) FROM knowledge.pdf_content_builds WHERE status = 'FAILED';`,
+      ),
       "0",
       "the sweep must retire the FAILED build no link can name",
     );
@@ -1131,11 +1142,20 @@ test("M12/T9 F-443: two incremental passes over one PDF leave no build-and-batch
 
     // Pass 3 over the same PDF, then the sweep again: the second cleanup must
     // reach the new accumulation and still leave every survivor alone.
-    runSql(residueSql(LATER_BUILD, LATER_BATCH, PDF_IDENTITY, "exit=1; stderr=artifact missing"));
+    runSql(
+      residueSql(
+        LATER_BUILD,
+        LATER_BATCH,
+        PDF_IDENTITY,
+        "exit=1; stderr=artifact missing",
+      ),
+    );
     runSql(`${sweep};`);
 
     assert.equal(
-      runSql(`SELECT count(*) FROM knowledge.pdf_content_builds WHERE status = 'FAILED';`),
+      runSql(
+        `SELECT count(*) FROM knowledge.pdf_content_builds WHERE status = 'FAILED';`,
+      ),
       "0",
       "a second sweep must retire the residue a later pass adds",
     );
@@ -1164,7 +1184,6 @@ test("M12/T9 F-443: two incremental passes over one PDF leave no build-and-batch
     admin(`DROP DATABASE IF EXISTS ${dbName}`);
   }
 });
-
 
 // ===========================================================================
 // M12/T9-R4 F-509 (R10-L05-2) — the retirement state's postcondition, fired.
