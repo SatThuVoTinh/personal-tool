@@ -2197,19 +2197,6 @@ fix xong và đã chứng minh, nên hai loại hàng này ở lại. Dọn chú
 - Acceptance criteria: `start.ps1`, or a helper it dot-sources, refuses a missing or sentinel `POSTGRES_PASSWORD` and the `N8N_*` set before the first `up`, and the docker contract lane `tests/m5-docker-contract.test.mjs` asserts that call exists so removing it turns that lane red.
 - Related findings: sibling of closed F-266 (R7-D13-03, `CHANGELOG.md:1781-1782`, commit `9f476d0`), which fixed which variable preflight names and did not touch start.ps1's silence; same advisory-guard-on-a-mutating-path shape as OPEN F-490 · nguồn: R10 V08 — infra, CI and gates
 
-### F-523 — PLAN.md carries two unlabeled live Plan Revision fields and its own disambiguating preface names the wrong band, so the ACTIVE-validity predicate depends on which field a reader picks
-
-- Category: F3 — State & Lifecycle Integrity
-- Legacy register id: `R10-L10-2`
-- Affected modules: Governance docs
-- Severity: Medium
-- Status: OPEN — production-reachable: any agent running AGENTS.md §4 bootstrap step 2 reads `PLAN.md` §4 Current focus first and evaluates the `docs/contracts/execution/README.md:30` predicate that the ACTIVE Plan Revision equals the PLAN Plan Revision against `PLAN.md:81`, which says `M12/T9-R1` while the live tail block `:7708` and the working-tree `ACTIVE.md:4` say `M12/T9-R3`
-- Root cause: the R1 band was closed and its contract archived, but §4's field block was never re-synchronized; the one sentence that resolves the split (`:79-80`) declares everything below it to be the closed `M12/T2.2-R3` band's record, which is neither the band it sits in nor the band it disambiguates, so it is prose a reader can follow to the wrong conclusion. `:84` and `:7711` both point at `docs/contracts/execution/ACTIVE.md`, a path `.gitignore:72` excludes, so nothing in HEAD can resolve the pointer at all.
-- Evidence: Where: `PLAN.md:81` — `Plan Revision: M12/T9-R1` · Where: `PLAN.md:79-80` — the preface naming the closed `M12/T2.2-R3` band above fields that carry M12/T9 · Where: `PLAN.md:7708` — `Plan Revision: M12/T9-R3` · Where: `PLAN.md:7717` — Prior band `M12/T9-R1` CLOSED 2026-10-21 · Where: `docs/contracts/execution/archive/2026-10-21-M12-T9-R1.md` — the archived R1 contract, tracked · Where: `docs/contracts/execution/README.md:24-31` and `AGENTS.md:44` — the match predicate · Measured: `git cat-file -e HEAD:docs/contracts/execution/ACTIVE.md` fails with "exists on disk, but not in 'HEAD'" and `git check-ignore -v` returns `.gitignore:72`, so ACTIVE.md is a gitignored working-tree file carrying `Plan Revision: M12/T9-R3` at `:4`; `grep -n "Plan Revision" PLAN.md` returns 22 hits, exactly two unlabeled live-looking ones; `git status --porcelain -- PLAN.md` is empty so §4 is the committed state.
-- Reproduction: read-only — `grep -n "^Plan Revision" PLAN.md` shows `:81` R1 and `:7708` R3; `sed -n '74,85p;7704,7717p' PLAN.md` shows the preface naming `M12/T2.2-R3` above M12/T9 fields; `git check-ignore -v docs/contracts/execution/ACTIVE.md` proves the pointed-at contract is untracked, so the predicate cannot be evaluated from HEAD.
-- Acceptance criteria: the count of `^Plan Revision: M12/T9-R1` lines inside the §4 block PLAN.md declares live is 0 (either `:81` carries `M12/T9-R3` or the field is removed and only the tail block names it) and the `:79-80` preface names the band whose record actually follows it; a shipped case reads `PLAN.md` and reddens when two unlabeled `^Plan Revision:` values disagree.
-- Related findings: F-458 and F-483 are the gate-registry prose family and do not touch this seam · the legacy `AGENTS.md:3` aliasing row does not cover the revision split · nguồn: R10 V09 — PLAN.md authority fields at HEAD
-
 ### F-524 — the Approved Plan Lock is named as binding by two skills and defined nowhere, so a routed post-approval obligation has no content and nothing that can fail on it
 
 - Category: F4 — Integration & Contract Violations
