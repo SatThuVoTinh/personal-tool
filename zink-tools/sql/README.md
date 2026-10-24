@@ -79,10 +79,10 @@ console.table(result.rows);
 
 ## 5. Các Lỗi Thường gặp & Mã lỗi
 
-| Mã lỗi                            | Nguyên nhân                                  | Cách xử lý                                    |
-| --------------------------------- | -------------------------------------------- | --------------------------------------------- |
-| `DUCKDB_UNAUTHORIZED_CALLER`      | Agent gọi khác `sql` (ví dụ `main`, `excel`) | Giao việc cho đúng agent `sql`                |
-| `DUCKDB_UNAUTHORIZED_RESOURCE`    | `target_database` không thuộc allowlist      | Chỉ định `knowledge` hoặc `analytics_read`    |
-| `DUCKDB_FILESYSTEM_ACCESS_DENIED` | Chứa `ATTACH`, `COPY`, `read_csv`, hoặc `..` | Truy vấn trực tiếp bảng có sẵn trong database |
-| `DUCKDB_HOST_EXECUTION_DENIED`    | Chứa `powershell`, `cmd`, `wsl`, `PRAGMA`    | Loại bỏ các lệnh hệ thống khỏi truy vấn       |
-| `DUCKDB_MUTATION_NOT_PERMITTED`   | Truy vấn cố ý sửa đổi dữ liệu                | Chuyển sang câu lệnh `SELECT` thuần túy       |
+| Mã lỗi                            | Nguyên nhân                                               | Cách xử lý                                    |
+| --------------------------------- | --------------------------------------------------------- | --------------------------------------------- |
+| `DUCKDB_UNAUTHORIZED_CALLER`      | Agent gọi khác `sql` (ví dụ `main`, `excel`)              | Giao việc cho đúng agent `sql`                |
+| `DUCKDB_UNAUTHORIZED_RESOURCE`    | `target_database` không thuộc allowlist                   | Chỉ định `knowledge` hoặc `analytics_read`    |
+| `DUCKDB_FILESYSTEM_ACCESS_DENIED` | Chứa `ATTACH`, `COPY`, `read_csv`, hoặc đọc tệp trực tiếp | Truy vấn trực tiếp bảng có sẵn trong database |
+| `DUCKDB_HOST_EXECUTION_DENIED`    | Chứa `powershell`, `cmd`, `wsl`, `PRAGMA`                 | Loại bỏ các lệnh hệ thống khỏi truy vấn       |
+| `DUCKDB_MUTATION_NOT_PERMITTED`   | Truy vấn cố ý sửa đổi dữ liệu                             | Chuyển sang câu lệnh `SELECT` thuần túy       |

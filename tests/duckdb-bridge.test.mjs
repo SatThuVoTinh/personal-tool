@@ -6,7 +6,11 @@
 // CI runner's expectation is declared once and every host agrees on it.
 import test, { describe } from "node:test";
 import assert from "node:assert/strict";
-import { executeGovernedDuckDbQuery } from "../zink-tools/sql/duckdb-bridge.mjs";
+import {
+  assertDuckDbSafety,
+  bindParameters,
+  executeGovernedDuckDbQuery,
+} from "../zink-tools/sql/duckdb-bridge.mjs";
 import {
   classifyDuckDbEngineProbe,
   duckDbEngineAvailable,
@@ -213,22 +217,16 @@ describe("Governed DuckDB Windows Bridge (M7/T4 G4 & G5)", () => {
     }
   });
 
-  test("Gate 5.6: filesystem traversal in parameter value -> DENY (DUCKDB_FILESYSTEM_ACCESS_DENIED)", async () => {
-    await assert.rejects(
-      async () => {
-        await executeGovernedDuckDbQuery(validContext, {
-          query: "SELECT id FROM knowledge WHERE name = :param",
-          target_database: validDatabase,
-          parameters: [
-            { name: "param", type: "string", value: "../../etc/passwd" },
-          ],
-        });
-      },
-      (err) => {
-        assert.equal(err.code, "DUCKDB_FILESYSTEM_ACCESS_DENIED");
-        return true;
-      },
+  test("Gate 5.6: a traversal-shaped bind value is quoted data, not a filesystem path", () => {
+    const query = "SELECT id FROM knowledge WHERE name = :param";
+    const parameters = [
+      { name: "param", type: "string", value: "../../etc/passwd" },
+    ];
+    assert.equal(
+      bindParameters(query, parameters),
+      "SELECT id FROM knowledge WHERE name = '../../etc/passwd'",
     );
+    assert.doesNotThrow(() => assertDuckDbSafety(query, parameters));
   });
 
   test("Gate 5.7: mutation query is denied by Lean Option B parser", async () => {

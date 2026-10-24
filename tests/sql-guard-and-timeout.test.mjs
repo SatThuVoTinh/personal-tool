@@ -173,6 +173,98 @@ describe("F-037 (R5-E15-03) — the bridge refuses a host-file read by shape, no
   });
 });
 
+describe("F-452 (R9-L07b-3) — a string literal is data for the FROM-clause guard", () => {
+  test("F-452: a literal that spells a table function reaches the engine", async () => {
+    const counter = { spawned: 0 };
+    const query = "SELECT 'FROM x(' FROM knowledge";
+    assert.doesNotThrow(() => validateSqlQuery(query, []));
+    const res = await executeGovernedDuckDbQuery(
+      context,
+      { query, target_database: "knowledge" },
+      { execFileSyncImpl: recordingSpawn(counter) },
+    );
+    assert.equal(res.row_count, 0);
+    assert.equal(
+      counter.spawned,
+      1,
+      "the masked clause must not refuse a read whose data spells FROM x(",
+    );
+  });
+
+  test("F-452: doubled-quote escapes stay delimiters, not clause text", async () => {
+    const counter = { spawned: 0 };
+    const query = "SELECT 'it''s FROM x(' FROM knowledge";
+    assert.doesNotThrow(() => validateSqlQuery(query, []));
+    const res = await executeGovernedDuckDbQuery(
+      context,
+      { query, target_database: "knowledge" },
+      { execFileSyncImpl: recordingSpawn(counter) },
+    );
+    assert.equal(res.row_count, 0);
+    assert.equal(counter.spawned, 1);
+  });
+
+  test("F-452: a host-file read in syntax position is still refused", () => {
+    assert.throws(
+      () => assertDuckDbSafety("SELECT * FROM read_text('/etc/passwd')"),
+      { code: "DUCKDB_FILESYSTEM_ACCESS_DENIED" },
+    );
+  });
+});
+
+describe("F-453 (R9-L07b-4) — the escape scan reads syntax, not data", () => {
+  test("F-453: a label that merely spells load or sh is admitted", async () => {
+    for (const query of [
+      "SELECT id FROM knowledge WHERE label = 'load'",
+      "SELECT id FROM knowledge WHERE label = 'sh'",
+    ]) {
+      assert.doesNotThrow(() => assertDuckDbSafety(query, []));
+      const counter = { spawned: 0 };
+      const res = await executeGovernedDuckDbQuery(
+        context,
+        { query, target_database: "knowledge" },
+        { execFileSyncImpl: recordingSpawn(counter) },
+      );
+      assert.equal(res.row_count, 0, query);
+      assert.equal(counter.spawned, 1, query);
+    }
+  });
+
+  test("F-453: a traversal-shaped bind value is quoted data and reaches the engine", async () => {
+    let boundStatement = null;
+    const res = await executeGovernedDuckDbQuery(
+      context,
+      {
+        query: "SELECT id FROM knowledge WHERE name = :p",
+        target_database: "knowledge",
+        parameters: [{ name: "p", type: "string", value: "/reports/q3" }],
+      },
+      {
+        execFileSyncImpl: (file, args) => {
+          void file;
+          boundStatement = args[2];
+          return "[]";
+        },
+      },
+    );
+    assert.equal(res.row_count, 0);
+    assert.match(boundStatement, /name = '\/reports\/q3'/u);
+  });
+
+  test("F-453: syntax-position SET, COPY and read_text stay refused", () => {
+    for (const [query, code] of [
+      ["SET memory_limit='1GB'", "DUCKDB_HOST_EXECUTION_DENIED"],
+      ["COPY knowledge TO '/tmp/x.csv'", "DUCKDB_FILESYSTEM_ACCESS_DENIED"],
+      [
+        "SELECT * FROM read_text('/etc/passwd')",
+        "DUCKDB_FILESYSTEM_ACCESS_DENIED",
+      ],
+    ]) {
+      assert.throws(() => assertDuckDbSafety(query, []), { code }, query);
+    }
+  });
+});
+
 describe("F-294 (R7-C5-02) — the subprocess timeout is applied to a real child", () => {
   test("F-294: the timeout kills a real hanging child and the call returns", async () => {
     let observedTimeout = null;
@@ -267,45 +359,6 @@ describe("F-294 (R7-C5-02) — the subprocess timeout is applied to a real child
           { simulateTimeout: true, timeoutMs: 1000 },
         ),
       { code: "DUCKDB_TIMEOUT" },
-    );
-  });
-});
-
-describe("F-452 (R9-L07b-3) — a string literal is data for the FROM-clause guard", () => {
-  test("F-452: a literal that spells a table function reaches the engine", async () => {
-    const counter = { spawned: 0 };
-    const query = "SELECT 'FROM x(' FROM knowledge";
-    assert.doesNotThrow(() => validateSqlQuery(query, []));
-    const res = await executeGovernedDuckDbQuery(
-      context,
-      { query, target_database: "knowledge" },
-      { execFileSyncImpl: recordingSpawn(counter) },
-    );
-    assert.equal(res.row_count, 0);
-    assert.equal(
-      counter.spawned,
-      1,
-      "the masked clause must not refuse a read whose data spells FROM x(",
-    );
-  });
-
-  test("F-452: doubled-quote escapes stay delimiters, not clause text", async () => {
-    const counter = { spawned: 0 };
-    const query = "SELECT 'it''s FROM x(' FROM knowledge";
-    assert.doesNotThrow(() => validateSqlQuery(query, []));
-    const res = await executeGovernedDuckDbQuery(
-      context,
-      { query, target_database: "knowledge" },
-      { execFileSyncImpl: recordingSpawn(counter) },
-    );
-    assert.equal(res.row_count, 0);
-    assert.equal(counter.spawned, 1);
-  });
-
-  test("F-452: a host-file read in syntax position is still refused", () => {
-    assert.throws(
-      () => assertDuckDbSafety("SELECT * FROM read_text('/etc/passwd')"),
-      { code: "DUCKDB_FILESYSTEM_ACCESS_DENIED" },
     );
   });
 });

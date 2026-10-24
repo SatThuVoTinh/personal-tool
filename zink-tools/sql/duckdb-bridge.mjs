@@ -187,9 +187,14 @@ export function assertDuckDbResourceAuthorized(targetDatabase) {
 }
 
 /**
- * Scans query string and parameters for escape or injection vectors.
+ * Scans the statement for escape or injection vectors.
+ *
+ * Bound values are data, not syntax: `bindParameters` renders every value as a
+ * quoted literal, so the values themselves are deliberately not scanned. Only
+ * the masked statement can carry a statement-shaped escape.
+ *
  * @param {string} query
- * @param {Array<{name: string, value: any}>} parameters
+ * @param {Array<{name: string, type: string, value: unknown}>} parameters
  */
 export function assertDuckDbSafety(query, parameters = []) {
   if (typeof query !== "string") {
@@ -199,10 +204,16 @@ export function assertDuckDbSafety(query, parameters = []) {
     );
   }
 
-  // 1. Check escape patterns in query
+  // 1. Check escape patterns in the MASKED statement. A literal interior is
+  // data, not syntax: scanning the raw query made `label = 'load'`,
+  // `label = 'sh'` and a literal that merely spells a read function look like
+  // host commands. `stripSqlStringLiterals` keeps the quotes and doubled-quote
+  // escapes, so the structural statement (COPY, SET, read_text(...)) is still
+  // visible and is still refused.
+  const maskedQuery = stripSqlStringLiterals(query);
   for (const pattern of ESCAPE_PATTERNS) {
-    if (pattern.test(query)) {
-      if (/ATTACH|DETACH|COPY/i.test(query)) {
+    if (pattern.test(maskedQuery)) {
+      if (/ATTACH|DETACH|COPY/i.test(maskedQuery)) {
         throw new DuckDbBridgeError(
           "DUCKDB_FILESYSTEM_ACCESS_DENIED",
           `Forbidden database manipulation statement detected: ${pattern.source}`,
@@ -210,7 +221,7 @@ export function assertDuckDbSafety(query, parameters = []) {
       }
       if (
         /read_csv|read_parquet|read_json|parquet_scan|read_text|read_blob|glob/i.test(
-          query,
+          maskedQuery,
         )
       ) {
         throw new DuckDbBridgeError(
@@ -220,7 +231,7 @@ export function assertDuckDbSafety(query, parameters = []) {
       }
       if (
         /powershell|cmd|wsl|docker|sh|bash|PRAGMA|INSTALL|LOAD|SECRET|SET/i.test(
-          query,
+          maskedQuery,
         )
       ) {
         throw new DuckDbBridgeError(
@@ -246,35 +257,13 @@ export function assertDuckDbSafety(query, parameters = []) {
     );
   }
 
-  // 2. Check parameter values for path traversal or command escape vectors
-  if (Array.isArray(parameters)) {
-    for (const param of parameters) {
-      if (typeof param?.value === "string") {
-        const val = param.value;
-        if (
-          val.includes("..") ||
-          val.includes("\\..") ||
-          val.includes("/..") ||
-          /^[A-Za-z]:[\\/]/.test(val) ||
-          val.startsWith("/") ||
-          val.startsWith("\\")
-        ) {
-          throw new DuckDbBridgeError(
-            "DUCKDB_FILESYSTEM_ACCESS_DENIED",
-            `Filesystem traversal path in parameter '${param.name}' is strictly forbidden`,
-          );
-        }
-        for (const pattern of ESCAPE_PATTERNS) {
-          if (pattern.test(val)) {
-            throw new DuckDbBridgeError(
-              "DUCKDB_ESCAPE_ATTEMPT_DENIED",
-              `Disallowed pattern in parameter '${param.name}'`,
-            );
-          }
-        }
-      }
-    }
-  }
+  // 2. Bound values are data. `bindParameters` renders every string value
+  // through `toDuckDbLiteral`, which wraps it in single quotes and doubles any
+  // embedded quote, so a value such as `/reports/q3` or `load` can never
+  // become statement syntax. Scanning the value here refused a legitimate
+  // path or label for a filesystem escape that the quoted literal cannot
+  // perform. The statement's own syntax was already masked and checked above.
+  void parameters;
 }
 
 /**
@@ -319,11 +308,9 @@ function toDuckDbLiteral(value, name) {
  *
  * Measured at HEAD: `parameters` was validated (`validateSqlQuery` requires
  * exact set equality between the query's placeholders and the declared
- * parameter names, and `assertDuckDbSafety` scans every value) and then
- * discarded - `initSql` interpolated `input.query` verbatim - so EVERY
- * contract-valid parameterized `zink_sql` call reached the engine with
- * `:name` unsubstituted and failed `DUCKDB_EXECUTION_ERROR`, while the values
- * the traversal scan protected never reached SQL at all.
+ * parameter names) and then discarded - `initSql` interpolated `input.query`
+ * verbatim - so EVERY contract-valid parameterized `zink_sql` call reached the
+ * engine with `:name` unsubstituted and failed `DUCKDB_EXECUTION_ERROR`.
  *
  * F-455 (R9-T07-1): the canonical parameter shape is
  * `{name: string, type: string, value: unknown}`, as published in
