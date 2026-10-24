@@ -1,5 +1,103 @@
 import { Buffer } from "node:buffer";
+import { readFileSync } from "node:fs";
 import { N8N_WORKFLOW_REGISTRY } from "../../integrations/openclaw/lib/policy.mjs";
+
+// F-451 (R9-L07b-2): the output bound is the published contract, not a
+// hand-copied second vocabulary. The adapter used to check only "non-empty
+// string", so an upstream envelope that exceeded `maxLength` or carried an
+// undeclared key was reported as success and only rejected by the guard AFTER
+// the POST had fired. Reading the same definition the contract publishes makes
+// the adapter and the post-dispatch guard answer one question.
+const N8N_CONTRACT = JSON.parse(
+  readFileSync(
+    new URL("../contracts/tools/zink-n8n.schema.json", import.meta.url),
+    "utf8",
+  ),
+);
+
+/**
+ * The published output-data definition for one workflow.
+ *
+ * @param {string} workflowId
+ * @returns {object|undefined}
+ */
+function outputDataDefinition(workflowId) {
+  return N8N_CONTRACT.$defs[`${workflowId}_output_data`];
+}
+
+/**
+ * The string bounds the guard applies: a minimum in code points and a maximum
+ * in UTF-8 bytes, because governance ceilings are bytes (schema.mjs).
+ *
+ * @param {unknown} value
+ * @param {object} rule
+ * @returns {boolean}
+ */
+function satisfiesStringBounds(value, rule) {
+  if (typeof value !== "string") return false;
+  if ([...value].length < (rule.minLength ?? 0)) return false;
+  if (
+    rule.maxLength !== undefined &&
+    Buffer.byteLength(value, "utf8") > rule.maxLength
+  ) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Enforces the published object definition: declared keys only, required
+ * keys present, and the field bounds the contract states.
+ *
+ * @param {object|undefined} definition
+ * @param {unknown} data
+ * @returns {boolean}
+ */
+function satisfiesOutputDefinition(definition, data) {
+  if (!definition || !data || typeof data !== "object" || Array.isArray(data)) {
+    return false;
+  }
+  const properties = definition.properties ?? {};
+  if (definition.additionalProperties === false) {
+    for (const key of Object.keys(data)) {
+      if (!Object.hasOwn(properties, key)) return false;
+    }
+  }
+  for (const key of definition.required ?? []) {
+    if (!Object.hasOwn(data, key)) return false;
+  }
+  for (const [key, rule] of Object.entries(properties)) {
+    if (!Object.hasOwn(data, key)) continue;
+    const value = data[key];
+    if (rule.type === "string") {
+      if (!satisfiesStringBounds(value, rule)) return false;
+      continue;
+    }
+    if (rule.type === "integer") {
+      if (!Number.isSafeInteger(value)) return false;
+      if (rule.minimum !== undefined && value < rule.minimum) return false;
+      if (rule.maximum !== undefined && value > rule.maximum) return false;
+      continue;
+    }
+    if (rule.type === "boolean") {
+      if (typeof value !== "boolean") return false;
+      continue;
+    }
+    if (rule.type === "array") {
+      if (!Array.isArray(value)) return false;
+      for (const item of value) {
+        if (rule.items?.type === "string") {
+          if (!satisfiesStringBounds(item, rule.items)) return false;
+        } else if (rule.items?.type && typeof item !== rule.items.type) {
+          return false;
+        }
+      }
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
 
 export class N8nAdapterError extends Error {
   constructor(code, message) {
@@ -54,46 +152,13 @@ export function classifyWorkflowState(state) {
   return "pending";
 }
 
+/**
+ * F-451 (R9-L07b-2): the adapter validates the upstream data against the
+ * definition the contract publishes, so the response cannot be reported as a
+ * success envelope and only rejected later by the post-dispatch guard.
+ */
 function validateWorkflowOutputData(workflowId, data) {
-  if (!data || typeof data !== "object" || Array.isArray(data)) {
-    return false;
-  }
-  if (workflowId === "data_plant_ingest") {
-    if (typeof data.ingest_id !== "string" || data.ingest_id.length === 0)
-      return false;
-    if (typeof data.status !== "string" || data.status.length === 0)
-      return false;
-    if (
-      data.records_ingested !== undefined &&
-      (!Number.isSafeInteger(data.records_ingested) ||
-        data.records_ingested < 0)
-    )
-      return false;
-    return true;
-  }
-  if (workflowId === "data_plant_sync") {
-    if (typeof data.sync_id !== "string" || data.sync_id.length === 0)
-      return false;
-    if (typeof data.status !== "string" || data.status.length === 0)
-      return false;
-    if (
-      data.synced_tables !== undefined &&
-      (!Array.isArray(data.synced_tables) ||
-        !data.synced_tables.every((t) => typeof t === "string"))
-    )
-      return false;
-    return true;
-  }
-  if (workflowId === "pipeline_notify") {
-    if (typeof data.delivered !== "boolean") return false;
-    if (
-      data.notification_id !== undefined &&
-      typeof data.notification_id !== "string"
-    )
-      return false;
-    return true;
-  }
-  return false;
+  return satisfiesOutputDefinition(outputDataDefinition(workflowId), data);
 }
 
 /**

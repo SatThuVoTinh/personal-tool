@@ -171,3 +171,127 @@ describe("F-235 (R7-D5-01) — an accepted workflow is pending, never success", 
     );
   });
 });
+
+describe("F-451 (R9-L07b-2) - the adapter enforces the published output bounds", () => {
+  test("F-451: an over-length ingest_id never becomes a success envelope", async () => {
+    await assert.rejects(
+      () =>
+        invokeN8n(decisionContext, ingestInput, {
+          fetchImpl: upstream({
+            ingest_id: "i".repeat(129),
+            status: "completed",
+          }),
+        }),
+      (err) => {
+        assert.ok(err instanceof N8nAdapterError);
+        assert.equal(err.code, "SCHEMA_VALIDATION_FAILED");
+        return true;
+      },
+    );
+  });
+
+  test("F-451: an id over the guard's UTF-8 byte ceiling is refused", async () => {
+    await assert.rejects(
+      () =>
+        invokeN8n(decisionContext, ingestInput, {
+          fetchImpl: upstream({
+            ingest_id: String.fromCodePoint(0xe9).repeat(65),
+            status: "completed",
+          }),
+        }),
+      { code: "SCHEMA_VALIDATION_FAILED" },
+    );
+  });
+
+  test("F-451: an undeclared output key is refused by the adapter", async () => {
+    await assert.rejects(
+      () =>
+        invokeN8n(decisionContext, ingestInput, {
+          fetchImpl: upstream({
+            ingest_id: "i-1",
+            status: "completed",
+            extra: "x",
+          }),
+        }),
+      { code: "SCHEMA_VALIDATION_FAILED" },
+    );
+  });
+
+  test("F-451: an over-length synced_tables item is refused", async () => {
+    await assert.rejects(
+      () =>
+        invokeN8n(
+          decisionContext,
+          {
+            workflow_id: "data_plant_sync",
+            payload: { target: "knowledge" },
+          },
+          {
+            fetchImpl: upstream({
+              sync_id: "s-1",
+              status: "completed",
+              synced_tables: ["t".repeat(129)],
+            }),
+          },
+        ),
+      { code: "SCHEMA_VALIDATION_FAILED" },
+    );
+  });
+
+  test("F-451: an over-length sync_id is refused", async () => {
+    await assert.rejects(
+      () =>
+        invokeN8n(
+          decisionContext,
+          {
+            workflow_id: "data_plant_sync",
+            payload: { target: "knowledge" },
+          },
+          {
+            fetchImpl: upstream({
+              sync_id: "s".repeat(129),
+              status: "completed",
+            }),
+          },
+        ),
+      { code: "SCHEMA_VALIDATION_FAILED" },
+    );
+  });
+
+  test("F-451: an undeclared data_plant_sync key is refused", async () => {
+    await assert.rejects(
+      () =>
+        invokeN8n(
+          decisionContext,
+          {
+            workflow_id: "data_plant_sync",
+            payload: { target: "knowledge" },
+          },
+          {
+            fetchImpl: upstream({
+              sync_id: "s-1",
+              status: "completed",
+              extra: "x",
+            }),
+          },
+        ),
+      { code: "SCHEMA_VALIDATION_FAILED" },
+    );
+  });
+
+  test("F-451: a 128-character id is admitted and satisfies the tool-result contract", async () => {
+    const res = await invokeN8n(decisionContext, ingestInput, {
+      fetchImpl: upstream({ ingest_id: "i".repeat(128), status: "completed" }),
+    });
+    assert.equal(res.status, "success");
+    assert.equal(res.output.data.ingest_id.length, 128);
+    assert.equal(
+      validateContractSchema(
+        "tool-result",
+        res,
+        TOOL_RESULT_ENVELOPE_MAX_BYTES,
+      ),
+      true,
+    );
+  });
+});
