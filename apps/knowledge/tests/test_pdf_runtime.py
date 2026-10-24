@@ -61,6 +61,46 @@ def _declared_model_revisions(source: str) -> dict[str, str]:
     raise AssertionError("download_models.py declares no MODEL_REVISIONS mapping")
 
 
+class RangePathArityTests(unittest.TestCase):
+    """F-439 (R9-L09-3): the range extraction's call arity is pinned.
+
+    The stale range-contract suite called `_docling_extract` with three
+    arguments against a four-required-parameter signature and asserted item
+    dicts against the conversion result. It imported the docling closure,
+    which no lane installs, so nothing collected it and the drift was
+    invisible. Every call anywhere in the package must carry the whole
+    signature.
+    """
+
+    def test_every_call_passes_the_whole_extraction_signature(self) -> None:
+        root = Path(__file__).resolve().parents[1] / "pdf-runtime"
+        definitions: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
+        calls: list[ast.Call] = []
+        for path in sorted(root.rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    if node.name == "_docling_extract":
+                        definitions.append(node)
+                elif (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "_docling_extract"
+                ):
+                    calls.append(node)
+        self.assertEqual(len(definitions), 1, "exactly one extraction definition")
+        definition = definitions[0]
+        self.assertEqual(
+            [argument.arg for argument in definition.args.args],
+            ["source", "start", "end", "overall_deadline"],
+        )
+        self.assertEqual(definition.args.defaults, [], "every parameter is required")
+        self.assertTrue(calls, "the extraction must be called")
+        for call in calls:
+            self.assertEqual(len(call.args), 4, "a call must pass every parameter")
+            self.assertEqual(call.keywords, [])
+
+
 class ParentIsolationTests(unittest.TestCase):
     # F-212 (R5-E09-04): the parent project gained the pytest configuration
     # the Knowledgebase lane needs (`[tool.pytest.ini_options]`). The

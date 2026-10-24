@@ -264,9 +264,11 @@ def _docling_extract(
 ) -> Any:
     """Use the candidate's public range API and explicit Pdfium backend only.
 
-    The integration test runs this exact path inside the Linux image and
-    instruments page-level calls.  This module deliberately has no fallback to
-    full-document conversion or internal batching.
+    No lane runs this path: the docling closure is not installed by any test
+    lane, and the stale range-contract suite that claimed to run it inside the
+    Linux image called the superseded three-argument form (F-439, R9-L09-3).
+    The arity is pinned from the parent lane instead. This module deliberately
+    has no fallback to full-document conversion or internal batching.
     """
 
     _configure_determinism()
