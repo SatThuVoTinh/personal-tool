@@ -8104,14 +8104,15 @@ force-push, no PR/merge/release.
 - R3 is archived at `docs/contracts/execution/archive/2026-10-21-M12-T9-R3.md`.
 - R4 is materialized at `docs/contracts/execution/ACTIVE.md`; this block is its
   lifecycle pointer.
-- 30 of the 189 scoped rows are closed with red/green and mutation evidence:
+- 33 of the 189 scoped rows are closed with red/green and mutation evidence:
   `F-523`, `F-524`, `F-437`, `F-438`, `F-408`, `F-414`, `F-464`, `F-465`,
   `F-466`, `F-473`, `F-442`, `F-444`, `F-533`, `F-427`, `F-428`, `F-429`,
   `F-450`, `F-455`, `F-451`, `F-452`, `F-453`, `F-511`, `F-467`, `F-474`,
-  `F-567`, `F-517`, `F-518`, `F-441`, `F-440`, `F-439`. The register now
-  carries 193 rows (124 OPEN + 34 LATENT in scope = 158, 32 REFUTED, 2 BLOCKED,
-  1 PARTIAL). The §1 census in the register was stale by the 22 earlier closures
-  and was corrected against the file rather than against its own header.
+  `F-567`, `F-517`, `F-518`, `F-441`, `F-440`, `F-439`, `F-487`, `F-491`,
+  `F-415`. The register now carries 190 rows (121 OPEN + 34 LATENT in scope =
+  155, 32 REFUTED, 2 BLOCKED, 1 PARTIAL). The §1 census in the register was
+  stale by the 22 earlier closures and was corrected against the file rather
+  than against its own header.
 - The evidence floor is dispositioned: `F-467` (`8de5340`), `F-474`+`F-567`
   (one recorded merge, `7c6571b`) and `F-492`'s failed/errored half (`7e13dcb`)
   are green with red-before and a mutation probe reverted in person. `F-492`
@@ -8136,6 +8137,18 @@ force-push, no PR/merge/release.
   relocated (its lines never executed, so no passing assertion was lost).
   `F-443`, `F-512` and `F-550` stay open: their sites are in
   `app/database.py` / `app/index_lifecycle.py`, outside that lane's write scope.
+- The B8/B9 durability lane (`w1-tests-hygiene`) closed three rows — `F-487`
+  (`3989120`), `F-491` (`c007690`), `F-415` (`9df66fd`) — and its lane
+  `tests/m12-t9-r4-durability-population.test.mjs` is enumerated in `npm test`.
+  The lead re-ran the probe: forcing the parent-binding rule to accept
+  everything reddened the shared predicate's fixture case (1 failed / 9 passed).
+  **`F-485` stays OPEN**: its criterion needs all 16 `mkdtemp` lanes to remove
+  their trees *and* a `scripts/repository-policy.mjs` rule that fails a lane
+  matching `mkdtemp` with no removal API; the lane cleaned the two lanes it
+  owned (`3d6f09f`) and added no rule, so the residue path is still unguarded
+  for the other fourteen. The lane stopped at its 150-turn cap mid-edit, as did
+  `w1-skill-vector`, `w1-skill-catalog` and `w1-gate-scripts`; their committed
+  rows are integrated below, their uncommitted work is not.
 - The band that had already merged without its closeout (`F-464`/`F-465`/
   `F-466`/`F-473` from B4, `F-442`/`F-444` from B5) was re-measured at this HEAD
   before its rows were deleted: the artifact/Excel lane is 8/8, the knowledge
