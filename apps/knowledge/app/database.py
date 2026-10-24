@@ -431,6 +431,9 @@ class KnowledgeDatabase:
                 await self.release_advisory_lock(connection, self._advisory_lock_key)
                 raise
         await self.assert_searchable_segment_type_domain()
+        # F-575 (R10-T10-6): the second member of the same invariant family,
+        # on the same two arms, so a boot never runs one and skips the other.
+        await self.assert_segments_agree_with_sources()
 
     async def start(self) -> None:
         try:
@@ -832,6 +835,52 @@ class KnowledgeDatabase:
         )
         if unknown:
             raise StateTransitionError("Searchable segment-type domain is incompatible.")
+
+    async def assert_segments_agree_with_sources(self) -> None:
+        """Fail closed if a searchable segment's copy left its canonical row.
+
+        F-575 (R10-T10-6): `knowledge.segments` re-declares `source_path`,
+        `title`, `primary_topic`, `canonical_topics` and `tags` for retrieval
+        speed, and the schema declares no trigger, no CHECK and no per-segment
+        content digest -- `sha256` exists only on `knowledge.sources`. The
+        copies therefore agree with the canonical row by writer convention
+        alone, while the digest a citation carries is always the source's. The
+        reads now project the citation fields through the FK; this is the
+        standing assertion that the convention still holds, so an out-of-band
+        UPDATE to a source row surfaces as a refused boot instead of a silent
+        split between the citation a caller sees and the identity it names.
+
+        It runs beside `assert_searchable_segment_type_domain` on every boot
+        arm, and is bound in the non-skippable Knowledgebase Python lane -- not
+        in the may-skip Postgres lane F-481 covers.
+        """
+
+        if self._pool is None:
+            raise RuntimeError("Database pool is unavailable.")
+        rows = await self._pool.fetch(
+            """
+            SELECT segments.id
+            FROM knowledge.segments segments
+            JOIN knowledge.sources sources
+              ON sources.id = segments.source_id
+             AND sources.index_id = segments.index_id
+            JOIN knowledge.indexes indexes
+              ON indexes.id = segments.index_id
+            WHERE indexes.status IN ('ACTIVE', 'BUILDING')
+              AND (
+                segments.source_path IS DISTINCT FROM sources.source_path
+                OR segments.title IS DISTINCT FROM sources.title
+                OR segments.primary_topic IS DISTINCT FROM sources.primary_topic
+                OR segments.canonical_topics IS DISTINCT FROM sources.canonical_topics
+                OR segments.tags IS DISTINCT FROM sources.tags
+              )
+            LIMIT 1
+            """
+        )
+        if rows:
+            raise StateTransitionError(
+                "Searchable segment citation copies disagree with their source row."
+            )
 
     async def create_pdf_content_build(
         self,
@@ -1645,32 +1694,44 @@ class KnowledgeDatabase:
                 await connection.execute("SET LOCAL hnsw.max_scan_tuples = 20000")
                 await connection.execute("SET LOCAL hnsw.scan_mem_multiplier = 1")
                 common = """
-                    index_id = $1::uuid
-                    AND segment_type = ANY($6::text[])
-                    AND ($3::text IS NULL OR primary_topic = $3)
-                    AND ($4::text[] IS NULL OR tags @> $4::text[])
-                    AND ($5::text IS NULL OR source_path = $5
-                         OR left(source_path, char_length($5) + 1) = $5 || '/')
-                    AND ($7::text IS NULL OR canonical_topics @> ARRAY[$7::text])
+                    segments.index_id = $1::uuid
+                    AND segments.segment_type = ANY($6::text[])
+                    AND ($3::text IS NULL OR segments.primary_topic = $3)
+                    AND ($4::text[] IS NULL OR segments.tags @> $4::text[])
+                    AND ($5::text IS NULL OR segments.source_path = $5
+                         OR left(segments.source_path, char_length($5) + 1) = $5 || '/')
+                    AND ($7::text IS NULL OR segments.canonical_topics @> ARRAY[$7::text])
                     AND ($8::text[] IS NULL
                          OR (cardinality($8::text[]) > 0
-                             AND canonical_topics @> $8::text[]))
+                             AND segments.canonical_topics @> $8::text[]))
                 """
                 # The inner query intentionally has only the pgvector distance
                 # operator in ascending order plus LIMIT, which permits HNSW.
+                # F-575 (R10-T10-6): the filter still runs on the segment's own
+                # copies -- that is what they exist for -- but the citation
+                # fields are projected from the canonical source row OUTSIDE the
+                # materialised ANN scan, so the scan F-072 pinned is unchanged.
                 dense_rows = await connection.fetch(
                     f"""
                     WITH ann AS MATERIALIZED (
-                      SELECT id, source_path, title, primary_topic, tags, heading_path,
-                             text, line_start, line_end, page_start, page_end, bbox,
-                             segment_type, indexed_by_run_id, source_id, canonical_topics,
-                             embedding <=> $2::vector AS dense_distance
-                      FROM knowledge.segments
+                      SELECT segments.id, segments.source_id, segments.segment_type,
+                             segments.text, segments.heading_path,
+                             segments.line_start, segments.line_end,
+                             segments.page_start, segments.page_end, segments.bbox,
+                             segments.indexed_by_run_id,
+                             segments.embedding <=> $2::vector AS dense_distance
+                      FROM knowledge.segments segments
                       WHERE {common}
-                      ORDER BY embedding <=> $2::vector ASC
+                      ORDER BY segments.embedding <=> $2::vector ASC
                       LIMIT 40
                     )
-                    SELECT * FROM ann ORDER BY dense_distance ASC, id ASC
+                    SELECT ann.*,
+                           sources.source_path, sources.title, sources.primary_topic,
+                           sources.canonical_topics, sources.tags
+                    FROM ann
+                    JOIN knowledge.sources sources
+                      ON sources.id = ann.source_id
+                    ORDER BY dense_distance ASC, id ASC
                     """,
                     UUID(index_id), vector, primary_topic, tags, path_prefix, list(segment_types),
                     namespace_topic,
@@ -1681,13 +1742,21 @@ class KnowledgeDatabase:
                     WITH parsed AS (
                       SELECT websearch_to_tsquery('simple', $2) AS value
                     )
-                    SELECT segments.id, source_path, title, primary_topic, tags,
-                           heading_path, text, line_start, line_end, page_start, page_end, bbox,
-                           segment_type, indexed_by_run_id, source_id, canonical_topics,
-                           ts_rank_cd('{{0.1,0.2,0.4,1.0}}', search_vector,
+                    SELECT segments.id, segments.segment_type,
+                           segments.text, segments.heading_path,
+                           segments.line_start, segments.line_end,
+                           segments.page_start, segments.page_end, segments.bbox,
+                           segments.indexed_by_run_id, segments.source_id,
+                           sources.source_path, sources.title, sources.primary_topic,
+                           sources.canonical_topics, sources.tags,
+                           ts_rank_cd('{{0.1,0.2,0.4,1.0}}', segments.search_vector,
                                       parsed.value, 0) AS fts_score
-                    FROM knowledge.segments, parsed
-                    WHERE {common} AND search_vector @@ parsed.value
+                    FROM knowledge.segments segments
+                    JOIN knowledge.sources sources
+                      ON sources.id = segments.source_id
+                     AND sources.index_id = segments.index_id,
+                         parsed
+                    WHERE {common} AND segments.search_vector @@ parsed.value
                     ORDER BY fts_score DESC, segments.id ASC
                     LIMIT 40
                     """,
@@ -1812,8 +1881,11 @@ class KnowledgeDatabase:
         row = await self._pool.fetchrow(
             """
             SELECT segments.id::text, segments.index_id::text, segments.source_id::text,
-                   segments.source_path, segments.title, segments.text, segments.heading_path,
-                   segments.primary_topic, segments.canonical_topics, segments.tags,
+                   -- F-575 (R10-T10-6): the citation fields are the canonical
+                   -- source row's, projected through the existing FK, never the
+                   -- denormalised copy the segment carries.
+                   sources.source_path, sources.title, segments.text, segments.heading_path,
+                   sources.primary_topic, sources.canonical_topics, sources.tags,
                    segments.segment_type, segments.chunk_ordinal,
                    segments.line_start, segments.line_end,
                    segments.page_start, segments.page_end, segments.bbox,

@@ -782,7 +782,10 @@ class StartupSweepAndLockTests(unittest.IsolatedAsyncioTestCase):
         domain assertion that guards every later read.
         """
 
-        connection = FakeConnection(fetchvals=[True, True], fetches=[[]])
+        # Two invariant asserts run on every boot arm (F-513's domain assert and
+        # F-575's segments-to-sources agreement assert), so the fake answers
+        # two fetches.
+        connection = FakeConnection(fetchvals=[True, True], fetches=[[], []])
         pool = FakePool(connection)
         database = KnowledgeDatabase(
             "localhost",
@@ -849,7 +852,10 @@ class StartupSweepAndLockTests(unittest.IsolatedAsyncioTestCase):
         it with the code of whatever failed first.
         """
 
-        connection = FakeConnection(fetchvals=[True, True], fetches=[[]])
+        # Two invariant asserts run on every boot arm (F-513's domain assert and
+        # F-575's segments-to-sources agreement assert), so the fake answers
+        # two fetches.
+        connection = FakeConnection(fetchvals=[True, True], fetches=[[], []])
         original_execute = connection.execute
         lock_attempts: list[int] = []
 
