@@ -1985,9 +1985,42 @@ export function checkWorktreeRegistry(repositoryRoot) {
  * read it. The rule here is that a cited script is READ by at least one file
  * the `npm test` gate runs, and that the cited path exists at all - a doc that
  * points at a script nothing carries is the same defect with a shorter path.
+ *
+ * The citation population is derived, not typed: the first channel is every
+ * tracked executable a tracked doc names by path, the second is every path a
+ * doc puts in command position (behind an interpreter, or prefixed with
+ * `./`). A hand-typed alternation of directory prefixes only ever checked the
+ * two families somebody remembered, so the operator drivers under
+ * `integrations/openclaw/` were cited by README and never entered the map.
  */
-const OPERATOR_SCRIPT_CITATION =
-  /(?:infrastructure\/docker\/scripts\/[\w.-]+\.(?:ps1|sh)|scripts\/[\w./-]+\.(?:mjs|sh|bash))/gu;
+const EXECUTABLE_FILE_SUFFIX = /\.(?:mjs|cjs|js|mts|sh|bash|ps1|py)$/u;
+const INTERPRETER_COMMAND_CITATION =
+  /\b(?:node|python3?|bash|sh|pwsh|powershell|deno|bun)\s+(?:--?[\w-]+(?:=\S+)?\s+)*((?:\.\/)?(?:[\w@+-]+\/)+[\w@+-]+\.(?:mjs|cjs|js|mts|sh|bash|ps1|py))/gu;
+const RELATIVE_COMMAND_CITATION =
+  /(?:^|[\s`"'(])(\.\/(?:[\w@+-]+\/)+[\w@+-]+\.(?:mjs|cjs|js|mts|sh|bash|ps1|py))/gu;
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+function documentNamesPath(contents, repositoryPath) {
+  const pattern = new RegExp(
+    `(?:^|[^\\w./@+-])${escapeRegExp(repositoryPath)}(?![\\w./@+-])`,
+    "u",
+  );
+  return pattern.test(contents);
+}
+
+function declaredSuiteDirectories(packageJson) {
+  const directories = new Set();
+  for (const body of Object.values(packageJson?.scripts ?? {})) {
+    if (typeof body !== "string" || !/\bpytest\b/u.test(body)) continue;
+    const directory = /--directory\s+([\w./-]+)/u.exec(body)?.[1];
+    if (!directory) continue;
+    directories.add(`${directory.replace(/\/+$/u, "")}/tests`);
+  }
+  return [...directories];
+}
 
 export function checkDocumentedScriptsAreCovered(
   repositoryRoot,
@@ -2022,34 +2055,65 @@ export function checkDocumentedScriptsAreCovered(
       (repositoryPath.startsWith("docs/runbooks/") &&
         repositoryPath.endsWith(".md")),
   );
-  const cited = new Map();
+  const docContents = new Map();
   for (const docFile of docFiles) {
     const docPath = resolveTrackedPath(repositoryRoot, docFile);
     if (!existsSync(docPath)) continue;
-    const contents = readFileSync(docPath, "utf8");
-    for (const match of contents.matchAll(OPERATOR_SCRIPT_CITATION)) {
-      const scriptPath = match[0];
-      if (!cited.has(scriptPath)) cited.set(scriptPath, new Set());
-      cited.get(scriptPath).add(docFile);
+    docContents.set(docFile, readFileSync(docPath, "utf8"));
+  }
+
+  const cited = new Map();
+  const cite = (scriptPath, docFile) => {
+    if (!cited.has(scriptPath)) cited.set(scriptPath, new Set());
+    cited.get(scriptPath).add(docFile);
+  };
+  // Channel one: the population of tracked executables, filtered by whether
+  // a tracked doc names the path. A doc cannot cite a file nobody ships into
+  // this channel, so the population grows with the tree instead of with an
+  // editor's memory of which prefixes exist.
+  for (const scriptPath of trackedFiles.filter((repositoryPath) =>
+    EXECUTABLE_FILE_SUFFIX.test(repositoryPath),
+  )) {
+    for (const [docFile, contents] of docContents) {
+      if (documentNamesPath(contents, scriptPath)) cite(scriptPath, docFile);
+    }
+  }
+  // Channel two: command position, which also reaches a path no doc tracks -
+  // the instruction to run something the repository does not carry is the
+  // defect the not-tracked failure exists for.
+  for (const [docFile, contents] of docContents) {
+    for (const citation of [
+      INTERPRETER_COMMAND_CITATION,
+      RELATIVE_COMMAND_CITATION,
+    ]) {
+      for (const match of contents.matchAll(citation)) {
+        cite(match[1].replace(/^\.\//u, ""), docFile);
+      }
     }
   }
 
+  const suiteDirectories = declaredSuiteDirectories(packageJson);
   for (const [scriptPath, docFiles_] of [...cited].sort()) {
+    const citing = [...docFiles_].sort().join(", ");
     if (!trackedFiles.includes(scriptPath)) {
       failures.push(
-        `A tracked document tells the operator to run a script that is not tracked: ${scriptPath} (cited by ${[...docFiles_].sort().join(", ")}).`,
+        `A tracked document tells the operator to run a script that is not tracked: ${scriptPath} (cited by ${citing}).`,
       );
       continue;
     }
-    // A gate file names the script by its file name (the tests assemble the
-    // path from parts), so the file name is the coverage token.
+    // An enumerated gate file covers itself. A pytest suite declared by an
+    // npm script covers the cases it collects. Otherwise a gate file names
+    // the script by its file name (the tests assemble the path from parts).
     const scriptName = path.posix.basename(scriptPath);
-    const covered = [...gateSources.entries()].filter(([, source]) =>
+    const readByBasename = [...gateSources.values()].some((source) =>
       source.includes(scriptName),
     );
-    if (!covered.length) {
+    const readBySuite = suiteDirectories.some((directory) =>
+      scriptPath.startsWith(`${directory}/`),
+    );
+    if (!gateFiles.includes(scriptPath) && !readByBasename && !readBySuite) {
       failures.push(
-        `A tracked document tells the operator to run a script that no verify stage reads: ${scriptPath} (cited by ${[...docFiles_].sort().join(", ")}).`,
+        `A tracked document tells the operator to run a script that no verify stage reads: ${scriptPath} (cited by ${citing}).`,
       );
     }
   }

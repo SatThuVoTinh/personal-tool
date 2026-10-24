@@ -1314,7 +1314,7 @@ test("F-223: a cited script that is not tracked must fail the check", () => {
     writeTrackedFile(
       repositoryRoot,
       "docs/runbooks/knowledge-platform.md",
-      "Run `infrastructure/docker/scripts/phantom.ps1` first.\n",
+      "Run `powershell -File infrastructure/docker/scripts/phantom.ps1` first.\n",
     );
     const failures = checkDocumentedScriptsAreCovered(
       repositoryRoot,
@@ -2178,4 +2178,52 @@ test("F-483: a row documented as outside verify and CI must not run there", () =
     }),
     [],
   );
+});
+
+test("F-566: a runbook that cites an integrations/ operator driver is checked", () => {
+  withTemporaryRepository((repositoryRoot) => {
+    writeTrackedFile(
+      repositoryRoot,
+      "integrations/openclaw/driver.mjs",
+      "export const run = 1;\n",
+    );
+    writeTrackedFile(
+      repositoryRoot,
+      "tests/a.test.mjs",
+      'import test from "node:test";\ntest("a", () => {});\n',
+    );
+    writeTrackedFile(
+      repositoryRoot,
+      "docs/runbooks/operator.md",
+      "Run `node integrations/openclaw/driver.mjs` last.\n",
+    );
+    const tracked = [
+      "integrations/openclaw/driver.mjs",
+      "tests/a.test.mjs",
+      "docs/runbooks/operator.md",
+    ];
+    const uncovered = checkDocumentedScriptsAreCovered(
+      repositoryRoot,
+      { scripts: { test: "node --test tests/a.test.mjs" } },
+      tracked,
+    );
+    assert.ok(
+      uncovered.some((failure) =>
+        /integrations\/openclaw\/driver\.mjs/u.test(failure),
+      ),
+      `a cited integrations driver that no gate reads must fail the check: ${uncovered.join(" | ")}`,
+    );
+
+    writeTrackedFile(
+      repositoryRoot,
+      "tests/b.test.mjs",
+      'const driver = "integrations/openclaw/driver.mjs";\n',
+    );
+    const covered = checkDocumentedScriptsAreCovered(
+      repositoryRoot,
+      { scripts: { test: "node --test tests/a.test.mjs tests/b.test.mjs" } },
+      [...tracked, "tests/b.test.mjs"],
+    );
+    assert.deepEqual(covered, []);
+  });
 });
