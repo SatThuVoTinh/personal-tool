@@ -19,6 +19,7 @@
  */
 
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 
 import { generatePureNodePng } from "./excel-writer.mjs";
@@ -60,6 +61,12 @@ export const RESULT_PREVIEW_BRANDS = Object.freeze({
 });
 
 const UNKNOWN_COLUMN = "(cột sẽ được xác định khi chạy)";
+
+// How many leading hex characters of the rendered image's digest scope the file
+// name (F-468). 16 hex is 64 bits of SHA-256: distinct enough that two different
+// previews never land on one name, short enough to stay a readable Discord file
+// name next to the target label.
+const PNG_NAME_SCOPE_LENGTH = 16;
 
 function sanitizeTarget(target) {
   const value = String(target ?? "result")
@@ -111,6 +118,16 @@ export function buildPreviewTable({ columns = [], rows = [], notes = "" }) {
  * The directory must be absolute and must not be reachable through a path traversal;
  * the caller owns it, which is why the transport layer separately confines the
  * attachment root it hands to the host.
+ *
+ * F-468: the file name is content-scoped. The caller hands this renderer a SHARED
+ * preview root (the `main` agent sandbox) and only reads the returned path back
+ * after an await, so a name keyed on the target alone let a second in-flight task
+ * for the same `targetAgentId` overwrite the first task's image inside the
+ * render-await-upload window — the first card then attached the second task's
+ * screen. The rendered PNG's digest is part of the name, so the path this call
+ * returns always resolves to the bytes this call wrote. Identical content
+ * re-renders onto the same file, which keeps retries from accumulating residue in
+ * the shared root.
  */
 export function renderExpectedResultPreview({
   target = "main",
@@ -143,9 +160,10 @@ export function renderExpectedResultPreview({
     sheetTitle,
     RESULT_PREVIEW_BRANDS[sanitizeTarget(target)] ?? RESULT_PREVIEW_BRANDS.main,
   );
+  const contentScope = createHash("sha256").update(png).digest("hex");
   const filePath = path.join(
     normalized,
-    `expected_result_${sanitizeTarget(target)}.png`,
+    `expected_result_${sanitizeTarget(target)}_${contentScope.slice(0, PNG_NAME_SCOPE_LENGTH)}.png`,
   );
   mkdirSync(normalized, { recursive: true });
   writeFileSync(filePath, png);

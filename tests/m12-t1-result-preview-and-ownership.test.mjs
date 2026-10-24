@@ -46,7 +46,11 @@ describe("M12/T1 P4 — the expected-result preview", () => {
         rows: [["01/2026", "120.000.000", "34"]],
         outputDirectory: root,
       });
-      assert.equal(path.basename(excel), "expected_result_excel.png");
+      assert.match(
+        path.basename(excel),
+        /^expected_result_excel_[0-9a-f]{16}\.png$/u,
+        "F-468: the name is target-scoped AND content-scoped",
+      );
       const bytes = readFileSync(excel);
       assert.deepEqual(bytes.subarray(0, 8), PNG_SIGNATURE);
       assert.ok(bytes.length > 1000, "a blank canvas is not a preview");
@@ -58,6 +62,59 @@ describe("M12/T1 P4 — the expected-result preview", () => {
       });
       assert.notDeepEqual(readFileSync(powerBi), bytes);
       assert.equal(Object.keys(RESULT_PREVIEW_BRANDS).includes("sql"), true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("F-468: two same-target renders keep their own image, not the last writer's", () => {
+    // The preview root is the SHARED `main` agent sandbox and the card's
+    // `mediaUrl` is resolved after the thread-post await, so a second in-flight
+    // task for the same targetAgentId used to overwrite the first task's PNG
+    // inside the render -> await -> upload window and the first card attached
+    // the second task's screen.
+    const root = tempRoot("f468");
+    try {
+      const first = renderExpectedResultPreview({
+        target: "excel",
+        title: "TASK 13102026AAAA",
+        columns: [" thang", " Doanh thu "],
+        rows: [["01/2026", "120.000.000"]],
+        outputDirectory: root,
+      });
+      const firstBytes = readFileSync(first);
+      const second = renderExpectedResultPreview({
+        target: "excel",
+        title: "TASK 13102026BBBB",
+        columns: [" thang", " Doanh thu "],
+        rows: [["02/2026", "999.000.000"]],
+        outputDirectory: root,
+      });
+      assert.notEqual(
+        second,
+        first,
+        "a second same-target render must not reuse the first card's path",
+      );
+      assert.deepEqual(
+        readFileSync(first),
+        firstBytes,
+        "the first card's image must survive the overlapping render",
+      );
+      assert.notDeepEqual(
+        readFileSync(second),
+        firstBytes,
+        "each returned path carries its own image",
+      );
+      // Content-scoped, not call-scoped: the same brief re-renders onto the
+      // same file, so a retry does not accumulate residue in the shared root.
+      const repeat = renderExpectedResultPreview({
+        target: "excel",
+        title: "TASK 13102026AAAA",
+        columns: [" thang", " Doanh thu "],
+        rows: [["01/2026", "120.000.000"]],
+        outputDirectory: root,
+      });
+      assert.equal(repeat, first, "identical content stays one file");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
