@@ -350,7 +350,21 @@ test("the shipped gate registry enumerates every shipped npm script", () => {
   const packageJson = JSON.parse(
     readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"),
   );
-  assert.deepEqual(checkGateRegistry(packageJson, registry), []);
+  // Rows may enumerate a blocking CI surface (an action or a script the
+  // workflow invokes) instead of an npm script, so the pass needs the
+  // workflows as its operand; without them every such row reads as invented.
+  const workflowTexts = {
+    ci: readFileSync(
+      path.join(REPO_ROOT, ".github", "workflows", "ci.yml"),
+      "utf8",
+    ),
+    security: readFileSync(
+      path.join(REPO_ROOT, ".github", "workflows", "security.yml"),
+      "utf8",
+    ),
+    gitleaksConfig: existsSync(path.join(REPO_ROOT, ".gitleaks.toml")),
+  };
+  assert.deepEqual(checkGateRegistry(packageJson, registry, workflowTexts), []);
 });
 
 test("test:m8 and rehearse:r16 are required scripts, not undocumented ones", () => {
