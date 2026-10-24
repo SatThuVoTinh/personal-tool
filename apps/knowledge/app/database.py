@@ -1754,8 +1754,8 @@ class KnowledgeDatabase:
                     FROM knowledge.segments segments
                     JOIN knowledge.sources sources
                       ON sources.id = segments.source_id
-                     AND sources.index_id = segments.index_id,
-                         parsed
+                     AND sources.index_id = segments.index_id
+                    CROSS JOIN parsed
                     WHERE {common} AND segments.search_vector @@ parsed.value
                     ORDER BY fts_score DESC, segments.id ASC
                     LIMIT 40
