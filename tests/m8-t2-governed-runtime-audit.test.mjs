@@ -917,7 +917,13 @@ describe("Data File Format Handler Enrichment — multi-format validation & prev
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "zink-f503-ownxlsx-"));
     try {
       const xlsx = buildMultiSheetWorkbookBuffer([
-        { name: "Sheet1", rows: [["Region", "Amount"], ["North", 10]] },
+        {
+          name: "Sheet1",
+          rows: [
+            ["Region", "Amount"],
+            ["North", 10],
+          ],
+        },
       ]);
       const file = path.join(tempDir, "own-workbook.pbix");
       await writeFile(file, xlsx);
@@ -961,7 +967,9 @@ describe("Data File Format Handler Enrichment — multi-format validation & prev
   // The conjunction, not just the part list, is the control: an ANY-of over the
   // distinguishing parts still accepts a package that carries only one of them.
   test("Power BI: Report/Layout without a data half is refused (conjunction is load-bearing)", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "zink-f503-layoutonly-"));
+    const tempDir = await mkdtemp(
+      path.join(os.tmpdir(), "zink-f503-layoutonly-"),
+    );
     try {
       const file = path.join(tempDir, "layout-only.pbix");
       const buf = buildZip([
@@ -978,7 +986,9 @@ describe("Data File Format Handler Enrichment — multi-format validation & prev
   });
 
   test("Power BI: a data half without Report/Layout is refused (conjunction is load-bearing)", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "zink-f503-dataonly-"));
+    const tempDir = await mkdtemp(
+      path.join(os.tmpdir(), "zink-f503-dataonly-"),
+    );
     try {
       const file = path.join(tempDir, "data-only.pbix");
       const buf = buildZip([
