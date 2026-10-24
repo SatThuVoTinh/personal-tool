@@ -66,6 +66,19 @@ function resolveRepositoryRoot() {
 
 const REPO = resolveRepositoryRoot();
 
+/**
+ * The governance writers the durability rows name. This is the ONE register:
+ * every lane that proves the per-site property consumes it instead of typing
+ * its own copy, because two hand-typed copies is how the predicate forked in
+ * the first place (F-491 / R9-T11-1).
+ */
+export const REGISTERED_DURABILITY_WRITERS = Object.freeze([
+  "integrations/openclaw/topology/lib/ledger.mjs",
+  "integrations/openclaw/lib/queue-manager.mjs",
+  "integrations/openclaw/lib/decision-ledger.mjs",
+  "integrations/openclaw/lib/artifact-validator.mjs",
+]);
+
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
