@@ -407,12 +407,27 @@ test("R3 0: provenance parity — ten admitted digests for ten proven records", 
       "sanity: digests differ from the gate file itself",
     );
   }
-  // No wildcard or prefix entry was introduced anywhere.
-  assert.equal(
-    /"\*"|\*\//u.test(CONFIGURE_SOURCE),
-    false,
-    "no wildcard entries",
+  // F-528 (R10-L12-3): the guard's subject is the allowlist's KEYS. The line
+  // this replaces ran `/"\*"|\*\//u` over the whole ~2,000-line script, so it
+  // policed the file's comment style — any JSDoc block anywhere reddened a lane
+  // whose message says "no wildcard entries" — while a wildcard written as a
+  // prefix or a regex scope passed it. Scoped to the extracted table, a `"*"`
+  // key now reddens the lane and a comment elsewhere leaves it green.
+  const keys = [...table.matchAll(/^ {2}"([^"]+)": Object\.freeze\(\[/gmu)].map(
+    (match) => match[1],
   );
+  assert.ok(
+    keys.length >= Object.keys(HYGIENE_ASSET_PREDECESSORS).length,
+    "the extracted table must expose at least the ten admitted paths",
+  );
+  for (const key of keys) {
+    assert.notEqual(key, "*", "the allowlist must not carry a wildcard key");
+    assert.equal(
+      /[*?[\]{}]/u.test(key),
+      false,
+      `"${key}": an admitted key must name one exact path, not a glob`,
+    );
+  }
 });
 
 test("R3 0b: the current-build digests are NOT listed anywhere", async () => {
