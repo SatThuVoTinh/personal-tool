@@ -170,6 +170,41 @@ def _reranker_error_code(error: BaseException) -> str:
     return "RERANKER_UNAVAILABLE"
 
 
+def _search_report(
+    retained_count: int,
+    returned_count: int,
+    candidate_pool_count: int,
+    pool_at_ceiling: bool,
+) -> dict[str, bool | int]:
+    """The completeness fields of a `/v1/search` answer.
+
+    F-132 (R5-E02-04) and F-140 (R5-E01-06): `total_count` used to be the
+    LENGTH OF THE PAGE, so a 20-candidate pool cut to `limit=5` read as "only 5
+    matches exist" and an agent concluded the corpus held nothing more. It is
+    the number of matching results that EXIST, and `has_more` /
+    `candidate_pool_count` say whether the page was truncated.
+
+    F-514 (R10-L07-3): `has_more` compares the retained pool with the page, and
+    both are capped at `MAX_RERANK_CANDIDATES` -- the same constant `limit` is
+    capped at. At `limit == MAX_RERANK_CANDIDATES` a pool that FILLED that
+    ceiling left no field differing from a complete answer, so a cut answer was
+    indistinguishable from an exhausted one. `truncated` states that a ceiling
+    was applied: true when the fused pool reached `MAX_RERANK_CANDIDATES`
+    (equality included -- a pool that filled the ceiling cannot claim there was
+    nothing more) or when the page dropped results the pool did hold. No
+    ceiling moves: the pool is still `MAX_RERANK_CANDIDATES`, the page is still
+    `limit`.
+    """
+
+    return {
+        "total_count": retained_count,
+        "returned_count": returned_count,
+        "has_more": retained_count > returned_count,
+        "candidate_pool_count": candidate_pool_count,
+        "truncated": pool_at_ceiling or retained_count > returned_count,
+    }
+
+
 def _file_content_evidence(path: Path) -> tuple[str, int, int]:
     """Cheap evidence that a hashed file's CONTENT changed.
 
@@ -564,6 +599,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     raise HTTPException(
                         status_code=422, detail={"code": "INVALID_SEARCH_REQUEST"}
                     )
+                # F-514 (R10-L07-3): fuse the branches once, before the ceiling
+                # is applied. `pool_at_ceiling` is the operand `has_more` cannot
+                # carry at the top of the legal `limit` range: a pool that
+                # filled the ceiling means at least this many results matched,
+                # not exactly this many.
+                fused_pool = fuse_candidates(dense, fts)
+                candidate_limit = MAX_RERANK_CANDIDATES
+                pool_at_ceiling = len(fused_pool) >= candidate_limit
                 if reranked:
                     # M10/T2-R21: the pool is MAX_RERANK_CANDIDATES, not the
                     # page size. `min(MAX_RERANK_CANDIDATES, request.limit)` was
@@ -576,8 +619,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     # filter-after-limit. A query with min_score=0.8 whose top 10
                     # all scored below 0.8 returned an empty page while ranks
                     # 11-20, never scored, could have satisfied it.
-                    candidate_limit = MAX_RERANK_CANDIDATES
-                    fused_candidates = fuse_candidates(dense, fts)[:candidate_limit]
+                    #
+                    # F-514 (R10-L07-3): the cut itself is measured once, over
+                    # the whole fused set, so the answer can say that a ceiling
+                    # was applied even when the page and the pool are the same
+                    # size.
+                    fused_candidates = fused_pool[:candidate_limit]
                     pairs = [
                         (query, render_retrieval_text(item.candidate.heading_path, item.candidate.text))
                         for item in fused_candidates
@@ -593,8 +640,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     # M10/T2-R21: same correction as the reranked branch — the
                     # candidate pool must be wider than the page so that
                     # `min_score` filters a pool rather than the final page.
-                    candidate_limit = MAX_RERANK_CANDIDATES
-                    fused_candidates = fuse_candidates(dense, fts)[:candidate_limit]
+                    fused_candidates = fused_pool[:candidate_limit]
                     raw_scores = [item.rrf_score for item in fused_candidates]
 
                 results = []
@@ -671,18 +717,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "index_id": active_index.id,
                     "query": query,
                     "semantic_contract_version": "zink-semantic-v2",
-                    # F-132 (R5-E02-04) and F-140 (R5-E01-06): `total_count`
-                    # used to be the LENGTH OF THE PAGE, so a 20-candidate
-                    # pool cut to `limit=5` read as "only 5 matches exist" and
-                    # an agent concluded the corpus held nothing more. It is
-                    # now the number of matching results that EXIST, and
-                    # `has_more` / `candidate_pool_count` say whether the page
-                    # was truncated. No ceiling moved: the pool is still
-                    # MAX_RERANK_CANDIDATES and the page is still `limit`.
-                    "total_count": len(results),
-                    "returned_count": len(bounded_results),
-                    "has_more": len(results) > len(bounded_results),
-                    "candidate_pool_count": len(fused_candidates),
+                    **_search_report(
+                        len(results),
+                        len(bounded_results),
+                        len(fused_candidates),
+                        pool_at_ceiling,
+                    ),
                     "results": bounded_results,
                 }
             raise HTTPException(status_code=503, detail={"code": "ACTIVE_INDEX_CHANGED"})

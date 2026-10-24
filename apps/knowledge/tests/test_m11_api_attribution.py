@@ -58,7 +58,7 @@ from app.main import (
 )
 from app.markdown_adapter import QUERY_BUDGET_FIXTURE, QUERY_MAX_TOKENS
 from app.model_probe import ResolvedEmbeddingModel
-from app.retrieval import NO_MATCH_TOPIC
+from app.retrieval import MAX_RERANK_CANDIDATES, NO_MATCH_TOPIC
 from app.run_errors import SafeRunError, serialize_errors
 
 EMBEDDING = ResolvedEmbeddingModel("bge-m3:latest", "a" * 64, 1024)
@@ -446,6 +446,41 @@ class ApiAttributionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(body["results"]), 5)
         self.assertTrue(body["has_more"])
         self.assertEqual(body["candidate_pool_count"], 20)
+        # F-514 (R10-L07-3): a ceiling was applied, so the answer is not
+        # complete even though the pool is the whole matching set it retained.
+        self.assertTrue(body["truncated"])
+
+    async def test_a_page_at_the_ceiling_states_that_a_ceiling_was_applied(
+        self,
+    ) -> None:
+        """F-514 (R10-L07-3): completeness at the top of the legal `limit`.
+
+        `has_more` compares the page with the retained pool, and both are
+        capped at `MAX_RERANK_CANDIDATES` -- the same constant `limit` is
+        capped at. A saturated pool therefore reported `has_more: false` and
+        `total_count: 20`, which is exactly what a corpus holding 20 matches
+        reports. `truncated` carries the fact that a ceiling was applied.
+        """
+
+        self.app.state.database.get_active_index = AsyncMock(return_value=ACTIVE)
+        self.app.state.database.search_candidates = AsyncMock(
+            return_value=(
+                [candidate(f"c{index}") for index in range(MAX_RERANK_CANDIDATES)],
+                [],
+            )
+        )
+
+        response = await self.request(
+            "POST",
+            "/v1/search",
+            json={"query": "topic", "rerank": False, "limit": MAX_RERANK_CANDIDATES},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["candidate_pool_count"], MAX_RERANK_CANDIDATES)
+        self.assertFalse(body["has_more"])
+        self.assertTrue(body["truncated"])
 
     async def test_an_untruncated_page_reports_no_more_results(self) -> None:
         """F-140 (R5-E01-06): completeness is distinguishable from truncation."""
@@ -462,6 +497,7 @@ class ApiAttributionTests(unittest.IsolatedAsyncioTestCase):
         body = response.json()
         self.assertEqual(body["total_count"], 2)
         self.assertFalse(body["has_more"])
+        self.assertFalse(body["truncated"])
 
     async def test_a_namespace_scope_reaches_the_query(self) -> None:
         """F-116 (R5-E02-01): an answer scoped to a namespace was corpus-wide.
