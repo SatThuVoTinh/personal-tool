@@ -1607,13 +1607,44 @@ class KnowledgeDatabase:
     async def _source_digests(
         connection: asyncpg.Connection, source_ids: set[str]
     ) -> dict[str, str]:
+        """The identity a caller re-verifies, as the bytes of the file itself.
+
+        F-512 (R10-L07-1): `knowledge.sources.sha256` holds the PDF CONTENT
+        IDENTITY -- the composite of the PDF digest, its sidecar digest and the
+        processing identity -- while the same column holds `sha256(file)` for a
+        markdown source. Every reader projected that one column as
+        `source_sha256`, and the citation promises a digest that "can be
+        re-verified by re-hashing the source", so a PDF hit published a value
+        no re-hash of the PDF could ever produce.
+
+        The file digest is the build's own `pdf_digest`. The join is on the
+        identity the source row already carries, not on the publish link, so it
+        also covers a build whose link was reclaimed: the identity encodes the
+        file digest, so every build of one identity carries the same
+        `pdf_digest`.
+        """
+
         if not source_ids:
             return {}
         rows = await connection.fetch(
-            "SELECT id::text, sha256 FROM knowledge.sources WHERE id = ANY($1::uuid[])",
+            """
+            SELECT sources.id::text AS id,
+                   sources.sha256 AS content_identity_digest,
+                   builds.pdf_digest AS pdf_digest
+            FROM knowledge.sources sources
+            LEFT JOIN knowledge.pdf_content_builds builds
+              ON builds.content_identity_digest = sources.sha256
+             AND sources.source_type = 'PDF'
+            WHERE sources.id = ANY($1::uuid[])
+            """,
             [UUID(source_id) for source_id in sorted(source_ids)],
         )
-        return {str(row["id"]): str(row["sha256"]) for row in rows}
+        return {
+            str(row["id"]): str(
+                row["pdf_digest"] or row["content_identity_digest"]
+            )
+            for row in rows
+        }
 
     @staticmethod
     def _candidate_from_row(
@@ -1670,12 +1701,17 @@ class KnowledgeDatabase:
                    segments.segment_type, segments.line_start, segments.line_end,
                    segments.page_start, segments.page_end, segments.bbox,
                    segments.indexed_by_run_id::text,
-                   sources.sha256 AS source_sha256, sources.source_type AS source_type,
+                   sources.sha256 AS content_identity_digest,
+                   builds.pdf_digest AS pdf_digest,
+                   sources.source_type AS source_type,
                    sources.mime_type AS source_mime_type
             FROM knowledge.segments
             JOIN knowledge.sources
               ON knowledge.sources.id = segments.source_id
              AND knowledge.sources.index_id = segments.index_id
+            LEFT JOIN knowledge.pdf_content_builds builds
+              ON builds.content_identity_digest = sources.sha256
+             AND sources.source_type = 'PDF'
             WHERE segments.id = $1
             """,
             UUID(segment_id),
@@ -1693,7 +1729,9 @@ class KnowledgeDatabase:
             id=str(row["id"]),
             index_id=str(row["index_id"]),
             source_id=str(row["source_id"]),
-            source_sha256=str(row["source_sha256"]),
+            # F-512 (R10-L07-1): the published digest is the file digest, not
+            # the composite `sources.sha256` holds for a PDF row.
+            source_sha256=str(row["pdf_digest"] or row["content_identity_digest"]),
             source_path=str(row["source_path"]),
             source_type=source_type,
             source_mime_type=str(row["source_mime_type"]),
