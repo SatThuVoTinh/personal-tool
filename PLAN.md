@@ -8104,11 +8104,25 @@ force-push, no PR/merge/release.
 - R3 is archived at `docs/contracts/execution/archive/2026-10-21-M12-T9-R3.md`.
 - R4 is materialized at `docs/contracts/execution/ACTIVE.md`; this block is its
   lifecycle pointer.
-- 22 of the 189 scoped rows are closed with red/green and mutation evidence:
+- 25 of the 189 scoped rows are closed with red/green and mutation evidence:
   `F-523`, `F-524`, `F-437`, `F-438`, `F-408`, `F-414`, `F-464`, `F-465`,
   `F-466`, `F-473`, `F-442`, `F-444`, `F-533`, `F-427`, `F-428`, `F-429`,
-  `F-450`, `F-455`, `F-451`, `F-452`, `F-453`, `F-511`. The register now carries
-  201 rows (133 OPEN + 34 LATENT in scope = 167, 32 REFUTED, 2 BLOCKED).
+  `F-450`, `F-455`, `F-451`, `F-452`, `F-453`, `F-511`, `F-467`, `F-474`,
+  `F-567`. The register now carries 198 rows (129 OPEN + 34 LATENT in scope =
+  163, 32 REFUTED, 2 BLOCKED, 1 PARTIAL). The §1 census in the register was
+  stale by the 22 earlier closures and was corrected against the file rather
+  than against its own header.
+- The evidence floor is dispositioned: `F-467` (`8de5340`), `F-474`+`F-567`
+  (one recorded merge, `7c6571b`) and `F-492`'s failed/errored half (`7e13dcb`)
+  are green with red-before and a mutation probe reverted in person. `F-492`
+  stays in the register as `PARTIAL`: its widened acceptance criterion also
+  demands a red for a childless zero-assertion case, but the row's own
+  measurement says the junit report carries only `name`, `time`, `classname`
+  and `file` per case, so that state is byte-identical to a pass and no
+  predicate over the report can see it; the criterion's named lane
+  `tests/skip-expectation-gate.test.mjs` does not exist. Owner decision needed:
+  re-scope the criterion to the two observable states, or name the signal.
+  `F-481` stays `OPEN` per the 2026-10-24 decision above.
 - The band that had already merged without its closeout (`F-464`/`F-465`/
   `F-466`/`F-473` from B4, `F-442`/`F-444` from B5) was re-measured at this HEAD
   before its rows were deleted: the artifact/Excel lane is 8/8, the knowledge
