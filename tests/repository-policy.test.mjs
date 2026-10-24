@@ -203,6 +203,47 @@ test("rejects a tracked .env file", () => {
   });
 });
 
+// F-521 (legacy `R10-L09-5`): `.gitignore:2-5` declares the whole `.env.*`
+// family "Secrets and machine-specific environment files", but `isSensitivePath`
+// compared the basename against `.env` exactly, so a force-added
+// `.env.production` passed `repo:check` by name.
+test("F-521: refuses the .env.* family while the declared templates stay allowed", () => {
+  withTemporaryRepository((repositoryRoot) => {
+    for (const name of [
+      ".env.production",
+      ".env.local",
+      "infrastructure/docker/env/.env.staging",
+    ]) {
+      writeTrackedFile(
+        repositoryRoot,
+        name,
+        "POSTGRES_PASSWORD=not-a-real-secret\n",
+      );
+    }
+    const failures = checkTrackedFilePolicies(listTrackedFiles(repositoryRoot));
+    for (const name of [
+      ".env.production",
+      ".env.local",
+      "infrastructure/docker/env/.env.staging",
+    ]) {
+      assert.ok(
+        failures.includes(`Tracked sensitive file is not allowlisted: ${name}`),
+        `the .env.* family must be refused by name: ${JSON.stringify(failures)}`,
+      );
+    }
+  });
+  // The templates the allowlist already names must not become refused: the
+  // family clause may only widen the guard, never silence a declared template.
+  assert.deepEqual(
+    checkTrackedFilePolicies([
+      ".env.example",
+      ".env.template",
+      "infrastructure/docker/env/.env.example",
+    ]),
+    [],
+  );
+});
+
 test("rejects a tracked runtime license artifact", () => {
   withTemporaryRepository((repositoryRoot) => {
     writeTrackedFile(

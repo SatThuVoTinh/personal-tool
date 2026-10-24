@@ -882,6 +882,12 @@ function isSensitivePath(filePath) {
   const name = path.posix.basename(normalizedPath(filePath)).toLowerCase();
   return (
     name === ".env" ||
+    // F-521 (legacy `R10-L09-5`): `.gitignore` declares the whole `.env.*`
+    // family "Secrets and machine-specific environment files", so the guard must
+    // refuse the family by name and not only the bare basename. The names the
+    // template allowlist already declares (`.env.example`, `.env.template`) stay
+    // allowed downstream in `checkTrackedFilePolicies`.
+    name.startsWith(".env.") ||
     /^credentials[^/]*\.json$/.test(name) ||
     /\.license$/.test(name) ||
     /\.(key|pem|p12|pfx)$/.test(name)
