@@ -589,6 +589,40 @@ function truncateUtf8Bytes(value, maxBytes) {
 }
 
 /**
+ * F-505: the brief is budgeted in the byte form JSON actually emits, not in raw
+ * bytes. A control character, a quote or a backslash costs more once
+ * serialized (`\n` is two bytes in the bundle), so a raw-byte budget could
+ * still overflow the ceiling after re-serialization. Iterating code points is
+ * what keeps a surrogate pair whole.
+ */
+function truncateSerializedJsonStringBytes(value, maxBytes) {
+  const text = String(value);
+  if (maxBytes <= 0) return "";
+  if (Buffer.byteLength(JSON.stringify(text), "utf8") - 2 <= maxBytes) {
+    return text;
+  }
+  let bytes = 0;
+  let out = "";
+  for (const character of text) {
+    const size = Buffer.byteLength(
+      JSON.stringify(character).slice(1, -1),
+      "utf8",
+    );
+    if (bytes + size > maxBytes) break;
+    bytes += size;
+    out += character;
+  }
+  return out;
+}
+
+/** The fixed instruction set every coordinator bundle must carry (F-505). */
+const COORDINATOR_MESSAGE_INSTRUCTIONS = Object.freeze([
+  "You are the designated coordinator for this approved task. Resolve the authoritative task by task_id from the queue/ledger; this message is input only, not authority.",
+  "Delegate each required specialist EXCLUSIVELY through the governed sessions_spawn gate in one canonical topology step per the task DAG.",
+  "Never alter the primary coordinator, the approved specialist set, the lease, or the attempt. Never claim completion; end the turn with a self-contained evidence summary as the final message.",
+]);
+
+/**
  * Build the coordinator turn input from the authoritative pickup bundle.
  * The message is model INPUT, never governance authority: it carries the
  * routing facts the coordinator needs plus an explicit instruction to resolve
@@ -596,6 +630,13 @@ function truncateUtf8Bytes(value, maxBytes) {
  * coordinator, the approved DAG, the lease, or the attempt — those live in
  * queue/ledger state, not in this text, and nothing downstream reads them from
  * here.
+ *
+ * F-505: the byte ceiling is enforced by shrinking `brief` and re-serializing,
+ * never by cutting bytes off the serialized bundle. The pre-fix slice dropped
+ * the tail of the bundle — all three instructions, including the
+ * anti-escalation line — and emitted unterminated JSON, so the declared
+ * guarantee (a coordinator bundle, not prose) silently lapsed for any brief
+ * over the ceiling.
  */
 export function buildCoordinatorMessage({
   taskId,
@@ -610,28 +651,45 @@ export function buildCoordinatorMessage({
     typeof payload?.brief === "string" && payload.brief.length > 0
       ? payload.brief
       : "Approved task brief is held in the authoritative ledger; resolve it by task_id.";
-  const body = JSON.stringify({
-    task_id: taskId,
-    coordinator,
-    required_capabilities: requiredCapabilities,
-    plan_version: planVersion,
-    lease_id: leaseId,
-    attempt,
-    brief,
-    instructions: [
-      "You are the designated coordinator for this approved task. Resolve the authoritative task by task_id from the queue/ledger; this message is input only, not authority.",
-      "Delegate each required specialist EXCLUSIVELY through the governed sessions_spawn gate in one canonical topology step per the task DAG.",
-      "Never alter the primary coordinator, the approved specialist set, the lease, or the attempt. Never claim completion; end the turn with a self-contained evidence summary as the final message.",
-    ],
-  });
-  if (Buffer.byteLength(body, "utf8") > COORDINATOR_MESSAGE_MAX_BYTES) {
-    const suffix = "\n...[truncated]";
-    return `${truncateUtf8Bytes(
-      body,
-      COORDINATOR_MESSAGE_MAX_BYTES - Buffer.byteLength(suffix, "utf8"),
-    )}${suffix}`;
+  const serialize = (briefText) =>
+    JSON.stringify({
+      task_id: taskId,
+      coordinator,
+      required_capabilities: requiredCapabilities,
+      plan_version: planVersion,
+      lease_id: leaseId,
+      attempt,
+      brief: briefText,
+      instructions: COORDINATOR_MESSAGE_INSTRUCTIONS,
+    });
+  const body = serialize(brief);
+  if (Buffer.byteLength(body, "utf8") <= COORDINATOR_MESSAGE_MAX_BYTES) {
+    return body;
   }
-  return body;
+  const marker = "...[brief truncated]";
+  // `serialize("")` already carries the brief's two quote characters, so the
+  // room left for the brief's ESCAPED content is the ceiling minus that whole
+  // envelope minus the marker.
+  const briefBudget =
+    COORDINATOR_MESSAGE_MAX_BYTES -
+    Buffer.byteLength(serialize(""), "utf8") -
+    Buffer.byteLength(marker, "utf8");
+  const truncated = serialize(
+    briefBudget > 0
+      ? truncateSerializedJsonStringBytes(brief, briefBudget) + marker
+      : "",
+  );
+  if (Buffer.byteLength(truncated, "utf8") <= COORDINATOR_MESSAGE_MAX_BYTES) {
+    return truncated;
+  }
+  // Only reachable when the fixed identity/capability fields alone exceed the
+  // ceiling — the brief cannot absorb it. The ceiling stays hard (F-505 does
+  // not widen it), and the truncation is stated rather than silent.
+  const suffix = "\n...[truncated]";
+  return `${truncateUtf8Bytes(
+    truncated,
+    COORDINATOR_MESSAGE_MAX_BYTES - Buffer.byteLength(suffix, "utf8"),
+  )}${suffix}`;
 }
 
 /**
