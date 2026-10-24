@@ -8104,7 +8104,7 @@ force-push, no PR/merge/release.
 - R3 is archived at `docs/contracts/execution/archive/2026-10-21-M12-T9-R3.md`.
 - R4 is materialized at `docs/contracts/execution/ACTIVE.md`; this block is its
   lifecycle pointer.
-- 58 of the 165 scoped rows are closed with red/green and mutation evidence:
+- 59 of the 165 scoped rows are closed with red/green and mutation evidence:
   `F-523`, `F-524`, `F-437`, `F-438`, `F-408`, `F-414`, `F-464`, `F-465`,
   `F-466`, `F-473`, `F-442`, `F-444`, `F-533`, `F-427`, `F-428`, `F-429`,
   `F-450`, `F-455`, `F-451`, `F-452`, `F-453`, `F-511`, `F-467`, `F-474`,
@@ -8112,9 +8112,9 @@ force-push, no PR/merge/release.
   `F-415`, `F-410`, `F-512`, `F-573`, `F-412`, `F-413`, `F-513`, `F-458`,
   `F-483`, `F-566`, `F-482`, `F-519`, `F-509`, `F-574`, `F-133`, `F-544`,
   `F-514`, `F-516`, `F-526`, `F-527`, `F-528`, `F-550`, `F-443`, `F-570`,
-  `F-547`, `F-541`. The register now carries 165 rows (101 OPEN + 27 LATENT in
-  scope = 128, 32 REFUTED, 2 BLOCKED, 3 PARTIAL). The §1 census in the register
-  was stale by the 22 earlier closures and was corrected against the file rather
+  `F-547`, `F-541`, `F-496`. The register now carries 164 rows (100 OPEN + 27
+  LATENT in scope = 127, 32 REFUTED, 2 BLOCKED, 3 PARTIAL). The §1 census in the
+  register was stale by the 22 earlier closures and was corrected against the file rather
   than against its own header; its closure total also read 419 while its own
   item list summed to 427, and is now measured from the `CHANGELOG.md` bullets.
 - The evidence floor is dispositioned: `F-467` (`8de5340`), `F-474`+`F-567`
@@ -8220,6 +8220,19 @@ null;`) left the lane 3/3 green, so that path is unproven and the shipped
   Dockerfile contracts 62 pass / 1 skip, policy + register 95/95, Knowledgebase
   275 pass / 17 skipped / 31 subtests (the tokenizer and POSIX lanes stay
   `NOT RUN`).
+- `F-496` (`R9-L12-1`, Low) closed as a **duplicate with no code change**: the row's own
+  related-finding note predicted the fix — the registry-columns candidate `R9-T07-4`, which is
+  `F-458`, already shipped in `13cd224`. Measured at HEAD: the conventions doc states the
+  `uv==0.12.0` the workflow installs, `tests/agent-owner-F-338.test.mjs:31` pins the same
+  literal, and `scripts/repository-policy.mjs` feeds `checkGateRegistry` the real conventions
+  file plus the real workflow texts, so the prose is read by the shipped gate rather than only
+  by a fixture. Probe, reverted in person: rewriting the doc line to `0.12.5` made
+  `node scripts/repository-check.mjs` print the uv disagreement as its only non-worktree
+  failure; the restored doc printed zero. `npm run repo:check` at this head fails only on the
+  registered-worktree list — the lanes' own trees — which is the parallel-work cost `F-261`
+  records, not a defect. The §1 closure total also read **450** while its own band list summed
+  to 452 and `CHANGELOG.md` carried 452 bullets; the prose now states the measured 453 with
+  this row included.
 - The Knowledge HTTP lane (`w1-kb-api`) closed two rows and left two `PARTIAL`:
   `F-514` (`df2410f`) and `F-516` (`1ebfa51`), with the Knowledgebase lane at
   251 passed / 17 skipped / 31 subtests after integration. Probes, each
