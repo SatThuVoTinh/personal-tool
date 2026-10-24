@@ -84,6 +84,7 @@ import {
 import {
   executeExcelOperation,
   buildMultiSheetWorkbookBuffer,
+  readWorkbookSheetNames,
   readZipEntries,
 } from "../integrations/openclaw/lib/excel-writer.mjs";
 
@@ -3609,6 +3610,54 @@ describe("F-473 — the per-cell character budget is enforced", () => {
         result.errors.some((entry) => entry.includes("EXCEL_CELL_TOO_LONG")),
         `expected EXCEL_CELL_TOO_LONG, got ${JSON.stringify(result.errors)}`,
       );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// =========================================================================
+// M12/T9 F-466 — two declared sheet names that sanitise to the same text
+// produced two worksheets with the same name while the tool reported the
+// declared inputs, so the workbook was invalid and the report was untrue.
+// =========================================================================
+describe("F-466 — sanitised sheet names stay unique and are reported truthfully", () => {
+  test("F-466-1: names that sanitise to the same text get distinct entries", () => {
+    const buf = buildMultiSheetWorkbookBuffer([
+      { name: "A B", rows: [["first"]] },
+      { name: "AB", rows: [["second"]] },
+      { name: "ab", rows: [["third"]] },
+    ]);
+    const names = readWorkbookSheetNames(buf);
+    assert.deepEqual(names, ["AB", "AB_2", "ab_3"]);
+    assert.equal(new Set(names.map((name) => name.toLowerCase())).size, 3);
+    const parts = [...readZipEntries(buf).keys()].filter((name) =>
+      /^xl\/worksheets\/sheet\d+\.xml$/u.test(name),
+    );
+    assert.equal(parts.length, 3);
+  });
+
+  test("F-466-2: generate reports the names the workbook declares", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "zink-f466-"));
+    try {
+      const result = executeExcelOperation(
+        {
+          operation: "generate",
+          file_path: "collide.xlsx",
+          specification: {
+            sheets: [
+              { name: "A B", rows: [["1"]] },
+              { name: "AB", rows: [["2"]] },
+            ],
+          },
+        },
+        dir,
+      );
+      const written = readWorkbookSheetNames(
+        readFileSync(path.join(dir, "collide.xlsx")),
+      );
+      assert.deepEqual(result.summary.sheets, written);
+      assert.equal(new Set(written.map((name) => name.toLowerCase())).size, 2);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

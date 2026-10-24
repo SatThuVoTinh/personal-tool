@@ -266,12 +266,40 @@ function buildSheetRowsXml(rows, startRow = 1) {
   return sheetRowsXml;
 }
 
+const EXCEL_SHEET_NAME_MAX_LENGTH = 31;
+
 function safeSheetName(name) {
   return (
     String(name ?? "")
       .replace(/[^a-zA-Z0-9_-]/gu, "")
-      .slice(0, 31) || "Sheet1"
+      .slice(0, EXCEL_SHEET_NAME_MAX_LENGTH) || "Sheet1"
   );
+}
+
+/**
+ * Normalise a declared sheet name to a worksheet name that is unique in the
+ * workbook.
+ *
+ * F-466: `safeSheetName` stripped disallowed characters and truncated to 31
+ * with no de-duplication, so two declared names that sanitise identically
+ * ("A B" and "AB") wrote two `<sheet name="AB">` entries — an invalid workbook
+ * — while the tool reported the declared names. Excel sheet names are unique
+ * case-insensitively, so the suffix search is case-insensitive and
+ * deterministic (the first declaration keeps the base name).
+ */
+function uniqueSheetName(name, usedNames) {
+  const base = safeSheetName(name);
+  let candidate = base;
+  let suffix = 2;
+  while (usedNames.has(candidate.toLowerCase())) {
+    const marker = `_${suffix}`;
+    const stem =
+      base.slice(0, EXCEL_SHEET_NAME_MAX_LENGTH - marker.length) || "Sheet";
+    candidate = `${stem}${marker}`;
+    suffix += 1;
+  }
+  usedNames.add(candidate.toLowerCase());
+  return candidate;
 }
 
 /**
@@ -282,8 +310,9 @@ function safeSheetName(name) {
  * the tool reported `status: "success"`.
  */
 export function buildMultiSheetWorkbookBuffer(sheets = []) {
+  const usedNames = new Set();
   const list = (Array.isArray(sheets) ? sheets : []).map((sheet, index) => ({
-    name: safeSheetName(sheet?.name || `Sheet${index + 1}`),
+    name: uniqueSheetName(sheet?.name || `Sheet${index + 1}`, usedNames),
     rows: Array.isArray(sheet?.rows) ? sheet.rows : [],
   }));
   if (list.length === 0) list.push({ name: "Sheet1", rows: [] });
@@ -761,7 +790,7 @@ export function executeExcelOperation(params, baseDir = null) {
   }
 
   let buf;
-  let writtenSheetNames = [sheetName];
+  let writtenSheetNames;
   let templateApplied = false;
   if (op === "populate" && templatePath) {
     // F-126: `template_path` is consumed, not ignored.
@@ -799,10 +828,14 @@ export function executeExcelOperation(params, baseDir = null) {
   } else if (declaredSheets.length > 1) {
     // F-126: every declared sheet is written, not only the first.
     buf = buildMultiSheetWorkbookBuffer(declaredSheets);
-    writtenSheetNames = declaredSheets.map((sheet) => sheet.name);
-    sheetName = declaredSheets[0].name;
+    // F-466: report the names the workbook actually declares (sanitised and
+    // de-duplicated), not the unnormalised inputs.
+    writtenSheetNames = readWorkbookSheetNames(buf);
+    sheetName = writtenSheetNames[0];
   } else {
     buf = buildWorkbookBuffer(rows, sheetName);
+    writtenSheetNames = readWorkbookSheetNames(buf);
+    sheetName = writtenSheetNames[0];
   }
 
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
