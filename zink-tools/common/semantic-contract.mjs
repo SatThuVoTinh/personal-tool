@@ -766,11 +766,18 @@ export function deduplicateRetrievalContext(items = []) {
     }));
 
   // B28: stable dedup key — content_hash > passage_id > full-text SHA-256
-  const getKey = (item) => {
-    if (item.content_hash) return `hash:${item.content_hash}`;
-    if (item.passage_id) return `pid:${item.passage_id}`;
+  // F-510 (R10-L06-1): the type class is part of the key. B27 classified every
+  // item before this point and then threw the class away, so one shared Map
+  // spanned all classes and a skill or tool copy of a fact consumed the fact's
+  // key: the second item was dropped before it ever reached its own bucket, and
+  // which class survived was decided by arrival order, not by relevance.
+  const getKey = (item, typeClass) => {
+    if (item.content_hash) return `${typeClass}:hash:${item.content_hash}`;
+    if (item.passage_id) return `${typeClass}:pid:${item.passage_id}`;
     if (typeof item.text === "string" && item.text.length > 0) {
-      return `sha256:${createHash("sha256").update(item.text, "utf8").digest("hex")}`;
+      return `${typeClass}:sha256:${createHash("sha256")
+        .update(item.text, "utf8")
+        .digest("hex")}`;
     }
     return null; // no dedup key — always include
   };
@@ -782,7 +789,7 @@ export function deduplicateRetrievalContext(items = []) {
   const toolReferences = [];
 
   for (const { item, typeClass } of classified) {
-    const key = getKey(item);
+    const key = getKey(item, typeClass);
 
     if (key !== null && seenKeys.has(key)) {
       // B30: detect provenance conflict (same content, different metadata)

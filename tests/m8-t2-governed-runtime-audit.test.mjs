@@ -551,6 +551,61 @@ describe("M8/T2 Governed Runtime, Authority, Memory & Reliability Hardening — 
   });
 
   // =========================================================================
+  // F-510 (R10-L06-1): the seen-set is scoped per type class, so a cross-type
+  // duplicate is not dropped and the retained copy is not chosen by arrival
+  // order. The four items below are one fact reached by two retrieval arms,
+  // plus a skill copy sharing its content hash and a tool copy sharing its
+  // passage id. Dropping the class from the dedup key makes the fact vanish
+  // (measured at HEAD: 1 0 1 2 0).
+  // =========================================================================
+  test("F-510: deduplicateRetrievalContext keeps a cross-type duplicate rather than dropping it", () => {
+    const sharedHash = "f".repeat(64);
+    const sharedPassage = "p-510";
+    const crossTypeDuplicates = [
+      {
+        type: "skill",
+        content_hash: sharedHash,
+        text: "Lead time variability is the driver of safety stock.",
+        score: 0.4,
+      },
+      {
+        type: "fact",
+        content_hash: sharedHash,
+        text: "Lead time variability is the driver of safety stock.",
+        score: 0.9,
+      },
+      {
+        type: "tool",
+        passage_id: sharedPassage,
+        text: "Lead time variability is the driver of safety stock.",
+        score: 0.5,
+      },
+      {
+        type: "fact",
+        passage_id: sharedPassage,
+        content_hash: sharedHash,
+        text: "Lead time variability is the driver of safety stock.",
+        score: 0.9,
+      }, // within-class duplicate of the fact above
+    ];
+
+    const deduped = deduplicateRetrievalContext(crossTypeDuplicates);
+    assert.equal(deduped.procedures.length, 1);
+    assert.equal(deduped.canonicalFacts.length, 1);
+    assert.equal(deduped.toolReferences.length, 1);
+    assert.equal(deduped.totalCount, 3);
+
+    // The same rule must not depend on which class happened to arrive first.
+    const reversed = deduplicateRetrievalContext(
+      [...crossTypeDuplicates].reverse(),
+    );
+    assert.equal(reversed.procedures.length, 1);
+    assert.equal(reversed.canonicalFacts.length, 1);
+    assert.equal(reversed.toolReferences.length, 1);
+    assert.equal(reversed.totalCount, 3);
+  });
+
+  // =========================================================================
   // BUG-M8T2-09: Direct O1/O2 Clarification in #office
   // =========================================================================
   test("BUG-M8T2-09: formatOfficeClarificationQuestion formats exact ACTIVE.md Section 8 structure", () => {
