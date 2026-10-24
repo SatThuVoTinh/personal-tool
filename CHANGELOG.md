@@ -2200,6 +2200,14 @@ passed.`; `python-quality` SUCCESS — 188 passed, 27 subtests) and Security run
 - **`F-544`** — a store that declares an identity was never compared with anything on the ordinary unnamed path, so `skillsRoot` pointed at the wrong store ran the destructive statements against it — closed by `b520fba`.
   Row `F-544` (`R10-T04-6`, Low). `syncSkillsToVectorStore` refuses a sync whose caller names no store when the store declares an identity (`SKILL_STORE_IDENTITY_UNNAMED`, nothing synced and nothing deleted); a store with no identity keeps the F-176 behaviour. Regression: two cases in `tests/m11-t1-skill-vector-sql.test.mjs`. Probe: gating the refusal off reddened the refusal case; reverted.
 
+#### M12/T9-R4 — the Knowledge HTTP surface (2026-10-24) (2 rows, 5 commits)
+
+- **`F-514`** — a rerank pool saturated at `MAX_RERANK_CANDIDATES` with `limit` at its 20 ceiling reported `has_more: false` and `total_count: 20`, which is byte-identical to a complete answer — closed by `df2410f`.
+  Row `F-514` (`R10-L07-3`, Medium). The fused pool is now built once before the ceiling, `_search_report` derives the four completeness fields from it, and a new `truncated` states that a ceiling was applied (a pool that FILLED the ceiling included); no ceiling moved — the pool is still 20, the page still `limit`, and both SQL branches still `LIMIT 40`. Regression: `tests/test_b5_knowledge_http_surface.py` (the ceiling case plus `truncated: false` for a small pool) and the widened attribution case. Probe: `>= candidate_limit` → `> candidate_limit` reddened the ceiling case (1 failed / 16 passed); reverted.
+
+- **`F-516`** — the `/readyz` processing-identity memo keyed on the three files the identity happened to mention while the identity hashes five inputs, so an in-place change to the parent `uv.lock` or `app/pdf_runtime.py` replayed a stale identity — closed by `1ebfa51`.
+  Row `F-516` (`R10-L07-5`, Low, LATENT). `ProcessingIdentityInputs` holds the same five paths `identity()` is built from and derives the memo key from `evidence()`, so an input added to one is evidence in the other by construction rather than by remembering; `client_code_path` defaults to `app/pdf_runtime.py`'s own resolved file, which is what the identity hashes. Regression: four cases in `tests/test_b5_knowledge_http_surface.py` — the key reads the parent lock and the client module, every input's rewrite moves the key, the default client path is the module the identity hashes, and the embedding identity is still part of the key. The criterion's named vehicle was a `/readyz` double call; the shipped proof is the key-level replay (the same predicate, one call down), recorded here rather than claimed as the named test. Probe: deleting `client_code_path` from `paths` reddened 2 cases; reverted.
+
 ## Changelog Rules
 
 ### Completed Changes Only
