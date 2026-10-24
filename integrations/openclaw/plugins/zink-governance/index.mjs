@@ -9,6 +9,7 @@ import {
   readdirSync,
   realpathSync,
   renameSync,
+  statSync,
   writeFileSync,
   mkdirSync,
 } from "node:fs";
@@ -181,7 +182,10 @@ import {
 } from "../../lib/discord-forum-tags.mjs";
 
 import {
+  deriveType,
   evaluateResultGate,
+  FORMAT_MAX_SIZE_LIMITS,
+  MAX_ARTIFACT_SIZE_BYTES,
   VALIDATION_STATUS,
 } from "../../lib/artifact-validator.mjs";
 
@@ -2830,6 +2834,43 @@ export function artifactContainmentFailure(artifactPath, boundary) {
   return null;
 }
 
+/**
+ * F-472 / R9-T12-1: consult the format size ceiling BEFORE the artifact is
+ * read and hashed.
+ *
+ * Containment proves the artifact is in scope, not that it is small enough.
+ * Both completion-seam read sites used to hand the whole file to
+ * `createHash("sha256")`, so the ceiling — including the validator's own,
+ * which is compared later and itself reads whole — could refuse the verdict
+ * but never the cost. The bound is taken from `statSync`, so an over-limit
+ * artifact is refused without a full buffer, and the digest is minted only
+ * once the bound passes.
+ *
+ * The ceiling row is resolved from the artifact's own extension, exactly as
+ * `validateTechnicalArtifact` does for a path-only call, so the seam never
+ * refuses a legitimate set member on a ceiling that the delivered bytes were
+ * not measured against.
+ */
+export function artifactSizeCeilingFailure(artifactPath) {
+  let sizeBytes;
+  try {
+    sizeBytes = statSync(artifactPath).size;
+  } catch {
+    // Fail closed: an artifact whose size cannot be proven is not digested.
+    return `ARTIFACT_UNREADABLE: ${path.basename(String(artifactPath ?? ""))}`;
+  }
+  const inferredType = deriveType(
+    undefined,
+    path.extname(String(artifactPath ?? "")).toLowerCase(),
+  );
+  const maxSize =
+    FORMAT_MAX_SIZE_LIMITS[inferredType] || MAX_ARTIFACT_SIZE_BYTES;
+  if (sizeBytes > maxSize) {
+    return `ARTIFACT_TOO_LARGE: ${path.basename(String(artifactPath ?? ""))} is ${sizeBytes}B over the ${maxSize}B ceiling for ${inferredType} (ARTIFACT_SIZE_EXCEEDED)`;
+  }
+  return null;
+}
+
 export function handleExecutionFinished({
   taskId,
   agentId,
@@ -2958,6 +2999,12 @@ export function handleExecutionFinished({
     if (containment) {
       return { status: "FAILED", error: containment };
     }
+    // F-472: the size ceiling is enforced here, before any byte is read, so an
+    // over-limit in-sandbox artifact is refused without paying the read+hash.
+    const sizeFailure = artifactSizeCeilingFailure(logicalPath);
+    if (sizeFailure) {
+      return { status: "FAILED", error: sizeFailure };
+    }
     let sha256;
     try {
       sha256 = createHash("sha256")
@@ -2978,11 +3025,18 @@ export function handleExecutionFinished({
     artifactSet.length > 0
       ? canonicalHash("zink-artifact-set-v1", { artifacts: artifactSet })
       : null;
-  const payloadDigest =
-    artifactSetDigest ??
-    (artifactPath && existsSync(artifactPath)
-      ? createHash("sha256").update(readFileSync(artifactPath)).digest("hex")
-      : null);
+  let payloadDigest = artifactSetDigest ?? null;
+  if (!payloadDigest && artifactPath && existsSync(artifactPath)) {
+    // F-472: the second unbounded read site. The singular artifactPath feeds
+    // the replay-fence digest, so its size is proven before it is read too.
+    const soloSizeFailure = artifactSizeCeilingFailure(artifactPath);
+    if (soloSizeFailure) {
+      return { status: "FAILED", error: soloSizeFailure };
+    }
+    payloadDigest = createHash("sha256")
+      .update(readFileSync(artifactPath))
+      .digest("hex");
+  }
 
   // M8-053: durable replay fence. The queue projection is restart-durable, so
   // an exact replay of the same task + attempt + result digest is an

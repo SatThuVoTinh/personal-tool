@@ -386,11 +386,13 @@ function readLastBytes(filePath, n) {
 
 /**
  * Derives the canonical type string from a file extension or explicit override.
+ * F-472 / R9-T12-1: exported so the governed completion seam can consult the
+ * same FORMAT_MAX_SIZE_LIMITS row the validator uses, BEFORE it reads the bytes.
  * @param {string|undefined} expectedType
  * @param {string} ext  lowercase extension including dot
  * @returns {string}
  */
-function deriveType(expectedType, ext) {
+export function deriveType(expectedType, ext) {
   if (expectedType) return expectedType;
   switch (ext) {
     case ".xlsx":
