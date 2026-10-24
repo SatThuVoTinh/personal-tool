@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import os
+import shutil
 import stat
 import tempfile
 import time
@@ -37,6 +38,29 @@ def set_extraction_deadline(deadline: float | None) -> None:
     _EXTRACTION_DEADLINE = deadline
 
 
+def _prepare_temp_root() -> Path:
+    """Create the child's private temp root and remove a killed child's residue.
+
+    F-442 (R9-L09-6): each region lives inside a ``TemporaryDirectory`` that
+    only the context manager or ``atexit`` removes.  The parent kills the
+    child's whole process group when its deadline expires, so neither runs and
+    the region directory survived inside the container's tmpfs.  The parent
+    serialises runtime invocations, so every pre-existing child of this root is
+    residue from a killed invocation and is safe to remove here.
+    """
+
+    temp_root = Path(os.environ["ZINK_PDF_TEMP_ROOT"])
+    temp_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if temp_root.is_symlink() or stat.S_IMODE(temp_root.stat().st_mode) != 0o700:
+        raise OcrRuntimeError("PDF_RUNTIME_UNAVAILABLE")
+    for entry in temp_root.iterdir():
+        if entry.is_symlink() or not entry.is_dir():
+            entry.unlink()
+        else:
+            shutil.rmtree(entry)
+    return temp_root
+
+
 class M4TesseractOcrModel(BaseOcrModel):
     """Reuses only Docling region and cell semantics, never its subprocess code."""
 
@@ -65,10 +89,7 @@ class M4TesseractOcrModel(BaseOcrModel):
         if not self.enabled:
             yield from page_batch
             return
-        temp_root = Path(os.environ["ZINK_PDF_TEMP_ROOT"])
-        temp_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        if temp_root.is_symlink() or stat.S_IMODE(temp_root.stat().st_mode) != 0o700:
-            raise OcrRuntimeError("PDF_RUNTIME_UNAVAILABLE")
+        temp_root = _prepare_temp_root()
         for page in page_batch:
             if page._backend is None or not page._backend.is_valid():
                 yield page
