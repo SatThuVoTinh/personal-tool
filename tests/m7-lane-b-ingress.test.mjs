@@ -442,3 +442,96 @@ describe("Lane B — tool ingress & contract authority", () => {
     }
   });
 });
+
+// F-470 / R9-T09-1: the registered tool dispatcher is the model-facing sink.
+// Its catch paths forwarded `err.message` verbatim and echoed the whole tool
+// output (`rawOutput`/`parsedOutput`) into the envelope, so internal failure
+// text and unredacted output — a class that carries absolute filesystem paths,
+// session keys and digests — reached model context, while the repo's own SQL
+// sibling already returns a fixed message plus a symbolic code.
+describe("F-470 — dispatcher failure envelopes are symbolic, never raw", () => {
+  const BANNED_CLASSES = [
+    ["session key", /\bsess-[a-zA-Z0-9_-]{8,}\b/u],
+    ["64-hex digest", /\b[a-f0-9]{64}\b/u],
+    [
+      "filesystem path",
+      /(?:[a-zA-Z]:\\[^\s"'<>|]+|\/(?:Users|home|tmp|etc|var|app)\/[^\s"'<>|]+)/u,
+    ],
+    ["bearer token", /Bearer\s+[A-Za-z0-9._~+/-]+=*/iu],
+  ];
+
+  it("the parameter-schema refusal returns fixed text plus a symbolic code", async () => {
+    const { api, tools } = captureApi();
+    registerTools(api);
+    const wrapper = tools.find((t) => t.name === "zink_excel");
+    const env = statusOf(await wrapper.execute({ agent: "excel" }, {}));
+    assert.equal(env.status, "INVALID_PARAMETERS");
+    assert.equal(env.code, "INVALID_PARAMETERS");
+    assert.deepEqual(
+      env.errors,
+      ["INVALID_PARAMETERS: governed tool parameter validation failed closed"],
+      "errors must be the fixed canonical text, never the thrown error message",
+    );
+  });
+
+  it("an output-schema refusal echoes neither the output nor its banned classes", () => {
+    const contracts = loadToolContractSchemas();
+    const sentinel = {
+      status: "success",
+      workbook: "C:\\Users\\hoang_vinh\\Documents\\secret-target.xlsx",
+      session_key: "sess-a1b2c3d4e5f6g7h8",
+      digest: "a".repeat(64),
+      authorization: "Bearer super.secret.value",
+    };
+    const check = validateToolOutputEnvelope(
+      "zink_excel",
+      { content: [{ type: "text", text: JSON.stringify(sentinel) }] },
+      contracts.zink_excel,
+    );
+    assert.equal(check.ok, false);
+    const text = check.response.content[0].text;
+    const env = JSON.parse(text);
+    assert.equal(env.status, "INVALID_OUTPUT_SCHEMA");
+    assert.equal(env.code, "INVALID_OUTPUT_SCHEMA");
+    assert.ok(
+      !("rawOutput" in env),
+      "the model-facing envelope must not carry the tool output",
+    );
+    assert.ok(
+      !("parsedOutput" in env),
+      "the model-facing envelope must not carry the parsed tool output",
+    );
+    assert.deepEqual(
+      env.errors,
+      [
+        "INVALID_OUTPUT_SCHEMA: governed tool output did not satisfy its contract",
+      ],
+      "errors must be the fixed canonical text, never the thrown error message",
+    );
+    for (const [label, pattern] of BANNED_CLASSES) {
+      assert.ok(
+        !pattern.test(text),
+        `the envelope leaks the ${label} class: ${text.slice(0, 400)}`,
+      );
+    }
+  });
+
+  it("a non-JSON tool output is refused with a symbolic code and no echoed bytes", () => {
+    const contracts = loadToolContractSchemas();
+    const raw =
+      "fatal: cannot open /home/hoang_vinh/.openclaw-zink/ledger.json";
+    const check = validateToolOutputEnvelope(
+      "zink_excel",
+      { content: [{ type: "text", text: raw }] },
+      contracts.zink_excel,
+    );
+    assert.equal(check.ok, false);
+    const text = check.response.content[0].text;
+    const env = JSON.parse(text);
+    assert.deepEqual(env.errors, ["NON_JSON_OUTPUT"]);
+    assert.ok(
+      !text.includes("/home/hoang_vinh"),
+      "raw output bytes must not echo",
+    );
+  });
+});

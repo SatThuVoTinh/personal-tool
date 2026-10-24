@@ -5178,6 +5178,10 @@ export function registerTools(api, options = {}) {
               toolContracts[toolId]?.schemaName,
             );
           } catch (paramErr) {
+            // F-470: the thrown schema detail stays on the host log.
+            api?.logger?.error?.(
+              `[zink-governance] ${toolId} parameter schema rejected: ${paramErr?.code || "INVALID_PARAMETERS"}`,
+            );
             return {
               content: [
                 {
@@ -5185,7 +5189,11 @@ export function registerTools(api, options = {}) {
                   text: JSON.stringify({
                     status: "INVALID_PARAMETERS",
                     tool: toolId,
-                    errors: [paramErr?.message || String(paramErr)],
+                    // F-470: fixed canonical text, never `paramErr.message`,
+                    // which is model-facing and can carry internal detail.
+                    errors: [
+                      "INVALID_PARAMETERS: governed tool parameter validation failed closed",
+                    ],
                     code: "INVALID_PARAMETERS",
                   }),
                 },
@@ -5218,6 +5226,13 @@ export function registerTools(api, options = {}) {
             };
           }
         } catch (err) {
+          // F-470: the raw failure text stays on the host log for diagnosis and
+          // never enters the model-facing envelope, which carries a fixed
+          // canonical message plus a symbolic code — the convention the governed
+          // SQL sibling already follows.
+          api?.logger?.error?.(
+            `[zink-governance] ${toolId} execution failed closed: ${err?.code || "TOOL_EXECUTION_FAILED"}`,
+          );
           return {
             content: [
               {
@@ -5225,7 +5240,8 @@ export function registerTools(api, options = {}) {
                 text: JSON.stringify({
                   status: "ERROR",
                   tool: toolId,
-                  error: err?.message || String(err),
+                  error: err?.code || "TOOL_EXECUTION_FAILED",
+                  message: "Governed tool execution failed closed.",
                   code: err?.code || "TOOL_EXECUTION_FAILED",
                 }),
               },
@@ -5269,7 +5285,10 @@ export function validateToolOutputEnvelope(toolId, executionResult, contract) {
   if (!outputSchema || typeof outputText !== "string") {
     return { ok: true };
   }
-  const blocked = (errors, rawOutput) => ({
+  // F-470: the refusal carries a symbolic code only. The offending output is
+  // never echoed back into the model-facing envelope, because it can itself be
+  // the disclosure (absolute paths, session keys, digests).
+  const blocked = (errors) => ({
     ok: false,
     response: {
       content: [
@@ -5280,7 +5299,6 @@ export function validateToolOutputEnvelope(toolId, executionResult, contract) {
             tool: toolId,
             errors,
             code: "INVALID_OUTPUT_SCHEMA",
-            ...(rawOutput === undefined ? {} : { rawOutput }),
           }),
         },
       ],
@@ -5304,8 +5322,10 @@ export function validateToolOutputEnvelope(toolId, executionResult, contract) {
   ) {
     try {
       checkSchema(outputSchema, parsedOutput, contract?.schemaName);
-    } catch (outErr) {
-      return blocked([outErr?.message || String(outErr)], parsedOutput);
+    } catch {
+      return blocked([
+        "INVALID_OUTPUT_SCHEMA: governed tool output did not satisfy its contract",
+      ]);
     }
   }
   return { ok: true };
