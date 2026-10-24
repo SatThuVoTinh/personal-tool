@@ -101,6 +101,13 @@
                     "items": { "type": "string" }
                   },
                   "source_type": { "type": "string" },
+                  "source_id": { "type": ["string", "null"] },
+                  "source_sha256": {
+                    "type": ["string", "null"],
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "line_start": { "type": ["number", "null"] },
+                  "line_end": { "type": ["number", "null"] },
                   "page_start": { "type": ["number", "null"] },
                   "page_end": { "type": ["number", "null"] }
                 },

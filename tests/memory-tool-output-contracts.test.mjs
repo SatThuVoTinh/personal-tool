@@ -257,6 +257,93 @@ describe("F-125 (R1-A10-03) — the memory-tool envelopes pass their own contrac
     }
   });
 
+  test("F-570: the identity the service publishes survives into the agent's item", async () => {
+    /**
+     * F-570 (R10-T10-1): the Knowledgebase publishes `source_id`,
+     * `source_sha256` and the span on the RESULT ITEM, but the tool contract
+     * closed the item and the five-key metadata object, and the adapter rebuilt
+     * each item from scratch. A governed agent therefore could not re-verify a
+     * citation it had just been given: a moved or edited source produced an
+     * identical citation string with no digest anywhere in the envelope.
+     */
+    const digest = "a".repeat(64);
+    const service = await knowledgeService({
+      results: [
+        {
+          segment_id: "seg-1",
+          title: "Authority",
+          text: "retrieved body",
+          score: 0.91,
+          source_path: "02. Books/Authority/report.pdf",
+          source_type: "PDF",
+          source_id: "src-1",
+          source_sha256: digest,
+          line_start: null,
+          line_end: null,
+          page_start: 2,
+          page_end: 3,
+          citation: "02. Books/Authority/report.pdf#page=2",
+        },
+      ],
+    });
+    try {
+      const adapter = new KnowledgeAdapter(service.endpoint, {
+        apiKey: "test-key",
+      });
+      const success = await adapter.queryKnowledge({
+        action: "search",
+        namespace: "core",
+        query: "governance",
+      });
+
+      assert.equal(success.results[0].metadata.source_sha256, digest);
+      assert.equal(success.results[0].metadata.source_id, "src-1");
+      assert.equal(success.results[0].metadata.line_start, null);
+      assert.equal(success.results[0].metadata.page_end, 3);
+      assertMatchesDeclaredOutput("zink-knowledge", success);
+    } finally {
+      await service.close();
+    }
+  });
+
+  test("F-570: a markdown line span survives, and a malformed digest is refused", async () => {
+    const service = await knowledgeService({
+      results: [
+        {
+          segment_id: "seg-2",
+          title: "Note",
+          text: "a body",
+          score: 0.5,
+          source_path: "01. Knowledge/AI/note.md",
+          source_type: "MARKDOWN",
+          source_id: "src-2",
+          source_sha256: "not-a-digest",
+          line_start: 7,
+          line_end: 9,
+          citation: "01. Knowledge/AI/note.md#L7-L9",
+        },
+      ],
+    });
+    try {
+      const adapter = new KnowledgeAdapter(service.endpoint, {
+        apiKey: "test-key",
+      });
+      const success = await adapter.queryKnowledge({
+        action: "search",
+        namespace: "core",
+        query: "governance",
+      });
+
+      assert.equal(success.results[0].metadata.line_start, 7);
+      assert.equal(success.results[0].metadata.line_end, 9);
+      // The declared pattern is the guard: the envelope carries the identity or
+      // carries nothing, never an upstream sentence in a digest's place.
+      assert.equal(success.results[0].metadata.source_sha256, null);
+      assertMatchesDeclaredOutput("zink-knowledge", success);
+    } finally {
+      await service.close();
+    }
+  });
   test("F-125: the search envelope carries no undeclared top-level key", () => {
     // The search path needs an embedding endpoint and a live index, so this
     // case is a source assertion in the repository's own idiom rather than an

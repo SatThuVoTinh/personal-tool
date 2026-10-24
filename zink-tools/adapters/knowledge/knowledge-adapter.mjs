@@ -724,6 +724,26 @@ export class KnowledgeAdapter {
                 ...(typeof r.source_type === "string"
                   ? { source_type: r.source_type }
                   : {}),
+                // F-570 (R10-T10-1): the identity the service publishes on the
+                // item is forwarded, not re-invented. Without it a governed
+                // agent holding a citation could not re-verify the source it
+                // came from: a moved or edited file produced an identical
+                // citation string with no digest anywhere in the envelope. A
+                // digest that is not one is dropped rather than carried — the
+                // declared pattern is the guard, and the envelope answers with
+                // `null` instead of an upstream sentence.
+                source_id:
+                  typeof r.source_id === "string" && r.source_id
+                    ? r.source_id
+                    : null,
+                source_sha256:
+                  typeof r.source_sha256 === "string" &&
+                  /^[a-f0-9]{64}$/u.test(r.source_sha256)
+                    ? r.source_sha256
+                    : null,
+                line_start:
+                  typeof r.line_start === "number" ? r.line_start : null,
+                line_end: typeof r.line_end === "number" ? r.line_end : null,
                 page_start:
                   typeof r.page_start === "number" ? r.page_start : null,
                 page_end: typeof r.page_end === "number" ? r.page_end : null,
