@@ -150,8 +150,15 @@ const HYGIENE_ASSET_PREDECESSORS = Object.freeze({
 // file on 2026-10-16 — becomes an admitted predecessor in BOTH per-mode lists in
 // `configure.mjs`. The digest below is deliberately NOT listed there: it is the current
 // build, accepted by content comparison.
+// M12/T9-R4 F-533: this pin moves again. Deleting the plugin's never-fixed copy of
+// `deriveGovernedDispatchTarget` and binding the dispatch, queue-projection and spawn-gate
+// call sites to the `lib/policy.mjs` export changes packaged entrypoint bytes, so
+// `c4d0d92…` — re-measured read-only on 2026-10-24 with `sha256sum` against the deployed
+// WSL file, not transcribed from the plan — becomes an admitted predecessor in BOTH per-mode
+// lists in `configure.mjs`. The digest below is deliberately NOT listed there: it is the
+// current build, accepted by content comparison.
 const CURRENT_ENTRYPOINT_SHA256 =
-  "c4d0d921d1f0c4ca1eca6e2f3dd6093e7a6a878359ab69779b37b18d0ce1bd1a";
+  "338d1406cc73b299d148770eb507082c3a8469024177b426e0d62a7695f1b94c";
 
 const identifiers = Object.freeze({
   discordGuildId: "123456789012345678",

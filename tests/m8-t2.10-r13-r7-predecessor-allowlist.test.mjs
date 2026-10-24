@@ -175,9 +175,26 @@ assert.ok(
  * deployed extension. M12/T1-R1's own candidate (`85fbee50…`) and M12/T2-R1's
  * (`f9ef77dc…`) are NOT listed: neither was ever deployed, so no runtime can
  * carry it.
+ *
+ * M12/T9-R4 F-533: this pin moves. Deleting the plugin's never-fixed copy of
+ * `deriveGovernedDispatchTarget` and binding the dispatch, queue-projection and
+ * spawn-gate call sites to the `lib/policy.mjs` export changes packaged
+ * entrypoint bytes, so the build below becomes the admitted predecessor —
+ * `c4d0d92…` is what the live WSL runtime carries, re-measured read-only on
+ * 2026-10-24 with `sha256sum` against
+ * `/home/hoang_vinh/.openclaw-zink/extensions/zink-governance/index.mjs`, and it
+ * is reproduced from its own commit by `R13 P7` below rather than taken on
+ * trust. `513beb15…` stays listed: the runtime carried it before that deploy, so
+ * an operator can still upgrade from either state.
  */
 const M11_T3_ENTRYPOINT_SHA256 =
   "c4d0d921d1f0c4ca1eca6e2f3dd6093e7a6a878359ab69779b37b18d0ce1bd1a";
+/**
+ * M12/T9-R4 F-533: the CURRENT packaged entrypoint build. Accepted by content
+ * comparison and deliberately NOT listed.
+ */
+const R4_F533_CURRENT_ENTRYPOINT_SHA256 =
+  "338d1406cc73b299d148770eb507082c3a8469024177b426e0d62a7695f1b94c";
 const M12_T2_2_OUTGOING_ENTRYPOINT_SHA256 =
   "513beb15c3d7624c0a928c4c1556dc44d4c4cff4f1e00980f24b298a25751c0d";
 assert.ok(
@@ -338,6 +355,16 @@ const M11_T1_R1_ENTRYPOINT_SOURCE = gitShow(
 // live runtime carries, which this task's deployment replaces.
 const M11_T1_R1_LIVE_ENTRYPOINT_SOURCE = gitShow(
   M11_T3_SOURCE_COMMIT,
+  "integrations/openclaw/plugins/zink-governance/index.mjs",
+);
+
+// M12/T9-R4 F-533: the plugin entrypoint source as committed by the build this
+// revision replaces. `1b68586` is the last commit whose packaged entrypoint the
+// live WSL runtime carried, and `R13 P7` re-derives the admitted digest from it
+// instead of trusting the plan's arithmetic.
+const R4_F533_OUTGOING_SOURCE_COMMIT = "1b68586";
+const R4_F533_OUTGOING_ENTRYPOINT_SOURCE = gitShow(
+  R4_F533_OUTGOING_SOURCE_COMMIT,
   "integrations/openclaw/plugins/zink-governance/index.mjs",
 );
 
@@ -543,7 +570,7 @@ test("R13 P4: the M11/T1-R1 Phase 2 outgoing entrypoint is proven from its commi
   const current = await currentBuild();
   assert.equal(
     sha256(current.entrypoint),
-    M11_T3_ENTRYPOINT_SHA256,
+    R4_F533_CURRENT_ENTRYPOINT_SHA256,
     "the working tree must carry the M11/T3 Phase-1 build",
   );
   assert.notEqual(
@@ -571,7 +598,31 @@ test("R13 P5: the entrypoint the live runtime carries is proven from its commit"
   );
   // The three hunks A1/A2 touched are the only packaged difference.
   const current = await currentBuild();
-  assert.equal(sha256(current.entrypoint), M11_T3_ENTRYPOINT_SHA256);
+  assert.equal(sha256(current.entrypoint), R4_F533_CURRENT_ENTRYPOINT_SHA256);
+});
+
+test("R13 P7: the entrypoint F-533 replaces is admitted and proven from its commit", async () => {
+  // The rule P5 states for its own predecessor applies to every admission:
+  // an allowlist entry nobody can reproduce is how an allowlist rots.
+  const outgoing = (
+    await scratchGenerator([
+      ["plugins/zink-governance/index.mjs", R4_F533_OUTGOING_ENTRYPOINT_SOURCE],
+    ])
+  ).entrypoint;
+  assert.equal(
+    sha256(outgoing),
+    M11_T3_ENTRYPOINT_SHA256,
+    `the committed source at ${R4_F533_OUTGOING_SOURCE_COMMIT} must reproduce the digest the live runtime carries`,
+  );
+  assert.ok(
+    CONFIGURE_SOURCE.includes(M11_T3_ENTRYPOINT_SHA256),
+    "the entrypoint the live WSL runtime carries must be an admitted predecessor",
+  );
+  assert.notEqual(
+    R4_F533_OUTGOING_ENTRYPOINT_SOURCE,
+    readFileSync(PLUGIN_ENTRYPOINT_SOURCE, "utf8"),
+    "F-533 must really have moved the plugin entrypoint source",
+  );
 });
 
 test("R13 P6: the boundary build the live runtime carries is admitted and proven from its commit", async () => {
@@ -797,7 +848,7 @@ test("R13 2: the current build digests are NOT listed anywhere", () => {
   // the digests of the CURRENT build must be absent from the source.
   for (const digest of [
     M11_T3_NATIVE_BOUNDARY_SHA256,
-    M11_T3_ENTRYPOINT_SHA256,
+    R4_F533_CURRENT_ENTRYPOINT_SHA256,
   ]) {
     assert.equal(
       CONFIGURE_SOURCE.includes(digest),
@@ -1058,7 +1109,7 @@ test("R13 B2: the M11/T1-R1 Phase 2 outgoing entrypoint is accepted and converge
     assert.doesNotThrow(p.apply);
     assert.equal(
       sha256(readFileSync(p.asset("index.mjs"), "utf8")),
-      M11_T3_ENTRYPOINT_SHA256,
+      R4_F533_CURRENT_ENTRYPOINT_SHA256,
       "an accepted predecessor must be upgraded onto the current build",
     );
   } finally {
@@ -1096,7 +1147,7 @@ test("R13 B3: the build the live runtime carries is accepted and converges", asy
     assert.doesNotThrow(p.apply);
     assert.equal(
       sha256(readFileSync(p.asset("index.mjs"), "utf8")),
-      M11_T3_ENTRYPOINT_SHA256,
+      R4_F533_CURRENT_ENTRYPOINT_SHA256,
     );
     assert.equal(
       sha256(readFileSync(p.asset("lib/native-boundary.mjs"), "utf8")),
@@ -1160,7 +1211,7 @@ test("R13 C2: the current-build versions remain accepted", async () => {
     );
     assert.equal(
       sha256(readFileSync(p.asset("index.mjs"), "utf8")),
-      M11_T3_ENTRYPOINT_SHA256,
+      R4_F533_CURRENT_ENTRYPOINT_SHA256,
     );
   } finally {
     rmSync(p.root, { recursive: true, force: true });

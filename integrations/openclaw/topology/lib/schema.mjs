@@ -552,9 +552,16 @@ export function generateSchemaManifest() {
  *
  * M12/T9 F-376 (completion): the BLOCKED branch admitted the legacy member
  * too, so the contract bytes changed once more and the pin follows.
+ *
+ * M12/T9-R4 F-450/F-455: `$defs.parameter` in
+ * `zink-tools/contracts/tools/zink-sql.schema.json` gained `type` and `value`
+ * in `properties` and in `required`, because the definition demanded both in
+ * its five `oneOf` branches while `additionalProperties: false` refused them —
+ * an unsatisfiable shape that made every governed parameterized SQL call
+ * impossible to express. The contract bytes changed, so the pin follows.
  */
 export const PINNED_SCHEMA_MANIFEST_CHECKSUM =
-  "9ab8c31181b79f134a911d8878ac0edbff62af851be0e6f146940cef0c14311c";
+  "8f6db1a023baccc9a6c5c46aa2fc3bfbe1e4d58d7a3b9a81d6d1a102f94ad732";
 
 export function verifySchemaManifestChecksums(manifest = null) {
   if (manifest === null) {

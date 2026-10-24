@@ -1971,6 +1971,17 @@ async function main() {
       // and they must stay identical. The new digest is deliberately NOT listed:
       // it is the current build, accepted by content comparison.
       "513beb15c3d7624c0a928c4c1556dc44d4c4cff4f1e00980f24b298a25751c0d",
+      // M12/T9-R4 F-533: the entrypoint the live WSL runtime carries. Re-measured
+      // read-only on 2026-10-24 (`sha256sum` of
+      // `/home/hoang_vinh/.openclaw-zink/extensions/zink-governance/index.mjs`),
+      // not transcribed from the plan. It became a predecessor because binding the
+      // dispatch derivation to the `lib/policy.mjs` export deletes the
+      // plugin-local copy, which changes packaged entrypoint bytes. Without this
+      // admission BOTH guards refuse the upgrade: this list appears at the
+      // --preflight and the --apply call sites, and they must stay identical. The
+      // new digest is deliberately NOT listed: it is the current build, accepted
+      // by content comparison.
+      "c4d0d921d1f0c4ca1eca6e2f3dd6093e7a6a878359ab69779b37b18d0ce1bd1a",
     ],
   );
   assertRegularOrMissing(output.identityKeyPath);
@@ -2263,6 +2274,17 @@ async function main() {
       // new digest is deliberately NOT listed: it is the current build and is
       // accepted by content comparison.
       "513beb15c3d7624c0a928c4c1556dc44d4c4cff4f1e00980f24b298a25751c0d",
+      // M12/T9-R4 F-533: the entrypoint the live WSL runtime carries. Re-measured
+      // read-only on 2026-10-24 (`sha256sum` of
+      // `/home/hoang_vinh/.openclaw-zink/extensions/zink-governance/index.mjs`),
+      // not transcribed from the plan. It became a predecessor because binding the
+      // dispatch derivation to the `lib/policy.mjs` export deletes the
+      // plugin-local copy, which changes packaged entrypoint bytes. Without this
+      // admission BOTH guards refuse the upgrade: this list appears at the
+      // --preflight and the --apply call sites, and they must stay identical. The
+      // new digest is deliberately NOT listed: it is the current build, accepted
+      // by content comparison.
+      "c4d0d921d1f0c4ca1eca6e2f3dd6093e7a6a878359ab69779b37b18d0ce1bd1a",
     ],
   );
   if (!existsSync(output.identityKeyPath))
