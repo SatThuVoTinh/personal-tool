@@ -87,6 +87,33 @@ function skillStoreMigrations() {
 }
 
 /**
+ * The ledger-bootstrap statement the Knowledgebase runtime runs before its
+ * migration set, read out of the runtime's own source.
+ *
+ * F-547 / F-541: migration 005 ALTERs `knowledge.schema_migrations`, which no
+ * migration CREATEs — the runner creates it. Re-typing the DDL here would let
+ * this gate prove a set applies to a table the runtime may have stopped
+ * creating, so the text is taken from `apps/knowledge/app/database.py`.
+ */
+function runnerLedgerStatement() {
+  const source = readFileSync(
+    path.join(REPO_ROOT, "apps", "knowledge", "app", "database.py"),
+    "utf8",
+  );
+  const statement = source.match(
+    /"CREATE TABLE IF NOT EXISTS knowledge\.schema_migrations [^"]*"/u,
+  );
+  if (!statement) {
+    throw new Error(
+      "apps/knowledge/app/database.py no longer creates knowledge.schema_migrations " +
+        "before it applies the migration set; this gate must bootstrap the same " +
+        "ledger the runtime does, so read the new statement here.",
+    );
+  }
+  return statement[0].slice(1, -1);
+}
+
+/**
  * Every tracked migration of the repository, in the order they are applied:
  * the Knowledgebase's set first, then the Skill Store's own set.
  */
@@ -98,11 +125,16 @@ function everyTrackedMigration() {
  * Apply every tracked migration, in order, to the scratch database and report
  * the set that was applied.
  *
- * The runtime creates the `knowledge` schema before it applies the migrations
- * (apps/knowledge/app/database.py), so the gate does the same; the migrations
- * themselves only create objects INSIDE that schema.
+ * The runtime creates the `knowledge` schema and the `schema_migrations` ledger
+ * before it applies the migrations (apps/knowledge/app/database.py), so the gate
+ * does the same; the migrations themselves only create objects INSIDE that
+ * schema. F-547 / F-541 makes that precondition load-bearing — migration 005
+ * ALTERs the ledger — so the ledger statement is read out of the runtime's own
+ * source rather than re-typed here, and a runtime that stops creating its own
+ * ledger reddens this gate instead of applying a set the runtime cannot reach.
  */
 function applyTrackedMigrations(dbName) {
+  const ledgerStatement = runnerLedgerStatement();
   const bootstrap = dockerExec([
     "psql",
     "-U",
@@ -113,11 +145,11 @@ function applyTrackedMigrations(dbName) {
     "-t",
     "-A",
     "-c",
-    "CREATE SCHEMA IF NOT EXISTS knowledge;",
+    `CREATE SCHEMA IF NOT EXISTS knowledge; ${ledgerStatement};`,
   ]);
   if (bootstrap.status !== 0) {
     throw new Error(
-      `could not create the knowledge schema: ${(bootstrap.stderr || bootstrap.stdout || "").slice(0, 400)}`,
+      `could not create the knowledge schema and its migration ledger: ${(bootstrap.stderr || bootstrap.stdout || "").slice(0, 400)}`,
     );
   }
   const applied = [];
@@ -1323,6 +1355,149 @@ test("F-509: a surviving narrow sync_status CHECK is refused by the postconditio
       `${verification.stderr ?? ""}${verification.stdout ?? ""}`,
       /TOMBSTONED retirement state/u,
       "the refusal must name the domain it could not prove",
+    );
+  } finally {
+    admin(`DROP DATABASE IF EXISTS ${dbName}`);
+  }
+});
+
+// ===========================================================================
+// F-547 / F-541 (R10-T05-4, R10-T03-6) — the ledger's digest column is a real
+// constraint on a real PostgreSQL.
+//
+// The apply seam refuses a drifted file in Python, but the WITNESS it refuses
+// against is this column. A row written before migration 005 must still accept
+// NULL (the boot adopts the published digest for it), and a row carrying
+// anything other than 64 hex must be refused by the database itself: a ledger
+// that accepts a malformed digest is not evidence of anything, and the runner
+// would compare against it.
+// ===========================================================================
+test("M12/T9 F-547: the migration ledger binds its digest to 64 hex on real PostgreSQL", async (t) => {
+  if (!containerAvailable(t)) return;
+
+  const dbName = `m12_t9_f547_${createHash("sha256")
+    .update(String(Math.random()))
+    .digest("hex")
+    .slice(0, 10)}`;
+  const admin = (statement) =>
+    dockerExec([
+      "psql",
+      "-U",
+      "postgres",
+      "-d",
+      "postgres",
+      "--set=ON_ERROR_STOP=1",
+      "-t",
+      "-A",
+      "-c",
+      statement,
+    ]);
+
+  const created = admin(`CREATE DATABASE ${dbName}`);
+  if (created.status !== 0) {
+    t.skip(
+      `could not create scratch database: ${created.stderr?.slice(0, 200)}`,
+    );
+    return;
+  }
+
+  const value = (sql) =>
+    String(
+      dockerExec([
+        "psql",
+        "-U",
+        "postgres",
+        "-d",
+        dbName,
+        "--set=ON_ERROR_STOP=1",
+        "-t",
+        "-A",
+        "-c",
+        sql,
+      ]).stdout ?? "",
+    ).trim();
+  const attempt = (sql) =>
+    dockerExec(
+      [
+        "psql",
+        "-U",
+        "postgres",
+        "-d",
+        dbName,
+        "--set=ON_ERROR_STOP=1",
+        "-t",
+        "-A",
+        "-f",
+        "-",
+      ],
+      sql,
+    );
+
+  try {
+    try {
+      applyTrackedMigrations(dbName);
+    } catch (error) {
+      if (error?.migration === VECTOR_SCHEMA_MIGRATION) {
+        t.skip(
+          `pgvector/migration unavailable in container: ${String(error?.message ?? error).slice(0, 300)}`,
+        );
+        return;
+      }
+      throw error;
+    }
+
+    assert.equal(
+      value(
+        "SELECT is_nullable FROM information_schema.columns WHERE table_schema = 'knowledge' " +
+          "AND table_name = 'schema_migrations' AND column_name = 'digest';",
+      ),
+      "YES",
+      "the ledger must carry a nullable digest: every row written before this migration has none",
+    );
+    assert.equal(
+      value(
+        "SELECT count(*) FROM pg_constraint con " +
+          "JOIN pg_class rel ON rel.oid = con.conrelid " +
+          "JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace " +
+          "WHERE nsp.nspname = 'knowledge' AND rel.relname = 'schema_migrations' " +
+          "AND con.contype = 'c' AND pg_get_constraintdef(con.oid) LIKE '%digest%';",
+      ),
+      "1",
+      "the digest column must be shaped by a CHECK the database enforces",
+    );
+
+    const legacy = attempt(
+      "INSERT INTO knowledge.schema_migrations (version) VALUES ('000_legacy_row.sql');\n",
+    );
+    assert.equal(
+      legacy.status,
+      0,
+      `a row with no digest must be insertable: ${(legacy.stderr || "").slice(0, 300)}`,
+    );
+
+    const corrupt = attempt(
+      "INSERT INTO knowledge.schema_migrations (version, digest) " +
+        "VALUES ('000_corrupt_row.sql', 'not-a-digest');\n",
+    );
+    assert.notEqual(
+      corrupt.status,
+      0,
+      "a malformed digest must be refused by the database, or the ledger is not evidence",
+    );
+    assert.match(
+      `${corrupt.stderr ?? ""}${corrupt.stdout ?? ""}`,
+      /digest/u,
+      "the refusal must name the column it rejected",
+    );
+
+    const wellFormed = attempt(
+      "INSERT INTO knowledge.schema_migrations (version, digest) " +
+        `VALUES ('000_bound_row.sql', '${"a".repeat(64)}');\n`,
+    );
+    assert.equal(
+      wellFormed.status,
+      0,
+      `a 64-hex digest must be accepted: ${(wellFormed.stderr || "").slice(0, 300)}`,
     );
   } finally {
     admin(`DROP DATABASE IF EXISTS ${dbName}`);

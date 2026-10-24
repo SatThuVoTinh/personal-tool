@@ -1,5 +1,5 @@
 {
-  "purpose": "Tracks the SHA-256 digest of every applied Knowledgebase migration in apps/knowledge/migrations/. Adoption is keyed on filename only (apps/knowledge/app/database.py records knowledge.schema_migrations.version = filename), so editing an already-applied .sql in place is a silent no-op on every database that adopted it; tests/m12-t2.2-a4-migration-digest.test.mjs reddens when a listed file's bytes change, and the correct action is to add a NEW forward migration, never to edit a listed one. A file NOT listed here is treated as a forward migration and stays green, which is deliberate: when a new migration is released and begins being adopted, append it with its digest, because from that moment editing it in place becomes the same silent no-op.",
+  "purpose": "Tracks the SHA-256 digest of every released Knowledgebase migration in apps/knowledge/migrations/, and is a runtime input rather than only a test fixture: apps/knowledge/app/database.py resolves its published digests from apps/knowledge/contracts/knowledgebase-migration-digests.json — the packaged carrier of docs/contracts/knowledgebase-migration-digests.json, pinned byte-identical to that contract by tests/m12-t2.2-a4-migration-digest.test.mjs, because the Knowledgebase image copies apps/knowledge/ and cannot reach docs/ — and refuses the boot with KNOWLEDGE_MIGRATION_DIGEST_MISMATCH when a listed file's bytes are not the published ones, then binds knowledge.schema_migrations.digest (added by 005_schema_migration_digest.sql) to those bytes, so a database that recorded a digest refuses a later edit whose manifest was rolled alongside it with KNOWLEDGE_MIGRATION_DIGEST_ADOPTED_MISMATCH. Adoption is keyed on filename, so editing an already-applied .sql in place used to be a silent no-op on every database that adopted it; the correct action is a NEW forward migration, never an edit of a listed one. tests/m12-t2.2-a4-migration-digest.test.mjs reddens when a listed migration's bytes change, and its pinned-copy check reddens when either carrier's own bytes change, because a pin that the same edit can re-legitimise is not a control. A file NOT listed here is treated as a forward migration and stays green, which is deliberate: when a new migration is released and begins being adopted, append it with its digest in the same commit, because from that moment the runner holds an expectation for it and editing it in place becomes the refusal above.",
   "digestAlgorithm": "sha256",
   "migrations": [
     {
@@ -17,6 +17,10 @@
     {
       "file": "004_pdf_build_failure_cause.sql",
       "sha256": "aadc513bed2a719a6acb85077586d0c6542234c8fefde4cd789aa70a49d7b67e"
+    },
+    {
+      "file": "005_schema_migration_digest.sql",
+      "sha256": "0c731439eef37f0a8268f3141c66b1c6ff4c074d2af4308792269f0873c72661"
     }
   ]
 }

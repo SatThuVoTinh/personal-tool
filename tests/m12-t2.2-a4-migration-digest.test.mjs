@@ -81,6 +81,25 @@ function sha256OfFile(filePath) {
     .digest("hex");
 }
 
+// F-547: the carrier the RUNNER reads. The image copies apps/knowledge/ and
+// cannot reach docs/, so the module carries the document itself; the contract at
+// MANIFEST_FILE stays the tracked authority and both are pinned below to one
+// digest, with the reader's own source bound to this path.
+const PACKAGED_KNOWLEDGE_MANIFEST_FILE = path.join(
+  REPO_ROOT,
+  "apps",
+  "knowledge",
+  "contracts",
+  "knowledgebase-migration-digests.json",
+);
+const KNOWLEDGE_DATABASE_SOURCE = path.join(
+  REPO_ROOT,
+  "apps",
+  "knowledge",
+  "app",
+  "database.py",
+);
+
 // The shared guard logic, so the fixture tests exercise the same code path the
 // real-file gate runs. `migrationsDir` is a directory holding *.sql files;
 // `manifest` is the parsed manifest object. The guard reconciles in BOTH
@@ -419,4 +438,151 @@ test("A-4 FIXTURE: a NEW unlisted migration file reddens the guard (a new file e
     /SAME commit/u,
     `Failure message must say how a new file enters the manifest, got: ${failures[0]}`,
   );
+});
+
+// ---------------------------------------------------------------------------
+// F-547 / F-541 (R10-T05-4, R10-T03-6) — the pin file is itself pinned
+// ---------------------------------------------------------------------------
+
+// Both published manifests are now read by a RUNNER at the apply seam
+// (apps/knowledge/app/database.py, zink-skill-store/src/migrations.mjs), so the
+// value that decides a boot lives in these JSON files. A store whose bytes can be
+// rewritten by the same change that mutates a migration is not a control: the
+// comparator above reads the rolled value and stays green, which is exactly the
+// re-legitimising edit this row names. Each manifest's own SHA-256 is therefore
+// pinned as a literal here, so mutating a migration AND rolling its published
+// digest — or deleting a manifest outright — reddens this lane.
+//
+// The Knowledgebase has TWO carriers of one document, because the image copies
+// apps/knowledge/ and cannot reach docs/: the runner reads
+// apps/knowledge/contracts/, the contract lives at docs/contracts/, and both are
+// pinned to the same literal below, so a roll that edits one carrier and not the
+// other is a failure rather than a second opinion.
+const PINNED_MANIFEST_COPIES = [
+  {
+    label: "docs/contracts/knowledgebase-migration-digests.json",
+    file: MANIFEST_FILE,
+    sha256: "d0e095e101df94317e7629cd1fe11781951f4105837958bb9e2264bc5db2fc79",
+  },
+  {
+    label: "apps/knowledge/contracts/knowledgebase-migration-digests.json",
+    file: PACKAGED_KNOWLEDGE_MANIFEST_FILE,
+    sha256: "d0e095e101df94317e7629cd1fe11781951f4105837958bb9e2264bc5db2fc79",
+  },
+  {
+    label: "docs/contracts/skill-store/skill-store-migration-digests.json",
+    file: SKILL_STORE_MANIFEST_FILE,
+    sha256: "cb880eb9ec5f5cdb8a236c1b8bb5ac89555a71c2862a14dde9ca4730ff3f8695",
+  },
+];
+
+/** Every way a pinned manifest copy has stopped being the pinned bytes. */
+function checkPinnedManifestBytes(pinned) {
+  const failures = [];
+  for (const entry of pinned) {
+    if (!fs.existsSync(entry.file)) {
+      failures.push(
+        `${entry.label} is missing. Both runners read it at the apply seam, so a ` +
+          `boot that cannot resolve its published digests refuses the database; the ` +
+          `manifest must be restored, not deleted.`,
+      );
+      continue;
+    }
+    const actual = sha256OfFile(entry.file);
+    if (actual !== entry.sha256) {
+      failures.push(
+        `${entry.label} has changed bytes (pinned sha256 ${entry.sha256}, observed ${actual}). ` +
+          `This file IS the pin the runners trust, so an edit here is the re-legitimising half of ` +
+          `an in-place migration edit. Restore the published digests — a released migration is ` +
+          `immutable and the correct action is a NEW forward migration — or land a deliberate ` +
+          `re-pin of this file in the same commit that changes what it pins, with the literal in ` +
+          `tests/m12-t2.2-a4-migration-digest.test.mjs rolled alongside it.`,
+      );
+    }
+  }
+  return failures;
+}
+
+test("A-4 REAL: each published manifest's own bytes are pinned", () => {
+  assert.deepEqual(
+    checkPinnedManifestBytes(PINNED_MANIFEST_COPIES),
+    [],
+    "the pin file must not be re-legitimisable by the edit it exists to catch",
+  );
+});
+
+test("A-4 REAL: the Knowledgebase runner reads the carrier this lane pins", () => {
+  // F-547: the enforcement is only as real as the reader's own path. Re-pointing
+  // `database.py` at some other document -- a fixture, a stale copy, nothing --
+  // would leave every pin above unread, so the source text is bound here.
+  const source = fs.readFileSync(KNOWLEDGE_DATABASE_SOURCE, "utf8");
+  assert.match(
+    source,
+    /Path\(__file__\)\.resolve\(\)\.parents\[1\]\s*\n\s*\/ "contracts"\s*\n\s*\/ "knowledgebase-migration-digests\.json"/u,
+    "database.py must resolve the published digests from apps/knowledge/contracts/",
+  );
+  assert.match(
+    source,
+    /MIGRATION_DIGEST_MANIFEST,\n\) -> dict\[str, str\]:/u,
+    "the apply seam must resolve its expectation through published_migration_digests()",
+  );
+});
+
+test("A-4 FIXTURE: rolling a manifest's bytes reddens the pin guard", () => {
+  const dir = fs.mkdtempSync(
+    path.join(os.tmpdir(), "a4-manifest-pin-fixture-"),
+  );
+  try {
+    const copy = path.join(dir, "knowledgebase-migration-digests.json");
+    fs.copyFileSync(MANIFEST_FILE, copy);
+    // The re-legitimising edit: the pin is rewritten in place, so the migration
+    // comparator above would read the rolled value and pass.
+    fs.appendFileSync(copy, " ");
+    const failures = checkPinnedManifestBytes([
+      { ...PINNED_MANIFEST_COPIES[0], file: copy },
+    ]);
+    assert.equal(
+      failures.length,
+      1,
+      "a mutated manifest copy must produce exactly one failure.",
+    );
+    assert.match(
+      failures[0],
+      /has changed bytes/,
+      `Failure message must name the pin whose bytes moved, got: ${failures[0]}`,
+    );
+    assert.match(
+      failures[0],
+      /re-legitimising half/u,
+      `Failure message must say why the pin file is pinned, got: ${failures[0]}`,
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("A-4 FIXTURE: a deleted manifest reddens the pin guard", () => {
+  const dir = fs.mkdtempSync(
+    path.join(os.tmpdir(), "a4-manifest-pin-fixture-"),
+  );
+  try {
+    const copy = path.join(dir, "skill-store-migration-digests.json");
+    fs.copyFileSync(SKILL_STORE_MANIFEST_FILE, copy);
+    fs.rmSync(copy);
+    const failures = checkPinnedManifestBytes([
+      { ...PINNED_MANIFEST_COPIES[1], file: copy },
+    ]);
+    assert.equal(
+      failures.length,
+      1,
+      "a missing manifest must produce exactly one failure.",
+    );
+    assert.match(
+      failures[0],
+      /is missing/,
+      `Failure message must name the missing manifest, got: ${failures[0]}`,
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

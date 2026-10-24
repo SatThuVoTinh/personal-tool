@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import hashlib
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -29,6 +30,25 @@ logger = logging.getLogger(__name__)
 
 class StateTransitionError(RuntimeError):
     """Raised when a lifecycle transaction no longer owns its expected state."""
+
+
+class MigrationDigestError(RuntimeError):
+    """Raised when a migration's bytes are not the ones published for it.
+
+    F-547 / F-541 (R10-T05-4, R10-T03-6): the ledger recorded only the
+    filename, so editing an applied .sql in place was a silent no-op on every
+    database that had adopted it, while the two published JSONs were read by no
+    runner at all -- only by a repo test that a matching JSON edit satisfies.
+    The apply seam now refuses a listed file whose bytes are not the published
+    ones before applying anything, and the database's own ledger row is bound to
+    those bytes so a rolled manifest cannot re-legitimise an edited migration.
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        # The message is "<CODE> <version>", so the code is what the boot
+        # reports and what the operator's runbook switches on.
+        self.code = message.split(" ", 1)[0]
 
 
 class MigrationLockError(RuntimeError):
@@ -288,6 +308,48 @@ class ActiveIndexChangedError(RuntimeError):
     """The immutable ACTIVE index selected by search was replaced."""
 
 
+# F-547: the runner resolves its expected digests from the published manifest, so
+# the path is the module's OWN carrier -- `apps/knowledge/contracts/` -- and not
+# `docs/contracts/`, because the Knowledgebase image copies apps/knowledge/ and
+# cannot reach the repository's docs/. `tests/m12-t2.2-a4-migration-digest.test.mjs`
+# pins both carriers to one byte-identical document.
+MIGRATION_DIGEST_MANIFEST = (
+    Path(__file__).resolve().parents[1]
+    / "contracts"
+    / "knowledgebase-migration-digests.json"
+)
+
+
+def published_migration_digests(
+    manifest_path: Path = MIGRATION_DIGEST_MANIFEST,
+) -> dict[str, str]:
+    """The digests the repository publishes for each migration file.
+
+    F-547: an unreadable manifest is a refusal, not an empty table — a boot that
+    silently lost the published values would adopt whatever bytes it found.
+    """
+
+    try:
+        document = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise MigrationDigestError(
+            "KNOWLEDGE_MIGRATION_MANIFEST_UNREADABLE"
+        ) from error
+    entries = document.get("migrations") if isinstance(document, dict) else None
+    if not isinstance(entries, list):
+        raise MigrationDigestError("KNOWLEDGE_MIGRATION_MANIFEST_UNREADABLE")
+    published: dict[str, str] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise MigrationDigestError("KNOWLEDGE_MIGRATION_MANIFEST_UNREADABLE")
+        name = entry.get("file")
+        digest = entry.get("sha256")
+        if not isinstance(name, str) or not isinstance(digest, str):
+            continue
+        published[name] = digest
+    return published
+
+
 class KnowledgeDatabase:
     def __init__(
         self,
@@ -384,6 +446,13 @@ class KnowledgeDatabase:
                 command_timeout=30,
             )
             await self._apply_startup_schema()
+        except MigrationDigestError as error:
+            # F-547 / F-541: an applied migration whose bytes are no longer the
+            # published ones is not a connectivity fault either. Naming it keeps
+            # the boot from answering "the database is down" for a schema the
+            # store refuses to trust.
+            self.startup_error_code = error.code
+            await self._abort_startup()
         except MigrationLockError:
             # F-149: a schema race is not "the database is down". The refusal
             # is named, so the operator can tell the two apart.
@@ -450,6 +519,15 @@ class KnowledgeDatabase:
                     # the barrier branch and the domain assertion included --
                     # not the lock-and-migrate half the copy kept.
                     await self._apply_startup_schema()
+                except MigrationDigestError as error:
+                    # F-547 / F-541: the published bytes are the fact the retry
+                    # cannot repair, so the loop records the named refusal and
+                    # ends instead of polling behind a schema it will not accept.
+                    self.startup_error_code = error.code
+                    if self._pool is not None:
+                        await self._pool.close()
+                        self._pool = None
+                    return
                 except MigrationLockError:
                     # F-513: the named refusal must survive the retry instead
                     # of being replaced by whatever failed first.
@@ -2589,6 +2667,26 @@ class KnowledgeDatabase:
             await connection.execute(
                 "CREATE TABLE IF NOT EXISTS knowledge.schema_migrations (version text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())"
             )
+            published = published_migration_digests()
+            # The digest is of the file's BYTES, exactly as the repo comparator
+            # hashes them: a text-mode read would let a line-ending translation
+            # change what the runner trusts without changing the file.
+            file_digests = {
+                migration_path.name: hashlib.sha256(
+                    migration_path.read_bytes()
+                ).hexdigest()
+                for migration_path in migrations
+            }
+            # F-547 / F-541: the published JSON is read at the apply seam, so an
+            # in-place edit of a listed migration is refused BEFORE anything is
+            # applied. A file the JSON does not name is the forward migration the
+            # manifest's own `purpose` text allows, so it carries no expectation.
+            for version, file_digest in sorted(file_digests.items()):
+                expected = published.get(version)
+                if expected is not None and expected != file_digest:
+                    raise MigrationDigestError(
+                        f"KNOWLEDGE_MIGRATION_DIGEST_MISMATCH {version}"
+                    )
             for migration_path in migrations:
                 version = migration_path.name
                 if await connection.fetchval(
@@ -2616,13 +2714,61 @@ class KnowledgeDatabase:
                     ):
                         raise
                 await connection.execute(
-                    "INSERT INTO knowledge.schema_migrations (version) VALUES ($1)", version
+                    "INSERT INTO knowledge.schema_migrations (version) VALUES ($1)",
+                    version,
                 )
+            # The digest column is created by migration 005, so the ledger cannot
+            # be read by that name until the set has been applied.
+            await self._bind_ledger_to_published_digests(
+                connection, file_digests, published
+            )
+
         if owner_connection is not None:
             await apply(owner_connection)
         else:
             async with self._pool.acquire() as connection:
                 await apply(connection)
+
+    @staticmethod
+    async def _bind_ledger_to_published_digests(
+        connection: asyncpg.Connection,
+        file_digests: dict[str, str],
+        published: dict[str, str],
+    ) -> None:
+        """Bind the database's own ledger to the bytes the repository publishes.
+
+        F-547 / F-541 (R10-T05-4, R10-T03-6): the JSON pin can be re-legitimised
+        by the same edit that mutates a migration, so the database carries the
+        second witness. A row that recorded a digest must agree with the
+        published value, or the boot refuses a schema whose history it cannot
+        trust; a row that predates the column is bound to the bytes now on disk
+        and so becomes a witness from this boot forward.
+        """
+
+        rows = await connection.fetch(
+            "SELECT version, digest FROM knowledge.schema_migrations ORDER BY version"
+        )
+        for row in rows:
+            version = row["version"]
+            file_digest = file_digests.get(version)
+            if file_digest is None:
+                # The ledger names a migration the repository no longer ships.
+                # Deleting an applied file is the A-4 lane's refusal; this run
+                # cannot bind a digest to bytes that are gone.
+                continue
+            expected = published.get(version)
+            stored = row["digest"]
+            if stored is None:
+                await connection.execute(
+                    "UPDATE knowledge.schema_migrations SET digest = $2 "
+                    "WHERE version = $1 AND digest IS NULL",
+                    version,
+                    file_digest,
+                )
+            elif expected is not None and stored != expected:
+                raise MigrationDigestError(
+                    f"KNOWLEDGE_MIGRATION_DIGEST_ADOPTED_MISMATCH {version}"
+                )
 
     @staticmethod
     async def _migration_is_already_applied(

@@ -70,6 +70,11 @@ RUN /opt/reranker-venv/bin/python /app/export_reranker.py
 FROM reranker-export AS test
 
 COPY app ./app
+# F-547 (R10-T05-4): the runner resolves the published migration digests from
+# this carrier, because the build context is apps/knowledge/ and cannot reach
+# docs/. tests/m12-t2.2-a4-migration-digest.test.mjs pins it byte-identical to
+# the contract at docs/contracts/knowledgebase-migration-digests.json.
+COPY contracts ./contracts
 COPY migrations ./migrations
 COPY pdf-runtime/pyproject.toml pdf-runtime/uv.lock pdf-runtime/requirements.txt ./pdf-runtime/
 COPY pdf-runtime/src ./pdf-runtime/src
@@ -115,6 +120,11 @@ COPY --chown=root:knowledge --chmod=0440 uv.lock /app/uv.lock
 COPY --from=builder --chown=knowledge:knowledge --chmod=0444 /app/artifacts/tokenizer.json /app/artifacts/tokenizer.json
 COPY --from=reranker-export --chown=knowledge:knowledge --chmod=0444 /app/runtime-artifacts/ /app/artifacts/
 COPY app ./app
+# F-547 (R10-T05-4): the runner resolves the published migration digests from
+# this carrier, because the build context is apps/knowledge/ and cannot reach
+# docs/. tests/m12-t2.2-a4-migration-digest.test.mjs pins it byte-identical to
+# the contract at docs/contracts/knowledgebase-migration-digests.json.
+COPY contracts ./contracts
 COPY migrations ./migrations
 
 RUN /opt/pdf-runtime/.venv/bin/python -m zink_pdf_runtime.manifest \

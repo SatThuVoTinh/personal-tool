@@ -428,6 +428,14 @@ class ReplayMigrationConnection:
             return False
         return str(args[-1]) in self.existing
 
+    async def fetch(self, sql: str, *args: object) -> list[object]:
+        # F-547 / F-541: the digest pass reads the ledger once, after the set is
+        # applied. This fixture replays a catalog that owns the objects but has
+        # no rows, so the ledger it reads is empty.
+        normalized = " ".join(sql.split())
+        self.calls.append(("fetch", normalized, args))
+        return []
+
 
 class MigrationReplayTests(unittest.IsolatedAsyncioTestCase):
     MIGRATION = (
@@ -512,6 +520,23 @@ class FakePool:
         return await self.connection.fetchval(sql, *args)
 
 
+def boot_connection(*, boots: int = 3) -> FakeConnection:
+    """A connection scripted for `boots` successful boots over the shipped set.
+
+    One "already applied" answer per migration file, then the two reads a boot
+    makes after it: the ledger digest pass F-547 / F-541 adds, and the
+    segment-type domain assertion. Deriving both from the set the boot actually
+    sees is what keeps a new forward migration from changing what these cases
+    script.
+    """
+
+    migrations = len(list(Path("migrations").glob("*.sql")))
+    return FakeConnection(
+        fetchvals=[True] * (migrations * boots),
+        fetches=[[]] * (2 * boots),
+    )
+
+
 class StartupSweepAndLockTests(unittest.IsolatedAsyncioTestCase):
     async def test_the_startup_sweep_is_chunked(self) -> None:
         """F-092 (R5-E03-03): one statement carried every failed index id.
@@ -549,7 +574,7 @@ class StartupSweepAndLockTests(unittest.IsolatedAsyncioTestCase):
         operator read it as "the database is down".
         """
 
-        connection = FakeConnection(fetchvals=[True, True, True], fetches=[[]])
+        connection = boot_connection()
         pool = FakePool(connection)
         database = KnowledgeDatabase(
             "localhost", 5432, "knowledge", "zink", "secret", Path("migrations")
@@ -579,7 +604,7 @@ class StartupSweepAndLockTests(unittest.IsolatedAsyncioTestCase):
         restart.
         """
 
-        connection = FakeConnection(fetchvals=[True, True, True], fetches=[[]])
+        connection = boot_connection()
         pool = FakePool(connection)
         database = KnowledgeDatabase(
             "localhost", 5432, "knowledge", "zink", "secret", Path("migrations")
@@ -652,12 +677,7 @@ class StartupSweepAndLockTests(unittest.IsolatedAsyncioTestCase):
         process even after the lock (held for seconds) was released.
         """
 
-        # One "already applied" answer per migration file the boot reads, so a
-        # new forward migration cannot change what this case scripts.
-        connection = FakeConnection(
-            fetchvals=[True] * len(list(Path("migrations").glob("*.sql"))),
-            fetches=[[]],
-        )
+        connection = boot_connection()
         original_execute = connection.execute
         lock_attempts: list[int] = []
 
@@ -710,12 +730,7 @@ class StartupSweepAndLockTests(unittest.IsolatedAsyncioTestCase):
         healthy. The sweep is idempotent, so the loop repeats it.
         """
 
-        # One "already applied" answer per migration file the boot reads, so a
-        # new forward migration cannot change what this case scripts.
-        connection = FakeConnection(
-            fetchvals=[True] * len(list(Path("migrations").glob("*.sql"))),
-            fetches=[[]],
-        )
+        connection = boot_connection()
         pool = FakePool(connection)
         database = KnowledgeDatabase(
             "localhost", 5432, "knowledge", "zink", "secret", Path("migrations")
