@@ -22,6 +22,25 @@ Before owner approval, Codex may freely propose and revise plans.
 
 After approval, the Approved Plan Lock applies.
 
+## Approved Plan Lock
+
+After the owner approves a plan, the approved scope and its material decisions
+are locked. Without a new owner decision, no agent may change:
+
+- task identity, scope, acceptance criteria, or Definition of Done;
+- architecture, ownership, public API, durable schema or migration semantics;
+- persistent state, dependency set, topology, security boundary, resource
+  ceiling, compatibility guarantee, or milestone order;
+- required validation gates.
+
+The owner is the only authority who may lift or narrow the lock; silence is not
+approval. An agent that finds a material conflict or a better option must stop at
+the smallest safe boundary, record the evidence and impact, and use the Owner
+Decision Protocol below. A violation is a RED decision under `AGENTS.md` §7 and
+must be resolved before execution resumes. The revised decision is recorded in
+`PLAN.md` and, when execution is authorized, in the matching
+`docs/contracts/execution/ACTIVE.md`.
+
 ## Requirement
 
 Agents are engineers, not passive instruction followers.
