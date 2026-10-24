@@ -220,6 +220,22 @@ export function buildInspectionRecord(stateDir) {
   };
 }
 
+/**
+ * The deployment verdict a verify run may publish (M12/T9 F-467 / `R9-L05-5`).
+ *
+ * A static inspection of a host is not deployment evidence. PASS requires all
+ * of these facts: the live battery was requested, it produced at least one
+ * entry, every entry is non-FAIL, and the host inspection itself passed. A live
+ * FAIL is FAIL; every other absence of evidence is NOT RUN.
+ */
+export function deploymentEvidenceFor({ liveRequested, live, inspection }) {
+  const entries = Array.isArray(live) ? live : [];
+  if (entries.some((entry) => entry.status === "FAIL")) return "FAIL";
+  if (!liveRequested || entries.length === 0) return "NOT RUN";
+  if (inspection?.deploymentEvidence !== "PASS") return "NOT RUN";
+  return "PASS";
+}
+
 function displayCommand(command, args) {
   const redacted = args.map((argument, index) =>
     args[index - 1] === "--target" && argument.startsWith("channel:")
@@ -639,7 +655,10 @@ async function main() {
   const result = {
     static: "PASS",
     live: [],
-    deploymentEvidence: inspection.deploymentEvidence,
+    // F-467 (legacy `R9-L05-5`): the deployment verdict is derived AFTER
+    // the live battery, from the live outcome. The inspection record alone is
+    // a host-capability check, not deployment evidence.
+    deploymentEvidence: "NOT RUN",
     inspection,
   };
   if (options.live) {
@@ -734,6 +753,11 @@ async function main() {
       process.exitCode = 1;
     }
   }
+  result.deploymentEvidence = deploymentEvidenceFor({
+    liveRequested: Boolean(options.live),
+    live: result.live,
+    inspection,
+  });
   process.stdout.write(`${stableJson(result)}`);
 }
 
