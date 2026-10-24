@@ -281,7 +281,9 @@ test("R4 N3: exactly one selection predecessor slot, R10 -> R5", async () => {
     files.length,
     "no artifact file may carry more than one predecessor slot",
   );
-  const supersededRegions = Object.values(table).map((entry) => entry.supersedes);
+  const supersededRegions = Object.values(table).map(
+    (entry) => entry.supersedes,
+  );
   assert.equal(
     new Set(supersededRegions).size,
     supersededRegions.length,
