@@ -497,7 +497,7 @@ export function validateTechnicalArtifact({
     result.checks.sandboxContainment = true;
   }
 
-  // 2. File size & readability check + SHA-256 hash (I07)
+  // 2. File size & readability check (stat only)
   let fileSizeBytes;
   try {
     const stat = statSync(filePath);
@@ -512,13 +512,6 @@ export function validateTechnicalArtifact({
       return stampProvenanceAndDigest(result, initialInferredType);
     }
     result.checks.readability = true;
-
-    // I07: Compute immutable SHA-256 hash
-    const contentBuf = readFileSync(filePath);
-    const hash = createHash("sha256").update(contentBuf).digest("hex");
-    result.sizeBytes = fileSizeBytes;
-    result.sha256 = hash;
-    result.checks.hash = hash;
   } catch (err) {
     result.status = VALIDATION_STATUS.FAIL;
     result.errors.push(
@@ -528,12 +521,13 @@ export function validateTechnicalArtifact({
     return stampProvenanceAndDigest(result, initialInferredType);
   }
 
-  // 3. Content parsing & schema check by type
+  // 3. Format-specific maximum size limits bounded by the Discord upload
+  // ceiling. F-464: the ceiling is compared against stat.size BEFORE the
+  // artifact body is read, so an over-limit file is refused without paying the
+  // full read and hash cost.
   const ext = path.extname(filePath).toLowerCase();
   const inferredType = deriveType(expectedType, ext);
   result.checks.inferredType = inferredType;
-
-  // J09: Format-specific maximum size limits bounded by Discord upload ceiling
   const maxSize =
     FORMAT_MAX_SIZE_LIMITS[inferredType] || MAX_ARTIFACT_SIZE_BYTES;
   result.checks.maxSizeBytes = maxSize;
@@ -547,6 +541,24 @@ export function validateTechnicalArtifact({
   }
   result.checks.sizeBound = true;
 
+  // 4. Read + SHA-256 hash (I07), bounded by the ceiling above
+  let contentBuf;
+  try {
+    contentBuf = readFileSync(filePath);
+    const hash = createHash("sha256").update(contentBuf).digest("hex");
+    result.sizeBytes = fileSizeBytes;
+    result.sha256 = hash;
+    result.checks.hash = hash;
+  } catch (err) {
+    result.status = VALIDATION_STATUS.FAIL;
+    result.errors.push(
+      `READ_ERROR: Failed to read the artifact: ${err?.message}`,
+    );
+    result.checks.readability = false;
+    return stampProvenanceAndDigest(result, inferredType);
+  }
+
+  // 5. Content parsing & schema check by type
   if (inferredType === "json") {
     try {
       const content = readFileSync(filePath, "utf8");

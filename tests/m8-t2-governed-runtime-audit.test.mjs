@@ -44,6 +44,7 @@ import {
   validateTechnicalArtifact,
   generateArtifactPreview,
   VALIDATION_STATUS,
+  FORMAT_MAX_SIZE_LIMITS,
 } from "../integrations/openclaw/lib/artifact-validator.mjs";
 
 import { validateSqlFileContent } from "../zink-tools/sql/validator.mjs";
@@ -3441,5 +3442,63 @@ describe("F-259 — the result card sanitizes the preview and fits the ceiling",
     assert.match(card, /\[ACCEPT \/ COMPLETE\]/);
     assert.match(card, /\[REJECT\]/);
     assert.match(card, /\[REQUEST REVISION\]/);
+  });
+});
+// =========================================================================
+// M12/T9 F-464 — the validator read and hashed an artifact in full before it
+// compared the per-format ceiling, so an over-limit file paid the read cost
+// before the guard could refuse it.
+//
+// Measured pre-fix: a 2 MiB + 1 python artifact failed FILE_TOO_LARGE but
+// carried a sha256 and sizeBytes, proving the whole buffer had been read and
+// hashed before the guard refused it.
+// =========================================================================
+describe("F-464 — the validator bounds its own artifact read", () => {
+  test("F-464-1: an over-limit artifact is refused without being read or hashed", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "zink-f464-"));
+    try {
+      const oversized = path.join(dir, "oversized.py");
+      await writeFile(
+        oversized,
+        Buffer.alloc(FORMAT_MAX_SIZE_LIMITS.python + 1, 0x78),
+      );
+      const result = validateTechnicalArtifact({ filePath: oversized });
+      assert.equal(result.status, VALIDATION_STATUS.FAIL);
+      assert.ok(
+        result.errors.some((entry) => entry.includes("FILE_TOO_LARGE")),
+        `expected FILE_TOO_LARGE, got ${JSON.stringify(result.errors)}`,
+      );
+      assert.equal(result.checks.sizeBound, false);
+      assert.equal(result.sha256, undefined, "the body must not be hashed");
+      assert.equal(
+        result.checks.hash,
+        undefined,
+        "the hash check must not run",
+      );
+      assert.equal(result.sizeBytes, undefined, "no buffered digest metadata");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("F-464-2: the stat-size guard precedes the artifact read in source order", () => {
+    const source = readFileSync(
+      new URL(
+        "../integrations/openclaw/lib/artifact-validator.mjs",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    const body = source.slice(
+      source.indexOf("export function validateTechnicalArtifact"),
+    );
+    const guard = body.indexOf("if (fileSizeBytes > maxSize)");
+    const read = body.indexOf("readFileSync(filePath)");
+    assert.ok(guard > 0, "the ceiling guard must be present");
+    assert.ok(read > 0, "the artifact read must be present");
+    assert.ok(
+      guard < read,
+      "the ceiling must be compared before the artifact body is read",
+    );
   });
 });
