@@ -2015,3 +2015,116 @@ test("F-197: the quality-gate lane consumes the skip counts", () => {
     "the skip-expectation table must exist: a gate without an expectation is not a gate",
   );
 });
+
+// =========================================================================
+// M12/T9 B8 — the gate registry must state what HEAD actually does.
+//
+// `checkGateRegistry` compared the Script column against
+// `package.json.scripts` and nothing else, so the "Where it runs" and
+// "NOT RUN condition" columns and the CI prose beside them could state the
+// opposite of the workflow and stay green. The cases below drive the parsed
+// workflow and the documented prose through the same predicate.
+// =========================================================================
+const gateRegistryRows = (rows) =>
+  [
+    "| Script | What it checks | Where it runs | NOT RUN condition |",
+    "| --- | --- | --- | --- |",
+    ...rows.map(
+      ([name, what = "d", where = "CI", notRun = "n"]) =>
+        `| \`${name}\` | ${what} | ${where} | ${notRun} |`,
+    ),
+  ].join("\n");
+
+const workflowWith = (steps) =>
+  `name: Test\n\non:\n  push:\n\njobs:\n  gate:\n    steps:\n${steps}`;
+
+test("F-458: the uv pin the registry prose states must match the version CI installs", () => {
+  const packageJson = { scripts: { test: "node --test tests/a.test.mjs" } };
+  const ci = workflowWith('      - run: pip install "uv==0.12.0"\n');
+  const documented = `${gateRegistryRows([["test"]])}\n\n- \`CI / python-quality\` installs \`uv==0.12.5\`.\n`;
+
+  const failures = checkGateRegistry(packageJson, documented, { ci });
+  assert.equal(failures.length, 1, failures.join(" | "));
+  assert.match(failures[0], /uv==0\.12\.5/u);
+  assert.match(failures[0], /uv==0\.12\.0/u);
+
+  const consistent = checkGateRegistry(
+    packageJson,
+    documented.replace("0.12.5", "0.12.0"),
+    { ci },
+  );
+  assert.deepEqual(consistent, []);
+});
+
+test("F-458: the registry's secret-scan prose must match the Security workflow and the tracked configuration", () => {
+  const packageJson = { scripts: { test: "node --test tests/a.test.mjs" } };
+  const security = workflowWith(
+    '      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e\n        env:\n          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "true"\n',
+  );
+  const rows = gateRegistryRows([["test"], ["gitleaks/gitleaks-action"]]);
+  const stale = `${rows}\n\n- Gitleaks uses full history, does not create PR comments or upload artifacts, and has no license or custom configuration.\n`;
+
+  const failures = checkGateRegistry(packageJson, stale, {
+    security,
+    gitleaksConfig: true,
+  });
+  assert.equal(failures.length, 2, failures.join(" | "));
+  assert.ok(
+    failures.some((failure) => /does not upload artifacts/u.test(failure)),
+    failures.join(" | "),
+  );
+  assert.ok(
+    failures.some((failure) => /no custom configuration/u.test(failure)),
+    failures.join(" | "),
+  );
+
+  const corrected = checkGateRegistry(
+    packageJson,
+    stale.replace(
+      "does not create PR comments or upload artifacts, and has no license or custom configuration",
+      "uploads its report artifact and is configured by the tracked .gitleaks.toml",
+    ),
+    { security, gitleaksConfig: true },
+  );
+  assert.deepEqual(corrected, []);
+});
+
+test("F-458: every blocking CI check surface must hold a registry row", () => {
+  const packageJson = {
+    scripts: {
+      test: "node --test tests/a.test.mjs",
+      verify: "npm test",
+    },
+  };
+  const ci = workflowWith(
+    '      - run: npm run verify\n      - run: node scripts/merge-gate.mjs --sha "$SHA"\n      - continue-on-error: true\n        run: node scripts/report-only.mjs\n',
+  );
+
+  const complete = checkGateRegistry(
+    packageJson,
+    gateRegistryRows([["test"], ["verify"], ["scripts/merge-gate.mjs"]]),
+    { ci },
+  );
+  assert.deepEqual(complete, []);
+
+  const missing = checkGateRegistry(
+    packageJson,
+    gateRegistryRows([["test"], ["verify"]]),
+    { ci },
+  );
+  assert.equal(missing.length, 1, missing.join(" | "));
+  assert.match(missing[0], /scripts\/merge-gate\.mjs/u);
+
+  const invented = checkGateRegistry(
+    packageJson,
+    gateRegistryRows([
+      ["test"],
+      ["verify"],
+      ["scripts/merge-gate.mjs"],
+      ["scripts/ghost.mjs"],
+    ]),
+    { ci },
+  );
+  assert.equal(invented.length, 1, invented.join(" | "));
+  assert.match(invented[0], /scripts\/ghost\.mjs/u);
+});

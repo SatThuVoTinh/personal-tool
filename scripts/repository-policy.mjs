@@ -1310,16 +1310,162 @@ export function checkTestListReconciliation(packageJson, testFiles) {
 
 const GATE_REGISTRY_HEADER =
   /^\|\s*Script\s*\|\s*What it checks\s*\|\s*Where it runs\s*\|\s*NOT RUN condition\s*\|/u;
+const GATE_REGISTRY_ROW = /^\|\s*`([^`]+)`\s*\|([^|]*)\|([^|]*)\|([^|]*)\|/u;
+
+// Actions a workflow runs to provision the runner rather than to check the
+// repository. Every other action is a blocking check surface, so it needs its
+// own registry row and its own NOT RUN condition.
+const TOOLCHAIN_ACTIONS = new Set([
+  "actions/checkout",
+  "actions/setup-node",
+  "actions/setup-python",
+]);
+
+const NPM_SCRIPT_INVOCATION = /\bnpm\s+run\s+([\w:@.-]+)/gu;
+const NPM_TEST_INVOCATION = /\bnpm\s+test\b/u;
+const NODE_SCRIPT_INVOCATION =
+  /\bnode\s+(?:--?[\w-]+(?:=\S+)?\s+)*([\w./@+-]+\.(?:mjs|cjs|js))/gu;
+const UV_PIN = /uv==(\d+\.\d+\.\d+)/gu;
+// The two sentences `docs/development/conventions.md` used to carry about the
+// secret-scan lane, each of which contradicted a shipped gate.
+const GITLEAKS_UPLOAD_DENIAL =
+  /does not[^.\n]*\bupload(?:s)? (?:an? )?artifacts?/iu;
+const GITLEAKS_NO_CONFIG = /\bhas no (?:license|custom configuration)/iu;
 
 /**
- * `docs/development/conventions.md` holds the one durable enumeration of the npm
- * gates, which is what gives a `NOT RUN` claim a denominator. A registry that can
- * drift from `package.json.scripts` is worse than none — it reads like an answer
- * while the scripts quietly change — so both directions fail, and a missing table
- * fails too rather than passing vacuously. This compares membership only: it never
- * adds a script to `verify`'s run order or to any CI job.
+ * The check surfaces a workflow runs and does not let fail softly.
+ *
+ * A step with `continue-on-error: true` reports and moves on, so it blocks
+ * nothing and needs no NOT RUN condition. Everything else — an npm script, a
+ * direct `node` invocation or an action — is a surface whose absence from the
+ * registry is a gate nobody can account for.
  */
-export function checkGateRegistry(packageJson, registryMarkdown) {
+function blockingCheckSurfaces(workflowPath, workflowText) {
+  const surfaces = new Map();
+  if (typeof workflowText !== "string" || workflowText.trim().length === 0) {
+    return surfaces;
+  }
+  let document;
+  try {
+    document = parseDocument(workflowText, { uniqueKeys: true });
+  } catch {
+    return surfaces;
+  }
+  // An unparseable workflow is checkWorkflowDefinitions' failure, not this
+  // check's: it would otherwise report every surface as missing.
+  if (document.errors.length > 0) return surfaces;
+  const jobs = document.toJS()?.jobs;
+  if (!isObject(jobs)) return surfaces;
+
+  for (const job of Object.values(jobs)) {
+    const steps = isObject(job) ? job.steps : undefined;
+    if (!Array.isArray(steps)) continue;
+    for (const step of steps) {
+      if (!isObject(step) || step["continue-on-error"] === true) continue;
+      if (typeof step.uses === "string") {
+        const action = step.uses.split("@")[0];
+        if (!TOOLCHAIN_ACTIONS.has(action) && !surfaces.has(action)) {
+          surfaces.set(action, { surface: action, workflowPath });
+        }
+        continue;
+      }
+      if (typeof step.run !== "string") continue;
+      const invoked = [
+        ...[...step.run.matchAll(NPM_SCRIPT_INVOCATION)].map(
+          (match) => match[1],
+        ),
+        ...[...step.run.matchAll(NODE_SCRIPT_INVOCATION)].map(
+          (match) => match[1],
+        ),
+      ];
+      if (NPM_TEST_INVOCATION.test(step.run)) invoked.push("test");
+      for (const surface of invoked) {
+        if (!surfaces.has(surface))
+          surfaces.set(surface, { surface, workflowPath });
+      }
+    }
+  }
+  return surfaces;
+}
+
+/**
+ * The prose beside the registry table must agree with the workflows it
+ * describes. Both contradictions measured here were live: the table block
+ * stated a uv pin the CI job does not install, and stated that the Gitleaks
+ * lane uploads no artifact and carries no custom configuration while
+ * `security.yml` sets the upload flag to `true` and `repo:check` fails when
+ * the tracked `.gitleaks.toml` is missing.
+ */
+function checkRegistryProse(registryMarkdown, workflowTexts) {
+  const failures = [];
+  const markdown = String(registryMarkdown ?? "");
+  const ci = typeof workflowTexts.ci === "string" ? workflowTexts.ci : "";
+  const security =
+    typeof workflowTexts.security === "string" ? workflowTexts.security : "";
+
+  const documentedPins = new Set(
+    [...markdown.matchAll(UV_PIN)].map((m) => m[1]),
+  );
+  const ciPins = new Set([...ci.matchAll(UV_PIN)].map((match) => match[1]));
+  if (documentedPins.size > 0 && ciPins.size > 0) {
+    for (const pin of [...documentedPins].sort()) {
+      if (!ciPins.has(pin)) {
+        failures.push(
+          `The gate registry documents uv==${pin}, while the CI workflow installs ${[
+            ...ciPins,
+          ]
+            .sort()
+            .map((entry) => `uv==${entry}`)
+            .join(", ")}. The registry must state the version CI installs.`,
+        );
+      }
+    }
+  }
+
+  const uploadsReport =
+    /GITLEAKS_ENABLE_UPLOAD_ARTIFACT:\s*["']?true["']?/u.test(security);
+  const claims = markdown
+    .split(/\r?\n/u)
+    .filter(
+      (line) => /gitleaks/iu.test(line) && !line.trimStart().startsWith("|"),
+    );
+  for (const line of claims) {
+    if (uploadsReport && GITLEAKS_UPLOAD_DENIAL.test(line)) {
+      failures.push(
+        "The gate registry states that the secret-scan lane does not upload artifacts, while .github/workflows/security.yml sets GITLEAKS_ENABLE_UPLOAD_ARTIFACT to true. The report artifact is what makes a zero-leak claim re-inspectable.",
+      );
+    }
+    if (
+      workflowTexts.gitleaksConfig === true &&
+      GITLEAKS_NO_CONFIG.test(line)
+    ) {
+      failures.push(
+        "The gate registry states that the secret-scan lane carries no custom configuration, while the repository tracks .gitleaks.toml and repo:check fails without it.",
+      );
+    }
+  }
+  return failures;
+}
+
+/**
+ * `docs/development/conventions.md` holds the one durable enumeration of the
+ * gates, which is what gives a `NOT RUN` claim a denominator. A registry that
+ * can drift from the thing it describes is worse than none — it reads like an
+ * answer while the scripts quietly change — so the comparison runs in every
+ * direction that has a HEAD-side operand:
+ *
+ * - every npm script needs a row, and every row needs an npm script or a
+ *   blocking CI check surface behind it;
+ * - every blocking surface the parsed workflows run — npm script, direct
+ *   `node` invocation or action — needs a row, so a step added to either YAML
+ *   without one reddens the check;
+ * - the prose beside the table is compared with the workflows it describes.
+ */
+export function checkGateRegistry(
+  packageJson,
+  registryMarkdown,
+  workflowTexts = {},
+) {
   const scripts = Object.keys(packageJson?.scripts ?? {});
   const lines = String(registryMarkdown ?? "").split(/\r?\n/u);
   const header = lines.findIndex((line) => GATE_REGISTRY_HEADER.test(line));
@@ -1331,12 +1477,12 @@ export function checkGateRegistry(packageJson, registryMarkdown) {
 
   const listed = new Set();
   for (let index = header + 2; index < lines.length; index += 1) {
-    const match = /^\|\s*`([^`]+)`\s*\|/u.exec(lines[index]);
+    const match = GATE_REGISTRY_ROW.exec(lines[index]);
     if (!match) break;
     listed.add(match[1]);
   }
 
-  const failures = [];
+  const failures = checkRegistryProse(registryMarkdown, workflowTexts);
   for (const scriptName of [...scripts].sort()) {
     if (!listed.has(scriptName)) {
       failures.push(
@@ -1344,12 +1490,33 @@ export function checkGateRegistry(packageJson, registryMarkdown) {
       );
     }
   }
-  for (const entry of [...listed].sort()) {
-    if (!scripts.includes(entry)) {
+
+  const surfaces = new Map();
+  for (const [workflowPath, workflowText] of Object.entries({
+    [WORKFLOW_PATHS.ci]: workflowTexts.ci,
+    [WORKFLOW_PATHS.security]: workflowTexts.security,
+  })) {
+    for (const [surface, entry] of blockingCheckSurfaces(
+      workflowPath,
+      workflowText,
+    )) {
+      if (!surfaces.has(surface)) surfaces.set(surface, entry);
+    }
+  }
+  for (const [surface, entry] of [...surfaces].sort()) {
+    if (!listed.has(surface)) {
       failures.push(
-        `The gate registry enumerates an npm script that does not exist: ${entry}.`,
+        `The gate registry does not enumerate the blocking CI check surface: ${surface} (${entry.workflowPath}). A blocking step with no row has no NOT RUN condition anywhere.`,
       );
     }
+  }
+
+  for (const entry of [...listed].sort()) {
+    if (scripts.includes(entry)) continue;
+    if (surfaces.has(entry)) continue;
+    failures.push(
+      `The gate registry enumerates a gate that neither package.json nor the workflows declare: ${entry}.`,
+    );
   }
   return failures;
 }
@@ -1976,10 +2143,21 @@ export function collectRepositoryFailures(repositoryRoot) {
       "development",
       "conventions.md",
     );
+    const workflowTexts = {};
+    for (const [name, workflowPath] of Object.entries(WORKFLOW_PATHS)) {
+      const filePath = path.join(repositoryRoot, workflowPath);
+      if (existsSync(filePath)) {
+        workflowTexts[name] = readFileSync(filePath, "utf8");
+      }
+    }
+    workflowTexts.gitleaksConfig = existsSync(
+      path.join(repositoryRoot, ".gitleaks.toml"),
+    );
     failures.push(
       ...checkGateRegistry(
         packageJson,
         existsSync(registryPath) ? readFileSync(registryPath, "utf8") : "",
+        workflowTexts,
       ),
     );
 
