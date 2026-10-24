@@ -8320,6 +8320,31 @@ null;`) left the lane 3/3 green, so that path is unproven and the shipped
   lists of `configure.mjs`, and the new `R13 P7` case re-derives it from commit
   `1b68586` through the real generator. Three probes confirmed the pins are live
   controls; all were reverted.
+- The reds the integrated tree carried from earlier rows on this branch were
+  remediated as lead work, each measured before it was called a repair.
+  `97761f4` re-binds two text-pinned expectations to the controls they police:
+  `R21-05` counted how often the line binding `candidate_limit` to
+  `MAX_RERANK_CANDIDATES` is WRITTEN, so `F-514`'s hoist of that binding out of
+  the two branches reddened the lane while both pool cuts were still made by the
+  constant, and `M3/T3` pinned the run-error ordering key at two members, so
+  `F-550`'s third member (the cause, in the order by design) reddened it. Three
+  probes — clamp one cut to `request.limit`, rebind the constant to the page,
+  drop the cause from the key — each reddened its own lane and every one was
+  reverted. `5bf81b5` fixes the `F-379` admission lane's `tar -xf C:\Users\…`
+  operands: MSYS tar reads the `C:` as a remote host and refuses, so on this
+  host the packaged-asset admission had never actually been measured, and a lane
+  that cannot run is not a lane that passed. With relative operands run from the
+  temp root both cases PASS (`--force-local` is not the fix — tar then reads the
+  `-C` operand as a member name), and that run settles that
+  `zink-knowledge.schema.json` packages into no deployed asset set. `3b63956`
+  rolls the contract-manifest pin `fc7a399` owed: attribution was proven by
+  restoring ONLY the pre-row contract bytes at HEAD and reproducing `8f6db1a0…`
+  exactly, the new `fe12b29f…` came from the generator call the constant's own
+  docblock prescribes, displacing it reddened 3 tests (reverted), and the three
+  files that read the constant report 27 pass / 0 fail. `b9d3f69` names the
+  `.qoder/` owner in the topology map — the remedy `F-372`'s own assertion text
+  prescribes — so that lane passes and `F-261` x2, the single-worktree rule, is
+  the only red this branch still owes the deferred worktree cleanup.
 - `repo:check` no longer reports an unenumerated test file. Its only remaining
   failure is the single-worktree rule: `git worktree list` registers 9 trees (this
   one plus the 8 lane worktrees), and the gate clears when the last lane is
