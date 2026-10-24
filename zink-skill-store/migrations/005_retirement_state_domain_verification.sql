@@ -24,6 +24,13 @@
 --
 -- This file changes no schema. It fails the migration (and therefore leaves it
 -- unrecorded) instead of letting an unverified domain be frozen as applied.
+--
+-- Two layers, both required. The NAME-keyed blocks prove that the constraints
+-- 004 re-added still carry the widened domains — that is the postcondition 004
+-- wrote for only one of its two constraints, and the one F-541's gate requires
+-- for every CHECK a migration drops. The TYPE-keyed count proves the property
+-- a name can never prove: no OTHER CHECK on `sync_status` refuses the state the
+-- widening made reachable.
 
 DO $$
 DECLARE
@@ -36,12 +43,11 @@ BEGIN
     JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
     WHERE nsp.nspname = 'skills'
       AND rel.relname = 'catalog_index'
-      AND con.contype = 'c'
-      AND pg_get_constraintdef(con.oid) LIKE '%status%'
+      AND con.conname = 'catalog_index_status_check'
       AND pg_get_constraintdef(con.oid) LIKE '%DEPRECATED%'
   ) THEN
     RAISE EXCEPTION
-      'skills.catalog_index still refuses the DEPRECATED retirement state';
+      'skills.catalog_index status CHECK (catalog_index_status_check) still refuses DEPRECATED';
   END IF;
 
   IF NOT EXISTS (
@@ -51,12 +57,11 @@ BEGIN
     JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
     WHERE nsp.nspname = 'skills'
       AND rel.relname = 'catalog_index'
-      AND con.contype = 'c'
-      AND pg_get_constraintdef(con.oid) LIKE '%sync_status%'
+      AND con.conname = 'catalog_index_sync_status_check'
       AND pg_get_constraintdef(con.oid) LIKE '%TOMBSTONED%'
   ) THEN
     RAISE EXCEPTION
-      'skills.catalog_index still refuses the TOMBSTONED retirement sync state';
+      'skills.catalog_index sync_status CHECK (catalog_index_sync_status_check) still refuses TOMBSTONED';
   END IF;
 
   SELECT count(*) INTO v_narrow_sync_checks

@@ -1064,10 +1064,6 @@ test("F-509: the retirement-state postcondition asserts both widened domains", a
     /con\.conrelid/u,
     "the postcondition must scope to the table by conrelid",
   );
-  assert.ok(
-    !/con\.conname\s*=\s*'catalog_index_sync_status_check'/u.test(block),
-    "the sync_status half must not be keyed on one predicted constraint name",
-  );
 
   // The guard that closes the documented harm: ANOTHER CHECK on sync_status
   // may not omit TOMBSTONED.
@@ -1081,4 +1077,87 @@ test("F-509: the retirement-state postcondition asserts both widened domains", a
     /v_narrow_sync_checks > 0/u,
     "the other-CHECK count must be a refusal, not a diagnostic",
   );
+});
+
+// M12/T9-R4 F-541 (R10-T03-6) — migration immutability is a BYTE pin, and the
+// byte pin says nothing about what the SQL does. Neither runner, and neither
+// digest gate, ever inspects a migration's statements.
+//
+// The checkable minimum is the pairing every widening needs: a constraint a
+// migration DROPs must be re-ADDed in the same file (otherwise the column is
+// left unconstrained), and its NAME must appear in a `DO $$` verification
+// block in the applied set (otherwise the widening has no postcondition and is
+// frozen as applied — exactly F-509's harm).
+//
+// The unit is the applied SET, not one file: an applied migration is
+// immutable, so a later forward migration is the module's only lawful way to
+// complete an earlier file's postcondition. The set-level reading is what makes
+// the rule satisfiable without editing a digest-pinned file.
+//
+// Both migration sets are parsed, so the Knowledgebase set is covered by the
+// same shipped, non-skippable lane.
+test("F-541: every CHECK a migration drops is re-added and re-verified by name", async () => {
+  const repoRoot = path.resolve(import.meta.dirname, "..");
+  const sets = [
+    path.join(repoRoot, "apps", "knowledge", "migrations"),
+    SKILL_STORE_MIGRATIONS_DIR,
+  ];
+
+  for (const directory of sets) {
+    const files = (await readdir(directory))
+      .filter((name) => name.endsWith(".sql"))
+      .sort();
+    assert.ok(files.length > 0, `${directory} must hold migrations`);
+
+    const texts = [];
+    for (const name of files) {
+      texts.push({
+        name,
+        text: await readFile(path.join(directory, name), "utf8"),
+      });
+    }
+    const verification = texts
+      .flatMap(
+        (file) => file.text.match(/DO \$[\s\S]*?END \$[\s\S]*?;/gu) ?? [],
+      )
+      .join("\n");
+    const droppedInSet = texts.flatMap((file) =>
+      [
+        ...file.text.matchAll(
+          /DROP\s+CONSTRAINT\s+IF\s+EXISTS\s+([A-Za-z0-9_]+)/giu,
+        ),
+      ].map((match) => match[1]),
+    );
+    if (droppedInSet.length > 0) {
+      assert.match(
+        verification,
+        /pg_constraint/u,
+        `${directory}: a postcondition must read the catalog, not be a comment`,
+      );
+    }
+
+    for (const file of texts) {
+      const dropped = [
+        ...file.text.matchAll(
+          /DROP\s+CONSTRAINT\s+IF\s+EXISTS\s+([A-Za-z0-9_]+)/giu,
+        ),
+      ].map((match) => match[1]);
+      const added = new Set(
+        [...file.text.matchAll(/ADD\s+CONSTRAINT\s+([A-Za-z0-9_]+)/giu)].map(
+          (match) => match[1],
+        ),
+      );
+      for (const name of dropped) {
+        assert.ok(
+          added.has(name),
+          `${file.name} drops ${name} and never re-adds it: the column would be left unconstrained`,
+        );
+        assert.ok(
+          verification.includes(name),
+          `${file.name} re-adds ${name} but no migration's postcondition re-asserts it by name: ` +
+            `a widening without a postcondition is recorded as applied and frozen by the digest pin`,
+        );
+      }
+    }
+  }
 });
