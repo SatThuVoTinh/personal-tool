@@ -8081,11 +8081,33 @@ contract, leaves a clean tree, creates the local closeout commit, and pushes the
 current non-main task branch. No deployment, no direct `main` push, no
 force-push, no PR/merge/release.
 
-### Current checkpoint (2026-10-23)
+### Current checkpoint (2026-10-24)
 
 - R3 is archived at `docs/contracts/execution/archive/2026-10-21-M12-T9-R3.md`.
 - R4 is materialized at `docs/contracts/execution/ACTIVE.md`; this block is its
   lifecycle pointer.
-- `F-523` is being fixed: the §4 header and the old R3 block are now explicitly
-  historical, so the only live `Plan Revision:` is this block.
-- The evidence floor is the next Phase 0 action. No product-code fix has started.
+- 13 of the 189 scoped rows are closed with red/green and mutation evidence:
+  `F-523`, `F-524`, `F-437`, `F-438`, `F-408`, `F-414`, `F-464`, `F-465`,
+  `F-466`, `F-473`, `F-442`, `F-444` and the Critical head of B1, `F-533`. The
+  register now carries 210 rows (142 OPEN + 34 LATENT in scope, 32 REFUTED, 2
+  BLOCKED).
+- The band that had already merged without its closeout (`F-464`/`F-465`/
+  `F-466`/`F-473` from B4, `F-442`/`F-444` from B5) was re-measured at this HEAD
+  before its rows were deleted: the artifact/Excel lane is 8/8, the knowledge
+  lane 212 passed / 17 skipped / 0 failed, and each control was
+  mutation-probed in person with the probe reverted.
+- `repo:check` no longer reports an unenumerated test file. `tests/agent-owner-F-408.test.mjs`,
+  `tests/agent-owner-F-414.test.mjs` and `tests/agent-plugin-F-533.test.mjs` are
+  in the `npm test` script. Its only remaining failure is the single-worktree
+  rule, held red by the eight intentional lane worktrees; it stays a real
+  failure and is cleared as the lanes are integrated and removed.
+- `format:check`, `lint` and the register gate (12/12) pass. The shipped
+  `npm test` still cannot start on this Windows host (command-line length), so
+  the equivalent `node --test` lane is the evidence and `NOT RUN` is recorded as
+  `NOT RUN`.
+- Work in the lanes, not yet integrated: `m12-t9-r4-b7` (F-450, F-451, F-452,
+  F-453, F-455, F-511 — 168/168 green, uncommitted), `m12-t9-r4-b6` (F-427,
+  F-428, F-429 — 7/7 green, uncommitted) and `m12-t9-r4-evidence` (F-467 and the
+  rest of the evidence floor — 29/29 green, uncommitted). `m12-t9-r4-b3` is
+  parked with nothing done. The `red-probe` stash in the B7 worktree is a
+  mutation probe and must never be applied.
