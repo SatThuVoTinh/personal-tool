@@ -779,14 +779,48 @@ export class KnowledgeAdapter {
             };
           });
 
-          // M14: total_count matches formattedResults length
+          // F-571 (R10-T10-2): pool and page are the SERVICE's answer, not this
+          // module's. M14 set `total_count` to the number of rows it formatted,
+          // which is exactly the reading F-132/F-140/F-514 removed at the
+          // service: a candidate pool of 20 cut to a two-row page read as "two
+          // matches exist". The five completeness fields the service publishes
+          // are forwarded, and only the ones it actually carried are emitted — a
+          // key whose value is `undefined` is still a key, and the closed output
+          // object refuses it (F-125). A signal that arrives out of shape is
+          // dropped rather than passed through, so the envelope cannot carry an
+          // upstream value its own contract would reject.
+          const counts = {};
+          if (Number.isInteger(parsed.total_count) && parsed.total_count >= 0) {
+            counts.total_count = parsed.total_count;
+          } else {
+            counts.total_count = formattedResults.length;
+          }
+          if (
+            Number.isInteger(parsed.returned_count) &&
+            parsed.returned_count >= 0
+          ) {
+            counts.returned_count = parsed.returned_count;
+          }
+          if (typeof parsed.has_more === "boolean") {
+            counts.has_more = parsed.has_more;
+          }
+          if (
+            Number.isInteger(parsed.candidate_pool_count) &&
+            parsed.candidate_pool_count >= 0
+          ) {
+            counts.candidate_pool_count = parsed.candidate_pool_count;
+          }
+          if (typeof parsed.truncated === "boolean") {
+            counts.truncated = parsed.truncated;
+          }
+
           return {
             action,
             namespace: namespace || "core",
             semantic_contract_version:
               parsed.semantic_contract_version || "zink-semantic-v2",
             results: formattedResults,
-            total_count: formattedResults.length,
+            ...counts,
             governed_status:
               formattedResults.length === 0 ? "NO_MATCH" : "SUCCESS",
           };

@@ -637,3 +637,106 @@ describe("F-551 (R10-T06-3) — an object `detail` reaches the adapter envelope"
     }
   });
 });
+
+// ===========================================================================
+// F-571 (R10-T10-2) — pool and page are reported separately at the consumer seam
+// ===========================================================================
+describe("F-571 (R10-T10-2) — the adapter forwards the service's count signals", () => {
+  /**
+   * `F-132`/`F-140`/`F-514` corrected the SERVICE: `/v1/search` answers with
+   * `total_count` (the matches that EXIST), `returned_count` (the page),
+   * `has_more`, `candidate_pool_count` and `truncated`. The adapter builds its
+   * envelope independently and set `total_count` to the number of rows it
+   * formatted, and the published contract declared one integer with a closed
+   * envelope, so the other four signals had nowhere to go. The agent therefore
+   * read the pre-F-132 truncated semantics one hop after the service fix.
+   */
+  const page = [
+    {
+      segment_id: "seg-1",
+      title: "Safety stock",
+      text: "Lead time variability drives safety stock.",
+      score: 0.91,
+      citation: "01. Knowledge/safety.md#L3",
+    },
+    {
+      segment_id: "seg-2",
+      title: "Reorder point",
+      text: "The reorder point covers the lead time only.",
+      score: 0.88,
+      citation: "01. Knowledge/safety.md#L9",
+    },
+  ];
+
+  test("F-571: a truncated page does not report its own length as the total", async () => {
+    const service = await knowledgeService({
+      results: page,
+      total_count: 20,
+      returned_count: 2,
+      has_more: true,
+      candidate_pool_count: 20,
+      truncated: true,
+    });
+    try {
+      const adapter = new KnowledgeAdapter(service.endpoint, {
+        apiKey: "test-key",
+      });
+      const result = await adapter.queryKnowledge({
+        action: "search",
+        namespace: "core",
+        query: "safety stock",
+      });
+      assert.equal(result.governed_status, "SUCCESS");
+      assert.equal(
+        result.total_count,
+        20,
+        "the service's total is forwarded, not recomputed from the page",
+      );
+      assert.ok(
+        result.total_count > result.results.length,
+        "an envelope whose total equals the page length is the pre-F-132 reading this row removes",
+      );
+      assert.equal(result.returned_count, 2);
+      assert.equal(result.has_more, true);
+      assert.equal(result.candidate_pool_count, 20);
+      assert.equal(result.truncated, true);
+      assertMatchesDeclaredOutput("zink-knowledge", result);
+    } finally {
+      await service.close();
+    }
+  });
+
+  test("F-571: a body that carries no count signals still passes its own contract", async () => {
+    const service = await knowledgeService({ results: page });
+    try {
+      const adapter = new KnowledgeAdapter(service.endpoint, {
+        apiKey: "test-key",
+      });
+      const result = await adapter.queryKnowledge({
+        action: "search",
+        namespace: "core",
+        query: "safety stock",
+      });
+      assert.equal(
+        result.total_count,
+        2,
+        "with nothing from the service the page length remains the only honest count",
+      );
+      for (const field of [
+        "returned_count",
+        "has_more",
+        "candidate_pool_count",
+        "truncated",
+      ]) {
+        assert.equal(
+          field in result,
+          false,
+          `a signal the service did not carry must not be invented: ${field}`,
+        );
+      }
+      assertMatchesDeclaredOutput("zink-knowledge", result);
+    } finally {
+      await service.close();
+    }
+  });
+});

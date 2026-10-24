@@ -122,6 +122,20 @@
           "type": "integer",
           "minimum": 0
         },
+        "returned_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "candidate_pool_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "has_more": {
+          "type": "boolean"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
         "governed_status": {
           "type": "string",
           "enum": ["SUCCESS", "NO_MATCH", "CONTROLLED_FAILURE"]
