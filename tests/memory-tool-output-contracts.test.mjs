@@ -429,3 +429,211 @@ describe("F-125 (R1-A10-03) — the memory-tool envelopes pass their own contrac
     );
   });
 });
+
+// ===========================================================================
+// F-551 (R10-T06-3) — the governed failure code survives the transport hop
+// ===========================================================================
+describe("F-551 (R10-T06-3) — an object `detail` reaches the adapter envelope", () => {
+  /**
+   * The reader was written for FastAPI's `RequestValidationError` ARRAY body and
+   * was never reconciled with the hand-raised `HTTPException` OBJECT bodies the
+   * same routes produce. Measured at HEAD, `apps/knowledge/app/main.py` raises
+   * 44 `detail={"code": …}` sites; every one of them arrived at the adapter as
+   * `HTTP_<status>`, so the governed vocabulary existed only on the producer
+   * side of the hop.
+   *
+   * The vocabulary is READ FROM THE PRODUCER rather than restated here: 19
+   * distinct literal codes across those 44 sites, plus the seven
+   * `ModelProbeError` codes `F-515` (R10-L07-4) taught the embedding arms to
+   * carry. A governed code that joins the producer without joining the reader
+   * therefore turns this lane red.
+   */
+  const PRODUCER = path.resolve(
+    import.meta.dirname,
+    "../apps/knowledge/app/main.py",
+  );
+  const PROBE = path.resolve(
+    import.meta.dirname,
+    "../apps/knowledge/app/model_probe.py",
+  );
+
+  function producerVocabulary() {
+    const source = fs.readFileSync(PRODUCER, "utf8");
+    const sites = source.match(/detail=\{"code"/gu) ?? [];
+    const literals = [
+      ...new Set(
+        (
+          source.match(/detail=\{"code": "([A-Z][A-Z0-9_]{0,63})"\}/gu) ?? []
+        ).map((site) => site.match(/"([A-Z][A-Z0-9_]{0,63})"/u)[1]),
+      ),
+    ];
+    const probeCodes = [
+      ...new Set(
+        fs.readFileSync(PROBE, "utf8").match(/\bEMBEDDING_[A-Z0-9_]{1,63}/gu) ??
+          [],
+      ),
+    ];
+    return { siteCount: sites.length, literals, probeCodes };
+  }
+
+  /**
+   * A loopback service that answers the current body at the given status, so one
+   * server can replay a whole vocabulary.
+   *
+   * @param {number} status
+   */
+  async function failureService(status) {
+    const state = { body: "{}" };
+    const server = http.createServer((_req, res) => {
+      res.writeHead(status, { "content-type": "application/json" });
+      res.end(state.body);
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address();
+    return {
+      endpoint: `http://127.0.0.1:${port}`,
+      serve(body) {
+        state.body = JSON.stringify(body);
+      },
+      close: () =>
+        new Promise((resolve) => {
+          server.closeAllConnections();
+          server.close(resolve);
+        }),
+    };
+  }
+
+  test("F-551: every governed code the Knowledge service raises reaches the envelope", async () => {
+    const { siteCount, literals, probeCodes } = producerVocabulary();
+    assert.equal(
+      siteCount,
+      44,
+      'the register measured 44 `detail={"code" …}` producer sites; a site added or removed here must be reconciled with the reader',
+    );
+    assert.ok(
+      literals.length >= 19 && probeCodes.length >= 7,
+      `the producer vocabulary must be resolvable from source (literals: ${literals.length}, probe codes: ${probeCodes.length})`,
+    );
+
+    // 409 is not a retryable status, so each code costs one attempt.
+    const service = await failureService(409);
+    try {
+      const adapter = new KnowledgeAdapter(service.endpoint, {
+        apiKey: "test-key",
+      });
+      for (const code of [...literals, ...probeCodes]) {
+        service.serve({ detail: { code } });
+        const result = await adapter.queryKnowledge({
+          action: "search",
+          namespace: "core",
+          query: "governance",
+        });
+        assert.equal(result.governed_status, "CONTROLLED_FAILURE");
+        assert.equal(
+          result.error,
+          code,
+          `the upstream governed code must name the failure, not the status integer: ${code}`,
+        );
+        assertMatchesDeclaredOutput("zink-knowledge", result);
+      }
+    } finally {
+      await service.close();
+    }
+  });
+
+  test("F-551: the 503 reranker refusal carries its code and still passes the contract", async () => {
+    // The row's production-reachable path: a 503 `RERANKER_UNAVAILABLE` body.
+    // A tight call budget keeps the retry path from stretching the gate; the
+    // envelope is reached either way.
+    const service = await failureService(503);
+    try {
+      service.serve({ detail: { code: "RERANKER_UNAVAILABLE" } });
+      const adapter = new KnowledgeAdapter(service.endpoint, {
+        apiKey: "test-key",
+      });
+      const result = await adapter.queryKnowledge({
+        action: "search",
+        namespace: "core",
+        query: "governance",
+        timeout: 400,
+      });
+      assert.equal(result.governed_status, "CONTROLLED_FAILURE");
+      assert.equal(result.error, "RERANKER_UNAVAILABLE");
+      assertMatchesDeclaredOutput("zink-knowledge", result);
+    } finally {
+      await service.close();
+    }
+  });
+
+  test("F-551: an object detail that is not code-shaped forwards no prose", async () => {
+    const service = await failureService(500);
+    try {
+      service.serve({
+        detail: {
+          code: "psycopg.errors.UndefinedColumn: embedding_vector",
+          msg: "column knowledge_chunks.embedding_vector does not exist",
+        },
+      });
+      const adapter = new KnowledgeAdapter(service.endpoint, {
+        apiKey: "test-key",
+      });
+      const result = await adapter.queryKnowledge({
+        action: "search",
+        namespace: "core",
+        query: "governance",
+      });
+      assert.equal(
+        result.error,
+        "HTTP_500",
+        "the status constant is the fallback when the body carries no code",
+      );
+      const rendered = JSON.stringify(result);
+      for (const marker of ["psycopg", "embedding_vector", "UndefinedColumn"]) {
+        assert.ok(
+          !rendered.includes(marker),
+          `no upstream prose may be forwarded: ${marker}`,
+        );
+      }
+      assertMatchesDeclaredOutput("zink-knowledge", result);
+    } finally {
+      await service.close();
+    }
+  });
+
+  test("F-551: an array detail keeps the existing field projection", async () => {
+    const service = await failureService(422);
+    try {
+      service.serve({
+        detail: [
+          {
+            type: "missing",
+            loc: ["body", "query"],
+            msg: "Field required",
+            input: { query: "governance" },
+          },
+        ],
+      });
+      const adapter = new KnowledgeAdapter(service.endpoint, {
+        apiKey: "test-key",
+      });
+      const result = await adapter.queryKnowledge({
+        action: "search",
+        namespace: "core",
+        query: "governance",
+      });
+      assert.equal(
+        result.error,
+        "HTTP_422",
+        "a validation array carries no governed code, so the status fallback stands",
+      );
+      assert.match(
+        result.message,
+        /Rejected fields: body\.query: missing/u,
+        "the caller-request field projection is unchanged by the object branch",
+      );
+      assertMatchesDeclaredOutput("zink-knowledge", result);
+    } finally {
+      await service.close();
+    }
+  });
+});

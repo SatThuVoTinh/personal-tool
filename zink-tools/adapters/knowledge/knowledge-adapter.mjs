@@ -167,6 +167,34 @@ const KNOWLEDGE_FAILURE_FIELD = /^[A-Za-z0-9_.-]{1,64}$/u;
 const KNOWLEDGE_FAILURE_MAX_FIELDS = 3;
 const KNOWLEDGE_FAILURE_MAX_CHARS = 200;
 
+// F-551 (R10-T06-3): the governed code an OBJECT `detail` carries. This reader
+// was written for FastAPI's `RequestValidationError` array body and never
+// reconciled with the `detail={"code": …}` object bodies the same routes raise
+// by hand — 44 of them at HEAD — so every code the Knowledgebase settled on was
+// replaced by the status integer one hop after the service produced it
+// (`R10-L07-4`). The shape is the allowlist: it is the same predicate the
+// producer applies to itself (`_code_shaped`, apps/knowledge/app/main.py), so a
+// free-text `detail` still contributes nothing and no upstream sentence can
+// ride through this branch.
+const KNOWLEDGE_FAILURE_CODE = /^[A-Z][A-Z0-9_]{0,63}$/u;
+
+function projectKnowledgeFailureCode(data) {
+  let body;
+  try {
+    body = JSON.parse(data);
+  } catch {
+    return "";
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body.detail)) {
+    return "";
+  }
+  if (!body.detail || typeof body.detail !== "object") return "";
+  const { code } = body.detail;
+  return typeof code === "string" && KNOWLEDGE_FAILURE_CODE.test(code)
+    ? code
+    : "";
+}
+
 function summarizeKnowledgeFailure(data) {
   let body;
   try {
@@ -766,6 +794,9 @@ export class KnowledgeAdapter {
 
         // M11: the failure envelope carries a fixed code and a field
         // projection, never upstream response bytes.
+        // F-551 (R10-T06-3): the code the service raised names the failure when
+        // it carried one; the status integer is the fallback, not the default.
+        const failureCode = projectKnowledgeFailureCode(response.data);
         const summary = summarizeKnowledgeFailure(response.data);
 
         return {
@@ -774,7 +805,7 @@ export class KnowledgeAdapter {
           results: [],
           total_count: 0,
           governed_status: "CONTROLLED_FAILURE",
-          error: `HTTP_${response.status}`,
+          error: failureCode || `HTTP_${response.status}`,
           message: summary
             ? `Knowledge service rejected the request (HTTP ${response.status}). Rejected fields: ${summary}.`
             : `Knowledge service failed the request (HTTP ${response.status}); its response body is not forwarded.`,
