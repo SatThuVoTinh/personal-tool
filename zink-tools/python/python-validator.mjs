@@ -98,6 +98,78 @@ export const PYTHON_DENY_RULES = Object.freeze([
 ]);
 
 /**
+ * The text that cannot execute, blanked out.
+ *
+ * F-462 (R9-T08-4): the deny rules were applied to every character of every
+ * line, so a `# use subprocess …` comment, a docstring describing `exec()`, and
+ * a string literal naming `open()` were all refused. A construct that lives
+ * only inside a comment or a literal cannot run, so over-refusal teaches a
+ * caller to phrase the same effect so the gate misses it — a gate that cries
+ * wolf is worse than no gate.
+ *
+ * Comments (to end of line), `'''`/`"""` blocks and single-quoted literals are
+ * replaced with spaces; line breaks and every character position are preserved,
+ * so a violation still names the executable line it was seen on. A quote inside
+ * a comment and a `#` inside a string are each consumed by whichever construct
+ * opens first, which is what the raw-text scan got wrong.
+ *
+ * @param {string} content
+ * @returns {string}
+ */
+function maskNonCodeText(content) {
+  const out = Array.from(content);
+  const length = content.length;
+  const blank = (from, to) => {
+    for (let index = from; index < to && index < length; index += 1) {
+      if (content[index] !== "\n") out[index] = " ";
+    }
+  };
+
+  let index = 0;
+  while (index < length) {
+    const character = content[index];
+    if (character === "#") {
+      let end = index;
+      while (end < length && content[end] !== "\n") end += 1;
+      blank(index, end);
+      index = end;
+      continue;
+    }
+    const delimiter =
+      content.slice(index, index + 3) === '"""'
+        ? '"""'
+        : content.slice(index, index + 3) === "'''"
+          ? "'''"
+          : character === '"' || character === "'"
+            ? character
+            : null;
+    if (delimiter === null) {
+      index += 1;
+      continue;
+    }
+    let end = index + delimiter.length;
+    while (end < length) {
+      if (content[end] === "\\") {
+        end += 2;
+        continue;
+      }
+      if (delimiter.length === 1 && content[end] === "\n") {
+        // An unterminated single-quoted literal ends at the line, as in Python.
+        break;
+      }
+      if (content.startsWith(delimiter, end)) {
+        end += delimiter.length;
+        break;
+      }
+      end += 1;
+    }
+    blank(index, end);
+    index = end;
+  }
+  return out.join("");
+}
+
+/**
  * The deny rules a piece of Python content violates.
  *
  * @param {string} content
@@ -105,7 +177,7 @@ export const PYTHON_DENY_RULES = Object.freeze([
  */
 export function findPythonViolations(content) {
   if (typeof content !== "string") return [];
-  const lines = content.split(/\r?\n/);
+  const lines = maskNonCodeText(content).split(/\r?\n/);
   const violations = [];
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
@@ -208,8 +280,18 @@ export function validatePythonFileContent(content) {
  * F-236 (R7-D5-02): refuses a Python file that violates a deny rule.
  *
  * The summariser itself never throws on a violation, because a preview of a
- * refused file is still useful to an operator. This is the refusal the
- * governed path calls.
+ * refused file is still useful to an operator.
+ *
+ * F-462 (R9-T08-4) — what this actually is: an ADVISORY check with no
+ * production caller at HEAD, not the `zink_python` safety gate. The live handler
+ * executes nothing (`ENGINE_NOT_IMPLEMENTED` in the governed `zink_python`
+ * arm), the production `.py` artifact path runs an empty/counts/`py_compile`
+ * check with no deny rule, and this module is imported by test lanes only. It is
+ * also a static scan of the five observable constructs in `PYTHON_DENY_RULES`
+ * and nothing more: it does not recognize a host effect reached by another
+ * library spelling (`os.popen`, a `read_csv` target, a `duckdb` query), and no
+ * path exempts `open()` under a sandbox root, because no sandbox root exists.
+ * A caller that wires it gets those five refusals; it does not get containment.
  *
  * @param {string} content - Raw Python file content
  * @returns {void}

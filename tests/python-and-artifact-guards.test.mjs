@@ -163,3 +163,77 @@ describe("F-273 (R7-C1-03) — the envelope's artifact reference has a producer"
     );
   });
 });
+
+// ===========================================================================
+// F-462 (R9-T08-4) — the Python deny scan reads code, not prose
+// ===========================================================================
+describe("F-462 (R9-T08-4) — the deny scan skips comment and literal text", () => {
+  /**
+   * The orphaned deny set was a per-line raw-text regex with no comment or
+   * string state, so it refused benign prose while the published invariant
+   * claimed it was the enforced gate. Measured at HEAD on these very inputs:
+   * comment -> `PYTHON_SUBPROCESS`, docstring -> `PYTHON_EXEC`, prose `open()`
+   * -> `PYTHON_OPEN`. A construct that lives only inside a comment or a string
+   * literal cannot execute, so refusing it teaches a caller to route around the
+   * gate; the constructs that DO execute must keep being refused, on the right
+   * line.
+   */
+  test("F-462: comment, docstring and string-literal text are not refused", () => {
+    const prose = [
+      ["a `#` comment", "# use subprocess for host commands\nx = 1\n"],
+      ["a comment naming exec()", "# call exec() later\nx = 1\n"],
+      [
+        "a module docstring",
+        '"""\nThis helper never calls exec().\n"""\nx = 1\n',
+      ],
+      [
+        "a single-quoted docstring",
+        "'''\nDocumented as open() form.\n'''\nx = 1\n",
+      ],
+      ["a string literal", 'msg = "run exec() at runtime"\n'],
+      ["an apostrophe in prose", "# don't drop anything\nx = 1\n"],
+    ];
+    for (const [label, source] of prose) {
+      assert.deepEqual(
+        findPythonViolations(source),
+        [],
+        `prose text must not be refused: ${label}`,
+      );
+      assert.doesNotThrow(
+        () => assertNoPythonViolations(source),
+        `a benign file must not be refused: ${label}`,
+      );
+    }
+  });
+
+  test("F-462: the observable effects are still refused, on the line they sit on", () => {
+    const effects = [
+      ["exec('print(1)')\n", "PYTHON_EXEC", 1],
+      ["# noqa\nvalue = eval('1 + 1')\n", "PYTHON_EVAL", 2],
+      ["import os\nos.system('ls')\n", "PYTHON_OS_SYSTEM", 2],
+      [
+        '"""\nopen() is documented.\n"""\nimport subprocess\n',
+        "PYTHON_SUBPROCESS",
+        4,
+      ],
+      [
+        "def helper():\n    with open('/etc/passwd') as h:\n        pass\n",
+        "PYTHON_OPEN",
+        2,
+      ],
+    ];
+    for (const [source, rule, line] of effects) {
+      const rules = findPythonViolations(source).map((v) => v.rule);
+      assert.ok(
+        rules.includes(rule),
+        `${rule} must stay refused, got ${JSON.stringify(rules)}`,
+      );
+      const found = findPythonViolations(source).find((v) => v.rule === rule);
+      assert.equal(
+        found.line,
+        line,
+        `${rule} must name the executable line, not the masked prose above it`,
+      );
+    }
+  });
+});
