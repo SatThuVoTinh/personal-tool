@@ -1448,6 +1448,97 @@ function checkRegistryProse(registryMarkdown, workflowTexts) {
 }
 
 /**
+ * What `npm run verify` reaches, one expansion deep per script.
+ *
+ * The registry's "Where it runs" column is a claim about EXECUTION, and the
+ * only thing that can contradict it is the script graph itself: a row that
+ * says "not in verify and not in CI" is false the moment `verify` runs the
+ * script, or runs `npm test` over a file its own body declares with a glob.
+ */
+function scriptsReachedFromVerify(packageJson) {
+  const scripts = isObject(packageJson?.scripts) ? packageJson.scripts : {};
+  const reachable = new Set();
+  const verify = scripts.verify;
+  if (typeof verify !== "string") return reachable;
+
+  const pending = [...verify.matchAll(NPM_SCRIPT_INVOCATION)].map(
+    (match) => match[1],
+  );
+  if (NPM_TEST_INVOCATION.test(verify)) pending.push("test");
+  while (pending.length > 0) {
+    const name = pending.pop();
+    if (reachable.has(name) || typeof scripts[name] !== "string") continue;
+    reachable.add(name);
+    const body = scripts[name];
+    for (const match of body.matchAll(NPM_SCRIPT_INVOCATION)) {
+      pending.push(match[1]);
+    }
+    if (NPM_TEST_INVOCATION.test(body)) pending.push("test");
+  }
+  return reachable;
+}
+
+/** The `tests/<glob>.test.mjs` population a script body declares, if any. */
+function declaredTestGlob(scriptBody) {
+  const match =
+    /\bnode\s+--test\s+(?:--?[\w-]+(?:=\S+)?\s+)*(tests\/[\w.*+-]+\.test\.mjs)/u.exec(
+      typeof scriptBody === "string" ? scriptBody : "",
+    );
+  return match ? match[1] : null;
+}
+
+function globExpression(glob) {
+  const source = glob
+    .split("*")
+    .map((part) => part.replace(/[.+^${}()|[\]\\]/gu, "\\$&"))
+    .join(".*");
+  return new RegExp(`^${source}$`, "u");
+}
+
+/** The row claims the script does not run under `verify` or in CI. */
+const RUNS_OUTSIDE_VERIFY_AND_CI =
+  /không nằm trong[^\n]*verify|không chạy ở ci|not (?:run|executed) in ci|does not run in ci/iu;
+
+/**
+ * The second half of the registry's truth: columns 3 and 4 are claims about
+ * execution, not decoration. A row that documents a script as outside
+ * `verify` and outside CI while HEAD runs it there is exactly the shape that
+ * made the registry unreadable — the durable NOT RUN denominator said a gate
+ * was unexecuted on every CI job.
+ */
+function checkRegistryExecutionColumns(packageJson, rows) {
+  const failures = [];
+  const scripts = isObject(packageJson?.scripts) ? packageJson.scripts : {};
+  const reached = scriptsReachedFromVerify(packageJson);
+  const enumerated = new Set(
+    (typeof scripts.test === "string" ? scripts.test : "")
+      .split(/\s+/u)
+      .filter((token) => TEST_FILE_ARGUMENT.test(token)),
+  );
+
+  for (const row of rows) {
+    const claim = `${row.where} ${row.notRun}`;
+    if (!RUNS_OUTSIDE_VERIFY_AND_CI.test(claim)) continue;
+    if (reached.has(row.name)) {
+      failures.push(
+        `The gate registry documents ${row.name} as outside verify and CI, while npm run verify runs it. Correct the row, or the NOT RUN denominator claims a gate is unexecuted that runs on every CI job.`,
+      );
+      continue;
+    }
+    const glob = declaredTestGlob(scripts[row.name]);
+    if (!glob) continue;
+    const expression = globExpression(glob);
+    const matched = [...enumerated].filter((file) => expression.test(file));
+    if (matched.length > 0) {
+      failures.push(
+        `The gate registry documents ${row.name} as outside verify and CI, while npm test enumerates ${matched.length} file(s) its own glob ${glob} declares (for example ${matched[0]}), so verify runs it. Correct the row.`,
+      );
+    }
+  }
+  return failures;
+}
+
+/**
  * `docs/development/conventions.md` holds the one durable enumeration of the
  * gates, which is what gives a `NOT RUN` claim a denominator. A registry that
  * can drift from the thing it describes is worse than none — it reads like an
@@ -1459,6 +1550,7 @@ function checkRegistryProse(registryMarkdown, workflowTexts) {
  * - every blocking surface the parsed workflows run — npm script, direct
  *   `node` invocation or action — needs a row, so a step added to either YAML
  *   without one reddens the check;
+ * - columns 3 and 4 are compared with the script graph they describe;
  * - the prose beside the table is compared with the workflows it describes.
  */
 export function checkGateRegistry(
@@ -1476,13 +1568,24 @@ export function checkGateRegistry(
   }
 
   const listed = new Set();
+  const rows = [];
   for (let index = header + 2; index < lines.length; index += 1) {
     const match = GATE_REGISTRY_ROW.exec(lines[index]);
     if (!match) break;
     listed.add(match[1]);
+    rows.push({
+      name: match[1],
+      where: match[3].trim(),
+      notRun: match[4].trim(),
+    });
   }
 
   const failures = checkRegistryProse(registryMarkdown, workflowTexts);
+  // Columns 3 and 4 are claims about CI placement, so the pass needs the CI
+  // workflow as its operand: a caller that supplies none is comparing names.
+  if (typeof workflowTexts.ci === "string") {
+    failures.push(...checkRegistryExecutionColumns(packageJson, rows));
+  }
   for (const scriptName of [...scripts].sort()) {
     if (!listed.has(scriptName)) {
       failures.push(

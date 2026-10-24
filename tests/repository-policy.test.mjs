@@ -2128,3 +2128,54 @@ test("F-458: every blocking CI check surface must hold a registry row", () => {
   assert.equal(invented.length, 1, invented.join(" | "));
   assert.match(invented[0], /scripts\/ghost\.mjs/u);
 });
+
+test("F-483: a row documented as outside verify and CI must not run there", () => {
+  const packageJson = {
+    scripts: {
+      test: "node --test tests/a.test.mjs tests/m8-one.test.mjs",
+      "test:m8": "node --test tests/m8-*.test.mjs",
+      "rehearse:r16": "node scripts/rehearsal.mjs",
+      verify: "npm test",
+    },
+  };
+  const documented = gateRegistryRows([
+    ["test"],
+    [
+      "test:m8",
+      "d",
+      "**Không nằm trong `verify` và không chạy ở CI** — chỉ khi gọi tường minh",
+      "không được invoke → `NOT RUN`",
+    ],
+    [
+      "rehearse:r16",
+      "d",
+      "chỉ WSL, cần runtime live; **không chạy ở CI**",
+      "cần clone runtime live",
+    ],
+    ["verify"],
+  ]);
+
+  const failures = checkGateRegistry(packageJson, documented, {
+    ci: workflowWith("      - run: npm run verify\n"),
+  });
+  assert.equal(failures.length, 1, failures.join(" | "));
+  assert.match(failures[0], /test:m8/u, failures.join(" | "));
+
+  const corrected = gateRegistryRows([
+    ["test"],
+    ["test:m8", "d", "Windows, WSL, CI `quality-gate` (qua `npm test`)", "n"],
+    [
+      "rehearse:r16",
+      "d",
+      "chỉ WSL, cần runtime live; **không chạy ở CI**",
+      "cần clone runtime live",
+    ],
+    ["verify"],
+  ]);
+  assert.deepEqual(
+    checkGateRegistry(packageJson, corrected, {
+      ci: workflowWith("      - run: npm run verify\n"),
+    }),
+    [],
+  );
+});
