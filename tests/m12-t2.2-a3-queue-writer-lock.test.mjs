@@ -77,8 +77,19 @@ function balancedBody(source, fromIndex) {
   return source.slice(fromIndex);
 }
 
-function tempStorage(name) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `a3-queue-${name}-`));
+// F-485 (R9-L11a-4): every temp root this lane creates is registered with the
+// test's own `t.after`, so it is removed even when an assertion fails. Before
+// this, each run left seven `a3-queue-*`/`b12-*` trees in os.tmpdir().
+function registerTempRoot(t, dir) {
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
+function tempStorage(t, name) {
+  const dir = registerTempRoot(
+    t,
+    fs.mkdtempSync(path.join(os.tmpdir(), `a3-queue-${name}-`)),
+  );
   return path.join(dir, "queue.json");
 }
 
@@ -122,8 +133,8 @@ function codeOnly(body) {
 // The mechanism, on the real class and the real file
 // ===========================================================================
 
-test("A-3: an unlocked set+save from a stale instance erases a task another writer committed", () => {
-  const storagePath = tempStorage("unlocked");
+test("A-3: an unlocked set+save from a stale instance erases a task another writer committed", (t) => {
+  const storagePath = tempStorage(t, "unlocked");
   seed(storagePath, "t-first");
   // Snapshot taken before the next commit, and never reloaded — the state a
   // long-lived plugin instance is in between locked calls.
@@ -149,8 +160,8 @@ test("A-3: an unlocked set+save from a stale instance erases a task another writ
   );
 });
 
-test("A-3: the same mutation through withLock survives, because withLock reloads before its body", () => {
-  const storagePath = tempStorage("locked");
+test("A-3: the same mutation through withLock survives, because withLock reloads before its body", (t) => {
+  const storagePath = tempStorage(t, "locked");
   seed(storagePath, "t-first");
   const stale = new QueueManager({ storagePath });
   seed(storagePath, "t-second");
@@ -231,7 +242,7 @@ test("A-3: contention and storage failure stay returned failures at that seam, n
 // The trap that must stay closed
 // ===========================================================================
 
-test("A-3 pin: QueueManager.save() must not re-take the queue lock it already holds — the lock is not reentrant", () => {
+test("A-3 pin: QueueManager.save() must not re-take the queue lock it already holds — the lock is not reentrant", (t) => {
   const saveAt = QUEUE_SOURCE.indexOf("  save() {");
   assert.notEqual(saveAt, -1, "save() must still exist");
   const body = codeOnly(balancedBody(QUEUE_SOURCE, saveAt));
@@ -255,7 +266,7 @@ test("A-3 pin: QueueManager.save() must not re-take the queue lock it already ho
 
   // Executable half: the lock really is non-reentrant, which is why a
   // self-locking `save()` is not an available fix.
-  const storagePath = tempStorage("nested");
+  const storagePath = tempStorage(t, "nested");
   const manager = new QueueManager({ storagePath });
   manager.enqueueTask({
     taskId: "t-one-lock",
@@ -322,16 +333,19 @@ function saveWithFrozenClock(writer, instant = INSTANT) {
   }
 }
 
-function tempDir(label) {
-  return fs.mkdtempSync(path.join(os.tmpdir(), `b12-${label}-`));
+function tempDir(t, label) {
+  return registerTempRoot(
+    t,
+    fs.mkdtempSync(path.join(os.tmpdir(), `b12-${label}-`)),
+  );
 }
 
 function residueFiles(dir) {
   return fs.readdirSync(dir).filter((name) => name.includes(".tmp-"));
 }
 
-test("B-12 queue: a temp file already at the predicted path is refused, not truncated", () => {
-  const storagePath = tempStorage("wx-queue");
+test("B-12 queue: a temp file already at the predicted path is refused, not truncated", (t) => {
+  const storagePath = tempStorage(t, "wx-queue");
   seed(storagePath, "t-live");
   const planted = tempNameFor(storagePath, INSTANT);
   fs.writeFileSync(planted, "PLANTED-BEFORE-THE-WRITER\n", "utf8");
@@ -352,8 +366,8 @@ test("B-12 queue: a temp file already at the predicted path is refused, not trun
   );
 });
 
-test("B-12 ledger: the decision ledger refuses the same planted temp path", () => {
-  const dir = tempDir("wx-ledger");
+test("B-12 ledger: the decision ledger refuses the same planted temp path", (t) => {
+  const dir = tempDir(t, "wx-ledger");
   const storagePath = path.join(dir, "ledger.json");
   fs.writeFileSync(storagePath, "[]\n", "utf8");
   const planted = tempNameFor(storagePath, INSTANT);
@@ -375,8 +389,8 @@ test("B-12 ledger: the decision ledger refuses the same planted temp path", () =
   );
 });
 
-test("B-12 queue: a failed serialization leaves no temp residue behind", () => {
-  const storagePath = tempStorage("residue-queue");
+test("B-12 queue: a failed serialization leaves no temp residue behind", (t) => {
+  const storagePath = tempStorage(t, "residue-queue");
   seed(storagePath, "t-live");
   const writer = new QueueManager({ storagePath });
   // Circular, so `JSON.stringify` throws AFTER the temp has been opened — the
@@ -399,8 +413,8 @@ test("B-12 queue: a failed serialization leaves no temp residue behind", () => {
   );
 });
 
-test("B-12 ledger: a failed serialization leaves no temp residue behind", () => {
-  const dir = tempDir("residue-ledger");
+test("B-12 ledger: a failed serialization leaves no temp residue behind", (t) => {
+  const dir = tempDir(t, "residue-ledger");
   const storagePath = path.join(dir, "ledger.json");
   const ledger = new DecisionLedger({ storagePath });
   const circular = { decisionId: "d-loop" };
@@ -426,7 +440,7 @@ test("B-12: a symlinked path component is refused before either writer writes", 
     );
     return;
   }
-  const root = tempDir("symlink");
+  const root = tempDir(t, "symlink");
   const real = path.join(root, "real");
   fs.mkdirSync(real);
   const link = path.join(root, "link");

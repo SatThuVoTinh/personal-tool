@@ -28,7 +28,13 @@
 // against the PowerShell AST, not against a text search).
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -60,10 +66,14 @@ function powerShell() {
   return existsSync("/usr/bin/pwsh") ? "/usr/bin/pwsh" : null;
 }
 
-function runPowerShell(body, arguments_ = []) {
+// F-485 (R9-L11a-4): the workspace each PowerShell run needs is registered with
+// the test's own `t.after`, so the `f-291-*` tree is removed even when the
+// spawn or an assertion fails. Before this, every run left eight trees behind.
+function runPowerShell(t, body, arguments_ = []) {
   const shell = powerShell();
   if (!shell) return null;
   const workspace = mkdtempSync(path.join(os.tmpdir(), "f-291-"));
+  t.after(() => rmSync(workspace, { recursive: true, force: true }));
   const harness = path.join(workspace, "harness.ps1");
   writeFileSync(harness, body);
   const result = spawnSync(
@@ -85,9 +95,10 @@ function runPowerShell(body, arguments_ = []) {
   };
 }
 
-function finalizationContract(cleanup) {
+function finalizationContract(t, cleanup) {
   const helper = path.join(root, HELPER_PATH).replace(/'/g, "''");
   return runPowerShell(
+    t,
     [
       "$ErrorActionPreference = 'Stop'",
       `. '${helper}'`,
@@ -125,7 +136,10 @@ test("F-291: a failing cleanup is captured, recorded and named, never raised", (
     t.skip("PowerShell is not available to run the shared contract");
     return;
   }
-  const run = finalizationContract("throw 'the acceptance container leaked'");
+  const run = finalizationContract(
+    t,
+    "throw 'the acceptance container leaked'",
+  );
   assert.equal(
     run.status,
     0,
@@ -158,7 +172,7 @@ test("F-291: a clean cleanup leaves the result alone and names nothing", (t) => 
     t.skip("PowerShell is not available to run the shared contract");
     return;
   }
-  const run = finalizationContract("'nothing to clean'");
+  const run = finalizationContract(t, "'nothing to clean'");
   assert.equal(run.status, 0, run.stderr);
   assert.doesNotMatch(
     run.stdout,
@@ -209,7 +223,7 @@ test("F-291: no driver raises from inside a finally block", (t) => {
     "",
   ].join("\n");
   for (const driver of DRIVERS) {
-    const run = runPowerShell(harness, [
+    const run = runPowerShell(t, harness, [
       path.join(root, SCRIPT_DIRECTORY, driver),
     ]);
     assert.equal(run.status, 0, `${driver}: ${run.stderr}`);
