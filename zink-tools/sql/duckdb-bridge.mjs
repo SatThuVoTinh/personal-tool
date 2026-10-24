@@ -322,12 +322,18 @@ function toDuckDbLiteral(value, name) {
  * `:name` unsubstituted and failed `DUCKDB_EXECUTION_ERROR`, while the values
  * the traversal scan protected never reached SQL at all.
  *
+ * F-455 (R9-T07-1): the canonical parameter shape is
+ * `{name: string, type: string, value: unknown}`, as published in
+ * `contracts/tools/zink-sql.schema.json` and `sql/README.md`. The binder
+ * DISCARDS `type`: rendering is decided by the JavaScript type of `value`, so
+ * a mismatched declaration never changes how the literal is quoted.
+ *
  * The scan mirrors the validator's tokenizer: a `:name` inside a string literal
  * is data, not a placeholder, and single quotes are doubled so a value cannot
  * terminate its own literal.
  *
  * @param {string} query
- * @param {Array<{name: string, value: unknown}>} [parameters]
+ * @param {Array<{name: string, type: string, value: unknown}>} [parameters]
  * @returns {string}
  */
 export function bindParameters(query, parameters = []) {

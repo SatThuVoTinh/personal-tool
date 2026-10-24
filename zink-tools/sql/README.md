@@ -47,6 +47,8 @@ Mọi nỗ lực truy vấn ra ngoài danh sách trên đều bị ném lỗi `D
 const query =
   "SELECT id, name, category, value FROM analytics_read WHERE category = :cat";
 const parameters = [{ name: "cat", type: "string", value: "silver" }];
+// `type` is required by the published contract and is discarded by the
+// binder: the value's JavaScript type decides how it is rendered.
 ```
 
 ### Bước 2: Gọi Cầu nối DuckDB có kiểm soát

@@ -12,9 +12,16 @@
         "name": {
           "type": "string",
           "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["string", "integer", "float", "boolean", "null"]
+        },
+        "value": {
+          "type": ["string", "integer", "number", "boolean", "null"]
         }
       },
-      "required": ["name"],
+      "required": ["name", "type", "value"],
       "oneOf": [
         {
           "properties": {

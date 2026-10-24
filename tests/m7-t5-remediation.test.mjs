@@ -1684,7 +1684,7 @@ describe("F-117 (R5-E06-05) - declared parameters reach the engine", () => {
         {
           target_database: "knowledge",
           query: "SELECT id, name FROM knowledge WHERE category = :category",
-          parameters: [{ name: "category", value: "silver" }],
+          parameters: [{ name: "category", type: "string", value: "silver" }],
         },
       );
       assert.equal(result.provider, "duckdb");
@@ -1697,20 +1697,26 @@ describe("F-117 (R5-E06-05) - declared parameters reach the engine", () => {
   test("F-117: a bound value cannot terminate its own literal", () => {
     assert.equal(
       bindParameters("SELECT 1 WHERE name = :v", [
-        { name: "v", value: "O'Brien" },
+        { name: "v", type: "string", value: "O'Brien" },
       ]),
       "SELECT 1 WHERE name = 'O''Brien'",
     );
     assert.equal(
-      bindParameters("SELECT 1 WHERE n = :n", [{ name: "n", value: 42 }]),
+      bindParameters("SELECT 1 WHERE n = :n", [
+        { name: "n", type: "integer", value: 42 },
+      ]),
       "SELECT 1 WHERE n = 42",
     );
     assert.equal(
-      bindParameters("SELECT 1 WHERE b = :b", [{ name: "b", value: null }]),
+      bindParameters("SELECT 1 WHERE b = :b", [
+        { name: "b", type: "null", value: null },
+      ]),
       "SELECT 1 WHERE b = NULL",
     );
     assert.equal(
-      bindParameters("SELECT 1 WHERE b = :b", [{ name: "b", value: true }]),
+      bindParameters("SELECT 1 WHERE b = :b", [
+        { name: "b", type: "boolean", value: true },
+      ]),
       "SELECT 1 WHERE b = TRUE",
     );
   });
@@ -1719,7 +1725,7 @@ describe("F-117 (R5-E06-05) - declared parameters reach the engine", () => {
     assert.equal(
       bindParameters(
         "SELECT ':category' AS literal_label, id FROM knowledge WHERE category = :category",
-        [{ name: "category", value: "silver" }],
+        [{ name: "category", type: "string", value: "silver" }],
       ),
       "SELECT ':category' AS literal_label, id FROM knowledge WHERE category = 'silver'",
     );

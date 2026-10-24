@@ -39,6 +39,7 @@ import {
   TOOL_CALL_ENVELOPE_MAX_BYTES,
   TOOL_RESULT_ENVELOPE_MAX_BYTES,
 } from "../integrations/openclaw/topology/lib/schema.mjs";
+import { bindParameters } from "../zink-tools/sql/duckdb-bridge.mjs";
 import { validateSqlQuery } from "../zink-tools/sql/validator.mjs";
 import { validateArtifactLogicalPath } from "../zink-tools/common/path-safety.mjs";
 import { invokeN8n, N8nAdapterError } from "../zink-tools/n8n/trigger.mjs";
@@ -1501,6 +1502,121 @@ describe("M12/T9 F-272 — the envelope budget matches the published tool output
         schemaSource,
       ),
       "the validator must not carry a default budget: every call site states one",
+    );
+  });
+});
+
+describe("F-450/F-455 (R9-L07b-1 / R9-T07-1) - one canonical SQL parameter shape", () => {
+  const CALL_ID = "00000000-0000-4000-8000-000000000001";
+
+  /**
+   * The published tool-call envelope around one zink_sql input.
+   *
+   * @param {object[]} parameters
+   * @returns {object}
+   */
+  function sqlCall(parameters) {
+    return {
+      call_id: CALL_ID,
+      tool_id: "zink_sql",
+      specialist: "sql",
+      constraints: { timeout_seconds: 30, max_memory_mb: 512 },
+      input: {
+        query: "SELECT id, name FROM analytics_read WHERE category = :cat",
+        target_database: "analytics_read",
+        parameters,
+      },
+      provenance: { task_id: "task-01", session_key: "sess-01" },
+    };
+  }
+
+  it("F-450: the README shape validates for all five declared type branches", () => {
+    const parameters = [
+      { name: "p_string", type: "string", value: "silver" },
+      { name: "p_integer", type: "integer", value: 7 },
+      { name: "p_float", type: "float", value: 3.14 },
+      { name: "p_boolean", type: "boolean", value: true },
+      { name: "p_null", type: "null", value: null },
+    ];
+    assert.doesNotThrow(() =>
+      validateContractSchema(
+        "tool-call",
+        sqlCall(parameters),
+        TOOL_CALL_ENVELOPE_MAX_BYTES,
+      ),
+    );
+  });
+
+  const canonicalParameters = [
+    { name: "p_string", type: "string", value: "silver" },
+    { name: "p_integer", type: "integer", value: 7 },
+    { name: "p_float", type: "float", value: 3.14 },
+    { name: "p_boolean", type: "boolean", value: true },
+    { name: "p_null", type: "null", value: null },
+  ];
+
+  it("F-450: a missing name, a wrong-typed value and an unknown key are refused", () => {
+    for (const parameters of [
+      [{ type: "string", value: "silver" }],
+      [{ name: "cat", type: "integer", value: "7" }],
+      [{ name: "cat", type: "string", value: "silver", extra: "x" }],
+      [{ name: "cat", value: "silver" }],
+    ]) {
+      assert.throws(
+        () =>
+          validateContractSchema(
+            "tool-call",
+            sqlCall(parameters),
+            TOOL_CALL_ENVELOPE_MAX_BYTES,
+          ),
+        /SCHEMA_VALIDATION_FAILED/u,
+        JSON.stringify(parameters),
+      );
+    }
+  });
+
+  it("F-450: the validator and binder accept the same five-branch set", () => {
+    const query =
+      "SELECT id FROM analytics_read WHERE a = :p_string AND b = :p_integer AND c = :p_float AND d = :p_boolean AND e = :p_null";
+    assert.doesNotThrow(() => validateSqlQuery(query, canonicalParameters));
+    assert.equal(
+      bindParameters(query, canonicalParameters),
+      "SELECT id FROM analytics_read WHERE a = 'silver' AND b = 7 AND c = 3.14 AND d = TRUE AND e = NULL",
+    );
+  });
+
+  it("F-455: the README shape is the binder shape and type is discarded", () => {
+    const parameter = { name: "cat", type: "string", value: "silver" };
+    assert.doesNotThrow(() =>
+      validateContractSchema(
+        "tool-call",
+        sqlCall([parameter]),
+        TOOL_CALL_ENVELOPE_MAX_BYTES,
+      ),
+    );
+    assert.equal(
+      bindParameters("SELECT id FROM analytics_read WHERE category = :cat", [
+        parameter,
+      ]),
+      "SELECT id FROM analytics_read WHERE category = 'silver'",
+    );
+    assert.equal(
+      bindParameters("SELECT :n AS value", [
+        { name: "n", type: "string", value: 42 },
+      ]),
+      "SELECT 42 AS value",
+      "the JS value type decides rendering; the declared type is discarded",
+    );
+    // The binder-consumed spelling with no declared type is NOT the published
+    // shape, so the contract still refuses it.
+    assert.throws(
+      () =>
+        validateContractSchema(
+          "tool-call",
+          sqlCall([{ name: "cat", value: "silver" }]),
+          TOOL_CALL_ENVELOPE_MAX_BYTES,
+        ),
+      /SCHEMA_VALIDATION_FAILED/u,
     );
   });
 });
