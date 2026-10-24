@@ -2147,6 +2147,7 @@ class KnowledgeDatabase:
             await self._purge_index_content(
                 connection, [row["id"] for row in stale_failed_ids]
             )
+            await self._retire_terminal_pdf_content_builds(connection)
 
     async def recover_interrupted_runs(self) -> int:
         if self._pool is None:
@@ -2194,6 +2195,7 @@ class KnowledgeDatabase:
                 await self._purge_index_content(
                     connection, [row["id"] for row in failed_ids]
                 )
+                await self._retire_terminal_pdf_content_builds(connection)
         return len(rows)
 
     async def acquire_advisory_lock(self, lock_key: int) -> asyncpg.Connection | None:
@@ -2386,6 +2388,36 @@ class KnowledgeDatabase:
             "WHERE b.id = ANY($1::uuid[]) AND NOT EXISTS ("
             "SELECT 1 FROM knowledge.pdf_source_details d WHERE d.build_id = b.id)",
             list(build_ids),
+        )
+
+    @staticmethod
+    async def _retire_terminal_pdf_content_builds(
+        connection: asyncpg.Connection,
+    ) -> None:
+        """Delete FAILED content builds, which no link can ever enumerate.
+
+        F-443 (R9-T06-1): retention is a lifecycle status on a content-
+        addressed row, and every cleanup path above names its candidates from
+        `knowledge.pdf_source_details`. A detail row can only exist for a
+        READY build -- its foreign key is `(build_id, build_status)` with
+        `build_status = 'READY'` -- so a build that ended FAILED carries a
+        whole batch set that no sweep can name: the only handle the sweep takes
+        is the table the build never entered. `002` makes the identity
+        uniqueness partial over `('BUILDING', 'READY')`, so a second build of
+        the same identity is legal the moment the first is terminal, and each
+        incremental run over a changed PDF commits one more.
+
+        The residue is retired by lifecycle state plus the absence of a link,
+        so a build another index still publishes is never taken. CANCELLED is
+        NOT residue: it is the owner's reclamation RECORD, which
+        `pdf_content_is_reclaimed` reads back to keep a reclaimed copy from
+        being derived again (F-444), so the predicate names FAILED alone.
+        """
+
+        await connection.execute(
+            "DELETE FROM knowledge.pdf_content_builds b "
+            "WHERE b.status = 'FAILED' AND NOT EXISTS ("
+            "SELECT 1 FROM knowledge.pdf_source_details d WHERE d.build_id = b.id)"
         )
 
     @staticmethod

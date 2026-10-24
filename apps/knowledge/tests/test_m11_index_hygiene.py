@@ -143,13 +143,28 @@ RETIRED_PDF_BUILD_STATEMENT = (
 )
 
 
+# F-443 (R9-T06-1): the sweep that retires FAILED builds is not keyed by index
+# id either -- the residue belongs to an identity whose run failed, so no
+# surviving index id names it. It is separated from the per-index deletes for
+# the same reason as the build retirement above.
+TERMINAL_PDF_BUILD_SWEEP = (
+    "DELETE FROM knowledge.pdf_content_builds b WHERE b.status = 'FAILED' "
+    "AND NOT EXISTS (SELECT 1 FROM knowledge.pdf_source_details d "
+    "WHERE d.build_id = b.id)"
+)
+
+BUILD_RETENTION_STATEMENTS = frozenset(
+    {RETIRED_PDF_BUILD_STATEMENT, TERMINAL_PDF_BUILD_SWEEP}
+)
+
+
 def index_deletes(connection: FakeConnection) -> list[tuple[str, tuple[object, ...]]]:
-    """The per-index deletes, without the build retirement."""
+    """The per-index deletes, without the build-retention sweeps."""
 
     return [
         (statement, args)
         for (statement, args) in deletes(connection)
-        if statement != RETIRED_PDF_BUILD_STATEMENT
+        if statement not in BUILD_RETENTION_STATEMENTS
     ]
 
 
