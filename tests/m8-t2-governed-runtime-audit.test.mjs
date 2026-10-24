@@ -3502,3 +3502,61 @@ describe("F-464 — the validator bounds its own artifact read", () => {
     );
   });
 });
+// =========================================================================
+// M12/T9 F-465 — the Excel writer emitted XML-forbidden C0 control characters
+// into inline strings while the validator's "EXCEL valid" tier never opened the
+// sheet XML, so an invalid workbook committed and hashed as PASS.
+//
+// Measured pre-fix: a cell containing U+0001 produced a raw 0x01 byte in
+// xl/worksheets/sheet1.xml and validateTechnicalArtifact returned PASS.
+// =========================================================================
+describe("F-465 — control characters never become a valid workbook", () => {
+  test("F-465-1: the writer refuses a cell carrying a C0 control character", () => {
+    assert.throws(
+      () =>
+        buildMultiSheetWorkbookBuffer([
+          { name: "S", rows: [["A" + String.fromCharCode(0x00) + "B"]] },
+        ]),
+      /EXCEL_CELL_CONTROL_CHARACTER/u,
+      "U+0000 must be refused at build",
+    );
+    assert.throws(
+      () =>
+        buildMultiSheetWorkbookBuffer([
+          { name: "S", rows: [["A" + String.fromCharCode(0x0b) + "B"]] },
+        ]),
+      /EXCEL_CELL_CONTROL_CHARACTER/u,
+      "U+000B must be refused at build",
+    );
+  });
+
+  test("F-465-2: the validator EXCEL tier rejects a sheet part with a raw C0 byte", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "zink-f465-"));
+    try {
+      const workbook = path.join(dir, "control.xlsx");
+      const control = String.fromCharCode(0x0b);
+      await writeFile(
+        workbook,
+        buildZip([
+          ["[Content_Types].xml", "<Types/>"],
+          ["xl/workbook.xml", "<workbook/>"],
+          [
+            "xl/worksheets/sheet1.xml",
+            `<worksheet><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>A${control}B</t></is></c></row></sheetData></worksheet>`,
+          ],
+        ]),
+      );
+      const result = validateTechnicalArtifact({ filePath: workbook });
+      assert.equal(result.status, VALIDATION_STATUS.FAIL);
+      assert.equal(result.checks.sheetXmlValid, false);
+      assert.ok(
+        result.errors.some((entry) =>
+          entry.includes("INVALID_EXCEL_SHEET_XML"),
+        ),
+        `expected INVALID_EXCEL_SHEET_XML, got ${JSON.stringify(result.errors)}`,
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});

@@ -13,6 +13,7 @@ import {
   mkdirSync,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { inflateRawSync } from "node:zlib";
 import { createHash } from "node:crypto";
 import path from "node:path";
 
@@ -124,7 +125,23 @@ export function readZipEntryNames(filePath) {
   } catch {
     return null;
   }
-  if (buf.length < 22) return null;
+  return readZipArchive(buf, { includeContents: false })?.names ?? null;
+}
+
+/**
+ * Parse the ZIP central directory and, when asked, inflate the declared parts.
+ *
+ * F-465: the EXCEL tier now parses the worksheet XML, so it needs the
+ * archive's real bytes, not just the entry names. The per-part output is
+ * capped at the artifact ceiling so a crafted container cannot expand a small
+ * file into an unbounded buffer. Name-only callers skip inflation.
+ *
+ * @param {Buffer} buf
+ * @param {{ includeContents?: boolean }} [options]
+ * @returns {{ names: string[], contents: Map<string, Buffer> } | null}
+ */
+function readZipArchive(buf, { includeContents = true } = {}) {
+  if (!Buffer.isBuffer(buf) || buf.length < 22) return null;
   let eocd = -1;
   const lowest = Math.max(0, buf.length - 66000);
   for (let i = buf.length - 22; i >= lowest; i--) {
@@ -137,18 +154,46 @@ export function readZipEntryNames(filePath) {
   const entryCount = buf.readUInt16LE(eocd + 10);
   let offset = buf.readUInt32LE(eocd + 16);
   const names = [];
+  const contents = new Map();
   for (let i = 0; i < entryCount; i++) {
     if (offset + 46 > buf.length) return null;
     if (buf.readUInt32LE(offset) !== 0x02014b50) return null;
+    const method = buf.readUInt16LE(offset + 10);
+    const compressedSize = buf.readUInt32LE(offset + 20);
     const nameLen = buf.readUInt16LE(offset + 28);
     const extraLen = buf.readUInt16LE(offset + 30);
     const commentLen = buf.readUInt16LE(offset + 32);
-    names.push(
-      buf.subarray(offset + 46, offset + 46 + nameLen).toString("utf8"),
-    );
+    const localOffset = buf.readUInt32LE(offset + 42);
+    const name = buf
+      .subarray(offset + 46, offset + 46 + nameLen)
+      .toString("utf8");
+    names.push(name);
+    if (
+      includeContents &&
+      localOffset + 30 <= buf.length &&
+      buf.readUInt32LE(localOffset) === 0x04034b50
+    ) {
+      const localNameLen = buf.readUInt16LE(localOffset + 26);
+      const localExtraLen = buf.readUInt16LE(localOffset + 28);
+      const dataStart = localOffset + 30 + localNameLen + localExtraLen;
+      const raw = buf.subarray(dataStart, dataStart + compressedSize);
+      try {
+        contents.set(
+          name,
+          method === 0
+            ? Buffer.from(raw)
+            : inflateRawSync(raw, {
+                maxOutputLength: MAX_ARTIFACT_SIZE_BYTES,
+              }),
+        );
+      } catch {
+        // An unreadable part is treated as missing by the format tiers; it is
+        // never accepted as valid content.
+      }
+    }
     offset += 46 + nameLen + extraLen + commentLen;
   }
-  return names;
+  return { names, contents };
 }
 
 /** An entry matches a required keyword by name or by path prefix. */
@@ -376,6 +421,50 @@ function deriveType(expectedType, ext) {
     default:
       return "generic";
   }
+}
+
+// XML 1.0 forbids C0 controls other than tab/LF/CR, plus U+FFFE/U+FFFF and
+// unpaired surrogates. F-465: the EXCEL tier parses each worksheet part, so a
+// forbidden byte cannot hide behind a container-only structure check.
+function forbiddenXmlCharacterCode(xml) {
+  for (const character of xml) {
+    const code = character.codePointAt(0);
+    const forbidden =
+      code === 0xfffe ||
+      code === 0xffff ||
+      (code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d) ||
+      (code >= 0xd800 && code <= 0xdfff);
+    if (forbidden) {
+      return code.toString(16).toUpperCase().padStart(4, "0");
+    }
+  }
+  return null;
+}
+
+/**
+ * Parse every worksheet part of a workbook archive.
+ *
+ * @param {{ names: string[], contents: Map<string, Buffer> } | null} archive
+ * @returns {string | null} the failure code with its detail, or null when the
+ *   worksheet parts are readable and XML-valid.
+ */
+function inspectExcelSheetParts(archive) {
+  if (!archive) {
+    return "CORRUPT_EXCEL: workbook central directory could not be read";
+  }
+  for (const name of archive.names) {
+    if (!/^xl\/worksheets\/[^/]+\.xml$/u.test(name)) continue;
+    const part = archive.contents.get(name);
+    if (!part) {
+      return `CORRUPT_EXCEL: worksheet part ${name} could not be read`;
+    }
+    const xml = part.toString("utf8");
+    const code = forbiddenXmlCharacterCode(xml);
+    if (code) {
+      return `INVALID_EXCEL_SHEET_XML: ${name} contains U+${code}, which XML 1.0 forbids`;
+    }
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -644,7 +733,8 @@ export function validateTechnicalArtifact({
       );
       result.checks.excelStructureValid = false;
     } else {
-      const names = readZipEntryNames(filePath);
+      const archive = readZipArchive(contentBuf);
+      const names = archive?.names ?? null;
       const hasContentTypes =
         Array.isArray(names) && names.includes("[Content_Types].xml");
       const hasWorksheet =
@@ -661,6 +751,13 @@ export function validateTechnicalArtifact({
         result.errors.push(
           `CORRUPT_EXCEL: Workbook container is missing required part(s): ${missing.join(", ")}`,
         );
+      } else {
+        const sheetXmlFailure = inspectExcelSheetParts(archive);
+        result.checks.sheetXmlValid = sheetXmlFailure === null;
+        if (sheetXmlFailure) {
+          result.status = VALIDATION_STATUS.FAIL;
+          result.errors.push(sheetXmlFailure);
+        }
       }
     }
   } else if (inferredType === "sql") {

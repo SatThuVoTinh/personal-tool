@@ -205,6 +205,31 @@ export function readWorkbookSheetNames(buf) {
   return names;
 }
 
+// XML 1.0 forbids C0 controls other than tab/LF/CR, plus U+FFFE/U+FFFF and
+// unpaired surrogates. A cell carrying one produces a workbook Excel opens in
+// repair mode, so the writer refuses the value instead of emitting invalid
+// OOXML (F-465).
+function forbiddenXmlCodePoint(value) {
+  for (const character of value) {
+    const code = character.codePointAt(0);
+    if (code === 0xfffe || code === 0xffff) return code;
+    if (code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d) {
+      return code;
+    }
+    if (code >= 0xd800 && code <= 0xdfff) return code;
+  }
+  return null;
+}
+
+function assertXmlSafeCellText(ref, value) {
+  const code = forbiddenXmlCodePoint(value);
+  if (code === null) return;
+  const label = code.toString(16).toUpperCase().padStart(4, "0");
+  throw new Error(
+    `EXCEL_CELL_CONTROL_CHARACTER: cell ${ref} contains U+${label}, which XML 1.0 forbids in a worksheet`,
+  );
+}
+
 function buildSheetRowsXml(rows, startRow = 1) {
   let sheetRowsXml = "";
   for (let rIdx = 0; rIdx < rows.length; rIdx++) {
@@ -213,12 +238,14 @@ function buildSheetRowsXml(rows, startRow = 1) {
     const row = Array.isArray(rows[rIdx]) ? rows[rIdx] : [rows[rIdx]];
     for (let cIdx = 0; cIdx < row.length; cIdx++) {
       const colLetter = spreadsheetColumnLetter(cIdx);
+      const ref = `${colLetter}${rowNum}`;
       const val = String(row[cIdx] ?? "");
+      assertXmlSafeCellText(ref, val);
       const escaped = val
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;");
-      cellsXml += `<c r="${colLetter}${rowNum}" t="inlineStr"><is><t>${escaped}</t></is></c>`;
+      cellsXml += `<c r="${ref}" t="inlineStr"><is><t>${escaped}</t></is></c>`;
     }
     sheetRowsXml += `<row r="${rowNum}">${cellsXml}</row>`;
   }
