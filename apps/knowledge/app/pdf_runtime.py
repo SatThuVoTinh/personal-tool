@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Mapping, NoReturn
 
 from .pdf_foundation import canonical_json_bytes, canonical_vault_path
+from .run_errors import CHILD_DETAIL_LIMIT
 
 PROTOCOL_VERSION = "zink:pdf-runtime-protocol:v1"
 SEGMENTATION_ALGORITHM_VERSION = 4
@@ -24,8 +25,11 @@ MAX_REQUEST_BYTES = 64 * 1024
 MAX_RESPONSE_BYTES = 64 * 1024 * 1024
 MAX_STDERR_BYTES = 1024 * 1024
 # R24: how much child stderr is worth carrying into an operator-facing
-# message. Bounded so a chatty child cannot inflate a stored error record.
-_CHILD_DETAIL_LIMIT = 512
+# message. Bounded so a chatty child cannot inflate a stored error record. The
+# bound is the durable record's own (`CHILD_DETAIL_LIMIT`), so a summary that
+# fits the child's message always fits the run row it lands in — F-550
+# (R10-T06-2) carries it there.
+_CHILD_DETAIL_LIMIT = CHILD_DETAIL_LIMIT
 SAFE_CHILD_ERROR_CODES = {
     "PDF_DOCUMENT_INVALID",
     "PDF_DOCUMENT_ENCRYPTED",

@@ -330,13 +330,41 @@ class IndexLifecycle:
                         )
                         indexed += 1
                         self._run_source_counts["PDF"][1] += 1
-                    except (PdfBuildError, StateTransitionError) as error:
-                        code = error.code if isinstance(error, PdfBuildError) else "PDF_RUNTIME_FAILED"
-                        errors.append(SafeRunError(code, sidecar.source_path))
+                    except PdfBuildError as error:
+                        # F-550 (R10-T06-2): the child's bounded summary is
+                        # recorded beside the code, so an OOM kill and a missing
+                        # artifact no longer persist as one indistinguishable
+                        # PDF_RUNTIME_FAILED row.
+                        errors.append(
+                            SafeRunError(error.code, sidecar.source_path, error.cause)
+                        )
                         failed += 1
                         self._run_source_counts["PDF"][2] += 1
                         if run.kind == "FULL_REBUILD":
-                            await self._fail(run, code, errors, discovered, indexed, failed)
+                            await self._fail(
+                                run, error.code, errors, discovered, indexed, failed
+                            )
+                            return []
+                    except StateTransitionError:
+                        # F-550 (R10-T06-2): a state the store refused is not a
+                        # runtime failure; naming it runtime sent the operator
+                        # to the child for a row the database declined. No cause
+                        # rides along — this fault's message is internal, and the
+                        # run row has always refused internal messages.
+                        errors.append(
+                            SafeRunError("PDF_BUILD_STATE_INVALID", sidecar.source_path)
+                        )
+                        failed += 1
+                        self._run_source_counts["PDF"][2] += 1
+                        if run.kind == "FULL_REBUILD":
+                            await self._fail(
+                                run,
+                                "PDF_BUILD_STATE_INVALID",
+                                errors,
+                                discovered,
+                                indexed,
+                                failed,
+                            )
                             return []
                     except LifecycleError as error:
                         errors.append(SafeRunError(error.code, sidecar.source_path))

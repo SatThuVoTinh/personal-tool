@@ -42,11 +42,17 @@ BUILD_TIMEOUT_SECONDS = 24 * 60 * 60
 
 
 class PdfBuildError(RuntimeError):
-    """A stable, outward-safe PDF build failure."""
+    """A stable, outward-safe PDF build failure.
 
-    def __init__(self, code: str) -> None:
-        super().__init__(code)
+    F-550 (R10-T06-2): `code` stays the single value every caller switches on;
+    `cause` is the bounded diagnosis the child already computed (`exit=N;
+    stderr=…`), which used to be computed and then dropped at this seam.
+    """
+
+    def __init__(self, code: str, cause: str | None = None) -> None:
+        super().__init__(code if cause is None else f"{code}: {cause}")
         self.code = code
+        self.cause = cause
 
 
 @dataclass(frozen=True)
@@ -110,7 +116,11 @@ class PdfContentBuilder:
                 sidecar.source_path, expected_processing_identity_digest, preflight_deadline
             )
         except PdfRuntimeError as error:
-            raise PdfBuildError(timeout_code if error.code == "PDF_RUNTIME_TIMEOUT" else error.code) from error
+            # F-550 (R10-T06-2): the child's own bounded summary rides along.
+            raise PdfBuildError(
+                timeout_code if error.code == "PDF_RUNTIME_TIMEOUT" else error.code,
+                error.detail,
+            ) from error
         self._assert_baseline(sidecar, baseline)
         self._require_before_commit_deadline(cumulative_deadline)
         page_count = preflight["page_count"]
@@ -204,7 +214,7 @@ class PdfContentBuilder:
                 except PdfRuntimeError as error:
                     code = timeout_code if error.code == "PDF_RUNTIME_TIMEOUT" else error.code
                     await self._database.fail_pdf_content_batch_and_build(batch, code)
-                    raise PdfBuildError(code) from error
+                    raise PdfBuildError(code, error.detail) from error
                 except PdfBuildError as error:
                     await self._database.fail_pdf_content_batch_and_build(batch, error.code)
                     raise
@@ -212,7 +222,14 @@ class PdfContentBuilder:
                     await self._database.fail_pdf_content_batch_and_build(
                         batch, "PDF_RUNTIME_FAILED"
                     )
-                    raise PdfBuildError("PDF_RUNTIME_FAILED") from error
+                    # F-550 (R10-T06-2): the cause channel carries the CHILD's
+                    # bounded summary only. A parent-side fault is named by its
+                    # type here, never by its message: `str(error)` of a database
+                    # or asyncio fault is exactly the detail the run row has
+                    # always refused to carry.
+                    raise PdfBuildError(
+                        "PDF_RUNTIME_FAILED", f"type={type(error).__name__}"
+                    ) from error
 
             await self._require_after_commit_deadline(cumulative_deadline, build)
             try:

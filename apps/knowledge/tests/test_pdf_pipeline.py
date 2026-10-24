@@ -303,18 +303,24 @@ class _Runtime:
         *,
         failure: str | None = None,
         failure_start: int | None = None,
+        failure_detail: str | None = None,
+        preflight_detail: str | None = None,
         empty: bool = False,
         delay: float = 0,
     ) -> None:
         self.page_count = page_count
         self.failure = failure
         self.failure_start = failure_start
+        self.failure_detail = failure_detail
+        self.preflight_detail = preflight_detail
         self.empty = empty
         self.delay = delay
         self.ranges: list[tuple[int, int]] = []
         self.after_extract = None
 
     async def preflight(self, *_args):
+        if self.preflight_detail is not None:
+            raise PdfRuntimeError(self.failure or "PDF_RUNTIME_FAILED", self.preflight_detail)
         return {"page_count": self.page_count}
 
     async def extract_range(self, _path, start, end, _identity, _deadline):
@@ -322,7 +328,7 @@ class _Runtime:
         if self.delay:
             await asyncio.sleep(self.delay)
         if self.failure and (self.failure_start is None or self.failure_start == start):
-            raise PdfRuntimeError(self.failure)
+            raise PdfRuntimeError(self.failure, self.failure_detail)
         if self.after_extract:
             self.after_extract()
         return {
@@ -624,6 +630,67 @@ class PdfBuildLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runtime.ranges, [(1, 4), (5, 8)])
         self.assertEqual([(batch.page_start, batch.page_end) for batch in database.started], [(1, 4), (5, 8)])
         self.assertEqual(database.failures[0][1], "PDF_RUNTIME_FAILED")
+
+    async def test_the_child_summary_reaches_the_build_error_as_its_cause(
+        self,
+    ) -> None:
+        """F-550 (R10-T06-2): the boundary computes a diagnosis, this seam keeps it.
+
+        `_child_failure_detail` returned `exit=-9; stderr=Killed` and the
+        conversion arm rebuilt the error from the code alone, so every cause was
+        dropped exactly one call before it could become durable.
+        """
+
+        database = _Database()
+        runtime = _Runtime(
+            10,
+            failure="PDF_RUNTIME_FAILED",
+            failure_start=5,
+            failure_detail="exit=-9; stderr=Killed",
+        )
+
+        with self.assertRaises(PdfBuildError) as caught:
+            await self.builder(database, runtime).build(self.sidecar, "a" * 64)
+
+        self.assertEqual(caught.exception.code, "PDF_RUNTIME_FAILED")
+        self.assertEqual(caught.exception.cause, "exit=-9; stderr=Killed")
+
+    async def test_a_preflight_death_keeps_its_cause_too(self) -> None:
+        """F-550 (R10-T06-2): the preflight seam is the other place it was dropped."""
+
+        database = _Database()
+        runtime = _Runtime(10, failure="PDF_RUNTIME_FAILED", preflight_detail="exit=1; stderr=artifact missing")
+
+        with self.assertRaises(PdfBuildError) as caught:
+            await self.builder(database, runtime).build(self.sidecar, "a" * 64)
+
+        self.assertEqual(caught.exception.cause, "exit=1; stderr=artifact missing")
+        self.assertEqual(runtime.ranges, [])
+
+    async def test_a_parent_side_fault_names_its_type_and_not_its_message(
+        self,
+    ) -> None:
+        """F-550 (R10-T06-2): the cause channel is the child's, not a message pipe.
+
+        The catch-all arm still answers `PDF_RUNTIME_FAILED`, so the cause is the
+        only thing that can say what really happened — and an internal fault's
+        message (a database detail, a file path) must not enter it.
+        """
+
+        database = _Database()
+        runtime = _Runtime(1)
+
+        def fault() -> None:
+            raise KeyError("host=internal-db password=rot13")
+
+        runtime.after_extract = fault
+
+        with self.assertRaises(PdfBuildError) as caught:
+            await self.builder(database, runtime).build(self.sidecar, "a" * 64)
+
+        self.assertEqual(caught.exception.code, "PDF_RUNTIME_FAILED")
+        self.assertEqual(caught.exception.cause, "type=KeyError")
+        self.assertNotIn("internal-db", str(caught.exception.cause))
 
     async def test_hashing_is_offloaded_from_the_event_loop(self) -> None:
         database, runtime = _Database(), _Runtime(1)

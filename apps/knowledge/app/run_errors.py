@@ -8,6 +8,10 @@ from typing import Any, Iterable
 MAX_ERROR_ENTRIES = 50
 _SAFE_ERROR_CODE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 _MAX_SOURCE_PATH_LENGTH = 1024
+# F-550 (R10-T06-2): how much diagnosis one durable run error may carry. The
+# PDF child already bounds its own summary to this many characters, so the two
+# bounds are one number: `app.pdf_runtime` imports it rather than repeating it.
+CHILD_DETAIL_LIMIT = 512
 # M11/T1-R1 3.5 (M1): markdown sources live under "01. Knowledge", PDF sources
 # under the roots pdf_foundation admits. A PDF failure attributed to
 # "02. Books/…" used to be dropped by the sanitizer, so the operator saw an
@@ -21,9 +25,19 @@ _SAFE_SOURCE_ROOTS = frozenset(
 class SafeRunError:
     code: str
     source_path: str | None = None
+    # F-550 (R10-T06-2): the diagnosis the producer already computed — for a
+    # PDF child, the bounded `exit=N; stderr=…` summary. It is a separate
+    # member precisely because the code must stay one switchable value; without
+    # it an OOM kill and a missing artifact both persisted as
+    # `PDF_RUNTIME_FAILED` and the run row could not tell them apart.
+    cause: str | None = None
 
     def as_dict(self) -> dict[str, str | None]:
-        return {"code": self.code, "source_path": self.source_path}
+        return {
+            "code": self.code,
+            "source_path": self.source_path,
+            "cause": self.cause,
+        }
 
 
 def serialize_errors(errors: Iterable[SafeRunError]) -> str:
@@ -38,12 +52,14 @@ def serialize_errors(errors: Iterable[SafeRunError]) -> str:
 
     supplied = list(errors)
     unique = {_sanitize_error(error) for error in supplied}
-    ordered = sorted(unique, key=lambda item: (item[0] or "", item[1]))
+    ordered = sorted(unique, key=lambda item: (item[0] or "", item[1], item[2] or ""))
     return json.dumps(
         {
             "errors": [
-                SafeRunError(code=code, source_path=source_path).as_dict()
-                for source_path, code in ordered[:MAX_ERROR_ENTRIES]
+                SafeRunError(
+                    code=code, source_path=source_path, cause=cause
+                ).as_dict()
+                for source_path, code, cause in ordered[:MAX_ERROR_ENTRIES]
             ],
             "total_error_count": len(supplied),
             # F-307 (R7-E1-02): the flag reflects the RAW list -- more
@@ -100,18 +116,31 @@ def deserialize_errors(detail: str | None) -> dict[str, Any]:
             return fallback
         safe_entries = []
         for entry in entries:
-            if not isinstance(entry, dict) or set(entry) != {"code", "source_path"}:
+            if not isinstance(entry, dict) or not _entry_keys_allowed(entry):
                 return fallback
             code = entry.get("code")
             source_path = entry.get("source_path")
+            cause = entry.get("cause")
             if not _is_safe_code(code) or not _is_safe_source_path(source_path):
                 return fallback
-            safe_entries.append({"code": code, "source_path": source_path})
+            if not _is_safe_cause(cause):
+                return fallback
+            safe_entries.append(
+                {"code": code, "source_path": source_path, "cause": cause}
+            )
         expected_order = sorted(
-            safe_entries, key=lambda entry: (entry["source_path"] or "", entry["code"])
+            safe_entries,
+            key=lambda entry: (
+                entry["source_path"] or "",
+                entry["code"],
+                entry["cause"] or "",
+            ),
         )
         if safe_entries != expected_order or len(
-            {(entry["source_path"], entry["code"]) for entry in safe_entries}
+            {
+                (entry["source_path"], entry["code"], entry["cause"])
+                for entry in safe_entries
+            }
         ) != len(safe_entries):
             return fallback
         return {"errors": safe_entries, "total_error_count": total, "truncated": truncated}
@@ -119,10 +148,46 @@ def deserialize_errors(detail: str | None) -> dict[str, Any]:
         return fallback
 
 
-def _sanitize_error(error: SafeRunError) -> tuple[str | None, str]:
+def _sanitize_error(error: SafeRunError) -> tuple[str | None, str, str | None]:
     code = error.code if _is_safe_code(error.code) else "UNSAFE_ERROR_REDACTED"
     source_path = error.source_path if _is_safe_source_path(error.source_path) else None
-    return source_path, code
+    cause = _sanitised_cause(error.cause)
+    return source_path, code, cause
+
+
+def _entry_keys_allowed(entry: dict[str, Any]) -> bool:
+    # A run row written before F-550 carries two members; it stays readable
+    # rather than collapsing to the legacy-failure fallback.
+    return set(entry) in ({"code", "source_path"}, {"code", "source_path", "cause"})
+
+
+def _is_safe_cause(value: object) -> bool:
+    return value is None or (
+        isinstance(value, str)
+        and value == _scrub_cause(value)
+        and 0 < len(value) <= CHILD_DETAIL_LIMIT
+    )
+
+
+def _sanitised_cause(value: str | None) -> str | None:
+    """Bound and scrub one cause, so it can never carry an unbounded child string.
+
+    F-550 (R10-T06-2) reuses the shape rules `_is_safe_source_path` applies —
+    nothing below 0x20, nothing at or above 0x7F, no length beyond the child's
+    own bound — but scrubs instead of dropping: the diagnosis is the reason the
+    member exists, and an unprintable byte in a stderr tail must not erase it.
+    """
+
+    if not isinstance(value, str):
+        return None
+    scrubbed = _scrub_cause(value)
+    return scrubbed or None
+
+
+def _scrub_cause(value: str) -> str:
+    return "".join(
+        character if 0x20 <= ord(character) < 0x7F else " " for character in value
+    )[:CHILD_DETAIL_LIMIT]
 
 
 def _is_safe_code(value: object) -> bool:

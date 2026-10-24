@@ -22,7 +22,9 @@ class RunErrorsTests(unittest.TestCase):
         self.assertEqual(payload["total_error_count"], 63)
         self.assertTrue(payload["truncated"])
         self.assertEqual(len(payload["errors"]), MAX_ERROR_ENTRIES)
-        self.assertEqual(payload["errors"][0], {"code": "A", "source_path": None})
+        self.assertEqual(
+            payload["errors"][0], {"code": "A", "source_path": None, "cause": None}
+        )
 
     def test_the_total_counts_the_errors_supplied_not_the_deduplicated_set(self) -> None:
         """F-307 (R7-E1-02): the count used to under-report."""
@@ -70,7 +72,18 @@ class RunErrorsTests(unittest.TestCase):
 
     def test_safe_json_round_trip(self) -> None:
         payload = deserialize_errors(serialize_errors([SafeRunError("X", "01. Knowledge/AI/x.md")]))
-        self.assertEqual(payload["errors"], [{"code": "X", "source_path": "01. Knowledge/AI/x.md"}])
+        # F-550 (R10-T06-2): the durable entry gained the cause member; an
+        # error without a computed diagnosis reads back with `cause: None`.
+        self.assertEqual(
+            payload["errors"],
+            [
+                {
+                    "code": "X",
+                    "source_path": "01. Knowledge/AI/x.md",
+                    "cause": None,
+                }
+            ],
+        )
 
     def test_unsafe_values_are_redacted_before_persistence(self) -> None:
         serialized = serialize_errors(
@@ -80,7 +93,7 @@ class RunErrorsTests(unittest.TestCase):
         self.assertNotIn("database.env", serialized)
         self.assertEqual(
             json.loads(serialized)["errors"],
-            [{"code": "UNSAFE_ERROR_REDACTED", "source_path": None}],
+            [{"code": "UNSAFE_ERROR_REDACTED", "source_path": None, "cause": None}],
         )
 
     def test_noncanonical_or_nondeterministic_json_is_treated_as_legacy(self) -> None:
