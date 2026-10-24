@@ -8104,13 +8104,14 @@ force-push, no PR/merge/release.
 - R3 is archived at `docs/contracts/execution/archive/2026-10-21-M12-T9-R3.md`.
 - R4 is materialized at `docs/contracts/execution/ACTIVE.md`; this block is its
   lifecycle pointer.
-- 39 of the 184 scoped rows are closed with red/green and mutation evidence:
+- 44 of the 179 scoped rows are closed with red/green and mutation evidence:
   `F-523`, `F-524`, `F-437`, `F-438`, `F-408`, `F-414`, `F-464`, `F-465`,
   `F-466`, `F-473`, `F-442`, `F-444`, `F-533`, `F-427`, `F-428`, `F-429`,
   `F-450`, `F-455`, `F-451`, `F-452`, `F-453`, `F-511`, `F-467`, `F-474`,
   `F-567`, `F-517`, `F-518`, `F-441`, `F-440`, `F-439`, `F-487`, `F-491`,
-  `F-415`, `F-410`, `F-512`, `F-573`, `F-412`, `F-413`, `F-513`. The register
-  now carries 184 rows (116 OPEN + 31 LATENT in scope = 147, 32 REFUTED,
+  `F-415`, `F-410`, `F-512`, `F-573`, `F-412`, `F-413`, `F-513`, `F-458`,
+  `F-483`, `F-566`, `F-482`, `F-519`. The register
+  now carries 179 rows (112 OPEN + 30 LATENT in scope = 142, 32 REFUTED,
   2 BLOCKED, 3 PARTIAL). The §1 census in the register
   was stale by the 22 earlier closures and was corrected against the file rather
   than against its own header; its closure total also read 419 while its own
@@ -8175,6 +8176,15 @@ force-push, no PR/merge/release.
   points on a fake connection instead, so the accumulation itself was not
   driven end to end. The lane hit its 150-turn cap after its sixth commit; the
   tree is clean.
+- The gate-scripts lane (`w1-gate-scripts`) closed five rows with probes the
+  lead re-ran here: `F-458` (`ea0366d`), `F-483` (`11f8e12`), `F-566`
+  (`d5a59ad`), `F-482` (`0e8e4df`) and `F-519` (`1e5e801`); the policy lane is
+  75/75. Probes, each reverted: an empty `blockingCheckSurfaces` reddened 2
+  cases; short-circuiting the execution-column claim test reddened 1;
+  restoring the two-prefix citation filter reddened 1; returning \`pass\` for an
+  absent scan root reddened 1; dropping the recorded-fingerprint requirement
+  reddened 1. **\`F-485\` still stays OPEN**: none of these five rules covers a
+  \`mkdtemp\` lane with no removal API. The lane also capped at 150 turns.
 - The band that had already merged without its closeout (`F-464`/`F-465`/
   `F-466`/`F-473` from B4, `F-442`/`F-444` from B5) was re-measured at this HEAD
   before its rows were deleted: the artifact/Excel lane is 8/8, the knowledge

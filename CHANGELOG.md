@@ -2169,6 +2169,23 @@ passed.`; `python-quality` SUCCESS — 188 passed, 27 subtests) and Security run
 - **`F-513`** — the reconnect loop re-applied migrations through the lock-and-migrate half only, so a retried boot migrated the live schema with no acceptance-barrier restore point and skipped the segment-domain assertion — closed by `faa1e4f`.
   Row `F-513` (`R10-L07-2`, Medium). Both boot arms now call one `_apply_startup_schema`, so the barrier branch and `assert_searchable_segment_type_domain()` cannot diverge, and the retry re-publishes `MIGRATION_LOCK_UNAVAILABLE` instead of swallowing it. Regression: two cases in `tests/test_m11_index_hygiene.py` (the barrier-branch order and the named refusal). Probe: forcing `barrier_completed = True` reddened the barrier case (the statement order became `['migrations']`); reverted.
 
+#### M12/T9-R4 — the gate registry's own claims (2026-10-24) (5 rows, 5 commits)
+
+- **`F-458`** — the gate-registry check verified only script-name membership, so its "Where it runs" / "NOT RUN" columns and the prose beside the table could state the opposite of HEAD and stay green — closed by `ea0366d`.
+  Row `F-458` (`R9-T07-4`, Medium). `checkGateRegistry` now parses columns 3-4, compares the registry prose with the workflows it describes (the uv pin and the secret-scan half) and derives the registry population from the parsed workflow steps, so every blocking CI surface — npm script, direct `node` invocation or action — needs a row. Regression: three cases in `tests/repository-policy.test.mjs`. Probe: making `blockingCheckSurfaces` return empty reddened the population and secret-scan-prose cases; reverted.
+
+- **`F-483`** — a row documenting a script as outside `verify` and CI went unenforced, and 23 m8 lanes ran in both while the registry said they did not — closed by `11f8e12`.
+  Row `F-483` (`R9-L11b-4`, Low). `checkRegistryExecutionColumns` reads the "Where it runs" and "NOT RUN condition" cells, follows `verify`'s script graph and the `test` glob each script declares, and refuses a row whose claim contradicts either; the `test:m8` row now states where it actually runs. Regression: `F-483: a row documented as outside verify and CI must not run there`. Probe: short-circuiting the claim test reddened the case; reverted.
+
+- **`F-566`** — the doc-to-script gate's citation population came from a hand-typed two-prefix list, so operator entry points under `integrations/openclaw` were never checked and the gate returned empty — closed by `d5a59ad`.
+  Row `F-566` (`R10-T09-1`, Medium). The population is now every tracked executable a tracked doc names (a literal-path channel) plus command-position citations, and a pytest/glob suite declared by an npm script counts as reading its own directory. Regression: `F-566: a runbook that cites an integrations/ operator driver is checked`. Probe: restoring the two-prefix filter on the cited set reddened the case; reverted.
+
+- **`F-482`** — the credential-literal lane returned an unchecked pass when `scratch/` was absent and dropped unreadable or oversized files without counting them — closed by `0e8e4df`.
+  Row `F-482` (`R9-L11b-3`, Low). `credentialLiteralScan` publishes `enumerated` / `scanned` / `dropped` and reports the absent root as `not-run` with the reason, so an absent root is a recorded skip rather than a passing assertion; both F-038 cases assert the denominator. Regression: `F-482: the credential-literal scan publishes its denominator and records an absent root`. Probe: returning `pass` for the absent root reddened the case; reverted.
+
+- **`F-519`** — the `.gitleaksignore` fingerprint half was validated only for tracked-ness while the sibling pattern half was anchored, recorded and capped — closed by `1e5e801`.
+  Row `F-519` (`R10-L09-2`, Low). An entry outside every recorded scope must now match `SECRET_SCAN_RECORDED_FINGERPRINTS` on all four coordinates (commit, file, rule, line), and the entry count is capped at `SECRET_SCAN_FINGERPRINT_CEILING`. Regression: `F-519: a fingerprint outside every recorded scope must be recorded in full`. Probe: dropping the recorded-fingerprint requirement left tracked-ness alone and reddened the case; reverted.
+
 ## Changelog Rules
 
 ### Completed Changes Only
