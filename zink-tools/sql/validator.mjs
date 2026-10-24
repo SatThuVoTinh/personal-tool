@@ -12,7 +12,10 @@ const MUTATION_KEYWORDS = new Set([
   "REVOKE",
 ]);
 
-const FORBIDDEN_KEYWORDS = new Set([
+// The one forbidden-keyword vocabulary both exported gates use. `NOT` is a
+// member; the tokenizer admits it only in the `IS NOT NULL` grammar the
+// statement validator supports, so a bare NOT is refused by BOTH gates.
+export const SQL_FORBIDDEN_KEYWORDS = Object.freeze([
   "JOIN",
   "INNER",
   "OUTER",
@@ -47,6 +50,7 @@ const FORBIDDEN_KEYWORDS = new Set([
   "SET",
   "VALUES",
 ]);
+const FORBIDDEN_KEYWORDS = new Set(SQL_FORBIDDEN_KEYWORDS);
 
 /**
  * F-276 (R7-C2-01): the token-level half of the governed read-only subset,
@@ -323,9 +327,19 @@ function tokenizeSql(sql) {
           "AND",
           "OR",
           "IS",
-          "NOT",
           "AS",
         ].includes(upper)
+      ) {
+        tokens.push({ type: "KEYWORD", value: upper, raw: word });
+      } else if (
+        // `IS NOT NULL` is part of the admitted subset; a bare NOT is not.
+        // Classifying the exception HERE keeps NOT a FORBIDDEN_KEYWORD for
+        // every other position, so the token gate and the grammar gate answer
+        // the same question instead of the KEYWORD branch shadowing the
+        // forbidden entry.
+        upper === "NOT" &&
+        tokens[tokens.length - 1]?.type === "KEYWORD" &&
+        tokens[tokens.length - 1]?.value === "IS"
       ) {
         tokens.push({ type: "KEYWORD", value: upper, raw: word });
       } else if (FORBIDDEN_KEYWORDS.has(upper)) {

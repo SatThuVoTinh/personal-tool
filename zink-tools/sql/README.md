@@ -25,6 +25,7 @@ Mọi truy vấn gửi tới `zink_sql` đều phải tuân thủ nghiêm ngặt
 4. **Không gom nhóm hay hàm:** Cấm `GROUP BY`, `HAVING`, `WINDOW`, `OVER`, `CASE WHEN`.
 5. **Không dùng chú thích hoặc dấu chấm phẩy:** Cấm `--`, `/* */` và `;`.
 6. **Tham số đặt tên (Named Parameters):** Phải gắn kết chính xác theo tên dạng `:param_name` (injective binding).
+7. **`NOT` chỉ hợp lệ trong `IS NOT NULL`:** `NOT` đứng một mình bị cả `validateSqlQuery` và `assertReadOnlyStatement` từ chối với `SQL_UNSUPPORTED_SYNTAX`; dạng `IS NOT NULL` vẫn được chấp nhận.
 
 ---
 

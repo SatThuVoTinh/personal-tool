@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  assertReadOnlyStatement,
+  SQL_FORBIDDEN_KEYWORDS,
   validateSqlQuery,
   validateSqlFileContent,
 } from "../zink-tools/sql/validator.mjs";
@@ -250,6 +252,32 @@ describe("Lane H4 — SQL safety matrix", () => {
     assert.throws(() => validateSqlQuery("SELECT a FROM t WHERE a = DROP"), {
       message: "SQL_MUTATION_NOT_PERMITTED",
     });
+  });
+
+  it("F-511: NOT is refused by both exported gates, in every forbidden member", () => {
+    // The tokenizer used to classify NOT as a plain KEYWORD, so the token gate
+    // admitted a bare NOT that the grammar gate refused. Enumerate the shipped
+    // vocabulary rather than a copy of it.
+    assert.ok(SQL_FORBIDDEN_KEYWORDS.includes("NOT"));
+    for (const keyword of SQL_FORBIDDEN_KEYWORDS) {
+      const query = `SELECT a FROM t WHERE a = ${keyword}`;
+      assert.throws(
+        () => validateSqlQuery(query, []),
+        { message: "SQL_UNSUPPORTED_SYNTAX" },
+        `${keyword} must be refused by validateSqlQuery`,
+      );
+      assert.throws(
+        () => assertReadOnlyStatement(query),
+        { message: "SQL_UNSUPPORTED_SYNTAX" },
+        `${keyword} must be refused by assertReadOnlyStatement`,
+      );
+    }
+  });
+
+  it("F-511: IS NOT NULL is the one admitted NOT grammar in both gates", () => {
+    const query = "SELECT a FROM t WHERE a IS NOT NULL";
+    assert.doesNotThrow(() => validateSqlQuery(query, []));
+    assert.doesNotThrow(() => assertReadOnlyStatement(query));
   });
 
   it("static file analysis reports mutations without executing them", () => {
