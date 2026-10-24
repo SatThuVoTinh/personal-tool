@@ -1424,33 +1424,70 @@ const CREDENTIAL_SCAN_SKIP_DIRECTORIES = new Set([
 
 const CREDENTIAL_SCAN_MAX_BYTES = 2 * 1024 * 1024;
 
-function collectCredentialLiteralFiles(files) {
+function credentialLiteralScan(rootDirectory, { paths } = {}) {
+  if (paths === undefined) {
+    if (!existsSync(rootDirectory)) {
+      return {
+        status: "not-run",
+        reason: `the scan root ${path.basename(rootDirectory)}/ is absent on this host`,
+        enumerated: 0,
+        scanned: 0,
+        dropped: [],
+        hits: [],
+      };
+    }
+    paths = collectScannedFiles(rootDirectory);
+  }
   const hits = [];
-  for (const filePath of files) {
+  const dropped = [];
+  for (const filePath of paths) {
+    const relative = path.relative(rootDirectory, filePath) || filePath;
     let stats;
     try {
       stats = statSync(filePath);
     } catch {
+      dropped.push({ path: relative, reason: "the path could not be read" });
       continue;
     }
-    if (!stats.isFile() || stats.size > CREDENTIAL_SCAN_MAX_BYTES) continue;
+    if (!stats.isFile()) {
+      dropped.push({
+        path: relative,
+        reason: "the path is not a regular file",
+      });
+      continue;
+    }
+    if (stats.size > CREDENTIAL_SCAN_MAX_BYTES) {
+      dropped.push({
+        path: relative,
+        reason: `the file is larger than ${CREDENTIAL_SCAN_MAX_BYTES} bytes`,
+      });
+      continue;
+    }
     let contents;
     try {
       contents = readFileSync(filePath);
     } catch {
+      dropped.push({ path: relative, reason: "the bytes could not be read" });
       continue;
     }
-    // A NUL byte means the file is not text; the shapes cannot appear in it.
+    // A NUL byte means the file is not text, so the shapes cannot appear in
+    // it. The bytes were read all the same, so the file counts as scanned.
     if (contents.includes(0)) continue;
     const text = contents.toString("utf8");
     for (const shape of CREDENTIAL_LITERAL_SHAPES) {
       if (shape.pattern.test(text)) {
-        hits.push(`${path.relative(REPO_ROOT, filePath)} (${shape.name})`);
+        hits.push(`${relative} (${shape.name})`);
         break;
       }
     }
   }
-  return hits;
+  return {
+    status: "scanned",
+    enumerated: paths.length,
+    scanned: paths.length - dropped.length,
+    dropped,
+    hits,
+  };
 }
 
 function collectScannedFiles(rootDirectory) {
@@ -1473,30 +1510,89 @@ function collectScannedFiles(rootDirectory) {
   return files;
 }
 
-test("F-038: no credential literal exists in any tracked file", () => {
+test("F-038: no credential literal exists in any tracked file", (t) => {
   const tracked = listTrackedFiles(REPO_ROOT).map((relativePath) =>
     path.join(REPO_ROOT, relativePath),
   );
-  const hits = collectCredentialLiteralFiles(tracked);
+  const result = credentialLiteralScan(REPO_ROOT, { paths: tracked });
+  t.diagnostic(
+    `credential scan denominator: enumerated ${result.enumerated}, scanned ${result.scanned}, dropped ${result.dropped.length}, hits ${result.hits.length}`,
+  );
+  assert.equal(result.status, "scanned");
+  assert.ok(result.enumerated > 0, "the tracked scan enumerated no file");
+  assert.equal(
+    result.scanned,
+    result.enumerated,
+    `the scan dropped files it never examined, so its green is a statement about intent: ${result.dropped
+      .map((entry) => `${entry.path} (${entry.reason})`)
+      .join(", ")}`,
+  );
   assert.deepEqual(
-    hits,
+    result.hits,
     [],
-    `a credential literal in source position is reachable by every reader of the file; remove it and rotate the credential: ${hits.join(", ")}`,
+    `a credential literal in source position is reachable by every reader of the file; remove it and rotate the credential: ${result.hits.join(", ")}`,
   );
 });
 
-test("F-038: no credential literal exists in the local scratch directory", () => {
+test("F-038: no credential literal exists in the local scratch directory", (t) => {
   const scratch = path.join(REPO_ROOT, "scratch");
-  if (!existsSync(scratch)) {
+  const result = credentialLiteralScan(scratch);
+  t.diagnostic(
+    `scratch credential scan: status ${result.status}, enumerated ${result.enumerated}, scanned ${result.scanned}, dropped ${result.dropped.length}`,
+  );
+  if (result.status === "not-run") {
+    // NOT RUN, recorded: the host state, not a completed scan, is the reason
+    // this case examined nothing. The reason is what makes the branch
+    // falsifiable - a bare return would leave no record at all.
+    assert.match(result.reason, /absent/u);
     return;
   }
-  const hits = collectCredentialLiteralFiles(collectScannedFiles(scratch));
+  assert.equal(
+    result.scanned,
+    result.enumerated,
+    `the scratch scan dropped files it never examined: ${result.dropped
+      .map((entry) => `${entry.path} (${entry.reason})`)
+      .join(", ")}`,
+  );
   assert.deepEqual(
-    hits,
+    result.hits,
     [],
     `the scratch directory is repository-adjacent: a credential literal there is one ` +
-      `forced add away from history. Remove it and rotate the credential: ${hits.join(", ")}`,
+      `forced add away from history. Remove it and rotate the credential: ${result.hits.join(", ")}`,
   );
+});
+
+test("F-482: the credential-literal scan publishes its denominator and records an absent root", () => {
+  withTemporaryRepository((repositoryRoot) => {
+    writeTrackedFile(repositoryRoot, "clean.txt", "no literal here\n");
+    const oversized = path.join(repositoryRoot, "oversized.txt");
+    writeFileSync(oversized, Buffer.alloc(CREDENTIAL_SCAN_MAX_BYTES + 1, 0x61));
+
+    const absent = credentialLiteralScan(path.join(repositoryRoot, "scratch"));
+    assert.equal(
+      absent.status,
+      "not-run",
+      "an absent root must be recorded, not reported as a completed scan",
+    );
+    assert.match(absent.reason, /absent/u);
+
+    const scan = credentialLiteralScan(repositoryRoot, {
+      paths: [path.join(repositoryRoot, "clean.txt"), oversized],
+    });
+    assert.equal(scan.enumerated, 2);
+    assert.equal(scan.scanned, 1);
+    assert.deepEqual(
+      scan.dropped.map((entry) => path.basename(entry.path)),
+      ["oversized.txt"],
+    );
+    assert.deepEqual(scan.hits, []);
+
+    const nonRegular = credentialLiteralScan(repositoryRoot, {
+      paths: [repositoryRoot],
+    });
+    assert.equal(nonRegular.scanned, 0);
+    assert.equal(nonRegular.dropped.length, 1);
+  });
 });
 
 // ---------------------------------------------------------------------------
