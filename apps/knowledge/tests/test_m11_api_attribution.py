@@ -280,6 +280,10 @@ class ApiAttributionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(item["source_sha256"], "a" * 64)
         self.assertEqual(item["citation"]["source_sha256"], "a" * 64)
         self.assertEqual(item["citation"]["source_id"], "source-1")
+        # F-570 (R10-T10-1): the span is on the ITEM, so a consumer that
+        # rebuilds the item can forward it instead of only the rendered string.
+        self.assertEqual(item["line_start"], 1)
+        self.assertEqual(item["line_end"], 2)
 
     async def test_a_failed_startup_sweep_is_named_and_does_not_stop_the_service(
         self,

@@ -34,7 +34,7 @@ import pytest
 os.environ.setdefault("KNOWLEDGE_DATABASE_PASSWORD", "unit-test-only")
 
 from app.config import Settings
-from app.database import ActiveIndex, SearchCandidate
+from app.database import ActiveIndex, SearchCandidate, SegmentRecord
 from app.main import create_app
 from app.model_probe import ModelProbeError, ResolvedEmbeddingModel
 from app.retrieval import MAX_RERANK_CANDIDATES
@@ -262,6 +262,92 @@ class EmbeddingFailureAttributionTests(KnowledgeHttpSurface):
         self.assertEqual(
             response.json(), {"status": "not_ready", "code": "EMBEDDING_MODEL_UNAVAILABLE"}
         )
+
+
+class PublishedProvenanceTests(KnowledgeHttpSurface):
+    """F-570 (R10-T10-1): the item carries what a citation needs to be checked.
+
+    The provenance existed only inside the `citation` object, so a consumer
+    that rebuilds its own item -- the governed adapter does -- had nothing to
+    forward but the rendered string. A moved or edited source then produced an
+    identical agent-visible citation with no digest and no span anywhere.
+    """
+
+    async def test_a_markdown_result_publishes_its_source_identity_and_line_span(
+        self,
+    ) -> None:
+        self.stub_candidates(1)
+
+        item = (await self.search(limit=5))["results"][0]
+
+        self.assertEqual(item["source_id"], "source-1")
+        self.assertEqual(item["source_sha256"], "a" * 64)
+        self.assertEqual(item["line_start"], 3)
+        self.assertEqual(item["line_end"], 4)
+
+    async def test_a_pdf_result_publishes_its_page_span(self) -> None:
+        self.app.state.database.search_candidates = AsyncMock(
+            return_value=(
+                [
+                    _candidate(
+                        "d1",
+                        source_type="PDF",
+                        source_path="02. Books/Authority/report.pdf",
+                        line_start=None,
+                        line_end=None,
+                        page_start=2,
+                        page_end=3,
+                    )
+                ],
+                [],
+            )
+        )
+
+        item = (await self.search(limit=5))["results"][0]
+
+        self.assertEqual(item["source_type"], "PDF")
+        self.assertEqual(item["page_start"], 2)
+        self.assertEqual(item["page_end"], 3)
+        self.assertIsNone(item["line_start"])
+        self.assertIsNone(item["line_end"])
+
+
+    async def test_the_retrieve_and_citation_items_publish_the_span_too(self) -> None:
+        """A governed agent's other actions rebuild the item the same way."""
+
+        self.app.state.database.get_segment = AsyncMock(
+            return_value=SegmentRecord(
+                id="segment-1",
+                index_id="index-1",
+                source_id="source-1",
+                source_sha256="a" * 64,
+                source_path="01. Knowledge/AI/note.md",
+                source_type="MARKDOWN",
+                source_mime_type="text/markdown",
+                title="Note",
+                text="body",
+                heading_path=("Title",),
+                primary_topic="AI",
+                canonical_topics=("AI",),
+                tags=("ai",),
+                line_start=1,
+                line_end=2,
+                page_start=None,
+                page_end=None,
+                bbox=None,
+                indexed_by_run_id="run-1",
+            )
+        )
+
+        for path in ("/v1/chunk/segment-1", "/v1/citation/segment-1"):
+            with self.subTest(path=path):
+                response = await self.request("GET", path)
+
+                self.assertEqual(response.status_code, 200)
+                row = response.json()["results"][0]
+                self.assertEqual(row["source_sha256"], "a" * 64)
+                self.assertEqual(row["line_start"], 1)
+                self.assertEqual(row["line_end"], 2)
 
 
 if __name__ == "__main__":

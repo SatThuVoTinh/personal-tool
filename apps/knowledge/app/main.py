@@ -699,6 +699,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             # answer was produced from.
                             "source_id": candidate.source_id,
                             "source_sha256": candidate.source_sha256,
+                            # F-570 (R10-T10-1): the span of the source this
+                            # result quotes, on the ITEM. The same values live
+                            # inside `citation` below, but a consumer that
+                            # rebuilds its own item from scratch can only carry
+                            # what the item declares -- so the identity that
+                            # makes a citation re-verifiable was unreachable
+                            # one hop after this route published it. Both are
+                            # nullable: a PDF row has pages and no lines.
+                            "line_end": candidate.line_end,
+                            "line_start": candidate.line_start,
+                            "page_start": candidate.page_start,
+                            "page_end": candidate.page_end,
                             "canonical_topics": list(candidate.canonical_topics),
                             "dense_score": None if candidate.dense_distance is None else 1.0 - candidate.dense_distance,
                             "fts_score": candidate.fts_score,
@@ -715,9 +727,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 # re-verified by re-hashing the source.
                                 "source_id": candidate.source_id,
                                 "source_sha256": candidate.source_sha256,
+                                    "line_end": candidate.line_end,
                                 "line_start": candidate.line_start,
-                                "line_end": candidate.line_end,
-                                "page_start": candidate.page_start,
+                            "page_start": candidate.page_start,
                                 "page_end": candidate.page_end,
                                 "bbox": (
                                     list(candidate.bbox)
@@ -851,6 +863,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "title": record.title,
             "text": record.text,
             "heading_path": list(record.heading_path),
+            # F-570 (R10-T10-1): the span, on the item, so a consumer that
+            # rebuilds the item can forward it.
+            "line_start": record.line_start,
+            "line_end": record.line_end,
+            "page_start": record.page_start,
+            "page_end": record.page_end,
             "citation": citation,
         }
         return {
@@ -884,6 +902,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "source_type": record.source_type,
             "title": record.title,
             "text": record.text,
+            # F-570 (R10-T10-1): the citation route publishes the same span on
+            # its item, not only inside `citation_block`.
+            "line_start": record.line_start,
+            "line_end": record.line_end,
+            "page_start": record.page_start,
+            "page_end": record.page_end,
             "citation": citation,
             "citation_block": {
                 "source_path": record.source_path,
