@@ -78,6 +78,8 @@ function craftReport(cases) {
   const body = cases
     .map((entry) => {
       const attributes = `name="${entry.name}" time="0.1" classname="test" file="${path.join(REPO, entry.lane)}"`;
+      if (entry.failed)
+        return `\t<testcase ${attributes}>\n\t\t<failure message="crafted"/>\n\t</testcase>`;
       if (!entry.skipped) return `\t<testcase ${attributes}/>`;
       return `\t<testcase ${attributes}>\n\t\t<skipped type="skipped" message="crafted"/>\n\t</testcase>`;
     })
@@ -227,7 +229,12 @@ unexplained-skip refusal",
   );
 });
 
-test("F-197: the gate passes a run that matches the declarations", () => {
+/**
+ * A case set that matches every declaration: each declared lane contributes a
+ * skipped case exactly when its family may skip, and every undeclared lane
+ * contributes a pass. This is the baseline a defect is injected into.
+ */
+function matchingCases() {
   const cases = [];
   for (const family of families) {
     for (const lane of lanesOf(family)) {
@@ -238,9 +245,6 @@ test("F-197: the gate passes a run that matches the declarations", () => {
       });
     }
   }
-  // Every lane of the repository contributes a case: a lane that did not run
-  // is a refusal of its own, so a report that leaves one out must not be
-  // able to claim to match the declarations.
   for (const lane of laneList()) {
     if (cases.some((entry) => entry.lane === lane)) continue;
     cases.push({
@@ -249,13 +253,42 @@ test("F-197: the gate passes a run that matches the declarations", () => {
       skipped: false,
     });
   }
-  const result = verdict(cases);
+  return cases;
+}
+
+test("F-197: the gate passes a run that matches the declarations", () => {
+  const result = verdict(matchingCases());
   assert.equal(
     result.code,
     0,
     `a run that matches the declarations must pass: ${result.stdout}${result.stderr}`,
   );
   assert.match(result.stdout, /SKIP EXPECTATION GATE: PASS/u);
+});
+
+test("F-492: a failed case is never counted as a pass", () => {
+  // F-492 (legacy `R9-T11-2`): a `<failure>` child used to fall through to
+  // the pass counter, so a failing case satisfied a must-run tripwire and
+  // inflated the ceiling denominator. The report otherwise matches every
+  // declaration, so the only thing the gate can refuse is the failure.
+  const cases = matchingCases();
+  const failed = cases.find(
+    (entry) => entry.lane === lanesOf(mustRunFamily)[0],
+  );
+  assert.ok(failed, "the must-run family must own a lane");
+  failed.failed = true;
+
+  const result = verdict(cases);
+  assert.notEqual(
+    result.code,
+    0,
+    `a failed case must refuse the gate: ${result.stdout}${result.stderr}`,
+  );
+  assert.match(
+    result.stderr,
+    /failed or errored/u,
+    `the refusal must name the failed case: ${result.stderr}`,
+  );
 });
 
 test("F-197: the gate refuses a lane that did not run at all", () => {

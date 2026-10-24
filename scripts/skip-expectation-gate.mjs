@@ -22,6 +22,16 @@
 // The gate never lowers a declared expectation to make a run pass: an
 // expectation changes only in the same commit that explains why.
 //
+// F-492 (legacy `R9-T11-2`): a JUnit case has three states this gate must tell
+// apart — passed, skipped, and failed/errored. A `<failure>` or `<error>`
+// child used to fall through to the pass counter, so a failed case satisfied
+// the must-run tripwire and inflated the ceiling denominator. Failures are
+// now their own count and are refused on every host. The fourth shape the
+// register also names — a childless `<testcase>` that returns before any
+// assertion — is NOT distinguishable in this report: Node's junit reporter
+// emits no assertion count and no child for it, so it is byte-identical to a
+// genuine pass. That limitation is recorded rather than guessed at.
+//
 // Usage: node scripts/skip-expectation-gate.mjs <junit-report> [--json]
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
@@ -113,11 +123,14 @@ function attributesOf(text, from) {
 }
 
 /**
- * The report's cases: the lane file and whether the case was skipped.
+ * The report's cases: the lane file and whether the case was skipped or
+ * failed/errored.
  *
  * The JUnit report is XML, and this gate reads it without an XML dependency:
- * a `<testcase>` element carries the lane in its `file` attribute, and a
- * skipped case carries a `<skipped/>` child.
+ * a `<testcase>` element carries the lane in its `file` attribute, a skipped
+ * case carries a `<skipped/>` child, and a failed or errored case carries a
+ * `<failure>`/`<error>` child. A case that carries neither is treated as a
+ * pass; the childless zero-assertion shape is indistinguishable here (F-492).
  */
 function reportCases(xml) {
   const cases = [];
@@ -126,12 +139,14 @@ function reportCases(xml) {
     const start = match.index + match[0].length;
     const { attributes, end, selfClosing } = attributesOf(xml, start);
     let skipped = false;
+    let failed = false;
     if (!selfClosing) {
       const close = xml.indexOf("</testcase>", end);
       const body = xml.slice(end, close === -1 ? undefined : close);
+      failed = /<(?:failure|error)\b/u.test(body);
       skipped = /<skipped\b/u.test(body);
     }
-    cases.push({ file: attributes.file ?? "", skipped });
+    cases.push({ file: attributes.file ?? "", skipped, failed });
   }
   return cases;
 }
@@ -167,7 +182,12 @@ function main() {
   const cases = reportCases(xml);
   const perLane = new Map();
   for (const lane of lanes) {
-    perLane.set(lane, { passes: 0, skips: 0, family: familyOfLane(lane) });
+    perLane.set(lane, {
+      passes: 0,
+      skips: 0,
+      failures: 0,
+      family: familyOfLane(lane),
+    });
   }
   for (const testCase of cases) {
     const lane = laneOf(testCase.file);
@@ -175,9 +195,11 @@ function main() {
     const entry = perLane.get(lane) ?? {
       passes: 0,
       skips: 0,
+      failures: 0,
       family: null,
     };
-    if (testCase.skipped) entry.skips += 1;
+    if (testCase.failed) entry.failures += 1;
+    else if (testCase.skipped) entry.skips += 1;
     else entry.passes += 1;
     perLane.set(lane, entry);
   }
@@ -196,6 +218,17 @@ function main() {
 skip family: the skip is unexplained`,
       );
     }
+  }
+
+  // A failed or errored case is never a pass, on any host. It cannot satisfy
+  // the must-run tripwire, it cannot inflate a ceiling denominator, and the
+  // gate must not publish "N passed" over it (F-492).
+  for (const [lane, entry] of perLane) {
+    if (entry.failures === 0) continue;
+    failures.push(
+      `the lane \`${lane}\` contributed ${entry.failures} failed or errored case(s): ` +
+        "a failure is not a pass, a skip, or execution evidence",
+    );
   }
 
   // A lane that declares a family the TABLE does not know is just as
@@ -220,7 +253,7 @@ expectation table does not: its skips are counted against nothing`,
   // against lanes it never meant to run.
   if (process.env.CI) {
     for (const [lane, entry] of perLane) {
-      if (entry.passes === 0 && entry.skips === 0) {
+      if (entry.passes === 0 && entry.skips === 0 && entry.failures === 0) {
         failures.push(
           `the lane \`${lane}\` contributed no case at all: it did not run, so \
 its skips are counted against nothing`,
@@ -235,15 +268,18 @@ its skips are counted against nothing`,
     );
     let passes = 0;
     let skips = 0;
+    let failed = 0;
     for (const [, entry] of members) {
       passes += entry.passes;
       skips += entry.skips;
+      failed += entry.failures;
     }
     report.push({
       id: family.id,
       lanes: members.length,
       passes,
       skips,
+      failed,
       expectation: family.expectation,
       maxSkips: family.maxSkips ?? 0,
     });
@@ -278,8 +314,8 @@ most ${family.maxSkips ?? 0} on the CI runner: ${family.reason}`,
 
   const lines = report.map(
     (family) =>
-      `  ${family.id}: ${family.passes} passed, ${family.skips} skipped \
-(${family.expectation}, at most ${family.maxSkips})`,
+      `  ${family.id}: ${family.passes} passed, ${family.skips} skipped, \
+${family.failed} failed (${family.expectation}, at most ${family.maxSkips})`,
   );
   if (process.argv.includes("--json")) {
     process.stdout.write(`${JSON.stringify({ report, failures }, null, 2)}\n`);
