@@ -534,7 +534,13 @@ function hasForbiddenControlByte(text) {
 async function validateVersion(directory, parts, errors, records, count) {
   const relativeDirectory = skillPath(parts);
   const entries = await readdir(directory, { withFileTypes: true });
-  const names = entries.map((entry) => entry.name).sort(compareStrings);
+  const names = entries
+    .map((entry) => entry.name)
+    // M12/T9-R4 F-410: the writer's own temp file is not directory content.
+    // It is reported as RESIDUE (and swept under the writer lock), so the
+    // exactly-two-entries rule below still binds every other entry.
+    .filter((name) => !isWriterTempFile(name))
+    .sort(compareStrings);
   if (names.includes("manifest.json")) {
     count.value += 1;
     if (count.value > 1000)
@@ -748,6 +754,18 @@ async function walk(directory, parts, errors, records, count, residue) {
   const isVersion =
     VERSION.test(currentName) && parts.length >= 3 && parts.length <= 10;
   if (isVersion) {
+    // M12/T9-R4 F-410: a killed writer's `*.tmp-*` file lives INSIDE a live
+    // version directory, so it cannot be reported by the sibling grammar
+    // below. It is residue all the same: the scanner ignores it in
+    // `validateVersion` and names it here so the writer's sweep removes it.
+    for (const entry of entries) {
+      if (isWriterTempFile(entry.name)) {
+        residue.push({
+          path: skillPath([...parts, entry.name]),
+          parts: [...parts, entry.name],
+        });
+      }
+    }
     await validateVersion(directory, parts, errors, records, count);
     return;
   }
@@ -973,17 +991,56 @@ function writerError(code, message, details = []) {
   throw error;
 }
 
-async function writeFileAtomic(filePath, bytes) {
+/**
+ * M12/T9-R4 F-410: the writer owns the residue it creates.
+ *
+ * `open()` creates the temp file before the write, the fsync and the rename;
+ * every one of those can fail (a killed process, a host that refuses the
+ * rename), and the old finally only closed the handle. The file therefore
+ * survived beside its target — and the version-directory validation demanded
+ * exactly two entries, so one interrupted write turned into a store-wide
+ * `VERSION_DIRECTORY_CONTENT_INVALID` refusal that no shipped command could
+ * repair. The unlink runs on every failure path; the original fault is what
+ * the caller is told about, never the cleanup.
+ */
+export async function writeFileAtomic(filePath, bytes) {
   await mkdir(path.dirname(filePath), { recursive: true });
   const tmp = `${filePath}.tmp-${process.pid}-${Date.now()}-${randomBytes(4).toString("hex")}`;
-  const handle = await open(tmp, "w");
   try {
-    await handle.writeFile(bytes);
-    await handle.sync();
-  } finally {
-    await handle.close();
+    const handle = await open(tmp, "w");
+    try {
+      await handle.writeFile(bytes);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await rename(tmp, filePath);
+  } catch (error) {
+    try {
+      await rm(tmp, { force: true });
+    } catch {
+      /* the residue cleanup is best effort; the original fault is the report */
+    }
+    throw error;
   }
-  await rename(tmp, filePath);
+}
+
+/** The names `writeFileAtomic` can leave beside its target. */
+const WRITER_TEMP_TARGETS = new Set(["SKILL.md", "manifest.json"]);
+
+/**
+ * M12/T9-R4 F-410: whether `name` is a temp file THIS writer produces.
+ *
+ * The grammar is the writer's own — a canonical target name, the `.tmp-`
+ * marker, and the `<pid>-<ms>-<8 hex>` suffix `writeFileAtomic` appends — so a
+ * directory entry the writer cannot have created (`notes.tmp-1-2-abcdef12`) is
+ * still diagnosed. Anything wider would let a malformed sibling hide.
+ */
+function isWriterTempFile(name) {
+  const marker = ".tmp-";
+  const at = name.indexOf(marker);
+  if (at <= 0 || !WRITER_TEMP_TARGETS.has(name.slice(0, at))) return false;
+  return /^[0-9]+-[0-9]+-[0-9a-f]{8}$/u.test(name.slice(at + marker.length));
 }
 
 function stagingName(version) {
@@ -1243,6 +1300,14 @@ async function healWriterResidue(skillsRoot, parentDir, versionDir) {
   try {
     const info = await lstat(versionDir);
     if (!info.isDirectory() || info.isSymbolicLink()) return;
+    // M12/T9-R4 F-410: a killed writer leaves `<target>.tmp-*` BESIDE a live
+    // pair, not beside the version directories, so the sibling sweep above
+    // never sees it. The scanner now ignores that name and reports it as
+    // residue; the heal of the version being promoted into clears it here.
+    for (const entry of await readdir(versionDir)) {
+      if (isWriterTempFile(entry))
+        await rm(path.join(versionDir, entry), { force: true });
+    }
     // The scanner recognizes only a complete pair, so an incomplete pair is
     // residue by the same argument that makes staging residue non-canonical —
     // whichever of the two members is the missing one. Judging only
