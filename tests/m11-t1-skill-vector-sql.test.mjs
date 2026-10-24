@@ -15,6 +15,7 @@ import {
   mkdtemp,
   mkdir,
   readFile,
+  readdir,
   writeFile,
   rm,
 } from "node:fs/promises";
@@ -1007,4 +1008,77 @@ test("F-547: an unreadable published digest store refuses the apply instead of s
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+// M12/T9-R4 F-509 (R10-L05-2) — the retirement state's domain postcondition.
+//
+// Migration 004 widens BOTH CHECK constraints on `skills.catalog_index` and
+// verifies only `catalog_index_status_check`, so a surviving narrow
+// `sync_status` CHECK is recorded as applied and frozen by the digest pin:
+// PostgreSQL allows several CHECKs on one column and `DROP CONSTRAINT IF EXISTS`
+// no-ops on a name it does not find. The widened domain is then unreachable
+// while the ledger says it is migrated.
+//
+// This case is STATIC and non-skippable on purpose: the live proof lives in
+// the `postgres` lane, whose cases may skip (F-481's ceiling), so the invariant
+// needs a lane that runs on a host with no Docker daemon. It reddens when
+// either domain assertion, or the "no OTHER narrow CHECK" guard, is removed.
+test("F-509: the retirement-state postcondition asserts both widened domains", async () => {
+  const files = (await readdir(SKILL_STORE_MIGRATIONS_DIR))
+    .filter((name) => name.endsWith(".sql"))
+    .sort();
+  const texts = await Promise.all(
+    files.map((name) =>
+      readFile(path.join(SKILL_STORE_MIGRATIONS_DIR, name), "utf8"),
+    ),
+  );
+
+  // One verification unit has to carry BOTH domains. A status-only block next
+  // to a sync-only block would pass a per-file reading and still leave the
+  // asymmetry the row measured.
+  const covering = texts.find((text) => {
+    const blocks = text.match(/DO \$\$[\s\S]*?END \$\$;/gu) ?? [];
+    return blocks.some(
+      (block) =>
+        block.includes("%DEPRECATED%") && block.includes("%TOMBSTONED%"),
+    );
+  });
+  assert.ok(
+    covering,
+    "some migration must verify BOTH widened domains (DEPRECATED on status, TOMBSTONED on sync_status) in one block",
+  );
+  const block = (covering.match(/DO \$\$[\s\S]*?END \$\$;/gu) ?? []).find(
+    (item) => item.includes("%TOMBSTONED%"),
+  );
+
+  // The predicate must select by constraint TYPE and TABLE, not by one
+  // predicted name: a hand-named narrow CHECK is exactly what the name-keyed
+  // check in 004 cannot see.
+  assert.match(
+    block,
+    /con\.contype\s*=\s*'c'/u,
+    "the postcondition must select CHECK constraints by contype",
+  );
+  assert.match(
+    block,
+    /con\.conrelid/u,
+    "the postcondition must scope to the table by conrelid",
+  );
+  assert.ok(
+    !/con\.conname\s*=\s*'catalog_index_sync_status_check'/u.test(block),
+    "the sync_status half must not be keyed on one predicted constraint name",
+  );
+
+  // The guard that closes the documented harm: ANOTHER CHECK on sync_status
+  // may not omit TOMBSTONED.
+  assert.match(
+    block,
+    /NOT LIKE '%TOMBSTONED%'/u,
+    "the postcondition must count the OTHER CHECKs on sync_status that omit TOMBSTONED",
+  );
+  assert.match(
+    block,
+    /v_narrow_sync_checks > 0/u,
+    "the other-CHECK count must be a refusal, not a diagnostic",
+  );
 });

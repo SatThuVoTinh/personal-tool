@@ -931,3 +931,147 @@ test("M12/T9 F-391: the reclamation's order is accepted by real PostgreSQL, and 
     admin(`DROP DATABASE IF EXISTS ${dbName}`);
   }
 });
+
+// ===========================================================================
+// M12/T9-R4 F-509 (R10-L05-2) — the retirement state's postcondition, fired.
+//
+// 004 widens two CHECK constraints and verifies only the status one. The harm
+// is unreachable by the ordinary path (003 creates both unnamed, so PostgreSQL
+// auto-names them to the names 004 drops), which is why the row is LATENT: it
+// needs a database whose narrow `sync_status` CHECK carries a DIFFERENT name.
+// That is exactly what this case injects. 005 must refuse that database,
+// leaving the migration unrecorded instead of freezing an unreachable domain
+// as applied.
+//
+// The static, non-skippable half of the same invariant lives in
+// `tests/m11-t1-skill-vector-sql.test.mjs` (F-509), because this family may
+// skip (F-481's ceiling).
+// ===========================================================================
+test("F-509: a surviving narrow sync_status CHECK is refused by the postcondition", async (t) => {
+  if (!containerAvailable(t)) return;
+
+  const dbName = `m12_t9r4_f509_${createHash("sha256")
+    .update(String(Math.random()))
+    .digest("hex")
+    .slice(0, 10)}`;
+  const admin = (statement) =>
+    dockerExec([
+      "psql",
+      "-U",
+      "postgres",
+      "-d",
+      "postgres",
+      "--set=ON_ERROR_STOP=1",
+      "-t",
+      "-A",
+      "-c",
+      statement,
+    ]);
+  const runFile = (name, sql) =>
+    dockerExec(
+      [
+        "psql",
+        "-U",
+        "postgres",
+        "-d",
+        dbName,
+        "--set=ON_ERROR_STOP=1",
+        "-t",
+        "-A",
+        "-f",
+        "-",
+      ],
+      sql,
+    );
+  const migrationSql = (name) =>
+    readFileSync(path.join(SKILL_STORE_MIGRATIONS_DIR, name), "utf8");
+  const runSql = (sql) =>
+    String(
+      dockerExec([
+        "psql",
+        "-U",
+        "postgres",
+        "-d",
+        dbName,
+        "--set=ON_ERROR_STOP=1",
+        "-t",
+        "-A",
+        "-c",
+        sql,
+      ]).stdout ?? "",
+    ).trim();
+
+  const created = admin(`CREATE DATABASE ${dbName}`);
+  if (created.status !== 0) {
+    t.skip(
+      `could not create scratch database: ${created.stderr?.slice(0, 200)}`,
+    );
+    return;
+  }
+
+  try {
+    const schema = runFile(
+      "003_skills_vector_schema.sql",
+      migrationSql("003_skills_vector_schema.sql"),
+    );
+    if (schema.status !== 0) {
+      t.skip(
+        `pgvector/migration unavailable in container: ${(schema.stderr || "").slice(0, 300)}`,
+      );
+      return;
+    }
+
+    // The injected pre-adoption shape: the same narrow domain under a name
+    // that 004's `DROP CONSTRAINT IF EXISTS` cannot match.
+    const injected = runFile(
+      "inject",
+      "ALTER TABLE skills.catalog_index ADD CONSTRAINT hand_named_narrow_sync " +
+        "CHECK (sync_status IN ('PENDING','READY','FAILED'));\n",
+    );
+    assert.equal(
+      injected.status,
+      0,
+      `the narrow CHECK must be creatable: ${(injected.stderr || "").slice(0, 300)}`,
+    );
+
+    const widening = runFile(
+      "004_skill_retirement_state.sql",
+      migrationSql("004_skill_retirement_state.sql"),
+    );
+    assert.equal(
+      widening.status,
+      0,
+      `004 must apply over the narrow CHECK: ${(widening.stderr || "").slice(0, 300)}`,
+    );
+    assert.equal(
+      runSql(
+        `SELECT count(*) FROM pg_constraint con
+           JOIN pg_class rel ON rel.oid = con.conrelid
+           JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+          WHERE nsp.nspname = 'skills' AND rel.relname = 'catalog_index'
+            AND con.contype = 'c'
+            AND pg_get_constraintdef(con.oid) LIKE '%sync_status%'
+            AND pg_get_constraintdef(con.oid) NOT LIKE '%TOMBSTONED%';`,
+      ),
+      "1",
+      "the injected narrow CHECK must still be there: that is the state the row is about",
+    );
+
+    const verification = runFile(
+      "005_retirement_state_domain_verification.sql",
+      migrationSql("005_retirement_state_domain_verification.sql"),
+    );
+    assert.notEqual(
+      verification.status,
+      0,
+      "the postcondition must REFUSE a database that still carries a narrow sync_status CHECK",
+    );
+    assert.match(
+      `${verification.stderr ?? ""}${verification.stdout ?? ""}`,
+      /TOMBSTONED retirement state/u,
+      "the refusal must name the domain it could not prove",
+    );
+  } finally {
+    admin(`DROP DATABASE IF EXISTS ${dbName}`);
+  }
+});
