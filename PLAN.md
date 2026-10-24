@@ -68,7 +68,7 @@ operations research and simulation remain first-class capabilities.
 
 **Permanent `NOT RUN` decisions recorded in this table (owner decisions, not open work).**
 
-- **The `pdf-runtime` child suites — `apps/knowledge/pdf-runtime/tests/test_ocr_contract.py` and `test_range_contract.py` — are a permanent `NOT RUN` in every lane.** The repository policy forbids the `python-quality` job from installing the `pdf-runtime` closure (`scripts/repository-policy.mjs`: _"It must stay an explicit NOT RUN in CI rather than being installed here or implied"_), and the only other executor would be a Docker lane that no policy permits. **Compensating control:** the parent-side contract lane in `apps/knowledge/tests/test_pdf_runtime_coverage_and_deadline.py` and `apps/knowledge/tests/test_pdf_ocr_runner_contract.py` covers the same conversion-outcome, deadline-cap and reader-reap behaviour from the parent process, so the behaviour the child suite would assert is still gated — only the child's own process boundary is not. A row can no longer be closed by silently skipping that suite: `tests/repository-policy.test.mjs` asserts the policy's own rule, and `F-269`'s status records the decision here.
+- **The `pdf-runtime` child suite — `apps/knowledge/pdf-runtime/tests/test_ocr_contract.py` — is a permanent `NOT RUN` in every lane.** The repository policy forbids the `python-quality` job from installing the `pdf-runtime` closure (`scripts/repository-policy.mjs`: _"It must stay an explicit NOT RUN in CI rather than being installed here or implied"_), and the only other executor would be a Docker lane that no policy permits. **Compensating control:** the parent-side contract lane in `apps/knowledge/tests/test_pdf_runtime_coverage_and_deadline.py` and `apps/knowledge/tests/test_pdf_ocr_runner_contract.py` covers the same conversion-outcome, deadline-cap and reader-reap behaviour from the parent process, so the behaviour the child suite would assert is still gated — only the child's own process boundary is not. A row can no longer be closed by silently skipping that suite: `tests/repository-policy.test.mjs` asserts the policy's own rule, and `F-269`'s status records the decision here. The sibling `test_range_contract.py` no longer exists: `F-439` (`R9-L09-3`, commit `f2bfc01`) deleted it because it called the superseded three-argument `_docling_extract` form, could never be collected (it imports the uninstalled docling closure), and its own claim that a parent lane ran the same path was false; the surviving arity pin lives in `apps/knowledge/tests/test_pdf_runtime.py`. Its range-materialization coverage is gone rather than relocated — the deleted lines never executed, so no gate lost a passing assertion, and the row is the record of that.
 - **The R16 apply rehearsal is a permanent `NOT RUN` on every lane that cites it.** `tests/m8-t2.13-r16-apply-rehearsal.test.mjs` now declares the reason it cannot start ("the R16 apply rehearsal runs only inside the private mount namespace the rehearsal driver creates, and this platform has no live runtime to clone") and the number of rehearsal-gated cases is declared and machine-checked, so a reader can no longer mistake a skipped gate for a green one.
 
 ## 4. Current focus
@@ -8104,14 +8104,14 @@ force-push, no PR/merge/release.
 - R3 is archived at `docs/contracts/execution/archive/2026-10-21-M12-T9-R3.md`.
 - R4 is materialized at `docs/contracts/execution/ACTIVE.md`; this block is its
   lifecycle pointer.
-- 25 of the 189 scoped rows are closed with red/green and mutation evidence:
+- 30 of the 189 scoped rows are closed with red/green and mutation evidence:
   `F-523`, `F-524`, `F-437`, `F-438`, `F-408`, `F-414`, `F-464`, `F-465`,
   `F-466`, `F-473`, `F-442`, `F-444`, `F-533`, `F-427`, `F-428`, `F-429`,
   `F-450`, `F-455`, `F-451`, `F-452`, `F-453`, `F-511`, `F-467`, `F-474`,
-  `F-567`. The register now carries 198 rows (129 OPEN + 34 LATENT in scope =
-  163, 32 REFUTED, 2 BLOCKED, 1 PARTIAL). The §1 census in the register was
-  stale by the 22 earlier closures and was corrected against the file rather
-  than against its own header.
+  `F-567`, `F-517`, `F-518`, `F-441`, `F-440`, `F-439`. The register now
+  carries 193 rows (124 OPEN + 34 LATENT in scope = 158, 32 REFUTED, 2 BLOCKED,
+  1 PARTIAL). The §1 census in the register was stale by the 22 earlier closures
+  and was corrected against the file rather than against its own header.
 - The evidence floor is dispositioned: `F-467` (`8de5340`), `F-474`+`F-567`
   (one recorded merge, `7c6571b`) and `F-492`'s failed/errored half (`7e13dcb`)
   are green with red-before and a mutation probe reverted in person. `F-492`
@@ -8123,6 +8123,19 @@ force-push, no PR/merge/release.
   `tests/skip-expectation-gate.test.mjs` does not exist. Owner decision needed:
   re-scope the criterion to the two observable states, or name the signal.
   `F-481` stays `OPEN` per the 2026-10-24 decision above.
+- B5's PDF lane (Wave 1, `w1-kb-pdf`) closed five rows with red-before and a
+  probe reverted in person: `F-517` (`800dc47`), `F-518` (`5ee59bc`), `F-441`
+  (`ef408d6`), `F-440` (`317a056`), `F-439` (`f2bfc01`). The Knowledgebase lane
+  is 218 passed / 17 skipped / 24 subtests after integration, and the two probes
+  the lead re-ran here were the F-440 stat (1 failed / 17 passed) and the F-441
+  arm split (1 failed / 1 passed / 4 POSIX-skipped). Two findings the lane
+  raised are recorded rather than fixed: `F-440`'s refusal now surfaces at
+  discovery without a `source_path` and, on `FULL_REBUILD`, fails the run before
+  any PDF is built — loud, but one oversized file blocks the others; and the
+  child range suite's range-materialization coverage is gone rather than
+  relocated (its lines never executed, so no passing assertion was lost).
+  `F-443`, `F-512` and `F-550` stay open: their sites are in
+  `app/database.py` / `app/index_lifecycle.py`, outside that lane's write scope.
 - The band that had already merged without its closeout (`F-464`/`F-465`/
   `F-466`/`F-473` from B4, `F-442`/`F-444` from B5) was re-measured at this HEAD
   before its rows were deleted: the artifact/Excel lane is 8/8, the knowledge
