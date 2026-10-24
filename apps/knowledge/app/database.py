@@ -276,6 +276,12 @@ class SegmentRecord:
     page_end: int | None
     bbox: tuple[float, float, float, float] | None
     indexed_by_run_id: str
+    # F-573 (R10-T10-4): the index this citation resolved against, and the
+    # ordinal that survives a reindex. `id` is a surrogate the source row's
+    # ON DELETE CASCADE destroys, so (index, source revision, ordinal) is the
+    # identity a caller can re-derive a segment from.
+    index_status: str | None = None
+    chunk_ordinal: int | None = None
 
 
 class ActiveIndexChangedError(RuntimeError):
@@ -1698,17 +1704,21 @@ class KnowledgeDatabase:
             SELECT segments.id::text, segments.index_id::text, segments.source_id::text,
                    segments.source_path, segments.title, segments.text, segments.heading_path,
                    segments.primary_topic, segments.canonical_topics, segments.tags,
-                   segments.segment_type, segments.line_start, segments.line_end,
+                   segments.segment_type, segments.chunk_ordinal,
+                   segments.line_start, segments.line_end,
                    segments.page_start, segments.page_end, segments.bbox,
                    segments.indexed_by_run_id::text,
                    sources.sha256 AS content_identity_digest,
                    builds.pdf_digest AS pdf_digest,
                    sources.source_type AS source_type,
-                   sources.mime_type AS source_mime_type
+                   sources.mime_type AS source_mime_type,
+                   indexes.status AS index_status
             FROM knowledge.segments
             JOIN knowledge.sources
               ON knowledge.sources.id = segments.source_id
              AND knowledge.sources.index_id = segments.index_id
+            JOIN knowledge.indexes
+              ON knowledge.indexes.id = segments.index_id
             LEFT JOIN knowledge.pdf_content_builds builds
               ON builds.content_identity_digest = sources.sha256
              AND sources.source_type = 'PDF'
@@ -1751,6 +1761,12 @@ class KnowledgeDatabase:
                 else None
             ),
             indexed_by_run_id=str(row["indexed_by_run_id"]),
+            # F-573 (R10-T10-4): a superseded index still resolves -- the
+            # citation is already durable -- but the reader now says which
+            # index it resolved against instead of leaving the caller to
+            # assume it is the live one.
+            index_status=str(row["index_status"]),
+            chunk_ordinal=int(row["chunk_ordinal"]),
         )
 
     async def set_discovered(self, run_id: str, discovered: int) -> None:

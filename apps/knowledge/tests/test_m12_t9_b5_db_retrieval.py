@@ -104,6 +104,7 @@ def segment_row(**overrides: object) -> dict[str, object]:
         "tags": [],
         "segment_type": "PDF_PASSAGE",
         "chunk_ordinal": 0,
+        "index_status": "ACTIVE",
         "line_start": None,
         "line_end": None,
         "page_start": 1,
@@ -219,6 +220,64 @@ class PublishedSourceDigestTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(digests, {})
         self.assertEqual(connection.calls, [])
+
+
+class CitationIndexLivenessTests(unittest.IsolatedAsyncioTestCase):
+    """F-573 (R10-T10-4): a citation says which index it resolves against.
+
+    The search path filters `knowledge.indexes.status = 'ACTIVE'` while the
+    citation loader joined only `segments` to `sources`, so a citation issued
+    against an index that has since been superseded resolved normally with no
+    field saying so, and the payload carried nothing but a surrogate row id --
+    which a reindex destroys -- so a caller could not re-derive the segment.
+    """
+
+    async def test_the_reader_reports_the_index_status_it_resolved_against(
+        self,
+    ) -> None:
+        row = segment_row(index_status="SUPERSEDED")
+        connection = FakeConnection(fetchrows=[row])
+        database = database_with(connection)
+
+        record = await database.get_segment(str(row["id"]))
+
+        self.assertIsNotNone(record)
+        assert record is not None
+        self.assertEqual(record.index_status, "SUPERSEDED")
+        statement = statements(connection, "fetchrow")[0]
+        self.assertIn("knowledge.indexes", statement)
+
+    async def test_an_active_index_is_reported_as_active(self) -> None:
+        row = segment_row(index_status="ACTIVE")
+        connection = FakeConnection(fetchrows=[row])
+        database = database_with(connection)
+
+        record = await database.get_segment(str(row["id"]))
+
+        assert record is not None
+        self.assertEqual(record.index_status, "ACTIVE")
+
+    async def test_the_reader_returns_the_chunk_ordinal_a_reindex_needs(
+        self,
+    ) -> None:
+        """`segment_id` is a surrogate a reindex destroys.
+
+        The identity that survives a reindex is (index, source revision, chunk
+        ordinal), so the ordinal has to travel with the citation.
+        """
+
+        row = segment_row(chunk_ordinal=7)
+        connection = FakeConnection(fetchrows=[row])
+        database = database_with(connection)
+
+        record = await database.get_segment(str(row["id"]))
+
+        assert record is not None
+        self.assertEqual(record.chunk_ordinal, 7)
+        self.assertEqual(record.index_id, row["index_id"])
+        self.assertEqual(record.source_sha256, FILE_DIGEST)
+        statement = statements(connection, "fetchrow")[0]
+        self.assertIn("chunk_ordinal", statement)
 
 
 if __name__ == "__main__":
