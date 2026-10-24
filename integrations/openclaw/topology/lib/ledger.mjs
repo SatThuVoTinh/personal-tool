@@ -1677,8 +1677,25 @@ function writeSnapshotAtomic(paths, snapshot) {
     if (
       process.platform !== "win32" ||
       !/^(EPERM|EISDIR|EINVAL|ENOTSUP)$/u.test(error?.code ?? "")
-    )
-      throw error;
+    ) {
+      // M12/T9-R4 F-417 (R9-T03-4): the rename above already committed the
+      // snapshot, so a directory-fsync failure here is a durability warning
+      // about the directory ENTRY, not a failed write. Rethrowing the raw errno
+      // told the caller the append had not happened, while the disk already
+      // held the new snapshot and the journal line that produced it - and the
+      // ledger has no in-memory copy to roll back, because every operation
+      // re-reads the snapshot under the writer lock. The classification mirrors
+      // the family's sibling (`decision-ledger.mjs`, M12/T9 F-260) so a caller
+      // can tell "the record is durable and the entry may not be" from "the
+      // write was refused", and never retries the append blind.
+      const uncertain = new Error(
+        `LEDGER_COMMIT_UNCERTAIN: the snapshot was committed but the directory entry could not be fsynced (${error?.code ?? "unknown error"})`,
+        { cause: error },
+      );
+      uncertain.code = "LEDGER_COMMIT_UNCERTAIN";
+      uncertain.committed = true;
+      throw uncertain;
+    }
   }
 }
 

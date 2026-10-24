@@ -316,3 +316,310 @@ try {
     `the fsync after the rename must be applied to the PARENT DIRECTORY handle (${observed.fsyncedPath}), not to the file handle`,
   );
 });
+
+// F-417 (R9-T03-4) — the ERROR POLICY of that directory fsync.
+//
+// The lane above proves the fsync happens. This proves what happens when it
+// FAILS after the rename already committed the record. On win32 the tolerated
+// error class is swallowed, so the only way to drive the non-tolerated branch
+// deterministically — on any host — is to raise it, which is what the observed
+// `node:fs` patch below does: it fails the FIRST fsync that follows a rename
+// with `EIO`, exactly the POSIX fault the row describes. Patching through the
+// CJS `node:fs` object BEFORE the module under test is imported is the same
+// mechanism the runtime proof above already uses, because a named ESM import of
+// a builtin binds the value the facade was built from.
+const POST_RENAME_FAULT_PRELUDE = `
+import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
+const require = createRequire(${JSON.stringify(import.meta.url)});
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const calls = [];
+let renamed = false;
+let armed = false;
+const realRename = fs.renameSync;
+fs.renameSync = function (...args) {
+  calls.push({ kind: "rename", path: String(args[1]) });
+  renamed = true;
+  return realRename.apply(fs, args);
+};
+const realUnlink = fs.unlinkSync;
+fs.unlinkSync = function (...args) {
+  calls.push({ kind: "unlink", path: String(args[0]), afterRename: renamed });
+  return realUnlink.apply(fs, args);
+};
+const realReadFileSync = fs.readFileSync;
+fs.readFileSync = function (...args) {
+  calls.push({
+    kind: "read",
+    path: typeof args[0] === "string" ? args[0] : null,
+    afterRename: renamed,
+  });
+  return realReadFileSync.apply(fs, args);
+};
+const realFsync = fs.fsyncSync;
+fs.fsyncSync = function (fd) {
+  // One-shot: it fires on the first fsync that follows a rename while armed,
+  // which is the directory fsync of the write being measured, and leaves every
+  // later write alone so the SAME instance can be driven again afterwards.
+  if (armed && renamed) {
+    armed = false;
+    const error = new Error("injected post-rename directory fsync failure");
+    error.code = "EIO";
+    throw error;
+  }
+  return realFsync.call(fs, fd);
+};
+const arm = () => {
+  calls.length = 0;
+  renamed = false;
+  armed = true;
+};
+const moduleUrl = (relative) =>
+  pathToFileURL(path.resolve(${JSON.stringify(REPO)}, relative)).href;
+`;
+
+test("F-417: the queue writer reports a post-rename directory-fsync failure as a committed write", () => {
+  const child = `${POST_RENAME_FAULT_PRELUDE}
+const { QueueManager } = await import(moduleUrl("integrations/openclaw/lib/queue-manager.mjs"));
+const root = fs.mkdtempSync(path.join(os.tmpdir(), "zink-f417-queue-"));
+try {
+  const storagePath = path.join(root, "task-queue.json");
+  const writer = new QueueManager({ storagePath });
+  let failure = null;
+  arm();
+  try {
+    writer.enqueueTask({
+      taskId: "t-f417",
+      planVersion: "1.0",
+      primaryCoordinator: "o1",
+      requiredCapabilities: [],
+      payload: {},
+    });
+  } catch (err) {
+    failure = {
+      message: String(err?.message ?? err),
+      code: err?.code ?? null,
+      committed: err?.committed === true,
+    };
+  }
+  const read = () =>
+    fs.existsSync(storagePath)
+      ? JSON.parse(fs.readFileSync(storagePath, "utf8")).map((i) => i.taskId)
+      : null;
+  // Counted BEFORE this child does its own read of the file, so what is counted
+  // is the writer's reload — not the measurement.
+  const writerRereads = calls.filter(
+    (call) =>
+      call.kind === "read" && call.path === storagePath && call.afterRename,
+  ).length;
+  const observed = {
+    failure,
+    writerRereads,
+    diskAfterFault: read(),
+    memoryAfterFault: [...writer.queue.keys()],
+    unlinkAfterRename: calls.filter(
+      (call) =>
+        call.kind === "unlink" &&
+        call.afterRename &&
+        call.path.includes(".tmp-"),
+    ).length,
+    residue: fs.readdirSync(root).filter((name) => name.includes(".tmp-")),
+  };
+  // The same fault on the copy-on-write mutator (_mutateWithRollback): its
+  // rollback must not put memory behind a disk that already holds the mutation.
+  const statusOf = (source) =>
+    source === "disk"
+      ? JSON.parse(fs.readFileSync(storagePath, "utf8")).find(
+          (i) => i.taskId === "t-f417",
+        )?.status
+      : writer.queue.get("t-f417")?.status;
+  arm();
+  try {
+    writer.rejectTask({
+      taskId: "t-f417",
+      actor: "user",
+      decisionRef: "msg-f417",
+    });
+  } catch (err) {
+    observed.rejectFailureCommitted = err?.committed === true;
+  }
+  observed.diskStatusAfterUncertainReject = statusOf("disk");
+  observed.memoryStatusAfterUncertainReject = statusOf("memory");
+  // The fault was a durability warning, not a refused write: the NEXT save must
+  // add to the record the disk already holds rather than erase it.
+  writer.enqueueTask({
+    taskId: "t-second",
+    planVersion: "1.0",
+    primaryCoordinator: "o1",
+    requiredCapabilities: [],
+    payload: {},
+  });
+  observed.diskAfterNextSave = read();
+  process.stdout.write(JSON.stringify(observed));
+} finally {
+  fs.rmSync(root, { recursive: true, force: true });
+}
+`;
+  const run = spawnSync(process.execPath, ["--input-type=module", "-"], {
+    input: child,
+    encoding: "utf8",
+    cwd: REPO,
+  });
+  assert.equal(
+    run.status,
+    0,
+    `the queue fault-injection child must succeed: ${run.stderr}`,
+  );
+  const observed = JSON.parse(run.stdout);
+
+  assert.notEqual(observed.failure, null, "the injected fault must be raised");
+  assert.equal(
+    observed.failure.committed,
+    true,
+    "a post-rename failure is a COMMITTED write: F-417",
+  );
+  assert.equal(
+    observed.failure.code,
+    "QUEUE_COMMIT_UNCERTAIN",
+    `the queue must name the uncertain commit instead of relabelling it as a write failure (${observed.failure.message})`,
+  );
+  assert.ok(
+    !/QUEUE_STORAGE_WRITE_FAILED/u.test(observed.failure.message),
+    `no QUEUE_STORAGE_WRITE_FAILED may be raised after the rename committed: ${observed.failure.message}`,
+  );
+
+  assert.deepEqual(
+    observed.diskAfterFault,
+    ["t-f417"],
+    "the acknowledged record survives on disk",
+  );
+  assert.equal(
+    observed.rejectFailureCommitted,
+    true,
+    "the copy-on-write mutator sees the same committed classification",
+  );
+  assert.equal(
+    observed.diskStatusAfterUncertainReject,
+    "REJECTED",
+    "the rejection the writer acknowledged is on disk",
+  );
+  assert.equal(
+    observed.memoryStatusAfterUncertainReject,
+    "REJECTED",
+    "_mutateWithRollback must not restore a pre-mutation copy behind a committed record",
+  );
+  assert.ok(
+    observed.writerRereads >= 1,
+    "the writer reloads the durable projection after an uncertain commit",
+  );
+  assert.deepEqual(
+    observed.memoryAfterFault,
+    ["t-f417"],
+    "the projection is reloaded from the disk that holds it",
+  );
+  assert.deepEqual(
+    observed.residue,
+    [],
+    "a committed rename leaves no residue",
+  );
+  assert.equal(
+    observed.unlinkAfterRename,
+    0,
+    "the temp-residue removal runs only while the temp still exists",
+  );
+  assert.deepEqual(
+    observed.diskAfterNextSave,
+    ["t-f417", "t-second"],
+    "the next save must not serialise a stale projection over the committed record",
+  );
+});
+
+test("F-417: the ledger snapshot writer reports a post-rename directory-fsync failure as a committed write", () => {
+  const child = `${POST_RENAME_FAULT_PRELUDE}
+const ledger = await import(moduleUrl("integrations/openclaw/topology/lib/ledger.mjs"));
+const { deriveTaskId } = await import(moduleUrl("integrations/openclaw/topology/lib/canonical.mjs"));
+const root = fs.mkdtempSync(path.join(os.tmpdir(), "zink-f417-ledger-"));
+try {
+  const paths = ledger.ledgerPaths(root);
+  ledger.ensureLedger(paths);
+  arm();
+  const payload = {
+    origin: "discord",
+    origin_principal_ref: "b".repeat(64),
+    origin_message_id: "12345678901234567",
+    root_agent_id: "main",
+    root_session_key: "agent:main:sess-f417",
+    root_run_id: "run-f417",
+  };
+  let failure = null;
+  try {
+    ledger.recordWorkflowEvent(paths, "WORKFLOW_OPENED", {
+      ...payload,
+      task_id: deriveTaskId(payload),
+    });
+  } catch (err) {
+    failure = {
+      message: String(err?.message ?? err),
+      code: err?.code ?? null,
+      committed: err?.committed === true,
+    };
+  }
+  const snapshot = JSON.parse(fs.readFileSync(paths.snapshot, "utf8"));
+  const observed = {
+    failure,
+    sequence: snapshot.sequence,
+    tasks: Object.keys(snapshot.tasks).length,
+    residue: fs.readdirSync(paths.root).filter((name) => name.includes(".tmp-")),
+    unlinkAfterRename: calls.filter(
+      (call) =>
+        call.kind === "unlink" &&
+        call.afterRename &&
+        call.path.includes(".tmp-"),
+    ).length,
+  };
+  renamed = false;
+  armed = false;
+  observed.reread = ledger.readSnapshot(paths).sequence;
+  process.stdout.write(JSON.stringify(observed));
+} finally {
+  fs.rmSync(root, { recursive: true, force: true });
+}
+`;
+  const run = spawnSync(process.execPath, ["--input-type=module", "-"], {
+    input: child,
+    encoding: "utf8",
+    cwd: REPO,
+  });
+  assert.equal(
+    run.status,
+    0,
+    `the ledger fault-injection child must succeed: ${run.stderr}`,
+  );
+  const observed = JSON.parse(run.stdout);
+
+  assert.notEqual(observed.failure, null, "the injected fault must be raised");
+  assert.equal(
+    observed.failure.committed,
+    true,
+    "the renamed snapshot is a COMMITTED write: F-417",
+  );
+  assert.equal(
+    observed.failure.code,
+    "LEDGER_COMMIT_UNCERTAIN",
+    `the snapshot writer must name the uncertain commit, as its sibling writer does (${observed.failure.message})`,
+  );
+  assert.equal(
+    observed.sequence,
+    1,
+    "the event the writer acknowledged is on disk",
+  );
+  assert.equal(observed.tasks, 1, "the projection advanced");
+  assert.deepEqual(
+    observed.residue,
+    [],
+    "a committed rename leaves no residue",
+  );
+  assert.equal(observed.reread, 1, "the next read sees the committed snapshot");
+});

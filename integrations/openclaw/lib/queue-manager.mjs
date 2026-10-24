@@ -410,8 +410,26 @@ export class QueueManager {
         if (
           process.platform !== "win32" ||
           !/^(EPERM|EISDIR|EINVAL|ENOTSUP)$/u.test(error?.code ?? "")
-        )
-          throw error;
+        ) {
+          // M12/T9-R4 F-417 (R9-T03-4): the rename ABOVE already committed the
+          // record, so this is a durability warning about the directory entry,
+          // not a failed write. It used to be rethrown and relabelled as
+          // `QUEUE_STORAGE_WRITE_FAILED` by the catch below, whose residue
+          // cleanup then ran against a temp the rename had already moved away
+          // and whose caller rolled its in-memory projection back BEHIND a disk
+          // that held the newer record. The sibling writer in this family
+          // (`decision-ledger.mjs`, M12/T9 F-260) already classifies the
+          // identical fault as a committed-but-uncertain commit; the queue now
+          // does the same, and the catch below reloads the projection from the
+          // disk that holds it.
+          const uncertain = new Error(
+            `QUEUE_COMMIT_UNCERTAIN: the record was committed but the directory entry could not be fsynced (${error?.code ?? "unknown error"})`,
+            { cause: error },
+          );
+          uncertain.code = "QUEUE_COMMIT_UNCERTAIN";
+          uncertain.committed = true;
+          throw uncertain;
+        }
       }
       this._projectionVersion = nextProjectionVersion;
     } catch (err) {
@@ -423,9 +441,18 @@ export class QueueManager {
         }
       }
       // Closed first, so the removal can succeed on Windows as well as POSIX.
-      // Only ever a temp this process created: an `EEXIST` refusal is someone
-      // else's file, and deleting it would turn a refusal into a side effect.
-      if (tempIsOurs) removeWriterResidue(temp);
+      // Only ever a temp this process created, and only while it is still
+      // there: F-417 — after the rename the temp name is gone, and an unlink
+      // aimed at a path this writer no longer created is a side effect, not a
+      // cleanup.
+      if (tempIsOurs && existsSync(temp)) removeWriterResidue(temp);
+      if (err?.committed === true) {
+        // F-417: the record IS on disk. Reload the projection so memory and
+        // disk agree again, and report the uncertain commit under its own name
+        // instead of relabelling it as a refused write.
+        this.load();
+        throw err;
+      }
       throw new Error(`QUEUE_STORAGE_WRITE_FAILED: ${err?.message}`, {
         cause: err,
       });
@@ -499,6 +526,13 @@ export class QueueManager {
       } catch (err) {
         // A failed durable write must not leave an in-memory task that was never
         // committed to the authoritative queue projection.
+        //
+        // F-417: a COMMITTED-but-uncertain write is not that case. The rename
+        // landed, `save()` reloaded the projection from the disk that holds it,
+        // and restoring the pre-write item here would put memory behind disk
+        // again — which is exactly the state the next successful save used to
+        // serialise over the record the disk already had.
+        if (err?.committed === true) throw err;
         if (previousItem) {
           this.queue.set(taskId, previousItem);
         } else {
@@ -661,10 +695,17 @@ export class QueueManager {
       this.save();
       return result;
     } catch (err) {
-      if (snapshot === undefined) {
-        this.queue.delete(taskId);
-      } else {
-        this.queue.set(taskId, snapshot);
+      // M12/T9-R4 F-417 (R9-T03-4): a COMMITTED-but-uncertain durable write is
+      // not a failed one. The rename landed, `save()` reloaded the projection
+      // from the disk that holds it, and restoring the pre-mutation copy here
+      // would put memory behind disk again — the state the next successful save
+      // used to serialise over the committed record.
+      if (err?.committed !== true) {
+        if (snapshot === undefined) {
+          this.queue.delete(taskId);
+        } else {
+          this.queue.set(taskId, snapshot);
+        }
       }
       throw err;
     }
