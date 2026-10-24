@@ -135,12 +135,27 @@ test("R21-05: the knowledge rerank pool is wider than the page", () => {
     /min\(MAX_RERANK_CANDIDATES,\s*request\.limit\)/u,
     "the rerank pool must not be clamped to the page size",
   );
-  const assignments =
-    code.match(/candidate_limit = MAX_RERANK_CANDIDATES/gu) || [];
+  // F-514 (R10-L07-3) hoisted the `candidate_limit` binding out of the two
+  // branches so the ceiling could be measured once over the whole fused set, and
+  // the count above reddened over a refactor that left both cuts intact: it
+  // policed the source's shape, not the control. What the row requires is that
+  // EACH branch cuts the pool by the constant and neither cuts it by the page.
+  const poolCuts =
+    code.match(/fused_candidates = fused_pool\[:candidate_limit\]/gu) || [];
   assert.equal(
-    assignments.length,
+    poolCuts.length,
     2,
-    "both the reranked and the non-reranked branch must use the pool constant",
+    "both the reranked and the non-reranked branch must cut the pool by the candidate constant",
+  );
+  assert.match(
+    code,
+    /candidate_limit = MAX_RERANK_CANDIDATES/u,
+    "the bound the branches cut by must be the pool constant",
+  );
+  assert.doesNotMatch(
+    code,
+    /fused_candidates = fused_pool\[:request\.limit\]/u,
+    "no branch may cut the candidate pool to the page size",
   );
   // The filter must still run before the final page cut.
   const filterAt = code.indexOf("request.min_score is not None");
