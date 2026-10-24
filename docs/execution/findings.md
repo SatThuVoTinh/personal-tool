@@ -2197,19 +2197,6 @@ fix xong và đã chứng minh, nên hai loại hàng này ở lại. Dọn chú
 - Acceptance criteria: `start.ps1`, or a helper it dot-sources, refuses a missing or sentinel `POSTGRES_PASSWORD` and the `N8N_*` set before the first `up`, and the docker contract lane `tests/m5-docker-contract.test.mjs` asserts that call exists so removing it turns that lane red.
 - Related findings: sibling of closed F-266 (R7-D13-03, `CHANGELOG.md:1781-1782`, commit `9f476d0`), which fixed which variable preflight names and did not touch start.ps1's silence; same advisory-guard-on-a-mutating-path shape as OPEN F-490 · nguồn: R10 V08 — infra, CI and gates
 
-### F-524 — the Approved Plan Lock is named as binding by two skills and defined nowhere, so a routed post-approval obligation has no content and nothing that can fail on it
-
-- Category: F4 — Integration & Contract Violations
-- Legacy register id: `R10-L10-4`
-- Affected modules: Governance docs
-- Severity: Low
-- Status: OPEN — production-reachable: AGENTS.md §5 routes create/revise and architecture-review work to `planning/SKILL.md` and `architecture-review/SKILL.md`, and both name the Approved Plan Lock as the control that binds post-approval behaviour
-- Root cause: `planning/SKILL.md:23` states only that the lock applies after approval, with no rule content, while `architecture-review/SKILL.md:16-17` declares the lock's content to live in that same file; the sibling artifact named in the same sentence, the Owner Decision Protocol, is genuinely defined at `planning/SKILL.md:86`, so the routing pattern is sound and only the lock was never written. `AGENTS.md` never names the lock, and no file under `scripts/` or `tests/` does either.
-- Evidence: Where: `.agents/skills/planning/SKILL.md:21-23` — before-approval freedom, then the one-sentence lock · Where: `.agents/skills/architecture-review/SKILL.md:13-17` — the routing list naming the lock and pointing at `planning/SKILL.md` · Where: `.agents/skills/planning/SKILL.md:86` — the Owner Decision Protocol heading, the defined sibling · Where: `AGENTS.md` §5 routing table and §7 RED list · Measured: `grep -rnI "Approved Plan Lock"` excluding `temp/` and `backups/` returns exactly 2 hits, both above; widening to Plan Lock, post-approval lock, plan is locked and LOCKED plan returns the same 2 hits; `AGENTS.md` 0 hits; `scripts/` and `tests/` 0 hits, so no gate can redden it.
-- Reproduction: read-only — run the two greps above and compare against the Owner Decision Protocol heading census in `planning/SKILL.md`; the lock has no heading, no rule list, no lift authority and no violation consequence anywhere in the tracked tree.
-- Acceptance criteria: either `planning/SKILL.md` gains an Approved Plan Lock heading stating what may not change after approval, who may lift it and what a violation maps to (naming the AGENTS.md §7 RED list), or `architecture-review/SKILL.md:16` stops naming it and points at the enforcing text; a shipped case requiring every artifact named across skills to exist as a heading in the owning skill turns red on the current tree and green after either fix.
-- Related findings: distinct from F-458, F-483 and F-496, which bind `conventions.md` prose to YAML and never touch `.agents/skills/` · the legacy `AGENTS.md:3` aliasing row covers a different sentence of the same file family · nguồn: R10 V09 — skill routing census at HEAD
-
 ### F-525 — the junction-escape case calls root-level `test.skip()` inside its own body, so the escape case is counted a pass while its four containment asserts never run
 
 - Category: F7 — Testing & Verification Gaps
