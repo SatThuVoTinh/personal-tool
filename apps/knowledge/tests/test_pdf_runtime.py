@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import ast
 import hashlib
 import importlib.util
 import json
@@ -10,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -29,6 +31,34 @@ from app.pdf_runtime import (
     processing_identity_for_runtime,
     verify_runtime_probe,
 )
+
+
+# F-517 (R10-L08-1): the three immutable snapshot revisions are DATA here and
+# the downloader must declare exactly this mapping. The pin used to count
+# 40-hex shapes anywhere in the file, so a swapped revision kept every gate
+# green while the manifest attested a revision the image did not carry.
+EXPECTED_MODEL_REVISIONS = {
+    "docling-project/docling-layout-heron": "8f39ad3c0b4c58e9c2d2c84a38465abf757272d8",
+    "docling-project/docling-layout-heron-onnx": "40bde044036bb181c130ddf6c51792187268748f",
+    "docling-project/docling-models": "fc0f2d45e2218ea24bce5045f58a389aed16dc23",
+}
+EXPECTED_TOKENIZERS_VERSION = "0.22.2"
+
+
+def _declared_model_revisions(source: str) -> dict[str, str]:
+    """The MODEL_REVISIONS mapping exactly as the downloader declares it."""
+
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "MODEL_REVISIONS"
+            for target in node.targets
+        ):
+            assert isinstance(node.value, ast.Dict)
+            return {
+                key.value: value.value
+                for key, value in zip(node.value.keys, node.value.values)
+            }
+    raise AssertionError("download_models.py declares no MODEL_REVISIONS mapping")
 
 
 class ParentIsolationTests(unittest.TestCase):
@@ -93,13 +123,25 @@ class IsolatedLockContractTests(unittest.TestCase):
             '"transformers==5.15.1"',
         ):
             self.assertIn(requirement, project)
-        self.assertIn('name = "tokenizers"', lock)
-        self.assertIn('version = "0.22.2"', lock)
+        # F-517 (R10-L08-1): the two assertions below were independent
+        # substrings, so a second package carrying 0.22.2 satisfied the
+        # version half while the tokenizers block said anything. The parsed
+        # lock names the block.
+        tokenizers = [
+            entry
+            for entry in tomllib.loads(lock)["package"]
+            if entry["name"] == "tokenizers"
+        ]
+        self.assertEqual(len(tokenizers), 1, "the lock must carry one tokenizers package")
+        self.assertEqual(tokenizers[0]["version"], EXPECTED_TOKENIZERS_VERSION)
         self.assertNotRegex(lock.casefold(), r'name = "(?:nvidia|cuda|rocm|xpu)')
         for package in ("docling", "docling-core", "torch", "torchvision", "transformers"):
             self.assertRegex(requirements, rf"(?m)^{re.escape(package)}==[^\s]+.*\\$")
-        revisions = re.findall(r'"[^"]+/[^"]+": "([0-9a-f]{40})"', downloader)
-        self.assertEqual(len(revisions), 3)
+        # F-517 (R10-L08-1): three 40-hex matches satisfied the old pin, so
+        # any revision could be swapped with every gate green. The mapping
+        # itself is the pin: a pair outside it, a missing model or an extra
+        # model is red.
+        self.assertEqual(_declared_model_revisions(downloader), EXPECTED_MODEL_REVISIONS)
 
     def test_the_hashed_requirements_artifact_is_pinned_and_carries_its_index(self) -> None:
         """F-340 (R7-OA-03): the artifact must be the pinned one, with its index."""
