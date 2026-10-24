@@ -8104,7 +8104,7 @@ force-push, no PR/merge/release.
 - R3 is archived at `docs/contracts/execution/archive/2026-10-21-M12-T9-R3.md`.
 - R4 is materialized at `docs/contracts/execution/ACTIVE.md`; this block is its
   lifecycle pointer.
-- 59 of the 165 scoped rows are closed with red/green and mutation evidence:
+- 60 of the 165 scoped rows are closed with red/green and mutation evidence:
   `F-523`, `F-524`, `F-437`, `F-438`, `F-408`, `F-414`, `F-464`, `F-465`,
   `F-466`, `F-473`, `F-442`, `F-444`, `F-533`, `F-427`, `F-428`, `F-429`,
   `F-450`, `F-455`, `F-451`, `F-452`, `F-453`, `F-511`, `F-467`, `F-474`,
@@ -8112,8 +8112,8 @@ force-push, no PR/merge/release.
   `F-415`, `F-410`, `F-512`, `F-573`, `F-412`, `F-413`, `F-513`, `F-458`,
   `F-483`, `F-566`, `F-482`, `F-519`, `F-509`, `F-574`, `F-133`, `F-544`,
   `F-514`, `F-516`, `F-526`, `F-527`, `F-528`, `F-550`, `F-443`, `F-570`,
-  `F-547`, `F-541`, `F-496`. The register now carries 164 rows (99 OPEN + 27
-  LATENT in scope = 126, 32 REFUTED, 3 BLOCKED, 3 PARTIAL). The §1 census in the
+  `F-547`, `F-541`, `F-496`, `F-522`. The register now carries 163 rows (98
+  OPEN + 27 LATENT in scope = 125, 32 REFUTED, 3 BLOCKED, 3 PARTIAL). The §1 census in the
   register was stale by the 22 earlier closures and was corrected against the file rather
   than against its own header; its closure total also read 419 while its own
   item list summed to 427, and is now measured from the `CHANGELOG.md` bullets.
@@ -8250,6 +8250,19 @@ null;`) left the lane 3/3 green, so that path is unproven and the shipped
   several advisories into one count (the live `markdown-it` entry carries three advisories
   at two severities and counts once), so an identity-set check is a strictly different
   predicate than the count check.
+- `F-522` (`R10-L09-6`, Low) closed in `16b973d` by giving the credential grammar one
+  carrier. The row's own defect was structural, not stylistic: `preflight.ps1` owned the
+  sentinel test and nothing invoked it, while `start.ps1` — the command `README.md` and both
+  runbooks publish — reached `docker compose up` having checked only that the env file exists.
+  `infrastructure/docker/scripts/credential-sentinels.ps1` now holds the reader, the sentinel
+  predicate and `Get-CredentialVariableNames`, and both scripts dot-source it; `preflight.ps1`
+  keeps only its knowledge-specific names on top of the carrier's list, so the
+  `F-266`-shaped drift (a per-script list) cannot come back. Two m5 pins moved with the
+  grammar rather than being duplicated: `$usesAutomation` and the `POSTGRES_PASSWORD` seed now
+  read the carrier, and a new fence refuses any entrypoint script re-declaring it.
+  `.ps1` files sit in no prettier glob and no eslint target, so the proof is PowerShell itself:
+  `Parser::ParseFile` reports zero errors on all three scripts and a harness under Windows
+  PowerShell 5.1 measured the refusals listed in `CHANGELOG.md`.
 - The Knowledge HTTP lane (`w1-kb-api`) closed two rows and left two `PARTIAL`:
   `F-514` (`df2410f`) and `F-516` (`1ebfa51`), with the Knowledgebase lane at
   251 passed / 17 skipped / 31 subtests after integration. Probes, each
