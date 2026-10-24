@@ -36,7 +36,7 @@ function makeJunction(target, link) {
   }
 }
 
-test("F-044: a workbook target under a junction inside the sandbox is refused", () => {
+test("F-044: a workbook target under a junction inside the sandbox is refused", (t) => {
   const root = mkdtempSync(path.join(os.tmpdir(), "zink-f044-"));
   const outside = path.join(root, "outside");
   const sandbox = path.join(root, "sandbox");
@@ -45,9 +45,14 @@ test("F-044: a workbook target under a junction inside the sandbox is refused", 
   const junction = path.join(sandbox, "escape");
   try {
     if (!makeJunction(outside, junction)) {
-      // The platform refuses to create a junction. The case is NOT RUN here —
-      // it must never report green.
-      test.skip(
+      // F-525 (legacy `R10-L11-1`): this used to call the ROOT-level
+      // `test.skip(name)` from inside the case body. That API registers a NEW
+      // root case and leaves the running case to hit the bare `return`, so the
+      // escape case was reported as a pass with its four containment asserts
+      // never executed, and the report gained a phantom sibling. `t.skip()`
+      // skips THIS case, which is the only honest verdict when the platform
+      // refuses the junction.
+      t.skip(
         "the platform refuses to create a directory junction, so the escape case is NOT RUN here",
       );
       return;
