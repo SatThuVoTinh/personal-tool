@@ -103,6 +103,11 @@ const FINAL_VERIFICATION_CLOSED_ROWS = 1;
  * seven status words, so filing a defect was red by construction.
  */
 const R10_GATE_CLOSED_ROWS = 1;
+/**
+ * The M12/T9-R4 rows that have left the register with their history in the
+ * changelog. Increment this when a validated R4 row is closed.
+ */
+const R4_CLOSED_ROWS = 2;
 /** Every closed row the register's §2 carried, in the changelog now. */
 const CLOSED_ROW_COUNT =
   CLOSURE_TABLE_ROWS +
@@ -117,7 +122,8 @@ const CLOSED_ROW_COUNT =
   OWNER_ANSWER_CLOSED_ROWS +
   DEPLOY_COMPLETED_CLOSED_ROWS +
   FINAL_VERIFICATION_CLOSED_ROWS +
-  R10_GATE_CLOSED_ROWS;
+  R10_GATE_CLOSED_ROWS +
+  R4_CLOSED_ROWS;
 
 /** Every closed row: "<row id> <commit token>". */
 const CLOSED_ROWS = [
@@ -613,7 +619,12 @@ const CLOSED_RELEASED_ROWS = {
 };
 
 /** The rows that are not fixed and therefore stay parked. */
-const PARKED_ROWS = ["F-045", "F-133"];
+const PARKED_ROWS = [];
+/**
+ * The last EXCLUDED rows the owner released for M12/T9-R4 on 2026-10-23.
+ * They are OPEN work now, not parked exclusions.
+ */
+const R4_RELEASED_ROWS = ["F-045", "F-133", "F-167"];
 
 /** Every `### F-xxx` block of the register, with its Status line. */
 function registerRows(markdown) {
@@ -878,6 +889,20 @@ test("the rows that are not fixed stay parked, and the refuted rows keep their m
       row.status ?? "",
       /^EXCLUDED\b/u,
       `${id} is not fixed, so it stays EXCLUDED: ${row.status}`,
+    );
+  }
+  for (const id of R4_RELEASED_ROWS) {
+    const row = rows.get(id);
+    assert.ok(row, `${id} must stay in the register`);
+    assert.match(
+      row.status ?? "",
+      /^OPEN\b/u,
+      `${id} was released for M12/T9-R4, so it is OPEN work: ${row.status}`,
+    );
+    assert.match(
+      row.status ?? "",
+      /owner/iu,
+      `${id} must record that the owner released it`,
     );
   }
   const refuted = registerRows(REGISTER_TEXT).filter((row) =>
