@@ -164,6 +164,39 @@ def _code_shaped(error: BaseException) -> str | None:
     return None
 
 
+# F-552 (R10-T06-4): one governed code, one status and one retry verdict.
+#
+# `EMBEDDING_MODEL_DRIFT` has one producer (`index_lifecycle.py`) and used to
+# have two answers: `/v1/search` raised it with 503 and `/v1/index-runs` with
+# 409, and the caller decides retry from the status integer alone -- so the
+# same permanent model swap was retried three times on one route and never on
+# the other. The table is the only place that answers "what status" and "is it
+# retryable" for a code the producer can raise; the routes look this up instead
+# of picking their own, and a code with no row here is a defect, not a fallback.
+#
+# `/readyz` is deliberately outside the table: its status is the orchestrator's
+# health signal for a service that cannot serve, not a governed refusal.
+GOVERNED_LIFECYCLE_ERRORS: dict[str, tuple[int, bool]] = {
+    # A vault the operator can bring back is transient: retry is correct.
+    "VAULT_UNAVAILABLE": (503, True),
+    "EMBEDDING_MODEL_UNAVAILABLE": (503, True),
+    "EMBEDDING_FAILED": (503, True),
+    # A provider answering the wrong vector width is a configuration fault the
+    # next attempt cannot repair, so it is reported, not retried.
+    "EMBEDDING_INVALID_DIMENSIONS": (503, False),
+    # The indexed corpus and the loaded model disagree; only the operator can
+    # resolve it, so it is a conflict and it is never retried.
+    "EMBEDDING_MODEL_DRIFT": (409, False),
+}
+
+
+def _governed_lifecycle_refusal(error: LifecycleError) -> HTTPException:
+    """The one status/refusal pair the governed table declares for this code."""
+
+    status_code, _retryable = GOVERNED_LIFECYCLE_ERRORS[error.code]
+    return HTTPException(status_code=status_code, detail={"code": error.code})
+
+
 def _reranker_error_code(error: BaseException) -> str:
     """The code a reranker failure carries, when it is one.
 
@@ -655,7 +688,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     await lifecycle.require_identity(active_index)
                 except LifecycleError as error:
                     code = error.code if error.code == "EMBEDDING_MODEL_DRIFT" else "EMBEDDING_MODEL_UNAVAILABLE"
-                    raise HTTPException(status_code=503, detail={"code": code}) from error
+                    # F-552 (R10-T06-4): the code choice stays this route's
+                    # (only drift is named, everything else is an unavailable
+                    # model), but the status is the table's, so one code cannot
+                    # answer 503 here and 409 on `/v1/index-runs`.
+                    raise HTTPException(
+                        status_code=GOVERNED_LIFECYCLE_ERRORS[code][0],
+                        detail={"code": code},
+                    ) from error
                 except (httpx.HTTPError, ModelProbeError) as error:
                     # F-515 (R10-L07-4): the arm bound the error and then threw
                     # its code away, and this route logs only inside its generic
@@ -1059,7 +1099,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 try:
                     await lifecycle.require_identity(active_index)
                 except LifecycleError as error:
-                    raise HTTPException(status_code=409 if error.code == "EMBEDDING_MODEL_DRIFT" else 503, detail={"code": error.code}) from error
+                    # F-552 (R10-T06-4): the status comes from the same table
+                    # `/v1/search` uses, so the drift code has one answer.
+                    raise _governed_lifecycle_refusal(error) from error
                 accepted = await database.accept_incremental(active_index)
             else:
                 identity = await lifecycle.resolve_configured_model()
@@ -1085,7 +1127,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise HTTPException(status_code=503, detail={"code": "SCHEDULING_FAILED"}) from error
             return IndexRunAcceptedResponse(index_run_id=accepted.id, index_id=accepted.index_id, status="RUNNING")
         except LifecycleError as error:
-            raise HTTPException(status_code=503, detail={"code": error.code}) from error
+            # F-552 (R10-T06-4): the preflight and model-resolution arms land
+            # here; their status is the table's too, not a constant.
+            raise _governed_lifecycle_refusal(error) from error
         except StateTransitionError as error:
             raise HTTPException(
                 status_code=409, detail={"code": "INDEX_STATE_TRANSITION_FAILED"}
