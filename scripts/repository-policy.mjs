@@ -140,6 +140,47 @@ const SECRET_SCAN_ALLOWED_SCOPES = [
 // row asked for.
 const SECRET_SCAN_SUPPRESSED_CEILING = 320;
 
+// The fingerprint half of the suppression record. A pattern suppresses a
+// family; a fingerprint suppresses one finding, and the finding has four
+// coordinates. The five entries below name the shipped governance plugin and
+// the shipped builder, which sit inside no recorded pattern scope, so this
+// table is the only record their suppression has.
+const SECRET_SCAN_RECORDED_FINGERPRINTS = [
+  {
+    commit: "0e5a899b4b29482a4d927480a47175a5fd3b5616",
+    file: "integrations/openclaw/plugins/zink-governance/index.mjs",
+    rule: "discord-client-id",
+    line: "3647",
+  },
+  {
+    commit: "01489aa996aef7ab04789ba3bb08dcd0b0974c68",
+    file: "integrations/openclaw/plugins/zink-governance/index.mjs",
+    rule: "discord-client-id",
+    line: "3656",
+  },
+  {
+    commit: "01489aa996aef7ab04789ba3bb08dcd0b0974c68",
+    file: "integrations/openclaw/plugins/zink-governance/index.mjs",
+    rule: "discord-client-id",
+    line: "3845",
+  },
+  {
+    commit: "7d922112f7649e0ff7d2ef9f35f84666ab7b93da",
+    file: "integrations/openclaw/configure.mjs",
+    rule: "generic-api-key",
+    line: "62",
+  },
+  {
+    commit: "7d922112f7649e0ff7d2ef9f35f84666ab7b93da",
+    file: "integrations/openclaw/configure.mjs",
+    rule: "generic-api-key",
+    line: "64",
+  },
+];
+// Seven entries at HEAD; the ceiling leaves one band's headroom, and a band
+// that exceeds it must re-measure and raise the number in the same commit.
+const SECRET_SCAN_FINGERPRINT_CEILING = 16;
+
 // The workflow step that compares the live audit with the recorded baseline.
 const AUDIT_BASELINE_SCRIPT = "scripts/audit-baseline.mjs";
 
@@ -1087,25 +1128,54 @@ export function checkSecretScanAllowlist(repositoryRoot, trackedFiles) {
   // The fingerprint file is the per-file record of a suppression. Every
   // fingerprint must name a file the repository still tracks, or the record
   // points at nothing and the suppression it describes cannot be reviewed.
+  // A fingerprint whose file is inside a recorded pattern scope is already
+  // reviewed by that scope; every other fingerprint needs all four of its
+  // coordinates named in SECRET_SCAN_RECORDED_FINGERPRINTS, because the
+  // commit, rule and line are what distinguish the reviewed finding from the
+  // next finding in the same file.
   const ignorePath = path.join(repositoryRoot, ".gitleaksignore");
   if (existsSync(ignorePath)) {
     const tracked = new Set(trackedFiles);
-    for (const line of readFileSync(ignorePath, "utf8").split("\n")) {
-      const entry = line.trim();
-      if (entry.length === 0 || entry.startsWith("#")) continue;
+    const entries = readFileSync(ignorePath, "utf8")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((entry) => entry.length > 0 && !entry.startsWith("#"));
+    for (const entry of entries) {
       const parts = entry.split(":");
-      const file = parts[1];
-      if (!file) {
+      if (parts.length !== 4 || parts.some((part) => part.length === 0)) {
         failures.push(
           `A secret-scan fingerprint is not in the <commit>:<file>:<rule>:<line> form: ${entry}`,
         );
         continue;
       }
+      const [commit, file, rule, line] = parts;
       if (!tracked.has(file)) {
         failures.push(
           `A secret-scan fingerprint names a file the repository does not track: ${entry}`,
         );
+        continue;
       }
+      const insideScope = SECRET_SCAN_ALLOWED_SCOPES.some((scope) =>
+        new RegExp(scope.pattern, "u").test(file),
+      );
+      if (insideScope) continue;
+      const recorded = SECRET_SCAN_RECORDED_FINGERPRINTS.some(
+        (item) =>
+          item.commit === commit &&
+          item.file === file &&
+          item.rule === rule &&
+          item.line === line,
+      );
+      if (!recorded) {
+        failures.push(
+          `A secret-scan fingerprint suppresses a finding outside every recorded scope and no recorded fingerprint names it: ${entry}. Record its commit, file, rule and line in SECRET_SCAN_RECORDED_FINGERPRINTS.`,
+        );
+      }
+    }
+    if (entries.length > SECRET_SCAN_FINGERPRINT_CEILING) {
+      failures.push(
+        `The secret-scan fingerprint file carries ${entries.length} entries, above the recorded ceiling of ${SECRET_SCAN_FINGERPRINT_CEILING}.`,
+      );
     }
   }
 

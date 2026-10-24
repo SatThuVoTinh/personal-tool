@@ -1206,6 +1206,76 @@ test("F-339: a fingerprint that names an untracked file must fail the policy che
   });
 });
 
+test("F-519: a fingerprint outside every recorded scope must be recorded in full", () => {
+  withTemporaryRepository((repositoryRoot) => {
+    writeTrackedFile(
+      repositoryRoot,
+      ".gitleaks.toml",
+      readFileSync(path.join(REPO_ROOT, ".gitleaks.toml"), "utf8"),
+    );
+    writeTrackedFile(
+      repositoryRoot,
+      "tests/scope.test.mjs",
+      "export const scope = 1;\n",
+    );
+    writeTrackedFile(
+      repositoryRoot,
+      "scripts/operator.mjs",
+      "export const operator = 1;\n",
+    );
+    writeTrackedFile(
+      repositoryRoot,
+      "integrations/openclaw/plugins/zink-governance/index.mjs",
+      "export const shipped = 1;\n",
+    );
+    const tracked = [
+      ".gitleaks.toml",
+      "tests/scope.test.mjs",
+      "scripts/operator.mjs",
+      "integrations/openclaw/plugins/zink-governance/index.mjs",
+    ];
+    const inScope =
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:tests/scope.test.mjs:discord-client-id:1";
+    const recorded =
+      "0e5a899b4b29482a4d927480a47175a5fd3b5616:integrations/openclaw/plugins/zink-governance/index.mjs:discord-client-id:3647";
+    const unrecorded =
+      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:scripts/operator.mjs:generic-api-key:9";
+
+    writeTrackedFile(
+      repositoryRoot,
+      ".gitleaksignore",
+      `${inScope}\n${recorded}\n${unrecorded}\n`,
+    );
+    const failures = checkSecretScanAllowlist(repositoryRoot, tracked);
+    assert.equal(failures.length, 1, failures.join(" | "));
+    assert.match(failures[0], /scripts\/operator\.mjs/u);
+    assert.match(failures[0], /outside every recorded scope/u);
+
+    // All four coordinates: the recorded file at a different line is a
+    // different finding and must not pass on its file column alone.
+    writeTrackedFile(
+      repositoryRoot,
+      ".gitleaksignore",
+      `${recorded.replace(/:3647$/u, ":3648")}\n`,
+    );
+    const mismatched = checkSecretScanAllowlist(repositoryRoot, tracked);
+    assert.equal(mismatched.length, 1, mismatched.join(" | "));
+    assert.match(mismatched[0], /outside every recorded scope/u);
+
+    // The entry count is capped: a file that keeps growing is a suppressed set
+    // nobody reviews, even when every entry is inside a recorded scope.
+    const crowded = Array.from(
+      { length: 17 },
+      (_, index) =>
+        `cccccccccccccccccccccccccccccccccccccccc:tests/scope.test.mjs:discord-client-id:${index + 1}`,
+    ).join("\n");
+    writeTrackedFile(repositoryRoot, ".gitleaksignore", `${crowded}\n`);
+    const capped = checkSecretScanAllowlist(repositoryRoot, tracked);
+    assert.equal(capped.length, 1, capped.join(" | "));
+    assert.match(capped[0], /above the recorded ceiling/u);
+  });
+});
+
 test("F-339: the shipped allowlist is anchored and its scopes are recorded", () => {
   const config = readFileSync(path.join(REPO_ROOT, ".gitleaks.toml"), "utf8");
   const block = /\[allowlist\]([\s\S]*?)(?=\n\[|$)/u.exec(config);
