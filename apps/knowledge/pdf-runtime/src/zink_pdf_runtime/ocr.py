@@ -57,7 +57,13 @@ def run_tesseract(image: Path, *, deadline: float) -> str:
 
     executable = Path(os.environ["ZINK_TESSERACT_BIN"])
     tessdata = Path(os.environ["ZINK_TESSDATA_PREFIX"])
-    if not executable.is_file() or not tessdata.is_dir() or deadline <= time.monotonic():
+    # F-441 (R9-L09-5): the deadline can expire during the page render and the
+    # PNG write that precede this call, so the expiry is classified FIRST. The
+    # combined arm reported an expired deadline as PDF_RUNTIME_UNAVAILABLE,
+    # which the parent does not map as a timeout.
+    if deadline <= time.monotonic():
+        raise OcrRuntimeError("PDF_RUNTIME_TIMEOUT")
+    if not executable.is_file() or not tessdata.is_dir():
         raise OcrRuntimeError("PDF_RUNTIME_UNAVAILABLE")
     environment = {
         "LANG": "C.UTF-8",

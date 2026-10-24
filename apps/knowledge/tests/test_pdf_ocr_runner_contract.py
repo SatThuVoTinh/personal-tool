@@ -97,6 +97,43 @@ def run_child(image: Path, deadline: float) -> dict:
     return json.loads(completed.stdout)
 
 
+class OcrDeadlineClassificationTests(unittest.TestCase):
+    """F-441 (R9-L09-5): an expired region deadline is a timeout.
+
+    The surviving window is the page render and the PNG write that sit
+    between the extraction-wide deadline check and the tesseract call, so the
+    deadline the runner receives can already have passed while the binary and
+    the tessdata directory are present. The combined arm used to report that
+    as PDF_RUNTIME_UNAVAILABLE, which the parent does not map as a timeout.
+    """
+
+    def test_an_expired_region_deadline_is_a_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "region.png"
+            image.write_bytes(b"fixture")
+            environment = dict(os.environ)
+            environment["ZINK_TESSERACT_BIN"] = sys.executable
+            environment["ZINK_TESSDATA_PREFIX"] = directory
+            with mock.patch.dict(os.environ, environment, clear=False):
+                result = run_child(image, -1.0)
+
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["code"], "PDF_RUNTIME_TIMEOUT")
+
+    def test_a_missing_binary_with_a_live_deadline_is_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "region.png"
+            image.write_bytes(b"fixture")
+            environment = dict(os.environ)
+            environment["ZINK_TESSERACT_BIN"] = str(Path(directory) / "absent")
+            environment["ZINK_TESSDATA_PREFIX"] = directory
+            with mock.patch.dict(os.environ, environment, clear=False):
+                result = run_child(image, 30.0)
+
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["code"], "PDF_RUNTIME_UNAVAILABLE")
+
+
 @unittest.skipUnless(
     os.name == "posix",
     "the runner selects on the child's pipes, which is POSIX-only; the "
