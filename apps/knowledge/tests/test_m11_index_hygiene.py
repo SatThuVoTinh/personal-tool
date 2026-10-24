@@ -697,6 +697,56 @@ class StartupSweepAndLockTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(was_available)
         self.assertIsNone(error_code)
 
+    async def test_a_failed_recovery_is_retried_until_it_succeeds(self) -> None:
+        """F-413 (R9-L08-3): the sweep failure was logged and dropped.
+
+        The interrupted RUNNING row survives a failed sweep, and the unique
+        one-running index refuses every later run while `readyz` stays
+        healthy. The sweep is idempotent, so the loop repeats it.
+        """
+
+        connection = FakeConnection(fetchvals=[True, True], fetches=[[]])
+        pool = FakePool(connection)
+        database = KnowledgeDatabase(
+            "localhost", 5432, "knowledge", "zink", "secret", Path("migrations")
+        )
+        recoveries: list[int] = []
+
+        async def recovery() -> None:
+            recoveries.append(1)
+            if len(recoveries) == 1:
+                raise RuntimeError("the sweep aborted on a database error")
+
+        database.set_recovery_callback(recovery)
+        attempts: list[int] = []
+
+        async def create_pool(*_args: object, **_kwargs: object) -> FakePool:
+            attempts.append(1)
+            if len(attempts) == 1:
+                raise RuntimeError("postgres is not up yet")
+            return pool
+
+        with patch(
+            "app.database.asyncpg.create_pool",
+            new=AsyncMock(side_effect=create_pool),
+        ), patch("app.database.RECONNECT_INTERVAL_SECONDS", 0.01):
+            await database.start()
+            for _ in range(200):
+                if len(recoveries) >= 2:
+                    break
+                await asyncio.sleep(0.02)
+            was_available = database.available
+            error_code = database.startup_error_code
+            await database.stop()
+
+        self.assertEqual(
+            len(recoveries),
+            2,
+            "a failed sweep must be re-attempted, not logged and dropped",
+        )
+        self.assertTrue(was_available)
+        self.assertIsNone(error_code)
+
     async def test_a_failed_lock_query_releases_the_connection(self) -> None:
         """F-254 (R7-D10A-02): four leaks exhausted the pool."""
 

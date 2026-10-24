@@ -419,52 +419,59 @@ class KnowledgeDatabase:
             self._reconnect_task = None
 
     async def _reconnect_loop(self) -> None:
+        if self._pool is not None:
+            return
         while True:
             await asyncio.sleep(RECONNECT_INTERVAL_SECONDS)
-            if self._pool is not None:
+            if self._pool is None:
+                try:
+                    self._pool = await asyncpg.create_pool(
+                        host=self._database_host,
+                        port=self._database_port,
+                        database=self._database_name,
+                        user=self._database_user,
+                        password=self._database_password,
+                        min_size=1,
+                        max_size=4,
+                        timeout=10,
+                        command_timeout=30,
+                    )
+                    # F-149 (R5-E03-02): the re-applied schema takes the same
+                    # lock the first boot took.
+                    connection = await self.acquire_migration_lock(
+                        self._advisory_lock_key
+                    )
+                    try:
+                        await self._apply_migrations(connection)
+                    finally:
+                        await self.release_advisory_lock(
+                            connection, self._advisory_lock_key
+                        )
+                except Exception:
+                    # The database is still unreachable. The next attempt repeats
+                    # the connect and the schema application.
+                    if self._pool is not None:
+                        await self._pool.close()
+                        self._pool = None
+                    continue
+                self.startup_error_code = None
+            if self._recovery_callback is None:
                 return
             try:
-                self._pool = await asyncpg.create_pool(
-                    host=self._database_host,
-                    port=self._database_port,
-                    database=self._database_name,
-                    user=self._database_user,
-                    password=self._database_password,
-                    min_size=1,
-                    max_size=4,
-                    timeout=10,
-                    command_timeout=30,
+                await self._recovery_callback()
+            except Exception as error:
+                # F-413 (R9-L08-3): the database is back but the recovery it
+                # repairs failed, leaving the interrupted RUNNING row that the
+                # unique one-running index turns into a 503 for every later
+                # run. The sweep is idempotent, so the failure is named and
+                # the loop re-attempts it instead of dropping it.
+                logger.error(
+                    "knowledge.reconnect_recovery_incomplete code=%s error=%s",
+                    "STARTUP_RECOVERY_INCOMPLETE",
+                    error,
+                    exc_info=True,
                 )
-                # F-149 (R5-E03-02): the re-applied schema takes the same
-                # lock the first boot took.
-                connection = await self.acquire_migration_lock(self._advisory_lock_key)
-                try:
-                    await self._apply_migrations(connection)
-                finally:
-                    await self.release_advisory_lock(
-                        connection, self._advisory_lock_key
-                    )
-            except Exception:
-                # The database is still unreachable. The next attempt repeats
-                # the connect and the schema application.
-                if self._pool is not None:
-                    await self._pool.close()
-                    self._pool = None
                 continue
-            self.startup_error_code = None
-            if self._recovery_callback is not None:
-                try:
-                    await self._recovery_callback()
-                except Exception as error:
-                    # The database is back; the recovery it repairs failed.
-                    # The failure is named, and the sweep it performs is
-                    # idempotent, so the next attempt repeats it.
-                    logger.error(
-                        "knowledge.reconnect_recovery_incomplete code=%s error=%s",
-                        "STARTUP_RECOVERY_INCOMPLETE",
-                        error,
-                        exc_info=True,
-                    )
             return
 
     async def stop(self) -> None:
