@@ -190,9 +190,9 @@ export function chunkSkillContent(rawContent) {
       // carry control characters; collapse all whitespace runs (a tab inside
       // a heading must not fail the whole skill).
       currentHeading = [headingMatch[2].replace(/\s+/g, " ").trim()];
-      currentLines = [line];
-      currentBytes = lineBytes;
-      continue;
+      // F-427: a heading is a line like any other for the length budget. It must
+      // fall through to the flush/split branches below; the pre-fix `continue`
+      // emitted an over-long heading as one oversized segment.
     }
     if (
       currentBytes + lineBytes > MAX_SEGMENT_CONTENT_BYTES &&
