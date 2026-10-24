@@ -57,7 +57,7 @@ from app.main import (
     create_app,
 )
 from app.markdown_adapter import QUERY_BUDGET_FIXTURE, QUERY_MAX_TOKENS
-from app.model_probe import ResolvedEmbeddingModel
+from app.model_probe import ModelProbeError, ResolvedEmbeddingModel
 from app.retrieval import MAX_RERANK_CANDIDATES, NO_MATCH_TOPIC
 from app.run_errors import SafeRunError, serialize_errors
 
@@ -498,6 +498,31 @@ class ApiAttributionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["total_count"], 2)
         self.assertFalse(body["has_more"])
         self.assertFalse(body["truncated"])
+
+    async def test_a_refused_query_embedding_carries_the_probe_code(self) -> None:
+        """F-515 (R10-L07-4): a permanent refusal is not a timeout.
+
+        The arm bound the error and then wrote one constant, and this route
+        logs only inside its generic arm -- which the HTTPException passthrough
+        never reaches -- so the provider's own code survived nowhere.
+        """
+
+        self.app.state.database.get_active_index = AsyncMock(return_value=ACTIVE)
+        self.app.state.model_probe.embed = AsyncMock(
+            side_effect=ModelProbeError("EMBEDDING_PERMANENT_HTTP")
+        )
+
+        with self.assertLogs("app.main", level="ERROR") as captured:
+            response = await self.request(
+                "POST", "/v1/search", json={"query": "topic", "rerank": False}
+            )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(
+            response.json()["detail"]["code"], "EMBEDDING_PERMANENT_HTTP"
+        )
+        self.assertIn("code=EMBEDDING_PERMANENT_HTTP", "\n".join(captured.output))
+        self.app.state.database.search_candidates.assert_not_awaited()
 
     async def test_a_namespace_scope_reaches_the_query(self) -> None:
         """F-116 (R5-E02-01): an answer scoped to a namespace was corpus-wide.

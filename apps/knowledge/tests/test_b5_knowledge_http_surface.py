@@ -189,5 +189,80 @@ class SearchCompletenessTests(KnowledgeHttpSurface):
         )
 
 
+class EmbeddingFailureAttributionTests(KnowledgeHttpSurface):
+    """F-515 (R10-L07-4): one constant cannot name an embedding failure."""
+
+    async def search_failure(self, error: BaseException) -> httpx.Response:
+        self.app.state.model_probe.embed = AsyncMock(side_effect=error)
+        return await self.request(
+            "POST", "/v1/search", json={"query": "topic", "rerank": False}
+        )
+
+    async def readyz_failure(self, error: BaseException) -> httpx.Response:
+        self.app.state.reranker = object()
+        self.app.state.model_probe.resolve = AsyncMock(side_effect=error)
+        return await self.request("GET", "/readyz")
+
+    async def test_a_permanent_provider_refusal_is_distinguishable_from_a_timeout(
+        self,
+    ) -> None:
+        with self.assertLogs("app.main", level="ERROR") as captured:
+            permanent = await self.search_failure(
+                ModelProbeError("EMBEDDING_PERMANENT_HTTP")
+            )
+        transient = await self.search_failure(ModelProbeError("EMBEDDING_TIMEOUT"))
+
+        self.assertEqual(permanent.status_code, 503)
+        self.assertEqual(transient.status_code, 503)
+        self.assertEqual(
+            permanent.json()["detail"]["code"], "EMBEDDING_PERMANENT_HTTP"
+        )
+        self.assertEqual(transient.json()["detail"]["code"], "EMBEDDING_TIMEOUT")
+        self.assertIn(
+            "code=EMBEDDING_PERMANENT_HTTP",
+            "\n".join(captured.output),
+            "the search route must record the code the probe raised",
+        )
+
+    async def test_a_transport_failure_keeps_its_own_code(self) -> None:
+        response = await self.search_failure(ModelProbeError("EMBEDDING_TRANSPORT"))
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["detail"]["code"], "EMBEDDING_TRANSPORT")
+
+    async def test_an_error_that_carries_no_code_falls_back_to_the_constant(
+        self,
+    ) -> None:
+        # The 503 body never echoes a free-text transport message.
+        response = await self.search_failure(
+            httpx.ConnectError("upstream body that must not reach the caller")
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(
+            response.json(), {"detail": {"code": "EMBEDDING_MODEL_UNAVAILABLE"}}
+        )
+
+    async def test_readiness_answers_the_raised_embedding_code(self) -> None:
+        response = await self.readyz_failure(
+            ModelProbeError("EMBEDDING_PERMANENT_HTTP")
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(
+            response.json(), {"status": "not_ready", "code": "EMBEDDING_PERMANENT_HTTP"}
+        )
+
+    async def test_readiness_still_answers_its_generic_embedding_code(
+        self,
+    ) -> None:
+        response = await self.readyz_failure(httpx.ConnectError("ollama down"))
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(
+            response.json(), {"status": "not_ready", "code": "EMBEDDING_MODEL_UNAVAILABLE"}
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

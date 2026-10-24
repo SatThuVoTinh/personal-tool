@@ -153,6 +153,15 @@ DATABASE_RESERVATION_ERRORS = DATABASE_ERRORS + (RuntimeError,)
 PDF_READY_LOCK_TIMEOUT_SECONDS = 2.0
 
 
+def _code_shaped(error: BaseException) -> str | None:
+    """The code an internal failure carries, when its message is one."""
+
+    message = str(error).strip()
+    if re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", message):
+        return message
+    return None
+
+
 def _reranker_error_code(error: BaseException) -> str:
     """The code a reranker failure carries, when it is one.
 
@@ -164,10 +173,24 @@ def _reranker_error_code(error: BaseException) -> str:
     is the generic name.
     """
 
-    message = str(error).strip()
-    if re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", message):
-        return message
-    return "RERANKER_UNAVAILABLE"
+    return _code_shaped(error) or "RERANKER_UNAVAILABLE"
+
+
+def _embedding_error_code(error: BaseException) -> str:
+    """The code an embedding failure carries, when it is one.
+
+    F-515 (R10-L07-4): both embedding arms named the error they caught and
+    then wrote the constant `EMBEDDING_MODEL_UNAVAILABLE`, so a permanent
+    provider refusal, a timeout, a dropped socket and a mis-shaped body were
+    one answer. The probe's vocabulary is already code-shaped
+    (`EMBEDDING_PERMANENT_HTTP`, `EMBEDDING_TRANSPORT`, `EMBEDDING_TIMEOUT`,
+    `EMBEDDING_TRANSIENT_HTTP`, `EMBEDDING_MODEL_INVALID_RESPONSE`,
+    `EMBEDDING_INVALID_RESPONSE`); it is carried the same way the reranker's is
+    above. A transport fault whose message is not a code keeps the constant,
+    so the 503 body never echoes an upstream sentence.
+    """
+
+    return _code_shaped(error) or "EMBEDDING_MODEL_UNAVAILABLE"
 
 
 def _search_report(
@@ -431,8 +454,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         try:
             actual_model = await model_probe.resolve(configured_settings.embedding_model)
-        except (httpx.HTTPError, ModelProbeError):
-            return JSONResponse(status_code=503, content={"status": "not_ready", "code": "EMBEDDING_MODEL_UNAVAILABLE"})
+        except (httpx.HTTPError, ModelProbeError) as error:
+            # F-515 (R10-L07-4): the same flattening as the search arm. The
+            # readiness answer is the one an orchestrator reads, so a permanent
+            # refusal and a timeout must not be the same string here either.
+            return JSONResponse(
+                status_code=503,
+                content={"status": "not_ready", "code": _embedding_error_code(error)},
+            )
         except Exception:
             # M12/T2.2-R2 B-20 (found while landing B-18): `resolve` parses a JSON body, and a
             # decode or shape fault is neither of the two types above, so it escaped as the
@@ -564,7 +593,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     code = error.code if error.code == "EMBEDDING_MODEL_DRIFT" else "EMBEDDING_MODEL_UNAVAILABLE"
                     raise HTTPException(status_code=503, detail={"code": code}) from error
                 except (httpx.HTTPError, ModelProbeError) as error:
-                    raise HTTPException(status_code=503, detail={"code": "EMBEDDING_MODEL_UNAVAILABLE"}) from error
+                    # F-515 (R10-L07-4): the arm bound the error and then threw
+                    # its code away, and this route logs only inside its generic
+                    # arm -- which `except HTTPException: raise` never reaches --
+                    # so neither the caller nor the operator could tell a
+                    # permanent refusal from a timeout. The code is carried into
+                    # the body AND recorded, because the two answer different
+                    # questions.
+                    code = _embedding_error_code(error)
+                    logger.error("knowledge.search_embedding_failed code=%s", code)
+                    raise HTTPException(status_code=503, detail={"code": code}) from error
                 if len(query_embedding) != 1 or len(query_embedding[0]) != active_index.embedding_dimensions:
                     raise HTTPException(status_code=503, detail={"code": "EMBEDDING_MODEL_UNAVAILABLE"})
                 try:

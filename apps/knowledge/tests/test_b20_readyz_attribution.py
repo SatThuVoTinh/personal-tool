@@ -39,7 +39,7 @@ if not _TOKENIZER or not Path(_TOKENIZER).is_file():
 
 from app.config import Settings
 from app.database import ActiveIndex
-from app.main import _reranker_error_code, create_app
+from app.main import _embedding_error_code, _reranker_error_code, create_app
 from app.model_probe import ModelProbeError, ResolvedEmbeddingModel
 from app.reranker import RerankerUnavailableError
 
@@ -228,10 +228,26 @@ class ReadyzAttributionTests(unittest.IsolatedAsyncioTestCase):
             },
         )
 
-    async def test_the_mapped_probe_error_is_still_a_503_not_the_new_500(self) -> None:
+    async def test_the_mapped_probe_error_is_still_a_503_and_keeps_its_code(self) -> None:
+        # F-515 (R10-L07-4): the route used to answer the constant
+        # `EMBEDDING_MODEL_UNAVAILABLE` for every probe failure. The status is
+        # unchanged; the probe's own code is what the orchestrator reads.
         self.app.state.database.get_active_index = AsyncMock(return_value=ACTIVE)
         self.app.state.model_probe.resolve = AsyncMock(
             side_effect=ModelProbeError("EMBEDDING_TIMEOUT")
+        )
+
+        response = await self.readyz()
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["code"], "EMBEDDING_TIMEOUT")
+
+    async def test_a_probe_failure_that_carries_no_code_keeps_the_constant(self) -> None:
+        """F-515 (R10-L07-4): the fallback still exists, and it is not prose."""
+
+        self.app.state.database.get_active_index = AsyncMock(return_value=ACTIVE)
+        self.app.state.model_probe.resolve = AsyncMock(
+            side_effect=httpx.ConnectError("All connection attempts failed")
         )
 
         response = await self.readyz()
@@ -357,13 +373,38 @@ class ReadyzAttributionTests(unittest.IsolatedAsyncioTestCase):
             "RERANKER_UNAVAILABLE",
         )
 
+    def test_only_a_code_shaped_embedding_message_is_carried(self) -> None:
+        """F-515 (R10-L07-4): the carried value is a code, not free text."""
+
+        self.assertEqual(
+            _embedding_error_code(ModelProbeError("EMBEDDING_PERMANENT_HTTP")),
+            "EMBEDDING_PERMANENT_HTTP",
+        )
+        self.assertEqual(
+            _embedding_error_code(ModelProbeError("EMBEDDING_TRANSPORT")),
+            "EMBEDDING_TRANSPORT",
+        )
+        self.assertEqual(
+            _embedding_error_code(httpx.ConnectError("upstream said no")),
+            "EMBEDDING_MODEL_UNAVAILABLE",
+        )
+
     def _emitted_codes(self) -> set[str]:
-        """The codes the readiness route itself can answer with."""
+        """The codes the readiness route itself can answer with.
+
+        F-515 (R10-L07-4): the embedding arm now carries the probe's code, so
+        the constant it can still fall back to moved into the helper that
+        computes it. The helper's own literals are part of the route's answer
+        set, so they are read here too -- otherwise moving a constant one call
+        down would silently retire its coverage requirement.
+        """
 
         route = next(
             item for item in self.app.routes if getattr(item, "path", None) == "/readyz"
         )
-        source = inspect.getsource(route.endpoint)
+        source = inspect.getsource(route.endpoint) + inspect.getsource(
+            _embedding_error_code
+        )
         return set(re.findall(r'"([A-Z][A-Z0-9_]{3,})"', source))
 
     async def test_the_case_matrix_covers_every_code_the_route_emits(self) -> None:
