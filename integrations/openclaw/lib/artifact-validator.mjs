@@ -441,6 +441,47 @@ function forbiddenXmlCharacterCode(xml) {
   return null;
 }
 
+// Excel's published per-cell text budget (F-473). The validator checks the
+// decoded text so escaped characters (`&amp;`) are measured as one character.
+const EXCEL_MAX_CELL_CHARACTERS = 32767;
+
+function decodeXmlText(value) {
+  return String(value)
+    .replace(/&lt;/gu, "<")
+    .replace(/&gt;/gu, ">")
+    .replace(/&quot;/gu, '"')
+    .replace(/&apos;/gu, "'")
+    .replace(/&amp;/gu, "&");
+}
+
+/**
+ * Return the first worksheet cell that exceeds Excel's per-cell text budget.
+ *
+ * F-473: the writer refuses an over-budget value, but a workbook built by any
+ * other producer could still arrive here; the EXCEL tier therefore measures
+ * the `<t>`/`<v>` text of every cell instead of trusting the container shape.
+ *
+ * @param {string} sheetName
+ * @param {string} xml
+ * @returns {string | null}
+ */
+function overBudgetCellFailure(sheetName, xml) {
+  for (const cell of xml.matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/gu)) {
+    const inner = cell[2];
+    let characters = 0;
+    for (const text of inner.matchAll(
+      /<(?:t|v)\b[^>]*>([\s\S]*?)<\/(?:t|v)>/gu,
+    )) {
+      characters += decodeXmlText(text[1]).length;
+    }
+    if (characters > EXCEL_MAX_CELL_CHARACTERS) {
+      const ref = /\br="([^"]*)"/u.exec(cell[1])?.[1] || "(unreferenced)";
+      return `EXCEL_CELL_TOO_LONG: ${sheetName} cell ${ref} holds ${characters} characters, above the ${EXCEL_MAX_CELL_CHARACTERS}-character per-cell budget`;
+    }
+  }
+  return null;
+}
+
 /**
  * Parse every worksheet part of a workbook archive.
  *
@@ -462,6 +503,10 @@ function inspectExcelSheetParts(archive) {
     const code = forbiddenXmlCharacterCode(xml);
     if (code) {
       return `INVALID_EXCEL_SHEET_XML: ${name} contains U+${code}, which XML 1.0 forbids`;
+    }
+    const overBudget = overBudgetCellFailure(name, xml);
+    if (overBudget) {
+      return overBudget;
     }
   }
   return null;

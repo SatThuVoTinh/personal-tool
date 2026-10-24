@@ -3560,3 +3560,57 @@ describe("F-465 — control characters never become a valid workbook", () => {
     }
   });
 });
+
+// =========================================================================
+// M12/T9 F-473 — Excel's 32,767-character per-cell budget was enforced by no
+// layer: the writer emitted a 40,000-character inline string and the EXCEL
+// validation tier returned PASS on a workbook Excel cannot open.
+// =========================================================================
+describe("F-473 — the per-cell character budget is enforced", () => {
+  test("F-473-1: the writer refuses an over-budget cell and keeps the boundary", () => {
+    assert.throws(
+      () =>
+        buildMultiSheetWorkbookBuffer([
+          { name: "S", rows: [["a".repeat(40000)]] },
+        ]),
+      /EXCEL_CELL_TOO_LONG/u,
+      "a 40,000-character cell must be refused at build",
+    );
+    const boundary = readZipEntries(
+      buildMultiSheetWorkbookBuffer([
+        { name: "S", rows: [["a".repeat(32767)]] },
+      ]),
+    );
+    assert.ok(
+      boundary.has("xl/worksheets/sheet1.xml"),
+      "32,767 characters must still build",
+    );
+  });
+
+  test("F-473-2: the validator EXCEL tier rejects an over-budget cell", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "zink-f473-"));
+    try {
+      const workbook = path.join(dir, "long.xlsx");
+      await writeFile(
+        workbook,
+        buildZip([
+          ["[Content_Types].xml", "<Types/>"],
+          ["xl/workbook.xml", "<workbook/>"],
+          [
+            "xl/worksheets/sheet1.xml",
+            `<worksheet><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>${"a".repeat(40000)}</t></is></c></row></sheetData></worksheet>`,
+          ],
+        ]),
+      );
+      const result = validateTechnicalArtifact({ filePath: workbook });
+      assert.equal(result.status, VALIDATION_STATUS.FAIL);
+      assert.equal(result.checks.sheetXmlValid, false);
+      assert.ok(
+        result.errors.some((entry) => entry.includes("EXCEL_CELL_TOO_LONG")),
+        `expected EXCEL_CELL_TOO_LONG, got ${JSON.stringify(result.errors)}`,
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});

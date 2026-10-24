@@ -230,6 +230,19 @@ function assertXmlSafeCellText(ref, value) {
   );
 }
 
+// Excel's published per-cell text budget. A longer inline string is written by
+// the container writer but Excel refuses/repairs the workbook, so the writer
+// refuses the cell instead of emitting an artifact that cannot be opened
+// (F-473).
+const EXCEL_MAX_CELL_CHARACTERS = 32767;
+
+function assertCellWithinCharacterBudget(ref, value) {
+  if (value.length <= EXCEL_MAX_CELL_CHARACTERS) return;
+  throw new Error(
+    `EXCEL_CELL_TOO_LONG: cell ${ref} holds ${value.length} characters, above the ${EXCEL_MAX_CELL_CHARACTERS}-character per-cell budget`,
+  );
+}
+
 function buildSheetRowsXml(rows, startRow = 1) {
   let sheetRowsXml = "";
   for (let rIdx = 0; rIdx < rows.length; rIdx++) {
@@ -241,6 +254,7 @@ function buildSheetRowsXml(rows, startRow = 1) {
       const ref = `${colLetter}${rowNum}`;
       const val = String(row[cIdx] ?? "");
       assertXmlSafeCellText(ref, val);
+      assertCellWithinCharacterBudget(ref, val);
       const escaped = val
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
