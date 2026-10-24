@@ -931,6 +931,240 @@ test("M12/T9 F-391: the reclamation's order is accepted by real PostgreSQL, and 
     admin(`DROP DATABASE IF EXISTS ${dbName}`);
   }
 });
+// ===========================================================================
+// M12/T9-R4 F-443 (R9-T06-1) — two incremental passes over one PDF leave no
+// build-and-batch residue.
+//
+// The Python lane proves the sweep ISSUES the right statement; a recorder
+// cannot prove that the statement, run against the real schema, actually
+// reaches the rows the link table can never name. This case runs the writer's
+// OWN DELETE — read out of `database.py`, so there is no second copy to drift —
+// over an accumulation a real database accepts: `002` makes the identity
+// uniqueness partial over ('BUILDING','READY'), so every pass that ends FAILED
+// commits one more build plus its whole batch set, and no cleanup path that
+// names its candidates from `pdf_source_details` can ever see them.
+//
+// The control that gives the case teeth is the CANCELLED row: it is the
+// owner's reclamation RECORD (F-444), it is equally unlinkable, and the sweep
+// must leave it standing while it deletes the FAILED residue.
+// ===========================================================================
+const SWEEP_WRITER = path.join(
+  REPO_ROOT,
+  "apps",
+  "knowledge",
+  "app",
+  "database.py",
+);
+
+function terminalSweepStatement() {
+  const source = readFileSync(SWEEP_WRITER, "utf8");
+  const start = source.indexOf("async def _retire_terminal_pdf_content_builds");
+  assert.notEqual(
+    start,
+    -1,
+    "apps/knowledge/app/database.py must declare _retire_terminal_pdf_content_builds",
+  );
+  const end = source.indexOf("\n    async def ", start + 1);
+  const body = source.slice(start, end === -1 ? undefined : end);
+  const call = /await connection\.execute\(\s*([\s\S]*?)\n\s*\)/u.exec(body);
+  assert.ok(
+    call,
+    "the sweep must issue exactly one connection.execute — read the source",
+  );
+  const sql = [...call[1].matchAll(/"((?:[^"\\]|\\.)*)"/gu)]
+    .map((fragment) => fragment[1])
+    .join("")
+    .trim();
+  assert.match(
+    sql,
+    /^DELETE FROM knowledge\.pdf_content_builds\b/u,
+    `the sweep's write must delete builds; read: ${sql.slice(0, 80)}`,
+  );
+  return sql;
+}
+
+const RESIDUE_BUILD = "22222222-2222-4222-8222-222222222201";
+const RESIDUE_BATCH = "22222222-2222-4222-8222-222222222202";
+const LATER_BUILD = "33333333-3333-4333-8333-333333333301";
+const LATER_BATCH = "33333333-3333-4333-8333-333333333302";
+const RECLAIMED_BUILD = "44444444-4444-4444-8444-444444444401";
+const RECLAIMED_BATCH = "44444444-4444-4444-8444-444444444402";
+
+function residueSql(buildId, batchId, identity, cause) {
+  return `
+INSERT INTO knowledge.pdf_content_builds
+  (id, content_identity_digest, pdf_digest, sidecar_digest,
+   processing_identity_digest, status, finished_at, failure_code, failure_cause)
+VALUES ('${buildId}', '${identity}', '${"b".repeat(64)}', '${"c".repeat(64)}',
+        '${"d".repeat(64)}', 'FAILED', now(), 'PDF_RUNTIME_FAILED', '${cause}');
+INSERT INTO knowledge.pdf_content_batches
+  (id, build_id, page_start, page_end, status, started_at, finished_at, failure_code)
+VALUES ('${batchId}', '${buildId}', 1, 1, 'FAILED', now(), now(), 'PDF_RUNTIME_FAILED');
+`;
+}
+
+function reclaimedSql(buildId, batchId, identity) {
+  return `
+INSERT INTO knowledge.pdf_content_builds
+  (id, content_identity_digest, pdf_digest, sidecar_digest,
+   processing_identity_digest, status, finished_at, failure_code)
+VALUES ('${buildId}', '${identity}', '${"e".repeat(64)}', '${"f".repeat(64)}',
+        '${"0".repeat(64)}', 'CANCELLED', now(), 'PDF_CONTENT_RECLAIMED');
+INSERT INTO knowledge.pdf_content_batches
+  (id, build_id, page_start, page_end, status, started_at, finished_at)
+VALUES ('${batchId}', '${buildId}', 1, 1, 'SUCCEEDED', now(), now());
+`;
+}
+
+test("M12/T9 F-443: two incremental passes over one PDF leave no build-and-batch residue", async (t) => {
+  if (!containerAvailable(t)) return;
+
+  const sweep = terminalSweepStatement();
+  const dbName = `m12_t9_f443_${createHash("sha256")
+    .update(String(Math.random()))
+    .digest("hex")
+    .slice(0, 10)}`;
+  const admin = (statement) =>
+    dockerExec([
+      "psql",
+      "-U",
+      "postgres",
+      "-d",
+      "postgres",
+      "--set=ON_ERROR_STOP=1",
+      "-t",
+      "-A",
+      "-c",
+      statement,
+    ]);
+
+  const created = admin(`CREATE DATABASE ${dbName}`);
+  if (created.status !== 0) {
+    t.skip(
+      `could not create scratch database: ${created.stderr?.slice(0, 200)}`,
+    );
+    return;
+  }
+
+  try {
+    const runSql = (sql) => {
+      const res = dockerExec(
+        [
+          "psql",
+          "-U",
+          "postgres",
+          "-d",
+          dbName,
+          "--set=ON_ERROR_STOP=1",
+          "-t",
+          "-A",
+          "-f",
+          "-",
+        ],
+        sql,
+      );
+      if (res.status !== 0) {
+        throw new Error(
+          `psql rejected SQL (code ${res.status}): ${(res.stderr || res.stdout || "").slice(0, 400)}`,
+        );
+      }
+      return (res.stdout || "").trim();
+    };
+
+    try {
+      applyTrackedMigrations(dbName);
+    } catch (error) {
+      if (error?.migration === VECTOR_SCHEMA_MIGRATION) {
+        t.skip(
+          `pgvector/migration unavailable in container: ${String(error?.message ?? error).slice(0, 300)}`,
+        );
+        return;
+      }
+      throw error;
+    }
+
+    const published = "55555555-5555-4555-8555-5555555555";
+    const PDF_IDENTITY = "a".repeat(64);
+    // Pass 1 publishes the PDF: a READY build, its batch, its link.
+    runSql(reclamationFixtureSql(published, PDF_IDENTITY));
+    // Pass 2 over the SAME identity ends FAILED. PostgreSQL accepts it because
+    // the identity uniqueness is partial over ('BUILDING','READY') — this is
+    // the accumulation the sweep exists for.
+    runSql(residueSql(RESIDUE_BUILD, RESIDUE_BATCH, PDF_IDENTITY, "exit=-9; stderr=Killed"));
+    // An owner reclamation, which is terminal AND unlinkable, and must survive.
+    runSql(reclaimedSql(RECLAIMED_BUILD, RECLAIMED_BATCH, "9".repeat(64)));
+
+    assert.equal(
+      runSql(`SELECT count(*) FROM knowledge.pdf_content_builds WHERE status = 'FAILED';`),
+      "1",
+      "the second pass must have left exactly one FAILED build",
+    );
+
+    runSql(`${sweep};`);
+
+    assert.equal(
+      runSql(`SELECT count(*) FROM knowledge.pdf_content_builds WHERE status = 'FAILED';`),
+      "0",
+      "the sweep must retire the FAILED build no link can name",
+    );
+    assert.equal(
+      runSql(
+        `SELECT count(*) FROM knowledge.pdf_content_batches WHERE build_id = '${RESIDUE_BUILD}';`,
+      ),
+      "0",
+      "the residue's whole batch set goes with the build",
+    );
+    assert.equal(
+      runSql(
+        `SELECT status FROM knowledge.pdf_content_builds WHERE id = '${published}04';`,
+      ),
+      "READY",
+      "the published build is never residue",
+    );
+    assert.equal(
+      runSql(
+        `SELECT status FROM knowledge.pdf_content_builds WHERE id = '${RECLAIMED_BUILD}';`,
+      ),
+      "CANCELLED",
+      "the reclamation RECORD survives the sweep that takes the residue",
+    );
+
+    // Pass 3 over the same PDF, then the sweep again: the second cleanup must
+    // reach the new accumulation and still leave every survivor alone.
+    runSql(residueSql(LATER_BUILD, LATER_BATCH, PDF_IDENTITY, "exit=1; stderr=artifact missing"));
+    runSql(`${sweep};`);
+
+    assert.equal(
+      runSql(`SELECT count(*) FROM knowledge.pdf_content_builds WHERE status = 'FAILED';`),
+      "0",
+      "a second sweep must retire the residue a later pass adds",
+    );
+    assert.equal(
+      runSql(
+        `SELECT count(*) FROM knowledge.pdf_content_batches WHERE build_id IN ('${RESIDUE_BUILD}', '${LATER_BUILD}');`,
+      ),
+      "0",
+      "no batch of any retired build may survive",
+    );
+    assert.equal(
+      runSql(
+        `SELECT count(*) FROM knowledge.pdf_content_builds WHERE status IN ('READY','CANCELLED');`,
+      ),
+      "2",
+      "the published build and the reclamation record are untouched by both sweeps",
+    );
+    assert.equal(
+      runSql(
+        `SELECT count(*) FROM knowledge.segments WHERE source_id = '${published}03';`,
+      ),
+      "1",
+      "the published searchable copy must survive",
+    );
+  } finally {
+    admin(`DROP DATABASE IF EXISTS ${dbName}`);
+  }
+});
+
 
 // ===========================================================================
 // M12/T9-R4 F-509 (R10-L05-2) — the retirement state's postcondition, fired.
