@@ -121,24 +121,94 @@ test("M5/T1-R2 keeps Nginx scoped to Knowledge and Dozzle constrained", () => {
   assert.equal(socket.read_only, true);
 });
 
+const SENTINEL_HELPER = path.join(
+  "infrastructure",
+  "docker",
+  "scripts",
+  "credential-sentinels.ps1",
+);
+
+function sentinelHelperSource() {
+  return readFileSync(path.join(root, SENTINEL_HELPER), "utf8");
+}
+
 test("M5/T1-R2 validates only environment variables used by each profile", () => {
+  // F-522 (R10-L09-6): the credential name set lives in the one carrier both
+  // entrypoint scripts dot-source, so the pin reads that carrier rather than
+  // whichever script happened to declare it.
+  const helper = sentinelHelperSource();
   assert.match(
     preflight,
     /\$usesKnowledge = \$Profile -in @\("knowledge", "all"\)/,
   );
   assert.match(
-    preflight,
+    helper,
     /\$usesAutomation = \$Profile -in @\("automation", "all"\)/,
   );
-  assert.match(preflight, /\$requiredVariables = @\("POSTGRES_PASSWORD"\)/);
   assert.match(
     preflight,
+    /\$requiredVariables = @\(Get-CredentialVariableNames \$Profile\)/,
+    "preflight must assemble its own list from the shared carrier",
+  );
+  assert.match(helper, /function Get-CredentialVariableNames/);
+  assert.match(helper, /\$names = @\("POSTGRES_PASSWORD"\)/);
+  assert.match(
+    helper,
     /if \(\$usesAutomation\) \{[\s\S]*"N8N_POSTGRES_PASSWORD", "N8N_ENCRYPTION_KEY"/,
   );
+  assert.match(helper, /function Test-SentinelValue/);
+  assert.match(helper, /function Read-EnvironmentFile/);
   assert.match(
     preflight,
     /if \(\$usesKnowledge\) \{[\s\S]*"KNOWLEDGE_VAULT_ROOT", "OLLAMA_SMOKE_MODEL"/,
   );
+});
+
+test("F-522: start.ps1 refuses a missing or sentinel credential before its first up", () => {
+  assert.match(
+    start,
+    /Join-Path \$PSScriptRoot "credential-sentinels\.ps1"/,
+    "start.ps1 must dot-source the credential carrier",
+  );
+  const guardIndex = start.indexOf("Assert-CredentialValues");
+  assert.ok(
+    guardIndex >= 0,
+    "start.ps1 must call the credential guard, not only check that the env file exists",
+  );
+  const firstUp = start.indexOf('"up",');
+  assert.ok(firstUp >= 0, "the first compose up must still be in the script");
+  assert.ok(
+    guardIndex < firstUp,
+    "the guard must run before the first `up`, or the stack is created unchecked",
+  );
+});
+
+test("F-522: no entrypoint script re-declares the sentinel grammar", () => {
+  for (const [name, source] of [
+    ["start.ps1", start],
+    ["preflight.ps1", preflight],
+  ]) {
+    assert.match(
+      source,
+      /credential-sentinels\.ps1/,
+      `${name} must source the shared credential carrier`,
+    );
+    assert.doesNotMatch(
+      source,
+      /^function Test-SentinelValue/mu,
+      `${name} must not carry its own copy of the sentinel grammar`,
+    );
+    assert.doesNotMatch(
+      source,
+      /^function Read-EnvironmentFile/mu,
+      `${name} must not carry its own copy of the env-file reader`,
+    );
+    assert.doesNotMatch(
+      source,
+      /\$requiredVariables = @\("POSTGRES_PASSWORD"\)/u,
+      `${name} must not re-declare the credential name set the carrier already owns`,
+    );
+  }
 });
 
 //

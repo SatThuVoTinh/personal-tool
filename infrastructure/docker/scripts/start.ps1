@@ -9,6 +9,8 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
+. (Join-Path $PSScriptRoot "credential-sentinels.ps1")
+
 if (-not $EnvironmentFile) { $EnvironmentFile = Join-Path $PSScriptRoot "..\env\.env" }
 
 $dockerDirectory = Split-Path -Parent $PSScriptRoot
@@ -55,6 +57,13 @@ function Invoke-PlatformCompose {
 if (-not (Test-Path -LiteralPath $EnvironmentFile -PathType Leaf)) {
   throw "Runtime environment file is missing: $EnvironmentFile"
 }
+
+# F-522 (R10-L09-6): this is the mutating path README.md and both runbooks
+# publish as the start command, so it refuses a missing or placeholder
+# credential itself rather than relying on the operator having volunteered to
+# run preflight.ps1 first. compose.core.yml interpolates
+# POSTGRES_PASSWORD with an `unconfigured` default, so nothing downstream does.
+Assert-CredentialValues -Values (Read-EnvironmentFile $EnvironmentFile) -Names (Get-CredentialVariableNames $Profile)
 
 if ($usesKnowledge) {
   $configuredVaultRoot = Get-EnvironmentFileValue "KNOWLEDGE_VAULT_ROOT" $EnvironmentFile

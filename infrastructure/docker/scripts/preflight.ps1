@@ -9,15 +9,16 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
+. (Join-Path $PSScriptRoot "credential-sentinels.ps1")
+
 $dockerDirectory = Split-Path -Parent $PSScriptRoot
 $composeFile = Join-Path $dockerDirectory "compose\compose.core.yml"
 $knowledgeComposeFile = Join-Path $dockerDirectory "compose\compose.knowledge.yml"
 $usesKnowledge = $Profile -in @("knowledge", "all")
-$usesAutomation = $Profile -in @("automation", "all")
-$requiredVariables = @("POSTGRES_PASSWORD")
-if ($usesAutomation) {
-  $requiredVariables += @("N8N_POSTGRES_PASSWORD", "N8N_ENCRYPTION_KEY")
-}
+# F-522 (R10-L09-6): the credential names and the sentinel grammar come from the
+# shared carrier that start.ps1 also dot-sources, so the mutating path cannot
+# drift away from the answer this script gives.
+$requiredVariables = @(Get-CredentialVariableNames $Profile)
 if ($usesKnowledge) {
   # F-266 (R7-D13-03): the service reads KNOWLEDGE_EMBEDDING_MODEL
   # (apps/knowledge/app/config.py), so that is the variable this preflight has
@@ -25,35 +26,6 @@ if ($usesKnowledge) {
   # the two, so an operator who changed one got a green preflight and a
   # knowledge readiness failure at index/embed time.
   $requiredVariables += @("KNOWLEDGE_VAULT_ROOT", "OLLAMA_SMOKE_MODEL", "KNOWLEDGE_EMBEDDING_MODEL")
-}
-
-function Read-EnvironmentFile {
-  param([string]$Path)
-
-  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
-    throw "Runtime environment file is missing: $Path"
-  }
-
-  $values = @{}
-  foreach ($line in Get-Content -LiteralPath $Path -Encoding utf8) {
-    $trimmed = $line.Trim()
-    if ($trimmed.Length -eq 0 -or $trimmed.StartsWith("#")) { continue }
-    $separator = $trimmed.IndexOf("=")
-    if ($separator -lt 1) { throw "Runtime environment file contains an invalid assignment." }
-    $name = $trimmed.Substring(0, $separator).Trim()
-    $value = $trimmed.Substring($separator + 1).Trim().Trim('"').Trim("'")
-    $values[$name] = $value
-  }
-  return $values
-}
-
-function Test-SentinelValue {
-  param([string]$Value)
-  $normalized = $Value.Trim().ToLowerInvariant()
-  return (
-    $normalized.Length -eq 0 -or
-    $normalized -match "(?:change|replace|example|placeholder|your)[-_ ]?(?:me|with|value|secret|password|key|path)?"
-  )
 }
 
 function Get-OllamaExecutable {
@@ -68,11 +40,7 @@ function Get-OllamaExecutable {
 }
 
 $values = Read-EnvironmentFile $EnvironmentFile
-foreach ($name in $requiredVariables) {
-  if (-not $values.ContainsKey($name) -or (Test-SentinelValue $values[$name])) {
-    throw "Runtime variable $name is missing, empty, or uses a rejected example value."
-  }
-}
+Assert-CredentialValues -Values $values -Names $requiredVariables
 
 if ($usesKnowledge) {
   if (-not (Test-Path -LiteralPath $values.KNOWLEDGE_VAULT_ROOT -PathType Container)) {
