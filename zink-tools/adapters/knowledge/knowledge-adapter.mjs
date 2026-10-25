@@ -195,6 +195,48 @@ function projectKnowledgeFailureCode(data) {
     : "";
 }
 
+// F-552 (R10-T06-4): the retry verdict each governed lifecycle code carries.
+//
+// A status integer is a transport fact, not a cause. `EMBEDDING_MODEL_DRIFT`
+// once arrived as 503 on `/v1/search` and 409 on `/v1/index-runs`, so the
+// identical permanent model swap was retried three times against one route and
+// never against the other — the retryable answer was derived from the transport
+// rather than from the code the service raised. The verdict now comes from the
+// code; the status set below is only the fallback for a response that carries
+// no governed code (a proxy 503, a rate limit, a transport failure).
+//
+// MIRROR OF `GOVERNED_LIFECYCLE_ERRORS` (apps/knowledge/app/main.py), retry
+// column only: this module cannot import Python, and the deployed extension
+// ships only `lib/` and `contracts/`, so the duplication is deliberate and
+// pinned by `tests/m12-t9-r4-lifecycle-retry-verdict.test.mjs`, which parses the
+// service's table and compares the code set and every verdict.
+export const GOVERNED_LIFECYCLE_RETRYABLE = Object.freeze({
+  VAULT_UNAVAILABLE: true,
+  EMBEDDING_MODEL_UNAVAILABLE: true,
+  EMBEDDING_FAILED: true,
+  EMBEDDING_INVALID_DIMENSIONS: false,
+  EMBEDDING_MODEL_DRIFT: false,
+});
+
+// Transport facts that stay retryable when no governed code answers: 0 is a
+// transport failure (`req.on("error")`), 429 the upstream's own rate limit,
+// 503/504 a proxy or an unclassified outage.
+export const RETRYABLE_KNOWLEDGE_STATUS_CODES = Object.freeze([0, 429, 503, 504]);
+
+/**
+ * Whether another attempt is worth its cost, judged by cause first.
+ *
+ * @param {{status: number, data?: string}} response
+ * @returns {boolean}
+ */
+export function knowledgeFailureIsRetryable(response) {
+  const code = projectKnowledgeFailureCode(response.data ?? "");
+  if (Object.hasOwn(GOVERNED_LIFECYCLE_RETRYABLE, code)) {
+    return GOVERNED_LIFECYCLE_RETRYABLE[code];
+  }
+  return RETRYABLE_KNOWLEDGE_STATUS_CODES.includes(response.status);
+}
+
 function summarizeKnowledgeFailure(data) {
   let body;
   try {
@@ -613,11 +655,10 @@ export class KnowledgeAdapter {
           // F-184 (R1-A14-07): a transport failure (status 0) is retryable, and
           // each attempt is bounded by the call budget rather than by a
           // per-attempt timeout of its own.
-          const retryableOutcome =
-            response.status === 0 ||
-            response.status === 429 ||
-            response.status === 503 ||
-            response.status === 504;
+          // F-552 (R10-T06-4): the verdict comes from the governed code the
+          // service raised; the status set is the fallback for a response that
+          // carries none.
+          const retryableOutcome = knowledgeFailureIsRetryable(response);
           if (retryableOutcome && attempt < maxAttempts) {
             let retryDelayMs = attempt * 1500;
             const retryHeader = response.headers?.["retry-after"];
