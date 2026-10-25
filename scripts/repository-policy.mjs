@@ -112,7 +112,7 @@ const SECRET_SCAN_ALLOWED_SCOPES = [
   {
     scope: "tests/",
     pattern: "^tests/.*",
-    measured: 283,
+    measured: 285,
   },
   {
     scope: "apps/knowledge/tests/",
@@ -139,8 +139,10 @@ const SECRET_SCAN_ALLOWED_SCOPES = [
 // it re-measures and records the new number, which is the visible act the
 // row asked for. Measured again on 2026-10-25 while closing the R4 band:
 // 283 + 36 + 1 + 1 = 321 tracked paths (one `pdf-runtime/tests/` lane left
-// the tree since the 2026-10-20 measurement).
-const SECRET_SCAN_SUPPRESSED_CEILING = 321;
+// the tree since the 2026-10-20 measurement). Two R4 band tests (F-506,
+// F-393) landed after that measurement, so `tests/` carries 285 and the
+// total is 285 + 36 + 1 + 1 = 323.
+const SECRET_SCAN_SUPPRESSED_CEILING = 323;
 
 // The fingerprint half of the suppression record. A pattern suppresses a
 // family; a fingerprint suppresses one finding, and the finding has four

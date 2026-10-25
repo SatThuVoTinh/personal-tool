@@ -2162,9 +2162,15 @@ function reconcileForRetry(task, nodeId, eventTime) {
  *
  * The decision MAY name the outcome it accepted; when it does, the name must
  * equal the outcome the ledger recorded, so a decision cannot re-label the
- * result it is accepting. A decision that names no outcome is a verdict
- * recorded before the binding existed: it keeps the legacy COMPLETE, so every
- * already-written acceptance still replays byte-identically.
+ * result it is accepting. A decision that names no outcome follows the outcome
+ * the ledger recorded — a silent verdict cannot contradict a result it is
+ * accepting either — and only a result that recorded none keeps the legacy
+ * COMPLETE.
+ *
+ * F-393: the silent branch used to return COMPLETE unconditionally, and the
+ * plugin's only ACCEPT emitter sends no outcome_status, so the silent branch
+ * was the PRODUCTION branch: accepting a recorded FAILED closed the brief as a
+ * completed run and the ledger then contradicted the outcome it had recorded.
  */
 function resolveAcceptedOutcome(task, payload) {
   const recorded = task.root_result?.outcome_status ?? null;
@@ -2177,7 +2183,7 @@ function resolveAcceptedOutcome(task, payload) {
     );
     return claimed === "COMPLETE" ? "COMPLETE" : claimed;
   }
-  return "COMPLETE";
+  return recorded ?? "COMPLETE";
 }
 
 /**
