@@ -1238,16 +1238,26 @@ export async function validateStagedVersion(directory, parts) {
   return { errors, records };
 }
 
-async function fsyncDirectoryBestEffort(dir) {
+/**
+ * Make a rename durable by syncing its parent directory.
+ *
+ * F-411: only "this platform cannot open a directory handle for sync" is a
+ * hint that can be ignored. Every other failure — a POSIX EIO, EACCES, ENOENT —
+ * is a lost anchor, and swallowing it turned an unanchored write into an
+ * acknowledged one.
+ */
+export async function fsyncDirectoryBestEffort(dir) {
+  let handle;
   try {
-    const handle = await open(dir, "r");
-    try {
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
-  } catch {
-    /* durability hint only; the rename is what makes the entry atomic */
+    handle = await open(dir, "r");
+    await handle.sync();
+  } catch (error) {
+    const platformClass =
+      process.platform === "win32" &&
+      ["EPERM", "EISDIR", "EINVAL", "ENOTSUP"].includes(error?.code);
+    if (!platformClass) throw error;
+  } finally {
+    if (handle) await handle.close();
   }
 }
 
@@ -1985,6 +1995,9 @@ export async function retireSkillUnlocked({
   ownerActor = "owner",
   decisionRef,
   at = null,
+  // F-411: the parent-directory anchor is injectable so a fault in the sync can
+  // be proven to reach the caller instead of being swallowed.
+  directorySync = fsyncDirectoryBestEffort,
 }) {
   const nsArray = Array.isArray(namespace) ? namespace : [namespace];
   if (
@@ -2114,6 +2127,17 @@ export async function retireSkillUnlocked({
     writerError(
       "SKILL_PUBLISH_FAILED",
       `the retirement could not be written: ${error?.message ?? error}`,
+    );
+  }
+
+  try {
+    // F-411: the retirement rename carries the same parent-directory anchor the
+    // promotion path has, so an acknowledged retirement survives a crash.
+    await directorySync(path.dirname(manifestPath));
+  } catch (error) {
+    writerError(
+      "SKILL_PUBLISH_FAILED",
+      `the retirement could not be anchored: ${error?.message ?? error}`,
     );
   }
 
