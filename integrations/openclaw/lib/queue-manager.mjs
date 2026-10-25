@@ -85,6 +85,9 @@ const ACQUISITION_STORAGE_ERRORS = new Set([
  *   is a routing aid (M8-057: ANY-match), never the final authorization.
  * - M7-028/M7-029/M7-030: heartbeat/finish/reclaim require the current
  *   leaseId fence; finish additionally requires agentId + attempt.
+ * - M12/T9-R4 F-407: one expiry predicate governs the fence, the finish, the
+ *   heartbeat and the claimTaskById reclaim; none of them revives a lapsed
+ *   lease by rewriting its expiry.
  * - M10/T2-R2: withExecutionFence() is the queue's current-execution-authority
  *   seam. It runs an authoritative commit inside the queue critical section so
  *   a lease revoked by stale recovery cannot interleave with that commit.
@@ -108,6 +111,33 @@ const QUEUE_TERMINAL_STATES = Object.freeze([
 
 function sha256hex(value) {
   return createHash("sha256").update(String(value), "utf8").digest("hex");
+}
+
+/**
+ * M12/T9-R4 F-407 (R9-T02-4): the ONE lease-expiry predicate.
+ *
+ * Four mutators can move or extend an EXECUTING item — the fence, the finish,
+ * the heartbeat, and the `claimTaskById` reclaim that delegates to the
+ * heartbeat. Each validated identity fields (`status`, `claimedBy`, `leaseId`,
+ * `attempt`) that all still match after the clock passed `leaseExpiresAt`, so
+ * enforcing the expiry at only the fence let a lapsed owner finish governed
+ * work and let a heartbeat rewrite the expiry forward, erasing the lapse.
+ * Every one of them asks this function, so they cannot answer differently.
+ *
+ * An absent or unparsable expiry is not expired: it is not a lease this queue
+ * issued, and the item's identity fields still decide. That is the tolerance
+ * the fence has always had, kept here so the shared predicate changes only
+ * the three paths that lacked a check.
+ */
+function assertLeaseNotExpired(item, taskId) {
+  if (typeof item?.leaseExpiresAt !== "string") return;
+  const expiresAt = Date.parse(item.leaseExpiresAt);
+  if (Number.isNaN(expiresAt)) return;
+  if (expiresAt <= Date.now()) {
+    throw new Error(
+      `EXECUTION_FENCE_EXPIRED: ${taskId} lease expired at ${item.leaseExpiresAt}`,
+    );
+  }
 }
 
 /**
@@ -631,6 +661,8 @@ export class QueueManager {
         if (item.claimedBy === agentId) {
           // M7-030: reclaim/renew requires the current lease fence.
           // Possessing only task ID + agent ID is not enough.
+          // F-407: the reclaim renews the lease, so it is governed by the
+          // shared expiry predicate inside the heartbeat it delegates to.
           return this._heartbeatInner({
             taskId,
             agentId,
@@ -793,15 +825,8 @@ export class QueueManager {
           `EXECUTION_FENCE_REVOKED: ${taskId} no longer holds the presented lease`,
         );
       }
-      if (
-        typeof item.leaseExpiresAt === "string" &&
-        !Number.isNaN(Date.parse(item.leaseExpiresAt)) &&
-        Date.parse(item.leaseExpiresAt) <= Date.now()
-      ) {
-        throw new Error(
-          `EXECUTION_FENCE_EXPIRED: ${taskId} lease expired at ${item.leaseExpiresAt}`,
-        );
-      }
+      // F-407: the same predicate every other lease mutator asks.
+      assertLeaseNotExpired(item, taskId);
       // F-056 (legacy R1-A06-01): the lease clock moved only through
       // `heartbeat()`, and `heartbeat()` had no production caller, so
       // `lastHeartbeatAt` stood at `claimedAt` for the whole life of every
@@ -907,6 +932,10 @@ export class QueueManager {
         );
       }
 
+      // F-407: a heartbeat may extend authority that is still held, never
+      // revive it; the rewrite below would erase the lapse otherwise.
+      assertLeaseNotExpired(item, taskId);
+
       const now = Date.now();
       item.lastHeartbeatAt = new Date(now).toISOString();
       item.leaseExpiresAt = new Date(now + leaseSeconds * 1000).toISOString();
@@ -955,6 +984,9 @@ export class QueueManager {
             "ATTEMPT_MISMATCH: Finish attempt does not match current attempt",
           );
         }
+        // F-407: finishing is a governed mutation under the lease the fence
+        // checks, so a lapsed lease is not authority here either.
+        assertLeaseNotExpired(item, taskId);
 
         const now = new Date().toISOString();
         const summary = typeof resultSummary === "string" ? resultSummary : "";

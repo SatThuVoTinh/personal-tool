@@ -112,7 +112,7 @@ const SECRET_SCAN_ALLOWED_SCOPES = [
   {
     scope: "tests/",
     pattern: "^tests/.*",
-    measured: 292,
+    measured: 293,
   },
   {
     scope: "apps/knowledge/tests/",
@@ -142,7 +142,9 @@ const SECRET_SCAN_ALLOWED_SCOPES = [
 // the tree since the 2026-10-20 measurement). Nine R4 band tests (F-506,
 // F-393, F-395, F-401, F-403, F-404, F-409, F-411, F-421) landed after that
 // measurement, so `tests/` carries 292 and the total is 292 + 36 + 1 + 1 = 330.
-const SECRET_SCAN_SUPPRESSED_CEILING = 330;
+// One more R4 band test (F-407) landed after that, so `tests/` carries 293 and
+// the total is 293 + 36 + 1 + 1 = 331.
+const SECRET_SCAN_SUPPRESSED_CEILING = 331;
 
 // The fingerprint half of the suppression record. A pattern suppresses a
 // family; a fingerprint suppresses one finding, and the finding has four
