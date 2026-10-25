@@ -558,7 +558,7 @@ Cross-process exactly-once is still not claimed and must not be claimed.
 
 ### 14.7 Evidence and status
 
-`tests/m10-t2-r2-coordinator-execution-authority.test.mjs` (19 cases) is the
+`tests/m10-t2-r2-coordinator-execution-authority.test.mjs` (20 cases) is the
 regression suite, including the fencing/race evidence. The case count is
 derived, not remembered (re-derive it with
 `grep -c '^test(' tests/m10-t2-r2-coordinator-execution-authority.test.mjs`). Repository-local

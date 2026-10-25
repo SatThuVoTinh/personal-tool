@@ -112,17 +112,17 @@ const SECRET_SCAN_ALLOWED_SCOPES = [
   {
     scope: "tests/",
     pattern: "^tests/.*",
-    measured: 195,
+    measured: 283,
   },
   {
     scope: "apps/knowledge/tests/",
     pattern: "^apps/knowledge/tests/.*",
-    measured: 26,
+    measured: 36,
   },
   {
     scope: "apps/knowledge/pdf-runtime/tests/",
     pattern: "^apps/knowledge/pdf-runtime/tests/.*",
-    measured: 2,
+    measured: 1,
   },
   {
     // The one file the allowlist names by path rather than by scope. It is
@@ -134,11 +134,13 @@ const SECRET_SCAN_ALLOWED_SCOPES = [
   },
 ];
 // The measured total was 224 tracked paths; the M12/T9 band added 51 lanes
-// under the recorded `tests/` scope, so the measured total is now 275. The
-// ceiling carries headroom for one band's new test files; a band that exceeds
-// it must re-measure and record the new number, which is the visible act the
-// row asked for.
-const SECRET_SCAN_SUPPRESSED_CEILING = 320;
+// under the recorded `tests/` scope, so the measured total became 275. The
+// ceiling carries headroom for a band's new test files; a band that exceeds
+// it re-measures and records the new number, which is the visible act the
+// row asked for. Measured again on 2026-10-25 while closing the R4 band:
+// 283 + 36 + 1 + 1 = 321 tracked paths (one `pdf-runtime/tests/` lane left
+// the tree since the 2026-10-20 measurement).
+const SECRET_SCAN_SUPPRESSED_CEILING = 321;
 
 // The fingerprint half of the suppression record. A pattern suppresses a
 // family; a fingerprint suppresses one finding, and the finding has four
