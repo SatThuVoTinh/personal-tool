@@ -190,11 +190,13 @@ assert.ok(
 const M11_T3_ENTRYPOINT_SHA256 =
   "c4d0d921d1f0c4ca1eca6e2f3dd6093e7a6a878359ab69779b37b18d0ce1bd1a";
 /**
- * M12/T9-R4 F-533: the CURRENT packaged entrypoint build. Accepted by content
- * comparison and deliberately NOT listed.
+ * M12/T9-R4 F-533, then F-470 + F-472: the CURRENT packaged entrypoint build.
+ * Accepted by content comparison and deliberately NOT listed. F-533's build
+ * (`338d1406…`) was never installed, so it joins the other undeployed
+ * candidates rather than the admitted predecessors.
  */
 const R4_F533_CURRENT_ENTRYPOINT_SHA256 =
-  "338d1406cc73b299d148770eb507082c3a8469024177b426e0d62a7695f1b94c";
+  "5aacf6a7a983e1aa4b913a2f38682d030ddac5c48a01fbd3e2f9d02a4942f3e8";
 const M12_T2_2_OUTGOING_ENTRYPOINT_SHA256 =
   "513beb15c3d7624c0a928c4c1556dc44d4c4cff4f1e00980f24b298a25751c0d";
 assert.ok(
@@ -1176,9 +1178,17 @@ test("R13 B3: the build the live runtime carries is accepted and converges", asy
     // never allowlisted; the live `a5580bb6...` (measured read-only on the WSL
     // runtime) and the admitted `f7995d51...` both stay admitted predecessors,
     // so the upgrade path is unchanged.
+    // M12/T9-R4 F-417 + F-504, re-valued in band. F-417 classifies a
+    // post-rename directory-fsync failure as a committed-but-uncertain write in
+    // this writer (and in `ledger.mjs`), and F-504 makes every result
+    // generation replace or clear its own record, so the queue writer's bytes
+    // changed again. Attribution measured, not assumed: the pre-row blob at
+    // `e24c2d1` hashes to exactly the value replaced here (`f2774f58…`). No
+    // `configure.mjs` entry is added: this is the CURRENT build, accepted by
+    // content comparison and deliberately never allowlisted.
     assert.equal(
       sha256(readFileSync(p.asset("lib/queue-manager.mjs"), "utf8")),
-      "f2774f580fa45d48ad0cfeb59b93aae2cee4e97f5ab03077a9d0802b400d7572",
+      "ede81c64af7dd2984a49c1f9f841a7494b053b2c8e1291c51a81422e0c42bf29",
       "an accepted predecessor must converge onto the current queue writer",
     );
   } finally {
