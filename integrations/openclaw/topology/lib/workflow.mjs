@@ -682,6 +682,17 @@ export function applyWorkflowEvent(
         run.child_session_key === payload.child_session_key &&
         run.parent_session_key === payload.parent_session_key,
     );
+    // F-395: the report is validated BEFORE the abandoned-spawn lane can
+    // consume it. That lane reconciles the attempt from the report alone, so
+    // reading `outcome` after it meant the lane acted on an unvalidated value
+    // and — because it never read the outcome at all — journaled an ok child as
+    // a transient failure the retry gate then authorized re-executing.
+    requireCondition(
+      ["ok", "error", "timeout", "killed", "reset", "deleted"].includes(
+        payload.outcome,
+      ),
+      "SCHEMA_INVALID",
+    );
     if (matches.length === 0) {
       // M12/T9 F-078: a late report about a spawn whose receipt was lost.
       // The ledger never learned this child's identity, so the report matches
@@ -701,21 +712,25 @@ export function applyWorkflowEvent(
           run.parent_session_key === payload.parent_session_key,
       );
       if (abandoned.length === 1) {
+        const run = abandoned[0];
+        // F-395: an ok child is the SAME terminal success the matched lane
+        // records. Reconciling it to FAILED/TRANSIENT_RUNTIME_FAILURE told the
+        // ledger a successful execution had crashed, and that reason code is
+        // exactly the predicate the next-attempt gate reads.
+        if (payload.outcome === "ok") {
+          run.run_state = "COMPLETE";
+          run.reconciled_at = eventTime;
+          return next;
+        }
         reconcileAbandonedSpawns(
           task,
           eventTime,
-          (run) => run === abandoned[0],
+          (candidate) => candidate === run,
         );
         return next;
       }
     }
     requireCondition(matches.length === 1, "LINEAGE_MISMATCH");
-    requireCondition(
-      ["ok", "error", "timeout", "killed", "reset", "deleted"].includes(
-        payload.outcome,
-      ),
-      "SCHEMA_INVALID",
-    );
     const run = matches[0];
     // M8-056: a superseded attempt's callback is late by definition. It must
     // not block the live attempt by forcing the task out of its state.
