@@ -71,6 +71,21 @@ export function sanitizeDiscordText(
 }
 
 /**
+ * M12/T9 F-463: strips Discord's group-mention tokens from text that is published
+ * as message content. A ledger-derived label must never be able to ping a channel.
+ */
+export function stripDiscordMentions(text, { collapseWhitespace = true } = {}) {
+  if (typeof text !== "string") return "";
+  const stripped = text.replace(
+    /(?<![A-Za-z0-9_])@everyone|(?<![A-Za-z0-9_])@here|<@[!&]?\d+>|<#\d+>/giu,
+    "",
+  );
+  return collapseWhitespace
+    ? stripped.replace(/[^\S\r\n]+/g, " ").trim()
+    : stripped;
+}
+
+/**
  * Formats a governed result or raw output into a clean, human-safe Discord message.
  */
 export function formatForDiscord(rawInput, { agentName = "Zink Bot" } = {}) {
@@ -641,6 +656,14 @@ function clipField(value, limit = PLAN_FIELD_LIMIT) {
   return `${text.slice(0, limit).trimEnd()}…`;
 }
 
+// M12/T9 F-463: a plan field is ledger-supplied free text, so it carries the same
+// redaction as any other published text before it joins a card body. `clipField`
+// only trims and slices; on its own it let paths, session keys, tokens and digests
+// through to the approval and result surfaces.
+function redactGovernedField(value, limit = PLAN_FIELD_LIMIT) {
+  return clipField(sanitizeDiscordText(value), limit);
+}
+
 export function specialistSoftwareLabel(agentId) {
   return (
     SPECIALIST_SOFTWARE_LABELS[agentId] ??
@@ -664,11 +687,11 @@ export function renderGovernedPlanSteps(nodes, { activeNodeId = null } = {}) {
         ? `${index + 1}. **${label}** — \`${nodeId}\``
         : `${index + 1}. **${label}**`,
     ];
-    const operations = clipField(node?.inputs);
+    const operations = redactGovernedField(node?.inputs);
     if (operations) lines.push(`   - Thao tác: ${operations}`);
-    const constraints = clipField(node?.constraints);
+    const constraints = redactGovernedField(node?.constraints);
     if (constraints) lines.push(`   - Ràng buộc: ${constraints}`);
-    const criteria = clipField(node?.validation_criteria);
+    const criteria = redactGovernedField(node?.validation_criteria);
     if (criteria) lines.push(`   - Nghiệm thu: ${criteria}`);
     if (node?.required === false) lines.push("   - Không bắt buộc");
     if (activeNodeId && node?.node_id === activeNodeId) {
@@ -689,10 +712,10 @@ export function renderGovernedExpectedResult({
   previewImage = null,
 }) {
   const lines = [];
-  const summary = clipField(outcome, PLAN_FIELD_LIMIT);
+  const summary = redactGovernedField(outcome, PLAN_FIELD_LIMIT);
   if (summary) lines.push(summary);
   for (const node of Array.isArray(nodes) ? nodes : []) {
-    const criteria = clipField(node?.validation_criteria, 240);
+    const criteria = redactGovernedField(node?.validation_criteria, 240);
     if (criteria) {
       lines.push(`• ${specialistSoftwareLabel(node?.agent_id)}: ${criteria}`);
     }
@@ -784,7 +807,9 @@ export function renderGovernedResultBody({
       ? planSteps.join("\n")
       : "*(không có bước nào trong kế hoạch đã ghi)*",
   );
-  const body = head.join("\n");
+  const body = stripDiscordMentions(head.join("\n"), {
+    collapseWhitespace: false,
+  });
   if (body.length <= DISCORD_BODY_LIMIT) return body;
   return `${body.slice(0, DISCORD_BODY_LIMIT - PLAN_TRUNCATION_MARK.length).trimEnd()}\n${PLAN_TRUNCATION_MARK}`;
 }

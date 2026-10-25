@@ -19,6 +19,12 @@ import test from "node:test";
 
 import { renderGovernedApprovalBody } from "../integrations/openclaw/lib/discord-formatter.mjs";
 import {
+  renderGovernedExpectedResult,
+  renderGovernedPlanSteps,
+  renderGovernedResultBody,
+} from "../integrations/openclaw/lib/discord-formatter.mjs";
+import { openGovernedForumThread } from "../integrations/openclaw/lib/discord-forum-tags.mjs";
+import {
   boundApprovalBody,
   buildApprovalActionLine,
   buildApprovalButtonsMessage,
@@ -157,4 +163,92 @@ test("F-124: the buttons message carries a short ledger-derived pointer", () => 
   assert.doesNotMatch(line, /@everyone/u);
   assert.doesNotMatch(line, /<@[!&]?\d+>/u);
   assert.match(line, /task/u);
+});
+
+// M12/T9 F-463 (legacy R9-L05-1): the governed plan fields reached the approval
+// and result bodies through `clipField`, which only trims and slices, so a path,
+// a session key, a bearer-style token or a 64-hex digest in ledger text landed on
+// a Discord-visible card. Only mentions were stripped, and only at the approval
+// seam; the result body and the forum's opening message stripped nothing.
+const SENTINEL_PATH = "C:\\Users\\owner\\vault\\private\\note.md";
+const SENTINEL_SESSION = "sess-abcdefgh12345678";
+const SENTINEL_TOKEN = "Bearer abc.def-ghi_jkl";
+const SENTINEL_DIGEST = "a".repeat(64);
+
+function assertNoIdentifiers(text, where) {
+  assert.ok(!text.includes("C:\\Users"), `${where}: a path survived`);
+  assert.ok(
+    !text.includes(SENTINEL_SESSION),
+    `${where}: a session key survived`,
+  );
+  assert.ok(!text.includes("abc.def"), `${where}: a token survived`);
+  assert.ok(
+    !text.includes(SENTINEL_DIGEST),
+    `${where}: a 64-hex digest survived`,
+  );
+}
+
+test("F-463: every free-text plan field is redacted before it joins a body", () => {
+  const nodes = [
+    {
+      node_id: "node-1",
+      agent_id: "sql",
+      inputs: `read ${SENTINEL_PATH}`,
+      constraints: `keep ${SENTINEL_SESSION} alive`,
+      validation_criteria: `digest is ${SENTINEL_DIGEST}`,
+    },
+  ];
+  const steps = renderGovernedPlanSteps(nodes).join("\n");
+  assertNoIdentifiers(steps, "plan steps");
+  // The field's own words survive: this is redaction, not deletion of the step.
+  assert.match(steps, /read/u);
+  assert.match(steps, /keep/u);
+  assert.match(steps, /digest is/u);
+
+  const expected = renderGovernedExpectedResult({
+    nodes,
+    outcome: `send ${SENTINEL_TOKEN} to ${SENTINEL_PATH}`,
+  });
+  assertNoIdentifiers(expected, "expected result");
+});
+
+test("F-463: the result body and the forum opening message are mention-safe", async () => {
+  const body = renderGovernedResultBody({
+    taskId: "task-f463",
+    software: "@everyone",
+    outcomeStatus: "COMPLETE",
+    resultDigest: null,
+    planSteps: renderGovernedPlanSteps([
+      {
+        node_id: "node-1",
+        agent_id: "sql",
+        inputs: "@here <@123456789012345678>",
+      },
+    ]),
+  });
+  assert.doesNotMatch(body, /@everyone|@here/u);
+  assert.doesNotMatch(body, /<@[!&]?\d+>/u);
+
+  const posted = [];
+  const result = await openGovernedForumThread({
+    surface: "results",
+    channelId: "1",
+    token: "token",
+    title: "@everyone [KẾT QUẢ]",
+    bodyContent: `${body}\n<#987654321098765432>`,
+    selections: {},
+    resolver: { resolve: async () => ({ ok: true, tagIds: [] }) },
+    fetchImpl: async (_url, init) => {
+      posted.push(JSON.parse(init.body));
+      return {
+        ok: true,
+        json: async () => ({ id: "thread-1" }),
+      };
+    },
+    deadlineMs: 1000,
+  });
+  assert.equal(result.posted, true);
+  assert.doesNotMatch(posted[0].message.content, /@everyone|@here/u);
+  assert.doesNotMatch(posted[0].message.content, /<#[0-9]+>/u);
+  assert.doesNotMatch(posted[0].name, /@everyone/u);
 });

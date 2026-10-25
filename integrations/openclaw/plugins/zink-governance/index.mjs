@@ -127,6 +127,7 @@ import {
   sanitizeDiscordText,
   specialistSoftwareLabel,
   SPECIALIST_SOFTWARE_LABELS,
+  stripDiscordMentions,
 } from "../../lib/discord-formatter.mjs";
 
 import {
@@ -1891,22 +1892,13 @@ const PLAN_TRUNCATION_MARK = "…(xem toàn bộ kế hoạch trong phiên)";
  *
  * `sanitizeDiscordIdentifier` strips mentions but also every newline, so it
  * cannot be used on a body: the body keeps its structure and loses only the
- * mention tokens.
+ * mention tokens. M12/T9 F-463 moved the token list into the formatter so the
+ * result body and the forum seam strip the same tokens.
  */
-const DISCORD_MENTION_TOKENS = Object.freeze([
-  /(?<![A-Za-z0-9_])@everyone/giu,
-  /(?<![A-Za-z0-9_])@here/giu,
-  /<@[!&]?\d+>/gu,
-  /<#\d+>/gu,
-]);
-
 export function sanitizeApprovalBody(body) {
-  if (typeof body !== "string") return "";
-  let sanitized = body;
-  for (const token of DISCORD_MENTION_TOKENS) {
-    sanitized = sanitized.replace(token, "");
-  }
-  return sanitized;
+  // M12/T9 F-463: one mention stripper for every published body. The whitespace is
+  // left alone here because the body keeps its rendered structure.
+  return stripDiscordMentions(body, { collapseWhitespace: false });
 }
 
 /**
@@ -1976,7 +1968,7 @@ export function buildFirstSpawnApprovalCard({
     steps.push(
       [
         `1. **${specialistSoftwareLabel(targetAgentId)}**`,
-        `   - Thao tác: ${String(spawnInputs ?? "").trim() || "(không mô tả)"}`,
+        `   - Thao tác: ${sanitizeDiscordText(String(spawnInputs ?? "")) || "(không mô tả)"}`,
         "   - **Đang chờ anh duyệt ở bước này**",
       ].join("\n"),
     );

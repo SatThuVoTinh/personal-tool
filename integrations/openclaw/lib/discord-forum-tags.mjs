@@ -19,6 +19,8 @@
  * (requirement 5).
  */
 
+import { stripDiscordMentions } from "./discord-formatter.mjs";
+
 export const SURFACE_TAG_CATEGORIES = Object.freeze({
   approvals: Object.freeze(["STATUS", "RISK", "STACK"]),
   results: Object.freeze(["STATUS", "TYPE", "STACK"]),
@@ -822,8 +824,16 @@ export async function openGovernedForumThread({
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        name: String(title ?? "").slice(0, 100),
-        message: { content: String(bodyContent ?? "").slice(0, 2000) },
+        // M12/T9 F-463: the opening post is the last seam a body crosses, so it
+        // strips mentions itself instead of trusting every caller to have done so.
+        name: stripDiscordMentions(String(title ?? ""), {
+          collapseWhitespace: false,
+        }).slice(0, 100),
+        message: {
+          content: stripDiscordMentions(String(bodyContent ?? ""), {
+            collapseWhitespace: false,
+          }).slice(0, 2000),
+        },
         applied_tags: outcome.tagIds,
       }),
       signal: AbortSignal.timeout(deadlineMs),

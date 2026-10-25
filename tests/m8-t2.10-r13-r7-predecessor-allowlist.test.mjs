@@ -190,14 +190,17 @@ assert.ok(
 const M11_T3_ENTRYPOINT_SHA256 =
   "c4d0d921d1f0c4ca1eca6e2f3dd6093e7a6a878359ab69779b37b18d0ce1bd1a";
 /**
- * M12/T9-R4 F-533, then F-470 + F-472: the CURRENT packaged entrypoint build.
- * Accepted by content comparison and deliberately NOT listed. F-533's build
- * (`338d1406…`) was never installed, so it joins the other undeployed
- * candidates rather than the admitted predecessors. F-470's own test seam then
- * moved the bytes again; `5aacf6a7…` was never installed either.
+ * M12/T9-R4 F-533, then F-470 + F-472, then F-463: the CURRENT packaged
+ * entrypoint build. Accepted by content comparison and deliberately NOT listed.
+ * F-533's build (`338d1406…`) was never installed, so it joins the other
+ * undeployed candidates rather than the admitted predecessors. F-470's own test
+ * seam then moved the bytes again; `5aacf6a7…` was never installed either.
+ * F-463 changes the same plugin (plan-field redaction, result/forum mention
+ * strips, the delegated approval-body stripper), so `415e2d4b…` also stays
+ * unlisted.
  */
 const R4_F533_CURRENT_ENTRYPOINT_SHA256 =
-  "415e2d4b331df65f9d136d1420d4130dbb897e69a7b14410aec821783fb49efc";
+  "f67cbc6fe42285e564a6b5b089c669b1b23075f111a74fcae7516023768b8cd2";
 const M12_T2_2_OUTGOING_ENTRYPOINT_SHA256 =
   "513beb15c3d7624c0a928c4c1556dc44d4c4cff4f1e00980f24b298a25751c0d";
 assert.ok(

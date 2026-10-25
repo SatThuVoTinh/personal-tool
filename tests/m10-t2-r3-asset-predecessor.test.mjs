@@ -168,8 +168,14 @@ const HYGIENE_ASSET_PREDECESSORS = Object.freeze({
 // F-470's own test seam (`options.toolRegistry`) then changed those bytes again; the
 // `5aacf6a7…` build it replaces was never installed either, so it stays unlisted and
 // the current build is the digest below.
+// M12/T9-R4 F-463: the pin moves once more. Routing every free-text plan field
+// through the formatter's redactor, stripping mentions at the result and forum
+// seams and delegating `sanitizeApprovalBody` to the shared stripper changes the
+// plugin's bytes. Like every build in this band, `415e2d4b…` was never installed,
+// so it stays unlisted and the digest below is the current build, accepted by
+// content comparison.
 const CURRENT_ENTRYPOINT_SHA256 =
-  "415e2d4b331df65f9d136d1420d4130dbb897e69a7b14410aec821783fb49efc";
+  "f67cbc6fe42285e564a6b5b089c669b1b23075f111a74fcae7516023768b8cd2";
 
 const identifiers = Object.freeze({
   discordGuildId: "123456789012345678",
