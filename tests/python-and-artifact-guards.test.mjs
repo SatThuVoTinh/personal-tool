@@ -1,5 +1,6 @@
 import test, { describe } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import { validateContractSchema } from "../integrations/openclaw/topology/lib/guard.mjs";
 import { TOOL_RESULT_ENVELOPE_MAX_BYTES } from "../integrations/openclaw/topology/lib/schema.mjs";
@@ -235,5 +236,27 @@ describe("F-462 (R9-T08-4) — the deny scan skips comment and literal text", ()
         `${rule} must name the executable line, not the masked prose above it`,
       );
     }
+  });
+
+  /**
+   * The published claim is part of the finding: README named
+   * `python/python-validator.mjs` as the `.py` gate even though nothing in
+   * production imports it, and the real gate (`artifact-validator.mjs`) runs
+   * `py_compile` plus counts with no content deny rule. Whoever re-publishes a
+   * safety claim has to revisit this row first.
+   */
+  test("F-462: the README publishes what the .py gate actually enforces", () => {
+    const readme = readFileSync(
+      new URL("../README.md", import.meta.url),
+      "utf8",
+    );
+    const bullet = readme
+      .split(/\r?\n/u)
+      .find((line) => line.includes("**Python (`.py`):**"));
+    assert.ok(bullet, "the README must keep a .py validation bullet");
+    assert.match(bullet, /artifact-validator\.mjs/u);
+    assert.match(bullet, /ENGINE_NOT_IMPLEMENTED/u);
+    assert.match(bullet, /không có deny-rule nội dung/u);
+    assert.match(bullet, /không có caller production/u);
   });
 });

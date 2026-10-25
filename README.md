@@ -804,7 +804,7 @@ Quy trình nghiệm thu kết quả tuân thủ nghiêm ngặt 2 tầng kiểm t
    - **Xác thực và sinh Preview Đa định dạng (`artifact-validator.mjs`):**
      - **Excel (`.xlsx`):** Phân tích workbook, kiểm tra số dòng/cột, sinh ảnh SVG preview trực quan các sheet đầu ra.
      - **SQL (`.sql`):** Đọc UTF-8, đếm câu lệnh, phân loại DML/Read-only, preview 30 dòng đầu kèm chú thích phân tích an toàn (`sql/validator.mjs`).
-     - **Python (`.py`):** Phân tích AST, đếm hàm/class, phân loại import thư viện (Data Science: pandas, numpy, scipy, scikit-learn; Database: duckdb, psycopg2, sqlalchemy; File I/O: csv, json, openpyxl), preview 30 dòng đầu (`python/python-validator.mjs`).
+     - **Python (`.py`):** Kiểm tra cú pháp bằng `py_compile` (AST của CPython), đếm dòng/hàm/class/import, preview 30 dòng đầu (`artifact-validator.mjs`). Tầng này **không có deny-rule nội dung** — không chặn `subprocess`/`exec`/`open` — và `zink_python` chưa thực thi script (`ENGINE_NOT_IMPLEMENTED`, `zink-tools/python/contract.md`); `python/python-validator.mjs` chỉ là tiện ích phân tích tĩnh, không có caller production.
      - **Power BI (`.pbix`, `.pbit`):** Kiểm tra magic byte zip `PK\x03\x04`, xác thực tính toàn vẹn của container và dung lượng tệp.
      - **Apache Parquet (`.parquet`):** Kiểm tra magic byte `PAR1` ở header và footer, xác nhận biên byte hợp lệ.
      - **PDF (`.pdf`):** Kiểm tra magic byte `%PDF-`, trích xuất chuỗi phiên bản từ header.
