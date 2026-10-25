@@ -221,7 +221,9 @@ export const GOVERNED_LIFECYCLE_RETRYABLE = Object.freeze({
 // Transport facts that stay retryable when no governed code answers: 0 is a
 // transport failure (`req.on("error")`), 429 the upstream's own rate limit,
 // 503/504 a proxy or an unclassified outage.
-export const RETRYABLE_KNOWLEDGE_STATUS_CODES = Object.freeze([0, 429, 503, 504]);
+export const RETRYABLE_KNOWLEDGE_STATUS_CODES = Object.freeze([
+  0, 429, 503, 504,
+]);
 
 /**
  * Whether another attempt is worth its cost, judged by cause first.
