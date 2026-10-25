@@ -442,17 +442,24 @@ describe("F-551 (R10-T06-3) — an object `detail` reaches the adapter envelope"
    * `HTTP_<status>`, so the governed vocabulary existed only on the producer
    * side of the hop.
    *
-   * The vocabulary is READ FROM THE PRODUCER rather than restated here: 19
-   * distinct literal codes across those sites, plus the seven
-   * `ModelProbeError` codes `F-515` (R10-L07-4) taught the embedding arms to
-   * carry. A governed code that joins the producer without joining the reader
-   * therefore turns this lane red.
+   * The vocabulary is READ FROM THE PRODUCER rather than restated here: every
+   * refusal site is parsed, and each site resolves to the code(s) it can
+   * actually raise — 19 distinct literal codes, the keys of the
+   * `GOVERNED_LIFECYCLE_ERRORS` table, the `startup_error_code` values the
+   * database layer sets (including the three `MigrationDigestError` codes), the
+   * `SearchValidationError` codes, and the seven `ModelProbeError` codes
+   * `F-515` (R10-L07-4) taught the embedding arms to carry. A governed code
+   * that joins the producer without joining the reader therefore turns this
+   * lane red.
    *
    * `F-552` (R10-T06-4) moved two route arms onto `_governed_lifecycle_refusal`,
    * so the producer surface is now the literal `detail={"code" …}` sites plus
    * that helper's raise calls, minus the helper's own literal, which is the sink
    * they share rather than a site of its own. The count still asserts how many
    * refusals the service can raise, not how they happen to be spelled.
+   *
+   * An expression shape this parser does not know is an ERROR, never a silent
+   * skip: a new dynamic arm must be taught to this lane, not waived by it.
    */
   const PRODUCER = path.resolve(
     import.meta.dirname,
@@ -462,36 +469,105 @@ describe("F-551 (R10-T06-3) — an object `detail` reaches the adapter envelope"
     import.meta.dirname,
     "../apps/knowledge/app/model_probe.py",
   );
+  const DATABASE = path.resolve(
+    import.meta.dirname,
+    "../apps/knowledge/app/database.py",
+  );
+  const RETRIEVAL = path.resolve(
+    import.meta.dirname,
+    "../apps/knowledge/app/retrieval.py",
+  );
+
+  function distinctCodes(text, pattern) {
+    return [...new Set([...text.matchAll(pattern)].map((match) => match[1]))];
+  }
 
   function producerVocabulary() {
     const source = fs.readFileSync(PRODUCER, "utf8");
-    const literalSites = (source.match(/detail=\{"code"/gu) ?? []).length;
-    const detailArgs = (source.match(/detail=/gu) ?? []).length;
-    const sharedHelpers = (
-      source.match(/def _governed_lifecycle_refusal\(/gu) ?? []
-    ).length;
-    const sharedCalls = (
+    const database = fs.readFileSync(DATABASE, "utf8");
+    const retrieval = fs.readFileSync(RETRIEVAL, "utf8");
+
+    const tableCodes = distinctCodes(
+      source,
+      /"([A-Z][A-Z0-9_]{0,63})": \(\d{3}, (?:True|False)\)/gu,
+    );
+    const probeCodes = distinctCodes(
+      fs.readFileSync(PROBE, "utf8"),
+      /\b(EMBEDDING_[A-Z0-9_]{1,63})/gu,
+    );
+    const startupCodes = [
+      ...new Set([
+        ...distinctCodes(
+          database,
+          /startup_error_code = "([A-Z][A-Z0-9_]{0,63})"/gu,
+        ),
+        ...distinctCodes(
+          database,
+          /MigrationDigestError\(\s*f?"([A-Z][A-Z0-9_]{0,63})/gu,
+        ),
+      ]),
+    ];
+    const searchValidationCodes = distinctCodes(
+      retrieval,
+      /SearchValidationError\("([A-Z][A-Z0-9_]{0,63})"\)/gu,
+    );
+    const embeddingCodes = [
+      ...new Set([
+        ...probeCodes,
+        ...tableCodes.filter((code) => code.startsWith("EMBEDDING_")),
+      ]),
+    ];
+
+    const routes = [];
+    for (const [index, line] of source.split(/\r?\n/u).entries()) {
+      const match = line.match(/detail=\{"code": ([^}]+)\}/u);
+      if (!match) continue;
+      if (/\breturn HTTPException\(status_code=status_code,/u.test(line)) {
+        // The helper's sink. Its callers are the sites that reach it.
+        continue;
+      }
+      routes.push({ line: index + 1, expression: match[1].trim() });
+    }
+
+    const dynamic = {
+      'database.startup_error_code or "DATABASE_UNAVAILABLE"': startupCodes,
+      code: embeddingCodes,
+      "error.code": searchValidationCodes,
+    };
+    const sites = routes.map((site) => {
+      const literal = site.expression.match(/^"([A-Z][A-Z0-9_]{0,63})"$/u);
+      const codes = literal ? [literal[1]] : dynamic[site.expression];
+      if (!codes || codes.length === 0) {
+        throw new Error(
+          `unresolved producer expression at main.py:${site.line}: ${site.expression}`,
+        );
+      }
+      return { ...site, codes };
+    });
+    const helperCalls = (
       source.match(/raise _governed_lifecycle_refusal\(/gu) ?? []
     ).length;
-    const literals = [
-      ...new Set(
-        (
-          source.match(/detail=\{"code": "([A-Z][A-Z0-9_]{0,63})"\}/gu) ?? []
-        ).map((site) => site.match(/"([A-Z][A-Z0-9_]{0,63})"/u)[1]),
-      ),
-    ];
-    const probeCodes = [
-      ...new Set(
-        fs.readFileSync(PROBE, "utf8").match(/\bEMBEDDING_[A-Z0-9_]{1,63}/gu) ??
-          [],
-      ),
-    ];
+    for (let index = 0; index < helperCalls; index += 1) {
+      sites.push({
+        expression: "raise _governed_lifecycle_refusal",
+        codes: tableCodes,
+      });
+    }
+
     return {
-      siteCount: literalSites - sharedHelpers + sharedCalls,
-      literalSites,
-      detailArgs,
-      literals,
+      sites,
+      siteCount: sites.length,
+      detailArgs: (source.match(/detail=/gu) ?? []).length,
+      objectSites: (source.match(/detail=\{/gu) ?? []).length,
+      literals: distinctCodes(
+        source,
+        /detail=\{"code": "([A-Z][A-Z0-9_]{0,63})"\}/gu,
+      ),
+      tableCodes,
       probeCodes,
+      startupCodes,
+      searchValidationCodes,
+      codes: [...new Set(sites.flatMap((site) => site.codes))],
     };
   }
 
@@ -523,8 +599,18 @@ describe("F-551 (R10-T06-3) — an object `detail` reaches the adapter envelope"
   }
 
   test("F-551: every governed code the Knowledge service raises reaches the envelope", async () => {
-    const { siteCount, literalSites, detailArgs, literals, probeCodes } =
-      producerVocabulary();
+    const {
+      sites,
+      siteCount,
+      detailArgs,
+      objectSites,
+      literals,
+      tableCodes,
+      probeCodes,
+      startupCodes,
+      searchValidationCodes,
+      codes,
+    } = producerVocabulary();
     assert.equal(
       siteCount,
       44,
@@ -532,13 +618,63 @@ describe("F-551 (R10-T06-3) — an object `detail` reaches the adapter envelope"
     );
     assert.equal(
       detailArgs,
-      literalSites,
+      objectSites,
       "every producer detail must be the governed {code} object the reader names",
     );
     assert.ok(
-      literals.length >= 19 && probeCodes.length >= 7,
+      literals.length >= 19 && probeCodes.length >= 6,
       `the producer vocabulary must be resolvable from source (literals: ${literals.length}, probe codes: ${probeCodes.length})`,
     );
+    // The dynamic arms are part of the surface too. If one of these names went
+    // away, the resolver above would still produce a set, so pin the members.
+    for (const [label, members, resolved] of [
+      [
+        "the governed lifecycle table",
+        [
+          "VAULT_UNAVAILABLE",
+          "EMBEDDING_FAILED",
+          "EMBEDDING_INVALID_DIMENSIONS",
+          "EMBEDDING_MODEL_DRIFT",
+        ],
+        tableCodes,
+      ],
+      [
+        "the boot's startup_error_code",
+        [
+          "MIGRATION_LOCK_UNAVAILABLE",
+          "KNOWLEDGE_MIGRATION_MANIFEST_UNREADABLE",
+          "KNOWLEDGE_MIGRATION_DIGEST_MISMATCH",
+          "KNOWLEDGE_MIGRATION_DIGEST_ADOPTED_MISMATCH",
+        ],
+        startupCodes,
+      ],
+      [
+        "SearchValidationError",
+        ["INVALID_SEARCH_REQUEST"],
+        searchValidationCodes,
+      ],
+    ]) {
+      for (const code of members) {
+        assert.ok(
+          resolved.includes(code),
+          `${label} is a producer of ${code}; the lane must resolve it`,
+        );
+      }
+    }
+    // 19 literal codes plus the 14 the dynamic arms add (4 table keys, 4 boot
+    // codes, 6 probe codes). Duplicates are collapsed for the replay, but every
+    // one of the 44 sites contributes at least one of them.
+    assert.equal(
+      codes.length,
+      33,
+      "the distinct producer vocabulary changed; reconcile the reader and this count",
+    );
+    for (const site of sites) {
+      assert.ok(
+        site.codes.every((code) => codes.includes(code)),
+        `main.py:${site.line} produces a code the replay does not cover`,
+      );
+    }
 
     // 409 is not a retryable status, so each code costs one attempt.
     const service = await failureService(409);
@@ -546,7 +682,7 @@ describe("F-551 (R10-T06-3) — an object `detail` reaches the adapter envelope"
       const adapter = new KnowledgeAdapter(service.endpoint, {
         apiKey: "test-key",
       });
-      for (const code of [...literals, ...probeCodes]) {
+      for (const code of codes) {
         service.serve({ detail: { code } });
         const result = await adapter.queryKnowledge({
           action: "search",
