@@ -157,8 +157,16 @@ const HYGIENE_ASSET_PREDECESSORS = Object.freeze({
 // WSL file, not transcribed from the plan — becomes an admitted predecessor in BOTH per-mode
 // lists in `configure.mjs`. The digest below is deliberately NOT listed there: it is the
 // current build, accepted by content comparison.
+// M12/T9-R4 F-470 and F-472: the pin moves once more, and both rows land in the same
+// entrypoint. F-470 makes the dispatcher's failure envelopes symbolic instead of raw;
+// F-472 bounds an artifact by stat before reading and hashing it. The outgoing
+// `338d1406…` build was never installed — every row in this band ran under no deployment
+// authorization — so it stays unlisted like the other undeployed candidates, and the
+// digest below is the current build, accepted by content comparison. Attribution was
+// measured, not assumed: restoring only the pre-row bytes of `index.mjs` reproduced
+// `338d1406…` exactly through the real generator.
 const CURRENT_ENTRYPOINT_SHA256 =
-  "338d1406cc73b299d148770eb507082c3a8469024177b426e0d62a7695f1b94c";
+  "5aacf6a7a983e1aa4b913a2f38682d030ddac5c48a01fbd3e2f9d02a4942f3e8";
 
 const identifiers = Object.freeze({
   discordGuildId: "123456789012345678",
