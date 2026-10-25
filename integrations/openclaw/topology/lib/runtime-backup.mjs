@@ -238,13 +238,17 @@ export function findDisplacedPluginTrees(
 /**
  * M12/T9 F-370: move a displaced tree OUT of the directory the loader scans.
  *
- * Every destination is checked before any tree is moved and every move is a
- * single rename, so the ceremony either leaves the scanned directory free of
- * displaced trees or changes nothing at all.
+ * M12/T9 F-421: every destination is checked before any tree is moved, and a
+ * rename that fails after an earlier one committed undoes the committed moves
+ * in reverse order. Without that undo the first tree was quarantined while the
+ * rest stayed live — a duplicate plugin id with stale code — so the ceremony
+ * is all-or-nothing above one element too. `rename` is injectable because the
+ * mid-loop fault is the only way to prove the undo.
  */
 export function quarantineDisplacedPluginTrees(
   stateDir,
   pluginId = "zink-governance",
+  { rename = renameSync } = {},
 ) {
   const displaced = findDisplacedPluginTrees(stateDir, pluginId);
   if (displaced.length === 0) return [];
@@ -266,10 +270,25 @@ export function quarantineDisplacedPluginTrees(
     }
   }
   mkdirSync(destination, { recursive: true, mode: 0o700 });
-  for (const move of moves) {
-    renameSync(move.source, move.target);
-    syncDirectory(path.dirname(move.source));
-    syncDirectory(path.dirname(move.target));
+  const moved = [];
+  try {
+    for (const move of moves) {
+      rename(move.source, move.target);
+      moved.push(move);
+      syncDirectory(path.dirname(move.source));
+      syncDirectory(path.dirname(move.target));
+    }
+  } catch (error) {
+    for (const move of moved.reverse()) {
+      try {
+        rename(move.target, move.source);
+        syncDirectory(path.dirname(move.source));
+        syncDirectory(path.dirname(move.target));
+      } catch {
+        /* the original failure is the honest cause; a failed undo is residue */
+      }
+    }
+    throw error;
   }
   return moves.map((move) => ({ from: move.source, to: move.target }));
 }
