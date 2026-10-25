@@ -828,6 +828,27 @@ export function startCoordinatorPickupLoop({
         )),
     runOnce: async () => {
       const ledgerTasks = await getLedgerTasks();
+      // F-401: the stale-execution sweep runs BEFORE the pickup pass, on the
+      // same authoritative ledger read the pass uses. It is the only code that
+      // returns an EXECUTING item to QUEUED with its dead lease revoked, and
+      // nothing in production called it: `claimTask` considers only QUEUED and
+      // withExecutionFence refuses an expired lease, so a crash — or a claim
+      // whose `recordClaimed` threw — stranded the item for ever. Running it
+      // here also lets the same tick claim and start the recovered item, so
+      // recovery costs no extra interval.
+      const recovered = queueManager.detectAndRecoverStaleTasks({
+        ledgerTasks,
+      });
+      if (recovered.length > 0) {
+        logger?.warn?.(
+          `[zink-coordinator-pickup] recovered ${recovered.length} stale execution(s): ${recovered
+            .map(
+              (entry) =>
+                `${entry.taskId} (claimed by ${entry.claimedBy ?? "unknown"}, silent ${Math.round(entry.elapsedSeconds)}s)`,
+            )
+            .join(", ")}`,
+        );
+      }
       const result = await runCoordinatorPickup({
         queueManager,
         ledgerTasks,
