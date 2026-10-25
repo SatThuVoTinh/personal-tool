@@ -570,9 +570,18 @@ export function generateSchemaManifest() {
  * were left to report as red. `zink-knowledge.schema.json` packages into no
  * deployed asset set — no entry for either its old or its new digest exists in
  * `ALLOWED_GOVERNANCE_ASSET_SHA256` — so this roll owes no per-mode admission.
+ *
+ * M12/T9-R4 F-571: the same `zink-knowledge.schema.json` gained
+ * `returned_count`, `candidate_pool_count`, `has_more` and `truncated` in the
+ * closed result object, because the adapter was reporting the page length as
+ * the total and had nowhere to declare either signal. The contract bytes
+ * changed, so the pin follows. Attribution was measured, not assumed: restoring
+ * only the pre-row bytes of that one file reproduced the previous value
+ * (`fe12b29f…`) exactly. The file still packages into no deployed asset set, so
+ * this roll owes no per-mode admission either.
  */
 export const PINNED_SCHEMA_MANIFEST_CHECKSUM =
-  "fe12b29f4f3354cc3f6026b4780e77087989c8403602cdd98dc7f1c605c4e723";
+  "f95cd209035eb7963d4b2b21484c9c919eaa498dda587a8d196ed945ac8e3fa7";
 
 export function verifySchemaManifestChecksums(manifest = null) {
   if (manifest === null) {
