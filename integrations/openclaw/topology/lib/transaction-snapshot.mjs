@@ -747,48 +747,65 @@ export function persistTransactionSnapshot(
   });
 
   const files = {};
-  for (const [relative, entry] of Object.entries(snapshot.files)) {
-    if (!entry.existed) {
-      files[relative] = { existed: false, sha256: null, mode: null };
-      continue;
+  let loaded;
+  try {
+    for (const [relative, entry] of Object.entries(snapshot.files)) {
+      if (!entry.existed) {
+        files[relative] = { existed: false, sha256: null, mode: null };
+        continue;
+      }
+      // The on-disk layout mirrors the recorded relative path, so a restore reads
+      // exactly what the record names. Traversal is impossible by construction and
+      // is refused again on the way back out.
+      const target = path.join(directory, PREIMAGE_DIR, relative);
+      noLinks(target);
+      mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+      // F-409: the recorded BYTES, not the text member. A base64-captured
+      // preimage carries no `body`, so passing it here handed the writer
+      // `undefined` and threw mid-loop.
+      writeExclusiveFile(target, snapshotBytes(entry), 0o600);
+      files[relative] = {
+        existed: true,
+        sha256: entry.sha256,
+        mode: entry.mode,
+      };
     }
-    // The on-disk layout mirrors the recorded relative path, so a restore reads
-    // exactly what the record names. Traversal is impossible by construction and
-    // is refused again on the way back out.
-    const target = path.join(directory, PREIMAGE_DIR, relative);
-    noLinks(target);
-    mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
-    writeExclusiveFile(target, entry.body, 0o600);
-    files[relative] = { existed: true, sha256: entry.sha256, mode: entry.mode };
+    syncDirectory(path.join(directory, PREIMAGE_DIR));
+
+    const record = {
+      schema: RECORD_SCHEMA,
+      // WHICH attempt this is.
+      attemptId: id,
+      // WHICH exact runtime state it started from. Deterministic, and derived from
+      // the component manifest so the two can never disagree.
+      preimageDigest: derivePreimageDigest(snapshot),
+      createdAt,
+      status: TRANSACTION_STATUS.STARTED,
+      snapshotPath: PREIMAGE_DIR,
+      stateDir: snapshot.stateDir,
+      runtimeRoot: snapshot.runtimeRoot,
+      // M12/T9 F-106: the third root is part of the record, so a recovery that
+      // reloads the preimage can restore the unit drop-in as well. It is
+      // OPTIONAL, so a record written before the drop-in was tracked still
+      // loads; the manifest binding covers it either way.
+      systemdRoot: snapshot.systemdRoot ?? null,
+      files,
+    };
+    record.manifestDigest = manifestDigest(record);
+    writeExclusiveFile(
+      path.join(directory, RECORD_NAME),
+      `${JSON.stringify(record, null, 2)}\n`,
+    );
+
+    loaded = loadTransaction(stateDir, id);
+  } catch (error) {
+    // F-409: a throw between the mkdir and the record write used to strand a
+    // directory that is neither a transaction nor empty; findOrphanedTransaction
+    // reports it unreadable and every later apply refuses. The directory was
+    // created by this call, so it is removed rather than left behind.
+    rmSync(directory, { recursive: true, force: true });
+    throw error;
   }
-  syncDirectory(path.join(directory, PREIMAGE_DIR));
-
-  const record = {
-    schema: RECORD_SCHEMA,
-    // WHICH attempt this is.
-    attemptId: id,
-    // WHICH exact runtime state it started from. Deterministic, and derived from
-    // the component manifest so the two can never disagree.
-    preimageDigest: derivePreimageDigest(snapshot),
-    createdAt,
-    status: TRANSACTION_STATUS.STARTED,
-    snapshotPath: PREIMAGE_DIR,
-    stateDir: snapshot.stateDir,
-    runtimeRoot: snapshot.runtimeRoot,
-    // M12/T9 F-106: the third root is part of the record, so a recovery that
-    // reloads the preimage can restore the unit drop-in as well. It is
-    // OPTIONAL, so a record written before the drop-in was tracked still
-    // loads; the manifest binding covers it either way.
-    systemdRoot: snapshot.systemdRoot ?? null,
-    files,
-  };
-  record.manifestDigest = manifestDigest(record);
-  writeExclusiveFile(
-    path.join(directory, RECORD_NAME),
-    `${JSON.stringify(record, null, 2)}\n`,
-  );
-
-  const loaded = loadTransaction(stateDir, id);
   if (loaded.status !== TRANSACTION_STATUS.STARTED)
     throw new Error("TRANSACTION_RECORD_INVALID");
   return loaded;
@@ -873,14 +890,20 @@ export function loadTransaction(stateDir, id) {
       throw new Error("TRANSACTION_SNAPSHOT_TARGET_MISMATCH");
     noLinks(file);
     if (!existsSync(file)) throw new Error("TRANSACTION_SNAPSHOT_INCOMPLETE");
-    const body = readFileSync(file, "utf8");
+    const body = readFileSync(file);
+    // F-409: the digest was recorded over RAW bytes, so the re-hash must read
+    // raw bytes too. Reading as UTF-8 replaced every non-UTF-8 byte and the
+    // round trip failed its own integrity check. A lossless body keeps the text
+    // shape every older record has; only a lossy one is carried base64.
     if (digest(body) !== entry.sha256)
       throw new Error("TRANSACTION_SNAPSHOT_DIGEST_MISMATCH");
+    const text = body.toString("utf8");
+    const lossless = Buffer.from(text, "utf8").equals(body);
     snapshot.files[relative] = {
       existed: true,
       sha256: entry.sha256,
       mode: entry.mode,
-      body,
+      ...(lossless ? { body: text } : { body_base64: body.toString("base64") }),
     };
   }
   verifyTransactionSnapshot(snapshot);
