@@ -1,10 +1,17 @@
 // F-188 (R5-E09-06) - the recorded npm-audit baseline.
 //
 // A bare `npm audit --audit-level=high` returns the same non-zero exit for
-// the recorded 5-high baseline and for a newly added high-severity
-// dependency, so the gate cannot say which one happened. This module records
-// the baseline and compares a live audit report against it: green while the
-// baseline holds, red the moment a count grows.
+// the recorded baseline and for a newly added high-severity dependency, so
+// the gate cannot say which one happened. This module records the baseline
+// and compares a live audit report against it: green while the baseline
+// holds, red the moment a count grows.
+//
+// F-568 (R10-T09-3): six counts cannot tell a recorded advisory from a
+// different advisory of the same severity, because the counts aggregate the
+// advisory set. The baseline therefore also records the advisory identity set
+// (id, package, vulnerable range, severity) taken from the same report, and
+// the comparison fails on any observed advisory the record does not carry.
+// The counts remain as a secondary ceiling.
 //
 // The comparison is a pure function over an audit report, so the gate is
 // testable without a registry and without a network.
@@ -17,11 +24,33 @@ export const AUDIT_BASELINE_PATH = ".github/security/npm-audit-baseline.json";
 
 export const AUDIT_SEVERITIES = ["info", "low", "moderate", "high", "critical"];
 
+const AUDIT_BASELINE_SCHEMA_VERSION = 2;
+
 const BASELINE_COUNT_KEYS = [...AUDIT_SEVERITIES, "total"];
 
+function isPlainObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function severityRank(severity) {
+  const rank = AUDIT_SEVERITIES.indexOf(severity);
+  return rank < 0 ? -1 : rank;
+}
+
+function advisoryId(advisory, packageName) {
+  if (typeof advisory.url === "string") {
+    const ghsa = advisory.url.match(/GHSA-[0-9A-Za-z-]+/u);
+    if (ghsa) return ghsa[0];
+  }
+  if (advisory.source != null) return `source-${advisory.source}`;
+  return `${packageName}:${advisory.title ?? advisory.name ?? "advisory"}`;
+}
+
 /**
- * The recorded baseline, or a thrown error when the file is missing or does
- * not carry the six counts the comparison reads.
+ * The recorded baseline, or a thrown error when the file is missing, does not
+ * carry the six counts the comparison reads, or carries no advisory identity
+ * set. A record of counts alone is the defect F-568 closes, so it is refused
+ * rather than silently compared as if the set were empty.
  */
 export function readAuditBaseline(repositoryRoot) {
   const filePath = path.join(repositoryRoot, AUDIT_BASELINE_PATH);
@@ -34,13 +63,13 @@ export function readAuditBaseline(repositoryRoot) {
       { cause: error },
     );
   }
-  if (baseline?.schema_version !== 1) {
+  if (baseline?.schema_version !== AUDIT_BASELINE_SCHEMA_VERSION) {
     throw new Error(
-      `The npm audit baseline must carry schema_version 1: ${AUDIT_BASELINE_PATH}`,
+      `The npm audit baseline must carry schema_version ${AUDIT_BASELINE_SCHEMA_VERSION}: ${AUDIT_BASELINE_PATH}`,
     );
   }
   const counts = baseline.vulnerabilities;
-  if (!counts || typeof counts !== "object") {
+  if (!isPlainObject(counts)) {
     throw new Error(
       `The npm audit baseline carries no vulnerability counts: ${AUDIT_BASELINE_PATH}`,
     );
@@ -52,6 +81,38 @@ export function readAuditBaseline(repositoryRoot) {
         `The npm audit baseline must record a non-negative integer count for ${key}: ${AUDIT_BASELINE_PATH}`,
       );
     }
+  }
+  const advisories = baseline.advisories;
+  if (!Array.isArray(advisories)) {
+    throw new Error(
+      `The npm audit baseline records no advisory identity set: ${AUDIT_BASELINE_PATH}`,
+    );
+  }
+  const seen = new Set();
+  for (const advisory of advisories) {
+    if (!isPlainObject(advisory)) {
+      throw new Error(
+        `The npm audit baseline must record each advisory as an object: ${AUDIT_BASELINE_PATH}`,
+      );
+    }
+    for (const field of ["id", "package", "range"]) {
+      if (typeof advisory[field] !== "string" || advisory[field].length === 0) {
+        throw new Error(
+          `The npm audit baseline must record a non-empty ${field} for every advisory: ${AUDIT_BASELINE_PATH}`,
+        );
+      }
+    }
+    if (!AUDIT_SEVERITIES.includes(advisory.severity)) {
+      throw new Error(
+        `The npm audit baseline must record a known severity for ${advisory.id}: ${AUDIT_BASELINE_PATH}`,
+      );
+    }
+    if (seen.has(advisory.id)) {
+      throw new Error(
+        `The npm audit baseline records ${advisory.id} twice: ${AUDIT_BASELINE_PATH}`,
+      );
+    }
+    seen.add(advisory.id);
   }
   return baseline;
 }
@@ -75,11 +136,58 @@ export function auditVulnerabilityCounts(report) {
 }
 
 /**
+ * The advisory identities of an `npm audit --json` report, or null when the
+ * report carries no per-package detail. `vulnerabilities` is the per-package
+ * map; a `via` entry that is a string is a transitive reference to another
+ * package's advisory, not an advisory of its own, so only object entries name
+ * an advisory. Duplicate ids collapse to the highest severity, and the set is
+ * sorted by id so a recorded set and an observed set can be compared whole.
+ */
+export function auditAdvisoryIdentities(report) {
+  const packages = report?.vulnerabilities;
+  if (!isPlainObject(packages)) return null;
+  const byId = new Map();
+  for (const [packageName, entry] of Object.entries(packages)) {
+    if (!isPlainObject(entry)) return null;
+    const via = Array.isArray(entry.via) ? entry.via : [];
+    for (const advisory of via) {
+      if (typeof advisory === "string") continue;
+      if (!isPlainObject(advisory)) return null;
+      const identity = {
+        id: advisoryId(advisory, packageName),
+        package: packageName,
+        severity:
+          typeof advisory.severity === "string"
+            ? advisory.severity
+            : String(entry.severity ?? "unknown"),
+        range:
+          typeof advisory.range === "string"
+            ? advisory.range
+            : String(entry.range ?? "*"),
+      };
+      const existing = byId.get(identity.id);
+      if (
+        !existing ||
+        severityRank(identity.severity) > severityRank(existing.severity)
+      ) {
+        byId.set(identity.id, identity);
+      }
+    }
+  }
+  return [...byId.values()].sort((left, right) =>
+    left.id < right.id ? -1 : left.id > right.id ? 1 : 0,
+  );
+}
+
+/**
  * Compare a live audit report with the recorded baseline.
  *
- * The baseline is a ceiling: a count that falls is an improvement and stays
- * green, a count that rises is a branch that added one and is red. An
- * unreadable report fails closed rather than passing vacuously.
+ * The advisory set is the primary check: an observed advisory the record does
+ * not carry is red, even when it replaces a recorded advisory of the same
+ * severity and the counts do not move. The counts are a secondary ceiling - a
+ * count that falls is an improvement and stays green, a count that rises is a
+ * branch that added one and is red. An unreadable report fails closed rather
+ * than passing vacuously.
  */
 export function compareAuditToBaseline(report, baseline) {
   const failures = [];
@@ -88,8 +196,20 @@ export function compareAuditToBaseline(report, baseline) {
     return {
       ok: false,
       counts: null,
+      advisories: null,
       failures: [
         "The npm audit report carries no readable vulnerability counts, so the baseline cannot be compared.",
+      ],
+    };
+  }
+  const advisories = auditAdvisoryIdentities(report);
+  if (!advisories) {
+    return {
+      ok: false,
+      counts,
+      advisories: null,
+      failures: [
+        "The npm audit report carries no readable per-package advisory detail, so the recorded advisory set cannot be compared.",
       ],
     };
   }
@@ -109,7 +229,29 @@ export function compareAuditToBaseline(report, baseline) {
       `npm audit total vulnerabilities grew from the recorded baseline of ${recorded.total} to ${counts.total}.`,
     );
   }
-  return { ok: failures.length === 0, counts, failures };
+  const recordedAdvisories = new Map(
+    (baseline?.advisories ?? []).map((advisory) => [advisory.id, advisory]),
+  );
+  for (const observed of advisories) {
+    const allowed = recordedAdvisories.get(observed.id);
+    if (!allowed) {
+      failures.push(
+        `npm audit reports ${observed.id} against ${observed.package} (${observed.severity}) and the recorded baseline does not carry it.`,
+      );
+      continue;
+    }
+    if (allowed.package !== observed.package) {
+      failures.push(
+        `npm audit reports ${observed.id} against ${observed.package}, but the recorded baseline carries it against ${allowed.package}.`,
+      );
+    }
+    if (allowed.severity !== observed.severity) {
+      failures.push(
+        `npm audit rates ${observed.id} ${observed.severity}, but the recorded baseline rates it ${allowed.severity}.`,
+      );
+    }
+  }
+  return { ok: failures.length === 0, counts, advisories, failures };
 }
 
 /**
@@ -152,6 +294,9 @@ function formatSummary(comparison, baseline) {
       `  observed: ${BASELINE_COUNT_KEYS.map((key) => `${key}=${observed[key]}`).join(" ")}`,
     );
   }
+  lines.push(
+    `  advisories: ${(baseline.advisories ?? []).length} recorded, ${comparison.advisories?.length ?? "unreadable"} observed`,
+  );
   if (comparison.ok) {
     lines.push("  result: the recorded baseline holds.");
   } else {

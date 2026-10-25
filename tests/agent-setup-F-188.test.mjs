@@ -1,17 +1,24 @@
 // F-188 (R5-E09-06) - a permanently red gate cannot say "and this branch
-// added one": it returns the same word for the recorded 5-high baseline as
-// for a new high-severity dependency.
+// added one": it returns the same word for the recorded baseline as for a new
+// high-severity dependency.
 //
-// The acceptance criterion is one sentence: CI reports green while the 5-high
+// The acceptance criterion is one sentence: CI reports green while the
 // baseline persists and red the moment it grows. That needs a recorded
 // baseline and a comparison, not a bare "npm audit --audit-level=high".
+//
+// F-568 (R10-T09-3) - a baseline of six counts cannot tell a recorded
+// advisory from a different advisory of the same severity, so the record also
+// carries the advisory identity set (id, package, vulnerable range, severity)
+// taken from the same report the count comparison reads, and the comparison
+// fails on any observed advisory the record does not carry. The counts stay
+// as a secondary ceiling.
 //
 // The audit is never run against the network from this suite: the comparison
 // is a pure function over an audit report, and the CLI is exercised over a
 // report file, so the lane is deterministic and offline.
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -21,6 +28,7 @@ import { parseDocument } from "yaml";
 import {
   AUDIT_BASELINE_PATH,
   AUDIT_SEVERITIES,
+  auditAdvisoryIdentities,
   compareAuditToBaseline,
   readAuditBaseline,
 } from "../scripts/audit-baseline.mjs";
@@ -30,22 +38,103 @@ import {
 } from "../scripts/repository-policy.mjs";
 
 const root = process.cwd();
-function auditReport(counts) {
+
+// The advisories the recorded baseline carries, transcribed from the report
+// measured on 2026-10-25 (`npm audit --json`).
+const RECORDED_ADVISORIES = [
+  {
+    id: "GHSA-238p-pmpm-9mq7",
+    package: "katex",
+    severity: "low",
+    range: ">=0.11.0 <0.18.2",
+  },
+  {
+    id: "GHSA-gfr2-rv44-r23c",
+    package: "markdown-it",
+    severity: "high",
+    range: ">=15.0.0 <15.0.3",
+  },
+  {
+    id: "GHSA-r4xh-jqrq-34v2",
+    package: "smol-toml",
+    severity: "moderate",
+    range: "<=1.8.0",
+  },
+  {
+    id: "GHSA-r7fv-28h4-cvq7",
+    package: "markdown-it",
+    severity: "high",
+    range: ">=15.0.0 <15.0.2",
+  },
+  {
+    id: "GHSA-vfgh-jcmw-g37q",
+    package: "markdown-it",
+    severity: "low",
+    range: ">=15.0.0 <15.0.3",
+  },
+];
+
+// `metadata.vulnerabilities` counts vulnerable packages, not advisories: three
+// of the six packages are vulnerable only through a dependency (`via` is a
+// package-name string), which is why six packages carry five advisories.
+const RECORDED_COUNTS = {
+  info: 0,
+  low: 3,
+  moderate: 2,
+  high: 1,
+  critical: 0,
+  total: 6,
+};
+
+const TRANSITIVE_PACKAGES = {
+  markdownlint: {
+    severity: "low",
+    via: ["micromark-extension-math"],
+    range: ">=0.37.0",
+  },
+  "markdownlint-cli2": {
+    severity: "moderate",
+    via: ["markdown-it", "markdownlint", "smol-toml"],
+    range: ">=0.17.0",
+  },
+  "micromark-extension-math": {
+    severity: "low",
+    via: ["katex"],
+    range: "*",
+  },
+};
+
+function auditReport(
+  advisories = RECORDED_ADVISORIES,
+  counts = RECORDED_COUNTS,
+) {
+  const vulnerabilities = {};
+  for (const advisory of advisories) {
+    vulnerabilities[advisory.package] ??= {
+      name: advisory.package,
+      severity: advisory.severity,
+      via: [],
+      effects: [],
+      range: advisory.range,
+      nodes: [],
+    };
+    vulnerabilities[advisory.package].via.push({
+      source: 1,
+      name: advisory.package,
+      dependency: advisory.package,
+      title: `advisory ${advisory.id}`,
+      url: `https://github.com/advisories/${advisory.id}`,
+      severity: advisory.severity,
+      range: advisory.range,
+    });
+  }
+  for (const [name, entry] of Object.entries(TRANSITIVE_PACKAGES)) {
+    vulnerabilities[name] ??= { name, effects: [], nodes: [], ...entry };
+  }
   return {
     auditReportVersion: 2,
-    vulnerabilities: counts,
+    vulnerabilities,
     metadata: { vulnerabilities: counts },
-  };
-}
-
-function baselineCounts() {
-  return {
-    info: 0,
-    low: 3,
-    moderate: 1,
-    high: 5,
-    critical: 0,
-    total: 9,
   };
 }
 
@@ -70,12 +159,12 @@ function trackedFiles() {
 // ---------------------------------------------------------------------------
 test("F-188: the committed audit baseline records the repository's own audit result", () => {
   const baseline = readAuditBaseline(root);
-  assert.equal(baseline.schema_version, 1);
-  // The repository's recorded audit result (PLAN.md section 8, four times):
-  // 9 vulnerabilities (3 low, 1 moderate, 5 high).
-  assert.equal(baseline.vulnerabilities.total, 9);
-  assert.equal(baseline.vulnerabilities.high, 5);
-  assert.equal(baseline.vulnerabilities.moderate, 1);
+  assert.equal(baseline.schema_version, 2);
+  // The repository's own measured audit result on 2026-10-25: 6 vulnerable
+  // packages (3 low, 2 moderate, 1 high).
+  assert.equal(baseline.vulnerabilities.total, 6);
+  assert.equal(baseline.vulnerabilities.high, 1);
+  assert.equal(baseline.vulnerabilities.moderate, 2);
   assert.equal(baseline.vulnerabilities.low, 3);
   assert.equal(baseline.vulnerabilities.info, 0);
   assert.equal(baseline.vulnerabilities.critical, 0);
@@ -86,6 +175,40 @@ test("F-188: the committed audit baseline records the repository's own audit res
       `the baseline must record the ${severity} count`,
     );
   }
+});
+
+test("F-568: the baseline records the advisory identity set, not only counts", () => {
+  const baseline = readAuditBaseline(root);
+  assert.deepEqual(
+    baseline.advisories,
+    RECORDED_ADVISORIES,
+    "the recorded set must name every advisory the count comparison aggregates",
+  );
+  for (const advisory of baseline.advisories) {
+    assert.match(advisory.id, /^GHSA-/u);
+    assert.equal(typeof advisory.package, "string");
+    assert.ok(AUDIT_SEVERITIES.includes(advisory.severity));
+    assert.equal(typeof advisory.range, "string");
+  }
+  const ids = baseline.advisories.map((advisory) => advisory.id);
+  assert.equal(
+    new Set(ids).size,
+    ids.length,
+    "an identity set with a duplicate id cannot say which advisory it records",
+  );
+});
+
+test("F-568: today's report is the recorded state, and the comparison reads the same set", () => {
+  const baseline = readAuditBaseline(root);
+  const report = auditReport();
+  assert.deepEqual(
+    auditAdvisoryIdentities(report),
+    baseline.advisories,
+    "the extraction must reproduce the recorded set from the same report shape",
+  );
+  const comparison = compareAuditToBaseline(report, baseline);
+  assert.deepEqual(comparison.failures, []);
+  assert.equal(comparison.ok, true);
 });
 
 test("F-188: the audit baseline file is a repository file git will track", () => {
@@ -146,33 +269,102 @@ test("F-188: the policy check refuses a baseline that is not tracked", () => {
 // ---------------------------------------------------------------------------
 // The comparison: green while the baseline holds, red the moment it grows
 // ---------------------------------------------------------------------------
-test("F-188: the comparison is green while the recorded baseline holds", () => {
+test("F-188: the comparison is red the moment a severity count grows", () => {
   const baseline = readAuditBaseline(root);
+  const grown = { ...RECORDED_COUNTS, high: 2, total: 7 };
   const comparison = compareAuditToBaseline(
-    auditReport(baselineCounts()),
+    auditReport(undefined, grown),
+    baseline,
+  );
+  assert.equal(comparison.ok, false);
+  assert.ok(
+    comparison.failures.some((failure) => failure.includes("high")),
+    `the failure must name the severity that grew: ${comparison.failures.join(" | ")}`,
+  );
+  assert.ok(
+    comparison.failures.every((failure) => !failure.includes("GHSA-")),
+    `a count-only growth must not be reported as an unknown advisory: ${comparison.failures.join(" | ")}`,
+  );
+});
+
+test("F-188: a lower count stays green - the baseline is a ceiling, not a target", () => {
+  const baseline = readAuditBaseline(root);
+  const remaining = RECORDED_ADVISORIES.filter(
+    (advisory) => advisory.id !== "GHSA-238p-pmpm-9mq7",
+  );
+  const improved = { ...RECORDED_COUNTS, low: 2, total: 5 };
+  const comparison = compareAuditToBaseline(
+    auditReport(remaining, improved),
     baseline,
   );
   assert.deepEqual(comparison.failures, []);
   assert.equal(comparison.ok, true);
 });
 
-test("F-188: the comparison is red the moment a severity count grows", () => {
+test("F-568: two recorded highs swapped for two different highs redden at unchanged counts", () => {
   const baseline = readAuditBaseline(root);
-  const grown = { ...baselineCounts(), high: 6, total: 10 };
-  const comparison = compareAuditToBaseline(auditReport(grown), baseline);
+  const swapped = RECORDED_ADVISORIES.map((advisory) => {
+    if (advisory.id === "GHSA-gfr2-rv44-r23c") {
+      return { ...advisory, id: "GHSA-aaaa-bbbb-cccc" };
+    }
+    if (advisory.id === "GHSA-r7fv-28h4-cvq7") {
+      return { ...advisory, id: "GHSA-dddd-eeee-ffff" };
+    }
+    return advisory;
+  });
+  const comparison = compareAuditToBaseline(
+    auditReport(swapped, RECORDED_COUNTS),
+    baseline,
+  );
   assert.equal(comparison.ok, false);
+  for (const id of ["GHSA-aaaa-bbbb-cccc", "GHSA-dddd-eeee-ffff"]) {
+    assert.ok(
+      comparison.failures.some((failure) => failure.includes(id)),
+      `the failure must name the unrecorded advisory ${id}: ${comparison.failures.join(" | ")}`,
+    );
+  }
   assert.ok(
-    comparison.failures.some((failure) => failure.includes("high")),
-    `the failure must name the severity that grew: ${comparison.failures.join(" | ")}`,
+    comparison.failures.every((failure) => !failure.includes("grew")),
+    `the counts are unchanged, so the failure must not be a count failure: ${comparison.failures.join(" | ")}`,
   );
 });
 
-test("F-188: a lower count stays green - the baseline is a ceiling, not a target", () => {
+test("F-568: an advisory the record does not carry reddens even when the counts hold", () => {
   const baseline = readAuditBaseline(root);
-  const improved = { ...baselineCounts(), high: 4, total: 8 };
-  const comparison = compareAuditToBaseline(auditReport(improved), baseline);
-  assert.deepEqual(comparison.failures, []);
-  assert.equal(comparison.ok, true);
+  const extra = [
+    ...RECORDED_ADVISORIES,
+    {
+      id: "GHSA-9999-zzzz-0000",
+      package: "left-pad",
+      severity: "low",
+      range: "<1.0.0",
+    },
+  ];
+  const comparison = compareAuditToBaseline(
+    auditReport(extra, RECORDED_COUNTS),
+    baseline,
+  );
+  assert.equal(comparison.ok, false);
+  assert.ok(
+    comparison.failures.some(
+      (failure) =>
+        failure.includes("GHSA-9999-zzzz-0000") && failure.includes("left-pad"),
+    ),
+    `the failure must name the advisory and its package: ${comparison.failures.join(" | ")}`,
+  );
+});
+
+test("F-568: a report without per-package advisories fails closed", () => {
+  const baseline = readAuditBaseline(root);
+  const comparison = compareAuditToBaseline(
+    { metadata: { vulnerabilities: RECORDED_COUNTS } },
+    baseline,
+  );
+  assert.equal(comparison.ok, false);
+  assert.ok(
+    comparison.failures.some((failure) => failure.includes("advisory")),
+    `a counts-only report cannot prove the set: ${comparison.failures.join(" | ")}`,
+  );
 });
 
 test("F-188: an unreadable audit report fails closed", () => {
@@ -180,6 +372,24 @@ test("F-188: an unreadable audit report fails closed", () => {
   const comparison = compareAuditToBaseline({}, baseline);
   assert.equal(comparison.ok, false);
   assert.ok(comparison.failures.length > 0);
+});
+
+test("F-568: the baseline reader refuses a record without an advisory set", () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "f568-baseline-"));
+  mkdirSync(path.join(directory, ".github", "security"), { recursive: true });
+  writeFileSync(
+    path.join(directory, AUDIT_BASELINE_PATH),
+    JSON.stringify({
+      schema_version: 2,
+      vulnerabilities: RECORDED_COUNTS,
+    }),
+    "utf8",
+  );
+  assert.throws(
+    () => readAuditBaseline(directory),
+    /advisory/u,
+    "a baseline that records only counts is the defect this row exists for",
+  );
 });
 // ---------------------------------------------------------------------------
 // The gate: the workflow compares, and the comparison is what blocks
@@ -244,10 +454,12 @@ test("F-188: the comparison CLI exits 0 while the baseline holds and 1 when it g
   const directory = mkdtempSync(path.join(tmpdir(), "f188-audit-"));
   const holding = path.join(directory, "holding.json");
   const growing = path.join(directory, "growing.json");
-  writeFileSync(holding, JSON.stringify(auditReport(baselineCounts())), "utf8");
+  writeFileSync(holding, JSON.stringify(auditReport()), "utf8");
   writeFileSync(
     growing,
-    JSON.stringify(auditReport({ ...baselineCounts(), high: 6, total: 10 })),
+    JSON.stringify(
+      auditReport(undefined, { ...RECORDED_COUNTS, high: 2, total: 7 }),
+    ),
     "utf8",
   );
 
