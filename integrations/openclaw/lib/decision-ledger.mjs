@@ -16,6 +16,7 @@ import {
   assertNoSymlinkComponents,
   DECISION_STORE_FILE,
   resolveGovernedStoreRoot,
+  stableJson,
 } from "./policy.mjs";
 
 /**
@@ -213,15 +214,31 @@ function validateDecisionRecord(d) {
   return true;
 }
 
+// M12/T9 F-404: the replay comparison must be key-order independent for the
+// same reason the derived id is — `canonicalDecisionKey` hashes a canonical
+// key, so two representations of one decision share an id. Comparing raw
+// `JSON.stringify` bytes made an honest replay throw DECISION_ID_CONFLICT.
+function sortKeysDeep(value) {
+  if (Array.isArray(value)) return value.map(sortKeysDeep);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map((key) => [key, sortKeysDeep(value[key])]),
+    );
+  }
+  return value;
+}
+
 function canonicalRecordBytes(record) {
-  return JSON.stringify({
+  return stableJson({
     decisionId: record.decisionId,
     topic: record.topic,
     question: record.question ?? "",
     decision: record.decision,
     scope: record.scope,
     confirmedBy: record.confirmedBy,
-    context: record.context ?? {},
+    context: sortKeysDeep(record.context ?? {}),
     tags: record.tags ?? [],
   });
 }
