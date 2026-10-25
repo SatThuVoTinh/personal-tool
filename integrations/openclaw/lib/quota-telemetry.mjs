@@ -256,8 +256,19 @@ export function resolveRuntimeModel({
     }
   }
 
-  const nextLatch = fallback && chosen === fallback ? "fallback" : "primary";
-  store.latches.set(agentId, nextLatch);
+  // F-403: the latch records what FRESH evidence said, so only a fresh read
+  // rewrites it. A STALE or UNKNOWN read falls back to the primary model
+  // because there is no evidence to step down on, but it is still no evidence:
+  // writing "primary" here let the same durable data, read one freshness window
+  // later, erase the fallback hold the latch exists to keep.
+  const fresh =
+    telemetry.status !== QUOTA_STATUS.STALE &&
+    telemetry.status !== QUOTA_STATUS.UNKNOWN;
+  let nextLatch = latch;
+  if (fresh) {
+    nextLatch = fallback && chosen === fallback ? "fallback" : "primary";
+    store.latches.set(agentId, nextLatch);
+  }
 
   // Model selection can never escape the canonical allowlist.
   //
