@@ -72,10 +72,32 @@ export function registerNativeGuard(scope, guard) {
     resolveRunModel: guard.resolveRunModel.bind(guard),
   });
   registry().set(scope, entry);
-  publishPreflightIngress(entry);
+  publishPreflightIngress();
   return () => {
-    if (registry().get(scope) === entry) registry().delete(scope);
+    if (registry().get(scope) !== entry) return;
+    registry().delete(scope);
+    // M12/T9 F-506: the published predicate belongs to the registration, so the
+    // last release retracts it. A stale closure must not keep deciding admission
+    // for a root that no longer exists.
+    if (registry().size === 0) delete globalThis[preflightIngressKey];
   };
+}
+
+/** The one normalization rule shared by `resolveGovernance` and the seam. */
+function sameScope(registeredScope, scope) {
+  return (
+    registeredScope.replace(/\\/g, "/").replace(/\/+$/, "") ===
+    scope.replace(/\\/g, "/").replace(/\/+$/, "")
+  );
+}
+
+function findGuardEntry(entries, scope) {
+  const exact = entries.get(scope);
+  if (exact) return exact;
+  for (const [registeredScope, registeredGuard] of entries) {
+    if (sameScope(registeredScope, scope)) return registeredGuard;
+  }
+  return undefined;
 }
 
 /**
@@ -87,16 +109,35 @@ export function registerNativeGuard(scope, guard) {
  * scope string `resolveGovernance` derives from the host config, so there is one
  * registry and one policy, not two.
  *
+ * M12/T9 F-506: the published value is a view of the registry, not a capture of
+ * one entry. A scoped call resolves through that scope only — a released root's
+ * traffic is never decided by another root's guard — and an unscoped call is
+ * answered only when exactly one registration exists, because with two roots
+ * there is no truthful way to pick one.
+ *
  * ABSENT PREDICATE IS NOT A DENY. If governance never registered — the plugin
  * has not loaded, or a build predates this seam — the preflight must not invent
  * an admission decision. It returns null and the late `enterNativeRun` gate
  * still governs the run, so enforcement is unchanged and only the timing is lost.
  */
-function publishPreflightIngress(entry) {
-  if (entry.beforePreflightIngress) {
-    globalThis[preflightIngressKey] = (input) =>
-      entry.beforePreflightIngress(input);
-  }
+function publishPreflightIngress() {
+  if (registry().size === 0) return;
+  globalThis[preflightIngressKey] = (input) => {
+    const entries = registry();
+    const requestedScope =
+      typeof input?.scope === "string" && input.scope.length > 0
+        ? input.scope
+        : null;
+    let entry;
+    if (requestedScope) {
+      entry = findGuardEntry(entries, requestedScope);
+    } else if (entries.size === 1) {
+      entry = entries.values().next().value;
+    }
+    return typeof entry?.beforePreflightIngress === "function"
+      ? entry.beforePreflightIngress(input)
+      : undefined;
+  };
 }
 
 // M10/T2-R12: exported as a test seam so suites can drive the registered
@@ -105,19 +146,8 @@ export function resolveGovernance(config) {
   const entry = config?.plugins?.entries?.["zink-governance"];
   if (entry?.enabled !== true) return { enabled: false };
   const scope = entry.config?.ledgerRoot;
-  let guard = typeof scope === "string" ? registry().get(scope) : undefined;
-  if (!guard && typeof scope === "string") {
-    // Normalization check in case of path separator / trailing slash differences
-    const normScope = scope.replace(/\\/g, "/").replace(/\/+$/, "");
-    for (const [registeredScope, registeredGuard] of registry().entries()) {
-      if (
-        registeredScope.replace(/\\/g, "/").replace(/\/+$/, "") === normScope
-      ) {
-        guard = registeredGuard;
-        break;
-      }
-    }
-  }
+  let guard =
+    typeof scope === "string" ? findGuardEntry(registry(), scope) : undefined;
   return {
     enabled: true,
     guard,

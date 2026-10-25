@@ -104,9 +104,14 @@ const R12_OUTGOING_NATIVE_BOUNDARY_SHA256 =
  * Four seams also name the guard's reason in the diagnostic channel; every
  * host-visible code, verdict and return shape is unchanged. Accepted by content
  * comparison and deliberately NOT listed.
+ *
+ * M12/T9 F-506: the published preflight predicate is now a view of the
+ * registration set instead of a capture of the last entry, and the last release
+ * retracts it. The verdicts the seams return are unchanged; `a4e30801…` was
+ * never installed, so it stays unlisted like the other undeployed candidates.
  */
 const M11_T3_NATIVE_BOUNDARY_SHA256 =
-  "a4e30801aba1e00a2f23e63f1d8b0882f4daa60833adfb2a0d72aa536f464380";
+  "ff6b57a9d27666e26a0b37ae342e30fbb71a0f25a66e460703520871d22b5d67";
 /**
  * M12/T2.2-R2 J-1: the boundary build the LIVE runtime ACTUALLY carries,
  * byte-proven by `sha256sum` of the installed asset on the WSL host. B-16 rolled
@@ -1544,13 +1549,44 @@ const preflightIngressKey = Symbol.for(
       `    beforeToolCall: guard.beforeToolCall.bind(guard),
     beforeAnnounce: guard.beforeAnnounce.bind(guard),`,
     ],
-    // M10/T2-R8: publishing the seam, and its deliberate "absent is not a deny".
+    // M10/T2-R8 + M12/T9 F-506: publishing the seam, its deliberate "absent is
+    // not a deny", and the registration-viewed predicate F-506 published.
     [
       `  registry().set(scope, entry);
-  publishPreflightIngress(entry);
+  publishPreflightIngress();
+  return () => {
+    if (registry().get(scope) !== entry) return;
+    registry().delete(scope);
+    // M12/T9 F-506: the published predicate belongs to the registration, so the
+    // last release retracts it. A stale closure must not keep deciding admission
+    // for a root that no longer exists.
+    if (registry().size === 0) delete globalThis[preflightIngressKey];
+  };
+}`,
+      `  registry().set(scope, entry);
   return () => {
     if (registry().get(scope) === entry) registry().delete(scope);
   };
+}`,
+    ],
+    [
+      `
+
+/** The one normalization rule shared by \`resolveGovernance\` and the seam. */
+function sameScope(registeredScope, scope) {
+  return (
+    registeredScope.replace(/\\\\/g, "/").replace(/\\/+$/, "") ===
+    scope.replace(/\\\\/g, "/").replace(/\\/+$/, "")
+  );
+}
+
+function findGuardEntry(entries, scope) {
+  const exact = entries.get(scope);
+  if (exact) return exact;
+  for (const [registeredScope, registeredGuard] of entries) {
+    if (sameScope(registeredScope, scope)) return registeredGuard;
+  }
+  return undefined;
 }
 
 /**
@@ -1562,22 +1598,62 @@ const preflightIngressKey = Symbol.for(
  * scope string \`resolveGovernance\` derives from the host config, so there is one
  * registry and one policy, not two.
  *
+ * M12/T9 F-506: the published value is a view of the registry, not a capture of
+ * one entry. A scoped call resolves through that scope only — a released root's
+ * traffic is never decided by another root's guard — and an unscoped call is
+ * answered only when exactly one registration exists, because with two roots
+ * there is no truthful way to pick one.
+ *
  * ABSENT PREDICATE IS NOT A DENY. If governance never registered — the plugin
  * has not loaded, or a build predates this seam — the preflight must not invent
  * an admission decision. It returns null and the late \`enterNativeRun\` gate
  * still governs the run, so enforcement is unchanged and only the timing is lost.
  */
-function publishPreflightIngress(entry) {
-  if (entry.beforePreflightIngress) {
-    globalThis[preflightIngressKey] = (input) =>
-      entry.beforePreflightIngress(input);
-  }
-}`,
-      `  registry().set(scope, entry);
-  return () => {
-    if (registry().get(scope) === entry) registry().delete(scope);
+function publishPreflightIngress() {
+  if (registry().size === 0) return;
+  globalThis[preflightIngressKey] = (input) => {
+    const entries = registry();
+    const requestedScope =
+      typeof input?.scope === "string" && input.scope.length > 0
+        ? input.scope
+        : null;
+    let entry;
+    if (requestedScope) {
+      entry = findGuardEntry(entries, requestedScope);
+    } else if (entries.size === 1) {
+      entry = entries.values().next().value;
+    }
+    return typeof entry?.beforePreflightIngress === "function"
+      ? entry.beforePreflightIngress(input)
+      : undefined;
   };
-}`,
+}
+
+`,
+      `
+
+`,
+    ],
+    [
+      `  const scope = entry.config?.ledgerRoot;
+  let guard =
+    typeof scope === "string" ? findGuardEntry(registry(), scope) : undefined;
+  return {`,
+      `  const scope = entry.config?.ledgerRoot;
+  let guard = typeof scope === "string" ? registry().get(scope) : undefined;
+  if (!guard && typeof scope === "string") {
+    // Normalization check in case of path separator / trailing slash differences
+    const normScope = scope.replace(/\\\\/g, "/").replace(/\\/+$/, "");
+    for (const [registeredScope, registeredGuard] of registry().entries()) {
+      if (
+        registeredScope.replace(/\\\\/g, "/").replace(/\\/+$/, "") === normScope
+      ) {
+        guard = registeredGuard;
+        break;
+      }
+    }
+  }
+  return {`,
     ],
     // M10/T2-R8: the model-visible block reason is a refusal sentence. Proven
     // live: the host copies a block decision's `reason` into the tool result the

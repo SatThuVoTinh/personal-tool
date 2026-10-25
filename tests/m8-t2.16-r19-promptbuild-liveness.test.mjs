@@ -521,10 +521,13 @@ test(
     // rendering still replays), so the boundary's own bytes moved with it. The
     // pin's purpose as a change detector is unchanged: the next unreviewed
     // boundary mutation still fails here.
+    // M12/T9-R4 F-506: rolled again. The published preflight predicate became a
+    // view of the registration set and the last release retracts it; no verdict
+    // changes, and the pin still only detects an unreviewed mutation.
     assert.equal(
       sha(current),
-      "a4e30801aba1e00a2f23e63f1d8b0882f4daa60833adfb2a0d72aa536f464380",
-      "the boundary must equal the bytes the R19 suite was extended against, plus M11/T3 A3 and B-16's reason diagnostics (landed in 3cb8274) and M12/T9 F-371's delegation-id rendering",
+      "ff6b57a9d27666e26a0b37ae342e30fbb71a0f25a66e460703520871d22b5d67",
+      "the boundary must equal the bytes the R19 suite was extended against, plus M11/T3 A3 and B-16's reason diagnostics (landed in 3cb8274), M12/T9 F-371's delegation-id rendering and F-506's registration-viewed preflight predicate",
     );
   },
 );

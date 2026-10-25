@@ -50,8 +50,9 @@ function msg(over = {}) {
  */
 async function preflight(agentId, gate) {
   const scope = `r8-pf-${agentId}-${Math.random().toString(36).slice(2)}`;
+  let unregister = null;
   if (gate !== null) {
-    registerNativeGuard(scope, {
+    unregister = registerNativeGuard(scope, {
       beforePreflightIngress: gate,
       beforeToolCall: async () => ({ allow: true }),
       beforeAnnounce: async () => ({ allow: true }),
@@ -69,15 +70,22 @@ async function preflight(agentId, gate) {
     "resolvedAccountId",
     DISCORD_PREFLIGHT_INJECTION,
   );
-  const returned = await factory(
-    msg(),
-    null,
-    { cfg: {} },
-    globalThis,
-    { agentId },
-    "acct-1",
-  );
-  return returned === undefined ? Symbol.for("ctx") : returned;
+  try {
+    const returned = await factory(
+      msg(),
+      null,
+      { cfg: {} },
+      globalThis,
+      { agentId },
+      "acct-1",
+    );
+    return returned === undefined ? Symbol.for("ctx") : returned;
+  } finally {
+    // M12/T9 F-506: the published seam is a view of the registration set, so a
+    // harness that leaked guards would leave more than one root registered and an
+    // unscoped call would have no truthful answer.
+    unregister?.();
+  }
 }
 
 /** The canonical rule, copied from the plugin's registered predicate. */
