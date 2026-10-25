@@ -1056,12 +1056,24 @@ export class QueueManager {
    * the digest and the finish timestamp, and no other path writes either), so a
    * caller cannot satisfy the check with a value it minted, and the recorded
    * digest must belong to the CURRENT attempt rather than a superseded one.
+   *
+   * M12/T9-R4 F-406: the TERMINAL STATE is the accepted OUTCOME, not a
+   * constant. The write used to be an unconditional COMPLETE, so an owner's
+   * ACCEPT of a PARTIAL/FAILED result closed the queue item as a completed
+   * task and the queue then disagreed with the ledger about what was accepted.
+   * A governed caller passes the outcome the ledger accepted; it is projected
+   * through the queue's own ledger mapping and must land on a terminal queue
+   * state, so an outcome the queue cannot represent is refused rather than
+   * flattened into COMPLETE. `outcome` is optional only because the queue
+   * cannot see the ledger: a caller that omits it is asserting the default
+   * COMPLETE, and the governed ACCEPT path always supplies it.
    */
   completeTask({
     taskId,
     userConfirmationRef,
     userPrincipalRef,
     resultDigest,
+    outcome = null,
   }) {
     return this.withLock(() =>
       this._mutateWithRollback(taskId, (item) => {
@@ -1130,19 +1142,31 @@ export class QueueManager {
         }
 
         const now = new Date().toISOString();
-        item.status = TASK_STATES.COMPLETE;
+        // F-406: the queue records what was ACCEPTED. The outcome is projected
+        // through the queue's own ledger mapping, so an unrecognised outcome
+        // cannot masquerade as COMPLETE.
+        const acceptedStatus =
+          outcome === null
+            ? TASK_STATES.COMPLETE
+            : mapLedgerStatusToQueue({ workflow_status: outcome });
+        if (!QUEUE_TERMINAL_STATES.includes(acceptedStatus)) {
+          throw new Error(
+            `RESULT_MISMATCH: The accepted outcome ${String(outcome)} is not a terminal queue state`,
+          );
+        }
+        item.status = acceptedStatus;
         item.completedAt = now;
         item.userConfirmationRef = userConfirmationRef;
         item.completedBy = userPrincipalRef;
 
         item.history.push({
-          status: TASK_STATES.COMPLETE,
+          status: acceptedStatus,
           at: now,
           userConfirmationRef,
           completedBy: userPrincipalRef,
         });
 
-        return { success: true, status: TASK_STATES.COMPLETE };
+        return { success: true, status: acceptedStatus };
       }),
     );
   }

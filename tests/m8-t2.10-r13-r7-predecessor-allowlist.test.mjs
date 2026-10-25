@@ -195,17 +195,19 @@ assert.ok(
 const M11_T3_ENTRYPOINT_SHA256 =
   "c4d0d921d1f0c4ca1eca6e2f3dd6093e7a6a878359ab69779b37b18d0ce1bd1a";
 /**
- * M12/T9-R4 F-533, then F-470 + F-472, then F-463: the CURRENT packaged
- * entrypoint build. Accepted by content comparison and deliberately NOT listed.
- * F-533's build (`338d1406…`) was never installed, so it joins the other
- * undeployed candidates rather than the admitted predecessors. F-470's own test
- * seam then moved the bytes again; `5aacf6a7…` was never installed either.
- * F-463 changes the same plugin (plan-field redaction, result/forum mention
- * strips, the delegated approval-body stripper), so `415e2d4b…` also stays
- * unlisted.
+ * M12/T9-R4 F-533, then F-470 + F-472, then F-463, then F-402/F-405/F-406: the
+ * CURRENT packaged entrypoint build. Accepted by content comparison and
+ * deliberately NOT listed. F-533's build (`338d1406…`) was never installed, so
+ * it joins the other undeployed candidates rather than the admitted
+ * predecessors. F-470's own test seam then moved the bytes again;
+ * `5aacf6a7…` was never installed either. F-463 changes the same plugin
+ * (plan-field redaction, result/forum mention strips, the delegated
+ * approval-body stripper), so `415e2d4b…` also stays unlisted. F-402/F-405/F-406
+ * change the ACCEPT seam (owner projection, principal mint, accepted outcome,
+ * ledger reconciliation), so `f67cbc6f…` stays unlisted too.
  */
 const R4_F533_CURRENT_ENTRYPOINT_SHA256 =
-  "f67cbc6fe42285e564a6b5b089c669b1b23075f111a74fcae7516023768b8cd2";
+  "75764d46e7f06cc0f4525dd26359236b558cb46ee3f226ae1427c8f1e86d5c9f";
 const M12_T2_2_OUTGOING_ENTRYPOINT_SHA256 =
   "513beb15c3d7624c0a928c4c1556dc44d4c4cff4f1e00980f24b298a25751c0d";
 assert.ok(
@@ -1195,9 +1197,17 @@ test("R13 B3: the build the live runtime carries is accepted and converges", asy
     // `e24c2d1` hashes to exactly the value replaced here (`f2774f58…`). No
     // `configure.mjs` entry is added: this is the CURRENT build, accepted by
     // content comparison and deliberately never allowlisted.
+    // M12/T9-R4 F-402 + F-406, re-valued in band. `completeTask` now writes the
+    // ACCEPTED outcome projected through the queue's own ledger mapping instead
+    // of a hardcoded COMPLETE. The value replaced here (`ede81c64…`) is this
+    // asset's digest at `0114b73` (`git show a41256b^:…/queue-manager.mjs`), the
+    // commit before F-407; F-407's own lease-expiry edit moved the bytes first
+    // and did not roll this pin, so this value covers both rows. No
+    // `configure.mjs` entry is added: this is the CURRENT build, accepted by
+    // content comparison and deliberately never allowlisted.
     assert.equal(
       sha256(readFileSync(p.asset("lib/queue-manager.mjs"), "utf8")),
-      "ede81c64af7dd2984a49c1f9f841a7494b053b2c8e1291c51a81422e0c42bf29",
+      "aadfd449e703b54898b968988012387eea507800a90792fd2a88e03504493052",
       "an accepted predecessor must converge onto the current queue writer",
     );
   } finally {

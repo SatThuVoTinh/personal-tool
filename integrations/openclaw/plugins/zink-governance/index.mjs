@@ -7272,6 +7272,11 @@ export default {
         planVersion: String(task.brief_revision || "1.0"),
         primaryCoordinator: dispatch.coordinator,
         requiredCapabilities: dispatch.requiredCapabilities,
+        // M12/T9-R4 F-402: the queue verifies completion against the owner the
+        // LEDGER projected. Nothing passed it, so every queued task carried
+        // `ownerPrincipalRef: null` and completeTask refused every owner ACCEPT.
+        // The ledger's `origin_principal_ref` is that owner.
+        ownerPrincipalRef: task.origin_principal_ref ?? null,
         payload: task.payload || {},
       });
       return { status: "QUEUED", taskId, queueItem };
@@ -7449,6 +7454,13 @@ export default {
       }
       if (normAction !== ACTIONS.ACCEPT_RESULT) return;
 
+      // M12/T9-R4 F-406: the accepted OUTCOME is the ledger's, read from the
+      // verdict the ledger just committed. The queue advance used to write
+      // COMPLETE unconditionally, so an accepted PARTIAL/FAILED result closed
+      // the queue item as a completed task.
+      const acceptedOutcome = paths
+        ? (readSnapshot(paths)?.tasks?.[taskId]?.workflow_status ?? null)
+        : null;
       // M7-012: complete only from the verified owner principal, bound to the
       // current authoritative result digest. The caller has already proven the
       // sender is the owner.
@@ -7457,8 +7469,13 @@ export default {
         defaultQueueManager.completeTask({
           taskId,
           userConfirmationRef,
-          userPrincipalRef,
+          // M12/T9-R4 F-402: both presenters hand this seam a RAW Discord
+          // snowflake, and the queue verifies completion against the principal
+          // the ledger minted. The mint therefore belongs here, at the ONE seam
+          // the button and text paths share, not at either caller.
+          userPrincipalRef: mintUserPrincipalRef(paths, userPrincipalRef),
           resultDigest: defaultQueueManager.getTask(taskId)?.resultDigest,
+          outcome: acceptedOutcome,
         });
         queueCompletionRecorded = true;
       } catch (qErr) {
@@ -7468,6 +7485,27 @@ export default {
         api.logger?.error?.(
           `[zink-governance] completeTask FAILED (queue not advanced): ${qErr?.message}`,
         );
+        // M12/T9-R4 F-405: a refused queue write must not leave the ledger's
+        // terminal verdict stranded behind a queue item stuck in review. The
+        // ledger is the authority, so the projection is reconciled from it on
+        // this same path — the recovery that used to exist only in the
+        // operator-triggered rebuild. Success is claimed only when the
+        // reconciled projection AGREES with the accepted outcome, so a
+        // half-reconciled item still suppresses the success notice.
+        try {
+          defaultQueueManager.rebuildFromLedger(
+            paths ? readSnapshot(paths) : null,
+          );
+          const reconciled = defaultQueueManager.getTask(taskId);
+          queueCompletionRecorded = reconciled?.status === acceptedOutcome;
+          api.logger?.warn?.(
+            `[zink-governance] queue projection reconciled from the ledger for task ${taskId}: status=${reconciled?.status ?? "MISSING"} (completeTask refused: ${qErr?.message})`,
+          );
+        } catch (reconcileErr) {
+          api.logger?.error?.(
+            `[zink-governance] ledger reconciliation FAILED (queue still lagged): ${reconcileErr?.message}`,
+          );
+        }
       }
 
       const officeChannelId = resolveDiscordDestination(

@@ -174,8 +174,15 @@ const HYGIENE_ASSET_PREDECESSORS = Object.freeze({
 // plugin's bytes. Like every build in this band, `415e2d4b…` was never installed,
 // so it stays unlisted and the digest below is the current build, accepted by
 // content comparison.
+// M12/T9-R4 F-402, F-405, F-406: the pin moves once more. The ACCEPT seam now
+// projects the ledger's owner onto the enqueue, mints the presenter's principal
+// before it reaches the queue, carries the accepted outcome into the queue write
+// and reconciles the projection from the ledger when that write is refused — all
+// in the plugin's own bytes. `f67cbc6f…` was never installed, so it stays
+// unlisted and the digest below is the current build, accepted by content
+// comparison.
 const CURRENT_ENTRYPOINT_SHA256 =
-  "f67cbc6fe42285e564a6b5b089c669b1b23075f111a74fcae7516023768b8cd2";
+  "75764d46e7f06cc0f4525dd26359236b558cb46ee3f226ae1427c8f1e86d5c9f";
 
 const identifiers = Object.freeze({
   discordGuildId: "123456789012345678",

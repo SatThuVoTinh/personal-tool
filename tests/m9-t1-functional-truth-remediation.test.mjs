@@ -1109,6 +1109,26 @@ function sliceExecuteApprovedTask() {
   return { source, body: source.slice(start, end) };
 }
 
+/**
+ * The braced body of the function starting at `from`. The I5 slice used to run
+ * from one function's start to the NEXT function's start, so it measured
+ * whatever happened to sit in between; bounding the slice by its own braces
+ * measures exactly the function the assertion names.
+ */
+function functionBody(source, from) {
+  const start = source.indexOf("{", from);
+  if (start === -1) return null;
+  let depth = 0;
+  for (let index = start; index < source.length; index += 1) {
+    if (source[index] === "{") depth += 1;
+    else if (source[index] === "}") {
+      depth -= 1;
+      if (depth === 0) return source.slice(start + 1, index);
+    }
+  }
+  return null;
+}
+
 test("I1: the destination is preflighted BEFORE the durable queue write", () => {
   const { body } = sliceExecuteApprovedTask();
   const preflight = body.indexOf(
@@ -1202,11 +1222,14 @@ test("I4: the delivered-notification outcome comes from the shared pure policy",
 test("I5: recording a notification never advances the authoritative task state", () => {
   const source = readExecutionPath();
   const start = source.indexOf("function recordCoordinatorNotification(");
-  const end = source.indexOf("async function executeApprovedTask(", start);
+  assert.ok(start > 0, "recordCoordinatorNotification must exist");
+  // Bounded by the function's own braces: the previous slice ran to the START
+  // of the next function, so it measured whatever sat in between.
+  const signatureClose = source.indexOf(") {", start);
+  assert.ok(signatureClose > start, "the recorder's signature must close");
   // Strip comments first: the function documents that it does NOT touch
   // workflow_status, and asserting on prose would prove nothing.
-  const body = source
-    .slice(start, end)
+  const body = functionBody(source, signatureClose + 1)
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/^\s*\/\/.*$/gm, "");
   // It may annotate the queue projection, but it must not touch the ledger.
