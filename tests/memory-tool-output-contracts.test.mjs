@@ -438,15 +438,21 @@ describe("F-551 (R10-T06-3) — an object `detail` reaches the adapter envelope"
    * The reader was written for FastAPI's `RequestValidationError` ARRAY body and
    * was never reconciled with the hand-raised `HTTPException` OBJECT bodies the
    * same routes produce. Measured at HEAD, `apps/knowledge/app/main.py` raises
-   * 44 `detail={"code": …}` sites; every one of them arrived at the adapter as
+   * 44 governed-code refusals; every one of them arrived at the adapter as
    * `HTTP_<status>`, so the governed vocabulary existed only on the producer
    * side of the hop.
    *
    * The vocabulary is READ FROM THE PRODUCER rather than restated here: 19
-   * distinct literal codes across those 44 sites, plus the seven
+   * distinct literal codes across those sites, plus the seven
    * `ModelProbeError` codes `F-515` (R10-L07-4) taught the embedding arms to
    * carry. A governed code that joins the producer without joining the reader
    * therefore turns this lane red.
+   *
+   * `F-552` (R10-T06-4) moved two route arms onto `_governed_lifecycle_refusal`,
+   * so the producer surface is now the literal `detail={"code" …}` sites plus
+   * that helper's raise calls, minus the helper's own literal, which is the sink
+   * they share rather than a site of its own. The count still asserts how many
+   * refusals the service can raise, not how they happen to be spelled.
    */
   const PRODUCER = path.resolve(
     import.meta.dirname,
@@ -459,7 +465,14 @@ describe("F-551 (R10-T06-3) — an object `detail` reaches the adapter envelope"
 
   function producerVocabulary() {
     const source = fs.readFileSync(PRODUCER, "utf8");
-    const sites = source.match(/detail=\{"code"/gu) ?? [];
+    const literalSites = (source.match(/detail=\{"code"/gu) ?? []).length;
+    const detailArgs = (source.match(/detail=/gu) ?? []).length;
+    const sharedHelpers = (
+      source.match(/def _governed_lifecycle_refusal\(/gu) ?? []
+    ).length;
+    const sharedCalls = (
+      source.match(/raise _governed_lifecycle_refusal\(/gu) ?? []
+    ).length;
     const literals = [
       ...new Set(
         (
@@ -473,7 +486,13 @@ describe("F-551 (R10-T06-3) — an object `detail` reaches the adapter envelope"
           [],
       ),
     ];
-    return { siteCount: sites.length, literals, probeCodes };
+    return {
+      siteCount: literalSites - sharedHelpers + sharedCalls,
+      literalSites,
+      detailArgs,
+      literals,
+      probeCodes,
+    };
   }
 
   /**
@@ -504,11 +523,17 @@ describe("F-551 (R10-T06-3) — an object `detail` reaches the adapter envelope"
   }
 
   test("F-551: every governed code the Knowledge service raises reaches the envelope", async () => {
-    const { siteCount, literals, probeCodes } = producerVocabulary();
+    const { siteCount, literalSites, detailArgs, literals, probeCodes } =
+      producerVocabulary();
     assert.equal(
       siteCount,
       44,
-      'the register measured 44 `detail={"code" …}` producer sites; a site added or removed here must be reconciled with the reader',
+      "the register measured 44 governed-code refusal sites; a site added or removed here must be reconciled with the reader",
+    );
+    assert.equal(
+      detailArgs,
+      literalSites,
+      "every producer detail must be the governed {code} object the reader names",
     );
     assert.ok(
       literals.length >= 19 && probeCodes.length >= 7,
