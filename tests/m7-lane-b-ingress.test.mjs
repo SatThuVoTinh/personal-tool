@@ -534,4 +534,70 @@ describe("F-470 — dispatcher failure envelopes are symbolic, never raw", () =>
       "raw output bytes must not echo",
     );
   });
+
+  it("an execute throw returns the fixed sentence plus the symbolic code", async () => {
+    const { api, tools } = captureApi();
+    const rawMessage =
+      "EIO: cannot write C:\\Users\\hoang_vinh\\state\\ledger.json for sess-a1b2c3d4e5f6g7h8";
+    registerTools(api, {
+      toolRegistry: {
+        zink_sql: {
+          description: "throwing implementation",
+          parameters: { type: "object", properties: {} },
+          async execute() {
+            throw Object.assign(new Error(rawMessage), {
+              code: "DUCKDB_TIMEOUT",
+            });
+          },
+        },
+      },
+    });
+    const wrapper = tools.find((tool) => tool.name === "zink_sql");
+    assert.ok(wrapper, "the stub tool must still be registered");
+    const text = (await wrapper.execute({ agent: "sql" }, {})).content[0].text;
+    const env = JSON.parse(text);
+    assert.equal(env.status, "ERROR");
+    assert.equal(env.message, "Governed tool execution failed closed.");
+    assert.equal(env.code, "DUCKDB_TIMEOUT");
+    assert.equal(env.error, "DUCKDB_TIMEOUT");
+    assert.ok(!text.includes("EIO"), "the raw message must not echo");
+    for (const [label, pattern] of BANNED_CLASSES) {
+      assert.ok(
+        !pattern.test(text),
+        `the envelope leaks the ${label} class: ${text.slice(0, 400)}`,
+      );
+    }
+  });
+
+  it("an uncoded execute throw carries the symbolic fallback, not the message", async () => {
+    const { api, tools } = captureApi();
+    registerTools(api, {
+      toolRegistry: {
+        zink_python: {
+          description: "throwing implementation",
+          parameters: { type: "object", properties: {} },
+          async execute() {
+            throw new Error(
+              "sandbox root /home/hoang_vinh/.openclaw-zink/sandbox is unavailable",
+            );
+          },
+        },
+      },
+    });
+    const wrapper = tools.find((tool) => tool.name === "zink_python");
+    const text = (await wrapper.execute({ agent: "python" }, {})).content[0]
+      .text;
+    const env = JSON.parse(text);
+    assert.equal(env.status, "ERROR");
+    assert.equal(env.message, "Governed tool execution failed closed.");
+    assert.equal(env.code, "TOOL_EXECUTION_FAILED");
+    assert.equal(env.error, "TOOL_EXECUTION_FAILED");
+    assert.ok(!text.includes("sandbox root"), "the raw message must not echo");
+    for (const [label, pattern] of BANNED_CLASSES) {
+      assert.ok(
+        !pattern.test(text),
+        `the envelope leaks the ${label} class: ${text.slice(0, 400)}`,
+      );
+    }
+  });
 });

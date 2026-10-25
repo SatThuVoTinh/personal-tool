@@ -165,8 +165,11 @@ const HYGIENE_ASSET_PREDECESSORS = Object.freeze({
 // digest below is the current build, accepted by content comparison. Attribution was
 // measured, not assumed: restoring only the pre-row bytes of `index.mjs` reproduced
 // `338d1406…` exactly through the real generator.
+// F-470's own test seam (`options.toolRegistry`) then changed those bytes again; the
+// `5aacf6a7…` build it replaces was never installed either, so it stays unlisted and
+// the current build is the digest below.
 const CURRENT_ENTRYPOINT_SHA256 =
-  "5aacf6a7a983e1aa4b913a2f38682d030ddac5c48a01fbd3e2f9d02a4942f3e8";
+  "415e2d4b331df65f9d136d1420d4130dbb897e69a7b14410aec821783fb49efc";
 
 const identifiers = Object.freeze({
   discordGuildId: "123456789012345678",

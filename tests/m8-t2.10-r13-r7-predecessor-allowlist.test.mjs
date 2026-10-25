@@ -193,10 +193,11 @@ const M11_T3_ENTRYPOINT_SHA256 =
  * M12/T9-R4 F-533, then F-470 + F-472: the CURRENT packaged entrypoint build.
  * Accepted by content comparison and deliberately NOT listed. F-533's build
  * (`338d1406…`) was never installed, so it joins the other undeployed
- * candidates rather than the admitted predecessors.
+ * candidates rather than the admitted predecessors. F-470's own test seam then
+ * moved the bytes again; `5aacf6a7…` was never installed either.
  */
 const R4_F533_CURRENT_ENTRYPOINT_SHA256 =
-  "5aacf6a7a983e1aa4b913a2f38682d030ddac5c48a01fbd3e2f9d02a4942f3e8";
+  "415e2d4b331df65f9d136d1420d4130dbb897e69a7b14410aec821783fb49efc";
 const M12_T2_2_OUTGOING_ENTRYPOINT_SHA256 =
   "513beb15c3d7624c0a928c4c1556dc44d4c4cff4f1e00980f24b298a25751c0d";
 assert.ok(

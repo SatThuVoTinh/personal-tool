@@ -4270,8 +4270,9 @@ export function registerTools(api, options = {}) {
     (path.isAbsolute(api.pluginConfig?.ledgerRoot ?? "")
       ? path.join(api.pluginConfig.ledgerRoot, "skill-proposals")
       : undefined);
-  // Test seam: options.toolContracts / options.registryChecksum override the
-  // loaders so contract/checksum failure paths are provable. Production
+  // Test seam: options.toolContracts / options.registryChecksum /
+  // options.toolRegistry override the loaders and the static registry so
+  // contract, checksum and execution-failure paths are provable. Production
   // always omits them and uses the loaders below.
   const toolContracts = options.toolContracts ?? loadToolContractSchemas();
   let registryChecksum = null;
@@ -4304,7 +4305,7 @@ export function registerTools(api, options = {}) {
     }
   }
 
-  const registry = {
+  const registry = options.toolRegistry ?? {
     zink_skill_search: {
       description:
         "Search governed skills in Zink Skill Store using semantic vector similarity.",
