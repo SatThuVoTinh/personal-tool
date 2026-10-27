@@ -12,14 +12,9 @@ import tomllib
 from pathlib import Path
 
 from .download_models import MODEL_REVISIONS
-
-# F-340 (R7-OA-03): the hashed requirements artifact is re-pinned. The
-# committed file now carries the index its own `+cpu` pins need, so its
-# digest changed with it; the image refuses to publish a manifest over an
-# artifact that is not the pinned one.
-EXPECTED_HASHED_REQUIREMENTS_SHA256 = (
-    "9ec325c8142e1dcae25dd510daa604454526ad9b364f505b9914aed3505f8556"
-)
+# F-548 (R10-T05-5 / R10-L08-2): one carrier for the artifact pin. The parent
+# lane imports this module and asserts every other carrier still holds it.
+from .pins import EXPECTED_HASHED_REQUIREMENTS_SHA256
 
 
 def main() -> None:

@@ -10,7 +10,11 @@ import {
   scanCatalog,
 } from "../src/catalog.mjs";
 import { applySkillStoreMigrations } from "../src/migrations.mjs";
-import { retireSkill, withSkillStoreWriterLock } from "../index.mjs";
+import {
+  retireSkill,
+  syncSkillsToVectorStore,
+  withSkillStoreWriterLock,
+} from "../index.mjs";
 
 const canonicalSkillsRoot = fileURLToPath(
   new URL("../skills/", import.meta.url),
@@ -148,6 +152,7 @@ function parseDeprecate(args) {
     "--version",
     "--decision-ref",
     "--actor",
+    "--store-id",
   ]);
   const values = parseFlagValues(args, flags);
   if (!values) return null;
@@ -156,13 +161,43 @@ function parseDeprecate(args) {
   const version = values.get("--version");
   const decisionRef = values.get("--decision-ref");
   const actor = values.get("--actor") ?? "owner";
+  const storeId = values.get("--store-id");
   if (
     !validIdentityFlags(namespace, capability, version) ||
     !decisionRef ||
     !actor
   )
     return null;
-  return { namespace, capability, version, decisionRef, actor };
+  return { namespace, capability, version, decisionRef, actor, storeId };
+}
+
+/**
+ * The `sync` arguments (M12/T9-R4 F-430).
+ *
+ * Only the optional store identity the F-544 gate demands: a store that
+ * DECLARES an identity is synced only when the caller names it.
+ */
+function parseSync(args) {
+  const values = parseFlagValues(args, new Set(["--store-id"]));
+  if (!values) return null;
+  return { storeId: values.get("--store-id") };
+}
+
+/**
+ * The bounded derived-sync projection a CLI response carries (F-430).
+ *
+ * The full sync report lists every skill with its embedding diagnostics; the
+ * CLI answers with the facts an operator acts on, never the whole report.
+ */
+function derivedSyncProjection(report) {
+  return {
+    status: report?.status ?? null,
+    error_code: report?.error_code ?? null,
+    tombstone_status: report?.tombstone_status ?? null,
+    synced_count: report?.synced_count ?? 0,
+    failed_count: report?.failed_count ?? 0,
+    sync_generation_id: report?.sync_generation_id ?? null,
+  };
 }
 
 /**
@@ -248,18 +283,90 @@ export async function executeCli(args, skillsRoot = canonicalSkillsRoot) {
           decisionRef: options.decisionRef,
         }),
       );
+      const skill = {
+        namespace: retired.namespace,
+        capability: retired.capability,
+        version: retired.version,
+        retired_at: retired.retired_at,
+        decision_ref: retired.decision_ref,
+      };
+      // M12/T9-R4 F-430: the retirement PROPAGATES in the same command.
+      //
+      // The canonical transition above committed under the writer lock, but
+      // the adapter keeps serving the derived `status = 'ACTIVE' AND
+      // sync_status = 'READY'` rows until a sync runs — and before this fix
+      // the ONLY sync trigger was an unrelated plugin approval, so a retired
+      // skill stayed searchable indefinitely. The sync runs OUTSIDE the lock
+      // section: `syncSkillsToVectorStore` acquires the writer lock itself for
+      // its scan-and-tombstone phase. A store that DECLARES an identity is
+      // synced only when the operator names it (`--store-id`, the F-544 gate).
+      //
+      // A failed propagation is NEVER reported as success: the retirement is
+      // canonically committed, so the envelope carries it plus the failed
+      // sync under a named code and a non-zero exit, and `skill-store sync`
+      // is the documented retry path.
+      const derived = await syncSkillsToVectorStore({
+        skillsRoot,
+        ...(options.storeId ? { expectedStoreId: options.storeId } : {}),
+      });
+      if (derived.status === "FAILED") {
+        return response(
+          5,
+          {
+            error: {
+              code: "DERIVED_SYNC_FAILED",
+              message:
+                "the retirement committed canonically but the derived-index sync failed; " +
+                "re-run `skill-store sync` (with --store-id when the store declares an identity) to propagate it",
+              details: [],
+            },
+            retired: skill,
+            derived_sync: derivedSyncProjection(derived),
+          },
+          "stderr",
+        );
+      }
       return response(
         0,
         {
           status: retired.status,
-          skill: {
-            namespace: retired.namespace,
-            capability: retired.capability,
-            version: retired.version,
-            retired_at: retired.retired_at,
-            decision_ref: retired.decision_ref,
-          },
+          skill,
+          derived_sync: derivedSyncProjection(derived),
         },
+        "stdout",
+      );
+    }
+    // M12/T9-R4 F-430: the derived-index sync as its own command. It is the
+    // documented retry path when a deprecate's propagation failed (exit 5,
+    // DERIVED_SYNC_FAILED): the canonical retirement is already committed, so
+    // the operator re-runs THIS instead of waiting for an unrelated plugin
+    // approval to sync.
+    if (args[0] === "sync") {
+      const options = parseSync(args.slice(1));
+      if (!options) return cliError("Invalid skill-store sync arguments.");
+      const report = await syncSkillsToVectorStore({
+        skillsRoot,
+        ...(options.storeId ? { expectedStoreId: options.storeId } : {}),
+      });
+      if (report.status === "FAILED") {
+        return response(
+          5,
+          {
+            error: {
+              code: "DERIVED_SYNC_FAILED",
+              message:
+                report.error ??
+                "the derived-index sync failed; nothing was propagated",
+              details: [],
+            },
+            derived_sync: derivedSyncProjection(report),
+          },
+          "stderr",
+        );
+      }
+      return response(
+        0,
+        { status: report.status, derived_sync: derivedSyncProjection(report) },
         "stdout",
       );
     }

@@ -38,6 +38,7 @@ import {
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
+import { performance } from "node:perf_hooks";
 
 export const DEFAULT_LOCK_TIMEOUT_MS = 5000;
 export const DEFAULT_LOCK_RETRY_DELAY_MS = 10;
@@ -62,8 +63,12 @@ const RETRYABLE_RELEASE_ERRNOS = new Set([
 ]);
 
 function busyWaitMs(ms) {
-  const until = Date.now() + ms;
-  while (Date.now() < until) {
+  // M12/T9 F-581 (R10-T12-6): the spin budget is monotonic. Wall-clock time is
+  // not monotonic: a forward clock step truncated the wait and a backward step
+  // extended it, and this module's own Python-child precedent (the ocr.py
+  // deadline arms) already treats monotonic time as the correct source.
+  const until = performance.now() + ms;
+  while (performance.now() < until) {
     // bounded spin — the total budget below is 15 ms, two orders of magnitude
     // under the event-loop stall this module was introduced to remove
   }
@@ -320,7 +325,10 @@ export async function acquire(lockDir, options = {}) {
     Number.isSafeInteger(options.retryDelayMs) && options.retryDelayMs >= 0
       ? options.retryDelayMs
       : DEFAULT_LOCK_RETRY_DELAY_MS;
-  const deadline = Date.now() + timeoutMs;
+  // M12/T9 F-581 (R10-T12-6): the acquire deadline is monotonic, so a wall-clock
+  // step can neither truncate the governed budget (spurious FILE_LOCK_TIMEOUT
+  // after one attempt) nor silently extend it.
+  const deadline = performance.now() + timeoutMs;
   let lastError = null;
   // M10/T2-R18: only EEXIST means "held". `tryAcquire` already converts EEXIST
   // to `false`, so anything it THROWS is a real filesystem failure (ENOSPC,
@@ -331,7 +339,7 @@ export async function acquire(lockDir, options = {}) {
   // propagates unchanged instead of being converted to FILE_LOCK_TIMEOUT.
   for (;;) {
     if (tryAcquire(dir)) return;
-    if (Date.now() >= deadline) break;
+    if (performance.now() >= deadline) break;
     await delay(retryDelayMs);
   }
   const timeout = new Error(

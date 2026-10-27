@@ -46,6 +46,19 @@ export function validateArtifactLogicalPath(logicalPath) {
       throw new Error("SCHEMA_VALIDATION_FAILED");
     }
 
+    // F-447 (R9-L07a-2): a dot at either edge is a normaliser-visible alias,
+    // not an ordinary character. Windows strips trailing dots from a file
+    // name, and a leading dot spells a hidden entry on POSIX, so `orders.`
+    // and `.orders` could name an object that `orders` already names while the
+    // validator reported two distinct logical ids. The storage adapter's
+    // "no second spelling can address this object" invariant was false for
+    // exactly this shape. Reject the spelling rather than normalise it: the
+    // caller must name one logical id, and the validator never hands back a
+    // different string than the object identity it approved.
+    if (segment.startsWith(".") || segment.endsWith(".")) {
+      throw new Error("SCHEMA_VALIDATION_FAILED");
+    }
+
     // 6. Assert segment matches allowed characters
     if (!SAFE_SEGMENT_PATTERN.test(segment)) {
       throw new Error("SCHEMA_VALIDATION_FAILED");

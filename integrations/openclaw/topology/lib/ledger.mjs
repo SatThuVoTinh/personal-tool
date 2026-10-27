@@ -38,6 +38,17 @@ const BUDGET_FIELDS = [
   "transitions_used",
   "delegated_runs_used",
 ];
+
+// M12/T9 F-579 (R10-T12-3): the counter each reservation kind advances.
+//
+// The WRITE-TIME gate (`reserveBudget`) and the REPLAY projection
+// (`projectBudgetReservation`) share this declaration, so an admitted
+// reservation and a recorded one cannot mean different things.
+const BUDGET_KEY_BY_KIND = Object.freeze({
+  revisions: "revisions_used",
+  transitions: "transitions_used",
+  delegated_runs: "delegated_runs_used",
+});
 const INITIAL_BUDGET = Object.freeze({
   revisions_used: 1,
   transitions_used: 0,
@@ -383,10 +394,10 @@ function readCheckpoint(paths) {
  */
 function writeCheckpointAtomic(paths, checkpoint) {
   const file = checkpointPath(paths);
-  const temp = `${file}.tmp-${process.pid}`;
+  // M12/T9 F-577 (R10-T12-1): pid-Date.now()-random entropy, never pid alone.
+  const temp = writerTempName(file);
   try {
-    assertNoLinks(temp);
-    const fd = openSync(temp, "wx", 0o600);
+    const fd = openExclusiveTemp(temp);
     let writeFault = null;
     try {
       writeFileSync(fd, `${JSON.stringify(checkpoint, null, 2)}\n`);
@@ -972,7 +983,10 @@ function projectLedgerEvent(state, event, options = null) {
   const anchored = options?.anchored === true;
   if (event.type === "BUDGET_RESERVED") {
     const { task_id, kind, amount, counters } = event.payload;
-    const budgeted = reserveBudget(state, task_id, kind, amount);
+    // M12/T9 F-579 (R10-T12-3): replay projects the RECORDED reservation.
+    // The ceiling admitted the event when it was written and is not
+    // re-applied here; the recorded counters remain the verification below.
+    const budgeted = projectBudgetReservation(state, task_id, kind, amount);
     if (
       BUDGET_FIELDS.some(
         (field) => counters?.[field] !== budgeted.tasks[task_id][field],
@@ -1391,7 +1405,15 @@ function readSnapshotLocked(
         continue;
       }
       const { task_id, kind, amount, counters } = event.payload;
-      const recovered = reserveBudget(snapshot, task_id, kind, amount);
+      // M12/T9 F-579 (R10-T12-3): the tail is replayed through the same
+      // projection as the anchored region - a recorded reservation is not
+      // re-admitted against a live ceiling.
+      const recovered = projectBudgetReservation(
+        snapshot,
+        task_id,
+        kind,
+        amount,
+      );
       if (
         canonicalHash("zink-ledger-event-v1", recovered.tasks[task_id]) !==
         canonicalHash("zink-ledger-event-v1", counters)
@@ -1488,7 +1510,13 @@ function withWriterLock(paths, operation) {
       const error = new Error("Ledger writer unavailable", {
         cause: err,
       });
-      error.code = "EXECUTION_STATE_UNKNOWN";
+      // M12/T9 F-577 (R10-T12-1): a lock-busy writer NEVER ATTEMPTED the
+      // commit — no journal byte moved and no derived state changed — so it
+      // must not wear EXECUTION_STATE_UNKNOWN, which tells a caller the
+      // ledger's state is unknowable. The honest answer is a named
+      // NOT_ATTEMPTED, and `commitState` is the member a retry reads.
+      error.code = "LEDGER_COMMIT_NOT_ATTEMPTED";
+      error.commitState = "NOT_ATTEMPTED";
       throw error;
     }
     throw err;
@@ -1582,48 +1610,147 @@ function appendEventLocked(
   validateContract("ledger-event", { ...event, event_digest });
   validateContract("ledger-snapshot", snapshot, Number.MAX_SAFE_INTEGER);
   const line = `${JSON.stringify({ ...event, event_digest })}\n`;
-  // M12/T9 F-099: the checkpoint for the anchor this append creates. The
-  // anchored prefix grows by exactly one line and the snapshot's task states
-  // change with it, so the seal is recomputed over the journal as it now
-  // stands. A checkpoint that does not describe the journal (a ledger that
-  // predates it, or one whose checkpoint was lost) is replaced by this one.
-  const preAppendSize = journalFileSize(paths.events);
-  const previousCheckpoint = readCheckpoint(paths);
-  let eraFlag = previousCheckpoint?.has_pre_verdict_stamp ?? false;
-  if (!previousCheckpoint) {
-    // The era of a journal that has no checkpoint: derived from the event
-    // stream, which is the only place it is declared.
-    eraFlag = splitJournalLines(readFileSync(paths.events)).lines.some(
-      (journalLine) => PRE_VERDICT_STAMP_PATTERN.test(journalLine),
-    );
-  }
-  assertJournalAppendable(paths);
-  const fd = openSync(paths.events, "a", 0o600);
+  // M12/T9 F-577 (R10-T12-1): the commit seam classifies every failure by the
+  // phase it happened in, so a caller can tell "nothing was attempted"
+  // (NOT_ATTEMPTED), "the journal may or may not hold the bytes" (UNKNOWN)
+  // and "the journal append is durable, a derived write failed" (COMMITTED)
+  // apart — instead of every fault wearing one undifferentiated label and
+  // inviting a blind retry that double-appends.
+  let phase = "pre-append";
   try {
-    appendFileSync(fd, line, "utf8");
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
+    // M12/T9 F-099: the checkpoint for the anchor this append creates. The
+    // anchored prefix grows by exactly one line and the snapshot's task states
+    // change with it, so the seal is recomputed over the journal as it now
+    // stands. A checkpoint that does not describe the journal (a ledger that
+    // predates it, or one whose checkpoint was lost) is replaced by this one.
+    const preAppendSize = journalFileSize(paths.events);
+    const previousCheckpoint = readCheckpoint(paths);
+    let eraFlag = previousCheckpoint?.has_pre_verdict_stamp ?? false;
+    if (!previousCheckpoint) {
+      // The era of a journal that has no checkpoint: derived from the event
+      // stream, which is the only place it is declared.
+      eraFlag = splitJournalLines(readFileSync(paths.events)).lines.some(
+        (journalLine) => PRE_VERDICT_STAMP_PATTERN.test(journalLine),
+      );
+    }
+    assertJournalAppendable(paths);
+    const fd = openSync(paths.events, "a", 0o600);
+    phase = "append";
+    try {
+      appendFileSync(fd, line, "utf8");
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    phase = "post-append";
+    const next = {
+      ...snapshot,
+      sequence: event.sequence,
+      last_event_digest: event_digest,
+      updated_at: event.created_at,
+    };
+    writeSnapshotAtomic(paths, next);
+    // The checkpoint is written WITH the snapshot: the snapshot first, so a
+    // crash between the two leaves a checkpoint that is stale (and therefore
+    // ignored) rather than one that outlives its state.
+    const journalBytes = readFileSync(paths.events);
+    writeCheckpointAtomic(paths, {
+      sequence: next.sequence,
+      last_event_digest: next.last_event_digest,
+      has_pre_verdict_stamp: eraFlag,
+      events_offset: preAppendSize + Buffer.byteLength(line, "utf8"),
+      prefix_digest: checkpointDigest(journalBytes, next.tasks),
+    });
+    return withCommitState(next, "COMMITTED");
+  } catch (error) {
+    throw classifyCommitFailure(error, phase);
   }
-  const next = {
-    ...snapshot,
-    sequence: event.sequence,
-    last_event_digest: event_digest,
-    updated_at: event.created_at,
-  };
-  writeSnapshotAtomic(paths, next);
-  // The checkpoint is written WITH the snapshot: the snapshot first, so a
-  // crash between the two leaves a checkpoint that is stale (and therefore
-  // ignored) rather than one that outlives its state.
-  const journalBytes = readFileSync(paths.events);
-  writeCheckpointAtomic(paths, {
-    sequence: next.sequence,
-    last_event_digest: next.last_event_digest,
-    has_pre_verdict_stamp: eraFlag,
-    events_offset: preAppendSize + Buffer.byteLength(line, "utf8"),
-    prefix_digest: checkpointDigest(journalBytes, next.tasks),
+}
+
+/**
+ * M12/T9 F-577 (R10-T12-1): the commit-state marker on a committed snapshot.
+ *
+ * NON-ENUMERABLE, exactly like the F-081 `discarded` flag: the returned object
+ * IS a ledger snapshot, the published contract forbids extra members and the
+ * digest chain covers the whole object, so the marker must not serialize.
+ */
+function withCommitState(snapshot, commitState) {
+  Object.defineProperty(snapshot, "commitState", {
+    value: commitState,
+    enumerable: false,
+    writable: false,
+    configurable: false,
   });
-  return next;
+  return snapshot;
+}
+
+/**
+ * M12/T9 F-577 (R10-T12-1): classify a commit-seam failure by phase.
+ *
+ * - `pre-append`: nothing durable was attempted — NOT_ATTEMPTED;
+ * - `append`: the bytes may or may not have reached the journal (a torn tail
+ *   is exactly this state) — UNKNOWN, with the raw errno preserved;
+ * - `post-append`: the journal line IS durable and only a derived artefact
+ *   failed — COMMITTED, in the F-417 LEDGER_COMMIT_UNCERTAIN family, so a
+ *   caller never retries the append blind.
+ *
+ * The message names the error CLASS only, never its message: ledger content is
+ * untrusted data and must not reach a string a caller logs (M11/T3 B3).
+ */
+function classifyCommitFailure(error, phase) {
+  if (error?.commitState !== undefined) return error;
+  if (phase === "post-append") {
+    const committed = new Error(
+      `LEDGER_COMMIT_UNCERTAIN: the journal append is durable but a derived state write failed (${error?.code ?? error?.name ?? "unknown"})`,
+      { cause: error },
+    );
+    committed.code = "LEDGER_COMMIT_UNCERTAIN";
+    committed.committed = true;
+    committed.commitState = "COMMITTED";
+    return committed;
+  }
+  if (phase === "append") {
+    error.commitState = "UNKNOWN";
+    return error;
+  }
+  error.commitState = "NOT_ATTEMPTED";
+  return error;
+}
+
+/**
+ * M12/T9 F-577 (R10-T12-1): the writer's temp-name grammar.
+ *
+ * `process.pid` ALONE made the exclusive `openSync(..., "wx")` a permanent
+ * failure the day a recycled pid met a crashed writer's residue: the temp
+ * file was already there, the open refused, and nothing swept it. The grammar
+ * now carries the entropy the Skill Store writer already uses
+ * (`catalog.mjs`): pid, wall clock and 8 cryptographic bytes, so a name is
+ * never reused by a later writer.
+ */
+function writerTempName(file) {
+  return `${file}.tmp-${process.pid}-${Date.now()}-${randomBytes(8).toString("hex")}`;
+}
+
+/**
+ * M12/T9 F-577 (R10-T12-1): the exclusive open, INSIDE a fault handler.
+ *
+ * The bare `openSync(temp, "wx")` used to sit outside any handler, so an
+ * `EEXIST` — residue from a crashed writer of this process — propagated raw
+ * and blocked every later commit. Under the writer lock the temp name is
+ * private to this writer, so a file already sitting there is residue by
+ * definition: it is removed with the shipped residue helper and the open is
+ * attempted exactly once more. Any other errno is a real fault and propagates.
+ */
+function openExclusiveTemp(temp) {
+  try {
+    assertNoLinks(temp);
+    return openSync(temp, "wx", 0o600);
+  } catch (error) {
+    if (error?.code !== "EEXIST") throw error;
+    unlinkWriterResidue(temp);
+    assertNoLinks(temp);
+    return openSync(temp, "wx", 0o600);
+  }
 }
 
 /**
@@ -1646,9 +1773,9 @@ export function unlinkWriterResidue(tempPath) {
 
 function writeSnapshotAtomic(paths, snapshot) {
   validateContract("ledger-snapshot", snapshot, Number.MAX_SAFE_INTEGER);
-  const temp = `${paths.snapshot}.tmp-${process.pid}`;
-  assertNoLinks(temp);
-  const snapshotFd = openSync(temp, "wx", 0o600);
+  // M12/T9 F-577 (R10-T12-1): entropy temp name + fault-handled exclusive open.
+  const temp = writerTempName(paths.snapshot);
+  const snapshotFd = openExclusiveTemp(temp);
   let writeFault = null;
   try {
     writeFileSync(snapshotFd, `${JSON.stringify(snapshot, null, 2)}\n`);
@@ -1694,21 +1821,62 @@ function writeSnapshotAtomic(paths, snapshot) {
       );
       uncertain.code = "LEDGER_COMMIT_UNCERTAIN";
       uncertain.committed = true;
+      // M12/T9 F-577: the seam-wide vocabulary this classification predates.
+      uncertain.commitState = "COMMITTED";
       throw uncertain;
     }
   }
 }
 
+/**
+ * M12/T9 F-579 (R10-T12-3): the REPLAY projection of a recorded reservation.
+ *
+ * A ceiling is an ADMISSION rule: it decides, at write time, whether a new
+ * reservation may be recorded. Replay is not admission - the event is already
+ * in the record - so the projection must reproduce the reservation the event
+ * RECORDS; the caller then verifies it against the counters the event carries.
+ *
+ * Re-deriving the limit here made the readability of the journal depend on the
+ * reading build: lowering a `BUDGETS` constant turned any ledger whose tail
+ * still held budget events into EXECUTION_STATE_UNKNOWN, although every
+ * recorded counter was the arithmetic of the events themselves. This function
+ * therefore reads no live ceiling; `reserveBudget` keeps that job.
+ */
+function projectBudgetReservation(snapshot, taskId, kind, amount) {
+  const task = snapshot.tasks[taskId] ?? INITIAL_BUDGET;
+  const key = BUDGET_KEY_BY_KIND[kind];
+  const used = key ? task[key] : undefined;
+  if (
+    !key ||
+    !Number.isSafeInteger(used) ||
+    used < 0 ||
+    !Number.isSafeInteger(amount) ||
+    amount <= 0 ||
+    !Number.isSafeInteger(used + amount)
+  )
+    throw new Error("journal budget mismatch");
+  return {
+    ...snapshot,
+    tasks: {
+      ...snapshot.tasks,
+      [taskId]: { ...task, [key]: used + amount },
+    },
+  };
+}
+
+/**
+ * M12/T9 F-579: the WRITE-TIME admission gate.
+ *
+ * The ceiling decides whether a NEW reservation may enter the record. It is
+ * deliberately not consulted by `projectBudgetReservation`, which is the only
+ * path replay uses.
+ */
 export function reserveBudget(snapshot, taskId, kind, amount = 1) {
   if (!Number.isSafeInteger(amount) || amount <= 0) {
     throw new TypeError("Budget reservation must be a positive safe integer");
   }
   const task = snapshot.tasks[taskId] ?? INITIAL_BUDGET;
-  const key = {
-    revisions: "revisions_used",
-    transitions: "transitions_used",
-    delegated_runs: "delegated_runs_used",
-  }[kind];
+  const key = BUDGET_KEY_BY_KIND[kind];
   const limit = {
     revisions: BUDGETS.maxBriefRevisionsPerTask,
     transitions: BUDGETS.maxStackTransitionsPerTask,
@@ -1724,13 +1892,7 @@ export function reserveBudget(snapshot, taskId, kind, amount = 1) {
     error.code = "WORKFLOW_BUDGET_EXHAUSTED";
     throw error;
   }
-  return {
-    ...snapshot,
-    tasks: {
-      ...snapshot.tasks,
-      [taskId]: { ...task, [key]: task[key] + amount },
-    },
-  };
+  return projectBudgetReservation(snapshot, taskId, kind, amount);
 }
 
 export function reserveBudgetAtomically(
@@ -1739,17 +1901,73 @@ export function reserveBudgetAtomically(
   taskId,
   kind,
   amount = 1,
+  idempotencyKey = null,
 ) {
   return withWriterLock(paths, () => {
     const current = readSnapshotLocked(paths);
+    // M12/T9 F-577 (R10-T12-1): a caller-supplied idempotency key makes a
+    // retry after a COMMITTED-but-uncertain commit safe. The key is committed
+    // INTO the BUDGET_RESERVED payload, so the journal itself answers whether
+    // the reservation already happened; a repeated key is DISCARDED with the
+    // F-081 non-enumerable flag instead of charging the budget twice. A
+    // caller that supplies no key keeps the legacy behaviour exactly.
+    if (idempotencyKey !== null && idempotencyKey !== undefined) {
+      if (
+        typeof idempotencyKey !== "string" ||
+        idempotencyKey.length === 0 ||
+        idempotencyKey.length > 128
+      )
+        throw new TypeError(
+          "Budget idempotency key must be a string of 1-128 characters",
+        );
+      if (journalHasBudgetReservationKey(paths, idempotencyKey)) {
+        const discarded = { ...current };
+        Object.defineProperty(discarded, "discarded", {
+          value: true,
+          enumerable: false,
+          writable: false,
+          configurable: false,
+        });
+        return withCommitState(discarded, "COMMITTED");
+      }
+    }
     const reserved = reserveBudget(current, taskId, kind, amount);
     return appendEventLocked(paths, reserved, "BUDGET_RESERVED", {
       task_id: taskId,
       kind,
       amount,
       counters: reserved.tasks[taskId],
+      ...(idempotencyKey !== null && idempotencyKey !== undefined
+        ? { idempotency_key: idempotencyKey }
+        : {}),
     });
   });
+}
+
+/**
+ * M12/T9 F-577 (R10-T12-1): does the journal already hold a BUDGET_RESERVED
+ * carrying this exact idempotency key? Called UNDER the writer lock, so the
+ * journal cannot grow while it is scanned. Only lines that name the event type
+ * are parsed; the comparison is on the parsed payload, never on raw text.
+ */
+function journalHasBudgetReservationKey(paths, idempotencyKey) {
+  if (!existsSync(paths.events)) return false;
+  const { lines } = splitJournalLines(readFileSync(paths.events));
+  for (const line of lines) {
+    if (!line.includes('"BUDGET_RESERVED"')) continue;
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (
+      event?.type === "BUDGET_RESERVED" &&
+      event?.payload?.idempotency_key === idempotencyKey
+    )
+      return true;
+  }
+  return false;
 }
 
 export function recordWorkflowEvent(paths, type, payload) {

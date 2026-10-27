@@ -27,7 +27,7 @@ import {
 } from "../zink-skill-store/bin/skill-store.mjs";
 import { recoverSkillStoreLock } from "../zink-skill-store/bin/skill-store-lock-recovery.mjs";
 import {
-  promoteApprovedSkill,
+  promoteApprovedSkillWithLock,
   scanCatalog,
   skillStoreWriterLockDir,
 } from "../zink-skill-store/src/catalog.mjs";
@@ -350,7 +350,7 @@ test("rejects path mismatch, digest mismatch, and multiple active versions", asy
     writeSkill(root);
     await assert.rejects(
       () =>
-        promoteApprovedSkill({
+        promoteApprovedSkillWithLock({
           skillsRoot: root,
           namespace: ["supply-chain", "inventory"],
           capability: "safety-stock",

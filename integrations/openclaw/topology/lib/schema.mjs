@@ -80,6 +80,13 @@ export const KEYWORDS = Object.freeze(
     "format",
     "minimum",
     "maximum",
+    // F-536 (R10-T03-1): `default` is a JSON Schema ANNOTATION, not an
+    // assertion. The host engine accepts it and two published tool contracts
+    // use it to document optional inputs; refusing it here made
+    // `zink_sql.max_rows` and `zink_knowledge.top_k` unsatisfiable the moment
+    // a caller sent them. Admission is deliberately non-validating: the
+    // interpreter records no default and applies no value.
+    "default",
     "allOf",
     "anyOf",
     "oneOf",
@@ -581,7 +588,7 @@ export function generateSchemaManifest() {
  * this roll owes no per-mode admission either.
  */
 export const PINNED_SCHEMA_MANIFEST_CHECKSUM =
-  "f95cd209035eb7963d4b2b21484c9c919eaa498dda587a8d196ed945ac8e3fa7";
+  "014c8f8948b6c411801a3a57364d2eddb5b8c14951d3a4ac432ae13972040a5d";
 
 export function verifySchemaManifestChecksums(manifest = null) {
   if (manifest === null) {

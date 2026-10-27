@@ -315,19 +315,52 @@ class ApiAttributionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("STARTUP_RECOVERY_INCOMPLETE", joined)
 
     async def test_the_documented_response_keys_exist(self) -> None:
-        """F-357 (R7-OC2-02): the walkthrough read fields the service never returns.
+        """F-357 (R7-OC2-02) / F-495 (R9-L10-3): every operator walkthrough.
 
         The operator walkthrough was written against an assumed response
         shape: `$status.state`, `$results.hits`, `$hit.document_title` and
         `$hit.score` are not keys any handler returns, so a reader who copied
         it enumerated a null collection and printed nothing.
+
+        F-357's closure corrected `apps/knowledge/README.md` only, and this
+        guard resolved that single file, so the second tracked operator
+        walkthrough -- `platforms/knowledge-platform/README.md` -- was never
+        opened by any lane and still reads the assumed shape. The guard now
+        iterates every tracked operator walkthrough, so reverting a field name
+        in any of them turns it red.
         """
 
-        readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(
-            encoding="utf-8"
+        knowledge_root = Path(__file__).resolve().parents[1]
+        # `<repo root>` from `<repo root>/apps/knowledge`, built from the path
+        # parts so a build context without that parent raises nothing here.
+        repository_root = Path(*knowledge_root.parts[:-2])
+        walkthroughs = (
+            ("apps/knowledge/README.md", knowledge_root / "README.md"),
+            (
+                "platforms/knowledge-platform/README.md",
+                repository_root
+                / "platforms"
+                / "knowledge-platform"
+                / "README.md",
+            ),
         )
-        documented = sorted(set(re.findall(r"\$(\w+)\.(\w+)", readme)))
-        self.assertTrue(documented, "the walkthrough must read something")
+        missing = [label for label, path in walkthroughs if not path.is_file()]
+        self.assertEqual(
+            missing,
+            [],
+            "every tracked operator walkthrough must be readable from this "
+            "checkout; missing: " + ", ".join(missing),
+        )
+        texts = {
+            label: path.read_text(encoding="utf-8")
+            for label, path in walkthroughs
+        }
+        documented = {
+            label: sorted(set(re.findall(r"\$(\w+)\.(\w+)", text)))
+            for label, text in texts.items()
+        }
+        for label, reads in documented.items():
+            self.assertTrue(reads, f"{label} must read something")
 
         self.app.state.database.get_active_index = AsyncMock(return_value=ACTIVE)
         self.app.state.database.search_candidates = AsyncMock(
@@ -362,13 +395,42 @@ class ApiAttributionTests(unittest.IsolatedAsyncioTestCase):
         run = await self.request("GET", "/v1/index-runs/run-1")
         allowed |= set(run.json())
 
-        for variable, key in documented:
-            with self.subTest(variable=variable, key=key):
-                self.assertIn(
-                    key,
-                    allowed,
-                    f"the walkthrough reads ${variable}.{key}, which no handler returns",
+        for label, reads in documented.items():
+            text = texts[label]
+            # F-495 (R9-L10-3): the walkthrough's terminal success code has to
+            # be a value `knowledge.index_run_status` actually carries, the
+            # readyz step has to stop expecting a `connected` field no handler
+            # returns, and every block that opens an index run has to capture
+            # the run id the polling step interpolates.
+            with self.subTest(walkthrough=label, contract="status-vocabulary"):
+                self.assertIn("SUCCEEDED", text)
+                self.assertNotIn("COMPLETED", text)
+                self.assertNotIn("`connected`", text)
+            post_blocks = [
+                fence
+                for fence in re.findall(r"```[^\n]*\n(.*?)```", text, flags=re.DOTALL)
+                if "/v1/index-runs" in fence and "-Method Post" in fence
+            ]
+            with self.subTest(walkthrough=label, contract="run-id-capture"):
+                self.assertTrue(
+                    post_blocks,
+                    f"{label} documents no index-run POST block",
                 )
+                for fence in post_blocks:
+                    self.assertRegex(
+                        fence,
+                        r"\$runId\s*=",
+                        f"{label} posts an index run without assigning $runId, "
+                        "so the polling step interpolates an empty variable",
+                    )
+            for variable, key in reads:
+                with self.subTest(walkthrough=label, variable=variable, key=key):
+                    self.assertIn(
+                        key,
+                        allowed,
+                        f"{label} reads ${variable}.{key}, which no handler "
+                        "returns",
+                    )
 
     async def test_min_score_on_the_rrf_path_is_refused(self) -> None:
         """F-012 (R5-E02-03): a threshold that cannot be enforced is refused.
@@ -512,6 +574,7 @@ class ApiAttributionTests(unittest.IsolatedAsyncioTestCase):
         """
 
         self.app.state.database.get_active_index = AsyncMock(return_value=ACTIVE)
+        self.app.state.database.search_candidates = AsyncMock()
         self.app.state.model_probe.embed = AsyncMock(
             side_effect=ModelProbeError("EMBEDDING_PERMANENT_HTTP")
         )

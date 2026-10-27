@@ -97,9 +97,23 @@ const M11_T3_OUTGOING_FILE_LOCK_SHA256 =
 const DEPLOYED_BUILD_FILE_LOCK_SHA256 =
   "bcd65de81c9f6df088dd9ec269cc4dd3969fd80657f9c582e34e06554e64cf7b";
 
+/**
+ * M12/T9-R4 F-581: the bytes the LIVE WSL runtime carries, measured read-only this
+ * band with `sha256sum` through `wsl.exe` and `MSYS_NO_PATHCONV=1` on
+ * `/home/hoang_vinh/.openclaw-zink/extensions/zink-governance/lib/file-lock.mjs`.
+ * Provenance is `git show 85eb094:integrations/openclaw/lib/file-lock.mjs`, which
+ * reproduces them exactly, so packaging does not rewrite this module's imports and
+ * the repository bytes are the deployed bytes. F-581 moves the acquire deadline and
+ * the busy-wait comparison from `Date.now()` to `performance.now()` so a wall-clock
+ * step can no longer mint or expire a lock early; that displaces this digest, and
+ * until the runtime is redeployed it is what --preflight finds on the host.
+ */
+const F581_OUTGOING_FILE_LOCK_SHA256 =
+  "e9cac11dea2ebca6fd57f55e1aca6a7c0a6959fb4ff6a6dabf0811533a9bde06";
+
 /** The CURRENT build's file-lock asset — accepted by content, never listed. */
 const CURRENT_FILE_LOCK_SHA256 =
-  "e9cac11dea2ebca6fd57f55e1aca6a7c0a6959fb4ff6a6dabf0811533a9bde06";
+  "98c15fe47423c1e19f43d9072e9a35f8b86d441cebd75940e374ce62c11008ee";
 
 const identifiers = Object.freeze({
   discordGuildId: "123456789012345678",
@@ -412,18 +426,19 @@ test("R2 P2: the live runtime agrees with the proven digest where readable", asy
 // THE ALLOWLIST ITSELF — one addition, bounded
 // ---------------------------------------------------------------------------
 
-test("R2 0: the file-lock block holds exactly the three proven predecessors, each listed once", async () => {
+test("R2 0: the file-lock block holds exactly the five proven predecessors, each listed once", async () => {
   const block = keyBlock(assetTable(), "lib/file-lock.mjs");
   const admitted = [
     R18_FILE_LOCK_SHA256,
     LIVE_FILE_LOCK_SHA256,
     M11_T3_OUTGOING_FILE_LOCK_SHA256,
     DEPLOYED_BUILD_FILE_LOCK_SHA256,
+    F581_OUTGOING_FILE_LOCK_SHA256,
   ];
   assert.deepEqual(
     listedDigests(block).sort(),
     admitted.slice().sort(),
-    "the block must carry the R18 predecessor, the R2 live predecessor, the M11/T3 outgoing build and the DEPLOYED build (F-379), nothing else",
+    "the block must carry the R18 predecessor, the R2 live predecessor, the M11/T3 outgoing build, the DEPLOYED build (F-379) and the build F-581 displaces, nothing else",
   );
   for (const digest of admitted) {
     assert.equal(

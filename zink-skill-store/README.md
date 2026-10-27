@@ -27,7 +27,7 @@ Toàn bộ kho kỹ năng tuân thủ nghiêm ngặt cấu trúc phân cấp chu
 zink-skill-store/
 ├── index.mjs                        # CỬA CHÍNH THỨC (public door) của kho: entry point công khai
 ├── bin/
-│   └── skill-store.mjs             # CLI kiểm tra (validate), truy xuất (get), rút lui (deprecate) và migrate schema (migrate)
+│   └── skill-store.mjs             # CLI kiểm tra (validate), truy xuất (get), rút lui (deprecate), migrate schema (migrate) và đồng bộ chỉ mục dẫn xuất (sync)
 ├── migrations/                      # Bộ migration RIÊNG của kho (DDL skills.* + ledger schema_migrations của kho)
 │   ├── 003_skills_vector_schema.sql # DDL lược đồ vector của kho (đã áp dụng, băm cố định — không sửa tại chỗ)
 │   └── 004_skill_retirement_state.sql # Migration TIẾN LÊN: cho phép trạng thái DEPRECATED/TOMBSTONED trong chỉ mục dẫn xuất
@@ -381,6 +381,20 @@ Trong chỉ mục vector dẫn xuất, kỹ năng đã rút lui được **ghi l
 bị xoá im lặng: dòng dẫn xuất chuyển sang `status = 'DEPRECATED'` và
 `sync_status = 'TOMBSTONED'`, còn các vector của nó bị xoá. Việc này cần
 migration tiến lên `004_skill_retirement_state.sql` trong bộ migration của kho.
+
+M12/T9-R4 F-430: lệnh `deprecate` **tự lan truyền** việc rút lui tới chỉ mục
+dẫn xuất trong cùng một lệnh (sync chạy sau khi đoạn writer lock đóng). Nếu
+lan truyền thất bại, lệnh thoát mã `5` với `error.code = DERIVED_SYNC_FAILED`,
+kèm bản ghi rút lui đã commit canonical — không bao giờ báo thành công khi
+sync chưa chạy. Đường thử lại chính thức là lệnh `sync`:
+
+```powershell
+node zink-skill-store/bin/skill-store.mjs sync [--store-id <tên-kho>]
+```
+
+Kho **khai báo danh tính** chỉ được sync khi người vận hành nêu tên nó
+(`--store-id` cho cả `deprecate` lẫn `sync`, cổng F-544); kho không khai báo
+danh tính giữ hành vi cũ.
 
 ### 10.2. Kho sở hữu lược đồ của chính nó (`migrate`)
 

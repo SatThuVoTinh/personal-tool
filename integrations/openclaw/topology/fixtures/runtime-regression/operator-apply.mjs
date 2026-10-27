@@ -37,15 +37,27 @@ import {
 } from "../../lib/transaction-snapshot.mjs";
 import { ledgerPaths, migrateLedgerProjection } from "../../lib/ledger.mjs";
 import { applyRuntime, classifyApplyReason } from "./apply-orchestration.mjs";
+import {
+  STATE_DIR_NOT_NAMED,
+  resolveStateRoot,
+  rootDisclosure,
+} from "./operator-state-root.mjs";
 
 // F-219: the machine-specific state root is NOT a literal. The operator
 // names it (ZINK_OPERATOR_STATE_DIR or the first argument) and the driver
 // refuses to run without one, exactly like live-governance-probe.mjs: a
 // driver that silently points at one operator's machine root says nothing
 // about any other, and a hardcoded root is what let these files drift.
-const stateDir = process.env.ZINK_OPERATOR_STATE_DIR ?? process.argv[2] ?? null;
+//
+// M12/T9 F-560 (R10-T07-6): the TYPED argument outranks an inherited
+// environment value, so a stale export cannot point the apply at a different
+// tree than the operator named, and the report names the resolved root by
+// digest.
+const stateRoot = resolveStateRoot({ argv: process.argv.slice(2) });
+const stateDir = stateRoot.stateDir;
+const stateRootSource = stateRoot.source;
 if (!stateDir) {
-  process.stderr.write("STATE_DIR_NOT_NAMED\n");
+  process.stderr.write(`${STATE_DIR_NOT_NAMED}\n`);
   process.exit(2);
 }
 const runtimeRoot = "/home/hoang_vinh/.local/lib/node_modules/openclaw";
@@ -229,21 +241,26 @@ const oldQuarantine = path.join(
   "quarantined-t2",
 );
 
-// M12/T9 (the owner's ruling of 2026-10-21): the ledger's DERIVED snapshot
-// is recomputed from its authoritative journal BEFORE the apply, so the Gateway
-// that comes up reads a state that agrees with the record. The journal is never
-// written; only the derived cache is. Nothing is asked of the operator: the
-// deploy ceremony does it, and it says so in its own output.
-const ledgerMigration = migrateLedgerProjection(ledgerPaths(stateDir));
-if (ledgerMigration.changed) {
-  console.log(
-    `[zink-operator] the derived ledger snapshot was recomputed from the journal: sequence=${ledgerMigration.sequence} tasks=${ledgerMigration.tasks}`,
-  );
-}
-
+// M12/T9 F-561 (R10-T07-7): the ledger's DERIVED snapshot is recomputed from
+// its authoritative journal before the Gateway that comes up reads it, so the
+// record and the cache agree. It used to run HERE, at module scope, ahead of
+// `applyRuntime` — a live write outside every stage of the ceremony, so a run
+// that reported `mutationStarted: false` had already written the state root.
+// It is now the ceremony's own declared stage (`apply-orchestration.mjs`,
+// `ledger-projection`), after the transaction preimage exists and before the
+// builder writes, and the report's `mutationStarted` covers it. The journal is
+// never written; only the derived cache is.
 const report = await applyRuntime({
   readIdentifiers,
   runBuilder,
+  recomputeLedgerProjection() {
+    const ledgerMigration = migrateLedgerProjection(ledgerPaths(stateDir));
+    if (ledgerMigration.changed) {
+      console.log(
+        `[zink-operator] the derived ledger snapshot was recomputed from the journal: sequence=${ledgerMigration.sequence} tasks=${ledgerMigration.tasks}`,
+      );
+    }
+  },
   pruneQuarantine(snapshot) {
     // M12/T9 F-106: the quarantine prune used to delete the legacy r12
     // quarantine outright. That tree is deliberately never a transaction
@@ -330,5 +347,10 @@ const report = await applyRuntime({
   classifyReason: classifyApplyReason,
 });
 
-process.stdout.write(`${JSON.stringify(report)}\n`);
+process.stdout.write(
+  `${JSON.stringify({
+    ...report,
+    ...rootDisclosure(stateDir, stateRootSource),
+  })}\n`,
+);
 if (report.status !== "PASS") process.exitCode = 1;

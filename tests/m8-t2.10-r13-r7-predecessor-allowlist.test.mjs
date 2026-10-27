@@ -195,19 +195,23 @@ assert.ok(
 const M11_T3_ENTRYPOINT_SHA256 =
   "c4d0d921d1f0c4ca1eca6e2f3dd6093e7a6a878359ab69779b37b18d0ce1bd1a";
 /**
- * M12/T9-R4 F-533, then F-470 + F-472, then F-463, then F-402/F-405/F-406: the
- * CURRENT packaged entrypoint build. Accepted by content comparison and
- * deliberately NOT listed. F-533's build (`338d1406…`) was never installed, so
- * it joins the other undeployed candidates rather than the admitted
- * predecessors. F-470's own test seam then moved the bytes again;
- * `5aacf6a7…` was never installed either. F-463 changes the same plugin
- * (plan-field redaction, result/forum mention strips, the delegated
- * approval-body stripper), so `415e2d4b…` also stays unlisted. F-402/F-405/F-406
- * change the ACCEPT seam (owner projection, principal mint, accepted outcome,
- * ledger reconciliation), so `f67cbc6f…` stays unlisted too.
+ * M12/T9-R4 F-533, then F-470 + F-472, then F-463, then F-402/F-405/F-406, then
+ * the F-529/F-532/F-535/F-542/F-500 cluster: the CURRENT packaged entrypoint
+ * build. Accepted by content comparison and deliberately NOT listed. F-533's
+ * build (`338d1406…`) was never installed, so it joins the other undeployed
+ * candidates rather than the admitted predecessors. F-470's own test seam then
+ * moved the bytes again; `5aacf6a7…` was never installed either. F-463 changes
+ * the same plugin (plan-field redaction, result/forum mention strips, the
+ * delegated approval-body stripper), so `415e2d4b…` also stays unlisted.
+ * F-402/F-405/F-406 change the ACCEPT seam (owner projection, principal mint,
+ * accepted outcome, ledger reconciliation), so `f67cbc6f…` stays unlisted too.
+ * The approval-surface cluster then moved the same bytes once more: the build
+ * packaged by `85eb094` (`75764d46…`) was never installed either, so it is not
+ * an admitted predecessor — only builds the live runtime actually carried are
+ * listed.
  */
 const R4_F533_CURRENT_ENTRYPOINT_SHA256 =
-  "75764d46e7f06cc0f4525dd26359236b558cb46ee3f226ae1427c8f1e86d5c9f";
+  "705b893377c9753e61d41402c953915ccd07765f37d5109c146c888cba7d30de";
 const M12_T2_2_OUTGOING_ENTRYPOINT_SHA256 =
   "513beb15c3d7624c0a928c4c1556dc44d4c4cff4f1e00980f24b298a25751c0d";
 assert.ok(
@@ -1205,9 +1209,14 @@ test("R13 B3: the build the live runtime carries is accepted and converges", asy
     // and did not roll this pin, so this value covers both rows. No
     // `configure.mjs` entry is added: this is the CURRENT build, accepted by
     // content comparison and deliberately never allowlisted.
+    // M12/T9-R4 F-581, re-valued in band. The call budget now reads a monotonic
+    // clock instead of wall-clock time, so the queue writer's bytes moved again.
+    // The value replaced here (`aadfd449…`) is exactly
+    // `git show HEAD:integrations/openclaw/lib/queue-manager.mjs`'s digest, so
+    // the pin this test was actually asserting is the one it replaced.
     assert.equal(
       sha256(readFileSync(p.asset("lib/queue-manager.mjs"), "utf8")),
-      "aadfd449e703b54898b968988012387eea507800a90792fd2a88e03504493052",
+      "7fe3c3633d935e36cf66643f39124cab36bbf2220df807285e014d94e80910b3",
       "an accepted predecessor must converge onto the current queue writer",
     );
   } finally {

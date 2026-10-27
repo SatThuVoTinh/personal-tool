@@ -527,6 +527,11 @@ describe("M12/T9 F-083 - the load reports the capabilities it actually has", () 
 });
 
 describe("M12/T1 P1 — an approval decision is recorded with its own reason", () => {
+  // M12/T9 F-529: the surfaced record is LOAD-BEARING — an APPROVE against a
+  // recorded request now requires the durable record of the surfaced card and
+  // the projected approval thread, and every decision must name the thread it
+  // was surfaced in (the tests/agent-owner-F-123.test.mjs fixture pattern).
+  const DECISION_THREAD = "900000000000000021";
   async function decisionHarness(tag) {
     const root = mkdtempSync(path.join(os.tmpdir(), `m12t1-reason-${tag}-`));
     const ledgerRoot = path.join(root, "operator", "m7-t2", "ledger");
@@ -582,6 +587,11 @@ describe("M12/T1 P1 — an approval decision is recorded with its own reason", (
       session_key: `agent:o1:session-${tag}`,
       run_id: `approval-run-${tag}`,
     });
+    recordWorkflowEvent(paths, "WORKFLOW_APPROVAL_SURFACED", {
+      task_id: taskId,
+      channel: "approvals",
+      thread_id: DECISION_THREAD,
+    });
     return { root, paths, taskId };
   }
 
@@ -613,6 +623,7 @@ describe("M12/T1 P1 — an approval decision is recorded with its own reason", (
           channel: "approvals",
           taskId: h.taskId,
           action,
+          data: { threadId: DECISION_THREAD },
           paths: h.paths,
         });
         assert.equal(
@@ -643,7 +654,7 @@ describe("M12/T1 P1 — an approval decision is recorded with its own reason", (
         channel: "approvals",
         taskId: h.taskId,
         action: "APPROVE",
-        data: { reason: "DUYET_CO_LEU" },
+        data: { reason: "DUYET_CO_LEU", threadId: DECISION_THREAD },
         paths: h.paths,
       });
       assert.equal(lastDecision(h.root).payload.reason, "DUYET_CO_LEU");

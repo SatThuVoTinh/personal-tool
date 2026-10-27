@@ -1357,6 +1357,28 @@ export function applyWorkflowEvent(
       typeof payload.thread_id === "string" && payload.thread_id.length > 0,
       "SCHEMA_INVALID",
     );
+    // M12/T9 F-396 (legacy R9-L02-6): the member was admitted and then dropped,
+    // so the same thread could be re-surfaced with a DIFFERENT result digest and
+    // both were accepted: durable state could not say which result the owner was
+    // shown. The digest is already durable (the task-level result records it and
+    // a root result carries it), so the surface is bound to the SAME identity a
+    // verdict must name (`requireResultIdentityMatch`) instead of projecting a
+    // second copy of it. The check runs BEFORE the idempotent same-thread return,
+    // which is exactly the replay the finding measured as silently accepted.
+    //
+    // A SURFACED that reaches the ledger before any result is recorded keeps its
+    // admission: there is no recorded identity to differ from yet, the journal
+    // still carries the digest it was given, and a later verdict is bound by the
+    // same expression this comparison uses.
+    if (payload.result_digest !== undefined) {
+      const recordedResultDigest =
+        task.root_result?.payload_digest ?? task.execution_payload_digest;
+      if (recordedResultDigest !== undefined)
+        requireCondition(
+          payload.result_digest === recordedResultDigest,
+          "RESULT_MISMATCH",
+        );
+    }
     if (task.results_thread_id) {
       if (task.results_thread_id !== payload.thread_id)
         fail("INVALID_STATE_TRANSITION");
@@ -1727,6 +1749,32 @@ export function applyWorkflowEvent(
     // names it is bound to THIS result and to no other.
     task.execution_payload_digest =
       payload.payload_digest ?? reducerMintedResultDigest(task);
+    // M12/T9 F-394 (legacy R9-L02-2): this arm whitelisted technical_status
+    // and business_status and then wrote NEITHER, so a FAIL/FAIL result left
+    // no outcome anywhere in the durable projection and a later ACCEPT
+    // derived COMPLETE — the outcome the owner was being asked to accept was
+    // absent from durable state. The outcome is now persisted, derived from
+    // the two gate statuses the plugin ships, in the published outcome
+    // vocabulary, and resolveAcceptedOutcome reads it. A result that carries
+    // no status (every event recorded before the plugin shipped them, and
+    // every replay of one) persists no outcome and keeps the legacy COMPLETE
+    // fallback, so an old journal never changes meaning by replay.
+    if (
+      payload.technical_status !== undefined ||
+      payload.business_status !== undefined
+    ) {
+      for (const status of [payload.technical_status, payload.business_status])
+        if (status !== undefined)
+          requireCondition(
+            status === "PASS" || status === "FAIL",
+            "SCHEMA_INVALID",
+          );
+      task.execution_outcome_status =
+        payload.technical_status === "FAIL" ||
+        payload.business_status === "FAIL"
+          ? "FAILED"
+          : "COMPLETE";
+    }
     return next;
   }
   // M7-020: a spawn reservation creates governed work, so it is a
@@ -2188,7 +2236,12 @@ function reconcileForRetry(task, nodeId, eventTime) {
  * completed run and the ledger then contradicted the outcome it had recorded.
  */
 function resolveAcceptedOutcome(task, payload) {
-  const recorded = task.root_result?.outcome_status ?? null;
+  // M12/T9 F-394: a task-level result persists its derived outcome in
+  // execution_outcome_status; a root result keeps outcome_status. Either is
+  // "the outcome the ledger recorded" — only a result that recorded none
+  // keeps the legacy COMPLETE.
+  const recorded =
+    task.root_result?.outcome_status ?? task.execution_outcome_status ?? null;
   const claimed = payload.outcome_status ?? null;
   if (claimed !== null) {
     requireCondition(OUTCOME_STATUSES.includes(claimed), "SCHEMA_INVALID");

@@ -269,6 +269,16 @@ def _docling_extract(
     Linux image called the superseded three-argument form (F-439, R9-L09-3).
     The arity is pinned from the parent lane instead. This module deliberately
     has no fallback to full-document conversion or internal batching.
+
+    F-493 (R9-T11-3): the population every sanctioned executor measures is
+    `apps/knowledge/tests` alone -- the image test stage copies
+    `pdf-runtime/src` but never `pdf-runtime/tests`, and the CI
+    `python-quality` job deliberately does not install this closure -- so this
+    child package holds no test module and nothing claims an image lane for
+    one. The parent lane binds this package's process contract instead
+    (`apps/knowledge/tests/test_m12_t9_r4_pdf_ocr_process_contract.py` loads
+    `ocr.py` by path and reddens if a child test module or a Dockerfile copy
+    line for one reappears).
     """
 
     _configure_determinism()

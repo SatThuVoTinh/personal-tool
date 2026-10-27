@@ -14,9 +14,8 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const url = (rel) => pathToFileURL(path.join(REPO, rel)).href;
 const readSource = (rel) => readFileSync(path.join(REPO, rel), "utf8");
 
-const { promoteApprovedSkill, describeVersionRollbackState } = await import(
-  url("zink-skill-store/src/catalog.mjs")
-);
+const { promoteApprovedSkillWithLock, describeVersionRollbackState } =
+  await import(url("zink-skill-store/src/catalog.mjs"));
 const NATIVE = await import(
   url("integrations/openclaw/topology/lib/native-patch.mjs")
 );
@@ -85,7 +84,7 @@ test("R22-02: publishing a skill produces a complete version directory", async (
   const newline = String.fromCharCode(10);
   const body = "# R22 proof" + newline + newline + "A short body." + newline;
   try {
-    const result = await promoteApprovedSkill({
+    const result = await promoteApprovedSkillWithLock({
       skillsRoot,
       namespace: ["office"],
       capability: "r22-proof",
@@ -287,7 +286,7 @@ test("R22-08: a rolled-back promotion states whether canonical state is clean", 
     // A dirty fixture would be refused as "catalog has pre-existing errors"
     // instead, so asserting the limit code below also proves the tree was clean
     // before the rename put the 1,001st manifest into it.
-    const failure = await promoteApprovedSkill({
+    const failure = await promoteApprovedSkillWithLock({
       skillsRoot,
       namespace,
       capability,

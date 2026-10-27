@@ -54,6 +54,8 @@ export const ACTIONS = Object.freeze({
   APPROVE: "APPROVE",
   REJECT_APPROVAL: "REJECT_APPROVAL",
   REQUEST_REVISION_APPROVAL: "REQUEST_REVISION_APPROVAL",
+  // F-531 (R10-T01-4): the owner's revocation path after a durable APPROVE.
+  CANCEL: "CANCEL",
 
   // Queue & execution-agent actions
   CLAIM: "CLAIM",
@@ -125,15 +127,30 @@ export const LEDGER_APPROVAL_DECISION_VALUES = Object.freeze(
 );
 
 /**
- * The authority action -> ledger decision mapping, for the approval verdicts.
- * A result verdict has no entry here on purpose: it is carried by its own
- * event type, not by `WORKFLOW_USER_APPROVAL_DECIDED`.
+ * F-531 (R10-T01-4): the marker `resolveLedgerDecision` returns for the
+ * owner's cancellation action. It is NOT an approval decision: the
+ * cancellation is carried by `WORKFLOW_CANCELLED`, whose payload declares
+ * `reason_code: OWNER_CANCELLED`, not by
+ * `WORKFLOW_USER_APPROVAL_DECIDED`.
+ */
+export const LEDGER_CANCELLATION_DECISION = "CANCEL";
+
+/**
+ * The authority action -> ledger decision mapping.
+ *
+ * Approval verdicts map to the three decision strings the
+ * `WORKFLOW_USER_APPROVAL_DECIDED` reducer commits. `CANCEL` maps to the
+ * cancellation marker, which the plugin uses to route the owner's revocation
+ * to `WORKFLOW_CANCELLED`. A result verdict has no entry here on purpose: it
+ * is carried by its own event type, not by
+ * `WORKFLOW_USER_APPROVAL_DECIDED`.
  */
 export const AUTHORITY_ACTION_LEDGER_DECISION = Object.freeze({
   [ACTIONS.APPROVE]: LEDGER_APPROVAL_DECISIONS.APPROVE,
   [ACTIONS.REJECT_APPROVAL]: LEDGER_APPROVAL_DECISIONS.REJECT,
   [ACTIONS.REQUEST_REVISION_APPROVAL]:
     LEDGER_APPROVAL_DECISIONS.REQUEST_REVISION,
+  [ACTIONS.CANCEL]: LEDGER_CANCELLATION_DECISION,
 });
 
 /**
@@ -385,6 +402,34 @@ export function validateActionAuthority({
         ? TASK_STATES.QUEUED
         : TASK_STATES.REJECTED;
     return { allowed: true, nextState };
+  }
+
+  // F-531 (R10-T01-4): CANCEL is the owner's revocation of a QUEUED plan.
+  //
+  // It is deliberately narrow: only the owner, only on the approvals surface,
+  // and only after a durable APPROVE has projected QUEUED. A task that is
+  // still APPROVAL_PENDING is refused by REJECT_APPROVAL instead, and a task
+  // already executing is not revoked by this action.
+  if (normAction === ACTIONS.CANCEL) {
+    if (normActor !== ACTORS.USER) {
+      return {
+        allowed: false,
+        reason: "AUTHORITY_DENIED: Only User can cancel a queued plan",
+      };
+    }
+    if (normChannel !== CHANNELS.APPROVALS) {
+      return {
+        allowed: false,
+        reason: "CHANNEL_MISMATCH: A plan cancellation must occur in #approvals",
+      };
+    }
+    if (normState !== TASK_STATES.QUEUED) {
+      return {
+        allowed: false,
+        reason: `INVALID_STATE_TRANSITION: Cannot cancel a task in state ${normState} (must be QUEUED)`,
+      };
+    }
+    return { allowed: true, nextState: TASK_STATES.CANCELLED };
   }
 
   // ACCEPT_RESULT and REJECT_RESULT are strictly USER ONLY

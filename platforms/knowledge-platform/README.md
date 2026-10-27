@@ -72,7 +72,7 @@ Trước khi lập chỉ mục hoặc tìm kiếm, đảm bảo container Postgr
 Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:8080/knowledge/readyz"
 ```
 
-- **Đầu ra mong đợi:** HTTP 200 kèm trạng thái cơ sở dữ liệu `connected` và model `bge-m3:latest` đã tải vào bộ nhớ.
+- **Đầu ra mong đợi:** HTTP 200 với `status` = `ready`, kèm `active_index_id` và `embedding_model` (`name`, `digest`, `dimensions`) của model đã tải vào bộ nhớ.
 
 ---
 
@@ -94,6 +94,8 @@ Write-Host "Bắt đầu lập chỉ mục với Run ID: $runId"
 ```powershell
 $body = @{ kind = "FULL_REBUILD" } | ConvertTo-Json -Compress
 $run = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8080/knowledge/v1/index-runs" -ContentType "application/json" -Body $body
+$runId = $run.index_run_id
+Write-Host "Bắt đầu xây dựng lại toàn bộ với Run ID: $runId"
 ```
 
 ---
@@ -104,10 +106,10 @@ Sử dụng `run_id` để kiểm tra tiến trình xử lý tài liệu cho đ�
 
 ```powershell
 $status = Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:8080/knowledge/v1/index-runs/$runId"
-Write-Host "Trạng thái: $($status.state) | Đã xử lý: $($status.processed_files)/$($status.total_files) tệp"
+Write-Host "Trạng thái: $($status.status) | Đã xử lý: $($status.sources_indexed)/$($status.sources_discovered) nguồn"
 ```
 
-- Trạng thái hoàn thành thành công: `COMPLETED`.
+- Trạng thái hoàn thành thành công: `SUCCEEDED`.
 - Nếu có sự cố trong quá trình đọc tài liệu: `FAILED` kèm thông báo lỗi chi tiết.
 
 ---
@@ -124,11 +126,11 @@ $queryBody = @{
 
 $response = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8080/knowledge/v1/search" -ContentType "application/json" -Body $queryBody
 
-foreach ($hit in $response.hits) {
+foreach ($hit in $response.results) {
     Write-Host "--------------------------------------------------"
-    Write-Host "Tài liệu : $($hit.document_title)"
-    Write-Host "Trích dẫn: $($hit.citation)"
-    Write-Host "Điểm RRF : $($hit.score)"
+    Write-Host "Tài liệu : $($hit.title)"
+    Write-Host "Trích dẫn: $($hit.citation.markdown)"
+    Write-Host "Điểm RRF : $($hit.rrf_score)"
     Write-Host "Nội dung : $($hit.text)"
 }
 ```

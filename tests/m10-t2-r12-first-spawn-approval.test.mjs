@@ -50,6 +50,10 @@ import { canonicalHash } from "../integrations/openclaw/topology/lib/canonical.m
 
 const OWNER = "123456789012345678";
 const OFFICE = "1545425766161063937";
+// M12/T9 F-529: the approvals thread the surfaced card is recorded in. An
+// APPROVE against a recorded request now REQUIRES the durable SURFACED record
+// and must name this thread (the F-123 fixture pattern).
+const APPROVAL_THREAD = "900000000000000001";
 const freshMsg = (n) => `154543${String(700000000000 + n).padStart(12, "0")}`;
 
 async function withPlugin(body) {
@@ -307,6 +311,18 @@ test("R12 case 2+8: owner approval unblocks the SAME task, never another", async
     const da = await spawnViaHook(native, ctxA, spawnParams());
     assert.equal(da.reason ?? da.threw, "AUTH_APPROVAL_REQUIRED");
 
+    // M12/T9 F-529: the surfaced record is LOAD-BEARING — an APPROVE against
+    // a recorded request now requires the durable record of the surfaced
+    // card, and the decision must name the thread it was surfaced in. The
+    // temp state has no forum config, so the card post fails closed and never
+    // writes SURFACED; the fixture records it the way
+    // tests/agent-owner-F-123.test.mjs does.
+    recordWorkflowEvent(paths, "WORKFLOW_APPROVAL_SURFACED", {
+      task_id: a.taskId,
+      channel: "approvals",
+      thread_id: APPROVAL_THREAD,
+    });
+
     // Owner approves task A only (text path, as the owner would send it).
     const verdict = handleDiscordAction({
       actor: "user",
@@ -315,7 +331,7 @@ test("R12 case 2+8: owner approval unblocks the SAME task, never another", async
       action: "APPROVE",
       currentState: "APPROVAL_PENDING",
       paths,
-      data: { messageId: freshMsg(50) },
+      data: { messageId: freshMsg(50), threadId: APPROVAL_THREAD },
     });
     assert.equal(verdict.allowed, true, "owner APPROVE must be accepted");
     const snapA = readSnapshot(paths).tasks[a.taskId];

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import ast
+import contextlib
 import hashlib
+import importlib
 import importlib.util
 import json
 import os
@@ -12,9 +14,12 @@ import subprocess
 import sys
 import tempfile
 import tomllib
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+
+from app.markdown_adapter import ARTIFACT_SHA256_EXPECTED
 
 from app.pdf_runtime import (
     MAX_RESPONSE_BYTES,
@@ -59,6 +64,96 @@ def _declared_model_revisions(source: str) -> dict[str, str]:
                 for key, value in zip(node.value.keys, node.value.values)
             }
     raise AssertionError("download_models.py declares no MODEL_REVISIONS mapping")
+
+
+PACKAGE_SOURCE = (
+    Path(__file__).resolve().parents[1] / "pdf-runtime" / "src" / "zink_pdf_runtime"
+)
+REPO_ROOT = Path(__file__).resolve().parents[3]
+ARTIFACT_PIN_CARRIERS = (
+    ".github/workflows/ci.yml",
+    "apps/knowledge/Dockerfile",
+    "tests/m3-t2-contract.test.mjs",
+    "tests/repository-policy.test.mjs",
+)
+REQUIREMENTS_PIN_CARRIERS = (
+    "apps/knowledge/pdf-runtime/src/zink_pdf_runtime/manifest.py",
+    "apps/knowledge/tests/test_pdf_runtime.py",
+)
+
+
+@contextlib.contextmanager
+def _runtime_module(name: str):
+    """Import one module of the isolated child package by its file path.
+
+    The child package is deliberately not on the parent's `sys.path`
+    (`test_isolated_runtime_is_not_on_parent_sys_path`), so the parent lane
+    loads the shipped guard through a temporary package object and removes it
+    again. The modules it imports pull `huggingface_hub`, which is not a
+    parent dependency; a stub is injected only when it is genuinely absent.
+    """
+
+    package_name = "zink_pdf_runtime"
+    child_names = (
+        f"{package_name}.{name}",
+        f"{package_name}.download_models",
+        f"{package_name}.pins",
+    )
+    saved_package = sys.modules.get(package_name)
+    saved_children = {child: sys.modules.get(child) for child in child_names}
+    saved_hub = sys.modules.get("huggingface_hub")
+
+    package = types.ModuleType(package_name)
+    package.__path__ = [str(PACKAGE_SOURCE)]
+    sys.modules[package_name] = package
+    if saved_hub is None and importlib.util.find_spec("huggingface_hub") is None:
+        stub = types.ModuleType("huggingface_hub")
+        stub.snapshot_download = lambda **_kwargs: None  # type: ignore[attr-defined]
+        sys.modules["huggingface_hub"] = stub
+    try:
+        yield importlib.import_module(f"{package_name}.{name}")
+    finally:
+        for child in child_names:
+            if saved_children[child] is None:
+                sys.modules.pop(child, None)
+            else:
+                sys.modules[child] = saved_children[child]
+        if saved_package is None:
+            sys.modules.pop(package_name, None)
+        else:
+            sys.modules[package_name] = saved_package
+        if saved_hub is None:
+            sys.modules.pop("huggingface_hub", None)
+        else:
+            sys.modules["huggingface_hub"] = saved_hub
+
+
+def _requirements_pin() -> str:
+    with _runtime_module("pins") as pins:
+        return str(pins.EXPECTED_HASHED_REQUIREMENTS_SHA256)
+
+
+def _requirements_carrier_drift(root: Path, pin: str) -> list[str]:
+    """The artifact digest every carrier of this family must still agree on."""
+
+    drift: list[str] = []
+    artifact = root / "apps/knowledge/pdf-runtime/requirements.txt"
+    if hashlib.sha256(artifact.read_bytes()).hexdigest() != pin:
+        drift.append("apps/knowledge/pdf-runtime/requirements.txt")
+    for relative in REQUIREMENTS_PIN_CARRIERS:
+        if pin in (root / relative).read_text(encoding="utf-8"):
+            drift.append(relative)
+    return drift
+
+
+def _artifact_carrier_drift(root: Path) -> list[str]:
+    """Every text carrier of the tokenizer artifact pin, checked against it."""
+
+    return [
+        relative
+        for relative in ARTIFACT_PIN_CARRIERS
+        if ARTIFACT_SHA256_EXPECTED not in (root / relative).read_text(encoding="utf-8")
+    ]
 
 
 class RangePathArityTests(unittest.TestCase):
@@ -137,13 +232,9 @@ class ParentIsolationTests(unittest.TestCase):
 
 class IsolatedLockContractTests(unittest.TestCase):
     # F-340 (R7-OA-03): the hashed requirements artifact now carries the index
-    # its own `+cpu` pins need, so its digest is re-pinned here. The image-side
-    # reader (pdf-runtime/src/zink_pdf_runtime/manifest.py) pins the same
-    # bytes, so the two ends of the supply chain cannot drift apart.
-    EXPECTED_PDF_RUNTIME_REQUIREMENTS_SHA256 = (
-        "9ec325c8142e1dcae25dd510daa604454526ad9b364f505b9914aed3505f8556"
-    )
-
+    # its own `+cpu` pins need. F-548 (R10-T05-5 / R10-L08-2): the digest is
+    # imported from the runtime's single pin carrier instead of re-declared
+    # here, so this end of the supply chain cannot satisfy itself alone.
     def test_candidate_is_exact_cpu_only_and_models_use_immutable_revisions(self) -> None:
         root = Path(__file__).resolve().parents[1] / "pdf-runtime"
         project = (root / "pyproject.toml").read_text(encoding="utf-8")
@@ -190,7 +281,7 @@ class IsolatedLockContractTests(unittest.TestCase):
         artifact = (root / "requirements.txt").read_bytes()
         self.assertEqual(
             hashlib.sha256(artifact).hexdigest(),
-            self.EXPECTED_PDF_RUNTIME_REQUIREMENTS_SHA256,
+            _requirements_pin(),
             "the committed requirements artifact must be the pinned one",
         )
         text = artifact.decode("utf-8")
@@ -240,6 +331,90 @@ class IsolatedLockContractTests(unittest.TestCase):
             (root / "requirements.txt").read_bytes(),
             "the committed artifact must be byte-identical to the export",
         )
+
+
+class PinCarrierAgreementTests(unittest.TestCase):
+    """F-548 (R10-T05-5 / R10-L08-2): the pin carriers and the shipped guard.
+
+    The previous shape let each copy of a digest satisfy its own assertion: the
+    parent test re-declared the literal it checked, and the image-side refusal
+    in `zink_pdf_runtime.manifest` was imported by no lane. These cases import
+    the shipped guard, execute its refusal, and compare every remaining text
+    carrier against the imported value.
+    """
+
+    def test_the_parent_lane_does_not_redeclare_the_artifact_digest(self) -> None:
+        source = Path(__file__).read_text(encoding="utf-8")
+        self.assertNotIn(_requirements_pin(), source)
+
+    def test_the_manifest_imports_the_single_pin_carrier(self) -> None:
+        with _runtime_module("manifest") as manifest:
+            with _runtime_module("pins") as pins:
+                self.assertIs(
+                    manifest.EXPECTED_HASHED_REQUIREMENTS_SHA256,
+                    pins.EXPECTED_HASHED_REQUIREMENTS_SHA256,
+                )
+
+    def test_the_shipped_guard_refuses_a_mutated_artifact(self) -> None:
+        with _runtime_module("manifest") as manifest:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "requirements.txt").write_text("mutated\n", encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "pinned digest"):
+                    manifest._requirements_digest(root / "uv.lock")
+
+    def test_the_shipped_guard_returns_the_pin_for_the_committed_artifact(
+        self,
+    ) -> None:
+        with _runtime_module("manifest") as manifest:
+            root = Path(__file__).resolve().parents[1] / "pdf-runtime"
+            self.assertEqual(
+                manifest._requirements_digest(root / "uv.lock"),
+                manifest.EXPECTED_HASHED_REQUIREMENTS_SHA256,
+            )
+
+    def test_every_remaining_requirements_carrier_agrees(self) -> None:
+        self.assertEqual(
+            _requirements_carrier_drift(REPO_ROOT, _requirements_pin()), []
+        )
+
+    def test_every_text_carrier_of_the_artifact_pin_agrees(self) -> None:
+        self.assertEqual(_artifact_carrier_drift(REPO_ROOT), [])
+
+    def test_the_carrier_checks_redden_on_one_drifted_copy(self) -> None:
+        real_artifact = (
+            REPO_ROOT / "apps/knowledge/pdf-runtime/requirements.txt"
+        ).read_bytes()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifact = root / "apps/knowledge/pdf-runtime/requirements.txt"
+            artifact.parent.mkdir(parents=True)
+            artifact.write_bytes(real_artifact)
+            for relative in REQUIREMENTS_PIN_CARRIERS:
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("from .pins import PIN\n", encoding="utf-8")
+            self.assertEqual(
+                _requirements_carrier_drift(root, _requirements_pin()), []
+            )
+
+            artifact.write_text("drifted\n", encoding="utf-8")
+            self.assertEqual(
+                _requirements_carrier_drift(root, _requirements_pin()),
+                ["apps/knowledge/pdf-runtime/requirements.txt"],
+            )
+
+            for relative in ARTIFACT_PIN_CARRIERS:
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(ARTIFACT_SHA256_EXPECTED + "\n", encoding="utf-8")
+            self.assertEqual(_artifact_carrier_drift(root), [])
+            (root / ARTIFACT_PIN_CARRIERS[0]).write_text(
+                "drifted\n", encoding="utf-8"
+            )
+            self.assertEqual(
+                _artifact_carrier_drift(root), [ARTIFACT_PIN_CARRIERS[0]]
+            )
 
 
 class ProtocolValidationTests(unittest.TestCase):

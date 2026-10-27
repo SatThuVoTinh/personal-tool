@@ -885,9 +885,19 @@ test("B7-3: the snapshot write path cleans its own residue before rethrowing", (
     "a failed snapshot write must remove its residue and still surface the original fault",
   );
   // The temp name is Lane H5's fault-injection hook and must not be changed.
+  // M12/T9 F-577: the hook is now the ONE writerTempName seam, and its
+  // grammar carries pid + Date.now() + randomBytes entropy (the catalog.mjs
+  // shape) instead of pid alone. The persistence matrix injects against this
+  // by rewriting exactly that seam in a scratch checkout, so both the call
+  // and the grammar stay pinned.
   assert.match(
     window,
-    /\$\{paths\.snapshot\}\.tmp-\$\{process\.pid\}/u,
+    /writerTempName\(paths\.snapshot\)/u,
+    "the snapshot writer must mint its temp name through the one grammar seam",
+  );
+  assert.match(
+    LEDGER_SOURCE,
+    /function writerTempName\(file\) \{\s*return `\$\{file\}\.tmp-\$\{process\.pid\}-\$\{Date\.now\(\)\}-\$\{randomBytes\(8\)\.toString\("hex"\)\}`;/u,
     "the temp snapshot name must stay the one the persistence matrix injects against",
   );
 });

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  cpSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -9,6 +10,7 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   ensureLedger,
   ledgerPaths,
@@ -34,6 +36,54 @@ import {
 
 function fixture() {
   return mkdtempSync(path.join(os.tmpdir(), "lane-h5-"));
+}
+
+const SOURCE_ROOT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../integrations/openclaw",
+);
+
+// M12/T9 F-577: the shipped writer names its snapshot temp with
+// pid + Date.now() + randomBytes entropy, so an outside injector can no
+// longer predict the exact path to occupy — a pid-only directory no longer
+// collides with anything. The scratch-checkout pattern
+// (tests/m12-t9-r4-ledger-commit-seam.test.mjs) rewrites the ONE
+// writerTempName seam in a private copy of the module tree to a
+// deterministic name, and the collision is then forced for real: a
+// DIRECTORY squats the temp path, unlinkWriterResidue swallows EPERM
+// (Windows) / EISDIR (POSIX) by design and never removes what it does not
+// own, so the exclusive reopen fails and the snapshot write genuinely
+// faults. The control this proves is unchanged: the fault surfaces and the
+// previous snapshot stays authoritative.
+const TEMP_NAME_GRAMMAR =
+  'return `${file}.tmp-${process.pid}-${Date.now()}-${randomBytes(8).toString("hex")}`;';
+
+function scratchLedgerWithDeterministicTemp() {
+  const build = mkdtempSync(path.join(os.tmpdir(), "lane-h5-scratch-"));
+  for (const dir of [
+    "topology/lib",
+    "topology/contracts",
+    "topology/policy",
+    "lib",
+  ])
+    cpSync(path.join(SOURCE_ROOT, dir), path.join(build, dir), {
+      recursive: true,
+    });
+  const ledgerFile = path.join(build, "topology", "lib", "ledger.mjs");
+  const source = readFileSync(ledgerFile, "utf8");
+  assert.equal(
+    source.split(TEMP_NAME_GRAMMAR).length - 1,
+    1,
+    "the scratch checkout must rewrite exactly one temp-name grammar",
+  );
+  writeFileSync(
+    ledgerFile,
+    source.replace(
+      TEMP_NAME_GRAMMAR,
+      "return `${file}.tmp-lane-h5-collision`;",
+    ),
+  );
+  return build;
 }
 
 function governedTask(root) {
@@ -68,18 +118,36 @@ function captureApi() {
 }
 
 describe("Lane H5 — persistence-failure matrix, ledger and snapshot", () => {
-  it("a failed snapshot write leaves the previous snapshot authoritative", () => {
+  it("a failed snapshot write leaves the previous snapshot authoritative", async () => {
+    const build = scratchLedgerWithDeterministicTemp();
     const root = fixture();
     try {
-      const { paths, taskId } = governedTask(root);
+      const ledger = await import(
+        pathToFileURL(path.join(build, "topology", "lib", "ledger.mjs")).href
+      );
+      const paths = ledger.ledgerPaths(root);
+      ledger.ensureLedger(paths);
+      const origin = {
+        origin: "discord",
+        origin_principal_ref: "c".repeat(64),
+        origin_message_id: "96000000000000001",
+      };
+      const taskId = deriveTaskId(origin);
+      ledger.recordWorkflowEvent(paths, "WORKFLOW_OPENED", {
+        ...origin,
+        task_id: taskId,
+        root_agent_id: "main",
+        root_session_key: "main-session",
+        root_run_id: "main-run",
+      });
       const before = readFileSync(paths.snapshot, "utf8");
-      // Make the atomic temp file unwritable by occupying its exact path with a
-      // directory, which no rename can replace.
-      const temp = `${paths.snapshot}.tmp-${process.pid}`;
-      mkdirSync(temp, { recursive: true });
+      // Occupy the (in this scratch build, deterministic) atomic temp path
+      // with a directory, which no rename can replace and no residue cleanup
+      // may remove.
+      mkdirSync(`${paths.snapshot}.tmp-lane-h5-collision`, { recursive: true });
       let threw = false;
       try {
-        recordWorkflowEvent(paths, "WORKFLOW_USER_APPROVAL_DECIDED", {
+        ledger.recordWorkflowEvent(paths, "WORKFLOW_USER_APPROVAL_DECIDED", {
           task_id: taskId,
           actor: "user",
           channel: "approvals",
@@ -93,6 +161,7 @@ describe("Lane H5 — persistence-failure matrix, ledger and snapshot", () => {
       assert.equal(readFileSync(paths.snapshot, "utf8"), before);
     } finally {
       rmSync(root, { recursive: true, force: true });
+      rmSync(build, { recursive: true, force: true });
     }
   });
 

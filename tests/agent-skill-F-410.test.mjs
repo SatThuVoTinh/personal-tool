@@ -31,7 +31,7 @@ const CATALOG_PATH = fileURLToPath(
   new URL("../zink-skill-store/src/catalog.mjs", import.meta.url),
 );
 const catalog = await import(`file:///${CATALOG_PATH.replace(/\\/gu, "/")}`);
-const { promoteApprovedSkill, scanCatalog, writeFileAtomic } = catalog;
+const { promoteApprovedSkillWithLock, scanCatalog, writeFileAtomic } = catalog;
 
 // Every governed input is passed explicitly: the promotion must not be able to
 // fall back to a constant actor or provenance (F-045's row).
@@ -77,7 +77,7 @@ test("F-410: a failed atomic write removes its own temp file", async () => {
 test("F-410: a killed publisher's temp residue is residue, not store corruption", async () => {
   const { root, skillsRoot } = await freshRoots();
   try {
-    const promoted = await promoteApprovedSkill({
+    const promoted = await promoteApprovedSkillWithLock({
       skillsRoot,
       namespace: ["office"],
       capability: "tailored",
@@ -107,7 +107,7 @@ test("F-410: a killed publisher's temp residue is residue, not store corruption"
 
     // The next promotion succeeds and leaves the store clean, so one killed
     // publisher no longer blocks every later one.
-    const successor = await promoteApprovedSkill({
+    const successor = await promoteApprovedSkillWithLock({
       skillsRoot,
       namespace: ["office"],
       capability: "successor",
@@ -133,7 +133,7 @@ test("F-410: a killed publisher's temp residue is residue, not store corruption"
 test("F-410: a genuinely malformed sibling name is still an error", async () => {
   const { root, skillsRoot } = await freshRoots();
   try {
-    await promoteApprovedSkill({
+    await promoteApprovedSkillWithLock({
       skillsRoot,
       namespace: ["office"],
       capability: "strict",

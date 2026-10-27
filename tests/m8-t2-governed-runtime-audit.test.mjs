@@ -1078,13 +1078,31 @@ describe("Data File Format Handler Enrichment — multi-format validation & prev
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "zink-fmt-pbixprev-"));
     try {
       const pbixFile = path.join(tempDir, "report.pbix");
-      const buf = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00]);
+      // M12/T9 F-564: a REAL container now. The former 6-byte PK fragment
+      // pinned exactly the defect F-564 fixed — the preview arm called a
+      // truncated container a valid ZIP from its magic bytes alone. The
+      // preview now reads the technical tier's own structure reader, so the
+      // positive control is a container that actually carries Report/Layout
+      // with its data half; the refusal side (truncated/part-less containers
+      // reported INVALID) is pinned by
+      // tests/m12-t9-r4-f564-preview-verdict.test.mjs.
+      const buf = buildZip([
+        ["[Content_Types].xml", "<Types/>"],
+        ["Report/Layout", "layout-json"],
+        ["DataMashup", "mashup-bytes"],
+        ["Version", "1"],
+      ]);
       await writeFile(pbixFile, buf);
       const preview = generateArtifactPreview({ filePath: pbixFile });
       assert.equal(preview.available, true);
       assert.equal(preview.type, "powerbi");
       assert.match(preview.previewText, /Power BI/);
       assert.match(preview.previewText, /Container ZIP hợp lệ/);
+      assert.equal(
+        preview.verdict,
+        "VALID",
+        "the preview verdict must agree with the technical tier's structure reader",
+      );
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -1240,13 +1258,26 @@ describe("Data File Format Handler Enrichment — multi-format validation & prev
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "zink-fmt-docxprev-"));
     try {
       const docxFile = path.join(tempDir, "contract.docx");
-      const buf = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00]);
+      // M12/T9 F-564: a REAL container now — see the Power BI preview case
+      // above. The 6-byte PK fragment was the defect's own input: the preview
+      // called it a valid DOCX while the technical tier requires both OOXML
+      // parts. The refusal side is pinned by
+      // tests/m12-t9-r4-f564-preview-verdict.test.mjs.
+      const buf = buildZip([
+        ["[Content_Types].xml", "<Types/>"],
+        ["word/document.xml", "<document/>"],
+      ]);
       await writeFile(docxFile, buf);
       const preview = generateArtifactPreview({ filePath: docxFile });
       assert.equal(preview.available, true);
       assert.equal(preview.type, "docx");
       assert.match(preview.previewText, /Word Document/);
       assert.match(preview.previewText, /Container ZIP hợp lệ/);
+      assert.equal(
+        preview.verdict,
+        "VALID",
+        "the preview verdict must agree with the technical tier's structure reader",
+      );
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

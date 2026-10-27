@@ -152,6 +152,7 @@ import {
   DISCORD_BOT_IDS,
   normalizeAuthorityAction,
   resolveLedgerDecision,
+  LEDGER_CANCELLATION_DECISION,
 } from "../../lib/authority.mjs";
 
 import { QueueManager, defaultQueueManager } from "../../lib/queue-manager.mjs";
@@ -1430,11 +1431,14 @@ export async function handleOwnerSkillApproval({
   // writer lock, so two concurrent approvals (or an approval racing a
   // rejection or a CLI promotion) cannot interleave clash-check and rename
   // and fork the canonical tree. The lock is taken exactly here and the
-  // Unlocked variant is called inside it: `promoteApprovedSkill` acquires the
-  // same lock itself, so calling it from within this section would
-  // self-deadlock into FILE_LOCK_TIMEOUT. The async seam is used rather than
-  // the sync one because the guarded work is async — the sync seam would
-  // release while writes were still in flight.
+  // door's refusing `promoteApprovedSkill` — bound from the public door
+  // `zink-skill-store/index.mjs`, which requires the held lock and delegates
+  // to the Unlocked variant — is called inside it. The store's acquiring
+  // wrapper `promoteApprovedSkillWithLock` takes the same lock itself, so
+  // calling THAT from within this section would self-deadlock into
+  // FILE_LOCK_TIMEOUT. The async seam is used rather than the sync one
+  // because the guarded work is async — the sync seam would release while
+  // writes were still in flight.
   const boundDecisionRef = decisionRef.trim();
   const planProvenanceRef = boundDecisionRef.replace(/^PLAN:/u, "");
   const canonical = await underWriterLock(skillsRoot, async () => {
@@ -2407,7 +2411,28 @@ export function handleDiscordAction({
   // 5. Record in ledger if ledger paths are provided
   if (paths && auth.nextState) {
     try {
-      if (
+      if (normAction === ACTIONS.CANCEL) {
+        // F-531 (R10-T01-4): the owner's revocation path. The action is
+        // resolved through the ONE reviewed ledger-decision mapping, so a
+        // CANCEL that mapping does not recognise can never emit the event.
+        if (
+          resolveLedgerDecision(normAction) !== LEDGER_CANCELLATION_DECISION
+        ) {
+          return {
+            allowed: false,
+            reason:
+              "UNKNOWN_ACTION: CANCEL is not in the reviewed ledger-decision mapping",
+            status: "DENIED",
+          };
+        }
+        recordWorkflowEvent(paths, "WORKFLOW_CANCELLED", {
+          task_id: taskId,
+          reason_code: "OWNER_CANCELLED",
+          actor: normalizeActor(actor),
+          channel: normalizeChannel(channel),
+          ...(data.messageId ? { message_id: String(data.messageId) } : {}),
+        });
+      } else if (
         normAction === ACTIONS.APPROVE ||
         normAction === ACTIONS.REJECT_APPROVAL ||
         normAction === ACTIONS.REQUEST_REVISION_APPROVAL
@@ -2420,10 +2445,39 @@ export function handleDiscordAction({
         // restart and cannot be re-derived from a moment that is not the
         // card's own. The refusal carries the same code the guard's own
         // approval seam already uses for an expired approval.
-        const approvalExpiresAt = approvalCardExpiresAt(
-          readSurfacedApprovalPostedAt(paths, taskId),
-        );
+        const surfacedPostedAt = readSurfacedApprovalPostedAt(paths, taskId);
+        // M12/T9 F-529: the surfaced record is LOAD-BEARING, not optional.
+        // Every guard below (the 24h clock, the thread match) used to skip
+        // when the record was absent or unreadable, so a delivered card whose
+        // SURFACED write failed — or a journal that cannot be read — left an
+        // approvable card with no clock and no thread binding. An APPROVE
+        // against a recorded request therefore REQUIRES the readable durable
+        // record of the surfaced card; refusing is the inversion of the skip.
+        // A refusal (REJECT/REQUEST_REVISION) is still recordable without it:
+        // the owner must never be locked out of refusing (F-392 family).
         if (
+          normAction === ACTIONS.APPROVE &&
+          authoritativeTask?.approval_requested_at &&
+          surfacedPostedAt === null
+        ) {
+          return {
+            allowed: false,
+            reason:
+              "APPROVAL_SURFACE_RECORD_REQUIRED: an approval verdict requires the durable record of the surfaced card",
+            status: "DENIED",
+          };
+        }
+        const approvalExpiresAt = approvalCardExpiresAt(surfacedPostedAt);
+        // M12/T9 F-392: the card's clock refuses an APPROVAL, not a REFUSAL.
+        //
+        // The 24-hour window exists so an untouched card is not approved. A
+        // refusal is the opposite decision: past the window the owner must
+        // still be able to record REJECT_APPROVAL or REQUEST_REVISION_APPROVAL,
+        // and those actions fall through to the durable
+        // WORKFLOW_USER_APPROVAL_DECIDED event below. Gating all three (the
+        // shipped shape) locked the owner out of closing an expired task.
+        if (
+          normAction === ACTIONS.APPROVE &&
           approvalExpiresAt !== null &&
           isApprovalCardExpired({
             expiresAt: approvalExpiresAt,
@@ -2446,6 +2500,21 @@ export function handleDiscordAction({
         // it does not.
         const recordedApprovalThreadId =
           authoritativeTask?.approval_thread_id ?? null;
+        // M12/T9 F-529: the same inversion on the projection — an APPROVE
+        // against a recorded request requires the projected surfaced thread;
+        // a missing projection is a missing record, never a passing guard.
+        if (
+          normAction === ACTIONS.APPROVE &&
+          authoritativeTask?.approval_requested_at &&
+          !recordedApprovalThreadId
+        ) {
+          return {
+            allowed: false,
+            reason:
+              "APPROVAL_SURFACE_RECORD_REQUIRED: an approval verdict requires the recorded approval thread of the surfaced card",
+            status: "DENIED",
+          };
+        }
         if (recordedApprovalThreadId) {
           const decisionThreadId = normalizeDecisionThreadId(data.threadId);
           if (decisionThreadId !== recordedApprovalThreadId) {
@@ -2870,6 +2939,7 @@ export function handleExecutionFinished({
   attempt = null,
   artifactPath,
   artifacts = null,
+  resultPayload = null,
   sandboxDir = null,
   technicalConfig = {},
   businessData = {},
@@ -2889,6 +2959,25 @@ export function handleExecutionFinished({
       status: "FAILED",
       error: `MAX_ARTIFACTS_EXCEEDED: Result exceeds maximum allowed artifacts (${MAX_ARTIFACTS_PER_RESULT})`,
     };
+  }
+
+  // M12/T9 F-535: the ingested result envelope is validated against the
+  // PUBLISHED agent-result-payload contract BEFORE any queue or ledger state
+  // moves. The brief-activation seam stamps `validation_digest` with this
+  // schema's name; this is where the validation that digest names actually
+  // executes. An envelope that fails the contract refuses the whole result —
+  // nothing is finished, nothing is recorded. A caller that presents no
+  // envelope is not refused: the validation gates what is ingested, it never
+  // invents an envelope.
+  if (resultPayload !== null && resultPayload !== undefined) {
+    try {
+      validateContract("agent-result-payload", resultPayload);
+    } catch (schemaErr) {
+      return {
+        status: "FAILED",
+        error: `RESULT_PAYLOAD_SCHEMA_INVALID: ${schemaErr?.message}`,
+      };
+    }
   }
 
   // G20: Idempotency check for repeated artifact completion
@@ -2924,29 +3013,11 @@ export function handleExecutionFinished({
     }
   }
 
-  // G14: Execution-agent lease/attempt validation against active claims
-  if (queueManager?.activeClaims?.has(taskId)) {
-    const claim = queueManager.activeClaims.get(taskId);
-    if (agentId && claim.agentId !== agentId) {
-      return {
-        status: "FAILED",
-        error: `AGENT_MISMATCH: Task claimed by ${claim.agentId}, not ${agentId}`,
-      };
-    }
-    if (leaseId && claim.leaseId !== leaseId) {
-      return {
-        status: "FAILED",
-        error:
-          "LEASE_MISMATCH: Execution-agent lease does not match active claim",
-      };
-    }
-    if (attempt !== null && claim.attempt !== attempt) {
-      return {
-        status: "FAILED",
-        error: "ATTEMPT_MISMATCH: Attempt does not match active claim",
-      };
-    }
-  }
+  // M12/T9 F-532: the former G14 "active claims" guard was deleted: no queue
+  // manager declares such a property anywhere, so its refusals were
+  // unreachable dead code. The real lease/attempt fence is the M7-029 check
+  // inside `finishExecution`, fed with the run's ledger-binding identity by
+  // the execution_finished seam.
 
   // M8-051: the canonical artifact set is ordered and bounded, and every
   // member is validated BEFORE any validation verdict is produced. A
@@ -4231,11 +4302,20 @@ export function isExecutableTool(toolId) {
 }
 
 // O19: Validate built-in vs callable tool allowlist invariants
-export function validateToolAllowlistInvariants() {
+//
+// F-499 (R10-L01-2): the validator existed but nothing called it, so a future
+// policy-table edit could cross the invariant silently. `registerTools` now
+// refuses registration on a violation. The two optional parameters are the
+// test seam that plants an overlap without mutating the frozen live tables;
+// production always passes neither.
+export function validateToolAllowlistInvariants(
+  toolPolicy = TOOL_POLICY,
+  builtInToolPolicy = BUILT_IN_TOOL_POLICY,
+) {
   const violations = [];
   for (const agentId of ids) {
-    const callable = TOOL_POLICY[agentId] || [];
-    const builtin = BUILT_IN_TOOL_POLICY[agentId] || [];
+    const callable = toolPolicy[agentId] || [];
+    const builtin = builtInToolPolicy[agentId] || [];
     const intersection = callable.filter((t) => builtin.includes(t));
     if (intersection.length > 0) {
       violations.push(
@@ -4257,6 +4337,20 @@ export function registerTools(api, options = {}) {
         ? api.tools.register.bind(api.tools)
         : null;
   if (!registerFn) return { registered: [], skipped: [] };
+  // F-499 (R10-L01-2): the built-in/callable allowlist overlap is a
+  // registration-time invariant, not a test-only assertion. A planted overlap
+  // must refuse the whole registration; the live tables are disjoint today, so
+  // startup is unchanged.
+  const allowlist = validateToolAllowlistInvariants(
+    options.toolPolicy ?? TOOL_POLICY,
+    options.builtInToolPolicy ?? BUILT_IN_TOOL_POLICY,
+  );
+  if (!allowlist.valid) {
+    api?.logger?.error?.(
+      `[zink-governance] registerTools: refusing registration: ${allowlist.violations.join("; ")}`,
+    );
+    return { registered: [], skipped: ["*"] };
+  }
   const proposalStorageDir =
     options.proposalStorageDir ??
     (path.isAbsolute(api.pluginConfig?.ledgerRoot ?? "")
@@ -6029,16 +6123,22 @@ export default {
     // M8-058: a disabled governance plugin exposes no tools or hooks.
     // The enabled check runs before any registration side effect.
     if (config.enabled === false) return;
-    registerTools(api, {
-      proposalStorageDir: path.isAbsolute(config.ledgerRoot ?? "")
-        ? path.join(config.ledgerRoot, "skill-proposals")
-        : undefined,
-    });
+    // M12/T9 F-500: the config validation runs BEFORE the registerTools side
+    // effect. The throw used to fire AFTER the governed tool surface was
+    // attached, so an invalid deployment left a half-registered plugin whose
+    // inertness rested on a DIFFERENT module's unconfigured-store-root
+    // refusal. Ordering it first restores the M8-058 posture for the
+    // invalid-config case: neither tools nor hooks are registered.
     if (
       !path.isAbsolute(config.ledgerRoot ?? "") ||
       !/^[1-9][0-9]{16,19}$/u.test(config.ownerDiscordId ?? "")
     )
       throw new Error("GOVERNANCE_CONFIGURATION_INVALID");
+    registerTools(api, {
+      proposalStorageDir: path.isAbsolute(config.ledgerRoot ?? "")
+        ? path.join(config.ledgerRoot, "skill-proposals")
+        : undefined,
+    });
     // F-002: the ONE configured governance store root. The queue projection
     // and the decision ledger live under it, and an unconfigured store
     // refuses by name (GOVERNANCE_STORE_ROOT_UNCONFIGURED) instead of
@@ -7188,9 +7288,20 @@ export default {
           thread_id: thread.id,
         });
       } catch (surfaceError) {
+        // M12/T9 F-529: the SURFACED record is the card's ONLY durable anchor —
+        // the 24h clock, both thread guards and every re-drive decision read
+        // it. A delivered, actionable card whose record failed to persist must
+        // not be reported as PUBLISHED: the seam fails closed exactly like the
+        // result-record seam (LEDGER_RESULT_RECORD_FAILED). Nothing was
+        // recorded, so `approval_thread_id` stays unset and the task remains
+        // re-drivable; the next attempt surfaces a card that IS anchored.
         api.logger?.error?.(
           `[zink-governance] APPROVAL_SURFACE_UNRECORDED task=${taskId} thread=${thread.id} cause=${surfaceError?.message}`,
         );
+        return {
+          status: "BLOCKED",
+          error: `APPROVAL_SURFACE_UNRECORDED: ${surfaceError?.message}`,
+        };
       }
       return { status: "PUBLISHED", agentId, taskId, threadId: thread.id };
     }
@@ -9964,16 +10075,25 @@ export default {
         );
         return { allow: true, governanceState: "NO_ARTIFACT" };
       }
+      // M12/T9 F-532: the finish fence fields come from the run's own LEDGER
+      // BINDING, never from the queue record being verified. Copying
+      // claimedBy/leaseId/attempt off `coordinated.queueItem` made the M7-029
+      // three-way check inside finishExecution a self-comparison, so a
+      // superseded run (attempt N) delivered its result under the LIVE attempt
+      // (N+1) after stale recovery re-issued the lease. The binding is the
+      // run's authority record — the same source recordCoordinatorFenced
+      // fences on — and `requireBinding: true` above guarantees it exists.
       const outcome = handleExecutionFinished({
         taskId,
-        agentId: queueItem.claimedBy ?? null,
-        leaseId:
-          typeof queueItem.leaseId === "string" ? queueItem.leaseId : null,
-        attempt: Number.isSafeInteger(queueItem.attempt)
-          ? queueItem.attempt
-          : null,
+        agentId: coordinated.binding.coordinator,
+        leaseId: coordinated.binding.lease_id,
+        attempt: coordinated.binding.attempt,
         artifacts,
         artifactPath: artifacts[0],
+        // M12/T9 F-535: the run's result envelope, when the event carries
+        // one, is validated against the published agent-result-payload
+        // contract before anything is recorded (see handleExecutionFinished).
+        resultPayload: event?.resultPayload ?? event?.result_payload ?? null,
         sandboxDir: sandboxRoot,
         paths,
         queueManager: defaultQueueManager,

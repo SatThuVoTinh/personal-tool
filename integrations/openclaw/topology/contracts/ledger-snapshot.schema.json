@@ -622,6 +622,10 @@
                   "type": "string",
                   "pattern": "^[a-f0-9]{64}$"
                 },
+                "execution_outcome_status": {
+                  "description": "M12/T9 F-394 (R9-L02-2): the outcome derived from the gate statuses a task-level WORKFLOW_RESULT_RECORDED carried: FAILED when either technical_status or business_status is FAIL, COMPLETE when both are PASS. OPTIONAL and never required, so every task recorded before the field existed still validates under additionalProperties:false; its ABSENCE keeps the legacy COMPLETE fallback for pre-existing journals. resolveAcceptedOutcome reads it so an ACCEPT of a FAIL/FAIL result yields FAILED instead of COMPLETE.",
+                  "enum": ["COMPLETE", "FAILED"]
+                },
                 "artifact_set_digest": {
                   "type": "string",
                   "pattern": "^[a-f0-9]{64}$"

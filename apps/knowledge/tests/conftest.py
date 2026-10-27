@@ -16,6 +16,21 @@ pinned tokenizer is not provisioned: without the artifact their tests are
 never collected, so the collected set is legitimately smaller. The floor
 therefore states what the environment can collect, and the tokenizer case
 holds the larger one.
+
+F-493 (R9-T11-3): the population this floor measures is `apps/knowledge/tests`
+and nothing else, because that is the only directory either sanctioned pytest
+invocation names. `apps/knowledge/pdf-runtime/tests` is NOT part of it: no
+sanctioned executor runs that directory (both invocations root pytest at
+`apps/knowledge/tests`, the image test stage copies `pdf-runtime/src` but
+never `pdf-runtime/tests`, and the CI `python-quality` job deliberately does
+not install the pdf-runtime closure), so a test module parked there has
+no executor and its assertions bind nothing. The one module that lived there
+(`test_ocr_contract.py`) was deleted and its behaviour -- the four-key scrubbed
+environment and the fixed argv tail `zink_pdf_runtime.ocr` hands `Popen` -- is
+bound from the parent lane by
+`apps/knowledge/tests/test_m12_t9_r4_pdf_ocr_process_contract.py`, which also
+pins the decision: it reddens if a child test module reappears under
+`pdf-runtime/tests` or if the Dockerfile grows a copy line for it.
 """
 
 from __future__ import annotations
@@ -38,9 +53,11 @@ def _tokenizer_is_provisioned() -> bool:
 def pytest_collection_finish(session) -> None:  # type: ignore[no-untyped-def]
     """Fail the session when the collected set shrank below the floor.
 
-    The floor is a property of the WHOLE suite, so it is only enforced when
-    the run targets the suite's directory. A scoped run (one module, one
-    test) is a developer's own selection and carries no denominator.
+    The floor is a property of the WHOLE suite -- that is, of the whole of
+    `apps/knowledge/tests`, the only population a sanctioned invocation names
+    (F-493) -- so it is only enforced when the run targets that directory. A
+    scoped run (one module, one test) is a developer's own selection and
+    carries no denominator.
     """
 
     if not _runs_the_whole_suite(session):

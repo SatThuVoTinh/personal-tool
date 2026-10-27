@@ -7988,19 +7988,19 @@ introduced, and each is a decision the owner may want to take):
 - the skip expectation is enforced on the CI runner; on a developer machine
   the gate reports the counts and refuses only an unexplained skip.
 
-## Active task — M12/T9-R4 (owner order: sửa hết findings; 2026-10-23)
+## Superseded band — M12/T9-R4 (history; archived 2026-10-27)
 
-Task: M12/T9 — Remediate all findings in `docs/execution/findings.md` (189 rows:
-152 OPEN + 37 LATENT).
+Task: M12/T9 — Remediate the findings in `docs/execution/findings.md` at the
+R4 scope snapshot (152 OPEN + 37 LATENT, recorded 2026-10-23).
 Milestone: M12 — Governed Discord interaction lifecycle and governed presentation
-Plan Revision: M12/T9-R4
-Planning Readiness: APPROVED — the owner approved when switching from plan to edit on 2026-10-23; the approval record is §1 of `docs/contracts/execution/ACTIVE.md`.
-Execution Authorization: YES — bounded to `docs/contracts/execution/ACTIVE.md` §1–§10; AGENTS.md §12 terms (local implementation/closeout commits and push of the current non-main task branch after closeout). No deployment, no live Discord, no `--apply`, no Vault writes, no dependency/lockfile changes.
-Execution Contract: docs/contracts/execution/ACTIVE.md
-Task Status: IN PROGRESS — Phase 0 (governance and evidence floor) is executing.
-Evidence Level: LOCAL-VERIFIED per band; `NOT RUN` stays `NOT RUN` and is never converted to `PASS`.
-Review Convergence Gate: NOT RUN — the first band has not been submitted for review.
-Final Quality Gate: NOT RUN — the task is not closed.
+Historical Plan Revision: M12/T9-R4
+Historical Planning Readiness: APPROVED 2026-10-23 — retained as history.
+Historical Execution Authorization: YES — bounded to the archived R4 contract; retained as history.
+Historical Execution Contract: archived at `docs/contracts/execution/archive/2026-10-27-M12-T9-R4.md`.
+Historical Task Status: SUPERSEDED 2026-10-27 — replaced by M12/T9-R5; not claimed complete.
+Historical Evidence Level: LOCAL-VERIFIED per band; retained as history.
+Historical Review Convergence Gate: NOT RUN.
+Historical Final Quality Gate: NOT RUN.
 
 ### Owner decisions recorded 2026-10-23
 
@@ -8039,6 +8039,117 @@ Final Quality Gate: NOT RUN — the task is not closed.
   abandoned lane's gate change reddens the shipped F-197 case (7 passed / 1 failed,
   naming `live-runtime` as a family that contributed no pass at all). No partial
   gate change ships. The measurement is recorded in the row's own `Status:` line.
+
+### Owner decisions recorded 2026-10-25
+
+- `F-459` may cross the module boundary. Its acceptance criteria require the
+  artifact scanner and `zink-tools/sql/validator.mjs` to share one tokenizer, and
+  measured at `85eb094` that is impossible without a new edge: `tokenizeSql` is
+  module-private at `zink-tools/sql/validator.mjs:129` (callers only `:80` and
+  `:111`), `integrations/openclaw/lib/artifact-validator.mjs` imports node builtins
+  plus `./policy.mjs`, and no static import runs from
+  `integrations/openclaw/{lib,plugins,topology/lib}` into `zink-tools` or
+  `zink-skill-store`. The owner chose to allow the static edge — export
+  `tokenizeSql`, import it in `artifact-validator.mjs`, and delete both the raw
+  `UNSAFE_SQL` regex and the hand-rolled backslash-parity quote counter. The
+  boundary is already crossed dynamically at runtime (the plugin `await import()`s
+  the skill adapter at `index.mjs:718`, the knowledge adapter at `:759`, the duckdb
+  bridge at `:1196`), so this makes an existing edge static and digest-visible
+  rather than opening a new one. Recorded because `AGENTS.md` §7 lists the
+  dependency set and topology as RED. Full reasoning in `ACTIVE.md` §8.1.
+- `F-572` leaves this band. It requires a model-name and digest column on
+  `skills.catalog_index`, which `ACTIVE.md` §2.2 excludes ("any public
+  API/schema/security change not listed in §8") and §8 does not list. The owner
+  declined to widen R4: the row stays `OPEN`, unimplemented, and takes its own Plan
+  Revision with its own regression gate. The work already done is preserved rather
+  than discarded — `m12-t9-r4-w1-skill-vector` holds an untracked
+  `zink-skill-store/migrations/006_embedding_identity.sql` (MAIN stops at `005_…`)
+  and 13 lines of `zink-skill-store/src/vector-sync.mjs`; both are recovered to
+  `temp/` before that tree is removed.
+- The 26 stale lane worktrees are authorized for removal **after** recovery.
+  `repo:check` clears `F-261` only at zero extra trees, so removing just the 18
+  measured `SAFE-TO-REMOVE` would not green the gate. Sequence: recover the unique
+  work from the 8 `HOLDS-UNIQUE-WORK` trees, verify each recovery, then remove all
+  26. Evidence `temp/worktree-inventory.md`. That measurement refuted two prior
+  handoff claims — `m12-t9-r4-evidence` holds no unique tracked work (its 15
+  entries are scratch), and `m12-t9-r4-b6`'s entries are real edits that duplicate
+  MAIN's tests. The `red-probe` stash lives in the common `.git/refs/stash` rather
+  than per-lane, so removal neither loses nor clears it, and it must never be
+  applied. Six unregistered hollow `.qoder/worktrees/` dirs are not counted by
+  `F-261` and are harness-owned, so they are left alone.
+- `F-546` — the lead chose Option A under the §1 RED-queue delegation, and the
+  owner may veto. One resolver anchored on `import.meta.url`, no `ZINK_REPO_ROOT`
+  and no cwd candidate, `findRepoRoot` tests `current` before its parent, and the
+  packaged entrypoint joins the repo-depth rewrite target in `policy.mjs`. It
+  removes the ambient authority instead of bounding it and matches the shipped
+  `F-115` precedent. Consequences: `ZINK_REPO_ROOT` is retired (measured 1 read, 0
+  setters) and the packaged entrypoint bytes move, so the `configure.mjs` digest
+  admission rolls in the same commit per §4.2.1. **The owner ratified Option A on
+  2026-10-25, and ratified Option A for `F-560` in the same answer** — a typed
+  argument outranks the environment, and every record carries
+  `resolved_root_fingerprint` plus `state_root_source` so the resolved root is
+  auditable by digest. Option B for `F-560` (hard refusal on any env/argv
+  disagreement) was rejected because it adds a refusal class that `F-559`'s
+  load-time drift contract would force into the shared classifier, the README and
+  the runbook, and it breaks benign multi-root scripting during an outage. Neither
+  choice touches schema, public API or the dependency set.
+- `F-576`'s CHECK-constraint half leaves this band, on the same ruling as `F-572`.
+  Its criteria ask for a CHECK that `source_path` is stored in NFC form, and
+  satisfying that needs a NEW forward migration
+  (`apps/knowledge/migrations/006_source_path_nfc.sql`) whose SHA-256 must be
+  recorded in BOTH `docs/contracts/knowledgebase-migration-digests.json` and the
+  byte-identical carrier `apps/knowledge/contracts/knowledgebase-migration-
+  digests.json`, because `tests/m12-t2.2-a4-migration-digest.test.mjs` reconciles
+  the directory against the contract in both directions. That is a durable schema
+  change, `F-576` is not in §8, and §2.2 excludes it — so the owner deferred it
+  rather than widen the band mid-wave. **The shipped half still stands**: the write
+  side normalises with `normalize_source_path` at every write and the read side
+  compares `normalize(<col>, NFC)` so pre-fix rows stay visible; both were
+  mutation-probed twice (write-side revert → 4 failed / 4 passed; read-side revert →
+  3 failed / 5 passed). The row therefore becomes `PARTIAL`, not closed, and the
+  migration joins `F-572`'s own revision.
+- `F-515`'s test is authorized for repair (2026-10-25). The wave measured that the
+  test the register relies on to prove `F-515`'s code half **errors out rather than
+  passing**: `apps/knowledge/tests/test_m11_api_attribution.py::test_a_refused_
+  query_embedding_carries_the_probe_code` raises `AttributeError: 'function' object
+  has no attribute 'assert_not_awaited'` at `:591`, because that one test never
+  assigns `AsyncMock` to `search_candidates` the way its twelve siblings do. It only
+  surfaces when the pinned tokenizer is provisioned — without it the whole module
+  skips at import, which is why `npm run test:knowledge` reads green locally
+  (307 passed / 18 skipped) while the CI shape reads red (9 failed / 404 passed).
+  The owner's ruling: fix the test first, then re-judge whether `F-515` closes.
+  `F-492` and `F-580` stay `PARTIAL` and unchanged, still waiting on the questions
+  recorded in `ACTIVE.md` §8.1.
+
+### Owner decisions recorded 2026-10-26
+
+- **Commit granularity is hybrid.** One row per commit for single-row files; a
+  multi-row shared file becomes one commit naming every row it carries, recorded
+  as a merge in this file and `CHANGELOG.md`. Pins and `configure.mjs` admissions
+  ship with the row that moves them. Full record: `ACTIVE.md` §8.1.
+- **`F-392`:** narrow the 24-hour card expiry guard to `APPROVE` only; refusals
+  fall through to the durable `WORKFLOW_USER_APPROVAL_DECIDED` event.
+- **`F-499`:** call `validateToolAllowlistInvariants` from `registerTools` and
+  refuse registration on a violation.
+- **`F-531`:** add a `CANCEL` owner action mapped through
+  `resolveLedgerDecision`, emitting `WORKFLOW_CANCELLED` with `OWNER_CANCELLED`
+  before dispatch.
+- **`F-536`:** admit `default` to `KEYWORDS` as a non-validating annotation, plus
+  the keyword-membership gate.
+- **`F-045`:** make `requestingActor`, `ownerActor`, `sourceType` and `references`
+  required in `promoteApprovedSkillUnlocked`; refuse omission.
+- **Both new ledger-contract members stay:** `execution_outcome_status` (`F-394`)
+  and `idempotency_key` (`F-577`), both optional under
+  `additionalProperties: false` (the `F-450` test). `idempotency_key` has no
+  production caller yet, recorded rather than hidden.
+- **`F-530`:** authorized in this band — optional 64-hex `scope_digest` on the
+  `WORKFLOW_APPROVAL_SURFACED` branch, `PINNED_SCHEMA_MANIFEST_CHECKSUM` rolled,
+  recorded-digest comparison, `brief_revision` required on new approvals.
+- **`F-535`:** §9 of `coordinator-session-binding.md` follows the shipped code;
+  keep the invariant that `WORKFLOW_COORDINATOR_RUN_BOUND` alone does not make a
+  run eligible for a result.
+- **`F-529` stays narrow;** the second SURFACED producer at `index.mjs:~8540` is
+  filed as `F-586` (`OPEN`), not fixed by drive-by.
 
 ### Scope and bands
 
@@ -8456,3 +8567,116 @@ null;`) left the lane 3/3 green, so that path is unproven and the shipped
   Gates at this head: register
   lane 12/12, policy lane 76/76, `repo:check` red only on the registered-worktree
   list (`F-261`).
+
+## Active task — M12/T9-R5 (owner order: sửa hết findings; 2026-10-27)
+
+Task: M12/T9 — Remediate the 138 actionable findings in `docs/execution/findings.md`
+at the measured R5 scope (90 OPEN, 20 LATENT, 13 CONFIRMED-AS-LATENT, 10
+CONFIRMED, 3 PARTIAL, 2 BLOCKED), plus the 32 REFUTED rows retained as history.
+Milestone: M12 — Governed Discord interaction lifecycle and governed presentation
+Plan Revision: M12/T9-R5
+Planning Readiness: APPROVED — the owner approved `docs/execution/fix-plan.md` on 2026-10-27 and authorized materializing the contract; the approval record is §1 of `docs/contracts/execution/ACTIVE.md`.
+Execution Authorization: YES — bounded to `docs/contracts/execution/ACTIVE.md` §1–§9; AGENTS.md §12 terms (local implementation/closeout commits and push of the current non-main task branch after the closeout gate). No deployment, no live Discord, no `--apply`, no Vault writes, no dependency/lockfile changes.
+Execution Contract: docs/contracts/execution/ACTIVE.md
+Task Status: IN PROGRESS — Phase 5 (fix execution); W0 pending, W1 ready.
+Evidence Level: LOCAL-VERIFIED per band; `NOT RUN` stays `NOT RUN` and is never converted to `PASS`.
+Review Convergence Gate: NOT RUN — W5 has not run.
+Final Quality Gate: NOT RUN — the task is not closed.
+
+### Owner decisions recorded 2026-10-27
+
+- **Scope is the measured live register, not the R4 snapshot.** 138 actionable
+  rows: B1–B9 carry the 111 rows still live, B10 adds the 27 loop-1 audit rows.
+  The 32 REFUTED rows stay as history; `F-400` and `F-534` stay BLOCKED until the
+  OpenClaw host fact arrives. `F-572` and `F-576`'s CHECK half remain deferred to
+  their own Plan Revision.
+- **`F-INFRA-002` — Option A.** `bootstrap-postgres.sh` grows idempotent
+  per-module role provisioning, called from `start.ps1` for every profile; the
+  `postgres` superuser stops being the application login. Credentials come from
+  `KNOWLEDGE_DB_PASSWORD` / `SKILL_DB_PASSWORD`, fail-closed when unset.
+- **`F-OC-002` — Option B.** ZIP budgets: 5,000 entries, 128 MiB per entry,
+  512 MiB total uncompressed, enforced on both declared and read sizes.
+- **`F-OC-006` — Option A now, Option B deferred.** The reducer refuses a second
+  task for an already-bound origin; no schema change in R5. A unique index plus
+  backfill is a deferred follow-up for a later revision.
+- **`F-481` — re-scoped (owner: "1").** Close it with the static declaration
+  rule: the gate reddens any `may-skip` family whose `maxSkips` equals its own
+  case count, and the same commit re-declares `ci-skip-expectations.json`
+  (`postgres` below its own count, `docker` as `must-run`). No CI-runner tallies
+  are required; `F-492` stays `PARTIAL`.
+- **Commit granularity stays hybrid** (2026-10-26 decision): one row per commit
+  for single-row files; a shared file is one commit naming every row it carries.
+
+### Scope and bands (R5)
+
+| Band | Scope | Actionable rows | Fixer batches (≤5) |
+| --- | --- | ---: | ---: |
+| B1 | Approval, verdict, result and queue integrity | 22 | 7 |
+| B2 | Ledger, transaction and apply durability | 14 | 5 |
+| B3 | Operator ceremony, rollback, rehearsal and state root | 13 | 6 |
+| B4 | Artifact validation, Excel writer and preview/delivery | 8 | 6 |
+| B5 | Knowledgebase ingestion, retrieval and citation | 4 | 2 |
+| B6 | Skill Store catalog, vector, lock and migration | 11 | 4 |
+| B7 | Tool contracts, SQL/Python guards and error taxonomy | 13 | 5 |
+| B8 | Gate truth and CI enforcement | 17 | 5 |
+| B9 | Test-only assertions and docs consistency | 9 | 3 |
+| B10 | Loop-1 audit findings | 27 | 19 |
+| **Total** | | **138** | **62** |
+
+By type: F1 5, F2 21, F3 24, F4 28, F5 25, F6 13, F7 22. By severity: 35 High,
+72 Medium, 31 Low. Membership and ordering are frozen in
+`docs/contracts/execution/ACTIVE.md` §2–§3 and `docs/execution/fix-plan.md` §4.
+
+### Execution topology (R5)
+
+- **W0 — evidence floor:** `F-481`; `F-492` carries its measurement and stays
+  PARTIAL. One batch with `fix-tests`.
+- **W1 — B10 loop-1 roots:** 19 batches in the order fixed by `ACTIVE.md` §3.2.
+  `F-INFRA-002` is the first dispatch.
+- **W2 — B1 + B5 + B6 + B8:** 67 rows, 17 batches.
+- **W3 — B2 + B3 + B4 + B7:** 48 rows, 22 batches.
+- **W4 — B9:** 9 rows, 3 batches.
+- **W5 — review:** `review-correctness`, `review-security`, `review-regression`,
+  `review-architecture` in parallel, then `review-chair`.
+
+Approval-serial lanes (`fix-infrastructure`, `fix-openclaw-governance-library`,
+`fix-openclaw-topology`, `fix-openclaw-governance-plugin`,
+`fix-openclaw-setup-templates`) run one at a time. The parallel-safe lanes
+(`fix-knowledgebase`, `fix-skill-store`, `fix-tools`,
+`fix-openclaw-artifact-validation`, `fix-openclaw-discord-adapters`, `fix-tests`)
+run at most three at once with disjoint file sets. The lead owns governance
+files, integration, review convergence, closeout and the final push.
+
+### Gates and closeout (R5)
+
+Node: `npm run format:check`, `npm run lint`, the affected `node --test` suites,
+`npm run repo:check`; band end: `npm run verify`. The Knowledgebase adds
+`npm run test:knowledge` and the Python/uv lane. PostgreSQL/Docker and WSL are
+required for the rows that need them, one row at a time on the shared container.
+An unavailable lane is recorded as `NOT RUN`, never `PASS`.
+
+A row closes only when the premise is re-verified at HEAD, a red test/probe was
+observed, the minimal fix is green, the affected gates and mutation probe are
+recorded, and independent review evidence exists. OPEN rows then leave
+`findings.md`; history goes to `CHANGELOG.md` and `PLAN.md` §4.17/§8. LATENT rows
+need the deterministic fault-injection/probe. REFUTED and BLOCKED rows stay.
+
+Closeout archives `ACTIVE.md` to `docs/contracts/execution/archive/`, updates
+`PLAN.md` and the durable docs, sets `Execution Authorization: NO` /
+`Execution Contract: NONE`, deletes the live contract, leaves a clean tree,
+creates the local closeout commit, and pushes the current non-main task branch.
+
+### Current checkpoint (2026-10-27)
+
+- R4 is archived verbatim at `docs/contracts/execution/archive/2026-10-27-M12-T9-R4.md`.
+- R5 is materialized at `docs/contracts/execution/ACTIVE.md` with the three
+  blocking RED decisions recorded in §8.4; this block is its lifecycle pointer.
+- Phases 1–4 are complete and verified: 20/20 scanner reports
+  (`docs/execution/reports/p1/`), 12/12 cross-check reports (`p2/`), 12/12
+  triage reports (`p3/`), and 23 loop-1 verdicts embedded in the register (10
+  CONFIRMED, 13 CONFIRMED-AS-LATENT, 0 rejected).
+- The register holds 170 rows; `docs/execution/fix-plan.md` carries the 62
+  batches; `docs/execution/context.md` records the run.
+- Phase 5 has not started. W1 is ready to dispatch; W0 waits on the `F-481`
+  conflict with the 2026-10-24 owner decision (it requires CI-runner tallies
+  this host cannot produce, and no partial gate change may ship).

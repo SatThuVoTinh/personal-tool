@@ -1124,19 +1124,35 @@ export function skillStoreWriterLockDir(skillsRoot) {
  * instead of writing one. It is a count, not a flag: two sections on the same
  * root in one process are serialized by the lock itself, and the first one's
  * release must not clear the second one's hold.
+ *
+ * M12/T9-R4 F-432: the count records an ACQUIRED hold, never an intended one.
+ * It used to be incremented at function entry, before `withFileLock` had the
+ * mutex, so a process merely WAITING for the lock reported itself as its
+ * holder for the whole wait — and the door's mandatory-lock control
+ * (`isSkillStoreWriterLockHeld`) then accepted a promotion that ran before the
+ * lock was real. The increment therefore lives inside the `withFileLock`
+ * callback, immediately before the caller's work, and is decremented in the
+ * same callback's `finally`. A timed-out or failed acquisition records
+ * nothing, which is the truth.
  */
 const heldWriterLocks = new Map();
 
 export async function withSkillStoreWriterLock(skillsRoot, fn, options = {}) {
   const lockDir = skillStoreWriterLockDir(skillsRoot);
-  heldWriterLocks.set(lockDir, (heldWriterLocks.get(lockDir) ?? 0) + 1);
-  try {
-    return await withFileLock(lockDir, fn, options);
-  } finally {
-    const remaining = (heldWriterLocks.get(lockDir) ?? 1) - 1;
-    if (remaining > 0) heldWriterLocks.set(lockDir, remaining);
-    else heldWriterLocks.delete(lockDir);
-  }
+  return withFileLock(
+    lockDir,
+    async () => {
+      heldWriterLocks.set(lockDir, (heldWriterLocks.get(lockDir) ?? 0) + 1);
+      try {
+        return await fn();
+      } finally {
+        const remaining = (heldWriterLocks.get(lockDir) ?? 1) - 1;
+        if (remaining > 0) heldWriterLocks.set(lockDir, remaining);
+        else heldWriterLocks.delete(lockDir);
+      }
+    },
+    options,
+  );
 }
 
 /**
@@ -1146,6 +1162,10 @@ export async function withSkillStoreWriterLock(skillsRoot, fn, options = {}) {
  * a lock held elsewhere is not observable from here. It exists so the public
  * door can refuse an unlocked canonical promotion; it is never a substitute
  * for the lock itself.
+ *
+ * M12/T9-R4 F-432: it answers "this process HOLDS the lock", not "this process
+ * is waiting for it" — the hold is recorded only once the file lock has been
+ * acquired.
  */
 export function isSkillStoreWriterLockHeld(skillsRoot) {
   if (typeof skillsRoot !== "string" || skillsRoot.trim() === "") return false;
@@ -1573,8 +1593,15 @@ async function pruneEmptyParents(fromDir, stopDir) {
  * proposal-state writes in ONE critical section (the governed approval
  * transaction) run them inside `withSkillStoreWriterLock` and call
  * `promoteApprovedSkillUnlocked` — never both.
+ *
+ * M12/T9-R4 F-435: this acquiring wrapper is named
+ * `promoteApprovedSkillWithLock` — NOT `promoteApprovedSkill`. That name
+ * belongs to the public door (`zink-skill-store/index.mjs`), whose variant
+ * REFUSES unless the writer lock is already held. One name per locking
+ * semantics: the import site can no longer silently choose between
+ * self-serialising and refusing.
  */
-export async function promoteApprovedSkill(params) {
+export async function promoteApprovedSkillWithLock(params) {
   return withSkillStoreWriterLock(params.skillsRoot, () =>
     promoteApprovedSkillUnlocked(params),
   );
@@ -1586,12 +1613,29 @@ export async function promoteApprovedSkillUnlocked({
   capability,
   version,
   content,
-  requestingActor = "unknown",
-  ownerActor = "owner",
+  // F-045 (R5-E04-07): provenance is REQUIRED, never defaulted.
+  //
+  // The shipped defaults (`unknown`, `owner`, `demonstration`,
+  // `[{plan, M8/T3-R1}]`) let a caller publish a canonical ACTIVE manifest
+  // whose owner attribution and plan provenance were constants unrelated to
+  // the approval that produced it. Omitting any of the four now raises a
+  // named writer error instead of inventing a record.
+  requestingActor,
+  ownerActor,
   decisionRef,
-  sourceType = "demonstration",
-  references = [{ type: "plan", ref: "M8/T3-R1" }],
+  sourceType,
+  references,
   at = null,
+  // M12/T9-R4 F-580: the two fault-injection seams, the same class as
+  // `retireSkillUnlocked`'s `directorySync` (F-411). The state this writer must
+  // survive — a promoted record that FAILS re-validation while the rollback
+  // removal also fails — is a host errno (EBUSY/EPERM/ESTALE on a just-written
+  // tree) no gate can reproduce on demand, so the shipped case substitutes the
+  // re-validation read and the rollback removal instead of pretending a
+  // different code path. Production callers never pass either seam.
+  reverifyCatalog = scanCatalog,
+  removeVersionDirectory = (directory) =>
+    rm(directory, { recursive: true, force: true }),
 }) {
   const nsArray = Array.isArray(namespace) ? namespace : [namespace];
   if (
@@ -1910,11 +1954,11 @@ export async function promoteApprovedSkillUnlocked({
   }
   await fsyncDirectoryBestEffort(parentDir);
 
-  const reverified = await scanCatalog(skillsRoot);
+  const reverified = await reverifyCatalog(skillsRoot);
   if (reverified.errors.length > 0) {
     let removalError = null;
     try {
-      await rm(versionDir, { recursive: true, force: true });
+      await removeVersionDirectory(versionDir);
     } catch (error) {
       removalError = error;
     }
@@ -1968,7 +2012,10 @@ export async function promoteApprovedSkillUnlocked({
  * audit forbids. The catalog grammar already admitted
  * `CANDIDATE,ACTIVE,DEPRECATED`; nothing ever WROTE it.
  *
- * This is that writer. It is the counterpart of `promoteApprovedSkill`: the
+ * This is that writer. It is the counterpart of
+ * `promoteApprovedSkillUnlocked` (F-435: the unlocked promotion this unlocked
+ * retirement mirrors; the public door name `promoteApprovedSkill` and the
+ * acquiring wrapper `promoteApprovedSkillWithLock` sit above both): the
  * same discipline, the same refusals, the same re-validation.
  *
  * Semantics:

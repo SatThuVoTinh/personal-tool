@@ -21,7 +21,10 @@
 //     refused, never guessed);
 //   - a lock with an unreadable owner record or a stray entry is INSPECTED,
 //     not reclaimed;
-//   - nothing is removed without the typed confirmation.
+//   - nothing is removed without the typed confirmation;
+//   - the owner record is re-read and compared immediately before the
+//     removal, so a lock a NEW writer acquired after the inspection is never
+//     deleted (F-433).
 //
 // The holder's token is NOT printed: a prefix of it is still a substring of a
 // live credential, and this report is pasted into terminals and cards.
@@ -85,6 +88,76 @@ function parseArguments(argv) {
 }
 
 /**
+ * Reads and shape-checks a lock's owner record.
+ *
+ * Returns the parsed record plus the shape verdict, because the two answers are
+ * different facts and both callers need them separately: a record that cannot
+ * be read is INSPECTed, and a record of the wrong shape is INSPECTed too, but
+ * only a shaped record can be compared with the one the scan approved.
+ */
+function readOwnerRecord(ownerPath) {
+  let owner;
+  try {
+    const stat = lstatSync(ownerPath);
+    if (!stat.isFile())
+      return { owner: null, reason: "OWNER_ENTRY_UNREADABLE" };
+    owner = JSON.parse(readFileSync(ownerPath, "utf8"));
+  } catch {
+    return { owner: null, reason: "OWNER_ENTRY_UNREADABLE" };
+  }
+  const shaped =
+    typeof owner?.token === "string" &&
+    /^[0-9a-f]{32}$/u.test(owner.token) &&
+    typeof owner?.pid === "number";
+  return { owner, reason: shaped ? null : "OWNER_RECORD_SHAPE" };
+}
+
+/**
+ * Removes an orphaned lock ONLY while it still belongs to the holder the scan
+ * proved dead.
+ *
+ * M12/T9-R4 F-433: the inspection above is a SNAPSHOT — it reads `owner.json`,
+ * checks that holder's pid and then deletes. Between that read and this delete
+ * another writer can acquire the very same lock, and deleting it then erases a
+ * LIVE writer's mutex while that writer believes it is protected: two writers
+ * inside the critical section. So the record is re-read immediately before the
+ * removal and compared with the snapshot by token AND pid. A lock created after
+ * the scan is never touched, and the comparison is what enforces it — not the
+ * snapshot's liveness check, which vouched for the OLD holder.
+ *
+ * Exported so the compare-before-delete contract is testable without a
+ * multi-process interleaving.
+ */
+export function removeOrphanedLock(lockDir, expectedOwner) {
+  const ownerPath = path.join(lockDir, LOCK_OWNER_FILE);
+  const current = readOwnerRecord(ownerPath);
+  if (!current.owner) {
+    return { mutated: false, removed: false, reason: "OWNER_ENTRY_UNREADABLE" };
+  }
+  if (current.reason) {
+    return { mutated: false, removed: false, reason: "OWNER_RECORD_SHAPE" };
+  }
+  if (
+    current.owner.token !== expectedOwner?.token ||
+    current.owner.pid !== expectedOwner?.pid
+  ) {
+    return {
+      mutated: false,
+      removed: false,
+      reason: "OWNER_CHANGED_BEFORE_REMOVAL",
+    };
+  }
+  unlinkSync(ownerPath);
+  rmdirSync(lockDir);
+  const removed = !existsSync(lockDir);
+  return {
+    mutated: true,
+    removed,
+    reason: removed ? null : "LOCK_STILL_PRESENT",
+  };
+}
+
+/**
  * Inspects (and, on request, clears) the Skill Store's writer lock.
  *
  * Returns the report and the exit code the CLI uses; the function is
@@ -137,27 +210,20 @@ export function recoverSkillStoreLock(options = {}) {
     return { report, exitCode: 1 };
   }
 
-  let owner;
-  try {
-    const stat = lstatSync(ownerPath);
-    if (!stat.isFile()) throw new Error("not a regular file");
-    owner = JSON.parse(readFileSync(ownerPath, "utf8"));
-  } catch {
+  const read = readOwnerRecord(ownerPath);
+  const owner = read.owner;
+  if (!owner) {
     report.owner_entry = "MALFORMED";
     report.action = "INSPECT";
-    report.reason = "OWNER_ENTRY_UNREADABLE";
+    report.reason = read.reason;
     return { report, exitCode: 1 };
   }
   report.owner_entry = "OK";
   report.owner_pid = typeof owner?.pid === "number" ? owner.pid : null;
-  if (
-    typeof owner?.token !== "string" ||
-    !/^[0-9a-f]{32}$/u.test(owner.token) ||
-    report.owner_pid === null
-  ) {
+  if (read.reason) {
     report.owner_entry = "MALFORMED";
     report.action = "INSPECT";
-    report.reason = "OWNER_RECORD_SHAPE";
+    report.reason = read.reason;
     return { report, exitCode: 1 };
   }
   report.owner_token = "PRESENT";
@@ -189,13 +255,12 @@ export function recoverSkillStoreLock(options = {}) {
     return { report, exitCode: 1 };
   }
 
-  unlinkSync(ownerPath);
-  rmdirSync(lock);
-  report.mutated = true;
-  report.recovered = !existsSync(lock);
-  report.action = report.recovered ? "RECOVERED" : "INSPECT";
-  report.reason = report.recovered ? null : "LOCK_STILL_PRESENT";
-  return { report, exitCode: report.recovered ? 0 : 1 };
+  const removal = removeOrphanedLock(lock, owner);
+  report.mutated = removal.mutated;
+  report.recovered = removal.removed;
+  report.action = removal.removed ? "RECOVERED" : "INSPECT";
+  report.reason = removal.reason;
+  return { report, exitCode: removal.removed ? 0 : 1 };
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

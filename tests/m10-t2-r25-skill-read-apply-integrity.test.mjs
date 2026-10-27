@@ -30,7 +30,7 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const url = (rel) => pathToFileURL(path.join(REPO, rel)).href;
 const readSource = (rel) => readFileSync(path.join(REPO, rel), "utf8");
 
-const { promoteApprovedSkill, scanCatalog } = await import(
+const { promoteApprovedSkillWithLock, scanCatalog } = await import(
   url("zink-skill-store/src/catalog.mjs")
 );
 const { SkillAdapter } = await import(
@@ -56,7 +56,7 @@ const sha256 = (s) => createHash("sha256").update(s, "utf8").digest("hex");
 async function catalogWith(pairs) {
   const skillsRoot = await mkdtemp(path.join(tmpdir(), "r25-"));
   for (const [ns, capability, body] of pairs) {
-    await promoteApprovedSkill({
+    await promoteApprovedSkillWithLock({
       skillsRoot,
       namespace: [ns],
       capability,

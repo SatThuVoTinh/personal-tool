@@ -14,15 +14,28 @@ import {
   assertSameRefusalClasses,
   refusalOutput,
 } from "./refusal-classifier.mjs";
+import {
+  STATE_DIR_NOT_NAMED,
+  resolveStateRoot,
+  rootDisclosure,
+} from "./operator-state-root.mjs";
 
 // F-219: the machine-specific state root is NOT a literal. The operator
 // names it (ZINK_OPERATOR_STATE_DIR or the first argument) and the driver
 // refuses to run without one, exactly like live-governance-probe.mjs: a
 // driver that silently points at one operator's machine root says nothing
 // about any other, and a hardcoded root is what let these files drift.
-const stateDir = process.env.ZINK_OPERATOR_STATE_DIR ?? process.argv[2] ?? null;
+//
+// M12/T9 F-560 (R10-T07-6): the TYPED argument outranks an inherited
+// environment value, so a stale export cannot redirect the preflight away from
+// the root the operator named, and the record this driver prints names the
+// resolved root by digest (`operator-state-root.mjs` states the rule once for
+// every operator driver).
+const stateRoot = resolveStateRoot({ argv: process.argv.slice(2) });
+const stateDir = stateRoot.stateDir;
+const stateRootSource = stateRoot.source;
 if (!stateDir) {
-  process.stderr.write("STATE_DIR_NOT_NAMED\n");
+  process.stderr.write(`${STATE_DIR_NOT_NAMED}\n`);
   process.exit(2);
 }
 const input = path.join(stateDir, "operator/m7-t2/discord-identifiers.json");
@@ -59,7 +72,12 @@ try {
     maxBuffer: 65536,
   });
   process.stdout.write(
-    `${JSON.stringify({ identifiers: "VALID", builder_preflight: "PASS", installed_mutation: false })}\n`,
+    `${JSON.stringify({
+      identifiers: "VALID",
+      builder_preflight: "PASS",
+      installed_mutation: false,
+      ...rootDisclosure(stateDir, stateRootSource),
+    })}\n`,
   );
 } catch (error) {
   // Classify only known static diagnostics; unknown output stays undisclosed.
@@ -117,7 +135,13 @@ try {
     known.find((entry) => refusalOutput(error).includes(entry)) ??
     "PREFLIGHT_REJECTED";
   process.stdout.write(
-    `${JSON.stringify({ stage, status: "FAIL", reason, installed_mutation: false })}\n`,
+    `${JSON.stringify({
+      stage,
+      status: "FAIL",
+      reason,
+      installed_mutation: false,
+      ...rootDisclosure(stateDir, stateRootSource),
+    })}\n`,
   );
   process.exitCode = 1;
 }

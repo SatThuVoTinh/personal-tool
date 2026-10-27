@@ -47,6 +47,14 @@ const manifestReader = read(
   "zink_pdf_runtime",
   "manifest.py",
 );
+const pinsReader = read(
+  "apps",
+  "knowledge",
+  "pdf-runtime",
+  "src",
+  "zink_pdf_runtime",
+  "pins.py",
+);
 const parentReader = read("apps", "knowledge", "tests", "test_pdf_runtime.py");
 
 const EXPORT_FLAGS = [
@@ -170,25 +178,45 @@ test("F-340: the image exports the artifact in the form it is committed in", () 
 });
 
 test("F-340: both digest readers pin the committed artifact", () => {
-  const manifestPin = pinnedDigest(manifestReader);
-  const parentPin = pinnedDigest(parentReader);
+  // F-548 moved the literal into `pins.py` so the pin has exactly one carrier:
+  // the image-side guard imports it and the parent lane reads it from that
+  // module. The intent of this test is unchanged — both readers must pin the
+  // committed bytes — but the carrier is now the module, not two copies.
+  const canonicalPin = pinnedDigest(pinsReader);
   assert.ok(
-    manifestPin,
-    "the image-side digest reader must pin the artifact it digests",
-  );
-  assert.ok(
-    parentPin,
-    "the parent-side digest reader must pin the artifact it digests",
+    canonicalPin,
+    "the canonical pin must name the artifact it digests",
   );
   assert.equal(
-    manifestPin,
-    parentPin,
-    "the two digest readers must pin the same artifact",
-  );
-  assert.equal(
-    manifestPin,
+    canonicalPin,
     artifactDigest,
     "the pinned digest must be the digest of the committed artifact",
+  );
+  assert.match(
+    manifestReader,
+    /from \.pins import EXPECTED_HASHED_REQUIREMENTS_SHA256/u,
+    "the image-side digest reader must import the canonical pin",
+  );
+  assert.match(
+    manifestReader,
+    /if digest != EXPECTED_HASHED_REQUIREMENTS_SHA256:/u,
+    "the image-side digest reader must compare the artifact against the canonical pin",
+  );
+  assert.match(
+    parentReader,
+    /pins\.EXPECTED_HASHED_REQUIREMENTS_SHA256/u,
+    "the parent-side digest reader must read the canonical pin",
+  );
+  // Neither reader may quietly re-declare its own copy again.
+  assert.equal(
+    pinnedDigest(manifestReader),
+    null,
+    "the image-side reader must not re-declare the pin",
+  );
+  assert.equal(
+    pinnedDigest(parentReader),
+    null,
+    "the parent-side reader must not re-declare the pin",
   );
 });
 /** The canonical export command, in the order the Dockerfile uses it. */

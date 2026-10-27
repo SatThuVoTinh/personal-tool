@@ -45,7 +45,7 @@ const ADAPTER_PATH = fileURLToPath(
   ),
 );
 
-const { promoteApprovedSkill, scanCatalog } = await import(
+const { promoteApprovedSkillWithLock, scanCatalog } = await import(
   pathToFileURL(CATALOG_PATH).href
 );
 const { executeCli } = await import(pathToFileURL(CLI_PATH).href);
@@ -104,7 +104,7 @@ async function writeStrandedPair(skillsRoot) {
 async function seededStore() {
   const root = await mkdtemp(path.join(os.tmpdir(), "m12-t9-f580-"));
   const skillsRoot = path.join(root, "skills");
-  await promoteApprovedSkill({
+  await promoteApprovedSkillWithLock({
     skillsRoot,
     namespace: ["office"],
     capability: "healthy",
@@ -270,6 +270,104 @@ test("F-580: the repair refuses a record that validates and an absent version", 
     );
     assert.match(body, /# Healthy/u);
     assert.deepEqual((await scanCatalog(skillsRoot)).errors, []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// The half that stayed open: the quarantine must be reachable from the
+// PROMOTION itself, not only from the operator command. The case forces the two
+// host faults the row names - a promoted record that fails re-validation, and a
+// rollback removal that also fails - through the promotion's own injection
+// seams, so it reddens when the quarantine branch or the residue grammar goes.
+test("F-580: a promotion whose rollback removal fails quarantines itself", async () => {
+  const { root, skillsRoot } = await seededStore();
+  try {
+    const versionDir = path.join(skillsRoot, "office", "quarantined", "1.0.0");
+
+    const failure = await promoteApprovedSkillWithLock({
+      skillsRoot,
+      namespace: ["office"],
+      capability: "quarantined",
+      version: "1.0.0",
+      content: "# Quarantined\n\npublished, then refused\n",
+      ...GOVERNED,
+      // Fault 1: the just-published directory gains an entry the catalog
+      // refuses, so the re-validation - the REAL scanner, not a stub - reports
+      // an error for this record.
+      reverifyCatalog: async (scanRoot) => {
+        await writeFile(
+          path.join(versionDir, "notes.txt"),
+          "foreign\n",
+          "utf8",
+        );
+        return scanCatalog(scanRoot);
+      },
+      // Fault 2: the rollback removal answers the retryable errno the host
+      // reports for a just-written tree, so the canonical directory survives.
+      removeVersionDirectory: async () => {
+        const error = new Error("EBUSY: the just-written tree is busy");
+        error.code = "EBUSY";
+        throw error;
+      },
+    }).then(
+      () => null,
+      (error) => error,
+    );
+
+    assert.equal(failure?.code, "CATALOG_INVALID");
+    assert.ok(
+      failure.details.includes("PROMOTED_REVALIDATION_FAILED"),
+      `the refusal must name the stage, got ${JSON.stringify(failure.details)}`,
+    );
+    assert.match(failure.message, /VERSION_DIRECTORY_CONTENT_INVALID/u);
+    assert.match(
+      failure.message,
+      /quarantined as 1\.0\.0\.stranded-/u,
+      "the refusal must report where the refused bytes went",
+    );
+
+    const scan = await scanCatalog(skillsRoot);
+    assert.deepEqual(
+      scan.errors,
+      [],
+      "the store must be error-free after the quarantine",
+    );
+    const stranded = scan.residue
+      .map((entry) => entry.path)
+      .find((entry) =>
+        entry.startsWith("skills/office/quarantined/1.0.0.stranded-"),
+      );
+    assert.ok(
+      stranded,
+      `the quarantined directory must be residue, got ${JSON.stringify(scan.residue.map((entry) => entry.path))}`,
+    );
+
+    // The bytes are preserved under the residue name, never destroyed.
+    const strandedDir = path.join(
+      path.dirname(versionDir),
+      stranded.slice("skills/office/quarantined/".length),
+    );
+    assert.deepEqual((await readdir(strandedDir)).sort(), [
+      "SKILL.md",
+      "manifest.json",
+      "notes.txt",
+    ]);
+
+    // Both read arms serve again: no canonical-but-invalid directory is left to
+    // blank the whole store.
+    const adapter = new SkillAdapter(skillsRoot, { skillsRoot });
+    for (const action of ["read", "apply"]) {
+      const served = await adapter.querySkillStore({
+        action,
+        skill_id: "office/healthy",
+      });
+      assert.match(
+        served.skill_content.content,
+        /the record every read arm must keep serving/u,
+        `${action} must serve the healthy record again`,
+      );
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }

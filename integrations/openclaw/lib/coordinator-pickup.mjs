@@ -271,14 +271,26 @@ export async function runCoordinatorPickup({
       });
     } catch (claimErr) {
       const message = String(claimErr?.message ?? "");
-      if (/CONCURRENT_CLAIM_DENIED/u.test(message)) {
+      // M12/T9 F-553 (R10-T06-5): classify by the error's CODE first. The
+      // queue refusals now carry `code` as a member; the message regexes
+      // survive only for foreign errors whose producer sets no code, so a
+      // reword of a queue-manager message can no longer change the
+      // owner-visible class.
+      const code = typeof claimErr?.code === "string" ? claimErr.code : "";
+      if (
+        code === "CONCURRENT_CLAIM_DENIED" ||
+        /CONCURRENT_CLAIM_DENIED/u.test(message)
+      ) {
         return {
           ok: false,
           error: "PICKUP_ALREADY_CLAIMED",
           taskId: candidate,
         };
       }
-      if (/INVALID_STATE_TRANSITION/u.test(message)) {
+      if (
+        code === "INVALID_STATE_TRANSITION" ||
+        /INVALID_STATE_TRANSITION/u.test(message)
+      ) {
         return {
           ok: false,
           error: "PICKUP_ALREADY_CLAIMED",

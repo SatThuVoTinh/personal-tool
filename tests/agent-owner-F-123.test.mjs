@@ -81,16 +81,27 @@ function ledgerWithCard(tag) {
 
 /** The owner's decision, presented against the card. */
 function decide(paths, currentTime) {
+  return decideAction(paths, "APPROVE", currentTime);
+}
+
+function decideAction(paths, action, currentTime) {
   return handleDiscordAction({
     actor: "user",
     channel: "approvals",
     taskId: TASK_ID,
-    action: "APPROVE",
+    action,
     currentState: "APPROVAL_PENDING",
     paths,
     data: { threadId: THREAD_ID, messageId: "123456789012345679" },
     currentTime,
   });
+}
+
+function journalEvents(paths) {
+  return readFileSync(paths.events, "utf8")
+    .split("\n")
+    .filter((line) => line.trim().length > 0)
+    .map((line) => JSON.parse(line));
 }
 
 test("F-123: the owner's window is 24 hours from the moment the card is posted", () => {
@@ -201,5 +212,46 @@ test("F-123: a decision against an untouched card inside its 24 hours is still a
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("F-392: past the card window a refusal still reaches the durable decision", () => {
+  const { root, paths } = ledgerWithCard("expired-refusal");
+  try {
+    const before = readSnapshot(paths).sequence;
+    const decided = decideAction(
+      paths,
+      "REJECT_APPROVAL",
+      Date.now() + 25 * HOUR_MS,
+    );
+    assert.equal(
+      decided.allowed,
+      true,
+      `an owner must be able to refuse an expired card: ${decided.reason ?? ""}`,
+    );
+    assert.equal(
+      readSnapshot(paths).sequence,
+      before + 1,
+      "the refusal must be written to the ledger",
+    );
+    const events = journalEvents(paths);
+    const last = events.at(-1);
+    assert.equal(last.type, "WORKFLOW_USER_APPROVAL_DECIDED");
+    // The ledger's own decision vocabulary projects the approval action onto
+    // `REJECT`; the point is that the durable event exists at all.
+    assert.equal(last.payload.decision, "REJECT");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+
+  // The approval half of the window still holds: an expired card cannot be
+  // approved.
+  const second = ledgerWithCard("expired-approve");
+  try {
+    const refused = decide(second.paths, Date.now() + 25 * HOUR_MS);
+    assert.equal(refused.allowed, false);
+    assert.equal(refused.reason, "AUTH_APPROVAL_EXPIRED");
+  } finally {
+    rmSync(second.root, { recursive: true, force: true });
   }
 });

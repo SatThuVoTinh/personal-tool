@@ -13,6 +13,7 @@ from .database import (
     ActiveIndex,
     KnowledgeDatabase,
     StateTransitionError,
+    normalize_source_path,
 )
 from .markdown_adapter import MarkdownSource, MarkdownVaultScanner, TokenBudget
 from .model_probe import ModelProbeError, OllamaModelProbe, ResolvedEmbeddingModel
@@ -202,10 +203,24 @@ class IndexLifecycle:
                 )
                 return []
 
-            manifest = {source.source_path: source for source in scan.sources}
-            manifest.update({sidecar.source_path: sidecar for sidecar in pdf_sidecars})
+            # F-576 (R10-T10-7): the hash map is keyed by the stored form, so a
+            # decomposed scan path has to be compared in that same form; the
+            # stale set is derived from the same keys, which is what keeps an
+            # unchanged source from being deleted after it was skipped.
+            manifest = {
+                normalize_source_path(source.source_path): source
+                for source in scan.sources
+            }
+            manifest.update(
+                {
+                    normalize_source_path(sidecar.source_path): sidecar
+                    for sidecar in pdf_sidecars
+                }
+            )
             for source in scan.sources:
-                if run.kind == "INCREMENTAL" and existing.get(source.source_path) == source.sha256:
+                if run.kind == "INCREMENTAL" and existing.get(
+                    normalize_source_path(source.source_path)
+                ) == source.sha256:
                     continue
                 try:
                     embeddings = await self._embed_source(expected, source)
@@ -302,7 +317,9 @@ class IndexLifecycle:
                         ):
                             continue
                         result = await self._pdf_builder.build(sidecar, pdf_processing_identity)
-                        if existing.get(sidecar.source_path) == result.content_identity_digest:
+                        if existing.get(
+                            normalize_source_path(sidecar.source_path)
+                        ) == result.content_identity_digest:
                             continue
                         await self.require_identity(expected)
                         await self._pdf_builder.revalidate_identity(

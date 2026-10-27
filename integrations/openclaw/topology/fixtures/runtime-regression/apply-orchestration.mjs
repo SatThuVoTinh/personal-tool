@@ -65,6 +65,12 @@ export const APPLY_STAGES = [
   "builder-preflight",
   "orphan-check",
   "transaction-snapshot",
+  // M12/T9 F-561 (R10-T07-7): the derived ledger projection is recomputed from
+  // its journal INSIDE the ceremony. It used to run at the driver's module
+  // scope, before the first stage, so a run that reported
+  // `mutationStarted: false` had already written the live state root and no
+  // preimage could hold the tree it wrote.
+  "ledger-projection",
   "builder-apply",
   "quarantine-prune",
   "native-backup-prune",
@@ -75,13 +81,29 @@ export const APPLY_STAGES = [
 ];
 
 /**
- * The first stage that writes to the live runtime. `configure.mjs` returns for
- * mode `preflight` before its first mutating call, and the transaction snapshot
- * is read-only, so every stage before this one is provably zero-mutation.
+ * The first stage that writes anything in the live tree.
+ *
+ * It is the ledger projection, not `builder-apply`: the ledger's derived
+ * snapshot lives under the state directory, which is governed live state, so a
+ * stage that rewrites it is a mutation even though it touches no OpenClaw
+ * runtime file. Everything before it - the identifiers read, the builder's own
+ * zero-mutation preflight, the orphan check and the transaction preimage - is
+ * read-only, so `PRE-FLIGHT FAILURE = ZERO RUNTIME MUTATION` still holds
+ * exactly.
+ *
+ * The ledger tree is deliberately NOT a transaction target, and the reason is
+ * stated here because this is the list that would otherwise hide it: the journal
+ * is the record and no stage writes it, the recompute is atomic
+ * (`writeSnapshotAtomic`) and convergent (the same journal derives the same
+ * bytes), and the checkpoint it discards is a cache the next read rebuilds. A
+ * rollback therefore restores the tracked surface and leaves the re-derived
+ * cache agreeing with the journal it was derived from. Adding the tree to
+ * `SNAPSHOT_TARGETS.state` would snapshot a cache, not a record.
  */
-export const FIRST_MUTATING_STAGE = "builder-apply";
+export const FIRST_MUTATING_STAGE = "ledger-projection";
 
 const MUTATING_STAGES = new Set([
+  "ledger-projection",
   "builder-apply",
   "quarantine-prune",
   "native-backup-prune",
@@ -176,6 +198,21 @@ export async function applyRuntime(deps) {
         attemptId: null,
         transactionStatus: null,
       };
+    }
+
+    stage = "ledger-projection";
+    // M12/T9 F-561 (R10-T07-7): the derived ledger projection is recomputed
+    // here - after the rollback target is durable and before the builder writes
+    // - instead of at the driver's module scope. `mutationStarted` flips BEFORE
+    // the dep runs, so a run that reports `mutationStarted: false` has provably
+    // written nothing, including the ledger's derived cache.
+    //
+    // The seam is optional so the in-process harnesses that model no ledger
+    // stage keep their exact call sequences: a harness that does not supply the
+    // dependency has no ledger surface to migrate.
+    if (typeof deps.recomputeLedgerProjection === "function") {
+      mutationStarted = true;
+      deps.recomputeLedgerProjection();
     }
 
     stage = "builder-apply";

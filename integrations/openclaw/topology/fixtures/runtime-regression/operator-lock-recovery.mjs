@@ -19,8 +19,16 @@
 // token — so the prefix bought nothing here and could only leak.
 //
 // Usage:
-//   node operator-lock-recovery.mjs [--state-dir <absolute-path>]
-//   node operator-lock-recovery.mjs --recover --confirm=ORPHAN_LOCK_RECOVERY
+//   node operator-lock-recovery.mjs <state-root> [--recover --confirm=ORPHAN_LOCK_RECOVERY]
+//   node operator-lock-recovery.mjs --state-dir <absolute-path> [--recover ...]
+//   ZINK_OPERATOR_STATE_DIR=<absolute-path> node operator-lock-recovery.mjs [...]
+//
+// M12/T9 F-489 (R9-L12-3): this driver used to seed its root from the homedir
+// and accept only `--state-dir`, so the documented "environment or first
+// argument" contract (README BƯỚC 0b / the deploy runbook) did not hold for it
+// and the one mutating recovery was unreachable by its own instructions. It now
+// resolves a NAMED root like every other operator driver and refuses with
+// STATE_DIR_NOT_NAMED when it is given none; the homedir default is gone.
 import {
   existsSync,
   lstatSync,
@@ -29,20 +37,23 @@ import {
   unlinkSync,
   rmdirSync,
 } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 
 import { ledgerPaths } from "../../lib/ledger.mjs";
 import { LOCK_OWNER_FILE, lockDirFor } from "../../../lib/file-lock.mjs";
 import { assertNoSymlinkComponents } from "../../../lib/policy.mjs";
+import {
+  STATE_DIR_NOT_NAMED,
+  resolveStateRoot,
+  rootDisclosure,
+} from "./operator-state-root.mjs";
 
-const DEFAULT_STATE_DIR = path.join(os.homedir(), ".openclaw-zink");
 const CONFIRM_VALUE = "ORPHAN_LOCK_RECOVERY";
 
 function parseArguments(argv) {
   const options = {
-    stateDir: DEFAULT_STATE_DIR,
+    stateDir: null,
     recover: false,
     confirm: null,
   };
@@ -79,10 +90,23 @@ function holderState(pid) {
   }
 }
 
-const options = parseArguments(process.argv.slice(2));
-const lock = lockDirFor(ledgerPaths(options.stateDir).root, "writer.lock");
+const namedRoot = resolveStateRoot({
+  argv: process.argv.slice(2),
+  valueFlags: ["--state-dir"],
+});
+const options = parseArguments(namedRoot.rest);
+// The explicit `--state-dir` flag outranks the positional/env form; both are
+// the operator naming a root, and the flag is the older, unambiguous spelling.
+const stateDir = options.stateDir ?? namedRoot.stateDir;
+const stateRootSource = options.stateDir ? "flag" : namedRoot.source;
+if (!stateDir) {
+  process.stderr.write(`${STATE_DIR_NOT_NAMED}\n`);
+  process.exit(2);
+}
+const lock = lockDirFor(ledgerPaths(stateDir).root, "writer.lock");
 const report = {
-  state_dir: options.stateDir,
+  state_dir: stateDir,
+  ...rootDisclosure(stateDir, stateRootSource),
   lock_present: false,
   owner_entry: "ABSENT",
   owner_pid: null,

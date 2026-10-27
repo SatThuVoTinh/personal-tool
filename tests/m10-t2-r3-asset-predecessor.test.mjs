@@ -182,7 +182,7 @@ const HYGIENE_ASSET_PREDECESSORS = Object.freeze({
 // unlisted and the digest below is the current build, accepted by content
 // comparison.
 const CURRENT_ENTRYPOINT_SHA256 =
-  "75764d46e7f06cc0f4525dd26359236b558cb46ee3f226ae1427c8f1e86d5c9f";
+  "705b893377c9753e61d41402c953915ccd07765f37d5109c146c888cba7d30de";
 
 const identifiers = Object.freeze({
   discordGuildId: "123456789012345678",

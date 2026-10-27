@@ -52,7 +52,7 @@ import {
   SkillAdapter,
 } from "../zink-tools/adapters/skill-store/skill-adapter.mjs";
 
-import { promoteApprovedSkill } from "../zink-skill-store/src/catalog.mjs";
+import { promoteApprovedSkillWithLock } from "../zink-skill-store/src/catalog.mjs";
 import { validateArtifactLogicalPath } from "../zink-tools/common/path-safety.mjs";
 import { R2StorageAdapter } from "../zink-tools/adapters/storage/r2-adapter.mjs";
 import {
@@ -1816,7 +1816,7 @@ describe("F-186 (R5-E06-06) - a bounded result must say what bound it hit", () =
 describe("F-204 (R1-A10-07) - the shapes the zink-tools lint gap hid", () => {
   const f204Fixture = async () => {
     const skillsRoot = await mkdtemp(path.join(os.tmpdir(), "f204-"));
-    await promoteApprovedSkill({
+    await promoteApprovedSkillWithLock({
       skillsRoot,
       namespace: ["automation"],
       capability: "data-clean",

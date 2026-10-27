@@ -733,22 +733,30 @@ export function persistTransactionSnapshot(
     // Never silently replace a transaction. A leftover directory is an orphan
     // the caller must resolve with an explicit recovery decision.
     throw new Error("TRANSACTION_ALREADY_EXISTS");
-  mkdirSync(directory, { mode: 0o700 });
-  chmodSync(directory, 0o700);
-
-  // M12/T9: the preimage directory is created HERE, before the per-file loop.
-  // It used to be created only inside that loop, so a snapshot whose files all
-  // did not exist left the directory missing and `syncDirectory` below opened a
-  // directory that was not there — a FIRST apply against an empty state root
-  // could not take a transaction at all, which is the live fresh-install path.
-  mkdirSync(path.join(directory, PREIMAGE_DIR), {
-    recursive: true,
-    mode: 0o700,
-  });
 
   const files = {};
   let loaded;
+  // F-416: the directory creation, its chmod and the preimage mkdir all run
+  // INSIDE the cleanup scope. Before this, a throw from any of them stranded a
+  // record-less transaction directory that `findOrphanedTransaction` reports
+  // unreadable and every later apply refuses. `created` keeps the cleanup from
+  // deleting a directory this call did not make (a concurrent mkdir race).
+  let created = false;
   try {
+    mkdirSync(directory, { mode: 0o700 });
+    created = true;
+    chmodSync(directory, 0o700);
+
+    // M12/T9: the preimage directory is created HERE, before the per-file loop.
+    // It used to be created only inside that loop, so a snapshot whose files all
+    // did not exist left the directory missing and `syncDirectory` below opened a
+    // directory that was not there — a FIRST apply against an empty state root
+    // could not take a transaction at all, which is the live fresh-install path.
+    mkdirSync(path.join(directory, PREIMAGE_DIR), {
+      recursive: true,
+      mode: 0o700,
+    });
+
     for (const [relative, entry] of Object.entries(snapshot.files)) {
       if (!entry.existed) {
         files[relative] = { existed: false, sha256: null, mode: null };
@@ -802,8 +810,10 @@ export function persistTransactionSnapshot(
     // F-409: a throw between the mkdir and the record write used to strand a
     // directory that is neither a transaction nor empty; findOrphanedTransaction
     // reports it unreadable and every later apply refuses. The directory was
-    // created by this call, so it is removed rather than left behind.
-    rmSync(directory, { recursive: true, force: true });
+    // created by this call, so it is removed rather than left behind. F-416:
+    // only a directory this call actually made may be removed, so a concurrent
+    // mkdir race cannot turn cleanup into someone else's data loss.
+    if (created) rmSync(directory, { recursive: true, force: true });
     throw error;
   }
   if (loaded.status !== TRANSACTION_STATUS.STARTED)

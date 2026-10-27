@@ -66,6 +66,41 @@ def _split(dsn: str) -> dict[str, object]:
     }
 
 
+SERVICE_ANN_SETTINGS = (
+    "SET LOCAL hnsw.iterative_scan = strict_order",
+    "SET LOCAL hnsw.ef_search = 100",
+    "SET LOCAL hnsw.max_scan_tuples = 20000",
+    "SET LOCAL hnsw.scan_mem_multiplier = 1",
+)
+
+
+class ProbeServiceFidelityTests(unittest.TestCase):
+    """The probe must measure the query the service actually issues.
+
+    The measurement is only evidence for F-167 if the ANN operand carries the
+    same query-scoped pgvector settings as `search_candidates`; a probe that
+    omits `iterative_scan`/`scan_mem_multiplier` measures a query shape the
+    service never uses. The ground-truth operand's index switch is pinned by
+    its exact PostgreSQL GUC name -- the misspelt one does not exist and would
+    fail the probe at run time.
+    """
+
+    def test_the_probe_issues_the_service_ann_settings(self) -> None:
+        service = (
+            Path(__file__).resolve().parents[1] / "app" / "database.py"
+        ).read_text(encoding="utf-8")
+        probe = Path(__file__).read_text(encoding="utf-8")
+        for statement in SERVICE_ANN_SETTINGS:
+            self.assertIn(statement, service)
+            self.assertIn(statement, probe)
+
+    def test_the_ground_truth_operand_disables_the_named_index_guc(self) -> None:
+        probe = Path(__file__).read_text(encoding="utf-8")
+        self.assertIn("SET LOCAL enable_indexscan = off", probe)
+        # Spelled in two pieces so this assertion does not pin itself.
+        self.assertNotIn("SET LOCAL enable" "indexscan = off", probe)
+
+
 def _vectors(count: int, seed: int) -> list[list[float]]:
     """A deterministic fixed set; the probe must compare like with like."""
 
@@ -246,13 +281,27 @@ class DenseBranchRecallProbe(unittest.IsolatedAsyncioTestCase):
             self.active_index_id,
         )
 
+    async def _apply_ann_settings(self) -> None:
+        """The exact query-scoped settings `search_candidates` issues.
+
+        F-167: the probe used to omit `iterative_scan` and
+        `scan_mem_multiplier`, so it measured a query shape the service never
+        runs. The static fidelity case above binds these two copies.
+        """
+
+        await self.connection.execute("SET LOCAL hnsw.iterative_scan = strict_order")
+        await self.connection.execute("SET LOCAL hnsw.ef_search = 100")
+        await self.connection.execute("SET LOCAL hnsw.max_scan_tuples = 20000")
+        await self.connection.execute("SET LOCAL hnsw.scan_mem_multiplier = 1")
+
     async def _ann_ids(self, index_id: str, vector: list[float]) -> set[str]:
         """The dense branch of `search_candidates`, verbatim in its settings."""
 
         literal = "[" + ",".join(format(value, ".17g") for value in vector) + "]"
-        async with self.connection.transaction():
-            await self.connection.execute("SET LOCAL hnsw.ef_search = 100")
-            await self.connection.execute("SET LOCAL hnsw.max_scan_tuples = 20000")
+        async with self.connection.transaction(
+            isolation="repeatable_read", readonly=True
+        ):
+            await self._apply_ann_settings()
             rows = await self.connection.fetch(
                 """
                 WITH ann AS MATERIALIZED (
@@ -275,8 +324,10 @@ class DenseBranchRecallProbe(unittest.IsolatedAsyncioTestCase):
         """Ground truth: the same LIMIT without the ANN index."""
 
         literal = "[" + ",".join(format(value, ".17g") for value in vector) + "]"
-        async with self.connection.transaction():
-            await self.connection.execute("SET LOCAL enableindexscan = off")
+        async with self.connection.transaction(
+            isolation="repeatable_read", readonly=True
+        ):
+            await self.connection.execute("SET LOCAL enable_indexscan = off")
             rows = await self.connection.fetch(
                 """
                 SELECT segments.id
@@ -291,6 +342,25 @@ class DenseBranchRecallProbe(unittest.IsolatedAsyncioTestCase):
                 ["MARKDOWN_PASSAGE"],
             )
         return {str(row["id"]) for row in rows}
+
+    async def _explain(self, index_id: str, vector: list[float]) -> object:
+        """`EXPLAIN (ANALYZE, BUFFERS)` of the service's own dense branch."""
+
+        literal = "[" + ",".join(format(value, ".17g") for value in vector) + "]"
+        async with self.connection.transaction(
+            isolation="repeatable_read", readonly=True
+        ):
+            await self._apply_ann_settings()
+            return await self.connection.fetch(
+                "EXPLAIN (ANALYZE, BUFFERS) "
+                "SELECT segments.id FROM knowledge.segments segments "
+                "WHERE segments.index_id = $1::uuid "
+                "AND segments.segment_type = ANY($2::text[]) "
+                "ORDER BY segments.embedding <=> $3::vector ASC LIMIT 40",
+                index_id,
+                ["MARKDOWN_PASSAGE"],
+                literal,
+            )
 
     async def test_candidate_recall_is_identical_with_and_without_a_shadow_clone(
         self,
@@ -314,16 +384,7 @@ class DenseBranchRecallProbe(unittest.IsolatedAsyncioTestCase):
 
         # The EXPLAIN (ANALYZE, BUFFERS) operand the row asks for, taken on the
         # clean graph first so the two plans can be compared line by line.
-        clean_plan = await self.connection.fetch(
-            "EXPLAIN (ANALYZE, BUFFERS) "
-            "SELECT segments.id FROM knowledge.segments segments "
-            "WHERE segments.index_id = $1::uuid "
-            "AND segments.segment_type = ANY($2::text[]) "
-            "ORDER BY segments.embedding <=> $3::vector ASC LIMIT 40",
-            active_id,
-            ["MARKDOWN_PASSAGE"],
-            "[" + ",".join(format(v, ".17g") for v in queries[0]) + "]",
-        )
+        clean_plan = await self._explain(active_id, queries[0])
 
         await self._clone_under_a_shadow_index(shadow_id)
         # Without this the comparison is vacuous: a clone that inserted nothing
@@ -345,16 +406,7 @@ class DenseBranchRecallProbe(unittest.IsolatedAsyncioTestCase):
             found = await self._ann_ids(active_id, vector)
             shadow_recall.append(len(truth & found) / len(truth))
 
-        shadow_plan = await self.connection.fetch(
-            "EXPLAIN (ANALYZE, BUFFERS) "
-            "SELECT segments.id FROM knowledge.segments segments "
-            "WHERE segments.index_id = $1::uuid "
-            "AND segments.segment_type = ANY($2::text[]) "
-            "ORDER BY segments.embedding <=> $3::vector ASC LIMIT 40",
-            active_id,
-            ["MARKDOWN_PASSAGE"],
-            "[" + ",".join(format(v, ".17g") for v in queries[0]) + "]",
-        )
+        shadow_plan = await self._explain(active_id, queries[0])
 
         # The second read-only operand: the per-index segment census, which is
         # what shows the duplicate copies the graph is carrying.

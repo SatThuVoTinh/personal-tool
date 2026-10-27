@@ -388,6 +388,11 @@ describe("V16 — the packaging rewriter cannot rewrite its own specification", 
           "native-boundary",
         ].map((n) => repoFile(`integrations/openclaw/topology/lib/${n}.mjs`)),
         "lib/policy.mjs": [repoFile("integrations/openclaw/lib/policy.mjs")],
+        // F-459: the artifact scanner imports the canonical SQL mask from the
+        // packaged `zink-tools/` subtree.
+        "lib/artifact-validator.mjs": [
+          repoFile("integrations/openclaw/lib/artifact-validator.mjs"),
+        ],
         entrypoint: [
           repoFile("integrations/openclaw/plugins/zink-governance/index.mjs"),
         ],
@@ -397,7 +402,12 @@ describe("V16 — the packaging rewriter cannot rewrite its own specification", 
       assert.ok(targets.length > 0, "the rewrite table must not be empty");
       // Mechanical coverage: every target the packager can rewrite is declared,
       // so a future inline replaceAll cannot bypass the table unnoticed.
-      for (const expected of ["topology/lib", "lib/policy.mjs", "entrypoint"])
+      for (const expected of [
+        "topology/lib",
+        "lib/policy.mjs",
+        "lib/artifact-validator.mjs",
+        "entrypoint",
+      ])
         assert.ok(
           targets.includes(expected),
           `${expected} must be governed by the rewrite table`,

@@ -1372,6 +1372,7 @@ describe("M12/T9 F-244 — a verdict is recorded only where it was observed", ()
   const OWNER = "123456789012345678";
   const APPROVALS_CHANNEL = "1545471797452087390";
   const FOREIGN_CHANNEL = "1545430000000000123";
+  const APPROVAL_THREAD = "1545471797452087391";
 
   function seed(root) {
     const paths = ledgerPaths(root);
@@ -1395,6 +1396,15 @@ describe("M12/T9 F-244 — a verdict is recorded only where it was observed", ()
       agent_id: "main",
       session_key: "main-session",
       run_id: "main-run",
+    });
+    // M12/T9 F-529: the durable record of the surfaced card is LOAD-BEARING for
+    // an APPROVE against a recorded request, and the decision must name the
+    // thread the card was surfaced in. The fixture records it the way
+    // tests/agent-owner-F-123.test.mjs does.
+    recordWorkflowEvent(paths, "WORKFLOW_APPROVAL_SURFACED", {
+      task_id: taskId,
+      channel: "approvals",
+      thread_id: APPROVAL_THREAD,
     });
     return { paths, taskId };
   }
@@ -1456,8 +1466,9 @@ describe("M12/T9 F-244 — a verdict is recorded only where it was observed", ()
           messageId: "1556249093729427461",
           senderId: OWNER,
           channelId: APPROVALS_CHANNEL,
+          threadId: APPROVAL_THREAD,
         },
-        { channelId: APPROVALS_CHANNEL },
+        { channelId: APPROVALS_CHANNEL, threadId: APPROVAL_THREAD },
       );
       assert.notEqual(
         readFileSync(paths.events, "utf8"),

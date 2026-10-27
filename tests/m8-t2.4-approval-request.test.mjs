@@ -49,6 +49,18 @@ const OPENED = {
   root_run_id: "root-run",
 };
 
+// M12/T9 F-529: the approvals thread a surfaced card is recorded in. An
+// APPROVE against a recorded request now requires the durable SURFACED record
+// and must name this thread (the tests/agent-owner-F-123.test.mjs fixture
+// pattern).
+const APPROVAL_THREAD = "900000000000000031";
+
+const surfaced = (taskId) => ({
+  task_id: taskId,
+  channel: "approvals",
+  thread_id: APPROVAL_THREAD,
+});
+
 function lineage(tag) {
   const root = mkdtempSync(path.join(os.tmpdir(), `r6-${tag}-`));
   const paths = ledgerPaths(root);
@@ -354,6 +366,13 @@ describe("R6 — approval semantics through the deployed plugin", () => {
         "WORKFLOW_APPROVAL_REQUESTED",
         request(taskId),
       );
+      // M12/T9 F-529: the surfaced record is load-bearing — without it the
+      // APPROVE is now denied with APPROVAL_SURFACE_RECORD_REQUIRED.
+      recordWorkflowEvent(
+        h.paths,
+        "WORKFLOW_APPROVAL_SURFACED",
+        surfaced(taskId),
+      );
       const res = (
         await import("../integrations/openclaw/plugins/zink-governance/index.mjs")
       ).handleDiscordAction({
@@ -362,6 +381,7 @@ describe("R6 — approval semantics through the deployed plugin", () => {
         taskId,
         action: "APPROVE",
         paths: h.paths,
+        data: { threadId: APPROVAL_THREAD },
       });
       assert.equal(res.allowed, true, `expected allow, got ${res.reason}`);
       const task = readSnapshot(h.paths).tasks[taskId];
@@ -414,12 +434,21 @@ describe("R6 — approval semantics through the deployed plugin", () => {
         "WORKFLOW_APPROVAL_REQUESTED",
         request(taskId),
       );
+      // M12/T9 F-529: the first APPROVE is only admissible with the durable
+      // record of the surfaced card; the duplicate below must then be refused
+      // by the STATE guard, not by the record requirement.
+      recordWorkflowEvent(
+        h.paths,
+        "WORKFLOW_APPROVAL_SURFACED",
+        surfaced(taskId),
+      );
       const dup = mod.handleDiscordAction({
         actor: "user",
         channel: "approvals",
         taskId,
         action: "APPROVE",
         paths: h.paths,
+        data: { threadId: APPROVAL_THREAD },
       });
       mod.handleDiscordAction({
         actor: "user",
@@ -427,6 +456,7 @@ describe("R6 — approval semantics through the deployed plugin", () => {
         taskId,
         action: "APPROVE",
         paths: h.paths,
+        data: { threadId: APPROVAL_THREAD },
       });
       const second = mod.handleDiscordAction({
         actor: "user",
@@ -434,6 +464,7 @@ describe("R6 — approval semantics through the deployed plugin", () => {
         taskId,
         action: "APPROVE",
         paths: h.paths,
+        data: { threadId: APPROVAL_THREAD },
       });
       assert.equal(dup.allowed, true);
       assert.equal(second.allowed, false, "duplicate approve must be refused");

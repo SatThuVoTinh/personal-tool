@@ -126,7 +126,7 @@ export function validateSqlQuery(query, parameters = []) {
   return true;
 }
 
-function tokenizeSql(sql) {
+export function tokenizeSql(sql) {
   const tokens = [];
   let i = 0;
   const n = sql.length;
@@ -369,6 +369,98 @@ function tokenizeSql(sql) {
   }
 
   return tokens;
+}
+
+/**
+ * F-459 (R9-T08-1): the ONE SQL mask both artifact decisions read.
+ *
+ * The artifact gate used to apply its `UNSAFE_SQL` pattern to the raw file text
+ * and to count brackets with a hand-rolled backslash-parity quote toggle. That
+ * scanner disagreed with the canonical lexer in both directions: it refused a
+ * benign `'DROP DATABASE'` string (over-reject) while it accepted a backslash
+ * escape and miscounted an apostrophe inside a `--` comment as an unclosed
+ * literal (under-reject and a false `MALFORMED_SQL_SYNTAX`).
+ *
+ * This mask blanks every single-quoted literal, `--` line comment and
+ * `/* ... *\/` block comment at its own length, so neither a keyword nor a
+ * bracket inside data can be read as syntax, and it reports the file-level
+ * refusals the canonical lexer would make: an unterminated literal or comment,
+ * and a backslash escape inside a literal (`tokenizeSql` throws
+ * `SQL_UNSUPPORTED_SYNTAX` for that). Comments are MASKED rather than refused
+ * because the artifact gate validates a FILE, and the canonical file analyzer
+ * (`validateSqlFileContent`) strips them: a migration carrying an apostrophe
+ * inside a comment is valid input, not malformed SQL.
+ *
+ * It lives in THIS module, not in the artifact gate, so the artifact scanner
+ * and the canonical validator share one implementation instead of growing two
+ * dialects. The owner authorized the resulting static edge on 2026-10-25;
+ * `integrations/openclaw/lib/policy.mjs` rewrites the repository-relative
+ * import for the deployed tree.
+ *
+ * @param {string} content raw SQL file text
+ * @returns {{ masked: string, unterminatedLiteral: boolean, unterminatedComment: boolean, backslashInLiteral: boolean }}
+ */
+export function maskSqlLiteralsAndComments(content) {
+  const text = typeof content === "string" ? content : "";
+  let masked = "";
+  let unterminatedLiteral = false;
+  let unterminatedComment = false;
+  let backslashInLiteral = false;
+  let i = 0;
+  const blank = (from, to) => " ".repeat(to - from);
+  while (i < text.length) {
+    const ch = text[i];
+    // `--` line comment: blank the body, keep the newline for the next pass.
+    if (ch === "-" && text[i + 1] === "-") {
+      let end = text.indexOf("\n", i);
+      if (end === -1) end = text.length;
+      masked += blank(i, end);
+      i = end;
+      continue;
+    }
+    // `/* ... */` block comment.
+    if (ch === "/" && text[i + 1] === "*") {
+      const close = text.indexOf("*/", i + 2);
+      if (close === -1) {
+        unterminatedComment = true;
+        masked += blank(i, text.length);
+        i = text.length;
+      } else {
+        masked += blank(i, close + 2);
+        i = close + 2;
+      }
+      continue;
+    }
+    // Single-quoted literal: emit an empty `''` placeholder, one quote pair.
+    if (ch === "'") {
+      masked += "''";
+      i += 1;
+      let closed = false;
+      while (i < text.length) {
+        if (text[i] === "\\") backslashInLiteral = true;
+        if (text[i] === "'") {
+          if (text[i + 1] === "'") {
+            i += 2;
+            continue;
+          }
+          closed = true;
+          i += 1;
+          break;
+        }
+        i += 1;
+      }
+      if (!closed) unterminatedLiteral = true;
+      continue;
+    }
+    masked += ch;
+    i += 1;
+  }
+  return {
+    masked,
+    unterminatedLiteral,
+    unterminatedComment,
+    backslashInLiteral,
+  };
 }
 
 function parseAndValidateSelect(tokens, parameters) {

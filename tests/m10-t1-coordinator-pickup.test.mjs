@@ -1134,9 +1134,14 @@ test("F-070: an orphaned writer lock fails the preflight, not only the apply", a
       /Ledger writer unavailable/u,
       "the refusal keeps the wording the operator report already knows",
     );
+    // M12/T9 F-577: the commit seam is phase-classified now. The orphaned
+    // lock makes the writer refuse with FILE_LOCK_BUSY before any journal
+    // byte moved, so the honest phase is NOT_ATTEMPTED — EXECUTION_STATE_UNKNOWN
+    // is reserved for a commit whose outcome cannot be known (ledger.mjs,
+    // withWriterLock).
     assert.throws(
       () => upgradeEmptyLegacyLedger(paths),
-      { code: "EXECUTION_STATE_UNKNOWN" },
+      { code: "LEDGER_COMMIT_NOT_ATTEMPTED", commitState: "NOT_ATTEMPTED" },
       "the apply path still refuses an orphaned writer lock",
     );
 

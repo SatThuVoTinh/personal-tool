@@ -8,7 +8,7 @@
 //    byte ceilings bind every model-visible read identically.
 // 2. The derived vector index could serve indefinitely stale rows: the
 //    freshness helper existed but was never wired into search.
-// 3. promoteApprovedSkill — the sole canonical writer — had no lock, so two
+// 3. promoteApprovedSkillWithLock — the sole canonical writer — had no lock, so two
 //    concurrent promotions could interleave heal/clash-check/stage/rename.
 // 4. handleOwnerSkillApproval defaulted its provenance decisionRef to a stale
 //    plan revision, and promotion references were hardcoded rather than bound
@@ -52,7 +52,7 @@ const PLUGIN_PATH = path.join(
 );
 
 const {
-  promoteApprovedSkill,
+  promoteApprovedSkillWithLock,
   promoteApprovedSkillUnlocked,
   withSkillStoreWriterLock,
   skillStoreWriterLockDir,
@@ -223,7 +223,7 @@ test("M11-04: concurrent in-process promotions serialize; one ACTIVE, one confli
   const { root, skillsRoot } = await freshRoots();
   try {
     const settled = await Promise.allSettled([
-      promoteApprovedSkill({
+      promoteApprovedSkillWithLock({
         skillsRoot,
         namespace: ["office"],
         capability: "race-skill",
@@ -232,7 +232,7 @@ test("M11-04: concurrent in-process promotions serialize; one ACTIVE, one confli
         requestingActor: "excel",
         decisionRef: "PLAN:M11/T1-R1",
       }),
-      promoteApprovedSkill({
+      promoteApprovedSkillWithLock({
         skillsRoot,
         namespace: ["office"],
         capability: "race-skill",
@@ -267,7 +267,7 @@ test("M11-05: cross-process promotions under contention yield ACTIVE + ALREADY_A
 const [catalogArg, skillsRootArg] = process.argv.slice(2);
 const mod = await import(pathToFileURL(catalogArg).href);
 try {
-  const result = await mod.promoteApprovedSkill({
+  const result = await mod.promoteApprovedSkillWithLock({
     skillsRoot: skillsRootArg,
     namespace: ["office"],
     capability: "xproc-race",
@@ -459,7 +459,7 @@ test("M11-08: a bare slug present under two namespaces is SKILL_ID_AMBIGUOUS", a
   const { root, skillsRoot } = await freshRoots();
   try {
     for (const ns of ["office", "data"]) {
-      await promoteApprovedSkill({
+      await promoteApprovedSkillWithLock({
         skillsRoot,
         namespace: [ns],
         capability: "amb-skill",
@@ -486,7 +486,7 @@ test("M11-08: a bare slug present under two namespaces is SKILL_ID_AMBIGUOUS", a
     });
     assert.match(qualified.skill_content.content, /office ambiguous/u);
     // A single-namespace bare slug keeps working.
-    await promoteApprovedSkill({
+    await promoteApprovedSkillWithLock({
       skillsRoot,
       namespace: ["research"],
       capability: "solo-skill",
@@ -512,7 +512,7 @@ test("M11-09: a duplicate-key manifest is rejected by the promote replay probe",
   const { root, skillsRoot } = await freshRoots();
   try {
     const content = "# Dup Key\n\napproved bytes\n";
-    await promoteApprovedSkill({
+    await promoteApprovedSkillWithLock({
       skillsRoot,
       namespace: ["office"],
       capability: "dup-key",
@@ -539,7 +539,7 @@ test("M11-09: a duplicate-key manifest is rejected by the promote replay probe",
     // Lax JSON.parse (last-key-wins) would have answered ALREADY_ACTIVE here.
     await assert.rejects(
       () =>
-        promoteApprovedSkill({
+        promoteApprovedSkillWithLock({
           skillsRoot,
           namespace: ["office"],
           capability: "dup-key",
@@ -742,7 +742,7 @@ test("F-064: read/apply/validate resolve the ACTIVE version when a superseded on
 test("F-095: the governed retirement withdraws the wrong version and the successor promotes", async () => {
   const { root, skillsRoot } = await freshRoots();
   try {
-    await promoteApprovedSkill({
+    await promoteApprovedSkillWithLock({
       skillsRoot,
       namespace: ["office"],
       capability: "wrong-skill",
@@ -755,7 +755,7 @@ test("F-095: the governed retirement withdraws the wrong version and the success
     // While the wrong version is ACTIVE, its successor is refused.
     await assert.rejects(
       () =>
-        promoteApprovedSkill({
+        promoteApprovedSkillWithLock({
           skillsRoot,
           namespace: ["office"],
           capability: "wrong-skill",
@@ -801,7 +801,7 @@ test("F-095: the governed retirement withdraws the wrong version and the success
     );
 
     // The successor promotes now.
-    const promoted = await promoteApprovedSkill({
+    const promoted = await promoteApprovedSkillWithLock({
       skillsRoot,
       namespace: ["office"],
       capability: "wrong-skill",
@@ -822,7 +822,7 @@ test("F-095: the governed retirement withdraws the wrong version and the success
 test("F-095: the retirement refuses an unlocked call, an unknown version and a version that is not ACTIVE", async () => {
   const { root, skillsRoot } = await freshRoots();
   try {
-    await promoteApprovedSkill({
+    await promoteApprovedSkillWithLock({
       skillsRoot,
       namespace: ["office"],
       capability: "guarded-skill",

@@ -21,19 +21,19 @@ export const MOTHERDUCK_MAX_ROWS = 1000;
  * SIMULATION_CONTRACT: this adapter is a contract test double, NOT a live
  * MotherDuck integration. It opens no network connection, reads no credential, and
  * returns canned in-memory values. Any credential-shaped option it accepts is
- * stored and never used, which is not integration. A governed path must treat
+ * ignored rather than retained, which is not integration. A governed path must treat
  * its output as simulation and must never present it as provider execution.
  * Wiring a real provider requires a separately approved backend.
  */
 /**
  * Governed MotherDuck Adapter
  * Remote analytical SQL execution behind zink_sql capability.
+ *
+ * F-446 (R9-L07a-1): `options.token` used to be assigned to an instance field
+ * that no method read. It is accepted for caller compatibility and discarded;
+ * an adapter that does not authenticate must not hold a credential.
  */
 export class MotherDuckAdapter {
-  constructor(options = {}) {
-    this.token = options.token || null;
-  }
-
   /**
    * Executes a bounded remote query on MotherDuck.
    *

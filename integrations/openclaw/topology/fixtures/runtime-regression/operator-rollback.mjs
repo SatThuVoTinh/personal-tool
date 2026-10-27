@@ -45,15 +45,33 @@ import {
   assertNoSymlinkComponents,
   parseIdentifiers,
 } from "../../../lib/policy.mjs";
+import {
+  STATE_DIR_NOT_NAMED,
+  resolveStateRoot,
+  rootDisclosure,
+} from "./operator-state-root.mjs";
 
 // F-219: the machine-specific state root is NOT a literal. The operator
 // names it (ZINK_OPERATOR_STATE_DIR or the first argument) and the driver
 // refuses to run without one, exactly like live-governance-probe.mjs: a
 // driver that silently points at one operator's machine root says nothing
 // about any other, and a hardcoded root is what let these files drift.
-const stateDir = process.env.ZINK_OPERATOR_STATE_DIR ?? process.argv[2] ?? null;
+//
+// M12/T9 F-560 (R10-T07-6): the TYPED argument outranks an inherited
+// environment value. This is the most destructive operator command in the
+// repository, so a stale export in the operator's shell profile must never
+// decide which tree it dismantles, and every record it prints names the
+// resolved root by digest.
+//
+// M12/T9 F-556 (R10-T07-1): the positional root is consumed HERE, before the
+// strict flag parser, so the form this driver documents - a first argument that
+// names the root - reaches the gate instead of being reported as
+// `UNSUPPORTED_ARGUMENT`. The parser keeps the flags it owns.
+const stateRoot = resolveStateRoot({ argv: process.argv.slice(2) });
+const stateDir = stateRoot.stateDir;
+const stateRootSource = stateRoot.source;
 if (!stateDir) {
-  process.stderr.write("STATE_DIR_NOT_NAMED\n");
+  process.stderr.write(`${STATE_DIR_NOT_NAMED}\n`);
   process.exit(2);
 }
 const runtimeRoot = "/home/hoang_vinh/.local/lib/node_modules/openclaw";
@@ -98,6 +116,7 @@ function refuse(refusal, extra = {}) {
       action: "HISTORICAL_RECOVERY",
       isTransactionRollback: false,
       installed_mutation: false,
+      ...rootDisclosure(stateDir, stateRootSource),
       ...extra,
     })}\n`,
   );
@@ -114,7 +133,7 @@ function identifiers() {
 }
 
 try {
-  const { options, refusal } = parseRecoveryArguments(process.argv.slice(2));
+  const { options, refusal } = parseRecoveryArguments(stateRoot.rest);
   if (refusal) refuse(refusal);
 
   assertNoSymlinkComponents(authorizationPath);
@@ -127,8 +146,15 @@ try {
   });
   if (!verdict.proceed) refuse(verdict.refusal, { ...verdict });
 
-  // Disclose the target before anything is written.
-  process.stdout.write(`${JSON.stringify(verdict.disclosure)}\n`);
+  // Disclose the target before anything is written. M12/T9 F-560: the root
+  // this run resolved is part of that disclosure, so the operator can see that
+  // the tree about to be dismantled is the one they named.
+  process.stdout.write(
+    `${JSON.stringify({
+      ...verdict.disclosure,
+      ...rootDisclosure(stateDir, stateRootSource),
+    })}\n`,
+  );
 
   const values = identifiers();
   restoreNativePatch(nativeRoots, nativeBackup);
@@ -152,6 +178,7 @@ try {
       requestedTarget: options.target,
       runtime: "T1_RESTORED",
       isTransactionRollback: false,
+      ...rootDisclosure(stateDir, stateRootSource),
     })}\n`,
   );
 } catch (error) {
@@ -179,6 +206,7 @@ try {
         action: "HISTORICAL_RECOVERY",
         isTransactionRollback: false,
         installed_mutation: true,
+        ...rootDisclosure(stateDir, stateRootSource),
       })}\n`,
     );
     process.exitCode = 1;

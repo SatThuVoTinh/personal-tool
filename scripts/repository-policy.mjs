@@ -112,17 +112,17 @@ const SECRET_SCAN_ALLOWED_SCOPES = [
   {
     scope: "tests/",
     pattern: "^tests/.*",
-    measured: 294,
+    measured: 321,
   },
   {
     scope: "apps/knowledge/tests/",
     pattern: "^apps/knowledge/tests/.*",
-    measured: 36,
+    measured: 38,
   },
   {
     scope: "apps/knowledge/pdf-runtime/tests/",
     pattern: "^apps/knowledge/pdf-runtime/tests/.*",
-    measured: 1,
+    measured: 0,
   },
   {
     // The one file the allowlist names by path rather than by scope. It is
@@ -145,7 +145,12 @@ const SECRET_SCAN_ALLOWED_SCOPES = [
 // One more R4 band test (F-407) landed after that, so `tests/` carries 293 and
 // the total is 293 + 36 + 1 + 1 = 331. The F-402/F-405/F-406 lane is one more,
 // so `tests/` carries 294 and the total is 294 + 36 + 1 + 1 = 332.
-const SECRET_SCAN_SUPPRESSED_CEILING = 332;
+// Measured again on 2026-10-26 after the W1/W2 integration: 27 new
+// `tests/m12-t9-r4-*` lanes landed, two new `apps/knowledge/tests/` lanes
+// landed, and the deleted `pdf-runtime/tests/test_ocr_contract.py` left the
+// tree, so `tests/` carries 321, the KB tests 38, the PDF tests 0 and the
+// allowlisted README 1: 321 + 38 + 0 + 1 = 360.
+const SECRET_SCAN_SUPPRESSED_CEILING = 360;
 
 // The fingerprint half of the suppression record. A pattern suppresses a
 // family; a fingerprint suppresses one finding, and the finding has four

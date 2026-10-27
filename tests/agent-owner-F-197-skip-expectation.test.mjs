@@ -26,6 +26,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -164,6 +165,71 @@ test("F-197: every declared family carries its reason, and its lanes come from t
       `the lane \`${lane}\` declares two families`,
     );
     seen.set(lane, family);
+  }
+});
+
+test("F-481: the gate refuses a may-skip ceiling that covers its report denominator", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "zink-f481-"));
+  try {
+    const fixtureTests = path.join(root, "tests");
+    const fixtureScripts = path.join(root, "scripts");
+    const fixtureContracts = path.join(root, "docs", "contracts");
+    mkdirSync(fixtureTests, { recursive: true });
+    mkdirSync(fixtureScripts, { recursive: true });
+    mkdirSync(fixtureContracts, { recursive: true });
+
+    const tablePath = path.join(fixtureContracts, "ci-skip-expectations.json");
+    const gatePath = path.join(fixtureScripts, "skip-expectation-gate.mjs");
+    const reportPath = path.join(root, "report.xml");
+    const lane = "tests/postgres-fixture.test.mjs";
+    const fixtureTable = {
+      families: [
+        {
+          id: "postgres",
+          expectation: "may-skip",
+          maxSkips: 4,
+          reason: "this fixture models the four PostgreSQL cases",
+        },
+      ],
+    };
+    writeFileSync(tablePath, JSON.stringify(fixtureTable), "utf8");
+    writeFileSync(
+      path.join(fixtureTests, "postgres-fixture.test.mjs"),
+      "// SKIP-FAMILY: postgres\n",
+      "utf8",
+    );
+    writeFileSync(gatePath, readFileSync(GATE, "utf8"), "utf8");
+    const fixtureCases = Array.from({ length: 4 }, (_, index) => {
+      const attributes = `name="a postgres case ${index + 1}" time="0.1" classname="test" file="${path.join(root, lane)}"`;
+      return index < 3
+        ? `\t<testcase ${attributes}>\n\t\t<skipped type="skipped" message="crafted"/>\n\t</testcase>`
+        : `\t<testcase ${attributes}/>`;
+    }).join("\n");
+    writeFileSync(
+      reportPath,
+      `<?xml version="1.0" encoding="utf-8"?>\n<testsuites>\n${fixtureCases}\n</testsuites>\n`,
+      "utf8",
+    );
+
+    const environment = { ...process.env };
+    delete environment.CI;
+    const result = spawnSync(process.execPath, [gatePath, reportPath], {
+      cwd: root,
+      encoding: "utf8",
+      env: environment,
+    });
+    assert.notEqual(
+      result.status,
+      0,
+      `the gate must refuse maxSkips equal to the four-case denominator with CI unset: ${result.stdout}${result.stderr}`,
+    );
+    assert.match(
+      result.stderr,
+      /ceiling.*denominator|denominator.*ceiling/iu,
+      `the refusal must identify the non-discriminating ceiling: ${result.stderr}`,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

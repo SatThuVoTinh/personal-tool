@@ -15,18 +15,21 @@ export const KAGGLE_MAX_POLL_TIMEOUT_MS = 60000;
  * SIMULATION_CONTRACT: this adapter is a contract test double, NOT a live
  * Kaggle integration. It opens no network connection, reads no credential, and
  * returns canned in-memory values. Any credential-shaped option it accepts is
- * stored and never used, which is not integration. A governed path must treat
+ * ignored rather than retained, which is not integration. A governed path must treat
  * its output as simulation and must never present it as provider execution.
  * Wiring a real provider requires a separately approved backend.
  */
 /**
  * Governed Kaggle Compute Adapter
  * External compute trigger for batch model training or heavy data processing.
+ *
+ * F-446 (R9-L07a-1): `options.key` used to be assigned to an instance field
+ * that no method read. The username is descriptor data; the key is accepted
+ * for caller compatibility and discarded.
  */
 export class KaggleComputeAdapter {
   constructor(options = {}) {
     this.username = options.username || null;
-    this.key = options.key || null;
   }
 
   /**

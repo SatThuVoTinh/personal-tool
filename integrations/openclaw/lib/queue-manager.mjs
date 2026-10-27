@@ -670,15 +670,26 @@ export class QueueManager {
             leaseSeconds,
           });
         }
-        throw new Error(
+        // M12/T9 F-553 (R10-T06-5): the refusal carries its CODE as a member,
+        // not only as message prose. The pickup seam classified this error by
+        // running a regex over the message, so a reword of this line silently
+        // changed the owner-visible class. The message is unchanged.
+        const denied = new Error(
           `CONCURRENT_CLAIM_DENIED: Task ${taskId} is already claimed by ${item.claimedBy}`,
         );
+        denied.code = "CONCURRENT_CLAIM_DENIED";
+        throw denied;
       }
 
       if (item.status !== TASK_STATES.QUEUED) {
-        throw new Error(
+        // M12/T9 F-553 (R10-T06-5): same code-member rule as the concurrent
+        // refusal above — the pickup seam classifies by `code` first, and the
+        // message prefix survives only as the foreign-error fallback.
+        const invalid = new Error(
           `INVALID_STATE_TRANSITION: Cannot claim task in state ${item.status}`,
         );
+        invalid.code = "INVALID_STATE_TRANSITION";
+        throw invalid;
       }
 
       // M7-010: bind the claim to the authoritative assignment.

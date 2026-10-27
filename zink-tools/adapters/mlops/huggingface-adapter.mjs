@@ -13,19 +13,21 @@ export class HuggingFaceAdapterError extends Error {
  * SIMULATION_CONTRACT: this adapter is a contract test double, NOT a live
  * Hugging Face integration. It opens no network connection, reads no credential, and
  * returns canned in-memory values. Any credential-shaped option it accepts is
- * stored and never used, which is not integration. A governed path must treat
+ * ignored rather than retained, which is not integration. A governed path must treat
  * its output as simulation and must never present it as provider execution.
  * Wiring a real provider requires a separately approved backend.
  */
 /**
  * Governed Hugging Face Adapter
  * Evaluates external candidate models/datasets as untrusted inputs without automatic promotion.
+ *
+ * F-446 (R9-L07a-1): the constructor used to assign `options.apiToken` to an
+ * instance field no method ever read. A credential the adapter does not
+ * authenticate with is not a configuration knob — it is a value kept alive in
+ * process memory and in any serialization of the instance. The option is
+ * accepted (callers may forward a shared provider config) and discarded.
  */
 export class HuggingFaceAdapter {
-  constructor(options = {}) {
-    this.apiToken = options.apiToken || null;
-  }
-
   /**
    * Evaluates an external candidate model against an evaluation dataset.
    * Untrusted boundary: records checksum, provenance, evaluation metrics,

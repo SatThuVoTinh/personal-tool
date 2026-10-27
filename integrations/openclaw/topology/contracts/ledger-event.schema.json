@@ -681,6 +681,12 @@
                 "type": "integer",
                 "minimum": 1
               },
+              "idempotency_key": {
+                "description": "M12/T9 F-577 (R10-T12-1): OPTIONAL caller-supplied key that makes a retried reservation idempotent. The writer refuses to append a second BUDGET_RESERVED carrying a key already committed in the journal, so a retry after an uncertain commit cannot double-charge the budget. Absent on every event recorded before the member existed.",
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
               "counters": {
                 "$ref": "#/$defs/counters"
               }
@@ -1179,9 +1185,9 @@
                 "enum": ["approvals", "results"]
               },
               "decision": {
-                    "type": "string",
-                    "enum": ["APPROVE", "REJECT", "REQUEST_REVISION"]
-                  },
+                "type": "string",
+                "enum": ["APPROVE", "REJECT", "REQUEST_REVISION"]
+              },
               "message_id": {
                 "type": ["string", "null"],
                 "pattern": "^[1-9][0-9]{16,19}$"

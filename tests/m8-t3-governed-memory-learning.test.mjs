@@ -39,13 +39,13 @@ describe("M8/T3 governed memory learning loop â€” contract parity", () => {
 
 describe("M8/T3 canonical Skill Store writer", () => {
   test("T2a: promotes exact approved bytes to ACTIVE with valid catalog", async () => {
-    const { promoteApprovedSkill } =
+    const { promoteApprovedSkillWithLock } =
       await import("../zink-skill-store/src/catalog.mjs");
     const { scanCatalog } = await import("../zink-skill-store/src/catalog.mjs");
     const tmp = await mkdtemp(path.join(os.tmpdir(), "zink-writer-"));
     try {
       const content = "# VLOOKUP Guide\n\nUse =VLOOKUP(A1, B:C, 2, FALSE).";
-      const res = await promoteApprovedSkill({
+      const res = await promoteApprovedSkillWithLock({
         skillsRoot: path.join(tmp, "skills"),
         namespace: ["office"],
         capability: "vlookup-guide",
@@ -72,13 +72,13 @@ describe("M8/T3 canonical Skill Store writer", () => {
   });
 
   test("T2b: identical repeat approval is idempotent, conflicting bytes are denied", async () => {
-    const { promoteApprovedSkill } =
+    const { promoteApprovedSkillWithLock } =
       await import("../zink-skill-store/src/catalog.mjs");
     const tmp = await mkdtemp(path.join(os.tmpdir(), "zink-writer-idem-"));
     try {
       const content = "# DAX Tuning\n\nUse KEEPFILTERS.";
       const skillsRoot = path.join(tmp, "skills");
-      const first = await promoteApprovedSkill({
+      const first = await promoteApprovedSkillWithLock({
         skillsRoot,
         namespace: ["data"],
         capability: "dax-tuning",
@@ -88,7 +88,7 @@ describe("M8/T3 canonical Skill Store writer", () => {
         decisionRef: "PLAN:M8/T3-R1",
       });
       assert.equal(first.status, "ACTIVE");
-      const second = await promoteApprovedSkill({
+      const second = await promoteApprovedSkillWithLock({
         skillsRoot,
         namespace: ["data"],
         capability: "dax-tuning",
@@ -100,7 +100,7 @@ describe("M8/T3 canonical Skill Store writer", () => {
       assert.equal(second.status, "ALREADY_ACTIVE");
       await assert.rejects(
         () =>
-          promoteApprovedSkill({
+          promoteApprovedSkillWithLock({
             skillsRoot,
             namespace: ["data"],
             capability: "dax-tuning",
@@ -113,7 +113,7 @@ describe("M8/T3 canonical Skill Store writer", () => {
       );
       await assert.rejects(
         () =>
-          promoteApprovedSkill({
+          promoteApprovedSkillWithLock({
             skillsRoot,
             namespace: ["data"],
             capability: "dax-tuning",
@@ -130,13 +130,13 @@ describe("M8/T3 canonical Skill Store writer", () => {
   });
 
   test("T2c: invalid decision_ref and unsafe identity are rejected", async () => {
-    const { promoteApprovedSkill } =
+    const { promoteApprovedSkillWithLock } =
       await import("../zink-skill-store/src/catalog.mjs");
     const tmp = await mkdtemp(path.join(os.tmpdir(), "zink-writer-neg-"));
     try {
       await assert.rejects(
         () =>
-          promoteApprovedSkill({
+          promoteApprovedSkillWithLock({
             skillsRoot: path.join(tmp, "skills"),
             namespace: ["office"],
             capability: "bad-ref",
@@ -149,7 +149,7 @@ describe("M8/T3 canonical Skill Store writer", () => {
       );
       await assert.rejects(
         () =>
-          promoteApprovedSkill({
+          promoteApprovedSkillWithLock({
             skillsRoot: path.join(tmp, "skills"),
             namespace: ["office"],
             capability: "../../escape",
@@ -166,14 +166,14 @@ describe("M8/T3 canonical Skill Store writer", () => {
   });
 
   test("T2d: post-approval tampering with canonical bytes is reported as drift", async () => {
-    const { promoteApprovedSkill } =
+    const { promoteApprovedSkillWithLock } =
       await import("../zink-skill-store/src/catalog.mjs");
     const { writeFile } = await import("node:fs/promises");
     const tmp = await mkdtemp(path.join(os.tmpdir(), "zink-writer-drift-"));
     const skillsRoot = path.join(tmp, "skills");
     try {
       const content = "# Guide\n\nOriginal bytes.";
-      await promoteApprovedSkill({
+      await promoteApprovedSkillWithLock({
         skillsRoot,
         namespace: ["office"],
         capability: "drift-watch",
@@ -189,7 +189,7 @@ describe("M8/T3 canonical Skill Store writer", () => {
       );
       await assert.rejects(
         () =>
-          promoteApprovedSkill({
+          promoteApprovedSkillWithLock({
             skillsRoot,
             namespace: ["office"],
             capability: "drift-watch",
@@ -252,7 +252,7 @@ describe("M8/T3 canonical Skill Store writer", () => {
   });
 
   test("T2f: interrupted publication leaves no ACTIVE skill and heals on retry", async () => {
-    const { promoteApprovedSkill, scanCatalog } =
+    const { promoteApprovedSkillWithLock, scanCatalog } =
       await import("../zink-skill-store/src/catalog.mjs");
     const { mkdir, writeFile, readdir } = await import("node:fs/promises");
     const tmp = await mkdtemp(path.join(os.tmpdir(), "zink-crash-"));
@@ -279,7 +279,7 @@ describe("M8/T3 canonical Skill Store writer", () => {
         "no partial publication may read as ACTIVE",
       );
       const content = "# Crash\n\nComplete bytes.";
-      const res = await promoteApprovedSkill({
+      const res = await promoteApprovedSkillWithLock({
         skillsRoot,
         namespace: ["office"],
         capability: "crash-skill",
@@ -301,7 +301,7 @@ describe("M8/T3 canonical Skill Store writer", () => {
   });
 
   test("T2g: staging residue from a killed promotion of another version does not block this one", async () => {
-    const { promoteApprovedSkill, scanCatalog } =
+    const { promoteApprovedSkillWithLock, scanCatalog } =
       await import("../zink-skill-store/src/catalog.mjs");
     const { mkdir } = await import("node:fs/promises");
     const tmp = await mkdtemp(path.join(os.tmpdir(), "zink-crash-cross-"));
@@ -336,7 +336,7 @@ describe("M8/T3 canonical Skill Store writer", () => {
       );
 
       const content = "# Cross\n\nComplete bytes under a different version.";
-      const res = await promoteApprovedSkill({
+      const res = await promoteApprovedSkillWithLock({
         skillsRoot,
         namespace: ["office"],
         capability: "cross-crash-skill",
@@ -370,14 +370,14 @@ describe("M8/T3 canonical Skill Store writer", () => {
   });
 
   test("T2g2: residue in one capability does not null the store, and the sweep is store-wide", async () => {
-    const { promoteApprovedSkill, scanCatalog, getActiveSkill } =
+    const { promoteApprovedSkillWithLock, scanCatalog, getActiveSkill } =
       await import("../zink-skill-store/src/catalog.mjs");
     const { mkdir } = await import("node:fs/promises");
     const tmp = await mkdtemp(path.join(os.tmpdir(), "zink-residue-reader-"));
     const skillsRoot = path.join(tmp, "skills");
     try {
       // A healthy, readable skill ...
-      const promoted = await promoteApprovedSkill({
+      const promoted = await promoteApprovedSkillWithLock({
         skillsRoot,
         namespace: ["office"],
         capability: "reader-skill",
@@ -415,7 +415,7 @@ describe("M8/T3 canonical Skill Store writer", () => {
 
       // A promotion into a DIFFERENT capability is not blocked by the residue,
       // and it sweeps it.
-      const second = await promoteApprovedSkill({
+      const second = await promoteApprovedSkillWithLock({
         skillsRoot,
         namespace: ["office"],
         capability: "other-skill",
@@ -441,7 +441,7 @@ describe("M8/T3 canonical Skill Store writer", () => {
   });
 
   test("T2h: a version directory missing its content is healed, and a real conflict still is not", async () => {
-    const { promoteApprovedSkill, scanCatalog } =
+    const { promoteApprovedSkillWithLock, scanCatalog } =
       await import("../zink-skill-store/src/catalog.mjs");
     const { mkdir, writeFile } = await import("node:fs/promises");
     const tmp = await mkdtemp(path.join(os.tmpdir(), "zink-torn-"));
@@ -459,7 +459,7 @@ describe("M8/T3 canonical Skill Store writer", () => {
       );
 
       const content = "# Torn\n\nComplete pair written by the retry.";
-      const res = await promoteApprovedSkill({
+      const res = await promoteApprovedSkillWithLock({
         skillsRoot,
         namespace: ["office"],
         capability: "torn-skill",
@@ -480,7 +480,7 @@ describe("M8/T3 canonical Skill Store writer", () => {
       // genuine conflict and must stay one.
       await assert.rejects(
         () =>
-          promoteApprovedSkill({
+          promoteApprovedSkillWithLock({
             skillsRoot,
             namespace: ["office"],
             capability: "torn-skill",
@@ -511,7 +511,7 @@ describe("M8/T3 canonical Skill Store writer", () => {
   // lifecycle event, and a decision is still required for every status
   // beyond CANDIDATE — only the accepted id shape is widened to the plan's.
   test("F-098: a lifecycle event may cite the plan's own dotted task ids", async () => {
-    const { promoteApprovedSkill, scanCatalog } =
+    const { promoteApprovedSkillWithLock, scanCatalog } =
       await import("../zink-skill-store/src/catalog.mjs");
     const tmp = await mkdtemp(path.join(os.tmpdir(), "zink-dotted-task-"));
     const skillsRoot = path.join(tmp, "skills");
@@ -524,7 +524,7 @@ describe("M8/T3 canonical Skill Store writer", () => {
         "PLAN:M8/T3-R1",
       ]) {
         index += 1;
-        const res = await promoteApprovedSkill({
+        const res = await promoteApprovedSkillWithLock({
           skillsRoot,
           namespace: ["office"],
           capability: `dotted-skill-${index}`,
@@ -546,7 +546,7 @@ describe("M8/T3 canonical Skill Store writer", () => {
       ]) {
         await assert.rejects(
           () =>
-            promoteApprovedSkill({
+            promoteApprovedSkillWithLock({
               skillsRoot,
               namespace: ["office"],
               capability: "other-skill",
@@ -576,7 +576,7 @@ describe("M8/T3 canonical Skill Store writer", () => {
   // (2) The same record, whose manifest simply carries its provenance keys in
   // another order, IS the same governed act and must not be refused.
   test("F-168: the replay probe compares the actors and the provenance canonically", async () => {
-    const { promoteApprovedSkill } =
+    const { promoteApprovedSkillWithLock } =
       await import("../zink-skill-store/src/catalog.mjs");
     const { readFile, writeFile } = await import("node:fs/promises");
     const tmp = await mkdtemp(path.join(os.tmpdir(), "zink-actor-bind-"));
@@ -596,13 +596,14 @@ describe("M8/T3 canonical Skill Store writer", () => {
       ...overrides,
     });
     try {
-      const first = await promoteApprovedSkill(call());
+      const first = await promoteApprovedSkillWithLock(call());
       assert.equal(first.status, "ACTIVE");
 
       // (1) The same bytes under a different owner actor is NOT the same
       // governed act, and must be refused loudly.
       await assert.rejects(
-        () => promoteApprovedSkill(call({ ownerActor: "another-owner" })),
+        () =>
+          promoteApprovedSkillWithLock(call({ ownerActor: "another-owner" })),
         (error) => {
           assert.equal(error.code, "SKILL_VERSION_CONFLICT");
           return true;
@@ -611,7 +612,9 @@ describe("M8/T3 canonical Skill Store writer", () => {
       // The same, for the requesting actor.
       await assert.rejects(
         () =>
-          promoteApprovedSkill(call({ requestingActor: "another-requester" })),
+          promoteApprovedSkillWithLock(
+            call({ requestingActor: "another-requester" }),
+          ),
         (error) => {
           assert.equal(error.code, "SKILL_VERSION_CONFLICT");
           return true;
@@ -643,7 +646,7 @@ describe("M8/T3 canonical Skill Store writer", () => {
         ),
         "utf8",
       );
-      const again = await promoteApprovedSkill(call());
+      const again = await promoteApprovedSkillWithLock(call());
       assert.equal(
         again.status,
         "ALREADY_ACTIVE",
@@ -655,7 +658,7 @@ describe("M8/T3 canonical Skill Store writer", () => {
   });
 
   test("T2i: the same bytes under a second owner decision are a conflict, not ALREADY_ACTIVE", async () => {
-    const { promoteApprovedSkill, scanCatalog } =
+    const { promoteApprovedSkillWithLock, scanCatalog } =
       await import("../zink-skill-store/src/catalog.mjs");
     const tmp = await mkdtemp(path.join(os.tmpdir(), "zink-decision-bind-"));
     const skillsRoot = path.join(tmp, "skills");
@@ -670,10 +673,10 @@ describe("M8/T3 canonical Skill Store writer", () => {
       decisionRef,
     });
     try {
-      const first = await promoteApprovedSkill(call("PLAN:M8/T3-R1"));
+      const first = await promoteApprovedSkillWithLock(call("PLAN:M8/T3-R1"));
       assert.equal(first.status, "ACTIVE");
 
-      const replay = await promoteApprovedSkill(call("PLAN:M8/T3-R1"));
+      const replay = await promoteApprovedSkillWithLock(call("PLAN:M8/T3-R1"));
       assert.equal(
         replay.status,
         "ALREADY_ACTIVE",
@@ -681,7 +684,7 @@ describe("M8/T3 canonical Skill Store writer", () => {
       );
 
       await assert.rejects(
-        () => promoteApprovedSkill(call("PLAN:M8/T3-R2")),
+        () => promoteApprovedSkillWithLock(call("PLAN:M8/T3-R2")),
         (error) => {
           assert.equal(
             error.code,
@@ -718,7 +721,7 @@ describe("M8/T3 canonical Skill Store writer", () => {
   });
 
   test("T2j: a refusal to promote over a dirty catalog names the diagnostic it found", async () => {
-    const { promoteApprovedSkill } =
+    const { promoteApprovedSkillWithLock } =
       await import("../zink-skill-store/src/catalog.mjs");
     const { mkdir } = await import("node:fs/promises");
     const tmp = await mkdtemp(path.join(os.tmpdir(), "zink-named-cause-"));
@@ -729,7 +732,7 @@ describe("M8/T3 canonical Skill Store writer", () => {
       });
       await assert.rejects(
         () =>
-          promoteApprovedSkill({
+          promoteApprovedSkillWithLock({
             skillsRoot,
             namespace: ["office"],
             capability: "named-cause-skill",
@@ -754,7 +757,7 @@ describe("M8/T3 canonical Skill Store writer", () => {
   });
 
   test("T2k: the writer puts its cause in error.details, not only in prose", async () => {
-    const { promoteApprovedSkill } =
+    const { promoteApprovedSkillWithLock } =
       await import("../zink-skill-store/src/catalog.mjs");
     const { mkdir } = await import("node:fs/promises");
     const tmp = await mkdtemp(path.join(os.tmpdir(), "zink-details-"));
@@ -770,7 +773,7 @@ describe("M8/T3 canonical Skill Store writer", () => {
     };
     const refuse = async (overrides) => {
       try {
-        await promoteApprovedSkill({ ...base, ...overrides });
+        await promoteApprovedSkillWithLock({ ...base, ...overrides });
       } catch (error) {
         return error;
       }
@@ -823,7 +826,7 @@ describe("M8/T3 canonical Skill Store writer", () => {
   });
 
   test("T2l: a control byte in the body is a catalog error, but tab, LF and CR are not", async () => {
-    const { promoteApprovedSkill, scanCatalog } =
+    const { promoteApprovedSkillWithLock, scanCatalog } =
       await import("../zink-skill-store/src/catalog.mjs");
     const { mkdir, readdir, writeFile } = await import("node:fs/promises");
     const tmp = await mkdtemp(path.join(os.tmpdir(), "zink-ctrl-byte-"));
@@ -869,7 +872,7 @@ describe("M8/T3 canonical Skill Store writer", () => {
       // details channel `R3-5` added.
       await assert.rejects(
         () =>
-          promoteApprovedSkill({
+          promoteApprovedSkillWithLock({
             skillsRoot,
             namespace: ["office"],
             capability: "nul-writer-skill",
@@ -898,7 +901,7 @@ describe("M8/T3 canonical Skill Store writer", () => {
         [],
         "an empty capability directory is DIRECTORY_GRAMMAR_INVALID, which would fail the whole store closed",
       );
-      const survived = await promoteApprovedSkill({
+      const survived = await promoteApprovedSkillWithLock({
         skillsRoot,
         namespace: ["office"],
         capability: "after-refusal-skill",
@@ -2448,13 +2451,13 @@ describe("M8/T3 Discord separation and residual guarantees", () => {
   test("T8k: a search hit leads to canonical approved procedure reuse", async () => {
     const { SkillAdapter } =
       await import("../zink-tools/adapters/skill-store/skill-adapter.mjs");
-    const { promoteApprovedSkill } =
+    const { promoteApprovedSkillWithLock } =
       await import("../zink-skill-store/src/catalog.mjs");
     const root = await mkdtemp(path.join(os.tmpdir(), "zink-t8k-"));
     const skillsRoot = path.join(root, "skills");
     const content = "# Reuse Proof\n\nFollow these exact steps.";
     try {
-      await promoteApprovedSkill({
+      await promoteApprovedSkillWithLock({
         skillsRoot,
         namespace: ["excel"],
         capability: "reuse-proof",

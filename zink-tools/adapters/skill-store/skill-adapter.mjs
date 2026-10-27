@@ -31,6 +31,41 @@ export class SkillAdapterError extends Error {
   }
 }
 
+/**
+ * F-448 (R9-L07a-3) / F-555 (R10-T06-7): the sentences an agent-facing failure
+ * may carry.
+ *
+ * F-145 (R1-A14-08) applied this rule to the sibling knowledge adapter and
+ * `knowledge-adapter.mjs:893-907` records why: a Node fs error embeds the
+ * absolute path it tried to open, a JSON.parse SyntaxError quotes the upstream
+ * bytes, and a socket error names the host and port — all of them reached the
+ * caller, and therefore the model and the cards. This adapter re-serialised
+ * whatever the write helper threw instead, so the same class of operator
+ * topology left the module. The raw text is now sent only to a trusted sink
+ * (`options.onAdapterFailure` / `options.logger.warn`); the envelope, or the
+ * thrown SkillAdapterError, carries a fixed sentence and a code.
+ */
+const SKILL_FAILURE_SENTENCES = Object.freeze({
+  SKILL_ADAPTER_ERROR: "The Skill Store request could not be completed.",
+  SKILL_PROPOSAL_PERSIST_FAILED: "The skill proposal could not be persisted.",
+});
+
+function fixedFailureSentence(code) {
+  return (
+    SKILL_FAILURE_SENTENCES[code] ?? SKILL_FAILURE_SENTENCES.SKILL_ADAPTER_ERROR
+  );
+}
+
+/**
+ * The envelope sentence for a code. `SkillAdapterError` already prefixes the
+ * code in its constructor; the returned envelope is not an Error, so it names
+ * the same code itself. Either way the caller can tell WHICH failure it got
+ * (F-008's named refusals, R10-T06-1) while the prose stays fixed (F-555).
+ */
+function fixedFailureMessage(code) {
+  return `[${code}] ${fixedFailureSentence(code)}`;
+}
+
 const ALLOWED_ACTIONS = new Set([
   "discover",
   "read",
@@ -328,6 +363,27 @@ export class SkillAdapter {
       path.resolve(import.meta.dirname, "../../../zink-skill-store");
     this.skillsRoot = options.skillsRoot ?? path.join(this.root, "skills");
     this.options = options;
+  }
+
+  /**
+   * F-448 / F-555: route raw failure detail to a trusted sink only.
+   *
+   * The caller-facing failure carries a fixed sentence and a code; this helper
+   * is where the verbatim message (which may quote an absolute path, upstream
+   * body bytes or a host:port) is allowed to go. Both sinks are optional and
+   * are supplied by trusted runtime code, never by model input.
+   *
+   * @param {string} code
+   * @param {unknown} error
+   */
+  reportAdapterFailure(code, error) {
+    const detail = error?.stack || error?.message || String(error);
+    if (typeof this.options.onAdapterFailure === "function") {
+      this.options.onAdapterFailure({ code, error });
+    }
+    if (typeof this.options.logger?.warn === "function") {
+      this.options.logger.warn(`[${code}] ${detail}`);
+    }
   }
 
   async querySkillStore(input = {}, context = {}) {
@@ -715,6 +771,11 @@ export class SkillAdapter {
         // (Postgres' native timestamptz text carries a "+07"-style offset that
         // JS Date cannot reliably parse), and the marker row is consumed by
         // the freshness gate below before any row is served.
+        //
+        // F-434 (R9-T05-1): the marker above is a table-wide MAX and proves only
+        // that SOME row was synced recently. The rows below carry their own
+        // `synced_at`, and the gate refuses when the OLDEST returned row is
+        // past the SLA, so one re-synced skill cannot vouch for an aged one.
         const sql = `
           SELECT 'ZINK_FRESHNESS|' || COALESCE(
             to_char(max(synced_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
@@ -729,7 +790,8 @@ export class SkillAdapter {
             'primary_topic', c.primary_topic,
             'subtopic', c.subtopic,
             'content', s.content,
-            'score', (1 - (s.embedding <=> '${vectorStr}'::vector))
+            'score', (1 - (s.embedding <=> '${vectorStr}'::vector)),
+            'synced_at', to_char(c.synced_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
           )::text AS row_json
           FROM skills.segments s
           JOIN skills.catalog_index c ON s.skill_id = c.id
@@ -791,6 +853,10 @@ export class SkillAdapter {
                   subtopic: obj.subtopic || null,
                   content: obj.content,
                   score: scoreNum,
+                  // F-434: the stamp this row was actually synced at. The
+                  // table-wide marker above cannot bound an individual row.
+                  synced_at:
+                    typeof obj.synced_at === "string" ? obj.synced_at : null,
                 });
                 continue;
               } catch (e) {
@@ -811,6 +877,7 @@ export class SkillAdapter {
                 subtopicVal,
                 content,
                 scoreStr,
+                syncedAtVal = null,
               ] = parts;
 
               const scoreNum = parseFloat(scoreStr);
@@ -838,6 +905,10 @@ export class SkillAdapter {
                 subtopic: subtopicVal || null,
                 content,
                 score: scoreNum,
+                synced_at:
+                  typeof syncedAtVal === "string" && syncedAtVal.length > 0
+                    ? syncedAtVal
+                    : null,
               });
             }
           }
@@ -855,6 +926,42 @@ export class SkillAdapter {
             `SKILL_INDEX_STALE: derived skill index is not fresh (${freshness.reason}); refusing to serve possibly stale rows`,
             "SKILL_INDEX_STALE",
           );
+        }
+
+        // F-434 (R9-T05-1): the table-wide MAX above is necessary but not
+        // sufficient — one freshly re-synced skill makes the marker fresh for
+        // EVERY query. The rows this query returns carry their own stamp, and
+        // the OLDEST one decides, so a skill synced before the 7-day SLA can
+        // never be served because another skill was synced moments ago. The
+        // shipped SQL always projects the stamp; only a legacy stub response
+        // that carries none falls back to the marker alone.
+        const servedStamps = parsedRows
+          .map((row) => row.synced_at)
+          .filter((value) => typeof value === "string" && value.length > 0);
+        if (servedStamps.length > 0) {
+          let oldestMs = Number.POSITIVE_INFINITY;
+          let oldestStamp = null;
+          let invalidStamp = false;
+          for (const value of servedStamps) {
+            const ms = Date.parse(value);
+            if (!Number.isFinite(ms)) {
+              invalidStamp = true;
+              break;
+            }
+            if (ms < oldestMs) {
+              oldestMs = ms;
+              oldestStamp = value;
+            }
+          }
+          const servedFreshness = checkIndexFreshness(oldestStamp);
+          if (invalidStamp || !servedFreshness.fresh) {
+            throw new SkillAdapterError(
+              `SKILL_INDEX_STALE: a returned skill row is not fresh (${
+                invalidStamp ? "INVALID_SYNC_TIMESTAMP" : servedFreshness.reason
+              }); refusing to serve possibly stale rows`,
+              "SKILL_INDEX_STALE",
+            );
+          }
         }
 
         // K06: Deduplicate multiple segments from the same skill
@@ -1143,8 +1250,9 @@ export class SkillAdapter {
           if (alreadyDecided) return alreadyDecided;
         } catch (error) {
           if (error instanceof SkillAdapterError) throw error;
+          this.reportAdapterFailure("SKILL_PROPOSAL_PERSIST_FAILED", error);
           throw new SkillAdapterError(
-            `Skill proposal persistence failed: ${error?.message}`,
+            fixedFailureSentence("SKILL_PROPOSAL_PERSIST_FAILED"),
             "SKILL_PROPOSAL_PERSIST_FAILED",
           );
         }
@@ -1168,13 +1276,26 @@ export class SkillAdapter {
       // it lived where it could never fire.
     } catch (error) {
       if (error instanceof SkillAdapterError) throw error;
+      // F-448/F-555: the code the envelope carries is itself interpolated into
+      // the fixed sentence, so only a token-shaped code is admitted; anything
+      // else (which could quote a path or upstream bytes) falls back to the
+      // adapter's own code.
+      const failureCode =
+        typeof error?.code === "string" && /^[A-Za-z0-9_]+$/.test(error.code)
+          ? error.code
+          : "SKILL_ADAPTER_ERROR";
+      this.reportAdapterFailure(failureCode, error);
       return {
         action,
         skills: [],
         results: [],
         governed_status: "CONTROLLED_FAILURE",
-        error: error.code || "SKILL_ADAPTER_ERROR",
-        message: error.message,
+        // F-555 (R10-T06-7): the code survives (R10-T06-1 requires it), but the
+        // sentence is fixed. A filesystem error's message carries the absolute
+        // path it opened; that text is for the trusted sink above, not for the
+        // envelope the plugin renders to the model.
+        error: failureCode,
+        message: fixedFailureMessage(failureCode),
       };
     }
   }

@@ -850,6 +850,19 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // `git show 6b0ea0a:integrations/openclaw/topology/lib/file-lock.mjs` reproduces the deployed bytes. The digest this build produces is deliberately NOT listed: it is
     // the current build and is accepted by content comparison.
     "bcd65de81c9f6df088dd9ec269cc4dd3969fd80657f9c582e34e06554e64cf7b",
+    // M12/T9-R4 F-581: the bytes the LIVE WSL runtime carries, measured read-only
+    // this band with `sha256sum` through `wsl.exe` and `MSYS_NO_PATHCONV=1` on
+    // `/home/hoang_vinh/.openclaw-zink/extensions/zink-governance/lib/file-lock.mjs`.
+    // Provenance: `git show 85eb094:integrations/openclaw/lib/file-lock.mjs`
+    // reproduces them exactly, so packaging does not rewrite this module's imports
+    // and the repository bytes are the deployed bytes. F-581 moves the acquire
+    // deadline and the busy-wait comparison from `Date.now()` to
+    // `performance.now()`, so a step change in the wall clock can no longer mint or
+    // expire a lock early; that changes this file, and without this entry
+    // --preflight would refuse the deployed extension and --apply would be
+    // unreachable. The digest this build produces is deliberately NOT listed: it is
+    // the current build and is accepted by content comparison.
+    "e9cac11dea2ebca6fd57f55e1aca6a7c0a6959fb4ff6a6dabf0811533a9bde06",
   ]),
   "lib/guard.mjs": Object.freeze([
     // M10/T2-R14: the outgoing R12/R13 build currently deployed, byte-proven by

@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 from typing import Any, AsyncIterator, Mapping, Sequence
+import unicodedata
 from uuid import UUID, uuid4
 
 import asyncpg
@@ -26,6 +27,18 @@ _CURRENT_OWNER_CONNECTION: contextvars.ContextVar["asyncpg.Connection | None"] =
 # F-101 (R5-E01-05): the module had no logging facility at all, so a
 # failure that nothing else recorded left no attributable record.
 logger = logging.getLogger(__name__)
+
+
+def normalize_source_path(source_path: str) -> str:
+    """The one form a source path is stored and compared in.
+
+    F-576 (R10-T10-7): the read seam normalised the operator's prefix to NFC
+    while the writer stored the raw bytes, so a decomposed path matched no
+    prefix filter. Writers now store NFC, and the SQL comparisons below
+    normalise the column too, which keeps rows written before this fix visible.
+    """
+
+    return unicodedata.normalize("NFC", source_path)
 
 
 class StateTransitionError(RuntimeError):
@@ -1328,10 +1341,11 @@ class KnowledgeDatabase:
                     SELECT s.sha256 AS content_identity_digest
                     FROM knowledge.sources s
                     JOIN knowledge.indexes i ON i.id = s.index_id
-                    WHERE s.source_path = $1 AND s.source_type = 'PDF'
+                    WHERE normalize(s.source_path, NFC) = $1
+                      AND s.source_type = 'PDF'
                       AND i.status = 'ACTIVE'
                     """,
-                    source_path,
+                    normalize_source_path(source_path),
                 )
                 if source is None:
                     raise PdfContentNotFoundError("PDF_SOURCE_NOT_FOUND")
@@ -1698,8 +1712,10 @@ class KnowledgeDatabase:
                     AND segments.segment_type = ANY($6::text[])
                     AND ($3::text IS NULL OR segments.primary_topic = $3)
                     AND ($4::text[] IS NULL OR segments.tags @> $4::text[])
-                    AND ($5::text IS NULL OR segments.source_path = $5
-                         OR left(segments.source_path, char_length($5) + 1) = $5 || '/')
+                    AND ($5::text IS NULL
+                         OR normalize(segments.source_path, NFC) = $5
+                         OR left(normalize(segments.source_path, NFC),
+                                 char_length($5) + 1) = $5 || '/')
                     AND ($7::text IS NULL OR segments.canonical_topics @> ARRAY[$7::text])
                     AND ($8::text[] IS NULL
                          OR (cardinality($8::text[]) > 0
@@ -1976,13 +1992,17 @@ class KnowledgeDatabase:
             raise RuntimeError("Database pool is unavailable.")
         if len(embeddings) != len(source.segments):
             raise ValueError("Embedding count does not match source segments.")
+        source_path = normalize_source_path(source.source_path)
         source_id = uuid4()
         async with self._mutation_transaction() as connection:
                 await self._require_run_and_index_state(connection, run)
                 await connection.execute(
-                    "DELETE FROM knowledge.sources WHERE index_id = $1 AND source_path = $2",
+                    """
+                    DELETE FROM knowledge.sources
+                    WHERE index_id = $1 AND normalize(source_path, NFC) = $2
+                    """,
                     UUID(run.index_id),
-                    source.source_path,
+                    source_path,
                 )
                 await connection.execute(
                     """
@@ -1993,7 +2013,7 @@ class KnowledgeDatabase:
                     """,
                     source_id,
                     UUID(run.index_id),
-                    source.source_path,
+                    source_path,
                     source.sha256,
                     source.mime_type,
                     source.title,
@@ -2014,7 +2034,7 @@ class KnowledgeDatabase:
                             UUID(run.index_id),
                             source_id,
                             segment.chunk_ordinal,
-                            source.source_path,
+                            source_path,
                             source.title,
                             source.primary_topic,
                             list(source.canonical_topics),
@@ -2070,6 +2090,7 @@ class KnowledgeDatabase:
             raise ValueError("PDF publication payload is invalid.")
         if any(segment.segment_type not in _PDF_SEGMENT_TYPES for segment in segments):
             raise ValueError("PDF publication contains an unknown segment type.")
+        source_path = normalize_source_path(source_path)
         source_id = uuid4()
         async with self._mutation_transaction() as connection:
                 await self._require_run_and_index_state(connection, run)
@@ -2085,7 +2106,10 @@ class KnowledgeDatabase:
                 if validate_before_publish is not None:
                     await validate_before_publish()
                 await connection.execute(
-                    "DELETE FROM knowledge.sources WHERE index_id = $1 AND source_path = $2",
+                    """
+                    DELETE FROM knowledge.sources
+                    WHERE index_id = $1 AND normalize(source_path, NFC) = $2
+                    """,
                     UUID(run.index_id), source_path,
                 )
                 await connection.execute(
@@ -2177,9 +2201,13 @@ class KnowledgeDatabase:
                 await self._require_run_and_index_state(connection, run)
                 if stale_paths:
                     await connection.execute(
-                        "DELETE FROM knowledge.sources WHERE index_id = $1 AND source_path = ANY($2::text[])",
+                        """
+                        DELETE FROM knowledge.sources
+                        WHERE index_id = $1
+                          AND normalize(source_path, NFC) = ANY($2::text[])
+                        """,
                         UUID(run.index_id),
-                        sorted(stale_paths),
+                        sorted(normalize_source_path(path) for path in stale_paths),
                     )
                 await self._upsert_source_counts_locked(connection, run.id, source_counts)
                 updated_run = await connection.fetchval(

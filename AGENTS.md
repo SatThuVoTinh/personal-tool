@@ -14,6 +14,9 @@ Keep this file compact: authority and invariants live here; procedures live in
 | `.agents/skills/*/SKILL.md` | reusable task procedures |
 | `.agents/states/README.md` | working-state schema/lifecycle |
 | `.agents/states/*.md` | local/ignored current-task hot context; never authority |
+| `docs/execution/context.md` | coordinated-run state; only the main agent writes it |
+| `docs/execution/findings.md` | canonical bug register; main agent verifies and consolidates reports per workflow |
+| `docs/execution/slices.md` | approved phase, roster, and routing source; do not change assignments without owner approval |
 | nearest nested `AGENTS.md` | narrower directory-specific rules |
 | `docs/architecture/` | canonical architecture and ownership |
 | `docs/contracts/` | persistent behavioral/runtime/API/data contracts plus execution-contract protocol |
@@ -67,6 +70,15 @@ is the sole source of truth for approved implementation details.
 
 `.agents/states/*.md` are working memory only and must never
 override `PLAN.md`, `ACTIVE.md`, architecture, or persistent contracts.
+
+The three files under `docs/execution/` are likewise not an authority source for
+scope or approval. `docs/execution/context.md` records the live run;
+`docs/execution/findings.md` is the actionable bug register whose reproduction and
+acceptance criteria bind only once `PLAN.md` and a valid `ACTIVE.md` authorize the
+band that owns those rows; `docs/execution/slices.md` fixes the phase/roster/routing
+design and may not be renumbered by an executing agent. Being git-tracked does not
+grant any of them authority over `PLAN.md`, `ACTIVE.md`, architecture or persistent
+contracts.
 
 ## 3. Agent roles
 
@@ -328,3 +340,16 @@ external publication actions unless the owner separately authorizes them.
 Produce the smallest correct, secure, maintainable, well-integrated, and fully
 validated change that satisfies the approved requirement without unnecessary
 complexity.
+
+## 14. Agent Coordination Rules
+
+- Read `docs/execution/context.md` (canonical path; no root copy exists) before starting or resuming coordinated work.
+- Follow `docs/execution/slices.md`, the configured agent definitions, current task assignments, and applicable execution authorizations. Agent definitions are outside this repository at `%USERPROFILE%\.config\opencode\opencode.json`; inspect that file when verifying the active configuration rather than assuming it is tracked here.
+- Before spawning subagents, the main agent must establish the actual run details in `docs/execution/context.md`, read the slices and agent definitions, and verify scope, authorization, permissions, and disjoint write ownership.
+- The main agent coordinates subagents, maintains `docs/execution/context.md`, verifies and consolidates candidate bugs into `docs/execution/findings.md` under its mandatory workflow, and verifies results.
+- Subagents report progress, findings, file changes, test results, evidence, and blockers to the main agent; they do not independently alter owner-approved decisions or finding statuses.
+- The main agent is the sole writer of the shared `docs/execution/context.md`. Avoid concurrent edits to shared files.
+- `docs/execution/slices.md` is the approved phase, roster, and routing design. Do not change its agent counts or assignment mechanism without owner approval.
+- Follow the mandatory bug workflow in `docs/execution/findings.md`, approval and execution requirements in `PLAN.md` and `docs/contracts/execution/ACTIVE.md`, and closure-history rules in `CHANGELOG.md`.
+- Never claim unverified work as complete. Preserve unresolved bugs, existing findings, and unrelated changes.
+- `docs/execution/context.md` tracks the current parallel run only. Never store secrets in project documentation.

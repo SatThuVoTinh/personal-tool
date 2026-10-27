@@ -38,7 +38,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const url = (rel) => pathToFileURL(path.join(REPO, rel)).href;
 
-const { promoteApprovedSkill } = await import(
+const { promoteApprovedSkillWithLock } = await import(
   url("zink-skill-store/src/catalog.mjs")
 );
 const { SkillAdapter } = await import(
@@ -48,7 +48,7 @@ const { SkillAdapter } = await import(
 /** A canonical two-skill store: one skill per stack. */
 async function twoStackStore() {
   const skillsRoot = await mkdtemp(path.join(tmpdir(), "f028-"));
-  await promoteApprovedSkill({
+  await promoteApprovedSkillWithLock({
     skillsRoot,
     namespace: ["excel"],
     capability: "excel-apply",
@@ -56,7 +56,7 @@ async function twoStackStore() {
     content: "# EXCEL\npopulate the workbook\n",
     decisionRef: "PLAN:M12/T9-R1",
   });
-  await promoteApprovedSkill({
+  await promoteApprovedSkillWithLock({
     skillsRoot,
     namespace: ["research"],
     capability: "research-apply",
@@ -183,7 +183,7 @@ test("F-028: a request that narrows nothing is not constrained", async () => {
 test("F-028: the binding compares the CANONICAL namespace, so an alias is not a way past it", async () => {
   const skillsRoot = await mkdtemp(path.join(tmpdir(), "f028-alias-"));
   try {
-    await promoteApprovedSkill({
+    await promoteApprovedSkillWithLock({
       skillsRoot,
       namespace: ["power-bi"],
       capability: "bi-report",

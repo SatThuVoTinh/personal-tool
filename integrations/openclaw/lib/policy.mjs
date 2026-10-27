@@ -1153,6 +1153,16 @@ export const PACKAGE_REWRITES = Object.freeze({
       `"${DEPLOYED_CONTRACTS_LOOKUP}"`,
     ]),
   ]),
+  "lib/artifact-validator.mjs": Object.freeze([
+    // F-459: the artifact scanner imports the canonical SQL mask from the
+    // packaged `zink-tools/` subtree. In the repository that subtree is three
+    // levels above `lib/`; in the deployed tree it sits at the plugin root,
+    // one level above `lib/`.
+    Object.freeze([
+      `${spec("..", "..", "..", "zink-tools")}/`,
+      `${spec("..", "zink-tools")}/`,
+    ]),
+  ]),
   entrypoint: Object.freeze([
     Object.freeze([`${spec("..", "..", "topology", "lib")}/`, '"./lib/']),
     Object.freeze([`${spec("..", "..", "lib")}/`, '"./lib/']),

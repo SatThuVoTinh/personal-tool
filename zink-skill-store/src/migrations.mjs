@@ -243,10 +243,25 @@ export async function applySkillStoreMigrations(options = {}) {
       skipped.push(file);
       continue;
     }
-    await executePostgresQuery(`BEGIN;\n${sql}\nCOMMIT;`, options);
+    // M12/T9-R4 F-431: the ledger write rides INSIDE the DDL transaction and
+    // is idempotent on the `version` PRIMARY KEY.
+    //
+    // It used to be a separate unlocked statement after the COMMIT, so two
+    // concurrent first-run syncs both passed the recorded-digest skip above
+    // and the loser threw a primary-key violation even though its DDL had
+    // committed — stamping INDEX_FAILED on a healthy promotion — and a
+    // process dying between the COMMIT and the INSERT left the file
+    // unrecorded, re-sending committed DDL cold. One BEGIN/COMMIT block makes
+    // the DDL and its record indivisible, and `ON CONFLICT (version) DO
+    // NOTHING` makes the raced loser a committed no-op instead of a
+    // violation: the winner's row records the identical file bytes both
+    // runners hashed. No "was it already applied" guess is involved — the
+    // recorded-vs-observed digest check above stays the authority for edited
+    // files.
     await executePostgresQuery(
-      `INSERT INTO ${SKILL_STORE_LEDGER} (version, sha256) VALUES ` +
-        `(${escapeSqlLiteral(file)}, ${escapeSqlLiteral(digest)});`,
+      `BEGIN;\n${sql}\nINSERT INTO ${SKILL_STORE_LEDGER} (version, sha256) ` +
+        `VALUES (${escapeSqlLiteral(file)}, ${escapeSqlLiteral(digest)}) ` +
+        `ON CONFLICT (version) DO NOTHING;\nCOMMIT;`,
       options,
     );
     applied.push(file);

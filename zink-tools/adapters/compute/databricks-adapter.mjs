@@ -15,18 +15,21 @@ export const DATABRICKS_MAX_POLL_TIMEOUT_MS = 120000;
  * SIMULATION_CONTRACT: this adapter is a contract test double, NOT a live
  * Databricks integration. It opens no network connection, reads no credential, and
  * returns canned in-memory values. Any credential-shaped option it accepts is
- * stored and never used, which is not integration. A governed path must treat
+ * ignored rather than retained, which is not integration. A governed path must treat
  * its output as simulation and must never present it as provider execution.
  * Wiring a real provider requires a separately approved backend.
  */
 /**
  * Governed Databricks Compute Adapter
  * External distributed compute trigger for large-scale spark/feature pipelines.
+ *
+ * F-446 (R9-L07a-1): `options.token` used to be assigned to an instance field
+ * that no method read. The host is descriptor data the adapter reports; the
+ * credential is accepted for caller compatibility and discarded.
  */
 export class DatabricksComputeAdapter {
   constructor(options = {}) {
     this.host = options.host || null;
-    this.token = options.token || null;
   }
 
   /**
