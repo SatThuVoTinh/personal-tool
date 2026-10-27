@@ -119,6 +119,11 @@ export function spreadsheetColumnLetter(index) {
  * container it writes. This reads the central directory and inflates the
  * entries, so the sheet names and the template parts come from the real file
  * instead of from a constant.
+ *
+ * F-OC-002: archive-level budget enforcement (ENTRY_COUNT_LIMIT, PER_ENTRY_LIMIT,
+ * TOTAL_UNCOMPRESSED_LIMIT). Central-directory declared sizes checked before
+ * inflation; actual inflated buffer length checked before storing contents.
+ * Errors preserve budget specificity with named limits.
  */
 export function readZipEntries(buf) {
   if (!Buffer.isBuffer(buf) || buf.length < 22) {
@@ -138,16 +143,27 @@ export function readZipEntries(buf) {
     );
   }
   const entryCount = buf.readUInt16LE(eocd + 10);
+
+  // Enforce entry count budget BEFORE looping
+  if (entryCount > 5000) {
+    throw new Error(`archive exceeds budget: entries ${entryCount} > 5000`);
+  }
+
   let offset = buf.readUInt32LE(eocd + 16);
   const entries = new Map();
+  let declaredAggregateBytes = 0;
+  let actualAggregateBytes = 0;
+
   for (let i = 0; i < entryCount; i++) {
     if (offset + 46 > buf.length || buf.readUInt32LE(offset) !== 0x02014b50) {
       throw new Error(
         "ZIP_CONTAINER_UNREADABLE: central directory entry invalid",
       );
     }
+
     const method = buf.readUInt16LE(offset + 10);
     const compressedSize = buf.readUInt32LE(offset + 20);
+    const declaredSize = buf.readUInt32LE(offset + 24);
     const nameLen = buf.readUInt16LE(offset + 28);
     const extraLen = buf.readUInt16LE(offset + 30);
     const commentLen = buf.readUInt16LE(offset + 32);
@@ -155,6 +171,23 @@ export function readZipEntries(buf) {
     const name = buf
       .subarray(offset + 46, offset + 46 + nameLen)
       .toString("utf8");
+
+    // Check declared per-entry size budget BEFORE counting aggregate
+    if (declaredSize > PER_ENTRY_LIMIT) {
+      throw new Error(
+        `archive exceeds budget: per-entry ${name} declared size ${declaredSize} > ${PER_ENTRY_LIMIT}`,
+      );
+    }
+
+    // Check declared aggregate budget incrementally
+    const remainingTotal = TOTAL_UNCOMPRESSED_LIMIT - declaredAggregateBytes;
+    if (declaredSize > remainingTotal) {
+      throw new Error(
+        `archive exceeds budget: total uncompressed ${declaredAggregateBytes + declaredSize} > ${TOTAL_UNCOMPRESSED_LIMIT}`,
+      );
+    }
+    declaredAggregateBytes += declaredSize;
+
     if (
       localOffset + 30 > buf.length ||
       buf.readUInt32LE(localOffset) !== 0x04034b50
@@ -167,8 +200,58 @@ export function readZipEntries(buf) {
     const localExtraLen = buf.readUInt16LE(localOffset + 28);
     const dataStart = localOffset + 30 + localNameLen + localExtraLen;
     const raw = buf.subarray(dataStart, dataStart + compressedSize);
-    const content = method === 0 ? Buffer.from(raw) : zlib.inflateRawSync(raw);
-    entries.set(name, content);
+
+    const remainingActual = TOTAL_UNCOMPRESSED_LIMIT - actualAggregateBytes;
+    if (method === 0) {
+      if (raw.length > PER_ENTRY_LIMIT) {
+        throw new Error(
+          `archive exceeds budget: per-entry ${name} actual size ${raw.length} > 128 MiB`,
+        );
+      }
+      if (raw.length > remainingActual) {
+        throw new Error(
+          `archive exceeds budget: total uncompressed ${actualAggregateBytes + raw.length} > 512 MiB`,
+        );
+      }
+      const content = Buffer.from(raw);
+      actualAggregateBytes += content.length;
+      entries.set(name, content);
+    } else {
+      const maxOutputLength = Math.min(PER_ENTRY_LIMIT, remainingActual);
+      let content;
+      try {
+        content = zlib.inflateRawSync(raw, { maxOutputLength });
+      } catch (error) {
+        if (error.message.includes("Buffer larger")) {
+          const quantity =
+            remainingActual < PER_ENTRY_LIMIT
+              ? "total uncompressed"
+              : "per-entry";
+          const limit =
+            remainingActual < PER_ENTRY_LIMIT ? "512 MiB" : "128 MiB";
+          throw new Error(
+            `archive exceeds budget: ${quantity} actual output from ${name} exceeds ${limit}`,
+            { cause: error },
+          );
+        }
+        throw new Error(`ZIP_INFLATE_ERROR: ${error.message}`, {
+          cause: error,
+        });
+      }
+      if (content.length > PER_ENTRY_LIMIT) {
+        throw new Error(
+          `archive exceeds budget: per-entry ${name} actual size ${content.length} > 128 MiB`,
+        );
+      }
+      if (content.length > remainingActual) {
+        throw new Error(
+          `archive exceeds budget: total uncompressed ${actualAggregateBytes + content.length} > 512 MiB`,
+        );
+      }
+      actualAggregateBytes += content.length;
+      entries.set(name, content);
+    }
+
     offset += 46 + nameLen + extraLen + commentLen;
   }
   return entries;
@@ -234,6 +317,8 @@ function assertXmlSafeCellText(ref, value) {
 // the container writer but Excel refuses/repairs the workbook, so the writer
 // refuses the cell instead of emitting an artifact that cannot be opened
 // (F-473).
+const PER_ENTRY_LIMIT = 128 * 1024 * 1024;
+const TOTAL_UNCOMPRESSED_LIMIT = 512 * 1024 * 1024;
 const EXCEL_MAX_CELL_CHARACTERS = 32767;
 
 function assertCellWithinCharacterBudget(ref, value) {

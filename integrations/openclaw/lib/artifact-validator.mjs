@@ -138,6 +138,10 @@ export function readZipEntryNames(filePath) {
   return readZipArchive(buf, { includeContents: false })?.names ?? null;
 }
 
+const ENTRY_COUNT_LIMIT = 5000;
+const PER_ENTRY_LIMIT = 128 * 1024 * 1024;
+const TOTAL_UNCOMPRESSED_LIMIT = 512 * 1024 * 1024;
+
 /**
  * Parse the ZIP central directory and, when asked, inflate the declared parts.
  *
@@ -146,9 +150,14 @@ export function readZipEntryNames(filePath) {
  * capped at the artifact ceiling so a crafted container cannot expand a small
  * file into an unbounded buffer. Name-only callers skip inflation.
  *
+ * F-OC-002: archive-level budget enforcement (ENTRY_COUNT_LIMIT, PER_ENTRY_LIMIT,
+ * TOTAL_UNCOMPRESSED_LIMIT). Central-directory declared sizes checked before
+ * inflation; actual inflated buffer length checked before storing contents.
+ * Errors preserve budget specificity with named limits.
+ *
  * @param {Buffer} buf
  * @param {{ includeContents?: boolean }} [options]
- * @returns {{ names: string[], contents: Map<string, Buffer> } | null}
+ * @returns {{ names: string[], contents: Map<string, Buffer> } | null|{ error: string, names?: string[] }}
  */
 function readZipArchive(buf, { includeContents = true } = {}) {
   if (!Buffer.isBuffer(buf) || buf.length < 22) return null;
@@ -162,14 +171,44 @@ function readZipArchive(buf, { includeContents = true } = {}) {
   }
   if (eocd < 0) return null;
   const entryCount = buf.readUInt16LE(eocd + 10);
+  if (entryCount > ENTRY_COUNT_LIMIT) {
+    return { error: `archive exceeds budget: entries ${entryCount} > 5000` };
+  }
+
   let offset = buf.readUInt32LE(eocd + 16);
   const names = [];
   const contents = new Map();
+
+  // Phase 1: Collect all names first (for name-only consumers)
   for (let i = 0; i < entryCount; i++) {
     if (offset + 46 > buf.length) return null;
     if (buf.readUInt32LE(offset) !== 0x02014b50) return null;
+
+    const nameLen = buf.readUInt16LE(offset + 28);
+    const extraLen = buf.readUInt16LE(offset + 30);
+    const commentLen = buf.readUInt16LE(offset + 32);
+    const name = buf
+      .subarray(offset + 46, offset + 46 + nameLen)
+      .toString("utf8");
+    names.push(name);
+    offset += 46 + nameLen + extraLen + commentLen;
+  }
+
+  // Re-parse for full content processing with budgets
+  const eocd2 = eocd;
+  const entryCount2 = entryCount;
+  const offsetStart = buf.readUInt32LE(eocd2 + 16);
+  offset = offsetStart;
+  let declaredAggregateBytes = 0;
+  let actualAggregateBytes = 0;
+
+  for (let i = 0; i < entryCount2; i++) {
+    if (offset + 46 > buf.length) return null;
+    if (buf.readUInt32LE(offset) !== 0x02014b50) return null;
+
     const method = buf.readUInt16LE(offset + 10);
     const compressedSize = buf.readUInt32LE(offset + 20);
+    const declaredSize = buf.readUInt32LE(offset + 24);
     const nameLen = buf.readUInt16LE(offset + 28);
     const extraLen = buf.readUInt16LE(offset + 30);
     const commentLen = buf.readUInt16LE(offset + 32);
@@ -177,7 +216,23 @@ function readZipArchive(buf, { includeContents = true } = {}) {
     const name = buf
       .subarray(offset + 46, offset + 46 + nameLen)
       .toString("utf8");
-    names.push(name);
+
+    // Check declared per-entry size budget BEFORE counting aggregate
+    if (declaredSize > PER_ENTRY_LIMIT) {
+      return {
+        error: `archive exceeds budget: per-entry ${name} declared size ${declaredSize} > ${PER_ENTRY_LIMIT}`,
+      };
+    }
+
+    // Check declared aggregate budget incrementally
+    const remainingTotal = TOTAL_UNCOMPRESSED_LIMIT - declaredAggregateBytes;
+    if (declaredSize > remainingTotal) {
+      return {
+        error: `archive exceeds budget: total uncompressed ${declaredAggregateBytes + declaredSize} > ${TOTAL_UNCOMPRESSED_LIMIT}`,
+      };
+    }
+    declaredAggregateBytes += declaredSize;
+
     if (
       includeContents &&
       localOffset + 30 <= buf.length &&
@@ -187,18 +242,65 @@ function readZipArchive(buf, { includeContents = true } = {}) {
       const localExtraLen = buf.readUInt16LE(localOffset + 28);
       const dataStart = localOffset + 30 + localNameLen + localExtraLen;
       const raw = buf.subarray(dataStart, dataStart + compressedSize);
-      try {
-        contents.set(
-          name,
-          method === 0
-            ? Buffer.from(raw)
-            : inflateRawSync(raw, {
-                maxOutputLength: MAX_ARTIFACT_SIZE_BYTES,
-              }),
+
+      if (method === 0) {
+        if (raw.length > PER_ENTRY_LIMIT) {
+          return {
+            error: `archive exceeds budget: per-entry ${name} actual size ${raw.length} > 128 MiB`,
+          };
+        }
+        const remainingAfterActual =
+          TOTAL_UNCOMPRESSED_LIMIT - actualAggregateBytes;
+        if (raw.length > remainingAfterActual) {
+          return {
+            error: `archive exceeds budget: total uncompressed ${actualAggregateBytes + raw.length} > 512 MiB`,
+          };
+        }
+        const inflated = Buffer.from(raw);
+        actualAggregateBytes += inflated.length;
+        contents.set(name, inflated);
+      } else {
+        const remainingBeforeInflation =
+          TOTAL_UNCOMPRESSED_LIMIT - actualAggregateBytes;
+        const maxOutputLength = Math.min(
+          PER_ENTRY_LIMIT,
+          remainingBeforeInflation,
         );
-      } catch {
-        // An unreadable part is treated as missing by the format tiers; it is
-        // never accepted as valid content.
+        let inflated;
+        try {
+          inflated = inflateRawSync(raw, { maxOutputLength });
+        } catch (error) {
+          if (error.message.includes("Buffer larger")) {
+            const quantity =
+              remainingBeforeInflation < PER_ENTRY_LIMIT
+                ? "total uncompressed"
+                : "per-entry";
+            const limit =
+              remainingBeforeInflation < PER_ENTRY_LIMIT
+                ? "512 MiB"
+                : "128 MiB";
+            return {
+              error: `archive exceeds budget: ${quantity} actual output from ${name} exceeds ${limit}`,
+            };
+          }
+          // Other inflate errors are treated as unreadable parts
+        }
+        if (inflated && inflated.length > PER_ENTRY_LIMIT) {
+          return {
+            error: `archive exceeds budget: per-entry ${name} actual size ${inflated.length} > 128 MiB`,
+          };
+        }
+        const remainingAfterInflated =
+          TOTAL_UNCOMPRESSED_LIMIT - actualAggregateBytes;
+        if (inflated && inflated.length > remainingAfterInflated) {
+          return {
+            error: `archive exceeds budget: total uncompressed ${actualAggregateBytes + inflated.length} > 512 MiB`,
+          };
+        }
+        if (inflated) {
+          actualAggregateBytes += inflated.length;
+          contents.set(name, inflated);
+        }
       }
     }
     offset += 46 + nameLen + extraLen + commentLen;
@@ -247,7 +349,7 @@ export function validatePythonSyntax(filePath, content) {
     // question. A spawn failure (`ENOENT`), the 5000 ms overrun (`ETIMEDOUT`)
     // and a child killed by a signal all arrive with `status: null` and an
     // empty stderr, so they used to fall through to the structural counter and
-    // return `valid: true` from a check that never executed — and the caller
+    // return `valid: true` from a check that never executed â€” and the caller
     // stamped `checks.pythonSyntax: true` over it.
     const interpreterRan = typeof err?.status === "number" && !err?.signal;
     if (!interpreterRan) {
@@ -892,7 +994,7 @@ export function validateTechnicalArtifact({
   } else if (inferredType === "excel") {
     // M12/T9 F-258: this branch checked NOTHING structural. The type came
     // from the file extension, the only check was a 100-byte floor, and the
-    // verdict was a PASS for any file over it — so a 200-byte text file named
+    // verdict was a PASS for any file over it â€” so a 200-byte text file named
     // `report.xlsx` reached the governed result card. The container is now
     // parsed: a workbook must be a readable ZIP that declares its content
     // types and at least one worksheet.
@@ -904,8 +1006,22 @@ export function validateTechnicalArtifact({
       );
       result.checks.excelStructureValid = false;
     } else {
-      const archive = readZipArchive(contentBuf);
-      const names = archive?.names ?? null;
+      const archiveResult = readZipArchive(contentBuf);
+
+      // Handle budget error return format
+      if (
+        archiveResult &&
+        typeof archiveResult === "object" &&
+        archiveResult.error
+      ) {
+        // Budget violation - convert to FAIL with explicit error message
+        result.status = VALIDATION_STATUS.FAIL;
+        result.errors.push(archiveResult.error);
+        result.checks.excelStructureValid = false;
+        return stampProvenanceAndDigest(result, inferredType);
+      }
+
+      const { names, contents } = archiveResult || {};
       const hasContentTypes =
         Array.isArray(names) && names.includes("[Content_Types].xml");
       const hasWorksheet =
@@ -923,7 +1039,7 @@ export function validateTechnicalArtifact({
           `CORRUPT_EXCEL: Workbook container is missing required part(s): ${missing.join(", ")}`,
         );
       } else {
-        const sheetXmlFailure = inspectExcelSheetParts(archive);
+        const sheetXmlFailure = inspectExcelSheetParts({ names, contents });
         result.checks.sheetXmlValid = sheetXmlFailure === null;
         if (sheetXmlFailure) {
           result.status = VALIDATION_STATUS.FAIL;
@@ -1026,7 +1142,7 @@ export function validateTechnicalArtifact({
       result.errors.push(`PYTHON_READ_ERROR: ${readErr?.message}`);
     }
   } else if (inferredType === "powerbi") {
-    // PBIX and PBIT are ZIP archives — the same reader the preview arm calls.
+    // PBIX and PBIT are ZIP archives â€” the same reader the preview arm calls.
     const { isPkZip, hasStructure } = inspectPowerBiContainer(filePath);
     result.checks.format = "POWERBI";
     result.checks.magicBytesValid = isPkZip;
@@ -1299,7 +1415,7 @@ export function validateBusinessLogic({
 
 /**
  * Extracts real preview data from an artifact file.
- * Prohibits mock data — all content derived directly from the file.
+ * Prohibits mock data â€” all content derived directly from the file.
  *
  * @param {object} opts
  * @param {string} opts.filePath
@@ -1311,7 +1427,7 @@ export function generateArtifactPreview({ filePath, maxRows = 5 }) {
     return {
       available: false,
       reason: "FILE_NOT_FOUND",
-      previewText: "*(Tệp không tồn tại)*",
+      previewText: "*(Tá»‡p khÃ´ng tá»“n táº¡i)*",
     };
   }
 
@@ -1325,7 +1441,7 @@ export function generateArtifactPreview({ filePath, maxRows = 5 }) {
       const content = readFileSync(filePath, "utf8");
       const lines = content.split(/\r?\n/).filter((l) => l.trim().length > 0);
       if (lines.length === 0) {
-        return { available: false, previewText: "*(Tệp CSV rỗng)*" };
+        return { available: false, previewText: "*(Tá»‡p CSV rá»—ng)*" };
       }
       const header = lines[0];
       const rows = lines.slice(1, 1 + maxRows);
@@ -1353,10 +1469,10 @@ export function generateArtifactPreview({ filePath, maxRows = 5 }) {
       const parsed = JSON.parse(content);
       let summary = "";
       if (Array.isArray(parsed)) {
-        summary = `Mảng gồm ${parsed.length} bản ghi.\n\`\`\`json\n${JSON.stringify(parsed.slice(0, maxRows), null, 2)}\n\`\`\``;
+        summary = `Máº£ng gá»“m ${parsed.length} báº£n ghi.\n\`\`\`json\n${JSON.stringify(parsed.slice(0, maxRows), null, 2)}\n\`\`\``;
       } else {
         const keys = Object.keys(parsed);
-        summary = `Đối tượng gồm ${keys.length} trường chính: ${keys.slice(0, 10).join(", ")}`;
+        summary = `Äá»‘i tÆ°á»£ng gá»“m ${keys.length} trÆ°á»ng chÃ­nh: ${keys.slice(0, 10).join(", ")}`;
       }
       return {
         available: true,
@@ -1379,11 +1495,11 @@ export function generateArtifactPreview({ filePath, maxRows = 5 }) {
         : hasSvg
           ? path.basename(svgPath)
           : null;
-      let text = `📊 **Bảng tính Excel:** \`${path.basename(filePath)}\` (${(stat.size / 1024).toFixed(1)} KB)`;
+      let text = `ðŸ“Š **Báº£ng tÃ­nh Excel:** \`${path.basename(filePath)}\` (${(stat.size / 1024).toFixed(1)} KB)`;
       if (hasPng && hasSvg) {
-        text += `\n🖼️ **Hình ảnh Preview thực tế:** \`${path.basename(pngPath)}\` (vector: \`${path.basename(svgPath)}\`)`;
+        text += `\nðŸ–¼ï¸ **HÃ¬nh áº£nh Preview thá»±c táº¿:** \`${path.basename(pngPath)}\` (vector: \`${path.basename(svgPath)}\`)`;
       } else if (previewImg) {
-        text += `\n🖼️ **Hình ảnh Preview thực tế:** \`${previewImg}\` (đã đính kèm để xem trực tiếp)`;
+        text += `\nðŸ–¼ï¸ **HÃ¬nh áº£nh Preview thá»±c táº¿:** \`${previewImg}\` (Ä‘Ã£ Ä‘Ã­nh kÃ¨m Ä‘á»ƒ xem trá»±c tiáº¿p)`;
       }
       return {
         available: true,
@@ -1408,13 +1524,13 @@ export function generateArtifactPreview({ filePath, maxRows = 5 }) {
       const MUTATION_RE = /\b(INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER)\b/i;
       const hasMutations = MUTATION_RE.test(content);
       const mutationNote = hasMutations
-        ? "\n⚠️ **Chứa câu lệnh ghi/xóa (DML/DDL)**"
-        : "\n✅ **Chỉ đọc (không có DML mutation)**";
+        ? "\nâš ï¸ **Chá»©a cÃ¢u lá»‡nh ghi/xÃ³a (DML/DDL)**"
+        : "\nâœ… **Chá»‰ Ä‘á»c (khÃ´ng cÃ³ DML mutation)**";
       const text =
-        `📄 **SQL Script:** \`${path.basename(filePath)}\` — ${allLines.length} dòng, ~${stmtCount} câu lệnh${mutationNote}\n` +
+        `ðŸ“„ **SQL Script:** \`${path.basename(filePath)}\` â€” ${allLines.length} dÃ²ng, ~${stmtCount} cÃ¢u lá»‡nh${mutationNote}\n` +
         "```sql\n" +
         previewLines.join("\n") +
-        (nonEmpty.length > 30 ? "\n-- ... (còn tiếp)" : "") +
+        (nonEmpty.length > 30 ? "\n-- ... (cÃ²n tiáº¿p)" : "") +
         "\n```";
       return {
         available: true,
@@ -1438,10 +1554,10 @@ export function generateArtifactPreview({ filePath, maxRows = 5 }) {
       const clsCount = (content.match(/^\s*class\s+/gm) || []).length;
       const impCount = (content.match(/^\s*(import|from)\s+/gm) || []).length;
       const text =
-        `🐍 **Python Script:** \`${path.basename(filePath)}\` — ${allLines.length} dòng, ${fnCount} hàm, ${clsCount} class, ${impCount} import\n` +
+        `ðŸ **Python Script:** \`${path.basename(filePath)}\` â€” ${allLines.length} dÃ²ng, ${fnCount} hÃ m, ${clsCount} class, ${impCount} import\n` +
         "```python\n" +
         previewLines.join("\n") +
-        (nonEmpty.length > 30 ? "\n# ... (còn tiếp)" : "") +
+        (nonEmpty.length > 30 ? "\n# ... (cÃ²n tiáº¿p)" : "") +
         "\n```";
       return {
         available: true,
@@ -1465,12 +1581,12 @@ export function generateArtifactPreview({ filePath, maxRows = 5 }) {
       // the tier's reader now.
       const { isPkZip, hasStructure } = inspectPowerBiContainer(filePath);
       const validity = !isPkZip
-        ? "❌ Không nhận dạng được định dạng PBIX/PBIT"
+        ? "âŒ KhÃ´ng nháº­n dáº¡ng Ä‘Æ°á»£c Ä‘á»‹nh dáº¡ng PBIX/PBIT"
         : hasStructure
-          ? "✅ Container ZIP hợp lệ và đủ cấu trúc Power BI (Report/Layout với DataModel hoặc DataMashup)"
-          : "❌ Container ZIP nhưng KHÔNG phải Power BI hợp lệ (thiếu Report/Layout với DataModel hoặc DataMashup)";
+          ? "âœ… Container ZIP há»£p lá»‡ vÃ  Ä‘á»§ cáº¥u trÃºc Power BI (Report/Layout vá»›i DataModel hoáº·c DataMashup)"
+          : "âŒ Container ZIP nhÆ°ng KHÃ”NG pháº£i Power BI há»£p lá»‡ (thiáº¿u Report/Layout vá»›i DataModel hoáº·c DataMashup)";
       const label = ext === ".pbit" ? "Template (.pbit)" : "Report (.pbix)";
-      const text = `📊 **Power BI ${label}:** \`${path.basename(filePath)}\` (${(stat.size / 1024).toFixed(1)} KB)\n${validity}`;
+      const text = `ðŸ“Š **Power BI ${label}:** \`${path.basename(filePath)}\` (${(stat.size / 1024).toFixed(1)} KB)\n${validity}`;
       return {
         available: true,
         type: "powerbi",
@@ -1495,9 +1611,9 @@ export function generateArtifactPreview({ filePath, maxRows = 5 }) {
         footer.length === 4 && footer.toString("ascii") === "PAR1";
       const validity =
         headerOk && footerOk
-          ? "✅ Magic bytes PAR1 hợp lệ (header + footer)"
-          : `❌ Magic bytes không hợp lệ (header=${headerOk}, footer=${footerOk})`;
-      const text = `🗃️ **Apache Parquet:** \`${path.basename(filePath)}\` (${(stat.size / 1024).toFixed(1)} KB)\n${validity}`;
+          ? "âœ… Magic bytes PAR1 há»£p lá»‡ (header + footer)"
+          : `âŒ Magic bytes khÃ´ng há»£p lá»‡ (header=${headerOk}, footer=${footerOk})`;
+      const text = `ðŸ—ƒï¸ **Apache Parquet:** \`${path.basename(filePath)}\` (${(stat.size / 1024).toFixed(1)} KB)\n${validity}`;
       return {
         available: true,
         type: "parquet",
@@ -1519,11 +1635,11 @@ export function generateArtifactPreview({ filePath, maxRows = 5 }) {
       const structurallyValid =
         pdf.isPdfHeader && pdf.hasTrailerEof && pdf.hasStartXref;
       const validity = !pdf.isPdfHeader
-        ? "❌ Không nhận dạng được định dạng PDF"
+        ? "âŒ KhÃ´ng nháº­n dáº¡ng Ä‘Æ°á»£c Ä‘á»‹nh dáº¡ng PDF"
         : structurallyValid
-          ? `✅ PDF hợp lệ (phiên bản ${pdf.version})`
-          : "❌ PDF KHÔNG hợp lệ: thiếu %%EOF trailer hoặc xref/startxref";
-      const text = `📕 **PDF:** \`${path.basename(filePath)}\` (${(stat.size / 1024).toFixed(1)} KB)\n${validity}`;
+          ? `âœ… PDF há»£p lá»‡ (phiÃªn báº£n ${pdf.version})`
+          : "âŒ PDF KHÃ”NG há»£p lá»‡: thiáº¿u %%EOF trailer hoáº·c xref/startxref";
+      const text = `ðŸ“• **PDF:** \`${path.basename(filePath)}\` (${(stat.size / 1024).toFixed(1)} KB)\n${validity}`;
       return {
         available: true,
         type: "pdf",
@@ -1552,11 +1668,11 @@ export function generateArtifactPreview({ filePath, maxRows = 5 }) {
           "word/document.xml",
         ]);
       const validity = !isPkZip
-        ? "❌ Không nhận dạng được định dạng DOCX"
+        ? "âŒ KhÃ´ng nháº­n dáº¡ng Ä‘Æ°á»£c Ä‘á»‹nh dáº¡ng DOCX"
         : hasDocxStructure
-          ? "✅ Container ZIP hợp lệ và đủ cấu trúc DOCX (OOXML)"
-          : "❌ Container ZIP nhưng KHÔNG phải DOCX hợp lệ (thiếu [Content_Types].xml hoặc word/document.xml)";
-      const text = `📝 **Word Document:** \`${path.basename(filePath)}\` (${(stat.size / 1024).toFixed(1)} KB)\n${validity}`;
+          ? "âœ… Container ZIP há»£p lá»‡ vÃ  Ä‘á»§ cáº¥u trÃºc DOCX (OOXML)"
+          : "âŒ Container ZIP nhÆ°ng KHÃ”NG pháº£i DOCX há»£p lá»‡ (thiáº¿u [Content_Types].xml hoáº·c word/document.xml)";
+      const text = `ðŸ“ **Word Document:** \`${path.basename(filePath)}\` (${(stat.size / 1024).toFixed(1)} KB)\n${validity}`;
       return {
         available: true,
         type: "docx",
@@ -1575,11 +1691,11 @@ export function generateArtifactPreview({ filePath, maxRows = 5 }) {
       // the preview may not call that shape a valid Word container.
       const doc = inspectLegacyDocContainer(filePath);
       const validity = doc.isOle2
-        ? "✅ Container OLE2 hợp lệ (DOC)"
+        ? "âœ… Container OLE2 há»£p lá»‡ (DOC)"
         : doc.isPkZip
-          ? "❌ .doc KHÔNG hợp lệ: có chữ ký ZIP của DOCX, thiếu header OLE2"
-          : "❌ Không nhận dạng được định dạng DOC (OLE2)";
-      const text = `📝 **Word Document:** \`${path.basename(filePath)}\` (${(stat.size / 1024).toFixed(1)} KB)\n${validity}`;
+          ? "âŒ .doc KHÃ”NG há»£p lá»‡: cÃ³ chá»¯ kÃ½ ZIP cá»§a DOCX, thiáº¿u header OLE2"
+          : "âŒ KhÃ´ng nháº­n dáº¡ng Ä‘Æ°á»£c Ä‘á»‹nh dáº¡ng DOC (OLE2)";
+      const text = `ðŸ“ **Word Document:** \`${path.basename(filePath)}\` (${(stat.size / 1024).toFixed(1)} KB)\n${validity}`;
       return {
         available: true,
         type: "doc",
@@ -1601,10 +1717,10 @@ export function generateArtifactPreview({ filePath, maxRows = 5 }) {
       const previewLines = nonEmpty.slice(0, 20);
       const headingCount = (content.match(/^#+\s+/gm) || []).length;
       const text =
-        `📄 **Markdown:** \`${path.basename(filePath)}\` — ${allLines.length} dòng, ${headingCount} heading\n` +
+        `ðŸ“„ **Markdown:** \`${path.basename(filePath)}\` â€” ${allLines.length} dÃ²ng, ${headingCount} heading\n` +
         "```markdown\n" +
         previewLines.join("\n") +
-        (nonEmpty.length > 20 ? "\n... (còn tiếp)" : "") +
+        (nonEmpty.length > 20 ? "\n... (cÃ²n tiáº¿p)" : "") +
         "\n```";
       return {
         available: true,
@@ -1622,13 +1738,13 @@ export function generateArtifactPreview({ filePath, maxRows = 5 }) {
     return {
       available: true,
       type: ext.replace(".", "") || "file",
-      previewText: `Tệp: \`${path.basename(filePath)}\` (${(stat.size / 1024).toFixed(1)} KB)`,
+      previewText: `Tá»‡p: \`${path.basename(filePath)}\` (${(stat.size / 1024).toFixed(1)} KB)`,
     };
   } catch (err) {
     return {
       available: false,
       reason: err?.message,
-      previewText: `*(Lỗi trích xuất preview: ${err?.message})*`,
+      previewText: `*(Lá»—i trÃ­ch xuáº¥t preview: ${err?.message})*`,
     };
   }
 }
@@ -1754,7 +1870,7 @@ export function evaluateResultGate({
  * F-502 (R10-L02-1): this writer used to adopt whatever already sat at its
  * predictable `.tmp-<pid>-<ms>` name (`"w"` truncates), never checked the path
  * for symlinked components, and left its own residue behind when the write
- * failed — the exact adopt-pattern `queue-manager.mjs` and `decision-ledger.mjs`
+ * failed â€” the exact adopt-pattern `queue-manager.mjs` and `decision-ledger.mjs`
  * replaced with `"wx"` + `assertNoSymlinkComponents` + own-temp removal. It is
  * the same discipline here, not a new atomic writer.
  */
