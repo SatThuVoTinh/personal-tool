@@ -8606,6 +8606,17 @@ Final Quality Gate: NOT RUN — the task is not closed.
   are required; `F-492` stays `PARTIAL`.
 - **Commit granularity stays hybrid** (2026-10-26 decision): one row per commit
   for single-row files; a shared file is one commit naming every row it carries.
+- **Baseline commit (owner: "A").** The 111-path pre-R5 working tree was
+  committed as `79241ab` ("chore: preserve the pre-R5 working tree as the Phase 5
+  baseline"), 154 files, +16,191/−640, with `.qoder/` excluded. It claims no
+  validation and closes no row; every Phase 5 row commits cleanly on top.
+- **`F-INFRA-002` ownership exception (owner: "A").** `fix-infrastructure` may
+  also edit `zink-skill-store/src/vector-sync.mjs` for this row only; its
+  hardcoded `psql -U postgres` login is the other half of the fix.
+- **The lead is the only committer (2026-10-27).** Every fixer's configured
+  `bash` block denies `git commit`, so a fixer stops at a verified working-tree
+  change plus its evidence; the lead re-reads the diff and commits the row. This
+  keeps one row per commit without loosening any fixer's git permissions.
 
 ### Scope and bands (R5)
 
