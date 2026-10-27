@@ -149,15 +149,24 @@ class IndexLifecycle:
                     pdf_sidecars = await asyncio.to_thread(discover_pdf_sidecars, self._vault_root)
                 except PdfFoundationError as error:
                     pdf_discovery_error = error
-            discovered = scan.discovered_count + len(pdf_sidecars)
+            failed_pdf_discovery = int(
+                pdf_discovery_error is not None
+                and pdf_discovery_error.source_path is not None
+            )
+            discovered = scan.discovered_count + len(pdf_sidecars) + failed_pdf_discovery
             self._run_source_counts = {
                 "MARKDOWN": [scan.discovered_count, 0, 0],
-                "PDF": [len(pdf_sidecars), 0, 0],
+                "PDF": [len(pdf_sidecars) + failed_pdf_discovery, 0, failed_pdf_discovery],
             }
             await self._database.set_discovered(run.id, discovered)
             if pdf_discovery_error is not None:
                 scan_failed = True
-                errors.append(SafeRunError(pdf_discovery_error.code))
+                errors.append(
+                    SafeRunError(
+                        pdf_discovery_error.code, pdf_discovery_error.source_path
+                    )
+                )
+                failed += failed_pdf_discovery
                 if run.kind == "FULL_REBUILD":
                     await self._fail(run, "SCAN_FAILED", errors, discovered, indexed, failed)
                     return []

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from app.database import AcceptedIndexRun, ActiveIndex
 from app.index_lifecycle import IndexLifecycle, LifecycleDependencies
@@ -288,6 +290,50 @@ class IndexLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(database.completed)
         stale_paths = database.completed_args[3]
         self.assertEqual(stale_paths, {"01. Knowledge/AI/removed.md"})
+
+    async def test_oversized_pdf_sidecar_cannot_delete_its_indexed_pdf(self) -> None:
+        item = source("unchanged", "same")
+        pdf_path = "02. Books/supply/book.pdf"
+        sidecar_path = "02. Books/supply/book.md"
+        database = FakeDatabase({item.source_path: item.sha256, pdf_path: "old-pdf-digest"})
+        scanner = FakeScanner(item)
+        probe = FakeProbe([MATCHING])
+
+        with tempfile.TemporaryDirectory() as temporary:
+            vault = Path(temporary)
+            (vault / "01. Knowledge").mkdir()
+            (vault / "02. Books" / "supply").mkdir(parents=True)
+            (vault / pdf_path).write_bytes(b"%PDF-intact")
+            (vault / sidecar_path).write_text("oversized sidecar", encoding="utf-8")
+            instance = IndexLifecycle(
+                LifecycleDependencies(
+                    database=database,  # type: ignore[arg-type]
+                    model_probe=probe,  # type: ignore[arg-type]
+                    scanner=scanner,  # type: ignore[arg-type]
+                    vault_root=vault,
+                    embedding_model="bge-m3:latest",
+                    embedding_dimensions=1024,
+                    pdf_builder=object(),  # type: ignore[arg-type]
+                    pdf_processing_identity=lambda _: "processing-identity",
+                )
+            )
+
+            with patch("app.pdf_foundation.MAX_SIDECAR_BYTES", 8):
+                await instance.execute(
+                    AcceptedIndexRun("run-1", EXPECTED.id, "INCREMENTAL", "RUNNING")
+                )
+
+            self.assertTrue((vault / pdf_path).is_file(), "the source PDF remains intact")
+
+        self.assertFalse(
+            database.completed,
+            "an incomplete PDF manifest must never be used to delete indexed PDFs",
+        )
+        self.assertTrue(database.failures)
+        failure = database.failures[0][0]
+        self.assertEqual(failure[1], "SCAN_FAILED")
+        self.assertEqual(failure[2][0].code, "PDF_SIDECAR_TOO_LARGE")
+        self.assertEqual(failure[2][0].source_path, sidecar_path)
 
     async def test_incremental_failure_fails_the_shadow_index(self) -> None:
         item = source("drift", "new")

@@ -39,9 +39,10 @@ _FENCE_OPEN = re.compile(r"^ {0,3}(`{3,}|~{3,})(?:[^\r\n]*)$")
 class PdfFoundationError(ValueError):
     """A safe, public foundation-validation failure."""
 
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, source_path: str | None = None) -> None:
         super().__init__(code)
         self.code = code
+        self.source_path = source_path
 
 
 @dataclass(frozen=True)
@@ -253,13 +254,16 @@ def discover_pdf_sidecars(vault_root: Path) -> tuple[PdfSidecar, ...]:
             continue
         _assert_no_link_or_reparse(resolved_vault, root)
         for sidecar in sorted(root.rglob("*.md")):
-            # M10/T2-R21: skip oversize sidecars by STAT, before any read. This
-            # sweep had no size check at all, so a single large `.md` dropped in
-            # the vault was read whole into the service process during an index
-            # run. Skipping (rather than raising) keeps one bad file from aborting
-            # discovery of every other sidecar.
+            # M10/T2-R21: check oversize sidecars by STAT, before any read. An
+            # omitted sidecar would make its still-present PDF look stale during
+            # incremental publication, so preserve its safe source path in the
+            # discovery error and let the lifecycle fail the run without deletes.
             if sidecar.stat().st_size > MAX_SIDECAR_BYTES:
-                continue
+                try:
+                    sidecar_path = sidecar.relative_to(resolved_vault).as_posix()
+                except ValueError as error:
+                    raise PdfFoundationError("PDF_SIDECAR_OUTSIDE_DISCOVERY_ROOT") from error
+                raise PdfFoundationError("PDF_SIDECAR_TOO_LARGE", sidecar_path)
             raw = sidecar.read_bytes()
             recognition_text = raw.decode("utf-8", errors="ignore")
             try:
