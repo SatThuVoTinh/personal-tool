@@ -37,7 +37,9 @@ services:
     entrypoint: ["/bin/sh", "/usr/local/bin/bootstrap-postgres.sh"]
     command: []
     environment:
+      KNOWLEDGE_DB_PASSWORD: ${KNOWLEDGE_DB_PASSWORD:-unconfigured}
       N8N_POSTGRES_PASSWORD: ${N8N_POSTGRES_PASSWORD:-unconfigured}
+      SKILL_DB_PASSWORD: ${SKILL_DB_PASSWORD:-unconfigured}
       PGCONNECT_TIMEOUT: "5"
       PGDATABASE: postgres
       PGHOST: postgres
@@ -148,9 +150,9 @@ services:
     environment:
       KNOWLEDGE_DATABASE_HOST: postgres
       KNOWLEDGE_DATABASE_NAME: postgres
-      KNOWLEDGE_DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-unconfigured}
+      KNOWLEDGE_DATABASE_PASSWORD: ${KNOWLEDGE_DB_PASSWORD:-unconfigured}
       KNOWLEDGE_DATABASE_PORT: "5432"
-      KNOWLEDGE_DATABASE_USER: postgres
+      KNOWLEDGE_DATABASE_USER: knowledge_app
       KNOWLEDGE_EMBEDDING_DIMENSIONS: "1024"
       KNOWLEDGE_EMBEDDING_MODEL: ${KNOWLEDGE_EMBEDDING_MODEL:-bge-m3:latest}
       KNOWLEDGE_INDEX_ADVISORY_LOCK_KEY: "741212391041002"

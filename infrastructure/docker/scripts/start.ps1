@@ -82,11 +82,9 @@ if ($usesKnowledge) {
 
 Invoke-PlatformCompose -Arguments @("up", "--detach", "--wait", "--wait-timeout", "180", "postgres")
 
-if ($Profile -in @("automation", "all")) {
-  Invoke-PlatformCompose -Profiles @("bootstrap") -Arguments @(
-    "run", "--rm", "--no-deps", "-T", "postgres-bootstrap"
-  )
-}
+Invoke-PlatformCompose -Profiles @("bootstrap") -Arguments @(
+  "run", "--rm", "--no-deps", "-T", "postgres-bootstrap"
+)
 
 Invoke-PlatformCompose -Arguments @("up", "--detach", "--wait", "--wait-timeout", "180")
 

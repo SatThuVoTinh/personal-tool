@@ -316,6 +316,12 @@ export async function executePostgresQuery(sql, options = {}) {
   );
   const dbTimeoutMs = options.dbTimeoutMs || 30000;
 
+  if (!process.env.SKILL_DB_PASSWORD) {
+    throw new Error(
+      "SKILL_DB_PASSWORD_REQUIRED: PostgreSQL access requires the Skill Store database credential.",
+    );
+  }
+
   return new Promise((resolve, reject) => {
     let settled = false;
     const child = spawn(
@@ -323,17 +329,22 @@ export async function executePostgresQuery(sql, options = {}) {
       [
         "exec",
         "-i",
+        "--env",
+        "PGPASSWORD",
         containerName,
         "psql",
         "-U",
-        "postgres",
+        "skill_app",
         "-d",
         "postgres",
         "--set=ON_ERROR_STOP=1",
         "-t",
         "-A",
       ],
-      { shell: false },
+      {
+        shell: false,
+        env: { ...process.env, PGPASSWORD: process.env.SKILL_DB_PASSWORD },
+      },
     );
 
     let stdout = "";

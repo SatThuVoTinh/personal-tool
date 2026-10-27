@@ -151,10 +151,21 @@ test("M5/T1-R2 validates only environment variables used by each profile", () =>
     "preflight must assemble its own list from the shared carrier",
   );
   assert.match(helper, /function Get-CredentialVariableNames/);
-  assert.match(helper, /\$names = @\("POSTGRES_PASSWORD"\)/);
+  for (const name of [
+    "POSTGRES_PASSWORD",
+    "N8N_POSTGRES_PASSWORD",
+    "KNOWLEDGE_DB_PASSWORD",
+    "SKILL_DB_PASSWORD",
+  ]) {
+    assert.match(helper, new RegExp(`"${name}"`));
+  }
   assert.match(
     helper,
-    /if \(\$usesAutomation\) \{[\s\S]*"N8N_POSTGRES_PASSWORD", "N8N_ENCRYPTION_KEY"/,
+    /if \(\$usesAutomation\) \{[\s\S]*\$names \+= @\("N8N_ENCRYPTION_KEY"\)/,
+  );
+  assert.doesNotMatch(
+    helper,
+    /if \(\$usesAutomation\) \{[\s\S]*"N8N_POSTGRES_PASSWORD"/,
   );
   assert.match(helper, /function Test-SentinelValue/);
   assert.match(helper, /function Read-EnvironmentFile/);

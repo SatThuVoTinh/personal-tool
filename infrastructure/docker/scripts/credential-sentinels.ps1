@@ -45,10 +45,15 @@ function Get-CredentialVariableNames {
     [string]$Profile
   )
 
-  $names = @("POSTGRES_PASSWORD")
+  $names = @(
+    "POSTGRES_PASSWORD",
+    "N8N_POSTGRES_PASSWORD",
+    "KNOWLEDGE_DB_PASSWORD",
+    "SKILL_DB_PASSWORD"
+  )
   $usesAutomation = $Profile -in @("automation", "all")
   if ($usesAutomation) {
-    $names += @("N8N_POSTGRES_PASSWORD", "N8N_ENCRYPTION_KEY")
+    $names += @("N8N_ENCRYPTION_KEY")
   }
 
   return $names

@@ -72,7 +72,8 @@ function readCompose() {
 }
 
 test("M3/T1 declares an internal-only Knowledge service", () => {
-  const knowledge = readCompose().services.knowledge;
+  const services = readCompose().services;
+  const knowledge = services.knowledge;
 
   assert.equal(knowledge.image, "personal-tool/knowledge:m3");
   assert.equal(knowledge.ports, undefined);
@@ -92,11 +93,17 @@ test("M3/T1 declares an internal-only Knowledge service", () => {
   assert.equal(knowledge.environment.KNOWLEDGE_DATABASE_NAME, "postgres");
   assert.equal(
     knowledge.environment.KNOWLEDGE_DATABASE_PASSWORD,
-    "${POSTGRES_PASSWORD:-unconfigured}",
+    "${KNOWLEDGE_DB_PASSWORD:-unconfigured}",
   );
   assert.equal(knowledge.environment.KNOWLEDGE_DATABASE_PORT, "5432");
-  assert.equal(knowledge.environment.KNOWLEDGE_DATABASE_USER, "postgres");
+  assert.notEqual(knowledge.environment.KNOWLEDGE_DATABASE_USER, "postgres");
+  assert.equal(knowledge.environment.KNOWLEDGE_DATABASE_USER, "knowledge_app");
   assert.equal(knowledge.environment.KNOWLEDGE_DATABASE_DSN, undefined);
+  assert.equal(services.postgres.environment.SKILL_DB_PASSWORD, undefined);
+  assert.equal(
+    services["postgres-bootstrap"].environment.SKILL_DB_PASSWORD,
+    "${SKILL_DB_PASSWORD:-unconfigured}",
+  );
 });
 
 test("M3/T1 keeps Nginx loopback-only and proxies only the Knowledge route", () => {
