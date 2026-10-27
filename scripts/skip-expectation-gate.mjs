@@ -313,6 +313,10 @@ case(s): ${family.reason}`,
 pass at all: it was skipped entirely`,
         );
       }
+    } else if (passes + skips > 0 && (family.maxSkips ?? 0) >= passes + skips) {
+      failures.push(
+        `the family \`${family.id}\` has a skip ceiling of ${family.maxSkips ?? 0} that is greater than or equal to its report denominator of ${passes + skips} (passes + skips)`,
+      );
     } else if (skips > (family.maxSkips ?? 0)) {
       failures.push(
         `the family \`${family.id}\` skipped ${skips} case(s) and may skip at \

@@ -366,18 +366,31 @@ unexplained-skip refusal",
 });
 
 /**
- * A case set that matches every declaration: each declared lane contributes a
- * skipped case exactly when its family may skip, and every undeclared lane
- * contributes a pass. This is the baseline a defect is injected into.
+ * A case set that matches every declaration while exercising skip ceilings:
+ * each may-skip family uses its full allowance plus one passing case, spread
+ * round-robin over its lanes; must-run and undeclared lanes contribute passes.
+ * This is the baseline a defect is injected into.
  */
 function matchingCases() {
   const cases = [];
   for (const family of families) {
-    for (const lane of lanesOf(family)) {
+    const lanes = lanesOf(family);
+    if (family.expectation === "may-skip") {
+      const caseCount = (family.maxSkips ?? 0) + 1;
+      for (let index = 0; index < caseCount; index += 1) {
+        cases.push({
+          lane: lanes[index % lanes.length],
+          name: `case ${index + 1} of ${family.id}`,
+          skipped: index < (family.maxSkips ?? 0),
+        });
+      }
+      continue;
+    }
+    for (const lane of lanes) {
       cases.push({
         lane,
-        name: `a case of ${family.id}`,
-        skipped: family.expectation === "may-skip",
+        name: `a passing case of ${family.id}`,
+        skipped: false,
       });
     }
   }
@@ -385,7 +398,7 @@ function matchingCases() {
     if (cases.some((entry) => entry.lane === lane)) continue;
     cases.push({
       lane,
-      name: "a case of a lane without a family",
+      name: "a passing case of a lane without a family",
       skipped: false,
     });
   }

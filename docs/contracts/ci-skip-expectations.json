@@ -48,14 +48,14 @@
     {
       "id": "postgres",
       "expectation": "may-skip",
-      "maxSkips": 4,
-      "reason": "the SQL statement gate needs the PostgreSQL container, and the CI runner has no Docker daemon, so its four cases report NOT RUN instead of a pass"
+      "maxSkips": 3,
+      "reason": "the SQL statement gate needs the PostgreSQL container, and the CI runner has no Docker daemon, so at most three of its four cases may report NOT RUN; a fourth skip would cover the whole family and leave the ceiling unable to discriminate"
     },
     {
       "id": "docker",
-      "expectation": "may-skip",
-      "maxSkips": 32,
-      "reason": "the Docker contract lanes need a Docker daemon, and the CI runner has none, so their cases report NOT RUN instead of a pass"
+      "expectation": "must-run",
+      "maxSkips": 0,
+      "reason": "the Docker contract lanes are readFileSync and regex scans that never need a daemon, so they must execute on every host; a skip means the lane stopped protecting the contract"
     },
     {
       "id": "powershell-helpers",
