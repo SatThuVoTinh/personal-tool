@@ -2064,7 +2064,7 @@ fix xong và đã chứng minh, nên hai loại hàng này ở lại. Dọn chú
 - Legacy register id: — (new Phase 1 candidate)
 - Affected modules: Zink Knowledgebase
 - Severity: High
-- Status: CONFIRMED - Phase 3 triage: oversized sidecar is skipped with no source error, then the intact PDF is deleted as stale; severity raised to High.
+- Status: CONFIRMED - Phase 3 triage: oversized sidecar is skipped with no source error, then the intact PDF is deleted as stale; severity raised to High. R5 fixed at `6c05167` (2026-10-27): the sweep raises `PDF_SIDECAR_TOO_LARGE` with the sidecar path, the lifecycle records it on the `SafeRunError` and refuses to publish the incomplete manifest. Evidence: `tests/test_index_lifecycle.py` 16 passed, `npm run test:knowledge` 308 passed / 18 skipped, mutation probe re-deletes the PDF. Closure waits for the band gate.
 - Phase 3 verdict: RED no; fixer fix-knowledgebase; depends_on none; evidence docs/execution/reports/p3/triage-03.md
 - Root cause: sidecar discovery skips files above `MAX_SIDECAR_BYTES` without reporting a source error or preserving the referenced PDF path; incremental publication interprets the missing path as a removed source and deletes its searchable record.
 - Evidence: `apps/knowledge/app/pdf_foundation.py:255-263` continues on an oversized sidecar; `apps/knowledge/app/index_lifecycle.py:206-219,418-435` builds the manifest and computes stale sources; `apps/knowledge/app/database.py:2202-2211` deletes those source rows. Cascading ownership is defined in migrations `001_initial.sql:87-95,136-140` and `002_pdf_ingestion_foundation.sql:71-79`.

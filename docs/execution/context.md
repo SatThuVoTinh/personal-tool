@@ -110,8 +110,9 @@ No assignments exist while the run status is `NOT STARTED`. The main agent recor
 | P4-01 | main agent | Apply the 23 triage verdicts to the register (status, type, severity, RED, fixer, depends_on, evidence) | docs/execution/findings.md | Phase 3 reports | every loop-1 row carries its verdict; 0 rejected | done_verified |
 | P4-02 | main agent | Write the Phase 4 fix plan covering the whole register | docs/execution/fix-plan.md | P4-01 | counts measured from the register; waves ordered root-cause → High → Medium → Low; RED list separate | done_verified |
 | P4-03 | main agent | Materialize the R5 execution contract and point `PLAN.md` at it | docs/contracts/execution/ACTIVE.md, PLAN.md | owner approval of P4-02 | task ID and revision match; Planning Readiness APPROVED; Execution Authorization YES | done_verified — R5 at `docs/contracts/execution/ACTIVE.md` (351 lines), R4 archived at `docs/contracts/execution/archive/2026-10-27-M12-T9-R4.md`, `PLAN.md` active block at line 8571 |
-| P5-01 | fix-infrastructure | Fix `F-INFRA-002` (Option A), then the remaining infra/DB rows | infrastructure/** plus `zink-skill-store/src/vector-sync.mjs` (row-scoped owner exception) | R5 contract §8.4 item 1 and item 5 | red/green + mutation probe + gates; the lead commits the row | blocked — the config edit line for `vector-sync.mjs` is not present yet (owner chose A on 2026-10-27) |
-| P5-02 | fix-tests | Fix `F-481` under the static declaration rule | tests/** and scripts/** (owner opened it 11:57) | R5 contract §8.4 item 4; owner decision 2026-10-27 | gate reddens 4/4 and 32/32, green after the re-declaration; mutation probe | blocked — the fixer's bash block denies `git commit`, so it must stop at a verified working-tree change; the lead commits |
+| P5-01 | fix-infrastructure | Fix `F-INFRA-002` (Option A: module roles inside the existing `postgres` database, no migration), then the remaining infra/DB rows | infrastructure/** plus `zink-skill-store/src/vector-sync.mjs` (row-scoped owner exception) | R5 contract §8.4 item 1 and item 5 | red/green + mutation probe + gates; the lead commits the row | in_progress — second pass; the first pass wrongly read Option A as new per-module databases and stopped before changing anything |
+| P5-02 | fix-tests | Fix `F-481` under the static declaration rule | tests/** and scripts/** (owner opened it 11:57) | R5 contract §8.4 item 4; owner decision 2026-10-27 | gate reddens 4/4 and 32/32, green after the re-declaration; mutation probe | review — gate rule in `scripts/skip-expectation-gate.mjs` (7 lines) and the `matchingCases()` fixture fixed; `node --test tests/agent-owner-F-197-skip-expectation.test.mjs` 13 passed / 0 failed; mutation probe red then green; lint/format blocked only by the F-OC-002 lane's untracked test file; the JSON re-declaration waits for the owner's 1/2/3 answer |
+| P5-03 | fix-knowledgebase | Fix `F-KB-001` (High) | apps/knowledge/** | R5 contract §5 | red/green + mutation probe + `test:knowledge`; lead commits | done_verified — lane worktree `m12-t9-r5-f-kb-001`, applied by the lead and committed as `6c05167`; `tests/test_index_lifecycle.py` 16 passed, `npm run test:knowledge` 308 passed / 18 skipped |
 
 Use only the statuses `planned`, `in_progress`, `blocked`, `review`, and `done_verified`:
 
@@ -122,6 +123,8 @@ Use only the statuses `planned`, `in_progress`, `blocked`, `review`, and `done_v
 - `done_verified`: acceptance criteria checked and evidence recorded.
 
 A subagent's completion report alone does not make an assignment `done_verified`.
+
+**Lane worktrees (observed 2026-10-27).** Some fixers run in an isolated git worktree under `%USERPROFILE%\.local\share\opencode\worktree\<id>\<name>` (observed: `m12-t9-r5-f-kb-001`, `f-oc-002-zip-budgets`) instead of the main tree. A lane's report can therefore be green while the main working tree shows no change. The lead integrates a finished lane by copying its diff into the main tree, re-running the row's gate there, and committing the row; the lane worktree is never committed by the fixer.
 
 ## 5. Agent reports
 
