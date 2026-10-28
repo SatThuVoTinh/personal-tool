@@ -536,11 +536,35 @@ const EXCEL_VALIDATION_RULES = Object.freeze({
  * resolves that, then re-appends the segments that do not exist yet — the
  * path a write will create, seen through the filesystem as it is.
  */
-function realpathOf(target) {
+function realpathOf(target, seen = new Set()) {
   let current = path.resolve(target);
   const trailing = [];
   for (;;) {
     try {
+      let isSymlink = false;
+      try {
+        isSymlink = fs.lstatSync(current).isSymbolicLink();
+      } catch {
+        // current does not exist
+      }
+
+      if (isSymlink) {
+        try {
+          const real = fs.realpathSync(current);
+          return trailing.length ? path.join(real, ...trailing.reverse()) : real;
+        } catch {
+          // Detect dangling symlink where realpathSync fails on a symbolic link
+          if (seen.has(current)) {
+            return trailing.length ? path.join(current, ...trailing.reverse()) : current;
+          }
+          seen.add(current);
+          const linkTarget = fs.readlinkSync(current);
+          const resolvedLink = path.resolve(path.dirname(current), linkTarget);
+          const real = realpathOf(resolvedLink, seen);
+          return trailing.length ? path.join(real, ...trailing.reverse()) : real;
+        }
+      }
+
       const real = fs.realpathSync(current);
       return trailing.length ? path.join(real, ...trailing.reverse()) : real;
     } catch {
@@ -562,6 +586,47 @@ function assertInsideWorkspace(base, target, message) {
   const rel = path.relative(realBase, realTarget);
   if (rel.startsWith("..") || path.isAbsolute(rel)) {
     throw new Error(message);
+  }
+
+  const resolvedTarget = path.resolve(base, target);
+  const relFromBase = path.relative(base, resolvedTarget);
+  if (relFromBase.startsWith("..") || path.isAbsolute(relFromBase)) {
+    throw new Error(message);
+  }
+
+  const segments = relFromBase.split(/[\\/]+/u).filter(Boolean);
+  let current = base;
+  for (const segment of segments) {
+    current = path.join(current, segment);
+    let stat;
+    try {
+      stat = fs.lstatSync(current);
+    } catch {
+      continue;
+    }
+    if (stat.isSymbolicLink()) {
+      let linkReal;
+      try {
+        linkReal = fs.realpathSync(current);
+      } catch {
+        throw new Error(message);
+      }
+      const linkRel = path.relative(realBase, linkReal);
+      if (linkRel.startsWith("..") || path.isAbsolute(linkRel)) {
+        throw new Error(message);
+      }
+    } else {
+      let segReal;
+      try {
+        segReal = fs.realpathSync(current);
+      } catch {
+        throw new Error(message);
+      }
+      const segRel = path.relative(realBase, segReal);
+      if (segRel.startsWith("..") || path.isAbsolute(segRel)) {
+        throw new Error(message);
+      }
+    }
   }
 }
 
@@ -756,6 +821,19 @@ export function executeExcelOperation(params, baseDir = null) {
       targetPath,
       `ARTIFACT_PATH_ESCAPE: file_path must stay inside the workspace`,
     );
+
+    const previewPath = targetPath.replace(/\.xlsx$/i, "_preview.svg");
+    const previewPngPath = targetPath.replace(/\.xlsx$/i, "_preview.png");
+    assertInsideWorkspace(
+      effectiveBase,
+      previewPath,
+      `ARTIFACT_PATH_ESCAPE: preview_path must stay inside the workspace`,
+    );
+    assertInsideWorkspace(
+      effectiveBase,
+      previewPngPath,
+      `ARTIFACT_PATH_ESCAPE: preview_png_path must stay inside the workspace`,
+    );
   }
   const publicFileName = path.basename(targetPath);
 
@@ -923,16 +1001,30 @@ export function executeExcelOperation(params, baseDir = null) {
     sheetName = writtenSheetNames[0];
   }
 
+  const previewPath = targetPath.replace(/\.xlsx$/i, "_preview.svg");
+  const previewPngPath = targetPath.replace(/\.xlsx$/i, "_preview.png");
+
+  if (effectiveBase) {
+    assertInsideWorkspace(
+      effectiveBase,
+      previewPath,
+      `ARTIFACT_PATH_ESCAPE: preview_path must stay inside the workspace`,
+    );
+    assertInsideWorkspace(
+      effectiveBase,
+      previewPngPath,
+      `ARTIFACT_PATH_ESCAPE: preview_png_path must stay inside the workspace`,
+    );
+  }
+
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
   fs.writeFileSync(targetPath, buf);
 
   // Generate real visual SVG preview of the spreadsheet
   const previewSvg = renderSheetPreviewSvg(rows, sheetName);
-  const previewPath = targetPath.replace(/\.xlsx$/i, "_preview.svg");
   fs.writeFileSync(previewPath, previewSvg, "utf8");
 
   // Generate real visual PNG preview of the spreadsheet
-  const previewPngPath = targetPath.replace(/\.xlsx$/i, "_preview.png");
   renderSheetPreviewPng(rows, sheetName, previewPngPath);
 
   const logicalFilePath = publicFileName;

@@ -113,3 +113,64 @@ test("F-044: a workbook target inside the sandbox is still allowed", () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("F-OC-003: a workbook target that is a dangling symlink or junction pointing outside the sandbox is refused", (t) => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "zink-foc003-"));
+  const outside = path.join(root, "outside");
+  const sandbox = path.join(root, "sandbox");
+  mkdirSync(outside, { recursive: true });
+  mkdirSync(sandbox, { recursive: true });
+
+  const outsideTarget = path.join(outside, "escaped.xlsx");
+  const danglingLink = path.join(sandbox, "dangling.xlsx");
+  let filePath = "dangling.xlsx";
+
+  let created = false;
+  try {
+    symlinkSync(outsideTarget, danglingLink, "file");
+    created = true;
+  } catch {
+    const danglingDir = path.join(sandbox, "dangling_dir");
+    try {
+      symlinkSync(path.join(outside, "nonexistent_sub"), danglingDir, "junction");
+      filePath = "dangling_dir/escaped.xlsx";
+      created = true;
+    } catch {
+      // platform refuses
+    }
+  }
+
+  if (!created) {
+    t.skip("the platform refuses to create symlinks or junctions");
+    return;
+  }
+
+  try {
+    let error = null;
+    try {
+      executeExcelOperation(
+        {
+          operation: "create",
+          file_path: filePath,
+          data: [{ a: 1 }],
+        },
+        sandbox,
+      );
+    } catch (err) {
+      error = err;
+    }
+
+    assert.ok(error, "the call must be refused");
+    assert.match(
+      String(error.message ?? error),
+      /ARTIFACT_PATH_ESCAPE/u,
+      `the refusal must be named ARTIFACT_PATH_ESCAPE, got ${error?.message ?? error}`,
+    );
+    assert.ok(
+      !existsSync(outsideTarget),
+      "the workbook must not be created outside the sandbox via dangling symlink",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
