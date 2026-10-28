@@ -642,6 +642,15 @@ export function applyWorkflowEvent(
       // Replaying the same lineage keeps the existing task byte-identical.
       return next;
     }
+    for (const existing of Object.values(next.tasks)) {
+      if (
+        existing.origin === payload.origin &&
+        existing.origin_principal_ref === payload.origin_principal_ref &&
+        existing.origin_message_id === payload.origin_message_id
+      ) {
+        requireCondition(false, "ORIGIN_BINDING_CONFLICT");
+      }
+    }
     next.tasks[payload.task_id] = {
       ...payload,
       revisions_used: 1,
