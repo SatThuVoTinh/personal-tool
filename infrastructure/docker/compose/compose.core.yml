@@ -220,8 +220,12 @@ networks:
   # infrastructure/networking/networks.yml and consumed here by that shared
   # name. The Docker network is project scoped (<project>_platform), so the
   # acceptance stacks stay isolated from the live stack.
+  # F-INFRA-001 (R9-I05-01): the platform network is internal to enforce egress
+  # through the Nginx model gateway; containers cannot bypass the allowlist by
+  # reaching host.docker.internal or other external hosts.
   platform:
     driver: bridge
+    internal: true
 
 volumes:
   n8n-data:
