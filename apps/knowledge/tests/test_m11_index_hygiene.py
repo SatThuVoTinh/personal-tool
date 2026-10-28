@@ -32,7 +32,7 @@ from unittest.mock import AsyncMock, patch
 from uuid import UUID, uuid4
 
 import asyncpg
-from asyncpg.exceptions import DuplicateTableError
+from asyncpg.exceptions import DuplicateColumnError, DuplicateTableError
 
 from app.database import AcceptedIndexRun, KnowledgeDatabase
 from app.database import PdfPublicationSegment
@@ -400,10 +400,11 @@ class ReplayMigrationConnection:
     replay of a migration the catalog already owns.
     """
 
-    def __init__(self, existing: set[str]) -> None:
+    def __init__(self, existing: set[str], error_to_raise: Exception | None = None) -> None:
         self.existing = existing
         self.calls: list[tuple[str, str, tuple[object, ...]]] = []
         self.versions: list[str] = []
+        self.error_to_raise = error_to_raise or DuplicateTableError("relation already exists")
 
     def is_closed(self) -> bool:
         return False
@@ -419,7 +420,7 @@ class ReplayMigrationConnection:
             return
         if normalized.startswith("CREATE SCHEMA") or "knowledge.schema_migrations (" in normalized:
             return
-        raise DuplicateTableError("relation already exists")
+        raise self.error_to_raise
 
     async def fetchval(self, sql: str, *args: object) -> object:
         normalized = " ".join(sql.split())
@@ -484,6 +485,62 @@ class MigrationReplayTests(unittest.IsolatedAsyncioTestCase):
             Path(directory, "001_widgets.sql").write_text(self.MIGRATION, encoding="utf-8")
             database = self.database(directory)
             connection = ReplayMigrationConnection({"widgets"})
+
+            with self.assertRaises(asyncpg.PostgresError):
+                await database._apply_migrations(owner_connection=connection)  # type: ignore[arg-type]
+
+            self.assertEqual(connection.versions, [])
+
+    async def test_an_alter_migration_replay_with_duplicate_column_is_recorded(self) -> None:
+        """F-KB-002: replaying an already-applied ALTER migration with a missing
+
+        ledger row must not abort startup with DATABASE_UNAVAILABLE when
+        PostgreSQL returns duplicate_column (42701).
+        """
+        migrations_dir = Path(__file__).parents[1] / "migrations"
+        with TemporaryDirectory() as directory:
+            real_004 = migrations_dir / "004_pdf_build_failure_cause.sql"
+            Path(directory, "004_pdf_build_failure_cause.sql").write_bytes(real_004.read_bytes())
+            database = self.database(directory)
+            connection = ReplayMigrationConnection(
+                set(), error_to_raise=DuplicateColumnError("column already exists")
+            )
+
+            await database._apply_migrations(owner_connection=connection)  # type: ignore[arg-type]
+
+            self.assertEqual(connection.versions, ["004_pdf_build_failure_cause.sql"])
+
+    async def test_an_alter_migration_005_replay_with_duplicate_column_is_recorded(self) -> None:
+        """F-KB-002: migration 005 uses ALTER TABLE ... ADD COLUMN digest and
+
+        must also be recovered on duplicate_column replay.
+        """
+        migrations_dir = Path(__file__).parents[1] / "migrations"
+        with TemporaryDirectory() as directory:
+            real_005 = migrations_dir / "005_schema_migration_digest.sql"
+            Path(directory, "005_schema_migration_digest.sql").write_bytes(real_005.read_bytes())
+            database = self.database(directory)
+            connection = ReplayMigrationConnection(
+                set(), error_to_raise=DuplicateColumnError("column already exists")
+            )
+
+            await database._apply_migrations(owner_connection=connection)  # type: ignore[arg-type]
+
+            self.assertEqual(connection.versions, ["005_schema_migration_digest.sql"])
+
+    async def test_an_alter_migration_failing_with_other_error_still_aborts_boot(self) -> None:
+        """F-KB-002: an ALTER migration with an empty object set failing with
+
+        anything other than duplicate_column (42701) must still raise and abort.
+        """
+        migrations_dir = Path(__file__).parents[1] / "migrations"
+        with TemporaryDirectory() as directory:
+            real_004 = migrations_dir / "004_pdf_build_failure_cause.sql"
+            Path(directory, "004_pdf_build_failure_cause.sql").write_bytes(real_004.read_bytes())
+            database = self.database(directory)
+            connection = ReplayMigrationConnection(
+                set(), error_to_raise=DuplicateTableError("relation already exists")
+            )
 
             with self.assertRaises(asyncpg.PostgresError):
                 await database._apply_migrations(owner_connection=connection)  # type: ignore[arg-type]

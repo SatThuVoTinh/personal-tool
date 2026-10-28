@@ -140,6 +140,13 @@ _MIGRATION_OBJECT_PATTERN = re.compile(
     r"(?:(?P<schema>[a-z_][a-z0-9_]*)\.)?(?P<name>[a-z_][a-z0-9_]*)",
     re.IGNORECASE,
 )
+# F-KB-002: ALTER TABLE ... ADD COLUMN patterns modify existing tables rather
+# than creating new catalog objects; recognize them explicitly and return an
+# empty object set for them (not a non-empty set).
+_MIGRATION_ALTER_PATTERN = re.compile(
+    r"ALTER\s+TABLE\s+(?:(?P<schema>[a-z_][a-z0-9_]*)\.)?(?P<table>[a-z_][a-z0-9_]*)\s+ADD\s+COLUMN",
+    re.IGNORECASE,
+)
 
 
 def _migration_objects(sql: str) -> list[tuple[str | None, str, str]]:
@@ -152,6 +159,9 @@ def _migration_objects(sql: str) -> list[tuple[str | None, str, str]]:
             kind = "INDEX"
         schema = match.group("schema")
         objects.append((schema, match.group("name"), kind))
+    # F-KB-002: ALTER TABLE ... ADD COLUMN statements are recognized as schema
+    # modifications rather than new catalog objects, returning an empty object
+    # set for them (not a non-empty set).
     return objects
 
 
@@ -2883,13 +2893,20 @@ class KnowledgeDatabase:
         duplicate-object failure AND every object the file creates is already
         in the catalog. A partial catalog therefore still aborts the boot,
         which is the behaviour a drifted schema needs.
+        
+        F-KB-002 (R5-T09-2): ALTER TABLE ... ADD COLUMN migrations have no
+        CREATE objects; an empty object set combined with PostgreSQL error
+        42701 (duplicate_column) indicates the column already exists and the
+        migration has been fully applied.
         """
 
         if getattr(error, "sqlstate", None) not in _MIGRATION_DUPLICATE_SQLSTATES:
             return False
         objects = _migration_objects(sql)
+        # F-KB-002: ALTER migrations (migrations 004, 005) add columns without
+        # creating new catalog objects; recognise them as applied on duplicate-column.
         if not objects:
-            return False
+            return getattr(error, "sqlstate", None) == "42701"  # duplicate_column
         for schema, name, kind in objects:
             if not await KnowledgeDatabase._migration_object_exists(
                 connection, schema, name, kind
