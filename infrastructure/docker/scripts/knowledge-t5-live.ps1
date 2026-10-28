@@ -327,7 +327,7 @@ function Assert-BackupAndRestore {
       Remove-Item -LiteralPath $truncatedHost -Force -ErrorAction SilentlyContinue
     }
 
-    $criticalTables = @("indexes", "index_runs", "sources", "source_sidecars")
+    $criticalTables = @("indexes", "index_runs", "segments", "sources", "source_sidecars")
     if (@($Snapshot.migration_versions) -contains "002_pdf_ingestion_foundation.sql") { $criticalTables += @("pdf_content_builds", "pdf_content_batches", "pdf_content_segments", "pdf_source_details", "index_run_source_counts") }
     $metadataRows = @(Invoke-LiveSnapshotSql (Get-MetadataDigestSql $criticalTables) $Snapshot.snapshot_id | Where-Object { $_ -and $_ -notin @("BEGIN", "SET", "COMMIT") })
     $metadataDigest = Get-T5Sha256Text (($metadataRows -join "`n") + "`n")
@@ -471,7 +471,7 @@ try {
   # the acceptance overlay.
   Assert-T5ModelEgressAllowlist $knowledgeId
   $ledgerAfterStart = @(Invoke-LiveSql "SELECT version FROM knowledge.schema_migrations ORDER BY version" | Where-Object { $_ })
-  if (($ledgerAfterStart -join "`n") -cne "001_initial.sql`n002_pdf_ingestion_foundation.sql") { throw "M4 migration ledger is invalid after service start." }
+  if (($ledgerAfterStart -join "`n") -cne "001_initial.sql`n002_pdf_ingestion_foundation.sql`n004_pdf_build_failure_cause.sql`n005_schema_migration_digest.sql") { throw "M4 migration ledger is invalid after service start." }
   $catalogAfterStart = ((Invoke-LiveSql (Get-CatalogSql) | Where-Object { $_ }) -join "`n") + "`n"
   if ((Get-T5Sha256Text $catalogAfterStart) -cne $matching.migration.schema_catalog_fingerprint) { throw "Operational M4 catalog differs from isolated exact-candidate acceptance." }
 

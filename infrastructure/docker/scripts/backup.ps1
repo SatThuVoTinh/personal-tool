@@ -23,6 +23,7 @@ $utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
 # inspecting the archives this script produces, so the decision lives in one
 # place instead of being asserted as a constant over an archive nobody read.
 . (Join-Path $scriptDirectory "backup-inspection.ps1")
+. (Join-Path $scriptDirectory "credential-sentinels.ps1")
 
 function Invoke-Compose {
   param([string[]]$Arguments, [string[]]$Profiles = @())
@@ -145,6 +146,30 @@ foreach ($file in @(Get-ChildItem -LiteralPath $backupRoot -File -Recurse)) {
   }
 }
 
+$envValues = Read-EnvironmentFile $EnvironmentFile
+$n8nKey = if ($envValues.ContainsKey("N8N_ENCRYPTION_KEY")) { $envValues["N8N_ENCRYPTION_KEY"] } else { "" }
+$n8nKeyPresent = ($n8nKey.Length -gt 0 -and -not (Test-SentinelValue $n8nKey))
+
+function Get-Sha256String {
+  param([string]$Text)
+  if (-not $Text) { return "" }
+  $bytes = [System.Text.Encoding]::UTF8.GetBytes($Text)
+  $hasher = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    $hashBytes = $hasher.ComputeHash($bytes)
+    return ([System.BitConverter]::ToString($hashBytes)).Replace("-", "").ToLowerInvariant()
+  }
+  finally { $hasher.Dispose() }
+}
+
+$n8nKeyHash = if ($n8nKeyPresent) { Get-Sha256String $n8nKey } else { "missing" }
+
+$n8nEncryptionKeyRef = [ordered]@{
+  key_present = $n8nKeyPresent
+  key_sha256 = $n8nKeyHash
+  recovery_note = "n8n config is excluded from n8n-home.tar.gz; restore requires N8N_ENCRYPTION_KEY matching key_sha256 in runtime environment"
+}
+
 $manifest = [ordered]@{
   backup_format_version = 3
   created_at = [DateTime]::UtcNow.ToString("o")
@@ -152,6 +177,7 @@ $manifest = [ordered]@{
   files = $files
   plaintext_secrets_excluded = $secretInspection.plaintext_secrets_excluded
   secret_inspection = $secretInspection
+  n8n_encryption_key_reference = $n8nEncryptionKeyRef
 }
 [IO.File]::WriteAllText(
   (Join-Path $backupRoot "manifest.json"),

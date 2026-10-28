@@ -352,9 +352,9 @@ function Get-T5MigrationIdentity {
   $migrations = @(foreach ($file in Get-ChildItem -LiteralPath $migrationDirectory -Filter *.sql | Sort-Object Name) {
     [ordered]@{ name = $file.Name; sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
   })
-  $expected = @("001_initial.sql", "002_pdf_ingestion_foundation.sql")
+  $expected = @("001_initial.sql", "002_pdf_ingestion_foundation.sql", "004_pdf_build_failure_cause.sql", "005_schema_migration_digest.sql")
   if (($migrations.name -join "`n") -cne ($expected -join "`n")) {
-    throw "M4/T5 expects the exact approved migration 001/002 ledger."
+    throw "M4/T5 expects the exact approved migration 001/002/004/005 ledger."
   }
   return @($migrations)
 }

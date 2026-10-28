@@ -16,6 +16,7 @@ if (-not $EnvironmentFile) { $EnvironmentFile = Join-Path $PSScriptRoot "..\env\
 $dockerDirectory = Split-Path -Parent $PSScriptRoot
 $composeFile = Join-Path $dockerDirectory "compose\compose.core.yml"
 $knowledgeComposeFile = Join-Path $dockerDirectory "compose\compose.knowledge.yml"
+$knowledgeHardeningComposeFile = Join-Path $dockerDirectory "compose\compose.knowledge.hardening.yml"
 $usesKnowledge = $Profile -in @("knowledge", "all")
 
 function Get-EnvironmentFileValue {
@@ -43,6 +44,9 @@ function Invoke-PlatformCompose {
   )
   if ($usesKnowledge) {
     $composeArguments += @("-f", $knowledgeComposeFile)
+    if (Test-Path -LiteralPath $knowledgeHardeningComposeFile -PathType Leaf) {
+      $composeArguments += @("-f", $knowledgeHardeningComposeFile)
+    }
   }
   foreach ($composeProfile in $Profiles) {
     $composeArguments += @("--profile", $composeProfile)
