@@ -790,13 +790,6 @@ async function walk(directory, parts, errors, records, count, residue) {
     // recognizes only complete validated pairs — so it is reported as RESIDUE
     // (invisible to the record set and to the error list) and swept by the
     // writer under the store-wide lock.
-    if (isResidueDirectory(entry.name)) {
-      residue.push({
-        path: skillPath([...parts, entry.name]),
-        parts: [...parts, entry.name],
-      });
-      continue;
-    }
     if (!entry.isDirectory() || entry.isSymbolicLink()) {
       errors.push(
         diagnostic(
@@ -805,6 +798,13 @@ async function walk(directory, parts, errors, records, count, residue) {
           skillPath([...parts, entry.name]),
         ),
       );
+      continue;
+    }
+    if (isResidueDirectory(entry.name)) {
+      residue.push({
+        path: skillPath([...parts, entry.name]),
+        parts: [...parts, entry.name],
+      });
       continue;
     }
     await walk(
@@ -1320,6 +1320,63 @@ export async function describeVersionRollbackState(versionDir, removalError) {
 }
 
 /**
+ * F-SKILL-001: validates that every existing path component beneath skillsRoot
+ * contains no dangling or escaping symlinks.
+ */
+async function assertSafeStorePathComponents(skillsRoot, relativeParts) {
+  if (typeof skillsRoot !== "string" || skillsRoot.trim() === "") {
+    writerError(
+      "SKILLS_ROOT_REQUIRED",
+      "a canonical skillsRoot is required for path validation.",
+    );
+  }
+  let realRoot;
+  try {
+    realRoot = await realpath(skillsRoot);
+  } catch {
+    realRoot = path.resolve(skillsRoot);
+  }
+
+  const parts = Array.isArray(relativeParts)
+    ? relativeParts.filter(Boolean)
+    : [relativeParts].filter(Boolean);
+  let cursor = skillsRoot;
+  for (const part of parts) {
+    cursor = path.join(cursor, part);
+    let info;
+    try {
+      info = await lstat(cursor);
+    } catch (error) {
+      if (error?.code === "ENOENT") {
+        break;
+      }
+      throw error;
+    }
+
+    if (info.isSymbolicLink()) {
+      let resolvedTarget;
+      try {
+        resolvedTarget = await realpath(cursor);
+      } catch {
+        writerError(
+          "SKILL_IDENTITY_INVALID",
+          `path component ${part} is a dangling symlink.`,
+          ["UNSAFE_PATH", "DANGLING_SYMLINK"],
+        );
+      }
+      const rel = path.relative(realRoot, resolvedTarget);
+      if (rel.startsWith("..") || path.isAbsolute(rel)) {
+        writerError(
+          "SKILL_IDENTITY_INVALID",
+          `path component ${part} resolves outside skill store base.`,
+          ["UNSAFE_PATH", "SYMLINK_ESCAPE"],
+        );
+      }
+    }
+  }
+}
+
+/**
  * Removes writer residue: stale `<semver>.pending-*` staging directories and
  * `<semver>.stranded-*` quarantined ones under the capability parent — any
  * version's, not only the promoting caller's, because one killed publisher (or
@@ -1330,11 +1387,20 @@ export async function describeVersionRollbackState(versionDir, removalError) {
  */
 async function healWriterResidue(skillsRoot, parentDir, versionDir) {
   try {
+    const parentRel = path.relative(skillsRoot, parentDir);
+    if (!parentRel.startsWith("..") && !path.isAbsolute(parentRel)) {
+      await assertSafeStorePathComponents(skillsRoot, parentRel.split(path.sep));
+    }
     const entries = await readdir(parentDir);
     let swept = false;
     for (const entry of entries) {
       if (isResidueDirectory(entry)) {
-        await rm(path.join(parentDir, entry), {
+        const residuePath = path.join(parentDir, entry);
+        await assertSafeStorePathComponents(skillsRoot, [
+          ...parentRel.split(path.sep),
+          entry,
+        ]);
+        await rm(residuePath, {
           recursive: true,
           force: true,
         });
@@ -1402,6 +1468,11 @@ async function sweepWriterResidue(skillsRoot, residue) {
   for (const entry of residue ?? []) {
     const parts = entry?.parts;
     if (!Array.isArray(parts) || parts.length === 0) continue;
+    try {
+      await assertSafeStorePathComponents(skillsRoot, parts);
+    } catch {
+      continue;
+    }
     const target = path.join(skillsRoot, ...parts);
     await rm(target, { recursive: true, force: true });
     await pruneEmptyParents(path.dirname(target), skillsRoot);
@@ -1475,6 +1546,11 @@ export async function quarantineInvalidVersion({
     );
   }
   return withSkillStoreWriterLock(skillsRoot, async () => {
+    await assertSafeStorePathComponents(skillsRoot, [
+      ...nsArray,
+      capability,
+      version,
+    ]);
     const versionDir = path.join(skillsRoot, ...nsArray, capability, version);
     const parentDir = path.join(skillsRoot, ...nsArray, capability);
     let info;
@@ -1716,6 +1792,11 @@ export async function promoteApprovedSkillUnlocked({
     );
   }
 
+  await assertSafeStorePathComponents(skillsRoot, [
+    ...nsArray,
+    capability,
+    version,
+  ]);
   const contentSha256 = createHash("sha256").update(contentBytes).digest("hex");
   const versionDir = path.join(skillsRoot, ...nsArray, capability, version);
   const manifestPath = path.join(versionDir, "manifest.json");
@@ -2079,6 +2160,11 @@ export async function retireSkillUnlocked({
     );
   }
 
+  await assertSafeStorePathComponents(skillsRoot, [
+    ...nsArray,
+    capability,
+    version,
+  ]);
   const versionDir = path.join(skillsRoot, ...nsArray, capability, version);
   const manifestPath = path.join(versionDir, "manifest.json");
   let manifestBytes;
