@@ -3,7 +3,7 @@
  *
  * Design (R4 Finding 2):
  * - Mutual exclusion via atomic directory creation (`mkdir`, mode 0o700).
- *   `EEXIST` means another process holds the lock — never double-acquire.
+ *   `EEXIST` means another process holds the lock Ã¢â‚¬â€ never double-acquire.
  * - Waiting is fully asynchronous (`setTimeout` between attempts): the event
  *   loop is never blocked while contending for the lock.
  * - Bounded: `acquire` throws an explicit timeout error after `timeoutMs`
@@ -11,12 +11,12 @@
  * - Release-safe: `withFileLock` releases in `finally`, including on throw.
  * - Crash-safe by fail-closed design: a crashed holder leaves the lock
  *   directory behind and the next acquirer times out with an explicit error.
- *   There is intentionally NO age-based stale-lock reclaim — reclaiming could
+ *   There is intentionally NO age-based stale-lock reclaim Ã¢â‚¬â€ reclaiming could
  *   let two processes enter the critical section together. Recovery of an
  *   orphaned lock is an explicit operator action, not an automatic heuristic.
  *
  * Adoption (M7-065/R4): the three call sites that each carried their own
- * inline retry loop now use this module — the ledger writer lock
+ * inline retry loop now use this module Ã¢â‚¬â€ the ledger writer lock
  * (`topology/lib/ledger.mjs`), the guard lock (`topology/lib/guard.mjs`) and the
  * queue lock (`lib/queue-manager.mjs`). Each previously retried for up to 5000ms
  * using `Atomics.wait`, which blocked the Node event loop. The sync half used by
@@ -69,7 +69,7 @@ function busyWaitMs(ms) {
   // deadline arms) already treats monotonic time as the correct source.
   const until = performance.now() + ms;
   while (performance.now() < until) {
-    // bounded spin — the total budget below is 15 ms, two orders of magnitude
+    // bounded spin Ã¢â‚¬â€ the total budget below is 15 ms, two orders of magnitude
     // under the event-loop stall this module was introduced to remove
   }
 }
@@ -213,11 +213,25 @@ function ownsRecordedLock(dir) {
 }
 
 /**
- * One unlink+rmdir round, returned as a verdict so the synchronous and
- * asynchronous releases apply exactly the same errno policy rather than each
- * restating it.
+ * One unlink+rmdir round with compare-and-remove semantics.
+ * Reads the current on-disk owner.json and verifies its token equals expectedToken
+ * immediately before unlinking; if mismatch, returns { refused: true }.
  */
-function removalRound(dir) {
+function removalRound(dir, expectedToken) {
+  if (expectedToken !== undefined) {
+    let recorded;
+    try {
+      recorded = JSON.parse(readFileSync(ownerFileFor(dir), "utf8"));
+    } catch (err) {
+      if (err?.code === "ENOENT") {
+        return { refused: true }; // no owner record present
+      }
+      throw notOwnerError(dir, "owner record is unreadable");
+    }
+    if (recorded?.token !== expectedToken) {
+      return { refused: true }; // token mismatch after interleaving
+    }
+  }
   try {
     unlinkSync(ownerFileFor(dir));
   } catch (err) {
@@ -243,7 +257,7 @@ function removalRound(dir) {
 /**
  * Release a lock held by this process. Never throws for a missing lock.
  * Throws FILE_LOCK_NOT_OWNER when the lock at `dir` was not acquired by this
- * process under the owner-token protocol — including a lock whose directory
+ * process under the owner-token protocol Ã¢â‚¬â€ including a lock whose directory
  * was removed and re-created by another holder in the meantime.
  *
  * M10/T2-R18: bounded retry. `rmdirSync` takes no retry budget of its own, and
@@ -253,7 +267,7 @@ function removalRound(dir) {
  * refusal must not become a permanent lockout of the ledger, the queue and the
  * decision ledger. unlink+rmdir are attempted as ONE unit per retry round with a
  * small geometric backoff: removing owner.json leaves a pending-delete handle on
- * Windows, so the very next `rmdirSync` transiently answers EPERM/ENOTEMPTY —
+ * Windows, so the very next `rmdirSync` transiently answers EPERM/ENOTEMPTY Ã¢â‚¬â€
  * without the backoff every second acquire at the same path then hit
  * FILE_LOCK_BUSY on a stranded empty directory.
  *
@@ -263,10 +277,16 @@ function removalRound(dir) {
  */
 export function release(lockDir) {
   const dir = normalizeLockDir(lockDir);
+  const expectedToken = instanceTokens.get(dir) ?? heldTokens.get(dir);
   if (!ownsRecordedLock(dir)) return;
   let lastError = null;
   for (let attempt = 0; attempt < RELEASE_RETRY_ATTEMPTS; attempt++) {
-    const round = removalRound(dir);
+    const round = removalRound(dir, expectedToken);
+    if (round.refused) {
+      instanceTokens.delete(dir);
+      heldTokens.delete(dir);
+      throw notOwnerError(dir, "token mismatch at removal point");
+    }
     if (round.released) {
       instanceTokens.delete(dir);
       heldTokens.delete(dir);
@@ -278,7 +298,7 @@ export function release(lockDir) {
   }
   // M11/T3 B1: an exhausted budget must not leave the token registered. A stale
   // in-process token survives into the next acquisition of the same path, whose
-  // release then deletes whichever lock is present — two writers inside the
+  // release then deletes whichever lock is present Ã¢â‚¬â€ two writers inside the
   // critical section, which is exactly what the owner token exists to prevent.
   instanceTokens.delete(dir);
   heldTokens.delete(dir);
@@ -293,10 +313,16 @@ export function release(lockDir) {
  */
 export async function releaseAsync(lockDir) {
   const dir = normalizeLockDir(lockDir);
+  const expectedToken = instanceTokens.get(dir) ?? heldTokens.get(dir);
   if (!ownsRecordedLock(dir)) return;
   let lastError = null;
   for (let attempt = 0; attempt < RELEASE_RETRY_ATTEMPTS; attempt++) {
-    const round = removalRound(dir);
+    const round = removalRound(dir, expectedToken);
+    if (round.refused) {
+      instanceTokens.delete(dir);
+      heldTokens.delete(dir);
+      throw notOwnerError(dir, "token mismatch at removal point");
+    }
     if (round.released) {
       instanceTokens.delete(dir);
       heldTokens.delete(dir);
@@ -333,7 +359,7 @@ export async function acquire(lockDir, options = {}) {
   // M10/T2-R18: only EEXIST means "held". `tryAcquire` already converts EEXIST
   // to `false`, so anything it THROWS is a real filesystem failure (ENOSPC,
   // EACCES, EPERM...). Retrying cannot fix those, and relabelling them as a
-  // timeout hides the cause behind an error that carries no `.code` — so every
+  // timeout hides the cause behind an error that carries no `.code` Ã¢â‚¬â€ so every
   // caller that classifies on `err?.code === "FILE_LOCK_BUSY"` silently
   // misdiagnoses a permanent fault as transient contention. It therefore
   // propagates unchanged instead of being converted to FILE_LOCK_TIMEOUT.
@@ -353,13 +379,13 @@ export async function acquire(lockDir, options = {}) {
 }
 
 /**
- * Acquire, run `fn`, and always release — including when `fn` throws.
+ * Acquire, run `fn`, and always release Ã¢â‚¬â€ including when `fn` throws.
  * Resolves with `fn`'s return value; rejects with `fn`'s error or timeout.
  */
 export async function withFileLock(lockDir, fn, options = {}) {
   const dir = normalizeLockDir(lockDir);
   await acquire(dir, options);
-  // M10/T2-R18: same semantics as the sync seam — a failing release must not
+  // M10/T2-R18: same semantics as the sync seam Ã¢â‚¬â€ a failing release must not
   // replace the guarded call's own outcome, and a committed result is never
   // converted into a thrown error.
   //
@@ -416,7 +442,7 @@ export function withFileLockSync(lockDir, fn) {
   //
   // `try { return fn() } finally { release(dir) }` means a release error
   // REPLACES the value `fn()` already returned, so an event that was appended
-  // and fsynced is reported to the caller as a failure — the ledger, the queue
+  // and fsynced is reported to the caller as a failure Ã¢â‚¬â€ the ledger, the queue
   // and the decision ledger all take a durable commit and treat it as rejected.
   // Retrying that is what duplicates work.
   //

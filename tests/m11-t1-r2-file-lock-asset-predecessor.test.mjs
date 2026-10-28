@@ -111,9 +111,9 @@ const DEPLOYED_BUILD_FILE_LOCK_SHA256 =
 const F581_OUTGOING_FILE_LOCK_SHA256 =
   "e9cac11dea2ebca6fd57f55e1aca6a7c0a6959fb4ff6a6dabf0811533a9bde06";
 
-/** The CURRENT build's file-lock asset — accepted by content, never listed. */
+/** The CURRENT build's file-lock asset after F-OC-004 compare-and-remove fix. */
 const CURRENT_FILE_LOCK_SHA256 =
-  "98c15fe47423c1e19f43d9072e9a35f8b86d441cebd75940e374ce62c11008ee";
+  "cf6a09e91999c418b953e4c5cd2d7a91fd520c17c8b3ccf05a8945af7f276767";
 
 const identifiers = Object.freeze({
   discordGuildId: "123456789012345678",

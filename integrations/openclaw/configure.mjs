@@ -863,6 +863,8 @@ const ALLOWED_GOVERNANCE_ASSET_SHA256 = Object.freeze({
     // unreachable. The digest this build produces is deliberately NOT listed: it is
     // the current build and is accepted by content comparison.
     "e9cac11dea2ebca6fd57f55e1aca6a7c0a6959fb4ff6a6dabf0811533a9bde06",
+    // M12/T9-R5 F-OC-004: the bytes the LIVE runtime carried prior to the compare-and-remove file lock release fix (F-OC-004). Provenance: git show dcd738d:integrations/openclaw/lib/file-lock.mjs
+    "98c15fe47423c1e19f43d9072e9a35f8b86d441cebd75940e374ce62c11008ee",
   ]),
   "lib/guard.mjs": Object.freeze([
     // M10/T2-R14: the outgoing R12/R13 build currently deployed, byte-proven by
