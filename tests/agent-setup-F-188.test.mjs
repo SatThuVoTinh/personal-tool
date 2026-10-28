@@ -478,3 +478,83 @@ test("F-188: the comparison CLI exits 0 while the baseline holds and 1 when it g
   assert.equal(red.status, 1);
   assert.match(red.stdout, /high/);
 });
+
+// ---------------------------------------------------------------------------
+// F-585: fixAvailable detection and remediation checking
+// ---------------------------------------------------------------------------
+test("F-585: auditAdvisoryIdentities extracts fixAvailable from package entries", () => {
+  const reportWithFix = {
+    vulnerabilities: {
+      "markdown-it": {
+        name: "markdown-it",
+        severity: "high",
+        range: ">=15.0.0 <15.0.3",
+        fixAvailable: {
+          name: "markdownlint-cli2",
+          version: "0.24.0",
+          isSemVerMajor: true,
+        },
+        via: [
+          {
+            source: 1,
+            name: "markdown-it",
+            dependency: "markdown-it",
+            title: "advisory GHSA-gfr2-rv44-r23c",
+            url: "https://github.com/advisories/GHSA-gfr2-rv44-r23c",
+            severity: "high",
+            range: ">=15.0.0 <15.0.3",
+          },
+        ],
+      },
+    },
+  };
+
+  const extracted = auditAdvisoryIdentities(reportWithFix);
+  assert.equal(extracted.length, 1);
+  assert.equal(extracted[0].id, "GHSA-gfr2-rv44-r23c");
+  assert.deepEqual(extracted[0].fixAvailable, {
+    name: "markdownlint-cli2",
+    version: "0.24.0",
+    isSemVerMajor: true,
+  });
+});
+
+test("F-585: compareAuditToBaseline fails when an advisory has fixAvailable but baseline does not acknowledge it", () => {
+  const baseline = readAuditBaseline(root);
+  const reportWithFix = auditReport();
+  reportWithFix.vulnerabilities["markdown-it"].fixAvailable = {
+    name: "markdownlint-cli2",
+    version: "0.24.0",
+  };
+
+  const comparison = compareAuditToBaseline(reportWithFix, baseline);
+  assert.equal(comparison.ok, false);
+  assert.ok(
+    comparison.failures.some(
+      (failure) =>
+        failure.includes("GHSA-gfr2-rv44-r23c") &&
+        failure.includes("has a fix available") &&
+        failure.includes("markdownlint-cli2@0.24.0"),
+    ),
+    `failure must name the advisory and the available fix: ${comparison.failures.join(" | ")}`,
+  );
+});
+
+test("F-585: compareAuditToBaseline passes when fixAvailable is acknowledged in the baseline", () => {
+  const baseline = JSON.parse(JSON.stringify(readAuditBaseline(root)));
+  for (const advisory of baseline.advisories) {
+    if (advisory.package === "markdown-it") {
+      advisory.fixAvailable = true;
+    }
+  }
+
+  const reportWithFix = auditReport();
+  reportWithFix.vulnerabilities["markdown-it"].fixAvailable = {
+    name: "markdownlint-cli2",
+    version: "0.24.0",
+  };
+
+  const comparison = compareAuditToBaseline(reportWithFix, baseline);
+  assert.deepEqual(comparison.failures, []);
+  assert.equal(comparison.ok, true);
+});

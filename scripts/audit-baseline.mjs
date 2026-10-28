@@ -149,10 +149,18 @@ export function auditAdvisoryIdentities(report) {
   const byId = new Map();
   for (const [packageName, entry] of Object.entries(packages)) {
     if (!isPlainObject(entry)) return null;
+    const packageFixAvailable =
+      entry.fixAvailable !== undefined && entry.fixAvailable !== false
+        ? entry.fixAvailable
+        : null;
     const via = Array.isArray(entry.via) ? entry.via : [];
     for (const advisory of via) {
       if (typeof advisory === "string") continue;
       if (!isPlainObject(advisory)) return null;
+      const fixAvailable =
+        (advisory.fixAvailable !== undefined && advisory.fixAvailable !== false
+          ? advisory.fixAvailable
+          : null) ?? packageFixAvailable;
       const identity = {
         id: advisoryId(advisory, packageName),
         package: packageName,
@@ -165,6 +173,9 @@ export function auditAdvisoryIdentities(report) {
             ? advisory.range
             : String(entry.range ?? "*"),
       };
+      if (fixAvailable) {
+        identity.fixAvailable = fixAvailable;
+      }
       const existing = byId.get(identity.id);
       if (
         !existing ||
@@ -248,6 +259,15 @@ export function compareAuditToBaseline(report, baseline) {
     if (allowed.severity !== observed.severity) {
       failures.push(
         `npm audit rates ${observed.id} ${observed.severity}, but the recorded baseline rates it ${allowed.severity}.`,
+      );
+    }
+    if (observed.fixAvailable && !allowed.fixAvailable) {
+      const fixDesc =
+        typeof observed.fixAvailable === "object"
+          ? `${observed.fixAvailable.name}@${observed.fixAvailable.version}`
+          : String(observed.fixAvailable);
+      failures.push(
+        `npm audit reports ${observed.id} against ${observed.package} has a fix available (${fixDesc}), but the recorded baseline carries no fixAvailable acknowledgement.`,
       );
     }
   }
