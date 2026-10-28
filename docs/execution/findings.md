@@ -2190,7 +2190,7 @@ fix xong và đã chứng minh, nên hai loại hàng này ở lại. Dọn chú
 - Legacy register id: — (new Phase 1 candidate)
 - Affected modules: OpenClaw shared file lock, decision ledger, queue, topology ledger, Zink Skill Store catalog
 - Severity: High
-- Status: CONFIRMED - Phase 3 triage: replace/remove interleaving can lose the replacement holder under the writer lock.
+- Status: CONFIRMED - Phase 3 triage: replace/remove interleaving can lose the replacement holder under the writer lock. R5 fixed at `f5bf41a` (2026-10-28): `removalRound()` enforces compare-and-remove, verifying owner.json token immediately before unlinking/rmdir; refusals throw `FILE_LOCK_NOT_OWNER`. Predecessor `98c15fe4...` added to `configure.mjs` and test pin updated. Evidence: `tests/m10-t2-r18-file-lock.test.mjs` 8 passed (including R18-08), mutation probe confirmed. Closure waits for the band gate.
 - Phase 3 verdict: RED yes; fixer fix-openclaw-governance-library; depends_on none; evidence docs/execution/reports/p3/triage-07.md
 - Root cause: release validates the owner token once, then unlinks the current `owner.json` and removes the directory without atomically rechecking that the same token still owns it.
 - Evidence: `integrations/openclaw/lib/file-lock.mjs:188-212` compares the recorded token and returns only a boolean; `:220-240` (`removalRound`) unlinks whichever `owner.json` currently occupies the directory and then removes the directory; `release` runs the two stages in sequence at `:264-270`, leaving the gap. The module documents exactly this replacement scenario at `:115-120` and the stale-token consequence at `:279-285`.
