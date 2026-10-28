@@ -447,6 +447,18 @@ export class DecisionLedger {
             ? new Map()
             : this.readDurableEntries();
           for (const [id, record] of this.decisions) {
+            // F-OC-005: inside the writer lock AFTER reading durable records
+            // from disk, if an existing record with the same deterministic ID
+            // is found in durable store, check whether its decision content
+            // differs from the record being saved. If decision content differs,
+            // throw DECISION_ID_CONFLICT, preserving the existing durable record
+            // on disk and refusing the overwrite.
+            const existing = durable.get(id);
+            if (existing) {
+              if (canonicalRecordBytes(existing) !== canonicalRecordBytes(record)) {
+                failLedger("DECISION_ID_CONFLICT");
+              }
+            }
             durable.set(id, record);
           }
           const data = Array.from(durable.values());
@@ -538,6 +550,9 @@ export class DecisionLedger {
       if (err?.code === "LEDGER_CORRUPT") {
         this.decisions.clear();
         this.load();
+        throw err;
+      }
+      if (err?.code === "DECISION_ID_CONFLICT") {
         throw err;
       }
       failLedger(`LEDGER_WRITE_FAILED: ${err?.message}`);

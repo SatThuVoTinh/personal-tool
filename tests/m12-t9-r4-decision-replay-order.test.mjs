@@ -10,7 +10,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
 
-import { DecisionLedger } from "../integrations/openclaw/lib/decision-ledger.mjs";
+import {
+  DecisionLedger,
+  canonicalDecisionKey,
+} from "../integrations/openclaw/lib/decision-ledger.mjs";
 
 function freshLedger() {
   const dir = mkdtempSync(path.join(tmpdir(), "r4-decision-"));
@@ -78,5 +81,62 @@ describe("M12/T9 F-404 - a replay compares canonical bytes, not key order", () =
       { code: "DECISION_ID_CONFLICT" },
       "canonicalisation must not erase a real content difference",
     );
+  });
+
+  it("F-OC-005: concurrent conflicting DecisionLedger save under writer lock is refused with DECISION_ID_CONFLICT", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "f-oc-005-"));
+    const storagePath = path.join(dir, "ledger.json");
+    const ledger1 = new DecisionLedger({ storagePath });
+    const ledger2 = new DecisionLedger({ storagePath });
+
+    // Two instances refresh an empty ledger
+    ledger1.refresh();
+    ledger2.refresh();
+
+    const topic = "DEPLOY";
+    const question = "Which region?";
+    const scope = "global";
+    const confirmedBy = "123456789012345678";
+    const id = "dec-" + canonicalDecisionKey({ topic, question, scope }).slice(0, 16);
+
+    // Create different decisions with identical topic/question/scope (yielding same ID)
+    ledger1.decisions.set(id, {
+      decisionId: id,
+      topic,
+      question,
+      decision: "us-east-1",
+      scope,
+      confirmedBy,
+      confirmedAt: new Date().toISOString(),
+      context: {},
+      tags: [],
+    });
+
+    ledger2.decisions.set(id, {
+      decisionId: id,
+      topic,
+      question,
+      decision: "eu-west-1",
+      scope,
+      confirmedBy,
+      confirmedAt: new Date().toISOString(),
+      context: {},
+      tags: [],
+    });
+
+    // Save instance 1 (succeeds)
+    ledger1.save();
+    assert.equal(ledger1.getDecision(id)?.decision, "us-east-1");
+
+    // Save instance 2 (refused with DECISION_ID_CONFLICT)
+    assert.throws(
+      () => ledger2.save(),
+      { code: "DECISION_ID_CONFLICT" },
+      "saving conflicting decision content under existing ID must throw DECISION_ID_CONFLICT",
+    );
+
+    // Existing durable record on disk is preserved and not overwritten
+    const fresh = new DecisionLedger({ storagePath }).refresh();
+    assert.equal(fresh.getDecision(id)?.decision, "us-east-1");
   });
 });
