@@ -953,10 +953,14 @@ export async function scanCatalog(skillsRoot) {
 export async function getActiveSkill(skillsRoot, namespace, capability) {
   const catalog = await scanCatalog(skillsRoot);
   if (catalog.errors.length > 0) return { ...catalog, skill: null };
+  // F-SKILL-002: Canonicalize namespace query to match stored form.
+  // Namespace may be passed as array or slash-separated string; convert
+  // both to canonical form (joined by /) for matching against stored records.
+  const nsQuery = Array.isArray(namespace) ? namespace.join("/") : namespace;
   const skill =
     catalog.records.find(
       (record) =>
-        record.manifest.identity.namespace.join("/") === namespace &&
+        record.manifest.identity.namespace.join("/") === nsQuery &&
         record.manifest.identity.capability === capability &&
         record.manifest.lifecycle.at(-1).status === "ACTIVE",
     ) ?? null;
@@ -1527,11 +1531,17 @@ export async function quarantineInvalidVersion({
   version,
 }) {
   const nsArray = Array.isArray(namespace) ? namespace : [namespace];
+  const canonicalNs =
+    nsArray.length === 1 && typeof nsArray[0] === "string" && !nsArray[0].includes("/")
+      ? nsArray
+      : nsArray.length === 1 && typeof nsArray[0] === "string"
+        ? nsArray[0].split("/").filter(Boolean)
+        : nsArray;
   if (
-    !Array.isArray(nsArray) ||
-    nsArray.length < 1 ||
-    nsArray.length > 8 ||
-    !nsArray.every(
+    !Array.isArray(canonicalNs) ||
+    canonicalNs.length < 1 ||
+    canonicalNs.length > 8 ||
+    !canonicalNs.every(
       (segment) => typeof segment === "string" && SLUG.test(segment),
     ) ||
     typeof capability !== "string" ||
@@ -1547,12 +1557,12 @@ export async function quarantineInvalidVersion({
   }
   return withSkillStoreWriterLock(skillsRoot, async () => {
     await assertSafeStorePathComponents(skillsRoot, [
-      ...nsArray,
+      ...canonicalNs,
       capability,
       version,
     ]);
-    const versionDir = path.join(skillsRoot, ...nsArray, capability, version);
-    const parentDir = path.join(skillsRoot, ...nsArray, capability);
+    const versionDir = path.join(skillsRoot, ...canonicalNs, capability, version);
+    const parentDir = path.join(skillsRoot, ...canonicalNs, capability);
     let info;
     try {
       info = await lstat(versionDir);
@@ -1572,7 +1582,7 @@ export async function quarantineInvalidVersion({
       );
     }
     const { errors } = await validateStagedVersion(versionDir, [
-      ...nsArray,
+      ...canonicalNs,
       capability,
       version,
     ]);
@@ -1597,7 +1607,7 @@ export async function quarantineInvalidVersion({
     }
     return {
       status: "QUARANTINED",
-      namespace: nsArray,
+      namespace: canonicalNs,
       capability,
       version,
       quarantined_as: path.basename(quarantined),
@@ -1714,11 +1724,19 @@ export async function promoteApprovedSkillUnlocked({
     rm(directory, { recursive: true, force: true }),
 }) {
   const nsArray = Array.isArray(namespace) ? namespace : [namespace];
+  // F-SKILL-002: Canonicalize namespace at write/storage time for query-time match.
+  // If namespace string contains slashes, split into segments; if array, keep as-is.
+  const canonicalNs =
+    nsArray.length === 1 && typeof nsArray[0] === "string" && !nsArray[0].includes("/")
+      ? nsArray
+      : nsArray.length === 1 && typeof nsArray[0] === "string"
+        ? nsArray[0].split("/").filter(Boolean)
+        : nsArray;
   if (
-    !Array.isArray(nsArray) ||
-    nsArray.length < 1 ||
-    nsArray.length > 8 ||
-    !nsArray.every(
+    !Array.isArray(canonicalNs) ||
+    canonicalNs.length < 1 ||
+    canonicalNs.length > 8 ||
+    !canonicalNs.every(
       (segment) => typeof segment === "string" && SLUG.test(segment),
     ) ||
     typeof capability !== "string" ||
@@ -1793,15 +1811,15 @@ export async function promoteApprovedSkillUnlocked({
   }
 
   await assertSafeStorePathComponents(skillsRoot, [
-    ...nsArray,
+    ...canonicalNs,
     capability,
     version,
   ]);
   const contentSha256 = createHash("sha256").update(contentBytes).digest("hex");
-  const versionDir = path.join(skillsRoot, ...nsArray, capability, version);
+  const versionDir = path.join(skillsRoot, ...canonicalNs, capability, version);
   const manifestPath = path.join(versionDir, "manifest.json");
   const markdownPath = path.join(versionDir, "SKILL.md");
-  const parentDir = path.join(skillsRoot, ...nsArray, capability);
+  const parentDir = path.join(skillsRoot, ...canonicalNs, capability);
 
   // Heal interrupted publications first, so residue from a killed publisher
   // can neither poison the health check below nor masquerade as canonical.
@@ -1946,7 +1964,7 @@ export async function promoteApprovedSkillUnlocked({
   await sweepWriterResidue(skillsRoot, catalog.residue);
   const clash = (catalog.records ?? []).find(
     (record) =>
-      record.manifest?.identity?.namespace?.join("/") === nsArray.join("/") &&
+      record.manifest?.identity?.namespace?.join("/") === canonicalNs.join("/") &&
       record.manifest?.identity?.capability === capability &&
       record.manifest?.lifecycle?.at(-1)?.status === "ACTIVE",
   );
@@ -1961,7 +1979,7 @@ export async function promoteApprovedSkillUnlocked({
     typeof at === "string" && validTimestamp(at) ? at : canonicalTimestamp();
   const manifest = {
     schema_version: 1,
-    identity: { namespace: nsArray, capability, version },
+    identity: { namespace: canonicalNs, capability, version },
     content: { path: "SKILL.md", sha256: contentSha256 },
     provenance: { source_type: sourceType, references },
     lifecycle: [
@@ -1988,7 +2006,7 @@ export async function promoteApprovedSkillUnlocked({
       Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, "utf8"),
     );
     const staged = await validateStagedVersion(stagingDir, [
-      ...nsArray,
+      ...canonicalNs,
       capability,
       version,
     ]);
@@ -2077,7 +2095,7 @@ export async function promoteApprovedSkillUnlocked({
   return {
     status: "ACTIVE",
     content_sha256: contentSha256,
-    namespace: nsArray,
+    namespace: canonicalNs,
     capability,
     version,
   };
@@ -2128,11 +2146,17 @@ export async function retireSkillUnlocked({
   directorySync = fsyncDirectoryBestEffort,
 }) {
   const nsArray = Array.isArray(namespace) ? namespace : [namespace];
+  const canonicalNs =
+    nsArray.length === 1 && typeof nsArray[0] === "string" && !nsArray[0].includes("/")
+      ? nsArray
+      : nsArray.length === 1 && typeof nsArray[0] === "string"
+        ? nsArray[0].split("/").filter(Boolean)
+        : nsArray;
   if (
-    !Array.isArray(nsArray) ||
-    nsArray.length < 1 ||
-    nsArray.length > 8 ||
-    !nsArray.every(
+    !Array.isArray(canonicalNs) ||
+    canonicalNs.length < 1 ||
+    canonicalNs.length > 8 ||
+    !canonicalNs.every(
       (segment) => typeof segment === "string" && SLUG.test(segment),
     ) ||
     typeof capability !== "string" ||
@@ -2161,11 +2185,11 @@ export async function retireSkillUnlocked({
   }
 
   await assertSafeStorePathComponents(skillsRoot, [
-    ...nsArray,
+    ...canonicalNs,
     capability,
     version,
   ]);
-  const versionDir = path.join(skillsRoot, ...nsArray, capability, version);
+  const versionDir = path.join(skillsRoot, ...canonicalNs, capability, version);
   const manifestPath = path.join(versionDir, "manifest.json");
   let manifestBytes;
   try {
@@ -2192,7 +2216,7 @@ export async function retireSkillUnlocked({
   if (
     !isObject(identity) ||
     !Array.isArray(identity.namespace) ||
-    identity.namespace.join("/") !== nsArray.join("/") ||
+    identity.namespace.join("/") !== canonicalNs.join("/") ||
     identity.capability !== capability ||
     identity.version !== version
   ) {
@@ -2236,8 +2260,8 @@ export async function retireSkillUnlocked({
   const errors = [];
   validateManifest(
     retiredManifest,
-    { namespace: nsArray, capability, version },
-    skillPath([...nsArray, capability, version]),
+    { namespace: canonicalNs, capability, version },
+    skillPath([...canonicalNs, capability, version]),
     errors,
   );
   if (errors.length > 0) {
@@ -2299,7 +2323,7 @@ export async function retireSkillUnlocked({
   return {
     status: "DEPRECATED",
     content_sha256: manifest?.content?.sha256 ?? null,
-    namespace: nsArray,
+    namespace: canonicalNs,
     capability,
     version,
     retired_at: stamp,
