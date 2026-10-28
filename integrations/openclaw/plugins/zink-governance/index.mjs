@@ -877,6 +877,8 @@ export function evaluateSpecialistProvenance({
   agentId,
   task = null,
   delegationAgentId = null,
+  runId = null,
+  delegation = null,
 } = {}) {
   if (typeof agentId !== "string" || agentId.length === 0) {
     return { allowed: false, reason: "NO_AGENT_IDENTITY" };
@@ -898,6 +900,18 @@ export function evaluateSpecialistProvenance({
       allowed: false,
       reason: `TASK_NOT_EXECUTING:${task.workflow_status ?? "unknown"}`,
     };
+  }
+  // F-OC-007: check if run is superseded
+  if (runId && delegation) {
+    if (
+      delegation.native_run_id !== runId &&
+      delegation.previous_native_run_ids?.includes(runId)
+    ) {
+      return {
+        allowed: false,
+        reason: `SUPERSEDED_RUN:${runId}`,
+      };
+    }
   }
   return { allowed: true, taskId: task.task_id ?? null };
 }
@@ -5320,16 +5334,21 @@ export function registerTools(api, options = {}) {
           api?.logger?.error?.(
             `[zink-governance] ${toolId} execution failed closed: ${err?.code || "TOOL_EXECUTION_FAILED"}`,
           );
+          // F-OC-010: emit an error envelope that satisfies the published schema.
+          // The generic {status:"ERROR", tool, error, message, code} violated the
+          // Excel output contract (which requires operation/success and forbids
+          // additional properties). We now emit only schema-compliant shapes:
+          // either operation-driven success/failure with the required fields, or
+          // a terminal-error carrier defined by the caller's contract.
           return {
             content: [
               {
                 type: "text",
                 text: JSON.stringify({
-                  status: "ERROR",
-                  tool: toolId,
-                  error: err?.code || "TOOL_EXECUTION_FAILED",
-                  message: "Governed tool execution failed closed.",
-                  code: err?.code || "TOOL_EXECUTION_FAILED",
+                  operation: err?.operation || "unknown_operation",
+                  success: false,
+                  error_code: err?.code || "TOOL_EXECUTION_FAILED",
+                  error_message: "Governed tool execution failed.",
                 }),
               },
             ],
@@ -10153,6 +10172,7 @@ export default {
       }
       let task;
       let delegationAgent;
+      let delegation;
       try {
         const owner = findSession(
           readSnapshot(paths),
@@ -10162,6 +10182,7 @@ export default {
         );
         task = owner?.task ?? null;
         delegationAgent = owner?.delegation?.agent_id ?? null;
+        delegation = owner?.delegation ?? null;
         if (!task && owner?.task_id) {
           task = readSnapshot(paths)?.tasks?.[owner.task_id] ?? null;
         }
@@ -10172,7 +10193,39 @@ export default {
         agentId,
         task,
         delegationAgentId: delegationAgent,
+        runId: ctx.runId,
+        delegation,
       });
+    }
+
+    async function specialistExecutionProvenanceWithRunCheck(agentId, ctx, paths) {
+      const result = specialistExecutionProvenance(agentId, ctx);
+      if (!result.allowed) return result;
+
+      // F-OC-007: check if the message's run is superseded
+      if (ctx.runId && paths) {
+        try {
+          const snapshot = readSnapshot(paths);
+          const owner = findSession(snapshot, ctx.sessionKey, ctx.runId, false);
+          const currentDelegation = owner?.delegation;
+          // If the runId is in previous_native_run_ids but not the current native_run_id,
+          // then this attempt has been superseded by a continuation
+          if (
+            currentDelegation &&
+            currentDelegation.native_run_id !== ctx.runId &&
+            currentDelegation.previous_native_run_ids?.includes(ctx.runId)
+          ) {
+            return {
+              allowed: false,
+              reason: `SUPERSEDED_RUN:${ctx.runId}`,
+            };
+          }
+        } catch {
+          // If we fail to check, fail closed
+          return { allowed: false, reason: "SUPERSEDED_CHECK_FAILED" };
+        }
+      }
+      return result;
     }
 
     api.on("message_sending", async (event, ctx = {}) => {
@@ -10203,7 +10256,7 @@ export default {
       // surfaces by the gate below this one, so admitting the agent never admits an
       // arbitrary channel.
       if (SPECIALIST_AGENT_IDS.includes(agentId)) {
-        const provenance = specialistExecutionProvenance(agentId, ctx);
+        const provenance = await specialistExecutionProvenanceWithRunCheck(agentId, ctx, paths);
         if (!provenance.allowed) {
           api.logger?.warn?.(
             `[zink-governance] Suppressed specialist '${agentId}' Discord message: ${provenance.reason}`,
@@ -10238,18 +10291,34 @@ export default {
         typeof rawDest === "string"
           ? rawDest.replace(/^(channel|discord|user):/u, "").trim()
           : rawDest;
-      const isCanonical =
+      // F-OC-009: the canonical-surface predicate must relate identifiers to the configured set,
+      // not short-circuit on their mere presence. A thread ID or parent channel without comparison
+      // against CANONICAL_DISCORD_SURFACE_IDS allows any ordinary thread metadata to bypass the gate.
+      let isCanonical =
         !destChannel ||
         destChannel === "discord" ||
         CANONICAL_DISCORD_SURFACE_IDS.size === 0 ||
         CANONICAL_DISCORD_SURFACE_IDS.has(destChannel) ||
-        CANONICAL_DISCORD_SURFACE_IDS.has(rawDest) ||
-        Boolean(
-          ctx.threadId ||
-          event.threadId ||
-          ctx.parentChannelId ||
-          event.parentChannelId,
+        CANONICAL_DISCORD_SURFACE_IDS.has(rawDest);
+      // Also check if thread's parent belongs to canonical surfaces
+      if (!isCanonical && typeof ctx.parentChannelId === "string") {
+        const parentChannel = ctx.parentChannelId.replace(
+          /^(channel|discord|user):/u,
+          ""
         );
+        if (CANONICAL_DISCORD_SURFACE_IDS.has(parentChannel)) {
+          isCanonical = true;
+        }
+      }
+      if (!isCanonical && typeof event.parentChannelId === "string") {
+        const parentChannel = event.parentChannelId.replace(
+          /^(channel|discord|user):/u,
+          ""
+        );
+        if (CANONICAL_DISCORD_SURFACE_IDS.has(parentChannel)) {
+          isCanonical = true;
+        }
+      }
       if (!isCanonical) {
         api.logger?.warn?.(
           `[zink-governance] message_sending blocked: non-canonical destination channel`,
