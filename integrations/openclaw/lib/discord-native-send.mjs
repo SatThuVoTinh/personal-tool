@@ -733,7 +733,7 @@ export async function sendNativePayload({
   let outboundPayload = payload;
   let bundle = null;
   if (Array.isArray(buttons) && buttons.length > 0) {
-    bundle = await buildNativeComponentBundle({
+    const { bundle: bundleResult, outcome } = await resolveNativeComponentBundle({
       buttons,
       accountId,
       sdk,
@@ -741,18 +741,29 @@ export async function sendNativePayload({
       logger,
       api,
     });
-    if (bundle) {
-      outboundPayload = {
-        ...payload,
-        channelData: {
-          ...(payload?.channelData ?? {}),
-          discord: {
-            ...(payload?.channelData?.discord ?? {}),
-            components: bundle.buildResult.components,
-          },
-        },
-      };
+    bundle = bundleResult;
+    if (!bundle) {
+      // Green fix F-OC-001: when buttons are present but bundle cannot be created,
+      // fail closed rather than sending payloads with unregistered markdown-style
+      // component objects that will never be clickable
+      const code =
+        outcome === COMPONENT_REGISTRATION_OUTCOME.SDK_UNAVAILABLE
+          ? "COMPONENT_SDK_UNAVAILABLE"
+          : "COMPONENT_BUILD_FAILED";
+      throw new Error(
+        `${code}: cannot deliver ${buttons.length} button(s) without working host SDK`
+      );
     }
+    outboundPayload = {
+      ...payload,
+      channelData: {
+        ...(payload?.channelData ?? {}),
+        discord: {
+          ...(payload?.channelData?.discord ?? {}),
+          components: bundle.buildResult.components,
+        },
+      },
+    };
   }
 
   // M12/T1-R1: a preview image travels as `payload.mediaUrl` with the roots the

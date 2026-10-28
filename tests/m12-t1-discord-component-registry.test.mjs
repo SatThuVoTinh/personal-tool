@@ -252,58 +252,64 @@ describe("M12/T1 P1 — components are built and registered through the host", (
     );
   });
 
-  it("delivers the card as text when the component build itself throws", async () => {
+  it("FAIL CLOSED when the component build itself throws with buttons present", async () => {
     const h = adapterHarness({ failBuild: true });
     const { logs, logger } = logHarness();
     const buttons = buttonSpecs();
-    const receipt = await sendNativePayload({
-      api: h.api,
-      to: "1234567890123456789",
-      accountId: "o1",
-      payload: buildNativeComponentPayload({ text: "card body", buttons }),
-      buttons,
-      sdk: h.sdk,
-      logger,
-    });
-    assert.equal(
-      receipt.messageId,
-      "msg-live-1",
-      "a build failure must not lose the card — the APPROVE <code> reply path is the fallback",
+    
+    await assert.rejects(
+      sendNativePayload({
+        api: h.api,
+        to: "1234567890123456789",
+        accountId: "o1",
+        payload: buildNativeComponentPayload({ text: "card body", buttons }),
+        buttons,
+        sdk: h.sdk,
+        logger,
+      }),
+      (error) => {
+        assert.ok(error.message.includes("COMPONENT_BUILD_FAILED"));
+        return true;
+      },
+      "must throw COMPONENT_BUILD_FAILED when bundle building fails and buttons are present"
     );
-    assert.match(
-      logs.join("\n"),
-      /COMPONENT_BUILD_FAILED/u,
-      "the degrade must be named, not left as a generic delivery failure",
-    );
+    
     assert.equal(
       h.calls.some((c) => c.kind === "register"),
       false,
-      "nothing can be registered when the build produced no bundle",
+      "nothing can be registered when the build produced no bundle"
     );
   });
 
-  it("says so out loud when the host component sdk cannot be reached", async () => {
+  it("FAIL CLOSED when the host component sdk cannot be reached", async () => {
     const h = adapterHarness();
     const { logs, logger } = logHarness();
     const buttons = buttonSpecs();
-    const receipt = await sendNativePayload({
-      api: h.api,
-      to: "1234567890123456789",
-      accountId: "o1",
-      payload: buildNativeComponentPayload({ text: "card body", buttons }),
-      buttons,
-      sdk: null,
-      resolveSdk: () => {
-        throw new Error("openclaw/plugin-sdk/discord not resolvable");
+    
+    await assert.rejects(
+      sendNativePayload({
+        api: h.api,
+        to: "1234567890123456789",
+        accountId: "o1",
+        payload: buildNativeComponentPayload({ text: "card body", buttons }),
+        buttons,
+        sdk: null,
+        resolveSdk: () => {
+          throw new Error("openclaw/plugin-sdk/discord not resolvable");
+        },
+        logger,
+      }),
+      (error) => {
+        assert.ok(error.message.includes("COMPONENT_SDK_UNAVAILABLE"));
+        return true;
       },
-      logger,
-    });
-    assert.equal(receipt.messageId, "msg-live-1");
-    assert.match(logs.join("\n"), /COMPONENT_SDK_UNAVAILABLE/u);
+      "must throw COMPONENT_SDK_UNAVAILABLE when SDK is unavailable but buttons are present"
+    );
+    
     assert.equal(
       h.calls.some((c) => c.kind === "register"),
       false,
-      "nothing can be registered without the host builder",
+      "nothing can be registered without the host builder"
     );
   });
 
