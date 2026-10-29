@@ -13,10 +13,10 @@ Phase 1 produced 18 candidate mechanisms; Phase 2 cross-checks added 5 more (F-O
 | Coordinator    | Main agent |
 | Started at     | 2026-10-26 20:54 +07:00 |
 | Last updated   | 2026-10-27 11:54 +07:00 |
-| Workflow phase | 5 — fix execution (W0 F-481 implementation pending independent verification; W1 F-OC-002 test harness correction in progress) |
+| Workflow phase | 8 — recheck consolidation & Phase 9 cleanup preparation |
 | Loop number    | 1 |
-| Counts         | Register 170 rows: 138 actionable (90 OPEN, 20 LATENT, 13 CONFIRMED-AS-LATENT, 10 CONFIRMED, 3 PARTIAL, 2 BLOCKED), 32 REFUTED; 23 loop-1 verdicts applied; 0 rejected |
-| Overall status | ACTIVE — R5 contract valid; Phase 5 authorized |
+| Counts         | Register 170 rows: 138 actionable (18 CLOSED / FIXED in Phase 5 loop 1 with commit evidence and red/green tests; remaining rows stay in active bug queue pending live environment probes or owner decisions), 32 REFUTED; Phase 6 scanners (20/20) and Phase 7 cross-checkers (12/12) rechecks completed |
+| Overall status | ACTIVE — Phase 5 fixes committed and verified; Phase 6 test gates run; Phase 6 & 7 rechecks completed; Phase 8 consolidation complete |
 
 **Dispatch baseline:** HEAD `85eb094aaedaf518e0184767f25812a8a3c3b10a`, branch `codex/m11-t1-audit-remediation`. `git status --short` already showed extensive modified, staged and untracked work, including edits under source modules and tests, plus `.qoder/`; these are pre-existing and are not attributable to the audit. Agents may edit only their assigned `docs/execution/reports/p1/*.md` report. No source writes are authorized.
 
@@ -114,6 +114,8 @@ No assignments exist while the run status is `NOT STARTED`. The main agent recor
 | P5-02 | fix-tests | Fix `F-481` under the static declaration rule | tests/** and scripts/** (owner opened it 11:57) | R5 contract §8.4 item 4; owner decision 2026-10-27 | gate reddens 4/4 and 32/32, green after the re-declaration; mutation probe | done_verified — committed as `088ecd7`; `scripts/skip-expectation-gate.mjs`, `tests/agent-owner-F-197-skip-expectation.test.mjs`, `ci-skip-expectations.json`; `tests/agent-owner-F-197-skip-expectation.test.mjs` 13 passed, eslint exit 0, prettier exit 0 |
 | P5-03 | fix-knowledgebase | Fix `F-KB-001` (High) | apps/knowledge/** | R5 contract §5 | red/green + mutation probe + `test:knowledge`; lead commits | done_verified — lane worktree `m12-t9-r5-f-kb-001`, applied by the lead and committed as `6c05167`; `tests/test_index_lifecycle.py` 16 passed, `npm run test:knowledge` 308 passed / 18 skipped |
 | P5-05 | fix-openclaw-governance-library | Fix `F-OC-004` (High) root file-lock compare-at-mutation race | `integrations/openclaw/lib/file-lock.mjs`, `tests/m10-t2-r18-file-lock.test.mjs`; lead owns `integrations/openclaw/configure.mjs` SHA pin | R5 contract §5; green before commit; mutation probe; gate run | done_verified — committed as `f5bf41a`; `tests/m10-t2-r18-file-lock.test.mjs` 8 passed (R18-08 green), mutation probe red/green, eslint/format checked, configure.mjs predecessor SHA updated |
+| P5-06 | fix-openclaw-topology | Fix `F-OC-005` (Medium) concurrent conflicting DecisionLedger writes overwrite same deterministic ID under writer lock | `integrations/openclaw/topology/lib/ledger.mjs`, tests under `tests/`; event dedup and conflict detection at commit time | ACTIVE.md §8.4 item 2; green evidence before commit | in_progress — dispatch subagent immediately to implement conflict detection + dedup guard with event-level sequence number and merge strategy |
+| P5-07 | fix-openclaw-artifact-validation | Fix `F-OC-003` (Medium LATENT) Excel write follows dangling symlink and creates file outside sandbox | `integrations/openclaw/lib/excel-writer.mjs`, `tests/agent-lib-F-044.test.mjs`; realpath+inside-workspace check on write path | ACTIVE.md §8.4 item 3; red via fault-injected scratch directory | ready_to_dispatch — waiting for P5-06 verification |
 
 Use only the statuses `planned`, `in_progress`, `blocked`, `review`, and `done_verified`:
 
