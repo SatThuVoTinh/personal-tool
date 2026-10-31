@@ -205,11 +205,13 @@ For each significant blocker, record its ID, description and evidence, affected 
 
 Next actions, in priority order:
 
-1. **Main agent — owner decisions executed 2026-10-31.** Four RED memos recorded in findings.md (`F-INFRA-003`, `F-KB-004`, `F-OC-010`, `F-OC-011`); `F-587` ruled RED (runner-signal arm, recorded); `PLAN.md` `F-492` wording reconciled at the 4 bounded spots (historical text kept, reconciliation notes appended); Phase 9 deletions executed per owner approval — 31 paths, one command per path (see `docs/execution/cleanup-candidates.md`; `temp/f568-audit.json` and `scratch/test-excel-unzipped` kept).
-2. **Main agent — loop-3 wave 1 dispatch** (disjoint scopes; one approval-gated fixer at a time): `fix-infrastructure` for `F-INFRA-003` (approval-serial, runs alone among gated fixers), `fix-tools` for `F-OC-011`, `fix-tests` for `F-587` (runner-signal lane). Each fixer: premise re-verify at HEAD, red-first test/probe, smallest fix, mutation probe, affected gates actually run — final reply ≤ 10 lines; the lead commits per `ACTIVE.md` §4.5.
-3. **Main agent — loop-3 wave 2**: the `F-KB-004` cross-module row (cross-module rows run last in their wave, fix-plan §6 note 6): `fix-knowledgebase` + `fix-tools` + `fix-tests` + `fix-openclaw-governance-library` (approval-serial); starts only after wave 1's gated fixer is done.
-4. **Owner/Codex — closure bookkeeping**: `F-OC-010` needs the PLAN §4.17/§8 disposition and the CHANGELOG history entry (the fix `54633d7` is accepted); 0 register rows close until these are recorded. `F-400`/`F-534` stay BLOCKED; Docker/PostgreSQL + WSL lanes stay NOT RUN; `F-585` npm-audit upgrade stays owner-scoped.
-5. **Owner — pending answers**: `F-INFRA-002` role provisioning (fix-plan §9 q1, options A/B/C being explained in Vietnamese); residual `temp/` R4-era files (hundreds of probe files/logs were NOT approved for deletion — only directories were; a separate listing can be prepared on request).
+1. **Main agent — Phase 5 loop 3 wave 1 complete.** Three findings committed on `codex/m11-t1-audit-remediation`:
+   - `F-INFRA-003` (`52234b8`): normal Knowledge start unconditionally includes the hardening overlay (drop silent `Test-Path` guard downgrading) + `agent-kb-F-239` regression lane (4/4 PASS).
+   - `F-587` (`fcc73f0`): runner-signal sidecar schema and zero-assertion case refusal in `skip-expectation-gate.mjs` + `agent-owner-F-197-skip-expectation` regression lane (15/15 PASS).
+   - `F-OC-011` (`e20edfc`): align published `zink_excel` executable mode descriptions across `contract.md`, `README.md`, policy registry, and runtime dispatch + `m7-t3-tools-contract` consistency lane (41/41 PASS).
+2. **Main agent — Phase 5 loop 3 wave 2**: `F-KB-004` cross-module row (`fix-knowledgebase` + `fix-tools` + `fix-tests` + `fix-openclaw-governance-library`).
+3. **Owner — decision on point 5 (`F-INFRA-002` role provisioning)**: explain options A/B/C in Vietnamese.
+4. **Owner/Codex — closure bookkeeping**: `F-OC-010` (committed `54633d7`) needs PLAN §4.17/§8 disposition and CHANGELOG entry before register closure. `F-400`/`F-534` stay BLOCKED; Docker/PostgreSQL + WSL lanes stay NOT RUN; `F-585` npm-audit upgrade stays owner-scoped.
 
 ## 10. Session handoff
 
