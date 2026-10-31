@@ -1,20 +1,20 @@
 # Phase 6 Recheck Report — DB backup/restore/integrity (db-2)
 
-**Date:** 2026-10-29  
-**Mode:** recheck  
-**Area:** Database backup, restore, integrity  
-**Finding IDs Checked:** F-DB-001, F-DB-002  
+**Date:** 2026-10-29
+**Mode:** recheck
+**Area:** Database backup, restore, integrity
+**Finding IDs Checked:** F-DB-001, F-DB-002
 
 ---
 
 ## Executive Summary
 
-| Finding | Claimed Fixed | Status | Verdict | Confidence |
-| ------- | ------------- | ------ | ------- | ---------- |
-| F-DB-001 | No | CONFIRMED-AS-LATENT | NOT FIXED | High |
-| F-DB-002 | No | CONFIRMED-AS-LATENT | NOT FIXED | High |
+| Finding  | Claimed Fixed | Status              | Verdict   | Confidence |
+| -------- | ------------- | ------------------- | --------- | ---------- |
+| F-DB-001 | No            | CONFIRMED-AS-LATENT | NOT FIXED | High       |
+| F-DB-002 | No            | CONFIRMED-AS-LATENT | NOT FIXED | High       |
 
-**Report Path:** `docs/execution/reports/p6/scan-db-2.md`  
+**Report Path:** `docs/execution/reports/p6/scan-db-2.md`
 **Test Gate Outcomes:** See `docs/execution/reports/p6/tests.md` — Knowledgebase PASS, Repository policy PASS; PostgreSQL/Docker real-database lane NOT RUN.
 
 ---
@@ -108,7 +108,7 @@ The fix addresses **half** of the finding:
 
 The SHA-256 hash provides cryptographic proof that the wrong key was used during restore attempts (the hash comparison will fail), but it does **not** solve the fundamental recovery problem: the encrypted credentials are unusable without the original key.
 
-The acceptance criteria states: *"the backup and recovery contract securely preserve **or identify** the matching encryption key without disclosing it in backup output, and a restore drill demonstrates that backed-up credentials remain usable with the recovered key."*
+The acceptance criteria states: _"the backup and recovery contract securely preserve **or identify** the matching encryption key without disclosing it in backup output, and a restore drill demonstrates that backed-up credentials remain usable with the recovered key."_
 
 The current implementation **"identifies"** via SHA-256 but **does not** demonstrate credential usability because the restore drill was never executed on this host (requires live container daemon and active PostgreSQL instance per `tests.md`).
 
@@ -120,11 +120,12 @@ The current implementation **"identifies"** via SHA-256 but **does not** demonst
 
 ## Blockers & Unresolved Issues
 
-| ID | Blocker | Status |
-| --- | --- | --- |
+| ID       | Blocker                                                                                | Status  |
+| -------- | -------------------------------------------------------------------------------------- | ------- |
 | BLK-DB-1 | F-DB-002 restore drill requires live Docker/PostgreSQL not provisioned on Windows host | NOT RUN |
 
 Per `docs/execution/reports/p6/tests.md`:
+
 - PostgreSQL / Docker real-database lane: **NOT RUN** — Requires live container daemon and active PostgreSQL instance not provisioned on this host
 - POSIX WSL fsync/lock lane: **NOT RUN** — Windows host environment; WSL lane not configured for foreground test runner
 

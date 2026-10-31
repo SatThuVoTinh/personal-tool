@@ -52,10 +52,10 @@
 
 ## Counts and blockers
 
-- **Confirmed new/consolidated candidates:** 3 — Critical 0, High 0, Medium 3, Low 0.  
-  - `F-SKILL-001` (symlinked path escape during promotion cleanup) — confirmed from Phase 1 candidate.  
-  - `F-SKILL-002` (namespace alias persisted raw while scoped search canonicalizes) — confirmed from Phase 1 candidate.  
-  - New candidate (nested-namespace admitted at propose, impossible to scope at search) — Medium, distinct from F-SKILL-002 and not covered by any live row.  
-- **Existing-row corroboration (not counted):** `F-INFRA-002` — Skill Store caller and Tools consumer paths added; no new row required.  
-- **Duplicates/merges:** `CAND-skill-1-01` -> `F-SKILL-001`; `scan-skill-2` alias observation -> `F-SKILL-002`; direct Tools imports of Skill Store internals -> existing `F-435`; migration serialization -> existing `F-431`/`F-436`; shared `postgres` identity -> existing `F-INFRA-002`.  
+- **Confirmed new/consolidated candidates:** 3 — Critical 0, High 0, Medium 3, Low 0.
+  - `F-SKILL-001` (symlinked path escape during promotion cleanup) — confirmed from Phase 1 candidate.
+  - `F-SKILL-002` (namespace alias persisted raw while scoped search canonicalizes) — confirmed from Phase 1 candidate.
+  - New candidate (nested-namespace admitted at propose, impossible to scope at search) — Medium, distinct from F-SKILL-002 and not covered by any live row.
+- **Existing-row corroboration (not counted):** `F-INFRA-002` — Skill Store caller and Tools consumer paths added; no new row required.
+- **Duplicates/merges:** `CAND-skill-1-01` -> `F-SKILL-001`; `scan-skill-2` alias observation -> `F-SKILL-002`; direct Tools imports of Skill Store internals -> existing `F-435`; migration serialization -> existing `F-431`/`F-436`; shared `postgres` identity -> existing `F-INFRA-002`.
 - **Blockers:** None. Static-only limits: no isolated symlink reproduction, PostgreSQL role probe, scoped query probe, container, or recovery rehearsal was run.

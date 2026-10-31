@@ -160,3 +160,35 @@ test("F-529: a failed SURFACED write in the announce path returns BLOCKED, never
     "a failed SURFACED write must fail closed (BLOCKED) instead of only logging before PUBLISHED",
   );
 });
+
+test("F-586: a failed SURFACED write in the first-spawn REST path halts before posting buttons", () => {
+  const source = readFileSync(
+    path.join(
+      REPO_ROOT,
+      "integrations",
+      "openclaw",
+      "plugins",
+      "zink-governance",
+      "index.mjs",
+    ),
+    "utf8",
+  );
+  const start = source.indexOf("async function postFirstSpawnApprovalCard");
+  assert.ok(start > 0, "postFirstSpawnApprovalCard must exist");
+  const surface = source.indexOf(
+    'recordWorkflowEvent(paths, "WORKFLOW_APPROVAL_SURFACED"',
+    start,
+  );
+  assert.ok(
+    surface > start,
+    "the first-spawn path must write the SURFACED record",
+  );
+  const buttonsPost = source.indexOf("buildApprovalButtonsMessage", surface);
+  assert.ok(buttonsPost > surface, "posting buttons must follow the SURFACED write");
+  const window = source.slice(surface, buttonsPost);
+  assert.match(
+    window,
+    /APPROVAL_SURFACE_UNRECORDED[\s\S]*return;/u,
+    "a failed SURFACED write in first-spawn path must halt before posting buttons",
+  );
+});

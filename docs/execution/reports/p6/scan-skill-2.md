@@ -7,18 +7,21 @@
 ### Evidence
 
 **Original Finding Summary:**
+
 - Issue: Namespace aliases are stored in their original form while scoped searches canonicalize them, causing valid alias-named skills to be unreachable via both raw alias and canonical filter queries
 - Path: Writer stores raw; query resolves aliases; mismatch yields zero-row results
 
 **Current Code State:**
 
 **Writer (zink-skill-store/src/vector-sync.mjs):**
+
 - Line 1195: `const { namespace, capability, version } = record.manifest.identity;` — extracts raw namespace directly from manifest without resolution
-- Line 1320: `namespace` passed verbatim to `buildSkillSyncTransaction({ namespace, ... })` 
+- Line 1320: `namespace` passed verbatim to `buildSkillSyncTransaction({ namespace, ... })`
 - No import or usage of `resolveNamespace`, `NAMESPACE_ALIAS_MAP`, or `CANONICAL_DOMAINS` in this file
 - Confirmed by grep: zero matches for namespace resolution functions in `vector-sync.mjs`
 
 **Query (zink-tools/adapters/skill-store/skill-adapter.mjs):**
+
 - Lines 746-747: `const canonicalNs = nsCheck.resolved_namespaces ?? nsList;` — explicitly resolves aliases to canonical form before building SQL predicate
 - Lines 748-751: Uses `canonicalNs` array for `@>` SQL operator
 
@@ -28,6 +31,7 @@ Writer stores whatever spelling was approved and persisted in `manifest.json` id
 ### Test Coverage
 
 Per `docs/execution/reports/p6/tests.md`:
+
 - PostgreSQL / Docker real-database lane: **NOT RUN**
 - No test assertions capture actual DB namespace values against filtered queries
 - `tests/zink-tools-skill-namespace-binding.test.mjs:183-216` tests `power-bi`/`bi` authorization binding but not cross-module write/read persistence with resolved vs. raw storage
@@ -41,6 +45,7 @@ No code changes were made to address this defect between audit and recheck phase
 ---
 
 **Report metadata:**
+
 - Phase: 6 (recheck)
 - Area: skill-2 (Skill Store)
 - Date: 2026-10-29

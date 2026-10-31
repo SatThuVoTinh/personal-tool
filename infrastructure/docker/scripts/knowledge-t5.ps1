@@ -175,7 +175,7 @@ try {
   Assert-T5NetworkBoundary $knowledgeId $nginxId $publishedPort
   Assert-T5RuntimeIsolation $knowledgeId $nginxId
   $ledgerBefore = @(Invoke-T5Sql "SELECT version FROM knowledge.schema_migrations ORDER BY version;") | Where-Object { $_ }
-  if (($ledgerBefore -join "`n") -cne "001_initial.sql`n002_pdf_ingestion_foundation.sql") { throw "Knowledge migration ledger is invalid." }
+  if (($ledgerBefore -join "`n") -cne "001_initial.sql`n002_pdf_ingestion_foundation.sql`n004_pdf_build_failure_cause.sql`n005_schema_migration_digest.sql") { throw "Knowledge migration ledger is invalid." }
   $schemaFingerprintBefore = Get-T5SchemaCatalogFingerprint
 
   $oldRun = Start-T5FullRebuild
@@ -241,7 +241,7 @@ VALUES ('$orphanRunId', '$orphanIndexId', 'FULL_REBUILD', 'RUNNING');
   $restartAfter = Get-T5CgroupSnapshot $knowledgeId
   $restartEvidence = Get-T5ResourceWindow $restartBefore $restartAfter "restart"
   $ledgerAfter = @(Invoke-T5Sql "SELECT version FROM knowledge.schema_migrations ORDER BY version;") | Where-Object { $_ }
-  if (($ledgerAfter -join "`n") -cne "001_initial.sql`n002_pdf_ingestion_foundation.sql") { throw "Migration was reapplied after restart." }
+  if (($ledgerAfter -join "`n") -cne "001_initial.sql`n002_pdf_ingestion_foundation.sql`n004_pdf_build_failure_cause.sql`n005_schema_migration_digest.sql") { throw "Migration was reapplied after restart." }
   $schemaFingerprintAfter = Get-T5SchemaCatalogFingerprint
   if ($schemaFingerprintBefore -ne $schemaFingerprintAfter) { throw "Knowledge schema catalog changed after restart/rebuild." }
   $afterRestartSearch = Invoke-T5Api "POST" "/v1/search" ($request | ConvertTo-Json -Compress)

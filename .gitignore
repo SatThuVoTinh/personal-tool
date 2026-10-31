@@ -73,3 +73,6 @@ Thumbs.db
 
 # Local scratch directory
 scratch/
+
+# Agent-tooling temp workspace cache
+.qoder/

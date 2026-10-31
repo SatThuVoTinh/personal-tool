@@ -1,8 +1,8 @@
 # Phase 1 scan — oc-1
 
-**Scope:** `integrations/openclaw/lib/discord-formatter.mjs`, `integrations/openclaw/lib/discord-native-send.mjs`  
-**Angle:** Discord formatting, native send, destination routing, fail-closed behavior  
-**Tree:** dispatch target at HEAD `85eb094` per `docs/execution/context.md`; the working tree was already dirty at dispatch. Source was inspected as presented in the current working tree.  
+**Scope:** `integrations/openclaw/lib/discord-formatter.mjs`, `integrations/openclaw/lib/discord-native-send.mjs`
+**Angle:** Discord formatting, native send, destination routing, fail-closed behavior
+**Tree:** dispatch target at HEAD `85eb094` per `docs/execution/context.md`; the working tree was already dirty at dispatch. Source was inspected as presented in the current working tree.
 **Checks:** Static read and caller tracing only; tests not run.
 
 ## Findings

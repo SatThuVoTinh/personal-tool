@@ -27,7 +27,19 @@ import {
   assertMediaInsideRoots,
   sendNativePayload,
 } from "../integrations/openclaw/lib/discord-native-send.mjs";
-import { evaluateSpecialistProvenance } from "../integrations/openclaw/plugins/zink-governance/index.mjs";
+import governancePlugin, { evaluateSpecialistProvenance } from "../integrations/openclaw/plugins/zink-governance/index.mjs";
+import {
+  buildSpawnProposal,
+  canonicalHash,
+  deriveTaskId,
+} from "../integrations/openclaw/topology/lib/canonical.mjs";
+import { governanceHash } from "../integrations/openclaw/lib/policy.mjs";
+import {
+  checkpointDigest,
+  ensureLedger,
+  ledgerPaths,
+  recordWorkflowEvent,
+} from "../integrations/openclaw/topology/lib/ledger.mjs";
 
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 
@@ -293,6 +305,187 @@ describe("M12/T1 P4 — attachment confinement", () => {
 });
 
 describe("M12/T1 P4 — the executing specialist may report its own task", () => {
+  it("F-OC-007: message_sending hook refuses a superseded run ID and admits current run ID", async () => {
+    const root = tempRoot("f-oc-007");
+    try {
+      const paths = ledgerPaths(root);
+      ensureLedger(paths);
+
+      const nextMessageId = "1556249093729427470";
+      const origin = {
+        origin: "discord",
+        origin_principal_ref: "a".repeat(64),
+        origin_message_id: nextMessageId,
+      };
+      const taskId = deriveTaskId(origin);
+      recordWorkflowEvent(paths, "WORKFLOW_OPENED", {
+        ...origin,
+        task_id: taskId,
+        root_agent_id: "main",
+        root_session_key: "main-session",
+        root_run_id: "main-run",
+      });
+
+      const nodeDef = (agentId) => ({
+        node_id: agentId,
+        agent_id: agentId,
+        stack_id: "data_plant",
+        dependencies: [],
+        required: true,
+        input_digest: canonicalHash("zink-input-v1", "work"),
+        constraints_digest: canonicalHash("zink-constraints-v1", "{}"),
+        validation_digest: canonicalHash(
+          "zink-validation-v1",
+          "agent-result-payload.schema.json",
+        ),
+      });
+
+      recordWorkflowEvent(paths, "WORKFLOW_BRIEF_ACTIVATED", {
+        task_id: taskId,
+        brief_revision: 1,
+        semantic_contract_status: "VALID",
+        nodes: [nodeDef("o1"), nodeDef("excel")],
+      });
+
+      recordWorkflowEvent(paths, "WORKFLOW_USER_APPROVAL_DECIDED", {
+        task_id: taskId,
+        actor: "user",
+        channel: "approvals",
+        decision: "APPROVE",
+        brief_revision: 1,
+      });
+
+      recordWorkflowEvent(paths, "WORKFLOW_TASK_CLAIMED", {
+        task_id: taskId,
+        agent_id: "o1",
+      });
+
+      const coordinator = buildSpawnProposal({
+        task_id: taskId,
+        brief_revision: 1,
+        node_id: "o1",
+        agent_id: "o1",
+        parent_agent_id: "main",
+        parent_session_key: "main-session",
+        parent_run_id: "main-run",
+        tool_call_id: "call-0",
+        turn: 1,
+        attempt: 1,
+        expected_governance_hash: governanceHash("o1"),
+      });
+      recordWorkflowEvent(paths, "WORKFLOW_SPAWN_RESERVED", coordinator);
+      recordWorkflowEvent(paths, "WORKFLOW_SPAWN_RECEIVED", {
+        task_id: taskId,
+        delegation_id: coordinator.delegation_id,
+        native_run_id: "o1-run-1",
+        child_session_key: "o1-session-1",
+        agent_id: "o1",
+        parent_session_key: "main-session",
+      });
+
+      const specialist = buildSpawnProposal({
+        task_id: taskId,
+        brief_revision: 1,
+        node_id: "excel",
+        agent_id: "excel",
+        parent_agent_id: "o1",
+        parent_session_key: "o1-session-1",
+        parent_run_id: "o1-run-1",
+        tool_call_id: "call-1",
+        turn: 1,
+        attempt: 1,
+        expected_governance_hash: governanceHash("excel"),
+      });
+      recordWorkflowEvent(paths, "WORKFLOW_SPAWN_RESERVED", specialist);
+      recordWorkflowEvent(paths, "WORKFLOW_SPAWN_RECEIVED", {
+        task_id: taskId,
+        delegation_id: specialist.delegation_id,
+        native_run_id: "excel-run-2",
+        child_session_key: "agent:excel:task-1",
+        agent_id: "excel",
+        parent_session_key: "o1-session-1",
+      });
+
+      // Update snapshot to add previous_native_run_ids
+      const snap = JSON.parse(readFileSync(paths.snapshot, "utf8"));
+      const del = Object.values(snap.tasks[taskId].delegations).find(
+        (d) => d.agent_id === "excel",
+      );
+      del.previous_native_run_ids = ["excel-run-1"];
+      writeFileSync(paths.snapshot, JSON.stringify(snap, null, 2), "utf8");
+
+      // Re-write checkpoint with the new tasks
+      const cpFile = path.join(paths.root, "checkpoint.json");
+      const cp = JSON.parse(readFileSync(cpFile, "utf8"));
+      const eventsBuf = readFileSync(paths.events);
+      cp.prefix_digest = checkpointDigest(
+        eventsBuf.subarray(0, cp.events_offset),
+        snap.tasks,
+      );
+      writeFileSync(cpFile, JSON.stringify(cp, null, 2), "utf8");
+
+      const hooks = new Map();
+      const logs = [];
+      governancePlugin.register({
+        pluginConfig: {
+          ledgerRoot: paths.root,
+          ownerDiscordId: "123456789012345678",
+          approvalsChannelId: "1556249093729427459",
+          resultsChannelId: "1556249093729427460",
+          officeChannelId: "1556249093729427461",
+          enabled: true,
+        },
+        on: (name, fn) => hooks.set(name, fn),
+        registerTool: () => {},
+        logger: {
+          warn: (m) => logs.push("warn:" + m),
+          info: (m) => logs.push("info:" + m),
+          error: (m) => logs.push("error:" + m),
+        },
+      });
+
+      const hook = hooks.get("message_sending");
+      assert.ok(
+        typeof hook === "function",
+        "message_sending hook must be registered",
+      );
+
+      const event = {
+        content: "Result payload from excel",
+        channelId: "1556249093729427460",
+      };
+
+      // 1. Superseded run ("excel-run-1") must be blocked
+      const supersededCtx = {
+        channelId: "discord",
+        sessionKey: "agent:excel:task-1",
+        agentId: "excel",
+        runId: "excel-run-1",
+      };
+      const supersededResult = await hook(event, supersededCtx);
+      assert.deepEqual(
+        supersededResult,
+        { block: true, cancel: true },
+        "message from superseded run ID must be blocked",
+      );
+
+      const currentCtx = {
+        channelId: "discord",
+        sessionKey: "agent:excel:task-1",
+        agentId: "excel",
+        runId: "excel-run-2",
+      };
+      const currentResult = await hook(event, currentCtx);
+      assert.equal(
+        currentResult?.block,
+        undefined,
+        "message from current run ID must be admitted",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("admits a specialist whose task the owner approved and that is executing", () => {
     const admitted = evaluateSpecialistProvenance({
       agentId: "excel",

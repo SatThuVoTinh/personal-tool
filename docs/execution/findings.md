@@ -1295,11 +1295,11 @@ fix xong và đã chứng minh, nên hai loại hàng này ở lại. Dọn chú
 - Legacy register id: `R9-T11-2`
 - Affected modules: Gates + CI
 - Severity: Medium
-- Status: PARTIAL — the failed/errored half is closed by `7e13dcb`: a `<failure>` or `<error>` case is now its own count and refuses the gate on every host, pinned by `tests/agent-owner-F-197-skip-expectation.test.mjs`. The childless zero-assertion half of the widened acceptance criterion is NOT closed: this row's own measurement says the junit reporter emits only `name`, `time`, `classname` and `file` per case, so a case that returns before any assertion is byte-identical to a pass and no predicate over this report can separate them; the criterion's named lane `tests/skip-expectation-gate.test.mjs` does not exist. Owner decision needed: re-scope the criterion to the two observable states, or name the signal the gate must read (2026-10-24).
+- Status: OPEN - the failed/errored half is closed by `7e13dcb`: a `<failure>` or `<error>` case is now its own count and refuses the gate on every host, pinned by `tests/agent-owner-F-197-skip-expectation.test.mjs`. The owner chose option 1 on 2026-10-29: the acceptance is re-scoped to the two observable non-executed states (skipped, failed/errored), and the childless zero-assertion concern is split into `F-587` instead of being a closure condition here. Closure waits for the W0/B8 band gate.
 - Root cause: `reportCases` parses only `/<skipped\b/u` from a testcase body, so `<failure>` and `<error>` children are indistinguishable from passing ones; the must-run tripwire therefore fires only at `passes === 0`, which a family that failed outright satisfies, and the ceiling test compares against the same inflated denominator — so the published "N passed" line is a count of report entries, not of executed assertions.
 - Evidence: Where: `scripts/skip-expectation-gate.mjs:132` — `skipped = /<skipped\b/u.test(body);` (verbatim at HEAD; nothing reads a failure or error child) · Where: `:180-181` — `if (testCase.skipped) entry.skips += 1; else entry.passes += 1;` · Where: `:257` — `if (!process.env.CI) continue;` so the whole family loop is inert outside CI · Where: `:259` `if (skips > 0)`, `:265` `if (passes === 0)`, `:271` `} else if (skips > (family.maxSkips ?? 0))` — the only three failure branches · Where: `:281` — `${family.id}: ${family.passes} passed, …` published as evidence · Where: `:41` `/^\/\/ SKIP-FAMILY: ([a-z0-9-]+)$/mu` with `:68-71` family resolution (transcribed) · Where: `:221-230` — the inert-lane detector that fires when `entry.passes === 0 && entry.skips === 0` · Measured: the sibling ceiling candidate R9-L11b-2 is the denominator half of this same mechanism · third case state measured by R10 (V10): a childless `<testcase>` with no `<skipped/>` and no `<failure/>` — i.e. a case whose body `return`s before any assertion — is counted a pass and the junit reporter emits only `name`, `time`, `classname`, `file` per case, so no `tests=`/`checked=` attribute exists to expose it; probe output was `passes: 5` from five childless cases with no refusal. Correction to the census: **27** `// SKIP-FAMILY:` declarations in **27** files on node v24.15.0, and a genuinely skipped case DOES emit `<skipped/>`, which the gate does see
 - Reproduction: a report of four `<testcase file="tests/m11-t1-postgres-sql-gate.test.mjs">` entries each carrying `<failure message="boom">` was written outside the repository and fed to the gate: with `CI` unset nothing can fail because `:257` skips the family loop outright, and with `CI=1` the gate exits FAIL only from the inert-lane detector firing on every other lane — the candidate's end-to-end "passes 4, failures [], PASS" was therefore NOT reproduced (the verifier could not isolate the postgres family's own line inside budget), while the failure-into-passes classification remains read directly from `:132` and `:180-181`.
-- Acceptance criteria: `scripts/skip-expectation-gate.mjs` classifies `failure` and `error` children as a third state, exits FAIL on any case that is neither a pass nor a declared skippable, and excludes failed cases from `passes` before the must-run (`:265`) and ceiling (`:271`) comparisons — red for a synthetic report whose cases all carry `<failure>`, green for the same report with the failures removed. · widening added by R10 (V10): the gate must refuse all three non-executed states — skipped, failed/errored, and a childless zero-assertion case — and a case that adds a childless case to a `// SKIP-FAMILY:` lane must redden `tests/skip-expectation-gate.test.mjs`; the fix may not rely on an assertion counter, because node v24.15.0 exposes none (`t.diagnostics` is null)
+- Acceptance criteria: `scripts/skip-expectation-gate.mjs` classifies `failure` and `error` children as a third state, exits FAIL on any case that is neither a pass nor a declared skippable, and excludes failed cases from `passes` before the must-run (`:265`) and ceiling (`:271`) comparisons — red for a synthetic report whose cases all carry `<failure>`, green for the same report with the failures removed. · Owner decision 2026-10-29 (option 1): the criterion is re-scoped to the two observable non-executed states (skipped, failed/errored); the childless zero-assertion concern is split into `F-587` and is not a closure condition for this row.
 - Related findings: carries the folded denominator insight of the sibling ceiling candidate R9-L11b-2 (that fix cannot close this row while the pass count is inflated) · the closed per-family-ceiling entry (CHANGELOG:1973) is present at HEAD and does not address failure classification · nguồn: R9 T11 — root-cause lane (test-validity shapes)
 
 ### F-493 — the collected-set floor and both sanctioned pytest invocations cover only apps/knowledge/tests, so the two tracked pdf-runtime contract tests are executed by nothing while a shipped docstring says the image runs them
@@ -2030,13 +2030,39 @@ fix xong và đã chứng minh, nên hai loại hàng này ở lại. Dọn chú
 - Acceptance criteria: a separately authorized task must make failure to durably record `WORKFLOW_APPROVAL_SURFACED` prevent the first-spawn approval from being reported or exposed as actionable, and a regression test must fail when the refusal is removed. Do not implement this under the current M12/T9-R4 contract; obtain a separate Plan Revision and execution authorization first.
 - Related findings: `F-529` covers the distinct approval-surface producer and remains narrow by owner decision; this row covers the first-spawn REST producer only. Filed per `docs/execution/findings.md` §0.2 rule 8 and owner decision recorded in `PLAN.md` on 2026-10-26.
 
-### F-INFRA-001 — the deployed Knowledge container can bypass the model gateway through unrestricted bridge egress
+### F-587 - a childless zero-assertion test case is byte-identical to a pass in the junit report, so the skip gate cannot measure executed assertions
+
+- Category: F7 - Testing & Verification Gaps
+- Legacy register id: `- (split from F-492 / R10 V10 on 2026-10-29)`
+- Affected modules: Gates + CI
+- Severity: Medium
+- Status: OPEN - split from `F-492` by owner option 1 on 2026-10-29. Measured at HEAD: the junit reporter emits only `name`, `time`, `classname` and `file` per case, so a `<testcase>` that returns before any assertion carries neither `<skipped/>` nor `<failure/>`/`<error/>` and is classified as a pass. The gate's own docblock records that no assertion count is available (`scripts/skip-expectation-gate.mjs:26-33`).
+- Root cause: the skip gate's only inputs are the JUnit children `skipped` and `failure`/`error`; a childless case has no marker that distinguishes "ran zero assertions" from "ran and passed", so the pass count and the must-run/ceiling denominators include it.
+- Evidence: `scripts/skip-expectation-gate.mjs:133-156` parses `failed` and `skipped` only; `:208-210` classifies every remaining case as a pass; `:26-33` states that a childless zero-assertion case is indistinguishable in this report. The F-492 measurement probe fed five childless cases and observed `passes: 5` with no refusal.
+- Reproduction: feed a JUnit report containing five childless `<testcase>` entries in a `// SKIP-FAMILY:` lane to `node scripts/skip-expectation-gate.mjs <report>`; the gate publishes the lane as passing and does not refuse the zero-assertion state.
+- Acceptance criteria: either a runner signal that counts executed assertions is defined and the gate refuses a lane containing a childless zero-assertion case (red on the synthetic report, green when the childless case is replaced by an assertion-bearing one), or the owner records an explicit `EXCLUDED` decision accepting that the JUnit surface cannot carry the signal. Changing the runner's report surface is a CI-surface/RED decision and needs its own authorization; the gate must not be weakened to approximate it.
+- Related findings: split from `F-492` (its failed/errored half is closed by `7e13dcb`); the skip-gate history is `F-197`, `F-477`, `F-481` and `F-492`; `tests/skip-expectation-gate.test.mjs` named by the old criterion does not exist.
+
+### F-588 - the committed F-OC-001 regression lane keeps a "red" subtest that asserts the fixed defect, so `npm test` fails permanently
+
+- Category: F7 - Testing & Verification Gaps
+- Legacy register id: `- (new in loop 2; no legacy id)`
+- Affected modules: Tests, OpenClaw Discord native send
+- Severity: High
+- Status: OPEN - verified at HEAD `ffee13c`: `node --test tests/m12-t9-unregistered-button-components-fail-closed.test.mjs` was 1 pass / 1 fail; the failing subtest `red: sdk failure allows buttons to be delivered with unregistered markdown components` asserted the pre-fix delivery and threw `COMPONENT_SDK_UNAVAILABLE` after `844a10f`. Fix staged in the working tree on 2026-10-29: the lane now asserts only the post-fix contract and runs 2 pass / 0 fail; the mutation probe (`if (false && !bundle)`) reddened it and the source was restored with an empty diff. Closure still needs the commit, the `package.json` registration and the W0 gate.
+- Root cause: `844a10f` committed the red-before demonstration as a permanent test instead of capturing it as evidence and converting the lane to the fail-closed assertion; the file header itself states "After the green fix, this test should FAIL" (`tests/m12-t9-unregistered-button-components-fail-closed.test.mjs:8-9`).
+- Evidence: `node --test tests/m12-t9-unregistered-button-components-fail-closed.test.mjs` reports `pass 1` / `fail 1`, with the failure at `tests/m12-t9-unregistered-button-components-fail-closed.test.mjs:32-82`; the green subtest at `:84-119` already asserts the post-fix contract.
+- Reproduction: run `node --test tests/m12-t9-unregistered-button-components-fail-closed.test.mjs`; the `red:` subtest fails because `sendNativePayload` now refuses delivery when the component SDK is unavailable.
+- Acceptance criteria: the lane asserts only the post-fix contract - an SDK resolution failure refuses delivery and never calls the adapter - `node --test` is 2 pass / 0 fail, and the red-before behaviour is recorded as commit/report evidence rather than asserted; a mutation probe that removes the fail-closed guard reddens the lane.
+- Related findings: F-OC-001 (`844a10f`) shipped the failing lane; the lane must be registered in the `npm test` enumeration under F-INFRA-004/§4.4 once green.
+
+### F-INFRA-001 - the deployed Knowledge container can bypass the model gateway through unrestricted bridge egress
 
 - Category: F2 — Security & Authorization
 - Legacy register id: — (new Phase 1 candidate)
 - Affected modules: Infrastructure, Zink Knowledgebase
 - Severity: Medium
-- Status: CONFIRMED-AS-LATENT - Phase 3 triage: static bridge-vs-internal egress gap proven; no deployed-container probe, host firewall unknown.
+- Status: LATENT - Phase 3 triage: static bridge-vs-internal egress gap proven; no deployed-container probe, host firewall unknown.
 - Phase 3 verdict: RED no; fixer fix-infrastructure; depends_on none; evidence docs/execution/reports/p3/triage-01.md
 - Root cause: the deployed Knowledge service joins a normal bridge network with no internal-egress restriction, while the model allowlist is enforced only by the configured Nginx URL; the direct network path bypasses that gateway.
 - Evidence: `infrastructure/docker/compose/compose.core.yml:149-165,182-183,216-222` configures Knowledge on the `platform` bridge and points its model URL at Nginx, but does not make the deployed network internal. The Nginx route allowlist is in `infrastructure/nginx/conf.d/default.conf:29-47`; the acceptance overlay's internal network and egress probes are at `infrastructure/docker/compose/compose.m3-t5.acceptance.yml:52-58` and `infrastructure/docker/scripts/knowledge-t5-common.ps1:591-609`, while the live proof checks only gateway paths at `knowledge-t5-live.ps1:463-472`.
@@ -2050,7 +2076,7 @@ fix xong và đã chứng minh, nên hai loại hàng này ở lại. Dọn chú
 - Legacy register id: — (new Phase 1 candidate; merged reports scan-infra-2 and scan-db-3)
 - Affected modules: Infrastructure, Zink Knowledgebase, Zink Skill Store, n8n automation database; Zink Tools reaches the boundary through the Skill Store retrieval adapter
 - Severity: High
-- Status: CONFIRMED - Phase 3 triage: shared superuser identity reaches Knowledge and Skill Store; no rolsuper probe run. R5 fixed at `7570f73` (2026-10-27): `knowledge_app` and `skill_app` are the module logins, the bootstrap owns the two schemas and their objects, `CONNECT` on `n8n` is revoked from `PUBLIC`, and `vector-sync.mjs` fails closed without `SKILL_DB_PASSWORD`. Evidence: `bash -n` exit 0, `m11-t1-skill-vector-sql` 25 passed, `m3-t1-contract` + `m5-docker-contract` 13 passed, eslint exit 0. Docker and live PostgreSQL privilege checks are `NOT RUN` on this host; closure waits for the band gate.
+- Status: OPEN - Phase 3 triage: shared superuser identity reaches Knowledge and Skill Store; no rolsuper probe run. R5 fixed at `7570f73` (2026-10-27): `knowledge_app` and `skill_app` are the module logins, the bootstrap owns the two schemas and their objects, `CONNECT` on `n8n` is revoked from `PUBLIC`, and `vector-sync.mjs` fails closed without `SKILL_DB_PASSWORD`. Evidence: `bash -n` exit 0, `m11-t1-skill-vector-sql` 25 passed, `m3-t1-contract` + `m5-docker-contract` 13 passed, eslint exit 0. Docker and live PostgreSQL privilege checks are `NOT RUN` on this host; closure waits for the band gate.
 - Phase 3 verdict: RED yes; fixer fix-infrastructure then fix-knowledgebase/fix-skill-store/fix-tools; depends_on none; evidence docs/execution/reports/p3/triage-01.md
 - Root cause: the PostgreSQL cluster administrator is the routine identity for more than one module client: Compose gives Knowledge the `postgres` role and cluster password, and Skill Store's executor invokes `psql -U postgres`. Each runner owns its own schema and ledger in code, but no role grants enforce that separation, so a compromise of either client crosses the logical module boundary.
 - Evidence: `infrastructure/docker/compose/compose.core.yml:13-16,149-153` initializes PostgreSQL as `postgres` and passes that identity to Knowledge; `apps/knowledge/app/database.py:453-459,2757-2768,2790-2819` uses the credentials for the runtime pool and schema migrations. The bootstrap provisions a separate n8n role in `infrastructure/docker/scripts/bootstrap-postgres.sh:28-38`. Skill Store's independent client is `zink-skill-store/src/vector-sync.mjs:307-335` (`docker exec … psql -U postgres -d postgres`), used by its migration runner `zink-skill-store/src/migrations.mjs:75-92` and by the Tools adapter that imports that executor (`zink-tools/adapters/skill-store/skill-adapter.mjs:13-20`, SELECT at `:779-806`). Corroborated by `docs/execution/reports/p2/xcheck-db-all.md`, `xcheck-infra-skill-tools.md` and `xcheck-skill-tools.md`.
@@ -2064,7 +2090,7 @@ fix xong và đã chứng minh, nên hai loại hàng này ở lại. Dọn chú
 - Legacy register id: — (new Phase 1 candidate)
 - Affected modules: Zink Knowledgebase
 - Severity: High
-- Status: CONFIRMED - Phase 3 triage: oversized sidecar is skipped with no source error, then the intact PDF is deleted as stale; severity raised to High. R5 fixed at `6c05167` (2026-10-27): the sweep raises `PDF_SIDECAR_TOO_LARGE` with the sidecar path, the lifecycle records it on the `SafeRunError` and refuses to publish the incomplete manifest. Evidence: `tests/test_index_lifecycle.py` 16 passed, `npm run test:knowledge` 308 passed / 18 skipped, mutation probe re-deletes the PDF. Closure waits for the band gate.
+- Status: OPEN - Phase 3 triage: oversized sidecar is skipped with no source error, then the intact PDF is deleted as stale; severity raised to High. R5 fixed at `6c05167` (2026-10-27): the sweep raises `PDF_SIDECAR_TOO_LARGE` with the sidecar path, the lifecycle records it on the `SafeRunError` and refuses to publish the incomplete manifest. Evidence: `tests/test_index_lifecycle.py` 16 passed, `npm run test:knowledge` 308 passed / 18 skipped, mutation probe re-deletes the PDF. Closure waits for the band gate.
 - Phase 3 verdict: RED no; fixer fix-knowledgebase; depends_on none; evidence docs/execution/reports/p3/triage-03.md
 - Root cause: sidecar discovery skips files above `MAX_SIDECAR_BYTES` without reporting a source error or preserving the referenced PDF path; incremental publication interprets the missing path as a removed source and deletes its searchable record.
 - Evidence: `apps/knowledge/app/pdf_foundation.py:255-263` continues on an oversized sidecar; `apps/knowledge/app/index_lifecycle.py:206-219,418-435` builds the manifest and computes stale sources; `apps/knowledge/app/database.py:2202-2211` deletes those source rows. Cascading ownership is defined in migrations `001_initial.sql:87-95,136-140` and `002_pdf_ingestion_foundation.sql:71-79`.
@@ -2078,7 +2104,7 @@ fix xong và đã chứng minh, nên hai loại hàng này ở lại. Dọn chú
 - Legacy register id: — (new Phase 1 candidate)
 - Affected modules: Zink Knowledgebase
 - Severity: Medium
-- Status: CONFIRMED-AS-LATENT - Phase 3 triage: migration replay recognises CREATE objects only; ALTER-only 004/005 have no recovery set.
+- Status: LATENT - Phase 3 triage: migration replay recognises CREATE objects only; ALTER-only 004/005 have no recovery set.
 - Phase 3 verdict: RED yes; fixer fix-knowledgebase; depends_on none; evidence docs/execution/reports/p3/triage-03.md
 - Root cause: migration replay recovery recognizes only objects parsed from `CREATE` statements, so an `ALTER TABLE ... ADD COLUMN` duplicate-column error has no recognized object set and is treated as a fatal migration failure.
 - Evidence: `apps/knowledge/app/database.py:2790-2819` replays files lacking a ledger row and calls `_migration_is_already_applied` on PostgreSQL errors; `:2888-2897` refuses an empty object set. `_migration_objects` recognizes CREATE forms at `:137-155`; migrations `004_pdf_build_failure_cause.sql:12-15` and `005_schema_migration_digest.sql:17-18` use ALTER ADD COLUMN.
@@ -2092,7 +2118,7 @@ fix xong và đã chứng minh, nên hai loại hàng này ở lại. Dọn chú
 - Legacy register id: — (new Phase 1 candidate)
 - Affected modules: Zink Knowledgebase
 - Severity: Medium
-- Status: CONFIRMED-AS-LATENT - Phase 3 triage: NFC normalisation collides distinct Markdown spellings on the unique source key; live only inside the uncommitted F-576 patch.
+- Status: LATENT - Phase 3 triage: NFC normalisation collides distinct Markdown spellings on the unique source key; live only inside the uncommitted F-576 patch.
 - Phase 3 verdict: RED no; fixer fix-knowledgebase; depends_on F-576; evidence docs/execution/reports/p3/triage-04.md
 - Root cause: source paths are normalized to NFC before replacing rows, while discovery preserves distinct filesystem spellings; canonical-equivalent filenames therefore collide on the unique `(index_id, source_path)` key and each replacement deletes the previous source.
 - Evidence: `apps/knowledge/app/database.py:1995-2024` normalizes then deletes matching NFC paths before insert; `apps/knowledge/app/markdown_adapter.py:296-337,368-374` retains raw relative paths; `apps/knowledge/migrations/001_initial.sql:81` makes `(index_id, source_path)` unique. The new NFC test covers one path, not two colliding names (`apps/knowledge/tests/test_m12_t9_r4_f576_source_path_form.py:127-157,292-371`).
@@ -2106,7 +2132,7 @@ fix xong và đã chứng minh, nên hai loại hàng này ở lại. Dọn chú
 - Legacy register id: — (new Phase 1 candidate; possible incomplete closure of F-573)
 - Affected modules: Zink Knowledgebase API and consumers
 - Severity: Medium
-- Status: CONFIRMED - Phase 3 triage: chunk/citation/metadata serialisers omit index status and stable ordinal; caller-visible closure incomplete.
+- Status: OPEN - Phase 3 triage: chunk/citation/metadata serialisers omit index status and stable ordinal; caller-visible closure incomplete.
 - Phase 3 verdict: RED yes; fixer fix-knowledgebase + fix-tools + fix-tests + fix-openclaw-governance-library; depends_on none; evidence docs/execution/reports/p3/triage-04.md
 - Root cause: the segment loader was extended with index state and ordinal, but the `/v1/chunk`, `/v1/citation` and `/v1/metadata` serializers build explicit response rows that omit both; downstream, the Tools Knowledge adapter's projection has no such fields and its closed output schema rejects undeclared keys, so the promise recorded at F-573's closure cannot be met end to end.
 - Evidence: `apps/knowledge/app/database.py:1913-1925` joins `knowledge.indexes` for any segment by id with no ACTIVE-only condition and `:1961-1967` returns `index_status` plus `chunk_ordinal`; the serializers omit both at `apps/knowledge/app/main.py:958-977` (`/v1/chunk`), `:998-1026` (`/v1/citation`) and `:1039-1068` (`/v1/metadata`). Superseded-index segment cleanup deletes those segments (`database.py:2377-2407,2591-2609`), so the surrogate id is not durable. Consumer side: `zink-tools/adapters/knowledge/knowledge-adapter.mjs:405-419` dispatches these routes and its formatter (`:775-822`) copies only declared fields — it also drops the endpoints' top-level `index_id`/`indexed_by_run_id` (`main.py:978-984,1028-1034`), while the closed output item declares no index-state/ordinal members and rejects others (`zink-tools/contracts/tools/zink-knowledge.schema.json:85-119`, metadata at `:114`).
@@ -2120,7 +2146,7 @@ fix xong và đã chứng minh, nên hai loại hàng này ở lại. Dọn chú
 - Legacy register id: — (new Phase 1 candidate)
 - Affected modules: Zink Skill Store
 - Severity: Medium
-- Status: CONFIRMED-AS-LATENT - Phase 3 triage: residue cleanup resolves ancestry before realpath; a planted symlink escapes the store root.
+- Status: LATENT - Phase 3 triage: residue cleanup resolves ancestry before realpath; a planted symlink escapes the store root.
 - Phase 3 verdict: RED yes; fixer fix-skill-store + fix-tests; depends_on none; evidence docs/execution/reports/p3/triage-05.md
 - Root cause: promotion performs residue cleanup before the catalog walk rejects symlinks; `readdir` and recursive removal follow a symlinked namespace/capability ancestor and accept residue names without proving the target is owned Skill Store state.
 - Evidence: `zink-skill-store/src/catalog.mjs:1723-1733` builds `parentDir` and calls `healWriterResidue` before `scanCatalog` at `:1844`; `:1331-1341` reads and recursively removes matching entries (`isResidueDirectory` at `:1077-1083`). Every refusal is later than the delete: symlinked root `UNSAFE_PATH` at `:868-876`; symlinked root/intermediate entries as `DIRECTORY_GRAMMAR_INVALID` (`:728-731`, `:800-808`, where the parent branch `continue`s before descending), so the Phase 1 `:689-710` `walk` locator does not fire for this shape (corrected by `docs/execution/reports/p2/xcheck-skill-tools.md`). Identity grammar is validated only at `:1640-1658`. Reachability: the plugin binds the store door at `integrations/openclaw/plugins/zink-governance/index.mjs:1416-1465`, takes the store lock at `:1444` and promotes through `zink-skill-store/index.mjs:61-69`. Sibling gap: the operator repair `quarantineInvalidVersion` (`catalog.mjs:1452-1497`) builds `versionDir`/`parentDir` the same way and its `lstat` rejects only a final-component link, not a linked ancestor.
@@ -2134,7 +2160,7 @@ fix xong và đã chứng minh, nên hai loại hàng này ở lại. Dọn chú
 - Legacy register id: — (new Phase 1 candidate)
 - Affected modules: Zink Skill Store, Zink Tools
 - Severity: Medium
-- Status: CONFIRMED - Phase 3 triage: alias-stored rows are queried by canonical name; contract and SQL predicate disagree.
+- Status: OPEN - Phase 3 triage: alias-stored rows are queried by canonical name; contract and SQL predicate disagree.
 - Phase 3 verdict: RED no; fixer fix-tools + fix-tests; depends_on none; evidence docs/execution/reports/p3/triage-05.md
 - Root cause: synchronization persists the manifest's raw namespace array, while the query side resolves aliases to canonical namespaces before building the SQL predicate; a valid alias-named skill therefore cannot match either alias or canonical scoped filters.
 - Evidence: writer — the proposal adapter admits alias roots through `VETTED_ROOT_NAMESPACES` and keeps the original `parsedNamespace` (`zink-tools/adapters/skill-store/skill-adapter.mjs:83-95,1110-1176`); owner approval binds that exact namespace (`integrations/openclaw/plugins/zink-governance/index.mjs:1312-1324`, promotion at `:1444-1465`); `zink-skill-store/src/vector-sync.mjs:1216-1220` derives semantic metadata but `buildSkillSyncTransaction` writes the supplied namespace verbatim (`:565-576,622-627`). Query — aliases live in `zink-tools/common/semantic-contract.mjs:36-44,203-210`, the resolver canonicalizes at `:477-487`, and the adapter builds `c.namespace @>` from the resolved values (`skill-adapter.mjs:720-751`); the registered `zink_skill_search` path is `index.mjs:4394-4488`. Catalog admission accepts up to eight lowercase-kebab namespace segments with no alias resolution (`zink-skill-store/src/catalog.mjs:337-347`). Adjacent disagreement at the same contract: `discover` compares the stored namespace string exactly (`skill-adapter.mjs:468-475`) while `read`/`apply` compare canonically (`assertNamespaceBinding`, `:256-280`).
@@ -2148,7 +2174,7 @@ fix xong và đã chứng minh, nên hai loại hàng này ở lại. Dọn chú
 - Legacy register id: — (new Phase 1 candidate)
 - Affected modules: OpenClaw Discord adapter, governance plugin
 - Severity: Medium
-- Status: CONFIRMED - Phase 3 triage: native-send strips components when the SDK field is null; formatter and sender disagree.
+- Status: OPEN - Phase 3 triage: native-send strips components when the SDK field is null; formatter and sender disagree.
 - Phase 3 verdict: RED yes; fixer fix-openclaw-discord-adapters; depends_on none; evidence docs/execution/reports/p3/triage-06.md
 - Root cause: when native component-bundle construction returns null, `outboundPayload` remains the caller's payload, so the caller-built raw component JSON is transmitted even though no host registry entry can ever resolve its ids.
 - Evidence: `integrations/openclaw/lib/discord-native-send.mjs:730-756` — `let outboundPayload = payload` (`:733`) is replaced only inside `if (bundle)` (`:744-755`); `resolveComponentSdk()` logs and returns null on resolution failure at `:311-328`, so the bundle is null; the send proceeds with that payload at `:779-795` and registration runs only when a bundle exists at `:805-814`. The module's own header at `:21-38` states that a missing registry yields expired buttons. Production pending-result caller supplies both `buttons` and `buildNativeComponentPayload(...)` components at `integrations/openclaw/plugins/zink-governance/index.mjs:6636-6645`, and its catch logs without inspecting any registration outcome at `:6647-6651`.
@@ -2162,7 +2188,7 @@ fix xong và đã chứng minh, nên hai loại hàng này ở lại. Dọn chú
 - Legacy register id: — (new Phase 1 candidate)
 - Affected modules: OpenClaw artifact validation, OpenClaw Excel writer, governance plugin
 - Severity: High
-- Status: CONFIRMED - Phase 3 triage: ZIP aggregate expansion is uncapped in two readers; MemoryMax=768M bounds the blast radius, not the defect. R5 fixed at `5b3f72b` (2026-10-27): Option B budgets enforced in both readers (5,000 entries max, 128 MiB per entry max, 512 MiB aggregate max) before retaining buffers, with errors naming measurement and limits. Evidence: `tests/m12-t9-r5-zip-expansion-budgets.test.mjs` 14 passed; eslint exit 0; prettier exit 0; m12-t9-r4-f469/f459 8 passed; m8-t2.3 9 passed. Closure waits for the band gate.
+- Status: OPEN - Phase 3 triage: ZIP aggregate expansion is uncapped in two readers; MemoryMax=768M bounds the blast radius, not the defect. R5 fixed at `5b3f72b` (2026-10-27): Option B budgets enforced in both readers (5,000 entries max, 128 MiB per entry max, 512 MiB aggregate max) before retaining buffers, with errors naming measurement and limits. Evidence: `tests/m12-t9-r5-zip-expansion-budgets.test.mjs` 14 passed; eslint exit 0; prettier exit 0; m12-t9-r4-f469/f459 8 passed; m8-t2.3 9 passed. Closure waits for the band gate.
 - Phase 3 verdict: RED yes; fixer fix-openclaw-artifact-validation; depends_on none; evidence docs/execution/reports/p3/triage-06.md
 - Root cause: both OpenClaw ZIP readers inflate untrusted entry data without an aggregate expanded-byte or entry-count budget; the result validator caps each inflated entry individually at 25 MiB, while the Excel-writer reader applies no per-entry output ceiling at all.
 - Evidence: Validator — `integrations/openclaw/lib/artifact-validator.mjs:164-204` trusts the 16-bit central-directory count, loops every entry and retains each inflated buffer in `contents`, inflating each with `maxOutputLength: MAX_ARTIFACT_SIZE_BYTES` (`:191-198`) with no aggregate budget; the compressed-input ceiling at `:784-808` does not bound retained bytes; distinct central names may reuse one local stream because no unique-offset or local-name check exists (`:173-189`). Excel result validation calls this reader at `:907-908` and the production gate at `integrations/openclaw/plugins/zink-governance/index.mjs:3125-3134`. Writer — `integrations/openclaw/lib/excel-writer.mjs:123-174` is a second independent parser: `readZipEntries` loops the declared count (`:140-143`) and calls `zlib.inflateRawSync(raw)` with **no** `maxOutputLength` (`:170`), retaining every result in a Map (`:142,171`); it is reached by governed `load` (`:688-697`), `validate` (`:733-752`) and `populate` template reads (`:795-827`) with the sandbox supplied at `index.mjs:4845-4864`. Corroborated by `docs/execution/reports/p2/xcheck-oc-artifact.md` and `xcheck-tools-oc.md`.
@@ -2176,7 +2202,7 @@ fix xong và đã chứng minh, nên hai loại hàng này ở lại. Dọn chú
 - Legacy register id: — (new Phase 1 candidate)
 - Affected modules: OpenClaw Excel writer, governance plugin
 - Severity: Medium
-- Status: CONFIRMED-AS-LATENT - Phase 3 triage: realpath/inside-workspace check is missing on the write path; latent until a symlink is planted.
+- Status: LATENT - Phase 3 triage: realpath/inside-workspace check is missing on the write path; latent until a symlink is planted.
 - Phase 3 verdict: RED yes; fixer fix-openclaw-artifact-validation; depends_on none; evidence docs/execution/reports/p3/triage-07.md
 - Root cause: `realpathOf` reconstructs a missing target from the deepest resolvable ancestor after any realpath failure, treating a dangling final symlink as a normal nonexistent path; `writeFileSync` later follows that symlink.
 - Evidence: `integrations/openclaw/lib/excel-writer.mjs:454-467` catches every failed target resolution and re-appends unresolved segments; `assertInsideWorkspace` accepts the reconstructed path at `:474-480`; target validation at `:660-673`; `fs.writeFileSync(targetPath, buf)` at `:841-842` follows the link. Governed caller supplies the sandbox as `baseDir` at `integrations/openclaw/plugins/zink-governance/index.mjs:4845-4864` (`executeExcelOperation(params, sandboxDir)` at `:4863`); the Tool schema admits the model-selected relative `file_path` (`zink-tools/contracts/tools/zink-excel.schema.json:45-53`).
@@ -2190,7 +2216,7 @@ fix xong và đã chứng minh, nên hai loại hàng này ở lại. Dọn chú
 - Legacy register id: — (new Phase 1 candidate)
 - Affected modules: OpenClaw shared file lock, decision ledger, queue, topology ledger, Zink Skill Store catalog
 - Severity: High
-- Status: CONFIRMED - Phase 3 triage: replace/remove interleaving can lose the replacement holder under the writer lock. R5 fixed at `f5bf41a` (2026-10-28): `removalRound()` enforces compare-and-remove, verifying owner.json token immediately before unlinking/rmdir; refusals throw `FILE_LOCK_NOT_OWNER`. Predecessor `98c15fe4...` added to `configure.mjs` and test pin updated. Evidence: `tests/m10-t2-r18-file-lock.test.mjs` 8 passed (including R18-08), mutation probe confirmed. Closure waits for the band gate.
+- Status: OPEN - Phase 3 triage: replace/remove interleaving can lose the replacement holder under the writer lock. R5 fixed at `f5bf41a` (2026-10-28): `removalRound()` enforces compare-and-remove, verifying owner.json token immediately before unlinking/rmdir; refusals throw `FILE_LOCK_NOT_OWNER`. Predecessor `98c15fe4...` added to `configure.mjs` and test pin updated. Evidence: `tests/m10-t2-r18-file-lock.test.mjs` 8 passed (including R18-08), mutation probe confirmed. Closure waits for the band gate.
 - Phase 3 verdict: RED yes; fixer fix-openclaw-governance-library; depends_on none; evidence docs/execution/reports/p3/triage-07.md
 - Root cause: release validates the owner token once, then unlinks the current `owner.json` and removes the directory without atomically rechecking that the same token still owns it.
 - Evidence: `integrations/openclaw/lib/file-lock.mjs:188-212` compares the recorded token and returns only a boolean; `:220-240` (`removalRound`) unlinks whichever `owner.json` currently occupies the directory and then removes the directory; `release` runs the two stages in sequence at `:264-270`, leaving the gap. The module documents exactly this replacement scenario at `:115-120` and the stale-token consequence at `:279-285`.
@@ -2204,7 +2230,7 @@ fix xong và đã chứng minh, nên hai loại hàng này ở lại. Dọn chú
 - Legacy register id: — (new Phase 1 candidate)
 - Affected modules: OpenClaw decision ledger and policy; governance owner-confirmation handler (exported, no registered caller)
 - Severity: Medium
-- Status: CONFIRMED-AS-LATENT - Phase 3 triage: conflict detection runs before the writer lock; save overwrites same-ID records without revalidation.
+- Status: LATENT - Phase 3 triage: conflict detection runs before the writer lock; save overwrites same-ID records without revalidation.
 - Phase 3 verdict: RED no; fixer fix-openclaw-governance-library; depends_on none; evidence docs/execution/reports/p3/triage-08.md
 - Root cause: conflict detection runs against each instance's refreshed in-memory map before acquiring the writer lock; save merges durable state but unconditionally replaces an existing same-ID record without revalidating decision content.
 - Evidence: `integrations/openclaw/lib/decision-ledger.mjs:583-638` refreshes and checks conflicts before save; the deterministic identity at `:596-607` excludes decision text; `save` acquires the writer lock only at `:436-438`, reads durable records at `:446-448`, and `durable.set(id, record)` at `:449-450` replaces an existing value with no conflict recheck. This contradicts `docs/contracts/decision-ledger.md:48`, which requires `DECISION_ID_CONFLICT`. Coverage: `tests/m7-lane-d-decision.test.mjs:84-113` uses sequential writes with an explicit shared id; `tests/agent-lib-F-002.test.mjs:109-140` uses two writers with **different** ids; `tests/m12-t9-r4-decision-replay-order.test.mjs:62-78` tests sequential changed-content conflict. None refreshes two instances from an empty ledger and saves differing decisions under one deterministic id.
@@ -2218,7 +2244,7 @@ fix xong và đã chứng minh, nên hai loại hàng này ở lại. Dọn chú
 - Legacy register id: — (new Phase 1 candidate)
 - Affected modules: OpenClaw topology reducer/ledger; governance plugin ingress
 - Severity: Medium
-- Status: CONFIRMED-AS-LATENT - Phase 3 triage: reducer makes WORKFLOW_OPENED idempotent by task_id only; the stated production race is refuted at this tree.
+- Status: LATENT - Phase 3 triage: reducer makes WORKFLOW_OPENED idempotent by task_id only; the stated production race is refuted at this tree.
 - Phase 3 verdict: RED yes; fixer fix-openclaw-topology; depends_on none; evidence docs/execution/reports/p3/triage-08.md
 - Root cause: the reducer makes `WORKFLOW_OPENED` idempotent by `task_id` only, and performs the lineage comparison exclusively when the incoming ID is already present. A different task ID carrying an origin binding that another task already owns is inserted without any origin-uniqueness check, so the serialized commit can still widen the state to two tasks per admitted origin.
 - Evidence: `integrations/openclaw/topology/lib/workflow.mjs:631-655` — the same-lineage test at `:633-640` is reached only inside `if (Object.hasOwn(next.tasks, payload.task_id))`, and `:645-655` inserts a new task unconditionally; `findSession` at `:329-357` collects matches across every task and throws `EXECUTION_STATE_UNKNOWN` unless exactly one is found. Producers: `integrations/openclaw/plugins/zink-governance/index.mjs:9535-9555` (snapshot read, `findTaskByOriginBinding`, mint) and `:9619-9626` (append).
@@ -2232,7 +2258,7 @@ fix xong và đã chứng minh, nên hai loại hàng này ở lại. Dọn chú
 - Legacy register id: — (new Phase 1 candidate)
 - Affected modules: OpenClaw governance plugin (message hook) and topology (run identity)
 - Severity: Medium
-- Status: CONFIRMED-AS-LATENT - Phase 3 triage: superseded provenance is not carried into the denial path; latent until a superseded record is read.
+- Status: LATENT - Phase 3 triage: superseded provenance is not carried into the denial path; latent until a superseded record is read.
 - Phase 3 verdict: RED no; fixer fix-openclaw-governance-plugin; depends_on none; evidence docs/execution/reports/p3/triage-09.md
 - Root cause: the message hook resolves historical run IDs with `includePrevious=true` and passes only the delegation's `agent_id` into provenance evaluation; it never checks that the message's `ctx.runId` is still the delegation's current `native_run_id`, unlike the result/callback arms which do consult `isSupersededAttempt`.
 - Evidence: `integrations/openclaw/plugins/zink-governance/index.mjs:10157-10162` — `findSession(readSnapshot(paths), sessionKey, ctx.runId, true)`; `:10163-10175` passes `task` plus `owner?.delegation?.agent_id` only; `evaluateSpecialistProvenance` at `:876-902` compares agent, `approved_at` and task-wide `workflow_status` and has no run condition; the allow path logs and continues to outbound formatting at `:10205-10215,10307-10310`. Topology: `integrations/openclaw/topology/lib/workflow.mjs:323-344` matches `previous_native_run_ids` when `includePrevious` is true, `:421-434` defines superseded attempts, `:1961-1973` records the old native run before replacing it; the reducer's result/callback arms do gate on supersession (`:737`, `:1614`, `:1650`), showing the missing check is specific to this seam. The hook itself is registered at `index.mjs:10178-10182`.
@@ -2246,7 +2272,7 @@ fix xong và đã chứng minh, nên hai loại hàng này ở lại. Dọn chú
 - Legacy register id: — (new Phase 1 candidate)
 - Affected modules: OpenClaw setup template and gateway startup
 - Severity: High
-- Status: CONFIRMED-AS-LATENT - Phase 3 triage: template verification accepts a hotfix set it never fsyncs; latent, needs the packaged template shape.
+- Status: LATENT - Phase 3 triage: template verification accepts a hotfix set it never fsyncs; latent, needs the packaged template shape.
 - Phase 3 verdict: RED yes; fixer fix-openclaw-setup-templates (fix-tests owns tests/agent-topo-F-296.test.mjs); depends_on none; evidence docs/execution/reports/p3/triage-09.md
 - Root cause: `writeAtomically` renames the new bytes into the live path before the parent-directory fsync, and its catch unlinks only the (by then absent) temp without restoring the destination; `writeTransaction` appends a record to `changed` only after `writeAtomically` returns, so rollback never sees the artifact that was already renamed.
 - Evidence: `integrations/openclaw/templates/openclaw-gemini-stream-hotfix.mjs:290-315` — `renameSync` at `:300`, `syncDirectory(path.dirname(filePath))` at `:301`, catch at `:302-315` unlinks the temp and rethrows without restoring `filePath`; `:421-432` — `changed.push(record)` only after `writeAtomically` succeeds and the reverse rollback iterates only `changed`; `classifyState` at `:379-394` accepts all-patched, all-original or the specific first-artifact-only `r18-predecessor` state and otherwise throws "unsupported partial state"; the generated systemd drop-in runs `--ensure` as `ExecStartPre` at `integrations/openclaw/lib/policy.mjs:1989`.
@@ -2260,7 +2286,7 @@ fix xong và đã chứng minh, nên hai loại hàng này ở lại. Dọn chú
 - Legacy register id: — (new Phase 2 candidate, `docs/execution/reports/p2/xcheck-oc-discord-gov.md` CAND-oc-1-02)
 - Affected modules: OpenClaw governance plugin (outbound message gate); OpenClaw host inbound/outbound context contract
 - Severity: Medium
-- Status: CONFIRMED-AS-LATENT - Phase 3 triage: the guard trusts a host-supplied event mapping this repository cannot verify.
+- Status: LATENT - Phase 3 triage: the guard trusts a host-supplied event mapping this repository cannot verify.
 - Phase 3 verdict: RED yes; fixer fix-openclaw-governance-plugin; depends_on none; evidence docs/execution/reports/p3/triage-10.md
 - Root cause: the canonical-surface predicate short-circuits to true whenever any thread/parent identifier is merely present, instead of relating that identifier to one of the configured surface IDs, so the destination check is bypassed by ordinary thread metadata.
 - Evidence: `integrations/openclaw/plugins/zink-governance/index.mjs:10241-10252` — `isCanonical` is satisfied by `Boolean(ctx.threadId || event.threadId || ctx.parentChannelId || event.parentChannelId)` with no comparison against `CANONICAL_DISCORD_SURFACE_IDS`, which is built from configured IDs at `:10113-10128` and compared only against `destChannel` (`:10230-10240`). The comment immediately above (`:10202-10204`) states arbitrary destinations must remain blocked. The separate empty-set allowance at `:10244` is NOT reachable through approved setup: `buildConfig` requires four distinct snowflakes (`integrations/openclaw/lib/policy.mjs:1304-1322`) and registration validates config before hooks (`index.mjs:6132-6136`). `tests/m8-t2-governed-runtime-audit.test.mjs:2433-2452` asserts source strings only, so it cannot prove refusal.
@@ -2274,7 +2300,7 @@ fix xong và đã chứng minh, nên hai loại hàng này ở lại. Dọn chú
 - Legacy register id: — (new Phase 2 candidate, `docs/execution/reports/p2/xcheck-oc-artifact.md` CAND-xcheck-oc-artifact-01)
 - Affected modules: OpenClaw governance plugin (shared native tool wrapper / output validation), Zink Tools Excel output contract
 - Severity: Low
-- Status: CONFIRMED - Phase 3 triage: native ERROR envelope violates the published schema at a shared exit; all five callable tools inherit it.
+- Status: OPEN - Phase 3 triage: native ERROR envelope violates the published schema at a shared exit; all five callable tools inherit it.
 - Phase 3 verdict: RED yes; fixer fix-openclaw-governance-plugin; depends_on none; evidence docs/execution/reports/p3/triage-10.md
 - Root cause: the shared catch in the native tool executor returns a generic `{status:"ERROR", tool, error, message, code}` envelope and returns before output-envelope validation; even when validation does run, it skips the schema check for any `ERROR` status, so the closed Excel output contract (which requires `operation` and `success` and forbids additional properties) is never applied to the failure shape.
 - Evidence: `integrations/openclaw/plugins/zink-governance/index.mjs:5315-5337` — the catch builds the generic object and returns it, so `validateToolOutputEnvelope(toolId, executionResult, …)` at `:5340-5344` is not reached; `:5400-5417` — validation is skipped when `status?.toUpperCase?.() !== "ERROR"` fails, alongside the other bypassed statuses. Contract: `zink-tools/contracts/tools/zink-excel.schema.json:56-75` declares the output object with `required: ["operation","success"]` and `additionalProperties: false` (no `message`/`code` members).
@@ -2288,7 +2314,7 @@ fix xong và đã chứng minh, nên hai loại hàng này ở lại. Dọn chú
 - Legacy register id: — (new Phase 2 candidate, `docs/execution/reports/p2/xcheck-tools-oc.md` CAND-xcheck-tools-oc-02)
 - Affected modules: Zink Tools (Excel semantic contract doc), OpenClaw governance plugin (registered native Excel tool)
 - Severity: Low
-- Status: CONFIRMED - Phase 3 triage: contract document and policy disagree on the Excel error surface.
+- Status: OPEN - Phase 3 triage: contract document and policy disagree on the Excel error surface.
 - Phase 3 verdict: RED yes; fixer fix-tools; depends_on none; evidence docs/execution/reports/p3/triage-11.md
 - Root cause: two published descriptions of `zink_excel` contradict the shipped dispatch: the semantic contract asserts Model A returns `ENGINE_NOT_IMPLEMENTED` via the contract seam, while the README and the registered plugin path execute the real hosted writer. The guard's `contractOnlySeam` is a different dispatch target, so neither statement is complete.
 - Evidence: `zink-tools/excel/contract.md:11-24` — "Under Model A (Contract Tool Interface), invocation returns deterministic `ENGINE_NOT_IMPLEMENTED` via the contract seam"; `zink-tools/README.md:8` — `zink_excel` "Thật, một engine duy nhất", pointing at `integrations/openclaw/lib/excel-writer.mjs`; runtime — the registered tool resolves the writer and calls `executeExcelOperation(params, sandboxDir)` at `integrations/openclaw/plugins/zink-governance/index.mjs:4845-4863`, which writes the workbook at `integrations/openclaw/lib/excel-writer.mjs:841-852`; the seam that returns `ENGINE_NOT_IMPLEMENTED` is the separate `target === "contract_seam"` arm (`integrations/openclaw/topology/lib/guard.mjs:2230-2242`, builder at `:621-634`). `zink_excel` is declared callable in `integrations/openclaw/lib/policy.mjs:2390-2401,2498-2513`.
@@ -2302,7 +2328,7 @@ fix xong và đã chứng minh, nên hai loại hàng này ở lại. Dọn chú
 - Legacy register id: — (new Phase 1 candidate)
 - Affected modules: Infrastructure recovery tooling, Zink Knowledgebase
 - Severity: Medium
-- Status: CONFIRMED-AS-LATENT - Phase 3 triage: restore verifier accepts a table definition or data TOC entry; knowledge.segments is in neither digest nor comparison.
+- Status: LATENT - Phase 3 triage: restore verifier accepts a table definition or data TOC entry; knowledge.segments is in neither digest nor comparison.
 - Phase 3 verdict: RED yes; fixer fix-infrastructure; depends_on F-INFRA-004 (soft); evidence docs/execution/reports/p3/triage-11.md
 - Root cause: the restore verifier accepts either a table definition or table-data TOC entry as proof for every required object, but neither its critical-table digest nor its restored comparison includes `knowledge.segments`.
 - Evidence: `infrastructure/docker/scripts/knowledge-t5-live.ps1:288-289` accepts a `TABLE` definition for `segments`; its critical-table digest is built at `:330-332` and restored comparison is at `:362-364`, omitting segment rows; it can set `restore_verified = $true` at `:396`.
@@ -2316,14 +2342,13 @@ fix xong và đã chứng minh, nên hai loại hàng này ở lại. Dọn chú
 - Legacy register id: — (new Phase 2 candidate)
 - Affected modules: Infrastructure, Zink Knowledgebase
 - Severity: Medium
-- Status: CONFIRMED-AS-LATENT - Phase 3 triage: normal start composes core+Knowledge overlays only; live hardening lives in the acceptance overlay.
+- Status: LATENT - Phase 3 triage: normal start composes core+Knowledge overlays only; live hardening lives in the acceptance overlay.
 - Phase 3 verdict: RED yes; fixer fix-infrastructure + fix-tests; depends_on none; evidence docs/execution/reports/p3/triage-01.md
-- Severity: Medium (triage-02)
 - Root cause: operational start composes only core plus Knowledge overlays, while Knowledge root read-only, capability drop, no-new-privileges, PID ceiling and `/tmp` tmpfs are declared only in the live acceptance overlay; the acceptance gate therefore proves a topology the normal command does not assemble.
-- Fixer: `fix-infrastructure` (primary); `fix-tests` (test expectations). RED (deployment security boundary).
 - Evidence: `infrastructure/docker/scripts/start.ps1:17-46` selects core and Knowledge compose files only; `compose.m4-t5.live.yml:10-17` declares five controls absent from core/Knowledge; `knowledge-t5-live.ps1:21-23,463-472` loads it. `tests/agent-kb-F-239.test.mjs:75-92` asserts only the overlay, not normal-start composition.
-- Related findings: F-239 closed and proved overlay contents, not normal assembly. Blast radius: Knowledge container lifecycle + `/tmp` runtime needs; preserve acceptance backup barrier separately.
-- Wave A dependency: none (static config gap confirmed).
+- Reproduction: `infrastructure/docker/scripts/start.ps1:17-46` composes only the core and Knowledge overlays; comparing the assembled service with `infrastructure/docker/compose/compose.m4-t5.live.yml:10-17` shows `read_only`, `cap_drop`, `security_opt: no-new-privileges`, `pids_limit` and the `/tmp` tmpfs are absent from the normal path, so a normal `start` never assembles the topology the acceptance gate proves.
+- Acceptance criteria: the normal Knowledge deployment assembles the five hardening controls the acceptance overlay declares, and a regression test reddens when any control is removed from the normal path (mutation probe) and passes on the hardened composition. RED: deployment security boundary; not dispatched without an owner memo.
+- Related findings: F-239 closed and proved overlay contents, not normal assembly. Blast radius: Knowledge container lifecycle + `/tmp` runtime needs; preserve the acceptance backup barrier separately.
 
 ### F-INFRA-004 — Knowledge M3/T5 acceptance drivers reject the currently shipped migration set
 
@@ -2331,20 +2356,20 @@ fix xong và đã chứng minh, nên hai loại hàng này ở lại. Dọn chú
 - Legacy register id: — (new Phase 2 candidate)
 - Affected modules: Infrastructure acceptance/recovery tooling, Zink Knowledgebase migration contract
 - Severity: Medium
-- Status: CONFIRMED - Phase 3 triage: T5 checkers hardcode the 001/002 set while the runtime ships 001/002/004/005.
+- Status: OPEN - Phase 3 triage: T5 checkers hardcode the 001/002 set while the runtime ships 001/002/004/005.
 - Phase 3 verdict: RED yes; fixer fix-infrastructure + fix-tests; depends_on none; evidence docs/execution/reports/p3/triage-11.md
-- Severity: Medium
-- Root cause: both T5 checkers require exactly 001/002 as complete set while runtime ships 001, 002, 004 and 005; driver throws before candidate identity (`knowledge-t5-common.ps1:355-357`) or ledger post-start (`knowledge-t5-live.ps1:474`). Fix = update Infrastructure expectations.
-- Evidence: `database.py:2762-2768,2790-2819` applies all SQL files; directory contains 001–005; manifests list 004/005 (`apps/knowledge/contracts/knowledgebase-migration-digests.json:17-24`); drivers reject anything else.
-- Fixer: `fix-infrastructure` (primary); `fix-tests` (test expectation changes). RED (required gate behavior change).
-- Wave A dependency: none (static mismatch proven).
+- Root cause: both T5 checkers require exactly 001/002 as complete set while runtime ships 001, 002, 004 and 005; driver throws before candidate identity (`knowledge-t5-common.ps1:355-357`) or at the ledger pre/post-start checks (`knowledge-t5.ps1:178,244`; `knowledge-t5-live.ps1:450,474`). Fix = update Infrastructure expectations.
+- Evidence: `database.py:2762-2768,2790-2819` applies all SQL files; directory contains 001-005; manifests list 004/005 (`apps/knowledge/contracts/knowledgebase-migration-digests.json:17-24`); drivers reject anything else.
+- Reproduction: `Get-ChildItem apps/knowledge/migrations` lists `001/002/004/005`, while `knowledge-t5.ps1:244` and `knowledge-t5-live.ps1:450` accept only the 001/002 set, so a valid restored ledger is rejected as "missing, corrupt, or unknown".
+- Acceptance criteria: every T5/M3/M4 driver accepts exactly the shipped four-migration ledger and rejects an unknown set; a static probe reddens on the old 001/002 expectation and passes after the update; every edited `.ps1` parses with zero errors; no runtime or schema change.
+- Related findings: none; the shipped migration contract is `apps/knowledge/contracts/knowledgebase-migration-digests.json`.
 
 ### F-DB-002 — the n8n backup excludes the encryption key required to decrypt backed-up credentials
 - Category: F5 — Data Integrity & Result Correctness
 - Legacy register id: — (new Phase 1 candidate)
 - Affected modules: Infrastructure backup, n8n automation
 - Severity: Medium
-- Status: CONFIRMED-AS-LATENT - Phase 3 triage: n8n backup excludes the config that carries the encryption key and records no recovery reference.
+- Status: LATENT - Phase 3 triage: n8n backup excludes the config that carries the encryption key and records no recovery reference.
 - Phase 3 verdict: RED yes; fixer fix-infrastructure; depends_on F-558; evidence docs/execution/reports/p3/triage-12.md
 - Root cause: the backup archives the n8n database and home directory while excluding its config file, but records neither the externally supplied `N8N_ENCRYPTION_KEY` nor a verifiable reference to its recovery location.
 - Evidence: `infrastructure/docker/scripts/backup.ps1:113-127` excludes `config` from the n8n home archive; its manifest covers only the archived backup root at `:138-158`. The runtime key is supplied from external configuration at `infrastructure/docker/compose/compose.core.yml:80`; README identifies the setting as n8n's encryption key at `README.md:448`.

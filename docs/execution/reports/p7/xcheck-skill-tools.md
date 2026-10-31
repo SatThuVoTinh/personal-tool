@@ -14,6 +14,7 @@
 ### Writer (zink-skill-store/src/vector-sync.mjs) still stores raw namespace
 
 **Line-by-line trace:**
+
 - Line 1195: `const { namespace, capability, version } = record.manifest.identity;` — extracts raw namespace array directly from manifest without any alias resolution
 - Lines 1227-1231: `deriveSemanticMetadata` is called correctly and returns resolved namespaces in `semanticMeta`, but...
 - Line 1320: `buildSkillSyncTransaction({ namespace, ... })` — passes the **raw** `namespace` variable verbatim, not `semanticMeta.resolved_namespaces`
@@ -27,7 +28,8 @@
 
 **Lines 731-745:** Filter validation uses `deriveSemanticMetadata({ namespace: nsList, capability: 'filter-validation' })` to check if filter values are resolvable.
 
-**Lines 746-751:** 
+**Lines 746-751:**
+
 ```javascript
 // Match the canonical form the writer stored, not the raw alias.
 const canonicalNs = nsCheck.resolved_namespaces ?? nsList;
@@ -41,6 +43,7 @@ The comment "Match the canonical form the writer stored" assumes the writer stor
 ### Cross-module mismatch is confirmed
 
 For a valid, owner-approved skill with namespace `['supply-chain']` stored in `skills.catalog_index.namespace`:
+
 - Scoped search with filter `supply-chain` becomes filter `[lscm]` after resolution
 - Scoped search with filter `lscm` also becomes filter `[lscm]`
 - Neither `@> ['lscm']` match a row storing `['supply-chain']`
@@ -99,11 +102,11 @@ Per existing test reports and manual inspection:
 
 Fixing F-SKILL-002 requires coordinated changes across three owners. Three implementation options exist:
 
-| Option | Module | File(s) | Change Scope | Blast Radius if Fixed |
-| --- | --- | --- | --- | --- |
-| **Option A (preferred)** | Zink Tools | `zink-tools/adapters/skill-store/skill-adapter.mjs:746-751` | Change SQL predicate to match raw stored namespace instead of resolved canonical | Confined to adapter predicate; preserves Skill Store identity; affects all scoped search consumers |
-| **Option B** | Zink Skill Store | `zink-skill-store/src/vector-sync.mjs:1319-1331` | Pass `semanticMeta.resolved_namespaces` instead of raw `namespace` to `buildSkillSyncTransaction` | Changes durable schema identity; requires migration of existing records; affects tombstone keys (`:765-787`) |
-| **Option C** | Shared | `zink-tools/common/semantic-contract.mjs` | Add alias normalization to catalog admission gate | Requires Skill Store admission changes; needs explicit owner decision |
+| Option                   | Module           | File(s)                                                     | Change Scope                                                                                      | Blast Radius if Fixed                                                                                        |
+| ------------------------ | ---------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| **Option A (preferred)** | Zink Tools       | `zink-tools/adapters/skill-store/skill-adapter.mjs:746-751` | Change SQL predicate to match raw stored namespace instead of resolved canonical                  | Confined to adapter predicate; preserves Skill Store identity; affects all scoped search consumers           |
+| **Option B**             | Zink Skill Store | `zink-skill-store/src/vector-sync.mjs:1319-1331`            | Pass `semanticMeta.resolved_namespaces` instead of raw `namespace` to `buildSkillSyncTransaction` | Changes durable schema identity; requires migration of existing records; affects tombstone keys (`:765-787`) |
+| **Option C**             | Shared           | `zink-tools/common/semantic-contract.mjs`                   | Add alias normalization to catalog admission gate                                                 | Requires Skill Store admission changes; needs explicit owner decision                                        |
 
 **Recommended approach (Option A):** Fix confined to query side avoids durable schema changes and migration complexity. Preserves Skill Store identity semantics where approved manifests dictate exact stored namespace.
 
@@ -138,14 +141,14 @@ There is currently no red test asserting namespace alias write/read round-trip e
 
 ## Blast Radius Assessment (Recheck Summary)
 
-| Module | File(s) | Change Scope | Blast Radius if Fixed (Option A) |
-| --- | --- | --- | --- |
+| Module     | File(s)                                                     | Change Scope                                                              | Blast Radius if Fixed (Option A)                                                                                                      |
+| ---------- | ----------------------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | Zink Tools | `zink-tools/adapters/skill-store/skill-adapter.mjs:746-751` | Match raw stored namespace in SQL predicate instead of resolved canonical | Affected scope: scoped `search` arm only; discover/read/apply remain unchanged; regression tests must cover alias/canonical scenarios |
 
 If Option B were chosen (canonicalize at write time):
 
-| Module | File(s) | Change Scope | Blast Radius if Fixed (Option B) |
-| --- | --- | --- | --- |
+| Module           | File(s)                                                                           | Change Scope                                                                                           | Blast Radius if Fixed (Option B)                                                                                      |
+| ---------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
 | Zink Skill Store | `zink-skill-store/src/vector-sync.mjs:1320` + `buildSkillSyncTransaction:576-651` | Pass `semanticMeta.resolved_namespaces` instead of raw namespace; update tombstone logic at `:765-787` | Breaking change to durable schema; requires data migration; affects all consumers of catalog index; high blast radius |
 
 ---
@@ -153,6 +156,7 @@ If Option B were chosen (canonicalize at write time):
 ## Final Verdict
 
 **NOT FIXED** — Root cause verified unchanged at HEAD. The namespace persistence/query contract mismatch persists:
+
 - Skill Store writer stores raw approved namespace (`vector-sync.mjs:1320`)
 - Tools query resolver canonicalizes filters before SQL predicate (`skill-adapter.mjs:746-751`)
 - Valid alias-named skills become unreachable via scoped search
@@ -162,6 +166,7 @@ Owner decision required before implementation. Recommended approach is **Option 
 ---
 
 **Report metadata:**
+
 - Phase: 7 (recheck)
 - Area: skill-tools boundary (F-SKILL-002)
 - Date: 2026-10-29

@@ -8,7 +8,7 @@
 
 ## Finding F-SKILL-001 — promotion residue healing follows a symlink and recursively deletes a matching directory outside the Skill Store root
 
-**Original defect (Phase 1 CAND-skill-1-01):**  
+**Original defect (Phase 1 CAND-skill-1-01):**
 `healWriterResidue()` was called during promotion (catalog.mjs:1832) BEFORE catalog health scan rejected symlinks. The function read parentDir with `readdir`, followed symlinked namespace/capability ancestors, and removed residue directories WITHOUT proving the resolved target stayed under skillsRoot. An attacker could plant `skills/ns/cap` as a symlink to an external directory containing `*.pending-*` residue; the heal would delete matching directories outside the store before the later scan refused the symlink, causing data loss of unrelated files.
 
 **Fix committed:** commit `2525cb8` (fix(skill-store): F-SKILL-001 prevent symlink traversal escape in residue cleanup)
@@ -17,7 +17,7 @@
 
 1. **Validation before deletion in `healWriterResidue`** (catalog.mjs:1392–1456)
    - Line 1395–1396: validates parentDir path components BEFORE any `readdir` or deletion
-   - Lines 1403–1406: validates each residue entry path component BEFORE `rm()` 
+   - Lines 1403–1406: validates each residue entry path component BEFORE `rm()`
    - Both use `assertSafeStoreStorePathComponents()` which:
      - Computes real path of skillsRoot (line 1339)
      - For every path component: `lstat()`, and if symbolic link, computes `realpath()` (lines 1360–1378)
@@ -39,27 +39,27 @@
   - "quarantineInvalidVersion refuses escaping symlinks without touching external files" — operator path covered
   - "symlink inside sandbox is checked against store base and preserved" — internal symlinks handled correctly
 
-**Test outcomes (from docs/execution/reports/p6/tests.md:11):**  
+**Test outcomes (from docs/execution/reports/p6/tests.md:11):**
 `symlink-escape (5/5)` — all 5 assertions passed green
 
 **Evidence summary:**
 
-| Aspect | Location | Status |
-| --- | --- | --- |
-| Validation before heal | catalog.mjs:1395–1396, :1403–1406 | Implemented |
-| Promotion path order | catalog.mjs:1813–1817 → :1832 | Fixed |
-| Quarantine path order | catalog.mjs:1559–1563 | Fixed |
-| Symlink detection logic | catalog.mjs:1330–1379 | Correct |
-| Regression tests | symlink-escape.test.mjs | 5/5 PASS |
+| Aspect                  | Location                          | Status      |
+| ----------------------- | --------------------------------- | ----------- |
+| Validation before heal  | catalog.mjs:1395–1396, :1403–1406 | Implemented |
+| Promotion path order    | catalog.mjs:1813–1817 → :1832     | Fixed       |
+| Quarantine path order   | catalog.mjs:1559–1563             | Fixed       |
+| Symlink detection logic | catalog.mjs:1330–1379             | Correct     |
+| Regression tests        | symlink-escape.test.mjs           | 5/5 PASS    |
 
-**Conclusion:**  
+**Conclusion:**
 F-SKILL-001 is **FIXED**. Pre-deletion validation ensures no symlink-following deletion escapes the store root. Outside sentinels remain untouched when malicious symlinks are planted. Tests confirm defense works for both promotion and operator repair paths.
 
-**No new defects introduced by this fix:**  
+**No new defects introduced by this fix:**
 The added validation guards are minimal (additional lstat/readdir only on suspicious paths) and execute before any destructive mutation. No performance regression or false-positive denial detected beyond intended safety behavior.
 
 ---
 
-**Report generated:** 2026-10-29  
-**Recheck scope limited to:** zink-skill-store/ source + test coverage  
+**Report generated:** 2026-10-29
+**Recheck scope limited to:** zink-skill-store/ source + test coverage
 **External dependencies not probed:** PostgreSQL runtime, WSL fsync lanes (per Phase 6 conventions)

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import {
+import fs, {
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -43,11 +43,14 @@ import {
   OPENCLAW_HOTFIX_ARTIFACTS,
   OPENCLAW_HOTFIX_RELEASE,
   assertPatchedInvariants,
+  classifyState,
   hotfixBootAction,
   patchContents,
   requireKnownHash,
   requireSupportedRelease,
   revertContents,
+  sha256,
+  writeTransaction,
 } from "../integrations/openclaw/templates/openclaw-gemini-stream-hotfix.mjs";
 import { isExpectedDiscordCapability } from "../integrations/openclaw/verify.mjs";
 import {
@@ -1024,6 +1027,64 @@ test("F-179: a fresh apply-then-start survives the hotfix boot gate", () => {
     /unsupported partial state/u,
     "a runtime that cannot be repaired still fails the boot",
   );
+});
+
+test("F-OC-008: writeTransaction failure after rename rolls back all modified artifacts to accepted state", () => {
+  const root = temporaryDirectory();
+  try {
+    const records = OPENCLAW_HOTFIX_ARTIFACTS.map((baseSpec) => {
+      const orig = ORIGINAL_HOTFIX_FIXTURES[baseSpec.id];
+      const patched = patchContents(baseSpec.id, orig);
+      const spec = {
+        ...baseSpec,
+        originalSha256: sha256(orig),
+        patchedSha256: sha256(patched),
+      };
+      const filePath = path.join(root, spec.fileName);
+      writeFileSync(filePath, orig, "utf8");
+      return {
+        spec,
+        filePath,
+        fileMode: 0o644,
+        contents: orig,
+      };
+    });
+
+    let writeCount = 0;
+    const injectedWriter = (filePath, contents) => {
+      writeCount += 1;
+      writeFileSync(filePath, contents, "utf8");
+      if (writeCount === 2) {
+        const err = new Error("EIO: simulated directory fsync failure after rename");
+        err.code = "EIO";
+        throw err;
+      }
+    };
+
+    assert.throws(
+      () => writeTransaction(records, "patched", injectedWriter),
+      /EIO: simulated directory fsync failure after rename/u,
+      "writeTransaction must surface the fsync failure",
+    );
+
+    const currentRecords = records.map((r) => ({
+      ...r,
+      contents: readFileSync(r.filePath, "utf8"),
+    }));
+    const state = classifyState(currentRecords);
+    assert.equal(
+      state,
+      "original",
+      "failure after rename must roll back modified artifacts to original so classifyState accepts the state",
+    );
+    assert.equal(
+      hotfixBootAction({ state }),
+      HOTFIX_BOOT_ACTION.REPAIR,
+      "gateway boot action on rolled-back state must be REPAIR, not fatal failure",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("M7/T1 builder upgrades only the exact R16 drop-in and rejects owned drift", () => {

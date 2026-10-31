@@ -1,8 +1,8 @@
 # Recheck Report scan-oc-4 (Phase 6)
 
-**Date:** 2026-10-29  
-**Finding ID under review:** F-OC-006  
-**Scope:** integrations/openclaw/topology/** and integrations/openclaw/orchestration/**  
+**Date:** 2026-10-29
+**Finding ID under review:** F-OC-006
+**Scope:** integrations/openclaw/topology/** and integrations/openclaw/orchestration/**
 **Task identity:** M12/T9-R5 – fix-openclaw-topology (recheck mode)
 
 ---
@@ -30,12 +30,14 @@ for (const existing of Object.values(next.tasks)) {
 ### Verdict: PARTIAL
 
 **What IS FIXED:**
+
 - The reducer now enforces origin-binding uniqueness in `recordWorkflowEvent(WORKFLOW_OPENED)` at `workflow.mjs:645-651`
 - A second `WORKFLOW_OPENED` with distinct `task_id` but identical origin binding throws `ORIGIN_BINDING_CONFLICT`
 - Same-task-id replay with same lineage remains idempotent (`workflow.mjs:631-643`)
 - Regression test exists and passes: `workflow-origin-uniqueness.test.mjs` (2/2 tests green per `docs/execution/reports/p6/tests.md`)
 
 **What is NOT YET FIXED:**
+
 - `docs/execution/findings.md` row for `F-OC-006` **has not been updated** since Phase 3 triage; it still reads:
   - `Status: CONFIRMED-AS-LATENT` (should be CLOSED or REFUTED)
   - `Root cause: the reducer makes WORKFLOW_OPENED idempotent by task_id only…` (factually incorrect at HEAD)
@@ -66,18 +68,18 @@ for (const existing of Object.values(next.tasks)) {
 
 ## Summary
 
-**F-OC-006 code fix: VERIFIED** — Origin uniqueness is enforced in reducer at `workflow.mjs:645-651`.  
-**F-OC-006 register entry: NOT UPDATED** — Still shows stale Phase 3 triage state; requires documentation closeout.  
-**Tests: PASSING** — 2/2 green in `workflow-origin-uniqueness.test.mjs` per `docs/execution/reports/p6/tests.md`.  
+**F-OC-006 code fix: VERIFIED** — Origin uniqueness is enforced in reducer at `workflow.mjs:645-651`.
+**F-OC-006 register entry: NOT UPDATED** — Still shows stale Phase 3 triage state; requires documentation closeout.
+**Tests: PASSING** — 2/2 green in `workflow-origin-uniqueness.test.mjs` per `docs/execution/reports/p6/tests.md`.
 **New defects: NONE detected.**
 
-**Final reply (10 lines):**  
-Report: docs/execution/reports/p6/scan-oc-4.md  
-Severity: 0 critical, 0 high, 0 medium, 0 low blockers  
-Finding F-OC-006: PARTIAL — code fixed, register stale  
-Code verified: workflow.mjs:645-651 (ORIGIN_BINDING_CONFLICT)  
-Tests: 2/2 green (workflow-origin-uniqueness.test.mjs)  
-Required: update findings.md status to CLOSED, add CHANGELOG entry, update PLAN.md disposition  
-Out-of-scope: F-586 (governance plugin), orchestration patterns  
-No new defects introduced  
+**Final reply (10 lines):**
+Report: docs/execution/reports/p6/scan-oc-4.md
+Severity: 0 critical, 0 high, 0 medium, 0 low blockers
+Finding F-OC-006: PARTIAL — code fixed, register stale
+Code verified: workflow.mjs:645-651 (ORIGIN_BINDING_CONFLICT)
+Tests: 2/2 green (workflow-origin-uniqueness.test.mjs)
+Required: update findings.md status to CLOSED, add CHANGELOG entry, update PLAN.md disposition
+Out-of-scope: F-586 (governance plugin), orchestration patterns
+No new defects introduced
 Awaiting documentation closeout by lead

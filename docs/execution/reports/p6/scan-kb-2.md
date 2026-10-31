@@ -1,16 +1,16 @@
 # Recheck Report: Slice kb-2 (Knowledgebase Indexing, Embeddings, Storage & Migrations)
 
-**Slice:** `kb-2`  
-**Phase:** Phase 6 (Recheck Mode)  
-**Target Finding ID:** `F-KB-002`  
-**Report File:** `docs/execution/reports/p6/scan-kb-2.md`  
+**Slice:** `kb-2`
+**Phase:** Phase 6 (Recheck Mode)
+**Target Finding ID:** `F-KB-002`
+**Report File:** `docs/execution/reports/p6/scan-kb-2.md`
 
 ---
 
 ## 1. Finding Recheck Summary
 
-| Finding ID | Title / Short Description | Status | Evidence (Path & Line) |
-| --- | --- | --- | --- |
+| Finding ID   | Title / Short Description                                                              | Status    | Evidence (Path & Line)                                                                                   |
+| ------------ | -------------------------------------------------------------------------------------- | --------- | -------------------------------------------------------------------------------------------------------- |
 | **F-KB-002** | Replaying applied ALTER migration with missing ledger row blocks Knowledgebase startup | **FIXED** | `apps/knowledge/app/database.py:131,2908-2909`, `apps/knowledge/tests/test_m11_index_hygiene.py:494-549` |
 
 ---

@@ -2893,7 +2893,7 @@ class KnowledgeDatabase:
         duplicate-object failure AND every object the file creates is already
         in the catalog. A partial catalog therefore still aborts the boot,
         which is the behaviour a drifted schema needs.
-        
+
         F-KB-002 (R5-T09-2): ALTER TABLE ... ADD COLUMN migrations have no
         CREATE objects; an empty object set combined with PostgreSQL error
         42701 (duplicate_column) indicates the column already exists and the

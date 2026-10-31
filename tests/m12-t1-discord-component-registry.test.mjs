@@ -256,7 +256,7 @@ describe("M12/T1 P1 — components are built and registered through the host", (
     const h = adapterHarness({ failBuild: true });
     const { logs, logger } = logHarness();
     const buttons = buttonSpecs();
-    
+
     await assert.rejects(
       sendNativePayload({
         api: h.api,
@@ -273,7 +273,7 @@ describe("M12/T1 P1 — components are built and registered through the host", (
       },
       "must throw COMPONENT_BUILD_FAILED when bundle building fails and buttons are present"
     );
-    
+
     assert.equal(
       h.calls.some((c) => c.kind === "register"),
       false,
@@ -285,7 +285,7 @@ describe("M12/T1 P1 — components are built and registered through the host", (
     const h = adapterHarness();
     const { logs, logger } = logHarness();
     const buttons = buttonSpecs();
-    
+
     await assert.rejects(
       sendNativePayload({
         api: h.api,
@@ -305,7 +305,7 @@ describe("M12/T1 P1 — components are built and registered through the host", (
       },
       "must throw COMPONENT_SDK_UNAVAILABLE when SDK is unavailable but buttons are present"
     );
-    
+
     assert.equal(
       h.calls.some((c) => c.kind === "register"),
       false,

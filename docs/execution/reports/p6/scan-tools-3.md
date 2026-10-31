@@ -1,26 +1,28 @@
 # Recheck Report — Phase 6: Tools provider/n8n/OpenClaw boundary
+
 ## Finding ID: F-DB-002 — n8n backup excludes the encryption key required to decrypt backed-up credentials
 
-**Report date:** 2026-10-29  
-**Mode:** recheck  
-**Area:** Tools provider / n8n / OpenClaw boundary  
-**Finding status per register:** CONFIRMED-AS-LATENT  
-**Fixer:** fix-infrastructure  
+**Report date:** 2026-10-29
+**Mode:** recheck
+**Area:** Tools provider / n8n / OpenClaw boundary
+**Finding status per register:** CONFIRMED-AS-LATENT
+**Fixer:** fix-infrastructure
 
 ---
 
 ### Verdict Summary
 
-| Item | Status | Path:line evidence | Notes |
-| --- | --- | --- | --- |
-| Manifest recovery pointer added | **FIXED** | `infrastructure/docker/scripts/backup.ps1:167-171` | The script now reads `N8N_ENCRYPTION_KEY` from env, computes its SHA256 hash, and writes `n8n_encryption_key_reference` with `key_sha256` and `recovery_note` to `manifest.json` at line 180. This addresses the missing recovery-reference half of the defect. |
-| Restore drill demonstrating usable credentials | **NOT RUN** | External host dependency (n8n container, `.env` retention) | Per triage-12.md §58 and findings.md §2351, the wrong-key restore drill was not executed. This is an external-dependent check that remains `NOT RUN`; cannot be verified on Windows host without WSL/n8n runtime. |
+| Item                                           | Status      | Path:line evidence                                         | Notes                                                                                                                                                                                                                                                           |
+| ---------------------------------------------- | ----------- | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Manifest recovery pointer added                | **FIXED**   | `infrastructure/docker/scripts/backup.ps1:167-171`         | The script now reads `N8N_ENCRYPTION_KEY` from env, computes its SHA256 hash, and writes `n8n_encryption_key_reference` with `key_sha256` and `recovery_note` to `manifest.json` at line 180. This addresses the missing recovery-reference half of the defect. |
+| Restore drill demonstrating usable credentials | **NOT RUN** | External host dependency (n8n container, `.env` retention) | Per triage-12.md §58 and findings.md §2351, the wrong-key restore drill was not executed. This is an external-dependent check that remains `NOT RUN`; cannot be verified on Windows host without WSL/n8n runtime.                                               |
 
 ---
 
 ### Evidence Details
 
 #### Fixed: Recovery reference in manifest
+
 The re-read of `backup.ps1` shows lines 149–171 implement the fix:
 
 ```powershell
@@ -44,7 +46,9 @@ $n8nEncryptionKeyReference = $n8nEncryptionKeyRef
 Line 180 writes `n8n_encryption_key_reference` into `manifest.json`. The key itself is never written to disk or archive (only its SHA256 fingerprint), preserving the security boundary per triage-12.md §23.
 
 #### Not run: Restore drill
-Acceptance criteria requires: *"a restore drill demonstrates that backed-up credentials remain usable with the recovered key."* This requires:
+
+Acceptance criteria requires: _"a restore drill demonstrates that backed-up credentials remain usable with the recovered key."_ This requires:
+
 - A live PostgreSQL+n8n stack
 - A known-good backup archive
 - An operator `.env` with a retained `N8N_ENCRYPTION_KEY`
@@ -56,7 +60,7 @@ None of these are available on this Windows host without WSL/container provision
 
 ### New Defects Introduced by Fix
 
-**Scope:** Inside `zink-tools/` and the Tools/provider-n8n/OpenClaw boundary  
+**Scope:** Inside `zink-tools/` and the Tools/provider-n8n/OpenClaw boundary
 
 **Result:** No new defects identified inside scope.
 
@@ -87,5 +91,5 @@ Per AGENTS §6 (read-only for subagent), source files outside `docs/execution/re
 
 ---
 
-**Report path:** `docs/execution/reports/p6/scan-tools-3.md`  
+**Report path:** `docs/execution/reports/p6/scan-tools-3.md`
 **Counts:** High 0 · Medium 0 (no new) · Low 0 · NEW DEFECTS IN SCOPE: 0

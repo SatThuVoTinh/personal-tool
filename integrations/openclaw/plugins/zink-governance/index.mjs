@@ -913,6 +913,7 @@ export function evaluateSpecialistProvenance({
       };
     }
   }
+
   return { allowed: true, taskId: task.task_id ?? null };
 }
 
@@ -8633,6 +8634,7 @@ export default {
             api.logger?.error?.(
               `[zink-governance] APPROVAL_SURFACE_UNRECORDED task=${taskId} thread=${thread.id} cause=${surfaceError?.message}`,
             );
+            return;
           }
           // R4-EXCEPTION (owner decision 2026-10-07): buttons travel by raw
           // REST in the SAME call flow as the permitted thread creation. The
@@ -10198,36 +10200,6 @@ export default {
       });
     }
 
-    async function specialistExecutionProvenanceWithRunCheck(agentId, ctx, paths) {
-      const result = specialistExecutionProvenance(agentId, ctx);
-      if (!result.allowed) return result;
-
-      // F-OC-007: check if the message's run is superseded
-      if (ctx.runId && paths) {
-        try {
-          const snapshot = readSnapshot(paths);
-          const owner = findSession(snapshot, ctx.sessionKey, ctx.runId, false);
-          const currentDelegation = owner?.delegation;
-          // If the runId is in previous_native_run_ids but not the current native_run_id,
-          // then this attempt has been superseded by a continuation
-          if (
-            currentDelegation &&
-            currentDelegation.native_run_id !== ctx.runId &&
-            currentDelegation.previous_native_run_ids?.includes(ctx.runId)
-          ) {
-            return {
-              allowed: false,
-              reason: `SUPERSEDED_RUN:${ctx.runId}`,
-            };
-          }
-        } catch {
-          // If we fail to check, fail closed
-          return { allowed: false, reason: "SUPERSEDED_CHECK_FAILED" };
-        }
-      }
-      return result;
-    }
-
     api.on("message_sending", async (event, ctx = {}) => {
       if (ctx.channelId !== "discord") return;
       const agentIdMatch = (ctx.sessionKey || "").match(/^agent:([^:]+)/);
@@ -10256,7 +10228,7 @@ export default {
       // surfaces by the gate below this one, so admitting the agent never admits an
       // arbitrary channel.
       if (SPECIALIST_AGENT_IDS.includes(agentId)) {
-        const provenance = await specialistExecutionProvenanceWithRunCheck(agentId, ctx, paths);
+        const provenance = specialistExecutionProvenance(agentId, ctx);
         if (!provenance.allowed) {
           api.logger?.warn?.(
             `[zink-governance] Suppressed specialist '${agentId}' Discord message: ${provenance.reason}`,

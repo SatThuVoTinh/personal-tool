@@ -376,10 +376,16 @@ export function requireKnownHash(artifactId, contents) {
   return digest;
 }
 
-function classifyState(records) {
+export function classifyState(records) {
   const states = records.map(({ spec, contents }) => {
-    const digest = requireKnownHash(spec.id, contents);
-    return digest === spec.patchedSha256 ? "patched" : "original";
+    const s = spec ?? artifactSpec(spec?.id);
+    const digest = sha256(contents);
+    if (digest !== s.originalSha256 && digest !== s.patchedSha256) {
+      throw new Error(
+        `OpenClaw hotfix target hash is not allowlisted: ${s.fileName}`,
+      );
+    }
+    return digest === s.patchedSha256 ? "patched" : "original";
   });
   if (states.every((state) => state === "patched")) return "patched";
   if (states.every((state) => state === "original")) return "original";
@@ -413,7 +419,11 @@ function desiredContents(record, desiredState) {
   return output;
 }
 
-function writeTransaction(records, desiredState) {
+export function writeTransaction(
+  records,
+  desiredState,
+  _writeAtomically = writeAtomically,
+) {
   const planned = records.map((record) => ({
     ...record,
     desired: desiredContents(record, desiredState),
@@ -422,8 +432,12 @@ function writeTransaction(records, desiredState) {
   try {
     for (const record of planned) {
       if (record.desired === record.contents) continue;
-      writeAtomically(record.filePath, record.desired, record.fileMode);
+      // Option A: record in `changed` before writeAtomically returns so
+      // rollback can restore even if a subsequent write fails after its
+      // rename (F-OC-008). The renamed artifact must be restorable via
+      // rollback when an fsync failure leaves it untracked.
       changed.push(record);
+      _writeAtomically(record.filePath, record.desired, record.fileMode);
     }
   } catch (error) {
     let rollbackError;

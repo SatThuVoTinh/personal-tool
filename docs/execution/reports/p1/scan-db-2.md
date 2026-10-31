@@ -1,8 +1,8 @@
 # Phase 1 database scan — db-2
 
-**Mode:** Audit  
-**Scope:** Database definitions under `infrastructure/` and application use, focused on backup, restore, integrity, and recovery.  
-**Status:** Complete; static inspection only. No tests or Docker commands were run.  
+**Mode:** Audit
+**Scope:** Database definitions under `infrastructure/` and application use, focused on backup, restore, integrity, and recovery.
+**Status:** Complete; static inspection only. No tests or Docker commands were run.
 **Candidate counts:** Critical 0; High 0; Medium 2; Low 0. Existing duplicate/reference: F-558 (not counted as a new candidate).
 
 ## Investigation

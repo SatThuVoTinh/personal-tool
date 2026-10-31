@@ -1,10 +1,10 @@
 # Phase 6 Recheck Report — OC-5 (Governance Plugin)
 
-**Mode:** Recheck  
-**Area:** Governance plugin authorization, sandbox  
-**Finding IDs:** F-OC-007, F-OC-009, F-OC-010  
-**Date:** 2026-10-29  
-**Repository HEAD:** 63ddf40  
+**Mode:** Recheck
+**Area:** Governance plugin authorization, sandbox
+**Finding IDs:** F-OC-007, F-OC-009, F-OC-010
+**Date:** 2026-10-29
+**Repository HEAD:** 63ddf40
 
 ---
 
@@ -89,7 +89,7 @@ let isCanonical =
 if (!isCanonical && typeof ctx.parentChannelId === "string") {
   const parentChannel = ctx.parentChannelId.replace(
     /^(channel|discord|user):/u,
-    ""
+    "",
   );
   if (CANONICAL_DISCORD_SURFACE_IDS.has(parentChannel)) {
     isCanonical = true;
@@ -98,7 +98,7 @@ if (!isCanonical && typeof ctx.parentChannelId === "string") {
 if (!isCanonical && typeof event.parentChannelId === "string") {
   const parentChannel = event.parentChannelId.replace(
     /^(channel|discord|user):/u,
-    ""
+    "",
   );
   if (CANONICAL_DISCORD_SURFACE_IDS.has(parentChannel)) {
     isCanonical = true;
@@ -167,10 +167,10 @@ Per `docs/execution/reports/p6/tests.md`: Affected Node tests are **PASS** (100%
 ## SUMMARY
 
 | Finding ID | Status | Confidence | Blockers |
-|------------|--------|-----------|----------|
-| F-OC-007 | FIXED | High | None |
-| F-OC-009 | FIXED | High | None |
-| F-OC-010 | FIXED | High | None |
+| ---------- | ------ | ---------- | -------- |
+| F-OC-007   | FIXED  | High       | None     |
+| F-OC-009   | FIXED  | High       | None     |
+| F-OC-010   | FIXED  | High       | None     |
 
 All three claimed fixes verified as implemented correctly per acceptance criteria.
 
@@ -180,10 +180,9 @@ All three claimed fixes verified as implemented correctly per acceptance criteri
 
 Report: docs/execution/reports/p6/scan-oc-5.md
 F-OC-007: FIXED (high confidence)
-F-OC-009: FIXED (high confidence)  
+F-OC-009: FIXED (high confidence)
 F-OC-010: FIXED (high confidence)
 No new defects found
 Test gates: PASS
 Blockers: None
 Scope clean
-

@@ -448,7 +448,7 @@ try {
   $schemaExists = ((Invoke-LiveSql "SELECT to_regclass('knowledge.schema_migrations') IS NOT NULL AND to_regclass('knowledge.indexes') IS NOT NULL;") -join "").Trim() -eq "t"
   if (-not $schemaExists) { throw "M4 live acceptance requires the recoverable M3 Knowledge schema." }
   $ledgerBefore = @(Invoke-LiveSql "SELECT version FROM knowledge.schema_migrations ORDER BY version" | Where-Object { $_ })
-  $allowedLedgers = @("001_initial.sql", "001_initial.sql`n002_pdf_ingestion_foundation.sql")
+  $allowedLedgers = @("001_initial.sql`n002_pdf_ingestion_foundation.sql`n004_pdf_build_failure_cause.sql`n005_schema_migration_digest.sql")
   if (($ledgerBefore -join "`n") -notin $allowedLedgers) { throw "Knowledge migration ledger is missing, corrupt, or unknown." }
 
   Invoke-LiveCompose @("up", "--detach", "knowledge")
