@@ -1,85 +1,39 @@
-# Recheck Report scan-oc-4 (Phase 6)
+# OpenClaw Topology Audit Recheck Report (oc-4)
 
-**Date:** 2026-10-29
-**Finding ID under review:** F-OC-006
-**Scope:** integrations/openclaw/topology/** and integrations/openclaw/orchestration/**
-**Task identity:** M12/T9-R5 – fix-openclaw-topology (recheck mode)
-
----
-
-## Finding F-OC-006 — Verification Status: PARTIAL
-
-### Current Code State
-
-**Evidence path:** `integrations/openclaw/topology/lib/workflow.mjs:645-651`
-
-```javascript
-for (const existing of Object.values(next.tasks)) {
-  if (
-    existing.origin === payload.origin &&
-    existing.origin_principal_ref === payload.origin_principal_ref &&
-    existing.origin_message_id === payload.origin_message_id
-  ) {
-    requireCondition(false, "ORIGIN_BINDING_CONFLICT");
-  }
-}
-```
-
-**Test coverage:** `integrations/openclaw/topology/lib/workflow-origin-uniqueness.test.mjs` (2 tests passing per `docs/execution/reports/p6/tests.md`)
-
-### Verdict: PARTIAL
-
-**What IS FIXED:**
-
-- The reducer now enforces origin-binding uniqueness in `recordWorkflowEvent(WORKFLOW_OPENED)` at `workflow.mjs:645-651`
-- A second `WORKFLOW_OPENED` with distinct `task_id` but identical origin binding throws `ORIGIN_BINDING_CONFLICT`
-- Same-task-id replay with same lineage remains idempotent (`workflow.mjs:631-643`)
-- Regression test exists and passes: `workflow-origin-uniqueness.test.mjs` (2/2 tests green per `docs/execution/reports/p6/tests.md`)
-
-**What is NOT YET FIXED:**
-
-- `docs/execution/findings.md` row for `F-OC-006` **has not been updated** since Phase 3 triage; it still reads:
-  - `Status: CONFIRMED-AS-LATENT` (should be CLOSED or REFUTED)
-  - `Root cause: the reducer makes WORKFLOW_OPENED idempotent by task_id only…` (factually incorrect at HEAD)
-  - `Acceptance criteria:` section prescribes a fix that has already been applied
-- `PLAN.md` §8 records owner decision "`F-OC-006 — Option A now, Option B deferred`" but does not reflect completion
-- `CHANGELOG.md` has no entry documenting when/where F-OC-006 was closed
-
-**New defects introduced?** No evidence of new defects inside scope from this fix.
+**Slice ID:** oc-4
+**Phase:** Phase 6 recheck mode (loop 2)
+**Date:** 2026-10-31
+**Branch:** codex/m11-t1-audit-remediation
+**Commit:** 93438dd
+**Test Reference:** `docs/execution/reports/p6/tests.md`
 
 ---
 
-## Required Actions Before Closing F-OC-006
+## 1. Recheck Verdicts Summary
 
-1. **Update findings.md:** Change `Status:` from `CONFIRMED-AS-LATENT` to `CLOSED by <task> <commit>`
-2. **Update FINDING.row metadata:** Delete or mark obsolete `Root cause` and `Acceptance criteria` sections once closure is recorded
-3. **Update CHANGELOG.md:** Add entry `F-OC-006 | origin uniqueness enforced in reducer | <commit> | workflow.mjs:645-651 + workflow-origin-uniqueness.test.mjs`
-4. **Update PLAN.md §4.17 disposition:** Mark F-OC-006 as completed with commit pointer
-5. **Re-run affected gates:** `npm run verify` (node tests), `repository-policy.mjs`, confirm green before closeout
+| Finding ID | Subject | Status / Verdict | Evidence Path / Reference |
+| --- | --- | --- | --- |
+| **F-OC-006** | Concurrent ingress persists two task IDs for one origin | **FIXED** | `workflow.mjs:645-651` reducer `ORIGIN_BINDING_CONFLICT` (commit `24e0c2e`, owner Option A) |
+| **F-586** | First-spawn approval card delivered without durable SURFACED record | **FIXED** | REST producer refuses; `APPROVAL_SURFACE_UNRECORDED` (loop-2 commit `a9ddced`) |
+| **F-423 / F-424 / F-425 / F-426** | Operator root/backup rows | **OPEN** (carried) | Register rows |
+| **F-489 / F-490** | Operator state-root rows | **OPEN** (carried) | Register rows |
 
----
+## 2. Detailed Findings Recheck
 
-## Out-of-Scope Pointers
+### F-OC-006 — origin-binding uniqueness (owner Option A)
+- **Verdict:** FIXED (mechanism re-verified at HEAD `93438dd`)
+- **Evidence:** the reducer's `recordWorkflowEvent(WORKFLOW_OPENED)` scans existing tasks and throws `ORIGIN_BINDING_CONFLICT` for a second distinct task with identical `origin`+`origin_principal_ref`+`origin_message_id` (`workflow.mjs:645-651`); the payload fields are validated at `:550-573`; same-task-id replay stays idempotent (`:631-643`).
+- **Test Evidence:** `workflow-origin-uniqueness` 2/2 PASS in the loop-2 W0/W1 rerun (`tests.md:11`).
 
-- `F-586` (first-spawn approval card SURFACED record anchor) — listed as related in fixes plan but outside topology scope; requires governance plugin edit
-- Orchestration patterns (`integrations/openclaw/orchestration/README.md`, `patterns/index.mjs`) — read-only documentation, no code change needed
+### F-586 — SURFACED anchor
+- **Verdict:** FIXED (mechanism re-verified at HEAD `93438dd`)
+- **Evidence:** in the first-spawn REST producer, when the durable `WORKFLOW_APPROVAL_SURFACED` journal record cannot be verified, publish refuses and returns `{status:"BLOCKED", error:"APPROVAL_SURFACE_UNRECORDED"}` instead of reporting PUBLISHED (governance plugin `index.mjs`; loop-2 commit message names F-586).
+- **Test Evidence:** `m12-t9-r4-f529-approval-surface-record` 4/4 PASS in the loop-2 rerun (`tests.md:11`).
 
----
+### Carried open rows
+- `F-423` (runtime-root literal frozen into transactions) OPEN; `F-424` (backup sets diverge) OPEN; `F-425` (quarantine renames unpreimaged) OPEN; `F-426` (`installed_mutation:true` unconditional) OPEN; `F-489`/`F-490` (state-root env/refusal) OPEN. No loop lane touched them.
 
-## Summary
+## 3. New Defects & Blockers
 
-**F-OC-006 code fix: VERIFIED** — Origin uniqueness is enforced in reducer at `workflow.mjs:645-651`.
-**F-OC-006 register entry: NOT UPDATED** — Still shows stale Phase 3 triage state; requires documentation closeout.
-**Tests: PASSING** — 2/2 green in `workflow-origin-uniqueness.test.mjs` per `docs/execution/reports/p6/tests.md`.
-**New defects: NONE detected.**
-
-**Final reply (10 lines):**
-Report: docs/execution/reports/p6/scan-oc-4.md
-Severity: 0 critical, 0 high, 0 medium, 0 low blockers
-Finding F-OC-006: PARTIAL — code fixed, register stale
-Code verified: workflow.mjs:645-651 (ORIGIN_BINDING_CONFLICT)
-Tests: 2/2 green (workflow-origin-uniqueness.test.mjs)
-Required: update findings.md status to CLOSED, add CHANGELOG entry, update PLAN.md disposition
-Out-of-scope: F-586 (governance plugin), orchestration patterns
-No new defects introduced
-Awaiting documentation closeout by lead
+- **New Defects Introduced:** None.
+- **Blockers:** Register/CHANGELOG closure history for `F-OC-006` (loop-1 fix) is incomplete — Phase 8 must record the CLOSED-by task/commit reference before removing the row (§0.5).

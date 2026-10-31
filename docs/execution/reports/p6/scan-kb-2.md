@@ -1,50 +1,38 @@
-# Recheck Report: Slice kb-2 (Knowledgebase Indexing, Embeddings, Storage & Migrations)
+# Knowledgebase Audit Recheck Report (kb-2)
 
-**Slice:** `kb-2`
-**Phase:** Phase 6 (Recheck Mode)
-**Target Finding ID:** `F-KB-002`
-**Report File:** `docs/execution/reports/p6/scan-kb-2.md`
-
----
-
-## 1. Finding Recheck Summary
-
-| Finding ID   | Title / Short Description                                                              | Status    | Evidence (Path & Line)                                                                                   |
-| ------------ | -------------------------------------------------------------------------------------- | --------- | -------------------------------------------------------------------------------------------------------- |
-| **F-KB-002** | Replaying applied ALTER migration with missing ledger row blocks Knowledgebase startup | **FIXED** | `apps/knowledge/app/database.py:131,2908-2909`, `apps/knowledge/tests/test_m11_index_hygiene.py:494-549` |
+**Slice ID:** kb-2
+**Phase:** Phase 6 recheck mode (loop 2)
+**Date:** 2026-10-31
+**Branch:** codex/m11-t1-audit-remediation
+**Commit:** 93438dd
+**Test Reference:** `docs/execution/reports/p6/tests.md`
 
 ---
 
-## 2. Detailed Evidence & Analysis
+## 1. Recheck Verdicts Summary
 
-### F-KB-002 — Replaying applied ALTER migration with missing ledger row blocks Knowledgebase startup
+| Finding ID | Subject | Status / Verdict | Evidence Path / Reference |
+| --- | --- | --- | --- |
+| **F-KB-002** | ALTER-migration replay with missing ledger row blocks startup | **FIXED** | `apps/knowledge/app/database.py` (commit `e14c5ae`) |
+| **F-KB-003** | NFC normalization collides two Markdown paths, deletes one document | **LATENT** | Live only inside the uncommitted `F-576` patch |
+| **F-576** | Non-NFC source path silently matches nothing | **OPEN** (deferred by owner) | `F-576` register row |
 
-- **Status:** **FIXED**
-- **Defect Description:** Migrations `004_pdf_build_failure_cause.sql` and `005_schema_migration_digest.sql` use `ALTER TABLE ... ADD COLUMN`. Replaying these migrations when their ledger row in `knowledge.schema_migrations` was missing caused PostgreSQL to return `42701` (`duplicate_column`). `_migration_is_already_applied()` previously checked only `CREATE` objects (`_migration_objects()`), returning an empty list for `ALTER` migrations and raising an unhandled exception that aborted Knowledgebase startup with `DATABASE_UNAVAILABLE`.
-- **Fix Verification:**
-  1. `apps/knowledge/app/database.py:131`: SQLSTATE `"42701"` (`duplicate_column`) is included in `_MIGRATION_DUPLICATE_SQLSTATES`.
-  2. `apps/knowledge/app/database.py:2908-2909`: `_migration_is_already_applied()` inspects `objects = _migration_objects(sql)`. When `not objects` (no `CREATE` objects in `ALTER` migrations), it checks if `getattr(error, "sqlstate", None) == "42701"`. If true, it recognizes the migration as already applied, logs `knowledge.migration_replay_ignored`, and repairs the missing `knowledge.schema_migrations` ledger row at `database.py:2826-2829`.
-  3. `apps/knowledge/tests/test_m11_index_hygiene.py:494-549`: Three comprehensive unit tests verify that:
-     - `test_an_alter_migration_replay_with_duplicate_column_is_recorded`: Replaying migration 004 on `42701` duplicate column records the ledger version without aborting.
-     - `test_an_alter_migration_005_replay_with_duplicate_column_is_recorded`: Replaying migration 005 on `42701` duplicate column records the ledger version.
-     - `test_an_alter_migration_failing_with_other_error_still_aborts_boot`: Non-duplicate errors on `ALTER` migrations properly raise and abort boot.
-- **Test Citation:** As recorded in `docs/execution/reports/p6/tests.md` line 9, `test:knowledge` passed (`311 passed, 18 skipped, 31 subtests passed in 54.67s`).
-- **Minor Observations:**
-  - `apps/knowledge/app/database.py:146-149`: `_MIGRATION_ALTER_PATTERN` is compiled but unreferenced elsewhere in the file. It is inert and harmless dead code.
+## 2. Detailed Findings Recheck
 
----
+### F-KB-002 — ALTER migration replay
+- **Verdict:** FIXED (mechanism re-verified at HEAD `93438dd`)
+- **Evidence:** `database.py` now reconciles PostgreSQL error 42701 (`duplicate_column`) with the migration catalog record: `_migration_is_already_applied` treats an empty object set + 42701 as already-applied for the shipped ALTER-only migrations (`004_pdf_build_failure_cause`, `005_schema_migration_digest`), so rebooting does not abort on replay.
+- **Test Evidence:** `apps/knowledge/tests/test_m11_index_hygiene.py:494-549` pins the replay path; full `test:knowledge` PASS at the loop-2 tree: 311 passed / 18 skipped (`tests.md:9`). `a9ddced` touched only one trailing-whitespace line of `database.py` afterwards (no logic change).
 
-## 3. New Defects Introduced
+### F-KB-003 — NFC path collision
+- **Verdict:** LATENT (not dispatched; register Phase 3 verdict: live only inside the uncommitted `F-576` patch)
+- **Evidence:** no committed NFC-dedup fix; `depends_on: F-576`.
 
-- **New Defects Found:** None (0).
+### F-576 — non-NFC prefix filter
+- **Verdict:** OPEN (owner deferred the schema/normalization change; production-reachable: a non-NFC path stored by the writer answers no prefix filter)
+- **Test Evidence:** no dispatch; no test in the affected list. Stays in queue.
 
----
+## 3. New Defects & Blockers
 
-## 4. Summary Counts & Blockers
-
-- **Rechecked Findings:** 1 (`F-KB-002`)
-- **Fixed:** 1 (`F-KB-002`)
-- **Partial:** 0
-- **Not Fixed:** 0
-- **New Defects:** 0
-- **Blockers:** 0
+- **New Defects Introduced:** None.
+- **Blockers:** `F-576` remains owner-deferred (schema decision), which keeps `F-KB-003` latent per its depends_on.

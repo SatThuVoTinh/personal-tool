@@ -1,86 +1,29 @@
-# Phase 7 Recheck — Knowledgebase <-> Tools boundary (F-KB-004)
+# Cross-Check Recheck Report — xcheck-kb-tools
 
-- **Mode:** Recheck
-- **Finding ID:** F-KB-004
-- **Title:** citation and chunk API responses omit index status and stable chunk ordinal supplied by the database
-- **Baseline:** Working tree HEAD `63ddf40`, branch `codex/m11-t1-audit-remediation`. P6 scan confirmed NOT FIXED. Owner decision required (RED row), not assigned to any R5 fix wave.
-- **Method:** Read-only static verification against current HEAD; compared p2 audit evidence with current code; no live probes, tests, or database checks run. No source changes made.
-- **Verdict:** NOT FIXED — same serialization omission persists at HEAD.
-
----
-
-## Detailed Evidence for F-KB-004 at Current HEAD
-
-### Knowledgebase API serializers still omit fields
-
-- `/v1/chunk/{segment_id}` row construction (`apps/knowledge/app/main.py:958-977`): builds dict with `segment_id`, `chunk_id`, `index_id`, `indexed_by_run_id`, source fields, title/text/span/citation. Does **not** include `record.index_status` or `record.chunk_ordinal` loaded by `get_segment`.
-- `/v1/citation/{segment_id}` row construction (`apps/knowledge/app/main.py:998-1027`): identical field set, still omits `index_status` and `chunk_ordinal`.
-- `/v1/metadata/{segment_id}` row construction (`apps/knowledge/app/main.py:1039-1068`): also omits both fields.
-- Database loader supplies them (`apps/knowledge/app/database.py:1961-1967`): `SegmentRecord` includes `index_status` and `chunk_ordinal`, but HTTP response dicts never project them.
-
-### Tools adapter projection lacks these fields
-
-- Adapter formatter (`zink-tools/adapters/knowledge/knowledge-adapter.mjs:775-822`): maps only declared fields; does not map `index_status` or `chunk_ordinal`. The upstream properties are absent from Knowledge's serialized rows, so even if added downstream they would be unmapped here.
-
-### Contract schema rejects unknown fields
-
-- Output schema (`zink-tools/contracts/tools/zink-knowledge.schema.json:85-119`): declares metadata and result members with `"additionalProperties": false` at lines `:114` and `:118`. There is **no** `index_status` or `chunk_ordinal` declaration, so any extension must update this closed contract.
-
-### Relationship to F-573 and F-071 remains unchanged
-
-- F-573 (loader half closed per CHANGELOG.md:2160-2161): its closure claim that a caller can distinguish superseded hits and re-derive `(index, source digest, ordinal)` requires status + ordinal on the public API, which remain omitted. This finding has not been remediated.
-- F-071 (routes exist; envelope mapping incomplete): top-level `index_id`/`indexed_by_run_id` are returned by endpoints (`main.py:978-984,1028-1034`) and admitted in the schema, but the Tools formatter drops them (`knowledge-adapter.mjs:716-822`). That seam is separate from the F-573 status/ordinal omission covered by F-KB-004.
+**Boundary:** Zink Knowledgebase ↔ Zink Tools (adapter contracts, path safety, envelope)
+**Phase:** Phase 7 recheck mode (loop 2)
+**Date:** 2026-10-31
+**Branch:** codex/m11-t1-audit-remediation
+**Commit:** 93438dd
+**Fixed IDs on this boundary:** none fixed yet; carried `F-KB-004` (OPEN, shared), `F-447` (OPEN), `F-470`/`F-471` (OPEN)
 
 ---
 
-## Cross-Module Boundary Audit Results
+## 1. Boundary Verdicts
 
-### Data and contract shapes
-
-- **KB → Tools data flow:** KB returns `index_id`/`indexed_by_run_id` at the endpoint level; tools adapter receives result rows and projects a fresh object without copying those top-level values. Status and ordinal are omitted earlier at KB serialization. No shape mismatch beyond what was recorded.
-- **Ownership boundaries preserved:** Knowledgebase owns API serialization of status/ordinal; Tools owns its projection and output contract. Neither module mutates the other's state or internals. No ownership leak found.
-- **Schema change required on Tools side:** Adding these fields would require a versioned update to the closed 1.1.0 Tools schema and adapter regression tests.
-
-### Error semantics and consumer impact
-
-- Existing error semantics unchanged; no new exceptions or failure modes introduced by the omission itself. Consumer effect is informational loss (cannot infer liveness or ordinal after segment deletion), not behavioral breakage.
-
-### Startup order and health dependencies
-
-- No new startup/health deps introduced by this finding. KB and Tools retain their existing topology and dependency chain.
-
-### Backup coverage
-
-- No backup policy changes implicated by this finding. KB database and Tools config remain independent artifacts.
-
----
-
-## Blast Radius Assessment
-
-Fixing F-KB-004 requires coordinated changes across three owners:
-
-| Module | File(s) | Change Scope | Blast Radius if Fixed |
+| ID | Cross-check question | Verdict | Evidence |
 | --- | --- | --- | --- |
-| Zink Knowledgebase | `apps/knowledge/app/main.py:958-977,998-1026,1039-1068` | Add `index_status`, `chunk_ordinal` to serializer rows | Public API change; breaks consumers that assume absence; requires regression tests |
-| Zink Tools | `zink-tools/adapters/knowledge/knowledge-adapter.mjs:775-822` | Project the new fields into Tools envelope | Projection contract change; affects all governed consumers of the Tool |
-| Zink Tools Contracts | `zink-tools/contracts/tools/zink-knowledge.schema.json:85-119` | Add fields with validation; keep `additionalProperties:false` intact | Version bump of declared output contract; adapter/tests must pass |
+| `F-KB-004` | The incomplete citation/chunk output flows into the tools-side envelope unmasked? | **OPEN — premise live, no conflict change** | Serialiser omissions persist; the tools envelope does not compensate for the missing fields |
+| `F-447` | Logical-path validator dot-segment acceptance contradicts the KB "single spelling" invariant? | **OPEN — carried** | `path-safety.mjs:3,44-47` unchanged |
+| `F-470` | The tool-result envelope sink redaction gap | **OPEN — carried** | Dispatch tree unchanged for this row |
+| `F-471` | Raw error text persisted into untracked durable trees | **OPEN — carried** | Skill-proposal persistence unchanged |
 
-No fix touches Zink Skill Store or infrastructure modules.
+## 2. Interaction Findings
 
----
+- No loop-1/loop-2 commit touched `zink-tools/` or the KB dispatch/envelope seam of these rows; all statuses carry forward exactly.
+- Adjacent note: the plugin-side error envelope simplification (`F-OC-010`, index.mjs) does not change the boundary question here — `F-470`'s sink is the governing plan/result render path, untouched.
+- Standing loop-2 gates (`tests.md:9-14`) measure none of these mechanisms.
 
-## Test Gates Status
+## 3. Blockers
 
-- **Knowledgebase tests (`test:knowledge`):** PASS (311 passed, 18 skipped, 31 subtests passed in 54.67s) — Per P6 test report.
-- **Repository policy (`repository-policy.mjs`):** PASS (1 suite, 1 test passed).
-- **Affected Node tests:** Not specifically failing due to F-KB-004 (row unassigned to fixer waves).
-- **PostgreSQL / Docker real-database lane:** NOT RUN (no live container daemon/active PostgreSQL on host).
-- **POSIX WSL fsync/lock lane:** NOT RUN (Windows environment; WSL lane not configured for foreground test runner).
-
-There is currently no red test asserting `index_status`/`chunk_ordinal` presence in HTTP responses; mutation probe cannot be executed until such a test exists.
-
----
-
-## Final Verdict
-
-**NOT FIXED** — Root cause verified unchanged at HEAD. The KB API serializer omission persists; Tools adapter projection and closed schema have not been updated. Owner decision required before implementation (RED). Fix would touch Knowledgebase HTTP layers, Tools adapter and schema. Both modules remain independently runnable and standalone. No new cross-module defects introduced during the P6 period.
+- `F-KB-004` needs its owner memo; others are scheduled for later dispatch waves (fix-plan §10).

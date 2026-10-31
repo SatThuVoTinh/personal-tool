@@ -13,10 +13,10 @@ Phase 1 produced 18 candidate mechanisms; Phase 2 cross-checks added 5 more (F-O
 | Coordinator    | Main agent |
 | Started at     | 2026-10-26 20:54 +07:00 |
 | Last updated   | 2026-10-31 (repo-history repair recorded in §8 BLK-14) |
-| Workflow phase | 6 — scanner recheck |
+| Workflow phase | 8 — consolidation (Phases 6-7 loop-2 rechecks executed in person per owner order "D") |
 | Loop number    | 2 |
-| Counts         | Register 172 rows: 32 REFUTED, 2 BLOCKED, 33 LATENT, 103 OPEN, 2 PARTIAL; 140 actionable (138 fixable + 2 BLOCKED); 18 loop-1 fixes committed; **0 rows closed** |
-| Overall status | ACTIVE — Phase 6 scanner recheck; W0/W1 loop-2 fixes verified at HEAD; loop-2 integration history repaired 2026-10-31 with owner approval (BLK-14); Phases 6–8 rechecks pending |
+| Counts         | Register 172 rows: 32 REFUTED, 2 BLOCKED, 33 LATENT, 103 OPEN, 2 PARTIAL; 140 actionable (138 fixable + 2 BLOCKED); 23 loop-1+loop-2 fixes committed (18 loop-1 + `a9ddced` five); **0 rows fully closed** — every §0.5 closure-history row stays owed |
+| Overall status | ACTIVE — Phase 8 consolidation: recheck reports at `p6/` (20/20) and `p7/` (12/12) rewritten at HEAD `93438dd`; register rows carrying committed fixes now carry "Loop-2 recheck" evidence bullets; rows whose required gates are NOT RUN (Docker/PostgreSQL, WSL, store node suites) stay queued |
 
 **Dispatch baseline:** HEAD `85eb094aaedaf518e0184767f25812a8a3c3b10a`, branch `codex/m11-t1-audit-remediation`. `git status --short` already showed extensive modified, staged and untracked work, including edits under source modules and tests, plus `.qoder/`; these are pre-existing and are not attributable to the audit. Agents may edit only their assigned `docs/execution/reports/p1/*.md` report. No source writes are authorized. **Updated 2026-10-31:** the branch head after the loop-2 integration and its history repair is `b331592` (fix `a9ddced` + docs `b331592` on top of `ffee13c`); `.qoder/` is untracked and now ignored — details in §8 BLK-14.
 
@@ -205,10 +205,10 @@ For each significant blocker, record its ID, description and evidence, affected 
 
 Next actions, in priority order:
 
-1. **Main agent** — Phase 6: run the gate suites (`node scripts/repository-check.mjs`, `node --test tests/repository-policy.test.mjs`, affected test suites), record raw outcomes in `docs/execution/reports/p6/tests.md`.
-2. **Main agent** — Phase 6 scanners (20 agents) and Phase 7 cross-checkers (12 agents): spawn recheck agents or perform recheck validations for the 22 completed W0/W1 finding IDs.
-3. **Main agent** — Phase 8 consolidation: re-verify every closure requirement at HEAD (§0.2/§0.5, red-before/green-after, mutation probe, gate evidence, PLAN disposition, CHANGELOG history) before updating finding statuses.
-4. **Owner** — supply the RED memos still blocking un-dispatched rows: `F-INFRA-003`, `F-KB-004`, `F-OC-010`, `F-OC-011`; `F-400`/`F-534` stay BLOCKED.
+1. **Main agent** — Phase 6 rechecks complete (loop 2, in person per owner order "D"): all 20 scanner reports rewritten at HEAD `93438dd` (`docs/execution/reports/p6/scan-*.md`); `tests.md` gates: knowledge 311/18, repo:check PASS (ceiling 370), 13 affected W0/W1 suites green; Docker/PostgreSQL + WSL lanes NOT RUN.
+2. **Main agent** — Phase 7 cross-checker rechecks complete: all 12 boundary reports at `docs/execution/reports/p7/`. No cross-module conflict introduced; `F-DB-001`↔`F-INFRA-004` predicate now consistent via the `002`-conditional extension.
+3. **Main agent** — Phase 8 consolidation: reconcile the register rows that carry committed fixes but stale Phase-3 status text (mechanisms verified at HEAD); apply §0.2/§0.5 closure rules — rows whose required gates are NOT RUN (Docker/PostgreSQL, WSL, skill-store node suites not in the loop-2 rerun list) stay in the queue; report counts to the owner in Vietnamese.
+4. **Owner** — supply the RED memos still blocking un-dispatched rows: `F-INFRA-003`, `F-KB-004`, `F-OC-010` (reconcile the committed `54633d7` fix), `F-OC-011`; `F-400`/`F-534` stay BLOCKED; `F-587` acceptance decision; PLAN.md `F-492` wording reconciliation (owner/Codex).
 
 ## 10. Session handoff
 

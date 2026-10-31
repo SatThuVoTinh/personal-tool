@@ -1,85 +1,32 @@
-# Recheck Report: Tests and Gates Against All Modules
+# Cross-Check Recheck Report — xcheck-tests-all
 
-**Date:** 2026-10-29
-**Mode:** Recheck (Phase 7)
-**Finding IDs:** F-481, F-585
-**Scope:** Cross-module boundary audit between `tests/**` and all modules
-
----
-
-## Executive Summary
-
-| Severity  | Count | Status                  |
-| --------- | ----- | ----------------------- |
-| FIXED     | 1     | PASS                    |
-| NOT FIXED | 1     | Requires owner decision |
+**Boundary:** test gates, skip-expectation, audit baselines
+**Phase:** Phase 7 recheck mode (loop 2)
+**Date:** 2026-10-31
+**Branch:** codex/m11-t1-audit-remediation
+**Commit:** 93438dd
+**Fixed IDs on this boundary:** `F-481`, `F-492`, `F-585`, `F-OC-008`, `F-SKILL-002`; plus `F-588` (regression lane) and `F-587` (OPEN child of `F-492`)
 
 ---
 
-## Finding Verification Results
+## 1. Boundary Verdicts
 
-### ✅ F-481 — POSTGRES AND DOCKER MAY-SKIP CEILINGS EQUAL DENOMINATORS
+| ID | Cross-check question | Verdict | Evidence |
+| --- | --- | --- | --- |
+| `F-481` | Denominator rule counted skips against a denominator that equals the whole family | **FIXED — consistent across gates** | `scripts/skip-expectation-gate.mjs:316-320` applies the failed+errored+skipped+executed denominator rule; pinned by `agent-owner-F-197-skip-expectation` 13/13 in the loop-2 W0/W1 rerun (`tests.md:11`) |
+| `F-492` | Skip gate recognised only pass/skip case states | **FIXED (re-scoped by owner option 1)** | a failed/errored case is its own count and refuses the gate on every host (register row); second half (childless zero-assertion) re-filed as `F-587` |
+| `F-587` | junit reporter emits only `name/time/classname/file`, so a childless zero-assertion case is byte-identical to a pass | **OPEN — premise live at HEAD** | Register row `findings.md` (measured); no gate measures executed assertions; stays OPEN, no dispatch scheduled |
+| `F-588` | The committed F-OC-001 regression lane kept a permanently-red subtest | **FIXED — lane green** | `tests/m12-t9-unregistered-button-components-fail-closed.test.mjs` rewritten (`a9ddced`), reports 2/2 PASS (`tests.md:11`) |
+| `F-585` | Accepted dependency advisories are never re-asked for fix availability | **FIXED (probe committed)** | `63ddf40` — the advisory fix-availability comparison lives in the audit-baseline script; `repo:check` PASS at loop 2 (`tests.md:12`); npm audit live probe is NOT RUN on this host |
+| `F-OC-008` | Hotfix template rollback accounting + its test lanes | **FIXED — consistent** | `changed.push` before `_writeAtomically` (`openclaw-gemini-stream-hotfix.mjs:439-440`); `agent-topo-F-296` 5/5 + `m7-t1-openclaw` 22/22 (`tests.md:11`) |
+| `F-SKILL-002` | Store-side alias canonicalization vs tools-side query | **FIXED — no cross-gate conflict** | Storage path canonicalizes (`30dbd99`); no schema/gate regression recorded at loop 2 |
 
-**Status: FIXED at commit `088ecd7` (2026-10-27)**
+## 2. Interaction Findings
 
-**Evidence:**
+- The 13-suite W0/W1 rerun list (`tests.md:11`) is green 100%: egress 4/4, m3-t5 8/8, zip-budgets 14/14, F-044 3/3, file-lock 8/8, decision-replay 4/4, origin-uniqueness 2/2, result-preview 14/14, approval-surface-record 4/4, m7-t1 22/22, F-296 5/5, unregistered-button 2/2, skip-expectation 13/13.
+- Gate outcomes `NOT RUN` remain: Knowledgebase pytest lane recorded at the pre-fixed commit (the interim `database.py` change is whitespace-only) plus Docker/PostgreSQL and WSL lanes (`tests.md:13-14`). No row may close on those lanes.
+- No cross-module inconsistency found on this boundary; no new defect introduced.
 
-- `docs/contracts/ci-skip-expectations.json:51`: postgres `maxSkips: 3` (was 4), docker `must-run` (was 32)
-- `scripts/skip-expectation-gate.mjs:316`: enforces `maxSkips < passes + skips` with ceiling-discriminator check
-- `tests/agent-owner-F-197-skip-expectation.test.mjs`: test "F-481" validates gate refusal on equal ceiling/denominator
+## 3. Blockers
 
-**Boundary Impact Analysis:**
-
-- **Test module → Gates module**: The gate script reads contract declarations; test verifies enforcement logic
-- **Blast radius**: Gates + CI only (no cross-module state mutation)
-- **Independence preserved**: Contract file is static declaration; test suite is isolated; no shared mutable state across Zink Knowledgebase/Skill Store/Tools boundaries
-
-**Recheck verdict: FIXED ✓** - Both fixes did not break any other module; gates remain standalone, tests validate without external dependencies.
-
----
-
-### ⚠️ F-585 — DEPENDENCY-AUDIT BASELINE ACCEPTS TWO HIGH ADVISORIES AGAINST `markdown-it`
-
-**Status: NOT FIXED — OWNER DECISION REQUIRED**
-
-**Evidence:**
-
-- `package.json:34`: `"markdownlint-cli2": "0.23.3"` (outdated)
-- `package-lock.json:1157`: `markdown-it@15.0.1` vulnerable to GHSA-gfr2-rv44-r23c and GHSA-r7fv-28h4-cvq7
-- `.github/security/npm-audit-baseline.json:21/33`: Two high advisories recorded as accepted
-- `npm audit --json` reports upgrade to `markdownlint-cli2@0.24.0` removes both vulnerabilities
-- Gate never checks `fixAvailable` field from `npm audit --json`
-
-**Boundary Impact Analysis:**
-
-- **Test module → Build & runtime config**: Dependency set change affects entire repository (RED per AGENTS.md §7)
-- **Cross-module ownership**: All three logical modules depend on devDependency for testing/linting
-- **Risk assessment**: No production impact (devDependency only), but security posture degraded
-- **Fix proposal requires**: Upgrade markdownlint-cli2 to 0.24.0 + re-record baseline OR explicit acceptance of cost
-
-**Owner decision options:**
-
-1. **Option A**: Upgrade to markdownlint-cli2@0.24.0, update lockfile, re-record empty baseline (clean)
-2. **Option B**: Record refusal and accept cost of two high advisories in baseline as explicit security tradeoff
-
-**Recheck verdict: PARTIAL** - Defect still present; awaiting owner decision per original finding scope (RED boundary).
-
----
-
-## Recommendations
-
-1. **F-481**: Mark CLOSED in `findings.md`; record closure in `CHANGELOG.md` with evidence path
-2. **F-585**: Schedule review with owner for Option A/B decision within 3 business days
-3. **Process improvement**: Add automated check for `fixAvailable: true` advisories in CI pipeline
-
----
-
-## Boundary Integrity Confirmation
-
-✅ All verified fixes preserve module isolation
-✅ No direct mutation of another owner's database/vector/object-store state
-✅ Test assertions remain scoped to their respective modules
-✅ Contract files are read-only declarations from downstream consumers
-
-**Report author:** Qoder (subagent in recheck mode)
-**Next steps:** Owner decision required for F-585 only
+- `F-587` owner decision (acceptance of the junit-observable scope) still pending.

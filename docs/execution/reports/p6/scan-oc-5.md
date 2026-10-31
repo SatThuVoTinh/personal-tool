@@ -1,188 +1,43 @@
-# Phase 6 Recheck Report — OC-5 (Governance Plugin)
+# OpenClaw Governance-Plugin Audit Recheck Report (oc-5)
 
-**Mode:** Recheck
-**Area:** Governance plugin authorization, sandbox
-**Finding IDs:** F-OC-007, F-OC-009, F-OC-010
-**Date:** 2026-10-29
-**Repository HEAD:** 63ddf40
-
----
-
-## F-OC-007 — Superseded delegated run provenance check
-
-**Claimed fix:** The message hook now verifies `ctx.runId` against `delegation.native_run_id` and `previous_native_run_ids`.
-
-### Current code inspection
-
-**Location A:** `integrations/openclaw/plugins/zink-governance/index.mjs:904-915`
-
-```javascript
-// F-OC-007: check if run is superseded
-if (runId && delegation) {
-  if (
-    delegation.native_run_id !== runId &&
-    delegation.previous_native_run_ids?.includes(runId)
-  ) {
-    return {
-      allowed: false,
-      reason: `SUPERSEDED_RUN:${runId}`,
-    };
-  }
-}
-```
-
-**Location B:** `integrations/openclaw/plugins/zink-governance/index.mjs:10205-10227`
-
-```javascript
-// F-OC-007: check if the message's run is superseded
-if (ctx.runId && paths) {
-  try {
-    const snapshot = readSnapshot(paths);
-    const owner = findSession(snapshot, ctx.sessionKey, ctx.runId, false);
-    const currentDelegation = owner?.delegation;
-    // If the runId is in previous_native_run_ids but not the current native_run_id,
-    // then this attempt has been superseded by a continuation
-    if (
-      currentDelegation &&
-      currentDelegation.native_run_id !== ctx.runId &&
-      currentDelegation.previous_native_run_ids?.includes(ctx.runId)
-    ) {
-      return {
-        allowed: false,
-        reason: `SUPERSEDED_RUN:${ctx.runId}`,
-      };
-    }
-  } catch {
-    // If we fail to check, fail closed
-    return { allowed: false, reason: "SUPERSEDED_CHECK_FAILED" };
-  }
-}
-```
-
-### Assessment: **FIXED**
-
-- **Evidence:** Two defensive checks exist: one in `evaluateSpecialistProvenance` (line 904-915) and one in `specialistExecutionProvenanceWithRunCheck` wrapper (line 10205-10227). Both properly check that `native_run_id !== runId && previous_native_run_ids.includes(runId)` before allowing message publication.
-- **Impact:** Superseded delegated runs will now be blocked from publishing specialist messages to Discord.
-- **Confidence:** High — the fix matches the acceptance criteria in `findings.md:2240`: "specialist message admission requires the message's run to be the delegation's current, non-superseded attempt."
+**Slice ID:** oc-5
+**Phase:** Phase 6 recheck mode (loop 2)
+**Date:** 2026-10-31
+**Branch:** codex/m11-t1-audit-remediation
+**Commit:** 93438dd
+**Test Reference:** `docs/execution/reports/p6/tests.md`
 
 ---
 
-## F-OC-009 — Canonical-surface predicate relation to configured set
+## 1. Recheck Verdicts Summary
 
-**Claimed fix:** The canonical-surface check now relates thread/parent identifiers to `CANONICAL_DISCORD_SURFACE_IDS` instead of short-circuiting on mere presence.
+| Finding ID | Subject | Status / Verdict | Evidence Path / Reference |
+| --- | --- | --- | --- |
+| **F-OC-007** | Superseded delegated run passes specialist provenance and publishes | **FIXED** | `evaluateSpecialistProvenance` `index.mjs:10194` + run check `:9790` (`54633d7`, final hook `a9ddced`) |
+| **F-OC-009** | Any thread metadata proves a canonical Discord surface | **FIXED** | `isCanonical` vs `CANONICAL_DISCORD_SURFACE_IDS` `index.mjs:10266-10292` (`54633d7`) |
+| **F-OC-010** | Native Excel ERROR envelope violates the published output schema | **FIXED (committed)** | `registerTools` catch emits schema-compliant envelope `index.mjs:5338-5353` (`54633d7`); owner RED memo still pending |
+| **F-392–F-398** | Approval/result binding rows | **OPEN** (carried) | Register rows |
+| **F-529 / F-530 / F-531 / F-532 / F-535** | Plan-binding / cancellation / fence rows | **OPEN** (carried) | Register rows |
+| **F-534** | `execution_finished` producer unknown | **BLOCKED** (carried) | Host fact missing |
 
-### Current code inspection
+## 2. Detailed Findings Recheck
 
-**Location:** `integrations/openclaw/plugins/zink-governance/index.mjs:10294-10321`
+### F-OC-007 — superseded provenance
+- **Verdict:** FIXED (mechanism re-verified at HEAD `93438dd`)
+- **Evidence:** the specialist provenance evaluation (`evaluateSpecialistProvenance`, `index.mjs:10194`) now carries the SUPERSEDED_RUN denial into the publish gate, enforced again at the outbound run check (`:9790`).
+- **Test Evidence:** `m7-t1-openclaw` 22/22 PASS in the loop-2 W0/W1 rerun (`tests.md:11`).
 
-```javascript
-// F-OC-009: the canonical-surface predicate must relate identifiers to the configured set,
-// not short-circuit on their mere presence. A thread ID or parent channel without comparison
-// against CANONICAL_DISCORD_SURFACE_IDS allows any ordinary thread metadata to bypass the gate.
-let isCanonical =
-  !destChannel ||
-  destChannel === "discord" ||
-  CANONICAL_DISCORD_SURFACE_IDS.size === 0 ||
-  CANONICAL_DISCORD_SURFACE_IDS.has(destChannel) ||
-  CANONICAL_DISCORD_SURFACE_IDS.has(rawDest);
-// Also check if thread's parent belongs to canonical surfaces
-if (!isCanonical && typeof ctx.parentChannelId === "string") {
-  const parentChannel = ctx.parentChannelId.replace(
-    /^(channel|discord|user):/u,
-    "",
-  );
-  if (CANONICAL_DISCORD_SURFACE_IDS.has(parentChannel)) {
-    isCanonical = true;
-  }
-}
-if (!isCanonical && typeof event.parentChannelId === "string") {
-  const parentChannel = event.parentChannelId.replace(
-    /^(channel|discord|user):/u,
-    "",
-  );
-  if (CANONICAL_DISCORD_SURFACE_IDS.has(parentChannel)) {
-    isCanonical = true;
-  }
-}
-```
+### F-OC-009 — canonical surface predicate
+- **Verdict:** FIXED (mechanism re-verified at HEAD `93438dd`)
+- **Evidence:** `isCanonical` compares the destination channel ID (and thread parent) against `CANONICAL_DISCORD_SURFACE_IDS` instead of short-circuiting on mere presence of thread metadata (`index.mjs:10266-10292`).
+- **Test Evidence:** `m12-t2-governed-surface` 44 passed (commit `54633d7` evidence); plugin coverage stands green at loop 2 via `m7-t1-openclaw` 22/22.
 
-### Assessment: **FIXED**
+### F-OC-010 — error envelope
+- **Verdict:** FIXED (committed; owner memo still outstanding)
+- **Evidence:** the `registerTools` catch block emits only schema-compliant shapes — `{operation, success:false, error_code, error_message}` with the fixed canonical message and no forbidden extra properties — replacing the generic `{status:"ERROR", tool, error, message, code}` (`index.mjs:5338-5353`).
+- **Test Evidence:** `m12-t2-governed-surface` 44 passed (`54633d7`). Note: the register row is RED pending the owner memo; the committed fix does not close the row — the owner must confirm the re-scoped acceptance (truthful status via `success:false` + symbolic code).
 
-- **Evidence:** The predicate now explicitly calls `CANONICAL_DISCORD_SURFACE_IDS.has()` for both `destChannel` and parent channels (`ctx.parentChannelId`, `event.parentChannelId`). The fix preserves the empty-set allowance (`CANONICAL_DISCORD_SURFACE_IDS.size === 0`) and rejects arbitrary destinations that don't match the configured set.
-- **Impact:** Outbound agent messages are now admitted only when the resolved destination or thread's parent provably belongs to the configured canonical surface set.
-- **Confidence:** High — the fix implements the acceptance criteria in `findings.md:2268`: "an outbound agent message is admitted only when the resolved destination, or the thread's parent, provably belongs to the configured canonical surface set."
+## 3. New Defects & Blockers
 
----
-
-## F-OC-010 — Excel error envelope schema compliance
-
-**Claimed fix:** The catch block now emits a schema-compliant envelope with `operation`, `success`, `error_code`, and `error_message` fields instead of `{status:"ERROR", tool, error, message, code}`.
-
-### Current code inspection
-
-**Location:** `integrations/openclaw/plugins/zink-governance/index.mjs:5337-5355`
-
-```javascript
-// F-OC-010: emit an error envelope that satisfies the published schema.
-// The generic {status:"ERROR", tool, error, message, code} violated the
-// Excel output contract (which requires operation/success and forbids
-// additional properties). We now emit only schema-compliant shapes:
-// either operation-driven success/failure with the required fields, or
-// a terminal-error carrier defined by the caller's contract.
-return {
-  content: [
-    {
-      type: "text",
-      text: JSON.stringify({
-        operation: err?.operation || "unknown_operation",
-        success: false,
-        error_code: err?.code || "TOOL_EXECUTION_FAILED",
-        error_message: "Governed tool execution failed.",
-      }),
-    },
-  ],
-};
-```
-
-### Assessment: **FIXED**
-
-- **Evidence:** The catch block now returns `JSON.stringify({operation, success, error_code, error_message})` which satisfies the `zink_excel` schema requirements (`required: ["operation","success"]` and no undeclared properties like `message`/`code`). The validation call at line 5359-5363 now executes after the return, so it validates successful outputs.
-- **Impact:** Excel execution errors now produce a shape that conforms to the published `zink_tools/contracts/tools/zink-excel.schema.json` output contract.
-- **Confidence:** High — the emitted fields match the schema's required fields and exclude the previously problematic `message`/`code` top-level members.
-
----
-
-## NEW DEFECTS INSPECTED IN SCOPE
-
-None detected during recheck. All three findings show proper implementation matching their acceptance criteria.
-
----
-
-## TEST GATE STATUS
-
-Per `docs/execution/reports/p6/tests.md`: Affected Node tests are **PASS** (100% green across all suites). No test failures reported related to these fixes.
-
----
-
-## SUMMARY
-
-| Finding ID | Status | Confidence | Blockers |
-| ---------- | ------ | ---------- | -------- |
-| F-OC-007   | FIXED  | High       | None     |
-| F-OC-009   | FIXED  | High       | None     |
-| F-OC-010   | FIXED  | High       | None     |
-
-All three claimed fixes verified as implemented correctly per acceptance criteria.
-
----
-
-## FINAL REPLY TO PARENT (≤10 lines)
-
-Report: docs/execution/reports/p6/scan-oc-5.md
-F-OC-007: FIXED (high confidence)
-F-OC-009: FIXED (high confidence)
-F-OC-010: FIXED (high confidence)
-No new defects found
-Test gates: PASS
-Blockers: None
-Scope clean
+- **New Defects Introduced:** None.
+- **Blockers:** Owner RED memos still missing for `F-OC-010` (reconciliation) and `F-OC-011`; `F-534` stays BLOCKED on the host fact.

@@ -1,80 +1,29 @@
-# Phase 7 Cross-Check Report: OpenClaw Artifact Validation / Excel Writer ↔ Zink Tools & Governance
+# Cross-Check Recheck Report — xcheck-oc-artifact
 
-- **Mode:** Recheck (Phase 7)
-- **Boundary:** OpenClaw artifact validation / Excel writer (`integrations/openclaw/lib/`) ↔ Zink Tools contracts (`zink-tools/contracts/`) and OpenClaw governance (`integrations/openclaw/plugins/zink-governance/`)
-- **Finding IDs Evaluated:** `F-OC-002`, `F-OC-003`
-- **Report Path:** `docs/execution/reports/p7/xcheck-oc-artifact.md`
-- **Summary Verdicts:**
-  - `F-OC-002`: **FIXED** (High severity, F6 — Reliability & Performance)
-  - `F-OC-003`: **FIXED** (Medium severity, F2 — Security & Authorization)
-- **Blockers:** 0
+**Boundary:** OpenClaw governance plugin ↔ artifact validation / Excel writer / zink-tools artifact contract
+**Phase:** Phase 7 recheck mode (loop 2)
+**Date:** 2026-10-31
+**Branch:** codex/m11-t1-audit-remediation
+**Commit:** 93438dd
+**Fixed IDs on this boundary:** `F-OC-002`, `F-OC-003`, `F-OC-010`; carried rows `F-463`–`F-473`
 
 ---
 
-## 1. Boundary & Module Isolation Overview
+## 1. Boundary Verdicts
 
-The boundary under review connects OpenClaw's artifact validation (`integrations/openclaw/lib/artifact-validator.mjs`) and Excel writer (`integrations/openclaw/lib/excel-writer.mjs`) with Zink Tools schema contracts (`zink-tools/contracts/tools/zink-excel.schema.json`) and OpenClaw governance handlers (`integrations/openclaw/plugins/zink-governance/index.mjs`).
+| ID | Cross-check question | Verdict | Evidence |
+| --- | --- | --- | --- |
+| `F-OC-002` | ZIP expansion budgets enforced on both readers without breaking the tools-side caller | **FIXED — consistent** | Budget errors name measurement and limits (`artifact-validator.mjs:265-271`, `excel-writer.mjs:220-223`); `m12-t9-r5-zip-expansion-budgets` 14/14 (`tests.md:11`) |
+| `F-OC-003` | Symlink/dangling guards on the write path do not reject legitimate in-sandbox writes | **FIXED — consistent** | `excel-writer.mjs:546-607` walks with `lstatSync`; refuses only out-of-sandbox traversal (committed `adc7e84`; dedicated suite not rerun at loop-2 — flagged) |
+| `F-OC-010` | The emitted error envelope now matches the published zink_excel output schema on both sides of the boundary | **FIXED — consistent** | `registerTools` catch emits `{operation, success:false, error_code, error_message}` (`index.mjs:5338-5353`) — the schema-forbidden `status:"ERROR"+tool+error+message+code` shape is gone; owner memo pending for closure |
 
-In accordance with AGENTS.md §9:
-1. **Module Ownership:** File execution and sandbox containment remain strictly within the OpenClaw hosting boundary (`~/.openclaw-zink/sandboxes`). Zink Tools remains a thin contract boundary.
-2. **State Isolation:** Neither artifact validation nor Excel writing accesses or mutates Zink Knowledgebase or Zink Skill Store persistent state or vector indexes.
-3. **Standalone Integrity:** Both modules maintain clear contract boundaries and operate standalone without shared runtime state or direct database coupling.
+## 2. Interaction Findings
 
----
+- **F-OC-002 budget refusal path → tools boundary:** the budget refusal now flows outward with a named error (limit + measured value), so the plugin-side envelope keeps a symbolic code; no raw message leakage observed on the refusal sites checked at HEAD.
+- **F-OC-010 envelope ↔ F-460/F-539 vocabulary:** the old generic 5-field envelope was one of the disagreeing declarations; the new shape reduces the disagreement but `F-539` (4 disagreeing vocabularies) remains OPEN by itself.
+- **F-463 residual (redaction) and `F-459` (SQL scanner semantics) stay OPEN on adjacent seams; not regressed** by the loop-1/loop-2 edits — the changed files (`artifact-validator.mjs`, `excel-writer.mjs`, `index.mjs` catch/registry seams) do not touch those mechanisms.
+- **`F-468 / F-472 / F-473` closed upstream** and absent from the register; no cross-boundary call site remains for them.
 
-## 2. Detailed Finding Re-verifications
+## 3. Blockers
 
-### F-OC-002 — Excel ZIP validation has no aggregate expanded-byte budget and can exhaust OpenClaw memory
-
-- **Category / Severity:** F6 — Reliability & Performance / High
-- **Verdict:** **FIXED**
-- **Original Issue:** Both the result validator (`artifact-validator.mjs`) and Excel writer ZIP parser (`excel-writer.mjs`) inflated untrusted ZIP entries without aggregate expanded-byte or entry-count budgets, exposing OpenClaw to memory exhaustion from zip-bomb payloads.
-- **Verification & Code Evidence:**
-  1. **Option B Budgets Enforced in Both Readers:**
-     - `ENTRY_COUNT_LIMIT = 5000`
-     - `PER_ENTRY_LIMIT = 128 * 1024 * 1024` (128 MiB)
-     - `TOTAL_UNCOMPRESSED_LIMIT = 512 * 1024 * 1024` (512 MiB)
-  2. **Validator Reader Implementation:**
-     - `integrations/openclaw/lib/artifact-validator.mjs:141-143`: Budget constants defined.
-     - `integrations/openclaw/lib/artifact-validator.mjs:174-176`: Entry count checked prior to buffer allocation (`entryCount > 5000`).
-     - `integrations/openclaw/lib/artifact-validator.mjs:220-235`: Pre-inflation checks against declared per-entry size and aggregate size.
-     - `integrations/openclaw/lib/artifact-validator.mjs:248-298`: Incremental checks during inflation using `{ maxOutputLength }` with named error messages.
-  3. **Writer Reader Implementation:**
-     - `integrations/openclaw/lib/excel-writer.mjs:148-150`: Entry count checked (`entryCount > 5000`).
-     - `integrations/openclaw/lib/excel-writer.mjs:176-190`: Pre-inflation checks against declared per-entry size and aggregate size.
-     - `integrations/openclaw/lib/excel-writer.mjs:206-250`: Incremental checks during `zlib.inflateRawSync` using `maxOutputLength`.
-  4. **Test Suite Verification:**
-     - `tests/m12-t9-r5-zip-expansion-budgets.test.mjs:304-397`: 14 tests verifying entry count limits (5,001 entries rejected), per-entry size limits (>128 MiB rejected), aggregate output limits (>512 MiB rejected), forged declared sizes, and acceptance of valid Excel ZIPs in both readers.
-- **Cross-Boundary Impact:**
-  - Valid Excel artifacts, Power BI (`.pbix`), and DOCX files pass validation through `validateTechnicalArtifact` without regressions.
-  - Zink Tools contracts remain thin schemas; no direct state access or ownership leaks occurred across the boundary.
-
----
-
-### F-OC-003 — Excel generation can follow an in-workspace dangling symlink and create a file outside the sandbox
-
-- **Category / Severity:** F2 — Security & Authorization / Medium
-- **Verdict:** **FIXED**
-- **Original Issue:** `realpathOf` reconstructed unresolved target paths after realpath errors, allowing a dangling final symlink or junction in the workspace to bypass `assertInsideWorkspace` containment checks and write files outside the sandbox.
-- **Verification & Code Evidence:**
-  1. **Dangling Symlink Detection & Containment Checks:**
-     - `integrations/openclaw/lib/excel-writer.mjs:539-577`: `realpathOf` handles dangling symlinks by resolving link targets with `fs.readlinkSync` and recursively checking real paths.
-     - `integrations/openclaw/lib/excel-writer.mjs:583-631`: `assertInsideWorkspace` checks both the resolved base and target paths, as well as every intermediate path segment. Any segment that is a dangling symlink or points outside the workspace throws `ARTIFACT_PATH_ESCAPE` before writing.
-  2. **Test Suite Verification:**
-     - `tests/agent-lib-F-044.test.mjs:117-176`: Explicit test verifying that a workbook target that is a dangling symlink or junction pointing outside the sandbox is refused with `ARTIFACT_PATH_ESCAPE`, and confirming the outside file is not created.
-- **Cross-Boundary Impact:**
-  - Standard in-sandbox Excel workbook generation, preview generation, and sheet operations succeed normally.
-  - Sandbox write authority remains strictly in the OpenClaw hosting boundary; Zink Tools adapter schemas and Knowledgebase/Skill Store state remain untouched.
-
----
-
-## 3. Summary of Recheck Results
-
-| Finding ID | Severity | Category | Status | Verdict | Evidence |
-| --- | --- | --- | --- | --- | --- |
-| `F-OC-002` | High | F6 — Reliability & Performance | CLOSED | **FIXED** | `artifact-validator.mjs:141-298`, `excel-writer.mjs:148-250`, `tests/m12-t9-r5-zip-expansion-budgets.test.mjs` (14/14 PASS) |
-| `F-OC-003` | Medium | F2 — Security & Authorization | CLOSED | **FIXED** | `excel-writer.mjs:539-631`, `tests/agent-lib-F-044.test.mjs:117-176` (PASS) |
-
-- **Counts per severity:** High: 1 (FIXED), Medium: 1 (FIXED)
-- **Blockers:** 0
-- **Cross-module integrity:** Confirmed. Both modules function standalone; no cross-module contract breaks or ownership leaks were detected.
+- `F-OC-010` closure needs the owner's RED memo (register row is RED-undecided); `F-OC-003` needs a loop-2 gate rerun of its dedicated suite before §0.5 closure.

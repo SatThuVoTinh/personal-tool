@@ -1,56 +1,34 @@
-# Recheck Report — kb-3 (Knowledgebase retrieval, provenance, citations and API)
+# Knowledgebase Audit Recheck Report (kb-3)
 
-- **Slice:** kb-3 (`apps/knowledge/`)
-- **Area:** Knowledgebase retrieval, provenance, citations and API surface
-- **Mode:** Recheck (Phase 6)
-- **Rechecked Findings:** `F-KB-004`
-
-## Status Summary
-
-| Finding ID | Title | Status | Severity | Category |
-| --- | --- | --- | --- | --- |
-| F-KB-004 | citation and chunk API responses omit index status and stable chunk ordinal supplied by the database | NOT FIXED | Medium | F5 |
+**Slice ID:** kb-3
+**Phase:** Phase 6 recheck mode (loop 2)
+**Date:** 2026-10-31
+**Branch:** codex/m11-t1-audit-remediation
+**Commit:** 93438dd
+**Test Reference:** `docs/execution/reports/p6/tests.md`
 
 ---
 
-## Detailed Recheck Results
+## 1. Recheck Verdicts Summary
 
-### F-KB-004 — citation and chunk API responses omit index status and stable chunk ordinal supplied by the database
+| Finding ID | Subject | Status / Verdict | Evidence Path / Reference |
+| --- | --- | --- | --- |
+| **F-KB-004** | Citation/chunk API responses omit index status and stable chunk ordinal | **OPEN** (RED, owner memo missing) | Register row; no fix dispatched |
+| **F-515** | Embedding arms collapse the 7-code ModelProbeError vocabulary | **PARTIAL** | Service half closed `cb812ad`; producer-dist half open |
+| **F-512–F-518** (others) | Citation family legacy rows | **not in register** (closed upstream) | findings.md history |
 
-- **Status:** NOT FIXED
-- **Category:** F5 — Data Integrity & Result Correctness
-- **Severity:** Medium
-- **Affected Modules:** Zink Knowledgebase API (`apps/knowledge/app/main.py`), Zink Tools Knowledge Adapter (`zink-tools/adapters/knowledge/knowledge-adapter.mjs`), Tools Schema (`zink-tools/contracts/tools/zink-knowledge.schema.json`)
-- **Evidence:**
-  - `apps/knowledge/app/main.py:958-977`: `/v1/chunk/{segment_id}` serializer builds `row` dict containing `segment_id`, `chunk_id`, `index_id`, `indexed_by_run_id`, `source_id`, `source_sha256`, `source_path`, `source_type`, `title`, `text`, `heading_path`, `line_start`, `line_end`, `page_start`, `page_end`, and `citation`. It still omits `record.index_status` and `record.chunk_ordinal` loaded by `get_segment` (`apps/knowledge/app/database.py:1961-1967`).
-  - `apps/knowledge/app/main.py:998-1027`: `/v1/citation/{segment_id}` serializer builds `row` dict with identical fields, omitting `record.index_status` and `record.chunk_ordinal`.
-  - `apps/knowledge/app/main.py:1039-1068`: `/v1/metadata/{segment_id}` serializer builds `row` dict omitting `record.index_status` and `record.chunk_ordinal`.
-  - `zink-tools/adapters/knowledge/knowledge-adapter.mjs:775-822`: `knowledge-adapter.mjs` formats result rows into the Tools envelope without mapping `index_status` or `chunk_ordinal`.
-  - `zink-tools/contracts/tools/zink-knowledge.schema.json:85-119`: Schema specifies `"additionalProperties": false` at `:114` and `:118` and carries no `index_status` or `chunk_ordinal` fields.
-- **Reason Not Fixed:** `F-KB-004` requires an owner decision (RED row) regarding public API modification and updating the closed 1.1.0 Tools schema (`docs/contracts/execution/ACTIVE.md:297-300`). No owner decision was recorded for `F-KB-004` during R5 execution (`ACTIVE.md:318-362`), and the row was not assigned to a fixer wave.
+## 2. Detailed Findings Recheck
 
-### New Defects Introduced
+### F-KB-004 — index status + chunk ordinal omitted
+- **Verdict:** OPEN — RED row still awaiting the owner decision memo (listed in `docs/execution/context.md:211`); the multi-fixer dispatch (kb + tools + tests + governance-library) was never started.
+- **Evidence:** chunk/citation/metadata serialisers still omit the DB-supplied index status and stable chunk ordinal; no committed change touches the cite/chunk path in loop 1 or loop 2.
+- **Test Evidence:** `test:knowledge` PASS 311/18 (`tests.md:9`) is the standing baseline gate; no F-KB-004 red test exists (fixer not dispatched).
 
-- **New Defects:** None. No code modifications were performed for `F-KB-004`.
+### F-515 — embedding error-code collapse
+- **Verdict:** PARTIAL (carried)
+- **Evidence:** the service half is closed by `cb812ad` — both embedding arms raise and carry the code through `_embedding_error_code`; the producer-distribution half (no log record on the search/readyz arm) remains open.
 
----
+## 3. New Defects & Blockers
 
-## Test Gate Citation
-
-Per lead test report `docs/execution/reports/p6/tests.md`:
-- **Knowledgebase tests (`test:knowledge`):** PASS (311 passed, 18 skipped, 31 subtests passed in 54.67s; `uv run --directory apps/knowledge --locked python -m pytest tests -q`)
-- **Repository policy (`repository-policy.mjs`):** PASS (1 suite, 1 test passed in 3.15s)
-- **Repository check (`repo:check`):** FAIL (Diagnostic failures: trailing whitespace in 7 files; status vocabulary in findings.md; package.json missing 2 new test files)
-- **PostgreSQL / Docker real-database lane:** NOT RUN (Host lacks live container daemon / active PostgreSQL instance)
-- **POSIX WSL fsync/lock lane:** NOT RUN (Windows host environment)
-
----
-
-## Summary Counts
-
-- **Total Rechecked:** 1
-- **FIXED:** 0
-- **PARTIAL:** 0
-- **NOT FIXED:** 1 (`F-KB-004`)
-- **NEW DEFECTS:** 0
-- **Blockers:** 0
+- **New Defects Introduced:** None.
+- **Blockers:** `F-KB-004` cannot be dispatched until the owner supplies its RED memo; adjacent API-surface row `F-495` (platforms README six response keys) also stays OPEN and untouched.

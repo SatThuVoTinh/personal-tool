@@ -1,151 +1,34 @@
-# Phase 6 Recheck Report — OpenClaw setup, preflight, rollback, templates
+# OpenClaw Setup/Templates Audit Recheck Report (oc-6)
 
-**Date**: 2026-10-29
-**Finding to verify**: F-OC-008
-**Scope**: `integrations/openclaw/configure.mjs`, `integrations/openclaw/verify.mjs`, `integrations/openclaw/templates/**/*`
-
-## Finding F-OC-008 — post-rename directory-fsync failure leaves untracked hotfix artifact mixture
-
-**Claimed fix state**: Candidate for recheck
-
-### Code Inspected: `integrations/openclaw/templates/openclaw-gemini-stream-hotfix.mjs`
-
-#### Evidence of vulnerability still present
-
-**Line 290-315: `writeAtomically` function**
-
-```javascript
-function writeAtomically(filePath, contents, fileMode) {
-  const temporaryPath = `${filePath}.zink-hotfix-${process.pid}.tmp`;
-  let descriptor;
-  try {
-    descriptor = openSync(temporaryPath, "wx", fileMode);
-    writeFileSync(descriptor, contents, "utf8");
-    fsyncSync(descriptor);
-    closeSync(descriptor);
-    descriptor = undefined;
-    chmodSync(temporaryPath, fileMode);
-    renameSync(temporaryPath, filePath); // Line 300 - destination now patched
-    syncDirectory(path.dirname(filePath)); // Line 301 - if this fails:
-  } catch (error) {
-    // filePath already renamed, but catch doesn't restore it
-    if (descriptor !== undefined) {
-      try {
-        closeSync(descriptor);
-      } catch {}
-    }
-    try {
-      unlinkSync(temporaryPath);
-    } catch {} // Only unlinks TEMP (which may not exist after rename)
-    throw error; // Destination left in corrupted state
-  }
-}
-```
+**Slice ID:** oc-6
+**Phase:** Phase 6 recheck mode (loop 2)
+**Date:** 2026-10-31
+**Branch:** codex/m11-t1-audit-remediation
+**Commit:** 93438dd
+**Test Reference:** `docs/execution/reports/p6/tests.md`
 
 ---
 
-**Lines 416-446: `writeTransaction` function**
+## 1. Recheck Verdicts Summary
 
-```javascript
-function writeTransaction(records, desiredState) {
-  const planned = records.map((record) => ({
-    ...record,
-    desired: desiredContents(record, desiredState),
-  }));
-  const changed = []; // Transaction log starts empty
-  try {
-    for (const record of planned) {
-      if (record.desired === record.contents) continue;
-      writeAtomically(record.filePath, record.desired, record.fileMode);
-      changed.push(record); // Line 426: only logged AFTER writeAtomically succeeds
-    }
-  } catch (error) {
-    // Rollback at line 430 only iterates what's already in `changed`
-    // Any artifact that failed after rename is never logged, so rollback can't undo it
-    let rollbackError;
-    for (const record of [...changed].reverse()) {
-      try {
-        writeAtomically(record.filePath, record.contents, record.fileMode);
-      } catch (candidate) {
-        rollbackError ??= candidate;
-      }
-    }
-    // ...
-  }
-}
-```
+| Finding ID | Subject | Status / Verdict | Evidence Path / Reference |
+| --- | --- | --- | --- |
+| **F-OC-008** | Post-rename fsync failure leaves an untracked hotfix artifact mixture | **FIXED** | `templates/openclaw-gemini-stream-hotfix.mjs:439-440` `changed.push` before `_writeAtomically`; `classifyState :379` (`a9ddced`) |
+| **F-542** | Parallel ledger root mints a second empty governance root | **OPEN** (carried) | Register row |
+| **F-556–F-564** | Operator rows | **OPEN/LATENT** (carried) | Register rows |
+| **F-537 / F-545 / F-546 / F-548 / F-500** | Setup contract rows | **OPEN/LATENT** (carried) | Register rows |
 
----
+## 2. Detailed Findings Recheck
 
-**Lines 379-394: `classifyState` function**
+### F-OC-008 — hotfix rollback accounting
+- **Verdict:** FIXED (mechanism re-verified at HEAD `93438dd`)
+- **Evidence:** `writeTransaction` now enqueues the record into `changed` **before** the write (`changed.push` at `:439` preceding `_writeAtomically` at `:440`), so a post-rename fsync failure at `syncDirectory` can be rolled back — the mixture that previously blocked gateway startup is undone; state detection lives in `classifyState` (`:379`).
+- **Test Evidence:** `agent-topo-F-296` 5/5 + `m7-t1-openclaw` 22/22 PASS in the loop-2 W0/W1 rerun (`tests.md:11`). Register row still carries LATENT text (stale) — Phase 8 reconciliation.
 
-```javascript
-function classifyState(records) {
-  const states = records.map(({ spec, contents }) => {
-    const digest = requireKnownHash(spec.id, contents);
-    return digest === spec.patchedSha256 ? "patched" : "original";
-  });
-  if (states.every((state) => state === "patched")) return "patched";
-  if (states.every((state) => state === "original")) return "original";
-  if (
-    states[0] === "patched" &&
-    states.slice(1).every((state) => state === "original")
-  ) {
-    return "r18-predecessor"; // ONLY first-artifact-only-patched allowed
-  }
-  throw new Error(
-    "OpenClaw hotfix artifacts are in an unsupported partial state",
-  ); // Mixed state rejected
-}
-```
+### Carried rows
+- `F-537` OPEN (digest-pinned contracts, no validation call site), `F-545` OPEN (registry checksum shape test), `F-546` OPEN (packaged copies unreachable), `F-548` OPEN/test-only (pin copies without agreement check), `F-500` LATENT (half-registered surface), `F-556` OPEN (rollback runbook refusal), `F-557` OPEN (r16 sentinel self-compare), `F-558` OPEN (coerced measurements), `F-559` OPEN test-only, `F-560` OPEN (env outranks positional root), `F-561` OPEN (pre-apply recompute), `F-562` OPEN (disjoint guards), `F-563` LATENT (POSIX-shaped preview root), `F-564` OPEN (magic-bytes preview validity). None touched in loop 1/loop 2.
 
----
+## 3. New Defects & Blockers
 
-### Verdict: **NOT FIXED**
-
-No changes detected to prevent this exact sequence. The vulnerable code patterns cited in findings.md remain identical:
-
-| Vulnerability Pattern                  | Path:Line                                   | Status    |
-| -------------------------------------- | ------------------------------------------- | --------- |
-| `renameSync` before `syncDirectory`    | `openclaw-gemini-stream-hotfix.mjs:300-301` | Unchanged |
-| Catch block doesn't restore `filePath` | `openclaw-gemini-stream-hotfix.mjs:302-316` | Unchanged |
-| `changed.push(record)` after success   | `openclaw-gemini-stream-hotfix.mjs:426`     | Unchanged |
-| `classifyState` rejects mixed states   | `openclaw-gemini-stream-hotfix.mjs:379-394` | Unchanged |
-
-**Root cause confirmed**: Still accurate per findings.md description.
-
----
-
-### Acceptance Criteria Assessment
-
-| Criterion                                 | Required Fix                     | Current State                   |
-| ----------------------------------------- | -------------------------------- | ------------------------------- |
-| Restore destination if fsync fails        | Rollback or atomic swap          | ❌ NOT DONE                     |
-| Record artifact in `changed` BEFORE fsync | Pre-log then operate             | ❌ NOT DONE                     |
-| Supported state after injection           | One of three acceptable patterns | ❌ Mixed states rejected        |
-| `--ensure` passes for supported states    | Idempotent repair                | ❌ Fails on unsupported partial |
-
----
-
-### New Defects Introduced
-
-**None** — No fix was applied, so no regression possible.
-
----
-
-## Summary
-
-| Finding  | Status        | Path:Line                                                                            | Impact                                            |
-| -------- | ------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------- |
-| F-OC-008 | **NOT FIXED** | `integrations/openclaw/templates/openclaw-gemini-stream-hotfix.mjs:290-315, 421-432` | Gateway startup blocks on directory-fsync failure |
-
-**Total findings verified**: 1
-**Fixed**: 0
-**Partial**: 0
-**Not Fixed**: 1
-**New defects**: 0
-
----
-
-_Report written by subagent scan-oc-6 in Phase 6 recheck mode._
-_Evidence preserved verbatim; test status not run pending docs/execution/reports/p6/tests.md lead documentation._
+- **New Defects Introduced:** None.
+- **Blockers:** None new; template/setup lanes stay scheduled per fix-plan §10 later waves.

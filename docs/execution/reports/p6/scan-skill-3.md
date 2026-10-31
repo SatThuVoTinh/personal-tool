@@ -1,58 +1,36 @@
-# Recheck Report — skill-3 (Skill Store isolation and backup/restore)
+# Skill Store Audit Recheck Report (skill-3)
 
-- **Slice:** skill-3 (`zink-skill-store/`)
-- **Area:** Skill Store isolation from Knowledgebase indexes and state backup/restore
-- **Mode:** Recheck (Phase 6)
-- **Rechecked Findings:** `F-INFRA-002` (skill portion)
-
-## Status Summary
-
-| Finding ID | Title | Status | Severity | Category |
-| --- | --- | --- | --- | --- |
-| F-INFRA-002 (skill portion) | Shared PostgreSQL administrator identity reaches Skill Store executor | FIXED | High | F2 |
+**Slice ID:** skill-3
+**Phase:** Phase 6 recheck mode (loop 2)
+**Date:** 2026-10-31
+**Branch:** codex/m11-t1-audit-remediation
+**Commit:** 93438dd
+**Test Reference:** `docs/execution/reports/p6/tests.md`
 
 ---
 
-## Detailed Recheck Results
+## 1. Recheck Verdicts Summary
 
-### F-INFRA-002 (skill portion) — Shared PostgreSQL administrator identity reaches Skill Store executor
+| Finding ID | Subject | Status / Verdict | Evidence Path / Reference |
+| --- | --- | --- | --- |
+| **F-508** | Orphan-lock recovery runs destructive unlink/rmdir outside every error path | **OPEN** (carried) | Register row |
+| **F-580** | Failed re-validation + failed rollback strands a canonical directory | **PARTIAL** | Stranded half closed `a7c8239` (`quarantineInvalidVersion`) |
+| **F-509 / F-574** | Legacy isolation rows | **not in register** (closed upstream) | findings.md history |
 
-- **Status:** FIXED
-- **Category:** F2 — Security & Authorization
-- **Severity:** High
-- **Affected Modules:** Zink Skill Store (`zink-skill-store/src/vector-sync.mjs`), Infrastructure (`infrastructure/docker/scripts/bootstrap-postgres.sh`)
-- **Evidence:**
-  - `zink-skill-store/src/vector-sync.mjs:319-323`: `executePostgresQuery` checks `process.env.SKILL_DB_PASSWORD` and throws `SKILL_DB_PASSWORD_REQUIRED: PostgreSQL access requires the Skill Store database credential.` when absent.
-  - `zink-skill-store/src/vector-sync.mjs:337`: Docker `psql` invocation passes `-U skill_app` instead of superuser `-U postgres`.
-  - `zink-skill-store/src/vector-sync.mjs:346`: `PGPASSWORD` is injected in child process env via `process.env.SKILL_DB_PASSWORD`.
-  - `infrastructure/docker/scripts/bootstrap-postgres.sh:6,12-15`: Requires non-empty, non-`unconfigured` `SKILL_DB_PASSWORD` at database bootstrap.
-  - `infrastructure/docker/scripts/bootstrap-postgres.sh:50-52,62`: Provisions dedicated `skill_app` role with `NOSUPERUSER NOCREATEDB NOCREATEROLE`.
-  - `infrastructure/docker/scripts/bootstrap-postgres.sh:69,74,76,80-114`: Restricts `skill_app` database access to `postgres` DB, assigns schema/object ownership of `skills.*` to `skill_app`, and isolates from `n8n` and `knowledge` schemas.
-- **Reason Fixed:** Skill Store database client no longer defaults to or uses the `postgres` superuser account. It uses the dedicated `skill_app` non-superuser login and fails closed if `SKILL_DB_PASSWORD` is omitted.
+## 2. Detailed Findings Recheck
 
-### New Defects Introduced
+### F-508 — no JSON record on mid-delete failure
+- **Verdict:** OPEN (carried; production-reachable via the same interleaving that makes `rmdirSync` throw `ENOTEMPTY` — the mechanism named by sibling row `F-433`, which is also OPEN)
+- **Evidence:** the two recovery drivers still print a raw stack with the absolute lock path when the destructive step throws; no loop-2 lane touched them.
 
-- **New Defects:** None. Code inspection of `zink-skill-store/` confirms vector queries, migrations, and lock recovery operate as intended without side effects.
+### F-580 — stranded canonical directory
+- **Verdict:** PARTIAL (carried)
+- **Evidence:** the stranded-state half is closed by `a7c8239` — `quarantineInvalidVersion` renames a canonical pair that fails validation into the residue group so reads are no longer taken dark; the remaining half (rollback-removal failure path) stays open.
 
----
+### Isolation/backup adjacency
+- `F-572` OPEN (embedding identity column one-sided) and `F-576` OPEN (non-NFC prefix filter) — both owner-deferred schema changes; untouched.
 
-## Test Gate Citation
+## 3. New Defects & Blockers
 
-Per lead test report `docs/execution/reports/p6/tests.md`:
-- **Affected Node tests (`m11-t1-skill-vector-sql`, `m3-t1-contract`, `m5-docker-contract`):** PASS (All affected test suites passed 100% green)
-- **Knowledgebase tests (`test:knowledge`):** PASS (311 passed, 18 skipped, 31 subtests passed in 54.67s; `uv run --directory apps/knowledge --locked python -m pytest tests -q`)
-- **Repository policy (`repository-policy.mjs`):** PASS (1 suite, 1 test passed in 3.15s)
-- **Repository check (`repo:check`):** FAIL (Diagnostic failures: trailing whitespace in 7 files; status vocabulary in findings.md; package.json missing 2 new test files)
-- **PostgreSQL / Docker real-database lane:** NOT RUN (Requires live container daemon and active PostgreSQL instance not provisioned on this host)
-- **POSIX WSL fsync/lock lane:** NOT RUN (Windows host environment)
-
----
-
-## Summary Counts
-
-- **Total Rechecked:** 1
-- **FIXED:** 1 (`F-INFRA-002` skill portion)
-- **PARTIAL:** 0
-- **NOT FIXED:** 0
-- **NEW DEFECTS:** 0
-- **Blockers:** 0
+- **New Defects Introduced:** None.
+- **Blockers:** None new; F-572/F-576 wait on owner schema decisions.
