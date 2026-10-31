@@ -8120,6 +8120,11 @@ Historical Final Quality Gate: NOT RUN.
   The owner's ruling: fix the test first, then re-judge whether `F-515` closes.
   `F-492` and `F-580` stay `PARTIAL` and unchanged, still waiting on the questions
   recorded in `ACTIVE.md` §8.1.
+  (Reconciled 2026-10-31: the owner re-scoped `F-492` on 2026-10-29 — option 1
+  narrows its acceptance to the skipped and failed/errored states; the
+  failed/errored half closed with `7e13dcb`, and the childless zero-assertion
+  arm was split out as `F-587`, which the owner ruled RED on 2026-10-31 —
+  runner-signal arm. The lines above are historical.)
 
 ### Owner decisions recorded 2026-10-26
 
@@ -8243,6 +8248,11 @@ force-push, no PR/merge/release.
   `tests/skip-expectation-gate.test.mjs` does not exist. Owner decision needed:
   re-scope the criterion to the two observable states, or name the signal.
   `F-481` stays `OPEN` per the 2026-10-24 decision above.
+  (Reconciled 2026-10-31: decided since then — the owner re-scoped the criterion
+  on 2026-10-29, option 1, the skipped and failed/errored states; the
+  failed/errored half closed with `7e13dcb`, and the childless zero-assertion
+  arm became `F-587`, ruled RED on 2026-10-31 with the runner-signal arm, not
+  `EXCLUDED`. The "Owner decision needed" question above is historical.)
 - B5's PDF lane (Wave 1, `w1-kb-pdf`) closed five rows with red-before and a
   probe reverted in person: `F-517` (`800dc47`), `F-518` (`5ee59bc`), `F-441`
   (`ef408d6`), `F-440` (`317a056`), `F-439` (`f2bfc01`). The Knowledgebase lane
@@ -8604,6 +8614,11 @@ Final Quality Gate: NOT RUN — the task is not closed.
   case count, and the same commit re-declares `ci-skip-expectations.json`
   (`postgres` below its own count, `docker` as `must-run`). No CI-runner tallies
   are required; `F-492` stays `PARTIAL`.
+  (Reconciled 2026-10-31: superseded by the owner's 2026-10-29 re-scope —
+  `F-492`'s failed/errored half closed with `7e13dcb`; the childless
+  zero-assertion arm moved to `F-587`, which the owner ruled RED on 2026-10-31
+  with the runner-signal arm. No runner tallies were required for `F-492`
+  itself; `F-587` now adds that signal work.)
 - **Commit granularity stays hybrid** (2026-10-26 decision): one row per commit
   for single-row files; a shared file is one commit naming every row it carries.
 - **Baseline commit (owner: "A").** The 111-path pre-R5 working tree was
@@ -8642,6 +8657,10 @@ By type: F1 5, F2 21, F3 24, F4 28, F5 25, F6 13, F7 22. By severity: 35 High,
 
 - **W0 — evidence floor:** `F-481`; `F-492` carries its measurement and stays
   PARTIAL. One batch with `fix-tests`.
+  (Reconciled 2026-10-31: `F-492`'s failed/errored half closed with `7e13dcb`
+  after the owner's 2026-10-29 re-scope; the childless zero-assertion arm is
+  now the row `F-587` — owner RED, runner-signal arm, 2026-10-31 — and
+  dispatches to `fix-tests` in loop 3.)
 - **W1 — B10 loop-1 roots:** 19 batches in the order fixed by `ACTIVE.md` §3.2.
   `F-INFRA-002` is the first dispatch.
 - **W2 — B1 + B5 + B6 + B8:** 67 rows, 17 batches.

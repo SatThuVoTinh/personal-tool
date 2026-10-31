@@ -1,17 +1,31 @@
 # Cleanup Candidates — Phase 9
 
-Refreshed 2026-10-31 (loop 2, after the BLK-14 history repair). Nothing on this list is
-deleted until the owner approves each path, one command per path (workflow rule).
+Refreshed 2026-10-31 (loop 2, after the BLK-14 history repair); **executed
+2026-10-31 with owner approval** — every approved path below was deleted with
+one `Remove-Item` command per path so the permission prompt showed the exact
+target. No `git add -A` was used at any step (BLK-14 lesson).
 
-| Path | Why it exists | Why safe to delete | Risk |
+## Executed 2026-10-31 (owner-approved)
+
+| Path | Why it existed | Verified safe | Result |
 | --- | --- | --- | --- |
-| `.qoder/` (untracked, gitignored since BLK-14) | IDE temp-worktree cache; the 8,499 tracked copies were removed from the index in the BLK-14 repair (option B) and the folder was gitignored | No tracked file references it (verified tracked count = 0); contains only stale worktree snapshots (agent-general-purpose-*) | Low — deleting the folder does not touch the repository or current history; do NOT combine with any `git add -A` (BLK-14 lesson) |
-| `temp/` scratch trees (26 dirs: `agent-plugin`, `b4-backup`, `b4-mut`.., `b5-mut`, `d-commit`, `f280-bak`, `f281-bak`, `f525probe`, `headcopy`, `int-f435`, `knowledge-t5`, `knowledge-test`, `l6-head`, `probe-f013`…) | Fixer/lead measurement and mutation probes from R4–R5 waves (temp copies of HEAD, mutation rigs, npm-audit JSON) | All untracked scratch; every still-referenced measurement result is recorded verbatim in findings.md rows (e.g. `temp/f568-audit.json` numbers) and in the p1–p7 reports | Low/Medium — deleting removes the raw probe files; keep `temp/f568-audit.json` if the owner wants to re-measure it before any dependency decision (F-585), else delete |
-| `docs/execution/reports/.findings-index.json` | Scratch index written by this plan's measurement (fix-plan §8 first candidate) | Scratch only; findings.md and reports/ carry the evidence | Low |
-| `scratch/legacy-empty-trees/` (incl. `models-probe/`) | Legacy scratch trees from earlier alleys | Untracked scratch referenced by no report or source | Low |
+| `.qoder/` | IDE temp-worktree cache (agent-general-purpose snapshots); the 8,499 tracked copies were already removed from the index in the BLK-14 repair and the folder was gitignored | `git worktree list` = main worktree only; `.git/worktrees` absent; tracked `.qoder` count = 0 | Deleted; still listed in `.gitignore`; git status shows no `.qoder` noise |
+| 28 `temp/` scratch directories (`agent-plugin`, `b4-backup`, `b4-mut`, `b4-mut2`, `b4-mut3`, `b5-mut`, `d-commit`, `f280-bak`, `f281-bak`, `f525probe`, `headcopy`, `int-f435`, `knowledge-t5`, `knowledge-test`, `l6-head`, `l7-head`, `l8-head`, `m4-r8-diagnostic-repo`, `prefix`, `probe-f013`, `probe-f058`, `probe-f115`, `probe-f151`, `probe-f169`, `probe-f176`, `recovered`, `snap`, `w2-snapshot-untracked`) | Fixer/lead measurement and mutation-probe rigs from R4–R5 waves | Untracked scratch; every still-referenced measurement is recorded verbatim in findings.md rows and the p1–p7 reports | All 28 deleted; 0 temp directories remain. **All `temp/` files were kept** — only directories were on the approved list |
+| `docs/execution/reports/.findings-index.json` | Scratch index written by the fix-plan §8 measurement | Scratch only; findings.md and `reports/` carry the evidence | Deleted; the tracked deletion (" D") is committed as part of the 2026-10-31 docs commit |
+| `scratch/legacy-empty-trees/` (incl. `models-probe/`) | Legacy scratch trees from earlier alleys | Untracked, referenced by no report or source | Deleted |
 
-Removed from the previous list (not candidates any more): the entire
-`docs/execution/reports/p6/` and `p7/` directories — they are git-tracked audit
-evidence updated in place at HEAD `93438dd` (20 scanner + 12 cross-checker
-recheck reports), referenced by findings.md rows and the Phase 8 records;
-deleting them would destroy audit history, not clean up leftovers.
+## Deliberately kept
+
+- `temp/f568-audit.json` — the F-585 re-measurement evidence (kept per the
+  plan's own rule; needed before any npm-audit/upstream-dependency decision).
+- ALL other `temp/` files (R4-era probe logs, `.bak` copies, `add-*.mjs` /
+  `apply-*.mjs` scripts, `admission-provenance.*`, `affected-*.txt`, the
+  ~5.3 MB `uv` payload, findings/PLAN snapshots, `empty-lane.xml`, etc.) — the
+  owner's approval covered the directories only. Hundreds of files remain; if
+  the owner wants them gone too, the lead will first publish a separate
+  per-path listing for approval (not deleted silently).
+- `scratch/test-excel-unzipped/` — not on the approved list, kept.
+- `docs/execution/reports/p6/` and `p7/` — git-tracked audit evidence
+  (20 scanner + 12 cross-checker recheck reports at HEAD `93438dd`),
+  referenced by findings.md rows; deleting them would destroy audit history,
+  not clean up leftovers.
