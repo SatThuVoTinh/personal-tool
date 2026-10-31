@@ -44,9 +44,7 @@ function Invoke-PlatformCompose {
   )
   if ($usesKnowledge) {
     $composeArguments += @("-f", $knowledgeComposeFile)
-    if (Test-Path -LiteralPath $knowledgeHardeningComposeFile -PathType Leaf) {
-      $composeArguments += @("-f", $knowledgeHardeningComposeFile)
-    }
+    $composeArguments += @("-f", $knowledgeHardeningComposeFile)
   }
   foreach ($composeProfile in $Profiles) {
     $composeArguments += @("--profile", $composeProfile)

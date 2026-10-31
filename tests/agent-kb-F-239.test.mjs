@@ -120,3 +120,58 @@ test("F-239: the only writable bind is the backup barrier, never the Vault", () 
     "the Vault must never be a writable bind",
   );
 });
+
+// F-INFRA-003 - the NORMAL start path must assemble the same hardening the
+// acceptance overlay proves. The shipped hardening overlay is referenced
+// unconditionally: a `Test-Path` guard around it would let a missing overlay
+// silently downgrade the normal deployment to the unhardened composition,
+// which is the exact degradation this row measured.
+test("F-INFRA-003: the normal start assembles the hardening overlay unconditionally", () => {
+  const start = read("infrastructure", "docker", "scripts", "start.ps1");
+
+  assert.match(
+    start,
+    /compose[\\/]compose\.knowledge\.hardening\.yml/u,
+    "start.ps1 must reference the shipped hardening overlay",
+  );
+  assert.ok(
+    start.includes(
+      '$composeArguments += @("-f", $knowledgeHardeningComposeFile)',
+    ),
+    "start.ps1 must append the hardening overlay to the composed file list",
+  );
+  assert.ok(
+    !start.includes(
+      "if (Test-Path -LiteralPath $knowledgeHardeningComposeFile",
+    ),
+    "a Test-Path guard lets a missing overlay silently skip every control",
+  );
+});
+
+test("F-INFRA-003: the shipped hardening overlay keeps the five live controls", () => {
+  const hardening = compose(
+    "infrastructure",
+    "docker",
+    "compose",
+    "compose.knowledge.hardening.yml",
+  );
+  const knowledge = hardening.services.knowledge;
+
+  assert.equal(
+    knowledge.read_only,
+    true,
+    "the normal deployment keeps the root filesystem read-only",
+  );
+  assert.deepEqual(
+    knowledge.cap_drop,
+    ["ALL"],
+    "the normal deployment drops every capability",
+  );
+  assert.deepEqual(knowledge.security_opt, ["no-new-privileges:true"]);
+  assert.equal(knowledge.pids_limit, 256);
+  assert.deepEqual(
+    knowledge.tmpfs,
+    ["/tmp:rw,nosuid,nodev,noexec,size=768m,mode=1777"],
+    "the /tmp tmpfs must stay the declared hardened shape",
+  );
+});
