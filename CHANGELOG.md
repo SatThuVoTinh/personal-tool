@@ -8,6 +8,13 @@ All notable, validated changes to Personal Tool are documented here.
 
 ### Added
 
+- M12/T9-R5 Phase 5 loop 2 remediation (2026-10-30): completed W0/W1 remediation lanes with red/green test evidence, mutation probes, parse checks, and zero repository policy errors.
+  - F-INFRA-004: updated T5 acceptance drivers (knowledge-t5.ps1:178,244, knowledge-t5-live.ps1:450) to match shipped 4-migration set; m3-t5-contract (8/8 pass).
+  - F-OC-007: specialist message hook provenance requires current non-superseded attempt; m12-t1-result-preview-and-ownership (14/14 pass).
+  - F-586: first-spawn SURFACED write failure halts before posting buttons; m12-t9-r4-f529-approval-surface-record (4/4 pass).
+  - F-OC-008: writeTransaction in openclaw-gemini-stream-hotfix.mjs records destination in changed before write, so rollback restores all artifacts; m7-t1-openclaw (22/22 pass).
+  - F-588: rewritten m12-t9-unregistered-button-components-fail-closed.test.mjs to post-fix fail-closed contract (2/2 pass).
+  - F-INFRA-001 / F-OC-002: registered tests in package.json npm test enumeration; secret ceiling re-measured to 370.
 - Deployed the STACK remediation (M12/T2-R3) to the live WSL gateway as **deployment B**
   (2026-10-14, owner grant E), after clearing the orphaned ledger lock with the new C1 tool.
   Sequence, all operator-side: recovery `REPORT` (`holder_alive:false`, `owner_pid:60201`,
