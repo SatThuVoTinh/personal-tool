@@ -12,13 +12,13 @@ Phase 1 produced 18 candidate mechanisms; Phase 2 cross-checks added 5 more (F-O
 | Objective      | Full repository read-only audit, Phases 1–4 |
 | Coordinator    | Main agent |
 | Started at     | 2026-10-26 20:54 +07:00 |
-| Last updated   | 2026-10-27 11:54 +07:00 |
+| Last updated   | 2026-10-31 (repo-history repair recorded in §8 BLK-14) |
 | Workflow phase | 6 — scanner recheck |
 | Loop number    | 2 |
 | Counts         | Register 172 rows: 32 REFUTED, 2 BLOCKED, 33 LATENT, 103 OPEN, 2 PARTIAL; 140 actionable (138 fixable + 2 BLOCKED); 18 loop-1 fixes committed; **0 rows closed** |
-| Overall status | ACTIVE — Phase 6 scanner recheck; W0/W1 fixes verified at HEAD; Phases 6–8 planned after integration |
+| Overall status | ACTIVE — Phase 6 scanner recheck; W0/W1 loop-2 fixes verified at HEAD; loop-2 integration history repaired 2026-10-31 with owner approval (BLK-14); Phases 6–8 rechecks pending |
 
-**Dispatch baseline:** HEAD `85eb094aaedaf518e0184767f25812a8a3c3b10a`, branch `codex/m11-t1-audit-remediation`. `git status --short` already showed extensive modified, staged and untracked work, including edits under source modules and tests, plus `.qoder/`; these are pre-existing and are not attributable to the audit. Agents may edit only their assigned `docs/execution/reports/p1/*.md` report. No source writes are authorized.
+**Dispatch baseline:** HEAD `85eb094aaedaf518e0184767f25812a8a3c3b10a`, branch `codex/m11-t1-audit-remediation`. `git status --short` already showed extensive modified, staged and untracked work, including edits under source modules and tests, plus `.qoder/`; these are pre-existing and are not attributable to the audit. Agents may edit only their assigned `docs/execution/reports/p1/*.md` report. No source writes are authorized. **Updated 2026-10-31:** the branch head after the loop-2 integration and its history repair is `b331592` (fix `a9ddced` + docs `b331592` on top of `ffee13c`); `.qoder/` is untracked and now ignored — details in §8 BLK-14.
 
 This file records the current coordinated run only. It is not permanent project memory, an execution authorization, or a replacement for `PLAN.md`, `docs/contracts/execution/ACTIVE.md`, or `docs/execution/findings.md`.
 
@@ -199,6 +199,7 @@ For each significant blocker, record its ID, description and evidence, affected 
 | BLK-11 | The lead's file tools cannot write `package.json` | `edit` of `package.json` was rejected | P5-15 (test registration) | **closed 2026-10-30**: lead registered the three test files in `package.json` using PowerShell per owner order "D" | main agent | closed |
 | BLK-12 | The lead cannot write source files, so the remaining one-line source fixes cannot land while BLK-10 holds | `edit` tool permission gate | Source fixes | **closed 2026-10-30**: lead applied source edits in person using PowerShell per owner order "D" | main agent | closed |
 | BLK-13 | The secret-scan allowlist now suppresses 364 tracked paths, above the recorded ceiling of 360 | `node scripts/repository-check.mjs` ceiling check | Phase 6 repository gate | **closed 2026-10-30**: secret scan ceiling re-measured from 360 to 370 in `scripts/repository-policy.mjs` per owner order "D" | main agent | closed |
+| BLK-14 | The loop-2 `git add -A` fix commit `5dc8191` accidentally tracked 8,499 `.qoder/` temp-worktree snapshot files (~1.05M added lines), and repeated CHANGELOG rewrite attempts left 5 duplicate entries in `d72233e`; both commits were local-only (branch ahead of remote) | Before repair: `git ls-files .qoder` = 8499, working tree showed 2,530 `.qoder` deletions, CHANGELOG entry count = 5, loose git objects 95.56 MiB | Branch history, `CHANGELOG.md`, Phase 6–8 lanes | **closed 2026-10-31** (owner approved repair option B): reset to `ffee13c`, removed all `.qoder` paths from the index, restored `CHANGELOG.md` from `ffee13c` and re-inserted the loop-2 entry exactly once, added `.qoder/` to `.gitignore`, re-committed as `a9ddced` (fix: 36 files, +1010/−473) and `b331592` (docs: 7 insertions); `git gc --prune=now` + worktree-prune reclaimed ~96 MB (pack now 6.64 MiB). Final verified state: tracked `.qoder` = 0, dirty paths = 0, CHANGELOG entry count = 1, `repository-check.mjs` PASS exit 0. Lesson: never `git add -A` without confirming temp-worktree dirs are ignored | main agent | closed |
 
 ## 9. Next actions
 
