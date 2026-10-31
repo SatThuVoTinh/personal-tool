@@ -89,11 +89,26 @@ function craftReport(cases) {
 }
 
 /** The gate's verdict on a crafted report. */
-function verdict(cases, { ci = true } = {}) {
+function verdict(cases, { ci = true, signal = true } = {}) {
   const root = mkdtempSync(path.join(tmpdir(), "zink-f197-"));
   try {
     const report = path.join(root, "report.xml");
     writeFileSync(report, craftReport(cases), "utf8");
+    if (signal) {
+      const signalCases = cases
+        .filter((entry) => !entry.skipped && !entry.failed)
+        .map((entry) => ({
+          file: path.join(REPO, entry.lane),
+          name: entry.name,
+          assertions: entry.assertions ?? (entry.zeroAssertions ? 0 : 1),
+        }));
+      const signalPath = path.join(root, "report.xml.assertions.json");
+      writeFileSync(
+        signalPath,
+        JSON.stringify({ version: 1, cases: signalCases }, null, 2),
+        "utf8",
+      );
+    }
     const environment = { ...process.env };
     if (ci) environment.CI = "true";
     else delete environment.CI;
@@ -208,6 +223,24 @@ test("F-481: the gate refuses a may-skip ceiling that covers its report denomina
     writeFileSync(
       reportPath,
       `<?xml version="1.0" encoding="utf-8"?>\n<testsuites>\n${fixtureCases}\n</testsuites>\n`,
+      "utf8",
+    );
+    writeFileSync(
+      path.join(root, "report.xml.assertions.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          cases: [
+            {
+              file: path.join(root, lane),
+              name: "a postgres case 4",
+              assertions: 1,
+            },
+          ],
+        },
+        null,
+        2,
+      ),
       "utf8",
     );
 
@@ -563,4 +596,46 @@ test("a case that skipped", { skip: "crafted" }, () => {});
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("F-587: the gate refuses a lane containing a childless zero-assertion testcase", () => {
+  // A childless <testcase> with no executed assertions in the runner signal
+  // must be refused: a zero-assertion case is not a pass.
+  const cases = matchingCases();
+  const target = cases.find(
+    (entry) => entry.lane === lanesOf(mustRunFamily)[0],
+  );
+  assert.ok(target, "the must-run family must own a lane");
+  target.zeroAssertions = true;
+
+  const result = verdict(cases);
+  assert.notEqual(
+    result.code,
+    0,
+    `a childless zero-assertion case must refuse the gate: ${result.stdout}${result.stderr}`,
+  );
+  assert.match(
+    result.stderr,
+    /childless zero-assertion/u,
+    `the refusal must name the childless zero-assertion case: ${result.stderr}`,
+  );
+});
+
+test("F-587: the gate passes when the childless case is replaced by an assertion-bearing one", () => {
+  // When the childless zero-assertion case is replaced by an assertion-bearing
+  // case (assertions > 0 in the runner signal), the gate must pass.
+  const cases = matchingCases();
+  const target = cases.find(
+    (entry) => entry.lane === lanesOf(mustRunFamily)[0],
+  );
+  assert.ok(target, "the must-run family must own a lane");
+  target.assertions = 1;
+
+  const result = verdict(cases);
+  assert.equal(
+    result.code,
+    0,
+    `a run with assertion-bearing cases must pass: ${result.stdout}${result.stderr}`,
+  );
+  assert.match(result.stdout, /SKIP EXPECTATION GATE: PASS/u);
 });

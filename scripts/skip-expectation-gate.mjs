@@ -26,11 +26,15 @@
 // apart — passed, skipped, and failed/errored. A `<failure>` or `<error>`
 // child used to fall through to the pass counter, so a failed case satisfied
 // the must-run tripwire and inflated the ceiling denominator. Failures are
-// now their own count and are refused on every host. The fourth shape the
-// register also names — a childless `<testcase>` that returns before any
-// assertion — is NOT distinguishable in this report: Node's junit reporter
-// emits no assertion count and no child for it, so it is byte-identical to a
-// genuine pass. That limitation is recorded rather than guessed at.
+// now their own count and are refused on every host.
+//
+// F-587 (owner RED decision, runner-signal arm): a childless `<testcase>` that
+// returns before executing any assertion is byte-identical to a genuine pass in
+// raw JUnit XML. A runner signal (e.g. `<report>.assertions.json`) carries
+// per-case executed assertion counts alongside the JUnit report. The gate
+// checks the runner signal for any childless `<testcase>` (neither <skipped/>
+// nor <failure/>/<error/>); if the case has no executed assertions in the
+// signal (or 0 assertions), the gate refuses the lane on every host.
 //
 // Usage: node scripts/skip-expectation-gate.mjs <junit-report> [--json]
 //
@@ -130,16 +134,90 @@ function attributesOf(text, from) {
 }
 
 /**
- * The report's cases: the lane file and whether the case was skipped or
- * failed/errored.
+ * Load the runner signal artifact (per-case assertion counts) associated with the report.
+ * Checks candidate paths alongside the report (or CLI argument --signal / --assertions).
+ */
+function loadAssertionSignal(reportPath, argv = process.argv) {
+  let signalPath = null;
+  for (let index = 0; index < argv.length; index += 1) {
+    if (argv[index] === "--signal" || argv[index] === "--assertions") {
+      signalPath = argv[index + 1];
+      break;
+    }
+    if (argv[index].startsWith("--signal=")) {
+      signalPath = argv[index].slice("--signal=".length);
+      break;
+    }
+    if (argv[index].startsWith("--assertions=")) {
+      signalPath = argv[index].slice("--assertions=".length);
+      break;
+    }
+  }
+
+  if (!signalPath) {
+    const candidates = [
+      `${reportPath}.assertions.json`,
+      path.join(
+        path.dirname(reportPath),
+        `${path.basename(reportPath, path.extname(reportPath))}.assertions.json`,
+      ),
+      path.join(REPOSITORY_ROOT, ".skip-expectation-assertions.json"),
+      path.join(REPOSITORY_ROOT, ".skip-expectation.assertions.json"),
+    ];
+    for (const candidate of candidates) {
+      try {
+        readFileSync(candidate, "utf8");
+        signalPath = candidate;
+        break;
+      } catch {
+        // try next candidate
+      }
+    }
+  }
+
+  if (!signalPath) return null;
+
+  try {
+    const content = JSON.parse(readFileSync(signalPath, "utf8"));
+    const map = new Map();
+    const cases = Array.isArray(content)
+      ? content
+      : Array.isArray(content?.cases)
+        ? content.cases
+        : null;
+
+    if (cases) {
+      for (const item of cases) {
+        const lane = laneOf(item.file);
+        const name = item.name ?? "";
+        const count =
+          typeof item.assertions === "number"
+            ? item.assertions
+            : (item.count ?? 0);
+        map.set(`${lane}::${name}`, count);
+      }
+    } else if (content?.assertions && typeof content.assertions === "object") {
+      for (const [key, count] of Object.entries(content.assertions)) {
+        map.set(key, typeof count === "number" ? count : 0);
+      }
+    }
+    return map;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The report's cases: the lane file, name, whether the case was skipped or
+ * failed/errored, and executed assertion count from the runner signal.
  *
  * The JUnit report is XML, and this gate reads it without an XML dependency:
  * a `<testcase>` element carries the lane in its `file` attribute, a skipped
  * case carries a `<skipped/>` child, and a failed or errored case carries a
- * `<failure>`/`<error>` child. A case that carries neither is treated as a
- * pass; the childless zero-assertion shape is indistinguishable here (F-492).
+ * `<failure>`/`<error>` child. For a case carrying neither child, the gate
+ * looks up executed assertions in the runner signal (F-587).
  */
-function reportCases(xml) {
+function reportCases(xml, signalMap = null) {
   const cases = [];
   const element = /<testcase\b/gu;
   for (const match of xml.matchAll(element)) {
@@ -153,7 +231,15 @@ function reportCases(xml) {
       failed = /<(?:failure|error)\b/u.test(body);
       skipped = /<skipped\b/u.test(body);
     }
-    cases.push({ file: attributes.file ?? "", skipped, failed });
+    const file = attributes.file ?? "";
+    const name = attributes.name ?? "";
+    const lane = laneOf(file);
+    let assertions = 1;
+    if (signalMap) {
+      assertions =
+        signalMap.get(`${lane}::${name}`) ?? signalMap.get(name) ?? 0;
+    }
+    cases.push({ file, name, skipped, failed, assertions });
   }
   return cases;
 }
@@ -186,13 +272,15 @@ function main() {
     return;
   }
 
-  const cases = reportCases(xml);
+  const signalMap = loadAssertionSignal(reportPath, process.argv);
+  const cases = reportCases(xml, signalMap);
   const perLane = new Map();
   for (const lane of lanes) {
     perLane.set(lane, {
       passes: 0,
       skips: 0,
       failures: 0,
+      zeroAssertions: 0,
       family: familyOfLane(lane),
     });
   }
@@ -203,11 +291,13 @@ function main() {
       passes: 0,
       skips: 0,
       failures: 0,
+      zeroAssertions: 0,
       family: null,
     };
     if (testCase.failed) entry.failures += 1;
     else if (testCase.skipped) entry.skips += 1;
-    else entry.passes += 1;
+    else if (testCase.assertions > 0) entry.passes += 1;
+    else entry.zeroAssertions += 1;
     perLane.set(lane, entry);
   }
 
@@ -238,6 +328,19 @@ skip family: the skip is unexplained`,
     );
   }
 
+  // A childless zero-assertion case is never a pass: a test case that executed
+  // zero assertions is indistinguishable from a pass in raw JUnit XML, so the
+  // runner signal carries executed assertion counts. A case with neither
+  // <skipped/> nor <failure/>/<error/> children and no executed assertions in the
+  // signal is refused on every host (F-587).
+  for (const [lane, entry] of perLane) {
+    if (entry.zeroAssertions === 0) continue;
+    failures.push(
+      `the lane \`${lane}\` contributed ${entry.zeroAssertions} childless zero-assertion case(s): ` +
+        "a case with no executed assertions is not a pass",
+    );
+  }
+
   // A lane that declares a family the TABLE does not know is just as
   // unexplained: its skips would be counted against no family, and the gate
   // would print PASS — the very "a whole tier went inert and CI stayed
@@ -264,7 +367,12 @@ expectation table does not: its skips are counted against nothing`,
   // a partial report must be refused, and the table's `may-skip` families are
   // the only declared NOT RUN path.
   for (const [lane, entry] of perLane) {
-    if (entry.passes === 0 && entry.skips === 0 && entry.failures === 0) {
+    if (
+      entry.passes === 0 &&
+      entry.skips === 0 &&
+      entry.failures === 0 &&
+      entry.zeroAssertions === 0
+    ) {
       failures.push(
         `the lane \`${lane}\` contributed no case at all: it did not run, so \
 its skips are counted against nothing`,
