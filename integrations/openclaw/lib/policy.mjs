@@ -2392,7 +2392,7 @@ export const ZINK_CAPABILITY_REGISTRY = Object.freeze({
   zink_excel: Object.freeze({
     id: "zink_excel",
     status: "callable_interface",
-    executionMode: "contract_interface",
+    executionMode: "governed_adapter",
     stacks: Object.freeze(["data_plant", "semantic", "decision"]),
     schemaFile: "zink-excel.schema.json",
     contractPath: "zink-tools/excel/contract.md",

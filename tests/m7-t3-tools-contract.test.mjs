@@ -1620,3 +1620,55 @@ describe("F-450/F-455 (R9-L07b-1 / R9-T07-1) - one canonical SQL parameter shape
     );
   });
 });
+
+it("F-OC-011: published descriptions of zink_excel's executable mode match across contract.md, README.md, policy registry, and runtime dispatch", () => {
+  const contract = readFileSync(
+    path.join("zink-tools", "excel", "contract.md"),
+    "utf8",
+  );
+  const readme = readFileSync(path.join("zink-tools", "README.md"), "utf8");
+  const plugin = readFileSync(
+    path.join(
+      "integrations",
+      "openclaw",
+      "plugins",
+      "zink-governance",
+      "index.mjs",
+    ),
+    "utf8",
+  );
+
+  // 1. contract.md must not state invocation unconditionally returns ENGINE_NOT_IMPLEMENTED
+  assert.ok(
+    !contract.includes(
+      "Under Model A (Contract Tool Interface), invocation returns deterministic `ENGINE_NOT_IMPLEMENTED`",
+    ),
+    "contract.md must not state invocation unconditionally returns ENGINE_NOT_IMPLEMENTED",
+  );
+  assert.match(
+    contract,
+    /hosted (?:workbook |excel )?engine/i,
+    "contract.md must describe the hosted workbook engine as executable mode",
+  );
+
+  // 2. README.md must state the hosted engine is real
+  assert.match(
+    readme,
+    /excel-writer\.mjs/,
+    "README.md must point to the hosted excel-writer engine",
+  );
+
+  // 3. Policy registry must set executionMode to governed_adapter
+  assert.equal(
+    ZINK_CAPABILITY_REGISTRY.zink_excel.executionMode,
+    "governed_adapter",
+    "policy registry executionMode for zink_excel must be governed_adapter",
+  );
+
+  // 4. Governance plugin must resolve the writer and execute
+  assert.match(
+    plugin,
+    /executeExcelOperation/,
+    "governance plugin must dispatch zink_excel to executeExcelOperation",
+  );
+});
