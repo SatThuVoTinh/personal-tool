@@ -960,6 +960,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "chunk_id": record.id,
             "index_id": record.index_id,
             "indexed_by_run_id": record.indexed_by_run_id,
+            # F-KB-004: `id` is a surrogate that superseded-index cleanup deletes, so
+            # (index, source revision, ordinal) is the re-derivable identity; the loader
+            # already carries both, the serialiser was withholding them.
+            "index_status": record.index_status,
+            "chunk_ordinal": record.chunk_ordinal,
             "source_id": record.source_id,
             "source_sha256": record.source_sha256,
             "source_path": record.source_path,
@@ -1000,6 +1005,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "chunk_id": record.id,
             "index_id": record.index_id,
             "indexed_by_run_id": record.indexed_by_run_id,
+            # F-KB-004: `id` is a surrogate that superseded-index cleanup deletes, so
+            # (index, source revision, ordinal) is the re-derivable identity; the loader
+            # already carries both, the serialiser was withholding them.
+            "index_status": record.index_status,
+            "chunk_ordinal": record.chunk_ordinal,
             "source_id": record.source_id,
             "source_sha256": record.source_sha256,
             "source_path": record.source_path,
@@ -1041,6 +1051,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "chunk_id": record.id,
             "index_id": record.index_id,
             "indexed_by_run_id": record.indexed_by_run_id,
+            # F-KB-004: `id` is a surrogate that superseded-index cleanup deletes, so
+            # (index, source revision, ordinal) is the re-derivable identity; the loader
+            # already carries both, the serialiser was withholding them.
+            "index_status": record.index_status,
+            "chunk_ordinal": record.chunk_ordinal,
             "source_id": record.source_id,
             "source_sha256": record.source_sha256,
             "source_path": record.source_path,

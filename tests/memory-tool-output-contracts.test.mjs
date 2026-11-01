@@ -173,6 +173,117 @@ describe("F-125 (R1-A10-03) — the memory-tool envelopes pass their own contrac
       await service.close();
     }
   });
+  test("F-KB-004: index identity, status and ordinal survive into metadata and pass schema", async () => {
+    const service = await knowledgeService({
+      results: [
+        {
+          segment_id: "seg-100",
+          title: "Architecture",
+          text: "chunk body",
+          score: 0.88,
+          source_path: "01. Knowledge/arch.md",
+          source_type: "MARKDOWN",
+          citation: "01. Knowledge/arch.md",
+          index_id: "idx-999",
+          indexed_by_run_id: "run-888",
+          index_status: "SUPERSEDED",
+          chunk_ordinal: 7,
+        },
+      ],
+    });
+    try {
+      const adapter = new KnowledgeAdapter(service.endpoint, {
+        apiKey: "test-key",
+      });
+      const success = await adapter.queryKnowledge({
+        action: "search",
+        namespace: "core",
+        query: "governance",
+      });
+
+      assert.equal(success.results[0].metadata.index_id, "idx-999");
+      assert.equal(success.results[0].metadata.indexed_by_run_id, "run-888");
+      assert.equal(success.results[0].metadata.index_status, "SUPERSEDED");
+      assert.equal(success.results[0].metadata.chunk_ordinal, 7);
+      assertMatchesDeclaredOutput("zink-knowledge", success);
+    } finally {
+      await service.close();
+    }
+  });
+
+  test("F-KB-004: ACTIVE status and chunk_ordinal 0 are preserved", async () => {
+    const service = await knowledgeService({
+      results: [
+        {
+          segment_id: "seg-101",
+          title: "Index Header",
+          text: "first chunk body",
+          score: 0.95,
+          source_path: "01. Knowledge/intro.md",
+          source_type: "MARKDOWN",
+          citation: "01. Knowledge/intro.md",
+          index_id: "idx-001",
+          indexed_by_run_id: "run-001",
+          index_status: "ACTIVE",
+          chunk_ordinal: 0,
+        },
+      ],
+    });
+    try {
+      const adapter = new KnowledgeAdapter(service.endpoint, {
+        apiKey: "test-key",
+      });
+      const success = await adapter.queryKnowledge({
+        action: "search",
+        namespace: "core",
+        query: "governance",
+      });
+
+      assert.equal(success.results[0].metadata.index_status, "ACTIVE");
+      assert.equal(success.results[0].metadata.chunk_ordinal, 0);
+      assertMatchesDeclaredOutput("zink-knowledge", success);
+    } finally {
+      await service.close();
+    }
+  });
+
+  test("F-KB-004: malformed index identity, status and ordinal fall back to null", async () => {
+    const service = await knowledgeService({
+      results: [
+        {
+          segment_id: "seg-102",
+          title: "Malformed",
+          text: "bad data chunk",
+          score: 0.7,
+          source_path: "01. Knowledge/bad.md",
+          source_type: "MARKDOWN",
+          citation: "01. Knowledge/bad.md",
+          index_id: "",
+          indexed_by_run_id: 42,
+          index_status: "RETIRED",
+          chunk_ordinal: -3,
+        },
+      ],
+    });
+    try {
+      const adapter = new KnowledgeAdapter(service.endpoint, {
+        apiKey: "test-key",
+      });
+      const success = await adapter.queryKnowledge({
+        action: "search",
+        namespace: "core",
+        query: "governance",
+      });
+
+      assert.equal(success.results[0].metadata.index_id, null);
+      assert.equal(success.results[0].metadata.indexed_by_run_id, null);
+      assert.equal(success.results[0].metadata.index_status, null);
+      assert.equal(success.results[0].metadata.chunk_ordinal, null);
+      assertMatchesDeclaredOutput("zink-knowledge", success);
+    } finally {
+      await service.close();
+    }
+  });
 
   test("F-125: an empty result set is NO_MATCH and still passes the contract", async () => {
     const service = await knowledgeService({ results: [] });

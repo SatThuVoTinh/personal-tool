@@ -586,9 +586,18 @@ export function generateSchemaManifest() {
  * only the pre-row bytes of that one file reproduced the previous value
  * (`fe12b29f…`) exactly. The file still packages into no deployed asset set, so
  * this roll owes no per-mode admission either.
+ *
+ * M12/T9-R5 F-KB-004: `zink-tools/contracts/tools/zink-knowledge.schema.json`
+ * gained `index_id`, `indexed_by_run_id`, `index_status` and `chunk_ordinal`
+ * in the closed metadata object (index liveness and stable chunk ordinal so a
+ * superseded citation can be recognised and re-derived). The contract bytes
+ * changed, so the pin follows. Attribution was measured, not assumed: restoring
+ * only the previous bytes of that one file reproduced the previous value
+ * (`014c8f89…`) exactly. The file still packages into no deployed asset set, so
+ * this roll owes no per-mode admission either.
  */
 export const PINNED_SCHEMA_MANIFEST_CHECKSUM =
-  "014c8f8948b6c411801a3a57364d2eddb5b8c14951d3a4ac432ae13972040a5d";
+  "7388252553ef316ed111922d9bf7f850ea3e54885f78fc7f6d056b5ae8935f37";
 
 export function verifySchemaManifestChecksums(manifest = null) {
   if (manifest === null) {

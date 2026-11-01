@@ -109,7 +109,14 @@
                   "line_start": { "type": ["number", "null"] },
                   "line_end": { "type": ["number", "null"] },
                   "page_start": { "type": ["number", "null"] },
-                  "page_end": { "type": ["number", "null"] }
+                  "page_end": { "type": ["number", "null"] },
+                  "index_id": { "type": ["string", "null"] },
+                  "indexed_by_run_id": { "type": ["string", "null"] },
+                  "index_status": {
+                    "type": ["string", "null"],
+                    "enum": ["BUILDING", "ACTIVE", "SUPERSEDED", "FAILED", null]
+                  },
+                  "chunk_ordinal": { "type": ["integer", "null"], "minimum": 0 }
                 },
                 "additionalProperties": false
               }

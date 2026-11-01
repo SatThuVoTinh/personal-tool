@@ -530,5 +530,82 @@ class ProcessingIdentityInputsTests(unittest.IsolatedAsyncioTestCase):
         )
 
 
+class SegmentIdentityFieldsTests(KnowledgeHttpSurface):
+    """F-KB-004: /v1/chunk, /v1/citation and /v1/metadata publish index_status and chunk_ordinal."""
+
+    async def test_chunk_citation_and_metadata_routes_publish_index_status_and_ordinal(
+        self,
+    ) -> None:
+        self.app.state.database.get_segment = AsyncMock(
+            return_value=SegmentRecord(
+                id="segment-1",
+                index_id="index-1",
+                source_id="source-1",
+                source_sha256="a" * 64,
+                source_path="01. Knowledge/AI/note.md",
+                source_type="MARKDOWN",
+                source_mime_type="text/markdown",
+                title="Note",
+                text="body",
+                heading_path=("Title",),
+                primary_topic="AI",
+                canonical_topics=("AI",),
+                tags=("ai",),
+                line_start=1,
+                line_end=2,
+                page_start=None,
+                page_end=None,
+                bbox=None,
+                indexed_by_run_id="run-1",
+                index_status="SUPERSEDED",
+                chunk_ordinal=7,
+            )
+        )
+
+        for path in ("/v1/chunk/segment-1", "/v1/citation/segment-1", "/v1/metadata/segment-1"):
+            with self.subTest(path=path):
+                response = await self.request("GET", path)
+                self.assertEqual(response.status_code, 200)
+                row = response.json()["results"][0]
+                self.assertEqual(row["index_status"], "SUPERSEDED")
+                self.assertEqual(row["chunk_ordinal"], 7)
+
+    async def test_zero_ordinal_and_active_status_are_retained_on_item(self) -> None:
+        """0 must not be dropped as falsy."""
+        self.app.state.database.get_segment = AsyncMock(
+            return_value=SegmentRecord(
+                id="segment-2",
+                index_id="index-2",
+                source_id="source-2",
+                source_sha256="b" * 64,
+                source_path="01. Knowledge/AI/note2.md",
+                source_type="MARKDOWN",
+                source_mime_type="text/markdown",
+                title="Note 2",
+                text="body 2",
+                heading_path=("Title",),
+                primary_topic="AI",
+                canonical_topics=("AI",),
+                tags=("ai",),
+                line_start=1,
+                line_end=2,
+                page_start=None,
+                page_end=None,
+                bbox=None,
+                indexed_by_run_id="run-2",
+                index_status="ACTIVE",
+                chunk_ordinal=0,
+            )
+        )
+
+        for path in ("/v1/chunk/segment-2", "/v1/citation/segment-2", "/v1/metadata/segment-2"):
+            with self.subTest(path=path):
+                response = await self.request("GET", path)
+                self.assertEqual(response.status_code, 200)
+                row = response.json()["results"][0]
+                self.assertEqual(row["index_status"], "ACTIVE")
+                self.assertEqual(row["chunk_ordinal"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -20,6 +20,14 @@ const FORBIDDEN_ACTIONS = new Set([
   "governance mutation",
 ]);
 
+// F-KB-004: valid index lifecycle states published by the Knowledgebase
+const VALID_INDEX_STATUSES = new Set([
+  "BUILDING",
+  "ACTIVE",
+  "SUPERSEDED",
+  "FAILED",
+]);
+
 export const MAX_KNOWLEDGE_RESPONSE_BYTES = 50 * 1024 * 1024; // 50MB ceiling (M08)
 export const MAX_RESULT_TEXT_BYTES = 64 * 1024; // 64KB ceiling per result (M15)
 
@@ -818,6 +826,26 @@ export class KnowledgeAdapter {
                 page_start:
                   typeof r.page_start === "number" ? r.page_start : null,
                 page_end: typeof r.page_end === "number" ? r.page_end : null,
+                // F-KB-004: per-item index identity, index status and chunk
+                // ordinal published by the Knowledge service are forwarded with
+                // explicit safe fallbacks and no fabrication.
+                index_id:
+                  typeof r.index_id === "string" && r.index_id
+                    ? r.index_id
+                    : null,
+                indexed_by_run_id:
+                  typeof r.indexed_by_run_id === "string" && r.indexed_by_run_id
+                    ? r.indexed_by_run_id
+                    : null,
+                index_status:
+                  typeof r.index_status === "string" &&
+                  VALID_INDEX_STATUSES.has(r.index_status)
+                    ? r.index_status
+                    : null,
+                chunk_ordinal:
+                  Number.isInteger(r.chunk_ordinal) && r.chunk_ordinal >= 0
+                    ? r.chunk_ordinal
+                    : null,
               },
             };
           });
