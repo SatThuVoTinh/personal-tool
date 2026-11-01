@@ -95,6 +95,8 @@ function runBootstrapUnderStub() {
       PATH: `${binDirectory}${path.delimiter}${process.env.PATH ?? ""}`,
       RECORD_DIR: recordDirectory,
       N8N_POSTGRES_PASSWORD: SECRET,
+      KNOWLEDGE_DB_PASSWORD: "knowledge-secret-8f3a1c",
+      SKILL_DB_PASSWORD: "skill-secret-8f3a1c",
     },
     encoding: "utf8",
   });
@@ -150,7 +152,7 @@ test("F-264: the secret is delivered through a 0600 file the client reads back",
   );
   assert.match(
     source,
-    /trap '[^']*rm -f "\$secretFile"/,
+    /trap '[^']*rm -f "\$n8nSecretFile" "\$knowledgeSecretFile" "\$skillSecretFile"/,
     "the secret file must be removed when the script exits",
   );
 });

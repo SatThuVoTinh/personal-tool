@@ -99,7 +99,22 @@ test("M3/T1 declares an internal-only Knowledge service", () => {
   assert.notEqual(knowledge.environment.KNOWLEDGE_DATABASE_USER, "postgres");
   assert.equal(knowledge.environment.KNOWLEDGE_DATABASE_USER, "knowledge_app");
   assert.equal(knowledge.environment.KNOWLEDGE_DATABASE_DSN, undefined);
-  assert.equal(services.postgres.environment.SKILL_DB_PASSWORD, undefined);
+  // Owner decision 2026-11-01 (option C, F-INFRA-002): the postgres container
+  // now runs the first-boot role bootstrap, so it receives the same
+  // fail-closed module passwords as the one-shot helper. The superuser can
+  // already reset those roles, so the module boundary is unchanged.
+  assert.equal(
+    services.postgres.environment.KNOWLEDGE_DB_PASSWORD,
+    "${KNOWLEDGE_DB_PASSWORD:-unconfigured}",
+  );
+  assert.equal(
+    services.postgres.environment.N8N_POSTGRES_PASSWORD,
+    "${N8N_POSTGRES_PASSWORD:-unconfigured}",
+  );
+  assert.equal(
+    services.postgres.environment.SKILL_DB_PASSWORD,
+    "${SKILL_DB_PASSWORD:-unconfigured}",
+  );
   assert.equal(
     services["postgres-bootstrap"].environment.SKILL_DB_PASSWORD,
     "${SKILL_DB_PASSWORD:-unconfigured}",

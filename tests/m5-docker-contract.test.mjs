@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
@@ -105,9 +105,12 @@ test("M5/T1-R2 keeps Nginx scoped to Knowledge and Dozzle constrained", () => {
   assert.equal(dozzle.environment.DOZZLE_ENABLE_SHELL, "false");
   assert.equal(dozzle.environment.DOZZLE_ENABLE_MCP, "false");
   assert.equal(services.n8n.environment.OLLAMA_SMOKE_MODEL, undefined);
-  assert.deepEqual(services.postgres.volumes, [
-    "postgres-data:/var/lib/postgresql/data",
-  ]);
+  assert.ok(
+    services.postgres.volumes.includes(
+      "postgres-data:/var/lib/postgresql/data",
+    ),
+    "the data volume stays a named volume",
+  );
   assert.deepEqual(services.n8n.volumes, ["n8n-data:/home/node/.n8n"]);
   const vault = knowledgeOverlay().services.knowledge.volumes.find(
     (volume) => volume.target === "/vault",
@@ -220,6 +223,64 @@ test("F-522: no entrypoint script re-declares the sentinel grammar", () => {
       `${name} must not re-declare the credential name set the carrier already owns`,
     );
   }
+});
+
+test("F-INFRA-002: first boot provisions the module roles", () => {
+  const services = compose().services;
+  const environment = services.postgres.environment;
+  // Owner decision 2026-11-01 (option C): the image entrypoint runs the
+  // bootstrap from /docker-entrypoint-initdb.d, so the postgres container now
+  // carries the same fail-closed module passwords as the one-shot
+  // postgres-bootstrap helper. The superuser can already reset those roles,
+  // so this does not widen the effective boundary.
+  for (const name of [
+    "KNOWLEDGE_DB_PASSWORD",
+    "N8N_POSTGRES_PASSWORD",
+    "SKILL_DB_PASSWORD",
+  ]) {
+    assert.equal(
+      environment[name],
+      `\${${name}:-unconfigured}`,
+      `${name} must reach the first-boot bootstrap with a fail-closed default`,
+    );
+  }
+
+  const binds = services.postgres.volumes.filter(
+    (volume) => typeof volume === "object",
+  );
+  const helper = binds.find(
+    (volume) => volume.target === "/usr/local/bin/bootstrap-postgres.sh",
+  );
+  assert.ok(helper, "the init wrapper must reach the bootstrap script");
+  assert.equal(helper.source, "../scripts/bootstrap-postgres.sh");
+  assert.equal(helper.read_only, true);
+  const init = binds.find(
+    (volume) =>
+      volume.target === "/docker-entrypoint-initdb.d/10-bootstrap-postgres.sh",
+  );
+  assert.ok(
+    init,
+    "an empty volume must get its module roles from the image init phase",
+  );
+  assert.equal(init.source, "../scripts/bootstrap-postgres-init.sh");
+  assert.equal(init.read_only, true);
+
+  const wrapperPath = path.join(
+    "infrastructure",
+    "docker",
+    "scripts",
+    "bootstrap-postgres-init.sh",
+  );
+  assert.ok(existsSync(path.join(root, wrapperPath)), "the wrapper must exist");
+  const wrapper = readFileSync(path.join(root, wrapperPath), "utf8");
+  // The image sources a non-executable init file, so the wrapper must not exec
+  // into the bootstrap (that would replace the image entrypoint) and must not
+  // source it (its EXIT trap would replace the entrypoint cleanup). It runs
+  // the bootstrap as a child and aborts the first boot when it fails.
+  assert.match(wrapper, /\/bin\/sh \/usr\/local\/bin\/bootstrap-postgres\.sh/);
+  assert.doesNotMatch(wrapper, /^\s*exec\s/mu);
+  assert.doesNotMatch(wrapper, /^\s*\.\s+\/usr\/local/mu);
+  assert.match(wrapper, /exit "\$status"/);
 });
 
 //

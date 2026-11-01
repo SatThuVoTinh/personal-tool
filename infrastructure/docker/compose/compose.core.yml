@@ -14,8 +14,30 @@ services:
       POSTGRES_DB: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-unconfigured}
       POSTGRES_USER: postgres
+      # F-INFRA-002 (owner option C, 2026-11-01): the image init phase runs
+      # bootstrap-postgres-init.sh from /docker-entrypoint-initdb.d on the
+      # first boot of an empty volume, so it needs the same fail-closed module
+      # passwords the one-shot postgres-bootstrap helper already carries. The
+      # superuser can already reset these roles, so the effective module
+      # boundary is unchanged. start.ps1 validates them before its first `up`.
+      KNOWLEDGE_DB_PASSWORD: ${KNOWLEDGE_DB_PASSWORD:-unconfigured}
+      N8N_POSTGRES_PASSWORD: ${N8N_POSTGRES_PASSWORD:-unconfigured}
+      SKILL_DB_PASSWORD: ${SKILL_DB_PASSWORD:-unconfigured}
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      # F-INFRA-002 (owner option C, 2026-11-01): provision the module roles
+      # while the image initializes an empty data volume. The wrapper is what
+      # initdb.d runs; the bootstrap stays the single role authority and the
+      # postgres-bootstrap service still re-runs it on every start, so
+      # existing volumes converge without a re-init.
+      - type: bind
+        source: ../scripts/bootstrap-postgres-init.sh
+        target: /docker-entrypoint-initdb.d/10-bootstrap-postgres.sh
+        read_only: true
+      - type: bind
+        source: ../scripts/bootstrap-postgres.sh
+        target: /usr/local/bin/bootstrap-postgres.sh
+        read_only: true
     healthcheck:
       test: ["CMD-SHELL", "pg_isready --username=postgres --dbname=postgres"]
       interval: 5s
