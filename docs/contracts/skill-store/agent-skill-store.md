@@ -40,6 +40,29 @@ catalog. The lifecycle histories are `[CANDIDATE]`, `[CANDIDATE, ACTIVE]`,
 `[CANDIDATE, ACTIVE, DEPRECATED]`, and `[CANDIDATE, REJECTED]`; current state is
 the final event. At most one version per namespace/capability is ACTIVE.
 
+## Proposal provenance
+
+A skill proposal declares its provenance before it exists durably. `propose`
+requires `source_type` and accepts exactly five values — `owner-authored`,
+`demonstration`, `execution`, `correction`, `research` — defined once in
+`zink-skill-store/src/catalog.mjs` (`PROVENANCE_SOURCE_TYPES`). A missing or
+unknown value is refused with `PROVENANCE_SOURCE_TYPE_INVALID`; there is no
+default and no generated value. The declaration is persisted in the durable
+proposal and appears in the owner's approval packet as
+`material_parameters.source_type`, which no longer validates without it
+(`APPROVAL_SOURCE_TYPE_MISSING`).
+
+The owner may attest a different value when approving. The override is explicit,
+validated against the same five values (`APPROVAL_SOURCE_TYPE_INVALID`), and the
+approval record keeps both values plus who attested each:
+`provenance.declared_source_type`, `provenance.approved_source_type`,
+`provenance.attested_by` (`proposal` or `owner-at-approval`) and
+`provenance.overridden`. The approved value is what the canonical manifest
+carries and what the approval scope digest binds; a replay that attests a
+different value is `APPROVAL_PROPOSAL_MISMATCH`. A proposal created before this
+field existed can still be approved, but only when the owner supplies the value
+explicitly (`APPROVAL_SOURCE_TYPE_REQUIRED` otherwise).
+
 ## Schema ownership
 
 The Skill Store owns its durable schema, its migration set and its migration

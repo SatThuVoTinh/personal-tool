@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://zink.local/contracts/tools/zink-skill.schema.json",
   "title": "Zink Skill Tool Schema",
-  "x-zink-contract-version": "1.1.0",
+  "x-zink-contract-version": "1.2.0",
   "type": "object",
   "additionalProperties": false,
   "$defs": {
@@ -55,9 +55,29 @@
         },
         "requesting_agent": {
           "type": "string"
+        },
+        "source_type": {
+          "type": "string",
+          "enum": [
+            "owner-authored",
+            "demonstration",
+            "execution",
+            "correction",
+            "research"
+          ],
+          "description": "Provenance of the proposed skill. Required when action is propose; the owner reviews it on the approval packet and may attest a different value at approval."
         }
       },
       "required": ["action"],
+      "allOf": [
+        {
+          "if": {
+            "properties": { "action": { "const": "propose" } },
+            "required": ["action"]
+          },
+          "then": { "required": ["source_type"] }
+        }
+      ],
       "additionalProperties": false
     },
     "output": {
@@ -150,6 +170,16 @@
             "content_sha256": { "type": "string" },
             "content": { "type": "string" },
             "requesting_agent": { "type": "string" },
+            "source_type": {
+              "type": "string",
+              "enum": [
+                "owner-authored",
+                "demonstration",
+                "execution",
+                "correction",
+                "research"
+              ]
+            },
             "reason": { "type": "string" },
             "status": {
               "type": "string",
@@ -169,6 +199,7 @@
             "capability",
             "version",
             "content_sha256",
+            "source_type",
             "status"
           ],
           "additionalProperties": false

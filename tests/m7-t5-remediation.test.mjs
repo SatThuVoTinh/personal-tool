@@ -872,6 +872,7 @@ describe("F-010 (R1-A16-08) - a skill proposal's identity is trusted-context onl
       const result = await executeGovernedSkillQuery(
         {
           action: "propose",
+          source_type: "execution",
           namespace: ["office"],
           capability: "f010-trusted-identity",
           version: "1.0.0",
@@ -906,6 +907,7 @@ describe("F-010 (R1-A16-08) - a skill proposal's identity is trusted-context onl
       const result = await executeGovernedSkillQuery(
         {
           action: "propose",
+          source_type: "execution",
           namespace: ["office"],
           capability: "f010-unbound-identity",
           version: "1.0.0",
@@ -1822,7 +1824,11 @@ describe("F-204 (R1-A10-07) - the shapes the zink-tools lint gap hid", () => {
       capability: "data-clean",
       version: "1.0.0",
       content: "# AUTOMATION\nclean the table\n",
+      requestingActor: "automation",
+      ownerActor: "owner",
       decisionRef: "PLAN:M12/T9-R1",
+      sourceType: "execution",
+      references: [{ type: "plan", ref: "M12/T9-R1" }],
     });
     return skillsRoot;
   };

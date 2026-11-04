@@ -690,6 +690,7 @@ async function proposedSkill(capability) {
   const content = `# ${capability}\n\nGoverned content.`;
   const proposed = await proposing.querySkillStore({
     action: "propose",
+    source_type: "execution",
     namespace: ["office"],
     capability,
     version: "1.0.0",

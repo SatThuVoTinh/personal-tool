@@ -963,6 +963,7 @@ describe("M8/T3 durable skill proposals", () => {
       const content = "# Filter Guide\n\nFilter multi criteria.";
       const result = await adapter.querySkillStore({
         action: "propose",
+        source_type: "execution",
         namespace: "excel",
         capability: "filter-multi-criteria",
         version: "1.0.0",
@@ -1029,6 +1030,7 @@ describe("M8/T3 durable skill proposals", () => {
       const adapter = new SkillAdapter(undefined, { proposalStorageDir });
       const input = {
         action: "propose",
+        source_type: "execution",
         namespace: "sql",
         capability: "slow-query-check",
         version: "1.0.0",
@@ -1124,6 +1126,7 @@ describe("M8/T3 skill approval contract", () => {
         capability: "filter",
         version: "1.0.0",
         content_sha256: contentDigest,
+        source_type: "execution",
       },
       impact: "i",
       recovery_proposal: "r",
@@ -1131,7 +1134,7 @@ describe("M8/T3 skill approval contract", () => {
       expires_at: new Date(Date.now() + 86400000).toISOString(),
       approval_scope_digest: canonicalHash(
         "zink-approval-scope-v1",
-        "skills/excel/filter@1.0.0|SKILL_CANDIDATE_APPROVAL|prop-1",
+        "skills/excel/filter@1.0.0|SKILL_CANDIDATE_APPROVAL|prop-1|execution",
       ),
       publication_status: "pending_owner_post",
       proposal: { proposal_id: "prop-1" },
@@ -1158,6 +1161,7 @@ describe("M8/T3 governed skill approval", () => {
     const adapter = new SkillAdapter(undefined, { proposalStorageDir });
     const result = await adapter.querySkillStore({
       action: "propose",
+      source_type: "execution",
       namespace: "excel",
       capability: "filter-multi-criteria",
       version: "1.0.0",
@@ -1862,6 +1866,7 @@ describe("M8/T3 teaching bridges", () => {
         version: "1.0.0",
         content,
         reason: "Team-agreed monthly layout",
+        sourceType: "demonstration",
         requestingAgent: "excel",
         proposalStorageDir,
       });
@@ -1974,6 +1979,7 @@ describe("M8/T3 teaching bridges", () => {
       const adapter = new SkillAdapter(undefined, { proposalStorageDir });
       const { proposal } = await adapter.querySkillStore({
         action: "propose",
+        source_type: "execution",
         namespace: "excel",
         capability: "card-skill",
         version: "1.0.0",
@@ -2051,6 +2057,7 @@ describe("M8/T3 Discord separation and residual guarantees", () => {
     const adapter = new SkillAdapter(undefined, { proposalStorageDir });
     const result = await adapter.querySkillStore({
       action: "propose",
+      source_type: "execution",
       namespace: "excel",
       capability: "pivot-mastery",
       version: "1.0.0",
@@ -2370,6 +2377,7 @@ describe("M8/T3 Discord separation and residual guarantees", () => {
           version: "1.0.0",
           content,
           reason: "Digest parity",
+          source_type: "execution",
         },
       );
       const packet = JSON.parse(result.content[0].text);
@@ -2534,6 +2542,7 @@ describe("M8/T3 Discord separation and residual guarantees", () => {
       const adapter = new SkillAdapter(undefined, { proposalStorageDir });
       const input = {
         action: "propose",
+        source_type: "execution",
         namespace: "sql",
         capability: "stable-skill",
         version: "1.0.0",

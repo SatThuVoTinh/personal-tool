@@ -1259,6 +1259,10 @@ export async function handleOwnerSkillApproval({
   // real decision. The ref is required and validated below; an omitted or
   // blank value denies the approval before any durable read.
   decisionRef,
+  // F-OC-012 (owner decision 2026-11-04, option A+B): an explicit
+  // owner-attested provenance. No default: absent means "use what the
+  // proposal declared", and a proposal that declared none requires this.
+  sourceType,
   options = {},
 }) {
   // Distinct governance subject: a skill approval is never an execution-plan
@@ -1377,6 +1381,36 @@ export async function handleOwnerSkillApproval({
     );
   }
 
+  // F-OC-012 (owner decision 2026-11-04, option A+B): resolve the provenance
+  // BEFORE the replay check, so an approval replay cannot attest a different
+  // source type than the record it is replaying. The proposal's declaration is
+  // the default only in the sense that it is the value the author already
+  // declared; a proposal without one is approvable only when the owner
+  // supplies it here.
+  const declaredSourceType =
+    typeof stored.source_type === "string" && stored.source_type.trim()
+      ? stored.source_type.trim()
+      : null;
+  // A supplied-but-blank override is not an attestation; only a non-blank
+  // value changes who is recorded as the attester.
+  const ownerSourceType =
+    typeof sourceType === "string" && sourceType.trim()
+      ? sourceType.trim()
+      : null;
+  const approvedSourceType = ownerSourceType ?? declaredSourceType;
+  if (!approvedSourceType) {
+    throw new Error(
+      "APPROVAL_SOURCE_TYPE_REQUIRED: the proposal declares no provenance source_type and the owner did not attest one",
+    );
+  }
+  const sourceTypeAttestedBy = ownerSourceType
+    ? "owner-at-approval"
+    : "proposal";
+  const provenanceAttestation = Object.freeze({
+    source_type: approvedSourceType,
+    source_type_attested_by: sourceTypeAttestedBy,
+  });
+
   // Idempotent replay: the exact same approval binding already completed.
   const approvalFile = skillApprovalFilePath(storeDir, proposalId);
   let completed = null;
@@ -1391,7 +1425,9 @@ export async function handleOwnerSkillApproval({
       completed.content_sha256 === contentSha256 &&
       (completed.namespace ?? []).join("/") === nsArray.join("/") &&
       completed.capability === capability &&
-      completed.version === version;
+      completed.version === version &&
+      (completed.provenance?.approved_source_type ?? null) ===
+        approvedSourceType;
     if (!sameBinding) {
       throw new Error(
         "APPROVAL_PROPOSAL_MISMATCH: a different approval already consumed this proposal id",
@@ -1441,6 +1477,20 @@ export async function handleOwnerSkillApproval({
       "APPROVAL_PROMOTE_UNAVAILABLE: canonical Skill Store writer is unavailable",
     );
   }
+  // F-OC-012: the store owns the provenance vocabulary, and the adapter module
+  // re-exports it. An owner attestation is checked against that same set before
+  // anything durable is written, so an invalid override is refused by name
+  // rather than surfacing later as a store identity error.
+  const skillMod = await getSkillAdapter();
+  const provenanceSourceTypes = skillMod?.PROVENANCE_SOURCE_TYPES;
+  if (
+    !Array.isArray(provenanceSourceTypes) ||
+    !provenanceSourceTypes.includes(approvedSourceType)
+  ) {
+    throw new Error(
+      "APPROVAL_SOURCE_TYPE_INVALID: the approved provenance source_type is not in the store's vocabulary",
+    );
+  }
   // M11/T1-R1 (2.3): heal → validate → clash-check → staging write → rename →
   // proposal-status write form ONE critical section under the store-wide
   // writer lock, so two concurrent approvals (or an approval racing a
@@ -1463,6 +1513,17 @@ export async function handleOwnerSkillApproval({
     if (current?.status === "REJECTED") {
       throw new Error("APPROVAL_PROPOSAL_REJECTED: candidate was rejected");
     }
+    // F-OC-012: persist the resolved provenance before the canonical write, so
+    // a retry after a partial failure reuses the same attestation instead of
+    // asking the owner again or falling back to a constant.
+    try {
+      writeJsonAtomicSync(skillProposalFilePath(storeDir, proposalId), {
+        ...(current ?? stored),
+        ...provenanceAttestation,
+      });
+    } catch {
+      /* best effort: canonical state remains authoritative */
+    }
     let promoted;
     try {
       promoted = await promoteApproved({
@@ -1474,6 +1535,9 @@ export async function handleOwnerSkillApproval({
         requestingActor: stored.requesting_agent ?? "unknown",
         ownerActor: "owner",
         decisionRef: boundDecisionRef,
+        // F-OC-012: the provenance the owner approved, declared by the author
+        // or explicitly attested at approval — never a constant.
+        sourceType: approvedSourceType,
         // M11/T1-R1 (2.4): provenance is derived from the ref this approval
         // actually carries — never a constant.
         references: [{ type: "plan", ref: planProvenanceRef }],
@@ -1486,6 +1550,7 @@ export async function handleOwnerSkillApproval({
         try {
           writeJsonAtomicSync(skillProposalFilePath(storeDir, proposalId), {
             ...stored,
+            ...provenanceAttestation,
             status: "CONFLICTED",
           });
         } catch {
@@ -1503,6 +1568,7 @@ export async function handleOwnerSkillApproval({
     try {
       writeJsonAtomicSync(skillProposalFilePath(storeDir, proposalId), {
         ...stored,
+        ...provenanceAttestation,
         status: "MATERIALIZED",
       });
     } catch {
@@ -1528,7 +1594,10 @@ export async function handleOwnerSkillApproval({
   let vectorSync;
   try {
     const report = options.vectorSyncFn
-      ? await options.vectorSyncFn({ skillsRoot, proposal: stored })
+      ? await options.vectorSyncFn({
+          skillsRoot,
+          proposal: { ...stored, ...provenanceAttestation },
+        })
       : await syncSkillsThroughDoor(skillsRoot, options, expectedStoreId);
     vectorSync = {
       status: report?.status ?? "UNKNOWN",
@@ -1537,6 +1606,7 @@ export async function handleOwnerSkillApproval({
     try {
       writeJsonAtomicSync(skillProposalFilePath(storeDir, proposalId), {
         ...stored,
+        ...provenanceAttestation,
         status: report?.status === "READY" ? "READY" : "INDEX_FAILED",
       });
     } catch {
@@ -1550,6 +1620,7 @@ export async function handleOwnerSkillApproval({
     try {
       writeJsonAtomicSync(skillProposalFilePath(storeDir, proposalId), {
         ...stored,
+        ...provenanceAttestation,
         status: "INDEX_FAILED",
       });
     } catch {
@@ -1573,6 +1644,18 @@ export async function handleOwnerSkillApproval({
     version,
     subject_type: APPROVAL_SUBJECT_TYPES.SKILL_CANDIDATE_APPROVAL,
     approval_status: "APPROVED",
+    provenance: {
+      declared_source_type: declaredSourceType,
+      approved_source_type: approvedSourceType,
+      attested_by: sourceTypeAttestedBy,
+      overridden: declaredSourceType !== approvedSourceType,
+    },
+    // The approved provenance is bound into the same scope digest the packet
+    // carries, re-derived with the value the owner actually attested.
+    approval_scope_digest: canonicalHash(
+      "zink-approval-scope-v1",
+      `skills/${nsArray.join("/")}/${capability}@${version}|SKILL_CANDIDATE_APPROVAL|${proposalId}:${contentSha256}|${approvedSourceType}`,
+    ),
     canonical,
     vector_sync: vectorSync,
     approved_at: new Date().toISOString(),
@@ -1714,6 +1797,10 @@ export async function proposeSkillFromTeaching({
   version,
   content,
   reason,
+  // F-OC-012 (owner decision 2026-11-04): the teaching path declares the
+  // provenance it is actually creating. No default: a teaching that does not
+  // name its source type fails closed before a proposal exists.
+  sourceType,
   requestingAgent,
   proposalStorageDir,
   context = {},
@@ -1751,6 +1838,11 @@ export async function proposeSkillFromTeaching({
       "PROPOSAL_STORE_UNAVAILABLE: durable proposal store is not configured",
     );
   }
+  if (typeof sourceType !== "string" || !sourceType.trim()) {
+    throw new Error(
+      "TEACHING_SOURCE_TYPE_REQUIRED: the teaching path must declare the skill's provenance source_type",
+    );
+  }
   const skillMod = await getSkillAdapter();
   const Adapter = skillMod?.SkillAdapter;
   if (typeof Adapter !== "function") {
@@ -1771,6 +1863,7 @@ export async function proposeSkillFromTeaching({
       content: procedureBytes,
       reason:
         reason ?? teaching.reason ?? "Promoted from owner-confirmed teaching",
+      source_type: sourceType.trim(),
       requesting_agent:
         requestingAgent ?? teaching.requesting_agent ?? context?.agentId,
     },
@@ -2146,6 +2239,9 @@ export async function handleSkillDiscordAction({
   // is no default: an approve action without a ref fails closed with
   // APPROVAL_DECISION_REF_REQUIRED inside `handleOwnerSkillApproval`.
   decisionRef,
+  // F-OC-012 (owner decision 2026-11-04, option A+B): an owner-attested
+  // provenance override. Absent means "use the proposal's declaration".
+  sourceType,
   notify,
   options = {},
 }) {
@@ -2203,6 +2299,7 @@ export async function handleSkillDiscordAction({
       version: stored.version,
       skillsRoot,
       decisionRef,
+      sourceType,
       proposalStorageDir: storeDir,
       options,
     });
@@ -4644,6 +4741,18 @@ export function registerTools(api, options = {}) {
                 type: "string",
                 description: "Justification for this new/updated skill",
               },
+              source_type: {
+                type: "string",
+                enum: [
+                  "owner-authored",
+                  "demonstration",
+                  "execution",
+                  "correction",
+                  "research",
+                ],
+                description:
+                  "Provenance of this skill: how it was produced. Shown to the owner on the approval packet; never defaulted.",
+              },
               // M12/T9 F-041: `task_id`, `session_key` and `run_id` are the
               // trusted runtime context's correlation identity, never
               // model-fillable fields.
@@ -4654,6 +4763,7 @@ export function registerTools(api, options = {}) {
               "version",
               "content",
               "reason",
+              "source_type",
             ],
           }
         : {
@@ -4681,6 +4791,18 @@ export function registerTools(api, options = {}) {
                 type: "string",
                 description: "Justification for this new/updated skill",
               },
+              source_type: {
+                type: "string",
+                enum: [
+                  "owner-authored",
+                  "demonstration",
+                  "execution",
+                  "correction",
+                  "research",
+                ],
+                description:
+                  "Provenance of this skill: how it was produced. Shown to the owner on the approval packet; never defaulted.",
+              },
               // M12/T9 F-041: `task_id` is the trusted runtime context's
               // correlation identity, never a model-fillable field.
             },
@@ -4690,6 +4812,7 @@ export function registerTools(api, options = {}) {
               "version",
               "content",
               "reason",
+              "source_type",
             ],
           },
       async execute(_id, params) {
@@ -4739,6 +4862,18 @@ export function registerTools(api, options = {}) {
                 "SKILL_CONTENT_DIGEST_DIVERGED: governance digest does not match the proposal digest",
               );
             }
+            // F-OC-012: the owner must see the provenance before approving.
+            // A proposal that carries none (created before the field existed)
+            // never reaches the owner as an unnamed skill; the approval path
+            // can still accept an explicit owner attestation.
+            if (
+              typeof proposal.source_type !== "string" ||
+              proposal.source_type.trim() === ""
+            ) {
+              throw new Error(
+                "APPROVAL_SOURCE_TYPE_MISSING: the proposal does not declare its provenance source_type",
+              );
+            }
             const approvalRecord = {
               schema_version: "1.0.0",
               governance_version: GOVERNANCE_VERSION,
@@ -4760,6 +4895,10 @@ export function registerTools(api, options = {}) {
                 reason: proposal.reason,
                 requesting_agent:
                   proposal.requesting_agent || ctx.requestingAgent,
+                // F-OC-012: the provenance the author declared. The owner
+                // reviews it here and may attest a different value at
+                // approval; the approved value is bound into the scope digest.
+                source_type: proposal.source_type,
               },
               impact: `Duyệt đưa skill ${proposal.capability} v${proposal.version} vào Zink Skill Store (trạng thái ACTIVE) và lập chỉ mục vào cơ sở dữ liệu vector dài hạn (pgvector).`,
               recovery_proposal:
@@ -4768,12 +4907,13 @@ export function registerTools(api, options = {}) {
               expires_at: new Date(
                 Date.now() + 7 * 24 * 60 * 60 * 1000,
               ).toISOString(),
-              // The scope digest binds target, operation, proposal identity
-              // and exact content. It is a separate field and never overloads
-              // content_sha256.
+              // The scope digest binds target, operation, proposal identity,
+              // exact content and the declared provenance. It is a separate
+              // field and never overloads content_sha256. An owner-attested
+              // override re-derives this digest with the approved value.
               approval_scope_digest: canonicalHash(
                 "zink-approval-scope-v1",
-                `${targetStr}|SKILL_CANDIDATE_APPROVAL|${proposal.proposal_id}:${contentDigest}`,
+                `${targetStr}|SKILL_CANDIDATE_APPROVAL|${proposal.proposal_id}:${contentDigest}|${proposal.source_type}`,
               ),
               publication_status: "pending_owner_post",
               proposal,

@@ -266,6 +266,7 @@ try {
   const result = await adapter.querySkillStore(
     {
       action: "propose",
+      source_type: "execution",
       namespace: "office",
       capability: "durability-probe",
       version: "1.0.0",

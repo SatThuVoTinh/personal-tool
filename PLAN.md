@@ -8633,6 +8633,19 @@ Final Quality Gate: NOT RUN — the task is not closed.
   change plus its evidence; the lead re-reads the diff and commits the row. This
   keeps one row per commit without loosening any fixer's git permissions.
 
+### Owner decisions recorded 2026-11-04
+
+- **`F-OC-013` — option 1 (owner: "oc13: option 1").** Extend the stale
+  asset-predecessor test pin to the six digests the committed allowlist carries;
+  do not revisit the admission. The sixth digest is re-measured from the raw Git
+  blob and every negative admission case stays.
+- **`F-OC-012` — option A+B (owner: "oc12: option a+b").** The skill proposal
+  declares `source_type`; the owner may attest a different value at approval,
+  recorded as an explicit override bound into the approval record and scope
+  digest. No default, no constant; a proposal without a declaration needs the
+  owner's explicit attestation. The store's five-value vocabulary and its
+  requirement stay unchanged. Detailed implementation is `ACTIVE.md` §8.5.
+
 ### Scope and bands (R5)
 
 | Band | Scope | Actionable rows | Fixer batches (≤5) |
@@ -8701,6 +8714,9 @@ creates the local closeout commit, and pushes the current non-main task branch.
 - R4 is archived verbatim at `docs/contracts/execution/archive/2026-10-27-M12-T9-R4.md`.
 - R5 is materialized at `docs/contracts/execution/ACTIVE.md` with the three
   blocking RED decisions recorded in §8.4; this block is its lifecycle pointer.
+- Loop-3 additions `F-OC-012` and `F-OC-013` were decided by the owner on
+  2026-11-04 and are recorded in §8.5; their fixes are implemented in the
+  working tree, pending the lead's commit.
 - Phases 1–4 are complete and verified: 20/20 scanner reports
   (`docs/execution/reports/p1/`), 12/12 cross-check reports (`p2/`), 12/12
   triage reports (`p3/`), and 23 loop-1 verdicts embedded in the register (10

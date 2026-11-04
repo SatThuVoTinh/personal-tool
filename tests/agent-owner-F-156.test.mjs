@@ -185,6 +185,7 @@ test("F-156: the plugin's approval still promotes and syncs through the door", a
       "# Public door\n\nGoverned content promoted through the door.";
     const proposed = await proposing.querySkillStore({
       action: "propose",
+      source_type: "execution",
       namespace: ["office"],
       capability: "door-skill",
       version: "1.0.0",

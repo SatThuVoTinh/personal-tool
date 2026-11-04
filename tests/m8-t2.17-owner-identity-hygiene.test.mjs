@@ -142,6 +142,7 @@ test("owner hygiene: a correctly bound pair still authorizes", async () => {
     const content = "# Hygiene Skill\n\nGoverned content.";
     const proposed = await proposing.querySkillStore({
       action: "propose",
+      source_type: "execution",
       namespace: ["office"],
       capability: "hygiene-skill",
       version: "1.0.0",

@@ -235,6 +235,7 @@ describe("Lane G — policy & lifecycle contract reconciliation", () => {
         capability: "filter",
         version: "1.0.0",
         content_sha256: contentDigest,
+        source_type: "execution",
       },
       impact: "i",
       recovery_proposal: "r",
@@ -242,7 +243,7 @@ describe("Lane G — policy & lifecycle contract reconciliation", () => {
       expires_at: new Date().toISOString(),
       approval_scope_digest: canonicalHash(
         "zink-approval-scope-v1",
-        `${"skills/excel/filter@1.0.0"}|SKILL_CANDIDATE_APPROVAL|${contentDigest}`,
+        `${"skills/excel/filter@1.0.0"}|SKILL_CANDIDATE_APPROVAL|${contentDigest}|execution`,
       ),
       publication_status: "pending_owner_post",
       proposal: { proposal_id: "prop-1" },

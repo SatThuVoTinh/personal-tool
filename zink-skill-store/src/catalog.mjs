@@ -51,13 +51,14 @@ const TASK_ID =
 const DECISION = new RegExp(`^PLAN:${TASK_ID}$`);
 const GIT_SHA = /^[0-9a-f]{40}$/;
 const PLAN_REF = new RegExp(`^${TASK_ID}$`);
-const SOURCE_TYPES = new Set([
+export const PROVENANCE_SOURCE_TYPES = Object.freeze([
   "owner-authored",
   "demonstration",
   "execution",
   "correction",
   "research",
 ]);
+const SOURCE_TYPES = new Set(PROVENANCE_SOURCE_TYPES);
 const REFERENCE_TYPES = new Set(["repository", "url", "plan", "git"]);
 const STATUSES = new Set(["CANDIDATE", "ACTIVE", "DEPRECATED", "REJECTED"]);
 const textDecoder = new TextDecoder("utf-8", { fatal: true });

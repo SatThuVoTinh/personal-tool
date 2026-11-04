@@ -176,6 +176,7 @@ const TOOL_FIXTURES = {
     provenance: DELEGATED_PROVENANCE,
     input: {
       action: "propose",
+      source_type: "execution",
       capability: "example-capability",
       version: "1.0.0",
       content: "# example\n",

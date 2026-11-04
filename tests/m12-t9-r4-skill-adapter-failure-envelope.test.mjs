@@ -96,6 +96,7 @@ test("F-448: proposal-persistence failure throws the fixed canonical sentence, n
     () =>
       adapter.querySkillStore({
         action: "propose",
+        source_type: "execution",
         namespace: ["office"],
         capability: "failure-envelope-skill",
         version: "1.0.0",

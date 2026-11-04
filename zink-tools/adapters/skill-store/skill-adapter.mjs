@@ -21,7 +21,12 @@ import {
 import {
   scanCatalog,
   withSkillStoreWriterLock,
+  PROVENANCE_SOURCE_TYPES,
 } from "../../../zink-skill-store/src/catalog.mjs";
+
+// F-OC-012: the proposal path and the approval path validate against the one
+// vocabulary the store defines, never a per-layer copy.
+export { PROVENANCE_SOURCE_TYPES };
 
 export class SkillAdapterError extends Error {
   constructor(message, code = "SKILL_ADAPTER_ERROR") {
@@ -48,6 +53,8 @@ export class SkillAdapterError extends Error {
 const SKILL_FAILURE_SENTENCES = Object.freeze({
   SKILL_ADAPTER_ERROR: "The Skill Store request could not be completed.",
   SKILL_PROPOSAL_PERSIST_FAILED: "The skill proposal could not be persisted.",
+  PROVENANCE_SOURCE_TYPE_INVALID:
+    "The skill proposal did not declare a valid provenance source type.",
 });
 
 function fixedFailureSentence(code) {
@@ -1040,6 +1047,7 @@ export class SkillAdapter {
           content,
           reason,
           tags: inputTags,
+          source_type: sourceType,
         } = input;
         // F-010 (R1-A16-08): the proposal's requester identity comes from
         // trusted runtime context only. A model-supplied `requesting_agent` is
@@ -1082,6 +1090,17 @@ export class SkillAdapter {
           throw new SkillAdapterError(
             "reason is required for skill proposal",
             "SKILL_REASON_REQUIRED",
+          );
+        }
+
+        // F-045/F-OC-012: provenance is declared where the skill is proposed,
+        // never invented at approval. The store validates the same set again;
+        // this check refuses an unnamed source before a durable proposal or an
+        // owner-facing packet exists.
+        if (!PROVENANCE_SOURCE_TYPES.includes(sourceType)) {
+          throw new SkillAdapterError(
+            `source_type is required for a skill proposal and must be one of ${PROVENANCE_SOURCE_TYPES.join(", ")}`,
+            "PROVENANCE_SOURCE_TYPE_INVALID",
           );
         }
 
@@ -1178,6 +1197,9 @@ export class SkillAdapter {
           ...(trustedRequestingAgent
             ? { requesting_agent: trustedRequestingAgent }
             : {}),
+          // F-045/F-OC-012: the provenance the approver will see. It travels
+          // with the durable proposal so approval never has to guess it.
+          source_type: sourceType,
           reason: reason.trim(),
           status: "CANDIDATE",
           created_at: new Date().toISOString(),

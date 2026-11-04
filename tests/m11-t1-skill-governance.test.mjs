@@ -377,6 +377,7 @@ async function proposedFixture(extra = {}) {
   const content = "# Bound Ref\n\nGoverned content.";
   const proposed = await proposing.querySkillStore({
     action: "propose",
+    source_type: "execution",
     namespace: ["office"],
     capability: "bound-ref-skill",
     version: "1.0.0",

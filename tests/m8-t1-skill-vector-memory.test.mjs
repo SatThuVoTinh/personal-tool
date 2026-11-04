@@ -2,7 +2,14 @@ import test, { describe } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { mkdtemp, mkdir, writeFile, rm, readFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  writeFile,
+  rm,
+  readFile,
+  readdir,
+} from "node:fs/promises";
 import os from "node:os";
 
 import {
@@ -252,6 +259,7 @@ describe("M8/T1 Governed Skill Vector Store & Semantic Vector RAG", () => {
 
     const result = await adapter.querySkillStore({
       action: "propose",
+      source_type: "execution",
       namespace: ["data", "power-bi"],
       capability: "dax-performance",
       version: "1.0.0",
@@ -361,6 +369,7 @@ describe("M8/T1 Governed Skill Vector Store & Semantic Vector RAG", () => {
       const content = "# Bug06 Skill\n\nGoverned content.";
       const proposed = await proposing.querySkillStore({
         action: "propose",
+        source_type: "execution",
         namespace: ["office"],
         capability: "bug06-skill",
         version: "1.0.0",
@@ -387,6 +396,186 @@ describe("M8/T1 Governed Skill Vector Store & Semantic Vector RAG", () => {
 
       assert.ok(approvalResult);
       assert.equal(approvalResult.approval_status, "APPROVED");
+      assert.equal(approvalResult.provenance.declared_source_type, "execution");
+      assert.equal(approvalResult.provenance.approved_source_type, "execution");
+      assert.equal(approvalResult.provenance.overridden, false);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  // =========================================================================
+  // F-OC-012 — provenance is declared at proposal time and never defaulted.
+  // =========================================================================
+  test("F-OC-012: a proposal without source_type is refused by name", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "foc012-missing-"));
+    try {
+      const adapter = new SkillAdapter(undefined, {
+        proposalStorageDir: dir,
+      });
+      await assert.rejects(
+        () =>
+          adapter.querySkillStore({
+            action: "propose",
+            namespace: ["office"],
+            capability: "missing-provenance",
+            version: "1.0.0",
+            content: "# Missing\n\nNo provenance.",
+            reason: "F-OC-012 missing provenance",
+          }),
+        (error) => {
+          assert.equal(error.code, "PROVENANCE_SOURCE_TYPE_INVALID");
+          assert.match(error.message, /PROVENANCE_SOURCE_TYPE_INVALID/u);
+          return true;
+        },
+      );
+      assert.deepEqual(
+        await readdir(dir),
+        [],
+        "a refused proposal writes no durable record",
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("F-OC-012: an owner-attested source_type overrides the declaration and is recorded", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "foc012-override-"));
+    const ownerDiscordId = "123456789012345678";
+    try {
+      const proposalDir = path.join(tempDir, "proposals");
+      const proposing = new SkillAdapter(undefined, {
+        proposalStorageDir: proposalDir,
+      });
+      const content = "# Override\n\nGoverned content.";
+      const proposed = await proposing.querySkillStore({
+        action: "propose",
+        source_type: "demonstration",
+        namespace: ["office"],
+        capability: "override-skill",
+        version: "1.0.0",
+        content,
+        reason: "F-OC-012 override",
+      });
+      const base = {
+        ownerDiscordId,
+        expectedOwnerId: ownerDiscordId,
+        proposalId: proposed.proposal.proposal_id,
+        contentSha256: proposed.proposal.content_sha256,
+        decisionRef: "PLAN:M12/T9-R5",
+        namespace: ["office"],
+        capability: "override-skill",
+        version: "1.0.0",
+        skillsRoot: path.join(tempDir, "skills"),
+        proposalStorageDir: proposalDir,
+        options: {
+          embedFn: async () => [new Array(1024).fill(0.01)],
+          dbExecutor: async () => "",
+        },
+      };
+      // An owner override outside the store's vocabulary is refused before
+      // any durable attestation or canonical write exists.
+      await assert.rejects(
+        () => handleOwnerSkillApproval({ ...base, sourceType: "fabricated" }),
+        /APPROVAL_SOURCE_TYPE_INVALID/u,
+      );
+
+      const approval = await handleOwnerSkillApproval({
+        ...base,
+        sourceType: "correction",
+      });
+      assert.equal(approval.provenance.declared_source_type, "demonstration");
+      assert.equal(approval.provenance.approved_source_type, "correction");
+      assert.equal(approval.provenance.attested_by, "owner-at-approval");
+      assert.equal(approval.provenance.overridden, true);
+
+      const manifest = JSON.parse(
+        await readFile(
+          path.join(
+            tempDir,
+            "skills",
+            "office",
+            "override-skill",
+            "1.0.0",
+            "manifest.json",
+          ),
+          "utf8",
+        ),
+      );
+      assert.equal(manifest.provenance.source_type, "correction");
+
+      const durable = JSON.parse(
+        await readFile(
+          path.join(proposalDir, `${proposed.proposal.proposal_id}.json`),
+          "utf8",
+        ),
+      );
+      assert.equal(durable.source_type, "correction");
+      assert.equal(durable.source_type_attested_by, "owner-at-approval");
+
+      // A replay that attests a different provenance is a different approval,
+      // not an idempotent success.
+      await assert.rejects(
+        () => handleOwnerSkillApproval({ ...base, sourceType: "execution" }),
+        /APPROVAL_PROPOSAL_MISMATCH/u,
+      );
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("F-OC-012: a legacy proposal without source_type needs an explicit owner attestation", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "foc012-legacy-"));
+    const ownerDiscordId = "123456789012345678";
+    try {
+      const proposalDir = path.join(tempDir, "proposals");
+      await mkdir(proposalDir, { recursive: true });
+      const content = "# Legacy\n\nNo provenance field.";
+      const contentSha256 = createHash("sha256")
+        .update(content, "utf8")
+        .digest("hex");
+      const proposalId = "a".repeat(32);
+      await writeFile(
+        path.join(proposalDir, `${proposalId}.json`),
+        JSON.stringify({
+          proposal_id: proposalId,
+          namespace: ["office"],
+          capability: "legacy-skill",
+          version: "1.0.0",
+          content_sha256: contentSha256,
+          content,
+          status: "CANDIDATE",
+          created_at: new Date().toISOString(),
+          expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+        }),
+      );
+      const base = {
+        ownerDiscordId,
+        expectedOwnerId: ownerDiscordId,
+        proposalId,
+        contentSha256,
+        decisionRef: "PLAN:M12/T9-R5",
+        namespace: ["office"],
+        capability: "legacy-skill",
+        version: "1.0.0",
+        skillsRoot: path.join(tempDir, "skills"),
+        proposalStorageDir: proposalDir,
+      };
+      await assert.rejects(
+        () => handleOwnerSkillApproval({ ...base }),
+        /APPROVAL_SOURCE_TYPE_REQUIRED/u,
+      );
+      const approved = await handleOwnerSkillApproval({
+        ...base,
+        sourceType: "research",
+        options: {
+          embedFn: async () => [new Array(1024).fill(0.01)],
+          dbExecutor: async () => "",
+        },
+      });
+      assert.equal(approved.provenance.declared_source_type, null);
+      assert.equal(approved.provenance.approved_source_type, "research");
+      assert.equal(approved.provenance.overridden, true);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -854,6 +1043,7 @@ describe("M8/T1 Governed Skill Vector Store & Semantic Vector RAG", () => {
         version: "1.0.0",
         content,
         reason: "Optimize filtering on large dataset",
+        source_type: "execution",
       },
     );
 
@@ -861,6 +1051,12 @@ describe("M8/T1 Governed Skill Vector Store & Semantic Vector RAG", () => {
     const parsedPacket = JSON.parse(proposeResult.content[0].text);
 
     assert.equal(parsedPacket.exact_operation, "SKILL_CANDIDATE_APPROVAL");
+    assert.equal(
+      parsedPacket.material_parameters.source_type,
+      "execution",
+      "the owner sees the declared provenance on the packet",
+    );
+    assert.equal(parsedPacket.proposal.source_type, "execution");
     assert.equal(
       parsedPacket.exact_target,
       "skills/excel/filter-multi-criteria@1.0.0",

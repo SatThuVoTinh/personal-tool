@@ -104,8 +104,11 @@ Phải tuân thủ schema JSON đóng với đúng 5 trường gốc sau:
   các byte file `SKILL.md`. Mọi chỉnh sửa nội dung sau khi tạo manifest đều bị
   phát hiện (`CONTENT_DIGEST_MISMATCH` / `SOURCE_DRIFT_DETECTED`).
 - **`provenance`:** `source_type` thuộc
-  `owner-authored | demonstration | execution | correction | research`;
-  tối đa 32 reference (`repository | url | plan | git`).
+  `owner-authored | demonstration | execution | correction | research` và phải
+  được khai báo ngay khi `propose` — không có giá trị mặc định. Chủ sở hữu có
+  thể xác nhận một giá trị khác khi phê duyệt; cả giá trị đã khai báo và giá trị
+  được duyệt đều được ghi lại. Tối đa 32 reference
+  (`repository | url | plan | git`).
 - **`lifecycle`:** Trạng thái vòng đời. Chỉ chấp nhận một trong 4 giá trị,
   theo đúng một trong các chuỗi sau:
   - `[CANDIDATE]`: bản nháp chờ phê duyệt (không bao giờ được index vector,

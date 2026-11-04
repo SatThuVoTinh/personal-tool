@@ -595,9 +595,17 @@ export function generateSchemaManifest() {
  * only the previous bytes of that one file reproduced the previous value
  * (`014c8f89…`) exactly. The file still packages into no deployed asset set, so
  * this roll owes no per-mode admission either.
+ *
+ * M12/T9-R5 F-OC-012: `zink-tools/contracts/tools/zink-skill.schema.json` and
+ * `integrations/openclaw/topology/contracts/approval-request.schema.json` now
+ * declare the provenance `source_type` the proposal carries and the owner
+ * approves (option A+B, owner decision 2026-11-04). The contract bytes changed,
+ * so the pin follows. Attribution was measured, not assumed: restoring only the
+ * previous bytes of those two files reproduced the previous value
+ * (`73882525…`) exactly.
  */
 export const PINNED_SCHEMA_MANIFEST_CHECKSUM =
-  "7388252553ef316ed111922d9bf7f850ea3e54885f78fc7f6d056b5ae8935f37";
+  "c0a137b2296dbdefe253f650e57aafca7d27cda33b0abe115bf25198b7d784ee";
 
 export function verifySchemaManifestChecksums(manifest = null) {
   if (manifest === null) {

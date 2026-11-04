@@ -621,6 +621,7 @@ async function proposalFixture() {
 
 const proposeInput = (content) => ({
   action: "propose",
+  source_type: "execution",
   namespace: ["office"],
   capability: "m11-t3-bound",
   version: "1.0.0",
