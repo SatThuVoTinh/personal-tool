@@ -111,6 +111,17 @@ const DEPLOYED_BUILD_FILE_LOCK_SHA256 =
 const F581_OUTGOING_FILE_LOCK_SHA256 =
   "e9cac11dea2ebca6fd57f55e1aca6a7c0a6959fb4ff6a6dabf0811533a9bde06";
 
+/**
+ * M12/T9-R5 F-OC-004: the bytes the LIVE runtime carried before the
+ * compare-and-remove release fix. Provenance: the raw blob at
+ * `git cat-file blob dcd738d:integrations/openclaw/lib/file-lock.mjs`
+ * reproduces this digest exactly (`98c15fe4…`, re-measured 2026-11-04). The
+ * allowlist already admits it; this pin records that admission so the
+ * "exactly the listed predecessors" assertion describes the shipped gate.
+ */
+const F_OC_004_OUTGOING_FILE_LOCK_SHA256 =
+  "98c15fe47423c1e19f43d9072e9a35f8b86d441cebd75940e374ce62c11008ee";
+
 /** The CURRENT build's file-lock asset after F-OC-004 compare-and-remove fix. */
 const CURRENT_FILE_LOCK_SHA256 =
   "cf6a09e91999c418b953e4c5cd2d7a91fd520c17c8b3ccf05a8945af7f276767";
@@ -426,7 +437,7 @@ test("R2 P2: the live runtime agrees with the proven digest where readable", asy
 // THE ALLOWLIST ITSELF — one addition, bounded
 // ---------------------------------------------------------------------------
 
-test("R2 0: the file-lock block holds exactly the five proven predecessors, each listed once", async () => {
+test("R2 0: the file-lock block holds exactly the six proven predecessors, each listed once", async () => {
   const block = keyBlock(assetTable(), "lib/file-lock.mjs");
   const admitted = [
     R18_FILE_LOCK_SHA256,
@@ -434,11 +445,12 @@ test("R2 0: the file-lock block holds exactly the five proven predecessors, each
     M11_T3_OUTGOING_FILE_LOCK_SHA256,
     DEPLOYED_BUILD_FILE_LOCK_SHA256,
     F581_OUTGOING_FILE_LOCK_SHA256,
+    F_OC_004_OUTGOING_FILE_LOCK_SHA256,
   ];
   assert.deepEqual(
     listedDigests(block).sort(),
     admitted.slice().sort(),
-    "the block must carry the R18 predecessor, the R2 live predecessor, the M11/T3 outgoing build, the DEPLOYED build (F-379) and the build F-581 displaces, nothing else",
+    "the block must carry the R18 predecessor, the R2 live predecessor, the M11/T3 outgoing build, the DEPLOYED build (F-379), the build F-581 displaces and the build F-OC-004 displaces, nothing else",
   );
   for (const digest of admitted) {
     assert.equal(
